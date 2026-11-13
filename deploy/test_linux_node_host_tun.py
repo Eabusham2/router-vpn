@@ -231,7 +231,17 @@ SAVED_CANDIDATE_HOST_CASES = (
 SAVED_PREFIX_HOST_CASES = tuple(prefix + 'prefix-candidates-' + action
     for prefix in ('node-chain-3-', 'node-chain-3-awg-fast-wg-', 'node-chain-3-awg-strong-awg-fast-')
     for action in ('save', 'cancel'))
-NODE_CHAIN_HOST_CASES += SAVED_CANDIDATE_HOST_CASES + SAVED_PREFIX_HOST_CASES
+NODE_CHAIN_HYSTERIA_HOST_CASES = (
+    'node-chain-hy2-wg-wg-connect',
+    'node-chain-hy2-awg-fast-awg-strong-connect',
+    'node-chain-hy2-awg-strong-awg-fast-connect',
+    'node-chain-hy2-wg-wg-final-password',
+    'node-chain-hy2-wg-wg-final-trust',
+    'node-chain-hy2-wg-wg-final-mask',
+    'node-chain-hy2-wg-wg-final-dns-failure',
+    'node-chain-hy2-wg-wg-middle-source',
+    'node-chain-hy2-wg-wg-prefix-lost')
+NODE_CHAIN_HOST_CASES += SAVED_CANDIDATE_HOST_CASES + SAVED_PREFIX_HOST_CASES + NODE_CHAIN_HYSTERIA_HOST_CASES
 CASES += NODE_CHAIN_HOST_CASES
 NODE_CHAIN_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledNodeChainFixtureKeepsCompiledAuthority'
 NODE_CHAIN_CIPHER_CASES = (
@@ -251,12 +261,16 @@ PREFIX_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledPrefixCandidateFixtureKee
 NODE_CHAIN_HOST_AUTHORITY_CASES += (PREFIX_HOST_AUTHORITY_ROOT,
     *(PREFIX_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg-fast', 'awg-strong')))
 
+HYSTERIA_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledHysteriaNodeChainFixtureKeepsOriginalSources'
+NODE_CHAIN_HOST_AUTHORITY_CASES += (HYSTERIA_HOST_AUTHORITY_ROOT,
+    *(HYSTERIA_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg-wg', 'awg-fast-awg-strong', 'awg-strong-awg-fast')))
+
 def check_node_chain_host_authority_verdict(output):
     NODE.require_native_verdicts(output, NODE_CHAIN_HOST_AUTHORITY_CASES, 'installed ordered source authority')
 
 def execute_node_chain_host_authority(binary, captured):
     status, output = NODE.run([str(binary), '-test.v', '-test.timeout=30s',
-        '-test.run=^(' + NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '|' + PREFIX_HOST_AUTHORITY_ROOT + ')$'], cwd=ROOT, env=captured, timeout=40)
+        '-test.run=^(' + NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '|' + PREFIX_HOST_AUTHORITY_ROOT + '|' + HYSTERIA_HOST_AUTHORITY_ROOT + ')$'], cwd=ROOT, env=captured, timeout=40)
     if status:
         raise ValueError('Installed ordered source authority failed:\n' + output[-16384:])
     check_node_chain_host_authority_verdict(output)
@@ -307,7 +321,9 @@ def checked_sources(source):
     if catalog.is_symlink() or not catalog.is_file():
         raise ValueError('Installed public Connect lost its actual runtime catalog')
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
-    required = {'cmd/client/ordered_candidate_prefix_linux_tun_native_test.go',
+    required = {'cmd/client/desktop_node_chain_linux_hysteria_tun_native_test.go',
+                'cmd/client/desktop_node_chain_linux_tun_native_test.go',
+                'cmd/client/ordered_candidate_prefix_linux_tun_native_test.go',
                 'cmd/client/ordered_candidate_prefix_runtime.go', 'cmd/client/desktop_node_candidate_prefix_linux.go',
                 'cmd/client/desktop_node_candidate_prefix_candidates.go',
                 'cmd/client/ordered_candidate_preparation_linux_tun_native_test.go',
@@ -641,6 +657,7 @@ def check_verdict(output, case=None):
         ('HYSTERIA2_LAYER_CASES', HYSTERIA2_LAYER_CASES),
         ('IMPORTED_CASES', IMPORTED_CASES),
         ('NODE_CHAIN_HOST_CASES', NODE_CHAIN_HOST_CASES),
+        ('NODE_CHAIN_HYSTERIA_HOST_CASES', NODE_CHAIN_HYSTERIA_HOST_CASES),
         ('SAVED_CANDIDATE_HOST_CASES', SAVED_CANDIDATE_HOST_CASES),
         ('SAVED_PREFIX_HOST_CASES', SAVED_PREFIX_HOST_CASES),
         ('LAYER_CASES', LAYER_CASES),
@@ -656,6 +673,9 @@ def check_verdict(output, case=None):
         ('WIREGUARD_LAYER_CASES', WIREGUARD_LAYER_CASES),
     )}
     for value in cases:
+        if value in membership['NODE_CHAIN_HYSTERIA_HOST_CASES']:
+            if suffix_receipts['verified installed host ordered Hysteria2 native final and joined retirement: ' + value] != 1 or exact_passes[value] != 1:
+                raise ValueError('Installed ordered Hysteria2 omitted or duplicated original encrypted final and joined native retirement: ' + value)
         if value in membership['SAVED_CANDIDATE_HOST_CASES']:
             if saved_candidate_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed saved candidate API omitted or duplicated actual fifty-sample DOWN/decision completion: ' + value)
@@ -1126,6 +1146,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'hysteria_auth_cases': list(HYSTERIA_AUTH_CASES), 'hysteria_auth_output_sha256': hashlib.sha256(hysteria_auth_output.encode()).hexdigest(),
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
+                  'node_chain_hysteria_host_cases': list(NODE_CHAIN_HYSTERIA_HOST_CASES),
                   'saved_candidate_host_cases': list(SAVED_CANDIDATE_HOST_CASES), 'saved_prefix_host_cases': list(SAVED_PREFIX_HOST_CASES),
                   'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
                   'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS), 'node_chain_candidate_output_sha256': hashlib.sha256(node_chain_candidate_output.encode()).hexdigest(),

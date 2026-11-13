@@ -33,7 +33,7 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-var linuxNodeChainHostCases = []string{
+var linuxNodeChainHostCases = append([]string{
 	"node-chain-3-prefix-candidates-save", "node-chain-3-prefix-candidates-cancel",
 	"node-chain-3-awg-fast-wg-prefix-candidates-save", "node-chain-3-awg-fast-wg-prefix-candidates-cancel",
 	"node-chain-3-awg-strong-awg-fast-prefix-candidates-save", "node-chain-3-awg-strong-awg-fast-prefix-candidates-cancel",
@@ -49,7 +49,7 @@ var linuxNodeChainHostCases = []string{
 	"node-chain-3-candidates-save", "node-chain-3-candidates-cancel",
 	"node-chain-3-awg-fast-wg-candidates-save", "node-chain-3-awg-fast-wg-candidates-cancel",
 	"node-chain-3-awg-strong-awg-fast-candidates-save", "node-chain-3-awg-strong-awg-fast-candidates-cancel",
-}
+}, linuxNodeChainHysteriaHostCases()...)
 
 type linuxNodeChainPrefixRequest struct {
 	Mode            string            `json:"mode"`
@@ -74,24 +74,27 @@ type linuxNodeChainPeerReply struct {
 		ProofQueries     uint64 `json:"proof_queries"`
 		AuthRefusals     uint64 `json:"auth_refusals"`
 	} `json:"prefixes"`
-	Final  linuxImportedPeerReply          `json:"final"`
-	Middle *linuxNodeChainImportedCounters `json:"middle,omitempty"`
+	Final    linuxImportedPeerReply             `json:"final"`
+	Middle   *linuxNodeChainImportedCounters    `json:"middle,omitempty"`
+	Hysteria *linuxNodeChainHysteriaObservation `json:"hysteria,omitempty"`
 }
 
 type linuxNodeChainPeer struct {
-	input, output  *os.File
-	reader         *bufio.Reader
-	command        *exec.Cmd
-	done           chan struct{}
-	diagnostic     linuxHostTUNOutput
-	clients        []*ecdh.PrivateKey
-	requests       []linuxNodeChainPrefixRequest
-	finalClient    *ecdh.PrivateKey
-	finalServer    *ecdh.PrivateKey
-	password       string
-	middlePassword string
-	middleMethod   string
-	reply          linuxNodeChainPeerReply
+	input, output    *os.File
+	reader           *bufio.Reader
+	command          *exec.Cmd
+	done             chan struct{}
+	diagnostic       linuxHostTUNOutput
+	clients          []*ecdh.PrivateKey
+	requests         []linuxNodeChainPrefixRequest
+	finalClient      *ecdh.PrivateKey
+	finalServer      *ecdh.PrivateKey
+	password         string
+	middlePassword   string
+	middleMethod     string
+	hysteriaPassword string
+	hysteriaMask     string
+	reply            linuxNodeChainPeerReply
 }
 
 func linuxNodeChainProofID(key *ecdh.PrivateKey) string {
@@ -125,6 +128,9 @@ func linuxNodeChainScenario(scenario string) ([]string, string, error) {
 	}
 	if !found {
 		return nil, "", errors.New("uncaptured ordered installed scenario")
+	}
+	if modes, action, ok := linuxNodeChainHysteriaScenario(scenario); ok {
+		return modes, action, nil
 	}
 	for _, item := range linuxNodeChainImportedCipherCases() {
 		if action, ok := strings.CutPrefix(scenario, item.prefix); ok {
@@ -233,6 +239,7 @@ func (peer *linuxNodeChainPeer) read(t *testing.T) linuxNodeChainPeerReply {
 	} else if reply.Middle != nil {
 		t.Fatal("paired peer unexpectedly supplied imported middle authority")
 	}
+	linuxNodeChainHysteriaReadback(t, peer, reply)
 	peer.reply = reply
 	return reply
 }
@@ -247,6 +254,11 @@ func (peer *linuxNodeChainPeer) observe(t *testing.T, action string) linuxNodeCh
 
 func startLinuxNodeChainPeer(t *testing.T, modes []string) *linuxNodeChainPeer {
 	t.Helper()
+	return startLinuxNodeChainPeerFinal(t, modes, false)
+}
+
+func startLinuxNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *linuxNodeChainPeer {
+	t.Helper()
 	directory, err := os.MkdirTemp("/opt", "routervpn-node-chain-peer-")
 	if err != nil {
 		t.Fatal(err)
@@ -255,10 +267,16 @@ func startLinuxNodeChainPeer(t *testing.T, modes []string) *linuxNodeChainPeer {
 	image := filepath.Join(directory, "peer.test")
 	linuxHostTUNCopy(t, os.Getenv("ROUTERVPN_NODE_HOST_PEER_BINARY"), image, 512<<20, os.Getenv("ROUTERVPN_NODE_HOST_PEER_SHA256"), 0755)
 	peer := linuxNodeChainPeerForModes(t, modes)
+	if hysteria {
+		linuxNodeChainHysteriaCredentials(t, peer)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	root, child := "TestRouterVPNDesktopNodeChainReferenceProcess", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1"
 	if peer.middlePassword != "" {
 		root, child = "TestRouterVPNDesktopNodeChainImportedMiddleReferenceProcess", "ROUTERVPN_NODE_CHAIN_IMPORTED_REFERENCE_CHILD=1"
+	}
+	if hysteria {
+		root, child = "TestRouterVPNDesktopNodeChainHysteriaReferenceProcess", "ROUTERVPN_NODE_CHAIN_HYSTERIA_REFERENCE_CHILD=1"
 	}
 	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image, "-test.run=^"+root+"$", "-test.count=1", "-test.timeout=115s")
 	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", child}
@@ -284,6 +302,9 @@ func startLinuxNodeChainPeer(t *testing.T, modes []string) *linuxNodeChainPeer {
 	var wire any = request
 	if peer.middlePassword != "" {
 		wire = map[string]any{"schema": 1, "paired": request, "middle_method": peer.middleMethod, "middle_password": peer.middlePassword}
+	}
+	if hysteria {
+		wire = map[string]any{"schema": 1, "paired": request, "password": peer.hysteriaPassword, "salamander": peer.hysteriaMask}
 	}
 	if err := json.NewEncoder(peer.input).Encode(wire); err != nil {
 		t.Fatal(err)
@@ -364,7 +385,11 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, faul
 		profiles = append(profiles, middle)
 		nodes = append(nodes, common.MultihopNodeSelection{ID: middle.ID, Mode: "shadowsocks"})
 	}
-	nodes = append(nodes, common.MultihopNodeSelection{ID: final.ID, Mode: "shadowsocks"})
+	finalMode := "shadowsocks"
+	if peer.hysteriaPassword != "" {
+		finalMode = "hysteria2"
+	}
+	nodes = append(nodes, common.MultihopNodeSelection{ID: final.ID, Mode: finalMode})
 	final.MultihopNodes = nodes
 	profiles = append(profiles, final)
 	for i := range profiles {
@@ -380,6 +405,9 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, faul
 	assets[final.ID] = map[string]map[string][]byte{
 		"wg":          {"wg.conf": []byte(fmt.Sprintf("[Interface]\nAddress=10.79.0.2/32,fd79:79::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", base64.StdEncoding.EncodeToString(peer.finalClient.Bytes()), base64.StdEncoding.EncodeToString(peer.finalServer.PublicKey().Bytes())))},
 		"shadowsocks": {"sing-box.json": graph},
+	}
+	if peer.hysteriaPassword != "" {
+		assets[final.ID] = map[string]map[string][]byte{"wg": assets[final.ID]["wg"], "hysteria2": linuxNodeChainHysteriaAssets(t, peer, fault)}
 	}
 	return common.RouterProfileStore{SchemaVersion: common.RouterProfileSchemaVersion, SelectedID: final.ID, Profiles: profiles}, assets
 }
@@ -439,7 +467,7 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 		t.Fatal(err)
 	}
 	count := len(modes) + 1
-	peer := startLinuxNodeChainPeer(t, modes)
+	peer := startLinuxNodeChainPeerFinal(t, modes, strings.HasPrefix(scenario, "node-chain-hy2-"))
 	installLinuxNodeChainProfiles(t, peer, action)
 	if strings.HasPrefix(action, "prefix-candidates-") {
 		linuxHostTUNPrefixCandidateParent(t, installed, scenario, action, modes, peer)
@@ -449,7 +477,7 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 		linuxHostTUNPreparedCandidateParent(t, installed, scenario, action, modes, peer)
 		return
 	}
-	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure"
+	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure" || action == "final-password" || action == "final-trust" || action == "final-mask"
 	switch action {
 	case "wrong-middle-public":
 		peer.observe(t, "wrong-middle-public")
@@ -466,6 +494,7 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 	}
 	result := process.readNodeChain(t, scenario)
 	before := peer.observe(t, "stats")
+	linuxNodeChainHysteriaCounters(t, peer, before, action)
 	if negative {
 		if !result.Rejected || !result.Retired || result.Ready != nil || result.Proof != nil || result.Session == "" || before.Prefixes[0].RawUDP == 0 || before.Prefixes[0].ProofQueries == 0 {
 			t.Fatal("ordered negative never reached its actual first encrypted proof and joined refusal", result, before)
@@ -481,7 +510,7 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 		}
 	} else {
 		if result.Stage != "ready" || result.Ready == nil || result.Proof == nil || !result.Monitor || len(result.Nodes) != count || result.Proof.Generation != 1 ||
-			before.Final.RouterQueries == 0 || before.Final.DNSQueries == 0 || before.Final.FinalPublicQueries == 0 || before.Final.FinalTCP == 0 || before.Final.FinalUDP == 0 {
+			before.Final.RouterQueries == 0 || before.Final.DNSQueries == 0 || before.Final.FinalPublicQueries == 0 || peer.hysteriaPassword == "" && (before.Final.FinalTCP == 0 || before.Final.FinalUDP == 0) {
 			t.Fatal("ordered installed host omitted actual complete proof or final selected traffic", result, before)
 		}
 		for i, prefix := range before.Prefixes {
@@ -520,6 +549,9 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 	}
 	t.Log("verified installed host native lifecycle:", scenario)
 	t.Log("verified installed host ordered independent prefixes and final:", scenario)
+	if peer.hysteriaPassword != "" {
+		t.Log("verified installed host ordered Hysteria2 native final and joined retirement:", scenario)
+	}
 }
 
 func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario string) (failure error) {
@@ -599,7 +631,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			failure = errors.Join(failure, session.Retire(cleanup, session.active, false))
 		}
 	}()
-	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure"
+	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure" || action == "final-password" || action == "final-trust" || action == "final-mask"
 	result := linuxNodeChainHostResult{linuxImportedHostResult: linuxImportedHostResult{Scenario: scenario}}
 	if negative {
 		if response.Code == http.StatusOK || a.state.Connected || a.cmd != nil || constructed == nil || constructed.chain == nil || constructed.chain.platform == nil {
@@ -654,6 +686,9 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		h.launch.chain.mu.Unlock()
 		for i, member := range runtime.selection.Nodes {
 			expected := "shadowsocks"
+			if strings.HasPrefix(scenario, "node-chain-hy2-") {
+				expected = "hysteria2"
+			}
 			if i < len(modes) {
 				expected = modes[i]
 			}

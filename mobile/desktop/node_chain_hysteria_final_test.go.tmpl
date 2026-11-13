@@ -3,6 +3,8 @@
 package routervpnamnezia
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -15,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +51,110 @@ type desktopNodeChainHysteriaFixture struct {
 	held        chan struct{}
 }
 
+type desktopNodeChainHysteriaProvider struct {
+	final       *desktopNodeLayerServer
+	observation *desktopExternalHysteriaObservation
+	ca          string
+	stop        func()
+}
+
+// The direct encrypted test and installed namespace peer share the same pinned
+// HY2 service, original inner services and positively joined socket teardown.
+func desktopNodeChainHysteriaProviderStart(t *testing.T, ctx context.Context, peer *desktopNodeChainPeer, password, mask string, extra []desktopNodeLayerRoute) *desktopNodeChainHysteriaProvider {
+	t.Helper()
+	finalCtx, finalCancel := context.WithCancel(ctx)
+	provider := &desktopNodeChainHysteriaProvider{final: &desktopNodeLayerServer{ctx: finalCtx, cancel: finalCancel, connections: map[io.Closer]bool{},
+		routes: append(append([]desktopNodeLayerRoute(nil), peer.final.final.routes...), extra...)}}
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, ca := desktopImportedFinalCertificate(t)
+	provider.observation = &desktopExternalHysteriaObservation{}
+	closeNative := desktopStartImportedFinalHysteria(t, provider.final, packet, certificate, password, mask, provider.observation)
+	var once sync.Once
+	provider.stop = func() {
+		once.Do(func() {
+			provider.final.mu.Lock()
+			provider.final.closing = true
+			owned := make([]io.Closer, 0, len(provider.final.connections))
+			for connection := range provider.final.connections {
+				owned = append(owned, connection)
+			}
+			provider.final.mu.Unlock()
+			finalCancel()
+			closeNative()
+			for _, connection := range owned {
+				_ = connection.Close()
+			}
+			joined := make(chan struct{})
+			go func() { defer close(joined); provider.final.workers.Wait() }()
+			select {
+			case <-joined:
+			case <-time.After(2 * time.Second):
+				t.Error("original Hysteria2 provider failed to join its retained sockets")
+			}
+		})
+	}
+	t.Cleanup(provider.stop)
+	provider.ca = ca
+	// No prefix receives a physical resolver, final public service or DNS rule.
+	// Only this captured UDP destination reaches the independent HY2 provider.
+	peer.prefixes[len(peer.prefixes)-1].handler.rules["udp/10.77.0.1:443"] = desktopReferenceRule{
+		Network: "udp", Address: "10.77.0.1", Port: 443, Target: packet.LocalAddr().String()}
+	return provider
+}
+
+type desktopNodeChainHysteriaReferenceRequest struct {
+	Schema     int                         `json:"schema"`
+	Paired     desktopNodeChainPeerRequest `json:"paired"`
+	Password   string                      `json:"password"`
+	Salamander string                      `json:"salamander"`
+}
+
+type desktopNodeChainHysteriaReferenceObservation struct {
+	CA           string `json:"ca"`
+	ServerName   string `json:"server_name"`
+	RawUDP       int64  `json:"raw_udp"`
+	TCP          int64  `json:"tcp"`
+	UDP          int64  `json:"udp"`
+	AuthFailures uint32 `json:"auth_failures"`
+}
+
+func TestRouterVPNDesktopNodeChainHysteriaReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_CHAIN_HYSTERIA_REFERENCE_CHILD") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_NODE_CHAIN_HYSTERIA_REFERENCE_CHILD") != "1" {
+		t.Fatal("uncaptured ordered Hysteria2 reference invocation")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, 32<<10+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 32<<10 {
+		t.Fatal("ordered Hysteria2 reference requires its bounded inherited request")
+	}
+	var request desktopNodeChainHysteriaReferenceRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || request.Schema != 1 || len(request.Password) < 16 || len(request.Password) > 256 || len(request.Salamander) < 16 || len(request.Salamander) > 256 || strings.ContainsAny(request.Password+request.Salamander, "\x00\r\n") {
+		t.Fatal("ordered Hysteria2 reference request changed")
+	}
+	if _, err := desktopNodeChainPeerIdentity(request.Paired); err != nil {
+		t.Fatal(err)
+	}
+	local, remote := desktopNodeChainPeerPhysicalNamespace(t, request.Paired)
+	peer := desktopNodeChainPeerStart(t, request.Paired, local, remote)
+	ctx, cancel := context.WithCancel(pause.WithDefaultManager(context.Background()))
+	defer cancel()
+	provider := desktopNodeChainHysteriaProviderStart(t, ctx, peer, request.Password, request.Salamander, nil)
+	desktopNodeChainPeerServe(t, reader, peer, func() any {
+		return struct {
+			desktopNodeChainPeerReply
+			Hysteria desktopNodeChainHysteriaReferenceObservation `json:"hysteria"`
+		}{peer.snapshot(), desktopNodeChainHysteriaReferenceObservation{CA: provider.ca, ServerName: "captured-final.example", RawUDP: provider.final.rawUDP.Load(), TCP: provider.final.plainTCP.Load(), UDP: provider.final.plainUDP.Load(), AuthFailures: provider.observation.authFailures.Load()}}
+	})
+}
+
 func desktopNodeChainHysteriaStart(t *testing.T, modes []string, fault string) *desktopNodeChainHysteriaFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 20*time.Second)
@@ -57,9 +164,6 @@ func desktopNodeChainHysteriaStart(t *testing.T, modes []string, fault string) *
 	loopback := netip.MustParseAddr("127.0.0.1")
 	peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
 	f := &desktopNodeChainHysteriaFixture{ctx: ctx, peer: peer, request: request, held: make(chan struct{}, 1)}
-	finalCtx, finalCancel := context.WithCancel(ctx)
-	f.final = &desktopNodeLayerServer{ctx: finalCtx, cancel: finalCancel, connections: map[io.Closer]bool{},
-		routes: append([]desktopNodeLayerRoute(nil), peer.final.final.routes...)}
 	held := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != "10.77.0.1:8790" || r.Header.Get("Authorization") != "Bearer "+request.FinalAPIToken {
 			http.Error(w, "foreign", http.StatusForbidden)
@@ -72,44 +176,10 @@ func desktopNodeChainHysteriaStart(t *testing.T, modes []string, fault string) *
 		<-r.Context().Done()
 	}))
 	t.Cleanup(held.Close)
-	f.final.routes = append(f.final.routes, desktopNodeLayerRoute{Network: "tcp", Destination: "10.77.0.1:8790", Physical: held.Listener.Addr().String()})
-	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	certificate, ca := desktopImportedFinalCertificate(t)
-	f.observation = &desktopExternalHysteriaObservation{}
 	const password, mask = "original-ordered-Hysteria2-password", "original-ordered-Salamander-mask"
-	closeNative := desktopStartImportedFinalHysteria(t, f.final, packet, certificate, password, mask, f.observation)
-	var once sync.Once
-	f.stop = func() {
-		once.Do(func() {
-			f.final.mu.Lock()
-			f.final.closing = true
-			owned := make([]io.Closer, 0, len(f.final.connections))
-			for connection := range f.final.connections {
-				owned = append(owned, connection)
-			}
-			f.final.mu.Unlock()
-			finalCancel()
-			closeNative()
-			for _, connection := range owned {
-				_ = connection.Close()
-			}
-			joined := make(chan struct{})
-			go func() { defer close(joined); f.final.workers.Wait() }()
-			select {
-			case <-joined:
-			case <-time.After(2 * time.Second):
-				t.Error("original Hysteria2 provider failed to join its retained sockets")
-			}
-		})
-	}
-	t.Cleanup(f.stop)
-	// No prefix receives a physical resolver, final public service or DNS rule.
-	// Only this captured UDP destination reaches the independent HY2 provider.
-	peer.prefixes[len(modes)-1].handler.rules["udp/10.77.0.1:443"] = desktopReferenceRule{
-		Network: "udp", Address: "10.77.0.1", Port: 443, Target: packet.LocalAddr().String()}
+	provider := desktopNodeChainHysteriaProviderStart(t, ctx, peer, password, mask, []desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8790", Physical: held.Listener.Addr().String()}})
+	f.final, f.observation, f.stop = provider.final, provider.observation, provider.stop
+	ca := provider.ca
 	socket := netip.MustParseAddrPort(peer.prefixes[0].bind.address())
 	original := desktopNodeChainPeerSource(t, request, clients, net.JoinHostPort(request.Address, strconv.Itoa(int(socket.Port()))))
 	launch, err := original.LaunchInput()

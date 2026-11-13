@@ -542,6 +542,13 @@ func TestRouterVPNDesktopNodeChainReferenceProcess(t *testing.T) {
 	if _, err := desktopNodeChainPeerIdentity(request); err != nil {
 		t.Fatal(err)
 	}
+	local, remote := desktopNodeChainPeerPhysicalNamespace(t, request)
+	peer := desktopNodeChainPeerStart(t, request, local, remote)
+	desktopNodeChainPeerServe(t, reader, peer, func() any { return peer.snapshot() })
+}
+
+func desktopNodeChainPeerPhysicalNamespace(t *testing.T, request desktopNodeChainPeerRequest) (netip.Addr, netip.Addr) {
+	t.Helper()
 	local, remote := netip.MustParseAddr(request.Address), netip.MustParseAddr(request.ClientAddress)
 	interfaces, err := net.Interfaces()
 	found := false
@@ -558,15 +565,19 @@ func TestRouterVPNDesktopNodeChainReferenceProcess(t *testing.T) {
 	if err != nil || !found {
 		t.Fatal("ordered reference requires its original physical namespace", err)
 	}
-	peer := desktopNodeChainPeerStart(t, request, local, remote)
+	return local, remote
+}
+
+func desktopNodeChainPeerServe(t *testing.T, reader *bufio.Reader, peer *desktopNodeChainPeer, snapshot func() any) {
+	t.Helper()
 	respond := func() {
-		if json.NewEncoder(os.Stdout).Encode(peer.snapshot()) != nil {
+		if json.NewEncoder(os.Stdout).Encode(snapshot()) != nil {
 			t.Fatal("ordered reply pipe failed")
 		}
 	}
 	respond()
 	for {
-		line, err = reader.ReadSlice('\n')
+		line, err := reader.ReadSlice('\n')
 		if errors.Is(err, io.EOF) && len(line) == 0 {
 			return
 		}

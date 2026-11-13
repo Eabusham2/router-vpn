@@ -83,7 +83,7 @@ class OrderedNativeVerdicts(unittest.TestCase):
         self.assertEqual(len(G.MEASUREMENT_CASES), 19)
         linux = (ROOT/'cmd/client/desktop_node_chain_linux_tun_native_test.go').read_text()
         import re
-        match = re.search(r'var linuxNodeChainHostCases = \[\]string\{([^}]+)\}', linux)
+        match = re.search(r'var linuxNodeChainHostCases = append\(\[\]string\{([^}]+)\}, linuxNodeChainHysteriaHostCases\(\)\.\.\.\)', linux)
         self.assertIsNotNone(match)
         original = tuple(re.findall(r'"([a-z0-9-]+)"', match[1]))
         prefixes = ('node-chain-3-', 'node-chain-3-awg-fast-wg-', 'node-chain-3-awg-strong-awg-fast-')
