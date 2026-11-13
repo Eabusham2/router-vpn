@@ -2413,6 +2413,41 @@ This is native runtime fixture evidence, not installed TUN, Windows counter
 execution or physical-device acceptance. The exact cause of the historical
 generic Windows ARM heartbeat failure remains unconfirmed.
 
+## Linux native command-retirement inventory — November 13, 2026
+
+Protected Linux AMD64 job `131741200940` at `4e9f712a` failed at the
+command-retirement verdict parser after its Go invocation returned success.
+The selected test family already included
+`TestRouterVPNRawCommandOriginalStartupDeadline` and its `cli-bound`,
+`shorter-caller` and `expired` children, but the required inventory omitted
+all four. The affected gate and native templates remained unchanged through
+`d746d3bf`; the later heartbeat publication did not modify them.
+The installed ordered TUN acceptance was not reached by that failed job.
+
+The gate now requires all 60 parent/leaf verdicts, preserving the original
+56 and adding those four. A source-derived check compares the 12 selected
+original Go test roots against the required inventory, so a newly selected
+root cannot silently diverge from the Python gate again. Existing checks
+still reject every missing, duplicated, skipped, failed or out-of-order
+record, foreign test identities, race warnings and missing package success.
+Native production code, selectors, source projection and timeouts are unchanged.
+
+All six Python test methods passed in 0.287 seconds. The causal control
+restored the old omission and the new source-derived check rejected it with
+the original startup-deadline root as its witness. The exact `d746d3bf`
+archive's 5,095 source files were checked; only this gate changed.
+The frozen source SHA256 is
+`58707d0be4502dd05fc222ee6c03aa2f1571c8eb506df86c05031e92579fef36`;
+the validation manifest SHA256 is
+`1d16e0852472c3770b55aa188e8862d01035d24fa76b35e53ff387028dde94ab`.
+
+A separate native invocation in the recovery environment reached the
+original 120-second outer limit; no native JSON verdict was observed.
+Its original process group was confirmed joined before handing off the
+compiler. The 30-second Go test bound and `-p=2` shipping invocation were
+not changed. That attempt is not counted as native acceptance: the corrected
+60-record gate still needs its hosted architecture results.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

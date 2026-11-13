@@ -9,6 +9,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -32,6 +33,9 @@ CASES = (
     'TestRouterVPNCommandRetirementShutdownDominatesReload/terminated',
 )
 NATIVE_CASES = (
+    'TestRouterVPNRawCommandOriginalStartupDeadline',
+    *('TestRouterVPNRawCommandOriginalStartupDeadline/'+name for name in (
+        'cli-bound', 'shorter-caller', 'expired')),
     'TestRouterVPNRawCommandNativeStartupAndRetirement',
     'TestRouterVPNRawCommandNativePartialConstructionRetirement',
     'TestRouterVPNRawCommandNativePartialDependenciesRetention',
@@ -93,6 +97,17 @@ class CommandProjectionTests(unittest.TestCase):
             self.assertEqual(set(first), {'cmd_run.go', *(('routervpn_'+name.removesuffix('.tmpl')) for name in PROJECTION.TEMPLATES)})
             self.assertIn(b'//go:build !linux', first['routervpn_command_run_other.go'])
             self.assertIn(b'return false, nil', first['routervpn_command_run_other.go'])
+
+    def test_native_inventory_includes_selected_original_roots(self):
+        selected = {
+            name
+            for template in (*PROJECTION.TEMPLATES, 'external_retirement_linux_test.go.tmpl')
+            for name in re.findall(
+                r'^func (TestRouterVPN(?:CommandRetirement|RawCommand)\w+)\(t \*testing\.T\)',
+                (ROOT/'mobile/desktop'/template).read_text(), re.MULTILINE)
+        }
+        self.assertTrue(selected)
+        self.assertEqual(selected, {name for name in (*CASES, *NATIVE_CASES) if '/' not in name})
 
     def test_verdict_requires_every_original_parent_and_leaf_once(self):
         rows = [{'Action': action, 'Test': name} for name in (*CASES, *NATIVE_CASES) for action in ('run', 'pass')]
