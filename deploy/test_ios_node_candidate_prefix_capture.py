@@ -113,12 +113,23 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + r'''
 '''
 
 
-def main():
+CONTROLS = [
+            ('IOSNodeChainCapture.swift','selectionExecution: selectionExecution, originalSource: source','selectionExecution: selectionExecution, originalSource: nil','retained original compiler source'),
+            ('IOSNodeCandidatePrefixCapture.swift','value.original_source_sha256 == original.sourceSHA256,','true,','ACCEPTED native receipt original-owner'),
+            ('IOSNodeCandidatePrefixCapture.swift','!value.application_open, !value.dns_open, !value.ready,','true, !value.dns_open, !value.ready,','ACCEPTED native receipt application'),
+            ('IOSNodeCandidatePrefixCapture.swift','!value.application_open, !value.dns_open, !value.ready,','!value.application_open, true, !value.ready,','ACCEPTED native receipt dns'),
+            ('IOSNodeCandidatePrefixCapture.swift','source["inventory"] as? String == inventory','true','ACCEPTED changed inventory bytes'),
+            ('IOSNodeCandidatePrefixCapture.swift','guard failure == nil, let created else','guard let created else','ACCEPTED native receipt launch-error'),
+
+]
+
+def run_fixture(swift=SWIFT, files=None, controls=CONTROLS):
     with tempfile.TemporaryDirectory(prefix='.ios-prefix-compiler-',dir=ROOT) as gofolder,tempfile.TemporaryDirectory(prefix='ios-prefix-capture-') as folder:
         work=Path(folder);go=Path(gofolder)/'main.go';go.write_text(GO);compiler=work/'compiler'
         subprocess.run(['go','build','-p','1','-o',str(compiler),str(go)],cwd=ROOT,check=True,timeout=180)
+        print('Apple prefix shared compiler built',flush=True)
         options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules')]
-        stub=work/'Libbox.swift';stub.write_text(LIBBOX);test=work/'Tests.swift';test.write_text(SWIFT)
+        stub=work/'Libbox.swift';stub.write_text(LIBBOX);test=work/'Tests.swift';test.write_text(swift)
         library=work/('libLibbox.dylib' if platform.system()=='Darwin' else 'libLibbox.so')
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(stub),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(library)],check=True,timeout=90)
         if platform.system()!='Darwin':
@@ -126,7 +137,7 @@ def main():
             subprocess.run(options+['-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/'libCryptoKit.so')],check=True,timeout=90)
             options+=['-lCryptoKit']
         command=options+['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
-        files=['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidatePrefixCapture.swift']
+        files=files or ['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidatePrefixCapture.swift']
         binary=work/'test'
         def exercise(replacements=None,witness=None):
             replacements=replacements or {}
@@ -144,17 +155,10 @@ def main():
                 assert result.returncode==0,result.stdout+result.stderr
                 print(result.stdout.strip(),flush=True)
         exercise()
-        for name,before,after,witness in [
-            ('IOSNodeChainCapture.swift','selectionExecution: selectionExecution, originalSource: source','selectionExecution: selectionExecution, originalSource: nil','retained original compiler source'),
-            ('IOSNodeCandidatePrefixCapture.swift','value.original_source_sha256 == original.sourceSHA256,','true,','ACCEPTED native receipt original-owner'),
-            ('IOSNodeCandidatePrefixCapture.swift','!value.application_open, !value.dns_open, !value.ready,','true, !value.dns_open, !value.ready,','ACCEPTED native receipt application'),
-            ('IOSNodeCandidatePrefixCapture.swift','!value.application_open, !value.dns_open, !value.ready,','!value.application_open, true, !value.ready,','ACCEPTED native receipt dns'),
-            ('IOSNodeCandidatePrefixCapture.swift','source["inventory"] as? String == inventory','true','ACCEPTED changed inventory bytes'),
-            ('IOSNodeCandidatePrefixCapture.swift','guard failure == nil, let created else','guard let created else','ACCEPTED native receipt launch-error'),
-        ]:
+        for name,before,after,witness in controls:
             source=(APP/name).read_text();expected=2 if before=='guard failure == nil, let created else' else 1
             assert source.count(before)==expected,(name,before)
             altered=source.replace(before,after);assert altered!=source
             exercise({name:altered},witness)
 
-if __name__=='__main__':main()
+if __name__=='__main__':run_fixture()

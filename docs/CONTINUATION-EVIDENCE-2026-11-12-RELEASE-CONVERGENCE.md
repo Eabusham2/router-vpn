@@ -1292,6 +1292,30 @@ the actual Box/daemon ownership composition with controlled physical I/O;
 they do not establish physical-device tunnel teardown. Native host callers
 and their public prefix-only flow remain separate integration work.
 
+## iOS prefix provider capture and retained native host
+
+A separate prefix provider capture now reopens only its exact private
+publication, original complete saved source, selected prefix and node assets.
+It cannot enter an ordinary connection or Last launch. The new native host
+retains the original factory result before binding, including late returns and
+factory errors, and requires exact MTU readback while proving and measuring
+the prefix. Its application and DNS ingress remain closed throughout.
+
+Candidate cancellation joins the original workers; native Box/TUN closure is
+a separate positive receipt before releasing the MTU hold or owned directory.
+A pure no-acquisition factory failure may retire only after factory completion
+and candidate join. Failed or incomplete native cleanup retains the original
+host for retry and prevents replacement admission. The source inventory and
+Xcode extension source list include the new provider and host.
+
+The actual Swift provider composition passed 86 checks and five compiled
+causal controls; the actual host passed 51 checks and eight controls. These
+exercise source/publication identity, original factory ownership, MTU capture,
+closed preparation, native closure, failed-close retry and cleanup retention.
+Libbox and NetworkExtension I/O are controlled boundaries in these host tests.
+App-to-PacketTunnel activation and real Xcode/device execution remain distinct
+work and are not claimed by these passing fixtures.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
