@@ -209,7 +209,7 @@ func (h *desktopMacOSExternalHost) current(ctx context.Context, running bool) er
 		if err := p.enter(ctx); err != nil {
 			return err
 		}
-		selected := p.originalSession == h.parent.session && h.parent.session.external == h
+		selected := p.originalSession == h.parent.session && h.parent.session.external == h && h.parent.session.candidatePrefix == nil
 		p.gate <- struct{}{}
 		if !selected {
 			return errors.New("macOS external host belongs to another active session")
@@ -283,7 +283,7 @@ func (h *desktopMacOSExternalHost) Start(ctx context.Context) error {
 		a.mu.Unlock()
 		return err
 	}
-	if p.currentLocked(ctx, true) != nil || h.parent.session.external != nil || h.parent.session.nodeChain != nil {
+	if p.currentLocked(ctx, true) != nil || h.parent.session.external != nil || h.parent.session.nodeChain != nil || h.parent.session.candidatePrefix != nil {
 		p.gate <- struct{}{}
 		a.mu.Unlock()
 		return errors.New("macOS external predecessor has not retired")

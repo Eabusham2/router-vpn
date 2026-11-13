@@ -45,7 +45,7 @@ type desktopNodeCandidatePrefixPlatform interface {
 func newDesktopNodeCandidatePrefixLaunchForPurpose(ctx context.Context, selection multihopSelection, session, target string,
 	p *orderedCandidatePreparation) (*desktopNodeLaunch, error) {
 	if ctx == nil || ctx.Err() != nil || p == nil || p.prefixPreparation == nil || p.selection.Native != selection.Native ||
-		selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil || target != "linux" && target != "windows" {
+		selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil || target != "linux" && target != "windows" && target != "darwin" {
 		return nil, errors.New("candidate prefix launch requires its original closed purpose and supported native host")
 	}
 	if err := p.sourceCurrent(ctx); err != nil {

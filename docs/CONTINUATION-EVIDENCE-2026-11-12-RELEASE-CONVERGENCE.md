@@ -145,9 +145,9 @@ access:
   unreachable, now has the iOS app/provider/engine and Android helper/service/UI integration recorded below.
   Windows and Linux now have distinct parent/native-child and saved-prefix API
   integration and native Performance actions.
-  Darwin prefix process identity, PF journal foundation and generated native
-  child are published; its parent/installed-host integration and public native
-  admission remain in progress. Ordinary WireGuard or Android
+  Darwin prefix process identity, PF journal foundation, generated native
+  child and retained parent adapter are published. Installed-host acceptance
+  and public native admission remain in progress. Ordinary WireGuard or Android
   Network calls cannot substitute for the captured native owners. Native acceptance
   of each new platform flow must be recorded separately from these source tests.
 - Ordered graphs still cover a bounded set of WG/AWG prefixes and SS finals,
@@ -1720,6 +1720,37 @@ original physical-root guard, sealed desktop policy guard and saved endpoint
 binding assertion. Those are portable compiler and policy results; the
 encrypted DNS/SS runtime fixture and desktop, Android and iOS producers are
 separate work and are not claimed complete by this shared-source unit.
+
+## Retained Darwin parent for selected-prefix preparation
+
+The Darwin parent now retains a distinct candidate-prefix host under the
+original installed controller session. It keeps complete saved-source
+ownership separate from the selected runnable prefix, stages private inputs,
+uses the existing inherited native child channel and registers cleanup before
+any PF or process mutation. It cannot publish an ordinary active graph,
+Connected state or replacement-owner authority. Retirement requires the
+original authenticated child acknowledgment and process join, exact native PF
+journal cleanup and removal of the original private workspace; failed or
+ambiguous cleanup stays owned for retry.
+
+The native baseline action retains its original 30-second operation context
+and adds a five-second bounded output-pipe join. A pipe-join failure remains
+an error and never establishes native DOWN. Original stopped identity,
+selected profile, process family and PF receipt are checked separately from
+ordinary external or complete-chain sessions.
+
+All nine changed files matched the frozen `4e9f712ad774ada48d571a39a1b40ef05e066e70`
+snapshot plus those exact files. Complete ordinary Darwin controller test
+images cross-compiled with CGO disabled for AMD64 in 68.542 seconds and ARM64
+in 75.411 seconds, including six retained-host lifecycle test roots and three
+child cases. The image SHA-256 values were
+`bf7c76dac201c741bc1cd8a65481d78750ba6b9507296f2c3c3faee0275fc671` and
+`2cdaf7c258cbd1fc5c522440343d1f051fe49e92245d61e747d53831b8b849ed`.
+This Linux environment did not execute those Darwin images. Later shared
+hostname-source changes still require exact-publication hosted verification.
+The tagged installed fixture, private test admission seams, six-case native
+gate and macOS interface action are separate work. Public Darwin candidate
+and ordered admission remain closed pending actual native acceptance.
 
 ## Physical and private acceptance
 

@@ -39,9 +39,10 @@ type desktopMacOSParent struct {
 type desktopMacOSSession struct {
 	parent           *desktopMacOSParent
 	dependents       map[ownedDesktopNodeParent]struct{}
-	external         desktopExternalRetainedRuntime // Exact active ordinary host; protected by parent.gate.
-	nodeChain        *desktopNodeChainPlatformRuntime // Exact active ordered host; protected by parent.gate.
-	stopping, closed bool                           // Protected by the original parent's gate.
+	external         desktopExternalRetainedRuntime             // Exact active ordinary host; protected by parent.gate.
+	nodeChain        *desktopNodeChainPlatformRuntime           // Exact active ordered host; protected by parent.gate.
+	candidatePrefix  *desktopNodeCandidatePrefixPlatformRuntime // Separate never-connected purpose; protected by parent.gate.
+	stopping, closed bool                                       // Protected by the original parent's gate.
 }
 
 // Cleanup retains the original authority after admission is canceled. It does

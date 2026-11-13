@@ -113,7 +113,7 @@ func (h *desktopMacOSExternalHost) closeWithIntent(ctx context.Context, hold boo
 		a.mu.Unlock()
 		return err
 	}
-	if p.originalSession != h.parent.session || h.published && h.parent.session.external != h {
+	if p.originalSession != h.parent.session || h.published && (h.parent.session.external != h || h.parent.session.candidatePrefix != nil) {
 		p.gate <- struct{}{}
 		a.mu.Unlock()
 		return errors.New("macOS external retirement belongs to a replaced session")

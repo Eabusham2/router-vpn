@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package main
 
@@ -7,8 +7,8 @@ import (
 	"errors"
 )
 
-// Windows uses its captured owned-node host. Darwin remains unavailable until
-// its actual prefix PF/utun lifecycle has earned native acceptance.
+// Windows uses its captured owned-node host. Other targets have no concrete
+// platform adapter; public admission remains a separate accepted-capability gate.
 func (*desktopNodeChainPlatformCapture) prepareCandidatePrefixForPurpose(context.Context, *desktopNodeChainHostCapture, multihopSelection, *orderedCandidatePreparation) (*desktopNodeLaunch, string, error) {
 	return nil, "", errors.New("candidate prefix native platform admission is unavailable")
 }
