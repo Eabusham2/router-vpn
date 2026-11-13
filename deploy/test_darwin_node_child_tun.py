@@ -313,52 +313,115 @@ def execute(source, go='go', *, environment=None, compile_only=False, preflight_
 
 
 def native_output(command, *, cwd=None, env=None, timeout=960, sudo=None):
-    # Preserve the original newly-owned process group and complete merged
-    # transcript, but expose diagnostic bytes before a native PF transition
-    # can interrupt the runner. Streaming is never a verdict or a joined proof.
-    process = subprocess.Popen([str(value) for value in command], cwd=cwd, env=env,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               start_new_session=True)
+    # The sole Python caller owns this synchronous reporting scope. A dup
+    # preserves the original open-file description, so always restore its
+    # exact flags before closing our descriptor; do not admit another writer.
+    import fcntl
+    import threading
+    if (threading.current_thread() is not threading.main_thread()
+            or threading.active_count() != 1):
+        raise ValueError('Native reporting requires its sole original caller')
+    stream = getattr(sys.stdout, 'buffer', sys.stdout)
+    try:
+        sink = stream.fileno()
+        identity = os.fstat(sink)
+        flags = fcntl.fcntl(sink, fcntl.F_GETFL)
+    except (AttributeError, OSError, ValueError) as error:
+        raise ValueError('Native reporting requires a captured writable pipe or socket') from error
+    if (not (stat.S_ISFIFO(identity.st_mode) or stat.S_ISSOCK(identity.st_mode))
+            or flags & os.O_ACCMODE == os.O_RDONLY):
+        raise ValueError('Native reporting requires a captured writable pipe or socket')
+    forwarding = os.dup(sink)
+    changed_flags = False
+    process = None
     output = bytearray()
-    with selectors.DefaultSelector() as selector:
-        selector.register(process.stdout, selectors.EVENT_READ)
-        def receive(deadline):
-            while selector.get_map() or process.poll() is None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
-                for key, _ in selector.select(min(remaining, 0.1)):
-                    chunk = os.read(key.fd, 65536)
-                    if not chunk:
-                        selector.unregister(key.fileobj)
-                        continue
-                    output.extend(chunk)
-                    stream = getattr(sys.stdout, 'buffer', None)
-                    if stream is not None:
-                        stream.write(chunk); stream.flush()
-                    else:
-                        sys.stdout.write(chunk.decode('utf-8', errors='replace')); sys.stdout.flush()
+    def same_sink(actual):
+        return ((actual.st_dev, actual.st_ino, actual.st_mode, actual.st_rdev)
+                == (identity.st_dev, identity.st_ino, identity.st_mode, identity.st_rdev))
+    try:
+        if (not same_sink(os.fstat(sink)) or not same_sink(os.fstat(forwarding))
+                or fcntl.fcntl(forwarding, fcntl.F_GETFL) != flags):
+            raise ValueError('Native reporting duplicate lost its captured original sink')
+        fcntl.fcntl(forwarding, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        changed_flags = True
+        # Child output goes only to this new capture pipe; it never inherits
+        # the reporting descriptor as stdout/stderr or borrows its flags.
+        process = subprocess.Popen([str(value) for value in command], cwd=cwd, env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   start_new_session=True)
+        # Every operation after acquiring this original child, including
+        # selector construction/registration, retains its bounded cleanup.
         try:
-            receive(time.monotonic() + timeout)
-        except subprocess.TimeoutExpired as expired:
+            with selectors.DefaultSelector() as selector, selectors.DefaultSelector() as writable:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                writable.register(forwarding, selectors.EVENT_WRITE)
+                def forward(chunk, deadline):
+                    pending = memoryview(chunk)
+                    while pending:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
+                        if not same_sink(os.fstat(sink)):
+                            raise OSError('Native reporting sink replaced its original descriptor')
+                        try:
+                            written = os.write(forwarding, pending)
+                        except BlockingIOError:
+                            writable.select(min(remaining, 0.1))
+                            continue
+                        if written <= 0:
+                            raise OSError('Native reporting did not write its original bytes')
+                        pending = pending[written:]
+                def receive(deadline):
+                    while selector.get_map() or process.poll() is None:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(command, timeout, output=bytes(output))
+                        for key, _ in selector.select(min(remaining, 0.1)):
+                            chunk = os.read(key.fd, 65536)
+                            if not chunk:
+                                selector.unregister(key.fileobj)
+                                continue
+                            # Capture first; a refused reporter never erases
+                            # original native bytes or becomes an acceptance.
+                            output.extend(chunk)
+                            forward(chunk, deadline)
+                receive(time.monotonic() + timeout)
+        except BaseException as expired:
             try:
                 if sudo is None:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                 else:
                     subprocess.run([sudo, '-n', '--', '/bin/kill', '-KILL', '--', '-'+str(process.pid)],
                                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
-                receive(time.monotonic() + 5)
+                # This join does not use the failed reporting selector or sink.
+                # communicate drains the original capture pipe and waits for
+                # the same acquired process under the existing five seconds.
+                remaining, _ = process.communicate(timeout=5)
+                output.extend(remaining or b'')
             except (OSError, subprocess.SubprocessError) as cleanup:
-                raise RuntimeError('Darwin native fixture timed out and its process group could not be joined: '+
+                raise RuntimeError('Darwin native output failed and its process group could not be joined: '+
                                    bytes(output)[-8192:].decode('utf-8', errors='replace')) from cleanup
-            raise RuntimeError('Darwin native fixture timed out after its process group was joined: '+
+            if isinstance(expired, subprocess.TimeoutExpired):
+                raise RuntimeError('Darwin native fixture timed out after its process group was joined: '+
+                                   bytes(output)[-8192:].decode('utf-8', errors='replace')) from expired
+            if not isinstance(expired, Exception):
+                raise
+            raise RuntimeError('Darwin native reporting failed after its process group was joined: '+
                                bytes(output)[-8192:].decode('utf-8', errors='replace')) from expired
         finally:
             process.stdout.close()
-    if process.returncode:
-        raise subprocess.CalledProcessError(process.returncode, command, output=bytes(output))
-    return bytes(output).decode('utf-8')
-
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command, output=bytes(output))
+        return bytes(output).decode('utf-8')
+    finally:
+        try:
+            if changed_flags:
+                fcntl.fcntl(forwarding, fcntl.F_SETFL, flags)
+        finally:
+            os.close(forwarding)
 
 
 def execute_preflight_images(source, before, captured, sudo, arch, uid, child, peer, identities):

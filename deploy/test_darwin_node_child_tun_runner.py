@@ -540,57 +540,88 @@ class EncryptedPeerSourceClosure(unittest.TestCase):
 
 
 class StreamingNativeOutput(unittest.TestCase):
+    @contextlib.contextmanager
+    def captured_sink(self, *, ack=None, partial=False):
+        import fcntl
+        with tempfile.TemporaryDirectory(prefix='native-reporting-pipe-') as temporary:
+            output = Path(temporary)/'output'
+            read, write = os.pipe()
+            reader = subprocess.Popen([sys.executable, '-c', """import os,pathlib,sys
+fd=int(sys.argv[1]);body=bytearray()
+while True:
+ chunk=os.read(fd,65536)
+ if not chunk:break
+ body.extend(chunk)
+ if sys.argv[3] and b'original native stage\\n' in body:pathlib.Path(sys.argv[3]).write_text('original bytes observed')
+pathlib.Path(sys.argv[2]).write_bytes(body)
+""", str(read), str(output), str(ack) if ack else ''], pass_fds=(read,),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            os.close(read)
+            original_flags = fcntl.fcntl(write, fcntl.F_GETFL)
+            stream = os.fdopen(write, 'wb', buffering=0)
+            class Sink:
+                buffer = stream
+            captured = {'partial_writes': 0}
+            original_write = os.write
+            def shorter(fd, data):
+                if partial and len(data) > 17:
+                    captured['partial_writes'] += 1
+                    return original_write(fd, data[:17])
+                return original_write(fd, data)
+            try:
+                with patch.object(G.sys, 'stdout', Sink()), patch.object(G.os, 'write', side_effect=shorter):
+                    yield captured
+            finally:
+                self.assertEqual(fcntl.fcntl(write, fcntl.F_GETFL), original_flags)
+                stream.close()
+                try:
+                    _, errors = reader.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(reader.pid, signal.SIGKILL); reader.communicate(timeout=2)
+                    raise
+                self.assertEqual(reader.returncode, 0, errors.decode())
+                captured['output'] = output.read_bytes()
+
     def test_actual_native_bytes_arrive_before_original_process_exit(self):
         source = (ROOT/'deploy/test_darwin_node_child_tun.py').read_text()
         helper = source[source.index('def native_output('):source.index('\ndef execute_native_images(')]
-        needle = 'stream.write(chunk); stream.flush()'
+        needle = 'forward(chunk, deadline)'
+        self.assertEqual(helper.count(needle), 2)
+        # Mutate only the call, retaining the original forwarding definition.
+        needle = '                            forward(chunk, deadline)'
         self.assertEqual(helper.count(needle), 1)
-        child = '''import pathlib,sys,time
+        child = """import pathlib,sys,time
 ack=pathlib.Path(sys.argv[1])
 print("original native stage",flush=True)
-while not ack.exists():
- time.sleep(0.01)
+while not ack.exists():time.sleep(0.01)
 print("original command completed",flush=True)
-'''
+"""
         with tempfile.TemporaryDirectory() as directory:
             for mutated in (False, True):
                 ack = Path(directory)/('mutant' if mutated else 'original')
-                class Bytes(io.BytesIO):
-                    def write(self, body):
-                        count = super().write(body)
-                        if b'original native stage\n' in self.getvalue(): ack.write_text('observed original bytes')
-                        return count
-                class Sink:
-                    buffer = Bytes()
                 namespace = dict(G.__dict__)
-                changed = helper.replace(needle, 'pass # withheld output', 1) if mutated else helper
+                changed = helper.replace(needle, '                            pass # withheld output', 1) if mutated else helper
                 self.assertEqual(changed != helper, mutated)
                 exec(changed, namespace)
-                sink = Sink()
-                with patch.object(G.sys, 'stdout', sink):
+                with self.captured_sink(ack=ack) as sink:
                     if mutated:
-                        # Withheld output cannot publish this exact child's ACK.
-                        # Its original outer deadline must join that process
-                        # group; no shorter child timer races a loaded runner.
                         with self.assertRaisesRegex(RuntimeError, 'timed out after its process group was joined') as refused:
                             namespace['native_output']([sys.executable, '-c', child, str(ack)], timeout=3)
                         self.assertIsInstance(refused.exception.__cause__, subprocess.TimeoutExpired)
                         self.assertEqual(refused.exception.__cause__.output, b'original native stage\n')
                         self.assertFalse(ack.exists())
-                        self.assertEqual(sink.buffer.getvalue(), b'')
                     else:
                         output = namespace['native_output']([sys.executable, '-c', child, str(ack)], timeout=3)
                         self.assertEqual(output, 'original native stage\noriginal command completed\n')
-                        self.assertEqual(sink.buffer.getvalue(), output.encode())
                         with self.assertRaises(ValueError): G.check_verdict(output)
+                self.assertEqual(sink['output'], b'' if mutated else output.encode())
 
     def test_actual_failure_preserves_same_captured_output_and_exit(self):
-        sink = io.StringIO()
-        with contextlib.redirect_stdout(sink), self.assertRaises(subprocess.CalledProcessError) as failed:
+        with self.captured_sink() as sink, self.assertRaises(subprocess.CalledProcessError) as failed:
             G.native_output([sys.executable, '-c', 'import sys;print("actual native refusal",flush=True);sys.exit(17)'], timeout=3)
         self.assertEqual(failed.exception.returncode, 17)
         self.assertEqual(failed.exception.output, b'actual native refusal\n')
-        self.assertEqual(sink.getvalue(), 'actual native refusal\n')
+        self.assertEqual(sink['output'], b'actual native refusal\n')
 
     def test_actual_timeout_signals_only_new_original_group_and_stays_failed(self):
         kill = os.killpg
@@ -598,19 +629,196 @@ print("original command completed",flush=True)
         def captured(group, sig):
             calls.append((group, sig)); return kill(group, sig)
         started = time.monotonic()
-        with contextlib.redirect_stdout(io.StringIO()) as output, patch.object(G.os, 'killpg', side_effect=captured), self.assertRaisesRegex(RuntimeError, 'timed out after its process group was joined'):
+        with self.captured_sink() as output, patch.object(G.os, 'killpg', side_effect=captured), self.assertRaisesRegex(RuntimeError, 'timed out after its process group was joined'):
             G.native_output([sys.executable, '-c', 'import os,time;print("original-group="+str(os.getpid()),flush=True);time.sleep(30)'], timeout=0.25)
         self.assertLess(time.monotonic()-started, 3)
-        group = int(output.getvalue().strip().split('=')[1])
+        group = int(output['output'].decode().strip().split('=')[1])
         self.assertNotEqual(group, os.getpgrp())
         self.assertEqual(calls, [(group, signal.SIGKILL)])
+
+    def test_actual_partial_writes_preserve_every_original_byte_and_flags(self):
+        body = ('original complete native transcript\n'*4096).encode()
+        with self.captured_sink(partial=True) as sink:
+            output = G.native_output([sys.executable, '-c', 'import sys;sys.stdout.write("original complete native transcript\\n"*4096)'], timeout=5)
+        self.assertGreater(sink['partial_writes'], 0)
+        self.assertEqual(output.encode(), body)
+        self.assertEqual(sink['output'], body)
+
+    def test_unsupported_sink_refuses_before_any_native_process(self):
+        with contextlib.redirect_stdout(io.StringIO()), patch.object(G.subprocess, 'Popen') as start:
+            with self.assertRaisesRegex(ValueError, 'captured writable pipe'):
+                G.native_output(['must-not-start'], timeout=1)
+            start.assert_not_called()
+
+    def test_spawn_failure_restores_flags_and_concurrent_writer_refuses_before_start(self):
+        import fcntl
+        import threading
+        with self.captured_sink(), patch.object(G.subprocess, 'Popen', side_effect=OSError('captured spawn refusal')):
+            with self.assertRaisesRegex(OSError, 'captured spawn refusal'):
+                G.native_output(['does-not-start'], timeout=1)
+        entered, release = threading.Event(), threading.Event()
+        def other_writer():
+            entered.set(); release.wait(3)
+        worker = threading.Thread(target=other_writer)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            with patch.object(G.subprocess, 'Popen') as start:
+                with self.assertRaisesRegex(ValueError, 'sole original caller'):
+                    G.native_output(['must-not-start'], timeout=1)
+                start.assert_not_called()
+        finally:
+            release.set(); worker.join(2)
+        self.assertFalse(worker.is_alive())
+
+    def test_closed_pipe_keeps_failure_and_joins_original_group(self):
+        import fcntl
+        read, write = os.pipe(); os.close(read)
+        stream = os.fdopen(write, 'wb', buffering=0)
+        class Sink:
+            buffer = stream
+        flags = fcntl.fcntl(write, fcntl.F_GETFL)
+        children = []
+        popen = subprocess.Popen
+        def captured(*args, **kwargs):
+            process = popen(*args, **kwargs); children.append(process); return process
+        try:
+            with patch.object(G.sys, 'stdout', Sink()), patch.object(G.subprocess, 'Popen', side_effect=captured):
+                with self.assertRaisesRegex(RuntimeError, 'reporting failed after its process group was joined') as failed:
+                    G.native_output([sys.executable, '-c', 'import time;print("original refusal",flush=True);time.sleep(30)'], timeout=1)
+            self.assertIsInstance(failed.exception.__cause__, BrokenPipeError)
+            self.assertIn('original refusal', str(failed.exception))
+            self.assertEqual(fcntl.fcntl(write, fcntl.F_GETFL), flags)
+            self.assertEqual(len(children), 1)
+            self.assertIsNotNone(children[0].returncode)
+            with self.assertRaises(ProcessLookupError): os.killpg(children[0].pid, 0)
+        finally:
+            stream.close()
+
+    def test_full_pipe_cannot_defer_original_deadline_and_blocking_control_is_detected(self):
+        import fcntl
+        import select
+        # The parent owns and fills the report pipe, then withholds all reads.
+        # Both implementations run the real imported function in one original
+        # process. The old blocking behavior is released and joined afterward.
+        script = r"""import fcntl,importlib.util,json,os,pathlib,subprocess,sys
+source,receipt,mode=sys.argv[1:]
+spec=importlib.util.spec_from_file_location('actual_native_gate',source);g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
+if mode=='blocking':
+ text=pathlib.Path(source).read_text();begin=text.index('def native_output(');end=text.index('\ndef execute_preflight_images(',begin)
+ helper=text[begin:end];needle='flags | os.O_NONBLOCK'
+ assert helper.count(needle)==1
+ exec(helper.replace(needle,'flags',1),g.__dict__)
+children=[];original=subprocess.Popen
+def capture(*args,**kwargs):
+ p=original(*args,**kwargs);children.append(p);return p
+subprocess.Popen=capture
+flags=fcntl.fcntl(1,fcntl.F_GETFL)
+result={}
+try:g.native_output([sys.executable,'-c','import time;print("captured native output",flush=True);time.sleep(30)'],timeout=0.10)
+except BaseException as e:result={'error':str(e),'cause':type(e.__cause__).__name__}
+result['flags_restored']=fcntl.fcntl(1,fcntl.F_GETFL)==flags
+result['children']=[]
+for p in children:
+ try:os.killpg(p.pid,0);absent=False
+ except ProcessLookupError:absent=True
+ result['children'].append({'joined':p.returncode is not None,'group_absent':absent})
+pathlib.Path(receipt).write_text(json.dumps(result))
+"""
+        with tempfile.TemporaryDirectory(prefix='native-reporting-backpressure-') as directory:
+            for mode in ('bounded', 'blocking'):
+                receipt = Path(directory)/mode
+                read, write = os.pipe()
+                flags = fcntl.fcntl(write, fcntl.F_GETFL)
+                fcntl.fcntl(write, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+                try:
+                    while True: os.write(write, b'held reporter '*4096)
+                except BlockingIOError:
+                    pass
+                fcntl.fcntl(write, fcntl.F_SETFL, flags)
+                process = subprocess.Popen([sys.executable, '-c', script, str(ROOT/'deploy/test_darwin_node_child_tun.py'), str(receipt), mode],
+                    stdout=write, stderr=subprocess.PIPE, start_new_session=True)
+                os.close(write)
+                completed_while_held = False
+                try:
+                    try:
+                        process.wait(timeout=1.5)
+                        completed_while_held = True
+                    except subprocess.TimeoutExpired:
+                        pass
+                    # Release the same pipe for the blocking causal control;
+                    # its own original deadline must now kill/join its child.
+                    os.set_blocking(read, False)
+                    deadline = time.monotonic()+5
+                    while process.poll() is None:
+                        if time.monotonic() >= deadline: self.fail('original reporter process did not join after its pipe was released')
+                        if select.select([read], [], [], 0.05)[0]:
+                            try: os.read(read, 65536)
+                            except BlockingIOError: pass
+                    _, errors = process.communicate(timeout=2)
+                    self.assertEqual(process.returncode, 0, errors.decode())
+                    result = json.loads(receipt.read_text())
+                    self.assertEqual(completed_while_held, mode=='bounded', result)
+                    self.assertIn('timed out after its process group was joined', result['error'])
+                    self.assertEqual(result['cause'], 'TimeoutExpired')
+                    self.assertTrue(result['flags_restored'])
+                    self.assertEqual(result['children'], [{'joined': True, 'group_absent': True}])
+                finally:
+                    os.close(read)
+                    if process.poll() is None:
+                        os.killpg(process.pid, signal.SIGKILL); process.communicate(timeout=2)
+
+    def test_each_post_spawn_selector_setup_failure_joins_the_actual_original_child(self):
+        real_selector = G.selectors.DefaultSelector
+        real_popen = subprocess.Popen
+        for stage in ('first-constructor', 'second-constructor', 'capture-register', 'forward-register'):
+            with self.subTest(stage=stage), self.captured_sink():
+                children = []
+                constructions = 0
+                def capture(*args, **kwargs):
+                    process = real_popen(*args, **kwargs); children.append(process); return process
+                def construct():
+                    nonlocal constructions
+                    constructions += 1
+                    current = constructions
+                    if (stage == 'first-constructor' and current == 1
+                            or stage == 'second-constructor' and current == 2):
+                        raise OSError('original selector setup refused')
+                    selector = real_selector()
+                    if (stage == 'capture-register' and current == 1
+                            or stage == 'forward-register' and current == 2):
+                        def refused(*args, **kwargs):
+                            raise ValueError('original selector registration refused')
+                        selector.register = refused
+                    return selector
+                with patch.object(G.subprocess, 'Popen', side_effect=capture), patch.object(G.selectors, 'DefaultSelector', side_effect=construct):
+                    with self.assertRaisesRegex(RuntimeError, 'reporting failed after its process group was joined') as failed:
+                        G.native_output([sys.executable, '-c', 'import time;time.sleep(30)'], timeout=1)
+                self.assertIn('original selector', str(failed.exception.__cause__))
+                self.assertEqual(len(children), 1)
+                self.assertIsNotNone(children[0].returncode)
+                with self.assertRaises(ProcessLookupError): os.killpg(children[0].pid, 0)
+
+    def test_foreign_duplicate_refuses_before_flags_or_native_ownership_change(self):
+        import fcntl
+        read, write = os.pipe()
+        flags = fcntl.fcntl(write, fcntl.F_GETFL)
+        duplicate = os.dup
+        try:
+            with self.captured_sink(), patch.object(G.os, 'dup', side_effect=lambda original: duplicate(write)), patch.object(G.subprocess, 'Popen') as start:
+                with self.assertRaisesRegex(ValueError, 'duplicate lost its captured original sink'):
+                    G.native_output(['must-not-start'], timeout=1)
+                start.assert_not_called()
+                self.assertEqual(fcntl.fcntl(write, fcntl.F_GETFL), flags)
+        finally:
+            os.close(read); os.close(write)
 
     def test_sudo_timeout_keeps_captured_negative_group_delimiter(self):
         source = (ROOT/'deploy/test_darwin_node_child_tun.py').read_text()
         helper = source[source.index('def native_output('):source.index('\ndef execute_native_images(')]
         self.assertIn("[sudo, '-n', '--', '/bin/kill', '-KILL', '--', '-'+str(process.pid)]", helper)
         self.assertIn('start_new_session=True', helper)
-        self.assertIn('receive(time.monotonic() + 5)', helper)
+        self.assertIn('process.communicate(timeout=5)', helper)
         self.assertNotIn('native_down', helper)
         self.assertNotIn('pfctl', helper)
 

@@ -2892,6 +2892,117 @@ publication, full native graph coverage and physical/private acceptance
 remain open. No success for a previous SHA is substituted for that evidence.
 
 
+
+## Follow-up: typed MTU publication, native source refusal and diagnostic bounds
+
+The two unchanged SOCKS MTU files from candidate
+`022cb5cb6ceddcc0c09363041f5f4e5f8f1bbc44` were published as
+[f5d2860536d2a8bd2e729b77cd7c334d50afb52f](https://github.com/Eabusham2/router-vpn/commit/f5d2860536d2a8bd2e729b77cd7c334d50afb52f).
+Focused run [43420952125](https://github.com/Eabusham2/router-vpn/actions/runs/43420952125),
+job `131870510523`, passed under validator
+`1087f3c999c7f8f2d5e2a80dd09b2ad2a18268ad`. Actual Go 1.26.3 race runs passed
+24 new MTU records, 19 original MTU records and 36 original runtime records.
+The three separately compiled causal controls produced exactly two, two and
+ten required failures, with their original witnesses. All six process
+groups joined without timeout, all 5,122 tracked source entries retained
+their hashes and the before/after selection matched. Downloaded artifact
+`14034477400` had SHA256
+`3c5aa3123573915707012efc72fd9223d557a84ae11d9299f97b1f7ca1466939`;
+all raw verdict logs were independently reparsed by the captured trusted
+validator. Publication rebased the identical two blobs onto newer main,
+preserving unrelated changes. Actual native interface readback/continuation,
+Box/TUN, complete encrypted native Run and host/UI activation remain separate.
+
+The repaired owner candidate
+`62eb3b34b0c1a6b84f63390bfc484cad2642751e` also ran, in
+[43420957734](https://github.com/Eabusham2/router-vpn/actions/runs/43420957734),
+job `131870530069`. Its exact daemon-capture preflight passed, and its real
+race-instrumented encrypted owner image compiled successfully in 272.424
+seconds. The baseline then failed in 0.923 seconds: every native fixture
+was refused by the bounded shared SOCKS source constructor before the
+encrypted probes. This is distinct from the previous missing daemon
+declarations; the compiler blocker is cleared, native ownership acceptance
+is not. The three executed phase process groups joined. Artifact
+`14034688243` was downloaded and verified with SHA256
+`cac1f7dfe57e1047bcee27eb8ec76aaa0724db9de6f5ce38e2c1e6fda96c2a27`;
+the exact baseline log has SHA256
+`cb832b75493a54b7db96125849a229706e65282ba9ef136cbc4e1077c254193c`.
+The source/fixture discrepancy is being investigated without relaxing the
+compiler's canonical source, credential or policy checks. This candidate
+has not been published.
+
+The native MTU deadline fixture repair was published as
+[c745d4d2040781ed2c89ed8d46cc5d82fad9b3f1](https://github.com/Eabusham2/router-vpn/commit/c745d4d2040781ed2c89ed8d46cc5d82fad9b3f1).
+Independent review confirmed that the original 300 ms expiry, expired-input
+refusal and restored MTU 1400 checks remain. A separate held-worker case
+cancels the observation, checks that it cannot retire the captured operation,
+then explicitly cancels the original lifetime and requires rollback.
+The production deadline and cancellation code did not change. Actual native
+execution of that modified fixture remains required.
+
+The fixed first-case Darwin diagnostic was published in
+`4f39d70339ebb18876464c13e1c625c63a8358e8`. Its first dispatch was rejected
+with HTTP 422 because job-level environment expressions used
+`runner.temp`. The one-file correction
+`5f188fce5c63128bf47cfaed76e3a8f22e1b2cdd` resolves those paths from
+`RUNNER_TEMP` in the executing step. The corrected dispatch was accepted;
+[43421357456](https://github.com/Eabusham2/router-vpn/actions/runs/43421357456),
+job `131871888733`, passed its runner checks and completed the scheduled
+checkpoint upload before attempting the unchanged original `wg-three`
+case. Artifact `14034766145` was independently downloaded:
+ZIP SHA256 `44403b1791a9fa40b712b04bd7ee3ba401d7532baf8cadb97e418c15d1c4a731`,
+checkpoint SHA256 `e37f53988f10c69510c0c88deeecb9565a74baa4c272b47eedad97ebdbd6842e`.
+The checkpoint's source, tree and three named source hashes match the
+published files. It explicitly records scheduled, case-not-started and
+native-not-accepted; its reported full source digest was not independently
+recomputed. No successful native case is inferred from that checkpoint.
+
+Read-only tracing established that the native workflow step includes pinned
+preparation and compilation before the inner 960-second native invocation.
+The earlier one-hour job timeout does not establish that the inner invocation
+overran. The global PF baseline can also block ordinary host communication;
+missing terminal logs do not establish which native failure triggered that
+state. No outer harness authority to restore a live guardian's PF or routes
+was invented.
+
+A separate actual-process reproduction demonstrated a real reporting-bound
+defect: a held output sink blocked the original synchronous write/flush past
+its caller deadline. This change uses a captured writable pipe/socket,
+nonblocking forwarding with the same deadline, independent transcript
+capture, exact descriptor/flag restoration and bounded cleanup of the
+acquired original process. Selector setup errors after process creation
+use that same cleanup. Unsupported sinks are refused before native work.
+Forty-five selected Python methods passed, including actual pipe/process
+controls for partial writes, backpressure, closed sinks, foreign duplicates,
+post-creation setup failures, original nonzero exit, complete output and
+joined timeout. The blocking-forwarding and withheld-output causal controls
+remain effective. Existing Go extraction classes were unchanged and were
+not represented as rerun. PF/route policy, native verdicts and the complete
+exhaustive case inventory are unchanged. The hosted disconnect's cause
+remains unproved.
+
+Eight obsolete ancestor push workflows were normally cancelled only after
+their 19 unstarted Mac jobs and absence of active native jobs were
+rechecked and preserved; all eight reached completed/cancelled. The original
+profile-only run `43414997838` also remained wholly unstarted for over one
+hour. Commit
+`fbb6b3eae8efa2bdf99a61bb6c1a923905174d86` routes that focused suite to the
+Intel macOS target already supported by its trusted validator, preserving
+all 37 compiled causal controls and all full-release architecture gates.
+The identical two source blobs are now candidate
+`302fd49655cf2c8bb7a5fa42935b23a4a58e7481`, submitted as
+[43423758735](https://github.com/Eabusham2/router-vpn/actions/runs/43423758735).
+The superseded unstarted run's cancellation is administrative evidence,
+not a source test failure or pass.
+
+Android SOCKS capture, node/editor selection and saved-profile changes
+are being prepared separately. They are unpublished and uncompiled, and
+must not be counted as shipping host support. Complete native construction,
+positive encrypted Run/measurement, exact MTU reader continuation and
+retryable retained teardown remain prerequisites. Current source/build,
+publication, device and private deployment states remain distinct.
+
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
