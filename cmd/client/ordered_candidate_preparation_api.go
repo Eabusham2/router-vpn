@@ -12,6 +12,19 @@ import (
 	"router-vpn/internal/hopmeasure"
 )
 
+type orderedCandidatePreparedRequestEnvelope struct {
+	orderedCandidateRequest
+	Scope string `json:"scope"`
+}
+
+func orderedCandidatePreparedPurposeResponse(response map[string]any, scope string) map[string]any {
+	response["scope"] = scope
+	if scope == orderedCandidateSavedPrefixScope {
+		response["application_open"], response["dns_open"], response["proof_scope"] = false, false, "selected-prefix"
+	}
+	return response
+}
+
 func registerOrderedCandidatePreparedRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/multihop/saved-candidates/catalog", a.orderedCandidatePreparedCatalog)
 	h.HandleFunc("/api/multihop/saved-candidates", a.orderedCandidatePreparedRequest)
@@ -35,13 +48,23 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 		text = positions[0]
 	}
 	position, err := strconv.Atoi(text)
-	if len(query) != 1 || len(positions) != 1 || err != nil || strconv.Itoa(position) != text || position < 0 || position > 7 {
+	scope := ""
+	scopes, hasScope := query["scope"]
+	if hasScope && len(scopes) == 1 {
+		scope = scopes[0]
+	}
+	scope, scopeErr := normalizedOrderedCandidateSavedScope(scope)
+	expected := 1
+	if hasScope {
+		expected = 2
+	}
+	if len(query) != expected || hasScope && (len(scopes) != 1 || scopes[0] == "") || scopeErr != nil || len(positions) != 1 || err != nil || strconv.Itoa(position) != text || position < 0 || position > 7 {
 		http.Error(w, "choose an exact saved packet prefix position", http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), 12*time.Second)
 	defer cancel()
-	view, err := captureOrderedCandidatePreparedView(ctx, a, position, physicalNetworkIdentityContext)
+	view, err := captureOrderedCandidatePreparedViewScope(ctx, a, position, scope, physicalNetworkIdentityContext)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -58,10 +81,14 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 	}
 	control.preparedView = view
 	control.mu.Unlock()
-	viaEntryJSON(w, map[string]any{"schema": 1, "scope": "saved-complete-local", "view_token": view.token,
+	note := "Test temporarily proves the complete saved Local graph, measures 50 TCP connection handshakes per candidate through its prefix, then returns Home to DOWN before review. This requires a reachable original final node and does not authenticate candidate credentials. Save creates a separate next-connection profile."
+	if scope == orderedCandidateSavedPrefixScope {
+		note = "Test privately proves only the selected saved prefix, keeps application traffic and DNS closed, measures 50 TCP connection handshakes per candidate, then stops the temporary native path before review. It does not authenticate candidate credentials. Save creates a complete separate profile for the next connection."
+	}
+	viaEntryJSON(w, orderedCandidatePreparedPurposeResponse(map[string]any{"schema": 1, "view_token": view.token,
 		"expires_at": view.expires.UnixMilli(), "prefix_position": view.position, "prefixes": view.prefixes,
 		"candidates": view.candidates, "samples": 50, "measurement": "routed-tcp-connect",
-		"note": "Test temporarily proves the complete saved Local graph, measures 50 TCP connection handshakes per candidate through its prefix, then returns Home to DOWN before review. This requires a reachable original final node and does not authenticate candidate credentials. Save creates a separate next-connection profile."})
+		"note": note}, scope))
 }
 
 func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *http.Request) {
@@ -73,10 +100,16 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 		http.Error(w, "Temporary ordered native preparation is unavailable on this platform.", 409)
 		return
 	}
-	var q orderedCandidateRequest
+	var q orderedCandidatePreparedRequestEnvelope
 	if !viaEntryDecode(w, request, &q) {
 		return
 	}
+	scope, scopeErr := normalizedOrderedCandidateSavedScope(q.Scope)
+	if scopeErr != nil {
+		http.Error(w, scopeErr.Error(), 400)
+		return
+	}
+	q.Scope = scope
 	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || q.Samples != 50 || q.PrefixPosition < 0 || q.PrefixPosition > 7 || len(q.CandidateIDs) < 1 || len(q.CandidateIDs) > hopmeasure.CandidateMaximumTargets {
 		http.Error(w, "an exact saved view, distinct candidate IDs and 50 samples are required", 400)
 		return
@@ -87,7 +120,7 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 		return
 	}
 	view := control.preparedView
-	valid := view != nil && view.token == q.ViewToken && view.position == q.PrefixPosition && time.Now().Before(view.expires)
+	valid := view != nil && view.token == q.ViewToken && view.scopeValue() == scope && view.position == q.PrefixPosition && time.Now().Before(view.expires)
 	if valid {
 		valid = reserveOrderedCandidatePreparedAdmissionLocked(control, q.RequestID, view) == nil
 	}
@@ -100,7 +133,7 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 	defer stopAdmission()
 	lifetime, stopLifetime := context.WithTimeout(context.Background(), viaEntryRequestTimeout)
 	p, err := beginOrderedCandidatePreparationWithLifetime(admission, lifetime, a,
-		orderedCandidatePreparationRequest{q.RequestID, q.PrefixPosition, q.CandidateIDs, q.Samples}, physicalNetworkIdentityContext)
+		orderedCandidatePreparationRequest{Scope: scope, RequestID: q.RequestID, Position: q.PrefixPosition, CandidateIDs: q.CandidateIDs, Samples: q.Samples}, physicalNetworkIdentityContext)
 	if err != nil {
 		stopLifetime()
 		http.Error(w, err.Error(), 409)
@@ -182,7 +215,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 	rows := []hopmeasure.CandidateStatus{}
 	if reviewing && job.preparation.runtime != nil && job.preparation.runtime.catalog != nil {
 		for _, row := range job.results {
-			if validateDesktopNodeChainCandidateStatus(job.preparation.runtime.catalog.plan, row.CandidateID, row, now) == nil {
+			if validateOrderedCandidatePreparedStatus(job.preparation, row.CandidateID, row, now) == nil {
 				rows = append(rows, row)
 			}
 		}
@@ -195,7 +228,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 		return left < right
 	})
 	cleanupPending := !owner.running && !owner.drained && !reviewing
-	response := map[string]any{"schema": 1, "scope": "saved-complete-local", "request_id": owner.id,
+	response := map[string]any{"schema": 1, "request_id": owner.id,
 		"view_token": job.view.token, "prefix_position": job.view.position, "running": owner.running,
 		"drained": owner.drained, "cancelled": owner.cancelled, "native_down": job.nativeDown,
 		"accepted": reviewing && len(rows) > 0, "reviewing": reviewing, "cleanup_pending": cleanupPending,
@@ -205,7 +238,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 	if job.saved != nil {
 		response["saved_profile_id"], response["profile_id"], response["profile_name"], response["saved"] = job.saved.ID, job.saved.ID, job.saved.Name, true
 	}
-	return response
+	return orderedCandidatePreparedPurposeResponse(response, job.view.scopeValue())
 }
 
 // A lost Save response followed by Cancel must still expose the already

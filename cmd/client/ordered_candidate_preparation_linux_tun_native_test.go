@@ -18,6 +18,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/hopmeasure"
+	"router-vpn/internal/mobilemultihop"
 )
 
 type linuxOrderedPreparedHostReceipt struct {
@@ -106,6 +107,11 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 	if !nativeNodeChainPlatformSupported() {
 		return errors.New("installed saved candidate API lost actual Linux native admission")
 	}
+	prefixOnly := strings.HasPrefix(action, "prefix-candidates-")
+	scope := orderedCandidateSavedCompleteScope
+	if prefixOnly {
+		scope = orderedCandidateSavedPrefixScope
+	}
 	originalProfiles := cloneRouterProfileStore(a.profiles)
 	originalState := a.state
 	routerBytes, err := os.ReadFile(a.cfg.ProfilesFile)
@@ -132,6 +138,20 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 		var body []byte
 		var err error
 		if value != nil {
+			if prefixOnly {
+				raw, encodeErr := json.Marshal(value)
+				if encodeErr != nil {
+					return nil, encodeErr
+				}
+				var scoped map[string]any
+				if json.Unmarshal(raw, &scoped) != nil {
+					return nil, errors.New("prefix fixture lost original API body")
+				}
+				if _, explicit := scoped["scope"]; !explicit {
+					scoped["scope"] = scope
+				}
+				value = scoped
+			}
 			body, err = json.Marshal(value)
 			if err != nil {
 				return nil, err
@@ -139,11 +159,27 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 		}
 		response := httptest.NewRecorder()
 		mux.ServeHTTP(response, httptest.NewRequest(method, path, bytes.NewReader(body)).WithContext(callContext))
+		if prefixOnly && response.Code >= 200 && response.Code < 300 {
+			var envelope map[string]any
+			if json.Unmarshal(response.Body.Bytes(), &envelope) != nil || envelope["scope"] != scope || envelope["application_open"] != false || envelope["dns_open"] != false || envelope["proof_scope"] != "selected-prefix" {
+				return nil, errors.New("installed prefix API changed its immutable closed response purpose")
+			}
+		}
 		return response, nil
 	}
 	const base = "/api/multihop/saved-candidates"
-	position := len(originalProfiles.Profiles) - 2
-	response, err := call(ctx, http.MethodGet, fmt.Sprintf("%s/catalog?prefix_position=%d", base, position), nil)
+	controlProfile, found := a.profileByIDLocked(originalProfiles.SelectedID)
+	if !found {
+		return errors.New("saved candidate lost full original control")
+	}
+	position := len(controlProfile.MultihopNodes) - 2
+	query := fmt.Sprintf("%s/catalog?prefix_position=%d", base, position)
+	candidateID := originalProfiles.SelectedID
+	if prefixOnly {
+		query += "&scope=" + scope
+		candidateID = "installed-prefix-candidate"
+	}
+	response, err := call(ctx, http.MethodGet, query, nil)
 	var catalog struct {
 		Schema      int                      `json:"schema"`
 		Scope       string                   `json:"scope"`
@@ -157,17 +193,17 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 		return err
 	}
 	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &catalog) != nil || catalog.Schema != 1 ||
-		catalog.Scope != "saved-complete-local" || len(catalog.Token) != 64 || catalog.Position != position ||
+		catalog.Scope != scope || len(catalog.Token) != 64 || catalog.Position != position ||
 		catalog.Samples != 50 || catalog.Measurement != "routed-tcp-connect" {
 		return fmt.Errorf("installed saved candidate catalog: %d %s", response.Code, response.Body.String())
 	}
 	var choice *orderedCandidateChoice
 	for i := range catalog.Candidates {
-		if catalog.Candidates[i].ID == originalProfiles.SelectedID {
+		if catalog.Candidates[i].ID == candidateID {
 			choice = &catalog.Candidates[i]
 		}
 	}
-	if choice == nil || choice.SaveReason != "" || len(choice.Proposal) != len(originalProfiles.Profiles) {
+	if choice == nil || choice.SaveReason != "" || len(choice.Proposal) != len(controlProfile.MultihopNodes) {
 		return errors.New("installed saved graph omitted its original final candidate proposal")
 	}
 	id, err := randomHex(16)
@@ -254,14 +290,44 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 	default:
 		return errors.New("saved review preceded its original worker join")
 	}
-	if p.runtime == nil || p.runtime.catalog == nil || p.launch == nil || p.launch.chain == nil || p.launch.chain.platform == nil {
+	if p.runtime == nil || p.runtime.catalog == nil || p.launch == nil {
 		return errors.New("saved native result lost its actual original Linux launch")
 	}
-	if err := validateDesktopNodeChainCandidateStatus(p.runtime.catalog.plan, choice.ID, status.Rows[0], time.Now()); err != nil {
+	if err := validateOrderedCandidatePreparedStatus(p, choice.ID, status.Rows[0], time.Now()); err != nil {
 		return err
 	}
-	h, session := p.launch.chain.platform.host, p.launch.chain.platform.session
-	if h == nil || h.process == nil || h.ready == nil || !h.closed || !h.released || h.chain != nil || len(h.source) != 0 ||
+	var h *desktopLinuxNodeHost
+	var session *desktopLinuxNodeSession
+	var prefixProof *mobilemultihop.DesktopNodeCandidatePreparationReadyRecord
+	var fullProof *mobilemultihop.DesktopNodeChainReadyRecord
+	if prefixOnly {
+		if p.prefixPreparation == nil || p.launch.chain != nil || p.launch.candidatePrefix == nil {
+			return errors.New("saved prefix result adopted a full graph")
+		}
+		platform, ok := p.launch.candidatePrefix.platform.(*desktopNodeCandidatePrefixPlatformRuntime)
+		if !ok || platform == nil {
+			return errors.New("saved prefix result lost original Linux platform")
+		}
+		h, session = platform.host, platform.session
+		p.launch.candidatePrefix.mu.Lock()
+		prefixProof = p.launch.candidatePrefix.ready
+		p.launch.candidatePrefix.mu.Unlock()
+		if prefixProof == nil || !prefixProof.Prepared || prefixProof.ApplicationOpen || prefixProof.DNSOpen || h.ready != nil || h.proof != nil || h.candidatePrefix != nil {
+			return errors.New("saved prefix retirement fabricated ordinary Ready or retained its native policy")
+		}
+	} else {
+		if p.launch.chain == nil || p.launch.chain.platform == nil {
+			return errors.New("saved complete result lost original Linux platform")
+		}
+		h, session = p.launch.chain.platform.host, p.launch.chain.platform.session
+		p.launch.chain.mu.Lock()
+		fullProof = p.launch.chain.ready
+		p.launch.chain.mu.Unlock()
+		if h.ready == nil || fullProof == nil {
+			return errors.New("saved candidate result lost its original complete native proof")
+		}
+	}
+	if h == nil || h.process == nil || !h.closed || !h.released || h.chain != nil || len(h.source) != 0 ||
 		h.process.command.ProcessState == nil || session == nil || session.active != nil || session.journal == nil {
 		return errors.New("saved review omitted real original process/source/protection retirement")
 	}
@@ -274,7 +340,11 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 	if err != nil || head.Incomplete || head.Record.Phase != "settled" || head.Record.Committed.Engine != nil || head.Record.Committed.Target != nil {
 		return errors.Join(err, errors.New("saved native DOWN retained original on-connect protection"))
 	}
-	if err := linuxHostTUNTUNAbsent(h.ready); err != nil {
+	if prefixOnly {
+		if err := linuxHostTUNPrefixAbsent(prefixProof); err != nil {
+			return err
+		}
+	} else if err := linuxHostTUNTUNAbsent(h.ready); err != nil {
 		return err
 	}
 	owner.closeMu.Lock()
@@ -303,14 +373,8 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 	if err := unchanged(); err != nil {
 		return err
 	}
-	p.launch.chain.mu.Lock()
-	proof := p.launch.chain.ready
-	p.launch.chain.mu.Unlock()
-	if proof == nil {
-		return errors.New("saved candidate result lost its original complete native proof")
-	}
 	result := linuxNodeChainHostResult{linuxImportedHostResult: linuxImportedHostResult{Scenario: scenario, Stage: "review", Session: h.selection.SessionID, Ready: h.ready, Retired: true},
-		Proof: proof, Nodes: append([]common.MultihopNodeSelection(nil), choice.Proposal...),
+		Proof: fullProof, PrefixProof: prefixProof, Nodes: append([]common.MultihopNodeSelection(nil), choice.Proposal...),
 		Prepared: &linuxOrderedPreparedHostReceipt{RequestID: id, ViewToken: catalog.Token, Action: action, NativeDown: true, Observer: true, ProfileSame: true, Row: status.Rows[0]}}
 	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
 		return err
@@ -323,7 +387,7 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 	if err != nil || response.Code != 409 {
 		return errors.Join(err, errors.New("installed saved Cancel accepted another view"))
 	}
-	if action == "candidates-save" {
+	if action == "candidates-save" || action == "prefix-candidates-save" {
 		save := orderedCandidateSaveRequest{RequestID: id, ViewToken: catalog.Token, CandidateID: choice.ID, Name: "Explicit installed candidate draft", ProposedPath: choice.Proposal}
 		foreign := save
 		foreign.CandidateID = "uncaptured-candidate"
@@ -387,7 +451,7 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 		cancelled.View != catalog.Token || cancelled.Saved != result.Prepared.SavedID || !cancelled.Drained || !cancelled.Down {
 		return errors.Join(err, errors.New("installed exact candidate Cancel lost original DOWN, saved identity or observer join"))
 	}
-	if action == "candidates-cancel" {
+	if action == "candidates-cancel" || action == "prefix-candidates-cancel" {
 		after, err := os.ReadFile(connectionProfileStorePath(a))
 		if !bytes.Equal(after, storeBytes) || errors.Is(err, os.ErrNotExist) != errors.Is(storeErr, os.ErrNotExist) || err != nil && !errors.Is(err, os.ErrNotExist) {
 			return errors.New("review Cancel wrote or changed a connection profile")

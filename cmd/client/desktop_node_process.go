@@ -252,6 +252,38 @@ func validateDesktopNodeChainProcessArguments(arguments []string, directory stri
 	return validated, nil
 }
 
+// The closed prefix command adds exactly one sealed inventory digest to the
+// ordinary bounded physical argv syntax. It cannot borrow a full-chain command
+// or an imported entry's source authority.
+func validateDesktopNodeCandidatePrefixProcessArguments(arguments []string, directory string) ([]string, error) {
+	bad := errors.New("prefix native process requires its exact closed command and catalog capture")
+	if (len(arguments) != 13 && len(arguments) != 15) || arguments[0] != "routervpn-node-candidate-prefix" {
+		return nil, bad
+	}
+	copied := []string{"routervpn-node"}
+	capture := ""
+	for i := 1; i < len(arguments); i += 2 {
+		if arguments[i] == "--prefix-capture-sha256" {
+			if capture != "" || !desktopNodeProcessHex(arguments[i+1], 32) {
+				return nil, bad
+			}
+			capture = arguments[i+1]
+		} else {
+			if arguments[i] == "--imported-source-sha256" {
+				return nil, bad
+			}
+			copied = append(copied, arguments[i], arguments[i+1])
+		}
+	}
+	if capture == "" {
+		return nil, bad
+	}
+	if _, err := validateDesktopNodeProcessArguments(copied, directory); err != nil {
+		return nil, err
+	}
+	return append([]string(nil), arguments...), nil
+}
+
 // The external command shares bounded public digest syntax, never Router
 // readiness or its optional MTU argument. This is not a generic CLI selector.
 func validateDesktopExternalProcessArguments(arguments []string, directory string) ([]string, error) {

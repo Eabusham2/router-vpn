@@ -12,7 +12,7 @@ import (
 // remains on the launch through retirement; a newer preparation cannot adopt
 // an old process by changing an application-level testing flag.
 func (p *orderedCandidatePreparation) bindLaunch(ctx context.Context, launch *desktopNodeLaunch) error {
-	if ctx == nil || p == nil || launch == nil || launch.chain == nil || launch.chain.selection.Native != p.selection.Native ||
+	if ctx == nil || p == nil || p.prefixPreparation != nil || launch == nil || launch.candidatePrefix != nil || launch.chain == nil || launch.chain.selection.Native != p.selection.Native ||
 		launch.chain.preparation != nil || launch.command != nil || launch.directory != "" || launch.chain.ready != nil {
 		return errors.New("candidate purpose requires its unused original full-graph launch")
 	}
@@ -47,6 +47,14 @@ func (p *orderedCandidatePreparation) bindLaunch(ctx context.Context, launch *de
 // native hooks. A nil purpose means an ordinary launch; a non-nil but invalid
 // purpose is an error and must never fall through to ordinary adoption.
 func orderedCandidateLaunchPurposeLocked(a *app, launch *desktopNodeLaunch) (*orderedCandidatePreparation, error) {
+	if launch != nil && launch.candidatePrefix != nil {
+		prefix := launch.candidatePrefix
+		p := prefix.preparation
+		if launch.chain != nil || p == nil || p.prefixPreparation == nil || a == nil || p.app != a || p.launch != launch || p.selection.Native != prefix.selection.Native || p.request.Scope != orderedCandidateSavedPrefixScope {
+			return nil, errors.New("candidate prefix purpose belongs to another original owner")
+		}
+		return p, p.currentLocked()
+	}
 	if launch == nil || launch.chain == nil {
 		return nil, errors.New("candidate purpose observation lost its ordered launch")
 	}
@@ -57,7 +65,7 @@ func orderedCandidateLaunchPurposeLocked(a *app, launch *desktopNodeLaunch) (*or
 		}
 		return nil, nil
 	}
-	if a == nil || p.app != a || p.launch != launch || p.selection.Native != launch.chain.selection.Native {
+	if a == nil || p.prefixPreparation != nil || p.app != a || p.launch != launch || p.selection.Native != launch.chain.selection.Native {
 		return nil, errors.New("candidate launch purpose belongs to another original owner")
 	}
 	return p, p.currentLocked()
@@ -171,7 +179,7 @@ func (p *orderedCandidatePreparation) retireNative(ctx context.Context) error {
 		if launch == nil {
 			return errors.New("pending candidate child lost its retained launch")
 		}
-		if err := retryDesktopNodeChainCandidateDrain(ctx, launch, pending); err != nil {
+		if err := retryOrderedCandidateNativeDrain(ctx, launch, pending); err != nil {
 			return err
 		}
 		if err := desktopnetwork.LockContext(ctx, &p.mu); err != nil {
@@ -186,10 +194,11 @@ func (p *orderedCandidatePreparation) retireNative(ctx context.Context) error {
 		p.runtime.beforeNativeDown(ctx)
 	}
 	if launch != nil {
-		if launch.chain == nil || launch.chain.preparation != p {
+		if !orderedCandidateLaunchBound(p, launch) {
 			return errors.New("candidate retirement lost its bound original purpose")
 		}
-		if launch.ownedNode == nil && launch.chain.platform == nil && launch.command == nil && launch.directory == "" {
+		platform := launch.chain != nil && launch.chain.platform != nil || launch.candidatePrefix != nil && launch.candidatePrefix.platform != nil
+		if launch.ownedNode == nil && !platform && launch.command == nil && launch.directory == "" {
 			// Socket-free preparation can be cancelled before a native host is staged.
 			clear(launch.config)
 			clear(launch.metadata)

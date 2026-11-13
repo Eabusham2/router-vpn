@@ -31,6 +31,7 @@ type desktopNodeProtectionAttempt struct {
 	external        *mobilemultihop.DesktopExternalPolicy
 	imported        *mobilemultihop.DesktopImportedPolicy
 	chain           *mobilemultihop.DesktopNodeChainPolicy
+	candidatePrefix *mobilemultihop.DesktopNodeCandidatePreparationPolicy
 	transfer        mobiletor.DesktopProtectionTransferRecord
 	digest          string
 	prepared        *mobiletor.DesktopWindowsProtectionTarget
@@ -109,8 +110,26 @@ func (s *desktopNodeProtectionSlot) beginNodeChain(ctx context.Context, launch *
 
 func (s *desktopNodeProtectionSlot) beginAllPoliciesCaptured(ctx context.Context, launch *desktopNodeLaunch, node *mobilemultihop.DesktopNodePolicy,
 	external *mobilemultihop.DesktopExternalPolicy, imported *mobilemultihop.DesktopImportedPolicy, chain *mobilemultihop.DesktopNodeChainPolicy, revision string) (*desktopNodeProtectionAttempt, error) {
-	selection, err := desktopProtectionSelectionForAllCaptured(node, external, imported, chain)
-	if s == nil || ctx == nil || ctx.Err() != nil || launch == nil || err != nil || (chain != nil) != (launch.chain != nil) {
+	return s.beginAllPurposesCaptured(ctx, launch, node, external, imported, chain, nil, revision)
+}
+
+func (s *desktopNodeProtectionSlot) beginCandidatePrefix(ctx context.Context, launch *desktopNodeLaunch, policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (*desktopNodeProtectionAttempt, error) {
+	if launch == nil || launch.candidatePrefix == nil || launch.candidatePrefix.policy != policy || launch.ownedNode == nil ||
+		launch.ownedNode.candidatePrefix != launch.candidatePrefix || launch.ownedNode.policy != nil || launch.ownedNode.imported != nil ||
+		launch.ownedNode.chain != nil || launch.chain != nil || launch.external != nil || launch.ownedNode.profileToken == "" ||
+		policy == nil || launch.policyProfileID != policy.Metadata().PolicyProfileID ||
+		launch.policyProfileID != launch.candidatePrefix.selection.Control.ID {
+		return nil, errors.New("prefix protection lost its concrete closed launch")
+	}
+	return s.beginAllPurposesCaptured(ctx, launch, nil, nil, nil, nil, policy, launch.ownedNode.profileToken)
+}
+
+func (s *desktopNodeProtectionSlot) beginAllPurposesCaptured(ctx context.Context, launch *desktopNodeLaunch, node *mobilemultihop.DesktopNodePolicy,
+	external *mobilemultihop.DesktopExternalPolicy, imported *mobilemultihop.DesktopImportedPolicy, chain *mobilemultihop.DesktopNodeChainPolicy,
+	prefix *mobilemultihop.DesktopNodeCandidatePreparationPolicy, revision string) (*desktopNodeProtectionAttempt, error) {
+	selection, err := desktopProtectionSelectionForAllPurposes(node, external, imported, chain, prefix)
+	if s == nil || ctx == nil || ctx.Err() != nil || launch == nil || err != nil || (chain != nil) != (launch.chain != nil) ||
+		(prefix != nil) != (launch.candidatePrefix != nil) {
 		return nil, errors.Join(err, errors.New("native protection transfer has no captured launch"))
 	}
 	s.mu.Lock()
@@ -131,7 +150,7 @@ func (s *desktopNodeProtectionSlot) beginAllPoliciesCaptured(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	attempt := &desktopNodeProtectionAttempt{launch: launch, policy: node, external: external, imported: imported, chain: chain, transfer: transfer, digest: digest, profileRevision: revision}
+	attempt := &desktopNodeProtectionAttempt{launch: launch, policy: node, external: external, imported: imported, chain: chain, candidatePrefix: prefix, transfer: transfer, digest: digest, profileRevision: revision}
 	if external != nil && s.journal != nil {
 		selection, err := s.journal.Snapshot(ctx)
 		head := selection.Record

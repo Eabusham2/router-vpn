@@ -25,15 +25,30 @@ func desktopProtectionSelectionForCaptured(node *mobilemultihop.DesktopNodePolic
 
 func desktopProtectionSelectionForAllCaptured(node *mobilemultihop.DesktopNodePolicy, external *mobilemultihop.DesktopExternalPolicy,
 	imported *mobilemultihop.DesktopImportedPolicy, chain *mobilemultihop.DesktopNodeChainPolicy) (desktopProtectionSelection, error) {
+	return desktopProtectionSelectionForAllPurposes(node, external, imported, chain, nil)
+}
+
+func desktopProtectionSelectionForAllPurposes(node *mobilemultihop.DesktopNodePolicy, external *mobilemultihop.DesktopExternalPolicy,
+	imported *mobilemultihop.DesktopImportedPolicy, chain *mobilemultihop.DesktopNodeChainPolicy,
+	prefix *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (desktopProtectionSelection, error) {
 	var empty desktopProtectionSelection
 	families := 0
-	for _, present := range []bool{node != nil, external != nil, imported != nil, chain != nil} {
+	for _, present := range []bool{node != nil, external != nil, imported != nil, chain != nil, prefix != nil} {
 		if present {
 			families++
 		}
 	}
 	if families != 1 {
 		return empty, errors.New("native protection requires exactly one captured policy family")
+	}
+	if prefix != nil {
+		_, meta, _, err := prefix.PhysicalReadValidated()
+		control, controlErr := mobilemultihop.ReadDesktopProtectionProfileID(prefix)
+		if err != nil || controlErr != nil || meta.TargetOS != "windows" || !validProfileID(meta.ProfileID) || !validProfileID(control) ||
+			meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
+			return empty, errors.Join(err, controlErr, errors.New("prefix protection lost its sealed closed native policy"))
+		}
+		return desktopProtectionSelection{control, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil
 	}
 	if chain != nil {
 		_, meta, _, err := chain.ReadValidated()
@@ -99,10 +114,18 @@ func (attempt *desktopNodeProtectionAttempt) selection() (desktopProtectionSelec
 	if attempt == nil {
 		return desktopProtectionSelection{}, errors.New("native protection lost its original selection")
 	}
-	return desktopProtectionSelectionForAllCaptured(attempt.policy, attempt.external, attempt.imported, attempt.chain)
+	return desktopProtectionSelectionForAllPurposes(attempt.policy, attempt.external, attempt.imported, attempt.chain, attempt.candidatePrefix)
 }
 
 func (attempt *desktopNodeProtectionAttempt) matchesOwned(owned *desktopOwnedNodeRuntime) bool {
+	if owned != nil && owned.candidatePrefix != nil {
+		return attempt != nil && attempt.external == nil && attempt.policy == nil && attempt.imported == nil && attempt.chain == nil &&
+			owned.policy == nil && owned.imported == nil && owned.chain == nil && owned.candidatePrefix.policy != nil &&
+			attempt.candidatePrefix == owned.candidatePrefix.policy && attempt.launch != nil && attempt.launch.candidatePrefix == owned.candidatePrefix && attempt.launch.chain == nil
+	}
+	if attempt != nil && attempt.candidatePrefix != nil {
+		return false
+	}
 	if owned != nil && owned.chain != nil {
 		return attempt != nil && attempt.external == nil && attempt.policy == nil && attempt.imported == nil && owned.policy == nil && owned.imported == nil &&
 			owned.chain.policy != nil && attempt.chain == owned.chain.policy && attempt.launch != nil && attempt.launch.chain == owned.chain

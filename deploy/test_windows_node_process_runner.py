@@ -19,6 +19,23 @@ SPEC.loader.exec_module(GATE)
 
 
 class NodeProcessRunner(unittest.TestCase):
+    def test_prefix_parent_retains_closed_scope_full_control_and_cleanup_inventory(self):
+        self.assertEqual(len(GATE.PREFIX_CASES), 6)
+        self.assertEqual(sum(map(len, GATE.PREFIX_CASES.values())), 18)
+        expected = {name for root, children in GATE.PREFIX_CASES.items()
+                    for name in (root, *(root + "/" + child for child in children))}
+        self.assertEqual(len(expected), 24)
+        self.assertTrue(set(GATE.PREFIX_CASES).issubset(GATE.SHARED_TESTS))
+        self.assertTrue(expected.issubset(GATE.EXPECTED))
+        for path in ("cmd/client/desktop_node_candidate_prefix_owned.go",
+                     "cmd/client/desktop_node_candidate_prefix_owned_test.go",
+                     "cmd/client/desktop_node_candidate_prefix_launch.go",
+                     "cmd/client/desktop_protection_selection.go",
+                     "cmd/client/ordered_candidate_prefix_runtime.go",
+                     "cmd/client/ordered_candidate_preparation_down.go",
+                     "internal/mobilemultihop/desktop_node_candidate_preparation_policy.go"):
+            self.assertIn(path, GATE.REQUIRED_SOURCES)
+
     def test_imported_parent_requires_real_dispatch_proofs_and_both_original_sources(self):
         self.assertEqual(len(GATE.IMPORTED_CASES), 13)
         self.assertEqual(sum(map(len, GATE.IMPORTED_CASES.values())), 66)
@@ -180,10 +197,11 @@ class NodeProcessRunner(unittest.TestCase):
                       "cmd/client/desktop_node_connection_host.go", "cmd/client/desktop_node_native.go",
                       "cmd/client/strategy_requirements.go", "cmd/client/desktop_node_smart.go", "cmd/client/start_layer_routes.go",
                       "cmd/client/logical_modes.go", "cmd/client/logical_base_preference.go",
-                      "cmd/client/desktop_imported_owned.go", "cmd/client/multihop_native_launch.go")}
+                      "cmd/client/desktop_imported_owned.go", "cmd/client/multihop_native_launch.go",
+                      "cmd/client/desktop_protection_selection.go")}
         changes = GATE.mutants()
-        self.assertEqual(len(changes), 49)
-        self.assertEqual(len({change[1] for change in changes}), 49)
+        self.assertEqual(len(changes), 50)
+        self.assertEqual(len({change[1] for change in changes}), 50)
         for filename, _, test, witness, replacement in changes:
             self.assertIn(filename, originals)
             self.assertNotEqual(replacement.encode(), originals[filename])
@@ -408,7 +426,7 @@ class NodeProcessRunner(unittest.TestCase):
         partitions = [GATE.suite_controls(suite, changes) for suite in GATE.EXECUTION_SUITES]
         self.assertEqual(tuple(item for part in partitions for item in part), changes)
         self.assertEqual(len({item[1] for part in partitions for item in part}), len(changes))
-        self.assertEqual([len(part) for part in partitions], [0, 25, 24, 0])
+        self.assertEqual([len(part) for part in partitions], [0, 25, 25, 0])
         self.assertEqual(GATE.suite_controls("complete", changes), changes)
         with self.assertRaisesRegex(ValueError, "Unknown native Node process execution suite"):
             GATE.suite_controls("ownership-controls-3", changes)

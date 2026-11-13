@@ -376,11 +376,11 @@ func publishDesktopNodeChainMeasurementWithWriter(ctx context.Context, launch *d
 
 func desktopNodeChainMailboxLimit(name string) int {
 	switch name {
-	case "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-candidate-request.json", "node-chain-candidate-cancel.json":
+	case "node-candidate-prefix-request.json", "node-candidate-prefix-cancel.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-candidate-request.json", "node-chain-candidate-cancel.json":
 		return 16384
 	case "node-chain-candidate-source.json":
 		return mobilemultihop.NodeChainInputLimit
-	case "node-chain-candidate-live.json":
+	case "node-candidate-prefix-live.json", "node-chain-candidate-live.json":
 		return 4096
 	}
 	return 0

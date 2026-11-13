@@ -78,7 +78,9 @@ func (h *desktopLinuxNodeHost) startWithVerifier(ctx context.Context, journal *d
 	if err := h.publishStarting(ctx); err != nil {
 		return err
 	}
-	if h.chain != nil {
+	if h.candidatePrefix != nil {
+		h.transaction, err = newDesktopLinuxCandidatePrefixTransaction(ctx, h, journal, predecessor)
+	} else if h.chain != nil {
 		h.transaction, err = newDesktopLinuxNodeChainTransaction(ctx, h, journal, predecessor)
 	} else if h.imported != nil {
 		h.transaction, err = newDesktopLinuxImportedTransaction(ctx, h, journal, predecessor)
@@ -141,6 +143,17 @@ func (h *desktopLinuxNodeHost) publishStarting(ctx context.Context) error {
 			return err
 		}
 	}
+	if h.candidatePrefix != nil {
+		if h.launch.candidatePrefix == nil || h.launch.candidatePrefix.capture == nil {
+			return errors.New("prefix publication lost original captured sources")
+		}
+		if err := h.launch.candidatePrefix.capture.sources.currentLocked(a); err != nil {
+			return err
+		}
+		if _, err := orderedCandidateLaunchPurposeLocked(a, h.launch); err != nil {
+			return err
+		}
+	}
 	if h.chain != nil {
 		if err := h.launch.chain.platform.capture.sources.currentLocked(a); err != nil {
 			return err
@@ -162,6 +175,9 @@ func (h *desktopLinuxNodeHost) publishStarting(ctx context.Context) error {
 	a.state.DAITA, a.state.Jumbo, a.state.Socks = h.options[0], h.options[1], h.options[2]
 	if h.chain != nil {
 		a.state.Mode, a.state.LogicalMode, a.state.Base = "multihop", "multihop", h.launch.chain.selection.Base
+	}
+	if h.candidatePrefix != nil {
+		a.state.Mode, a.state.LogicalMode, a.state.Base = "multihop", "multihop", h.launch.candidatePrefix.selection.Base
 	}
 	if h.imported != nil {
 		owner := h.launch.importedPlatform.(*desktopLinuxImportedConnection)
@@ -185,7 +201,7 @@ func (h *desktopLinuxNodeHost) runningLocked(ctx context.Context) error {
 		return err
 	}
 	defer func() { t.gate <- struct{}{} }()
-	if t.process != h.process || t.policy != h.policy || t.external != h.external || t.imported != h.imported || t.chain != h.chain || t.selection != h.selection || !t.complete || !t.served || !t.admitted ||
+	if t.process != h.process || t.policy != h.policy || t.external != h.external || t.imported != h.imported || t.chain != h.chain || t.candidatePrefix != h.candidatePrefix || t.selection != h.selection || !t.complete || !t.served || !t.admitted ||
 		!t.nativeCommitted || t.stopRequested.Load() || t.retiring || t.retirement != nil || t.closed || t.retired || t.pending != nil {
 		return errors.New("Linux Node lost its original admitted source and durable transaction")
 	}

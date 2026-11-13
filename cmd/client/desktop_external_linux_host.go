@@ -23,6 +23,9 @@ type desktopLinuxPrivateInput struct {
 }
 
 func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
+	if h.candidatePrefix != nil {
+		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"node-candidate-prefix-source.json", h.source}}
+	}
 	if h.chain != nil {
 		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"node-chain-source.json", h.source}}
 	}
@@ -39,6 +42,9 @@ func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
 // The external command has the same inherited parent layout and bounded
 // public digests, but remains a different CLI and sealed policy family.
 func validateDesktopLinuxProtectedArguments(arguments []string, directory string) ([]string, error) {
+	if len(arguments) > 0 && arguments[0] == "routervpn-node-candidate-prefix" {
+		return validateDesktopNodeCandidatePrefixProcessArguments(arguments, directory)
+	}
 	if len(arguments) > 0 && arguments[0] == "routervpn-node-chain" {
 		return validateDesktopNodeChainProcessArguments(arguments, directory)
 	}
@@ -387,6 +393,21 @@ func newDesktopLinuxExternalTransactionWithStartup(startup context.Context, h *d
 }
 
 func (t *desktopLinuxNodeTransaction) validatePolicy() error {
+	if t.candidatePrefix != nil {
+		if t.chain != nil || t.policy != nil || t.imported != nil || t.external != nil || t.prefixSources == nil || t.candidatePrefix.Validate() != nil {
+			return errors.New("Linux candidate prefix mixed its concrete native policy")
+		}
+		meta := t.candidatePrefix.Metadata()
+		policyProfile, policyErr := mobilemultihop.ReadDesktopProtectionProfileID(t.candidatePrefix)
+		selection := t.prefixSources.selection
+		wanted := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+		if policyErr != nil || policyProfile != t.profileID || meta.PolicyProfileID != t.profileID || meta.TargetOS != "linux" || t.selection != wanted || t.mode != meta.Mode || selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil ||
+			selection.Native.source != meta.OriginalSourceSHA256 || t.profileID != selection.Control.ID || meta.PrefixPosition < 0 || meta.PrefixPosition >= len(selection.Nodes)-1 ||
+			len(meta.Prefixes) != meta.PrefixPosition+1 || meta.ApplicationOpen || meta.DNSOpen {
+			return errors.New("Linux candidate prefix changed its original source or closed purpose")
+		}
+		return nil
+	}
 	if t.chain != nil {
 		if t.policy != nil || t.imported != nil || t.external != nil || t.chainSources == nil || t.chain.Validate() != nil {
 			return errors.New("Linux ordered transaction mixed its concrete policy family")

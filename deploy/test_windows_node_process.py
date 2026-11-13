@@ -173,7 +173,18 @@ IMPORTED_CASES = {
     "TestDesktopImportedMTUMergedPolicyControlsAutoRetestAndStatus": ("entry-fixed", "entry-jumbo", "final-fixed", "compatible-auto", "packet-entry-fixed"),
     "TestDesktopImportedMTUMergedPolicyRefusesChangedOriginalSource": ("envelope", "resealed-source", "resealed-graph", "entry-policy", "final-authority"),
 }
-SHARED_TESTS = (*SHARED_TESTS, *IMPORTED_CASES)
+PREFIX_CASES = {
+    "TestDesktopCandidatePrefixOwnedKeepsClosedPurposeAndFullSavedControl": ("wg", "awg2-fast", "awg2-strong"),
+    "TestDesktopCandidatePrefixOwnedRejectsForeignObservation": (
+        "untested-member", "selected-control", "controller", "network", "source", "ready-source",
+        "ready-generation", "ready-stale", "ready-application", "ready-dns", "ready-missing",
+        "mtu-reader", "mtu-path", "mtu-receipt", "mixed-policy"),
+    "TestDesktopCandidatePrefixOwnedRetainsFailedOriginalCleanup": (),
+    "TestDesktopCandidatePrefixOwnedLateCleanupPreservesReplacement": (),
+    "TestDesktopCandidatePrefixOwnedCommandAndProtectionRemainTyped": (),
+    "TestDesktopCandidatePrefixOwnedAlwaysProtectionKeepsFullSavedControl": (),
+}
+SHARED_TESTS = (*SHARED_TESTS, *IMPORTED_CASES, *PREFIX_CASES)
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
     "interpreter", "another-directory", "missing-source", "duplicate-source",
@@ -185,6 +196,7 @@ PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsoc
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED, *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
+            *(root + "/" + case for root, cases in PREFIX_CASES.items() for case in cases),
             *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
             *("TestDesktopProtectionOffContextGuardsActualPublication/" + case for case in ("before-rename", "after-rename")),
             *("TestDesktopWindowsExternalCurrentProofContext/"+case for case in ("current", "owner-lock", "app-lock", "source-lock", "slot-lock", "process-done-lock", "missing-host-observer", "missing-process-observer", "wrong-session", "wrong-slot")), *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
@@ -276,6 +288,10 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_recovery_other.go", "cmd/client/desktop_node_recovery_test.go", "cmd/client/desktop_node_recovery_context_test.go",
     "cmd/client/desktop_node_recovery_initial.go", "cmd/client/desktop_node_recovery_initial_test.go",
     "cmd/client/desktop_node_owned.go",
+    "cmd/client/desktop_node_candidate_prefix_owned.go", "cmd/client/desktop_node_candidate_prefix_owned_test.go",
+    "cmd/client/desktop_node_candidate_prefix_launch.go", "cmd/client/desktop_protection_selection.go",
+    "cmd/client/ordered_candidate_prefix_runtime.go", "cmd/client/ordered_candidate_preparation_down.go",
+    "internal/mobilemultihop/desktop_node_candidate_preparation_policy.go",
     "cmd/client/desktop_node_connection_host.go", "cmd/client/desktop_node_connection_host_test.go",
     "cmd/client/desktop_node_owned_prepare.go", "cmd/client/desktop_node_owned_test.go",
     "cmd/client/desktop_node_owned_restore_cleanup_test.go", "cmd/client/desktop_node_smart.go", "cmd/client/desktop_node_smart_test.go",
@@ -538,6 +554,8 @@ def mutants():
     logical = (ROOT / logical_file).read_text(encoding="utf-8")
     base_file = "cmd/client/logical_base_preference.go"
     base = (ROOT / base_file).read_text(encoding="utf-8")
+    selection_file = "cmd/client/desktop_protection_selection.go"
+    selection = (ROOT / selection_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     alive = NATIVE.function_mutant(original, "func (owner *desktopNodeProcessOwner) Alive()",
         "\tif err := owner.controller(); err != nil {\n\t\treturn err\n\t}\n", "")
@@ -547,6 +565,10 @@ def mutants():
                      "basePreference, err := (*logicalBasePreferenceTransaction)(nil), error(nil)\n\t_ = operation")
     late_base = once(late_base, "\tfallbackUsed := used.Base !=", "\tif err := a.persistBasePreference(q.Base); err != nil {\n\t\thttp.Error(w, err.Error(), http.StatusInternalServerError)\n\t\treturn\n\t}\n\tfallbackUsed := used.Base !=")
     return (
+        (selection_file, "prefix-protection-wrong-saved-control", "TestDesktopCandidatePrefixOwnedAlwaysProtectionKeepsFullSavedControl",
+         "prefix protection attributed the saved control revision to another member",
+         once(selection, "return desktopProtectionSelection{control, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil",
+              "return desktopProtectionSelection{meta.ProfileID, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil")),
         (multihop_file, "protected-imported-legacy-fallback", "TestDesktopImportedOwnedSourceAndNativeDispatch/reality-vision/shadowsocks",
          "protected capture silently used a legacy helper",
          NATIVE.function_mutant(multihop, "func compileRetainedNativeMultihopLaunch(",

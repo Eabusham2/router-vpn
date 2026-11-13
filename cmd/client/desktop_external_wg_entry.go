@@ -118,7 +118,7 @@ func desktopExternalPathProfileID(launch *desktopNodeLaunch) string {
 	if launch == nil {
 		return ""
 	}
-	if launch.external != nil {
+	if launch.external != nil || launch.candidatePrefix != nil {
 		return launch.policyProfileID
 	}
 	return launch.profileID

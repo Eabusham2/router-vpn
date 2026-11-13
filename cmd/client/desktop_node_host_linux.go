@@ -33,6 +33,7 @@ type desktopLinuxNodeHost struct {
 	external                  *mobilemultihop.DesktopExternalPolicy
 	imported                  *mobilemultihop.DesktopImportedPolicy
 	chain                     *mobilemultihop.DesktopNodeChainPolicy
+	candidatePrefix           *mobilemultihop.DesktopNodeCandidatePreparationPolicy
 	importedMTU               *desktopImportedMTUOwner
 	importedProjected         bool
 	externalProof             *desktopLinuxExternalProof
@@ -230,6 +231,9 @@ func (h *desktopLinuxNodeHost) enter(ctx context.Context) error {
 }
 
 func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
+	if h != nil && h.candidatePrefix != nil {
+		return h.currentCandidatePrefix(ctx)
+	}
 	if h != nil && h.chain != nil {
 		return h.currentNodeChain(ctx)
 	}
@@ -348,6 +352,9 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 		return nil, "", err
 	}
 	command := "routervpn-node"
+	if h.candidatePrefix != nil {
+		command = "routervpn-node-candidate-prefix"
+	}
 	if h.chain != nil {
 		command = "routervpn-node-chain"
 	}
@@ -367,6 +374,13 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 	}
 	if h.chain != nil && h.chain.Metadata().RestoredMTU != 0 {
 		arguments = append(arguments, "--physical-mtu", strconv.Itoa(h.chain.Metadata().RestoredMTU))
+	}
+	if h.candidatePrefix != nil {
+		meta := h.candidatePrefix.Metadata()
+		arguments = append(arguments, "--prefix-capture-sha256", meta.CaptureSHA256)
+		if meta.RestoredMTU != 0 {
+			arguments = append(arguments, "--physical-mtu", strconv.Itoa(meta.RestoredMTU))
+		}
 	}
 	arguments, err = validateDesktopLinuxProtectedArguments(arguments, h.launch.directory)
 	if err != nil {
@@ -423,7 +437,7 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 			clear(h.launch.metadata)
 			h.launch.config, h.launch.metadata = nil, nil
 		}
-		h.source, h.policy, h.external, h.imported, h.chain = nil, nil, nil, nil, nil
+		h.source, h.policy, h.external, h.imported, h.chain, h.candidatePrefix = nil, nil, nil, nil, nil, nil
 		h.closed = true
 	}
 	if !h.released {

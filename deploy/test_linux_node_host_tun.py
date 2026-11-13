@@ -226,7 +226,10 @@ SAVED_CANDIDATE_HOST_CASES = (
     'node-chain-3-candidates-save', 'node-chain-3-candidates-cancel',
     'node-chain-3-awg-fast-wg-candidates-save', 'node-chain-3-awg-fast-wg-candidates-cancel',
     'node-chain-3-awg-strong-awg-fast-candidates-save', 'node-chain-3-awg-strong-awg-fast-candidates-cancel')
-NODE_CHAIN_HOST_CASES += SAVED_CANDIDATE_HOST_CASES
+SAVED_PREFIX_HOST_CASES = tuple(prefix + 'prefix-candidates-' + action
+    for prefix in ('node-chain-3-', 'node-chain-3-awg-fast-wg-', 'node-chain-3-awg-strong-awg-fast-')
+    for action in ('save', 'cancel'))
+NODE_CHAIN_HOST_CASES += SAVED_CANDIDATE_HOST_CASES + SAVED_PREFIX_HOST_CASES
 CASES += NODE_CHAIN_HOST_CASES
 NODE_CHAIN_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledNodeChainFixtureKeepsCompiledAuthority'
 NODE_CHAIN_CIPHER_CASES = (
@@ -242,12 +245,16 @@ NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledImportedNode
 NODE_CHAIN_HOST_AUTHORITY_CASES += (NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT,
     *(NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '/' + name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong')))
 
+PREFIX_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledPrefixCandidateFixtureKeepsClosedAuthority'
+NODE_CHAIN_HOST_AUTHORITY_CASES += (PREFIX_HOST_AUTHORITY_ROOT,
+    *(PREFIX_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg-fast', 'awg-strong')))
+
 def check_node_chain_host_authority_verdict(output):
     NODE.require_native_verdicts(output, NODE_CHAIN_HOST_AUTHORITY_CASES, 'installed ordered source authority')
 
 def execute_node_chain_host_authority(binary, captured):
     status, output = NODE.run([str(binary), '-test.v', '-test.timeout=30s',
-        '-test.run=^(' + NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + ')$'], cwd=ROOT, env=captured, timeout=40)
+        '-test.run=^(' + NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '|' + PREFIX_HOST_AUTHORITY_ROOT + ')$'], cwd=ROOT, env=captured, timeout=40)
     if status:
         raise ValueError('Installed ordered source authority failed:\n' + output[-16384:])
     check_node_chain_host_authority_verdict(output)
@@ -284,7 +291,10 @@ def checked_sources(source):
     if catalog.is_symlink() or not catalog.is_file():
         raise ValueError('Installed public Connect lost its actual runtime catalog')
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
-    required = {'cmd/client/ordered_candidate_preparation_linux_tun_native_test.go',
+    required = {'cmd/client/ordered_candidate_prefix_linux_tun_native_test.go',
+                'cmd/client/ordered_candidate_prefix_runtime.go', 'cmd/client/desktop_node_candidate_prefix_linux.go',
+                'cmd/client/desktop_node_candidate_prefix_candidates.go',
+                'cmd/client/ordered_candidate_preparation_linux_tun_native_test.go',
                 'cmd/client/ordered_candidate_preparation_api.go', 'cmd/client/ordered_candidate_preparation_profile.go',
                 'cmd/client/ordered_candidate_preparation_cancel.go', 'cmd/client/linux_standard_service_resolved_namespace_native_test.go', 'cmd/client/linux_standard_service_resolved_helper_linux.go', 'cmd/client/linux_standard_service_resolved_adapter_linux.go', 'cmd/client/linux_standard_service_boot_resolver_adapter_linux.go', 'cmd/client/linux_standard_service_boot_resolver_linux.go', 'cmd/client/linux_standard_service_boot_resolver_native_test.go', 'cmd/client/linux_standard_service_boot_hostname_namespace_native_test.go', 'internal/systembootstrap/config_linux.go', 'internal/systembootstrap/config_linux_test.go', 'internal/systembootstrap/resolve_linux.go', 'internal/mobiletor/desktop_standard_linux_bootstrap.go', 'internal/mobiletor/desktop_standard_linux_bootstrap_test.go', 'internal/mobiletor/desktop_standard_linux_bootstrap_native_test.go', 'cmd/client/linux_standard_service_boot_transfer_linux.go', 'cmd/client/linux_standard_service_boot_transfer_linux_test.go', 'cmd/client/linux_standard_service_boot_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_reverse_planning_linux.go', 'cmd/client/linux_standard_service_reverse_planning_linux_test.go', 'cmd/client/linux_standard_service_reverse_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_namespace_native_test.go', 'cmd/client/linux_standard_service_transfer_client_linux.go', 'cmd/client/linux_standard_service_transfer_service_linux.go', 'internal/mobiletor/desktop_standard_node_transfer_linux.go', 'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_external_linux_tun_native_test.go', 'cmd/client/desktop_external_linux_tun_peer_native_test.go',
@@ -555,6 +565,7 @@ def check_verdict(output, case=None):
     imported_receipts = Counter()
     chain_receipts = Counter()
     saved_candidate_receipts = Counter()
+    saved_prefix_receipts = Counter()
     exact_passes = Counter(re.findall(r"(?m)^\s*" + re.escape(prefix + "/") + r"([^\s(]+) \([0-9.]+s\)$", output))
     suffix_receipts = Counter()
     for line in output.splitlines():
@@ -565,6 +576,8 @@ def check_verdict(output, case=None):
         _, marker, suffix = line.rpartition('verified installed host ')
         if marker:
             receipts.add(marker + suffix + '\n')
+            if suffix.startswith('closed selected prefix fifty samples final unopened native DOWN and explicit decision: '):
+                saved_prefix_receipts[suffix.removeprefix('closed selected prefix fifty samples final unopened native DOWN and explicit decision: ')] += 1
             if suffix.startswith('saved candidate API fifty samples native DOWN and explicit decision: '):
                 saved_candidate_receipts[suffix.removeprefix('saved candidate API fifty samples native DOWN and explicit decision: ')] += 1
             if suffix.startswith('ordered independent prefixes and final: '):
@@ -613,6 +626,7 @@ def check_verdict(output, case=None):
         ('IMPORTED_CASES', IMPORTED_CASES),
         ('NODE_CHAIN_HOST_CASES', NODE_CHAIN_HOST_CASES),
         ('SAVED_CANDIDATE_HOST_CASES', SAVED_CANDIDATE_HOST_CASES),
+        ('SAVED_PREFIX_HOST_CASES', SAVED_PREFIX_HOST_CASES),
         ('LAYER_CASES', LAYER_CASES),
         ('MTU_CASES', MTU_CASES),
         ('OFF_CASES', OFF_CASES),
@@ -629,7 +643,10 @@ def check_verdict(output, case=None):
         if value in membership['SAVED_CANDIDATE_HOST_CASES']:
             if saved_candidate_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed saved candidate API omitted or duplicated actual fifty-sample DOWN/decision completion: ' + value)
-        if value in membership['NODE_CHAIN_HOST_CASES']:
+        if value in membership['SAVED_PREFIX_HOST_CASES']:
+            if saved_prefix_receipts[value] != 1 or exact_passes[value] != 1:
+                raise ValueError('Installed selected prefix omitted or duplicated its closed proof, fifty samples, unopened final and native DOWN/decision: ' + value)
+        if value in membership['NODE_CHAIN_HOST_CASES'] and value not in membership['SAVED_PREFIX_HOST_CASES']:
             if chain_receipts[value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed ordered graph omitted or duplicated its independent encrypted/native completion: ' + value)
         if value in membership['IMPORTED_CASES']:
@@ -1091,7 +1108,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'hysteria_auth_cases': list(HYSTERIA_AUTH_CASES), 'hysteria_auth_output_sha256': hashlib.sha256(hysteria_auth_output.encode()).hexdigest(),
                   'connect_tls_cases': list(CONNECT_TLS_CASES), 'connect_tls_output_sha256': hashlib.sha256(connect_tls_output.encode()).hexdigest(),
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
-                  'saved_candidate_host_cases': list(SAVED_CANDIDATE_HOST_CASES),
+                  'saved_candidate_host_cases': list(SAVED_CANDIDATE_HOST_CASES), 'saved_prefix_host_cases': list(SAVED_PREFIX_HOST_CASES),
                   'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
                   'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS), 'node_chain_candidate_output_sha256': hashlib.sha256(node_chain_candidate_output.encode()).hexdigest(),
                   'node_chain_imported_mtu_cases': list(NODE_CHAIN_IMPORTED_MTU_VERDICTS), 'node_chain_imported_mtu_output_sha256': hashlib.sha256(node_chain_imported_mtu_output.encode()).hexdigest(),

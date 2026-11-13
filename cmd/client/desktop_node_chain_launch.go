@@ -67,7 +67,7 @@ func newDesktopNodeChainLaunch(selection multihopSelection, session, target stri
 
 func validateDesktopNodeChainLaunch(ctx context.Context, launch *desktopNodeLaunch) error {
 	if ctx == nil || ctx.Err() != nil || launch == nil || launch.chain == nil || launch.chain.policy == nil ||
-		launch.importedEntry || launch.importedPlatform != nil || launch.external != nil || launch.tor != nil {
+		launch.importedEntry || launch.importedPlatform != nil || launch.external != nil || launch.tor != nil || launch.candidatePrefix != nil {
 		return errors.New("ordered native launch lost its concrete policy family or original caller")
 	}
 	owner := launch.chain
@@ -105,6 +105,9 @@ func validateDesktopNodeChainLaunch(ctx context.Context, launch *desktopNodeLaun
 // original setup/readback allowance remains separate. This never changes MTU
 // operation, heartbeat, socket, journal or lease deadlines.
 func desktopNodeReadyBudget(launch *desktopNodeLaunch) (time.Duration, error) {
+	if launch != nil && launch.candidatePrefix != nil {
+		return desktopCandidatePrefixReadyBudget(launch)
+	}
 	if launch == nil || launch.chain == nil {
 		return 25 * time.Second, nil
 	}

@@ -169,6 +169,9 @@ func preflightRetainedNativeMultihop(ctx context.Context, binary string, launch 
 	}
 	environment := desktopNativeEnvironment(os.Environ(), launch.root, launch.profileID, launch.endpoint)
 	command := "routervpn-node"
+	if launch.candidatePrefix != nil {
+		command = "routervpn-node-candidate-prefix"
+	}
 	if launch.chain != nil {
 		command = "routervpn-node-chain"
 	}

@@ -34,6 +34,9 @@ import (
 )
 
 var linuxNodeChainHostCases = []string{
+	"node-chain-3-prefix-candidates-save", "node-chain-3-prefix-candidates-cancel",
+	"node-chain-3-awg-fast-wg-prefix-candidates-save", "node-chain-3-awg-fast-wg-prefix-candidates-cancel",
+	"node-chain-3-awg-strong-awg-fast-prefix-candidates-save", "node-chain-3-awg-strong-awg-fast-prefix-candidates-cancel",
 	"node-chain-3-connect", "node-chain-4-connect", "node-chain-3-wrong-middle-key", "node-chain-4-wrong-middle-proof",
 	"node-chain-3-final-dns-failure", "node-chain-4-final-node-failure", "node-chain-4-middle-source", "node-chain-3-prefix-lost",
 	"node-chain-3-awg-fast-wg-connect", "node-chain-3-wg-awg-strong-connect", "node-chain-3-awg-strong-awg-fast-connect",
@@ -384,6 +387,9 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, faul
 func installLinuxNodeChainProfiles(t *testing.T, peer *linuxNodeChainPeer, fault string) {
 	t.Helper()
 	store, assets := linuxNodeChainInstalledSources(t, peer, fault)
+	if strings.HasPrefix(fault, "prefix-candidates-") {
+		store, assets = linuxNodeChainPrefixCandidateSources(t, peer)
+	}
 	raw, err := json.Marshal(store)
 	if err != nil || os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), raw, 0600) != nil {
 		t.Fatal("ordered saved source unavailable", err)
@@ -408,9 +414,10 @@ func installLinuxNodeChainProfiles(t *testing.T, peer *linuxNodeChainPeer, fault
 
 type linuxNodeChainHostResult struct {
 	linuxImportedHostResult
-	Proof    *mobilemultihop.DesktopNodeChainReadyRecord `json:"proof,omitempty"`
-	Nodes    []common.MultihopNodeSelection              `json:"nodes,omitempty"`
-	Prepared *linuxOrderedPreparedHostReceipt            `json:"prepared,omitempty"`
+	Proof       *mobilemultihop.DesktopNodeChainReadyRecord                `json:"proof,omitempty"`
+	Nodes       []common.MultihopNodeSelection                             `json:"nodes,omitempty"`
+	PrefixProof *mobilemultihop.DesktopNodeCandidatePreparationReadyRecord `json:"prefix_proof,omitempty"`
+	Prepared    *linuxOrderedPreparedHostReceipt                           `json:"prepared,omitempty"`
 }
 
 func (process *linuxHostTUNController) readNodeChain(t *testing.T, scenario string) linuxNodeChainHostResult {
@@ -434,6 +441,10 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 	count := len(modes) + 1
 	peer := startLinuxNodeChainPeer(t, modes)
 	installLinuxNodeChainProfiles(t, peer, action)
+	if strings.HasPrefix(action, "prefix-candidates-") {
+		linuxHostTUNPrefixCandidateParent(t, installed, scenario, action, modes, peer)
+		return
+	}
 	if action == "candidates-save" || action == "candidates-cancel" {
 		linuxHostTUNPreparedCandidateParent(t, installed, scenario, action, modes, peer)
 		return
@@ -517,6 +528,9 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		return err
 	}
 	count := len(modes) + 1
+	if strings.HasPrefix(action, "prefix-candidates-") {
+		count++
+	}
 	raw, err := readPrivateRegular(filepath.Join(linuxOwnedControllerRoot, "routers.json"), 64<<10)
 	var profiles common.RouterProfileStore
 	if err != nil || decodeRelayControlJSON(raw, &profiles) != nil || len(profiles.Profiles) != count || profiles.SelectedID != "installed-ordered-final" {
@@ -544,7 +558,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
 	defer cancel()
-	if action == "candidates-save" || action == "candidates-cancel" {
+	if action == "candidates-save" || action == "candidates-cancel" || strings.HasPrefix(action, "prefix-candidates-") {
 		return linuxHostTUNPreparedCandidateFixture(ctx, a, controller, gate, scenario, action)
 	}
 	releaseMTU, err := a.holdCapturedMTU(ctx)

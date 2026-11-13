@@ -44,6 +44,7 @@ type desktopNodeLaunch struct {
 	importedOpenVPN            *desktopImportedOpenVPNRuntime
 	ownedNode                  *desktopOwnedNodeRuntime
 	chain                      *desktopNodeChainLaunch
+	candidatePrefix            *desktopNodeCandidatePrefixLaunch
 	external                   *desktopExternalRuntime
 	tor                        *desktopTorRuntime
 	directoryInfo              os.FileInfo

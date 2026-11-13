@@ -36,6 +36,8 @@ type desktopLinuxNodeTransaction struct {
 	imported        *mobilemultihop.DesktopImportedPolicy
 	importedSources *desktopLinuxImportedSources
 	chain           *mobilemultihop.DesktopNodeChainPolicy
+	candidatePrefix *mobilemultihop.DesktopNodeCandidatePreparationPolicy
+	prefixSources   *desktopNodeChainSources
 	chainSources    *desktopNodeChainSources
 	mode            string
 	operation       context.Context
@@ -277,6 +279,9 @@ func (t *desktopLinuxNodeTransaction) accepted(ctx context.Context) error {
 		return err
 	}
 	defer a.mu.Unlock()
+	if t.candidatePrefix != nil && (t.prefixSources == nil || t.prefixSources.currentLocked(a) != nil) {
+		return errors.New("Linux prefix admission lost its captured full saved source")
+	}
 	if t.chain != nil {
 		if t.chainSources == nil || t.chainSources.currentLocked(a) != nil {
 			return errors.New("Linux ordered admission lost a captured member")

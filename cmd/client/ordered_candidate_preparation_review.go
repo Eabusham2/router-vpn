@@ -140,7 +140,7 @@ func (p *orderedCandidatePreparation) finishForReview(job *orderedCandidatePrepa
 	}
 	valid := job.results[:0]
 	for _, result := range job.results {
-		if validateDesktopNodeChainCandidateStatus(p.runtime.catalog.plan, result.CandidateID, result, time.Now()) == nil {
+		if validateOrderedCandidatePreparedStatus(p, result.CandidateID, result, time.Now()) == nil {
 			valid = append(valid, result)
 		}
 	}

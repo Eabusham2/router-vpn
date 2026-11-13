@@ -143,8 +143,11 @@ access:
   performs routed candidate timings and retires the path before review.
   Independent selected-prefix preparation, usable when the old final node is
   unreachable, now has the iOS app/provider/engine and Android helper/service/UI integration recorded below.
-  Desktop parent/API activation remains in progress; ordinary WireGuard or
-  Android Network calls cannot substitute for the captured native owners. Native acceptance
+  Windows and Linux now have distinct parent/native-child and saved-prefix API
+  integration; the desktop action is a separate UI delivery.
+  Darwin prefix process identity is published, while its child/host integration
+  and public native admission remain in progress. Ordinary WireGuard or Android
+  Network calls cannot substitute for the captured native owners. Native acceptance
   of each new platform flow must be recorded separately from these source tests.
 - Ordered graphs still cover a bounded set of WG/AWG prefixes and SS finals,
   with one literal, unlayered SS2022 imported middle in the three-member
@@ -1478,6 +1481,16 @@ On an immutable source snapshot containing only this correction, all 67 shared M
 The macOS authenticated process protocol now has a separate candidate-prefix family and private input manifest. Its prefix source cannot be substituted with an ordinary ordered-chain or external-policy input. Readiness transfers bind the complete captured selection using a separate hash domain, and the strict frame decoder preserves the existing legacy external and full-chain schemas while validating the new explicit family.
 
 The complete macosprocess package passed under the race detector. Two compiled defects were rejected: omitting the prefix transfer domain and bypassing the captured family during the handshake. These four files provide the process-identity foundation for the Darwin prefix child and host adapters. They do not enable public prefix admission or establish real PF, utun, encrypted-path or installed-host acceptance.
+
+## Windows and Linux saved-prefix parent and API integration
+
+The desktop saved-candidate API now captures an explicit `saved-prefix-local` purpose alongside the existing complete-saved-path purpose. On Windows and Linux it prepares only the selected paired WG/AWG packet prefix from the original immutable saved graph, so the old final node need not start or prove. Its distinct child command, private source, readiness heartbeat, MTU reader, candidate mailbox and cleanup owner cannot grant ordinary Connected or DNS authority. All prefix replies retain the selected-prefix proof scope and explicitly closed application and DNS ingress. The original complete saved control remains the owner of protection and future-profile provenance.
+
+Each admitted candidate receives 50 routed TCP connection samples through that exact proved prefix. Review and explicit Save remain unavailable until the original measurement worker drains and the native child, interface, journal and protection retire. Failed or interrupted retirement retains the same owner for retry; a late cleanup cannot close or overwrite a replacement Home connection. A launch that never acquired any process, platform or workspace has a separate zero-I/O retirement path. The API retains its original authentication, immutable catalog, source revision, cancellation, expiry and detached future-profile checks. The prefix proof/start budget is derived from the finite prefix count; the original 1.5-second live heartbeat bound is unchanged.
+
+The focused race runs produced 34 passing root tests and 153 distinct passing verdicts covering the owned Windows composition, mailbox/API scope, source-purpose rejection, cancellation, retained cleanup and the prior complete-saved behavior. The first common run exposed two fixture cases that had not acquired the actual outer MTU lease; those cases and the bounded drain test passed after correcting the fixture. That diagnostic run remains recorded as failed, rather than relabelled successful. A separately compiled wrong-control mutation failed at the intended protection-attribution assertion. The Windows process runner passed all 26 tests and now requires the six prefix roots and 18 leaves while retaining every previous control. The Linux installed-host runner passed all 68 tests.
+
+An immutable snapshot containing the 47 changed implementation and acceptance paths compiled the Linux privileged race controller. Its exact image passed all 17 required source-authority records, including the three prefix variants; all 5,052 captured source hashes and the compiled image remained unchanged through execution. The installed Linux gate now requires six genuine prefix Save/Cancel cases using an unreachable old final, actual encrypted WG/AWG prefix proof, exactly 50 candidate handshakes, zero final authentication/DNS/application traffic and original native DOWN before choices. The same captured source snapshot also cross-compiled the actual Windows parent/controller test image for AMD64 and ARM64. These local source-authority checks and cross-compiles do not execute privileged TUN/network acceptance. The actual installed Linux and Windows gates, release packaging and device acceptance remain separate evidence.
 
 ## Android startup fixture keeps its real Home state boundary
 

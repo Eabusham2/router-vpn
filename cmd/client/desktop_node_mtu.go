@@ -102,6 +102,15 @@ func readDesktopNodeMTUWith(launch *desktopNodeLaunch, read func(*desktopNodeLau
 	if record.Schema != 1 || record.Session != launch.mtuSession || record.Config != launch.configSHA256 || !desktopMTUPathPattern.MatchString(record.Path) || record.Reader < 1 || record.Index < 1 || record.MTU < 1280 || record.MTU > 9000 || validateMTULiveInterface(record.Interface) != nil || record.Heartbeat > now+2000 || record.Heartbeat < now-2000 || record.Request != "" && !desktopMTURequestPattern.MatchString(record.Request) || record.Lease != "" && !desktopMTURequestPattern.MatchString(record.Lease) || len(record.Failure) > 256 {
 		return record, errors.New("native TUN record is stale or belongs to another runtime")
 	}
+	if prefix := launch.candidatePrefix; prefix != nil {
+		if launch.chain != nil || prefix.policy == nil || prefix.policy.Validate() != nil || record.Active || record.Generation != 0 || record.Request != "" || record.Lease != "" || record.Reader != 1 || record.Restored || record.Expired || record.Failure != "" || record.NetworkReceipt == "" {
+			return record, errors.New("candidate prefix changed its closed original native TUN observation")
+		}
+		meta := prefix.policy.Metadata()
+		if meta.SessionID != record.Session || meta.ConfigSHA256 != record.Config {
+			return record, errors.New("candidate prefix TUN belongs to another source")
+		}
+	}
 	if record.NetworkReceipt != "" {
 		network, err := desktopnetwork.ParseDesktopNetworkReceipt(record.NetworkReceipt)
 		if err != nil || network.TargetOS != runtime.GOOS || network.Name != record.Interface || network.Index != uint32(record.Index) || network.MTU != record.MTU {
@@ -115,6 +124,9 @@ func openDesktopNodeMTUOwner(launch *desktopNodeLaunch, live mtuLiveSnapshot, to
 }
 
 func openDesktopNodeMTUOwnerContext(ctx context.Context, launch *desktopNodeLaunch, live mtuLiveSnapshot, token string) (mtuKernelOwner, error) {
+	if launch != nil && launch.candidatePrefix != nil {
+		return nil, errors.New("candidate prefix retains its original measurement TUN; a separate optimizer is unavailable")
+	}
 	record, err := readDesktopNodeMTUContext(ctx, launch)
 	if err != nil {
 		return nil, err
@@ -587,6 +599,9 @@ func (owner *desktopNodeMTUOwner) drainContext(parent context.Context) error {
 }
 
 func desktopNodeProcessDone(launch *desktopNodeLaunch) <-chan struct{} {
+	if launch != nil && launch.candidatePrefix != nil && launch.candidatePrefix.platform != nil {
+		return launch.candidatePrefix.platform.processDone()
+	}
 	if launch != nil && launch.chain != nil && launch.chain.platform != nil {
 		return launch.chain.platform.processDone()
 	}

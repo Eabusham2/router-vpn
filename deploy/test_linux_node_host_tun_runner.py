@@ -170,9 +170,9 @@ class InstalledNodeChainHostGate(unittest.TestCase):
     'node-chain-custom-wg-connect', 'node-chain-custom-awg-fast-connect', 'node-chain-custom-awg-strong-connect',
     'node-chain-custom-wg-wrong-middle-key', 'node-chain-custom-wg-wrong-middle-public', 'node-chain-custom-wg-final-dns-failure',
     'node-chain-custom-wg-middle-source', 'node-chain-custom-wg-prefix-lost')
-        self.assertEqual(G.NODE_CHAIN_HOST_CASES, expected + G.SAVED_CANDIDATE_HOST_CASES)
+        self.assertEqual(G.NODE_CHAIN_HOST_CASES, expected + G.SAVED_CANDIDATE_HOST_CASES + G.SAVED_PREFIX_HOST_CASES)
         expected += G.SAVED_CANDIDATE_HOST_CASES
-        self.assertEqual(G.CASES[-len(expected):], expected)
+        self.assertEqual(G.CASES[-len(expected)-len(G.SAVED_PREFIX_HOST_CASES):-len(G.SAVED_PREFIX_HOST_CASES)], expected)
         self.assertEqual(len(set(G.CASES)), len(G.CASES))
         fixture = InstalledLinuxHostVerdict()
         for case in expected:
@@ -211,6 +211,26 @@ class InstalledNodeChainHostGate(unittest.TestCase):
         self.assertIn("'saved_candidate_host_cases': list(SAVED_CANDIDATE_HOST_CASES)", inspect.getsource(G.execute))
         self.assertIn('ordered_candidate_preparation_linux_tun_native_test.go', inspect.getsource(G.checked_sources))
 
+    def test_closed_prefix_requires_distinct_native_receipt_and_every_decision(self):
+        expected = tuple(prefix + 'prefix-candidates-' + action
+            for prefix in ('node-chain-3-', 'node-chain-3-awg-fast-wg-', 'node-chain-3-awg-strong-awg-fast-')
+            for action in ('save', 'cancel'))
+        self.assertEqual(G.SAVED_PREFIX_HOST_CASES, expected)
+        self.assertEqual(len(set(expected)), 6)
+        fixture = InstalledLinuxHostVerdict()
+        for case in expected:
+            good = fixture.completed((case,))
+            G.check_verdict(good, case)
+            line = next(line for line in good.splitlines(True) if 'closed selected prefix fifty samples' in line)
+            for changed in (good.replace(line, '', 1), good + line,
+                            good.replace(line, line.replace(case, case + '-foreign'), 1),
+                            good.replace(line, 'PASS\n', 1),
+                            good.replace(line, '    native_test.go:34: verified installed host ordered independent prefixes and final: ' + case + '\n', 1)):
+                with self.subTest(case=case), self.assertRaises(ValueError):
+                    G.check_verdict(changed, case)
+        self.assertIn("'saved_prefix_host_cases': list(SAVED_PREFIX_HOST_CASES)", inspect.getsource(G.execute))
+        self.assertIn('ordered_candidate_prefix_linux_tun_native_test.go', inspect.getsource(G.checked_sources))
+
     def test_actual_installed_source_authority_is_compiled_and_required(self):
         names = G.NODE_CHAIN_HOST_AUTHORITY_CASES
         self.assertEqual(names, (G.NODE_CHAIN_HOST_AUTHORITY_ROOT,
@@ -219,7 +239,8 @@ class InstalledNodeChainHostGate(unittest.TestCase):
                 'awg-strong-awg-fast-3-nodes', 'wg-awg-fast-awg-strong-4-nodes',
                 'awg-fast-awg-strong-wg-4-nodes', 'awg-strong-wg-awg-fast-4-nodes')),
             G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT,
-            *(G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '/' + name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong'))))
+            *(G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '/' + name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong')),
+            G.PREFIX_HOST_AUTHORITY_ROOT, *(G.PREFIX_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg-fast', 'awg-strong'))))
         good = ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n' for name in names)
         G.check_node_chain_host_authority_verdict(good)
         for line in good.splitlines(True):
@@ -230,7 +251,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
         with patch.object(G.NODE, 'run', return_value=(0, good)) as run, redirect_stdout(io.StringIO()):
             self.assertEqual(G.execute_node_chain_host_authority(binary, captured), good)
         run.assert_called_once_with([str(binary), '-test.v', '-test.timeout=30s',
-            '-test.run=^(' + G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + ')$'], cwd=G.ROOT, env=captured, timeout=40)
+            '-test.run=^(' + G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '|' + G.PREFIX_HOST_AUTHORITY_ROOT + ')$'], cwd=G.ROOT, env=captured, timeout=40)
         for status, output in ((1, good), (0, 'PASS\n'), (0, '')):
             with patch.object(G.NODE, 'run', return_value=(status, output)), self.assertRaises(ValueError):
                 G.execute_node_chain_host_authority(binary, captured)
@@ -448,7 +469,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:22: verified installed host original service transfer: ' + case for case in cases if case in G.TRANSFER_CASES),
                           *('    native_test.go:18: verified installed host retained external succession: ' + case for case in cases if case in G.EXTERNAL_CASES),
                           *('    native_test.go:33: verified installed host imported independent WG entry and paired SS final: ' + case for case in cases if case in G.IMPORTED_CASES),
-                          *('    native_test.go:34: verified installed host ordered independent prefixes and final: ' + case for case in cases if case in G.NODE_CHAIN_HOST_CASES),
+                          *('    native_test.go:34: verified installed host ordered independent prefixes and final: ' + case for case in cases if case in G.NODE_CHAIN_HOST_CASES and case not in G.SAVED_PREFIX_HOST_CASES),
+                          *('    native_test.go:36: verified installed host closed selected prefix fifty samples final unopened native DOWN and explicit decision: ' + case for case in cases if case in G.SAVED_PREFIX_HOST_CASES),
                           *('    native_test.go:35: verified installed host saved candidate API fifty samples native DOWN and explicit decision: ' + case for case in cases if case in G.SAVED_CANDIDATE_HOST_CASES),
                           *('    native_test.go:21: verified installed host independent WireGuard entry and CONNECT final: ' + case for case in cases if case in G.EXTERNAL_WG_CONNECT_CASES),
                           *('    native_test.go:20: verified installed host independent WireGuard entry and SS final: ' + case for case in cases if case in G.EXTERNAL_WG_ENTRY_CASES),

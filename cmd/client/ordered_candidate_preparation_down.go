@@ -8,14 +8,41 @@ import (
 	"router-vpn/internal/mobiletor"
 )
 
+func orderedCandidateLaunchBound(p *orderedCandidatePreparation, launch *desktopNodeLaunch) bool {
+	if p == nil || launch == nil || p.launch != launch {
+		return false
+	}
+	if launch.candidatePrefix != nil {
+		return p.prefixPreparation != nil && launch.chain == nil && launch.candidatePrefix.preparation == p &&
+			launch.candidatePrefix.selection.Native == p.selection.Native
+	}
+	return p.prefixPreparation == nil && launch.chain != nil && launch.chain.preparation == p
+}
+
 func closeOrderedCandidateNativeLaunch(ctx context.Context, p *orderedCandidatePreparation, launch *desktopNodeLaunch) error {
-	if ctx == nil || p == nil || launch == nil || p.launch != launch || launch.chain == nil || launch.chain.preparation != p {
+	if ctx == nil || !orderedCandidateLaunchBound(p, launch) {
 		return errors.New("candidate disconnect lost its original immutable launch")
+	}
+	if prefix := launch.candidatePrefix; prefix != nil {
+		if prefix.platform != nil {
+			return prefix.platform.closePreparation(ctx, p)
+		}
+		if !orderedCandidateWindowsLaunchOwned(p, launch) {
+			return errors.New("prefix disconnect changed its original Windows owner")
+		}
+		return p.app.retireDesktopOwnedNode(ctx, launch)
 	}
 	if launch.chain.platform != nil {
 		return launch.chain.platform.closePreparation(ctx, p)
 	}
 	return closeDesktopNodeChainLaunch(ctx, p.app, launch)
+}
+
+func retryOrderedCandidateNativeDrain(ctx context.Context, launch *desktopNodeLaunch, failure error) error {
+	if launch != nil && launch.candidatePrefix != nil {
+		return retryDesktopNodeCandidatePrefixDrain(ctx, launch, failure)
+	}
+	return retryDesktopNodeChainCandidateDrain(ctx, launch, failure)
 }
 
 type orderedCandidateWindowsRelease struct {
@@ -31,8 +58,7 @@ type orderedCandidateWindowsRelease struct {
 // A failed attempt's unchanged predecessor is never adopted as that successor.
 // The original release transaction and generation survive cancellation/retry.
 func (p *orderedCandidatePreparation) releaseWindowsProtection(ctx context.Context, launch *desktopNodeLaunch) error {
-	if p == nil || launch == nil || launch != p.launch || launch.chain == nil || launch.chain.preparation != p ||
-		launch.ownedNode == nil || launch.ownedNode.chain != launch.chain {
+	if !orderedCandidateWindowsLaunchOwned(p, launch) {
 		return errors.New("candidate disconnect lost its original retired launch")
 	}
 	owned := launch.ownedNode
@@ -48,7 +74,7 @@ func (p *orderedCandidatePreparation) releaseWindowsProtection(ctx context.Conte
 		return nil // No protection transfer was ever entered.
 	}
 	slot, attempt := owned.slot, owned.attempt
-	if slot == nil || attempt == nil || attempt.launch != launch || attempt.chain != launch.chain.policy {
+	if slot == nil || attempt == nil || attempt.launch != launch || !attempt.matchesOwned(owned) {
 		return errors.New("candidate disconnect lost its original protection transfer")
 	}
 	if err := desktopnetwork.LockContext(ctx, &slot.mu); err != nil {
@@ -70,7 +96,10 @@ func (p *orderedCandidatePreparation) releaseWindowsProtection(ctx context.Conte
 		if slot.retirement != nil {
 			return errors.New("candidate disconnect cannot adopt another pending protection release")
 		}
-		meta := launch.chain.policy.Metadata()
+		_, meta, _, err := owned.physicalState()
+		if err != nil {
+			return err
+		}
 		if slot.target != nil {
 			if previous := attempt.transfer.Predecessor; previous != nil && *slot.target == *previous {
 				// The exact joined child returned the existing baseline. It
@@ -105,8 +134,7 @@ func (p *orderedCandidatePreparation) releaseWindowsProtection(ctx context.Conte
 // retirement instead completes this exact captured launch and preserves any
 // replacement command, registry, graph or Home state.
 func (p *orderedCandidatePreparation) finishWindowsNativeDown(ctx context.Context, launch *desktopNodeLaunch) error {
-	if p == nil || p.app == nil || launch == nil || launch != p.launch || launch.ownedNode == nil ||
-		launch.chain == nil || launch.chain.preparation != p || launch.ownedNode.chain != launch.chain {
+	if !orderedCandidateWindowsLaunchOwned(p, launch) {
 		return errors.New("candidate native DOWN lost its original Windows launch")
 	}
 	if err := desktopnetwork.LockContext(ctx, &launch.workspaceMu); err != nil {

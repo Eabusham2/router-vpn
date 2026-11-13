@@ -12,6 +12,7 @@ import (
 
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/hopmeasure"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // The preparation is a separate, finite purpose: measure saved SS candidates
@@ -19,6 +20,7 @@ import (
 // explicit profile save. It cannot represent an ordinary connection, a draft
 // prefix without its final node, or automatic connection adoption.
 type orderedCandidatePreparationRequest struct {
+	Scope        string
 	RequestID    string
 	Position     int
 	CandidateIDs []string
@@ -33,7 +35,8 @@ type orderedCandidatePreparation struct {
 	cancel            context.CancelFunc
 	request           orderedCandidatePreparationRequest
 	selection         multihopSelection
-	inventory         *desktopNodeChainCandidateCatalog // source-only capture; no connected identity
+	inventory         *desktopNodeChainCandidateCatalog             // source-only capture; no connected identity
+	prefixPreparation *mobilemultihop.NodeChainCandidatePreparation // distinct closed prefix purpose; nil for complete-saved
 	state             state
 	revision, network string
 	observeNetwork    func(context.Context) (string, error)
@@ -71,6 +74,11 @@ func beginOrderedCandidatePreparationWithNetwork(ctx context.Context, a *app, q 
 // original background worker, while explicit Cancel/Stop retains its join.
 func beginOrderedCandidatePreparationWithLifetime(ctx, lifetime context.Context, a *app, q orderedCandidatePreparationRequest,
 	observe func(context.Context) (string, error)) (result *orderedCandidatePreparation, failure error) {
+	scope, scopeErr := normalizedOrderedCandidateSavedScope(q.Scope)
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
+	q.Scope = scope
 	if ctx == nil || ctx.Err() != nil || lifetime == nil || lifetime.Err() != nil || a == nil || observe == nil || !validViaEntryRequestID(q.RequestID) ||
 		q.Samples != 50 || q.Position < 0 || q.Position > 7 || len(q.CandidateIDs) < 1 || len(q.CandidateIDs) > hopmeasure.CandidateMaximumTargets {
 		return nil, errors.New("temporary candidates require an original caller, saved IDs and exactly 50 samples")
@@ -145,6 +153,16 @@ func beginOrderedCandidatePreparationWithLifetime(ctx, lifetime context.Context,
 	if inventory.revision != revision {
 		return nil, errors.New("saved candidate catalog changed during preparation")
 	}
+	var prefixPreparation *mobilemultihop.NodeChainCandidatePreparation
+	if q.Scope == orderedCandidateSavedPrefixScope {
+		if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+			return nil, errors.New("candidate prefix native platform admission is unavailable")
+		}
+		prefixPreparation, err = captureDesktopNodeCandidatePrefixSource(ctx, selection, q.Position, inventory.inventory)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err = selection.Native.chain.validate(ctx, control, profiles); err != nil {
 		return nil, err
 	}
@@ -168,7 +186,7 @@ func beginOrderedCandidatePreparationWithLifetime(ctx, lifetime context.Context,
 	operation, cancel := context.WithCancel(lifetime)
 	q.CandidateIDs = append([]string(nil), q.CandidateIDs...)
 	p := &orderedCandidatePreparation{app: a, control: c, operation: operation, cancel: cancel, request: q,
-		selection: selection, inventory: inventory, state: initial, revision: revision, network: network, observeNetwork: observe}
+		selection: selection, inventory: inventory, prefixPreparation: prefixPreparation, state: initial, revision: revision, network: network, observeNetwork: observe}
 	p.owner = &viaEntryOwner{id: q.RequestID, cancel: cancel, done: make(chan struct{}), running: true, preparation: p}
 	p.owner.cleanup = p.retire
 	c.owner, c.seen[q.RequestID] = p.owner, time.Now()

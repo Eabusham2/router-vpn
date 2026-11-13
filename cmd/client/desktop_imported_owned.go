@@ -24,6 +24,12 @@ type desktopOwnedImportedRuntime struct {
 }
 
 func (owned *desktopOwnedNodeRuntime) physicalPolicy() (mobilemultihop.DesktopPhysicalPolicy, error) {
+	if owned != nil && owned.candidatePrefix != nil {
+		if owned.policy != nil || owned.imported != nil || owned.chain != nil || owned.candidatePrefix.policy == nil {
+			return nil, errors.New("native prefix owner mixed its concrete policy family")
+		}
+		return owned.candidatePrefix.policy, nil
+	}
 	if owned != nil && owned.chain != nil {
 		if owned.policy != nil || owned.imported != nil || owned.chain.policy == nil {
 			return nil, errors.New("native ordered owner mixed its concrete policy family")
@@ -101,6 +107,9 @@ func validateDesktopOwnedImportedConfigContext(ctx context.Context, launch *desk
 }
 
 func (owned *desktopOwnedNodeRuntime) sourceFile() (string, int) {
+	if owned != nil && owned.candidatePrefix != nil {
+		return "node-candidate-prefix-source.json", mobilemultihop.NodeChainInputLimit
+	}
 	if owned != nil && owned.chain != nil {
 		return "node-chain-source.json", mobilemultihop.NodeChainInputLimit
 	}
@@ -111,6 +120,13 @@ func (owned *desktopOwnedNodeRuntime) sourceFile() (string, int) {
 }
 
 func (owned *desktopOwnedNodeRuntime) networkContext(ctx context.Context) (string, error) {
+	if owned != nil && owned.candidatePrefix != nil {
+		capture := owned.candidatePrefix.capture
+		if capture == nil || capture.readNetwork == nil || owned.candidatePrefix.selection.Native == nil || owned.candidatePrefix.selection.Native.chain == nil || capture != owned.candidatePrefix.selection.Native.chain.host {
+			return "", errors.New("prefix owner lost its original network observer")
+		}
+		return capture.readNetwork(ctx)
+	}
 	if owned != nil && owned.chain != nil {
 		if owned.chain.selection.Native == nil || owned.chain.selection.Native.chain == nil ||
 			owned.chain.selection.Native.chain.host == nil || owned.chain.selection.Native.chain.host.readNetwork == nil {
@@ -207,7 +223,7 @@ func (a *app) desktopOwnedNodeCurrentFor(ctx context.Context, launch *desktopNod
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("native startup lost its original caller")
 	}
-	if launch != nil && launch.ownedNode != nil && (launch.ownedNode.imported != nil || launch.ownedNode.chain != nil) {
+	if launch != nil && launch.ownedNode != nil && (launch.ownedNode.imported != nil || launch.ownedNode.chain != nil || launch.ownedNode.candidatePrefix != nil) {
 		return a.desktopOwnedNodeCurrentContext(ctx, launch, processRequired)
 	}
 	if !a.desktopOwnedNodeCurrent(launch, processRequired) {

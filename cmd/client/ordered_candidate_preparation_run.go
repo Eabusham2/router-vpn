@@ -56,6 +56,9 @@ func (p *orderedCandidatePreparation) startRuntime(ctx context.Context) (*ordere
 	if err := p.sourceCurrent(ctx); err != nil {
 		return r, err
 	}
+	if p.prefixPreparation != nil {
+		return p.startPrefixRuntime(ctx, r)
+	}
 	launch, err := preflightOwnedNativeMultihopCommandForPurpose(ctx, p.app, p.selection, nil, p)
 	if err != nil {
 		return r, err
@@ -176,7 +179,13 @@ func (r *orderedCandidatePreparedRuntime) current(ctx context.Context) error {
 	if err := r.preparation.sourceCurrent(ctx); err != nil {
 		return err
 	}
-	if err := desktopNodeChainCurrent(ctx, r.preparation.app, r.preparation.launch); err != nil {
+	var err error
+	if r.preparation.prefixPreparation != nil {
+		err = desktopCandidatePrefixCurrent(ctx, r.preparation.app, r.preparation.launch)
+	} else {
+		err = desktopNodeChainCurrent(ctx, r.preparation.app, r.preparation.launch)
+	}
+	if err != nil {
 		return err
 	}
 	return r.pulseCurrent(ctx)
@@ -189,16 +198,28 @@ func (r *orderedCandidatePreparedRuntime) pulseCurrent(ctx context.Context) (fai
 		}
 	}()
 	if ctx == nil || ctx.Err() != nil || r == nil || r.preparation == nil || r.cohort == nil ||
-		r.catalog == nil || r.owner == nil || r.receipt == nil || r.transition {
+		r.catalog == nil || r.receipt == nil || r.transition {
 		return errors.New("candidate observation lacks its complete original native receipt")
 	}
 	p, c := r.preparation, r.catalog
-	if owner, ok := nativeMultihopOwners.Load(p.app); !ok || owner != r.owner || r.owner.launch != p.launch ||
-		c.launch != p.launch || p.launch == nil || p.launch.chain == nil || p.launch.chain.preparation != p {
-		return errors.New("candidate observation belongs to another native launch")
-	}
-	if graph, ok := getActiveMultihopGraph(p.app); !ok || graph != r.graph {
-		return errors.New("candidate observation changed its original full graph")
+	if p.prefixPreparation != nil {
+		if !orderedCandidateLaunchBound(p, p.launch) || r.owner != nil || r.graphSet || c.launch != p.inventory.launch {
+			return errors.New("prefix observation changed its private purpose or saved source inventory")
+		}
+		if _, exists := nativeMultihopOwners.Load(p.app); exists {
+			return errors.New("prefix observation cannot borrow an ordinary native graph")
+		}
+		if _, exists := activeMultihopGraphs.Load(p.app); exists {
+			return errors.New("prefix observation cannot borrow an ordinary active graph")
+		}
+	} else {
+		if owner, ok := nativeMultihopOwners.Load(p.app); !ok || owner != r.owner || r.owner == nil || r.owner.launch != p.launch ||
+			c.launch != p.launch || p.launch == nil || p.launch.chain == nil || p.launch.chain.preparation != p {
+			return errors.New("candidate observation belongs to another native launch")
+		}
+		if graph, ok := getActiveMultihopGraph(p.app); !ok || graph != r.graph {
+			return errors.New("candidate observation changed its original full graph")
+		}
 	}
 	if err := r.cohort.CurrentContext(ctx); err != nil {
 		return err
@@ -265,7 +286,13 @@ func (p *orderedCandidatePreparation) measureRuntime(ctx context.Context, r *ord
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		status, err := exchangeDesktopNodeChainCandidateObserved(ctx, r.catalog, id, r.current, r.pulseCurrent)
+		var status hopmeasure.CandidateStatus
+		var err error
+		if p.prefixPreparation != nil {
+			status, err = exchangeDesktopNodeCandidatePrefixObserved(ctx, r, id, r.current, r.pulseCurrent)
+		} else {
+			status, err = exchangeDesktopNodeChainCandidateObserved(ctx, r.catalog, id, r.current, r.pulseCurrent)
+		}
 		completed(id, status, err)
 		if errors.Is(err, errDesktopNodeChainMeasurementPending) {
 			pending = err

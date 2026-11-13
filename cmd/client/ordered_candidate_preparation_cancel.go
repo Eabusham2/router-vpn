@@ -14,6 +14,7 @@ import (
 // the view's 120 seconds, so pruning cannot revive a delayed original POST.
 type orderedCandidatePreparedAdmission struct {
 	token    string
+	scope    string
 	position int
 	created  time.Time
 }
@@ -29,7 +30,7 @@ func rememberOrderedCandidatePreparedViewLocked(control *viaEntryControl, view *
 	if control.preparedViews == nil {
 		control.preparedViews = map[string]*orderedCandidatePreparedAdmission{}
 	}
-	control.preparedViews[view.token] = &orderedCandidatePreparedAdmission{view.token, view.position, time.Now()}
+	control.preparedViews[view.token] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), position: view.position, created: time.Now()}
 	return nil
 }
 
@@ -42,7 +43,7 @@ func reserveOrderedCandidatePreparedAdmissionLocked(control *viaEntryControl, id
 	if control.preparedAdmissions == nil {
 		control.preparedAdmissions = map[string]*orderedCandidatePreparedAdmission{}
 	}
-	control.preparedAdmissions[id] = &orderedCandidatePreparedAdmission{view.token, view.position, time.Now()}
+	control.preparedAdmissions[id] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), position: view.position, created: time.Now()}
 	return nil
 }
 
@@ -50,8 +51,14 @@ func (a *app) orderedCandidatePreparedCancel(w http.ResponseWriter, request *htt
 	var q struct {
 		RequestID string `json:"request_id"`
 		ViewToken string `json:"view_token"`
+		Scope     string `json:"scope"`
 	}
 	if !viaEntryDecode(w, request, &q) {
+		return
+	}
+	scope, scopeErr := normalizedOrderedCandidateSavedScope(q.Scope)
+	if scopeErr != nil {
+		http.Error(w, scopeErr.Error(), 400)
 		return
 	}
 	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" {
@@ -68,11 +75,11 @@ func (a *app) orderedCandidatePreparedCancel(w http.ResponseWriter, request *htt
 	if admission == nil {
 		view := control.preparedView
 		if recorded := control.preparedViews[q.ViewToken]; recorded != nil {
-			view = &orderedCandidatePreparedView{token: recorded.token, position: recorded.position}
+			view = &orderedCandidatePreparedView{token: recorded.token, scope: recorded.scope, position: recorded.position}
 		}
 		// Expiry forbids starting work, not cancellation of the exact issued
 		// source view. This path creates only a request/view tombstone.
-		if view == nil || view.token != q.ViewToken ||
+		if view == nil || view.token != q.ViewToken || view.scopeValue() != scope ||
 			reserveOrderedCandidatePreparedAdmissionLocked(control, q.RequestID, view) != nil {
 			control.mu.Unlock()
 			http.Error(w, "saved cancellation lost its original bounded view", 409)
@@ -80,7 +87,7 @@ func (a *app) orderedCandidatePreparedCancel(w http.ResponseWriter, request *htt
 		}
 		admission = control.preparedAdmissions[q.RequestID]
 	}
-	if admission.token != q.ViewToken {
+	if admission.token != q.ViewToken || admission.scope != scope {
 		control.mu.Unlock()
 		http.Error(w, "saved request cannot be rebound to another view", 409)
 		return
@@ -113,11 +120,11 @@ func orderedCandidatePreparedAdmissionCancelResponse(control *viaEntryControl, o
 	if failure != nil {
 		cleanup = "Original temporary cleanup is pending; Cancel retries the same owner."
 	}
-	return map[string]any{"schema": 1, "scope": "saved-complete-local", "request_id": id,
+	return orderedCandidatePreparedPurposeResponse(map[string]any{"schema": 1, "request_id": id,
 		"view_token": admission.token, "prefix_position": admission.position, "measurement": "routed-tcp-connect",
 		"started": started, "admission_cancelled": !started, "running": running, "cancelled": true,
 		"drained": drained, "native_down": nativeDown, "accepted": false, "reviewing": false,
 		"cleanup_pending": !drained, "cleanup_error": cleanup, "failure": "",
 		"results": []hopmeasure.CandidateStatus{}, "errors": []viaEntryCandidateError{},
-		"saved_profile_id": "", "active_path_changed": false, "ok": failure == nil && drained}
+		"saved_profile_id": "", "active_path_changed": false, "ok": failure == nil && drained}, admission.scope)
 }

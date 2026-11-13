@@ -289,7 +289,10 @@ func writeDesktopRuntimeFileAdmissionContext(ctx context.Context, launch *deskto
 
 func desktopRuntimeOwnedFile(name string) bool {
 	switch name {
-	case "sing-box.json", "source.json", "capture.json", "proof.json", "progress.json", "stop.json", "stopped.json", "native-multihop.process.json",
+	case "node-candidate-prefix-source.json", "node-candidate-prefix-ready.json", ".node-candidate-prefix-ready.json.pending",
+		"node-candidate-prefix-request.json", ".node-candidate-prefix-request.json.pending", "node-candidate-prefix-live.json", ".node-candidate-prefix-live.json.pending",
+		"node-candidate-prefix-cancel.json", ".node-candidate-prefix-cancel.json.pending", "node-candidate-prefix-result.json", ".node-candidate-prefix-result.json.pending",
+		"sing-box.json", "source.json", "capture.json", "proof.json", "progress.json", "stop.json", "stopped.json", "native-multihop.process.json",
 		".proof.json.pending", ".progress.json.pending", ".stopped.json.pending", "mtu-request.json", "mtu-commit.json", "mtu-cancel.json", "mtu-status.json", ".mtu-status.json.pending",
 		"path-request.json", "path-cancel.json", "path-status.json", ".path-status.json.pending",
 		"dns-request.json", "dns-cancel.json", "dns-status.json", ".dns-status.json.pending",
@@ -316,6 +319,14 @@ func cleanupDesktopNodeLaunch(launch *desktopNodeLaunch) error {
 	}
 	retired := false
 	defer func() {
+		if retired && launch.candidatePrefix != nil {
+			launch.candidatePrefix.mu.Lock()
+			if pending := launch.candidatePrefix.candidatePending; pending != nil {
+				pending.joined.Store(true)
+				launch.candidatePrefix.candidatePending = nil
+			}
+			launch.candidatePrefix.mu.Unlock()
+		}
 		if retired && launch.chain != nil {
 			launch.chain.mu.Lock()
 			release := launch.chain.measurementRelease

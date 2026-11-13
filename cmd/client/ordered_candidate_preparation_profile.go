@@ -144,7 +144,7 @@ func preparedCandidateAdoptableLocked(owner *viaEntryOwner, q orderedCandidateSa
 		return false
 	}
 	for _, result := range job.results {
-		if result.CandidateID == q.CandidateID && validateDesktopNodeChainCandidateStatus(job.preparation.runtime.catalog.plan, q.CandidateID, result, now) == nil {
+		if result.CandidateID == q.CandidateID && validateOrderedCandidatePreparedStatus(job.preparation, q.CandidateID, result, now) == nil {
 			return true
 		}
 	}
@@ -152,10 +152,19 @@ func preparedCandidateAdoptableLocked(owner *viaEntryOwner, q orderedCandidateSa
 }
 
 func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request *http.Request) {
-	var q orderedCandidateSaveRequest
-	if !viaEntryDecode(w, request, &q) {
+	var envelope struct {
+		orderedCandidateSaveRequest
+		Scope string `json:"scope"`
+	}
+	if !viaEntryDecode(w, request, &envelope) {
 		return
 	}
+	scope, scopeErr := normalizedOrderedCandidateSavedScope(envelope.Scope)
+	if scopeErr != nil {
+		http.Error(w, scopeErr.Error(), 400)
+		return
+	}
+	q := envelope.orderedCandidateSaveRequest
 	q.Name = strings.TrimSpace(q.Name)
 	if !validViaEntryRequestID(q.RequestID) || q.ViewToken == "" || !validProfileID(q.CandidateID) || validateConnectionProfileName(q.Name) != nil {
 		http.Error(w, "an original completed result, exact candidate/path and explicit profile name are required", 400)
@@ -174,7 +183,7 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		return
 	}
 	owner := control.owner
-	if owner == nil || owner.id != q.RequestID || owner.prepared == nil || owner.prepared.view.token != q.ViewToken {
+	if owner == nil || owner.id != q.RequestID || owner.prepared == nil || owner.prepared.view.token != q.ViewToken || owner.prepared.view.scopeValue() != scope {
 		control.mu.Unlock()
 		http.Error(w, "original temporary candidate result is unavailable", 409)
 		return

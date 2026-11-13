@@ -41,6 +41,11 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 	if policyErr != nil || owned.network == "" {
 		return errors.New("native Router observation changed its captured policy or network")
 	}
+	if owned.candidatePrefix != nil {
+		if err := validateDesktopOwnedCandidatePrefixSourceContext(ctx, launch); err != nil {
+			return err
+		}
+	}
 	if owned.chain != nil {
 		if err := validateDesktopOwnedNodeChainSourceContext(ctx, launch); err != nil {
 			return err
@@ -66,10 +71,14 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 			return err
 		}
-		profile, exists := a.profileByIDLocked(launch.profileID)
-		current := exists && !a.closing && owned.slot != nil && a.nodeProtection == owned.slot && a.cmd == launch.command && a.state.RouterID == launch.profileID &&
+		profileID := launch.profileID
+		if owned.candidatePrefix != nil {
+			profileID = launch.policyProfileID
+		}
+		profile, exists := a.profileByIDLocked(profileID)
+		current := exists && !a.closing && owned.slot != nil && a.nodeProtection == owned.slot && a.cmd == launch.command && a.state.RouterID == profileID &&
 			a.state.RuntimeMode == launch.mode && [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == owned.options &&
-			desktopOwnedNodeProfileToken(profile) == owned.profileToken && owned.importedSourceCurrentLocked(a) && owned.chainSourceCurrentLocked(a)
+			desktopOwnedNodeProfileToken(profile) == owned.profileToken && owned.importedSourceCurrentLocked(a) && owned.chainSourceCurrentLocked(a) && owned.candidatePrefixSourceCurrentLocked(a)
 		a.mu.Unlock()
 		if !current {
 			return errors.New("native Router observation changed its original runtime or profile")
@@ -111,6 +120,9 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 // reads already in the OS remain synchronously joined through return.
 func (a *app) readDesktopOwnedNodeReadyContext(ctx context.Context, launch *desktopNodeLaunch, fresh bool) (mobilemultihop.DesktopNodeReadyRecord, error) {
 	var empty mobilemultihop.DesktopNodeReadyRecord
+	if launch != nil && launch.candidatePrefix != nil {
+		return empty, errors.New("closed prefix preparation cannot borrow ordinary node readiness")
+	}
 	if err := a.desktopOwnedNodeCurrentContext(ctx, launch, true); err != nil {
 		return empty, err
 	}
