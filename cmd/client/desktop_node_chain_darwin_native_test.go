@@ -78,7 +78,8 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 		return true, errors.Join(err, errors.New("ordered native test has no original disposable authority"))
 	}
 	raw, err = readPrivateRegular(filepath.Join(macOSOwnedControllerRoot, "fixture-node-chain-case"), 128)
-	modes, action, caseErr := macOSNodeChainScenario(strings.TrimSpace(string(raw)))
+	scenario := strings.TrimSpace(string(raw))
+	modes, action, caseErr := macOSNodeChainScenario(scenario)
 	if err != nil || caseErr != nil {
 		return true, errors.Join(err, caseErr)
 	}
@@ -97,6 +98,9 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 	}
 	for i, node := range control.MultihopNodes {
 		expected := "shadowsocks"
+		if strings.HasPrefix(scenario, "node-chain-hy2-") {
+			expected = "hysteria2"
+		}
 		if i < len(modes) {
 			expected = modes[i]
 		}
@@ -381,7 +385,7 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 	}
 	fixture := macOSControllerNativeInstall(t)
 	macOSExternalNativeBundle(t)
-	peer := startMacOSNodeChainPeer(t, modes)
+	peer := startMacOSNodeChainPeerFinal(t, modes, strings.HasPrefix(scenario, "node-chain-hy2-"))
 	macOSExternalNativeTrust(t, &macOSExternalNativePeer{ca: peer.reply.PublicCA})
 	store := installMacOSNodeChainProfiles(t, peer, action)
 	if err := os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-node-chain-case"), []byte(scenario+"\n"), 0600); err != nil {
@@ -439,7 +443,7 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		t.Fatal("native request lost original complete inventory", status, err, string(body))
 	}
 	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/connect", string(body))
-	negative := action == "wrong-middle-key" || action == "wrong-middle-public" || action == "wrong-awg-parameters" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure"
+	negative := action == "wrong-middle-key" || action == "wrong-middle-public" || action == "wrong-awg-parameters" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure" || action == "final-password" || action == "final-trust" || action == "final-mask"
 	if err != nil || negative && status == http.StatusOK || !negative && status != http.StatusOK {
 		t.Fatal("ordered native Connect reached wrong verdict", status, err, string(raw))
 	}
@@ -450,6 +454,7 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 	}
 	live = macOSNodeChainNativeRead(t, ctx, client)
 	stats := peer.observe(t, "stats")
+	macOSNodeChainHysteriaCounters(t, peer, stats, action)
 	if negative {
 		if !live.Closed || !live.NativeJoined || !live.Stopped || live.Ready != nil || live.Session == "" || stats.Prefixes[0].RawUDP == 0 || stats.Prefixes[0].ProofQueries == 0 {
 			t.Fatal("negative did not reach actual original encrypted boundary and joined refusal", live, stats)
@@ -681,6 +686,7 @@ func macOSNodeChainNativeProved(t *testing.T, peer *macOSNodeChainPeer, request 
 		t.Fatal("original actual utun readback failed", err, link)
 	}
 	stats := peer.observe(t, "stats")
+	macOSNodeChainHysteriaCounters(t, peer, stats, "connect")
 	for i, prefix := range stats.Prefixes {
 		if prefix.Mode != request.Nodes[i].Mode || prefix.RawUDP == 0 || prefix.TCP == 0 || prefix.UDP == 0 || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 {
 			t.Fatal("ordered path omitted actual independent authenticated prefix", i, prefix)
@@ -690,7 +696,7 @@ func macOSNodeChainNativeProved(t *testing.T, peer *macOSNodeChainPeer, request 
 		stats.Middle.Method != peer.middleMethod || stats.Middle.RawTCP == 0 || stats.Middle.RawUDP == 0 || stats.Middle.TCP == 0 || stats.Middle.UDP == 0 || stats.Middle.PublicQueries == 0) {
 		t.Fatal("ordered path omitted actual independent imported cipher or public-path proof", stats.Middle)
 	}
-	if stats.Final.RouterQueries == 0 || stats.Final.DNSQueries == 0 || stats.Final.FinalPublicQueries == 0 || stats.Final.FinalTCP == 0 || stats.Final.FinalUDP == 0 || stats.Final.DirectQueries != 0 {
+	if stats.Final.RouterQueries == 0 || stats.Final.DNSQueries == 0 || stats.Final.FinalPublicQueries == 0 || peer.hysteriaPassword == "" && (stats.Final.FinalTCP == 0 || stats.Final.FinalUDP == 0) || stats.Final.DirectQueries != 0 {
 		t.Fatal("ordered final did not carry selected DNS/private/public proof", stats)
 	}
 }

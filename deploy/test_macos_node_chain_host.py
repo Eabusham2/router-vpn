@@ -23,7 +23,7 @@ FLAG = 'ROUTERVPN_DARWIN_NODE_CHAIN_HOST_ACCEPTANCE'
 TEST = 'TestMacOSRetainedNodeChainNativeHost'
 AUTHORITY_TEST = 'TestDesktopDarwinInstalledImportedNodeChainFixtureKeepsOriginalSources'
 AUTHORITY_CASES = (AUTHORITY_TEST, *(AUTHORITY_TEST+'/'+name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong')))
-CASES = (
+ORIGINAL_CASES = (
     'node-chain-3-connect', 'node-chain-4-connect', 'node-chain-3-wrong-middle-key', 'node-chain-4-wrong-middle-proof',
     'node-chain-3-final-dns-failure', 'node-chain-4-final-node-failure', 'node-chain-4-middle-source', 'node-chain-3-prefix-lost',
     'node-chain-3-awg-fast-wg-connect', 'node-chain-3-wg-awg-strong-connect', 'node-chain-3-awg-strong-awg-fast-connect',
@@ -35,7 +35,24 @@ CASES = (
     'node-chain-custom-wg-middle-source', 'node-chain-custom-wg-prefix-lost',
     'node-chain-3-mtu', 'node-chain-4-wg-awg-fast-awg-strong-mtu',
 )
-MTU_CASES = CASES[-2:]
+HYSTERIA_CASES = (
+    'node-chain-hy2-wg-wg-connect',
+    'node-chain-hy2-awg-fast-awg-strong-connect',
+    'node-chain-hy2-awg-strong-awg-fast-connect',
+    'node-chain-hy2-wg-wg-final-password',
+    'node-chain-hy2-wg-wg-final-trust',
+    'node-chain-hy2-wg-wg-final-mask',
+    'node-chain-hy2-wg-wg-final-dns-failure',
+    'node-chain-hy2-wg-wg-middle-source',
+    'node-chain-hy2-wg-wg-prefix-lost',
+)
+CASES = ORIGINAL_CASES + HYSTERIA_CASES
+HYSTERIA_AUTHORITY_TEST = 'TestDesktopDarwinInstalledHysteriaNodeChainFixtureKeepsOriginalSources'
+HYSTERIA_AUTHORITY_CASES = (HYSTERIA_AUTHORITY_TEST, *(HYSTERIA_AUTHORITY_TEST+'/'+name for name in
+    ('wg-wg', 'awg-fast-awg-strong', 'awg-strong-awg-fast')))
+HYSTERIA_AUTHORITY_SOURCE = 'cmd/client/desktop_node_chain_hysteria_darwin_native_test.go'
+HYSTERIA_CONTROL_WITNESS = 'compiled installed final substituted TLS, password, Salamander or packet prefix'
+MTU_CASES = ORIGINAL_CASES[-2:]
 MTU_RECEIPT = 'actual sealed Darwin ordered MTU: Auto and Retest transferred final-only UDP, held Cancel joined exact rollback, original process PF and reader succession retained'
 MEASUREMENT_CASES = tuple(case for case in CASES if case not in (
     'node-chain-3-wrong-middle-key', 'node-chain-4-wrong-middle-proof',
@@ -43,6 +60,8 @@ MEASUREMENT_CASES = tuple(case for case in CASES if case not in (
     'node-chain-4-wg-awg-fast-awg-strong-wrong-middle-key',
     'node-chain-4-wg-awg-fast-awg-strong-wrong-awg-parameters',
     'node-chain-custom-wg-wrong-middle-key', 'node-chain-custom-wg-wrong-middle-public', 'node-chain-custom-wg-final-dns-failure',
+    'node-chain-hy2-wg-wg-final-password', 'node-chain-hy2-wg-wg-final-trust',
+    'node-chain-hy2-wg-wg-final-mask', 'node-chain-hy2-wg-wg-final-dns-failure',
 ))
 MEASUREMENT_RECEIPT = 'actual sealed Darwin ordered measurement: every original prefix transferred 8 MiB per direction with six HTTP samples, original native process PF and TUN reader retained'
 SOURCE_FILES = (
@@ -50,6 +69,7 @@ SOURCE_FILES = (
     'cmd/client/desktop_node_chain_darwin_native_test.go',
     'cmd/client/desktop_node_chain_darwin_peer_native_test.go',
     'cmd/client/desktop_node_chain_imported_darwin_native_test.go',
+    HYSTERIA_AUTHORITY_SOURCE,
     'cmd/client/controller_privilege_darwin_native_test.go',
     'modes/mtu-throughput-tuner.py', 'modes/mtu-throughput-tuner-platform.py',
     'modes/network_context.py', 'modes/private_profile_store.py', 'modes/profile_id.py',
@@ -139,8 +159,8 @@ def source_identity(core):
     if projector is None:
         raise ValueError('Native ordered peer source projection is not installed')
     copies = projector()
-    if len(copies) != 5:
-        raise ValueError('Native ordered peer lost one of its five complete projections')
+    if len(copies) != 7:
+        raise ValueError('Native ordered peer lost one of its seven complete projections')
     for relative, expected in copies.items():
         path = Path(core)/relative
         actual = EXTERNAL.sha(path)
@@ -150,11 +170,13 @@ def source_identity(core):
     return identity
 
 
-def check_authority_verdict(output):
+def check_authority_verdict(output, *, hysteria=False):
+    root = HYSTERIA_AUTHORITY_TEST if hysteria else AUTHORITY_TEST
+    cases = HYSTERIA_AUTHORITY_CASES if hysteria else AUTHORITY_CASES
     if not isinstance(output, str) or re.search(
             r'(?im)^\s*(?:--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
         raise ValueError('Imported source authority contains failure, skip or race evidence')
-    expected = set(AUTHORITY_CASES)
+    expected = set(cases)
     runs, passes = Counter(), Counter()
     complete = 0
     for line in output.splitlines():
@@ -162,7 +184,7 @@ def check_authority_verdict(output):
         passed = re.fullmatch(r'(?:    )?--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)', line)
         if run:
             name = run[1]
-            if name not in expected or complete or runs[name] or passes[AUTHORITY_TEST] or name != AUTHORITY_TEST and runs[AUTHORITY_TEST] != 1:
+            if name not in expected or complete or runs[name] or passes[root] or name != root and runs[root] != 1:
                 raise ValueError('Imported source authority RUN is missing its original root or duplicated')
             runs[name] += 1
         if passed:
@@ -178,18 +200,83 @@ def check_authority_verdict(output):
         raise ValueError('Imported source authority did not complete its exact original inventory')
 
 
-def execute_authority(controller, digest, environment):
+def execute_authority(controller, digest, environment, *, hysteria=False):
+    root = HYSTERIA_AUTHORITY_TEST if hysteria else AUTHORITY_TEST
     if EXTERNAL.sha(controller) != digest:
         raise ValueError('Imported source authority lost its captured controller image')
     result = subprocess.run([str(controller), '-test.v', '-test.count=1', '-test.timeout=30s',
-                             '-test.run=^'+AUTHORITY_TEST+'$'], cwd=ROOT, env=environment,
+                             '-test.run=^'+root+'$'], cwd=ROOT, env=environment,
                             check=True, timeout=40, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     print(result.stdout, end='' if result.stdout.endswith('\n') else '\n', flush=True)
-    check_authority_verdict(result.stdout)
+    check_authority_verdict(result.stdout, hysteria=hysteria)
     if EXTERNAL.sha(controller) != digest:
         raise ValueError('Imported source authority changed its captured controller image')
     return result.stdout
 
+
+
+def check_hysteria_control_verdict(output, returncode):
+    """Require the compiled original source-mask omission at all three exact leaves."""
+    if returncode == 0 or not isinstance(output, str) or re.search(
+            r'(?im)^\s*(?:--- (?:PASS|SKIP):|PASS(?:\s|$)|SKIP(?:\s|$)|WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
+        raise ValueError('Hysteria source control did not reach its original assertion')
+    expected = set(HYSTERIA_AUTHORITY_CASES)
+    runs, failures, witnesses = Counter(), Counter(), Counter()
+    active, complete = None, 0
+    for line in output.splitlines():
+        run = re.fullmatch(r'=== RUN   (\S+)', line)
+        failed = re.fullmatch(r'(?:    )?--- FAIL: (\S+) \([0-9]+(?:\.[0-9]+)?s\)', line)
+        witness = re.fullmatch(r'\s+desktop_node_chain_hysteria_darwin_native_test.go:\d+: '+re.escape(HYSTERIA_CONTROL_WITNESS), line)
+        if run:
+            name = run[1]
+            if name not in expected or complete or runs[name] or failures[HYSTERIA_AUTHORITY_TEST] or name != HYSTERIA_AUTHORITY_TEST and runs[HYSTERIA_AUTHORITY_TEST] != 1:
+                raise ValueError('Hysteria source control replaced its exact original execution')
+            runs[name] += 1
+            active = name
+        if witness:
+            if active not in expected - {HYSTERIA_AUTHORITY_TEST} or complete or failures[active]:
+                raise ValueError('Hysteria source control borrowed a foreign assertion')
+            witnesses[active] += 1
+        if failed:
+            name = failed[1]
+            if name not in expected or complete or runs[name] != 1 or failures[name]:
+                raise ValueError('Hysteria source control lacks one exact failed original run')
+            failures[name] += 1
+        if line == 'FAIL':
+            if set(failures) != expected:
+                raise ValueError('Hysteria source control ended before every required failure')
+            complete += 1
+    if set(runs) != expected or set(failures) != expected or complete != 1 or not output.rstrip().endswith('\nFAIL'):
+        raise ValueError('Hysteria source control omitted an original verdict')
+    if set(witnesses) != expected - {HYSTERIA_AUTHORITY_TEST} or any(value != 1 for value in witnesses.values()):
+        raise ValueError('Hysteria source control omitted or duplicated its original mask assertion')
+
+
+def execute_hysteria_control(compiler, work, environment):
+    original = ROOT/HYSTERIA_AUTHORITY_SOURCE
+    source = original.read_text()
+    before = EXTERNAL.sha(original)
+    needle = '"password": mask'
+    if source.count(needle) != 1:
+        raise ValueError('Hysteria original source-mask control seam changed')
+    directory = Path(work)/'hysteria-source-control'
+    directory.mkdir(mode=0o700)
+    changed, overlay, image = directory/'source.go', directory/'overlay.json', directory/'controller.test'
+    changed.write_text(source.replace(needle, '"password": mask + "-uncaptured"', 1))
+    overlay.write_text(json.dumps({'Replace': {str(original.resolve()): str(changed.resolve())}}))
+    command = [str(compiler), 'test', '-race', '-c', '-mod=readonly', '-tags=routervpn_controller_privileged',
+               '-overlay='+str(overlay), '-o', str(image), './cmd/client']
+    subprocess.run(command, cwd=ROOT, env=environment, check=True, timeout=300)
+    digest = EXTERNAL.sha(image)
+    result = subprocess.run([str(image), '-test.v', '-test.count=1', '-test.timeout=30s',
+                             '-test.run=^'+HYSTERIA_AUTHORITY_TEST+'$'], cwd=ROOT, env=environment,
+                            check=False, timeout=40, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    print(result.stdout, end='' if result.stdout.endswith('\n') else '\n', flush=True)
+    check_hysteria_control_verdict(result.stdout, result.returncode)
+    if EXTERNAL.sha(image) != digest or EXTERNAL.sha(original) != before:
+        raise ValueError('Hysteria source control replaced its captured image or original source')
+    return dict(image_sha256=digest, output_sha256=hashlib.sha256(result.stdout.encode()).hexdigest(),
+                cases=list(HYSTERIA_AUTHORITY_CASES), witness=HYSTERIA_CONTROL_WITNESS)
 
 def required_host(environment):
     if environment.get(FLAG) != '1' or environment.get('HOMEVPN_MTU_BENCH_FAKE'):
@@ -278,7 +365,9 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
         if source_identity(core) != before or BUILD.digest() != policy:
             raise ValueError('Native ordered source changed during compilation')
         authority_output = execute_authority(controller, identities['controller'], captured)
-        completed, output_digest = [], hashlib.sha256(authority_output.encode())
+        hysteria_authority_output = execute_authority(controller, identities['controller'], captured, hysteria=True)
+        hysteria_control = execute_hysteria_control(compiler, work, captured)
+        completed, output_digest = [], hashlib.sha256((authority_output+hysteria_authority_output).encode())
         for case in cases:
             command = ['/usr/bin/env', 'ROUTERVPN_MACOS_CONTROLLER_PRIVILEGE_FIXTURE=1',
                        'ROUTERVPN_MACOS_FIXTURE_UID='+str(uid), 'ROUTERVPN_MACOS_FIXTURE_SOURCE='+str(ROOT),
@@ -309,6 +398,9 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
                              sealed_bundle_sha256=signed_hash, images=identities, cases=list(completed),
                              sources=before, authority_cases=list(AUTHORITY_CASES),
                              authority_output_sha256=hashlib.sha256(authority_output.encode()).hexdigest(),
+                             hysteria_authority_cases=list(HYSTERIA_AUTHORITY_CASES),
+                             hysteria_authority_output_sha256=hashlib.sha256(hysteria_authority_output.encode()).hexdigest(),
+                             hysteria_source_control=hysteria_control,
                              output_sha256=output_digest.hexdigest(), native=True)
     if work.exists() or work.is_symlink():
         raise ValueError('Native ordered acceptance did not retire its exact compilation workspace')

@@ -594,6 +594,13 @@ func desktopNodeChainPeerServe(t *testing.T, reader *bufio.Reader, peer *desktop
 func desktopNodeChainPeerFixture(t *testing.T, count int) (desktopNodeChainPeerRequest, []string) {
 	t.Helper()
 	r := desktopNodeChainPeerRequest{Schema: 1, Address: "192.168.210.2", ClientAddress: "192.168.210.1", FinalAPIToken: "ordered-final-private-token"}
+	if runtime.GOOS == "darwin" {
+		address := os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS")
+		if !desktopNodeChainReferenceAddressPair(address, address) {
+			t.Fatal("ordered reference fixture lost its captured Darwin physical IPv4")
+		}
+		r.Address, r.ClientAddress = address, address
+	}
 	var clients []string
 	encode := base64.StdEncoding.EncodeToString
 	for i := 0; i < count; i++ {
@@ -1346,4 +1353,36 @@ func TestRouterVPNDesktopNodeChainBenchmarkCapture(t *testing.T) {
 			t.Fatal("benchmark replayed a held packet", after)
 		}
 	})
+}
+
+func TestRouterVPNDesktopNodeChainDarwinReferenceCapture(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	request, _ := desktopNodeChainPeerFixture(t, 2)
+	address := os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS")
+	if request.Address != address || request.ClientAddress != address {
+		t.Fatal("Darwin reference fixture substituted its original captured physical address")
+	}
+	if _, err := desktopNodeChainPeerIdentity(request); err != nil {
+		t.Fatal("Darwin reference fixture lost its complete original identity", err)
+	}
+	for _, fault := range []string{"missing-reference", "foreign-address", "linux-pair", "source-address"} {
+		t.Run(fault, func(t *testing.T) {
+			changed := request
+			switch fault {
+			case "missing-reference":
+				t.Setenv("ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE", "")
+			case "foreign-address":
+				t.Setenv("ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS", "127.0.0.1")
+			case "linux-pair":
+				changed.Address, changed.ClientAddress = "192.168.210.2", "192.168.210.1"
+			case "source-address":
+				changed.ClientAddress = "127.0.0.1"
+			}
+			if _, err := desktopNodeChainPeerIdentity(changed); err == nil {
+				t.Fatal("Darwin reference accepted a foreign physical capture", fault)
+			}
+		})
+	}
 }

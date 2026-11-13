@@ -27,7 +27,7 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-// These are the same independent WG/AWG prefix and paired SS source inputs as
+// These are the same independent WG/AWG prefix and paired SS/Hysteria2 source inputs as
 // the installed Linux host fixture. Darwin changes only the captured physical
 // bind address and retained native controller; no proof/counter is simulated.
 type macOSNodeChainFinalReply struct {
@@ -79,6 +79,15 @@ var macOSNodeChainHostCases = []string{
 	"node-chain-custom-wg-wrong-middle-key", "node-chain-custom-wg-wrong-middle-public", "node-chain-custom-wg-final-dns-failure",
 	"node-chain-custom-wg-middle-source", "node-chain-custom-wg-prefix-lost",
 	"node-chain-3-mtu", "node-chain-4-wg-awg-fast-awg-strong-mtu",
+	"node-chain-hy2-wg-wg-connect",
+	"node-chain-hy2-awg-fast-awg-strong-connect",
+	"node-chain-hy2-awg-strong-awg-fast-connect",
+	"node-chain-hy2-wg-wg-final-password",
+	"node-chain-hy2-wg-wg-final-trust",
+	"node-chain-hy2-wg-wg-final-mask",
+	"node-chain-hy2-wg-wg-final-dns-failure",
+	"node-chain-hy2-wg-wg-middle-source",
+	"node-chain-hy2-wg-wg-prefix-lost",
 }
 
 type macOSNodeChainPrefixRequest struct {
@@ -104,26 +113,29 @@ type macOSNodeChainPeerReply struct {
 		ProofQueries     uint64 `json:"proof_queries"`
 		AuthRefusals     uint64 `json:"auth_refusals"`
 	} `json:"prefixes"`
-	Middle    *macOSNodeChainImportedCounters `json:"middle,omitempty"`
-	Final     macOSNodeChainFinalReply        `json:"final"`
-	Benchmark *macOSNodeChainBenchmarkReply   `json:"benchmark,omitempty"`
+	Middle    *macOSNodeChainImportedCounters    `json:"middle,omitempty"`
+	Final     macOSNodeChainFinalReply           `json:"final"`
+	Benchmark *macOSNodeChainBenchmarkReply      `json:"benchmark,omitempty"`
+	Hysteria  *macOSNodeChainHysteriaObservation `json:"hysteria,omitempty"`
 }
 
 type macOSNodeChainPeer struct {
-	input, output  *os.File
-	reader         *bufio.Reader
-	command        *exec.Cmd
-	done           chan struct{}
-	physical       netip.Addr
-	failure        error
-	clients        []*ecdh.PrivateKey
-	requests       []macOSNodeChainPrefixRequest
-	finalClient    *ecdh.PrivateKey
-	finalServer    *ecdh.PrivateKey
-	password       string
-	middlePassword string
-	middleMethod   string
-	reply          macOSNodeChainPeerReply
+	input, output    *os.File
+	reader           *bufio.Reader
+	command          *exec.Cmd
+	done             chan struct{}
+	physical         netip.Addr
+	failure          error
+	clients          []*ecdh.PrivateKey
+	requests         []macOSNodeChainPrefixRequest
+	finalClient      *ecdh.PrivateKey
+	finalServer      *ecdh.PrivateKey
+	password         string
+	middlePassword   string
+	middleMethod     string
+	hysteriaPassword string
+	hysteriaMask     string
+	reply            macOSNodeChainPeerReply
 }
 
 func macOSNodeChainProofID(key *ecdh.PrivateKey) string {
@@ -159,6 +171,7 @@ func macOSNodeChainScenario(scenario string) ([]string, string, error) {
 		return nil, "", errors.New("uncaptured ordered installed scenario")
 	}
 	cases := append(macOSNodeChainCipherCases(), macOSNodeChainImportedCipherCases()...)
+	cases = append(cases, macOSNodeChainHysteriaCipherCases()...)
 	// Longest captured prefixes must win over the original WG-only names.
 	for i := len(cases) - 1; i >= 0; i-- {
 		if action, ok := strings.CutPrefix(scenario, cases[i].prefix); ok {
@@ -262,6 +275,7 @@ func (peer *macOSNodeChainPeer) read(t *testing.T) macOSNodeChainPeerReply {
 			t.Fatal("ordered peer native parameter readback changed", i)
 		}
 	}
+	macOSNodeChainHysteriaReadback(t, peer, reply)
 	peer.reply = reply
 	return reply
 }
@@ -346,7 +360,11 @@ func macOSNodeChainInstalledSources(t *testing.T, peer *macOSNodeChainPeer, faul
 		Endpoint: "10.77.0.1", RouterAPI: "http://10.77.0.1:8787", APIToken: "installed-ordered-final-token", AdGuardIPv4: "192.168.50.133", DNSMode: "home",
 		IPv6Mode: "off", StartLayer: "off", MTUPolicy: "auto", BaseTunnel: "wg", KillSwitch: true, KillSwitchPolicy: "on-connect",
 		DAITAHost: "10.77.0.1", DAITAPort: 45998, MultihopEnabled: true, MultihopExecution: "local"}
-	nodes = append(nodes, common.MultihopNodeSelection{ID: final.ID, Mode: "shadowsocks"})
+	finalMode := "shadowsocks"
+	if peer.hysteriaPassword != "" {
+		finalMode = "hysteria2"
+	}
+	nodes = append(nodes, common.MultihopNodeSelection{ID: final.ID, Mode: finalMode})
 	final.MultihopNodes = nodes
 	profiles = append(profiles, final)
 	for i := range profiles {
@@ -363,10 +381,18 @@ func macOSNodeChainInstalledSources(t *testing.T, peer *macOSNodeChainPeer, faul
 		"wg":          {"wg.conf": []byte(fmt.Sprintf("[Interface]\nAddress=10.79.0.2/32,fd79:79::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", base64.StdEncoding.EncodeToString(peer.finalClient.Bytes()), base64.StdEncoding.EncodeToString(peer.finalServer.PublicKey().Bytes())))},
 		"shadowsocks": {"sing-box.json": graph},
 	}
+	if peer.hysteriaPassword != "" {
+		assets[final.ID] = map[string]map[string][]byte{"wg": assets[final.ID]["wg"], "hysteria2": macOSNodeChainHysteriaAssets(t, peer, fault)}
+	}
 	return common.RouterProfileStore{SchemaVersion: common.RouterProfileSchemaVersion, SelectedID: final.ID, Profiles: profiles}, assets
 }
 
 func startMacOSNodeChainPeer(t *testing.T, modes []string) *macOSNodeChainPeer {
+	t.Helper()
+	return startMacOSNodeChainPeerFinal(t, modes, false)
+}
+
+func startMacOSNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *macOSNodeChainPeer {
 	t.Helper()
 	image := os.Getenv("ROUTERVPN_MACOS_NODE_CHAIN_PEER")
 	raw, err := os.ReadFile(image)
@@ -375,10 +401,16 @@ func startMacOSNodeChainPeer(t *testing.T, modes []string) *macOSNodeChainPeer {
 		t.Fatal("ordered native fixture lost its captured independent peer image", err)
 	}
 	peer := macOSNodeChainPeerForModes(t, modes)
+	if hysteria {
+		macOSNodeChainHysteriaCredentials(t, peer)
+	}
 	peer.physical = macOSExternalNativeAddress(t)
 	root, child := "TestRouterVPNDesktopNodeChainReferenceProcess", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1"
 	if peer.middlePassword != "" {
 		root, child = "TestRouterVPNDesktopNodeChainImportedMiddleReferenceProcess", "ROUTERVPN_NODE_CHAIN_IMPORTED_REFERENCE_CHILD=1"
+	}
+	if hysteria {
+		root, child = "TestRouterVPNDesktopNodeChainHysteriaReferenceProcess", "ROUTERVPN_NODE_CHAIN_HYSTERIA_REFERENCE_CHILD=1"
 	}
 	peer.command = exec.Command(image, "-test.run=^"+root+"$", "-test.count=1", "-test.timeout=240s")
 	peer.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "GORACE=atexit_sleep_ms=0",
@@ -427,6 +459,9 @@ func startMacOSNodeChainPeer(t *testing.T, modes []string) *macOSNodeChainPeer {
 	var wire any = request
 	if peer.middlePassword != "" {
 		wire = map[string]any{"schema": 1, "paired": request, "middle_method": peer.middleMethod, "middle_password": peer.middlePassword}
+	}
+	if hysteria {
+		wire = map[string]any{"schema": 1, "paired": request, "password": peer.hysteriaPassword, "salamander": peer.hysteriaMask}
 	}
 	if err := json.NewEncoder(peer.input).Encode(wire); err != nil {
 		t.Fatal(err)

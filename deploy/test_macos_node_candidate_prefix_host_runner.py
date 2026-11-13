@@ -131,7 +131,10 @@ class NativePrefixGate(unittest.TestCase):
         consumer=(ROOT/'.github/workflows/darwin-node-prefix-host-tun.yml').read_text()
         wrapper=(ROOT/'.github/workflows/darwin-node-host-native.yml').read_text()
         workflow_inventory(consumer,wrapper)
-        self.assertEqual(len(G.G.CASES),28);self.assertEqual(len(G.G.MEASUREMENT_CASES),19)
+        self.assertEqual(len(G.G.ORIGINAL_CASES),28)
+        self.assertEqual(len(set(G.G.MEASUREMENT_CASES).intersection(G.G.ORIGINAL_CASES)),19)
+        self.assertEqual(G.G.CASES[:28],G.G.ORIGINAL_CASES)
+        self.assertEqual(len(G.G.CASES),37);self.assertEqual(len(G.G.MEASUREMENT_CASES),24)
         for before,after in (
             ('runner: macos-15-intel','runner: ubuntu-latest'),('arch: arm64','arch: amd64'),
             ('${{ github.sha }}','old-source'),('timeout-minutes: 110','timeout-minutes: 200'),

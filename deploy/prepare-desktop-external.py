@@ -274,6 +274,8 @@ DARWIN_NODE_CHAIN_PEERS = {
     'node_imported_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_darwin_test.go',
     'node_chain_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_reference_darwin_test.go',
     'node_chain_imported_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_middle_darwin_test.go',
+    'node_chain_hysteria_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_hysteria_final_darwin_test.go',
+    'node_chain_imported_hostname_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_hostname_darwin_test.go',
 }
 
 
