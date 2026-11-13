@@ -17,7 +17,9 @@ on:
           - ordered-clock
           - legacy-clock
           - android-tor
+          - android-prefix-owner
           - linux-hy2
+          - socks-source
 
 permissions:
   contents: read
@@ -51,7 +53,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "linux-hy2"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -73,6 +75,9 @@ jobs:
         run: |
           python3 validator/deploy/focused_source_identity.py --self-test
           python3 validator/deploy/test_focused_multihop_clocks.py --self-test
+          if [[ "$SUITE" == "socks-source" ]]; then
+            python3 validator/deploy/test_focused_socks_source_runner.py
+          fi
           if [[ "$SUITE" == "linux-hy2" ]]; then
             python3 validator/deploy/test_validate_linux_hy2_source.py
           fi
@@ -86,13 +91,13 @@ jobs:
           go-version: '1.26.3'
           cache-dependency-path: candidate/go.sum
       - name: Install the Java fixture toolchain
-        if: inputs.suite == 'android-tor'
+        if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
       - name: Install the original Android JSON implementation
-        if: inputs.suite == 'android-tor'
+        if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libandroid-json-java
@@ -109,6 +114,14 @@ jobs:
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Require dormant SOCKS source and original schema compiler controls
+        if: inputs.suite == 'socks-source'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_socks_source.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
       - name: Require complete installed HY2 sources and original encrypted peers
         if: inputs.suite == 'linux-hy2'
         shell: bash
@@ -116,8 +129,8 @@ jobs:
           python3 validator/deploy/validate-linux-hy2-source.py \
             --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests" --go "$(command -v go)"
-      - name: Execute the original Android Tor fixture and capacity controls
-        if: inputs.suite == 'android-tor'
+      - name: Execute the original Android fixture and required rejection controls
+        if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner'
         shell: bash
         run: |
           python3 - <<'PY'
@@ -136,8 +149,9 @@ jobs:
           actual = git("rev-parse", "HEAD").decode().strip()
           if actual != os.environ["SOURCE_SHA"]:
               raise SystemExit("Android source identity changed before execution.")
+          suite = os.environ["SUITE"]
           manifest = {
-              "schema": 1, "suite": "android-tor", "requested_source_sha": os.environ["SOURCE_SHA"],
+              "schema": 1, "suite": suite, "requested_source_sha": os.environ["SOURCE_SHA"],
               "actual_source_sha": actual, "validator_sha": os.environ["VALIDATOR_SHA"],
               "tree_sha": git("rev-parse", "HEAD^{tree}").decode().strip(),
               "source_file_count": len(before),
@@ -158,8 +172,12 @@ jobs:
                   time.sleep(0.02)
               return not alive(group)
           save()
-          log = output / "android-tor.log"
-          command = [sys.executable, str(source / "android/test_android_tor_profile.py")]
+          scripts = {
+              "android-tor": "android/test_android_tor_profile.py",
+              "android-prefix-owner": "android/test_android_node_candidate_preparation_owner.py",
+          }
+          log = output / (suite + ".log")
+          command = [sys.executable, str(source / scripts[suite])]
           started = time.monotonic()
           try:
               with log.open("wb") as stream:
@@ -182,18 +200,24 @@ jobs:
                       joined_after_kill = True
               raw = log.read_bytes()
               text = raw.decode("utf-8", "replace")
-              markers = (
+              tor_markers = (
                   r"Android Tor: PASS \(348 shipping Java/Go graphs; [1-9][0-9]* checks; OS/startup doubled, native Tor traffic separate\)",
                   r"Android Tor capacity negative controls: 2 rejected by real compiler/host preparation",
                   r"Android Local Tor padding compiler: PASS \(160 shipping Java/Go captures; [1-9][0-9]* source/policy/session checks; actual production admission\)",
               )
-              counts = [len(re.findall(marker, text)) for marker in markers]
+              owner_markers = (
+                  r"Android temporary candidate process owner: [1-9][0-9]* executable composed host checks passed; explicit OS/native/source boundaries\.",
+                  *(re.escape("Android temporary candidate supervisor rejected: " + family + "/" + str(number))
+                    for number, family in enumerate(("permission", "complete", "graph-join", "complete", "complete", "complete", "complete"))),
+              )
+              markers = tor_markers if suite == "android-tor" else owner_markers
+              counts = [len(re.findall(r"^" + marker + r"$", text, re.MULTILINE)) for marker in markers]
               manifest.update(exit=code, timed_out=timed_out, process_group_joined=joined,
                               group_absent_after_cleanup=joined_after_kill, marker_counts=counts,
                               elapsed_seconds=round(time.monotonic() - started, 3),
                               log=log.name, log_sha256=hashlib.sha256(raw).hexdigest())
-              if timed_out or code != 0 or not joined or counts != [1, 1, 1]:
-                  raise RuntimeError("Original Android Tor execution or its required controls did not finish.")
+              if timed_out or code != 0 or not joined or counts != [1] * len(markers):
+                  raise RuntimeError("Original Android execution or its required controls did not finish.")
               if snapshot() != before or git("status", "--porcelain", "--untracked-files=no"):
                   raise RuntimeError("Android fixture changed its original tracked source.")
               manifest["status"] = "passed"

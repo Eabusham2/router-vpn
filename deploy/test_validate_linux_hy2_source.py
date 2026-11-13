@@ -68,7 +68,7 @@ class Composition:
             BUILD=types.SimpleNamespace(TOOLCHAIN='go1.26.3'),
             NODE=types.SimpleNamespace(TAGS=('with_wireguard', 'with_quic', 'with_purego'),
                 run=self.run, require_native_verdicts=PARSER,
-                selected_compiler=lambda go, core, env: ('/captured/go', env, 'amd64')),
+                selected_compiler=lambda go, core, env: (Path('/captured/go'), env, 'amd64')),
             checked_sources=self.checked_sources)
 
     def git(self, source, *args):
@@ -141,7 +141,7 @@ class Composition:
         raise AssertionError('Unexpected extra compiler or execution')
 
     def execute_process(self, command, cwd, env, log, bound):
-        status, text = self.run(command, cwd=cwd, env=env, timeout=bound)
+        status, text = self.run(list(map(str, command)), cwd=cwd, env=env, timeout=bound)
         log.write_text(text)
         control = len(self.calls) == 3
         return status, control and self.fault == 'control-timeout', not (control and self.fault == 'control-unjoined')
@@ -182,6 +182,38 @@ class FocusedLinuxHysteriaValidation(unittest.TestCase):
             self.assertTrue(result['completed'])
             self.assertEqual(len(result['images']), 2)
             self.assertTrue((f.output/'receipt.json').is_file())
+            self.assertEqual(result['compiler'], '/captured/go')
+            self.assertEqual(json.loads((f.output/'receipt.json').read_text()), result)
+            progress = json.loads((f.output/'progress.json').read_text())
+            self.assertEqual(progress['compiler'], '/captured/go')
+            self.assertEqual(len(progress['phases']), 5)
+
+    def test_path_compiler_preserves_failed_and_exception_receipts(self):
+        for failure in ('compile-failure', 'spawn-exception'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                f = Composition(Path(directory), failure)
+                if failure == 'spawn-exception':
+                    def refused(command, cwd, env, log, bound):
+                        raise OSError('original captured compiler spawn refused')
+                    f.execute_process = refused
+                with self.assertRaises((ValueError, OSError)) as caught:
+                    f.execute()
+                self.assertNotIsInstance(caught.exception, TypeError)
+                progress = json.loads((f.output/'progress.json').read_text())
+                self.assertEqual(progress['compiler'], '/captured/go')
+                self.assertEqual(len(progress['phases']), 1)
+                phase = progress['phases'][0]
+                self.assertEqual(phase['command'][0], '/captured/go')
+                self.assertEqual(phase['timeout'], 300)
+                if failure == 'compile-failure':
+                    self.assertEqual(phase['status'], 1)
+                    self.assertFalse(phase['timed_out'])
+                    self.assertTrue(phase['process_group_joined'])
+                    self.assertIn('compiler refused source', (f.output/'controller-build.log').read_text())
+                else:
+                    self.assertEqual(phase['error'], 'OSError')
+                    self.assertIn('original captured compiler spawn refused', (f.output/'controller-build.log').read_text())
+                self.assertFalse((f.output/'receipt.json').exists())
 
     def test_each_observed_failure_prevents_acceptance_receipt(self):
         for fault in ('missing-source', 'projection', 'compile-failure', 'missing-authority',

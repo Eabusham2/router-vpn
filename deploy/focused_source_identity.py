@@ -30,6 +30,12 @@ ALLOWLISTS = {
         "internal/mobilemultihop/runtime_proof_clock_test.go",
     }),
     "android-tor": frozenset({"android/test_android_tor_profile.py"}),
+    "android-prefix-owner": frozenset({"android/test_android_node_candidate_preparation_owner.py"}),
+    "socks-source": frozenset({
+        "internal/mobilemultihop/node_chain_imported_socks.go",
+        "internal/mobilemultihop/node_chain_socks_source.go",
+        "internal/mobilemultihop/node_chain_socks_source_test.go",
+    }),
     "linux-hy2": frozenset({
         "mobile/desktop/node_chain_peer_linux_test.go.tmpl",
         "mobile/desktop/node_chain_hysteria_final_test.go.tmpl",
@@ -194,7 +200,8 @@ class IdentityTests(unittest.TestCase):
         for path in ("internal/mobilemultihop/node_chain_execution_proof.go",
                      "internal/mobilemultihop/node_chain_execution_runtime.go",
                      "internal/mobilemultihop/runtime.go", "internal/mobilemultihop/plan.go",
-                     "android/test_android_tor_profile.py", "deploy/trusted-validator.py",
+                     "android/test_android_tor_profile.py",
+                     "android/test_android_node_candidate_preparation_owner.py", "deploy/trusted-validator.py",
                      ".github/workflows/trusted.yml", ".gitignore"):
             target = self.validator/path
             target.parent.mkdir(parents=True, exist_ok=True)

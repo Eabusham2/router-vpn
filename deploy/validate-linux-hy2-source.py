@@ -214,7 +214,7 @@ def validate(source, source_sha, output, go='go'):
             raise ValueError('HY2 native projection or original installed helper is absent')
         compiler, captured, architecture = gate.NODE.selected_compiler(go, core, env)
         captured['CGO_ENABLED'] = '1'
-        receipt.update(target='linux/'+architecture, toolchain=gate.BUILD.TOOLCHAIN, compiler=compiler,
+        receipt.update(target='linux/'+architecture, toolchain=gate.BUILD.TOOLCHAIN, compiler=str(compiler),
                        resource_limits=dict(parallel_packages=1, GOMAXPROCS=2, GOGC=100, GOMEMLIMIT='2GiB'), source_files=before,
                        source_sha256=hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
         controller, peer = work/'controller.test', work/'peer.test'

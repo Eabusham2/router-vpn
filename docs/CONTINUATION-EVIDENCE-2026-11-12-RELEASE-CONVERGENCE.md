@@ -2585,6 +2585,98 @@ the new Server cases passed. The full candidate was not accepted or pushed.
 Its failure log and source snapshot were preserved. No timing requirement,
 negative case or production guard was removed.
 
+
+## Verified proof clocks and native fixture repairs — November 13, 2026
+
+Main advanced to the exact tested ordered-clock source
+`5ac6f17f40f6aeaf608690b2e5ab28c8006e7e30`, tree
+`69195e4f7a736d96c0eed40b1a7d388b2b134576`, after focused run
+`43409493563` passed against captured validator `06b7016a`.
+The downloaded artifact digest is
+`846a43adc8a1049c7a3b59403df331af8a4d306afdd174409abf58ab440d8a80`.
+Its before/after source selection is identical and all 5,102 source files
+remained unchanged. The actual race-enabled compiler completed 37 new
+clock records and 32 original runtime records. The separately compiled
+unchecked-prefix and unchecked-public controls each failed all seven
+required records at their intended witnesses. All original process groups
+joined; no timeout, skipped record or substituted source counted as a pass.
+The corrected Local fixture now obtains its captured winner through the
+original Auto runtime, joins its exact bootstrap owner, and restores that
+proved choice into a fresh explicit engine boundary. The production
+constructors, comparison formula and original proof deadlines are unchanged.
+
+The legacy two-node proof-clock source `bb4d6c7a` was previously accepted
+and pushed after focused run `43408478209`: 23 new records, four preserved
+records and the compiled completion/lease controls (five and one required
+failure records). Its independently downloaded artifact digest is
+`e6840ad3aba31f8fa226345b1a8be175065de0c4ed86a0adc61850cc3e7f3fe4`.
+These shared-runtime results exercise real HTTP against explicit engine
+boundaries; they are separate from physical native tunnel acceptance.
+
+Commit `06b7016a` fixes a Windows SS fixture counter observation: after
+the original authenticated proof completes, every final transport rereads
+the same original authentication-failure counter. A positive counter remains
+mandatory, and a preexisting failure remains invalid. The source's five
+focused noncompiler checks passed. The new extracted Go control-flow
+regression and complete Windows installed gate still require their actual
+hosted execution. The old failure log does not prove its final counter value
+or the exact historical scheduling cause.
+
+## Focused Android owner and SOCKS source gates — November 13, 2026
+
+The manual read-only workflow now accepts two additional fixed suites.
+`android-prefix-owner` permits only its original fixture file and requires
+actual Java execution plus all seven unchanged supervisor rejection
+controls. Current-source Android job `131830043716` failed before the
+later deliberate run cancellation because a stale silent fixture rewrite
+no longer selected an all-WireGuard saved fallback. The pending one-file
+repair uses explicit complete saved WG/WG constructors and preserves the
+production non-WG prefix refusal. It has not yet passed actual Java here.
+
+`socks-source` admits exactly three new dormant source/compiler files.
+Its separate trusted driver requires 70 new records, 44 original schema 1/2
+preservation records, and separately compiled seal and Local-only controls
+requiring two and three exact failure records. Native activation, encrypted
+SOCKS transport, kernel capture and user-facing graph admission are outside
+this source-only gate and remain separate work. The original 120-second
+Go and 600-second process bounds, race instrumentation, exact source
+snapshot and joined-process checks are retained.
+
+The combined identity helper passed all 12 actual Git/CLI tests in
+2.949 seconds. Both Android workflow wrappers were executed against 12
+synthetic process/source cases: each valid receipt passed; missing and
+duplicated controls, failed children, source mutation and owned child leaks
+were refused. These wrapper tests do not execute Java. The separate SOCKS
+driver's 22 Python tests passed again in 2.158 seconds. Its exact 70/44/2/3
+inventories were checked against the actual source tables. The original
+clock driver remains byte-identical, SHA256
+`dbe2ecf83e4e4951465403f1801426f878a9ad5a2227bd3cebaf231453ea648d`.
+
+## Linux HY2 receipt correction and retained release limits — November 13, 2026
+
+Focused Linux run `43409131955` selected the exact seven-file candidate
+`bd937b4d`, then failed before any accepted native verdict: its validation
+receipt attempted to serialize a `pathlib.Path` compiler value directly.
+The failed artifact, including exact selection and the empty compiler log,
+was preserved and verified with digest
+`f6f663c29bcbd4b0000c805f66e966d07febe612c8bfc47873bd0dcab10f5afb`.
+
+The validator now serializes that receipt field as a string. Its fixture
+returns the original Path type and exercises successful, failed and
+spawn-exception receipt writing. Seven Python roots passed in 0.104 seconds,
+including the original inventory/rejection controls and an actual joined
+short child. Reverting the receipt conversion reproduces the original
+serialization rejection. The seven HY2 candidate source blobs are
+unchanged. Their 21 controller records, 37 actual encrypted peer records,
+compiled cipher control and full 47-case installed TUN gate remain pending.
+
+Intermediate authoritative run `43408867833` was deliberately cancelled
+to free runner capacity for these focused fixes after its real Android
+failure was preserved. This cancellation is not a source-test failure or
+a successful release. A fresh authoritative release at the final published
+source identity is still required; no current release-green claim follows
+from the focused results above.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
