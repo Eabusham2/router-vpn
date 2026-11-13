@@ -197,6 +197,7 @@ public sealed class ProfileModeOwner {
     . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'BaseChoice')))
     . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'UnifiedMultihopValue')))
     . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'GetUnifiedStopRetryToken')))
+    . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'Test-RouterVPNMutationBusyFromStatus')))
     $script:UnifiedStopRetryToken='';$script:UnifiedAsyncOwnedStopRetry=$false;$script:UnifiedProtectionPending=$false
     $MultihopEntryCombo=$entry;$MultihopExitCombo=$exit;$BaseCombo=New-Object ProfileModeCombo
     $BaseCombo.Items.Add((New-Object ProfileModeItem 'auto'));$BaseCombo.SelectedIndex=0
@@ -208,7 +209,8 @@ public sealed class ProfileModeOwner {
         if($Path-ceq'/api/multihop/status'){return $script:OrderedCapability}
         throw 'Unexpected Connect boundary'
     }
-    function Log($Message){}
+    $script:ConnectLogs=New-Object System.Collections.ArrayList
+    function Log($Message){[void]$script:ConnectLogs.Add([string]$Message)}
     function RefreshProduct{}
     $script:ConnectBody=$null
     function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Failure,$Finally){
@@ -218,8 +220,8 @@ public sealed class ProfileModeOwner {
     for($i=0;$i-lt$ExpectedEntries.Count;$i++){for($e=0;$e-lt3;$e++){
         $toggle.IsChecked=$true;$entry.SelectedValue='entry_private';$exit.SelectedValue='exit_private'
         $MultihopEntryModeCombo.SelectedIndex=$i;$MultihopExitModeCombo.SelectedIndex=$i%$ExpectedModes.Count;$execution.SelectedIndex=$e
-        $script:ConnectBody=$null;UnifiedConnect;$body=$script:ConnectBody
-        Check ($null-ne$body) 'Main Connect did not submit its selected path'
+        $script:ConnectBody=$null;$script:ConnectLogs.Clear();UnifiedConnect;$body=$script:ConnectBody
+        Check ($null-ne$body) ('Main Connect did not submit its selected path: '+($script:ConnectLogs -join '; '))
         Check ((@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'base,entry_id,entry_mode,execution,exit_id,exit_mode') 'Main Connect copied private fields or omitted graph choices'
         Check ($body.entry_mode-ceq$ExpectedEntries[$i]-and$body.exit_mode-ceq$ExpectedModes[$i%$ExpectedModes.Count]-and$body.execution-ceq$ExpectedExecutions[$e]) 'Main Connect replaced the captured entry, exit or execution'
         Check ($body.entry_id-ceq'entry_private'-and$body.exit_id-ceq'exit_private'-and$body.base-ceq'auto') 'Main Connect replaced exact identities or saved base fallback'

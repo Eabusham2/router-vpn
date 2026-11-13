@@ -1522,6 +1522,12 @@ The actual Intel generated-child jobs at af77ec44 and 06456dc0 failed the Python
 
 The fixture child now waits for the original output acknowledgment without an independent shorter timer. The positive shipping helper must deliver the exact output and acknowledgment before completion. The mutated helper must hit its unchanged three-second outer deadline, preserve the original captured stage in the timeout cause, publish neither acknowledgment nor output, and finish the original process-group join. The other streaming tests still require the exact child failure exit/output, only the captured group signal, and the original sudo negative-group delimiter. All four streaming tests passed in 3.305 seconds. The production helper, native deadlines, PF rules, utun logic and native acceptance criteria are unchanged.
 
+## Windows profile fixture composes the shipping mutation guard
+
+The retained Windows native job at 01a01989 failed its complete-profile transport gate because the fixture extracted the final `UnifiedConnect` implementation but omitted its real `Test-RouterVPNMutationBusyFromStatus` dependency. The shipping launcher already includes that function. The fixture now extracts the exact composed helper and retains refusal log messages when its expected Connect submission is absent. It does not replace the busy guard with an always-idle result or change production Connect behavior.
+
+The full original runner passed 3,115 Add/Load/Update and main-Connect callback checks. All 19 existing compiled mutations remained rejected, and the original ordered-node editor passed 97 callback checks. These executions use the real PowerShell functions with explicit WPF construction and transport boundaries; WPF rendering is false in this local receipt. The actual installation/runtime job remains a separate platform result.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
