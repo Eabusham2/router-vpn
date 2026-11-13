@@ -16,11 +16,20 @@ CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace('struct IOSNodeCandidatePrefix
 CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace(' let plan=Plan(),sourceSHA256="",configSHA256=""', ' struct Member {let id:String;let mode:String;let profile:[String:Any]}\n let members:[Member]=[];let plan=Plan(),sourceSHA256="",configSHA256=""')
 CONTROLLER_BOUNDARY += r'''
 @MainActor enum IOSRuntimeSelector {static func selectNodeChain(_ capture:IOSNodeChainCapture)throws->Int{throw NSError(domain:"OriginalStoreBoundary",code:1)}}
+@MainActor struct IOSNodeCandidatePrefixCapture {
+ let sourceSHA256="",configSHA256="",captureSHA256=""
+}
+@MainActor struct IOSNodeCandidatePrefixBinding {
+ let connection=NETunnelProviderSession()
+}
 @MainActor final class IOSNodeCandidatePreparation {
  static let busy=false;let owner=UUID();let sourceSHA256="",configSHA256="";let prefixes:[IOSNodeCandidatePrefix]=[]
- static func reserve(model:RouterVPNModel,onCancelled:@escaping @MainActor ()->Void)throws->IOSNodeCandidatePreparation{throw IOSNodeCandidateResult.issue()}
+ let prefixCapture:IOSNodeCandidatePrefixCapture?=nil,prefixCandidate:IOSNodeCandidateCapture?=nil
+ let prefixBinding:IOSNodeCandidatePrefixBinding?=nil,prefixEpoch=UUID()
+ static func reserve(model:RouterVPNModel,prefixPosition:Int?=nil,request:String?=nil,onCancelled:@escaping @MainActor ()->Void)throws->IOSNodeCandidatePreparation{throw IOSNodeCandidateResult.issue()}
  func start()async throws{throw IOSNodeCandidateResult.issue()}
  func requireLive()throws{throw IOSNodeCandidateResult.issue()}
+ func originalForProposal()throws->IOSNodeChainCapture{throw IOSNodeCandidateResult.issue()}
  func bind(_ value:IOSNodeCandidateTransaction)throws{throw IOSNodeCandidateResult.issue()}
  func seal(token:UUID,measured:Int64,expires:Int64)throws{throw IOSNodeCandidateResult.issue()}
  func requireSaved(token:UUID)throws{throw IOSNodeCandidateResult.issue()}
