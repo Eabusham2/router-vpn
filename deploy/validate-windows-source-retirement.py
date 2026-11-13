@@ -103,6 +103,20 @@ def parse(output, package, names, status, joined, *, witness="", leaf=""):
     return result
 
 
+
+def require_source_contract(output, status):
+    # Retain the raw captured transcript in its log. Windows text pipes can
+    # forward CRCRLF; only the observation of line boundaries is normalized.
+    lines = [line for line in output.replace("\r\n", "\n").replace("\r", "\n").split("\n") if line]
+    results = [line for line in lines if re.fullmatch(r"test_\w+ \([^\r\n]+\) \.\.\. ok", line)]
+    summaries = [line for line in lines if line.startswith("Ran ")]
+    if (status != 0 or len(results) != 5 or len(set(results)) != 5 or
+            len(summaries) != 1 or not re.fullmatch(r"Ran 5 tests in [0-9]+(?:\.[0-9]+)?s", summaries[0]) or
+            not lines or lines[-1] != "OK" or lines.count("OK") != 1 or
+            any(line.startswith(("FAILED", "ERROR", "FAIL:", "Traceback")) for line in lines)):
+        raise ValueError("candidate source-retirement inventory/control self-tests did not pass")
+
+
 def verify_max(result, target, sha, max_module):
     if (result.get("schema") != 2 or result.get("target") != target or
             result.get("repository", {}).get("commit") != sha or
@@ -230,8 +244,7 @@ def validate(args):
 
         status, text = run("source-contract", [sys.executable, source / "deploy/test_desktop_node_routing_runner.py",
                            "NodeSourceRetirementVerdicts", "-v"], source, 60)
-        if status or "Ran 5 tests" not in text or "\nOK\n" not in text:
-            raise ValueError("candidate source-retirement inventory/control self-tests did not pass")
+        require_source_contract(text, status)
         with owner.workspace("routervpn-windows-source-retirement-") as directory:
             workspace = Path(directory)
             core, xray, pq, cache = (workspace / name for name in ("core", "xray", "pq", "cargo-cache"))
@@ -352,6 +365,51 @@ def self_tests():
                 events.append({"Action": "fail" if failure else "pass", "Package": package, "Test": name})
             events.append({"Action": "fail" if failure else "pass", "Package": package})
             return "\n".join(json.dumps(event) for event in events)
+
+
+        def source_contract_output(self):
+            # Exercise the real unittest reporter, then its observed Windows
+            # forwarding forms. No native verdict is represented by this log.
+            class Original(unittest.TestCase):
+                def test_first(self): pass
+                def test_second(self): pass
+                def test_third(self): pass
+                def test_fourth(self): pass
+                def test_fifth(self): pass
+            output = io.StringIO()
+            result = unittest.TextTestRunner(stream=output, verbosity=2).run(
+                unittest.defaultTestLoader.loadTestsFromTestCase(Original))
+            self.assertTrue(result.wasSuccessful())
+            self.assertEqual(result.testsRun, 5)
+            return output.getvalue()
+
+        def test_original_source_contract_accepts_windows_line_boundaries(self):
+            original = self.source_contract_output()
+            for ending in ("\n", "\r\n", "\r\r\n"):
+                with self.subTest(ending=repr(ending)):
+                    captured = original.replace("\n", ending)
+                    require_source_contract(captured, 0)
+                    self.assertEqual(captured, original.replace("\n", ending))
+
+        def test_original_source_contract_rejects_incomplete_or_failed_receipts(self):
+            original = self.source_contract_output()
+            result = next(line for line in original.splitlines() if line.endswith(" ... ok"))
+            for name, output, status in (
+                    ("failed-exit", original, 1), ("signal", original, -15),
+                    ("timeout", original, 124), ("missing-test", original.replace(result+"\n", "", 1), 0),
+                    ("duplicate-test", original.replace(result+"\n", result+"\n"+result+"\n", 1), 0),
+                    ("failed-test", original.replace(" ... ok", " ... FAIL", 1), 0),
+                    ("skipped-test", original.replace(" ... ok", " ... skipped 'unavailable'", 1), 0),
+                    ("missing-summary", re.sub(r"Ran 5 tests in [^\n]+\n", "", original), 0),
+                    ("wrong-count", original.replace("Ran 5 tests", "Ran 4 tests"), 0),
+                    ("duplicate-summary", original.replace("Ran 5 tests", "Ran 5 tests in 0.001s\nRan 5 tests"), 0),
+                    ("missing-ok", original.replace("\nOK\n", "\n"), 0),
+                    ("duplicate-ok", original+"OK\n", 0),
+                    ("late-failure", original+"FAILED (errors=1)\n", 0),
+                    ("forged-ok", original+"FAILED (errors=1)\nOK\n", 0)):
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    require_source_contract(output.replace("\n", "\r\r\n"), status)
+
 
         def test_original_selection_binds_both_clean_checkouts_and_suite(self):
             with tempfile.TemporaryDirectory() as temporary:
