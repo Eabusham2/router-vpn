@@ -1,0 +1,413 @@
+package libbox
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// A distinct process-owned preparation: no ordinary connection proof, Last,
+// usage session, application/DNS ingress or caller-selected native destination.
+type RouterNodeChainCandidatePreparation struct {
+	prep           *mobilemultihop.NodeChainCandidatePreparation
+	inventorySHA   string
+	mu             sync.Mutex
+	state          atomic.Pointer[routerCandidatePreparationState]
+	retired        atomic.Bool
+	measuring      atomic.Bool
+	observation    sync.Mutex
+	pending        *routerNodeChainCatalogCall
+	callbackActive atomic.Bool
+}
+type routerCandidatePreparationState struct {
+	server   *CommandServer
+	instance *daemon.Instance
+	catalog  RouterNodeChainCandidateCatalog
+	lifetime context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+	engine   atomic.Pointer[box.RouterVPNNodeChainCandidatePreparationEngine]
+	runtime  atomic.Pointer[mobilemultihop.NodeChainCandidatePreparationRuntime]
+	service  atomic.Pointer[hopmeasure.CandidateService]
+}
+
+func NewRouterNodeChainCandidatePreparation(source string, prefixPosition int32, inventory string) (*RouterNodeChainCandidatePreparation, error) {
+	prep, err := mobilemultihop.NewNodeChainCandidatePreparation(source, int(prefixPosition), inventory)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256([]byte(inventory))
+	return &RouterNodeChainCandidatePreparation{prep: prep, inventorySHA: hex.EncodeToString(digest[:])}, nil
+}
+
+// Provider transport reopens only the complete canonical private capture.
+// Parse reconstructs and validates every source/config/candidate field first;
+// this narrow decode reads the already-validated canonical inventory solely
+// to bind the live host catalog callback. It never accepts a supplied graph.
+func RouterNodeChainCandidatePreparationLaunch(input string) (*RouterNodeChainCandidatePreparation, error) {
+	prep, err := mobilemultihop.ParseNodeChainCandidatePreparation(input)
+	if err != nil {
+		return nil, err
+	}
+	var captured struct {
+		Inventory string `json:"inventory"`
+	}
+	if err := json.Unmarshal([]byte(prep.Source()), &captured); err != nil || captured.Inventory == "" {
+		return nil, errRouterCandidatePreparation()
+	}
+	digest := sha256.Sum256([]byte(captured.Inventory))
+	return &RouterNodeChainCandidatePreparation{prep: prep, inventorySHA: hex.EncodeToString(digest[:])}, nil
+}
+func (m *RouterNodeChainCandidatePreparation) Config() string { return m.prep.Config() }
+
+// Private launch bytes are for the original process-owned session file only.
+// They contain source capabilities and must never be used as public metadata.
+func (m *RouterNodeChainCandidatePreparation) LaunchInput() string  { return m.prep.Source() }
+func (m *RouterNodeChainCandidatePreparation) SourceSHA256() string { return m.prep.SourceSHA256() }
+func (m *RouterNodeChainCandidatePreparation) ConfigSHA256() string { return m.prep.ConfigSHA256() }
+func (m *RouterNodeChainCandidatePreparation) OriginalSourceSHA256() string {
+	return m.prep.OriginalSourceSHA256()
+}
+func (m *RouterNodeChainCandidatePreparation) CaptureSHA256() string { return m.prep.CaptureSHA256() }
+func (m *RouterNodeChainCandidatePreparation) Metadata() string      { return m.prep.Metadata() }
+
+// Run is called only after the original command server has started Config.
+// That configuration closes TUN/DNS ingress at native construction, before
+// this binding. The caller retains this object even when Run fails.
+func (m *RouterNodeChainCandidatePreparation) Run(server *CommandServer, catalog RouterNodeChainCandidateCatalog) (failure error) {
+	if m == nil || m.prep == nil || server == nil || catalog == nil || server.ctx == nil || server.StartedService == nil {
+		return errRouterCandidatePreparation()
+	}
+	ctx, stop := context.WithTimeout(server.ctx, hopmeasure.ObservationTimeout)
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		stop()
+		return err
+	}
+	if m.retired.Load() || m.state.Load() != nil {
+		m.mu.Unlock()
+		stop()
+		return errRouterCandidatePreparation()
+	}
+	instance, err := server.StartedService.RouterVPNInstanceContext(ctx)
+	if err != nil || instance == nil || instance.Box() == nil || m.retired.Load() {
+		m.mu.Unlock()
+		stop()
+		return errors.Join(err, errRouterCandidatePreparation())
+	}
+	var nonce [32]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		m.mu.Unlock()
+		stop()
+		return err
+	}
+	lifetime, cancel := context.WithCancel(server.ctx)
+	state := &routerCandidatePreparationState{server: server, instance: instance, catalog: catalog, lifetime: lifetime, cancel: cancel, done: make(chan struct{})}
+	m.state.Store(state)
+	m.mu.Unlock()
+	stop()
+	defer close(state.done)
+	defer func() {
+		if failure != nil {
+			m.NetworkChanged()
+		}
+	}()
+	observe, end := context.WithTimeout(lifetime, hopmeasure.ObservationTimeout)
+	if err := m.CandidateInventoryCurrentContext(observe, m.prep.CaptureSHA256()); err != nil {
+		end()
+		return err
+	}
+	engine, err := instance.Box().RouterVPNNewNodeChainCandidatePreparationEngine(observe, m.prep, hex.EncodeToString(nonce[:]), func(call context.Context) error { return m.nativeCurrent(call, state) })
+	state.engine.Store(engine)
+	end()
+	if err != nil {
+		return err
+	}
+	runtime, err := mobilemultihop.NewNodeChainCandidatePreparationRuntime(m.prep, m)
+	if err != nil {
+		return err
+	}
+	state.runtime.Store(runtime)
+	if err := runtime.StartContext(lifetime); err != nil {
+		return err
+	}
+	observe, end = context.WithTimeout(lifetime, hopmeasure.ObservationTimeout)
+	defer end()
+	service, err := runtime.NewMeasurementContext(observe)
+	if err != nil {
+		return err
+	}
+	state.service.Store(service)
+	return runtime.VerifyMeasurement(observe)
+}
+
+func errRouterCandidatePreparation() error {
+	return errors.New("original native prefix preparation changed or retired")
+}
+
+// The Box retains this callback. Never acquire a measurement/proof mutex or
+// invoke Box observation from it; doing so would recurse through the gate.
+func (m *RouterNodeChainCandidatePreparation) nativeCurrent(ctx context.Context, state *routerCandidatePreparationState) error {
+	if m == nil || ctx == nil || ctx.Err() != nil || state == nil || m.retired.Load() || m.state.Load() != state || state.lifetime.Err() != nil ||
+		state.server == nil || state.server.ctx == nil || state.server.ctx.Err() != nil || state.server.StartedService == nil || state.instance == nil {
+		return errRouterCandidatePreparation()
+	}
+	actual, err := state.server.StartedService.RouterVPNInstanceContext(ctx)
+	if err != nil || actual != state.instance || m.retired.Load() || m.state.Load() != state || state.lifetime.Err() != nil {
+		return errors.Join(err, errRouterCandidatePreparation())
+	}
+	return ctx.Err()
+}
+func (m *RouterNodeChainCandidatePreparation) ObservePreparationContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	state := m.state.Load()
+	if err := m.nativeCurrent(ctx, state); err != nil {
+		return mobilemultihop.NodeChainIdentity{}, err
+	}
+	engine := state.engine.Load()
+	if engine == nil {
+		return mobilemultihop.NodeChainIdentity{}, errRouterCandidatePreparation()
+	}
+	return engine.ObservePreparationContext(ctx)
+}
+func (m *RouterNodeChainCandidatePreparation) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	state := m.state.Load()
+	if err := m.nativeCurrent(ctx, state); err != nil {
+		return nil, err
+	}
+	engine := state.engine.Load()
+	if engine == nil {
+		return nil, errRouterCandidatePreparation()
+	}
+	return engine.Dial(ctx, tag, address)
+}
+func (m *RouterNodeChainCandidatePreparation) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if _, err := m.ObservePreparationContext(ctx); err != nil {
+		return nil, err
+	}
+	if !m.measuring.CompareAndSwap(false, true) {
+		return nil, errors.New("prefix candidate native measurement is occupied")
+	}
+	if _, err := m.ObservePreparationContext(ctx); err != nil {
+		m.measuring.Store(false)
+		return nil, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			// A foreign callback cannot outlive the native measurement hold.
+			_ = m.joinCatalog(context.Background())
+			m.measuring.Store(false)
+		})
+	}, nil
+}
+func (m *RouterNodeChainCandidatePreparation) CandidateInventoryCurrentContext(parent context.Context, capture string) error {
+	if parent == nil {
+		return errRouterCandidatePreparation()
+	}
+	ctx, cancel := context.WithTimeout(parent, hopmeasure.ObservationTimeout)
+	defer cancel()
+	state := m.state.Load()
+	if err := m.nativeCurrent(ctx, state); err != nil {
+		return err
+	}
+	if capture != m.prep.CaptureSHA256() || state.catalog == nil {
+		return errRouterCandidatePreparation()
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.observation); err != nil {
+		return err
+	}
+	defer m.observation.Unlock()
+	if m.pending != nil {
+		select {
+		case <-m.pending.done:
+			m.pending = nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := m.nativeCurrent(ctx, state); err != nil {
+		return err
+	}
+	call := &routerNodeChainCatalogCall{done: make(chan struct{})}
+	m.pending = call
+	m.callbackActive.Store(true)
+	go func() {
+		defer func() { m.callbackActive.Store(false); close(call.done) }()
+		call.digest = state.catalog.CurrentInventorySHA256()
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-call.done:
+		m.pending = nil
+		if err := m.nativeCurrent(ctx, state); err != nil {
+			return err
+		}
+		if call.digest != m.inventorySHA {
+			m.NetworkChanged()
+			return errors.New("original prefix candidate catalog changed")
+		}
+		return ctx.Err()
+	}
+}
+func (m *RouterNodeChainCandidatePreparation) joinCatalog(ctx context.Context) error {
+	if err := adapter.RouterVPNLockContext(ctx, &m.observation); err != nil {
+		return err
+	}
+	defer m.observation.Unlock()
+	if m.pending != nil {
+		select {
+		case <-m.pending.done:
+			m.pending = nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return ctx.Err()
+}
+func (m *RouterNodeChainCandidatePreparation) Healthy() bool {
+	if m == nil {
+		return false
+	}
+	state := m.state.Load()
+	if state == nil || state.runtime.Load() == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	return state.runtime.Load().VerifyMeasurement(ctx) == nil
+}
+func (m *RouterNodeChainCandidatePreparation) ProgressJSON() string {
+	value := mobilemultihop.NodeChainCandidatePreparationProgress{Stage: "pending-prefix-proof"}
+	if m != nil {
+		if state := m.state.Load(); state != nil && state.runtime.Load() != nil {
+			value = state.runtime.Load().Progress()
+		}
+		if m.retired.Load() {
+			value.Prepared, value.Stage = false, "retired"
+		}
+	}
+	raw, _ := json.Marshal(value)
+	return string(raw)
+}
+func (m *RouterNodeChainCandidatePreparation) Start(request, candidateID string) error {
+	if m == nil || m.retired.Load() {
+		return errRouterCandidatePreparation()
+	}
+	state := m.state.Load()
+	if state == nil || state.service.Load() == nil {
+		return errRouterCandidatePreparation()
+	}
+	return state.service.Load().Start(request, candidateID)
+}
+func (m *RouterNodeChainCandidatePreparation) Cancel(request string) {
+	if m != nil {
+		if state := m.state.Load(); state != nil && state.service.Load() != nil {
+			state.service.Load().Cancel(request)
+		}
+	}
+}
+func (m *RouterNodeChainCandidatePreparation) Drain(request string) error {
+	if m == nil {
+		return errRouterCandidatePreparation()
+	}
+	state := m.state.Load()
+	if state == nil || state.service.Load() == nil {
+		return errRouterCandidatePreparation()
+	}
+	if err := state.service.Load().Drain(request); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.joinCatalog(ctx)
+}
+func (m *RouterNodeChainCandidatePreparation) StatusJSON() string {
+	if m == nil {
+		return ""
+	}
+	state := m.state.Load()
+	if state == nil || state.service.Load() == nil {
+		return ""
+	}
+	raw := state.service.Load().StatusJSON()
+	if !m.callbackActive.Load() {
+		return raw
+	}
+	var status hopmeasure.CandidateStatus
+	if json.Unmarshal([]byte(raw), &status) != nil {
+		return ""
+	}
+	status.Complete, status.Drained, status.Stage, status.Results = false, false, "draining", []hopmeasure.Result{}
+	encoded, _ := json.Marshal(status)
+	return string(encoded)
+}
+func (m *RouterNodeChainCandidatePreparation) NetworkChanged() {
+	if m == nil {
+		return
+	}
+	m.retired.Store(true)
+	if state := m.state.Load(); state != nil {
+		state.cancel()
+		if runtime := state.runtime.Load(); runtime != nil {
+			runtime.Cancel()
+		}
+		if service := state.service.Load(); service != nil {
+			service.Invalidate()
+		}
+	}
+}
+func (m *RouterNodeChainCandidatePreparation) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.closeContext(ctx)
+}
+func (m *RouterNodeChainCandidatePreparation) closeContext(ctx context.Context) error {
+	if m == nil || ctx == nil {
+		return errRouterCandidatePreparation()
+	}
+	m.NetworkChanged()
+	state := m.state.Load()
+	if state == nil {
+		return ctx.Err()
+	}
+	select {
+	case <-state.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if service := state.service.Load(); service != nil {
+		if err := service.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	if err := m.joinCatalog(ctx); err != nil {
+		return err
+	}
+	if m.measuring.Load() {
+		return errors.New("prefix candidate native measurement has not joined")
+	}
+	if runtime := state.runtime.Load(); runtime != nil {
+		if err := runtime.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	if engine := state.engine.Load(); engine != nil {
+		if err := engine.RetireContext(ctx); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}

@@ -1041,6 +1041,54 @@ runtime pass. The full existing GTK test remains mandatory in CI. Strict
 Windows/Linux session transform audits passed. These results do not establish
 physical rendering, orientation/accessibility, network transitions or leaks.
 
+After publication at `b82d7ab611dfd7e5f874feecb989a4b195e54f9f`, the
+GitHub [native UI gate](https://github.com/Eabusham2/router-vpn/actions/runs/43358770804)
+(job `131667026409`) and [map-first gate](https://github.com/Eabusham2/router-vpn/actions/runs/43358770925)
+(job `131667026804`) both passed, including exact checkout and no generated
+source drift. An independent archive of that commit also passed the complete
+map-first gate with the actual local Java and Swift toolchains. Its first
+local attempt lacked those toolchains on PATH; no source repair or assertion
+change was needed. These remain source/shipping-contract results.
+
+## Native prefix-only bridge and closed traffic purpose
+
+The shared source/runtime now has a separate libbox/Box preparation owner.
+It captures the exact daemon instance, options digest, native TUN inbound,
+selector, prefix outbounds, resolver and service objects, original session
+and network generation. It proves only captured private packet prefixes and
+permits candidate TCP calls only through the selected captured prefix to an
+allowlisted literal destination. Ordinary application and DNS ingress never
+open, and this purpose has no Connected, Last or usage adoption operation.
+The old final node and selected DNS are not contacted by preparation.
+
+The provider launch API strictly reopens the complete canonical private
+capture through the existing shared parser and reconstructs its graph. It
+does not trust a caller-provided options/configuration receipt or an ordinary
+connection's ready flag. Catalog replacement is sticky. Original startup,
+foreign-language catalog callbacks, measurements and denied inbound sockets
+remain owned through failed Close and exact retry before Box/TUN retirement.
+The generated preparers preserve their exact prior receipts and permit only
+the complete known two-file owner migration. Android's native build requires
+the new inventory, causal checks and exported API signatures.
+
+The pinned native gate passed all 30 required Box/libbox test records and
+nine independently compiled causal controls. Those controls reject omitted
+denied-input join, startup catalog verification, actual graph identity,
+closed ingress, exact destination, exact daemon instance, catalog callback
+join, startup join and sticky catalog invalidation. Additional checks passed
+the eight-test strict runner, seven mobile-preparer cases and two exact
+owner/migration cases. The 50-call fixture now waits within the service's
+existing 90-second request budget before requiring drain; the separate
+cleanup deadline and every production timeout remain unchanged.
+
+These tests execute real pinned managers, selectors, ingress gates, source
+compilation, loopback private HTTP proofs and 50 TCP calls for WG/AWG Fast/AWG
+Strong source variants. Privileged TUN, physical monitoring and encrypted
+WG/AWG packet I/O are explicit fixture boundaries. This is not encrypted
+host/device acceptance. Android/iOS host integration, mobile packaging and
+the separate desktop prefix-only host are subsequent requirements; neither
+this bridge nor the already shipped complete-saved flow closes them alone.
+
 ## Fresh native execution after the Server carrier correction
 
 At `c1a626e0013dcb57c75e12f8e3706ccc0e02edd4`, the actual encrypted

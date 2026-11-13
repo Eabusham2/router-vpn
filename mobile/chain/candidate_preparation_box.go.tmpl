@@ -1,0 +1,245 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"reflect"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	"github.com/sagernet/sing-box/route"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+var errRouterVPNCandidatePreparation = errors.New("original candidate prefix preparation changed or retired")
+
+// This separate purpose can only prove private prefixes and dial captured
+// candidate TCP endpoints. There is deliberately no application-open, selected
+// connection, discovery/adoption, DNS proof or saved-final dial method.
+type RouterVPNNodeChainCandidatePreparationEngine struct {
+	instance  *Box
+	prep      *mobilemultihop.NodeChainCandidatePreparation
+	current   func(context.Context) error
+	identity  mobilemultihop.NodeChainIdentity
+	retired   atomic.Bool
+	inbound   adapter.Inbound
+	selector  *group.Selector
+	selected  string
+	prefixes  map[string]adapter.Outbound
+	outbounds map[string]adapter.Outbound
+	resolvers map[string]adapter.DNSTransport
+	services  map[string]adapter.Service
+	gate      *G.Outbound
+	control   *G.Control
+	ingress   *route.RouterVPNNodeChainIngress
+	gateID    string
+}
+
+func (s *Box) RouterVPNNewNodeChainCandidatePreparationEngine(ctx context.Context, prep *mobilemultihop.NodeChainCandidatePreparation,
+	session string, current func(context.Context) error) (*RouterVPNNodeChainCandidatePreparationEngine, error) {
+	if s == nil || ctx == nil || ctx.Err() != nil || prep == nil || current == nil || !routerVPNNodeChainSession(session) ||
+		s.ctx == nil || s.ctx.Err() != nil || s.routerVPNNodeChainExecutionOptions == "" || s.router == nil || s.network == nil || current(ctx) != nil {
+		return nil, errRouterVPNCandidatePreparation
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](s.ctx, []byte(prep.Config()))
+	if err != nil || routerVPNNodeChainExecutionOptionsDigest(s.ctx, options) != s.routerVPNNodeChainExecutionOptions {
+		return nil, errRouterVPNCandidatePreparation
+	}
+	proofs := prep.ProofInventory()
+	if prep.SourceSHA256() == "" || prep.ConfigSHA256() == "" || len(proofs) == 0 || len(proofs) != prep.PrefixPosition()+1 {
+		return nil, errRouterVPNCandidatePreparation
+	}
+	e := &RouterVPNNodeChainCandidatePreparationEngine{instance: s, prep: prep, current: current, selected: proofs[len(proofs)-1].Tag,
+		identity: mobilemultihop.NodeChainIdentity{EngineID: fmt.Sprintf("%p", s), SessionID: session, SourceSHA256: prep.SourceSHA256(), ConfigSHA256: prep.ConfigSHA256()},
+		prefixes: make(map[string]adapter.Outbound), outbounds: make(map[string]adapter.Outbound), resolvers: make(map[string]adapter.DNSTransport), services: make(map[string]adapter.Service)}
+	e.identity.NetworkID, err = s.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil || len(inbounds) != 1 || inbounds[0].Type() != C.TypeTun || inbounds[0].Tag() != "routervpn-chain-tun" {
+		return nil, errRouterVPNCandidatePreparation
+	}
+	e.inbound = inbounds[0]
+	var tags []string
+	for _, row := range options.Outbounds {
+		tags = append(tags, row.Tag)
+	}
+	for _, row := range options.Endpoints {
+		tags = append(tags, row.Tag)
+	}
+	for _, tag := range tags {
+		retained, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil || !found || retained == nil || tag == "" || e.outbounds[tag] != nil {
+			return nil, errRouterVPNCandidatePreparation
+		}
+		e.outbounds[tag] = retained
+	}
+	if options.DNS != nil {
+		for _, row := range options.DNS.Servers {
+			retained, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, row.Tag)
+			if err != nil || !found || retained == nil || row.Tag == "" || e.resolvers[row.Tag] != nil {
+				return nil, errRouterVPNCandidatePreparation
+			}
+			e.resolvers[row.Tag] = retained
+		}
+	}
+	for _, row := range options.Services {
+		if row.Type == C.TypeOOMKiller {
+			continue
+		}
+		retained, found, err := adapter.RouterVPNServiceContext(ctx, s.service, row.Tag)
+		if err != nil || !found || retained == nil || row.Tag == "" || e.services[row.Tag] != nil {
+			return nil, errRouterVPNCandidatePreparation
+		}
+		e.services[row.Tag] = retained
+	}
+	for _, proof := range proofs {
+		retained := e.outbounds[proof.Tag]
+		if retained == nil || e.prefixes[proof.Tag] != nil {
+			return nil, errRouterVPNCandidatePreparation
+		}
+		e.prefixes[proof.Tag] = retained
+	}
+	selector, ok := e.outbounds[mobilemultihop.SelectorTag].(*group.Selector)
+	if !ok || selector == nil || !reflect.DeepEqual(selector.All(), []string{e.selected}) || selector.Now() != e.selected {
+		return nil, errRouterVPNCandidatePreparation
+	}
+	e.selector = selector
+	gate, ok := e.outbounds[mobilemultihop.NodeChainExecutionGateTag].(*G.Outbound)
+	if !ok || gate == nil {
+		return nil, errRouterVPNCandidatePreparation
+	}
+	e.gate = gate
+	e.gateID = e.identity.EngineID + ":" + session + ":" + prep.SourceSHA256()
+	e.control, err = gate.Bind(ctx, e.gateID, e.nativeCurrent)
+	if err != nil {
+		return nil, err
+	} // failed Bind owns no foreign gate cleanup
+	e.ingress, err = s.router.RouterVPNBindNodeChainIngress(ctx, e.inbound, e.nativeCurrent, e.control.TrackInbound, e.applicationClosed)
+	if err != nil {
+		return e, err
+	} // retain exact acquired control for retry
+	if _, err := e.ObservePreparationContext(ctx); err != nil {
+		return e, err
+	}
+	return e, nil
+}
+
+// The ingress and gate use this callback while observing their own state.
+// Keep it acyclic: only exact native managers, physical generation and outer
+// lifetime are read here, never ingress.Current or control.Observe.
+func (e *RouterVPNNodeChainCandidatePreparationEngine) nativeCurrent(ctx context.Context) error {
+	if e == nil || ctx == nil || ctx.Err() != nil || e.retired.Load() || e.instance == nil || e.current == nil || e.current(ctx) != nil {
+		return errRouterVPNCandidatePreparation
+	}
+	s := e.instance
+	if s.ctx == nil || s.ctx.Err() != nil || s.done == nil || s.network == nil || s.routerVPNNodeChainExecutionOptions == "" || e.prep.SourceSHA256() != e.identity.SourceSHA256 || e.prep.ConfigSHA256() != e.identity.ConfigSHA256 {
+		return errRouterVPNCandidatePreparation
+	}
+	select {
+	case <-s.done:
+		return errRouterVPNCandidatePreparation
+	default:
+	}
+	network, err := s.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil || network != e.identity.NetworkID {
+		return errRouterVPNCandidatePreparation
+	}
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil || len(inbounds) != 1 || inbounds[0] != e.inbound || e.inbound.Type() != C.TypeTun || e.inbound.Tag() != "routervpn-chain-tun" {
+		return errRouterVPNCandidatePreparation
+	}
+	for tag, retained := range e.outbounds {
+		actual, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil || !found || actual != retained {
+			return errRouterVPNCandidatePreparation
+		}
+	}
+	for tag, retained := range e.resolvers {
+		actual, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, tag)
+		if err != nil || !found || actual != retained {
+			return errRouterVPNCandidatePreparation
+		}
+	}
+	for tag, retained := range e.services {
+		actual, found, err := adapter.RouterVPNServiceContext(ctx, s.service, tag)
+		if err != nil || !found || actual != retained {
+			return errRouterVPNCandidatePreparation
+		}
+	}
+	if !reflect.DeepEqual(e.selector.All(), []string{e.selected}) || e.selector.Now() != e.selected || e.retired.Load() || e.current(ctx) != nil {
+		return errRouterVPNCandidatePreparation
+	}
+	network, err = s.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil || network != e.identity.NetworkID || ctx.Err() != nil {
+		return errRouterVPNCandidatePreparation
+	}
+	select {
+	case <-s.done:
+		return errRouterVPNCandidatePreparation
+	default:
+		return nil
+	}
+}
+
+func (e *RouterVPNNodeChainCandidatePreparationEngine) applicationClosed(ctx context.Context) (bool, error) {
+	return false, e.nativeCurrent(ctx)
+}
+
+func (e *RouterVPNNodeChainCandidatePreparationEngine) ObservePreparationContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	if e == nil || e.nativeCurrent(ctx) != nil || e.ingress == nil || e.ingress.Current(ctx) != nil || e.control == nil {
+		return mobilemultihop.NodeChainIdentity{}, errRouterVPNCandidatePreparation
+	}
+	state, err := e.control.Observe(ctx)
+	// Denied TUN inputs can still own an unfinished Close. They never grant
+	// forwarding; the exact control retains them through native retirement.
+	if err != nil || state.Open || state.Closed || state.Identity != e.gateID || e.nativeCurrent(ctx) != nil {
+		return mobilemultihop.NodeChainIdentity{}, errRouterVPNCandidatePreparation
+	}
+	return e.identity, nil
+}
+
+func (e *RouterVPNNodeChainCandidatePreparationEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if _, err := e.ObservePreparationContext(ctx); err != nil {
+		return nil, err
+	}
+	retained := e.prefixes[tag]
+	if retained == nil || !e.prep.AllowsDial(tag, address) {
+		return nil, errRouterVPNCandidatePreparation
+	}
+	destination, err := routerVPNExecutionDestination(address)
+	if err != nil {
+		return nil, err
+	}
+	conn, dialErr := retained.DialContext(ctx, "tcp", destination)
+	observed, err := e.ObservePreparationContext(ctx)
+	if err != nil || observed != e.identity || ctx.Err() != nil || conn == nil {
+		return conn, errors.Join(dialErr, err, ctx.Err(), errRouterVPNCandidatePreparation)
+	}
+	return conn, dialErr
+}
+
+// The enclosing owner first joins candidates and private proof workers. This
+// closes only the original deny gate/ingress; its Box/TUN is retired afterward.
+// Failed close retains the control so a later retry can finish exact cleanup.
+func (e *RouterVPNNodeChainCandidatePreparationEngine) RetireContext(ctx context.Context) error {
+	if e == nil || ctx == nil || e.control == nil {
+		return errRouterVPNCandidatePreparation
+	}
+	e.retired.Store(true)
+	if err := e.control.Close(ctx); err != nil {
+		return err
+	}
+	if e.ingress != nil {
+		e.ingress.Retire()
+	}
+	return ctx.Err()
+}

@@ -108,6 +108,18 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
+  grep -Fq 'io.nekohasekai.libbox.RouterNodeChainCandidatePreparation newRouterNodeChainCandidatePreparation(java.lang.String, int, java.lang.String) throws java.lang.Exception;' "$api_list" || {
+    echo 'combined libbox AAR is missing the original prefix preparation factory' >&2; return 1
+  }
+  grep -Fq 'io.nekohasekai.libbox.RouterNodeChainCandidatePreparation routerNodeChainCandidatePreparationLaunch(java.lang.String) throws java.lang.Exception;' "$api_list" || {
+    echo 'combined libbox AAR is missing the strict private prefix launch parser' >&2; return 1
+  }
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainCandidatePreparation >"$tmp/router-node-chain-candidate-preparation.javap"
+  for signature in 'void run(io.nekohasekai.libbox.CommandServer, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;' 'java.lang.String config();' 'java.lang.String launchInput();' 'java.lang.String sourceSHA256();' 'java.lang.String configSHA256();' 'java.lang.String originalSourceSHA256();' 'java.lang.String captureSHA256();' 'java.lang.String metadata();' 'java.lang.String progressJSON();' 'boolean healthy();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
+    grep -Fq "$signature" "$tmp/router-node-chain-candidate-preparation.javap" || {
+      echo 'combined libbox AAR prefix preparation has the wrong retained-owner API' >&2; return 1
+    }
+  done
   for symbol in newRouterNodeChainExecution routerNodeChainExecutionFromLaunch newRouterNodeChainExecutionLaunch newRouterNodeChainExecutionRestore; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing ordered execution API $symbol" >&2; return 1; }
   done
@@ -322,6 +334,8 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
   python3 "$ROOT/../deploy/test_hysteria2_deadlines_pinned.py" "$VENDOR"
   python3 "$ROOT/../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"
+  python3 "$ROOT/../deploy/test_node_chain_candidate_preparation_runner.py"
+  python3 "$ROOT/../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
   go_retry test ./experimental/libbox/routervpn/...
   go_retry test -race ./adapter/inbound -run TestRouterVPN -count=1
   go_retry test -race ./route -run '^TestRouterVPNStrategyInterface' -count=1 -timeout=90s

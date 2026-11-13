@@ -1,0 +1,224 @@
+package libbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Real source compiler, daemon instance lookup, callback lifetime and close
+// methods run. Native Box/proof transport executes in the separate pinned Box
+// suite; these component fixtures do not claim an Android VPN or packet path.
+func candidatePreparationBridgeFixture(t *testing.T) (*RouterNodeChainCandidatePreparation, *routerCandidatePreparationState, *candidateBridgeCatalog) {
+	t.Helper()
+	chain := candidateBridgeSource(t)
+	source, err := chain.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var originalSource mobilemultihop.NodeChainSource
+	if err := json.Unmarshal([]byte(source), &originalSource); err != nil {
+		t.Fatal(err)
+	}
+	source = candidateBridgeJSON(t, originalSource)
+	other := candidateBridgeSourceModes(t, []string{"wg", "wg", "wg"})
+	input, err := other.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record mobilemultihop.NodeChainSource
+	if err := json.Unmarshal([]byte(input), &record); err != nil {
+		t.Fatal(err)
+	}
+	inventory := candidateBridgeJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-catalog", Inputs: []string{record.Nodes[len(record.Nodes)-1]}})
+	m, err := NewRouterNodeChainCandidatePreparation(source, 1, inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.OriginalSourceSHA256() != chain.SourceSHA256() {
+		t.Fatal("fixture changed original saved source")
+	}
+	original, _ := routerNodeChainNativeOwnerFixture(t)
+	lifetime, cancel := context.WithCancel(original.server.ctx)
+	t.Cleanup(cancel)
+	catalog := &candidateBridgeCatalog{digest: m.inventorySHA}
+	state := &routerCandidatePreparationState{server: original.server, instance: original.instance, catalog: catalog, lifetime: lifetime, cancel: cancel, done: make(chan struct{})}
+	close(state.done)
+	m.state.Store(state)
+	return m, state, catalog
+}
+func TestRouterNodeChainBridgeCandidatePreparationSourceAndIdentity(t *testing.T) {
+	for _, fault := range []string{"source-only", "instance", "generation", "lifetime", "retired"} {
+		t.Run(fault, func(t *testing.T) {
+			m, state, _ := candidatePreparationBridgeFixture(t)
+			if err := m.nativeCurrent(t.Context(), state); err != nil {
+				t.Fatal(err)
+			}
+			if m.Healthy() || m.Start(strings.Repeat("a", 32), "chain-native-3") == nil {
+				t.Fatal("source/native identity fabricated proved prefix candidates")
+			}
+			if strings.Contains(m.Config(), "routervpn-chain-2-") || m.SourceSHA256() == m.OriginalSourceSHA256() {
+				t.Fatal("bridge reused complete saved suffix instead of separate preparation")
+			}
+			reconstructed, err := mobilemultihop.ParseNodeChainCandidatePreparation(m.LaunchInput())
+			if err != nil || reconstructed.Config() != m.Config() || reconstructed.SourceSHA256() != m.SourceSHA256() {
+				t.Fatal("private prefix session lost its exact reconstruction", err)
+			}
+			switch fault {
+			case "source-only":
+				return
+			case "instance":
+				*routerMTUField[*daemon.Instance](t, state.server.StartedService, "instance") = &daemon.Instance{}
+			case "generation":
+				m.state.Store(&routerCandidatePreparationState{lifetime: context.Background()})
+			case "lifetime":
+				state.cancel()
+			case "retired":
+				m.NetworkChanged()
+			}
+			if m.nativeCurrent(t.Context(), state) == nil {
+				t.Fatal("prefix bridge accepted changed native owner", fault)
+			}
+		})
+	}
+}
+func TestRouterNodeChainBridgeCandidatePreparationCatalogCloseRetainsCallback(t *testing.T) {
+	m, _, catalog := candidatePreparationBridgeFixture(t)
+	catalog.entered, catalog.release = make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(catalog.release) }) }
+	defer release()
+	done := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	go func() { done <- m.CandidateInventoryCurrentContext(ctx, m.CaptureSHA256()) }()
+	<-catalog.entered
+	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("held native host callback did not preserve caller deadline", err)
+	}
+	closeCtx, end := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer end()
+	if err := m.closeContext(closeCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("unjoined catalog callback allowed native retirement", err)
+	}
+	if !m.callbackActive.Load() || m.pending == nil {
+		t.Fatal("timed-out original catalog callback lost retry handle")
+	}
+	release()
+	joined, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	if err := m.closeContext(joined); err != nil {
+		t.Fatal("original catalog cleanup retry failed", err)
+	}
+	if m.callbackActive.Load() || m.pending != nil || m.Healthy() {
+		t.Fatal("joined callback revived prefix purpose")
+	}
+}
+func TestRouterNodeChainBridgeCandidatePreparationStartupJoinIsMandatory(t *testing.T) {
+	m, state, _ := candidatePreparationBridgeFixture(t)
+	state.done = make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := m.closeContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		close(state.done)
+		t.Fatal("pending original startup allowed native retirement", err)
+	}
+	if !m.retired.Load() || state.lifetime.Err() == nil {
+		close(state.done)
+		t.Fatal("cleanup did not cancel pending prefix lifetime")
+	}
+	close(state.done)
+	if err := m.closeContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestRouterNodeChainBridgeCandidatePreparationCatalogChangeIsSticky(t *testing.T) {
+	m, state, catalog := candidatePreparationBridgeFixture(t)
+	if err := m.CandidateInventoryCurrentContext(t.Context(), m.CaptureSHA256()); err != nil {
+		t.Fatal(err)
+	}
+	catalog.change("changed")
+	if err := m.CandidateInventoryCurrentContext(t.Context(), m.CaptureSHA256()); err == nil {
+		t.Fatal("changed catalog retained candidate preparation")
+	}
+	catalog.change(m.inventorySHA)
+	if err := m.CandidateInventoryCurrentContext(t.Context(), m.CaptureSHA256()); err == nil || !m.retired.Load() || state.lifetime.Err() == nil {
+		t.Fatal("restored catalog revived retired prefix purpose")
+	}
+}
+func TestRouterNodeChainBridgeCandidatePreparationNativeLookupKeepsDeadline(t *testing.T) {
+	m, state, _ := candidatePreparationBridgeFixture(t)
+	lock := routerMTUField[sync.RWMutex](t, state.server.StartedService, "serviceAccess")
+	lock.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := m.nativeCurrent(ctx, state)
+	cancel()
+	lock.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("prefix owner lookup lost actual native deadline", err)
+	}
+	if err := m.nativeCurrent(t.Context(), state); err != nil {
+		t.Fatal("expired observer retired native owner", err)
+	}
+}
+
+func TestRouterNodeChainBridgeCandidatePreparationRunChecksOriginalCatalog(t *testing.T) {
+	m, original, catalog := candidatePreparationBridgeFixture(t)
+	m.state.Store(nil)
+	catalog.change("changed-before-native-prefix-acquisition")
+	if err := m.Run(original.server, catalog); err == nil {
+		t.Fatal("changed startup source acquired native prefix")
+	}
+	state := m.state.Load()
+	if catalog.calls.Load() != 1 || state == nil || state.engine.Load() != nil || !m.retired.Load() {
+		t.Fatal("startup bypassed original catalog before prefix native acquisition")
+	}
+	if err := m.closeContext(context.Background()); err != nil {
+		t.Fatal("changed startup failed exact cleanup", err)
+	}
+}
+
+func TestRouterNodeChainBridgeCandidatePreparationLaunchIsExact(t *testing.T) {
+	m, _, _ := candidatePreparationBridgeFixture(t)
+	input := m.LaunchInput()
+	reopened, err := RouterNodeChainCandidatePreparationLaunch(input)
+	if err != nil || reopened.Config() != m.Config() || reopened.SourceSHA256() != m.SourceSHA256() || reopened.ConfigSHA256() != m.ConfigSHA256() || reopened.CaptureSHA256() != m.CaptureSHA256() || reopened.OriginalSourceSHA256() != m.OriginalSourceSHA256() || reopened.inventorySHA != m.inventorySHA || reopened.Metadata() != m.Metadata() || reopened.Healthy() {
+		t.Fatal("strict prefix reopen changed captured source or invented live proof", err)
+	}
+	for _, fault := range []string{"noncanonical", "unknown", "kind", "source", "position", "inventory"} {
+		t.Run(fault, func(t *testing.T) {
+			var record map[string]any
+			if err := json.Unmarshal([]byte(input), &record); err != nil {
+				t.Fatal(err)
+			}
+			wrong := input
+			switch fault {
+			case "noncanonical":
+				wrong = " " + input
+			case "unknown":
+				record["config"] = m.Config()
+			case "kind":
+				record["kind"] = "routervpn-node-chain-launch-input"
+			case "source":
+				record["original_source"] = "{}"
+			case "position":
+				record["prefix_position"] = 2
+			case "inventory":
+				record["inventory"] = "{}"
+			}
+			if fault != "noncanonical" {
+				wrong = candidateBridgeJSON(t, record)
+			}
+			if value, err := RouterNodeChainCandidatePreparationLaunch(wrong); err == nil || value != nil {
+				t.Fatal("strict prefix reopen admitted changed private capture", fault)
+			}
+		})
+	}
+}

@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-node-chain-source.json'
 TEMPLATES = {
+    'candidate_preparation.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation.go',
+    'candidate_preparation_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation_test.go',
     'box.go.tmpl': 'routervpn_node_chain.go',
     'box_test.go.tmpl': 'routervpn_node_chain_test.go',
     'network_context.go.tmpl': 'route/routervpn_node_chain.go',
@@ -28,7 +30,9 @@ TEMPLATES = {
 
 
 def inputs():
-    return [Path(__file__).resolve(), *sorted((ROOT/'mobile/chain').glob('*.tmpl'))]
+    return [Path(__file__).resolve(), ROOT/'deploy/test_node_chain_candidate_preparation.py',
+            ROOT/'deploy/test_node_chain_candidate_preparation_runner.py',
+            *sorted((ROOT/'mobile/chain').glob('*.tmpl'))]
 
 
 def digest():

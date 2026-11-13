@@ -75,6 +75,26 @@ class Preparation(unittest.TestCase):
             with self.subTest(before=before), self.assertRaises(ValueError):
                 PREP.box_source(derived.replace(before, after, 1))
 
+    def test_original_inventory_upgrades_only_complete_prefix_pair(self):
+        self.prepare()
+        owner = self.vendor/PREP.OWNER
+        record = json.loads(owner.read_text())
+        names = ('routervpn_node_chain_candidate_preparation.go', 'routervpn_node_chain_candidate_preparation_test.go')
+        for name in names:
+            (self.vendor/name).unlink()
+            del record['files'][name]
+        owner.write_text(json.dumps(record))
+        self.prepare()
+        self.assertEqual(set(json.loads(owner.read_text())['files']), set(PREP.TEMPLATES.values()))
+        record = json.loads(owner.read_text())
+        del record['files'][names[0]]
+        (self.vendor/names[0]).unlink()
+        owner.write_text(json.dumps(record))
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'source record'):
+            self.prepare()
+        self.assertEqual(self.snapshot(), before)
+
     def test_original_close_and_daemon_error_are_exact_and_idempotent(self):
         derived = PREP.box_source(BOX).decode()
         self.assertIn('func (s *Box) routerVPNCloseOriginal() error { return originalManagerClose() }', derived)
