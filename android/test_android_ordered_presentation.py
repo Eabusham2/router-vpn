@@ -15,6 +15,7 @@ ROOT, JAVA = U.ROOT, U.JAVA
 
 TEST = r'''
  public static void main(String[] args)throws Exception{
+  savedPolicyValidation();
   try(Fixture f=new Fixture(Path.of(args[0]))){
    var source=ordered(f);var home=AndroidHomeStateStore.beginNodeChain(f.activity,source);check(AndroidHomeStateStore.connectedNodeChain(f.activity,home),"display Home setup failed");
    var runtime=AndroidRuntimeRegistry.get(f.activity).nodeChain;runtime.active=new AndroidNodeChainRuntime.ActiveCapture(source,home,orderedProgress(source).toString());
@@ -128,7 +129,7 @@ final class PresentationObservation {
     activity = activity.replace(" // SHIPPING_MAP_MARKER", U.S.block((JAVA / "RouterVpnNodeMapView.java").read_text(), "    static final class Marker")).replace(" // SHIPPING_MAP_VALID", U.S.block((JAVA / "RouterVpnNodeMapView.java").read_text(), "    private boolean valid(Marker m)"))
     # Retain the real-source fixture helpers; only this worker transaction runs.
     harness = U.HARNESS[:U.HARNESS.index("public final class NodeUsageTest")] + "public final class NodeUsageTest {static int checks;\n"
-    harness += "\n".join(U.S.block(U.HARNESS, sig) for sig in ("static void check(", "static void await(", "static final class Callback", "static JSONObject bundle(", "static final class Fixture", "static JSONObject orderedBundle(", "static AndroidNodeStore.ChainCapture ordered(", "static JSONObject orderedProgress("))
+    harness += "\n".join(U.S.block(U.HARNESS, sig) for sig in ("static void check(", "static void await(", "static void savedPolicyValidation(", "static final class Callback", "static JSONObject bundle(", "static final class Fixture", "static JSONObject orderedBundle(", "static AndroidNodeStore.ChainCapture ordered(", "static JSONObject orderedProgress("))
     harness += TEST + "}"
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     with tempfile.TemporaryDirectory(prefix="routervpn-ordered-ui-") as work, tempfile.TemporaryDirectory(prefix=".ordered-ui-json-", dir=ROOT) as go_dir:
@@ -165,6 +166,7 @@ final class PresentationObservation {
         (app / "UsageActivity.java").write_text(activity)
         presentation = (JAVA / "AndroidOrderedPathPresentation.java").read_text()
         controls = (
+            ("Boundaries.java", boundaries, "!POLICY.contains(keys.getString(i))", "false", "saved hostname policy accepted malformed unknown-field"),
             ("AndroidOrderedPathPresentation.java", presentation, "testing&&preparation.testsSavedPosition(i)", "testing", "independent prefix presentation marked the saved suffix as Testing"),
             ("UsageActivity.java", activity, "presentation.members.get(position).testing", "true", "Product map marked untested saved suffix as Testing"),
             ("HomeObservation.java", home_source, "if(AndroidNodeCandidatePreparation.busy())", "if(false)", "temporary purpose escaped Home Testing presentation"),

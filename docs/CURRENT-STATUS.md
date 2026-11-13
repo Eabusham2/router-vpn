@@ -42,6 +42,15 @@ passed its separate 64-verdict inventory. This closes the older literal-only
 source statement for that bounded three-member path, while other imported
 protocols, positions, layers and installed/device acceptance remain open.
 
+### Android build-fixture repair
+
+Four Android fixture files now include the current shipping saved-policy
+validator, protection/dialog helpers and imported-member compiler ABI. This
+repairs the concrete javac failures observed after hostname adoption. All five
+usage, presentation, statistics, comparison and scoped imported Naive H3 suites
+passed with their original ownership controls. Production policy and deadlines
+are unchanged; current APK and native/device acceptance remain separate.
+
 ### Latest verified native ownership additions
 
 The original-engine MTU guard (`b535a16`), mobile lifetime retirement

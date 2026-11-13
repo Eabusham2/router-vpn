@@ -126,7 +126,7 @@ final class UsageMapTelemetry {double cachedMedian(String id){return 0;}}
 '''
 
 EXTERNAL_ACTIVITY = r'''package com.eabusham.routervpn;
-import android.app.Activity;import android.content.Intent;import android.net.VpnService;import android.os.Bundle;import android.widget.*;import java.util.*;import java.nio.charset.StandardCharsets;import org.json.*;
+import android.app.Activity;import android.app.AlertDialog;import android.content.Intent;import android.net.VpnService;import android.os.Bundle;import android.widget.*;import java.util.*;import java.nio.charset.StandardCharsets;import org.json.*;
 // Exact request, permission, recreation, owner and completion methods. Forms
 // and native engine proof remain the separately exercised UI/runtime boundary.
 final class StandardExitActivity extends Activity{
@@ -145,6 +145,14 @@ import android.content.*;import android.os.Bundle;import java.io.*;import java.n
 public final class NodeUsageTest{
  static int checks;static void check(boolean ok,String message){checks++;if(!ok)throw new AssertionError(message);}
  static void await(CountDownLatch latch,String message)throws Exception{check(latch.await(4,TimeUnit.SECONDS),message);}
+ static void savedPolicyValidation()throws Exception{
+  AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="hostname-policy";e.name="Original imported middle";e.protocol="shadowsocks";e.server="Middle.Example";e.serverPort=8388;e.expectedPublicIp="198.51.100.31";e.method="2022-blake3-aes-128-gcm";e.secret=java.util.Base64.getEncoder().encodeToString(new byte[16]);
+  JSONObject original=new JSONObject().put("dns_mode","custom").put("dns_protocol","tcp").put("dns_host","192.0.2.53").put("dns_port",53).put("kill_switch",true).put("kill_switch_policy","always");e.policy=original;AndroidStandardExitStore.validate(e);check(e.server.equals("Middle.Example")&&e.policy==original,"saved hostname validation changed its original source");
+  for(String fault:List.of("unknown-field","protection-type","dns-port-type","text-bound")){
+   e.policy=new JSONObject(original.toString());if(fault.equals("unknown-field"))e.policy.put("borrowed_policy",true);else if(fault.equals("protection-type"))e.policy.put("kill_switch","true");else if(fault.equals("dns-port-type"))e.policy.put("dns_port","53");else e.policy.put("dns_path","x".repeat(4097));
+   boolean refused=false;try{AndroidStandardExitStore.validate(e);}catch(Exception expected){refused=true;}check(refused,"saved hostname policy accepted malformed "+fault);
+  }
+ }
  static final class Callback implements AndroidUnifiedConnectionController.Callback{
   final AndroidUnifiedConnectionController.Callback delegate;final boolean user;boolean ok;int completions;String message="";
   Callback(UsageActivity a,boolean user){delegate=a.userCallback();this.user=user;}public boolean recordsNodeUsage(){return user&&delegate.recordsNodeUsage();}public void progress(String s){delegate.progress(s);}public void owned(String s){delegate.owned(s);}public void finished(boolean success,String s){ok=success;message=s;completions++;delegate.finished(success,s);}
@@ -358,7 +366,7 @@ public final class NodeUsageTest{
    AndroidHomeStateStore.advancePathGeneration(f.activity);check(f.activity.currentOrderedPresentation()==null,"ordered display survived a completed stop generation");f.activity.map();check(!f.activity.mapView.orderedLive,"ordered map animated a retired receipt");
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){if(!List.of("imported-packet","imported-socks").contains(args[1]))throw new AssertionError("Unknown usage family");importedProtocols=args[1].equals("imported-socks")?List.of("socks5"):List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android "+args[1]+" entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);orderedIdentity(root);orderedUsage(root);orderedPresentation(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
+ public static void main(String[] args)throws Exception{savedPolicyValidation();Path root=Path.of(args[0]);if(args.length>1){if(!List.of("imported-packet","imported-socks").contains(args[1]))throw new AssertionError("Unknown usage family");importedProtocols=args[1].equals("imported-socks")?List.of("socks5"):List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android "+args[1]+" entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);orderedIdentity(root);orderedUsage(root);orderedPresentation(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
 }
 '''
 
@@ -378,6 +386,16 @@ def sources():
     ui['org/amnezia/awg/backend/Tunnel.java'] = 'package org.amnezia.awg.backend;public interface Tunnel{enum State{UP,DOWN}}'
     ui['io/nekohasekai/libbox/Libbox.java'] = S.PRIVATE_JSON_JAVA
     boundaries = P.BOUNDARIES
+    # The actual saved-exit store validates hostname policy even in usage/UI
+    # composition. Extract its shipping validator and complete pure dependency
+    # closure; native profile construction remains an explicit separate boundary.
+    policy = (JAVA / 'AndroidExternalPolicy.java').read_text()
+    constants = "\n".join(line for line in policy.splitlines() if 'static final int MAX_CAPTURE =' in line)
+    start = policy.index('    private static final Set<String> POLICY =')
+    constants += "\n" + policy[start:policy.index(';', start) + 1]
+    methods = "\n".join(S.block(policy, signature) for signature in ('    static void checkPolicy(', '    private static boolean bounded('))
+    assert boundaries.count('final class AndroidExternalPolicy {') == 1
+    boundaries = boundaries.replace('final class AndroidExternalPolicy {', 'final class AndroidExternalPolicy {' + constants + methods)
     # This fixture uses the actual checked-exception store API, while the
     # permission fixture doubles that store. Keep the compiler seam explicit.
     boundaries = boundaries.replace('static void requireEntry(AndroidStandardExitStore.Entry e){', 'static void requireEntry(AndroidStandardExitStore.Entry e)throws Exception{')
@@ -398,6 +416,9 @@ def sources():
     assert boundaries.count(preparation_start) == 1
     boundaries = boundaries.replace(preparation_start, 'void start(){throw new AssertionError("usage fixture must not start candidate permission flow");}')
     boundaries += NATIVE.replace(' // MULTIHOP_CAPTURE_TYPES', P.MULTIHOP_CAPTURE_TYPES)
+    protection = S.block(boundaries, 'final class AndroidExternalProtection')
+    assert boundaries.count(protection) == 1
+    boundaries = boundaries.replace(protection, S.block((JAVA / 'AndroidExternalProtection.java').read_text(), 'final class AndroidExternalProtection'))
     return ui, boundaries
 
 
@@ -433,7 +454,7 @@ def main():
         external = (JAVA / 'StandardExitActivity.java').read_text()
         start = external.index('\n', external.index('public final class StandardExitActivity'))
         fields = external[start:external.index('    @Override protected void onCreate(')]
-        signatures = ('    @Override protected void onDestroy()', '    @Override protected void onSaveInstanceState(', '    private void restorePending(',
+        signatures = ('    private void dialog(', '    @Override protected void onDestroy()', '    @Override protected void onSaveInstanceState(', '    private void restorePending(',
                       '    private boolean selectionOnly(', '    private void requestDirect(', '    private void requestOrdinaryTor(',
                       '    private void requestConnect(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode,String execution)',
                       '    private void capturePending(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode)',
@@ -454,6 +475,8 @@ def main():
         subprocess.run([*run, "imported-packet"], check=True, timeout=60)
         subprocess.run([*run, "imported-socks"], check=True, timeout=60)
         controls = (
+            ('Boundaries.java', '!POLICY.contains(keys.getString(i))', 'false', 'saved hostname policy accepted malformed unknown-field'),
+            ('Boundaries.java', '!(policy.get("kill_switch") instanceof Boolean)', 'false', 'saved hostname policy accepted malformed protection-type'),
             ('AndroidNodeStore.java', '            source.requirePairedIdentity();', '            /* defect: omit original ordered identity source */', 'ordered capture accepted missing original WG companion: missing-wg'),
             ('UsageActivity.java', 'currentExternalReceipt.requireCurrent();', '', 'external map accepted an unowned live measurement'),
             ('AndroidNodeUsage.java', 'nodes.size()>8', 'nodes.size()>2', 'ordered original proof usage was not saved'),

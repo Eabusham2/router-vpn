@@ -2198,6 +2198,41 @@ This repairs the concrete native factory call path. Installed TUN/WFP/PF,
 packaged networking, physical devices, other graph families and Darwin admission
 still require their own appropriate acceptance evidence.
 
+## Android fixture closure after hostname and ordered-source adoption
+
+Two actual hosted jobs at `4bf0ed8e` exposed stale Java fixture boundaries:
+multihop job `131751885036` could not compile the current saved-exit store's
+`AndroidExternalPolicy.checkPolicy(JSONObject)` call, and Naive H3 job
+`131751524434` lacked `Libbox.routerNodeChainImportedMemberInput(String,String)`.
+The repair changes four test files, with no production policy change.
+
+The shared usage fixture now extracts the actual shipping policy validator,
+its bounded constants/helpers, and the actual protection implementation. Its
+activity composition also includes the shipping dialog helper called by the
+hostname guidance. The comparison consumer no longer adds its obsolete duplicate
+policy stub. Valid original hostname policy is retained; unknown fields, wrong
+protection or DNS-port types, and oversized text are rejected. The imported ABI
+calls the actual shared `NodeChainImportedMemberInput` constructor and rejects
+malformed original source and capture. No unconditional native success was added.
+
+Validation used an immutable `00622b16` snapshot plus exactly these four files.
+All five affected executable suites exited successfully:
+
+| Suite | Completed execution | Retained rejection controls |
+| --- | --- | --- |
+| Node usage | 248 ordinary, 45 imported packet and 55 imported SOCKS controller/store/UI checks | 21 |
+| Ordered presentation | Actual shipping Product worker, off-main capture and stale publication checks | 9 |
+| External statistics | 736 saved-50/live-3 HTTPS, ownership, cancellation, storage and dispatch checks | 8 |
+| External comparison | 438 actual lifecycle/store/usage checks | 20 |
+| Imported Naive H3 SOCKS5 | 1,300 checks across nine independent entry/final layer graphs | 7 |
+
+The statistics bridge's original actual shipping race test also passed in
+1.015 seconds. Its source was unchanged by the subsequent Java fixture closure
+repair. All original subprocess bounds and prior negative controls remain.
+The native proof/traffic boundary in these JVM tests is explicitly controlled;
+these passes do not establish an APK build, installed VPN, encrypted peer or
+physical Android acceptance. The current exact-SHA workflows must still pass.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

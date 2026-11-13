@@ -33,6 +33,8 @@ def block(source, signature):
 
 GO_CASE = r'''case "proxy-entry":
  out,err=mobilemultihop.CompileProxyEntry(args[1],args[2])
+ case "chain-imported":
+ out,err=mobilemultihop.NodeChainImportedMemberInput(args[1],args[2])
  case "ss-service":
  err=mobilemultihop.ValidateCapturedSSService(args[1],args[2]);if err==nil{out="true"}
  case "imported-router":
@@ -61,6 +63,12 @@ public final class ImportedRouterTest {
  interface Work{void run()throws Exception;}
  static void reject(String label,Work work)throws Exception{boolean refused=false;try{work.run();}catch(Exception expected){refused=true;}check(refused,"accepted "+label);check(RouterMultihop.open==0,"owner leaked after "+label);}
  static JSONObject object(String s)throws Exception{return new JSONObject(s);}
+ static void importedMemberBoundary()throws Exception{
+  AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="original-middle";e.name="Imported hostname";e.protocol="shadowsocks";e.server="Middle.Example";e.serverPort=8388;e.expectedPublicIp="198.51.100.31";e.method="2022-blake3-aes-128-gcm";e.secret=Base64.getEncoder().encodeToString(new byte[16]);e.policy=new JSONObject().put("dns_mode","custom").put("dns_protocol","tcp").put("dns_host","192.0.2.53").put("dns_port",53).put("ipv6_mode","off").put("kill_switch",true);
+  AndroidStandardExitStore.validate(e);AndroidExternalPolicy.validateDraft(e);AndroidExternalPolicy.Captured captured=AndroidExternalPolicy.captureImportedEntry(e);
+  JSONObject member=object(Libbox.routerNodeChainImportedMemberInput(captured.source,captured.capture));check(member.getString("kind").equals("routervpn-node-chain-imported-member")&&member.getInt("schema")==1,"imported member boundary lost its actual shared constructor");check(member.getString("config").equals(captured.source)&&member.getString("capture").equals(captured.capture),"imported member boundary changed original source bytes");
+  reject("malformed imported member source",()->Libbox.routerNodeChainImportedMemberInput("{}",captured.capture));reject("malformed imported member capture",()->Libbox.routerNodeChainImportedMemberInput(captured.source,"{}"));
+ }
  static JSONObject outbound(JSONObject graph,String tag)throws Exception{JSONArray rows=graph.getJSONArray("outbounds");for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(tag.equals(row.optString("tag")))return row;}throw new AssertionError("missing captured outbound "+tag);}
  static AndroidStandardExitStore.Entry entry(JSONArray args)throws Exception{
   JSONObject capture=object(args.getString(1)),profile=capture.getJSONObject("profile"),external=profile.getJSONObject("external"),transport=external.getJSONObject(capture.getString("protocol").replace("-","_"));
@@ -597,7 +605,7 @@ public final class ImportedRouterTest {
   check(RouterMultihop.open==0,"constructor ownership escaped fixture");
  }
  public static void main(String[] args)throws Exception{
-  Libbox.compiler=args[0];Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
+  Libbox.compiler=args[0];importedMemberBoundary();Path root=Path.of(args[1]),fixtures=Path.of(args[2]);retainedStaging(Files.createTempDirectory(root,"retained-staging-"));List<Path> all;
   if(args[3].startsWith("naive-h2--")){
    String kind=args[3].substring("naive-h2--".length());List<String> kinds=List.of("socks5","shadowsocks","hysteria2","http-connect","https-connect","wireguard","amneziawg","openvpn-tcp","openvpn-udp");check(kinds.contains(kind),"unknown Naive H2 entry phase");
    Path sources=Path.of(System.getenv("ROUTERVPN_IMPORTED_NAIVE_H2_SOURCES"));List<Path> paths;try(var entries=Files.list(sources)){paths=entries.sorted().toList();}
@@ -826,7 +834,7 @@ def main(phases=None):
         subprocess.run(["go", "build", "-o", str(temp / "compiler"), str(temp / "main.go")], cwd=ROOT, check=True, timeout=120)
         stubs = dict(E.STUBS)
         lib = stubs["io/nekohasekai/libbox/Libbox.java"]
-        addition = '''public static String routerCompileProxyEntry(String files,String mode)throws Exception{return call("proxy-entry",files,mode);} public static boolean rejectSSService; public static boolean routerValidateSSService(String files,String node)throws Exception{return !rejectSSService && "true".equals(call("ss-service",files,node));} public static RouterMultihop newRouterImportedEntryMultihop(String a,String b,String c,String d,String e,String f,String g)throws Exception{String result=call("imported-router",a,b,c,d,e,f,g);Runnable h=hook;hook=null;if(h!=null)h.run();return new RouterMultihop(result);}'''
+        addition = '''public static String routerNodeChainImportedMemberInput(String config,String capture)throws Exception{return call("chain-imported",config,capture);} public static String routerCompileProxyEntry(String files,String mode)throws Exception{return call("proxy-entry",files,mode);} public static boolean rejectSSService; public static boolean routerValidateSSService(String files,String node)throws Exception{return !rejectSSService && "true".equals(call("ss-service",files,node));} public static RouterMultihop newRouterImportedEntryMultihop(String a,String b,String c,String d,String e,String f,String g)throws Exception{String result=call("imported-router",a,b,c,d,e,f,g);Runnable h=hook;hook=null;if(h!=null)h.run();return new RouterMultihop(result);}'''
         stubs["io/nekohasekai/libbox/Libbox.java"] = lib[:lib.rindex("}")] + addition + "}"
         stubs["io/nekohasekai/libbox/RouterMultihop.java"] = OWNER
         for name, source in stubs.items():
@@ -866,6 +874,22 @@ def main(phases=None):
         # Preserve the original finite bound for each complete final-mode family.
         for final_mode in phases:
             subprocess.run(command+[final_mode], env=child_env, check=True, timeout=180)
+        # This ABI reaches the real shared constructor; prove malformed source
+        # cannot be replaced by an unconditional fixture success.
+        lib_path=temp/"io/nekohasekai/libbox/Libbox.java"
+        original_lib=lib_path.read_text()
+        call='return call("chain-imported",config,capture);'
+        assert original_lib.count(call)==1
+        lib_path.write_text(original_lib.replace(call,'if(config.equals("{}"))return "{}";'+call))
+        subprocess.run(compile_command,check=True,timeout=60,capture_output=True)
+        boundary_env=dict(child_env)
+        for key in tuple(boundary_env):
+            if key.startswith("ROUTERVPN_ANDROID_") and key.endswith("_FIXTURES"):boundary_env.pop(key)
+        broken=subprocess.run(command+[phases[0]],env=boundary_env,capture_output=True,text=True,timeout=180)
+        lib_path.write_text(original_lib)
+        if broken.returncode==0 or 'accepted malformed imported member source' not in broken.stderr:
+            raise AssertionError('Imported member ABI causal control missed malformed source: '+broken.stdout+broken.stderr)
+        print('Android imported member ABI causal rejected: malformed original source')
         source=app/"AndroidImportedRouterPath.java"
         original=source.read_text()
         controls=(

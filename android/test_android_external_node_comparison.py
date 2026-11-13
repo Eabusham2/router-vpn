@@ -271,7 +271,7 @@ def sources():
     # Ordered imported compilation is exercised by the real Java/Go source gate;
     # an unexpected entry into that branch must fail, never invent a native input.
     imported_boundary='static Captured captureImportedEntry(AndroidStandardExitStore.Entry source)throws Exception{throw new AssertionError("Ordered imported source requires the actual shared-compiler composition gate");}'
-    boundaries=U.S.replace_class(boundaries,'AndroidExternalPolicy',policy[:-1]+captured+imported_boundary+U.S.block(policy_source,'    static String entryDigest(')+'static void checkPolicy(JSONObject value){if(value==null)throw new IllegalArgumentException("native policy boundary missing");}}')
+    boundaries=U.S.replace_class(boundaries,'AndroidExternalPolicy',policy[:-1]+captured+imported_boundary+U.S.block(policy_source,'    static String entryDigest(')+'}')
     libbox='io/nekohasekai/libbox/Libbox.java'
     ui[libbox]=ui[libbox].rstrip()[:-1]+'public static String routerNodeChainImportedMemberInput(String config,String capture){throw new AssertionError("Ordered imported compilation is outside ordinary comparison");}}'
     speed=U.S.block(R.METERS,'final class AndroidSpeedLab')
