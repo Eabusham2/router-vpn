@@ -23,6 +23,12 @@ REPOSITORY = "Eabusham2/router-vpn"
 WORKFLOW_REF = "refs/heads/main"
 HEX40 = re.compile(r"[0-9a-f]{40}")
 ALLOWLISTS = {
+    "android-policy-fixtures": frozenset({
+        "android/test_android_tor_form.py",
+        "android/test_android_external_policy.py",
+        "android/test_android_external_entries.py",
+        "android/test_android_imported_router.py",
+    }),
     "desktop-socks-child": frozenset({
         "deploy/prepare-desktop-external.py",
         "deploy/test_desktop_node_physical.py",
@@ -322,6 +328,10 @@ ALLOWLISTS = {
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
     }),
     "android-sdk": frozenset({
+        "android/test_android_tor_form.py",
+        "android/test_android_external_policy.py",
+        "android/test_android_external_entries.py",
+        "android/test_android_imported_router.py",
         "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
         "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java",
         "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java",

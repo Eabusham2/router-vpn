@@ -201,7 +201,10 @@ def validate(args):
                 if not row["verdict"]["accepted"]:
                     raise ValueError("original WPF profile and ordered-editor verdicts incomplete")
         else:
-            command = [sys.executable, source / "client/linux/test-ordered-nodes-v1.py"]
+            bus = shutil.which("dbus-run-session")
+            if bus is None:
+                raise ValueError("native GTK accessibility session owner is missing")
+            command = [bus, "--", sys.executable, source / "client/linux/test-ordered-nodes-v1.py"]
             raw, code, timed_out, joined, row = execute("gtk-profiles", command, 900)
             row["verdict"] = verdict(raw, args.target, code, timed_out, joined)
             save()
