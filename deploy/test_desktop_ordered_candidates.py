@@ -87,6 +87,7 @@ cancellation.finish(["request_id":f.requestID,"drained":true]);settle();check(f.
 var savedCatalog=catalog;savedCatalog["scope"]="saved-complete-local";savedCatalog["schema"]=1;savedCatalog["samples"]=50;savedCatalog["measurement"]="routed-tcp-connect"
 func savedResult(_ form:Form)->[String:Any]{["schema":1,"scope":"saved-complete-local","request_id":form.requestID,"view_token":savedCatalog["view_token"]!,"prefix_position":0,"measurement":"routed-tcp-connect","running":false,"drained":false,"cancelled":false,"native_down":true,"accepted":true,"reviewing":true,"cleanup_pending":false,"active_path_changed":false,"saved_profile_id":"","results":[row()]]}
 func savedForm()->Form{let value=Form(savedPath:true);try! value.receive(savedCatalog,action:"catalog");value.requestID=String(repeating:"c",count:32);return value}
+for purpose in [false,true] {let expired=Form(savedPath:purpose);try! expired.receive(purpose ? savedCatalog:catalog,action:"catalog");expired.view?["expires_at"]=now-1;let before=RouterVPNMacSpeedLabTransport.calls.count;expired.measure();check(RouterVPNMacSpeedLabTransport.calls.count==before && expired.requestID.isEmpty && !expired.pendingDrain && !MacViaEntryCandidateReservation.shared.active && expired.status.stringValue.contains("expired"),"expired catalog created a request or editing owner")}
 let sf=Form(savedPath:true);sf.capture();let savedCapture=RouterVPNMacSpeedLabTransport.calls.last!
 check(savedCapture.url.path=="/api/multihop/saved-candidates/catalog" && f.endpoint=="/api/multihop/prefix-candidates","saved scope did not capture its immutable endpoint")
 savedCapture.finish(savedCatalog);settle();sf.measure();let savedRun=RouterVPNMacSpeedLabTransport.calls.last!
@@ -108,7 +109,7 @@ let missing=savedForm();var unknown=savedResult(missing);unknown.removeValue(for
 let expired=savedForm();var oldRow=row();oldRow["measured_at"]=now-120000;oldRow["expires_at"]=now;var old=savedResult(expired);old["results"]=[oldRow];try! expired.receive(old,action:"poll");expired.controls();check(!expired.save.isEnabled && expired.rows.isEmpty,"saved result polling renewed completion expiry")
 let wrongScope=savedForm();var foreign=savedResult(wrongScope);foreign["scope"]="connected-prefix";do{try wrongScope.receive(foreign,action:"run");fatalError("foreign purpose became saved result")}catch{checks+=1}
 var wrongCatalog=savedCatalog;wrongCatalog["scope"]="connected-prefix";do{try Form(savedPath:true).receive(wrongCatalog,action:"catalog");fatalError("foreign purpose became saved catalog")}catch{checks+=1}
-sf.profileName.stringValue="Saved separate graph";sf.saveProfile();let commit=RouterVPNMacSpeedLabTransport.calls.last!
+sf.profileName.stringValue="Saved separate graph";sf.view?["expires_at"]=now-1;sf.saveProfile();let commit=RouterVPNMacSpeedLabTransport.calls.last!
 check(commit.url.path=="/api/multihop/saved-candidates/save-profile" && commit.body?["name"] as? String=="Saved separate graph" && (commit.body?["proposed_path"] as? [[String:Any]])?.count==3,"saved profile append lost its explicit complete graph")
 func written(_ form:Form)->[String:Any]{var value=savedResult(form);value["accepted"]=false;value["reviewing"]=false;value["saved_profile_id"]="profile-original";value["profile_id"]="profile-original";value["profile_name"]="Saved separate graph";value["saved"]=true;value["ok"]=true;value["cleanup_pending"]=true;value["cleanup_error"]="Original observer remains pending.";value["failure"]="Result invalidated after its committed write.";return value}
 commit.finish(written(sf));settle();check(sf.savedProfileID=="profile-original" && sf.pendingDrain && !sf.save.isEnabled && sf.status.stringValue.contains("Saved separate graph") && sf.status.stringValue.contains("Result invalidated"),"committed saved identity was lost after cleanup invalidation")
@@ -222,10 +223,11 @@ def linux_policy(directory):
     candidates=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
     helpers=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
     declarations=candidates[candidates.index('typedef struct {'):candidates.index('} LinuxOrderedCandidates;')+len('} LinuxOrderedCandidates;')]
-    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static gboolean linux_ec_bool('])+'\n'+block(candidates,'static JsonObject*linux_oc_root(')+'\n'+block(candidates,'static gboolean linux_oc_before_start(')+'\n'+block(candidates,'static gboolean linux_oc_ready(')
+    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number('])+'\n'+block(candidates,'static JsonObject*linux_oc_root(')+'\n'+block(candidates,'static gboolean linux_oc_before_start(')+'\n'+block(candidates,'static gboolean linux_oc_ready(')+'\n'+block(candidates,'static gboolean linux_oc_view_fresh(')
     program=r"""
 #include <gtk/gtk.h>
 #include <glib-object.h>
+#include <math.h>
 #include <json-glib/json-glib.h>
 #include <string.h>
 #include <stdlib.h>
@@ -244,6 +246,7 @@ int main(void){
  check(routervpn_phase_busy("candidate:testing"),"temporary candidate phase was treated as idle");
  check(!routervpn_phase_busy("off")&&!routervpn_phase_busy("failed")&&routervpn_phase_busy("proving")&&routervpn_phase_busy("disconnecting"),"ordinary phase behavior changed");
  JsonNode*n=parse_json("{\"connected\":false,\"phase\":\"candidate:testing\"}");check(routervpn_mutation_busy_from_status(json_node_get_object(n)),"candidate status lost its transition guard");json_node_free(n);
+ n=parse_json("{\"expires_at\":1001}");check(linux_oc_view_fresh(json_node_get_object(n),1000),"fresh catalog rejected");check(!linux_oc_view_fresh(json_node_get_object(n),1001),"expired catalog retained test admission");json_object_remove_member(json_node_get_object(n),"expires_at");check(!linux_oc_view_fresh(json_node_get_object(n),1000),"missing catalog expiry retained test admission");json_object_set_double_member(json_node_get_object(n),"expires_at",NAN);check(!linux_oc_view_fresh(json_node_get_object(n),1000),"nonfinite catalog expiry retained test admission");json_node_free(n);
  App app={.window=g_object_new(G_TYPE_OBJECT,NULL)};check(!routervpn_mutation_busy(&app),"ordinary DOWN status did not permit mutation");unsigned original=calls;
  g_object_set_data(app.window,"linux-ordered-candidates-pending",&app);
  check(routervpn_mutation_busy(&app)&&calls==original,"retained DOWN review did not block mutation before HTTP");
@@ -346,7 +349,7 @@ int main(int argc,char**argv){
 
  /* Saved-path purpose keeps its original observer during DOWN review. */
  linux_ordered_candidates_open_purpose(&app,TRUE);s=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
- check(s->saved_path&&strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/saved-candidates/catalog?prefix_position=0")==0,"saved dialog captured another purpose");reply(s,catalog);choose(s);gtk_button_clicked(GTK_BUTTON(s->test));
+ check(s->saved_path&&strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/saved-candidates/catalog?prefix_position=0")==0,"saved dialog captured another purpose");reply(s,catalog);choose(s);guint before_expired=paths->len;json_object_set_int_member(linux_oc_root(s->view),"expires_at",g_get_real_time()/1000-1);gtk_button_clicked(GTK_BUTTON(s->test));check(paths->len==before_expired&&!s->pending&&async_state.auxiliary_jobs==0&&s->request[0]==0&&strstr(gtk_label_get_text(GTK_LABEL(s->status)),"expired"),"expired GTK catalog created a request or retained owner");json_object_set_int_member(linux_oc_root(s->view),"expires_at",g_get_real_time()/1000+120000);gtk_button_clicked(GTK_BUTTON(s->test));
  check(s->pending&&async_state.auxiliary_jobs==1&&g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates-pending")==s,"saved request lost mutation guard lease");
  check(strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/saved-candidates")==0,"saved test used connected endpoint");
  json_object_set_string_member(result_object,"request_id",s->request);json_object_set_boolean_member(result_object,"drained",FALSE);json_object_set_boolean_member(result_object,"running",TRUE);json_object_set_boolean_member(result_object,"accepted",FALSE);json_object_set_boolean_member(result_object,"native_down",FALSE);json_object_set_boolean_member(result_object,"reviewing",FALSE);json_object_set_boolean_member(result_object,"cleanup_pending",FALSE);reply_code(s,result,202);

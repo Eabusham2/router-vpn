@@ -1169,6 +1169,26 @@ fixture inventories include the new source. Provider request integration,
 retained runtime/UI flow, Xcode/NetworkExtension compilation and physical
 networking remain separate acceptance work.
 
+## Expired desktop catalogs cannot start a new test
+
+The Windows, AppKit and GTK Test callbacks now recheck the original catalog
+expiry immediately before creating a request or retaining a test/editing
+owner. An idle dialog whose catalog expired asks for a fresh capture instead
+of submitting a stale view and entering a cancellation cycle. The server's
+source/admission checks remain authoritative. This local admission check does
+not change the separate result deadline: a completed native-DOWN review can
+still Save a fresh result after the earlier catalog admission window ends.
+
+The actual Windows composed callbacks passed 49 checks and the existing 38
+Performance checks. The Swift form passed 65 checks, all ten existing causal
+controls and 37 transport checks. Both include stale connected/saved catalog
+refusal and valid Save after catalog expiry. GTK's compiled guard fixture
+passed 23 checks and three causal controls, including expired, missing and
+nonfinite catalog timestamps. Its final real-widget fixture compiled with
+warnings as errors; display execution remains required in CI because local
+AF_UNIX creation is denied. No backend timeout, history retention or
+measurement expiration policy was changed.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

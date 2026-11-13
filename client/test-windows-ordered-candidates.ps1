@@ -40,6 +40,10 @@ $S.PendingDrain=$true;ReceiveOrderedCandidates $S @{request_id=$S.RequestID;drai
 $Dialog=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq'ShowOrderedCandidates'},$true));Assert-Candidate ($Dialog.Count-eq1) 'actual shipping native dialog missing'
 $SaveEvent=@($Dialog[0].FindAll({param($n)$n-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$n.Expression.Extent.Text-ceq'$S.Save'-and$n.Member.Extent.Text-ceq'Add_Click'},$true));Assert-Candidate ($SaveEvent.Count-eq1) 'actual explicit save callback missing'
 $Click=$SaveEvent[0].Arguments[0].Expression.ScriptBlock.GetScriptBlock()
+$RunEvent=@($Dialog[0].FindAll({param($n)$n-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$n.Expression.Extent.Text-ceq'$S.Run'-and$n.Member.Extent.Text-ceq'Add_Click'},$true));Assert-Candidate ($RunEvent.Count-eq1) 'actual test callback missing'
+$RunClick=$RunEvent[0].Arguments[0].Expression.ScriptBlock.GetScriptBlock();$OriginalView=$S.View;$S.View=@{}+$Catalog;$S.View.expires_at=$Now-1;$OriginalID=$S.RequestID
+foreach($SavedPurpose in @($false,$true)){$S.SavedPath=$SavedPurpose;$script:SavedRequest=$null;&$RunClick;Assert-Candidate ($null-eq$SavedRequest-and-not$S.PendingDrain-and$S.RequestID-ceq$OriginalID-and$S.Status.Text.Contains('expired')) 'expired captured view created a request or retained cancellation owner'}
+$S.SavedPath=$false;$S.View=$OriginalView
 $S.Rows=@([pscustomobject]@{ID='custom-original';Choice=$Catalog.candidates[0];Receipt=(New-CandidateRow)});$S.Table.SelectedItem=$S.Rows[0];$S.Receipt=$Value;$S.ProfileName=[pscustomobject]@{Text='Named next connection'};$S.View=$Catalog
 $script:SavedRequest=$null
 function StartOrderedCandidateRequest($State,$Phase,$Path,$Body){$script:SavedRequest=@{Phase=$Phase;Path=$Path;Body=$Body}}
@@ -68,7 +72,7 @@ Assert-Candidate ($S.Rows.Count-eq0-and-not$S.Save.IsEnabled) 'accepted result b
 $SavedValue.native_down=$true;ReceiveOrderedCandidates $S $SavedValue 'poll';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
 Assert-Candidate ($S.Save.IsEnabled-and$S.PendingDrain-and-not$S.Run.IsEnabled-and-not$S.Refresh.IsEnabled-and$S.Cancel.IsEnabled-and$S.Status.Text.StartsWith('Disconnected.')) 'post-DOWN review did not preserve observer ownership and explicit Save'
 $Selected=$S.Table.SelectedItem;ReceiveOrderedCandidates $S $SavedValue 'poll';Assert-Candidate ($S.Table.SelectedItem.ID-ceq$Selected.ID) 'review polling silently changed the selected candidate'
-$S.ProfileName.Text='Saved path for later';$script:SavedRequest=$null;&$Click
+$S.ProfileName.Text='Saved path for later';$ReviewView=$S.View;$S.View=@{}+$ReviewView;$S.View.expires_at=$Now-1;$script:SavedRequest=$null;&$Click;$S.View=$ReviewView
 Assert-Candidate ($SavedRequest.Path-ceq'/api/multihop/saved-candidates/save-profile'-and$SavedRequest.Body.request_id-ceq$S.RequestID-and$SavedRequest.Body.view_token-ceq$Catalog.view_token-and$SavedRequest.Body.proposed_path.Count-eq3) 'saved purpose callback changed the exact future profile or request'
 $SavedValue.reviewing=$false;ReceiveOrderedCandidates $S $SavedValue 'poll';SetOrderedCandidateControls $S
 Assert-Candidate ($S.Rows.Count-eq0-and-not$S.Save.IsEnabled) 'closed review retained adoptable rows'

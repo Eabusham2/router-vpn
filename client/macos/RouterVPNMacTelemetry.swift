@@ -980,7 +980,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     }
     @objc private func capture(){guard request==nil,!pendingDrain else{return};position=prefix.selectedItem?.representedObject as? Int ?? position;view=nil;receipt=nil;receipts=[:];savedProfileID="";savedProfileName="";savedNativeDown=false;send("catalog",path:endpoint+"/catalog?prefix_position=\(position)")}
     @objc private func measure(){
-        controls();guard test.isEnabled,let view else{return};let ids=table.selectedRowIndexes.compactMap{rows.indices.contains($0) ? rows[$0]["id"] as? String:nil};guard !ids.isEmpty else{status.stringValue="Select at least one candidate row.";return}
+        controls();guard test.isEnabled,let view else{return};guard let expires=RouterVPNOrderedCandidateDisplay.number(view,"expires_at"),expires>Date().timeIntervalSince1970*1000 else{status.stringValue="The catalog expired. Capture this prefix again before testing.";return};let ids=table.selectedRowIndexes.compactMap{rows.indices.contains($0) ? rows[$0]["id"] as? String:nil};guard !ids.isEmpty else{status.stringValue="Select at least one candidate row.";return}
         if savedPath {guard let lease=MacViaEntryCandidateReservation.shared.acquire() else{status.stringValue="Another candidate transaction still owns editing; finish its Save or Cancel first.";return};editLease=lease}
         requestID=UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased();receipt=nil;pendingDrain=true;cancelWanted=false;savedProfileID="";savedProfileName="";savedNativeDown=false;savedAdmitted=false
         send("run",path:endpoint,body:["request_id":requestID,"view_token":view["view_token"] ?? "","prefix_position":position,"candidate_ids":ids,"samples":50])
