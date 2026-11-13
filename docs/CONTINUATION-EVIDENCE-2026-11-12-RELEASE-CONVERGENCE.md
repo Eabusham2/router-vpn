@@ -145,7 +145,7 @@ access:
   unreachable, now has the iOS app/provider/engine and Android helper/service/UI integration recorded below.
   Windows and Linux now have distinct parent/native-child and saved-prefix API
   integration and native Performance actions.
-  Darwin prefix process identity is published, while its child/host integration
+  Darwin prefix process identity and PF journal foundation are published, while its child/host integration
   and public native admission remain in progress. Ordinary WireGuard or Android
   Network calls cannot substitute for the captured native owners. Native acceptance
   of each new platform flow must be recorded separately from these source tests.
@@ -1550,6 +1550,44 @@ seven published source hashes matched the tested bytes. This foundation
 does not execute real PF/utun or open public macOS ordered admission; the
 separate native child, full parent adapter and actual macOS acceptance remain
 required.
+
+## Windows installed prefix acceptance is mandatory on fresh and cached builds
+
+The native Windows runtime builder now requires a selected-prefix acceptance
+gate on its matching AMD64 or ARM64 host, including when reusing a verified
+cached bundle. The cache path reconstructs the pinned source and original
+native-PQ inputs and runs the same gate; cache provenance alone cannot supply
+native execution evidence. The strict receipt binds source, bundle, controller,
+peer and scoped-engine hashes, the complete case inventory and closed purpose.
+
+The gate uses the actual authenticated controller, TLS API, owned process and
+Job, machine protection journal, Wintun owner and independently encrypted
+WG/AWG reference peers. Six cases cover two selected prefixes with the mode
+pairs WG/WG, AWG Fast/WG and AWG Strong/AWG Fast, with Save or Cancel after DOWN
+review. Each requires exactly 50 routed candidate TCP handshakes while the old
+saved final remains unopened, and requires native join, TUN absence and an
+independently reopened settled journal before review. Original profiles and
+startup state must remain unchanged; explicit Save is idempotent. These
+scenarios use on-connect protection, IPv6 Off and Start Layer Off; they do not
+establish active-operation cancellation or other policy/layer combinations.
+
+The disposable acceptance copy applies a compile-time WFP AppID scope for its
+captured native child, with literal localhost IPC only. Its nine exact scope
+source hashes and modified image are recorded separately from the unchanged
+original completed bundle. No packet, encryption, TUN, BFE transaction,
+authenticated journal or proof implementation is replaced. This scoped image
+is not whole-device acceptance of an unmodified shipping executable.
+
+All 16 focused runner/source and cold/cache-hook tests passed. The actual
+scoped generated engine, controller and encrypted peer test images
+cross-compiled for Windows AMD64 using CGO disabled; native-PQ linking and
+Windows execution were not available locally. The controller used a frozen
+`62dfcccfa97228c437a91b5eeab2e222db09b32a` source snapshot plus the exact new
+fixture files, rather than claiming a compile of every later main change.
+The published fixture and overlay hashes match those compiled bytes. An
+optional broad toolchain test attempt timed out and is not counted as passed.
+Actual matching-Windows kernel/driver, race where supported, native-PQ/CGO and
+installed-case execution remain required in the new mandatory gate.
 
 ## Physical and private acceptance
 

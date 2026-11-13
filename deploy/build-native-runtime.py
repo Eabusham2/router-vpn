@@ -146,6 +146,12 @@ def inputs():
                              ROOT/'deploy/test_windows_physical_bootstrap_runner.py',
                              ROOT/'deploy/test_windows_physical_tunnel.py',
                              ROOT/'deploy/test_windows_physical_tunnel_runner.py',
+                             ROOT/'deploy/test_windows_candidate_prefix.py',
+                             ROOT/'deploy/test_windows_candidate_prefix_runner.py',
+                             ROOT/'deploy/windows_candidate_prefix_overlay.py',
+                             *sorted((ROOT/'deploy/fixtures/windows-candidate-prefix').glob('*.go')),
+                             ROOT/'cmd/client/ordered_candidate_prefix_windows_native_test.go',
+                             ROOT/'cmd/client/ordered_candidate_prefix_windows_sources_native_test.go',
                              ROOT/'deploy/test_desktop_node_physical.py',
                              ROOT/'deploy/test_desktop_node_phases.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray.py',
@@ -1123,6 +1129,57 @@ def verify_reused_linux_host(bundle, target, env):
             raise ValueError('Reused Linux bundle changed during its original installed-host acceptance')
 
 
+def verify_installed_windows_prefix(source, bundle, target, env):
+    if platform.system() != 'Windows' or target != native_host_target() or target not in ('windows/amd64', 'windows/arm64'):
+        raise ValueError('Installed Windows prefix requires its matching actual native host')
+    original = reuse(bundle, target, env=env)
+    digest_before = hashlib.sha256((Path(bundle)/'NATIVE-RUNTIME.json').read_bytes()).hexdigest()
+    run([sys.executable, ROOT/'deploy/test_windows_candidate_prefix_runner.py'], cwd=ROOT, env=env, timeout=60)
+    output = run([sys.executable, ROOT/'deploy/test_windows_candidate_prefix.py', source, '--bundle', bundle],
+                 cwd=ROOT, env=env, timeout=3000)
+    prefix = 'Native Windows selected-prefix acceptance: '
+    rows = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
+    if len(rows) != 1:
+        raise ValueError('Installed Windows prefix omitted its unique native execution receipt')
+    receipt = json.loads(rows[0], object_pairs_hook=unique_object)
+    if not isinstance(receipt, dict):
+        raise ValueError('Installed Windows prefix receipt is not an object')
+    mappings = [receipt.get(name) for name in ('sources', 'scope_sources', 'images')]
+    if not all(isinstance(values, dict) and values and all(isinstance(name, str) and name and
+               isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest) for name, digest in values.items()) for values in mappings):
+        raise ValueError('Installed Windows prefix omitted its exact source/image hash maps')
+    scope_names = {'desktop_socket_windows_'+name+'.go' for name in ('policy','transfer','commit','baseline','status','prepared','probe','observation')}
+    scope_names.add('routervpn_candidate_prefix_scope_windows.go')
+    if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or receipt.get('target') != target or
+            receipt.get('source_sha256') != original['policy_sha256'] or receipt.get('bundle_sha256') != digest_before or
+            receipt.get('cases') != ['wg-save', 'wg-cancel', 'awg-fast-save', 'awg-fast-cancel', 'awg-strong-save', 'awg-strong-cancel'] or
+            receipt.get('unmodified_shipping_image') is not False or receipt.get('test_scope') != 'captured-native-child-app-id' or
+            receipt.get('application_open') is not False or receipt.get('dns_open') is not False or type(receipt.get('samples_per_case')) is not int or receipt.get('samples_per_case') != 50 or
+            receipt.get('original_final_unreachable') is not True or receipt.get('native_down_before_review') is not True or
+            set(receipt['scope_sources']) != scope_names or set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
+        raise ValueError('Installed Windows prefix lost actual closed purpose, native DOWN or exact image provenance')
+    if reuse(bundle, target, env=env) != original:
+        raise ValueError('Installed Windows prefix changed the original completed shipping bundle')
+
+
+def verify_reused_windows_prefix(bundle, target, env):
+    # A source/package cache is not native lifecycle evidence. Recreate the
+    # same pinned core and original PQ link input, then run the identical gate.
+    if platform.system() != 'Windows' or target != native_host_target():
+        raise ValueError('Reused Windows prefix requires its actual matching host')
+    with tempfile.TemporaryDirectory(prefix='routervpn-reused-windows-prefix-') as temporary:
+        source, xray, pq = Path(temporary)/'core', Path(temporary)/'xray', Path(temporary)/'pq'
+        checkout(source, 'https://github.com/SagerNet/sing-box.git', PIN)
+        checkout(xray, 'https://github.com/XTLS/Xray-core.git', POLICY.XRAY.XRAY_PIN)
+        pristine(source, PIN)
+        pristine(xray, POLICY.XRAY.XRAY_PIN)
+        prepare_native_sources(source, xray, env)
+        PQ.build(target, pq, ROOT/'dist/.native-pq-cache')
+        pq_receipt = PQ.verify(pq, target)
+        captured = dict(env, CGO_LDFLAGS=shlex.join(['-static', '-L'+str(pq), *pq_receipt['native_static_libs']]))
+        verify_installed_windows_prefix(source, bundle, target, captured)
+
+
 def verify_installed_darwin_host(source, bundle, target, env):
     if env.get('ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE') != '1':
         return
@@ -1266,6 +1323,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             verify_imported_desktop_naive_h3_configs(destination, target, env)
             if target.startswith('linux/'):
                 verify_reused_linux_host(destination, target, env)
+            elif target.startswith('windows/'):
+                verify_reused_windows_prefix(destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -1585,6 +1644,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             verify_imported_desktop_naive_h3_configs(stage, target, env)
             if target.startswith('linux/'):
                 verify_installed_linux_host(source, stage, target, env)
+            elif target.startswith('windows/'):
+                verify_installed_windows_prefix(source, stage, target, env)
             elif target.startswith('darwin/'):
                 verify_installed_darwin_host(source, stage, target, env)
         if destination.exists():
