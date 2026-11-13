@@ -24,7 +24,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -141,6 +143,14 @@ func darwinChildEngineOutput(command *exec.Cmd, output io.Writer) {
 // The parent creates only a new disposable fixed installation. It refuses any
 // pre-existing installed source/lock/socket and never adopts or deletes one.
 func TestRouterVPNNodeChainDarwinNativeHarness(t *testing.T) {
+	darwinChildHarness(t, false)
+}
+
+func TestRouterVPNNodeChainDarwinNativeHandshakeHarness(t *testing.T) {
+	darwinChildHarness(t, true)
+}
+
+func darwinChildHarness(t *testing.T, preflight bool) {
 	darwinChildNative(t)
 	for _, p := range []string{macosprocess.InstallRoot, macosprocess.InstallLockPath, macosprocess.ProcessLockPath, filepath.Dir(macosprocess.LifetimePath)} {
 		if _, e := os.Lstat(p); !errors.Is(e, os.ErrNotExist) {
@@ -223,17 +233,23 @@ func TestRouterVPNNodeChainDarwinNativeHarness(t *testing.T) {
 	if e := os.WriteFile(macosprocess.CatalogPath, darwinChildJSON(t, catalog), 0644); e != nil {
 		t.Fatal(e)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Second)
+	target, deadline, alarm := "TestRouterVPNNodeChainDarwinNativeCommand", 900*time.Second, "890s"
+	markerName, markerBody := "native-child-complete", "all original child owners joined\n"
+	if preflight {
+		target, deadline, alarm = "TestRouterVPNNodeChainDarwinNativeHandshake", 90*time.Second, "85s"
+		markerName, markerBody = "native-handshake-complete", "original preflight child joined without native preparation\n"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
-	command := exec.CommandContext(ctx, macosprocess.ControllerPath, "-test.run=^TestRouterVPNNodeChainDarwinNativeCommand$", "-test.v", "-test.count=1", "-test.timeout=890s")
+	command := exec.CommandContext(ctx, macosprocess.ControllerPath, "-test.run=^"+target+"$", "-test.v", "-test.count=1", "-test.timeout="+alarm)
 	command.Dir = "/"
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0", darwinChildFlag + "=1", "ROUTERVPN_DARWIN_NODE_CHILD_INSTALLED=1", "ROUTERVPN_DARWIN_NODE_CHILD_UID=" + os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_UID"), "ROUTERVPN_DARWIN_NODE_CHAIN_PEER=" + peer, "ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256=" + os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256")}
 	_, e = darwinChildHarnessOutput(command)
 	if e != nil {
-		t.Fatal("actual installed generated-child acceptance failed", e)
+		t.Fatal("actual installed generated-child fixture failed", e)
 	}
-	marker, e := os.ReadFile(macosprocess.InstallRoot + "/native-child-complete")
-	if e != nil || string(marker) != "all original child owners joined\n" {
+	marker, e := os.ReadFile(macosprocess.InstallRoot + "/" + markerName)
+	if e != nil || string(marker) != markerBody {
 		t.Fatal("native harness lacks complete joined original receipt", e)
 	}
 	complete = true
@@ -1362,4 +1378,180 @@ func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
 	if e := os.WriteFile(macosprocess.InstallRoot+"/native-child-complete", []byte("all original child owners joined\n"), 0600); e != nil {
 		t.Fatal(e)
 	}
+}
+
+// The handshake diagnostic observes host networking but never prepares a PF
+// baseline, native Box, socket guardian or utun. It uses the installed signed
+// images and exactly the same inherited capture/Stop protocol as the full gate.
+type darwinChildHandshakeNetwork struct {
+	PFStatus string
+	Rules, NAT, Anchors string
+	Interfaces []string
+}
+
+func darwinChildHandshakeSnapshot(ctx context.Context) (darwinChildHandshakeNetwork, error) {
+	var result darwinChildHandshakeNetwork
+	info, err := darwinChildCommand(ctx, "/sbin/pfctl", "-s", "info")
+	if err != nil { return result, errors.New("preflight could not read original PF status") }
+	for _, line := range strings.Split(string(info), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "Status:" { result.PFStatus = fields[1] }
+	}
+	if result.PFStatus != "Enabled" && result.PFStatus != "Disabled" {
+		return result, errors.New("preflight PF status is ambiguous")
+	}
+	rules, err := darwinChildCommand(ctx, "/sbin/pfctl", "-a", "*", "-sr")
+	if err != nil { return result, errors.New("preflight could not read original PF rules") }
+	nat, err := darwinChildCommand(ctx, "/sbin/pfctl", "-a", "*", "-sn")
+	if err != nil { return result, errors.New("preflight could not read original PF NAT") }
+	anchors, err := darwinChildCommand(ctx, "/sbin/pfctl", "-s", "Anchors")
+	if err != nil { return result, errors.New("preflight could not read original PF anchors") }
+	result.Rules, result.NAT, result.Anchors = darwinChildDigest(rules), darwinChildDigest(nat), darwinChildDigest(anchors)
+	interfaces, err := net.Interfaces()
+	if err != nil { return result, err }
+	for _, iface := range interfaces {
+		if !strings.HasPrefix(iface.Name, "utun") { continue }
+		addresses, err := iface.Addrs()
+		if err != nil { return result, err }
+		parts := make([]string, 0, len(addresses))
+		for _, address := range addresses { parts = append(parts, address.String()) }
+		sort.Strings(parts)
+		result.Interfaces = append(result.Interfaces, fmt.Sprintf("%d/%s/%d/%d/%s", iface.Index, iface.Name, iface.MTU, iface.Flags, strings.Join(parts, ",")))
+	}
+	sort.Strings(result.Interfaces)
+	return result, ctx.Err()
+}
+
+func darwinChildHandshakeUnchanged(ctx context.Context, before darwinChildHandshakeNetwork) error {
+	after, err := darwinChildHandshakeSnapshot(ctx)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		return errors.Join(err, errors.New("preflight changed original PF or utun state"))
+	}
+	return nil
+}
+
+// This is a separate installed-controller root. In particular it cannot call
+// darwinChildOwner.start, which intentionally installs a baseline for the full
+// native acceptance fixture.
+func TestRouterVPNNodeChainDarwinNativeHandshake(t *testing.T) {
+	darwinChildNative(t)
+	if os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_INSTALLED") != "1" {
+		t.Fatal("preflight requires its actual installed signed controller")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	before, err := darwinChildHandshakeSnapshot(ctx)
+	if err != nil { t.Fatal(err) }
+	authority := darwinChildAuthorityStart(t)
+	policy := desktopNodeChainCommandPolicyWithIdentity(t, 3, "darwin", 1400, true)
+	meta := policy.Metadata()
+	directory, err := os.MkdirTemp(macosprocess.InstallRoot+"/run/native-node", "handshake-")
+	if err != nil { t.Fatal(err) }
+	if err := os.Chmod(directory, 0700); err != nil { t.Fatal(err) }
+	// Preserve the valid config and its captured hash. Only the bounded source
+	// is invalid, and it is staged BEFORE OpenCapture pins the original inode.
+	for name, body := range map[string]string{
+		"node-chain-source.json": "{\"schema\":0}\n",
+		"sing-box.json": policy.Config(),
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(body), 0600); err != nil { t.Fatal(err) }
+	}
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil { t.Fatal(err) }
+	workspace, err := os.OpenFile(directory, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil { t.Fatal(err) }
+	scope := macosprocess.Scope{Family: macosprocess.NodeChainFamily, Workspace: directory, Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256}
+	capture, err := macosprocess.OpenCapture(ctx, scope, workspace, authority.install, authority.process, authority.lifetime)
+	workspace.Close()
+	if err != nil { t.Fatal("preflight original input capture", err) }
+	channel, inherited, err := mobiletor.NewDesktopDarwinControlPair()
+	if err != nil { t.Fatal(err) }
+	command := exec.Command(macosprocess.EnginePath, "routervpn-node-chain", "--runtime-dir", directory, "--session", scope.Session,
+		"--physical-source-sha256", scope.Source, "--config-sha256", scope.Config, "--darwin-control", "inherited-v1")
+	command.Dir = directory
+	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
+	command.ExtraFiles = append([]*os.File{inherited}, capture.Files()...)
+	var output darwinChildOutput
+	darwinChildEngineOutput(command, &output)
+	if err := command.Start(); err != nil { inherited.Close(); t.Fatal(err) }
+	inherited.Close()
+	done := make(chan struct{})
+	var waitErr error
+	go func() { waitErr = command.Wait(); close(done) }()
+	var bootstrap *macosprocess.Bootstrap
+	joined, stopped, bound := false, false, false
+	t.Cleanup(func() {
+		if joined { return }
+		// Retire only this original child. Before completed binding, closing
+		// its owned channel revokes that handshake; it is not a native receipt.
+		// After binding, only authenticated Stop may acknowledge retirement.
+		cleanup, stopCleanup := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stopCleanup()
+		if !bound {
+			if err := channel.Close(); err != nil { t.Error("preflight original channel", err) }
+		} else if !stopped {
+			if err := bootstrap.Stop(cleanup); err != nil { t.Error("preflight original cleanup", err); return }
+			stopped = true
+		}
+		select {
+		case <-done:
+			if waitErr != nil { t.Error("preflight original waiter", waitErr) }
+		case <-cleanup.Done():
+			t.Error("preflight original child did not join")
+		}
+	})
+	binding, stopBinding := context.WithTimeout(ctx, 15*time.Second)
+	bootstrap, err = macosprocess.BindCreated(binding, capture, channel, command)
+	stopBinding()
+	if err != nil { t.Fatal("preflight authenticated original handshake", err, output.String()) }
+	bound = true
+	checkStopped := func() error {
+		raw, err := files.read("stopped.json", 4096)
+		var receipt struct { routerVPNExternalStop; Closed bool `json:"closed"` }
+		if err != nil || !routerVPNMTUStrict(raw, &receipt) || receipt.Schema != 1 || receipt.Session != scope.Session ||
+			receipt.SourceSHA256 != scope.Config || !receipt.Closed {
+			return errors.Join(err, errors.New("preflight lacks original stopped receipt"))
+		}
+		for _, name := range []string{"node-ready.json", "node-chain-ready.json", "node-mtu-status.json"} {
+			if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+				return errors.New("preflight source refusal published native readiness")
+			}
+		}
+		return nil
+	}
+	refusal, stopRefusal := context.WithTimeout(ctx, 15*time.Second)
+	for {
+		if checkStopped() == nil { break }
+		select {
+		case <-done:
+			stopRefusal(); t.Fatal("preflight child exited before authenticated Stop", waitErr, output.String())
+		case <-refusal.Done():
+			stopRefusal(); t.Fatal("preflight source did not retire before Stop", refusal.Err(), output.String())
+		case <-time.After(20*time.Millisecond):
+		}
+	}
+	stopRefusal()
+	if err := bootstrap.Current(ctx); err != nil { t.Fatal("preflight lost live original child before Stop", err) }
+	if err := darwinChildHandshakeUnchanged(ctx, before); err != nil { t.Fatal(err) }
+	fmt.Println("verified original Darwin handshake preflight: source-refused")
+	stopping, stopStopping := context.WithTimeout(ctx, 15*time.Second)
+	if err := bootstrap.Stop(stopping); err != nil { stopStopping(); t.Fatal("preflight original authenticated Stop", err) }
+	stopped = true
+	fmt.Println("verified original Darwin handshake preflight: authenticated-stop")
+	select {
+	case <-done:
+		if waitErr != nil { stopStopping(); t.Fatal("preflight original child waiter failed", waitErr, output.String()) }
+	case <-stopping.Done():
+		stopStopping(); t.Fatal("preflight original child waiter did not join", stopping.Err())
+	}
+	stopStopping()
+	joined = true
+	if err := checkStopped(); err != nil { t.Fatal(err) }
+	if err := capture.Current(ctx); err != nil { t.Fatal(err) }
+	if err := darwinChildHandshakeUnchanged(ctx, before); err != nil { t.Fatal(err) }
+	if err := errors.Join(bootstrap.Close(), channel.Close(), capture.Close(), files.root.Close()); err != nil { t.Fatal(err) }
+	if err := authority.close(); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(macosprocess.InstallRoot+"/native-handshake-complete",
+		[]byte("original preflight child joined without native preparation\n"), 0600); err != nil { t.Fatal(err) }
+	fmt.Println("verified original Darwin handshake preflight: original-join")
 }

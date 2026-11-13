@@ -30,6 +30,9 @@ NATIVE = 'TestRouterVPNNodeChainDarwinNativeCommand'
 CASES = ('wg-three', 'mixed-four', 'captured-mtu', 'mtu-rollback', 'wrong-middle-key',
          'wrong-middle-proof', 'final-dns-failure', 'foreign-mtu-session')
 EXPECTED = (HARNESS, NATIVE, *(NATIVE+'/'+case for case in CASES))
+PREFLIGHT_HARNESS = 'TestRouterVPNNodeChainDarwinNativeHandshakeHarness'
+PREFLIGHT_NATIVE = 'TestRouterVPNNodeChainDarwinNativeHandshake'
+PREFLIGHT_RECEIPTS = ('source-refused', 'authenticated-stop', 'original-join')
 TAGS = ('with_wireguard', 'with_gvisor', 'with_quic', 'with_utls', 'with_openvpn',
         'with_naive_outbound', 'with_purego', 'routervpn_darwin_external_host',
         'routervpn_darwin_node_chain', 'routervpn_darwin_node_child_tun')
@@ -169,6 +172,43 @@ def check_verdict(output):
         raise ValueError('Darwin child omitted a required native case or original joined retirement')
 
 
+
+def check_preflight_verdict(output):
+    if not isinstance(output, str) or len(output.encode()) > 8 << 20:
+        raise ValueError('Darwin preflight has no bounded original transcript')
+    expected = (PREFLIGHT_HARNESS, PREFLIGHT_NATIVE)
+    runs, passes, receipts = Counter(), Counter(), []
+    for line in output.replace('\r\n', '\n').splitlines():
+        if re.search(r'--- (?:FAIL|SKIP):|WARNING: DATA RACE|panic:|fatal error:', line):
+            raise ValueError('Darwin preflight failed, skipped or raced')
+        match = re.fullmatch(r'\s*=== RUN\s+(\S+)', line)
+        if match:
+            name = match[1]
+            if (name not in expected or runs[name] or passes[name]
+                    or name == PREFLIGHT_NATIVE and (runs[PREFLIGHT_HARNESS] != 1 or passes[PREFLIGHT_HARNESS])):
+                raise ValueError('Darwin preflight ran a foreign or repeated owner')
+            runs[name] += 1
+        match = re.search(r'verified original Darwin handshake preflight: (\S+)$', line)
+        if match:
+            receipt = match[1]
+            if (runs[PREFLIGHT_NATIVE] != 1 or passes[PREFLIGHT_NATIVE]
+                    or len(receipts) >= len(PREFLIGHT_RECEIPTS)
+                    or receipt != PREFLIGHT_RECEIPTS[len(receipts)]):
+                raise ValueError('Darwin preflight changed original refusal/Stop/join order')
+            receipts.append(receipt)
+        match = re.fullmatch(r'\s*--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)', line)
+        if match:
+            name = match[1]
+            if (name not in expected or runs[name] != 1 or passes[name]
+                    or tuple(receipts) != PREFLIGHT_RECEIPTS
+                    or name == PREFLIGHT_HARNESS and passes[PREFLIGHT_NATIVE] != 1
+                    or name == PREFLIGHT_NATIVE and passes[PREFLIGHT_HARNESS]):
+                raise ValueError('Darwin preflight passed before its original joined receipt')
+            passes[name] += 1
+    if runs != Counter(expected) or passes != Counter(expected) or tuple(receipts) != PREFLIGHT_RECEIPTS:
+        raise ValueError('Darwin preflight omitted its original signed owner or joined refusal')
+
+
 def repository_identity(commit):
     if commit is None:
         return None
@@ -215,9 +255,9 @@ def native_fixture_compile(compiler, image, package):
             '-ldflags=-checklinkname=0 -s -w', '-o', image, package]
 
 
-def execute(source, go='go', *, environment=None, compile_only=False):
-    if type(compile_only) is not bool:
-        raise ValueError('Darwin compilation purpose must be explicit')
+def execute(source, go='go', *, environment=None, compile_only=False, preflight_only=False):
+    if type(compile_only) is not bool or type(preflight_only) is not bool or compile_only and preflight_only:
+        raise ValueError('Darwin compilation purpose must be explicit and exclusive')
     environment = dict(os.environ if environment is None else environment)
     arch, uid = required_host(environment)
     source, before = checked_sources(source)
@@ -246,6 +286,9 @@ def execute(source, go='go', *, environment=None, compile_only=False):
                           source_sha256=hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                           artifacts={role: {'bytes': identities[path][2], 'sha256': identities[path][-1]}
                                      for role, path in (('generated-child-test', child), ('independent-ordered-peer', peer))})
+            print(json.dumps(result, sort_keys=True), flush=True)
+        elif preflight_only:
+            result = execute_preflight_images(source, before, captured, sudo, arch, uid, child, peer, identities)
             print(json.dumps(result, sort_keys=True), flush=True)
         else:
             result = execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities)
@@ -303,6 +346,31 @@ def native_output(command, *, cwd=None, env=None, timeout=960, sudo=None):
     return bytes(output).decode('utf-8')
 
 
+
+def execute_preflight_images(source, before, captured, sudo, arch, uid, child, peer, identities):
+    command = ['/usr/bin/env', FLAG+'=1', 'ROUTERVPN_DARWIN_NODE_CHILD_UID='+str(uid),
+               'ROUTERVPN_DARWIN_NODE_CHILD_SHA256='+identities[child][-1],
+               'ROUTERVPN_DARWIN_NODE_CHAIN_PEER='+str(peer),
+               'ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256='+identities[peer][-1],
+               'GORACE=atexit_sleep_ms=0', str(child), '-test.run=^'+PREFLIGHT_HARNESS+'$',
+               '-test.v', '-test.count=1', '-test.timeout=115s']
+    if sudo:
+        command = [sudo, '-n', '--', *command]
+    native_stage('authenticating signed original child with source refusal before PF or utun')
+    output = native_output(command, cwd=ROOT, env=captured, timeout=120, sudo=sudo)
+    check_preflight_verdict(output)
+    if checked_sources(source)[1] != before or any(image_identity(path) != value for path, value in identities.items()):
+        raise ValueError('Darwin preflight changed original sources or images')
+    native_stage('verified source refusal, authenticated Stop, original Wait and unchanged PF/utun')
+    return dict(schema=1, gate='generated-darwin-ordered-child-handshake',
+                scope='native-handshake-only', native_accepted=False, target='darwin/'+arch,
+                toolchain=BUILD.TOOLCHAIN, source_files=before,
+                source_sha256=hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+                artifacts={role: {'bytes': identities[path][2], 'sha256': identities[path][-1]}
+                           for role, path in (('generated-child-test', child), ('independent-ordered-peer', peer))},
+                receipts=list(PREFLIGHT_RECEIPTS), output_sha256=hashlib.sha256(output.encode()).hexdigest())
+
+
 def execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities):
     command = ['/usr/bin/env', FLAG+'=1', 'ROUTERVPN_DARWIN_NODE_CHILD_UID='+str(uid),
                    'ROUTERVPN_DARWIN_NODE_CHILD_SHA256='+identities[child][-1],
@@ -328,9 +396,10 @@ def execute_native_images(source, before, captured, sudo, arch, uid, child, peer
                       cases=list(CASES), output_sha256=hashlib.sha256(output.encode()).hexdigest())
 
 
-def standalone(go='go', *, environment=None, receipt=None, required_commit=None, compile_only=False):
-    if type(compile_only) is not bool or compile_only and receipt is not None:
-        raise ValueError('Compilation-only diagnostics cannot publish a native receipt')
+def standalone(go='go', *, environment=None, receipt=None, required_commit=None, compile_only=False, preflight_only=False):
+    if (type(compile_only) is not bool or type(preflight_only) is not bool or compile_only and preflight_only
+            or (compile_only or preflight_only) and receipt is not None):
+        raise ValueError('Compilation-only and preflight diagnostics cannot publish a native receipt')
     environment = dict(os.environ if environment is None else environment)
     required_host(environment)
     repository = repository_identity(required_commit)
@@ -355,16 +424,16 @@ def standalone(go='go', *, environment=None, receipt=None, required_commit=None,
             BUILD.run([compiler, 'mod', 'verify'], cwd=core, env=captured)
             BUILD.POLICY.AMNEZIA.verify(core)
             native_stage('pinned module graph verified; entering native compilation')
-            result = execute(core, str(compiler), environment=captured, compile_only=compile_only)
+            result = execute(core, str(compiler), environment=captured, compile_only=compile_only, preflight_only=preflight_only)
         finally:
             os.environ.clear(); os.environ.update(previous)
     if repository_identity(required_commit) != repository:
         raise ValueError('Darwin source checkout changed during native acceptance')
     result['repository'] = repository
-    if compile_only:
+    if compile_only or preflight_only:
         if workspace.exists() or workspace.is_symlink():
-            raise ValueError('Compilation-only diagnostic workspace remains owned')
-        native_stage('compilation-only workspace retired; native acceptance was not executed')
+            raise ValueError('Diagnostic workspace remains owned')
+        native_stage('diagnostic workspace retired; full native acceptance was not executed')
     else:
         publish_receipt(path, result, workspace)
         native_stage('owned workspace retired and required receipt written' if path is not None
@@ -380,16 +449,17 @@ if __name__ == '__main__':
     parser.add_argument('--require-commit')
     parser.add_argument('--receipt', type=Path)
     parser.add_argument('--compile-only', action='store_true', help='diagnose exact native compilation without PF, utun or an acceptance receipt')
+    parser.add_argument('--preflight-only', action='store_true', help='authenticate and join the signed original child after source refusal, without preparing PF or utun')
     args = parser.parse_args()
     if args.standalone == (args.source is not None) or not args.standalone and (args.receipt or args.require_commit):
         parser.error('provide exact prepared source or --standalone; receipt/commit require standalone')
-    if args.compile_only and args.receipt:
-        parser.error('compilation-only diagnostics cannot publish a native receipt')
+    if args.compile_only and args.preflight_only or (args.compile_only or args.preflight_only) and args.receipt:
+        parser.error('diagnostic modes are exclusive and cannot publish a native receipt')
     try:
         if args.standalone:
-            standalone(args.go, receipt=args.receipt, required_commit=args.require_commit, compile_only=args.compile_only)
+            standalone(args.go, receipt=args.receipt, required_commit=args.require_commit, compile_only=args.compile_only, preflight_only=args.preflight_only)
         else:
-            execute(args.source, args.go, compile_only=args.compile_only)
+            execute(args.source, args.go, compile_only=args.compile_only, preflight_only=args.preflight_only)
     except subprocess.CalledProcessError as failure:
         if failure.output:
             raw = failure.output[-32768:]

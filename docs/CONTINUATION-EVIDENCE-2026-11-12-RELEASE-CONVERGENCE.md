@@ -2448,6 +2448,48 @@ compiler. The 30-second Go test bound and `-p=2` shipping invocation were
 not changed. That attempt is not counted as native acceptance: the corrected
 60-record gate still needs its hosted architecture results.
 
+## Darwin original-child handshake preflight — November 13, 2026
+
+The retained `cf893416` and `4bf0ed8e` Darwin jobs compiled their native
+images, then terminated with hosted-runner communication-loss annotations.
+Individual terminal logs were unavailable and the downloaded run archives
+were empty ZIPs. Those observations do not identify a native assertion or
+prove that PF caused the lost connection.
+
+The generated-child workflow now completes a separate signed-child
+handshake diagnostic before its full PF/utun acceptance step. The diagnostic
+uses the existing compiled images, original installation/capture mechanism,
+real inherited child authentication, authenticated Stop and original Wait.
+It stages a bounded invalid node source before capture while retaining the
+valid config and its hash. The child must produce its exact stopped receipt
+after source refusal, remain under original authority until Stop, and join
+before success. PF status, rules, NAT and anchors, and captured utun
+identities must remain unchanged. No PF write or tunnel-preparation helper
+is invoked by this diagnostic.
+
+The new `--preflight-only` purpose reports `native_accepted=false`.
+The existing `--compile-only` purpose remains execution-free. The full
+native step, required native inventory, final acceptance receipt, production
+PF/teardown code and public admission remain unchanged. The diagnostic's
+common policy helper was checked against the actual desktop preparation:
+its original template has no platform exclusion and is projected into the
+same generated command test package.
+
+On exact `3e9ae8df` plus these four files, Python syntax checks and 32
+selected tests passed in 3.749 seconds with no skips. This retains the
+existing native verdict/source/image/host/workflow checks, adds seven
+preflight controls, and executes four original Python streaming/timeout
+cases. Four Go-extraction tests were not selected in the recovered Python
+environment; Go formatting/parsing, actual signed Darwin compilation and
+preflight execution remain pending hosted verification. These Python results
+do not establish native or device acceptance.
+
+The frozen four-file manifest SHA256 is
+`5ec1fe17bbd7c113e24c79c3cf5e97bfe71e9bbbe31cc94d88198e7a8b542570`;
+the Python validation log SHA256 is
+`143a822fbf23035a06129bf420f5cc4721e8e6490aa3933d003281879b28dbc8`.
+All four original file modes remain `100644`.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

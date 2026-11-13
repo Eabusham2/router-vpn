@@ -62,9 +62,9 @@ jobs:
           cache: false
       - name: Verify exact native verdict, ownership and source projection boundaries
         run: python3 deploy/test_darwin_node_child_tun_runner.py
-      - name: Compile exact native fixtures before changing host networking
+      - name: Compile and authenticate original child before changing host networking
         timeout-minutes: 25
-        run: ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE=1 CGO_ENABLED=1 python3 deploy/test_darwin_node_child_tun.py --standalone --compile-only --require-commit "$GITHUB_SHA"
+        run: ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE=1 CGO_ENABLED=1 python3 deploy/test_darwin_node_child_tun.py --standalone --preflight-only --require-commit "$GITHUB_SHA"
       - name: Require real inherited child, every-node proof, selected DNS, utun rollback and joined stop
         timeout-minutes: 45
         env:

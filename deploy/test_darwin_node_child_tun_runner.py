@@ -32,6 +32,17 @@ def transcript():
     return '\n'.join(lines)+'\n'
 
 
+def preflight_transcript():
+    return '\n'.join([
+        '=== RUN   '+G.PREFLIGHT_HARNESS,
+        '=== RUN   '+G.PREFLIGHT_NATIVE,
+        *('verified original Darwin handshake preflight: '+stage for stage in G.PREFLIGHT_RECEIPTS),
+        '--- PASS: '+G.PREFLIGHT_NATIVE+' (1.00s)',
+        '--- PASS: '+G.PREFLIGHT_HARNESS+' (2.00s)',
+        'PASS',
+    ])+'\n'
+
+
 def workflow_inventory(raw):
     """Check the small exact native gate surface without optional YAML packages."""
     if not isinstance(raw, str) or len(raw) > 16384:
@@ -57,8 +68,8 @@ def workflow_inventory(raw):
         '          if-no-files-found: error',
         '          name: RouterVPN-Darwin-ordered-child-${{ matrix.arch }}-${{ github.sha }}',
         '          path: ${{ runner.temp }}/darwin-node-child-${{ matrix.arch }}.json',
-        '      - name: Compile exact native fixtures before changing host networking\n        timeout-minutes: 25',
-        '        run: ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE=1 CGO_ENABLED=1 python3 deploy/test_darwin_node_child_tun.py --standalone --compile-only --require-commit "$GITHUB_SHA"',
+        '      - name: Compile and authenticate original child before changing host networking\n        timeout-minutes: 25',
+        '        run: ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE=1 CGO_ENABLED=1 python3 deploy/test_darwin_node_child_tun.py --standalone --preflight-only --require-commit "$GITHUB_SHA"',
     )
     if any(raw.count(value) != 1 for value in required):
         raise ValueError('native workflow lost its exact required architecture/source/receipt inventory')
@@ -71,8 +82,8 @@ def workflow_inventory(raw):
     commands = [line.strip() for line in run[0].splitlines() if line.strip() and not line.lstrip().startswith('#')]
     if commands != [command] or raw.count('run: python3 deploy/test_darwin_node_child_tun_runner.py') != 1:
         raise ValueError('native workflow weakened actual invocation or its runner checks')
-    if raw.count('--compile-only') != 1 or raw.index('--compile-only') > raw.index(command):
-        raise ValueError('compilation diagnostics replaced or followed mandatory native acceptance')
+    if raw.count('--preflight-only') != 1 or raw.index('--preflight-only') > raw.index(command) or '--compile-only' in raw:
+        raise ValueError('handshake preflight replaced or followed mandatory native acceptance')
 
 
 class NativeVerdict(unittest.TestCase):
@@ -240,7 +251,7 @@ class ActualHostSelection(unittest.TestCase):
 
 
 class CompilationDiagnostics(unittest.TestCase):
-    def execute_boundary(self, *, compile_only=True, failure=False, source_changed=False):
+    def execute_boundary(self, *, compile_only=True, preflight_only=False, failure=False, source_changed=False, image_changed=False):
         calls=[]
         def run(command, **kwargs):
             calls.append((command,kwargs))
@@ -249,11 +260,13 @@ class CompilationDiagnostics(unittest.TestCase):
                 Path(command[command.index('-o')+1]).write_bytes(b'controlled native image')
                 return ''
             if compile_only: self.fail('compilation-only diagnostic entered native PF/utun execution')
-            return transcript()
+            if image_changed:
+                first=calls[0][0];Path(first[first.index('-o')+1]).write_bytes(b'replaced native image')
+            return preflight_transcript() if preflight_only else transcript()
         source=Path('/captured/source');before={'original':'a'*64}
         inventory=[(source,before),(source,{'changed':'b'*64})] if source_changed else None
         with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run), patch.object(G,'native_output',side_effect=run):
-            result=G.execute(source,environment={},compile_only=compile_only)
+            result=G.execute(source,environment={},compile_only=compile_only,preflight_only=preflight_only)
         for command,kwargs in calls[:2]:
             self.assertEqual(command[:6],G.native_fixture_compile('/captured/go',Path('/unused'),command[-1])[:6])
             self.assertEqual(kwargs['timeout'],600)
@@ -288,6 +301,92 @@ class CompilationDiagnostics(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):self.execute_boundary(failure=True)
         with self.assertRaisesRegex(ValueError,'sources changed'):self.execute_boundary(source_changed=True)
         with self.assertRaisesRegex(ValueError,'purpose must be explicit'):G.execute(Path('/unused'),compile_only='true')
+
+
+
+class HandshakePreflight(unittest.TestCase):
+    def test_exact_signed_refusal_stop_and_wait_order(self):
+        G.check_preflight_verdict(preflight_transcript())
+        with self.assertRaises(ValueError): G.check_verdict(preflight_transcript())
+        with self.assertRaises(ValueError): G.check_preflight_verdict(transcript())
+
+    def test_every_original_root_and_refusal_stop_join_receipt_is_required(self):
+        original=preflight_transcript()
+        for line in original.splitlines():
+            if line == 'PASS': continue
+            with self.subTest(omitted=line), self.assertRaises(ValueError):
+                G.check_preflight_verdict(original.replace(line+'\n','',1))
+            with self.subTest(duplicated=line), self.assertRaises(ValueError):
+                G.check_preflight_verdict(original.replace(line+'\n',line+'\n'+line+'\n',1))
+
+    def test_receipt_order_foreign_owner_and_early_pass_are_rejected(self):
+        original=preflight_transcript()
+        first='verified original Darwin handshake preflight: source-refused'
+        stop='verified original Darwin handshake preflight: authenticated-stop'
+        joined='verified original Darwin handshake preflight: original-join'
+        native_pass='--- PASS: '+G.PREFLIGHT_NATIVE+' (1.00s)'
+        changes=[
+            original.replace(G.PREFLIGHT_NATIVE, G.PREFLIGHT_NATIVE+'Foreign'),
+            original.replace(first+'\n','').replace(native_pass,native_pass+'\n'+first),
+            original.replace(joined+'\n','').replace(native_pass,native_pass+'\n'+joined),
+        ]
+        # Explicit swaps cannot accidentally collapse to the original transcript.
+        lines=original.splitlines()
+        for a,b in ((2,3),(3,4),(4,5),(5,6)):
+            altered=lines[:];altered[a],altered[b]=altered[b],altered[a];changes.append('\n'.join(altered)+'\n')
+        for number, changed in enumerate(changes):
+            with self.subTest(change=number), self.assertRaises(ValueError):
+                G.check_preflight_verdict(changed)
+
+    def test_failed_skipped_raced_or_panicked_preflight_is_not_a_receipt(self):
+        for failure in ('--- FAIL: x (0.00s)', '--- SKIP: x (0.00s)', 'WARNING: DATA RACE', 'panic: original owner'):
+            with self.subTest(failure=failure), self.assertRaises(ValueError):
+                G.check_preflight_verdict(preflight_transcript()+failure+'\n')
+
+    def test_preflight_mode_uses_original_images_without_full_native_acceptance(self):
+        result,calls=CompilationDiagnostics().execute_boundary(compile_only=False,preflight_only=True)
+        self.assertEqual(len(calls),3)
+        self.assertEqual(calls[-1][1]['timeout'],120)
+        self.assertIn('-test.run=^'+G.PREFLIGHT_HARNESS+'$',calls[-1][0])
+        self.assertIn('-test.timeout=115s',calls[-1][0])
+        self.assertNotIn('-test.run=^'+G.HARNESS+'$',calls[-1][0])
+        self.assertEqual(result['scope'],'native-handshake-only')
+        self.assertIs(result['native_accepted'],False)
+        self.assertEqual(result['receipts'],list(G.PREFLIGHT_RECEIPTS))
+        with tempfile.TemporaryDirectory() as directory:
+            receipt=Path(directory)/'native.json'
+            with self.assertRaisesRegex(ValueError,'not native acceptance'):
+                G.publish_receipt(receipt,result,Path(directory)/'retired')
+            with self.assertRaisesRegex(ValueError,'cannot publish'):
+                G.standalone(preflight_only=True,receipt=receipt)
+            self.assertFalse(receipt.exists())
+
+    def test_preflight_source_image_and_exclusive_purpose_remain_bound(self):
+        with self.assertRaisesRegex(ValueError,'sources changed'):
+            CompilationDiagnostics().execute_boundary(compile_only=False,preflight_only=True,source_changed=True)
+        with self.assertRaisesRegex(ValueError,'sources or images'):
+            CompilationDiagnostics().execute_boundary(compile_only=False,preflight_only=True,image_changed=True)
+        for kwargs in ({'compile_only':True,'preflight_only':True},{'preflight_only':'true'}):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError,'purpose must be explicit'):
+                G.execute(Path('/unused'),**kwargs)
+
+    def test_source_refusal_is_staged_before_capture_without_pf_launcher(self):
+        raw=(ROOT/'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl').read_text()
+        body=raw[raw.index('func TestRouterVPNNodeChainDarwinNativeHandshake(t *testing.T) {'):]
+        self.assertLess(body.index('"node-chain-source.json":'),body.index('macosprocess.OpenCapture('))
+        self.assertIn('"sing-box.json": policy.Config()',body)
+        for forbidden in ('installBaseline(', 'darwinChildOwner', 'box.New(', 'darwinChildPeerStart('):
+            self.assertNotIn(forbidden,body)
+        for required in ('macosprocess.BindCreated(', 'bootstrap.Current(ctx)', 'bootstrap.Stop(stopping)',
+                         'command.Wait()', 'checkStopped()', 'darwinChildHandshakeUnchanged(ctx, before)',
+                         'authority.close()', '"node-mtu-status.json"'):
+            self.assertIn(required,body)
+        self.assertLess(body.index('fmt.Println("verified original Darwin handshake preflight: source-refused")'),
+                        body.index('bootstrap.Stop(stopping)'))
+        production=(ROOT/'mobile/desktop/node_chain_run_darwin.go.tmpl').read_text()
+        self.assertLess(production.index('macosprocess.BindInherited('),production.index('return routerVPNExternalControlledLifetime('))
+        self.assertLess(production.index('control.compile(admission, files)'),production.index('control.prepare(graph, policy)'))
+        self.assertLess(production.index('control.prepare(graph, policy)'),production.index('box.New('))
 
 
 class EncryptedPeerSourceClosure(unittest.TestCase):
@@ -784,7 +883,8 @@ class RequiredWorkflowInventory(unittest.TestCase):
             ('caller-input', '  workflow_call:\n', '  workflow_call:\n    inputs:\n'),
             ('cross-caller-cancel', '-${{ github.sha }}-${{ github.run_id }}', ''),
             ('no-standalone', ' --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE"', ' --require-commit "$ROUTERVPN_EXPECTED_SOURCE"'),
-            ('no-compilation-boundary', ' --standalone --compile-only --require-commit "$GITHUB_SHA"', ' --standalone --require-commit "$GITHUB_SHA"'),
+            ('no-handshake-boundary', ' --standalone --preflight-only --require-commit "$GITHUB_SHA"', ' --standalone --require-commit "$GITHUB_SHA"'),
+            ('compile-only-replaces-handshake', ' --preflight-only', ' --compile-only'),
             ('compilation-replaces-native', ' --receipt "$ROUTERVPN_CHILD_RECEIPT"', ' --compile-only'),
             ('no-exact-commit', ' --require-commit "$ROUTERVPN_EXPECTED_SOURCE"', ''),
             ('no-receipt', ' --receipt "$ROUTERVPN_CHILD_RECEIPT"', ''),
