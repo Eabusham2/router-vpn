@@ -1787,6 +1787,50 @@ native encrypted transport evidence, not installed hostname-path or physical
 device acceptance. Desktop, Android and iOS producers remain independently
 validated units, and the publication SHA requires its own hosted release.
 
+## Mandatory installed Darwin selected-prefix acceptance gate
+
+The installed Darwin fixture now exercises the actual source view, retained
+preparation, worker/status and explicit Save/Cancel paths. Only the tagged
+installed controller can enter the unexported native body below public
+platform admission. The ordinary wrappers retain their Darwin refusal; all
+original source, nonce, network, idle, finite 50-sample and lifetime checks
+remain in the shared body. No public setting or request can bypass admission.
+
+The new gate requires six native cases: WG, AWG Fast and AWG Strong, each with
+Save and Cancel. The originally saved final remains unreachable at port 1;
+a separate candidate at port 8388 must receive 50 routed TCP handshakes.
+Review requires the original native Stop acknowledgment, process join, PF and
+utun retirement, workspace cleanup and a current physical-path observer.
+The fixture verifies unchanged original profile/startup bytes and exact Save
+identity, including repeated Save and Cancel after a committed decision.
+Four source-authority verdicts are required before the six native cases.
+
+Both architectures are mandatory dependencies of the authoritative release
+aggregate. Each consumes only its exact current-run, same-SHA native runtime
+artifact. The original per-case 240-second bound, native prepare/compiler
+bounds and ordinary host limits remain unchanged. Original Darwin inventories
+of 28 host cases and 19 measurement cases remain intact; the former stale
+Linux parity assertion now checks the full ordered six-plus-26-plus-six
+inventory explicitly.
+
+The thirteen changed files matched an immutable
+`b4c31e15e176a55f626b4c82f3358443fc7ae847` snapshot plus those files. The
+complete tagged installed-controller test images cross-compiled with CGO
+disabled for AMD64 and ARM64 in 70.608 and 71.648 seconds. Their SHA-256 values
+are `822b2471d2ba34a72293a2fbfe62aa52425f6017c849c9a1e14fedd8e7fd4568`
+and `9f6fb0f7e7a5f7fc019d4b04976425bfffa698fe7060fed8cdaa95b4addf701f`.
+Five shared source/admission roots passed 34 recorded race-test verdicts in
+32.199 seconds of package execution. The new strict runner passed nine checks,
+the original host runner 21, and release aggregate runner 18; workflow
+concurrency checks passed.
+
+Those compile and portable results do not establish execution of the six Mac
+sessions or four native source-authority cases. Actual macOS PF/utun, complete
+IPv6 behavior and the isolated control-plane acceptance obstacle remain open.
+No runner-egress exemption or protection relaxation was added. Public Darwin
+ordered/prefix admission and the held macOS interface change remain separate
+from this mandatory gate publication.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

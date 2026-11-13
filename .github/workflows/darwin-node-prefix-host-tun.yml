@@ -1,0 +1,65 @@
+name: Darwin installed selected-prefix host native acceptance
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: darwin-node-prefix-host-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  prefix-host:
+    name: Actual closed selected prefix, fifty samples, PF and utun on ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    # Six independent 240-second native cases retain their own deadlines.
+    # Preparation, two bounded compiler calls, extraction and joined cleanup
+    # have separate budget; no component-only result can satisfy this job.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: ./.github/actions/go-windows-sockets
+      - name: Verify exhaustive cases, native verdicts and exact artifact consumer
+        run: python3 deploy/test_macos_node_candidate_prefix_host_runner.py
+      - uses: actions/download-artifact@v4
+        with:
+          # No run-id, repository, token or wildcard: only this caller run's
+          # complete bundle for the exact target and source commit is accepted.
+          name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/prefix-host-bundle
+      - name: Verify complete exact-source native bundle before installing its sealed copy
+        run: python3 deploy/native-runtime-bundle.py extract 'darwin/${{ matrix.arch }}' "$RUNNER_TEMP/prefix-host-bundle/native-darwin-${{ matrix.arch }}.tar.gz" "$RUNNER_TEMP/prefix-host-verified"
+      - name: Require actual closed encrypted prefix, fifty TCP samples and joined native retirement
+        timeout-minutes: 110
+        env:
+          ROUTERVPN_DARWIN_NODE_PREFIX_HOST_ACCEPTANCE: '1'
+          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
+          ROUTERVPN_HOST_RECEIPT: ${{ runner.temp }}/darwin-node-prefix-host-${{ matrix.arch }}.json
+          CGO_ENABLED: '1'
+        run: |
+          python3 deploy/test_macos_node_candidate_prefix_host.py --bundle "$RUNNER_TEMP/prefix-host-verified" --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_HOST_RECEIPT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Darwin-selected-prefix-host-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/darwin-node-prefix-host-${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 14

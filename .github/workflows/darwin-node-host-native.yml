@@ -15,6 +15,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/darwin-node-host-*.yml'
+      - '.github/workflows/darwin-node-prefix-host-tun.yml'
       - '.github/workflows/desktop-native-runtime.yml'
   pull_request:
     paths:
@@ -28,6 +29,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/darwin-node-host-*.yml'
+      - '.github/workflows/darwin-node-prefix-host-tun.yml'
       - '.github/workflows/desktop-native-runtime.yml'
 
 permissions:
@@ -45,3 +47,7 @@ jobs:
   host:
     needs: native-runtimes
     uses: ./.github/workflows/darwin-node-host-tun.yml
+
+  prefix-host:
+    needs: native-runtimes
+    uses: ./.github/workflows/darwin-node-prefix-host-tun.yml

@@ -53,12 +53,13 @@ def workflow_inventory(consumer, wrapper):
     commands = re.findall(r'^        run: \|\n((?:          [^\n]*\n)+)', consumer, re.M)
     if len(commands) != 1 or [line.strip() for line in commands[0].splitlines()] != [command]:
         raise ValueError('Ordered host consumer weakened its actual native invocation')
-    if re.findall(r'^  ([A-Za-z][\w-]*):', wrapper.split('jobs:\n')[1], re.M) != ['native-runtimes', 'host']:
+    if re.findall(r'^  ([A-Za-z][\w-]*):', wrapper.split('jobs:\n')[1], re.M) != ['native-runtimes', 'host', 'prefix-host']:
         raise ValueError('Ordered native wrapper changed its complete producer/consumer jobs')
     for value in ('  workflow_dispatch:', '  push:', '  pull_request:',
                   '  group: darwin-node-host-native-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}',
                   '  native-runtimes:\n    uses: ./.github/workflows/desktop-native-runtime.yml\n    with:\n      platform: darwin',
-                  '  host:\n    needs: native-runtimes\n    uses: ./.github/workflows/darwin-node-host-tun.yml'):
+                  '  host:\n    needs: native-runtimes\n    uses: ./.github/workflows/darwin-node-host-tun.yml',
+                  '  prefix-host:\n    needs: native-runtimes\n    uses: ./.github/workflows/darwin-node-prefix-host-tun.yml'):
         if wrapper.count(value) != 1:
             raise ValueError('Ordered native wrapper lost exact successful current-run producer dependency')
 
@@ -85,7 +86,11 @@ class OrderedNativeVerdicts(unittest.TestCase):
         match = re.search(r'var linuxNodeChainHostCases = \[\]string\{([^}]+)\}', linux)
         self.assertIsNotNone(match)
         original = tuple(re.findall(r'"([a-z0-9-]+)"', match[1]))
-        self.assertEqual(G.CASES[:-2], original)
+        prefixes = ('node-chain-3-', 'node-chain-3-awg-fast-wg-', 'node-chain-3-awg-strong-awg-fast-')
+        selected = tuple(prefix+'prefix-candidates-'+action for prefix in prefixes for action in ('save', 'cancel'))
+        complete = tuple(prefix+'candidates-'+action for prefix in prefixes for action in ('save', 'cancel'))
+        self.assertEqual(original, selected + G.CASES[:-2] + complete)
+        self.assertEqual(len(original), 38)
 
     def test_inventory_rejects_missing_duplicate_reordered_or_unparsed_cases(self):
         source = (ROOT/'cmd/client/desktop_node_chain_darwin_peer_native_test.go').read_text()
@@ -382,7 +387,8 @@ class OrderedNativeWorkflows(unittest.TestCase):
 
     def test_standalone_wrapper_cannot_skip_or_borrow_runtime_producer(self):
         for before, after in (
-                ('    needs: native-runtimes', '    needs: []'),
+                ('  host:\n    needs: native-runtimes', '  host:\n    needs: []'),
+                ('  prefix-host:\n    needs: native-runtimes', '  prefix-host:\n    needs: []'),
                 ('      platform: darwin', '      platform: linux'),
                 ('  host:\n', '  host:\n    if: false\n'),
                 ('  native-runtimes:\n', '  native-runtimes:\n    continue-on-error: true\n'),

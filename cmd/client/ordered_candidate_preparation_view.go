@@ -49,6 +49,17 @@ func captureOrderedCandidatePreparedViewScope(ctx context.Context, a *app, posit
 		return nil, errors.New("this platform has no accepted closed prefix controller")
 	}
 
+	return captureOrderedCandidateNativePreparedViewScope(ctx, a, position, scope, observe)
+}
+
+// The tagged installed Darwin fixture uses this complete source-only body below
+// the public platform decision. It cannot create a native or Connected owner.
+func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app, position int, scope string,
+	observe func(context.Context) (string, error)) (*orderedCandidatePreparedView, error) {
+	scope, scopeErr := normalizedOrderedCandidateSavedScope(scope)
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
 	if ctx == nil || ctx.Err() != nil || a == nil || position < 0 || position > 7 || observe == nil {
 		return nil, errors.New("saved candidates require an original idle controller and exact prefix position")
 	}

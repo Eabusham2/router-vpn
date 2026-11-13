@@ -74,6 +74,22 @@ func beginOrderedCandidatePreparationWithNetwork(ctx context.Context, a *app, q 
 // original background worker, while explicit Cancel/Stop retains its join.
 func beginOrderedCandidatePreparationWithLifetime(ctx, lifetime context.Context, a *app, q orderedCandidatePreparationRequest,
 	observe func(context.Context) (string, error)) (result *orderedCandidatePreparation, failure error) {
+	scope, err := normalizedOrderedCandidateSavedScope(q.Scope)
+	if err != nil {
+		return nil, err
+	}
+	if scope == orderedCandidateSavedPrefixScope && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		return nil, errors.New("candidate prefix native platform admission is unavailable")
+	}
+	return beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime, a, q, observe)
+}
+
+// This unexported body owns the complete request, source and lifetime checks.
+// The tagged installed Darwin fixture may exercise the concrete native path
+// below public platform admission. Production callers enter through the public
+// wrapper above; no request or setting can override that platform decision.
+func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Context, a *app, q orderedCandidatePreparationRequest,
+	observe func(context.Context) (string, error)) (result *orderedCandidatePreparation, failure error) {
 	scope, scopeErr := normalizedOrderedCandidateSavedScope(q.Scope)
 	if scopeErr != nil {
 		return nil, scopeErr
@@ -155,9 +171,6 @@ func beginOrderedCandidatePreparationWithLifetime(ctx, lifetime context.Context,
 	}
 	var prefixPreparation *mobilemultihop.NodeChainCandidatePreparation
 	if q.Scope == orderedCandidateSavedPrefixScope {
-		if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-			return nil, errors.New("candidate prefix native platform admission is unavailable")
-		}
 		prefixPreparation, err = captureDesktopNodeCandidatePrefixSource(ctx, selection, q.Position, inventory.inventory)
 		if err != nil {
 			return nil, err

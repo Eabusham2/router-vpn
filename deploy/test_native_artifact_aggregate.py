@@ -55,7 +55,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(without + decoy)
 
     def test_duplicate_aggregate_or_imported_family_job_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "native-runtimes", "server-ordered-encrypted"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted"):
             with self.subTest(job=job), self.assertRaisesRegex(AssertionError, "missing or duplicate"):
                 self.check(self.source + "\n  " + job + ":\n    runs-on: ubuntu-24.04\n")
 
@@ -67,7 +67,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_condition_or_nonblocking_gate_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "native-runtimes", "server-ordered-encrypted"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted"):
             for bypass in ("    if: ${{ false }}\n", "    continue-on-error: true\n"):
                 with self.subTest(job=job, bypass=bypass):
                     with self.assertRaisesRegex(AssertionError, "conditional or nonblocking"):
@@ -167,6 +167,17 @@ class NativeArtifactAggregate(unittest.TestCase):
             with self.subTest(replacement=replacement):
                 with self.assertRaisesRegex(AssertionError, "complete current-run runtime producer"):
                     self.check(self.source.replace(producer, replacement, 1))
+
+    def test_darwin_prefix_host_is_required_from_exact_successful_producer(self):
+        marker = "    needs: native-runtimes\n    uses: ./.github/workflows/darwin-node-prefix-host-tun.yml"
+        for changed, witness in (
+            (marker.replace("darwin-node-prefix-host-tun", "darwin-node-host-tun"), "actual installed closed Darwin prefix"),
+            (marker.replace("    needs: native-runtimes\n", ""), "successful current-run runtime producer"),
+            (marker.replace("needs: native-runtimes", "needs: source-audit"), "successful current-run runtime producer")):
+            with self.subTest(changed=changed), self.assertRaisesRegex(AssertionError, witness):
+                self.check(self.source.replace(marker, changed, 1))
+        with self.assertRaisesRegex(AssertionError, "complete required gate inventory"):
+            self.check(self.source.replace("darwin-prefix-host, ", "", 1))
 
 
 if __name__ == "__main__":

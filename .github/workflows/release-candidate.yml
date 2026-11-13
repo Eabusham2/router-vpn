@@ -25,6 +25,11 @@ jobs:
     needs: native-runtimes
     uses: ./.github/workflows/darwin-node-host-tun.yml
 
+  darwin-prefix-host:
+    name: Actual installed closed Darwin prefix and detached candidate decisions
+    needs: native-runtimes
+    uses: ./.github/workflows/darwin-node-prefix-host-tun.yml
+
   windows-complete-max:
     name: Actual complete MAX ownership on both Windows architectures
     uses: ./.github/workflows/windows-node-max-contract.yml
@@ -673,7 +678,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, server-ordered-encrypted]
+    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, darwin-prefix-host, server-ordered-encrypted]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

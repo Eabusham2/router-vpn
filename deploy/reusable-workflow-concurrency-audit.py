@@ -14,6 +14,7 @@ EXPECTED = {
 }
 
 CALL_ONLY = {
+    ".github/workflows/darwin-node-prefix-host-tun.yml": "  group: darwin-node-prefix-host-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/darwin-node-host-tun.yml": "  group: darwin-node-host-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
 }
 STANDALONE = {

@@ -206,6 +206,9 @@ func macOSControllerFixtureChild() error {
 	if owned == nil || owned.accessToken == "" || owned.ownerToken == "" {
 		return errors.New("native fixture lost actual inherited launch credentials")
 	}
+	if handled, err := macOSCandidatePrefixNativeController(owned); handled {
+		return err
+	}
 	if handled, err := macOSNodeChainNativeController(owned); handled {
 		return err
 	}
