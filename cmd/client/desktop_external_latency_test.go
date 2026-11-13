@@ -315,6 +315,11 @@ func desktopLiveResponseTests(t *testing.T) {
 			if fault == "manual50" {
 				manual, _ = desktopLatencyStartTest(t, a)
 				<-manual.done
+				completed := manual.view(a).Status
+				if completed.Stage != "complete" || !completed.Complete || !completed.Drained ||
+					len(completed.Results) != 1 || completed.Results[0].Benchmark == nil {
+					t.Fatal("original manual50 did not complete before live3", completed)
+				}
 				slot := a.desktopLatencyFor()
 				slot.mu.Lock()
 				slot.responsePauseUntil = time.Time{}
@@ -937,4 +942,101 @@ func TestDesktopMeasurementDrainedReceiptWaitsForCancelRetirement(t *testing.T) 
 			}
 		})
 	}
+}
+
+func TestDesktopExternalLatencyCompletedMTUResumeDoesNotContend(t *testing.T) {
+	t.Run("completed-owner", func(t *testing.T) {
+		a, launch := desktopDNSControllerFixture(t, "mtu-winner")
+		owner := desktopMeasurementMTUSession(launch)
+		if owner == nil {
+			t.Fatal("original completed Auto owner missing")
+		}
+		owner.mu.Lock()
+		automatic := owner.automatic
+		owner.mu.Unlock()
+		if !automatic {
+			t.Fatal("fixture did not retain its original completed Auto")
+		}
+
+		// No catalog mutation or new worker is needed for this exact completed
+		// owner. Keep the catalog unavailable through the call's return so the
+		// old deferred no-op cannot win a scheduler race and mask contention.
+		a.mu.Lock()
+		done := make(chan struct{})
+		go func() {
+			a.startDesktopExternalAutomaticMTU(launch)
+			close(done)
+		}()
+		blocked := false
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			blocked = true
+			// The omission control must join its original call without queuing
+			// a late native worker after this failed fixture is released.
+			a.state.Connected = false
+		}
+		a.mu.Unlock()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("completed Auto resume fixture did not join its original caller")
+		}
+		if blocked {
+			t.Fatal("completed Auto resume entered catalog or queued MTU contention")
+		}
+		record, err := readDesktopMTURecord(launch)
+		if err != nil || record.Generation != 0 || desktopMeasurementMTUSession(launch) != owner || mtuSuspended(a) {
+			t.Fatal("completed Auto resume replaced its owner or opened another operation", err)
+		}
+	})
+
+	t.Run("replacement-owner", func(t *testing.T) {
+		a, launch := desktopDNSControllerFixture(t, "mtu-winner")
+		prior := desktopMeasurementMTUSession(launch)
+		launch.external.mu.Lock()
+		launch.external.mtu = nil
+		launch.external.mu.Unlock()
+		a.mu.Lock()
+		captureDesktopMTUBaselineLocked(a, launch)
+		a.mu.Unlock()
+		current := desktopMeasurementMTUSession(launch)
+		if current == nil || current == prior {
+			t.Fatal("fixture did not capture its replacement MTU owner")
+		}
+		t.Cleanup(func() {
+			a.mu.Lock()
+			a.closing = true
+			a.mu.Unlock()
+			current.mu.Lock()
+			if current.cancel != nil {
+				current.cancel()
+			}
+			current.mu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := desktopMTUJoinAutomatic(ctx, a); err != nil {
+				t.Error("replacement Auto fixture failed to join its captured worker", err)
+			}
+		})
+		a.startDesktopExternalAutomaticMTU(launch)
+		record := desktopMTUWaitRecord(t, launch, func(record desktopMTURecord) bool {
+			return record.Status.Complete && record.Status.Measured
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := desktopMTUJoinAutomatic(ctx, a)
+		cancel()
+		if err != nil || record.Generation != 1 || desktopMeasurementMTUSession(launch) != current {
+			t.Fatal("prior completed Auto suppressed the exact replacement owner", err)
+		}
+		prior.mu.Lock()
+		preserved := prior.automatic && prior.generation == 0 && prior.active == "" && prior.cancel == nil
+		prior.mu.Unlock()
+		current.mu.Lock()
+		joined := current.automatic && current.generation == 1 && current.active == "" && current.cancel == nil
+		current.mu.Unlock()
+		if !preserved || !joined {
+			t.Fatal("replacement Auto consumed prior ownership or failed to join its own operation")
+		}
+	})
 }

@@ -743,6 +743,17 @@ func (a *app) startDesktopExternalAutomaticMTU(launch *desktopNodeLaunch) {
 	if _, err := capturedDesktopMeasurementRuntime(launch); err != nil {
 		return
 	}
+	// A repeated resume for this exact already-scheduled owner is a no-op.
+	// Do not queue a worker which can briefly take the MTU start lock from a
+	// live response merely to discover the same completed Auto flag later.
+	if retained := desktopMeasurementMTUSession(launch); retained != nil {
+		retained.mu.Lock()
+		automatic := retained.automatic
+		retained.mu.Unlock()
+		if automatic && desktopMeasurementMTUSession(launch) == retained {
+			return
+		}
+	}
 	if launch.tor != nil && desktopMeasurementMTUSession(launch) == nil {
 		return // The successful Tor connection transaction installs its baseline.
 	}
