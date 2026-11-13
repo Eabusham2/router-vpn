@@ -77,9 +77,9 @@ SOURCES['android/net/Network.java'] = SOURCES['android/net/Network.java'].replac
 SOURCES['android/net/ConnectivityManager.java'] = SOURCES['android/net/ConnectivityManager.java'].replace('public Network[] getAllNetworks(){return new Network[0];} public Network getActiveNetwork(){return null;}', 'public Network physical=new Network();public Network[] getAllNetworks(){return new Network[]{physical};} public Network getActiveNetwork(){return physical;}').replace('getNetworkCapabilities(Network n){return null;}', 'getNetworkCapabilities(Network n){return new NetworkCapabilities();}').replace('getLinkProperties(Network n){return null;}', 'getLinkProperties(Network n){return new LinkProperties();}')
 SOURCES[NATIVE + 'TunOptions.java'] = SOURCES[NATIVE + 'TunOptions.java'].replace('getAutoRoute(){return true;}', 'getAutoRoute(){return false;}').replace('RoutePrefixIterator getInet4Address(){return null;}', 'RoutePrefixIterator getInet4Address(){return empty();}').replace('RoutePrefixIterator getInet6Address(){return null;}', 'RoutePrefixIterator getInet6Address(){return empty();}')[:-1] + 'private RoutePrefixIterator empty(){return new RoutePrefixIterator(){public boolean hasNext(){return false;}public RoutePrefix next(){return null;}};}}'
 SOURCES[NATIVE + 'CommandServer.java'] = r'''package io.nekohasekai.libbox;public class CommandServer {
- public static int created;public final PlatformInterface platform;public boolean closed;public int checkedCloses;public boolean failClose;
+ public static int created;public final PlatformInterface platform;public boolean closed;public String startedConfig="";public int checkedCloses;public boolean failClose;
  public CommandServer(PlatformInterface p,CommandServerHandler h){platform=p;created++;}public void start(){}
- public void startOrReloadService(String config,OverrideOptions options)throws Exception{platform.autoDetectInterfaceControl(10);platform.openTun(new TunOptions());}
+ public void startOrReloadService(String config,OverrideOptions options)throws Exception{startedConfig=config;platform.autoDetectInterfaceControl(10);platform.openTun(new TunOptions());}
  public void closeService(){throw new AssertionError("Ordered graph used unchecked native shutdown");}public void close(){closed=true;}public void resetNetwork(){}
 }'''
 SOURCES[NATIVE + 'RouterNodeChain.java'] = r'''package io.nekohasekai.libbox;public class RouterNodeChain {
@@ -111,14 +111,15 @@ SOURCES[APP + 'AndroidNodeStore.java'] = r'''package com.eabusham.routervpn;fina
  static final class ChainSource {final String id;ChainSource(String id){this.id=id;}}
  static final class ChainCapture {
   final ChainSource control;final java.util.List<ChainSource> members;final java.util.List<String> modes;final String execution="local";volatile boolean valid=true;boolean strict;volatile Runnable beforeCurrent;volatile Thread hookThread;
-  ChainCapture(int count){java.util.List<ChainSource> list=new java.util.ArrayList<>();java.util.List<String> selected=new java.util.ArrayList<>();for(int i=0;i<count;i++){list.add(new ChainSource(String.format("%032x",i+1)));selected.add(i==count-1?"shadowsocks":"wg");}members=java.util.List.copyOf(list);modes=java.util.List.copyOf(selected);control=members.get(count-1);}
+  ChainCapture(int count){this(count,"wg","shadowsocks");}
+  ChainCapture(int count,String prefixMode,String finalMode){java.util.List<ChainSource> list=new java.util.ArrayList<>();java.util.List<String> selected=new java.util.ArrayList<>();for(int i=0;i<count;i++){list.add(new ChainSource(String.format("%032x",i+1)));selected.add(i==count-1?finalMode:prefixMode);}members=java.util.List.copyOf(list);modes=java.util.List.copyOf(selected);control=members.get(count-1);}
   void requireCurrent(){Runnable hook=beforeCurrent;if(hook!=null&&Thread.currentThread()==hookThread){beforeCurrent=null;hook.run();}if(!valid)throw new IllegalStateException("original middle source replaced");}
  }
 }'''
 SOURCES[APP + 'AndroidNodeChainCapture.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeChainCapture {
  static final String SESSION_FILE="routervpn-node-chain.json";final AndroidNodeStore.ChainCapture source;final io.nekohasekai.libbox.RouterNodeChain plan;
- final String config="{\"original\":\"one-complete-TUN\"}",launchInput;final boolean strict;
- private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source){this.source=source;strict=source.strict;plan=new io.nekohasekai.libbox.RouterNodeChain(source.members.size());launchInput="ordered:"+source.members.size();}
+ final String config,launchInput;final boolean strict;
+ private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source){this.source=source;strict=source.strict;plan=new io.nekohasekai.libbox.RouterNodeChain(source.members.size());config="{\"original\":\"one-complete-TUN\",\"modes\":"+new org.json.JSONArray(source.modes).toString()+"}";launchInput="ordered:"+source.members.size()+":"+String.join(",",source.modes);}
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source){source.requireCurrent();return new AndroidNodeChainCapture(source);}
  boolean ownsSource(AndroidNodeStore.ChainCapture value){return source==value;}
  void requireCurrent(){source.requireCurrent();}void close()throws Exception{plan.close();}
@@ -180,7 +181,8 @@ public final class OrderedRuntimeTest {
  static final class Result implements AndroidNodeChainRuntime.Callback {final CountDownLatch done=new CountDownLatch(1);volatile boolean ok;volatile Thread worker;String message,home;public void progress(String ignored){worker=Thread.currentThread();}public void owned(String value){home=value;}public void finished(boolean success,String text){ok=success;message=text;done.countDown();}void finished()throws Exception{check(done.await(5,TimeUnit.SECONDS),"ordered callback did not finish");}}
  static final class Fixture implements AutoCloseable {
   final LayeredVpnService service=new LayeredVpnService();final NativeSingBoxController nativeOwner;final AndroidNodeChainRuntime runtime;final AndroidNodeStore.ChainCapture source;final Path files;
-  Fixture(int count)throws Exception{files=Files.createTempDirectory("ordered-runtime-");service.files=files.toFile();service.onCreate();nativeOwner=new NativeSingBoxController(service);runtime=new AndroidNodeChainRuntime(service,nativeOwner);source=new AndroidNodeStore.ChainCapture(count);RouterNodeChain.configured=null;android.net.VpnService.revoked=false;}
+  Fixture(int count)throws Exception{this(count,"wg","shadowsocks");}
+  Fixture(int count,String prefixMode,String finalMode)throws Exception{files=Files.createTempDirectory("ordered-runtime-");service.files=files.toFile();service.onCreate();nativeOwner=new NativeSingBoxController(service);runtime=new AndroidNodeChainRuntime(service,nativeOwner);source=new AndroidNodeStore.ChainCapture(count,prefixMode,finalMode);RouterNodeChain.configured=null;android.net.VpnService.revoked=false;}
   AndroidNodeChainSession owner()throws Exception{return (AndroidNodeChainSession)get(runtime,"owner");}
   Result connect()throws Exception{Result result=new Result();runtime.connect(source,result);result.finished();return result;}
   void connected()throws Exception{Result result=connect();check(result.ok,"complete native graph did not connect: "+result.message);check(runtime.isConnected(),"proved graph was not owned");drain();}
@@ -188,10 +190,13 @@ public final class OrderedRuntimeTest {
   void stop()throws Exception{check(runtime.stopAndProve(),"native owner did not acknowledge complete cleanup");drain();}
   public void close()throws Exception{RouterNodeChain.configured=null;AndroidNodeChainSession value=owner();if(value!=null){value.capture.plan.failCloses=0;CommandServer core=(CommandServer)get(service,"commandServer");if(core!=null)core.failClose=false;runtime.stopAndProve();}((ExecutorService)get(runtime,"executor")).shutdownNow();((ExecutorService)get(service,"executor")).shutdownNow();((ExecutorService)get(service,"nodeChainObservations")).shutdownNow();try(var all=Files.walk(files)){for(Path path:all.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}
  }
- static void success()throws Exception {
-  for(int count:new int[]{2,3,4,8})try(Fixture f=new Fixture(count)){
+ static void success()throws Exception {for(int count:new int[]{2,3,4,8})successPath(count,"wg","shadowsocks");}
+ static void hysteriaFinal()throws Exception {int count=2;for(String prefix:List.of("wg","awg2-fast","awg2-strong")){successPath(count++,prefix,"hysteria2");}successPath(8,"wg","hysteria2");}
+ static void successPath(int count,String prefixMode,String finalMode)throws Exception {
+  try(Fixture f=new Fixture(count,prefixMode,finalMode)){
    int previousHistory=AndroidStartupPolicy.recorded;f.connected();check(AndroidStartupPolicy.recorded==previousHistory+1,"fresh proved ordered connection did not record its captured Local choice");AndroidNodeChainSession original=f.owner();RouterNodeChain graph=original.capture.plan;CommandServer server=(CommandServer)get(f.service,"commandServer");
    check(graph.runs==1&&graph.count==count&&graph.server==server,"service substituted a pair/final probe or another native Box");
+   check(original.capture.config.equals(server.startedConfig)&&Files.readString(original.directory.toPath().resolve(AndroidNodeChainCapture.SESSION_FILE)).equals(original.capture.launchInput),"service substituted the exact ordered mode/config or private launch");
    var home=AndroidHomeStateStore.snapshot(f.service);var ordered=new org.json.JSONArray(home.activeChain);
    check(home.connected&&home.logicalMode.equals("node-chain")&&home.activeEntryId.isEmpty()&&home.activeExitId.isEmpty()&&ordered.length()==count,"Home dropped ordered members or borrowed pair identity");
    for(int i=0;i<count;i++)check(ordered.getJSONObject(i).getString("id").equals(f.source.members.get(i).id)&&ordered.getJSONObject(i).getString("mode").equals(f.source.modes.get(i)),"Home reordered original member choices");
@@ -442,7 +447,7 @@ public final class OrderedRuntimeTest {
   try {
   String family=args.length==0?"all":args[0];
   if(family.equals("all")||family.equals("measurement"))orderedMeasurement();
-  if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("source"))staleSources();if(family.equals("all")||family.equals("cleanup"))pendingCleanup();if(family.equals("all")||family.equals("late"))lateDelivery();if(family.equals("all")||family.equals("proof"))ownedProof();if(family.equals("all")||family.equals("destroyed"))destroyedHost();if(family.equals("all")||family.equals("idle"))idleEpoch();if(family.equals("all")||family.equals("watchdog"))watchdog();if(family.equals("all")||family.equals("late-destroyed"))lateDestroyedProof();if(family.equals("all")||family.equals("preclaim"))preclaim();if(family.equals("all")||family.equals("same-runtime"))sameRuntimeReplacement();if(family.equals("all")||family.equals("publication"))publicationFence();if(family.equals("all")||family.equals("captured-drain"))capturedDrainRetry();if(family.equals("all")||family.equals("selection"))selectionOwnership();
+  if(family.equals("all")||family.equals("hysteria-final"))hysteriaFinal();if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("source"))staleSources();if(family.equals("all")||family.equals("cleanup"))pendingCleanup();if(family.equals("all")||family.equals("late"))lateDelivery();if(family.equals("all")||family.equals("proof"))ownedProof();if(family.equals("all")||family.equals("destroyed"))destroyedHost();if(family.equals("all")||family.equals("idle"))idleEpoch();if(family.equals("all")||family.equals("watchdog"))watchdog();if(family.equals("all")||family.equals("late-destroyed"))lateDestroyedProof();if(family.equals("all")||family.equals("preclaim"))preclaim();if(family.equals("all")||family.equals("same-runtime"))sameRuntimeReplacement();if(family.equals("all")||family.equals("publication"))publicationFence();if(family.equals("all")||family.equals("captured-drain"))capturedDrainRetry();if(family.equals("all")||family.equals("selection"))selectionOwnership();
   check(uncaught.isEmpty(),"native cleanup failure escaped the ordered worker and could terminate Android");
   System.out.println("Android ordered native host ownership: "+checks+" executable checks passed; OS/native handles doubled.");
   } finally {Thread.setDefaultUncaughtExceptionHandler(previous);}
@@ -476,6 +481,7 @@ def main():
         run = ['java', '-cp', os.pathsep.join((str(classes), str(jar))), 'com.eabusham.routervpn.OrderedRuntimeTest']
         subprocess.run(run + (["measurement"] if measurement_only else []), check=True, timeout=120)
         controls = (
+            ('AndroidHomeStateStore', '.put("mode", source.modes.get(i))', '.put("mode", i==source.members.size()-1?"shadowsocks":source.modes.get(i))', 'hysteria-final', 'Home reordered original member choices'),
             ('LayeredVpnService', '                adoptHopMeasurement(capturedChain.newHopMeasurement(), ownedServer, generation);', '', 'measurement', 'proved ordered chain never adopted native measurement'),
             ('LayeredVpnService', 'if(chain!=service.nodeChainSession || chain!=null&&!chain.healthy())', 'if(false)', 'measurement', 'changed intermediate source published ordered measurements'),
             ('AndroidNodeChainSession', '        value.requireFiles();', '', 'source', 'stale ordered source/proof reached Connected: launch'),

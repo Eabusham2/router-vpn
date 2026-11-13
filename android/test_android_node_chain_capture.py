@@ -23,16 +23,19 @@ GENERATOR = r'''package mobilemultihop
 import("encoding/json";"encoding/base64";"crypto/ecdh";"bytes";"strings";"os";"testing";"fmt")
 func TestAndroidOrderedSourceFixture(t *testing.T){
  result:=map[string]any{}
- for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{2,"awg-strong"},{3,"awg-strong"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"}}{
-  layer:=test.layer;if layer=="fixed-middle"{layer=""}
+ for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{2,"awg-strong"},{3,"awg-strong"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"},{2,"hy2-wg"},{3,"hy2-awg-fast"},{4,"hy2-awg-strong"},{8,"hy2-long"}}{
+  hy2:=strings.HasPrefix(test.layer,"hy2-");layer:=test.layer;if layer=="fixed-middle"||hy2{layer=""}
   mixed:=strings.Contains(layer,"awg")||layer=="mixed-options"
   modes,layers:=make([]string,test.count),make([]string,test.count)
   for i:=range modes{modes[i],layers[i]="wg",layer;if mixed{modes[i]=[]string{"awg2-fast","wg","awg2-strong"}[i%3];layers[i]=""};if layer=="awg-strong"{modes[i]="awg2-strong"};if mixed&&test.count==4&&i==1{layers[i]="aes-256-gcm"};if mixed&&test.count==4&&i==2{layers[i]="aes-256-gcm+xor-whitening"}}
-  modes[test.count-1]="shadowsocks"
+  if test.layer=="hy2-awg-fast"||test.layer=="hy2-awg-strong"{for i:=range modes{modes[i]="awg2-fast";if test.layer=="hy2-awg-strong"{modes[i]="awg2-strong"}}}
+  modes[test.count-1]="shadowsocks";if hy2{modes[test.count-1]="hysteria2"}
   nodes:=nodeChainModeFixtureNodes(t,modes,layers)
   identityModes:=make([]string,test.count);for i:=range identityModes{identityModes[i]="wg"};identities:=nodeChainModeFixtureNodes(t,identityModes,layers)
   variants:=map[string][]*NodeProfile{}
   if mixed{for _,mode:=range []string{"wg","awg2-fast","awg2-strong"}{choices:=append([]string(nil),modes...);for i:=0;i<len(choices)-1;i++{choices[i]=mode};variants[mode]=nodeChainModeFixtureNodes(t,choices,layers)}}
+  var ssFinal *NodeProfile
+  if hy2{alternate:=append([]string(nil),modes...);alternate[test.count-1]="shadowsocks";ssFinal=nodeChainModeFixtureNodes(t,alternate,layers)[test.count-1]}
   selected:=[]map[string]string{}
   for _,node:=range nodes{selected=append(selected,map[string]string{"id":node.profile["id"].(string),"mode":node.mode})}
   bundles:=[]any{}
@@ -44,6 +47,7 @@ func TestAndroidOrderedSourceFixture(t *testing.T){
    if test.layer=="fixed-middle"&&position==1{profile["mtu_policy"],profile["manual_mtu"]="manual",1408}
    if position==len(nodes)-1{profile["multihop_enabled"],profile["multihop_execution"],profile["multihop_nodes"]=true,"local",selected}
    assets:=map[string]any{node.mode:files}
+   if hy2&&position==len(nodes)-1{var ss map[string]string;if err:=json.Unmarshal([]byte(ssFinal.inputs.Files),&ss);err!=nil{t.Fatal(err)};assets["shadowsocks"]=ss}
    var identity map[string]string;if err:=json.Unmarshal([]byte(identities[position].inputs.Files),&identity);err!=nil{t.Fatal(err)};assets["wg"]=identity
    if mixed&&position<len(nodes)-1{
     for _,mode:=range []string{"awg2-fast","awg2-strong"}{if mode!=node.mode&&test.layer!="mixed-options"{continue};var packet map[string]string;if err:=json.Unmarshal([]byte(variants[mode][position].inputs.Files),&packet);err!=nil{t.Fatal(err)}
@@ -52,7 +56,7 @@ func TestAndroidOrderedSourceFixture(t *testing.T){
     }
    }
    if node.inputs.Start!=""{var start map[string]string;if err:=json.Unmarshal([]byte(node.inputs.Start),&start);err!=nil{t.Fatal(err)};assets["shadowsocks"]=start}
-   available:=[]any{};for _,mode:=range []string{"wg","awg2-fast","awg2-strong","shadowsocks"}{if assets[mode]!=nil{available=append(available,map[string]string{"id":mode})}}
+   available:=[]any{};for _,mode:=range []string{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"}{if assets[mode]!=nil{available=append(available,map[string]string{"id":mode})}}
    bundles=append(bundles,map[string]any{"profileSchemaVersion":4,"selectedRouterID":profile["id"],"nodeProofId":profile["node_proof_id"],"routerProfiles":[]any{profile},"profiles":assets,"modes":available})
   }
   result[fmt.Sprintf("%d/%s",test.count,test.layer)]=bundles
@@ -521,8 +525,53 @@ public final class NodeChainCaptureHarness {
    reject(()->AndroidExternalPolicy.validateDraft(custom),"hostname policy editor accepted "+fault);
   }
  }
+ static void hysteriaFinal(Path root)throws Exception{
+  for(String key:List.of("2/hy2-wg","3/hy2-awg-fast","4/hy2-awg-strong","8/hy2-long")){
+   Fixture f=new Fixture(root,key);var original=f.profiles.currentOrderedPath();int last=original.members.size()-1;
+   check(original.modes.get(last).equals("hysteria2"),"paired HY2 source lost exact selected final mode");
+   try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(original)){
+    JSONObject launch=new JSONObject(capture.launchInput),member=new JSONObject(capture.memberInputs.get(last));
+    check(launch.getInt("schema")==1&&member.getString("mode").equals("hysteria2")&&member.getString("start").isEmpty(),"paired HY2 final borrowed imported, layered or execution source");
+    JSONObject graph=new JSONObject(capture.config);JSONArray outbounds=graph.getJSONArray("outbounds");JSONObject selected=tagged(outbounds,graph.getJSONObject("route").getString("final"));String tag=selected.getString("default");JSONObject out=tagged(outbounds,tag);
+    JSONObject raw=new JSONObject(new String(Base64.getDecoder().decode(original.members.get(last).bundle().getJSONObject("profiles").getJSONObject("hysteria2").getString("sing-box.json")),StandardCharsets.UTF_8)),transport=null;
+    for(int i=0;i<raw.getJSONArray("outbounds").length();i++)if("hysteria2".equals(raw.getJSONArray("outbounds").getJSONObject(i).optString("type")))transport=raw.getJSONArray("outbounds").getJSONObject(i);
+    check(transport!=null,"HY2 final lost its captured original transport");JSONObject tls=new JSONObject(transport.getJSONObject("tls").toString());
+    check(tls.getString("certificate_path").equals("cert.pem"),"HY2 fixture lost its original private trust asset");tls.remove("certificate_path");tls.put("certificate",new JSONArray().put(new String(Base64.getDecoder().decode(original.members.get(last).bundle().getJSONObject("profiles").getJSONObject("hysteria2").getString("cert.pem")),StandardCharsets.UTF_8)));
+    check(out.getString("type").equals("hysteria2")&&out.getString("password").equals(transport.getString("password"))&&ConnectionProfilesHarness.sameJSONValue(out.getJSONObject("tls"),tls),"HY2 final substituted original authentication or TLS identity");
+    check(out.getString("detour").equals(graph.getJSONArray("endpoints").getJSONObject(last-1).getString("tag")),"HY2 final bypassed its complete preceding packet prefix");
+    JSONObject dns=graph.getJSONObject("dns"),resolver=tagged(dns.getJSONArray("servers"),dns.getString("final"));
+    check(resolver.getString("detour").equals(tag)&&resolver.getString("server").equals(profile(f.original.get(last)).getString("adguard_ipv4")),"HY2 final lost original selected Home DNS");
+    for(int i=0;i<original.members.size();i++)check(capture.identityInputs.get(i).equals(original.members.get(i).bundle().getJSONObject("profiles").getJSONObject("wg").toString()),"HY2 ordered graph replaced original paired identity assets");
+    try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(capture.launchInput,original)){check(replay.launchInput.equals(capture.launchInput)&&replay.config.equals(capture.config),"HY2 ordered replay changed original source");}
+   }
+   var row=f.profiles.add("Original paired HY2 path");check(f.row().getJSONArray("multihop_nodes").getJSONObject(last).getString("mode").equals("hysteria2"),"HY2 saved profile silently selected SS final");
+   f.changePolicies();f.profiles.load(row.id);var restored=f.profiles.currentOrderedPath();check(restored.modes.equals(original.modes),"HY2 profile Load replaced original ordered transports");
+   for(int i=0;i<f.members.size();i++)check(ConnectionProfilesHarness.sameJSONValue(f.bundle(i).get("profiles"),f.original.get(i).get("profiles"))&&profile(f.bundle(i)).getString("mtu_policy").equals(profile(f.original.get(i)).getString("mtu_policy")),"HY2 profile Load replaced credentials, TLS source or MTU policy");
+   AndroidOrderedPathSelection draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);check(draft.finalModes(f.control().id).equals(List.of("shadowsocks","hysteria2")),"paired final chooser omitted exact compatible HY2 source");
+   reject(()->draft.finalModes(f.control().id).clear(),"final mode list is mutable");
+   for(String mode:List.of("HY2","Hysteria2"," hysteria2","hysteria2 ","wg","awg2-fast","reality-vision"))reject(()->draft.setFinal(f.control().id,mode),"final editor normalized or widened unsupported transport");
+   OrderedProductSurface ui=new OrderedProductSurface(f);ui.open();ui.choose(0);check(ui.dialog.labels[last].toString().contains("Final • Hysteria2"),"actual ordered editor mislabeled HY2 final as SS");
+   ui.choose(last);ui.choose(0);check(ui.dialog.title.equals("Final Router transport")&&Arrays.equals(ui.dialog.labels,new String[]{"Shadowsocks 2022","Hysteria2"}),"actual ordered editor omitted explicit final transport choice");ui.choose(0);
+   check(ui.dialog.labels[last].toString().contains("Final • Shadowsocks 2022"),"actual final callback ignored SS choice");ui.choose(last);ui.choose(0);ui.choose(1);ui.save();
+   check(ui.message.isEmpty()&&ui.refreshes==1&&f.profiles.currentOrderedPath().modes.get(last).equals("hysteria2"),"actual final callback ignored selected HY2 transport");
+   var live=f.profiles.currentOrderedPath();var stale=new AndroidOrderedPathSelection(f.nodes,f.profiles);JSONObject changed=f.bundle(last);profile(changed).put("api_token","new-hy2-original-token");f.replace(last,changed);f.nodes.select(f.control().id);
+   reject(live::requireCurrent,"HY2 live capture adopted replaced final source");reject(stale::save,"HY2 editor adopted replaced final source");
+  }
+ }
+ static void hysteriaFinalBoundaries(Path root)throws Exception{
+  Fixture f=new Fixture(root,"2/hy2-wg");f.prefs.edit().putString("multihop_nodes","").putBoolean("multihop_on",false).commit();
+  var legacy=new AndroidOrderedPathSelection(f.nodes,f.profiles);check(legacy.members().get(0).mode.equals("shadowsocks"),"new final support changed existing SS default");legacy.setFinal(f.control().id);check(legacy.members().get(0).mode.equals("shadowsocks"),"legacy final setter changed existing SS choice");
+  JSONObject bundle=f.bundle(1);bundle.getJSONObject("profiles").remove("shadowsocks");f.replace(1,bundle);f.nodes.select(f.control().id);var only=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+  check(only.members().size()==1&&only.members().get(0).mode.equals("hysteria2")&&only.finalModes(f.control().id).equals(List.of("hysteria2")),"HY2-only paired final cannot be selected");
+  Fixture layered=new Fixture(root,"3/aes-256-gcm");JSONObject source=layered.bundle(2);source.getJSONObject("profiles").put("hysteria2",f.bundle(1).getJSONObject("profiles").getJSONObject("hysteria2"));layered.replace(2,source);layered.nodes.select(layered.control().id);var denied=new AndroidOrderedPathSelection(layered.nodes,layered.profiles);
+  check(!denied.finalModes(layered.control().id).contains("hysteria2"),"final picker offered unproved HY2 Start Layer");reject(()->denied.setFinal(layered.control().id,"hysteria2"),"final editor accepted layered HY2 source");
+  Fixture mixed=new Fixture(root,"2/hy2-wg");var external=hostnameEntry("2022-blake3-aes-128-gcm");external.server="198.51.100.76";new AndroidStandardExitStore(mixed.context).save(external);var imported=new AndroidOrderedPathSelection(mixed.nodes,mixed.profiles);
+  check(imported.prefixModes(external.id).isEmpty(),"HY2 final offered unsupported imported middle");reject(()->imported.addPrefix(external.id,"shadowsocks"),"HY2 final admitted imported middle before Save");
+  imported.setFinal(mixed.control().id,"shadowsocks");imported.addPrefix(external.id,"shadowsocks");check(imported.finalModes(mixed.control().id).equals(List.of("shadowsocks")),"imported schema2 offered unsupported HY2 final");reject(()->imported.setFinal(mixed.control().id,"hysteria2"),"imported schema2 admitted HY2 final before Save");
+ }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";
+  if(family.equals("hysteria-final")){hysteriaFinalBoundaries(root);hysteriaFinal(root);System.out.println("Android paired HY2 final sources: "+checks+" shipping Java/shared Go checks passed; native crypto separate");return;}
   if(family.equals("hostname")){hostnamePolicyControls(root);hostnameMiddle(root);System.out.println("Android hostname ordered sources: "+checks+" shipping Java/shared Go checks passed; no native execution");return;}
   if(family.equals("imported")){importedMiddle(root);System.out.println("Android imported ordered methods: "+checks+" shipping Java/shared Go checks passed");return;}
   if(family.equals("source")){sourceControls(root);return;}if(family.equals("generation")){generationControls(root);return;}
@@ -556,7 +605,7 @@ def prepare_sources(src, app, java):
     shutil.copyfile(java / "AndroidConnectionSelection.java", app / "AndroidConnectionSelection.java")
     (app / "NodeChainCaptureHarness.java").write_text(HARNESS)
     from test_android_connection_profiles import method
-    handlers="\n".join(method("ProductActivity.java", signature) for signature in ("private void configureMultihop(","private void showOrderedEditor(","private void chooseOrderedNode(","private void chooseOrderedMode(","private void editOrderedPrefix("))
+    handlers="\n".join(method("ProductActivity.java", signature) for signature in ("private void configureMultihop(","private void showOrderedEditor(","private void chooseOrderedNode(","private void chooseOrderedFinalMode(","private void chooseOrderedMode(","private void editOrderedPrefix("))
     surface=r'''package com.eabusham.routervpn;
 import android.content.*;import java.util.*;
 final class OrderedProductSurface extends Context {
@@ -606,6 +655,8 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     command = ["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.NodeChainCaptureHarness", str(data)]
     subprocess.run(command + (["imported"] if imported_only else []), env=env, check=True, timeout=180)
     subprocess.run(command + ["hostname"], env=env, check=True, timeout=180)
+    if not imported_only:
+        subprocess.run(command + ["hysteria-final"], env=env, check=True, timeout=180)
     node = (app / "AndroidNodeStore.java").read_text()
     store = (app / "AndroidConnectionProfileStore.java").read_text()
     permission = (app / "AndroidConnectionSelection.java").read_text()
@@ -628,6 +679,9 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     stage = store[stage_start:stage_end]
     assert stage.count("for(int i=0;i<members.length();i++)") == 1
     controls = (
+        ("hysteria-final", "OrderedProductSurface", editor_ui.replace('draft.setFinal(id,modes.get(w));', 'draft.setFinal(id,"shadowsocks");'), "actual final callback ignored selected HY2 transport"),
+        ("hysteria-final", "OrderedProductSurface", editor_ui.replace('AndroidOrderedPathSelection.finalModeTitle(member.mode)', '"Shadowsocks 2022"'), "actual ordered editor mislabeled HY2 final as SS"),
+        ("hysteria-final", "AndroidOrderedPathSelection", editor.replace('if(!imported&&(layer.isEmpty()||"off".equals(layer))&&hasMode(source,"hysteria2"))', 'if(!imported&&hasMode(source,"hysteria2"))'), "final picker offered unproved HY2 Start Layer"),
         ("hostname", "AndroidStandardExitStore", standard.replace(hostname_policy, "static void validateImportedHostnamePolicy(Entry e) throws Exception {}"), "hostname saved policy accepted home"),
         ("hostname", "AndroidNodeStore", node.replace("source.importedGeneration!=AndroidStandardExitStore.publicationGeneration()", "false"), "hostname resolver change-away/back revived old native source"),
         ("imported", "AndroidNodeStore", node.replace('if(key.length!=expected||!java.util.Base64.getEncoder().encodeToString(key).equals(entry.secret))', 'if(false)'), "invalid single PSK shown as ordered eligible"),

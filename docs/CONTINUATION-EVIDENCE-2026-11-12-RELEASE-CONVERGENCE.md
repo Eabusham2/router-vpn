@@ -2029,6 +2029,39 @@ PacketTunnel/TUN execution, signed distribution and physical iPhone/iPad
 acceptance remain separate gates. This unit does not grant public ordered
 Darwin desktop admission or establish a completed current release.
 
+## Android ordered Hysteria2 final adoption
+
+The Android ordered editor now lists only final transports backed by the
+selected paired node's original private source and offers an explicit SS2022
+or Hysteria2 choice. The saved draft, source capture, controller, session and
+existing VPN service retain the selected raw final mode. Hysteria2 remains
+limited to paired WG/AWG prefixes with final Start Layer Off; imported-middle
+combinations retain the SS-only final. Source replacement, current-operation
+and device-policy guards still precede Save or Connect. The existing owned
+service, runtime constructor and private profile format were not replaced.
+
+Validation froze the four changed files against `4bf0ed8e`, with the actual
+shared Go parser and native bridge generator from the same source. The original
+ordered-source suite passed 953 checks and the hostname-middle suite passed
+360. The new Hysteria2 family passed 167 checks, and all 29 separately compiled
+source/UI defect controls passed. The actual shipping controller/session/service
+suite passed 479 checks and 25 separately compiled lifecycle controls, including
+rejection of a Hysteria2 session mislabeled as Shadowsocks.
+
+The initial new TLS assertion expected a certificate file path even though
+the real compiler embeds its captured bytes. Only that assertion was corrected
+to resolve the exact original `cert.pem` asset and compare the complete TLS map;
+password, server name, trust bytes and source identity remain mandatory. The
+unchanged original positive families retain their recorded results; the changed
+Java harness was recompiled, and the Hysteria2 cases and all source controls
+were rerun with the same verified helper binary. Original operation and test
+deadlines were unchanged.
+
+This is shipping Java/controller/callback and real shared-compiler evidence
+with explicit platform boundaries. Encrypted native transport, Android TUN,
+exact-current APK packaging and physical-device acceptance require their own
+results; this source unit does not claim those gates passed.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

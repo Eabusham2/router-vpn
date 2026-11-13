@@ -39,7 +39,8 @@ final class AndroidOrderedPathSelection {
             for(int i=0;i<captured.members.size();i++)members.add(new Member(catalog.source(captured.members.get(i).id),captured.modes.get(i)));
         } else if(!catalog.selectedId.isEmpty()) {
             AndroidNodeStore.ChainSource selected=catalog.source(catalog.selectedId);
-            if(hasMode(selected,"shadowsocks"))members.add(new Member(selected,"shadowsocks"));
+            List<String> modes=finalModes(selected.id);
+            if(!modes.isEmpty())members.add(new Member(selected,modes.get(0)));
         }
         requireCurrent();
     }
@@ -52,14 +53,14 @@ final class AndroidOrderedPathSelection {
         for(AndroidNodeStore.Node node:catalog.nodes) {
             boolean used=false;
             for(int i=0;i<members.size();i++)if(members.get(i).source.id.equals(node.id)&&(!finalNode||i!=members.size()-1))used=true;
-            if(!used&&(finalNode?hasMode(catalog.source(node.id),"shadowsocks"):!prefixModes(node.id).isEmpty()))result.add(node);
+            if(!used&&(finalNode?!finalModes(node.id).isEmpty():!prefixModes(node.id).isEmpty()))result.add(node);
         }
         requireCurrent();return result;
     }
 
     List<String> prefixModes(String id) throws Exception {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
-        if(source.imported){if(members.size()==2&&!members.get(0).source.imported)result.add("shadowsocks");}
+        if(source.imported){if(members.size()==2&&!members.get(0).source.imported&&"shadowsocks".equals(members.get(1).mode))result.add("shadowsocks");}
         else for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
         requireCurrent();return Collections.unmodifiableList(result);
     }
@@ -74,12 +75,35 @@ final class AndroidOrderedPathSelection {
         }
     }
 
+    List<String> finalModes(String id) throws Exception {
+        requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
+        if(!source.imported) {
+            if(hasMode(source,"shadowsocks"))result.add("shadowsocks");
+            boolean imported=false;for(Member member:members)imported|=member.source.imported;
+            String layer=source.profile().optString("start_layer","off");
+            if(!imported&&(layer.isEmpty()||"off".equals(layer))&&hasMode(source,"hysteria2"))result.add("hysteria2");
+        }
+        requireCurrent();return Collections.unmodifiableList(result);
+    }
+
+    static String finalModeTitle(String mode) {
+        if("shadowsocks".equals(mode))return "Shadowsocks 2022";
+        if("hysteria2".equals(mode))return "Hysteria2";
+        throw new IllegalArgumentException("Choose an exact supported final transport.");
+    }
+
     void setFinal(String id) throws Exception {
+        List<String> modes=finalModes(id);
+        if(modes.isEmpty())throw new IllegalStateException("The selected final node has no compatible complete source.");
+        setFinal(id,modes.get(0));
+    }
+
+    void setFinal(String id,String mode) throws Exception {
         requireCurrent();
         AndroidNodeStore.ChainSource source=catalog.source(id);
-        if(source.imported||!hasMode(source,"shadowsocks"))throw new IllegalStateException("The selected final node has no complete Shadowsocks source.");
+        if(!finalModes(id).contains(mode))throw new IllegalStateException("The selected final node has no compatible complete source for this exact transport.");
         for(int i=0;i<members.size()-1;i++)if(members.get(i).source.id.equals(id))throw new IllegalStateException("Choose a different final node.");
-        Member previous=members.isEmpty()?null:members.get(members.size()-1),selected=new Member(source,"shadowsocks");
+        Member previous=members.isEmpty()?null:members.get(members.size()-1),selected=new Member(source,mode);
         if(members.isEmpty())members.add(selected);else members.set(members.size()-1,selected);
         try { requireBound(); }
         catch(Exception failure) { if(previous==null)members.clear();else members.set(members.size()-1,previous);throw failure; }
@@ -95,6 +119,7 @@ final class AndroidOrderedPathSelection {
         if(members.size()>=8)throw new IllegalStateException("This native ordered path supports at most eight nodes.");
         for(Member member:members)if(member.source.id.equals(id))throw new IllegalStateException("Each ordered position needs a different saved node.");
         AndroidNodeStore.ChainSource source=catalog.source(id);
+        if(source.imported&&!"shadowsocks".equals(members.get(members.size()-1).mode))throw new IllegalStateException("An imported middle requires its paired Shadowsocks 2022 final.");
         requirePrefixMode(source,mode);
         members.add(members.size()-1,new Member(source,mode));
         try { requireBound(); }
@@ -166,6 +191,10 @@ final class AndroidOrderedPathSelection {
     }
 
     private void requireBound() throws Exception {
+        if(!members.isEmpty()) {
+            Member last=members.get(members.size()-1);
+            if(!finalModes(last.source.id).contains(last.mode))throw new IllegalStateException("The ordered final transport is incompatible with its original source or imported middle.");
+        }
         long size=0;Set<String> proofs=new HashSet<>();
         for(Member member:members) {
             size+=member.source.bytes().length;

@@ -545,11 +545,11 @@ public final class ProductActivity extends Activity {
             for(int i=0;i<members.size();i++) {
                 AndroidOrderedPathSelection.Member member=members.get(i);
                 String name=member.source.profile().optString("name",member.source.profileId);
-                labels.add((i+1)+". "+name+" • "+(i==members.size()-1?"Final • Shadowsocks 2022":AndroidOrderedPathSelection.prefixModeTitle(member.mode)));
+                labels.add((i+1)+". "+name+" • "+(i==members.size()-1?"Final • "+AndroidOrderedPathSelection.finalModeTitle(member.mode):AndroidOrderedPathSelection.prefixModeTitle(member.mode)));
             }
             if(members.isEmpty())labels.add("Choose final Router node");
             else if(members.size()<8)labels.add("Add another intermediate node");
-            choiceDialog("Ordered Router path", "Local execution supports two to eight independent nodes: WireGuard, AmneziaWG Fast or AmneziaWG Strong intermediate hops and a Shadowsocks 2022 final. Tap an intermediate hop to change its transport, reorder or remove it, or tap the final node to replace it. The final node supplies the selected DNS; every node keeps its own Start Layer and MTU choice.")
+            choiceDialog("Ordered Router path", "Local execution supports two to eight independent nodes: WireGuard, AmneziaWG Fast or AmneziaWG Strong intermediate hops and a Shadowsocks 2022 or Hysteria2 final. Hysteria2 requires its final node's Start Layer Off and paired intermediate nodes. An imported Shadowsocks middle keeps a Shadowsocks 2022 final. Tap an intermediate hop to change its transport, reorder or remove it, or tap the final node to choose its exact transport. The final node supplies the selected DNS; every node keeps its own permitted Start Layer and MTU choice.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                         if(members.isEmpty()){chooseOrderedNode(draft,true);return;}
                         if(w==members.size()){chooseOrderedNode(draft,false);return;}
@@ -567,13 +567,28 @@ public final class ProductActivity extends Activity {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing another node.");
             List<AndroidNodeStore.Node> nodes=draft.choices(finalNode);List<String> labels=new ArrayList<>();
             for(AndroidNodeStore.Node node:nodes)labels.add(node.name);
-            if(nodes.isEmpty())throw new IllegalStateException(finalNode?"Add a different Router node with a complete Shadowsocks 2022 profile.":"Add another independent Router node with a complete WireGuard, AmneziaWG Fast or AmneziaWG Strong profile.");
+            if(nodes.isEmpty())throw new IllegalStateException(finalNode?"Add a different Router node with a compatible complete Shadowsocks 2022 or Hysteria2 profile.":"Add another independent Router node with a complete WireGuard, AmneziaWG Fast or AmneziaWG Strong profile.");
             choiceDialog(finalNode?"Final Router node":"Add intermediate Router node", "Choose one original saved node. Its own keys, Start Layer and policy stay attached to this position.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
-                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing a node.");if(finalNode){draft.setFinal(nodes.get(w).id);showOrderedEditor(draft);}else chooseOrderedMode(draft,nodes.get(w).id,-1);}
+                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing a node.");if(finalNode)chooseOrderedFinalMode(draft,nodes.get(w).id);else chooseOrderedMode(draft,nodes.get(w).id,-1);}
                         catch(Exception error){toast(safe(error));}
                     }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
         } catch(Exception error) { toast(safe(error)); }
+    }
+
+    private void chooseOrderedFinalMode(AndroidOrderedPathSelection draft,String id){
+        try {
+            if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing the final transport.");
+            List<String> modes=draft.finalModes(id);List<String> labels=new ArrayList<>();
+            for(String mode:modes)labels.add(AndroidOrderedPathSelection.finalModeTitle(mode));
+            if(modes.isEmpty())throw new IllegalStateException("This original final node has no compatible complete transport.");
+            if(modes.size()==1){draft.setFinal(id,modes.get(0));showOrderedEditor(draft);return;}
+            choiceDialog("Final Router transport","Choose this node's exact saved transport. Hysteria2 keeps its final Start Layer Off; its own selected DNS and private credentials remain unchanged.")
+                    .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
+                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing the final transport.");draft.setFinal(id,modes.get(w));showOrderedEditor(draft);}
+                        catch(Exception error){toast(safe(error));}
+                    }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
+        } catch(Exception error){toast(safe(error));}
     }
 
     private void chooseOrderedMode(AndroidOrderedPathSelection draft,String id,int position){
