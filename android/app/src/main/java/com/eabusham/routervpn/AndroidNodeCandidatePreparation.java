@@ -7,9 +7,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Process-owned, initially idle preparation of the complete saved Local graph.
- * The existing final node must still prove. This is not prefix-only discovery.
- * No Activity owns cleanup, and no result is delivered before native DOWN. */
+/** Process-owned, initially idle candidate testing. Accepted packet prefixes
+ * use a closed-ingress native purpose independent of the saved suffix. Other
+ * saved paths retain the complete-graph flow. Results require exact native DOWN. */
 final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.TemporaryGuard {
     final String nonce=java.util.UUID.randomUUID().toString().replace("-","");
     interface Callback {
@@ -37,6 +37,8 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
     private AndroidNodeChainRuntime.Temporary temporary;
     private volatile AndroidNodeCandidateMeasurement measurement;
     private volatile AndroidNodeCandidateCatalog catalog;
+    private AndroidNodeChainCapture capturedSource;
+    private AndroidNodeCandidatePrefixCapture capturedPrefix;
     private volatile boolean started,startupDone,startupOK,startingMeasurement,stopRequested,userCancelled,batchDone,retired;
     private volatile boolean terminalCompletionReady;
     private volatile Throwable failure;
@@ -64,11 +66,17 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
             owner.lease=AndroidMTUMeasurementGate.acquire();
             owner.network=new AndroidExternalComparisonNetwork(owner.context);owner.network.start();owner.network.requireBeforeStart();
             owner.requireCurrent();
+            if(packetPrefix(source,prefix)){
+                owner.catalog=AndroidNodeCandidateCatalog.captureSources(context,source,prefix);
+                owner.capturedSource=AndroidNodeChainCapture.compile(source);
+                owner.capturedPrefix=AndroidNodeCandidatePrefixCapture.compile(owner.capturedSource,prefix,owner.catalog.inventory);
+                owner.requireCurrent();
+            }
             owner.temporary=runtime.reserveTemporary(source,idle,selected,owner,new AndroidNodeChainRuntime.Callback(){
-                public void progress(String detail){owner.progress("Testing saved path: "+detail);}
+                public void progress(String detail){owner.progress((owner.capturedPrefix==null?"Testing saved path: ":"Testing saved packet prefix: ")+detail);}
                 public void owned(String home){owner.homeSession=home;}
                 public void finished(boolean ok,String detail){owner.startupOK=ok;if(!ok)owner.failure=new IllegalStateException(detail);owner.startupDone=true;}
-            });
+            },owner.capturedPrefix,owner.capturedPrefix==null?null:owner.catalog);
         } catch(Throwable failed){owner.failure=failed;owner.stopRequested=true;}
         // This watcher, not the permission callback or Activity, owns every
         // failed candidate/native join and the outer MTU hold through retry.
@@ -79,6 +87,13 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
     static synchronized AndroidNodeCandidatePreparation retained(){return active;}
     static synchronized boolean testingHome(String home){return active!=null&&!active.retired&&active.homeSession.equals(home);}
     static synchronized boolean cancelActive(){if(active==null)return false;active.cancelFromUser();return true;}
+    static boolean packetPrefix(AndroidNodeStore.ChainCapture source,int prefix){
+        if(source==null||!"local".equals(source.execution)||prefix<0||prefix>=source.modes.size()-1)return false;
+        for(int i=0;i<=prefix;i++){String mode=source.modes.get(i);if(!("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)))return false;}
+        return true;
+    }
+    boolean prefixOnly(){return capturedPrefix!=null;}
+    boolean testsSavedPosition(int position){return position>=0&&position<source.modes.size()&&(!packetPrefix(source,prefix)||position<=prefix);}
     void attach(Callback callback){
         synchronized(this){observer=callback;observerVersion++;}
         if(terminalCompletionReady&&callback!=null)try{callback.finished(choices,failure);}catch(Throwable ignored){}
@@ -96,10 +111,11 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
     }
     @Override public void requireCurrent()throws Exception {
         if(stopRequested||retired||!AndroidMTUMeasurementGate.owns(lease))throw new IllegalStateException("The original candidate preparation was retired.");
-        requireSavedInputs();network.requireCurrent();
+        requireSavedInputs();if(capturedPrefix!=null)catalog.requireSourcesCurrent();network.requireCurrent();
     }
     private void requireSavedInputs()throws Exception {
         source.requireCurrent();AndroidNodeChainSession.requireSelection(context,source,selected);
+        if(capturedPrefix!=null)capturedPrefix.requireCurrent();
         if(!settings.equals(context.getSharedPreferences("router-vpn-unified",Context.MODE_PRIVATE).getAll()))
             throw new IllegalStateException("The captured connection settings changed during candidate preparation.");
     }
@@ -115,7 +131,9 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         try {
             requireCurrent();AndroidNodeChainSession session=temporary.session();
             network.requireProved(LayeredVpnService.prepareNodeCandidates(session,lease));requireCurrent();
-            catalog=new AndroidNodeCandidateCatalog(context,session,prefix);requireCurrent();
+            if(capturedPrefix==null)catalog=new AndroidNodeCandidateCatalog(context,session,prefix);
+            else if(session.candidatePrefix!=capturedPrefix||session.candidateCatalog!=catalog)throw new IllegalStateException("The original prepared packet prefix was replaced.");
+            requireCurrent();
             measurement=AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){
                 public void changed(List<AndroidNodeCandidateResult> ignored,String detail){progress("Testing candidates: "+detail);}
                 public void completed(AndroidNodeCandidateMeasurement owner,List<AndroidNodeCandidateResult> results)throws Exception {
@@ -143,8 +161,16 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         // native graph can still own a failed Box/TUN close independently.
         boolean joined=false;
         while(!joined){
-            try {joined=temporary==null?drain():temporary.drain();}
-            catch(Throwable pending){if(failure==null)failure=pending;}
+            try {
+                joined=temporary==null?drain():temporary.drain();
+                if(joined){
+                    // Also join pure handles captured before permission or a
+                    // failed native factory. They never lend Connected proof.
+                    if(capturedPrefix!=null)capturedPrefix.close();
+                    if(capturedSource!=null)capturedSource.close();
+                }
+            }
+            catch(Throwable pending){joined=false;if(failure==null)failure=pending;}
             if(!joined){progress("Cancelling candidate test; original native cleanup is still pending and MTU remains paused.");pause();}
         }
         AndroidMTUMeasurementGate.release(lease);retired=true;

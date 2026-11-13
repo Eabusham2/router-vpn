@@ -142,9 +142,9 @@ access:
   below. It uses the captured native graph, proves its existing final node,
   performs routed candidate timings and retires the path before review.
   Independent selected-prefix preparation, usable when the old final node is
-  unreachable, now has the iOS app/provider/engine integration recorded below.
-  Android and desktop activation remain in progress; ordinary WireGuard or
-  Android Network calls cannot substitute for their captured native owners. Native acceptance
+  unreachable, now has the iOS app/provider/engine and Android helper/service/UI integration recorded below.
+  Desktop parent/API activation remains in progress; ordinary WireGuard or
+  Android Network calls cannot substitute for the captured native owners. Native acceptance
   of each new platform flow must be recorded separately from these source tests.
 - Ordered graphs still cover a bounded set of WG/AWG prefixes and SS finals,
   with one literal, unlayered SS2022 imported middle in the three-member
@@ -1426,6 +1426,14 @@ The dedicated desktop child command now reaches its captured prefix engine on Wi
 A candidate operation uses 50 routed TCP connection samples through the proved prefix. The original worker must drain before proof-gate retirement and before the enclosing Box/TUN/protection owner may publish DOWN. Failed engine construction or incomplete closure retains its original cleanup owner; cancellation, substituted captures, stale pulses and replaced source files cannot publish a valid result. The parent observation deadline remains 1.5 seconds, with the existing worker and cleanup bounds unchanged. Immutable policy data is captured once to avoid repeatedly rebuilding its source during hot-path ownership checks; original inode/byte, native reader and physical-policy observations remain mandatory.
 
 Exact prepared-source race suites passed: 11 Box verdicts, 19 source replay verdicts, 20 runtime verdicts and nine dispatcher verdicts. The runtime suite includes a real private HTTP proof and 50 real TCP samples, 14 source/reader/capture/pulse substitutions, partial native cleanup retry and held-worker Cancel/retire cases. All 2,465 prepared shipping source hashes stayed unchanged through the suites. Three compiled causal controls were rejected at the original-pulse, source-inode and worker-before-gate witnesses; nine runner checks passed. These suites use an explicitly unstarted TUN and controlled physical I/O. They do not establish privileged installed-host or device acceptance. The public parent/API activation remains a separate unit.
+
+## Android activates independent packet-prefix candidate testing
+
+The existing saved-Local candidate dialog now captures eligible WG/AWG Fast/AWG Strong packet prefixes and their candidate inventory before permission or native startup. It prepares and proves only that captured prefix, so the old saved suffix need not connect. Other eligible selections retain the complete-saved-path flow, clearly labelled in the dialog. Both paths require 50 routed TCP connection samples, original native DOWN before choices and explicit future-profile Save. Map and path-summary labels distinguish tested prefix members from the unused Saved suffix; temporary paths have no live usage or ordinary Connected authority.
+
+The measurement helper borrows the prefix's original native proof owner. A successfully admitted request must be cancelled and drained before the worker joins, but only the outer session/service may close the prefix proof and Box. This prevents the candidate helper from prematurely retiring the proof while the service still observes it. Failed native cleanup retains both the original owner and MTU hold for retry. Pure handles captured before permission are also joined after native retirement.
+
+The final prefix helper/service composition passed 48 checks and eight compiled controls, including held Drain and premature prefix.Close defects. Final connected candidate tests passed 167 checks and 15 controls; source capture passed 65 and five; UI flow passed 53 and six. The complete-saved helper had passed 42 and seven before the final prefix-only Drain refinement; its connected cleanup branch is unchanged and the final shared worker bytes passed the connected and prefix suites above. Presentation checks and eight controls, usage checks 243/40/50 and 19 controls, import checks 74 and seven controls, and 13 mandatory-workflow checks passed. The fixture source compiler and canonical display validator were verified before reuse. These Java/native and OS boundaries are explicit component fixtures: full SDK/APK build, encrypted Android TUN operation and physical-device acceptance remain separate release evidence.
 
 ## Physical and private acceptance
 

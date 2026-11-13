@@ -19,26 +19,35 @@ spec.loader.exec_module(base)
 APP = base.APP
 NATIVE = base.NATIVE
 SOURCES = dict(base.SOURCES)
+# Preserve this gate's complete-saved fallback: testing the selected final WG
+# node needs the whole saved graph. Independent prefixes have a separate gate.
+SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('selected.add(i==count-1?"shadowsocks":"wg");','selected.add("wg");')
+SOURCES[APP+'AndroidNodeCandidatePrefixCapture.java']=SOURCES[APP+'AndroidNodeCandidatePrefixCapture.java'][:-1]+'''final String sourceSHA256="f".repeat(64),configSHA256="6".repeat(64);
+ static AndroidNodeCandidatePrefixCapture compile(AndroidNodeChainCapture original,int prefix,String inventory){throw new IllegalStateException("No independent prefix in the complete-saved fallback fixture");}}'''
+SOURCES[NATIVE+'RouterNodeChainCandidatePreparation.java']=SOURCES[NATIVE+'RouterNodeChainCandidatePreparation.java'][:-1]+'''
+ public String metadata(){throw new IllegalStateException("No independent prefix metadata in fallback fixture");}public String captureSHA256(){return "";}
+ public void start(String request,String candidate)throws Exception{throw new IllegalStateException("No independent prefix measurement in fallback fixture");}
+ public void cancel(String request){}public void drain(String request)throws Exception{throw new IllegalStateException("No independent prefix measurement in fallback fixture");}public String statusJSON(){return "{}";}}'''
 SOURCES[APP + 'AndroidMTUSession.java'] = SOURCES[APP + 'AndroidMTUSession.java'].replace(
     'throw new IllegalStateException("No ordered candidate MTU proof in this boundary");',
     'if(!AndroidMTUMeasurementGate.owns(lease))throw new IllegalStateException("foreign MTU hold");activateNodeChain(source);if(failure!=null)throw failure;')
 SOURCES[NATIVE + 'RouterNodeChain.java'] = SOURCES[NATIVE + 'RouterNodeChain.java'][:-1] + 'public String sourceSHA256(){return "a".repeat(64);}public String configSHA256(){return "b".repeat(64);}}'
 SOURCES[NATIVE + 'Libbox.java'] = SOURCES[NATIVE + 'Libbox.java'][:-1] + '''
  public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(RouterNodeChain plan,CommandServer server,int prefix,String inventory,Object catalog)throws Exception{
-  if(plan.server!=server||!plan.healthy())throw new IllegalStateException("foreign candidate native owner");return new RouterNodeChainCandidateMeasurement();}
+  if(plan.server!=server||!plan.healthy())throw new IllegalStateException("foreign candidate native owner");return new RouterNodeChainCandidateMeasurement(prefix);}
  public static void routerNodeChainCloseCandidateMeasurement(RouterNodeChain plan,int prefix,String inventory)throws Exception{if(RouterNodeChainCandidateMeasurement.latest!=null)RouterNodeChainCandidateMeasurement.latest.close();}
 }'''
 SOURCES[NATIVE + 'RouterNodeChainCandidateMeasurement.java'] = r'''package io.nekohasekai.libbox;
 import org.json.*;public final class RouterNodeChainCandidateMeasurement {
  public static volatile RouterNodeChainCandidateMeasurement latest;public static volatile boolean holdClose;public volatile int starts,closes;String request="",id="";
- public RouterNodeChainCandidateMeasurement(){latest=this;}public String captureSHA256(){return "c".repeat(64);}
- public String metadata()throws Exception{return new JSONObject().put("capture_sha256",captureSHA256()).put("source_sha256","a".repeat(64)).put("config_sha256","b".repeat(64)).put("prefix_position",0).put("prefix_id","prefix").put("targets",new JSONArray().put(new JSONObject().put("id","one").put("source_sha256","d".repeat(64))).put(new JSONObject().put("id","two").put("source_sha256","e".repeat(64)))).toString();}
+ final int prefix;public RouterNodeChainCandidateMeasurement(){this(0);}public RouterNodeChainCandidateMeasurement(int prefix){this.prefix=prefix;latest=this;}public String captureSHA256(){return "c".repeat(64);}
+ public String metadata()throws Exception{return new JSONObject().put("capture_sha256",captureSHA256()).put("source_sha256","a".repeat(64)).put("config_sha256","b".repeat(64)).put("prefix_position",prefix).put("prefix_id","prefix").put("targets",new JSONArray().put(new JSONObject().put("id","one").put("source_sha256","d".repeat(64))).put(new JSONObject().put("id","two").put("source_sha256","e".repeat(64)))).toString();}
  public void start(String request,String id){this.request=request;this.id=id;starts++;}public void cancel(String request){}public void drain(String request){}
  public void close()throws Exception{closes++;if(holdClose)throw new IllegalStateException("original candidate callback still running");}
  public String statusJSON()throws Exception{
   long now=System.currentTimeMillis();JSONObject distribution=new JSONObject().put("samples",50).put("min_ms",1).put("median_ms",2).put("average_ms",2).put("p90_ms",3).put("max_ms",4).put("jitter_ms",1);
   JSONObject row=new JSONObject().put("node_id",id).put("role","candidate").put("kind","tcp-connect").put("ready",true).put("benchmark",new JSONObject().put("schema",1).put("measurement","routed-tcp-connect").put("attempts",50).put("failed",0).put("distribution",distribution).put("trimmed_mean_ms",2));
-  return new JSONObject().put("schema",1).put("measurement","routed-tcp-connect").put("request_id",request).put("complete",true).put("drained",true).put("stage","complete").put("failure","").put("capture_sha256",captureSHA256()).put("prefix_position",0).put("prefix_id","prefix").put("candidate_id",id).put("candidate_source_sha256",(id.equals("one")?"d":"e").repeat(64)).put("measured_at",now).put("expires_at",now+120000).put("results",new JSONArray().put(row)).toString();
+  return new JSONObject().put("schema",1).put("measurement","routed-tcp-connect").put("request_id",request).put("complete",true).put("drained",true).put("stage","complete").put("failure","").put("capture_sha256",captureSHA256()).put("prefix_position",prefix).put("prefix_id","prefix").put("candidate_id",id).put("candidate_source_sha256",(id.equals("one")?"d":"e").repeat(64)).put("measured_at",now).put("expires_at",now+120000).put("results",new JSONArray().put(row)).toString();
  }
 }'''
 SOURCES[APP + 'AndroidNodeCandidateCatalog.java'] = '''package com.eabusham.routervpn;
@@ -48,6 +57,8 @@ final class AndroidNodeCandidateCatalog {
  final java.util.List<Row> rows=java.util.List.of(new Row("one"),new Row("two"));
  AndroidNodeCandidateCatalog(android.content.Context context,AndroidNodeChainSession session,int prefix)throws Exception{this.session=session;originalSource=session.source;this.prefix=prefix;server=session.candidateServer();}
  void bind(AndroidNodeChainSession source){throw new IllegalStateException("Complete-graph catalog is already bound in this fixture");}
+ static AndroidNodeCandidateCatalog captureSources(android.content.Context c,AndroidNodeStore.ChainCapture source,int prefix){throw new IllegalStateException("No independent prefix capture in fallback fixture");}
+ void requireSourcesCurrent(){originalSource.requireCurrent();requireSavedSourcesCurrent();}
  void requireCurrent(){try{session.requireCurrent();requireSavedSourcesCurrent();}catch(Exception stale){throw new IllegalStateException(stale);}}
  void requireSavedSourcesCurrent(){if(!sourcesValid)throw new IllegalStateException("captured saved catalog changed away and back");}
 }'''
@@ -76,7 +87,7 @@ CASES = r'''
  static boolean activePreparation(){try{Field field=AndroidNodeCandidatePreparation.class.getDeclaredField("active");field.setAccessible(true);return field.get(null)!=null;}catch(Exception error){throw new AssertionError(error);}}
  static AndroidNodeCandidatePreparation prepare(Fixture f,Completion callback)throws Exception{
   RouterNodeChainCandidateMeasurement.latest=null;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateCatalog.sourcesValid=true;
-  return AndroidNodeCandidatePreparation.reserve(f.service,f.runtime,f.source,AndroidHomeStateStore.snapshot(f.service),AndroidNodeChainSession.selection(f.service,f.source),0,callback);
+  return AndroidNodeCandidatePreparation.reserve(f.service,f.runtime,f.source,AndroidHomeStateStore.snapshot(f.service),AndroidNodeChainSession.selection(f.service,f.source),2,callback);
  }
  static void retire(AndroidNodeCandidatePreparation operation)throws Exception{operation.cancelFromUser();await(()->!activePreparation(),"original preparation observer did not close");}
  static void completePreparation()throws Exception {

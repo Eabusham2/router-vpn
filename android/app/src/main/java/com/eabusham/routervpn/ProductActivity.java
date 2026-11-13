@@ -471,7 +471,7 @@ public final class ProductActivity extends Activity {
                 else role=RouterVpnNodeMapView.ROLE_NORMAL;
                 double ms=position>=0?presentation.members.get(position).httpResponseMs:item.isRouterVpn()?(telemetry==null?0:telemetry.cachedMedian(item.id)):liveExternalMedian(item.id);
                 if(position<0&&ms<=0&&item.hasMeasuredLatency())ms=item.latencyMedianMs;
-                String name=(position>=0?(presentation.testing?"Testing • ":"")+(position+1)+". ":"")+item.name+(!item.isRouterVpn()&&ms>0?" • HTTPS":"");
+                String name=(position>=0?(presentation.testing?(presentation.members.get(position).testing?"Testing • ":"Saved • "):"")+(position+1)+". ":"")+item.name+(!item.isRouterVpn()&&ms>0?" • HTTPS":"");
                 if(position>=0&&ms>0)name+=" • routed HTTP proof";
                 markers.add(new RouterVpnNodeMapView.Marker(item.kind+":"+item.id,name,item.latitude,item.longitude,role,ms,!item.isRouterVpn()));
             }
@@ -722,7 +722,7 @@ public final class ProductActivity extends Activity {
             try {
                 AndroidOrderedPathPresentation presentation=currentOrderedPresentation();if(presentation==null){multihopHint.setText("Checking the complete ordered path…");return;}
                 StringBuilder summary=new StringBuilder(presentation.testing?"TESTING • ":presentation.live?"LIVE • ":"");
-                for(int i=0;i<presentation.members.size();i++){if(i>0)summary.append(" → ");AndroidOrderedPathPresentation.Member member=presentation.members.get(i);summary.append(i+1).append(". ").append(member.name).append(" [").append(member.mode).append("]");if(member.httpResponseMs>0)summary.append(String.format(Locale.US,member.imported?" • Public path via custom node %.1f ms":" • HTTP proof %.1f ms",member.httpResponseMs));}
+                for(int i=0;i<presentation.members.size();i++){if(i>0)summary.append(" → ");AndroidOrderedPathPresentation.Member member=presentation.members.get(i);if(presentation.testing)summary.append(member.testing?"Testing ":"Saved ");summary.append(i+1).append(". ").append(member.name).append(" [").append(member.mode).append("]");if(member.httpResponseMs>0)summary.append(String.format(Locale.US,member.imported?" • Public path via custom node %.1f ms":" • HTTP proof %.1f ms",member.httpResponseMs));}
                 multihopHint.setText(summary.append(" • Local").toString());
             }catch(Exception invalid){multihopHint.setText("The ordered path changed; reopen Edit hops.");}
             return;

@@ -45,13 +45,13 @@ final class AndroidNodeCandidatePreparationDialog {
         final AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(activity);final String selected;
         try{if(connection.isActiveOrTransitioning()||home.connected)throw new IllegalStateException("Stop the current VPN before testing the saved ordered path.");selected=AndroidConnectionSelection.digest(activity,nodes);}
         catch(Exception failure){showMessage(failure.getMessage());return;}
-        showProgress();output.setText("Reading the complete saved Local path… The existing final node must work. Testing makes 50 TCP connections per candidate through the selected prefix, then stops the temporary VPN before showing results.");
+        showProgress();output.setText("Reading the saved Local path… A WireGuard or AmneziaWG prefix can be tested without later nodes. Other selections require the complete saved path. Each candidate needs 50 successful TCP connections; results appear after the temporary VPN stops.");
         new Thread(()->{
             try{
                 AndroidNodeStore.ChainCapture source=new AndroidConnectionProfileStore(activity,nodes,new AndroidStandardExitStore(activity)).currentOrderedPath();source.requireCurrent();
                 List<Integer> positions=new ArrayList<>();List<String> names=new ArrayList<>();
                 if(!"local".equals(source.execution))throw new IllegalStateException("Choose Local execution for this saved path before testing candidates.");
-                for(int i=0;i<source.modes.size();i++){String mode=source.modes.get(i);if("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)){positions.add(i);names.add("Through node "+(i+1)+" • "+mode);}}
+                for(int i=0;i<source.modes.size();i++){String mode=source.modes.get(i);if("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)){positions.add(i);names.add("Through node "+(i+1)+" • "+mode+" • "+(AndroidNodeCandidatePreparation.packetPrefix(source,i)?"prefix only":"complete saved path"));}}
                 if(positions.isEmpty())throw new IllegalStateException("The saved path has no WireGuard or AmneziaWG prefix for candidate TCP timing.");
                 activity.runOnUiThread(()->{
                     if(!visible())return;

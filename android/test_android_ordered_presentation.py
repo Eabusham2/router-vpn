@@ -55,6 +55,11 @@ TEST = r'''
    var first=new AndroidNodeCandidatePreparation();AndroidNodeCandidatePreparation.active=first;
    check(!idle.current(f.activity),"saved display survived a new temporary purpose");
    storedTesting(f,source);
+   first.testThrough=0;var prefix=capture(f);
+   check(prefix.members.get(0).testing&&!prefix.members.get(1).testing&&!prefix.members.get(2).testing,"independent prefix presentation marked the saved suffix as Testing");
+   f.activity.orderedPresentation=prefix;f.activity.map();
+   for(var marker:f.activity.mapView.markers)check(marker.name.startsWith(marker.id.equals("router-vpn:"+source.members.get(0).id)?"Testing • ":"Saved • "),"Product map marked untested saved suffix as Testing");
+   first.testThrough=Integer.MAX_VALUE;
    // Permission and raw engine UP remain Testing, before a native Home proof exists.
    for(String key:List.of(NativeSingBoxController.STATE_KEY,NativeXrayController.STATE_KEY)){
     f.activity.getSharedPreferences("router-vpn",0).edit().putString(key,"UP").apply();storedTesting(f,source);f.activity.getSharedPreferences("router-vpn",0).edit().putString(key,"DOWN").apply();
@@ -160,6 +165,8 @@ final class PresentationObservation {
         (app / "UsageActivity.java").write_text(activity)
         presentation = (JAVA / "AndroidOrderedPathPresentation.java").read_text()
         controls = (
+            ("AndroidOrderedPathPresentation.java", presentation, "testing&&preparation.testsSavedPosition(i)", "testing", "independent prefix presentation marked the saved suffix as Testing"),
+            ("UsageActivity.java", activity, "presentation.members.get(position).testing", "true", "Product map marked untested saved suffix as Testing"),
             ("HomeObservation.java", home_source, "if(AndroidNodeCandidatePreparation.busy())", "if(false)", "temporary purpose escaped Home Testing presentation"),
             ("AndroidOrderedPathPresentation.java", presentation, "boolean live=!testing&&home.connected", "boolean live=home.connected", "temporary Testing display adopted native Connected proof"),
             ("AndroidOrderedPathPresentation.java", presentation, "preparation!=AndroidNodeCandidatePreparation.retained()", "false", "display survived a replaced temporary purpose"),

@@ -162,6 +162,7 @@ final class AndroidNodeCandidatePreparation {
  interface Callback{void progress(String detail);void finished(List<Choice> choices,Throwable failure);}static final class Choice{}
  static AndroidNodeCandidatePreparation active;final String nonce=java.util.UUID.randomUUID().toString();
  boolean retired,cancelled,started;int starts;String homeSession="";AndroidNodeStore.ChainCapture source;AndroidNodeChainRuntime runtime;
+ int testThrough=Integer.MAX_VALUE;boolean testsSavedPosition(int position){return position<=testThrough;}
  AndroidNodeCandidatePreparation(){}
  static boolean busy(){return active!=null&&!active.retired&&!active.cancelled;}static AndroidNodeCandidatePreparation retained(){return active;}
  static boolean testingHome(String session){return busy()&&active.homeSession.equals(session);}

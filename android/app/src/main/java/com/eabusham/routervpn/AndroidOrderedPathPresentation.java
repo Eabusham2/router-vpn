@@ -13,10 +13,10 @@ import java.util.List;
 final class AndroidOrderedPathPresentation {
     static final class Member {
         final String id, name, mode;
-        final boolean imported;
+        final boolean imported, testing;
         final double httpResponseMs;
-        Member(AndroidNodeStore.ChainSource source,String mode,double response)throws Exception {
-            id=source.id;imported=source.imported;name=imported?source.external().name:source.profile().optString("name",source.profileId);this.mode=mode;httpResponseMs=response;
+        Member(AndroidNodeStore.ChainSource source,String mode,double response,boolean testing)throws Exception {
+            id=source.id;imported=source.imported;name=imported?source.external().name:source.profile().optString("name",source.profileId);this.mode=mode;httpResponseMs=response;this.testing=testing;
         }
     }
     final List<Member> members;
@@ -65,7 +65,7 @@ final class AndroidOrderedPathPresentation {
                 ms=prefix.getDouble("response_ms");
                 if(!Double.isFinite(ms)||ms<=0)throw new IllegalStateException("The ordered HTTP proof response is unavailable.");
             }
-            values.add(new Member(sources.get(i),modes.get(i),ms));
+            values.add(new Member(sources.get(i),modes.get(i),ms,testing&&preparation.testsSavedPosition(i)));
         }
         AndroidOrderedPathPresentation out=new AndroidOrderedPathPresentation(values,live,testing,preparation,choice,home);
         if(!out.current(context))throw new IllegalStateException("The ordered display changed during capture.");

@@ -27,6 +27,7 @@ SESSION = '''package com.eabusham.routervpn;
 final class AndroidNodeChainSession {
  static AndroidNodeChainSession retained;static AndroidNodeChainSession retained(){return retained;}
  final AndroidNodeStore.ChainCapture source;final AndroidNodeChainCapture capture;
+ final AndroidNodeCandidatePrefixCapture candidatePrefix=null;
  io.nekohasekai.libbox.CommandServer server=new io.nekohasekai.libbox.CommandServer();boolean current=true;
  AndroidNodeChainSession(AndroidNodeStore.ChainCapture source)throws Exception{this.source=source;capture=AndroidNodeChainCapture.compile(source);retained=this;}
  void requireCurrent()throws Exception{source.requireCurrent();if(!current)throw new IllegalStateException("Retired native session/network");}
@@ -212,11 +213,13 @@ def prepare(src, app, java):
     for name,body in ui.items():
         target=src/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(body)
     (app/'AndroidNodeChainSession.java').write_text(SESSION)
+    (app/'AndroidNodeCandidatePrefixCapture.java').write_text('''package com.eabusham.routervpn;final class AndroidNodeCandidatePrefixCapture{final String sourceSHA256="",configSHA256="";final io.nekohasekai.libbox.RouterNodeChainCandidatePreparation plan=null;void close()throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}}''')
     (app/'NodeCandidateHarness.java').write_text(HARNESS)
     native=src/'io/nekohasekai/libbox'
     (native/'CommandServer.java').write_text('package io.nekohasekai.libbox;public class CommandServer{}')
     (native/'RouterNodeChainCandidateCatalog.java').write_text('package io.nekohasekai.libbox;public interface RouterNodeChainCandidateCatalog{String currentInventorySHA256();}')
     (native/'RouterNodeChainCandidateMeasurement.java').write_text(NATIVE)
+    (native/'RouterNodeChainCandidatePreparation.java').write_text('''package io.nekohasekai.libbox;public class RouterNodeChainCandidatePreparation{public String metadata(){throw new IllegalStateException("No idle prefix in connected candidate fixture");}public String captureSHA256(){return "";}public String statusJSON(){return "{}";}public void start(String request,String id)throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}public void cancel(String request){}public void drain(String request)throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}public void close()throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}}''')
     p=native/'Libbox.java';s=p.read_text();s=s[:-1]+r'''
 public static boolean routerNodeChainCandidateInputSupported(String input)throws Exception{return "true".equals(call("candidate-supported",input));}
 public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(RouterNodeChain plan,CommandServer server,int position,String inventory,RouterNodeChainCandidateCatalog catalog)throws Exception{RouterNodeChainCandidateMeasurement value=new RouterNodeChainCandidateMeasurement(plan,position,inventory,catalog);if(RouterNodeChainCandidateMeasurement.factoryFailure)throw new IllegalStateException("late original callback");return value;}

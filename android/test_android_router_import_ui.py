@@ -154,7 +154,7 @@ final class AndroidNodeChainRuntime {static final class ActiveCapture {long path
     original=T.SOURCES[purpose]
     declaration='class AndroidNodeCandidatePreparation {'
     assert original.count(declaration)==1
-    sources[purpose]=original.replace(declaration,declaration+'static boolean busy(){return false;}static AndroidNodeCandidatePreparation retained(){return null;}',1)
+    sources[purpose]=original.replace(declaration,declaration+'static boolean busy(){return false;}static AndroidNodeCandidatePreparation retained(){return null;}boolean testsSavedPosition(int position){throw new IllegalStateException("Import fixture has no temporary prefix owner");}',1)
     sources['com/eabusham/routervpn/AndroidOrderedPathPresentation.java']=(JAVA/'AndroidOrderedPathPresentation.java').read_text()
     sources['com/eabusham/routervpn/RouterVpnNodeMapView.java']=r'''package com.eabusham.routervpn;final class RouterVpnNodeMapView{static final String ROLE_ENTRY="entry",ROLE_HOP="hop",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";static final class Marker{Marker(String id,String name,double latitude,double longitude,String role,double latency,boolean external){}}void setMarkers(java.util.List<Marker> markers){}void setOrderedPath(java.util.List<String> ids,boolean live){}}'''
     handlers='\n'.join(method(signature) for signature in METHODS)

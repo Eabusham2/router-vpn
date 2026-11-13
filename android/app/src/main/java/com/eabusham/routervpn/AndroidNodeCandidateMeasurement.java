@@ -2,6 +2,7 @@ package com.eabusham.routervpn;
 
 import io.nekohasekai.libbox.Libbox;
 import io.nekohasekai.libbox.RouterNodeChainCandidateMeasurement;
+import io.nekohasekai.libbox.RouterNodeChainCandidatePreparation;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -19,7 +20,26 @@ final class AndroidNodeCandidateMeasurement {
     final AndroidNodeCandidateCatalog catalog;
     private final Callback callback;
     private volatile boolean cancelled;
-    private volatile RouterNodeChainCandidateMeasurement nativeOwner;
+    private volatile NativeOwner nativeOwner;
+    /** Both owners keep the same native fifty-sample protocol. Prefix-only
+     * preparation already owns its closed-ingress native lifetime. */
+    private static final class NativeOwner {
+        final RouterNodeChainCandidateMeasurement connected;
+        final RouterNodeChainCandidatePreparation prefix;
+        private String admittedRequest="";
+        NativeOwner(RouterNodeChainCandidateMeasurement value){if(value==null)throw new IllegalStateException("Native candidate owner was not returned.");connected=value;prefix=null;}
+        NativeOwner(RouterNodeChainCandidatePreparation value){if(value==null)throw new IllegalStateException("Native prefix owner was not returned.");connected=null;prefix=value;}
+        String metadata()throws Exception{return prefix==null?connected.metadata():prefix.metadata();}
+        String captureSHA256()throws Exception{return prefix==null?connected.captureSHA256():prefix.captureSHA256();}
+        String statusJSON()throws Exception{return prefix==null?connected.statusJSON():prefix.statusJSON();}
+        void start(String request,String candidate)throws Exception{if(prefix==null)connected.start(request,candidate);else prefix.start(request,candidate);admittedRequest=request;}
+        void cancel(String request){if(prefix==null)connected.cancel(request);else prefix.cancel(request);}
+        void drain(String request)throws Exception{if(prefix==null)connected.drain(request);else prefix.drain(request);}
+        // The shared prefix is the outer service's proof owner. A failed native
+        // Start joins its admission before returning; successful requests keep
+        // their exact drain authority until callbacks and native holds join.
+        void close()throws Exception{if(prefix==null)connected.close();else if(!admittedRequest.isEmpty())prefix.drain(admittedRequest);}
+    }
     private volatile String request="";
     private Object lease;
     private boolean borrowedLease;
@@ -54,17 +74,19 @@ final class AndroidNodeCandidateMeasurement {
     static synchronized boolean busy(){return active!=null;}
     boolean joined(){return joined.getCount()==0;}
     Throwable completionFailure(){return completionFailure;}
-    void cancel(){synchronized(this){cancelled=true;}RouterNodeChainCandidateMeasurement value=nativeOwner;if(value!=null&&!request.isEmpty())value.cancel(request);}
+    void cancel(){synchronized(this){cancelled=true;}NativeOwner value=nativeOwner;if(value!=null&&!request.isEmpty())value.cancel(request);}
     private void run(){
         Throwable failure=null;List<AndroidNodeCandidateResult> results=new ArrayList<>();
         try {
             catalog.requireCurrent();
-            nativeOwner=Libbox.routerNodeChainNewCandidateMeasurement(catalog.session.capture.plan,catalog.server,catalog.prefix,catalog.inventory,catalog);
+            AndroidNodeCandidatePrefixCapture prefix=catalog.session.candidatePrefix;
+            nativeOwner=prefix==null?new NativeOwner(Libbox.routerNodeChainNewCandidateMeasurement(catalog.session.capture.plan,catalog.server,catalog.prefix,catalog.inventory,catalog))
+                    :new NativeOwner(prefix.plan);
             if(nativeOwner==null)throw new IllegalStateException("Native candidate owner was not returned.");
             JSONObject metadata=new JSONObject(nativeOwner.metadata());
             if(!nativeOwner.captureSHA256().equals(metadata.getString("capture_sha256"))||catalog.prefix!=metadata.getInt("prefix_position")
-                    ||!catalog.session.capture.plan.sourceSHA256().equals(metadata.getString("source_sha256"))
-                    ||!catalog.session.capture.plan.configSHA256().equals(metadata.getString("config_sha256")))throw new IllegalStateException("Candidate metadata belongs to another original chain.");
+                    ||!(prefix==null?catalog.session.capture.plan.sourceSHA256():prefix.sourceSHA256).equals(metadata.getString("source_sha256"))
+                    ||!(prefix==null?catalog.session.capture.plan.configSHA256():prefix.configSHA256).equals(metadata.getString("config_sha256")))throw new IllegalStateException("Candidate metadata belongs to another original chain.");
             for(AndroidNodeCandidateCatalog.Row row:catalog.rows){
                 if(cancelled)break;
                 if(row.input.isEmpty())continue;
@@ -101,8 +123,9 @@ final class AndroidNodeCandidateMeasurement {
             boolean joined=false;
             while(!joined){
                 try {
-                    RouterNodeChainCandidateMeasurement value=nativeOwner;
+                    NativeOwner value=nativeOwner;
                     if(value!=null){if(!request.isEmpty())value.cancel(request);value.close();}
+                    else if(catalog.session.candidatePrefix!=null){ /* No request was admitted by this worker. The service retains the prefix. */ }
                     else Libbox.routerNodeChainCloseCandidateMeasurement(catalog.session.capture.plan,catalog.prefix,catalog.inventory);
                     joined=true;
                 } catch(Exception pending){

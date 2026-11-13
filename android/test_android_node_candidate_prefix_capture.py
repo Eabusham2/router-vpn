@@ -49,6 +49,8 @@ public final class RouterNodeChainCandidatePreparation {
  public String configSHA256()throws Exception{return meta.getString("config_sha256");}
  public String originalSourceSHA256()throws Exception{return meta.getString("original_source_sha256");}
  public String captureSHA256()throws Exception{return meta.getString("capture_sha256");}
+ public void start(String request,String candidate)throws Exception{throw new IllegalStateException("Pure source fixture cannot start native candidate work");}
+ public void cancel(String request){}public void drain(String request)throws Exception{throw new IllegalStateException("Pure source fixture has no native candidate work");}public String statusJSON(){return "{}";}
  public void close(){closed++;}
  private static String digest(String raw)throws Exception{byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8));StringBuilder value=new StringBuilder();for(byte b:digest)value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return value.toString();}
 }'''

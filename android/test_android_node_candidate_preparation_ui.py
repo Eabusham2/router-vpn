@@ -26,7 +26,7 @@ SOURCES={
 }
 BOUNDARIES=r'''package com.eabusham.routervpn;
 import android.content.Context;import java.util.*;
-final class AndroidNodeStore{static final class ChainCapture{final List<String> modes=List.of("wg","awg2-fast","awg2-strong","shadowsocks");String execution="local";boolean valid=true;void requireCurrent(){if(!valid)throw new IllegalStateException("source changed");}}}
+final class AndroidNodeStore{static final class ChainCapture{List<String> modes=List.of("wg","awg2-fast","awg2-strong","shadowsocks");String execution="local";boolean valid=true;void requireCurrent(){if(!valid)throw new IllegalStateException("source changed");}}}
 final class AndroidStandardExitStore{AndroidStandardExitStore(Context c){}}
 final class AndroidHomeStateStore{static final class Snapshot{boolean connected;}static Snapshot home=new Snapshot();static Snapshot snapshot(Context c){return home;}}
 final class AndroidConnectionSelection{static String selected="original";static String digest(Context c,AndroidNodeStore n){return selected;}static void requireCurrent(Context c,AndroidNodeStore n,String s){if(!s.equals(selected))throw new IllegalStateException("selection changed");}}
@@ -34,6 +34,7 @@ final class AndroidConnectionProfileStore{static AndroidNodeStore.ChainCapture s
 final class AndroidNodeCandidateResult{final String name="Original candidate";final double score=2.5;boolean valid=true;boolean current(long now){return valid;}}
 final class AndroidNodeCandidateProfile{static int writes;final String description="Original saved prefix → candidate";final AndroidNodeCandidatePreparation owner;final AndroidNodeCandidateResult result;AndroidNodeCandidateProfile(AndroidNodeCandidatePreparation o,AndroidNodeCandidateResult r){owner=o;result=r;}AndroidConnectionProfileStore.Record save(Context c,String name){if(!owner.retired||owner.cancelled||!result.valid)throw new IllegalStateException("retired result authority");if(name.trim().isEmpty())throw new IllegalStateException("name required");writes++;return new AndroidConnectionProfileStore.Record(name);}}
 final class AndroidNodeCandidatePreparation{
+ // SHIPPING_PREFIX_DECISION
  interface Callback{void progress(String detail);void finished(List<Choice> choices,Throwable failure);}static final class Choice{final AndroidNodeCandidateResult result=new AndroidNodeCandidateResult();final AndroidNodeCandidateProfile profile;Choice(AndroidNodeCandidatePreparation o){profile=new AndroidNodeCandidateProfile(o,result);}}
  static volatile AndroidNodeCandidatePreparation active;volatile boolean started,cancelled,retired;volatile Callback observer;final List<Choice> results=new ArrayList<>();static AndroidNodeCandidatePreparation retained(){return active;}
  synchronized boolean observes(Callback c){return observer==c;}void detach(Callback c){if(observer==c)observer=null;}void attach(Callback c){observer=c;if(retired)c.finished(results,null);else c.progress("Testing saved path; original candidate drain pending");}
@@ -64,7 +65,7 @@ public final class CandidatePreparationUITest{
  static CandidateProductSurface screen(){AndroidNodeCandidatePreparation.active=null;AlertDialog.last=null;AndroidHomeStateStore.home=new AndroidHomeStateStore.Snapshot();AndroidConnectionSelection.selected="original";AndroidConnectionProfileStore.source=new AndroidNodeStore.ChainCapture();AndroidNodeCandidateProfile.writes=0;return new CandidateProductSurface();}
  static void idleAndRotation()throws Exception{
   for(int prefix=0;prefix<3;prefix++){
-   var ui=screen();ui.test();workers();var picker=AlertDialog.last;check(picker!=null&&picker.items!=null&&picker.items.length==3,"shipping idle picker omitted a WG/AWG prefix or offered lazy final TCP");check(TextView.latest.contains("existing final node must work"),"idle UI concealed complete saved-final preparation limit");check(ui.connection.requests==0,"idle UI started temporary VPN before explicit prefix choice");picker.pick(prefix);
+   var ui=screen();ui.test();workers();var picker=AlertDialog.last;check(picker!=null&&picker.items!=null&&picker.items.length==3,"shipping idle picker omitted a WG/AWG prefix or offered lazy final TCP");check(TextView.latest.contains("without later nodes")&&picker.items[prefix].toString().contains("prefix only"),"idle UI concealed independent packet prefix preparation");check(ui.connection.requests==0,"idle UI started temporary VPN before explicit prefix choice");picker.pick(prefix);
    var owner=ui.connection.purpose;check(ui.connection.captured==AndroidConnectionProfileStore.source&&ui.connection.prefix==prefix&&!owner.started,"shipping dialog lost original saved source or bypassed permission");
    var old=ui.preparedCandidateDialog;ui.pauseTest();check(!owner.cancelled&&owner.observer==null,"Activity pause cancelled process-owned temporary testing");ui.resumeTest();check(owner.observer!=null&&TextView.latest.contains("drain pending"),"recreated sheet did not attach captured progress");
    ui.connection.approve();Button.last.click.run(Button.last);check(AndroidNodeCandidateProfile.writes==0&&TextView.latest.contains("cleanup to finish"),"Save was offered before native DOWN completion");owner.complete();check(TextView.latest.contains("Temporary VPN stopped")&&TextView.latest.contains("50/50")&&TextView.latest.contains("not HTTP"),"completed UI lost TCP-only measurement meaning");
@@ -80,12 +81,22 @@ public final class CandidatePreparationUITest{
   ui=screen();ui.test();workers();AlertDialog.last.pick(0);owner=ui.connection.purpose;ui.connection.approve();owner.complete();Button.last.click.run(Button.last);AlertDialog.last.pick(0);owner.results.get(0).result.valid=false;EditText.last.text="Stale";AlertDialog.last.positive.run(AlertDialog.last,0);workers();check(AndroidNodeCandidateProfile.writes==0&&TextView.latest.contains("not saved"),"late profile Save ignored detached authority refusal");ui.preparedCandidateDialog.cancel();
   ui=screen();ui.connection.connected=true;ui.test();check(ui.preparedCandidateDialog==null&&AndroidNodeCandidateDialog.shown>0,"normal connected prefix chooser was replaced by temporary preparation");
  }
- public static void main(String[] args)throws Exception{idleAndRotation();ownershipAndFailure();System.out.println("Android candidate shipping UI: "+checks+" exact source, purpose, rotation, DOWN and explicit Save checks PASS");}
+ static void fullSavedChoices()throws Exception{
+  for(var modes:List.of(List.of("wg"),List.of("shadowsocks","awg2-fast","shadowsocks"),List.of("wg","awg2-strong"))){
+   var ui=screen();AndroidConnectionProfileStore.source.modes=modes;ui.test();workers();var picker=AlertDialog.last;int selected=picker.items.length-1;
+   check(picker.items[selected].toString().contains("complete saved path")&&TextView.latest.contains("Other selections require the complete saved path"),"unsupported or final prefix lost complete-path disclosure");
+   picker.pick(selected);check(ui.connection.requests==1&&!ui.connection.purpose.started,"full-saved fallback bypassed original permission");ui.preparedCandidateDialog.cancel();
+  }
+ }
+ public static void main(String[] args)throws Exception{idleAndRotation();ownershipAndFailure();fullSavedChoices();System.out.println("Android candidate shipping UI: "+checks+" exact source, purpose, rotation, DOWN and explicit Save checks PASS");}
 }'''
 
 def main():
     if not shutil.which('javac'):raise RuntimeError('JDK17 required')
     product=(JAVA/'ProductActivity.java').read_text()
+    helper=(JAVA/'AndroidNodeCandidatePreparation.java').read_text()
+    start=helper.index('    static boolean packetPrefix(');end=helper.index('    boolean prefixOnly()',start)
+    boundaries=BOUNDARIES.replace('// SHIPPING_PREFIX_DECISION',helper[start:end])
     methods=[]
     for signature in ('    private void runCandidateTimes(', '    private void resumeCandidatePreparation(', '    private void detachCandidatePreparation(', '    private void closeCandidateMeasurement('):
         start=product.index(signature);methods.append(product[start:product.index('\n',start)])
@@ -96,11 +107,12 @@ def main():
         work=Path(directory);app=work/'com/eabusham/routervpn';app.mkdir(parents=True)
         for name,body in SOURCES.items():
             target=work/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(body)
-        (app/'Boundaries.java').write_text(BOUNDARIES);(app/'CandidateProductSurface.java').write_text(PRODUCT.replace('// SHIPPING_PRODUCT_METHODS','\n'.join(methods)));(app/'CandidatePreparationUITest.java').write_text(HARNESS)
+        (app/'Boundaries.java').write_text(boundaries);(app/'CandidateProductSurface.java').write_text(PRODUCT.replace('// SHIPPING_PRODUCT_METHODS','\n'.join(methods)));(app/'CandidatePreparationUITest.java').write_text(HARNESS)
         target=app/'AndroidNodeCandidatePreparationDialog.java';source=(JAVA/target.name).read_text();target.write_text(source)
         classes=work/'classes';compile=['javac','--release','17','-d',str(classes),*map(str,work.rglob('*.java'))]
         subprocess.run(compile,check=True,timeout=45);run=['java','-cp',str(classes),'com.eabusham.routervpn.CandidatePreparationUITest'];subprocess.run(run,check=True,timeout=30)
         controls=(
+            ('AndroidNodeCandidatePreparationDialog.java','AndroidNodeCandidatePreparation.packetPrefix(source,i)','true','unsupported or final prefix lost complete-path disclosure'),
             ('AndroidNodeCandidatePreparationDialog.java','if(captured!=null)connection.cancelCandidatePermission(captured);', '', 'recreated sheet retained captured permission receipt'),
             ('AndroidNodeCandidatePreparationDialog.java','owner.attach(notice);','/* no attachment */','recreated sheet did not attach captured progress'),
             ('AndroidNodeCandidatePreparationDialog.java','if(detached)return;detached=true;', 'if(detached)return;if(owner!=null)owner.cancelFromUser();detached=true;', 'Activity pause cancelled process-owned temporary testing'),
