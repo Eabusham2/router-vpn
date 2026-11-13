@@ -1461,6 +1461,12 @@ The generated Darwin acceptance fixture now applies the same five-second inherit
 
 All 29 runner tests passed, retaining the original 28 tests and 11 pre-start ownership controls. Real independently grouped output writers exercise controller, engine and utility helpers; omitting each output bound is rejected. A real peer Kill with its waiter deliberately held exercises the post-Kill failure path, and removing that bound fails its witness. The original successful join remains required. These are runner and process-composition repairs; the encrypted path, every-node proof, selected DNS, PF, utun and authenticated Stop acceptance gates are unchanged and still require actual hosted execution.
 
+## Linux cleanup fixture retains the new original prefix owner
+
+The actual AMD64 and ARM64 generated-child jobs at 14b18bb3 failed their runner prerequisite because its extracted shipping cleanup body referenced a prefix owner absent from the fixture declaration. The fixture now supplies that explicit owner and exercises prefix join failure, native-close retry and successful retirement. The production cleanup body remains copied unchanged, including its 15-second bound, 50-millisecond retry cadence, original failure identity and refusal to publish stopped before joined native retirement.
+
+All 18 runner tests passed. The new compiled defect that ignores a failed prefix join is rejected at the original prefix-before-native-retirement witness; the existing empty-source, ordered-proof and execution-join controls remain. This repairs the observed compile blocker and extends the modeled cleanup boundary. It does not substitute for real generated-child/TUN or installed-host acceptance.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
