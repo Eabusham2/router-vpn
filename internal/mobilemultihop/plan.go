@@ -26,6 +26,7 @@ import (
 	"unicode/utf8"
 
 	"router-vpn/internal/awgpolicy"
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilepq"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/nativecomposite"
@@ -123,6 +124,9 @@ type Controller struct {
 	openvpnActive       atomic.Pointer[openVPNRemoteState]
 	openvpnRemoteCancel context.CancelFunc
 	openvpnRemoteDone   chan struct{}
+
+	// Tests capture a failed clock before proof I/O. Lease exchanges never use it.
+	testProofInterval func() (hopmeasure.Interval, error)
 }
 
 func exactJSON(data []byte, output any, limit int) error {

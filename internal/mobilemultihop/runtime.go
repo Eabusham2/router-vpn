@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/nativeopenvpn"
 	"router-vpn/internal/routechoice"
@@ -20,7 +21,23 @@ type controlError struct{ status int }
 
 func (e controlError) Error() string { return "private entry rejected the lease operation" }
 func (c *Controller) exchange(ctx context.Context, tag, method, target, token string, payload []byte) ([]byte, time.Duration, error) {
-	return c.exchangeBounded(ctx, tag, method, target, token, payload, multihoprelay.MaxControlResponseBytes)
+	startInterval := hopmeasure.StartInterval
+	if c.testProofInterval != nil {
+		startInterval = c.testProofInterval
+	}
+	interval, err := startInterval()
+	if err != nil {
+		return nil, 0, routedRequestFailure{"routed response measurement unavailable", err}
+	}
+	data, _, err := c.exchangeBounded(ctx, tag, method, target, token, payload, multihoprelay.MaxControlResponseBytes)
+	if err != nil {
+		return nil, 0, err
+	}
+	elapsed, err := interval.Duration()
+	if err != nil {
+		return nil, 0, routedRequestFailure{"routed response measurement unavailable", err}
+	}
+	return data, elapsed, nil
 }
 
 // Keep private route/URL details out of the public error while retaining the
