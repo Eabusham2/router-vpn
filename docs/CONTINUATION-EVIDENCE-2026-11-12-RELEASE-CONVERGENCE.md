@@ -1388,6 +1388,14 @@ Windows and Linux physical factories construct the original native Box and captu
 
 Validation: three shared receipt roots passed with the race detector (4.888 seconds); the actual native Box fixture produced 11 passing verdicts (4.606 seconds), and command substitution fixtures produced 19 (6.312 seconds). Both compiled omission controls failed at their intended source-capture and Darwin-admission witnesses. All 2,458 shipping source hashes were identical before and after the native suites. Nine runner checks passed. The TUN in these fixtures is explicitly unstarted: these results do not establish privileged OS networking or device acceptance.
 
+## Android original prefix host and immutable source retirement
+
+The Android service, session and temporary runtime now retain a distinct selected-prefix purpose. They bind the captured catalog to exactly one original native server, prove only the selected packet prefix, skip ordinary performance services, and do not grant ordinary Connected, Last, usage, or full-path MTU authority. A configured-MTU check requires matching positive OS readback under the original measurement hold. A failed candidate join or missing original native close receipt retains the original VPN and MTU owner for retry.
+
+The catalog can now capture immutable saved source inventory before permission or native startup. An observed change to the original source permanently invalidates its saved authority, including when those bytes are subsequently restored. This fixes a real change-away/change-back gap: an earlier original-source exception could bypass the separate catalog-signature invalidation latch.
+
+Validation used the actual Java service/session/runtime composition with explicit OS and native boundaries: prefix host 77 checks and five compiled controls; MTU adapter 74 and 12; ordinary runtime regression 342 and 24; complete saved temporary runtime 164 and ten; process supervisor 42 and seven; catalog and measurement 167 and 15. The original-source invalidation omission control was rejected. The actual service typecheck and four controls passed, along with 12 mandatory-workflow checks. Helper, measurement and user-interface activation are deliberately a subsequent integration unit; this foundation does not claim new encrypted-host or physical-device acceptance.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

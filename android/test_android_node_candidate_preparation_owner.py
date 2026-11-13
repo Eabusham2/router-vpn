@@ -43,10 +43,11 @@ import org.json.*;public final class RouterNodeChainCandidateMeasurement {
 }'''
 SOURCES[APP + 'AndroidNodeCandidateCatalog.java'] = '''package com.eabusham.routervpn;
 final class AndroidNodeCandidateCatalog {
- static volatile boolean sourcesValid=true;final AndroidNodeChainSession session;final io.nekohasekai.libbox.CommandServer server;final int prefix;final String inventory="original inventory";
+ static volatile boolean sourcesValid=true;final AndroidNodeChainSession session;final AndroidNodeStore.ChainCapture originalSource;final io.nekohasekai.libbox.CommandServer server;final int prefix;final String inventory="original inventory";
  static final class Row{final String id,name,input="original input";Row(String id){this.id=id;name=id;}}
  final java.util.List<Row> rows=java.util.List.of(new Row("one"),new Row("two"));
- AndroidNodeCandidateCatalog(android.content.Context context,AndroidNodeChainSession session,int prefix)throws Exception{this.session=session;this.prefix=prefix;server=session.candidateServer();}
+ AndroidNodeCandidateCatalog(android.content.Context context,AndroidNodeChainSession session,int prefix)throws Exception{this.session=session;originalSource=session.source;this.prefix=prefix;server=session.candidateServer();}
+ void bind(AndroidNodeChainSession source){throw new IllegalStateException("Complete-graph catalog is already bound in this fixture");}
  void requireCurrent(){try{session.requireCurrent();requireSavedSourcesCurrent();}catch(Exception stale){throw new IllegalStateException(stale);}}
  void requireSavedSourcesCurrent(){if(!sourcesValid)throw new IllegalStateException("captured saved catalog changed away and back");}
 }'''

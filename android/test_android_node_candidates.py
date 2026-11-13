@@ -61,6 +61,20 @@ public final class NodeCandidateHarness {
  interface Work{void run()throws Exception;}static void reject(Work action,String message)throws Exception{try{action.run();}catch(Exception expected){checks++;return;}throw new AssertionError(message);}
  static NodeChainCaptureHarness.Fixture fixture(Path root)throws Exception{return new NodeChainCaptureHarness.Fixture(root,"2/");}
  static AndroidStandardExitStore.Entry custom(String method){AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id="1234567890abcdef1234567890abcdef";entry.name="Custom candidate";entry.protocol="shadowsocks";entry.server="198.51.100.76";entry.serverPort=443;entry.expectedPublicIp="203.0.113.76";entry.method=method;entry.secret=Base64.getEncoder().encodeToString(new byte[method.contains("aes-128")?16:32]);return entry;}
+ static void capturedSources(Path root)throws Exception{
+  var f=fixture(root);var source=f.profiles.currentOrderedPath();
+  var unopened=AndroidNodeCandidateCatalog.captureSources(f.context,source,0);unopened.requireSourcesCurrent();
+  check(unopened.originalSource==source&&unopened.session==null&&unopened.server==null,"saved catalog capture acquired native authority before permission");
+  check(unopened.currentInventorySHA256().isEmpty(),"unbound saved catalog lent live callback authority");
+  var session=new AndroidNodeChainSession(source);reject(()->unopened.bind(session),"observed unbound catalog revived native authority");
+  var catalog=AndroidNodeCandidateCatalog.captureSources(f.context,source,0);String inventory=catalog.inventory;
+  reject(()->catalog.bind(new AndroidNodeChainSession(f.profiles.currentOrderedPath())),"same-byte foreign source bound captured catalog");
+  catalog.bind(session);check(catalog.session==session&&catalog.server==session.server&&inventory.equals(catalog.inventory)&&catalog.inventorySHA.equals(catalog.currentInventorySHA256()),"saved catalog binding rebuilt inventory or lost exact native owner");
+  reject(()->catalog.bind(session),"saved catalog bound its native owner twice");
+  var pending=AndroidNodeCandidateCatalog.captureSources(f.context,source,0);Path path=f.control().file.toPath();byte[] before=Files.readAllBytes(path);
+  Files.writeString(path,new String(before,StandardCharsets.UTF_8)+" ");reject(pending::requireSourcesCurrent,"prepermission source mutation was ignored");Files.write(path,before);
+  reject(()->pending.bind(session),"prepermission source change-away/back revived catalog");
+ }
  static void sources(Path root)throws Exception{
   for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305")){
    var f=new NodeChainCaptureHarness.Fixture(root,method.contains("aes-128")?"2/":method.contains("aes-256")?"2/awg-fast":"3/awg-strong");var exits=new AndroidStandardExitStore(f.context);var entry=custom(method);exits.save(entry);var unsupported=new AndroidStandardExitStore.Entry();unsupported.id="unsupported-socks";unsupported.name="Unscored SOCKS";unsupported.protocol="socks5";unsupported.server="192.0.2.90";unsupported.serverPort=1080;unsupported.expectedPublicIp="203.0.113.90";exits.save(unsupported);
@@ -174,7 +188,7 @@ public final class NodeCandidateHarness {
    f.profiles.load(other.id);try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getJSONArray("nodes").length()==2,"future paired profile did not compile its exact truncated suffix");}
   }
  }
- public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);sources(root);overlappingSavedSources(root);receipts(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
+ public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
 }'''
 
 
@@ -224,6 +238,8 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     data=work/'candidate-data';data.mkdir()
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(data)],env=env,check=True,timeout=120)
     controls = (
+        ('AndroidNodeCandidateCatalog', 'original.source!=originalSource', 'false', 'same-byte foreign source bound captured catalog'),
+        ('AndroidNodeCandidateCatalog', 'catch(Exception changed){savedSourcesInvalidated=true;throw changed;}', 'catch(Exception changed){throw changed;}', 'prepermission source change-away/back revived catalog'),
         ('AndroidNodeCandidateProfile', 'private void requireCurrent()throws Exception {operation.requireResult(result);}', 'private void requireCurrent()throws Exception {}', 'retired candidate saved a future profile'),
         ('AndroidNodeCandidateCatalog', '||!signature.equals(currentSignature())', '||false', 'unsupported candidate source replacement accepted'),
         ('AndroidNodeCandidateCatalog', '+before.st_dev+":"+before.st_ino+":"', '+""', 'same-byte replacement revived original file identity'),

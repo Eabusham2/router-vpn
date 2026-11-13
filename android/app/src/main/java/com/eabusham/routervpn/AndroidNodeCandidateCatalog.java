@@ -20,8 +20,9 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         final String localID, id, name, input, reason;
         Row(String localID,String id,String name,String input,String reason){this.localID=localID;this.id=id;this.name=name;this.input=input;this.reason=reason;}
     }
-    final AndroidNodeChainSession session;
-    final CommandServer server;
+    volatile AndroidNodeChainSession session;
+    volatile CommandServer server;
+    final AndroidNodeStore.ChainCapture originalSource;
     final int prefix;
     final List<Row> rows;
     final String inventory, inventorySHA, signature;
@@ -31,14 +32,27 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     private final AndroidStandardExitStore external;
 
     AndroidNodeCandidateCatalog(Context context,AndroidNodeChainSession session,int prefix)throws Exception {
-        this.session=session;this.prefix=prefix;
-        if(session==null||prefix<0||prefix>=session.source.members.size())throw new IllegalStateException("Connect the original ordered path before choosing a prefix.");
-        String mode=session.source.modes.get(prefix);
+        this(context,source(session),prefix);
+        bind(session);
+    }
+    /** Capture the immutable saved inventory before permission or a native
+     * server exists. This grants no live candidate or connection authority. */
+    static AndroidNodeCandidateCatalog captureSources(Context context,AndroidNodeStore.ChainCapture source,int prefix)throws Exception {
+        return new AndroidNodeCandidateCatalog(context,source,prefix);
+    }
+    private static AndroidNodeStore.ChainCapture source(AndroidNodeChainSession session) {
+        if(session==null)throw new IllegalStateException("The original ordered path is missing.");return session.source;
+    }
+    private AndroidNodeCandidateCatalog(Context context,AndroidNodeStore.ChainCapture source,int prefix)throws Exception {
+        originalSource=source;this.prefix=prefix;
+        if(source==null||prefix<0||prefix>=source.members.size())throw new IllegalStateException("The original saved packet prefix is missing.");
+        source.requireCurrent();
+        String mode=source.modes.get(prefix);
         if(!("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)))throw new IllegalStateException("This prefix cannot time destination TCP connections; no score is available.");
-        server=session.candidateServer();nodes=new AndroidNodeStore(context);external=new AndroidStandardExitStore(context);
+        nodes=new AndroidNodeStore(context);external=new AndroidStandardExitStore(context);
         signature=currentSignature();
         Set<String> excluded=new HashSet<>(),proofs=new HashSet<>();
-        for(int i=0;i<=prefix;i++){AndroidNodeStore.ChainSource source=session.source.members.get(i);excluded.add(source.id);if(!source.proofId.isEmpty())proofs.add(source.proofId);}
+        for(int i=0;i<=prefix;i++){AndroidNodeStore.ChainSource member=source.members.get(i);excluded.add(member.id);if(!member.proofId.isEmpty())proofs.add(member.proofId);}
         List<Row> captured=new ArrayList<>();List<AndroidNodeStore.Node> available=new ArrayList<>(nodes.list());
         for(AndroidStandardExitStore.Entry entry:external.list())available.add(new AndroidNodeStore.Node(entry.id,entry.name,entry.server,null));
         available.sort(Comparator.comparing(value->value.id));Set<String> identities=new HashSet<>();JSONArray inputs=new JSONArray();
@@ -46,12 +60,12 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
             if(excluded.contains(node.id))continue;
             String id=node.id,input="",reason="Unsupported saved transport or Start Layer; no TCP score";
             try {
-                AndroidNodeStore.ChainSource source=nodes.candidateSource(node.id);id=source.profileId;
-                if(!source.proofId.isEmpty()&&proofs.contains(source.proofId))continue;
-                JSONObject profile=source.profile();
+                AndroidNodeStore.ChainSource candidate=nodes.candidateSource(node.id);id=candidate.profileId;
+                if(!candidate.proofId.isEmpty()&&proofs.contains(candidate.proofId))continue;
+                JSONObject profile=candidate.profile();
                 String layer=profile.optString("start_layer","off");
                 if(!layer.isEmpty()&&!"off".equals(layer))throw new IllegalStateException("Layered candidate is unsupported");
-                input=AndroidNodeChainCapture.memberInput(source,"shadowsocks",profile);
+                input=AndroidNodeChainCapture.memberInput(candidate,"shadowsocks",profile);
                 if(!Libbox.routerNodeChainCandidateInputSupported(input))throw new IllegalStateException("Unsupported original candidate source");
                 // The shared constructor is authoritative for literal transport,
                 // canonical single PSK and exact three-method admission.
@@ -65,7 +79,24 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         rows=java.util.Collections.unmodifiableList(captured);
         inventory=new JSONObject().put("schema",1).put("revision",signature).put("inputs",inputs).toString();
         inventorySHA=digest(inventory);
-        if(!signature.equals(currentSignature())||!inventorySHA.equals(currentInventorySHA256()))throw new IllegalStateException("Candidate sources changed during capture.");
+        requireSourcesCurrent();
+    }
+    synchronized void bind(AndroidNodeChainSession original)throws Exception {
+        if(session!=null||server!=null||original==null||original.source!=originalSource||invalidated)
+            throw new IllegalStateException("The original captured catalog cannot bind another native session.");
+        requireSourcesCurrent();
+        CommandServer retained=original.candidateServer();
+        // Retain even a binding that subsequently fails validation: a later
+        // caller cannot adopt a replacement server with these captured inputs.
+        session=original;server=retained;requireCurrent();
+    }
+    void requireSourcesCurrent()throws Exception {
+        requireOriginalSourceCurrent();requireSavedSourcesCurrent();requireOriginalSourceCurrent();
+        if(invalidated)throw new IllegalStateException("The original candidate catalog authority was retired.");
+    }
+    private void requireOriginalSourceCurrent()throws Exception {
+        try{originalSource.requireCurrent();}
+        catch(Exception changed){savedSourcesInvalidated=true;throw changed;}
     }
     private String currentSignature()throws Exception {
         try {
@@ -102,7 +133,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         return before.st_dev + ":" + before.st_ino + ":" + AndroidTorProfile.digest(bytes);
     }
     @Override public String currentInventorySHA256(){
-        try {if(invalidated||session.candidateServer()!=server||!signature.equals(currentSignature())){invalidated=true;return "";}session.requireCurrent();return inventorySHA;}
+        try {requireOriginalSourceCurrent();AndroidNodeChainSession original=session;CommandServer nativeServer=server;if(invalidated||original==null||nativeServer==null||original.candidateServer()!=nativeServer||!signature.equals(currentSignature())){invalidated=true;return "";}requireOriginalSourceCurrent();original.requireCurrent();if(original!=session||nativeServer!=server||invalidated||savedSourcesInvalidated){invalidated=true;return "";}return inventorySHA;}
         catch(Exception changed){invalidated=true;return "";}
     }
     AndroidNodeStore.ChainSource source(String localID)throws Exception { requireCurrent();AndroidNodeStore.ChainSource source=nodes.candidateSource(localID);requireCurrent();return source; }

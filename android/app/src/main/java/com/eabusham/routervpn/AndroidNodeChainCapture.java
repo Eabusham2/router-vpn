@@ -147,6 +147,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     JSONObject controlProfile() throws Exception { return original.control.profile(); }
     JSONObject finalProfile() throws Exception { return original.members.get(original.members.size() - 1).profile(); }
+    boolean ownsSource(AndroidNodeStore.ChainCapture source) { return original == source; }
     void requireCurrent() throws Exception { original.requireCurrent(); }
     @Override public void close() throws Exception { plan.close(); }
 

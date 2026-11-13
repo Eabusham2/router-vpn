@@ -45,6 +45,9 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     private long proofGeneration;
     private boolean torController;
     private volatile RouterMTU controller;
+    private AndroidNodeChainSession candidatePrefixOwner;
+    private RouterMTUState candidatePrefixReadback;
+    private Object candidatePrefixLease;
     private volatile String notice = "Connect a proved Auto-MTU Router VPN path first.";
 
     AndroidMTUSession(Context context, Failure failure) {
@@ -294,6 +297,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     /** A temporary candidate batch may defer automatic search, but must still
      * retain the real ordered controller and exact OS/native MTU readback. */
     void prepareNodeCandidates(AndroidNodeChainSession chain,Object lease)throws Exception {
+        if(chain.candidatePrefix!=null){prepareNodeCandidatePrefix(chain,lease);return;}
         synchronized(lifecycle) {
             if(!AndroidMTUMeasurementGate.owns(lease))throw new IllegalStateException("The original candidate MTU hold is unavailable.");
             activateNodeChain(chain);
@@ -301,6 +305,36 @@ final class AndroidMTUSession implements RouterMTUPlatform {
             chain.requireCurrent();drainForMeasurement();chain.requireCurrent();
             if(!AndroidMTUMeasurementGate.owns(lease))throw new IllegalStateException("The original candidate MTU hold changed.");
         }
+    }
+    /** Prefix-only testing has no complete-path MTU controller. Its unchanged
+     * configured TUN MTU must instead match positive OS readback while the
+     * original external hold prevents any optimizer from replacing it. */
+    private void prepareNodeCandidatePrefix(AndroidNodeChainSession chain,Object lease)throws Exception {
+        synchronized(lifecycle){
+            if(!AndroidMTUMeasurementGate.owns(lease)||closed||invalid||activated||controller!=null
+                    ||chain.candidatePrefix==null||candidatePrefixOwner!=null&&candidatePrefixOwner!=chain)
+                throw new IllegalStateException("The original prefix has no exclusive configured MTU owner.");
+            chain.requireCurrent();if(!chain.prefixHealthy())throw new IllegalStateException("The selected prefix proof is unavailable.");
+            long deadline=android.os.SystemClock.elapsedRealtime()+2500;
+            RouterMTUState actual;
+            while((actual=captureMTU())==null&&!closed&&!invalid&&android.os.SystemClock.elapsedRealtime()<deadline)Thread.sleep(20);
+            if(actual==null||actual.getMTU()!=chain.candidatePrefix.originalMTU||actual.getMTU()>chain.candidatePrefix.ceilingMTU)
+                throw new IllegalStateException("OS readback did not confirm the configured prefix MTU.");
+            synchronized(this){
+                if(changing||closed||invalid||!same(actual,captureMTU())||!AndroidMTUMeasurementGate.owns(lease))
+                    throw new IllegalStateException("The original prefix TUN changed during MTU readback.");
+                candidatePrefixOwner=chain;candidatePrefixReadback=actual;candidatePrefixLease=lease;
+            }
+            chain.requireCurrent();if(!chain.prefixHealthy()||!candidatePrefixCurrent(chain))throw new IllegalStateException("The original prefix or configured MTU changed.");
+            notice="Configured MTU retained during candidate testing; no path MTU measurement was performed.";
+        }
+    }
+    synchronized boolean candidatePrefixCurrent(AndroidNodeChainSession chain){
+        if(closed||invalid||changing)return false;
+        if(candidatePrefixOwner==null)return true; // Before the helper's explicit readback admission.
+        boolean current=candidatePrefixOwner==chain&&AndroidMTUMeasurementGate.owns(candidatePrefixLease)&&same(candidatePrefixReadback,captureMTU());
+        if(!current)invalid=true;
+        return current;
     }
     void activateTor(AndroidTorSession tor) {
         synchronized (lifecycle) {

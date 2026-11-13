@@ -171,7 +171,7 @@ def main():
         subprocess.run(['java', '-cp', os.pathsep.join((str(classes), str(jar))), 'com.eabusham.routervpn.OrderedRuntimeTest'], check=True, timeout=90)
         original = (base.JAVA / 'AndroidNodeChainRuntime.java').read_text()
         controls = (
-            ('selectedOperation,false,null,new Callback()', 'selectedOperation,true,null,new Callback()', 'success', 'temporary preparation overwrote ordered Last history'),
+            ('selectedOperation,false,null,prefix,catalog,new Callback()', 'selectedOperation,true,null,prefix,catalog,new Callback()', 'success', 'temporary preparation overwrote ordered Last history'),
             ('if(!guard.drain())return false;', 'guard.drain();', 'success', 'temporary graph retired before its held candidate drain'),
             ('public void validate() throws Exception { requireCurrent(); }', 'public void validate() throws Exception {}', 'invalidation', 'stale temporary capture reached success: network'),
             ('if(preparation!=null) {\n            preparation.cancel();', 'if(false) {\n            preparation.cancel();', 'network', 'network change invalidated native graph before candidate callbacks joined'),

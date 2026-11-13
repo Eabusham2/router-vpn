@@ -21,6 +21,7 @@ SOURCES['com/eabusham/routervpn/AndroidNodeChainSession.java'] = r'''package com
 final class AndroidNodeChainSession {
  final io.nekohasekai.libbox.CommandServer server=new io.nekohasekai.libbox.CommandServer();
  volatile boolean valid=true;boolean automatic=true,restoringExecution;int calls;io.nekohasekai.libbox.RouterMTUPlatform platform;
+ AndroidNodeCandidatePrefixCapture candidatePrefix;boolean prefixHealthy(){return candidatePrefix!=null&&valid;}
  void requireCurrent(){if(!valid)throw new IllegalStateException("original ordered source retired");}boolean healthy(){return valid;}
  io.nekohasekai.libbox.RouterMTU newMTU(io.nekohasekai.libbox.RouterMTUPlatform owner)throws Exception {
   requireCurrent();calls++;platform=owner;var result=io.nekohasekai.libbox.Libbox.newRouterMTU(server,owner,"original complete ordered config","native all-member capacity");result.automatic=automatic;return result;
@@ -99,7 +100,38 @@ public final class OrderedMTUTest {
    reject(()->f.owner.prepareNodeCandidates(chain,lease),"temporary candidate bypassed failed native MTU construction");f.owner.close();
   }finally{AndroidMTUMeasurementGate.release(lease);}
  }
- public static void main(String[] args)throws Exception{String family=args.length==0?"all":args[0];if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("restored"))restored();if(family.equals("all")||family.equals("policy"))policies();if(family.equals("all")||family.equals("constructor"))constructorRetirement();if(family.equals("all")||family.equals("retry"))retry();if(family.equals("all")||family.equals("observation"))observation();if(family.equals("all")||family.equals("temporary"))temporaryCandidates();reset();System.out.println("Android ordered MTU adapter: "+checks+" executable checks passed; OS/native handles doubled.");}
+ static void prefixCandidates()throws Exception {
+  for(String fault:new String[]{"none","mtu","ceiling","proof","lease"}){
+   reset();Main.Fixture f=new Main.Fixture();f.establish(1408);AndroidNodeChainSession chain=new AndroidNodeChainSession();chain.candidatePrefix=new AndroidNodeCandidatePrefixCapture();Object lease=AndroidMTUMeasurementGate.acquire();
+   try{
+    if(fault.equals("mtu"))chain.candidatePrefix.originalMTU=1360;
+    if(fault.equals("ceiling"))chain.candidatePrefix.ceilingMTU=1280;
+    if(fault.equals("proof"))chain.valid=false;
+    if(!fault.equals("none"))reject(()->f.owner.prepareNodeCandidates(chain,fault.equals("lease")?new Object():lease),"prefix MTU accepted invalid "+fault);
+    else{
+     f.owner.prepareNodeCandidates(chain,lease);
+     check(controller(f.owner)==null&&Libbox.latest==null&&chain.calls==0,"prefix readback constructed ordinary complete-path MTU");
+     check(f.owner.candidatePrefixCurrent(chain)&&f.owner.captureMTU().getMTU()==1408&&AndroidMTUMeasurementGate.owns(lease),"prefix lost configured readback or outer hold");
+     check(!f.owner.candidatePrefixCurrent(new AndroidNodeChainSession()),"prefix readback lent another graph its authority");
+     check(!f.owner.candidatePrefixCurrent(chain),"observed prefix replacement revived configured readback");
+    }
+    f.owner.close();check(AndroidMTUMeasurementGate.owns(lease),"prefix MTU close released outer native graph hold");
+   }finally{AndroidMTUMeasurementGate.release(lease);}
+  }
+  for(String fault:new String[]{"network","readback","hold"}){
+   reset();Main.Fixture f=new Main.Fixture();f.establish(1408);AndroidNodeChainSession chain=new AndroidNodeChainSession();chain.candidatePrefix=new AndroidNodeCandidatePrefixCapture();Object lease=AndroidMTUMeasurementGate.acquire();
+   try{
+    f.owner.prepareNodeCandidates(chain,lease);
+    if(fault.equals("network"))f.physical.links.addresses.add("192.0.2.3/24");
+    if(fault.equals("readback"))f.mtu=1360;
+    if(fault.equals("hold"))AndroidMTUMeasurementGate.release(lease);
+    check(!f.owner.candidatePrefixCurrent(chain),"prefix kept changed "+fault+" authority");
+    f.physical.links.addresses.remove("192.0.2.3/24");f.mtu=1408;
+    check(!f.owner.candidatePrefixCurrent(chain),"prefix change-away/back revived authority");f.owner.close();
+   }finally{AndroidMTUMeasurementGate.release(lease);}
+  }
+ }
+ public static void main(String[] args)throws Exception{String family=args.length==0?"all":args[0];if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("restored"))restored();if(family.equals("all")||family.equals("policy"))policies();if(family.equals("all")||family.equals("constructor"))constructorRetirement();if(family.equals("all")||family.equals("retry"))retry();if(family.equals("all")||family.equals("observation"))observation();if(family.equals("all")||family.equals("temporary"))temporaryCandidates();if(family.equals("all")||family.equals("prefix"))prefixCandidates();reset();System.out.println("Android ordered MTU adapter: "+checks+" executable checks passed; OS/native handles doubled.");}
 }'''
 
 
@@ -137,6 +169,10 @@ def main():
         mutants.append((original.replace('proofGeneration++;', ''), 'observation', 'MTU mutation revived an old proof observation token'))
         mutants.append((original.replace('if(!AndroidMTUMeasurementGate.owns(lease))', 'if(false)'), 'temporary', 'temporary candidate MTU admitted a foreign lease'))
         mutants.append((original.replace('if(closed||invalid||controller==null)', 'if(closed||invalid)'), 'temporary', 'temporary candidate bypassed failed native MTU construction'))
+        mutants.append((original.replace('actual.getMTU()!=chain.candidatePrefix.originalMTU', 'false'), 'prefix', 'prefix MTU accepted invalid mtu'))
+        mutants.append((original.replace('actual.getMTU()>chain.candidatePrefix.ceilingMTU', 'false'), 'prefix', 'prefix MTU accepted invalid ceiling'))
+        mutants.append((original.replace('candidatePrefixOwner==chain&&AndroidMTUMeasurementGate.owns(candidatePrefixLease)', 'candidatePrefixOwner==chain'), 'prefix', 'prefix kept changed hold authority'))
+        mutants.append((original.replace('candidatePrefixOwner==chain&&', ''), 'prefix', 'prefix readback lent another graph its authority'))
         for number, (changed, family, witness) in enumerate(mutants):
             if changed == original:
                 raise AssertionError('Ordered MTU mutation lost its source seam: ' + family)

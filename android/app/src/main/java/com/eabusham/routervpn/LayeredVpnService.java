@@ -100,18 +100,27 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
 
     static boolean nodeChainReady(AndroidNodeChainSession captured) {
         LayeredVpnService service = currentService.get();
-        return captured != null && service != null && service.nodeChainSession == captured
+        return captured != null && captured.candidatePrefix==null && service != null && service.nodeChainSession == captured
                 && !service.explicitStop && "UP".equals(service.state) && service.executionProved
                 && service.nodeChainProofCurrent(captured);
     }
+    static boolean nodeChainCandidatePrefixReady(AndroidNodeChainSession captured){
+        LayeredVpnService service=currentService.get();
+        return captured!=null&&captured.candidatePrefix!=null&&service!=null&&service.nodeChainSession==captured
+                &&!service.explicitStop&&"UP".equals(service.state)&&service.executionProved&&service.nodeChainCandidatePrefixCurrent(captured);
+    }
+    private boolean nodeChainCandidatePrefixCurrent(AndroidNodeChainSession captured){
+        AndroidMTUSession mtu=mtuSession;
+        return mtu!=null&&mtu.candidatePrefixCurrent(captured)&&captured.prefixHealthy()&&mtu==mtuSession&&mtu.candidatePrefixCurrent(captured);
+    }
     static Network prepareNodeCandidates(AndroidNodeChainSession captured,Object lease)throws Exception {
         LayeredVpnService service=currentService.get();
-        if(service==null||service.nodeChainSession!=captured||!nodeChainReady(captured))
+        if(service==null||captured==null||service.nodeChainSession!=captured||!(captured.candidatePrefix==null?nodeChainReady(captured):nodeChainCandidatePrefixReady(captured)))
             throw new IllegalStateException("The original temporary native graph is unavailable.");
         AndroidMTUSession mtu=service.mtuSession;Network physical=service.nodeChainPhysicalNetwork;
         if(mtu==null)throw new IllegalStateException("The original temporary graph has no MTU owner.");
         mtu.prepareNodeCandidates(captured,lease);service.requireNodeChainNetwork(physical);
-        if(currentService.get()!=service||service.nodeChainSession!=captured||service.mtuSession!=mtu||!nodeChainReady(captured))
+        if(currentService.get()!=service||service.nodeChainSession!=captured||service.mtuSession!=mtu||!(captured.candidatePrefix==null?nodeChainReady(captured):nodeChainCandidatePrefixReady(captured)))
             throw new IllegalStateException("The temporary native owner changed during MTU proof.");
         return physical;
     }
@@ -791,7 +800,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             boolean current;
             try {
                 captured.requireCurrent();
-                current = !executionProved || nodeChainProofCurrent(captured);
+                current = !executionProved || (captured.candidatePrefix==null?nodeChainProofCurrent(captured):nodeChainCandidatePrefixCurrent(captured));
             } catch(Exception retired) { current=false; }
             final boolean proved=current;
             nodeChainObservationPending.set(false);
@@ -1146,9 +1155,14 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 }, chainNetwork);
                 executionNetwork = chainNetwork;
                 executionHandler.post(executionWatch);
-                updateForeground("Proving every ordered member and selected DNS…");
-                capturedChain.prove();
-                adoptHopMeasurement(capturedChain.newHopMeasurement(), ownedServer, generation);
+                if(capturedChain.candidatePrefix!=null){
+                    updateForeground("Testing selected packet prefix; application and DNS traffic remain closed…");
+                    capturedChain.prepareCandidates();
+                }else{
+                    updateForeground("Proving every ordered member and selected DNS…");
+                    capturedChain.prove();
+                    adoptHopMeasurement(capturedChain.newHopMeasurement(), ownedServer, generation);
+                }
             }
             if (preparedMAX != null) executionHandler.post(executionWatch);
             if (torMetadata != null) {
@@ -1202,17 +1216,17 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                         ?ownedExecution.newHopMeasurement(ownedServer):Libbox.newRouterHopMeasurement(ownedServer,hopMetadata),ownedServer,generation);
                 executionHandler.removeCallbacks(executionWatch);executionHandler.post(executionWatch);
             }
-            long performanceServices = Libbox.routerStartPerformance(ownedServer);
+            long performanceServices = preparedChain!=null&&preparedChain.candidatePrefix!=null?0:Libbox.routerStartPerformance(ownedServer);
             synchronized(lock){
                 if(explicitStop||generation!=lifecycle.get()||commandServer!=ownedServer||executionController!=ownedExecution
-                        ||nodeChainSession!=null&&!nodeChainSession.healthy()
+                        ||nodeChainSession!=null&&!(nodeChainSession.candidatePrefix==null?nodeChainSession.healthy():nodeChainSession.prefixHealthy())
                         ||torSession!=null&&!torSession.healthy()||externalSession!=null&&!externalSession.healthy()||maxSession!=null&&!maxSession.current(true))throw new IllegalStateException("VPN ownership changed during path proof.");
-                performanceActive = performanceServices > 0;
+                performanceActive = performanceServices > 0 && (nodeChainSession==null||nodeChainSession.candidatePrefix==null);
                 executionProved=true;publish("UP",modeId,"");
             }
             if(capturedComparison!=null)capturedComparison.finished(true,"");
             if (performanceActive) executionHandler.post(performanceWatch);
-            updateForeground("Layered VPN active: " + modeId);
+            updateForeground(preparedChain!=null&&preparedChain.candidatePrefix!=null?"Testing candidates through the saved packet prefix; application and DNS traffic remain closed.":"Layered VPN active: " + modeId);
         } catch (RevokedException revoked) {
             Log.w(TAG, revoked.getMessage());
             if(capturedComparison!=null)capturedComparison.finished(false,revoked.getMessage());
@@ -1480,7 +1494,21 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             chain.cancel();
             AndroidMTUSession mtu = mtuSession;
             if (mtu != null) mtu.networkChanged();
-            if (chain.execution != null) {
+            if(chain.candidatePrefix!=null){
+                // Prefix proof workers and denied ingress retain this Box.
+                // No failed inner join permits the ordinary Local shortcut
+                // of closing the graph to unblock an outstanding operation.
+                closeNodeChainMeasurementsLocked();
+                try{
+                    chain.closePlan();chain.requireNativeBindingDrain();
+                    if(capturedServer!=null){Libbox.routerStrategyCloseService(capturedServer);capturedServer.close();}
+                    chain.nativeServiceClosed();
+                    if(mtu!=null)mtu.close();
+                }catch(Exception pending){
+                    publish("STOPPING",activeMode,"The original candidate prefix cleanup is pending; its VPN and MTU hold remain owned.");
+                    throw new IllegalStateException("The original candidate prefix has not acknowledged native cleanup.",pending);
+                }
+            } else if (chain.execution != null) {
                 // Server cleanup owns authenticated DELETE through the original
                 // lower path. Destroying that Box first would discard its only
                 // cleanup authority; every failed join must remain retryable.

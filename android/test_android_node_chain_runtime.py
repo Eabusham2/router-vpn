@@ -120,7 +120,28 @@ SOURCES[APP + 'AndroidNodeChainCapture.java'] = r'''package com.eabusham.routerv
  final String config="{\"original\":\"one-complete-TUN\"}",launchInput;final boolean strict;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source){this.source=source;strict=source.strict;plan=new io.nekohasekai.libbox.RouterNodeChain(source.members.size());launchInput="ordered:"+source.members.size();}
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source){source.requireCurrent();return new AndroidNodeChainCapture(source);}
+ boolean ownsSource(AndroidNodeStore.ChainCapture value){return source==value;}
  void requireCurrent(){source.requireCurrent();}void close()throws Exception{plan.close();}
+}'''
+SOURCES[APP + 'AndroidNodeCandidatePrefixCapture.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeCandidatePrefixCapture {
+ final AndroidNodeChainCapture original;final int prefix;final String inventory,config="{\"prefix\":\"closed-TUN\"}",launchInput="prefix-only";
+ final io.nekohasekai.libbox.RouterNodeChainCandidatePreparation plan=new io.nekohasekai.libbox.RouterNodeChainCandidatePreparation();
+ AndroidNodeCandidatePrefixCapture(AndroidNodeChainCapture original,int prefix,String inventory){this.original=original;this.prefix=prefix;this.inventory=inventory;}
+ void requireCurrent()throws Exception{original.requireCurrent();}void close()throws Exception{plan.close();}
+}'''
+SOURCES[APP + 'AndroidNodeCandidateCatalog.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeCandidateCatalog {
+ final AndroidNodeStore.ChainCapture originalSource;final int prefix;final String inventory="captured-inventory";AndroidNodeChainSession session;
+ AndroidNodeCandidateCatalog(AndroidNodeStore.ChainCapture source,int prefix){originalSource=source;this.prefix=prefix;}
+ void bind(AndroidNodeChainSession value)throws Exception{if(session!=null||value.source!=originalSource)throw new IllegalStateException("foreign catalog binding");value.candidateServer();session=value;}
+}'''
+SOURCES[NATIVE + 'RouterNodeChainCandidatePreparation.java'] = r'''package io.nekohasekai.libbox;public class RouterNodeChainCandidatePreparation {
+ public CommandServer server;public boolean cancelled,closed,proved,failClose,missingReceipt;public int binds,runs,closes;public Runnable afterRun;
+ public void bindNative(CommandServer value)throws Exception{if(server!=null)throw new IllegalStateException("already bound");server=value;binds++;if(cancelled)throw new IllegalStateException("retired native binding");}
+ public void run(CommandServer value,Object catalog)throws Exception{if(server!=value||cancelled)throw new IllegalStateException("foreign prefix proof");runs++;proved=true;if(afterRun!=null)afterRun.run();}
+ public boolean healthy(){return proved&&!cancelled&&!closed&&server!=null&&!server.closed;}
+ public boolean nativeClosed(){return closed&&server!=null&&server.closed&&!missingReceipt;}
+ public void networkChanged(){cancelled=true;}public String progressJSON(){return "{}";}
+ public void close()throws Exception{closes++;if(failClose)throw new IllegalStateException("prefix join pending");cancelled=true;closed=true;}
 }'''
 SOURCES[APP + 'AndroidMTUSession.java'] = SOURCES[APP + 'AndroidMTUSession.java'].replace('public void activateNodeChain(AndroidNodeChainSession source){}', 'public AndroidNodeChainSession activated;public Exception failure;public void activateNodeChain(AndroidNodeChainSession source){try{activated=source;source.newMTU(this);}catch(Exception stale){failure=stale;}}').replace('public Long proofObservationToken(){return 0L;}', 'public Long token=0L;public Long proofObservationToken(){return token;}').replace('public boolean proofOwnerCurrent(){return true;}', 'public boolean current=true;public boolean proofOwnerCurrent(){return current;}')
 SOURCES[APP + 'NativeSingBoxController.java'] = r'''package com.eabusham.routervpn;final class NativeSingBoxController {

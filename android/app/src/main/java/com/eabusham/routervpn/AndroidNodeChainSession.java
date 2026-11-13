@@ -36,6 +36,8 @@ final class AndroidNodeChainSession {
     final AndroidHomeStateStore.Snapshot home;
     final AndroidNodeChainCapture capture;
     final AndroidNodeChainExecutionCapture execution;
+    final AndroidNodeCandidatePrefixCapture candidatePrefix;
+    final AndroidNodeCandidateCatalog candidateCatalog;
     final boolean restoringExecution;
     private final String config, launchInput;
     final File directory;
@@ -60,8 +62,24 @@ final class AndroidNodeChainSession {
     AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
                             AndroidHomeStateStore.Snapshot home,String selectionDigest,
                             AndroidNodeChainExecutionCapture.RestoreCapture restore) throws Exception {
+        this(context,source,home,selectionDigest,restore,null,null);
+    }
+    AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
+                            AndroidHomeStateStore.Snapshot home,String selectionDigest,
+                            AndroidNodeCandidatePrefixCapture prefix,AndroidNodeCandidateCatalog catalog) throws Exception {
+        this(context,source,home,selectionDigest,null,prefix,catalog);
+    }
+    private AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
+                            AndroidHomeStateStore.Snapshot home,String selectionDigest,
+                            AndroidNodeChainExecutionCapture.RestoreCapture restore,
+                            AndroidNodeCandidatePrefixCapture prefix,AndroidNodeCandidateCatalog catalog) throws Exception {
         this.context = context.getApplicationContext();
         this.source = source; this.home = home; this.selectionDigest=selectionDigest;
+        candidatePrefix=prefix;candidateCatalog=catalog;
+        if((prefix==null)!=(catalog==null)||prefix!=null&&(restore!=null||!"local".equals(source.execution)
+                ||!prefix.original.ownsSource(source)||catalog.originalSource!=source||prefix.prefix!=catalog.prefix
+                ||!prefix.inventory.equals(catalog.inventory)))
+            throw new IllegalStateException("The candidate prefix lost its original saved source and catalog.");
         restoringExecution = restore != null;
         source.requireCurrent();
         requireSelection(this.context,source,selectionDigest);
@@ -69,7 +87,7 @@ final class AndroidNodeChainSession {
         File root = new File(this.context.getFilesDir(), "layered-sessions").getCanonicalFile();
         directory = new File(root, sessionId).getCanonicalFile();
         if (!directory.getParentFile().equals(root)) throw new IllegalStateException("The ordered private session path is unsafe.");
-        capture = AndroidNodeChainCapture.compile(source);
+        capture = prefix==null?AndroidNodeChainCapture.compile(source):prefix.original;
         try {
             if ("local".equals(source.execution)) {
                 if (restore != null) throw new IllegalStateException("A Local source cannot borrow another execution's restore owner.");
@@ -77,11 +95,11 @@ final class AndroidNodeChainSession {
             } else execution = restore == null ? AndroidNodeChainExecutionCapture.compile(capture, source.execution)
                     : AndroidNodeChainExecutionCapture.restore(capture, restore);
         } catch (Exception invalid) {
-            try { capture.close(); } catch (Exception cleanup) { invalid.addSuppressed(cleanup); }
+            if(prefix==null)try { capture.close(); } catch (Exception cleanup) { invalid.addSuppressed(cleanup); }
             throw invalid;
         }
-        config = execution == null ? capture.config : execution.config;
-        launchInput = execution == null ? capture.launchInput : execution.launchInput;
+        config = prefix!=null?prefix.config:execution == null ? capture.config : execution.config;
+        launchInput = prefix!=null?prefix.launchInput:execution == null ? capture.launchInput : execution.launchInput;
         request = new NativeSingBoxController.SessionInfo(sessionId, MODE);
     }
 
@@ -151,20 +169,21 @@ final class AndroidNodeChainSession {
     }
 
     void bindNative(CommandServer original) throws Exception {
-        if (execution == null) return;
+        if (execution == null && candidatePrefix == null) return;
         if (original == null || server != null || owner != null || !claimed)
             throw new IllegalStateException("The ordered execution cannot bind another native construction.");
         // Retain the exact newly created server before native binding. Even a
         // failed bind/start must finish that original construction's cleanup.
         server = original;
-        execution.bindNative(original);
+        if(candidatePrefix!=null)candidatePrefix.plan.bindNative(original);else execution.bindNative(original);
         nativeBound = true;
         requireSource();
     }
 
     void attach(CommandServer server, Owner owner, String expectedNetwork) throws Exception {
         if (server == null || owner == null || this.owner != null || !claimed
-                || (execution == null ? this.server != null : this.server != server))
+                || (execution == null && candidatePrefix == null ? this.server != null : this.server != server)
+                ||candidatePrefix!=null&&!nativeBound)
             throw new IllegalStateException("The ordered graph cannot adopt another native server.");
         this.server = server; this.owner = owner; network = expectedNetwork;
         if (network.isEmpty() || "[]".equals(network)) throw new IllegalStateException("The original physical network is unavailable.");
@@ -172,11 +191,24 @@ final class AndroidNodeChainSession {
     }
 
     void prove() throws Exception {
+        if(candidatePrefix!=null)throw new IllegalStateException("A candidate prefix cannot become a complete connection proof.");
         requireCurrent();
         if (execution == null) capture.plan.run(server); else execution.run(server);
         requireCurrent();
         if (!nativeHealthy()) throw new IllegalStateException("The complete ordered native path did not prove every node and selected DNS.");
         requireCurrent();
+    }
+
+    void prepareCandidates()throws Exception {
+        requireCurrent();
+        if(candidatePrefix==null||candidateCatalog==null||!nativeBound)throw new IllegalStateException("The original candidate prefix has no bound native construction.");
+        candidatePrefix.requireCurrent();candidateCatalog.bind(this);
+        candidatePrefix.plan.run(server,candidateCatalog);requireCurrent();
+        if(!prefixHealthy())throw new IllegalStateException("The selected private packet prefix did not complete its original proof.");
+    }
+    boolean prefixHealthy(){
+        try{requireCurrent();if(candidatePrefix==null||!nativeBound)return false;boolean prepared=candidatePrefix.plan.healthy();requireCurrent();return prepared;}
+        catch(Exception retired){return false;}
     }
 
     CommandServer candidateServer() throws Exception { requireCurrent(); return server; }
@@ -215,14 +247,14 @@ final class AndroidNodeChainSession {
         catch (Exception retired) { return false; }
     }
 
-    private boolean nativeHealthy() { return execution == null ? capture.plan.healthy() : execution.healthy(); }
+    private boolean nativeHealthy() { return candidatePrefix==null&&(execution == null ? capture.plan.healthy() : execution.healthy()); }
     String provedExecution() throws Exception {
         requireCurrent();
         if (!nativeHealthy()) throw new IllegalStateException("The ordered execution has no current proof.");
         String selected = execution == null ? "local" : execution.execution();
         requireCurrent(); return selected;
     }
-    String progressJSON() throws Exception { requireCurrent(); String result = execution == null ? capture.plan.progressJSON() : execution.progressJSON(); requireCurrent(); return result; }
+    String progressJSON() throws Exception { requireCurrent(); String result = candidatePrefix!=null?candidatePrefix.plan.progressJSON():execution == null ? capture.plan.progressJSON() : execution.progressJSON(); requireCurrent(); return result; }
     RouterMTU newMTU(RouterMTUPlatform platform) throws Exception {
         requireCurrent();
         if (!nativeHealthy()) throw new IllegalStateException("MTU requires the original complete ordered proof.");
@@ -243,10 +275,14 @@ final class AndroidNodeChainSession {
         TemporaryDrain retained=temporaryDrain;
         if(retained!=null&&!retained.drain())throw new IllegalStateException("The original temporary candidate work has not joined.");
     }
-    void cancel() { cancelled = true; if (execution == null) capture.plan.networkChanged(); else execution.networkChanged(); }
+    void cancel() { cancelled = true; if(candidatePrefix!=null)candidatePrefix.plan.networkChanged();else if (execution == null) capture.plan.networkChanged(); else execution.networkChanged(); }
     void closePlan() throws Exception {
         requireTemporaryDrain();
         cancel();
+        if(candidatePrefix!=null){
+            if(!nativeBound&&server!=null)try{candidatePrefix.plan.bindNative(server);}catch(Exception admissionRefused){ /* Retain exact cleanup-only reservation. */ }
+            candidatePrefix.close();
+        }
         if (execution != null) {
             if (!nativeBound && server != null) {
                 // A timed-out first Bind may not have reserved its construction
@@ -260,6 +296,8 @@ final class AndroidNodeChainSession {
         capture.close(); proofClosed = true;
     }
     void requireNativeBindingDrain() {
+        if(candidatePrefix!=null&&server!=null&&!nativeBound&&!candidatePrefix.plan.nativeClosed())
+            throw new IllegalStateException("The original prefix construction has not acknowledged its cleanup.");
         if (execution != null && server != null && !nativeBound && !execution.nativeClosed())
             throw new IllegalStateException("The original unstarted server has no sealed native construction receipt.");
     }
@@ -268,6 +306,8 @@ final class AndroidNodeChainSession {
                 && execution.retainsServerCleanup(original);
     }
     void nativeServiceClosed() {
+        if(candidatePrefix!=null&&(server==null?owner!=null||!proofClosed:!candidatePrefix.plan.nativeClosed()))
+            throw new IllegalStateException("The original candidate prefix Box has no successful native close receipt.");
         // A failed CommandServer constructor never lent this preparation any
         // native instance. Once BindNative retained a server, only its positive
         // Instance/Box receipt can complete cleanup.
