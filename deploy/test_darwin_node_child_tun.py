@@ -33,6 +33,9 @@ EXPECTED = (HARNESS, NATIVE, *(NATIVE+'/'+case for case in CASES))
 PREFLIGHT_HARNESS = 'TestRouterVPNNodeChainDarwinNativeHandshakeHarness'
 PREFLIGHT_NATIVE = 'TestRouterVPNNodeChainDarwinNativeHandshake'
 PREFLIGHT_RECEIPTS = ('source-refused', 'authenticated-stop', 'original-join')
+DIAGNOSTIC_CASE = 'wg-three'
+DIAGNOSTIC_HARNESS = 'TestRouterVPNNodeChainDarwinNativeDiagnosticHarness'
+DIAGNOSTIC_NATIVE = 'TestRouterVPNNodeChainDarwinNativeDiagnostic'
 TAGS = ('with_wireguard', 'with_gvisor', 'with_quic', 'with_utls', 'with_openvpn',
         'with_naive_outbound', 'with_purego', 'routervpn_darwin_external_host',
         'routervpn_darwin_node_chain', 'routervpn_darwin_node_child_tun')
@@ -126,6 +129,15 @@ def image_identity(path):
 
 
 def check_verdict(output):
+    _check_selected_verdict(output, HARNESS, NATIVE, CASES)
+
+
+def check_diagnostic_verdict(output):
+    _check_selected_verdict(output, DIAGNOSTIC_HARNESS, DIAGNOSTIC_NATIVE, (DIAGNOSTIC_CASE,))
+
+
+def _check_selected_verdict(output, harness, native, cases):
+    expected = (harness, native, *(native+'/'+case for case in cases))
     if not isinstance(output, str) or len(output.encode()) > 8 << 20:
         raise ValueError('Darwin child has no bounded native verdict')
     runs, passes, receipts = Counter(), Counter(), Counter()
@@ -135,40 +147,40 @@ def check_verdict(output):
         match = re.fullmatch(r'\s*=== RUN\s+(\S+)', line)
         if match:
             name = match[1]
-            parent = HARNESS if name == NATIVE else NATIVE if name.startswith(NATIVE+'/') else None
-            if (name not in EXPECTED or runs[name] or passes[name]
+            parent = harness if name == native else native if name.startswith(native+'/') else None
+            if (name not in expected or runs[name] or passes[name]
                     or parent is not None and (runs[parent] != 1 or passes[parent])):
                 raise ValueError('Darwin child ran an unknown or repeated native case')
             runs[name] += 1
         match = re.fullmatch(r'\s*--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)', line)
         if match:
             name = match[1]
-            if name not in EXPECTED or runs[name] != 1 or passes[name]:
+            if name not in expected or runs[name] != 1 or passes[name]:
                 raise ValueError('Darwin child passed an unrun or repeated native case')
-            if name == HARNESS:
-                if any(passes[child] != 1 for child in EXPECTED if child != HARNESS):
+            if name == harness:
+                if any(passes[child] != 1 for child in expected if child != harness):
                     raise ValueError('Darwin harness passed before all original child reports completed')
             else:
-                if runs[HARNESS] != 1 or passes[HARNESS]:
+                if runs[harness] != 1 or passes[harness]:
                     raise ValueError('Darwin child reported outside its original active harness')
-                if name == NATIVE:
+                if name == native:
                     # Go prints a parent PASS before its buffered subtest PASS
                     # lines. All actual case work and joined receipts must
                     # already exist; their terminal reports may follow it.
-                    if (receipts != Counter(CASES)
-                            or any(runs[NATIVE+'/'+case] != 1 for case in CASES)):
+                    if (receipts != Counter(cases)
+                            or any(runs[native+'/'+case] != 1 for case in cases)):
                         raise ValueError('Darwin child passed before all original native joins')
-                elif receipts[name[len(NATIVE)+1:]] != 1:
+                elif receipts[name[len(native)+1:]] != 1:
                     raise ValueError('Darwin child passed without its original retirement')
             passes[name] += 1
         match = re.search(r'verified original Darwin child retirement: (\S+)$', line)
         if match:
             case = match[1]
-            if (case not in CASES or receipts[case] or runs[NATIVE+'/'+case] != 1
-                    or passes[NATIVE+'/'+case] or passes[NATIVE] or passes[HARNESS]):
+            if (case not in cases or receipts[case] or runs[native+'/'+case] != 1
+                    or passes[native+'/'+case] or passes[native] or passes[harness]):
                 raise ValueError('Darwin child changed its authenticated retirement inventory')
             receipts[case] += 1
-    if runs != Counter(EXPECTED) or passes != Counter(EXPECTED) or receipts != Counter(CASES):
+    if runs != Counter(expected) or passes != Counter(expected) or receipts != Counter(cases):
         raise ValueError('Darwin child omitted a required native case or original joined retirement')
 
 
@@ -255,8 +267,8 @@ def native_fixture_compile(compiler, image, package):
             '-ldflags=-checklinkname=0 -s -w', '-o', image, package]
 
 
-def execute(source, go='go', *, environment=None, compile_only=False, preflight_only=False):
-    if type(compile_only) is not bool or type(preflight_only) is not bool or compile_only and preflight_only:
+def execute(source, go='go', *, environment=None, compile_only=False, preflight_only=False, diagnostic_original_case=False):
+    if any(type(value) is not bool for value in (compile_only, preflight_only, diagnostic_original_case)) or sum((compile_only, preflight_only, diagnostic_original_case)) > 1:
         raise ValueError('Darwin compilation purpose must be explicit and exclusive')
     environment = dict(os.environ if environment is None else environment)
     arch, uid = required_host(environment)
@@ -290,6 +302,8 @@ def execute(source, go='go', *, environment=None, compile_only=False, preflight_
         elif preflight_only:
             result = execute_preflight_images(source, before, captured, sudo, arch, uid, child, peer, identities)
             print(json.dumps(result, sort_keys=True), flush=True)
+        elif diagnostic_original_case:
+            result = execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities, diagnostic=True)
         else:
             result = execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities)
     if work.exists():
@@ -371,39 +385,109 @@ def execute_preflight_images(source, before, captured, sudo, arch, uid, child, p
                 receipts=list(PREFLIGHT_RECEIPTS), output_sha256=hashlib.sha256(output.encode()).hexdigest())
 
 
-def execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities):
+def execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities, *, diagnostic=False):
+    if type(diagnostic) is not bool:
+        raise ValueError('Native diagnostic selection must be explicit')
+    harness = DIAGNOSTIC_HARNESS if diagnostic else HARNESS
     command = ['/usr/bin/env', FLAG+'=1', 'ROUTERVPN_DARWIN_NODE_CHILD_UID='+str(uid),
                    'ROUTERVPN_DARWIN_NODE_CHILD_SHA256='+identities[child][-1],
                    'ROUTERVPN_DARWIN_NODE_CHAIN_PEER='+str(peer),
                    'ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256='+identities[peer][-1],
-                   'GORACE=atexit_sleep_ms=0', str(child), '-test.run=^'+HARNESS+'$',
+                   'GORACE=atexit_sleep_ms=0', str(child), '-test.run=^'+harness+'$',
                    '-test.v', '-test.count=1', '-test.timeout=930s']
     if sudo:
         command = [sudo, '-n', '--', *command]
     native_stage('starting actual inherited child, PF, utun and encrypted peer cases')
     output = native_output(command, cwd=ROOT, env=captured, timeout=960, sudo=sudo)
     native_stage('native process returned zero; exact verdict still required')
-    check_verdict(output)
+    if diagnostic:
+        check_diagnostic_verdict(output)
+    else:
+        check_verdict(output)
     if checked_sources(source)[1] != before or any(image_identity(path) != value for path, value in identities.items()):
         raise ValueError('Darwin native acceptance changed its original sources or images')
-    native_stage('verified every native case, joined receipt and original image')
-    return dict(schema=1, gate='generated-darwin-ordered-child', scope='generated-command-utun',
+    native_stage('verified fixed diagnostic case, joined receipt and original image' if diagnostic
+                 else 'verified every native case, joined receipt and original image')
+    return dict(schema=1,
+                      gate='generated-darwin-ordered-child-diagnostic' if diagnostic else 'generated-darwin-ordered-child',
+                      scope='original-single-case-diagnostic' if diagnostic else 'generated-command-utun',
+                      **({'native_accepted': False} if diagnostic else {}),
                       target='darwin/'+arch, toolchain=BUILD.TOOLCHAIN,
                       pins={'sing-box': BUILD.PIN, 'xray': BUILD.POLICY.XRAY.XRAY_PIN},
                       source_files=before, source_sha256=hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                       artifacts={role: {'bytes': identities[path][2], 'sha256': identities[path][-1]}
                                  for role, path in (('generated-child-test', child), ('independent-ordered-peer', peer))},
-                      cases=list(CASES), output_sha256=hashlib.sha256(output.encode()).hexdigest())
+                      cases=[DIAGNOSTIC_CASE] if diagnostic else list(CASES), output_sha256=hashlib.sha256(output.encode()).hexdigest())
 
 
-def standalone(go='go', *, environment=None, receipt=None, required_commit=None, compile_only=False, preflight_only=False):
-    if (type(compile_only) is not bool or type(preflight_only) is not bool or compile_only and preflight_only
-            or (compile_only or preflight_only) and receipt is not None):
-        raise ValueError('Compilation-only and preflight diagnostics cannot publish a native receipt')
+
+def diagnostic_checkpoint_value(commit, environment=None):
+    """A scheduled source/case checkpoint is never a native execution receipt."""
+    if commit is None:
+        raise ValueError('Diagnostic checkpoint requires its exact original commit')
+    arch, _ = required_host(dict(os.environ if environment is None else environment))
+    repository = repository_identity(commit)
+    if CASES[0] != DIAGNOSTIC_CASE or len(CASES) != 8:
+        raise ValueError('Diagnostic changed the first exhaustive native case')
+    return dict(schema=1, gate='generated-darwin-original-case-checkpoint',
+                scope='scheduled-diagnostic-only', state='scheduled', native_accepted=False,
+                case_started=False, case=DIAGNOSTIC_CASE, target='darwin/'+arch,
+                repository=repository, source_sha256=BUILD.digest(),
+                source_files={name:digest(ROOT/name) for name in (
+                    'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl',
+                    'deploy/test_darwin_node_child_tun.py', 'deploy/test_darwin_node_child_tun_runner.py')})
+
+
+def write_diagnostic_checkpoint(path, commit, environment=None):
+    path = receipt_path(path)
+    if path is None or path == ROOT or ROOT in path.parents:
+        raise ValueError('Diagnostic checkpoint requires a new artifact outside source')
+    result = diagnostic_checkpoint_value(commit, environment)
+    with path.open('x', encoding='utf-8') as output:
+        json.dump(result, output, indent=2, sort_keys=True)
+        output.write('\n')
+        output.flush()
+        os.fsync(output.fileno())
+    return result
+
+
+def read_diagnostic_checkpoint(path, commit, environment=None):
+    path = Path(path).absolute()
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 16384:
+        raise ValueError('Original scheduled diagnostic checkpoint is absent or unbounded')
+    raw = path.read_bytes()
+    expected = (json.dumps(diagnostic_checkpoint_value(commit, environment), indent=2, sort_keys=True)+'\n').encode()
+    if raw != expected:
+        raise ValueError('Diagnostic checkpoint changed its original source or scheduled scope')
+    return raw
+
+
+def publish_diagnostic_receipt(path, result, workspace):
+    if (result.get('gate') != 'generated-darwin-ordered-child-diagnostic'
+            or result.get('scope') != 'original-single-case-diagnostic'
+            or result.get('native_accepted') is not False or result.get('cases') != [DIAGNOSTIC_CASE]
+            or workspace.exists() or workspace.is_symlink()):
+        raise ValueError('Single-case diagnostic cannot acquire native acceptance or retain workspace')
+    if path is not None:
+        with path.open('x', encoding='utf-8') as output:
+            json.dump(result, output, indent=2, sort_keys=True)
+            output.write('\n')
+
+
+def standalone(go='go', *, environment=None, receipt=None, required_commit=None, compile_only=False, preflight_only=False,
+               diagnostic_original_case=False, diagnostic_checkpoint=None, diagnostic_receipt=None):
+    if (any(type(value) is not bool for value in (compile_only, preflight_only, diagnostic_original_case))
+            or sum((compile_only, preflight_only, diagnostic_original_case)) > 1
+            or (compile_only or preflight_only or diagnostic_original_case) and receipt is not None
+            or diagnostic_original_case and (diagnostic_checkpoint is None or required_commit is None)
+            or not diagnostic_original_case and (diagnostic_checkpoint is not None or diagnostic_receipt is not None)):
+        raise ValueError('Diagnostics require exclusive original scope and cannot publish a native receipt')
     environment = dict(os.environ if environment is None else environment)
     required_host(environment)
     repository = repository_identity(required_commit)
     path = receipt_path(receipt)
+    diagnostic_path = receipt_path(diagnostic_receipt)
+    checkpoint = read_diagnostic_checkpoint(diagnostic_checkpoint, required_commit, environment) if diagnostic_original_case else None
     compiler, captured = selected_compiler(go, ROOT, environment)
     previous = dict(os.environ)
     with tempfile.TemporaryDirectory(prefix='routervpn-darwin-child-core-') as temporary:
@@ -424,13 +508,20 @@ def standalone(go='go', *, environment=None, receipt=None, required_commit=None,
             BUILD.run([compiler, 'mod', 'verify'], cwd=core, env=captured)
             BUILD.POLICY.AMNEZIA.verify(core)
             native_stage('pinned module graph verified; entering native compilation')
-            result = execute(core, str(compiler), environment=captured, compile_only=compile_only, preflight_only=preflight_only)
+            result = execute(core, str(compiler), environment=captured, compile_only=compile_only, preflight_only=preflight_only,
+                             diagnostic_original_case=diagnostic_original_case)
         finally:
             os.environ.clear(); os.environ.update(previous)
     if repository_identity(required_commit) != repository:
         raise ValueError('Darwin source checkout changed during native acceptance')
     result['repository'] = repository
-    if compile_only or preflight_only:
+    if diagnostic_original_case:
+        if read_diagnostic_checkpoint(diagnostic_checkpoint, required_commit, environment) != checkpoint:
+            raise ValueError('Original diagnostic checkpoint changed during execution')
+        result['checkpoint_sha256'] = hashlib.sha256(checkpoint).hexdigest()
+        publish_diagnostic_receipt(diagnostic_path, result, workspace)
+        native_stage('fixed original case joined; exhaustive native acceptance was not executed')
+    elif compile_only or preflight_only:
         if workspace.exists() or workspace.is_symlink():
             raise ValueError('Diagnostic workspace remains owned')
         native_stage('diagnostic workspace retired; full native acceptance was not executed')
@@ -450,14 +541,27 @@ if __name__ == '__main__':
     parser.add_argument('--receipt', type=Path)
     parser.add_argument('--compile-only', action='store_true', help='diagnose exact native compilation without PF, utun or an acceptance receipt')
     parser.add_argument('--preflight-only', action='store_true', help='authenticate and join the signed original child after source refusal, without preparing PF or utun')
+    parser.add_argument('--diagnostic-original-case', action='store_true', help='diagnose only original wg-three; never publish exhaustive native acceptance')
+    parser.add_argument('--write-diagnostic-checkpoint', type=Path)
+    parser.add_argument('--diagnostic-checkpoint', type=Path)
+    parser.add_argument('--diagnostic-receipt', type=Path)
     args = parser.parse_args()
+    if args.write_diagnostic_checkpoint is not None:
+        if args.standalone or args.source or args.receipt or args.compile_only or args.preflight_only or args.diagnostic_original_case or args.diagnostic_checkpoint or args.diagnostic_receipt:
+            parser.error('checkpoint writing is a separate source-only step')
+        write_diagnostic_checkpoint(args.write_diagnostic_checkpoint, args.require_commit)
+        raise SystemExit(0)
+    if args.diagnostic_original_case and not args.standalone or not args.diagnostic_original_case and (args.diagnostic_checkpoint or args.diagnostic_receipt):
+        parser.error('single-case diagnostic requires standalone exact-source checkpoint ownership')
     if args.standalone == (args.source is not None) or not args.standalone and (args.receipt or args.require_commit):
         parser.error('provide exact prepared source or --standalone; receipt/commit require standalone')
     if args.compile_only and args.preflight_only or (args.compile_only or args.preflight_only) and args.receipt:
         parser.error('diagnostic modes are exclusive and cannot publish a native receipt')
     try:
         if args.standalone:
-            standalone(args.go, receipt=args.receipt, required_commit=args.require_commit, compile_only=args.compile_only, preflight_only=args.preflight_only)
+            standalone(args.go, receipt=args.receipt, required_commit=args.require_commit, compile_only=args.compile_only, preflight_only=args.preflight_only,
+                       diagnostic_original_case=args.diagnostic_original_case, diagnostic_checkpoint=args.diagnostic_checkpoint,
+                       diagnostic_receipt=args.diagnostic_receipt)
         else:
             execute(args.source, args.go, compile_only=args.compile_only, preflight_only=args.preflight_only)
     except subprocess.CalledProcessError as failure:

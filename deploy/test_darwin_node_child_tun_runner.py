@@ -43,6 +43,16 @@ def preflight_transcript():
     ])+'\n'
 
 
+
+def diagnostic_transcript():
+    lines = ['=== RUN   '+G.DIAGNOSTIC_HARNESS, '=== RUN   '+G.DIAGNOSTIC_NATIVE]
+    name = G.DIAGNOSTIC_NATIVE+'/'+G.DIAGNOSTIC_CASE
+    lines += ['=== RUN   '+name, '    native_test.go:1: verified original Darwin child retirement: '+G.DIAGNOSTIC_CASE,
+              '--- PASS: '+name+' (1.00s)', '--- PASS: '+G.DIAGNOSTIC_NATIVE+' (2.00s)',
+              'PASS', '--- PASS: '+G.DIAGNOSTIC_HARNESS+' (3.00s)', 'PASS']
+    return '\n'.join(lines)+'\n'
+
+
 def workflow_inventory(raw):
     """Check the small exact native gate surface without optional YAML packages."""
     if not isinstance(raw, str) or len(raw) > 16384:
@@ -251,7 +261,7 @@ class ActualHostSelection(unittest.TestCase):
 
 
 class CompilationDiagnostics(unittest.TestCase):
-    def execute_boundary(self, *, compile_only=True, preflight_only=False, failure=False, source_changed=False, image_changed=False):
+    def execute_boundary(self, *, compile_only=True, preflight_only=False, diagnostic_original_case=False, failure=False, source_changed=False, image_changed=False):
         calls=[]
         def run(command, **kwargs):
             calls.append((command,kwargs))
@@ -262,11 +272,11 @@ class CompilationDiagnostics(unittest.TestCase):
             if compile_only: self.fail('compilation-only diagnostic entered native PF/utun execution')
             if image_changed:
                 first=calls[0][0];Path(first[first.index('-o')+1]).write_bytes(b'replaced native image')
-            return preflight_transcript() if preflight_only else transcript()
+            return preflight_transcript() if preflight_only else diagnostic_transcript() if diagnostic_original_case else transcript()
         source=Path('/captured/source');before={'original':'a'*64}
         inventory=[(source,before),(source,{'changed':'b'*64})] if source_changed else None
         with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run), patch.object(G,'native_output',side_effect=run):
-            result=G.execute(source,environment={},compile_only=compile_only,preflight_only=preflight_only)
+            result=G.execute(source,environment={},compile_only=compile_only,preflight_only=preflight_only,diagnostic_original_case=diagnostic_original_case)
         for command,kwargs in calls[:2]:
             self.assertEqual(command[:6],G.native_fixture_compile('/captured/go',Path('/unused'),command[-1])[:6])
             self.assertEqual(kwargs['timeout'],600)
@@ -387,6 +397,109 @@ class HandshakePreflight(unittest.TestCase):
         self.assertLess(production.index('macosprocess.BindInherited('),production.index('return routerVPNExternalControlledLifetime('))
         self.assertLess(production.index('control.compile(admission, files)'),production.index('control.prepare(graph, policy)'))
         self.assertLess(production.index('control.prepare(graph, policy)'),production.index('box.New('))
+
+
+
+class OriginalCaseDiagnostic(unittest.TestCase):
+    def test_fixed_case_is_distinct_from_both_existing_native_purposes(self):
+        G.check_diagnostic_verdict(diagnostic_transcript())
+        with self.assertRaises(ValueError): G.check_verdict(diagnostic_transcript())
+        with self.assertRaises(ValueError): G.check_preflight_verdict(diagnostic_transcript())
+        for foreign in (transcript(), preflight_transcript(), diagnostic_transcript().replace('wg-three','mixed-four')):
+            with self.subTest(foreign=foreign[:60]), self.assertRaises(ValueError):
+                G.check_diagnostic_verdict(foreign)
+        for line in diagnostic_transcript().splitlines():
+            if line == 'PASS': continue
+            for replacement in ('', line+'\n'+line+'\n'):
+                with self.subTest(line=line,replacement=replacement), self.assertRaises(ValueError):
+                    G.check_diagnostic_verdict(diagnostic_transcript().replace(line+'\n',replacement,1))
+        for failure in ('--- FAIL: x (0.00s)','--- SKIP: x (0.00s)','WARNING: DATA RACE','panic: original'):
+            with self.subTest(failure=failure),self.assertRaises(ValueError):
+                G.check_diagnostic_verdict(diagnostic_transcript()+failure+'\n')
+
+    def test_original_images_bounds_and_exact_selection_cannot_claim_full_native(self):
+        result,calls=CompilationDiagnostics().execute_boundary(compile_only=False,diagnostic_original_case=True)
+        self.assertEqual(len(calls),3)
+        self.assertEqual(calls[-1][1]['timeout'],960)
+        self.assertIn('-test.timeout=930s',calls[-1][0])
+        self.assertIn('-test.run=^'+G.DIAGNOSTIC_HARNESS+'$',calls[-1][0])
+        self.assertIs(result['native_accepted'],False)
+        self.assertEqual(result['cases'],['wg-three'])
+        self.assertEqual(result['scope'],'original-single-case-diagnostic')
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'receipt.json';retired=Path(directory)/'retired'
+            with self.assertRaises(ValueError):G.publish_receipt(path,result,retired)
+            G.publish_diagnostic_receipt(path,result,retired)
+            self.assertEqual(json.loads(path.read_text()),result)
+            with self.assertRaises(FileExistsError):G.publish_diagnostic_receipt(path,result,retired)
+            for changed in (dict(result,native_accepted=True),dict(result,cases=list(G.CASES)),dict(result,scope='generated-command-utun')):
+                with self.assertRaises(ValueError):G.publish_diagnostic_receipt(None,changed,retired)
+            retired.mkdir()
+            with self.assertRaises(ValueError):G.publish_diagnostic_receipt(None,result,retired)
+        for change in ('source_changed','image_changed'):
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                CompilationDiagnostics().execute_boundary(compile_only=False,diagnostic_original_case=True,**{change:True})
+
+    def test_scheduled_checkpoint_is_exact_source_bound_and_never_a_started_case(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'scheduled.json'
+            identity=dict(repository='Eabusham2/router-vpn',commit='a'*40,tree='b'*40)
+            with patch.object(G,'required_host',return_value=('arm64',501)),patch.object(G,'repository_identity',return_value=identity),patch.object(G.BUILD,'digest',return_value='c'*64):
+                value=G.write_diagnostic_checkpoint(path,'a'*40,{})
+                raw=G.read_diagnostic_checkpoint(path,'a'*40,{})
+                self.assertEqual(json.loads(raw),value)
+                self.assertEqual(value['state'],'scheduled')
+                self.assertIs(value['case_started'],False)
+                self.assertIs(value['native_accepted'],False)
+                self.assertEqual(value['case'],'wg-three')
+                self.assertEqual(value['repository'],identity)
+                with self.assertRaises(ValueError):G.write_diagnostic_checkpoint(path,'a'*40,{})
+                for key,changed in (('case','mixed-four'),('case_started',True),('native_accepted',True),('state','completed'),('source_sha256','d'*64),('schema',True)):
+                    altered=dict(value,**{key:changed});path.write_text(json.dumps(altered,indent=2,sort_keys=True)+'\n')
+                    with self.subTest(key=key),self.assertRaises(ValueError):G.read_diagnostic_checkpoint(path,'a'*40,{})
+                path.write_bytes(raw)
+                with patch.object(G.BUILD,'digest',return_value='d'*64),self.assertRaises(ValueError):G.read_diagnostic_checkpoint(path,'a'*40,{})
+                with self.assertRaises(ValueError):G.write_diagnostic_checkpoint(Path(directory)/'other.json',None,{})
+                path.unlink();path.symlink_to(Path(directory)/'missing')
+                with self.assertRaises(ValueError):G.read_diagnostic_checkpoint(path,'a'*40,{})
+
+    def test_diagnostic_never_bypasses_original_scope_before_preparation(self):
+        invalid=(
+            dict(diagnostic_original_case=True),dict(diagnostic_original_case='true'),
+            dict(diagnostic_original_case=True,compile_only=True),
+            dict(diagnostic_original_case=True,preflight_only=True),
+            dict(diagnostic_original_case=True,receipt=Path('/unused')),
+            dict(diagnostic_checkpoint=Path('/unused')),dict(diagnostic_receipt=Path('/unused')),
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs),patch.object(G,'required_host',side_effect=AssertionError('preparation reached')),self.assertRaises(ValueError):
+                G.standalone(**kwargs)
+
+    def test_tagged_diagnostic_uses_original_case_cleanup_and_distinct_marker(self):
+        source=(ROOT/'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl').read_text()
+        self.assertIn('func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {\n\tdarwinChildCommandCases(t, false)\n}',source)
+        self.assertIn('func TestRouterVPNNodeChainDarwinNativeDiagnostic(t *testing.T) {\n\tdarwinChildCommandCases(t, true)\n}',source)
+        self.assertIn('cases := darwinChildCases\n\tif diagnostic {\n\t\tcases = darwinChildCases[:1]\n\t}',source)
+        self.assertIn('darwinChildCases[0] != "wg-three"',source)
+        body=source[source.index('func darwinChildCommandCases('):source.index('// The handshake diagnostic')]
+        for unchanged in ('owner.start(t, ctx, authority, policy)','owner.stop(cleanup)','owner.stopUnstarted(cleanup, t.Failed())','authority.close()','90*time.Second','15*time.Second'):
+            self.assertIn(unchanged,body)
+        self.assertIn('"native-child-complete", "all original child owners joined\\n"',body)
+        self.assertIn('"native-child-diagnostic-complete", "original wg-three diagnostic joined\\n"',body)
+
+    def test_manual_checkpoint_upload_precedes_pf_attempt_and_cannot_replace_push_gate(self):
+        raw=(ROOT/'.github/workflows/darwin-original-case-diagnostic.yml').read_text()
+        self.assertIn('  workflow_dispatch:',raw)
+        for forbidden in ('  push:','  pull_request:','  workflow_call:','inputs:','matrix:','continue-on-error:'):
+            self.assertNotIn(forbidden,raw)
+        self.assertIn('    runs-on: macos-15',raw)
+        self.assertIn('--write-diagnostic-checkpoint',raw)
+        self.assertLess(raw.index('--write-diagnostic-checkpoint'),raw.index('name: Preserve scheduled source and case before PF'))
+        self.assertLess(raw.index('name: Preserve scheduled source and case before PF'),raw.index('--diagnostic-original-case'))
+        self.assertIn('if-no-files-found: error',raw)
+        self.assertEqual(raw.count('--diagnostic-original-case'),1)
+        self.assertNotIn('--receipt ',raw)
+        workflow_inventory((ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text())
 
 
 class EncryptedPeerSourceClosure(unittest.TestCase):

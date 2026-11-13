@@ -150,7 +150,18 @@ func TestRouterVPNNodeChainDarwinNativeHandshakeHarness(t *testing.T) {
 	darwinChildHarness(t, true)
 }
 
+func TestRouterVPNNodeChainDarwinNativeDiagnosticHarness(t *testing.T) {
+	darwinChildSelectedHarness(t, false, true)
+}
+
 func darwinChildHarness(t *testing.T, preflight bool) {
+	darwinChildSelectedHarness(t, preflight, false)
+}
+
+func darwinChildSelectedHarness(t *testing.T, preflight, diagnostic bool) {
+	if preflight && diagnostic {
+		t.Fatal("native diagnostic purposes must remain exclusive")
+	}
 	darwinChildNative(t)
 	for _, p := range []string{macosprocess.InstallRoot, macosprocess.InstallLockPath, macosprocess.ProcessLockPath, filepath.Dir(macosprocess.LifetimePath)} {
 		if _, e := os.Lstat(p); !errors.Is(e, os.ErrNotExist) {
@@ -239,11 +250,18 @@ func darwinChildHarness(t *testing.T, preflight bool) {
 		target, deadline, alarm = "TestRouterVPNNodeChainDarwinNativeHandshake", 90*time.Second, "85s"
 		markerName, markerBody = "native-handshake-complete", "original preflight child joined without native preparation\n"
 	}
+	if diagnostic {
+		target = "TestRouterVPNNodeChainDarwinNativeDiagnostic"
+		markerName, markerBody = "native-child-diagnostic-complete", "original wg-three diagnostic joined\n"
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	command := exec.CommandContext(ctx, macosprocess.ControllerPath, "-test.run=^"+target+"$", "-test.v", "-test.count=1", "-test.timeout="+alarm)
 	command.Dir = "/"
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0", darwinChildFlag + "=1", "ROUTERVPN_DARWIN_NODE_CHILD_INSTALLED=1", "ROUTERVPN_DARWIN_NODE_CHILD_UID=" + os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_UID"), "ROUTERVPN_DARWIN_NODE_CHAIN_PEER=" + peer, "ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256=" + os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256")}
+	if diagnostic {
+		command.Env = append(command.Env, "ROUTERVPN_DARWIN_NODE_CHILD_DIAGNOSTIC=wg-three")
+	}
 	_, e = darwinChildHarnessOutput(command)
 	if e != nil {
 		t.Fatal("actual installed generated-child fixture failed", e)
@@ -1267,6 +1285,21 @@ func darwinChildAwaitRefusal(t *testing.T, ctx context.Context, o *darwinChildOw
 	}
 }
 func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
+	darwinChildCommandCases(t, false)
+}
+
+func TestRouterVPNNodeChainDarwinNativeDiagnostic(t *testing.T) {
+	darwinChildCommandCases(t, true)
+}
+
+func darwinChildCommandCases(t *testing.T, diagnostic bool) {
+	if diagnostic {
+		if os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_DIAGNOSTIC") != "wg-three" || len(darwinChildCases) != 8 || darwinChildCases[0] != "wg-three" {
+			t.Fatal("diagnostic lost its fixed original first native case")
+		}
+	} else if os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_DIAGNOSTIC") != "" {
+		t.Fatal("diagnostic purpose cannot acquire exhaustive native acceptance")
+	}
 	darwinChildNative(t)
 	image, e := os.Executable()
 	if e != nil || image != macosprocess.ControllerPath || os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_INSTALLED") != "1" {
@@ -1300,7 +1333,11 @@ func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
 			t.Error("original PF reference did not retire", e, string(raw))
 		}
 	})
-	for _, scenario := range darwinChildCases {
+	cases := darwinChildCases
+	if diagnostic {
+		cases = darwinChildCases[:1]
+	}
+	for _, scenario := range cases {
 		if !t.Run(scenario, func(t *testing.T) {
 			fmt.Println("Darwin native child case:", scenario)
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -1375,7 +1412,11 @@ func TestRouterVPNNodeChainDarwinNativeCommand(t *testing.T) {
 		t.Fatal(e)
 	}
 	authorityClosed = true
-	if e := os.WriteFile(macosprocess.InstallRoot+"/native-child-complete", []byte("all original child owners joined\n"), 0600); e != nil {
+	markerName, markerBody := "native-child-complete", "all original child owners joined\n"
+	if diagnostic {
+		markerName, markerBody = "native-child-diagnostic-complete", "original wg-three diagnostic joined\n"
+	}
+	if e := os.WriteFile(macosprocess.InstallRoot+"/"+markerName, []byte(markerBody), 0600); e != nil {
 		t.Fatal(e)
 	}
 }

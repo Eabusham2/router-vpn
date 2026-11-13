@@ -1,0 +1,56 @@
+name: Darwin original wg-three diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: darwin-original-case-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Diagnostic only - original wg-three on arm64
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE: '1'
+      CGO_ENABLED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      ROUTERVPN_DIAGNOSTIC_CHECKPOINT: ${{ runner.temp }}/darwin-wg-three-scheduled.json
+      ROUTERVPN_DIAGNOSTIC_RECEIPT: ${{ runner.temp }}/darwin-wg-three-diagnostic.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Verify original native and diagnostic boundaries
+        run: python3 deploy/test_darwin_node_child_tun_runner.py
+      - name: Capture scheduled exact source and original case without PF
+        run: python3 deploy/test_darwin_node_child_tun.py --require-commit "$GITHUB_SHA" --write-diagnostic-checkpoint "$ROUTERVPN_DIAGNOSTIC_CHECKPOINT"
+      - name: Preserve scheduled source and case before PF
+        uses: actions/upload-artifact@v4
+        with:
+          name: Darwin-wg-three-scheduled-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/darwin-wg-three-scheduled.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Attempt only original wg-three with unchanged native ownership
+        timeout-minutes: 45
+        run: python3 deploy/test_darwin_node_child_tun.py --standalone --require-commit "$GITHUB_SHA" --diagnostic-original-case --diagnostic-checkpoint "$ROUTERVPN_DIAGNOSTIC_CHECKPOINT" --diagnostic-receipt "$ROUTERVPN_DIAGNOSTIC_RECEIPT"
+      - name: Preserve joined diagnostic result when available
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Darwin-wg-three-diagnostic-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/darwin-wg-three-diagnostic.json
+          if-no-files-found: warn
+          retention-days: 14
