@@ -118,6 +118,14 @@ func darwinChildImage(t *testing.T, source, target, expected string) {
 	}
 }
 
+// A failed controller may retain a separately grouped guardian that inherited
+// stderr. Bound the output-pipe wait after the controller exits or its original
+// context expires. ErrWaitDelay remains a failed test, never native retirement.
+func darwinChildHarnessOutput(command *exec.Cmd) ([]byte, error) {
+	command.WaitDelay = 5 * time.Second
+	return command.CombinedOutput()
+}
+
 // The parent creates only a new disposable fixed installation. It refuses any
 // pre-existing installed source/lock/socket and never adopts or deletes one.
 func TestRouterVPNNodeChainDarwinNativeHarness(t *testing.T) {
@@ -208,7 +216,7 @@ func TestRouterVPNNodeChainDarwinNativeHarness(t *testing.T) {
 	command := exec.CommandContext(ctx, macosprocess.ControllerPath, "-test.run=^TestRouterVPNNodeChainDarwinNativeCommand$", "-test.v", "-test.count=1", "-test.timeout=890s")
 	command.Dir = "/"
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0", darwinChildFlag + "=1", "ROUTERVPN_DARWIN_NODE_CHILD_INSTALLED=1", "ROUTERVPN_DARWIN_NODE_CHILD_UID=" + os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_UID"), "ROUTERVPN_DARWIN_NODE_CHAIN_PEER=" + peer, "ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256=" + os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256")}
-	output, e := command.CombinedOutput()
+	output, e := darwinChildHarnessOutput(command)
 	fmt.Print(string(output))
 	if e != nil {
 		t.Fatal("actual installed generated-child acceptance failed", e)

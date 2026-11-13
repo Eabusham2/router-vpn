@@ -910,6 +910,25 @@ changed native tuple, ignored proof expiry and dropped late-socket ownership.
 The native Box adapter, libbox bridge and Android/iOS activation remain separate
 work; no public prefix-only UI is enabled by these two shared runtime files.
 
+## Bounded Darwin native harness error reporting
+
+The generated-child harness previously used `CombinedOutput` with no post-exit
+pipe bound. A separately grouped guardian can retain inherited stderr after its
+direct controller exits; in that situation waiting for output can exceed the
+controller's own context deadline. The existing harness now gives that output
+join a five-second `WaitDelay`. `ErrWaitDelay` remains a failed native test and
+cannot supply a retirement or success receipt.
+
+All nineteen runner checks passed in 25.132 seconds. The new check executes the
+actual extracted helper with a real child that exits and an independently
+grouped disposable writer retaining its output. It requires both the original
+diagnostic and `ErrWaitDelay`; removing the assignment is rejected at the exact
+output-wait bound. The native 900-second controller, 890-second test, 930/960-
+second enclosing limits, all eight native cases, PF rules and authenticated Stop
+are unchanged. This proves bounded failure reporting, not the cause of the
+earlier lost-runner failures or successful native cleanup. A retained PF owner
+could still block log upload after a separate cleanup failure.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

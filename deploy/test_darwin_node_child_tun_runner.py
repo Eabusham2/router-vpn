@@ -4,6 +4,8 @@ from pathlib import Path
 import importlib.util
 import os
 import re
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -257,6 +259,104 @@ class EncryptedPeerSourceClosure(unittest.TestCase):
         imported=(ROOT/'mobile/desktop/node_imported_peer_linux_test.go.tmpl').read_text()
         self.assertIn('if !request.Cover || n < 1 || n > 1200',imported)
         self.assertNotIn('45998',imported)
+
+
+class BoundedHarnessReporting(unittest.TestCase):
+    def test_actual_escaped_output_writer_cannot_hide_controller_failure(self):
+        source = (ROOT/'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl').read_text()
+        signature = 'func darwinChildHarnessOutput(command *exec.Cmd) ([]byte, error) {'
+        self.assertEqual(source.count(signature), 1)
+        self.assertEqual(source.count('output, e := darwinChildHarnessOutput(command)'), 1)
+        start = source.index(signature)
+        end = source.index('\n}', start) + 2
+        original = source[start:end]
+        needle = 'command.WaitDelay = 5 * time.Second'
+        self.assertEqual(original.count(needle), 1)
+        go = shutil.which('go')
+        self.assertIsNotNone(go, 'actual process-pipe reporting requires Go')
+        fixture = r'''package main
+import (
+ "context"
+ "errors"
+ "fmt"
+ "os"
+ "os/exec"
+ "strconv"
+ "strings"
+ "syscall"
+ "time"
+)
+// SHIPPING_HARNESS_OUTPUT
+func main() {
+ if len(os.Args)>1 && os.Args[1]=="writer" {
+  fmt.Println("original escaped writer")
+  time.Sleep(20*time.Second)
+  return
+ }
+ if len(os.Args)>1 && os.Args[1]=="parent" {
+  child:=exec.Command(os.Args[0],"writer")
+  child.SysProcAttr=&syscall.SysProcAttr{Setpgid:true}
+  child.Stdout=os.Stdout;child.Stderr=os.Stderr
+  if err:=child.Start();err!=nil {panic(err)}
+  if err:=os.WriteFile(os.Args[2],[]byte(strconv.Itoa(child.Process.Pid)),0600);err!=nil {panic(err)}
+  return
+ }
+ if err:=verify(os.Args[1]);err!=nil {fmt.Fprintln(os.Stderr,err);os.Exit(1)}
+ fmt.Println("actual escaped output pipe bounded; native retirement remains unproved")
+}
+func verify(pidFile string) error {
+ ctx,cancel:=context.WithTimeout(context.Background(),10*time.Second)
+ defer cancel()
+ command:=exec.CommandContext(ctx,os.Args[0],"parent",pidFile)
+ type result struct {output []byte;failure error}
+ joined:=make(chan result,1)
+ go func(){out,err:=darwinChildHarnessOutput(command);joined<-result{out,err}}()
+ deadline:=time.Now().Add(2*time.Second)
+ pid:=0
+ for time.Now().Before(deadline) {
+  raw,err:=os.ReadFile(pidFile)
+  if err==nil {pid,err=strconv.Atoi(string(raw));if err!=nil{return err};break}
+  time.Sleep(5*time.Millisecond)
+ }
+ if pid<=1 {return errors.New("actual escaped writer was never created")}
+ group,err:=syscall.Getpgid(pid)
+ if err!=nil || group!=pid || group==syscall.Getpgrp() {
+  return errors.New("actual writer did not retain its independent process group")
+ }
+ // This fixture owns only a disposable writer, no native VPN/PF resources.
+ // Never use this group signal as evidence of the production guardian join.
+ defer syscall.Kill(-pid,syscall.SIGKILL)
+ select {
+ case result:=<-joined:
+  if command.ProcessState==nil || !command.ProcessState.Success() {
+   return errors.New("original direct controller did not exit successfully")
+  }
+  if !errors.Is(result.failure,exec.ErrWaitDelay) || !strings.Contains(string(result.output),"original escaped writer") {
+   return errors.New("escaped output closure lost its failure or original diagnostic")
+  }
+  return nil
+ case <-time.After(7*time.Second):
+  syscall.Kill(-pid,syscall.SIGKILL)
+  select {case <-joined:case <-time.After(2*time.Second):return errors.New("reporting control could not join its disposable writer")}
+  return errors.New("Darwin native harness waited beyond its retained output bound")
+ }
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='darwin-child-reporting-') as temporary:
+            work = Path(temporary); code = work/'main.go'; image = work/'reporting'
+            for mutated in (False, True):
+                helper = original.replace(needle, '', 1) if mutated else original
+                self.assertEqual(helper != original, mutated)
+                code.write_text(fixture.replace('// SHIPPING_HARNESS_OUTPUT', helper))
+                subprocess.run([go, 'build', '-p=1', '-o', str(image), str(code)], cwd=work, check=True, timeout=90)
+                result = subprocess.run([str(image), str(work/('mutant.pid' if mutated else 'original.pid'))],
+                                        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15)
+                if mutated:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn('Darwin native harness waited beyond its retained output bound', result.stdout)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout)
+                    self.assertIn('actual escaped output pipe bounded; native retirement remains unproved', result.stdout)
 
 
 class RequiredWorkflowInventory(unittest.TestCase):
