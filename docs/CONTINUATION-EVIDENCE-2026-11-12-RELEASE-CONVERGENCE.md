@@ -885,6 +885,31 @@ mandatory. Forty-five workflow checks passed in 2.933 seconds, including the
 original missing-gate, substituted-budget and child-failure controls. Production
 build code, protocol inventories and native verdict requirements are unchanged.
 
+## Prefix-only proof and measurement runtime
+
+The sealed prefix source now has its own shared runtime. It proves each
+captured private prefix identity and grants measurement only while its exact
+native engine/session/network/source/config tuple and candidate catalog remain
+current. Its dial allowlist contains only the captured prefix APIs and candidate
+TCP endpoints through the selected prefix. Application and DNS ingress remain
+closed; no old final-node or ordinary Connected proof is borrowed.
+
+The runtime's owned lifetime is independent of disposable UI callbacks. Startup
+and periodic proof workers retain explicit joins; cancellation, proof expiry or
+native/catalog changes invalidate authority. Existing fifty-sample candidate
+measurement retains a late socket and MTU lease until that original child joins.
+The enclosing native owner still must close candidates before prefix proof
+workers and then retire its exact Box/TUN.
+
+Focused race tests passed in 8.840 seconds. They exercise real loopback private
+HTTP proofs and fifty TCP connections for each of WG, AWG Fast and AWG Strong
+source profiles, with the saved final fixture deliberately unreachable. Their
+host adapter is an explicit test boundary, so this is not encrypted native-path
+acceptance. Four separately compiled controls reject omitted private identity,
+changed native tuple, ignored proof expiry and dropped late-socket ownership.
+The native Box adapter, libbox bridge and Android/iOS activation remain separate
+work; no public prefix-only UI is enabled by these two shared runtime files.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
