@@ -2267,6 +2267,42 @@ assertion inventory or deadline change was needed. Crosscompilation does not
 establish Windows or macOS native execution; exact-SHA hosted gates remain
 required for the new release.
 
+## Checked intervals for ordinary ordered private and public proofs
+
+The Windows prefix investigation exposed a related ordinary ordered-path timing
+producer: both paired private HTTP and imported-middle public TLS proofs used
+raw `time.Since`, which could publish `Proven=true` with a zero `ResponseMS`.
+The ordinary readiness record does not contain this field, so this is a proof
+timing defect, not a claim that ordinary readiness has the same prefix-heartbeat
+refusal. The separate candidate-prefix investigation remains separately scoped.
+
+`NodeChain.provePrefix` now uses the existing checked `hopmeasure.Interval`.
+Windows uses its original checked performance counter. An unavailable,
+unchanged, regressing or unrepresentable interval is rejected; no minimum
+latency is manufactured. Both original proof branches retain their selected
+outbound, identity/source checks, five-second per-prefix deadline and final
+native-owner observation, including when clock readback fails. Earlier valid
+proof rows remain distinguishable from a later failed operation.
+
+The immutable `d294da4a` plus two-file validation retained 5,094 source hashes.
+The corrected two new roots passed all ten root/child records for actual HTTP
+and TLS, positive measured intervals, failed capture before target I/O, invalid
+completion after target I/O and cancellation. Nine existing elapsed/clock roots
+passed all 27 records, including same-tick, regression, changed domains and
+integer-range rejection. Six original proof/lifecycle roots had already passed
+all 23 records in the first attempt, including wrong identity, DNS, TLS, source,
+engine/network substitution, dead-middle retirement and joined cancellation.
+
+That first attempt failed only the new fixture's expectation for `Complete`:
+the existing runtime deliberately marks a failed operation terminal with
+`Complete=true`, `Stage=failed` and `Ready=false`. Only those new assertions were
+corrected. The first log and source are retained; it is not described as an
+overall passing run. A separately compiled control that ignores the checked
+Duration error failed both paired and imported completion witnesses. Original
+production deadlines and lifecycle behavior were unchanged. These are source
+and real HTTP/TLS fixture results with an explicit native routing boundary,
+not Windows counter execution, kernel TUN, packaged or device acceptance.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

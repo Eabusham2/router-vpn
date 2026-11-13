@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"router-vpn/internal/hopmeasure"
 )
 
 // All five fields belong to the same retained native observation. A process,
@@ -59,17 +61,18 @@ type NodeChainProgress struct {
 }
 
 type nodeChainRuntime struct {
-	mu          sync.Mutex
-	generation  atomic.Uint64
-	engine      NodeChainEngine
-	identity    NodeChainIdentity
-	cancel      context.CancelFunc
-	startDone   chan struct{}
-	observeDone chan struct{}
-	closed      bool
-	progress    NodeChainProgress
-	checkedAt   time.Time
-	testTLS     *tls.Config // Private package-test roots; never exposed to a host.
+	mu           sync.Mutex
+	generation   atomic.Uint64
+	engine       NodeChainEngine
+	identity     NodeChainIdentity
+	cancel       context.CancelFunc
+	startDone    chan struct{}
+	observeDone  chan struct{}
+	closed       bool
+	progress     NodeChainProgress
+	checkedAt    time.Time
+	testTLS      *tls.Config                         // Private package-test roots; never exposed to a host.
+	testInterval func() (hopmeasure.Interval, error) // Private clock-failure fixture; never exposed to a host.
 }
 
 func (c *NodeChain) Progress() NodeChainProgress {
@@ -175,30 +178,39 @@ func (c *NodeChain) provePrefix(parent context.Context, position int) (time.Dura
 		return 0, err
 	}
 	node, proof := c.nodes[position], c.proofs[position]
-	started := time.Now()
+	captureInterval := hopmeasure.StartInterval
+	if c.runtime.testInterval != nil {
+		captureInterval = c.runtime.testInterval
+	}
+	started, err := captureInterval()
+	if err != nil {
+		return 0, err
+	}
 	if position == 1 && c.importedMiddle != nil {
-		err := proveExternalPublicIP(ctx, c.dial, proof.Tag, c.importedMiddle.selection.ExpectedPublicIP, c.runtime.testTLS)
-		if err != nil {
+		if err := proveExternalPublicIP(ctx, c.dial, proof.Tag, c.importedMiddle.selection.ExpectedPublicIP, c.runtime.testTLS); err != nil {
 			return 0, err
 		}
-		return time.Since(started), c.currentContext(ctx, true)
+	} else {
+		data, err := externalProofHTTP(ctx, c.dial, proof.Tag,
+			healthURL(predecessorText(node.profile, "router_api")), predecessorText(node.profile, "api_token"), nil)
+		if err != nil {
+			return 0, errors.Join(ctx.Err(), err)
+		}
+		// The same exact paired identity and proof marker used by Controller.prove.
+		var result struct {
+			OK     bool   `json:"ok"`
+			NodeID string `json:"node_id"`
+			Proof  string `json:"proof"`
+		}
+		if exactJSON(data, &result, 8192) != nil || !result.OK ||
+			result.NodeID != proof.NodeID || result.Proof != "router-vpn-private-agent-v1" {
+			return 0, errors.New("ordered chain returned the wrong prefix node proof")
+		}
 	}
-	data, err := externalProofHTTP(ctx, c.dial, proof.Tag,
-		healthURL(predecessorText(node.profile, "router_api")), predecessorText(node.profile, "api_token"), nil)
-	if err != nil {
-		return 0, errors.Join(ctx.Err(), err)
-	}
-	// The same exact paired identity and proof marker used by Controller.prove.
-	var result struct {
-		OK     bool   `json:"ok"`
-		NodeID string `json:"node_id"`
-		Proof  string `json:"proof"`
-	}
-	if exactJSON(data, &result, 8192) != nil || !result.OK ||
-		result.NodeID != proof.NodeID || result.Proof != "router-vpn-private-agent-v1" {
-		return 0, errors.New("ordered chain returned the wrong prefix node proof")
-	}
-	return time.Since(started), c.currentContext(ctx, true)
+	// Measurement clocks do not govern deadlines or native ownership. Retain
+	// the original owner check even when elapsed readback is invalid.
+	elapsed, err := started.Duration()
+	return elapsed, errors.Join(err, c.currentContext(ctx, true))
 }
 
 func (c *NodeChain) provePrefixes(ctx context.Context, publish bool) error {
