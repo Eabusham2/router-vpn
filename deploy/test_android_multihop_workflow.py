@@ -12,7 +12,7 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/android-multihop-contract.yml'
 RUNTIME = WORKFLOW.parents[2] / 'android/test_android_runtime_contract.py'
 ANDROID = tuple('python3 android/test_android_' + name + '.py' for name in (
-    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'node_candidates', 'ordered_presentation',
+    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'node_candidates', 'node_candidate_profile', 'ordered_presentation',
     'node_chain_runtime', 'node_candidate_preparation', 'node_chain_execution_runtime', 'node_chain_execution_restore', 'node_chain_mtu', 'multihop_modes', 'home_dns',
     'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection',
     'naive_multihop',
@@ -34,6 +34,7 @@ def validate_runtime(source):
     assert len(values) == len(loops[0].iter.elts), 'Runtime gate inventory is not literal'
     assert values.count('test_android_node_chain_execution_capture.py') == 1, 'Runtime execution capture gate missing/duplicate'
     assert values.count('test_android_node_candidate_preparation.py') == 1, 'Runtime temporary preparation gate missing/duplicate'
+    assert values.count('test_android_node_candidate_profile.py') == 1, 'Runtime detached candidate profile gate missing/duplicate'
     expected = ast.parse('subprocess.run([sys.executable, str(ROOT / executable_contract)], cwd=ROOT.parent, check=True)').body
     assert not loops[0].orelse and len(loops[0].body) == 1, 'Runtime gate can be conditionally skipped'
     assert ast.dump(loops[0].body[0]) == ast.dump(expected[0]), 'Runtime gate no longer executes its exact checked script'
@@ -48,7 +49,7 @@ def validate(source):
             for i, m in enumerate(matches)}
     assert len(matches) == 5 and set(jobs) == {*EXPECTED, 'contract'}, 'Missing/duplicate job'
     assert source.count("- 'deploy/test_android_multihop_workflow.py'") == 2, 'Audit trigger missing'
-    for path in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_node_candidate_preparation.py', 'android/test_android_runtime_contract.py'):
+    for path in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_node_candidate_preparation.py', 'android/test_android_node_candidate_profile.py', 'android/test_android_runtime_contract.py'):
         assert source.count("- '" + path + "'") == 2, 'Execution capture source/test trigger missing'
     for name, expected in EXPECTED.items():
         body = jobs[name]
@@ -102,6 +103,15 @@ class WorkflowContract(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     validate_runtime(source.replace(gate, replacement))
 
+    def test_runtime_detached_profile_controls(self):
+        source = RUNTIME.read_text()
+        gate = '"test_android_node_candidate_profile.py",'
+        self.assertEqual(source.count(gate), 1)
+        for replacement in ('', gate + gate):
+            with self.subTest(replacement=replacement):
+                with self.assertRaises(AssertionError):
+                    validate_runtime(source.replace(gate, replacement))
+
     def test_actual_aggregate_rejects_every_incomplete_result(self):
         script = validate(self.source)
         for results in product(('success', 'failure', 'cancelled', 'skipped'), repeat=4):
@@ -116,6 +126,9 @@ class WorkflowContract(unittest.TestCase):
             (ANDROID[1], '# omitted'),
             (ANDROID[2], '# omitted execution capture'),
             ('python3 android/test_android_node_candidate_preparation.py', '# omitted temporary preparation'),
+            ('python3 android/test_android_node_candidate_profile.py', '# omitted detached candidate profile'),
+            ('python3 android/test_android_node_candidate_profile.py', 'python3 android/test_android_node_candidates.py'),
+            ("- 'android/test_android_node_candidate_profile.py'", "- 'android/omitted-candidate-profile.py'"),
             ('python3 android/test_android_node_candidate_preparation.py', 'python3 android/test_android_node_chain_runtime.py'),
             ('python3 android/test_android_node_chain_execution_runtime.py', '# omitted execution runtime'),
             ('python3 android/test_android_node_chain_execution_restore.py', '# omitted execution restore'),

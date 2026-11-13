@@ -426,6 +426,35 @@ passed the previously failing comparison/final-adoption step and the following
 native network-cohort check. The entire job and release were still running at
 this observation; this result does not prove the historical timeout's cause.
 
+## Android explicit profile Save after candidate retirement
+
+A temporary preparation can capture a proposed profile while its exact admitted
+candidate is still live, using the actual shared graph compiler. After that
+worker joins, Save requires the preparation's original result authority and the
+unextended native result expiry. The profile store repeats that authority check
+through its guarded append. Ordinary connected candidate profiles retain their
+existing live-measurement guard and cannot be converted into detached proposals
+after close. This internal API still requires the separately integrated
+preparation owner and UI before users can run the disconnected flow.
+
+The executable Java/shared-Go fixture passed 76 checks and all five causal
+controls, with exit zero. It compiles all three imported SS2022 methods with
+WG/AWG source captures, preserves the original paired final member, rejects
+copied or expired results, requires separate candidate and graph retirement,
+and verifies that rejected Save leaves profile bytes unchanged. Explicit Save
+does not copy private keys or alter the selected path; normal explicit Load
+compiles the complete saved schema-two graph. Cancellation during original graph
+compilation is rejected. The preparation's graph authority and native callback
+boundary are doubles here; the actual stores, source capture and shared compiler
+run unchanged.
+
+One first-pass negative was caught by an implementation-shaped callback count
+before its intended late-append witness. Removing that count assertion retained
+the transport check and allowed the stronger storage test to reject the actual
+guard bypass. No production guard was removed. Both Android shipping inventories
+now require the new script, and all eight workflow-audit tests passed, including
+missing/duplicate gate and incomplete aggregate rejection.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

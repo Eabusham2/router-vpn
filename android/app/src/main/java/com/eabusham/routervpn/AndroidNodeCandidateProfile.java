@@ -12,13 +12,26 @@ import java.util.List;
 /** An explicit future connection, compiled from the measured original sources.
  * Saving never edits a node, active selection, native session or receipt. */
 final class AndroidNodeCandidateProfile {
+    /** The preparation seals this authority only after its complete temporary
+     * native graph has drained. It checks the original result, sources, idle
+     * selection and physical cohort without retaining live measurement power. */
+    interface SavedResultAuthority {void requireCurrent(AndroidNodeCandidateResult result)throws Exception;}
     private final AndroidNodeCandidateMeasurement operation;
     private final AndroidNodeCandidateResult result;
+    private final SavedResultAuthority savedAuthority;
     private final List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();
     private final List<String> modes=new ArrayList<>();
     final String description;
     AndroidNodeCandidateProfile(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result)throws Exception {
-        this.operation=operation;this.result=result;requireCurrent();
+        this(operation,result,null);
+    }
+    static AndroidNodeCandidateProfile captureTemporary(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result,SavedResultAuthority authority)throws Exception {
+        if(authority==null)throw new IllegalArgumentException("The original temporary preparation authority is required.");
+        return new AndroidNodeCandidateProfile(operation,result,authority);
+    }
+    private AndroidNodeCandidateProfile(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result,SavedResultAuthority authority)throws Exception {
+        if(operation==null||result==null)throw new IllegalArgumentException("The original measured candidate is required.");
+        this.operation=operation;this.result=result;this.savedAuthority=authority;requireCurrent();
         AndroidNodeCandidateCatalog catalog=operation.catalog;AndroidNodeCandidateCatalog.Row selected=null;
         for(AndroidNodeCandidateCatalog.Row row:catalog.rows)if(row.id.equals(result.id)&&!row.input.isEmpty()){if(selected!=null)throw new IllegalStateException("Duplicate candidate identity");selected=row;}
         if(selected==null)throw new IllegalStateException("The measured original source is missing.");
@@ -54,10 +67,15 @@ final class AndroidNodeCandidateProfile {
         description=preview.toString();
     }
     private void requireCurrent()throws Exception {operation.requireResult(result);}
+    private void requireSavedCurrent()throws Exception {
+        if(savedAuthority==null){requireCurrent();return;}
+        if(!operation.joined()||!result.current(System.currentTimeMillis()))throw new IllegalStateException("The original temporary measurement must drain and remain fresh before saving.");
+        savedAuthority.requireCurrent(result);
+    }
     AndroidConnectionProfileStore.Record save(Context context,String name)throws Exception {
         synchronized(operation){
-            requireCurrent();AndroidConnectionProfileStore store=new AndroidConnectionProfileStore(context,new AndroidNodeStore(context),new AndroidStandardExitStore(context));
-            return store.appendOrderedProposal(name,sources,modes,()->{try{requireCurrent();}catch(Exception stale){throw new IllegalStateException("Retest this original candidate before saving.",stale);}});
+            requireSavedCurrent();AndroidConnectionProfileStore store=new AndroidConnectionProfileStore(context,new AndroidNodeStore(context),new AndroidStandardExitStore(context));
+            return store.appendOrderedProposal(name,sources,modes,()->{try{requireSavedCurrent();}catch(Exception stale){throw new IllegalStateException("Retest this original candidate before saving.",stale);}});
         }
     }
 }
