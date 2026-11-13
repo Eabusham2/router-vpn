@@ -199,6 +199,63 @@ func TestExternalProofCancelUnblocksOnlyCapturedDNSRequest(t *testing.T) {
 	}
 }
 
+func TestExternalDNSFailurePreservesItsPhaseAndPrivateBoundary(t *testing.T) {
+	for _, phase := range []string{"exchange", "path", "host", "cancelled-exchange"} {
+		t.Run(phase, func(t *testing.T) {
+			request, engine, _ := externalRequestFixture(t, "")
+			replacement, _, _ := externalRequestFixture(t, "")
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			dnsCalls, publicCalls, hostAfterDNS := 0, 0, 0
+			engine.dns = func(ctx context.Context, tag string) error {
+				dnsCalls++
+				if tag != "tun-in" || ctx.Err() != nil {
+					t.Fatal("diagnostic changed the original selected DNS call")
+				}
+				switch phase {
+				case "exchange":
+					return errors.New("secret resolver credentials")
+				case "path":
+					engine.current.Store(false)
+				case "cancelled-exchange":
+					cancel()
+					return ctx.Err()
+				}
+				return nil
+			}
+			request.public = func(context.Context, string, string) error { publicCalls++; return nil }
+			raw, err := request.RunContext(parent, func(context.Context) error {
+				if dnsCalls > 0 {
+					hostAfterDNS++
+					if phase == "host" {
+						return errors.New("private host ownership data")
+					}
+				}
+				return nil
+			})
+			want := "captured external DNS proof failed during exchange"
+			if phase == "path" {
+				want = "captured external DNS proof lost its original path"
+			}
+			if phase == "host" {
+				want = "captured external DNS proof lost its original host"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "secret resolver") || strings.Contains(err.Error(), "private host") {
+				t.Fatal("DNS failure changed its captured phase or exposed private cause", err)
+			}
+			if raw != "" || dnsCalls != 1 || publicCalls != 0 || request.Healthy() || request.ctx.Err() == nil || replacement.ctx.Err() != nil {
+				t.Fatal("DNS diagnostic retried proof, reached exit, published a result or cancelled a replacement")
+			}
+			if phase == "host" && hostAfterDNS != 1 || phase != "host" && hostAfterDNS != 0 {
+				t.Fatal("DNS diagnostic did not retain original short-circuit order")
+			}
+			if phase == "cancelled-exchange" && !errors.Is(err, context.Canceled) {
+				t.Fatal("DNS diagnostic lost original caller cancellation", err)
+			}
+		})
+	}
+}
+
 func TestExternalEntryProofRequiredForEveryDNSPolicy(t *testing.T) {
 	for _, entry := range []string{"router-wg", "socks5"} {
 		graph, capture := externalTestFixture(t, "shadowsocks", entry)

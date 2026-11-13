@@ -1510,6 +1510,12 @@ The retained iOS Libbox job at 552d8f4e completed its runtime cases, but the exa
 
 All 13 parser runner tests passed. Replaying the actual hosted job's 374 JSON events now returns the same 91 passing record bytes across the 35 required roots as the original parser produces when only its two build diagnostics are separated. The original parser rejects the unmodified stream, establishing the actual cause. Five mutations of that real stream remained rejected: build failure, foreign output, missing package completion, runtime failure and nonzero exit. This is a corrected interpretation of recorded execution, not a new iOS SDK, native-network or release acceptance claim.
 
+## External DNS failures retain their original diagnostic phase
+
+The actual Windows Hysteria2 AES-GCM/XOR native gate at 07a426 failed its first proof in the successor/restore case. Its old error combined three distinct checks and discarded which one failed, so the existing log does not establish whether the selected exchange, original path or original host was lost. The shared proof now preserves those three fixed diagnostic stages while continuing to redact underlying private resolver and provider errors. The native Windows Hysteria2 fixture enables the already-existing bounded DNS exchange classification logger.
+
+All original checks run in the same order with the same short-circuit behavior, context ownership and phase deadlines. No retry, resolver substitution, exit-proof bypass or wider timeout is added. Four explicit phase cases verify redaction, original cancellation, one DNS attempt, zero public-exit calls and no effect on a replacement owner. The full focused external-proof regression passed under the race detector: 14 root tests and 74 passing records in 6.135 seconds, including native observation budgets, cancellation, Compare ownership, selected-DNS/entry/exit order and bounded TLS responses. This is diagnostic work to locate the native failure; that Windows acceptance case remains unresolved until a fresh native execution establishes its cause and result.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

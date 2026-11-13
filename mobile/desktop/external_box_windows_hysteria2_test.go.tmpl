@@ -1231,7 +1231,7 @@ func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy
 		t.Fatal(err)
 	}
 	options.Log = &option.LogOptions{Disabled: true}
-	logSelectedDNSError := policy.Metadata().Protocol == "socks5"
+	logSelectedDNSError := policy.Metadata().Protocol == "socks5" || policy.Metadata().Protocol == "hysteria2"
 	if captured, captureErr := policy.Capture(); captureErr == nil && captured.Execution == "server" && captured.EntryNodeID != "" {
 		logSelectedDNSError = true
 	}

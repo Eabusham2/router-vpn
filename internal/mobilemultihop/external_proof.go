@@ -337,8 +337,16 @@ func (r *ExternalProofRequest) RunContext(parent context.Context, observe func(c
 			return "", errors.Join(ctx.Err(), errors.New("captured external entry proof failed or became stale"))
 		}
 	}
-	if err := r.engine.DNSProof(ctx, r.meta.TUNTag); err != nil || r.verifyCurrentPath(ctx) != nil || current(ctx) != nil {
-		return "", errors.Join(ctx.Err(), errors.New("captured external DNS proof failed or became stale"))
+	// Keep the original failure phase without exposing resolver/provider errors.
+	// These checks retain their original order and short-circuit on failure.
+	if err := r.engine.DNSProof(ctx, r.meta.TUNTag); err != nil {
+		return "", errors.Join(ctx.Err(), errors.New("captured external DNS proof failed during exchange"))
+	}
+	if err := r.verifyCurrentPath(ctx); err != nil {
+		return "", errors.Join(ctx.Err(), errors.New("captured external DNS proof lost its original path"))
+	}
+	if err := current(ctx); err != nil {
+		return "", errors.Join(ctx.Err(), errors.New("captured external DNS proof lost its original host"))
 	}
 	if err := r.public(ctx, ExternalFinalTag, r.meta.ExpectedPublicIP); err != nil || r.verifyCurrentPath(ctx) != nil || current(ctx) != nil {
 		return "", errors.Join(ctx.Err(), errors.New("captured public exit proof failed or became stale"))
