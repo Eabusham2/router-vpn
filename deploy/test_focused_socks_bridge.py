@@ -199,9 +199,19 @@ def checked_sources(source,core,xray):
         original=subprocess.check_output(["git","show",PIN+":"+relative],cwd=core,timeout=20)
         if (core/relative).is_symlink() or (core/relative).read_bytes()!=original:
             raise ValueError("Original pinned caller changed: "+relative)
+    return {"core":native_snapshot(core),"xray":native_snapshot(xray)}
+
+def checked_owner_sources(source,core,xray):
     gate=OWNER.load_gate(source)
     owner=OWNER.checked_sources(gate,source,core)
     return {"owner":owner,"core":native_snapshot(core),"xray":native_snapshot(xray)}
+
+def prepare_owner(source,source_sha,core,xray):
+    if COMMON.git(source,"rev-parse","HEAD")!=source_sha:
+        raise ValueError("Preparation source moved after selection")
+    if core.exists() or xray.exists():
+        raise ValueError("Desktop preparation requires its own fresh pinned trees")
+    OWNER.prepare(OWNER.load_gate(source),core,xray,dict(os.environ))
 
 def prepare_mobile(source,source_sha,core,xray,go):
     # Runs only as a bounded, joined child after exact candidate selection.
@@ -211,13 +221,19 @@ def prepare_mobile(source,source_sha,core,xray,go):
     build=module("socks_bridge_candidate_build",source/"deploy/build-native-runtime.py")
     if build.PIN!=PIN or build.TOOLCHAIN!="go1.26.3":
         raise ValueError("Original pinned native toolchain changed")
-    # Original owner preparation runs unchanged before mobile projection.
-    # It captures the same encrypted peer, packet patch and daemon receipts.
-    gate=OWNER.load_gate(source)
-    OWNER.prepare(gate,core,xray,dict(os.environ))
+    # Desktop and mobile generated Tor namespaces are deliberately different.
+    # Start from separate clean pinned checkouts, exactly as the shipping mobile
+    # build does. Never remove a generated file or weaken its namespace guard.
+    if core.exists() or xray.exists():
+        raise ValueError("Mobile preparation requires its own fresh pinned trees")
+    build.checkout(core,"https://github.com/SagerNet/sing-box.git",PIN)
+    build.checkout(xray,"https://github.com/XTLS/Xray-core.git",build.POLICY.XRAY.XRAY_PIN)
+    if COMMON.git(core,"rev-parse","HEAD")!=PIN or COMMON.git(xray,"rev-parse","HEAD")!=build.POLICY.XRAY.XRAY_PIN:
+        raise ValueError("Original mobile source pins changed")
     commands=(
         [sys.executable,source/"deploy/prepare-mobile-openvpn.py",core],
         [sys.executable,source/"deploy/prepare-mobile-multihop.py",core],
+        [sys.executable,source/"deploy/test_retained_strategy_preparation.py",core],
         [sys.executable,source/"deploy/prepare-mobile-tor.py",core,"--go",go],
         [sys.executable,source/"deploy/prepare-apple-xray.py",core,xray],
         ["git","-C",core,"tag","-f","v1.14.1",PIN],
@@ -326,6 +342,8 @@ def validate(source,source_sha,output,go="go"):
     receipt=dict(schema=1,suite=SUITE,selection=metadata,status="running",phases=[],
         scope="encrypted-original-owner-and-typed-native-object-composition",
         typed_object_boundaries=["TUN","OS monitor","packet-prefix I/O","selected DNS responses"],
+        prepared_source_roles={"mobile":"original shipping mobile preparers on pristine pinned core",
+                               "desktop_owner":"unchanged original owner preparer on independent pinned core"},
         installed_native_accepted=False,successful_run_accepted=False,public_native_admission=False,
         compiler=compiler,go_version=version,
         resource_limits=dict(parallel_packages=1,GOMAXPROCS=2,GOGC=100,GOMEMLIMIT="2GiB"),
@@ -352,22 +370,29 @@ def validate(source,source_sha,output,go="go"):
     save()
     try:
         with tempfile.TemporaryDirectory(prefix="routervpn-socks-bridge-",dir=output.parent) as temp:
-            work=Path(temp);core,xray=work/"core",work/"xray"
+            work=Path(temp);core,xray=work/"mobile-core",work/"mobile-xray"
+            owner_core,owner_xray=work/"owner-core",work/"owner-xray"
             status,raw=run("original-owner-preflight",
                 [sys.executable,source/"deploy/test_desktop_tor_preparation.py","--daemon-capture-only"],source,60)
             OWNER.require_daemon_preflight(raw.decode(),status)
+            status,_=run("prepare-owner",
+                [sys.executable,Path(__file__).resolve(),"--prepare-owner","--source",source,
+                 "--source-sha",source_sha,"--core",owner_core,"--xray",owner_xray],source,600)
+            if status:
+                raise ValueError("Original shipping desktop owner preparation failed")
             status,_=run("prepare-mobile",
                 [sys.executable,Path(__file__).resolve(),"--prepare-mobile","--source",source,
                  "--source-sha",source_sha,"--core",core,"--xray",xray,"--go",compiler],source,600)
             if status:
                 raise ValueError("Original shipping mobile preparation failed")
-            native_before=checked_sources(source,core,xray)
+            native_before={"mobile":checked_sources(source,core,xray),
+                           "desktop_owner":checked_owner_sources(source,owner_core,owner_xray)}
             (output/"native-before.json").write_text(json.dumps(native_before,sort_keys=True)+"\n")
             receipt["native_source_sha256"]=hashlib.sha256(json.dumps(native_before,sort_keys=True,separators=(",",":")).encode()).hexdigest()
             flags=["-race","-p=1","-mod=readonly","-tags="+TAGS,"-ldflags=-checklinkname=0"]
             images={}
             owner_gate=OWNER.load_gate(source)
-            compiler,captured,architecture=owner_gate.NODE.selected_compiler(compiler,core,env)
+            compiler,captured,architecture=owner_gate.NODE.selected_compiler(compiler,owner_core,env)
             if architecture!="amd64":
                 raise ValueError("Original native owner compiler selected another architecture")
             env.update(captured)
@@ -378,7 +403,8 @@ def validate(source,source_sha,output,go="go"):
                                         (LIBBOX,"./experimental/libbox","libbox"),(BOX,".","box")):
                 image=work/(name+".test")
                 compile_flags=owner_flags if package==OWNER.PACKAGE else flags
-                status,_=run(name+"-build",[compiler,"test","-c",*compile_flags,"-o",image,target],core,600)
+                build_core=owner_core if package==OWNER.PACKAGE else core
+                status,_=run(name+"-build",[compiler,"test","-c",*compile_flags,"-o",image,target],build_core,600)
                 if status:
                     raise ValueError("Actual native "+name+" image failed to compile")
                 images[package]=(image,COMMON.image_identity(image))
@@ -390,20 +416,20 @@ def validate(source,source_sha,output,go="go"):
                 ("original-encrypted-peer",(OWNER.ORIGINAL_ROOT,),OWNER.ORIGINAL),
             ):
                 status,raw=run(name,[owner_image,"-test.run=^("+"|".join(roots)+")$",
-                    "-test.count=1","-test.timeout=90s","-test.v"],core,100)
+                    "-test.count=1","-test.timeout=90s","-test.v"],owner_core,100)
                 if status:
                     raise ValueError("Original encrypted owner/peer baseline failed")
                 owner_gate.NODE.require_native_verdicts(raw.decode(),expected,name)
             owner_controls=[]
-            owner_original=(core/OWNER.OWNER_PROJECTION).read_text()
+            owner_original=(owner_core/OWNER.OWNER_PROJECTION).read_text()
             for control in OWNER.CONTROLS:
                 changed=mutate(control,owner_original)
                 replacement,overlay=work/("owner-"+control["name"]+".go"),work/("owner-"+control["name"]+".json")
                 replacement.write_text(changed)
-                overlay.write_text(json.dumps({"Replace":{str(core/OWNER.OWNER_PROJECTION):str(replacement)}}))
+                overlay.write_text(json.dumps({"Replace":{str(owner_core/OWNER.OWNER_PROJECTION):str(replacement)}}))
                 status,raw=run("owner-"+control["name"],[compiler,"test",*owner_flags,"-json",
                     "-overlay="+str(overlay),"-run=^"+control["root"]+"$","-count=1","-timeout=90s",
-                    "./protocol/routervpnamnezia"],core,600)
+                    "./protocol/routervpnamnezia"],owner_core,600)
                 OWNER.require_control(raw.decode(),status,control)
                 owner_controls.append(dict(name=control["name"],cases=list(control["cases"]),
                     failed_cases=sorted(OWNER.required_failures(control)[1]),witness=control["witness"],
@@ -430,7 +456,9 @@ def validate(source,source_sha,output,go="go"):
                 result=require_events(raw,status,LIBBOX,control["cases"],control)
                 controls.append(dict(name=control["name"],original_sha256=hashlib.sha256(original.read_bytes()).hexdigest(),
                     mutated_sha256=hashlib.sha256(changed.encode()).hexdigest(),**result))
-            if checked_sources(source,core,xray)!=native_before or CORE.snapshot(source)!=before or COMMON.git(source,"status","--porcelain","--untracked-files=all"):
+            native_after={"mobile":checked_sources(source,core,xray),
+                          "desktop_owner":checked_owner_sources(source,owner_core,owner_xray)}
+            if native_after!=native_before or CORE.snapshot(source)!=before or COMMON.git(source,"status","--porcelain","--untracked-files=all"):
                 raise ValueError("Original native or candidate source changed during execution")
             if (output.parent/"selection.json").read_bytes()!=raw_selection or selection(source,source_sha,output)[0]!=metadata:
                 raise ValueError("Original native source selection changed during execution")
@@ -456,13 +484,17 @@ def main():
     parser.add_argument("--output",type=Path)
     parser.add_argument("--go",default="go")
     parser.add_argument("--prepare-mobile",action="store_true",help=argparse.SUPPRESS)
+    parser.add_argument("--prepare-owner",action="store_true",help=argparse.SUPPRESS)
     parser.add_argument("--core",type=Path,help=argparse.SUPPRESS)
     parser.add_argument("--xray",type=Path,help=argparse.SUPPRESS)
     args=parser.parse_args()
-    if args.prepare_mobile:
-        if args.core is None or args.xray is None or args.suite or args.output:
+    if args.prepare_mobile or args.prepare_owner:
+        if args.prepare_mobile==args.prepare_owner or args.core is None or args.xray is None or args.suite or args.output:
             parser.error("exact internal mobile preparation arguments required")
-        prepare_mobile(args.source,args.source_sha,args.core,args.xray,args.go)
+        if args.prepare_mobile:
+            prepare_mobile(args.source,args.source_sha,args.core,args.xray,args.go)
+        else:
+            prepare_owner(args.source,args.source_sha,args.core,args.xray)
     else:
         if args.suite!=SUITE or args.output is None or args.core or args.xray:
             parser.error("suite and output are required")

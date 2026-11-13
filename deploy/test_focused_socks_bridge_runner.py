@@ -79,10 +79,12 @@ class Composition:
             raw=(("test_shipping_desktop_daemon_capture_is_exact_idempotent_and_fail_closed "
                 "(__main__.DesktopDaemonCapturePreparation.test_shipping_desktop_daemon_capture_is_exact_idempotent_and_fail_closed) ... ok\n\n")
                 +"-"*70+"\nRan 1 test in 0.01s\n\nOK\n").encode()
-        elif name=="prepare-mobile":
+        elif name in ("prepare-owner","prepare-mobile"):
             if self.fault=="spawn-failure":raise OSError("original preparation spawn refused")
             core=Path(command[command.index("--core")+1]);xray=Path(command[command.index("--xray")+1])
-            core.mkdir();xray.mkdir();self.core,self.xray=core,xray
+            core.mkdir();xray.mkdir()
+            if name=="prepare-mobile":self.core,self.xray=core,xray
+            else:self.owner_core,self.owner_xray=core,xray
             (xray/"original.go").write_text("original xray")
             by_path={}
             for control in V.CONTROLS:by_path.setdefault(control["path"],[]).append(control["before"])
@@ -90,14 +92,18 @@ class Composition:
             for relative,anchors in by_path.items():
                 path=core/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text("\n".join(anchors))
         elif name.endswith("-build"):
+            assert cwd==(self.owner_core if name=="owner-build" else self.core)
             image=Path(command[command.index("-o")+1]);image.write_bytes(("original image "+name).encode());self.images.append(image)
         elif name in ("original-encrypted-owner","original-encrypted-peer"):
+            assert cwd==self.owner_core
             raw=plain(V.OWNER.VERDICTS if name.endswith("-owner") else V.OWNER.ORIGINAL).encode()
         elif name.startswith("owner-"):
+            assert cwd==self.owner_core
             control=next(x for x in V.OWNER.CONTROLS if name=="owner-"+x["name"])
             raw=encoded(events(V.OWNER.PACKAGE,control["cases"],control,True));status=1
             self.check_overlay(command,cwd,V.OWNER.OWNER_PROJECTION,control)
         elif name in ("typed-native","original-libbox","original-box"):
+            assert cwd==self.core
             package,names=(V.BOX,V.ORIGINAL_BOX) if name=="original-box" else (V.LIBBOX,V.VERDICTS if name=="typed-native" else V.ORIGINAL_LIBBOX)
             raw=encoded(events(package,names))
         else:
@@ -106,6 +112,7 @@ class Composition:
             raw=encoded(events(V.LIBBOX,control["cases"],control));status=1
         if self.fault=="preflight-missing" and name=="original-owner-preflight":raw=b"Ran 0 tests\nOK\n"
         if self.fault=="prepare-fail" and name=="prepare-mobile":status=1
+        if self.fault=="owner-prepare-fail" and name=="prepare-owner":status=1
         if self.fault=="compile-fail" and name=="libbox-build":status=1
         if self.fault=="owner-missing" and name=="original-encrypted-owner":raw=plain(V.OWNER.VERDICTS[:-1]).encode()
         if self.fault=="peer-missing" and name=="original-encrypted-peer":raw=plain(V.OWNER.ORIGINAL[:-1]).encode()
@@ -118,6 +125,7 @@ class Composition:
         if name==V.CONTROLS[-1]["name"]:
             if self.fault=="source-change":(self.source/"original.go").write_text("changed")
             if self.fault=="native-change":(self.core/"changed.go").write_text("changed")
+            if self.fault=="owner-native-change":(self.owner_core/"changed.go").write_text("changed")
             if self.fault=="image-change":self.images[0].write_bytes(b"foreign image")
             if self.fault=="selection-change":self.selection_file.write_text(json.dumps(dict(self.metadata,suite="foreign")))
         log.write_bytes(raw)
@@ -131,6 +139,7 @@ class Composition:
     def run(self):
         with patch.object(V.COMMON,"git",side_effect=self.git),patch.object(V.CORE,"snapshot",side_effect=self.snapshot),\
              patch.object(V.CORE,"execute",side_effect=self.execute),patch.object(V,"checked_sources",side_effect=self.checked),\
+             patch.object(V,"checked_owner_sources",side_effect=self.checked),\
              patch.object(V.OWNER,"load_gate",return_value=self.gate),patch.object(V.shutil,"which",return_value="/captured/go"),\
              patch.object(V.subprocess,"check_output",return_value="go version go1.26.3 linux/amd64"):
             return V.validate(self.source,self.metadata["source_sha"],self.output,"/captured/go")
@@ -143,8 +152,9 @@ class TypedSOCKSBridgeValidator(unittest.TestCase):
         for names in (V.VERDICTS,V.ORIGINAL_LIBBOX,V.ORIGINAL_BOX):self.assertEqual(len(names),len(set(names)))
         with tempfile.TemporaryDirectory() as directory:
             f=Composition(Path(directory));receipt=f.run()
-            self.assertEqual(len(f.calls),20)
-            self.assertEqual([bound for _,_,bound in f.calls],[60,600,600,600,600,100,100,600,600,600,600,100,100,100,600,600,600,600,600,600])
+            self.assertEqual(len(f.calls),21)
+            self.assertNotEqual(f.core,f.owner_core);self.assertNotEqual(f.xray,f.owner_xray)
+            self.assertEqual([bound for _,_,bound in f.calls],[60,600,600,600,600,600,100,100,600,600,600,600,100,100,100,600,600,600,600,600,600])
             self.assertEqual(f.owner_calls,[tuple(V.OWNER.VERDICTS),tuple(V.OWNER.ORIGINAL)])
             self.assertEqual((len(receipt["original_owner_cases"]),len(receipt["original_peer_cases"])),(22,15))
             self.assertEqual((len(receipt["owner_controls"]),len(receipt["controls"])),(4,6))
@@ -159,10 +169,10 @@ class TypedSOCKSBridgeValidator(unittest.TestCase):
                 if name in ("typed-native","original-libbox","original-box"):
                     self.assertIn("-test.timeout=90s",command)
     def test_every_failed_or_unjoined_phase_withholds_acceptance(self):
-        for fault in ("preflight-missing","spawn-failure","prepare-fail","projection-refusal","compile-fail",
+        for fault in ("preflight-missing","spawn-failure","prepare-fail","owner-prepare-fail","projection-refusal","compile-fail",
             "owner-missing","peer-missing","owner-control-pass","native-missing","old-box-missing",
             "native-control-pass","native-control-signal","native-control-unrelated","timeout","unjoined",
-            "source-change","native-change","image-change","selection-change"):
+            "source-change","native-change","owner-native-change","image-change","selection-change"):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
                 f=Composition(Path(directory),fault)
                 with self.assertRaises((ValueError,RuntimeError,OSError)) as error:f.run()
@@ -249,35 +259,71 @@ class TypedSOCKSBridgeValidator(unittest.TestCase):
             result=V.CORE.execute([sys.executable,"-c","print('original native child')"],work,dict(os.environ),log,3)
             self.assertEqual(result,(0,False,True));self.assertEqual(log.read_text().strip(),"original native child")
 
-    def test_shipping_preparation_keeps_original_owner_then_mobile_sequence(self):
+    def test_shipping_mobile_preparation_starts_pristine_and_keeps_exact_order(self):
         with tempfile.TemporaryDirectory() as directory:
-            work=Path(directory);source,core,xray=work/"candidate",work/"core",work/"xray";source.mkdir()
+            work=Path(directory);source,core,xray=work/"candidate",work/"mobile-core",work/"mobile-xray";source.mkdir()
             calls=[]
-            build=types.SimpleNamespace(PIN=V.PIN,TOOLCHAIN="go1.26.3",
-                POLICY=types.SimpleNamespace(XRAY_VERSION="original-version"))
-            gate=object()
-            def owner_prepare(original,captured,peer,env):
-                self.assertIs(original,gate);self.assertEqual((captured,peer),(core,xray))
-                core.mkdir();xray.mkdir();calls.append(("owner",))
+            def checkout(path,url,pin):
+                self.assertFalse(path.exists());path.mkdir()
+                (path/"original-pin").write_text(pin);calls.append(("checkout",path,url,pin))
+            build=types.SimpleNamespace(PIN=V.PIN,TOOLCHAIN="go1.26.3",checkout=checkout,
+                POLICY=types.SimpleNamespace(XRAY_VERSION="original-version",XRAY=types.SimpleNamespace(XRAY_PIN="b"*40)))
+            def git(path,*args):
+                self.assertEqual(args,("rev-parse","HEAD"))
+                return "a"*40 if path==source else (path/"original-pin").read_text()
             def run(command,cwd,check):
                 self.assertTrue(core.is_dir());self.assertEqual(cwd,core);self.assertTrue(check)
+                self.assertFalse((core/"desktop-only-tor.go").exists())
                 calls.append(tuple(command))
-            with patch.object(V.COMMON,"git",return_value="a"*40),patch.object(V,"module",return_value=build),\
-                 patch.object(V.OWNER,"load_gate",return_value=gate),patch.object(V.OWNER,"prepare",side_effect=owner_prepare),\
+            with patch.object(V.COMMON,"git",side_effect=git),patch.object(V,"module",return_value=build),\
+                 patch.object(V.OWNER,"prepare",side_effect=AssertionError("desktop preparation entered mobile source")),\
                  patch.object(V.subprocess,"run",side_effect=run):
                 V.prepare_mobile(source,"a"*40,core,xray,"/captured/go")
-            self.assertEqual(calls[0],("owner",));self.assertEqual(len(calls),11)
-            self.assertEqual([Path(x[1]).name for x in calls[1:5]],[
-                "prepare-mobile-openvpn.py","prepare-mobile-multihop.py","prepare-mobile-tor.py","prepare-apple-xray.py"])
-            self.assertEqual(calls[3][-2:],("--go","/captured/go"))
+            self.assertEqual([x[0] for x in calls[:2]],["checkout","checkout"])
+            self.assertEqual([x[3] for x in calls[:2]],[V.PIN,"b"*40])
+            self.assertEqual(len(calls),13)
+            self.assertEqual([Path(x[1]).name for x in calls[2:7]],[
+                "prepare-mobile-openvpn.py","prepare-mobile-multihop.py","test_retained_strategy_preparation.py",
+                "prepare-mobile-tor.py","prepare-apple-xray.py"])
+            self.assertEqual(calls[5][-2:],("--go","/captured/go"))
             self.assertEqual(calls[-2:],[
                 ("/captured/go","mod","tidy"),("/captured/go","mod","verify")])
-            with patch.object(V.COMMON,"git",return_value="b"*40),patch.object(V.OWNER,"prepare") as called:
+            with patch.object(V.COMMON,"git",return_value="a"*40),patch.object(V,"module",return_value=build),\
+                 patch.object(V.subprocess,"run") as called:
+                with self.assertRaisesRegex(ValueError,"fresh pinned"):
+                    V.prepare_mobile(source,"a"*40,core,xray,"/captured/go")
+                called.assert_not_called()
+            with patch.object(V.COMMON,"git",return_value="c"*40),patch.object(V.OWNER,"prepare") as called:
                 with self.assertRaises(ValueError):V.prepare_mobile(source,"a"*40,core,xray,"/captured/go")
                 called.assert_not_called()
 
-    def test_actual_projection_and_hook_verifier_preserves_original_owner_checks(self):
-        faults=(None,"missing","changed","linked","map","box-hook","command-hook","packet","global","pinned","owner")
+    def test_original_owner_preparation_and_source_checker_stay_independent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work=Path(directory);source=work/"candidate";source.mkdir()
+            core,xray=work/"owner-core",work/"owner-xray"
+            gate=object();calls=[]
+            def prepare(original,captured,peer,env):
+                self.assertIs(original,gate);self.assertEqual((captured,peer),(core,xray))
+                core.mkdir();xray.mkdir();(core/"desktop-only-tor.go").write_text("original desktop")
+                (xray/"original.go").write_text("original xray");calls.append("owner")
+            with patch.object(V.COMMON,"git",return_value="a"*40),patch.object(V.OWNER,"load_gate",return_value=gate),\
+                 patch.object(V.OWNER,"prepare",side_effect=prepare),patch.object(V,"prepare_mobile",side_effect=AssertionError):
+                V.prepare_owner(source,"a"*40,core,xray)
+                self.assertEqual(calls,["owner"])
+                with self.assertRaisesRegex(ValueError,"fresh pinned"):V.prepare_owner(source,"a"*40,core,xray)
+            def checked(original,candidate,native):
+                self.assertIs(original,gate);self.assertEqual((candidate,native),(source,core))
+                return {"exact-original-owner":"a"*64}
+            with patch.object(V.OWNER,"load_gate",return_value=gate),patch.object(V.OWNER,"checked_sources",side_effect=checked):
+                result=V.checked_owner_sources(source,core,xray)
+                self.assertEqual(result["owner"],{"exact-original-owner":"a"*64})
+                self.assertEqual(result["core"],V.native_snapshot(core))
+                self.assertEqual(result["xray"],V.native_snapshot(xray))
+            with patch.object(V.OWNER,"load_gate",return_value=gate),patch.object(V.OWNER,"checked_sources",side_effect=ValueError("original owner refused")):
+                with self.assertRaises(ValueError):V.checked_owner_sources(source,core,xray)
+
+    def test_actual_mobile_projection_and_hook_verifier_excludes_desktop_namespace(self):
+        faults=(None,"missing","changed","linked","map","box-hook","command-hook","packet","global","pinned")
         for fault in faults:
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
                 work=Path(directory);source,core,xray=work/"candidate",work/"core",work/"xray"
@@ -319,8 +365,8 @@ class TypedSOCKSBridgeValidator(unittest.TestCase):
                         with self.assertRaises(ValueError):V.checked_sources(source,core,xray)
                     else:
                         result=V.checked_sources(source,core,xray)
-                        self.assertEqual(result["owner"],{"original-owner":"a"*64})
-                        self.assertEqual(owner_calls,[(gate,source,core)])
+                        self.assertNotIn("owner",result)
+                        self.assertEqual(owner_calls,[])
                         self.assertEqual(result["xray"],V.native_snapshot(xray))
 
 if __name__=="__main__":
