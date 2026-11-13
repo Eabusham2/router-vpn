@@ -388,6 +388,44 @@ invoke the new fixture; the workflow audit also retains the already-existing
 ordered execution and restore gates. Native service teardown, permission
 rotation and real-device candidate measurement remain separate acceptance.
 
+## Android temporary service and measurement integration
+
+The published reservation foundation subsequently passed the actual Android
+multihop workflow at cad6996f
+([run 43339541925](https://github.com/Eabusham2/router-vpn/actions/runs/43339541925)).
+The next integration binds an immutable candidate-drain gate before an ordered
+session is staged. Generic Stop, VPN revocation, service destruction and owned
+teardown must join that original candidate activity before cancelling its native
+plan or closing Box/TUN. Emergency Disconnect cannot fall through to a generic
+engine Stop after the ordered stop failed. Failed cleanup retains its original
+owner for retry.
+
+The candidate worker can borrow the preparation's already-held MTU lease. Its
+one-shot completion captures results while the original native proof is still
+current, joins the actual inner native worker and reports that join before an
+observer callback. It never releases the outer graph lease. The actual MTU
+adapter still activates the ordered controller and validates native/interface
+readback; only automatic MTU searching is deferred during the candidate batch.
+The service returns its captured physical Network for the preparation's cohort
+check. This unit does not yet expose the disconnected test in the app.
+
+The composed service fixture passed 164 checks and all ten causal controls;
+the real MTU adapter passed 55 checks and eight controls. The emergency/idle
+fixture passed its original API 28/29/30/35 ownership checks, the three API 29
+negative controls, omitted-stop rejection and the new generic-stop bypass
+rejection. Each has a durable exit-zero record. The retained-prefix candidate
+fixture passed 149 checks and all eleven controls, including borrowed-lease
+retention, no early native join and a throwing completion observer. Its separate
+later detached-profile harness exposed an overly early call-count assertion in
+one new negative control; that harness is not included in this unit or claimed
+passed by these results.
+
+The current d030a147 Windows AWG job (131611652744 in
+[run 43341806691](https://github.com/Eabusham2/router-vpn/actions/runs/43341806691))
+passed the previously failing comparison/final-adoption step and the following
+native network-cohort check. The entire job and release were still running at
+this observation; this result does not prove the historical timeout's cause.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

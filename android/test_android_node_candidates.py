@@ -100,6 +100,29 @@ public final class NodeCandidateHarness {
   reject(()->AndroidNodeCandidateMeasurement.start(catalog,null),"pending old cleanup allowed a replacement host");
   check(observer.await(10,TimeUnit.SECONDS),"cleanup did not notify original observer");RouterNodeChainCandidateMeasurement.holdClose=false;check(finished.await(10,TimeUnit.SECONDS),"original native cleanup did not finish");check(!AndroidMTUMeasurementGate.held()&&!AndroidNodeCandidateMeasurement.busy(),"joined cleanup retained a dead parent lease");RouterNodeChainCandidateMeasurement.factoryFailure=false;
  }
+ static void borrowedLifetime(Path root,boolean factoryFailure)throws Exception{
+  var f=fixture(root);new AndroidStandardExitStore(f.context).save(custom("2022-blake3-aes-256-gcm"));var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
+  Object lease=AndroidMTUMeasurementGate.acquire();
+  reject(()->AndroidNodeCandidateMeasurement.startBorrowed(catalog,new Object(),null),"foreign outer lease entered a temporary candidate worker");
+  RouterNodeChainCandidateMeasurement.factoryFailure=factoryFailure;RouterNodeChainCandidateMeasurement.holdClose=true;RouterNodeChainCandidateMeasurement.closeAttempts=0;
+  CountDownLatch completed=new CountDownLatch(1),closing=new CountDownLatch(1),finished=new CountDownLatch(1);var callbackThread=new java.util.concurrent.atomic.AtomicReference<Thread>();var original=new java.util.concurrent.atomic.AtomicReference<AndroidNodeCandidateMeasurement>();
+  var uncaught=new java.util.concurrent.ConcurrentLinkedQueue<Throwable>();Thread.UncaughtExceptionHandler previous=Thread.getDefaultUncaughtExceptionHandler();Thread.setDefaultUncaughtExceptionHandler((thread,error)->uncaught.add(error));
+  try{
+   var operation=AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){
+    public void changed(List<AndroidNodeCandidateResult> rows,String detail){if(detail.startsWith("Cancelling;"))closing.countDown();}
+    public void completed(AndroidNodeCandidateMeasurement owner,List<AndroidNodeCandidateResult> rows)throws Exception{check(!owner.joined()&&rows.size()==2,"temporary completion lost the full original candidate inventory");for(var result:rows)owner.requireResult(result);completed.countDown();}
+    public void finished(Throwable failure){callbackThread.set(Thread.currentThread());check(original.get().joined(),"completion observer ran before the native candidate join receipt");finished.countDown();throw new IllegalStateException("disposed temporary observer");}
+   });original.set(operation);
+   if(!factoryFailure)check(completed.await(10,TimeUnit.SECONDS),"temporary batch did not finish without waiting for a UI close");
+   check(closing.await(10,TimeUnit.SECONDS),"temporary candidate cleanup did not retain a failed native join");
+   check(!operation.joined()&&AndroidMTUMeasurementGate.owns(lease)&&AndroidNodeCandidateMeasurement.busy(),"borrowed candidate published join before native cleanup");
+   reject(()->AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,null),"pending temporary native join allowed a second worker");
+   RouterNodeChainCandidateMeasurement.holdClose=false;check(finished.await(10,TimeUnit.SECONDS),"temporary native cleanup did not finish");callbackThread.get().join(2000);
+   check(!callbackThread.get().isAlive()&&uncaught.isEmpty(),"disposed completion observer escaped the retained cleanup worker");
+   check(operation.joined()&&!AndroidNodeCandidateMeasurement.busy()&&AndroidMTUMeasurementGate.owns(lease),"borrowed candidate released the outer graph MTU lease");
+   operation.cancel();check(AndroidMTUMeasurementGate.owns(lease),"retired inner worker released its preparation lease");
+  }finally{Thread.setDefaultUncaughtExceptionHandler(previous);RouterNodeChainCandidateMeasurement.holdClose=false;RouterNodeChainCandidateMeasurement.factoryFailure=false;AndroidMTUMeasurementGate.release(lease);}
+ }
  static void presentation(Path root)throws Exception{
   var f=fixture(root);new AndroidNodeChainSession(f.profiles.currentOrderedPath());
   var dialog=new AndroidNodeCandidateDialog(new android.app.Activity(f.context));dialog.show();
@@ -136,7 +159,7 @@ public final class NodeCandidateHarness {
    f.profiles.load(other.id);try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getJSONArray("nodes").length()==2,"future paired profile did not compile its exact truncated suffix");}
   }
  }
- public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);sources(root);receipts(root);lifetime(root,false);lifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
+ public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);sources(root);receipts(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
 }'''
 
 
@@ -172,12 +195,17 @@ public static void routerNodeChainCloseCandidateMeasurement(RouterNodeChain plan
 }''';p.write_text(s)
 
 
-def run(root, work, app, classes, jar, env, imported_only=False):
+def generate_fixture(root, work, env):
     generator=work/'android_candidate_fixture_test.go';generator.write_text(chain.GENERATOR.replace('nodes:=nodeChainModeFixtureNodes(t,modes,layers)', r'''nodes:=nodeChainModeFixtureNodes(t,modes,layers)
   for position,node:=range nodes{if node.mode=="shadowsocks"{var assets map[string]string;_ = json.Unmarshal([]byte(node.inputs.Files),&assets);graph:=externalTestRead(t,string(mustDecodeChainAsset(t,assets["sing-box.json"])));out:=graph["outbounds"].([]any)[0].(map[string]any);out["method"]="2022-blake3-aes-256-gcm";assets["sing-box.json"]=base64.StdEncoding.EncodeToString([]byte(startJSON(t,graph)));var err error;nodes[position],err=NewNodeProfile(node.mode,startJSON(t,assets),node.inputs.ProfileJSON,node.inputs.Start,"");if err!=nil{t.Fatal(err)}}}'''))
     overlay=work/'candidate-overlay.json';overlay.write_text(json.dumps({'Replace':{str(root/'internal/mobilemultihop/android_candidate_fixture_test.go'):str(generator)}}))
     env=dict(env,ROUTERVPN_ANDROID_CHAIN_FIXTURE=str(work/'candidate-originals.json'))
     subprocess.run(['go','test','-count=1','-overlay='+str(overlay),'./internal/mobilemultihop','-run','^TestAndroidOrderedSourceFixture$'],cwd=root,env=env,check=True,timeout=180)
+    return env
+
+
+def run(root, work, app, classes, jar, env, imported_only=False):
+    env = generate_fixture(root, work, env)
     data=work/'candidate-data';data.mkdir()
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(data)],env=env,check=True,timeout=120)
     controls = (
@@ -189,6 +217,9 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ('AndroidNodeCandidateResult', 'integer(benchmark,"failed")!=0', 'false', 'foreign/partial candidate receipt accepted: failed'),
         ('AndroidNodeCandidateResult', 'expires-measured!=120000', 'false', 'foreign/partial candidate receipt accepted: expiry'),
         ('AndroidNodeCandidateMeasurement', 'boolean joined=false;', 'AndroidMTUMeasurementGate.release(lease);boolean joined=false;', 'failed close released original MTU/worker ownership'),
+        ('AndroidNodeCandidateMeasurement', 'if(!borrowedLease)AndroidMTUMeasurementGate.release(lease);', 'AndroidMTUMeasurementGate.release(lease);', 'borrowed candidate released the outer graph MTU lease'),
+        ('AndroidNodeCandidateMeasurement', 'boolean joined=false;', 'this.joined.countDown();boolean joined=false;', 'borrowed candidate published join before native cleanup'),
+        ('AndroidNodeCandidateMeasurement', 'try{callback.finished(failure);}catch(Throwable ignored){}', 'callback.finished(failure);', 'disposed completion observer escaped the retained cleanup worker'),
     )
     for index,(name,old,new,witness) in enumerate(controls):
         original=(app/(name+'.java')).read_text();assert original.count(old)==1,old

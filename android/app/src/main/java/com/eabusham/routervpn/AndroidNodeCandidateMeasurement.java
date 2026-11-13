@@ -10,7 +10,11 @@ import java.util.UUID;
 
 /** The original native slot and MTU lease survive cancellation and failed close. */
 final class AndroidNodeCandidateMeasurement {
-    interface Callback { void changed(List<AndroidNodeCandidateResult> results,String detail); void finished(Throwable failure); }
+    interface Callback {
+        void changed(List<AndroidNodeCandidateResult> results,String detail);
+        void finished(Throwable failure);
+        default void completed(AndroidNodeCandidateMeasurement owner,List<AndroidNodeCandidateResult> results)throws Exception {}
+    }
     private static AndroidNodeCandidateMeasurement active;
     final AndroidNodeCandidateCatalog catalog;
     private final Callback callback;
@@ -18,6 +22,9 @@ final class AndroidNodeCandidateMeasurement {
     private volatile RouterNodeChainCandidateMeasurement nativeOwner;
     private volatile String request="";
     private Object lease;
+    private boolean borrowedLease;
+    private final java.util.concurrent.CountDownLatch joined=new java.util.concurrent.CountDownLatch(1);
+    private volatile Throwable completionFailure;
     private volatile List<AndroidNodeCandidateResult> admitted=java.util.Collections.emptyList();
     synchronized void requireResult(AndroidNodeCandidateResult result)throws Exception {
         if(cancelled||nativeOwner==null||!admitted.contains(result)||!result.current(System.currentTimeMillis()))throw new IllegalStateException("Retest this candidate before saving its next connection.");
@@ -32,8 +39,21 @@ final class AndroidNodeCandidateMeasurement {
         operation.lease=AndroidMTUMeasurementGate.acquire();active=operation;
         new Thread(operation::run,"retained-prefix-candidates").start();return operation;
     }
+    /** The preparation owns this outer lease until its complete graph joins.
+     * This worker retires only its inner native candidate activity. */
+    static synchronized AndroidNodeCandidateMeasurement startBorrowed(AndroidNodeCandidateCatalog catalog,Object lease,Callback callback){
+        if(active!=null)throw new IllegalStateException("An original candidate test still owns native cleanup.");
+        if(callback==null||!AndroidMTUMeasurementGate.owns(lease))throw new IllegalStateException("The original preparation MTU lease is unavailable.");
+        AndroidNodeCandidateMeasurement operation=new AndroidNodeCandidateMeasurement(catalog,callback);
+        operation.lease=lease;operation.borrowedLease=true;active=operation;
+        try{new Thread(operation::run,"temporary-prefix-candidates").start();}
+        catch(Throwable failed){active=null;throw failed;}
+        return operation;
+    }
     static synchronized boolean cancelActive(){if(active==null)return false;active.cancel();return true;}
     static synchronized boolean busy(){return active!=null;}
+    boolean joined(){return joined.getCount()==0;}
+    Throwable completionFailure(){return completionFailure;}
     void cancel(){synchronized(this){cancelled=true;}RouterNodeChainCandidateMeasurement value=nativeOwner;if(value!=null&&!request.isEmpty())value.cancel(request);}
     private void run(){
         Throwable failure=null;List<AndroidNodeCandidateResult> results=new ArrayList<>();
@@ -66,7 +86,8 @@ final class AndroidNodeCandidateMeasurement {
                 catch(Exception noScore){ /* Failed or partial candidates keep an explicit no-score row. */ }
                 publish(results,"50 TCP connections per eligible candidate; any failed sample has no score.");
             }
-            while(!cancelled&&!results.isEmpty()){
+            if(borrowedLease&&!cancelled){catalog.requireCurrent();callback.completed(this,admitted);}
+            while(!borrowedLease&&!cancelled&&!results.isEmpty()){
                 catalog.requireCurrent();JSONObject current=new JSONObject(nativeOwner.statusJSON());
                 if("invalidated".equals(current.optString("stage"))||!current.optString("failure").isEmpty())throw new IllegalStateException("The retained candidate proof changed.");
                 publish(results,"Completed TCP connection times. Results expire 120 seconds after each completion; close to release MTU.");
@@ -91,8 +112,12 @@ final class AndroidNodeCandidateMeasurement {
                     try{Thread.sleep(250);}catch(InterruptedException ignored){}
                 }
             }
-            synchronized(AndroidNodeCandidateMeasurement.class){if(active==this){AndroidMTUMeasurementGate.release(lease);active=null;}}
-            callback.finished(failure);
+            synchronized(AndroidNodeCandidateMeasurement.class){if(active==this){if(!borrowedLease)AndroidMTUMeasurementGate.release(lease);active=null;}}
+            // A cleanup watcher may itself be the observer. Publish the actual
+            // native join before invoking it, and never let observer failure
+            // discard the preparation's outer graph/MTU cleanup authority.
+            completionFailure=failure;this.joined.countDown();
+            try{callback.finished(failure);}catch(Throwable ignored){}
         }
     }
     private void publish(List<AndroidNodeCandidateResult> values,String detail){

@@ -291,6 +291,17 @@ final class AndroidMTUSession implements RouterMTUPlatform {
             }
         }
     }
+    /** A temporary candidate batch may defer automatic search, but must still
+     * retain the real ordered controller and exact OS/native MTU readback. */
+    void prepareNodeCandidates(AndroidNodeChainSession chain,Object lease)throws Exception {
+        synchronized(lifecycle) {
+            if(!AndroidMTUMeasurementGate.owns(lease))throw new IllegalStateException("The original candidate MTU hold is unavailable.");
+            activateNodeChain(chain);
+            if(closed||invalid||controller==null)throw new IllegalStateException("The complete ordered path has no retained MTU authority.");
+            chain.requireCurrent();drainForMeasurement();chain.requireCurrent();
+            if(!AndroidMTUMeasurementGate.owns(lease))throw new IllegalStateException("The original candidate MTU hold changed.");
+        }
+    }
     void activateTor(AndroidTorSession tor) {
         synchronized (lifecycle) {
             if (closed || invalid) return;

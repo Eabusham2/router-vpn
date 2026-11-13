@@ -80,7 +80,26 @@ public final class OrderedMTUTest {
   f.owner.endMTUChange();Long next=f.owner.proofObservationToken();check(next!=null&&!next.equals(original),"MTU mutation revived an old proof observation token");
   f.owner.networkChanged();check(f.owner.proofObservationToken()==null&&!f.owner.proofOwnerCurrent(),"retired MTU could defer ordered proof forever");f.owner.close();
  }
- public static void main(String[] args)throws Exception{String family=args.length==0?"all":args[0];if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("restored"))restored();if(family.equals("all")||family.equals("policy"))policies();if(family.equals("all")||family.equals("constructor"))constructorRetirement();if(family.equals("all")||family.equals("retry"))retry();if(family.equals("all")||family.equals("observation"))observation();reset();System.out.println("Android ordered MTU adapter: "+checks+" executable checks passed; OS/native handles doubled.");}
+ static void temporaryCandidates()throws Exception {
+  for(boolean automatic:new boolean[]{true,false}){
+   reset();Main.Fixture f=new Main.Fixture();f.establish(1408);AndroidNodeChainSession chain=new AndroidNodeChainSession();chain.automatic=automatic;Object lease=AndroidMTUMeasurementGate.acquire();
+   try{
+    reject(()->f.owner.prepareNodeCandidates(chain,new Object()),"temporary candidate MTU admitted a foreign lease");
+    f.owner.prepareNodeCandidates(chain,lease);RouterMTU nativeOwner=Libbox.latest;
+    check(nativeOwner!=null&&controller(f.owner)==nativeOwner&&chain.calls==1&&chain.platform==f.owner,"temporary candidate skipped its actual original MTU controller");
+    check(nativeOwner.starts==0&&nativeOwner.attempts==0&&f.owner.captureMTU().getMTU()==1408,"temporary candidate changed or invented its configured MTU proof");
+    check(AndroidMTUMeasurementGate.owns(lease),"MTU preparation released the outer candidate hold");
+    f.owner.close();check(nativeOwner.closes==1&&AndroidMTUMeasurementGate.owns(lease),"native MTU cleanup released the outer graph hold");
+   }finally{AndroidMTUMeasurementGate.release(lease);}
+  }
+  reset();Main.Fixture f=new Main.Fixture();f.establish();AndroidNodeChainSession chain=new AndroidNodeChainSession();Object lease=AndroidMTUMeasurementGate.acquire();
+  try{
+   chain.valid=false;f.owner.activateNodeChain(chain);chain.valid=true;
+   check(controller(f.owner)==null,"failed ordered MTU construction fixture unexpectedly created a controller");
+   reject(()->f.owner.prepareNodeCandidates(chain,lease),"temporary candidate bypassed failed native MTU construction");f.owner.close();
+  }finally{AndroidMTUMeasurementGate.release(lease);}
+ }
+ public static void main(String[] args)throws Exception{String family=args.length==0?"all":args[0];if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("restored"))restored();if(family.equals("all")||family.equals("policy"))policies();if(family.equals("all")||family.equals("constructor"))constructorRetirement();if(family.equals("all")||family.equals("retry"))retry();if(family.equals("all")||family.equals("observation"))observation();if(family.equals("all")||family.equals("temporary"))temporaryCandidates();reset();System.out.println("Android ordered MTU adapter: "+checks+" executable checks passed; OS/native handles doubled.");}
 }'''
 
 
@@ -116,6 +135,8 @@ def main():
         )
         mutants = [(original[:start] + changed + original[end:], family, witness) for changed, family, witness in controls]
         mutants.append((original.replace('proofGeneration++;', ''), 'observation', 'MTU mutation revived an old proof observation token'))
+        mutants.append((original.replace('if(!AndroidMTUMeasurementGate.owns(lease))', 'if(false)'), 'temporary', 'temporary candidate MTU admitted a foreign lease'))
+        mutants.append((original.replace('if(closed||invalid||controller==null)', 'if(closed||invalid)'), 'temporary', 'temporary candidate bypassed failed native MTU construction'))
         for number, (changed, family, witness) in enumerate(mutants):
             if changed == original:
                 raise AssertionError('Ordered MTU mutation lost its source seam: ' + family)

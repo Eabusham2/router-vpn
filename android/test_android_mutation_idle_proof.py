@@ -133,7 +133,8 @@ private static boolean terminalEngineState(String state){return "DOWN".equals(st
    if(!completed.await(8,TimeUnit.SECONDS))throw new AssertionError("emergency worker did not finish");
    if(AndroidHomeStateStore.epoch<=before)throw new AssertionError("emergency did not revoke permission generation");
    if(runtime.nodeChain.stops!=1)throw new AssertionError("emergency did not stop the retained ordered owner");
-   if(runtime.multihop.busy||runtime.standardExit.busy||!runtime.singBox.state.equals("DOWN")||!runtime.xray.state.equals("DOWN"))throw new AssertionError("ordered cleanup failure prevented other emergency stop requests");
+   if(runtime.multihop.busy||runtime.standardExit.busy||!runtime.xray.state.equals("DOWN"))throw new AssertionError("ordered cleanup failure prevented other emergency stop requests");
+   if(fault.equals("cleanup")?!runtime.singBox.state.equals("UP"):!runtime.singBox.state.equals("DOWN"))throw new AssertionError("emergency generic stop bypassed the retained ordered cleanup gate");
    if(fault.isEmpty()){if(failure.get()!=null||!AndroidHomeStateStore.home.phase.equals("off")||!AndroidHomeStateStore.reason.isEmpty())throw new AssertionError("confirmed ordered stop did not finish emergency");}
    else if(failure.get()==null||!runtime.nodeChain.busy||AndroidHomeStateStore.reason.isEmpty())throw new AssertionError("emergency cleared unfinished ordered cleanup: "+fault);
   }
@@ -163,3 +164,8 @@ with tempfile.TemporaryDirectory(prefix='rvpn-guard-idle-') as tmp:
     result=subprocess.run(['java','-cp',str(base),'com.eabusham.routervpn.HomeEmergency'],capture_output=True,text=True,timeout=30)
     assert result.returncode!=0 and 'emergency did not stop the retained ordered owner' in result.stderr,result.stdout+result.stderr
     print('Android emergency ordered stop omission causal control: rejected')
+    target.write_text(original.replace('orderedStopped&&!terminalEngineState(runtime.singBox.getState())','!terminalEngineState(runtime.singBox.getState())'))
+    subprocess.run(['javac','-d',str(base),*[str(p) for p in base.rglob('*.java')]],check=True,timeout=30)
+    result=subprocess.run(['java','-cp',str(base),'com.eabusham.routervpn.HomeEmergency'],capture_output=True,text=True,timeout=30)
+    assert result.returncode!=0 and 'emergency generic stop bypassed the retained ordered cleanup gate' in result.stderr,result.stdout+result.stderr
+    print('Android emergency retained native cleanup bypass causal control: rejected')

@@ -104,6 +104,17 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 && !service.explicitStop && "UP".equals(service.state) && service.executionProved
                 && service.nodeChainProofCurrent(captured);
     }
+    static Network prepareNodeCandidates(AndroidNodeChainSession captured,Object lease)throws Exception {
+        LayeredVpnService service=currentService.get();
+        if(service==null||service.nodeChainSession!=captured||!nodeChainReady(captured))
+            throw new IllegalStateException("The original temporary native graph is unavailable.");
+        AndroidMTUSession mtu=service.mtuSession;Network physical=service.nodeChainPhysicalNetwork;
+        if(mtu==null)throw new IllegalStateException("The original temporary graph has no MTU owner.");
+        mtu.prepareNodeCandidates(captured,lease);service.requireNodeChainNetwork(physical);
+        if(currentService.get()!=service||service.nodeChainSession!=captured||service.mtuSession!=mtu||!nodeChainReady(captured))
+            throw new IllegalStateException("The temporary native owner changed during MTU proof.");
+        return physical;
+    }
     private boolean nodeChainProofCurrent(AndroidNodeChainSession captured) {
         try {
             captured.requireCurrent();
@@ -1461,6 +1472,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private void closeCoreLocked() {
         AndroidNodeChainSession chain = nodeChainSession;
         if (chain != null) {
+            // Revocation, Service destruction and generic engine Stop must use
+            // the same original candidate join as the process runtime. Never
+            // close its Box/TUN merely because a candidate callback is late.
+            chain.requireTemporaryDrain();
             final CommandServer capturedServer = commandServer;
             chain.cancel();
             AndroidMTUSession mtu = mtuSession;

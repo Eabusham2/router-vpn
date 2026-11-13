@@ -108,6 +108,10 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             try{guard.cancel();}catch(Throwable ignored){ /* Retain drain authority for retry. */ }
         }
         /** Background callers only. False retains this handle and both owners. */
+        private boolean drainMeasurements() {
+            cancel();
+            try{return guard.drain();}catch(Throwable pending){return false;}
+        }
         boolean drain() {
             synchronized(AndroidNodeChainRuntime.this) {
                 if(temporary!=this||operation!=selectedOperation)return true; // Already joined; never touch a replacement.
@@ -230,7 +234,13 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             callback.owned(home.sessionId);
             callback.progress("Preparing every original ordered node and authenticated layer…");
             session = new AndroidNodeChainSession(context, source, home, selected, restore);
-            synchronized (this) { requireStarting(selectedOperation); owner = session; }
+            synchronized (this) {
+                requireStarting(selectedOperation);
+                Temporary preparation=temporary;
+                if(preparation!=null&&preparation.selectedOperation==selectedOperation)
+                    session.bindTemporaryDrain(preparation::drainMeasurements);
+                owner = session;
+            }
             requireStarting(selectedOperation); session.stage(); callback.validate(); requireStarting(selectedOperation);
             synchronized (this) { requireStarting(selectedOperation); submitted = true; }
             singBox.startNodeChain(session.request, home.sessionId);

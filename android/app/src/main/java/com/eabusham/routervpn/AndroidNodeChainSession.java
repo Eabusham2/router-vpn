@@ -27,6 +27,7 @@ final class AndroidNodeChainSession {
         }
     }
     interface Host { void stop(AndroidNodeChainSession captured, Runnable complete); }
+    interface TemporaryDrain { boolean drain(); }
     static final String MODE = "node-chain";
     private static final Map<String, AndroidNodeChainSession> pending = new HashMap<>();
     final String sessionId = UUID.randomUUID().toString().replace("-", "");
@@ -45,6 +46,7 @@ final class AndroidNodeChainSession {
     private volatile CommandServer server;
     private volatile Owner owner;
     private volatile Host host;
+    private volatile TemporaryDrain temporaryDrain;
     private volatile String network = "";
 
     AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
@@ -232,8 +234,18 @@ final class AndroidNodeChainSession {
         return result;
     }
 
+    synchronized void bindTemporaryDrain(TemporaryDrain drain) {
+        if(drain==null||temporaryDrain!=null||staged||claimed||released)
+            throw new IllegalStateException("The original temporary cleanup gate cannot be replaced.");
+        temporaryDrain=drain;
+    }
+    void requireTemporaryDrain() {
+        TemporaryDrain retained=temporaryDrain;
+        if(retained!=null&&!retained.drain())throw new IllegalStateException("The original temporary candidate work has not joined.");
+    }
     void cancel() { cancelled = true; if (execution == null) capture.plan.networkChanged(); else execution.networkChanged(); }
     void closePlan() throws Exception {
+        requireTemporaryDrain();
         cancel();
         if (execution != null) {
             if (!nativeBound && server != null) {

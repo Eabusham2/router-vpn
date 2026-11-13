@@ -85,12 +85,14 @@ CASES = r'''
   try(Fixture f=new Fixture(3)){
    Guard guard=new Guard();Result result=new Result();var token=prepared(f,guard,result);var session=token.session();var plan=session.capture.plan;
    guard.join=false;guard.valid=false;int closes=plan.closes;
-   f.runtime.networkChanged(session.home);
-   ((ExecutorService)get(f.runtime,"executor")).submit(()->{}).get(5,TimeUnit.SECONDS);
-   check(guard.cancels>0&&guard.drains>0&&!plan.cancelled&&plan.closes==closes&&!session.released(),"network change retired the graph before candidate callbacks joined");
-   reject(token::session,"changed physical cohort still authorized a temporary candidate");
-   check(f.runtime.isActiveOrTransitioning(),"network change dropped retryable temporary cleanup");
-   guard.join=true;check(token.drain()&&session.released(),"network-change cleanup could not retry its exact owner");f.drain();
+   try{
+    f.runtime.networkChanged(session.home);
+    await(()->guard.drains>0||plan.cancelled,"network cancellation reached neither its captured guard nor native owner");
+    check(guard.cancels>0&&guard.drains>0&&!plan.cancelled&&plan.closes==closes&&!session.released(),"network change invalidated native graph before candidate callbacks joined");
+    reject(token::session,"changed physical cohort still authorized a temporary candidate");
+    check(f.runtime.isActiveOrTransitioning(),"network change dropped retryable temporary cleanup");
+   }finally{guard.join=true;token.drain();}
+   check(token.drain()&&session.released(),"network-change cleanup could not retry its exact owner");f.drain();
    f.connected();var newer=f.owner();f.runtime.networkChanged(session.home);check(f.owner()==newer&&f.runtime.isConnected(),"old network event stopped a replacement graph");f.stop();
   }
  }
@@ -111,6 +113,20 @@ CASES = r'''
    server.failClose=false;check(token.drain()&&session.released()&&!f.runtime.isActiveOrTransitioning(),"temporary retry did not join its exact native owner");f.drain();
   }
  }
+ static void temporaryServiceTeardown()throws Exception {
+  for(String event:new String[]{"stop","revoke","destroy","owned-stop"})try(Fixture f=new Fixture(3)){
+   Guard guard=new Guard();Result result=new Result();var token=prepared(f,guard,result);var session=token.session();var plan=session.capture.plan;var server=(CommandServer)get(f.service,"commandServer");
+   guard.join=false;int closes=plan.closes;
+   if(event.equals("revoke"))f.service.onRevoke();
+   else if(event.equals("destroy"))f.service.onDestroy();
+   else if(event.equals("owned-stop"))f.nativeOwner.stopNodeChain(session.sessionId);
+   else f.service.onStartCommand(new Intent().setAction(LayeredVpnService.ACTION_STOP),0,1);
+   f.drain();await(()->guard.drains>0||session.released()||server.closed,"Service teardown bypassed original candidate join: "+event);
+   check(guard.cancels>0&&guard.drains>0&&plan.closes==closes&&!server.closed&&!session.released(),"Service teardown bypassed original candidate join: "+event);
+   check(f.runtime.isActiveOrTransitioning(),"Service teardown dropped the original temporary cleanup authority: "+event);
+   guard.join=true;check(token.drain()&&session.released()&&server.closed&&!f.runtime.isActiveOrTransitioning(),"Service teardown lost exact temporary retry authority: "+event);
+  }
+ }
  public static void main(String[] args)throws Exception {
   String family=args.length==0?"all":args[0];
   if(family.equals("all")||family.equals("success"))temporarySuccess();
@@ -119,6 +135,7 @@ CASES = r'''
   if(family.equals("all")||family.equals("network"))temporaryNetwork();
   if(family.equals("all")||family.equals("disconnect"))temporaryDisconnect();
   if(family.equals("all")||family.equals("retry"))temporaryNativeRetry();
+  if(family.equals("all")||family.equals("service"))temporaryServiceTeardown();
   System.out.println("Android temporary ordered host: "+checks+" executable checks passed; native/OS and candidate guard boundaries doubled.");
  }
 }'''
@@ -157,11 +174,12 @@ def main():
             ('selectedOperation,false,null,new Callback()', 'selectedOperation,true,null,new Callback()', 'success', 'temporary preparation overwrote ordered Last history'),
             ('if(!guard.drain())return false;', 'guard.drain();', 'success', 'temporary graph retired before its held candidate drain'),
             ('public void validate() throws Exception { requireCurrent(); }', 'public void validate() throws Exception {}', 'invalidation', 'stale temporary capture reached success: network'),
-            ('if(preparation!=null) {\n            preparation.cancel();', 'if(false) {\n            preparation.cancel();', 'network', 'network change retired the graph before candidate callbacks joined'),
+            ('if(preparation!=null) {\n            preparation.cancel();', 'if(false) {\n            preparation.cancel();', 'network', 'network change invalidated native graph before candidate callbacks joined'),
             ('if (temporary != null || homeSession == null', 'if (homeSession == null', 'success', 'captured disconnect bypassed the temporary measurement drain'),
             ('if(temporary!=this||operation!=selectedOperation)return true; // Already joined; never touch a replacement.', 'if(false)return true; // Already joined; never touch a replacement.', 'success', 'stale temporary cleanup reclaimed an old external lease'),
             ('cancelled=true;\n                if(temporary!=this||operation!=selectedOperation)return;', 'cancelled=true;', 'success', 'stale temporary cleanup stopped a replacement graph'),
             ('if(!"local".equals(source.execution))', 'if(false)', 'reservation', 'temporary preparation admitted saved Server execution'),
+            ('session.bindTemporaryDrain(preparation::drainMeasurements);', 'session.bindTemporaryDrain(()->true);', 'service', 'Service teardown bypassed original candidate join'),
         )
         for number, (before, after, family, witness) in enumerate(controls):
             if original.count(before) != 1:
@@ -177,6 +195,21 @@ def main():
             if result.returncode == 0 or witness not in result.stderr:
                 raise AssertionError('Temporary owner negative control missed its defect: ' + family + '\n' + result.stdout + '\n' + result.stderr)
             print('Android temporary ordered host rejected: ' + family + '/' + str(number), flush=True)
+        service = (base.JAVA / 'LayeredVpnService.java').read_text()
+        seam = '            chain.requireTemporaryDrain();'
+        if service.count(seam) != 1:
+            raise AssertionError('Original service temporary drain boundary changed')
+        out = work / 'negative-service'
+        shutil.copytree(classes, out)
+        mutation = work / 'mutant-service' / 'LayeredVpnService.java'
+        mutation.parent.mkdir()
+        mutation.write_text(service.replace(seam, ''))
+        cp = os.pathsep.join((str(out), str(jar)))
+        subprocess.run(['javac', '--release', '17', '-encoding', 'UTF-8', '-proc:none', '-cp', cp, '-d', str(out), str(mutation)], check=True, timeout=60)
+        result = subprocess.run(['java', '-cp', cp, 'com.eabusham.routervpn.OrderedRuntimeTest', 'service'], capture_output=True, text=True, timeout=60)
+        if result.returncode == 0 or 'Service teardown bypassed original candidate join' not in result.stderr:
+            raise AssertionError('Service drain negative control missed its defect\n' + result.stdout + '\n' + result.stderr)
+        print('Android temporary ordered host rejected: service/core-drain', flush=True)
 
 
 if __name__ == '__main__':

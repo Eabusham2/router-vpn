@@ -151,7 +151,7 @@ final class AndroidHomeSummary {
                 try{orderedStopped=runtime.nodeChain.stopAndProve();}catch(Throwable ignored){}
                 try{runtime.multihop.failClosedForRevalidation();}catch(Throwable ignored){}
                 try{runtime.standardExit.failClosedForRevalidation();}catch(Throwable ignored){}
-                try{if(!terminalEngineState(runtime.singBox.getState()))runtime.singBox.stop();}catch(Throwable ignored){}
+                try{if(orderedStopped&&!terminalEngineState(runtime.singBox.getState()))runtime.singBox.stop();}catch(Throwable ignored){}
                 try{if(!terminalEngineState(runtime.xray.getState()))runtime.xray.stop();}catch(Throwable ignored){}
 
                 if(!rawStops.await(4, TimeUnit.SECONDS))throw new IllegalStateException("Raw WireGuard/AmneziaWG teardown timed out; session ownership retained.");
