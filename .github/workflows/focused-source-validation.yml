@@ -32,6 +32,8 @@ on:
           - android-sdk
           - ios-sdk
           - darwin-hy2
+          - windows-source-retirement
+          - desktop-socks-capture
 
 permissions:
   contents: read
@@ -65,7 +67,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "android-sdk", "ios-sdk"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -95,6 +97,12 @@ jobs:
         run: |
           python3 validator/deploy/focused_source_identity.py --self-test
           python3 validator/deploy/test_focused_multihop_clocks.py --self-test
+          if [[ "$SUITE" == "windows-source-retirement" ]]; then
+            python3 validator/deploy/validate-windows-source-retirement.py --self-test
+          fi
+          if [[ "$SUITE" == "desktop-socks-capture" ]]; then
+            python3 validator/deploy/test_focused_desktop_socks_capture_runner.py
+          fi
           if [[ "$SUITE" == "macos-profiles" ]]; then
             python3 validator/deploy/test_validate_macos_profile_source.py
           fi
@@ -143,7 +151,7 @@ jobs:
             --source-sha "$SOURCE_SHA" --base-sha "$VALIDATOR_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/selection.json"
       - name: Install the pinned Go toolchain
-        if: inputs.suite != 'macos-profiles'
+        if: inputs.suite != 'macos-profiles' && inputs.suite != 'windows-source-retirement'
         uses: actions/setup-go@v5
         with:
           go-version: '1.26.3'
@@ -267,6 +275,14 @@ jobs:
         run: |
           python3 validator/deploy/validate-node-chain-socks-owner.py \
             --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Verify original desktop SOCKS sources and catalog retirement
+        if: inputs.suite == 'desktop-socks-capture'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_desktop_socks_capture.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
       - name: Require dormant SOCKS source and original schema compiler controls
         if: inputs.suite == 'socks-source'
@@ -411,6 +427,107 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: focused-${{ inputs.suite }}-${{ inputs.source_sha }}
+          path: validation-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-source-retirement:
+    if: inputs.suite == 'windows-source-retirement'
+    needs: validate
+    name: Original Windows source retirement and MAX QUIC on ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 110
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: windows/amd64
+            slug: windows-amd64
+          - runner: windows-11-arm
+            target: windows/arm64
+            slug: windows-arm64
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      SUITE: windows-source-retirement
+      VALIDATOR_SHA: ${{ github.sha }}
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CGO_ENABLED: '1'
+    steps:
+      - name: Check out the trusted Windows validator
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: validator
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check out the exact candidate and original parent
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: candidate
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Capture original source identity on this Windows host
+        shell: pwsh
+        run: |
+          python validator/deploy/focused_source_identity.py --suite $env:SUITE --source (Join-Path $env:GITHUB_WORKSPACE 'candidate') --source-sha $env:SOURCE_SHA --base-sha $env:VALIDATOR_SHA --output (Join-Path $env:GITHUB_WORKSPACE 'validation-output/selection.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Original Windows source identity failed' }
+      - name: Prepare the original Go Windows socket cleanup
+        shell: pwsh
+        run: |
+          python validator/deploy/prepare-go-windows-sockets.py --github-env --output (Join-Path $env:RUNNER_TEMP 'routervpn-go-windows-sockets')
+          if ($LASTEXITCODE -ne 0) { throw 'Original Windows socket backport failed' }
+          python validator/deploy/test_go_windows_sockets.py
+          if ($LASTEXITCODE -ne 0) { throw 'Original Windows socket controls failed' }
+      - name: Verify original process ownership and native admission
+        shell: pwsh
+        run: |
+          python validator/deploy/test_windows_build_owner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Original Windows process ownership failed' }
+          python validator/deploy/test_windows_node_max_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Original MAX native source boundary failed' }
+          python validator/deploy/test_pq_reference_preparation.py
+          if ($LASTEXITCODE -ne 0) { throw 'Original private reference preparation failed' }
+      - name: Original private ACL readback in Windows PowerShell 5.1 and 7
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          $systemShell = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+          $coreShell = [IO.Path]::Combine($PSHOME, 'pwsh.exe')
+          foreach ($shell in @($systemShell, $coreShell)) {
+            & $shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File candidate/client/test-windows-private-acl.ps1
+            if ($LASTEXITCODE -ne 0) { throw 'Original private ACL readback/failure controls failed' }
+          }
+      - name: Select original native Rust target and verified LLVM compiler
+        shell: pwsh
+        run: |
+          python candidate/deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' (Join-Path $env:RUNNER_TEMP 'routervpn-source-retirement-toolchain')
+          if ($LASTEXITCODE -ne 0) { throw 'Original native toolchain preparation failed' }
+      - name: Execute native source retirement and original complete MAX QUIC
+        timeout-minutes: 90
+        shell: pwsh
+        run: |
+          python validator/deploy/validate-windows-source-retirement.py --source (Join-Path $env:GITHUB_WORKSPACE 'candidate') --source-sha $env:SOURCE_SHA --target '${{ matrix.target }}' --output (Join-Path $env:GITHUB_WORKSPACE 'validation-output/tests')
+          if ($LASTEXITCODE -ne 0) { throw 'Original native source retirement or MAX QUIC failed' }
+      - name: Recheck the original Windows source and validator identity
+        shell: pwsh
+        run: |
+          python validator/deploy/focused_source_identity.py --suite $env:SUITE --source (Join-Path $env:GITHUB_WORKSPACE 'candidate') --source-sha $env:SOURCE_SHA --base-sha $env:VALIDATOR_SHA --output (Join-Path $env:GITHUB_WORKSPACE 'validation-output/selection-after.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Original Windows source changed during validation' }
+      - name: Preserve exact Windows native results and failure logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: focused-windows-source-retirement-${{ matrix.slug }}-${{ inputs.source_sha }}
           path: validation-output/
           if-no-files-found: error
           retention-days: 14
