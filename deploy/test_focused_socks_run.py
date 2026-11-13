@@ -21,6 +21,8 @@ def module(name,path):
     value=importlib.util.module_from_spec(spec);sys.modules[name]=value;spec.loader.exec_module(value);return value
 BASE_PATH=ROOT/"deploy/test_focused_socks_bridge.py"
 BASE=module("socks_run_trusted_bridge",BASE_PATH)
+DIAGNOSTIC_PATH=ROOT/"deploy/socks_private_measurement_diagnostic.py"
+DIAGNOSTIC=module("socks_run_private_diagnostic",DIAGNOSTIC_PATH)
 # Only the fixed source-selection suite label differs. The trusted process,
 # snapshot, native source and strict event parsers are reused unchanged.
 BASE.SUITE=SUITE
@@ -87,6 +89,25 @@ def native_events(raw,status,case,control=None):
     actual=dict(control,cases=names) if control else None
     return BASE.require_events(raw,status,BASE.LIBBOX,names,actual)
 
+def require_private_diagnostic(record):
+    for path_key,hash_key in (("source","source_sha256"),("replacement","replacement_sha256"),("overlay","overlay_sha256")):
+        path=Path(record[path_key])
+        if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=record[hash_key]:
+            raise ValueError("Original failure-only measurement diagnostic changed")
+    expected={"Replace":{record["source"]:record["replacement"]}}
+    if json.loads(Path(record["overlay"]).read_text())!=expected:
+        raise ValueError("Original diagnostic overlay changed its sole measured source")
+    if DIAGNOSTIC.restore(Path(record["replacement"]).read_text())!=Path(record["source"]).read_text():
+        raise ValueError("Diagnostic did not retain every original statement")
+
+
+def private_control_overlay(record,original,replacement):
+    require_private_diagnostic(record)
+    if str(original)==record["source"]:
+        raise ValueError("Causal control overlaps the separate failure-only observation")
+    return {"Replace":{record["source"]:record["replacement"],str(original):str(replacement)}}
+
+
 def validate(source,source_sha,output,go="go"):
     source=Path(source).resolve(strict=True);output=Path(output).absolute()
     if output.is_symlink() or output.exists() or source==output or source in output.parents:
@@ -111,10 +132,14 @@ def validate(source,source_sha,output,go="go"):
         resource_limits=dict(parallel_packages=1,GOMAXPROCS=2,GOGC=100,GOMEMLIMIT="2GiB"),
         trusted_bridge_sha256=hashlib.sha256(BASE_PATH.read_bytes()).hexdigest(),
         trusted_executor_sha256=hashlib.sha256(BASE.CORE_PATH.read_bytes()).hexdigest())
+    diagnostic=None
     def save():(output/"progress.json").write_text(json.dumps(receipt,indent=2)+"\n")
     def run(name,command,cwd,bound,captured=None):
         command=list(map(str,command));log=output/(name+".log");started=time.monotonic()
-        try:status,timed_out,joined=BASE.CORE.execute(command,cwd,captured or env,log,bound)
+        try:
+            if diagnostic is not None:require_private_diagnostic(diagnostic)
+            status,timed_out,joined=BASE.CORE.execute(command,cwd,captured or env,log,bound)
+            if diagnostic is not None:require_private_diagnostic(diagnostic)
         except BaseException as error:
             receipt["phases"].append(dict(name=name,command=command,bound=bound,error=type(error).__name__));save();raise
         raw=log.read_bytes()
@@ -135,6 +160,11 @@ def validate(source,source_sha,output,go="go"):
                 if status:raise ValueError("Original shipping "+name+" failed")
             native_before=sources(source,mobile,mobile_xray,owner,owner_xray)
             (output/"native-before.json").write_text(json.dumps(native_before,sort_keys=True)+"\n")
+            diagnostic=DIAGNOSTIC.prepare(mobile,output/"private-diagnostic")
+            require_private_diagnostic(diagnostic)
+            receipt["failure_only_diagnostic"]=diagnostic
+            receipt["trusted_diagnostic_sha256"]=hashlib.sha256(DIAGNOSTIC_PATH.read_bytes()).hexdigest()
+            save()
             gate=BASE.OWNER.load_gate(source)
             if tuple(gate.NODE_CHAIN_IMPORTED_VERDICTS)!=ORIGINAL:
                 raise ValueError("Original complete imported peer inventory changed")
@@ -146,7 +176,7 @@ def validate(source,source_sha,output,go="go"):
             owner_flags=["-race","-p=1","-mod=readonly","-tags="+",".join(gate.NODE.TAGS),"-ldflags=-checklinkname=0"]
             for name,image,core,target,arguments in (
                 ("peer-build",peer,owner,"./protocol/routervpnamnezia",owner_flags),
-                ("client-build",client,mobile,"./experimental/libbox",flags)):
+                ("client-build",client,mobile,"./experimental/libbox",[*flags,"-overlay="+diagnostic["overlay"]])):
                 status,_=run(name,[compiler,"test","-c",*arguments,"-o",image,target],core,600)
                 if status:raise ValueError("Actual encrypted "+name+" failed")
             peer_identity,client_identity=BASE.COMMON.image_identity(peer),BASE.COMMON.image_identity(client)
@@ -164,7 +194,7 @@ def validate(source,source_sha,output,go="go"):
             for control in CONTROLS:
                 original=mobile/control["path"];changed=BASE.mutate(control,original.read_text())
                 replacement,overlay=work/(control["name"]+".go"),work/(control["name"]+".json")
-                replacement.write_text(changed);overlay.write_text(json.dumps({"Replace":{str(original):str(replacement)}}))
+                replacement.write_text(changed);overlay.write_text(json.dumps(private_control_overlay(diagnostic,original,replacement)))
                 selected=dict(env,ROUTERVPN_SOCKS_RUN_PEER=str(peer),ROUTERVPN_SOCKS_RUN_CASE=control["case"],GODEBUG="x509usefallbackroots=1")
                 status,raw=run(control["name"],[compiler,"test",*flags,"-json","-overlay="+str(overlay),
                     "-run=^"+CASE_ROOT+"$","-count=1","-timeout=180s","./experimental/libbox"],mobile,600,selected)

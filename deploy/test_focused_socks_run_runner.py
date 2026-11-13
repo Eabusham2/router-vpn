@@ -58,6 +58,8 @@ class Composition:
             core.mkdir();xray.mkdir();(xray/"original.go").write_text("original xray")
             (core/"original.go").write_text("original "+name);self.roles[name.removeprefix("prepare-")]=(core,xray)
             if name=="prepare-mobile":
+                diagnostic=core/V.DIAGNOSTIC.PROJECTION;diagnostic.parent.mkdir(parents=True,exist_ok=True)
+                diagnostic.write_text((ROOT/"internal/hopmeasure/measure.go").read_text())
                 by_path={}
                 for control in V.CONTROLS:by_path.setdefault(control["path"],[]).append(control["before"])
                 for path,anchors in by_path.items():
@@ -65,6 +67,14 @@ class Composition:
         elif name.endswith("-build"):
             assert cwd==self.roles["owner" if name=="peer-build" else "mobile"][0]
             image=Path(command[command.index("-o")+1]);image.write_bytes(("original "+name).encode());self.images.append(image)
+            overlays=[x.split("=",1)[1] for x in command if x.startswith("-overlay=")]
+            if name=="client-build":
+                assert len(overlays)==1
+                mapping=json.loads(Path(overlays[0]).read_text())["Replace"]
+                assert tuple(mapping)==(str(cwd/V.DIAGNOSTIC.PROJECTION),)
+                original=Path(next(iter(mapping)));replacement=Path(next(iter(mapping.values())))
+                assert V.DIAGNOSTIC.restore(replacement.read_text())==original.read_text()
+            else:assert not overlays
         elif name=="original-imported-middle":
             assert cwd==self.roles["owner"][0];raw=plain(V.ORIGINAL).encode()
         else:
@@ -79,7 +89,9 @@ class Composition:
                 assert case==control["case"]
                 overlay=Path(next(x.split("=",1)[1] for x in command if x.startswith("-overlay=")))
                 replacements=json.loads(overlay.read_text())["Replace"]
-                self_path=str(cwd/control["path"]);assert list(replacements)==[self_path]
+                self_path=str(cwd/control["path"]);diagnostic_path=str(cwd/V.DIAGNOSTIC.PROJECTION)
+                assert list(replacements)==[diagnostic_path,self_path]
+                assert V.DIAGNOSTIC.restore(Path(replacements[diagnostic_path]).read_text())==Path(diagnostic_path).read_text()
                 assert Path(replacements[self_path]).read_text()==V.BASE.mutate(control,Path(self_path).read_text())
                 raw=encoded(events(case,control));status=1
         if self.fault=="preflight" and name=="original-owner-preflight":raw=b"Ran 0 tests\nOK\n"
@@ -99,6 +111,7 @@ class Composition:
             if self.fault=="mobile-changed":(self.roles["mobile"][0]/"original.go").write_text("changed")
             if self.fault=="image-changed":self.images[0].write_bytes(b"changed")
             if self.fault=="selection-changed":self.selection.write_text(json.dumps(dict(self.metadata,source_tree="1"*40)))
+            if self.fault=="diagnostic-changed":(self.output/"private-diagnostic/measure.go").write_text("changed")
         log.write_bytes(raw)
         return status,self.fault=="timeout" and name=="run-wg",not(self.fault=="unjoined" and name=="run-wg")
     def run(self):
@@ -120,6 +133,8 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
             self.assertEqual(c.original,[V.ORIGINAL])
             self.assertEqual([x["case"] for x in receipt["case_records"]],list(V.CASES))
             self.assertEqual(len(receipt["controls"]),4)
+            self.assertFalse(receipt["failure_only_diagnostic"]["acceptance_changed"])
+            self.assertTrue(receipt["failure_only_diagnostic"]["original_deadlines_preserved"])
             self.assertTrue(receipt["successful_run_accepted"]);self.assertTrue(receipt["ordered_measurement_accepted"])
             self.assertFalse(receipt["public_native_admission"]);self.assertFalse(receipt["installed_native_accepted"])
             self.assertFalse(receipt["native_mtu_continuation_accepted"])
@@ -134,7 +149,7 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
     def test_no_failed_missing_or_unjoined_phase_can_publish_acceptance(self):
         for fault in ("preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
                       "control-pass","control-signal","control-panic","control-witness","candidate-changed","owner-changed",
-                      "mobile-changed","image-changed","selection-changed","timeout","unjoined"):
+                      "mobile-changed","image-changed","selection-changed","diagnostic-changed","timeout","unjoined"):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
                 c=Composition(Path(directory),fault)
                 with self.assertRaises((ValueError,RuntimeError)):c.run()
@@ -170,6 +185,19 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
             self.assertNotEqual(V.BASE.mutate(control,original),original)
             for text in ("foreign",original+original):
                 with self.assertRaises(ValueError):V.BASE.mutate(control,text)
+    def test_failure_diagnostic_cannot_replace_source_or_control_authority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work=Path(directory);core=work/"core";original=core/V.DIAGNOSTIC.PROJECTION
+            original.parent.mkdir(parents=True);original.write_text((ROOT/"internal/hopmeasure/measure.go").read_text())
+            record=V.DIAGNOSTIC.prepare(core,work/"diagnostic")
+            V.require_private_diagnostic(record)
+            with self.assertRaises(ValueError):V.private_control_overlay(record,original,work/"foreign.go")
+            for key in ("source","replacement","overlay"):
+                path=Path(record[key]);saved=path.read_bytes();path.write_bytes(saved+b"changed")
+                with self.subTest(key=key),self.assertRaises(ValueError):V.require_private_diagnostic(record)
+                path.write_bytes(saved)
+            V.require_private_diagnostic(record)
+
     def test_both_template_maps_and_original_peer_source_are_bound(self):
         mtu_faults=tuple("mtu-"+str(i)+"-"+kind for i in range(len(V.MTU_PROJECTIONS)) for kind in ("map","bytes","symlink"))
         for fault in (None,"mobile-map","peer-map","mobile-bytes","peer-bytes","old-peer","mobile-closure","owner-closure",*mtu_faults):
