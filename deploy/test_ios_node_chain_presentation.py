@@ -24,7 +24,7 @@ import Libbox
 // NETWORK_BOUNDARY
 @MainActor final class RouterVPNModel {
  var bundle:ClientBundle?,allNodeProfiles:[RouterProfile]=[],activeSessionIdentity:IOSSessionIdentity?
- var connected=false,tunnelTransitioning=false,profileMutationBlocked=false
+ var connected=false,tunnelTransitioning=false,profileMutationBlocked=false,iosCandidateTesting=false
  var multihopProgressInFlight:UUID?,multihopProgressDeadline=Date.distantPast
  var multihopProgressGeneration=UUID(),iosConnectGeneration=UUID(),multihopProgressText=""
  var selectedNodeProfile:RouterProfile?{bundle?.routerProfiles.first(where:{$0.id==bundle?.selectedRouterID})}
@@ -147,6 +147,10 @@ TESTS = r'''
    try check("verified complete route animates a single packet",coordinator.packet != nil && map.annotations.filter{($0 as? IOSUnifiedMapAnnotation)?.role=="packet"}.count==1)
    view.updateUIView(map,context:.init(coordinator:coordinator))
    try check("refresh replaces rather than duplicates route",map.overlays.count==count-1 && map.annotations.count==count+1)
+   model.iosCandidateTesting=true
+   view.updateUIView(map,context:.init(coordinator:coordinator))
+   try check("temporary Testing uses saved path without live packet animation",model.iosVisibleOrderedNodePath?[1].latitude==1 && coordinator.packet==nil && map.annotations.count==count)
+   model.iosCandidateTesting=false
    model.connected=false
    view.updateUIView(map,context:.init(coordinator:coordinator))
    try check("idle route shows changed planned coordinate without animation",model.iosVisibleOrderedNodePath?[1].latitude==1 && coordinator.packet==nil && map.annotations.count==count)
@@ -279,7 +283,9 @@ def main(selected_mutations=None):
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
         mutants = (
-            ('mutable-map-source', presentation.replace('if connected { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 'if false { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 1), body, 'FAIL connected map keeps original middle source'),
+            ('testing-map-source', presentation.replace('if connected && !iosCandidateTesting {', 'if connected {', 1), body, 'FAIL temporary Testing uses saved path without live packet animation'),
+            ('testing-map-animation', presentation, body.replace('if model.connected && !model.iosCandidateTesting { context.coordinator.ensurePacket(on: map) }', 'if model.connected { context.coordinator.ensurePacket(on: map) }', 1), 'FAIL temporary Testing uses saved path without live packet animation'),
+            ('mutable-map-source', presentation.replace('if connected && !iosCandidateTesting { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 'if false { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 1), body, 'FAIL connected map keeps original middle source'),
             ('middle-map-shortcut', presentation, body.replace('let routeIDs = ordered?.map(\\.id)', 'let routeIDs = ordered.map { [$0.first!.id, $0.last!.id] }', 1), 'FAIL all adjacent captured route legs are drawn'),
             ('stale-session', presentation, body.replace('self.activeSessionIdentity == identity,', 'true,', 1), 'FAIL late progress ownership identity'),
             ('stale-provider-source', presentation, body.replace('current["nodeChainSource"] as? String == chainSource,', 'true,', 1), 'FAIL late progress ownership source'),
@@ -296,5 +302,5 @@ def main(selected_mutations=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mutation', action='append', choices=['mutable-map-source', 'middle-map-shortcut', 'stale-session', 'stale-provider-source'])
+    parser.add_argument('--mutation', action='append', choices=['testing-map-source', 'testing-map-animation', 'mutable-map-source', 'middle-map-shortcut', 'stale-session', 'stale-provider-source'])
     main(parser.parse_args().mutation)

@@ -7,6 +7,28 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 APP=ROOT/'ios/RouterVPN/App'
 CONTROLLER_BOUNDARY='import Foundation\nprotocol ObservableObject: AnyObject {}\n@propertyWrapper struct Published<Value> { var wrappedValue: Value; init(wrappedValue: Value) {self.wrappedValue=wrappedValue} }\nfinal class NETunnelProviderSession: @unchecked Sendable {\n func sendProviderMessage(_ data: Data, responseHandler: @escaping (Data?)->Void) throws { responseHandler(nil) }\n}\n@MainActor final class RouterVPNModel {var connected=true;var activeEngine="multihop-libbox"}\n@MainActor enum IOSMTUControl {\n struct Identity {let nodeChainSource:Data?=nil;let bundleData=Data()}\n struct Binding {let connection:NETunnelProviderSession;let session:String;let identity=Identity()}\n static func capture(_ model:RouterVPNModel)async throws->Binding{Binding(connection:NETunnelProviderSession(),session:UUID().uuidString)}\n static func current(_ value:Binding,model:RouterVPNModel)->Bool{true}\n static func withHold<T>(model:RouterVPNModel,operation:@MainActor ()async throws->T)async throws->T{try await operation()}\n}\nstruct IOSNodeCandidatePrefix:Decodable {let position:Int;let profile_id:String;let node_id:String;let mode:String;var supported:Bool{true}}\n@MainActor struct IOSNodeCandidateCapture {\n struct Row{let id:String;let name:String;let input:String}\n let records:[String:Data]\n let source:IOSCandidateCatalogPublication.Capture,rows:[Row],prefix:IOSNodeCandidatePrefix,chainSource:String,chainConfig:String\n static func make(request:String,prefixPosition:Int,proofs:[IOSNodeCandidatePrefix],chainSource:String,chainConfig:String)throws->Self{throw NSError(domain:"OriginalStoreBoundary",code:1)}\n func requireCurrent()throws{}\n static func issue()->NSError{NSError(domain:"CandidateCaptureBoundary",code:1)}\n}\n\n@MainActor struct IOSNodeChainCapture {\n class Plan {func close()throws{}}\n let plan=Plan(),sourceSHA256="",configSHA256=""\n static func reopen(_ source:String,selectedProfile:[String:Any])throws->Self{Self()}\n}\n@MainActor struct IOSNodeCandidateProposal {\n let description="",profiles:[String]=[]\n static func compile(original:IOSNodeChainCapture,records:[String:Data],position:Int,candidateID:String,measuredInput:String)throws->Self{Self()}\n}\n@MainActor enum IOSCandidateConnectionProfiles {\n static func save(name:String,profiles:[String],current:()throws->Void)throws->String{try current();return name}\n}\n'
+# Only declarations cross this controller typecheck boundary. The separate
+# preparation fixture executes the actual owner and its joined teardown.
+CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace(
+    '@MainActor final class RouterVPNModel {var connected=true;var activeEngine="multihop-libbox"}',
+    '@MainActor final class RouterVPNModel {var connected=true;var activeEngine="multihop-libbox";var tunnelTransitioning=false;let iosSpeedLabOwnership=IOSSpeedLabOwnership();var selectedNodeProfile:Selected?;var iosVisibleOrderedNodePath:[String]?;var bundle:String?;struct Selected{var multihopExecution:String?};func captureIOSNodeChain(_ source:String)throws->IOSNodeChainCapture{throw NSError(domain:"OriginalStoreBoundary",code:1)}}')
+CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace('struct IOSNodeCandidatePrefix:Decodable {', 'struct IOSNodeCandidatePrefix:Decodable,Equatable {')
+CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace(' let plan=Plan(),sourceSHA256="",configSHA256=""', ' struct Member {let id:String;let mode:String;let profile:[String:Any]}\n let members:[Member]=[];let plan=Plan(),sourceSHA256="",configSHA256=""')
+CONTROLLER_BOUNDARY += r'''
+@MainActor enum IOSRuntimeSelector {static func selectNodeChain(_ capture:IOSNodeChainCapture)throws->Int{throw NSError(domain:"OriginalStoreBoundary",code:1)}}
+@MainActor final class IOSNodeCandidatePreparation {
+ static let busy=false;let owner=UUID();let sourceSHA256="",configSHA256="";let prefixes:[IOSNodeCandidatePrefix]=[]
+ static func reserve(model:RouterVPNModel,onCancelled:@escaping @MainActor ()->Void)throws->IOSNodeCandidatePreparation{throw IOSNodeCandidateResult.issue()}
+ func start()async throws{throw IOSNodeCandidateResult.issue()}
+ func requireLive()throws{throw IOSNodeCandidateResult.issue()}
+ func bind(_ value:IOSNodeCandidateTransaction)throws{throw IOSNodeCandidateResult.issue()}
+ func seal(token:UUID,measured:Int64,expires:Int64)throws{throw IOSNodeCandidateResult.issue()}
+ func requireSaved(token:UUID)throws{throw IOSNodeCandidateResult.issue()}
+ func retire()async{fatalError("typecheck boundary cannot join native ownership")}
+ func closeResults(){fatalError("typecheck boundary owns no temporary results")}
+ func cancel(){}
+}
+'''
 SWIFT=r'''
 import Foundation
 struct Failed:Error{let text:String}
@@ -88,7 +110,7 @@ def main():
    crypto=work/'CryptoKit.swift';crypto.write_text(LINUX_CRYPTO)
    subprocess.run(options+['-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/'libCryptoKit.so')],check=True,timeout=90)
    options+=['-I',str(work),'-L',str(work),'-lCryptoKit']
-  subprocess.run(options+['-emit-module','-module-name','CandidateHost',str(controller),str(APP/'IOSCandidateCatalogPublication.swift'),str(APP/'IOSNodeCandidateResult.swift'),'-emit-module-path',str(work/'CandidateHost.swiftmodule')],check=True,timeout=90)
+  subprocess.run(options+['-emit-module','-module-name','CandidateHost',str(controller),str(APP/'IOSSpeedLabOwnership.swift'),str(APP/'IOSCandidateCatalogPublication.swift'),str(APP/'IOSNodeCandidateResult.swift'),'-emit-module-path',str(work/'CandidateHost.swiftmodule')],check=True,timeout=90)
   print('Apple complete candidate controller typecheck PASS (OS/store/UI boundaries substituted)')
  subprocess.run(['swiftc','-frontend','-parse',str(APP/'IOSNodeCandidates.swift'),str(APP/'IOSSpeedLabView.swift')],check=True,timeout=30)
 if __name__=='__main__':main()

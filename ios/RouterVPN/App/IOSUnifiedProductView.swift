@@ -177,7 +177,7 @@ struct IOSUnifiedMap: UIViewRepresentable {
         let completePath = routeIDs.compactMap { coordinatesByID[$0] }
         if routeIDs.count >= 2 && completePath.count == routeIDs.count {
             context.coordinator.path = completePath
-            if model.connected { context.coordinator.ensurePacket(on: map) }
+            if model.connected && !model.iosCandidateTesting { context.coordinator.ensurePacket(on: map) }
             else if let packet { map.removeAnnotation(packet); context.coordinator.packet = nil }
         } else {
             context.coordinator.path = []
@@ -218,7 +218,7 @@ struct IOSUnifiedMap: UIViewRepresentable {
                 // actor before touching MapKit/coordinator state instead of
                 // weakening concurrency checking for the whole target.
                 Task { @MainActor [weak self] in
-                    guard let self, self.parent.model.connected, self.path.count >= 2, let packet = self.packet else { return }
+                    guard let self, self.parent.model.connected, !self.parent.model.iosCandidateTesting, self.path.count >= 2, let packet = self.packet else { return }
                     self.phase += 0.035; if self.phase >= 1 { self.phase -= 1 }
                     let step = self.phase * Double(self.path.count - 1)
                     let index = min(self.path.count - 2, Int(step))
@@ -259,7 +259,7 @@ struct IOSUnifiedMap: UIViewRepresentable {
             if let base = overlay as? RouterVPNVectorMapOverlay { return RouterVPNVectorMapRenderer(overlay: base) }
             guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
             let renderer = MKPolylineRenderer(polyline: line); renderer.strokeColor = line.title == "exit" ? .systemOrange : line.title == "hop" ? .systemCyan : .systemBlue; renderer.lineWidth = 4; renderer.lineCap = .round; renderer.lineJoin = .round
-            renderer.lineDashPattern = parent.model.connected ? nil : [6, 5]
+            renderer.lineDashPattern = parent.model.connected && !parent.model.iosCandidateTesting ? nil : [6, 5]
             return renderer
         }
     }
@@ -305,10 +305,10 @@ struct IOSUnifiedProductView: View {
                         Spacer()
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(connectionStateTitle).font(.subheadline.bold())
-                            Text(IOSUnifiedSecureTransport.handshakeLabel(connected: model.connected)).font(.caption2).foregroundStyle(model.connected ? .green : .secondary).lineLimit(1)
+                            Text(IOSUnifiedSecureTransport.handshakeLabel(connected: model.connected && !model.iosCandidateTesting)).font(.caption2).foregroundStyle(model.connected && !model.iosCandidateTesting ? .green : .secondary).lineLimit(1)
                             HStack(spacing: 5) {
                                 Text(model.activeRawProfile.isEmpty ? selectedModeTitle : model.activeRawProfile)
-                                if let ms = livePathMilliseconds, model.connected { Text(String(format: "• %.1f ms %@", ms, livePathLabel)).monospacedDigit() }
+                                if let ms = livePathMilliseconds, model.connected && !model.iosCandidateTesting { Text(String(format: "• %.1f ms %@", ms, livePathLabel)).monospacedDigit() }
                             }.font(.caption2).foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 10).padding(.vertical, 7).background(.regularMaterial, in: Capsule())
@@ -358,12 +358,14 @@ struct IOSUnifiedProductView: View {
         return ms > 0 ? String(format: "%@ • %.1f ms", kind, ms) : kind
     }
     private var connectionStateTitle: String {
+        if model.iosCandidateTesting { return "Testing" }
         if model.connected { return "Connected" }
         if model.iosStrategyStatus?.phase == .blocked { return "Protected • no proven path" }
         if model.tunnelTransitioning { return model.message.lowercased().contains("disconnect") ? "Disconnecting…" : "Connecting…" }
         return "Disconnected"
     }
     private var connectionButtonTitle: String {
+        if model.iosCandidateTesting { return "Cancel test" }
         if model.tunnelTransitioning { return model.iosUserDisconnectInProgress ? "Disconnecting…" : "Cancel & disconnect" }
         return model.connected ? "Disconnect" : "Connect"
     }
@@ -417,7 +419,7 @@ struct IOSUnifiedProductView: View {
                             .buttonStyle(.borderedProminent).tint(model.connected ? .red : .accentColor)
                             .disabled(model.iosUserDisconnectInProgress)
 
-                        if let ms = livePathMilliseconds, model.connected { Text(String(format: "%.1f\nms %@", ms, livePathLabel)).font(.caption2.bold()).monospacedDigit().multilineTextAlignment(.center) }
+                        if let ms = livePathMilliseconds, model.connected && !model.iosCandidateTesting { Text(String(format: "%.1f\nms %@", ms, livePathLabel)).font(.caption2.bold()).monospacedDigit().multilineTextAlignment(.center) }
                         Toggle(isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) })) { Image(systemName: "lock.shield.fill") }
                             .toggleStyle(.button).buttonStyle(.bordered).accessibilityLabel("Kill switch")
                             .disabled(model.profileMutationBlocked)
@@ -479,7 +481,7 @@ struct IOSUnifiedProductView: View {
         if let p = selectedProfile, p.multihopEnabled == true, let entry = p.multihopEntryID, let exit = p.multihopExitID {
             // Direct node-cache RTT is not a routed per-hop measurement.
             var text = "\(entry) → \(exit)"
-            if let path = livePathMilliseconds, model.connected { text += String(format: " • %@ %.1f ms", livePathLabel, path) }
+            if let path = livePathMilliseconds, model.connected && !model.iosCandidateTesting { text += String(format: " • %@ %.1f ms", livePathLabel, path) }
             return text
         }
         return "Choose native entry → encrypted exit"
@@ -530,6 +532,7 @@ struct IOSUnifiedProductView: View {
         model.message = "Selected fastest Router: \(winner.name) • \(String(format: "%.1f", winner.trimmedMeanMs)) ms, 50 TCP samples, 10% trimmed mean. Press Connect when ready with \(selectedModeTitle)."
     }
     private func connectOrDisconnect() {
+        if model.iosCandidateTesting { model.cancelCandidateTesting(); return }
         if model.tunnelTransitioning || model.connected { model.disconnect(); return }
         if !model.connected, selectedProfile?.multihopEnabled == true { Task { await model.connect() }; return }
         if model.connected { model.disconnect(); return }

@@ -781,6 +781,40 @@ for actual gate/composite preparation in both orders, exact copy/idempotence
 checks and original malformed-source refusal cases. This local preparation
 evidence does not replace real Windows native compilation or traffic acceptance.
 
+## iOS/iPadOS disconnected complete saved Local candidate flow
+
+The disconnected candidate UI now reserves the existing Speed Lab session owner
+and an outer MTU hold before requesting a temporary native tunnel. It freezes
+the complete saved Local graph, selected settings, catalog, private source
+records and physical network generation. The actual saved-graph launch rechecks
+that purpose across preference operations and immediately before native start;
+it does not use ordinary Connect's save, usage or Last-recording path.
+
+Candidates still use the existing native transaction and fifty TCP samples.
+Validated proposals are captured while the original graph is proved, then the
+transaction, callbacks and exact temporary tunnel must join and restore the
+original idle selection before choices appear. The physical source and both
+wall-clock and monotonic 120-second expiry remain checked through transactional
+Save. A view disappearing before the first task turn cannot abandon this owner.
+Cancellation or unknown native shutdown retains cleanup ownership and MTU hold.
+Home, map, controls and private telemetry distinguish Testing from ordinary
+Connected. Saved results remain explicit future profiles, without auto-connect.
+
+The actual Swift owner passed 26 checks plus seven causal controls; its full
+controller passed 28 checks plus three controls, including dropped-view cleanup
+and final-append authority. The existing transaction and foreign-owner rejection
+passed. Actual saved launch passed 156 checks plus four controls; presentation
+passed 101 plus six controls. Telemetry passed 263 checks, 21 native-read adapter
+checks, historical signed-API compile rejection and four causal controls. Linux
+uses the existing real OpenSSL SHA256 adapter only for portable compilation;
+Apple still uses CryptoKit and requires the SDK lane. The portable runtime
+selection contract also passed, including 191 SIP003 checks.
+
+This unit starts and proves the complete original saved path. The independent
+prefix-only native flow, which must work without the old final node, remains
+separate work. Real NetworkExtension permissions, full SDK packaging and device
+acceptance are not established by these local composition checks.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

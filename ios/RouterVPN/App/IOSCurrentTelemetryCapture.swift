@@ -7,7 +7,7 @@ import Foundation
     let source: IOSDNSMeasurementCapture
     private let entry: Data?
     init(model: RouterVPNModel, network: UInt64) throws {
-        guard model.connected, let bundle = model.bundle,
+        guard model.connected, !model.iosCandidateTesting, let bundle = model.bundle,
               IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.normalizedNodeKind == "router-vpn" else {
             throw IOSTelemetryProtocol.issue("Connect a proved Router VPN node before measuring its private path.")
         }
@@ -22,6 +22,7 @@ import Foundation
         try requireCurrent(model)
     }
     func requireCurrent(_ model: RouterVPNModel) throws {
+        guard !model.iosCandidateTesting else { throw CancellationError() }
         try source.requireCurrent(model: model)
         if let entry {
             guard let bundle = model.bundle else { throw CancellationError() }

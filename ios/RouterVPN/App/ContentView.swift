@@ -49,13 +49,13 @@ private struct ConnectView: View {
                     NativeCard {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(model.connected ? "Connected" : "Router VPN").font(.title2.bold())
+                                Text(model.iosCandidateTesting ? "Testing" : model.connected ? "Connected" : "Router VPN").font(.title2.bold())
                                 Text(model.endpoint.isEmpty ? "No node selected" : model.endpoint).font(.caption).foregroundStyle(.secondary)
-                                if model.connected { Text("Engine: \(model.activeEngine) • raw profile: \(model.activeRawProfile)").font(.caption2).foregroundStyle(.secondary) }
+                                if model.connected && !model.iosCandidateTesting { Text("Engine: \(model.activeEngine) • raw profile: \(model.activeRawProfile)").font(.caption2).foregroundStyle(.secondary) }
                             }
                             Spacer()
-                            Image(systemName: model.connected ? "checkmark.shield.fill" : "shield")
-                                .font(.system(size: 34)).foregroundStyle(model.connected ? .green : .blue)
+                            Image(systemName: model.connected && !model.iosCandidateTesting ? "checkmark.shield.fill" : "shield")
+                                .font(.system(size: 34)).foregroundStyle(model.connected && !model.iosCandidateTesting ? .green : .blue)
                         }
                     }
 
@@ -80,13 +80,13 @@ private struct ConnectView: View {
                         Text("Available modes depend on the selected node and its saved configuration. Connection starts only after the complete path and your DNS settings pass validation.")
                             .font(.caption).foregroundStyle(.secondary)
                         Button {
-                            if model.connected { model.disconnect() } else { Task { await model.connect() } }
+                            if model.iosCandidateTesting { model.cancelCandidateTesting() } else if model.connected { model.disconnect() } else { Task { await model.connect() } }
                         } label: {
-                            Label(model.connected ? "Disconnect" : "Connect", systemImage: model.connected ? "stop.fill" : "play.fill")
+                            Label(model.iosCandidateTesting ? "Cancel test" : model.connected ? "Disconnect" : "Connect", systemImage: model.connected || model.iosCandidateTesting ? "stop.fill" : "play.fill")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent).controlSize(.large)
-                        .disabled(!model.auto && !model.iosManualModeSupported)
+                        .disabled(!model.iosCandidateTesting && !model.auto && !model.iosManualModeSupported)
                     }
 
                     NativeCard {

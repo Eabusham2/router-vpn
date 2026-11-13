@@ -145,7 +145,7 @@ enum IOSNodeChainPresentation {
 @MainActor
 extension RouterVPNModel {
     var iosVisibleOrderedNodePath: [IOSNodePathPoint]? {
-        if connected { return IOSNodeChainPresentation.active(activeSessionIdentity) }
+        if connected && !iosCandidateTesting { return IOSNodeChainPresentation.active(activeSessionIdentity) }
         return IOSNodeChainPresentation.planned(selected: selectedNodeProfile, catalog: allNodeProfiles)
     }
 

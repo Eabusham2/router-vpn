@@ -74,6 +74,7 @@ struct IOSHomeSummaryView: View {
     }
 
     private var actualExitText: String {
+        if model.iosCandidateTesting { return "Testing temporary path" }
         if actualExitStatus == "proved" { return actualExitIP }
         return model.connected ? "Unproven — tap Prove actual exit" : "Not connected"
     }
@@ -127,7 +128,9 @@ struct IOSHomeSummaryView: View {
         HStack {
             Text("Home / Connect state").font(.headline)
             Spacer()
-            if model.connected {
+            if model.iosCandidateTesting {
+                Text("Testing").font(.caption.bold()).foregroundStyle(.secondary)
+            } else if model.connected {
                 Text("Connected").font(.caption.bold()).foregroundStyle(.green)
             } else {
                 Text("Off").font(.caption.bold()).foregroundStyle(.secondary)
@@ -139,7 +142,7 @@ struct IOSHomeSummaryView: View {
         Text("Node: \(profile?.name ?? model.routerName) • \(locationText)")
         Text("Public endpoint: \(profile?.endpoint ?? model.endpoint)")
         Text("Actual public VPN exit: \(actualExitText)")
-        Text("Phase/path proof: \(model.connected ? "connected • selected-node proof passed" : "off / not proven")")
+        Text("Phase/path proof: \(model.iosCandidateTesting ? "Testing" : model.connected ? "connected • selected-node proof passed" : "off / not proven")")
         Text("Logical/runtime/base: \(model.selectedLogicalMode) • \(rawProfileText) • \(actualBase)")
         Text("Fallback: \(fallbackText)")
         Text(dnsText)
@@ -171,7 +174,7 @@ struct IOSHomeSummaryView: View {
         Button(provingExit ? "Proving…" : "Prove actual exit") {
             Task { await proveActualExit() }
         }
-        .disabled(!model.connected || provingExit)
+        .disabled(model.iosCandidateTesting || !model.connected || provingExit)
 
         Button("Advanced Settings") { showingSettings = true }
             .disabled(model.connected)
@@ -188,7 +191,7 @@ struct IOSHomeSummaryView: View {
     }
 
     @MainActor private func proveActualExit() async {
-        guard model.connected, let bundle = model.bundle else { return }
+        guard model.connected, !model.iosCandidateTesting, let bundle = model.bundle else { return }
         let selectedNode = bundle.selectedRouterID
         let engine = model.activeEngine
         let rawProfile = model.activeRawProfile
@@ -198,7 +201,7 @@ struct IOSHomeSummaryView: View {
         defer { provingExit = false }
         do {
             let value = try await fetchPublicIP()
-            guard model.connected,
+            guard model.connected, !model.iosCandidateTesting,
                   model.bundle?.selectedRouterID == selectedNode,
                   model.activeEngine == engine,
                   model.activeRawProfile == rawProfile else {

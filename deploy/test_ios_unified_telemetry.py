@@ -5,6 +5,7 @@ The actual channel, HTTP transfer parser, app transaction, captures, controller,
 MTU hold and ownership execute together. Socket callbacks can be held after
 cancellation; the fixture rejects an acknowledgement before those callbacks
 join. Darwin additionally typechecks the unchanged native adapter with iOS SDK.
+Linux uses the existing OpenSSL SHA256 adapter; Darwin uses real CryptoKit.
 """
 from pathlib import Path
 import platform
@@ -87,7 +88,7 @@ enum NEVPNStatus { case connected,disconnected,connecting }
  }
 }
 @MainActor final class RouterVPNModel {
- var connected=false,tunnelTransitioning=false,iosUserDisconnectInProgress=false,auto=false
+ var connected=false,tunnelTransitioning=false,iosUserDisconnectInProgress=false,auto=false,iosCandidateTesting=false
  var bundle:ClientBundle?,entry:ClientBundle?,activeSessionIdentity:IOSSessionIdentity?
  var selectedMode="wg",selectedLogicalMode="fast",iosConnectGeneration=UUID()
  let iosSpeedLabOwnership=IOSSpeedLabOwnership()
@@ -275,6 +276,13 @@ TESTS = r'''
   return(model,session,provider)
  }
  static func main()async throws {
+  do {
+   let model=try native(TestWire()).0
+   let original=try IOSCurrentTelemetryCapture(model:model,network:1)
+   model.iosCandidateTesting=true
+   try rejects("private telemetry during candidate Testing"){_ = try IOSCurrentTelemetryCapture(model:model,network:1)}
+   try rejects("retained private telemetry during candidate Testing"){try original.requireCurrent(model)}
+  }
   let model=try fixture(),telemetry=IOSUnifiedTelemetry()
   let result=try await telemetry.measureOne(model.unifiedSelectedProfile!,model:model,samples:50)
   try check("50 real direct samples reach atomic publisher",model.commits==1 && result.samples==50 && result.failed==0 && model.bundle!.routerProfiles[0].latencySamples==50)
@@ -711,6 +719,12 @@ def main():
         fixture = work / "Fixture.swift"
         fixture.write_text(text)
         command = [swift, "-swift-version", "6", "-strict-concurrency=complete", "-module-cache-path", str(work / "modules")]
+        if platform.system() == "Linux":
+            from test_ios_physical_path import LINUX_CRYPTO
+            crypto = work / "CryptoKit.swift"; crypto.write_text(LINUX_CRYPTO)
+            subprocess.run(command + ["-emit-module", "-emit-library", "-module-name", "CryptoKit", str(crypto),
+                "-lcrypto", "-emit-module-path", str(work / "CryptoKit.swiftmodule"), "-o", str(work / "libCryptoKit.so")], check=True, timeout=90)
+            command += ["-I", str(work), "-L", str(work), "-lCryptoKit", "-Xlinker", "-rpath", "-Xlinker", str(work)]
         subprocess.run(command + [str(p) for p in sources] + [str(fixture), "-o", str(work / "test")], check=True, timeout=150)
         subprocess.run([str(work / "test")], check=True, timeout=180)
         # These controls must fail in the actual asynchronous ownership tests.
@@ -724,6 +738,8 @@ def main():
             ("direct network source", sources, text.replace("network == nil || IOSViaEntryNetwork.shared.current == network, let bundle", "let bundle", 1), "FAIL: accepted network changed before fastest adoption"),
             ("Performance fifty samples", sources, text.replace("let values = await telemetry.measureFastest(model.allNodeProfiles, model: model)", "let values = await telemetry.measureAll(model.allNodeProfiles, model: model, samples: 5)", 1), "FAIL: Performance comparison requires fifty samples and excludes external nodes"),
         ]
+        assert text.count('!model.iosCandidateTesting') == 2
+        controls.append(("temporary candidate purpose", sources, text.replace('!model.iosCandidateTesting', 'true'), "FAIL: accepted private telemetry during candidate Testing"))
         for label, inputs, mutant, assertion in controls:
             fixture.write_text(mutant)
             subprocess.run(command + [str(p) for p in inputs] + [str(fixture), "-o", str(work / "negative")], check=True, timeout=150)

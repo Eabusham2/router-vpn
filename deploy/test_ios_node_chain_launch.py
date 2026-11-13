@@ -75,15 +75,17 @@ enum IOSMultihopExecution {
  var tunnelTransitioning=false,auto=false,message="",selectedMode="",selectedLogicalMode="",multihopProgressText=""
  var multihopProgressGeneration=UUID()
  var selectedRouterProfile:RouterProfile?{bundle.flatMap{IOSDNSRuntimePolicy.selectedProfile(in:$0)}}
- func saveRouter()->Bool{bundle != nil}
+ var savedEdits=0,usageWrites=0
+ func saveRouter()->Bool{savedEdits+=1;return bundle != nil}
  func iosStrategySelections(kind:IOSStrategyPlan.Kind,rawProfileID:String?)throws->[IOSRuntimeSelection]{throw CancellationError()}
  func runIOSOwnedStrategy(kind:IOSStrategyPlan.Kind,selections:[IOSRuntimeSelection])async->Bool{false}
  func captureIOSNodeUsageOwner(_ manager:NETunnelProviderManager)->Int?{nil}
- func recordIOSNodeUsage(manager:NETunnelProviderManager,source:ClientBundle,generation:UUID,expected:Int?){}
+ func recordIOSNodeUsage(manager:NETunnelProviderManager,source:ClientBundle,generation:UUID,expected:Int?){usageWrites+=1}
  func rememberIOSMultihopExecution(manager:NETunnelProviderManager,source:ClientBundle,entry:Data?,generation:UUID)async throws{throw CancellationError()}
  func refreshTunnelStatus()async{connected=false;tunnelTransitioning=false}
  func engineName(_ selection:IOSRuntimeSelection)->String{selection.displayName}
- var activeSessionIdentity:Data?
+ struct Identity {let nodeChainSource:Data?}
+ var activeSessionIdentity:Identity?
  let iosSpeedLabOwnership=IOSSpeedLabOwnership()
  static func iosStrategyDigest(_ data:Data)->String{"boundary"}
  func iosMultihopEntryBundle(for bundle:ClientBundle)throws->ClientBundle{throw CancellationError()}
@@ -95,6 +97,7 @@ enum IOSMultihopExecution {
   observedTimeout=timeout;return false
  }
  // SHIPPING_CHAIN_BUNDLES
+ // SHIPPING_CANDIDATE_CONNECT
  // SHIPPING_CONNECT
  // SHIPPING_START
 }
@@ -161,6 +164,26 @@ TESTS = r'''
    await model.connect(rawProfileID:nil)
    try check("initial manager await preserves captured ordered source "+fault,NETunnelProviderManager.starts==(fault=="none" ? 1:0))
    try check("Connect handoff has no simulated proof",!model.connected)
+  }
+  for phase in ["none","load-all","save","load"] {
+   let(model,manager,final,_)=try setup()
+   let capture=try model.captureIOSNodeChain(final);defer{try? capture.plan.close()}
+   let proto=NETunnelProviderProtocol();proto.providerBundleIdentifier="com.eabusham.routervpn.PacketTunnel";manager.protocolConfiguration=proto
+   var purposeCurrent=true
+   NETunnelProviderManager.hook={observed in if observed==phase{purposeCurrent=false}}
+   IOSMTUMeasurementGate.current="captured-candidate-outer-hold"
+   try await reject("temporary native proof remains unavailable "+phase) {
+    try await IOSSpeedLabContext.$owner.withValue(UUID()) {
+     try await model.connectCandidatePreparation(capture,bundle:final) {if !purposeCurrent{throw CancellationError()}}
+    }
+   }
+   try check("temporary admission precedes native start "+phase,NETunnelProviderManager.starts==(phase=="none" ? 1:0))
+   try check("temporary source does not save form edits or user usage",model.savedEdits==0 && model.usageWrites==0 && !model.connected)
+   if phase=="none" {
+    let saved=(manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+    try check("temporary launch carries immutable purpose and source",saved[IOSSpeedLabContext.ownerKey] is String && saved["nodeChainSource"] as? String==capture.launchInput)
+    try check("temporary launch retains outer MTU hold",manager.connection.options?["routervpn_mtu_hold"] as? String=="captured-candidate-outer-hold")
+   }
   }
   for count in [2,3,4,8] {
    let (model,manager,final,selection)=try setup(count)
@@ -243,6 +266,7 @@ def main():
     body = body.replace('// SHIPPING_SELECTION_TYPES', runtime[runtime.index('enum IOSRuntimeEngine'):runtime.index('enum IOSRuntimeSelectionError')])
     body = body.replace('// SHIPPING_SELECTED_PROFILE', S.member(dns, '    static func selectedProfile('))
     body = body.replace('// SHIPPING_CHAIN_BUNDLES', S.member(view, '    func iosNodeChainBundles('))
+    body = body.replace('// SHIPPING_CANDIDATE_CONNECT', S.member(model, '    func connectCandidatePreparation('))
     body = body.replace('// SHIPPING_CONNECT', S.member(model, '    func connect(rawProfileID:'))
     body = body.replace('// SHIPPING_START', S.member(model, '    private func start(manager:'))
     with tempfile.TemporaryDirectory(prefix='.ios-chain-launch-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-launch-') as directory:
@@ -260,6 +284,15 @@ def main():
         binary = work / 'tests'
         subprocess.run(command + [str(code), '-o', str(binary)], check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
+        # Removing every final temporary admission is one causal defect. The
+        # ordinary full-source/parser guards remain intact in this mutation.
+        needle = 'try IOSSpeedLabContext.candidateAdmission?()'
+        assert body.count(needle) == 4
+        code.write_text(body.replace(needle, '_ = ()') + TESTS)
+        subprocess.run(command + [str(code), '-o', str(binary)], check=True, timeout=120)
+        failed = subprocess.run([str(binary), str(compiler)], capture_output=True, text=True, timeout=180)
+        assert failed.returncode != 0 and 'temporary admission precedes native start save' in failed.stdout + failed.stderr, failed.stdout + failed.stderr
+        print('Rejected ordered app launch defect mutation: temporary-purpose-admission')
         for name, before, after, failure in (
             ('initial-manager-source', 'selection.nodeChainInput == capture.launchInput else', 'true else', 'initial manager await preserves captured ordered source middle-token'),
             ('middle-source-revalidation', 'try requireCurrentIOSNodeChain(nodeChainSource, selected: bundle)', '_ = nodeChainSource', 'ACCEPTED save middle-token'),

@@ -6,6 +6,9 @@ enum IOSSpeedLabContext {
     static let ownerKey = "routervpn_speed_lab_owner"
     @TaskLocal static var owner: UUID?
     @TaskLocal static var restoringSelection = false
+    // A temporary saved graph rechecks its immutable source/network purpose
+    // after every suspending preference operation and immediately before start.
+    @TaskLocal static var candidateAdmission: (@MainActor @Sendable () throws -> Void)?
     // App-launch work may use an idle captured selection, but must never
     // supersede a user action or a temporary test that began while it waited.
     @TaskLocal static var startupAdmission: (@MainActor @Sendable () -> Bool)?

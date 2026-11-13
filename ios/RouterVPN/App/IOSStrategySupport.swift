@@ -209,7 +209,8 @@ extension RouterVPNModel {
     }
 
     func recordIOSLastRuntime() {
-        guard connected, let profile = iosStrategyProfile, profile.normalizedNodeKind == "router-vpn",
+        guard IOSSpeedLabContext.owner == nil, !IOSSpeedLabContext.restoringSelection,
+              !iosSpeedLabOwnership.active, connected, let profile = iosStrategyProfile, profile.normalizedNodeKind == "router-vpn",
               !activeRawProfile.isEmpty else { return }
         let value = IOSLastRuntime(routerID: profile.id, rawProfileID: activeRawProfile, logicalModeID: selectedLogicalMode)
         if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: "router-vpn.ios.last-runtime-v1") }

@@ -327,6 +327,37 @@ final class RouterVPNModel: ObservableObject {
         return [selection.rawProfileID]
     }
 
+    /// Temporary candidates launch the frozen saved graph without saving form
+    /// values, choosing a new route, recording usage, or updating Last.
+    func connectCandidatePreparation(_ capture: IOSNodeChainCapture, bundle: ClientBundle,
+                                     current: @escaping @MainActor @Sendable () throws -> Void) async throws {
+        try current()
+        guard IOSSpeedLabContext.owner != nil, !connected, !tunnelTransitioning,
+              !userDisconnectInProgress else { throw CancellationError() }
+        let selection = try IOSRuntimeSelector.selectNodeChain(capture)
+        let generation = UUID(); iosConnectGeneration = generation; tunnelTransitioning = true
+        defer { if iosConnectGeneration == generation { tunnelTransitioning = false } }
+        let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
+            ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
+        }
+        try current()
+        guard managers.count <= 1, iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
+        let manager = managers.first ?? NETunnelProviderManager()
+        guard manager.connection.status == .disconnected || manager.connection.status == .invalid,
+              !manager.isOnDemandEnabled else { throw CancellationError() }
+        let success = try await IOSSpeedLabContext.$candidateAdmission.withValue(current) {
+            try await start(manager: manager, bundle: bundle, selection: selection)
+        }
+        try current()
+        guard success, iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
+        activeEngine = selection.engine.rawValue; activeRawProfile = selection.rawProfileID
+        await refreshTunnelStatus()
+        try current()
+        guard connected, activeSessionIdentity?.nodeChainSource == Data(capture.launchInput.utf8),
+              iosConnectGeneration == generation else { throw CancellationError() }
+        message = "Testing saved ordered path"
+    }
+
     func connect() async { await connect(rawProfileID: nil) }
 
     // Exact raw attempts are used by CUSTOM, SMART reductions and last-good
@@ -546,10 +577,13 @@ final class RouterVPNModel: ObservableObject {
             manager.onDemandRules = []
         }
         guard iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
+        try IOSSpeedLabContext.candidateAdmission?()
         try await manager.saveToPreferences()
         guard iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
+        try IOSSpeedLabContext.candidateAdmission?()
         try await manager.loadFromPreferences()
         guard iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
+        try IOSSpeedLabContext.candidateAdmission?()
         if IOSSpeedLabContext.startupAdmission != nil {
             let available = try await NETunnelProviderManager.loadAllFromPreferences()
             guard iosConnectGeneration == generation, !userDisconnectInProgress, !Task.isCancelled,
@@ -625,6 +659,7 @@ final class RouterVPNModel: ObservableObject {
                 execution: IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopExecution ?? "local",
                 entryMode: selection.multihopEntryMode ?? "wg", exitMode: selection.rawProfileID)
         } else { startupTimeout = 10 }
+        try IOSSpeedLabContext.candidateAdmission?()
         try manager.connection.startVPNTunnel(options: options)
         connected = false
         activeEngine = selection.engine.rawValue
