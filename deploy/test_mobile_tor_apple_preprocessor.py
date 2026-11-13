@@ -3,7 +3,9 @@
 
 The ordinary tests execute the actual packaging environment preparation without
 building dependencies. --native also invokes the selected Xcode C preprocessor
-for all three shipping slices and requires the missing-target negative to fail.
+for all three shipping slices, then pairs an explicit foreign compiler default
+with intact and omitted CPP target flags. Host defaults cannot make an omission
+control accidentally valid for the same architecture and SDK.
 """
 from pathlib import Path
 import argparse
@@ -109,9 +111,16 @@ def probe_text(target):
     )
 
 
-def preprocess(environment, source):
-    # This is the Autoconf CPP invocation: deliberately do not add CFLAGS.
-    command = [environment["CC"], "-E", *shlex.split(environment["CPPFLAGS"]), str(source)]
+def preprocess(environment, source, default_target=None):
+    # The ordinary call is the Autoconf CPP invocation, without CFLAGS.
+    # Paired controls set the same explicit foreign compiler default before the
+    # actual CPPFLAGS; only their original target flags differ between runs.
+    defaults = []
+    if default_target is not None:
+        if default_target not in ("arm64-apple-macos13.0", "x86_64-apple-macos13.0"):
+            raise ValueError("Uncaptured Apple preprocessor default")
+        defaults = ["-target", default_target]
+    command = [environment["CC"], "-E", *defaults, *shlex.split(environment["CPPFLAGS"]), str(source)]
     return subprocess.run(command, env=environment, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, timeout=30)
 
@@ -148,11 +157,20 @@ def native_checks(package):
             if result.returncode or b"ROUTERVPN_ORIGINAL_APPLE_PREPROCESSOR" not in result.stdout:
                 raise RuntimeError("Original Apple preprocessing failed " + target["name"] + ":\n" +
                                    result.stdout.decode("utf-8", "replace")[-5000:])
-            broken = preprocess(without_cpp_target(environment), source)
+            # Xcode may infer the same iOS slice from SDKROOT and the host
+            # architecture even after CPPFLAGS are removed. Use a paired,
+            # explicit foreign default so omission must be causally observable.
+            foreign = ("x86_64" if target["arch"] == "arm64" else "arm64") + "-apple-macos13.0"
+            controlled = preprocess(environment, source, default_target=foreign)
+            if controlled.returncode or b"ROUTERVPN_ORIGINAL_APPLE_PREPROCESSOR" not in controlled.stdout:
+                raise RuntimeError("Original CPP target failed to override the captured compiler default " +
+                                   target["name"] + ":\n" + controlled.stdout.decode("utf-8", "replace")[-5000:])
+            broken = preprocess(without_cpp_target(environment), source, default_target=foreign)
             require_omitted_target_failure(broken)
             print("PASS original Apple Tor preprocessor: " + target["name"], flush=True)
-            print("Rejected missing Apple CPP target: " + target["name"], flush=True)
-    print("Apple Tor preprocessing: 3 actual Xcode slices and 3 rejected target omissions", flush=True)
+            print("PASS original CPP target over foreign default: " + target["name"], flush=True)
+            print("Rejected missing Apple CPP target under same foreign default: " + target["name"], flush=True)
+    print("Apple Tor preprocessing: 3 actual Xcode slices, 3 paired default overrides and 3 rejected target omissions", flush=True)
 
 
 def self_test(package):
@@ -197,6 +215,32 @@ def self_test(package):
                                  {k:v for k,v in env.items() if k!="CPPFLAGS"})
                 self.assertNotIn("-target", shlex.split(broken["CPPFLAGS"]))
                 self.assertIn("-DROUTERVPN_TOR_EMBEDDED=1", broken["CPPFLAGS"])
+
+        def test_paired_native_control_changes_only_original_cpp_flags(self):
+            with tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "original.c"
+                for target in targets(package):
+                    environment = capture_environment(package, target, Path(directory))
+                    foreign = ("x86_64" if target["arch"] == "arm64" else "arm64") + "-apple-macos13.0"
+                    with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"ok")) as run:
+                        preprocess(environment, source)
+                        ordinary = run.call_args
+                        preprocess(environment, source, foreign)
+                        intact = run.call_args
+                        preprocess(without_cpp_target(environment), source, foreign)
+                        omitted = run.call_args
+                    self.assertEqual(ordinary.args[0], [environment["CC"], "-E", *shlex.split(environment["CPPFLAGS"]), str(source)])
+                    self.assertEqual(intact.args[0][:4], [environment["CC"], "-E", "-target", foreign])
+                    self.assertEqual(omitted.args[0][:4], intact.args[0][:4])
+                    self.assertEqual(intact.args[0][4:], ordinary.args[0][2:])
+                    self.assertEqual(omitted.args[0][4:], [*shlex.split(without_cpp_target(environment)["CPPFLAGS"]), str(source)])
+                    self.assertEqual({k:v for k,v in intact.kwargs["env"].items() if k != "CPPFLAGS"},
+                                     {k:v for k,v in omitted.kwargs["env"].items() if k != "CPPFLAGS"})
+                    self.assertEqual(intact.kwargs["timeout"], 30)
+                    self.assertEqual(omitted.kwargs["timeout"], 30)
+                with patch.object(subprocess, "run") as run, self.assertRaises(ValueError):
+                    preprocess(environment, source, "foreign arbitrary target")
+                run.assert_not_called()
 
         def test_native_control_requires_expected_failure_not_a_crash(self):
             witness = b"error: ROUTERVPN_WRONG_APPLE_VARIANT"
