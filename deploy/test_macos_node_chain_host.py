@@ -21,6 +21,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 FLAG = 'ROUTERVPN_DARWIN_NODE_CHAIN_HOST_ACCEPTANCE'
 TEST = 'TestMacOSRetainedNodeChainNativeHost'
+AUTHORITY_TEST = 'TestDesktopDarwinInstalledImportedNodeChainFixtureKeepsOriginalSources'
+AUTHORITY_CASES = (AUTHORITY_TEST, *(AUTHORITY_TEST+'/'+name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong')))
 CASES = (
     'node-chain-3-connect', 'node-chain-4-connect', 'node-chain-3-wrong-middle-key', 'node-chain-4-wrong-middle-proof',
     'node-chain-3-final-dns-failure', 'node-chain-4-final-node-failure', 'node-chain-4-middle-source', 'node-chain-3-prefix-lost',
@@ -148,6 +150,47 @@ def source_identity(core):
     return identity
 
 
+def check_authority_verdict(output):
+    if not isinstance(output, str) or re.search(
+            r'(?im)^\s*(?:--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
+        raise ValueError('Imported source authority contains failure, skip or race evidence')
+    expected = set(AUTHORITY_CASES)
+    runs, passes = Counter(), Counter()
+    complete = 0
+    for line in output.splitlines():
+        run = re.fullmatch(r'=== RUN   (\S+)', line)
+        passed = re.fullmatch(r'(?:    )?--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)', line)
+        if run:
+            name = run[1]
+            if name not in expected or complete or runs[name] or passes[AUTHORITY_TEST] or name != AUTHORITY_TEST and runs[AUTHORITY_TEST] != 1:
+                raise ValueError('Imported source authority RUN is missing its original root or duplicated')
+            runs[name] += 1
+        if passed:
+            name = passed[1]
+            if name not in expected or complete or runs[name] != 1 or passes[name]:
+                raise ValueError('Imported source authority PASS has no unique original RUN')
+            passes[name] += 1
+        if line == 'PASS':
+            if set(passes) != expected:
+                raise ValueError('Imported source authority omitted an exact source case')
+            complete += 1
+    if set(runs) != expected or set(passes) != expected or complete != 1 or not output.rstrip().endswith('\nPASS'):
+        raise ValueError('Imported source authority did not complete its exact original inventory')
+
+
+def execute_authority(controller, digest, environment):
+    if EXTERNAL.sha(controller) != digest:
+        raise ValueError('Imported source authority lost its captured controller image')
+    result = subprocess.run([str(controller), '-test.v', '-test.count=1', '-test.timeout=30s',
+                             '-test.run=^'+AUTHORITY_TEST+'$'], cwd=ROOT, env=environment,
+                            check=True, timeout=40, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    print(result.stdout, end='' if result.stdout.endswith('\n') else '\n', flush=True)
+    check_authority_verdict(result.stdout)
+    if EXTERNAL.sha(controller) != digest:
+        raise ValueError('Imported source authority changed its captured controller image')
+    return result.stdout
+
+
 def required_host(environment):
     if environment.get(FLAG) != '1' or environment.get('HOMEVPN_MTU_BENCH_FAKE'):
         raise ValueError('Ordered native host requires explicit real disposable acceptance')
@@ -234,7 +277,8 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
             raise ValueError('Compiled native image omitted its actual ordered host test')
         if source_identity(core) != before or BUILD.digest() != policy:
             raise ValueError('Native ordered source changed during compilation')
-        completed, output_digest = [], hashlib.sha256()
+        authority_output = execute_authority(controller, identities['controller'], captured)
+        completed, output_digest = [], hashlib.sha256(authority_output.encode())
         for case in cases:
             command = ['/usr/bin/env', 'ROUTERVPN_MACOS_CONTROLLER_PRIVILEGE_FIXTURE=1',
                        'ROUTERVPN_MACOS_FIXTURE_UID='+str(uid), 'ROUTERVPN_MACOS_FIXTURE_SOURCE='+str(ROOT),
@@ -263,7 +307,9 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
         receipt_value = dict(schema=1, gate='installed-darwin-ordered-host', scope='installed-controller-public-mtu',
                              target=target, repository=repository, source_sha256=policy, bundle_sha256=original_hash,
                              sealed_bundle_sha256=signed_hash, images=identities, cases=list(completed),
-                             sources=before, output_sha256=output_digest.hexdigest(), native=True)
+                             sources=before, authority_cases=list(AUTHORITY_CASES),
+                             authority_output_sha256=hashlib.sha256(authority_output.encode()).hexdigest(),
+                             output_sha256=output_digest.hexdigest(), native=True)
     if work.exists() or work.is_symlink():
         raise ValueError('Native ordered acceptance did not retire its exact compilation workspace')
     if receipt_file is not None:

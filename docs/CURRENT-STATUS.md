@@ -1,10 +1,20 @@
 # Current implementation status
 
-Updated November 12, 2026 UTC. This file distinguishes published source,
+Updated November 13, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
+
+## Continuation from 35ff28a7: release convergence and retained scope
+
+The [release-convergence evidence](CONTINUATION-EVIDENCE-2026-11-12-RELEASE-CONVERGENCE.md)
+records original-source recovery, remote-main-verified repairs, local
+test boundaries, the temporary executor outage, recovery and exact reconstruction
+of reviewed pending work. It separates completed source fixes from hosted native
+validation, and retains actual source gaps: general ordered pre-connect candidate
+testing, broader graph families and public ordered macOS admission pending native
+gates. The older published release is not current release evidence.
 
 ### Latest verified native ownership additions
 

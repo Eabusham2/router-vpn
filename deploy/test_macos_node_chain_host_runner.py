@@ -3,6 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import importlib.util
+import hashlib
 import json
 import re
 import subprocess
@@ -262,6 +263,90 @@ class OrderedNativeVerdicts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 G.write_receipt(alias, value)
             self.assertEqual(json.loads(path.read_text()), value)
+
+
+class ImportedSourceAuthority(unittest.TestCase):
+    def completed(self):
+        return '\n'.join(['=== RUN   '+name for name in G.AUTHORITY_CASES] +
+                         [('    ' if '/' in name else '')+'--- PASS: '+name+' (0.01s)' for name in G.AUTHORITY_CASES] + ['PASS', ''])
+
+    def test_original_root_and_every_entry_mode_require_actual_unique_verdicts(self):
+        valid = self.completed()
+        G.check_authority_verdict(valid)
+        self.assertEqual(G.AUTHORITY_CASES, (G.AUTHORITY_TEST, *(G.AUTHORITY_TEST+'/'+name for name in
+            ('custom-wg', 'custom-awg-fast', 'custom-awg-strong'))))
+        for name in G.AUTHORITY_CASES:
+            run = '=== RUN   '+name+'\n'
+            passed = ('    ' if '/' in name else '')+'--- PASS: '+name+' (0.01s)\n'
+            for changed in (valid.replace(run, ''), valid.replace(passed, ''), valid.replace(run, run+run),
+                            valid.replace(passed, passed+passed), valid.replace(name, 'TestForeignAuthority')):
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    G.check_authority_verdict(changed)
+        for changed in (valid+'PASS\n', valid.removesuffix('PASS\n'), 'PASS\n'+valid, valid+'unfinished\n',
+                        valid.replace('--- PASS:', '--- SKIP:', 1), valid.replace('--- PASS:', '--- FAIL:', 1),
+                        'WARNING: DATA RACE\n'+valid, 'panic: stopped\n'+valid):
+            with self.assertRaises(ValueError):
+                G.check_authority_verdict(changed)
+
+    def test_actual_gate_requires_authority_before_all_native_cases(self):
+        for fault in ('success', 'missing-child', 'wrong-root', 'failed', 'timeout', 'changed-image'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                bundle = root/'bundle'
+                bundle.mkdir()
+                (bundle/'NATIVE-RUNTIME.json').write_bytes(b'original delivered bundle')
+                authority_calls, native_calls = [], []
+                output = self.completed()
+                def run(command, **options):
+                    if '-o' in command:
+                        Path(command[command.index('-o')+1]).write_bytes(b'original captured native image')
+                    if any(str(arg).startswith('-test.list=') for arg in command):
+                        return SimpleNamespace(returncode=0, stdout=G.TEST+'\n')
+                    if any(str(arg).startswith('-test.run=') for arg in command):
+                        self.assertEqual(command[1:], ['-test.v', '-test.count=1', '-test.timeout=30s', '-test.run=^'+G.AUTHORITY_TEST+'$'])
+                        self.assertEqual(options['timeout'], 40)
+                        self.assertTrue(options['check'])
+                        self.assertEqual(options['env']['CAPTURED_ENV'], '1')
+                        self.assertEqual(native_calls, [])
+                        authority_calls.append(Path(command[0]))
+                        if fault == 'failed':
+                            raise subprocess.CalledProcessError(1, command, output='actual authority failure')
+                        if fault == 'timeout':
+                            raise subprocess.TimeoutExpired(command, 40)
+                        actual = output
+                        if fault == 'missing-child':
+                            actual = actual.replace('    --- PASS: '+G.AUTHORITY_CASES[-1]+' (0.01s)\n', '')
+                        if fault == 'wrong-root':
+                            actual = actual.replace(G.AUTHORITY_TEST, 'TestForeignSourceAuthority')
+                        if fault == 'changed-image':
+                            Path(command[0]).write_bytes(b'replaced native image')
+                        return SimpleNamespace(returncode=0, stdout=actual)
+                    return SimpleNamespace(returncode=0, stdout='')
+                def native(command, **options):
+                    self.assertEqual(len(authority_calls), 1)
+                    self.assertIn(str(authority_calls[0]), command)
+                    case = command[command.index('-test.v')-1].removeprefix('-test.run=^'+G.TEST+'$/^').removesuffix('$')
+                    native_calls.append(case)
+                    return OrderedNativeVerdicts().completed(case)
+                with patch.object(G, 'required_host', return_value=('darwin/arm64', 501)), \
+                     patch.object(G.CONTROLLER.UID, 'compiler_toolchain', return_value=(Path('captured-go'), {'CAPTURED_ENV':'1'})), \
+                     patch.object(G.CONTROLLER.UID, 'privilege_tool', return_value=None), \
+                     patch.object(G.CONTROLLER, 'discover_python', return_value='/usr/bin/python3'), \
+                     patch.object(G.BUILD, 'reuse', return_value={'original':True}), \
+                     patch.object(G.BUILD, 'digest', return_value='a'*64), \
+                     patch.object(G, 'source_identity', return_value={'application':{'owned':'b'*64}, 'peer':{'original':'c'*64}}), \
+                     patch.object(G.subprocess, 'run', side_effect=run), \
+                     patch.object(G.CONTROLLER, 'reported_run', side_effect=native), patch('builtins.print'):
+                    if fault == 'success':
+                        receipt = G.execute(bundle, source=root/'core')
+                        self.assertEqual(receipt['authority_cases'], list(G.AUTHORITY_CASES))
+                        self.assertEqual(receipt['authority_output_sha256'], hashlib.sha256(output.encode()).hexdigest())
+                        self.assertEqual(native_calls, list(G.CASES))
+                    else:
+                        with self.assertRaises((ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired)):
+                            G.execute(bundle, source=root/'core')
+                        self.assertEqual(native_calls, [])
+                self.assertEqual(len(authority_calls), 1)
 
 
 class OrderedNativeWorkflows(unittest.TestCase):
