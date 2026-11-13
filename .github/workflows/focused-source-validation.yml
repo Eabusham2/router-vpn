@@ -36,6 +36,8 @@ on:
           - desktop-socks-capture
           - desktop-socks-policy
           - desktop-socks-parent
+          - desktop-socks-editor
+          - desktop-socks-child
 
 permissions:
   contents: read
@@ -69,7 +71,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent", "desktop-socks-editor", "desktop-socks-child"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -101,6 +103,12 @@ jobs:
           python3 validator/deploy/test_focused_multihop_clocks.py --self-test
           if [[ "$SUITE" == "windows-source-retirement" ]]; then
             python3 validator/deploy/validate-windows-source-retirement.py --self-test
+          fi
+          if [[ "$SUITE" == "desktop-socks-editor" ]]; then
+            python3 validator/deploy/test_validate_desktop_socks_editor.py
+          fi
+          if [[ "$SUITE" == "desktop-socks-child" ]]; then
+            python3 validator/deploy/test_validate_desktop_socks_child.py
           fi
           if [[ "$SUITE" == "desktop-socks-parent" ]]; then
             python3 validator/deploy/test_focused_desktop_socks_parent_runner.py
@@ -160,7 +168,7 @@ jobs:
             --source-sha "$SOURCE_SHA" --base-sha "$VALIDATOR_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/selection.json"
       - name: Install the pinned Go toolchain
-        if: inputs.suite != 'macos-profiles' && inputs.suite != 'windows-source-retirement'
+        if: inputs.suite != 'macos-profiles' && inputs.suite != 'windows-source-retirement' && inputs.suite != 'desktop-socks-editor'
         uses: actions/setup-go@v5
         with:
           go-version: '1.26.3'
@@ -177,7 +185,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libandroid-json-java
       - name: Install the Linux encrypted-reference compiler dependencies
-        if: inputs.suite == 'linux-hy2' || inputs.suite == 'socks-owner' || inputs.suite == 'socks-bridge' || inputs.suite == 'socks-run' || inputs.suite == 'socks-native-mtu'
+        if: inputs.suite == 'linux-hy2' || inputs.suite == 'socks-owner' || inputs.suite == 'socks-bridge' || inputs.suite == 'socks-run' || inputs.suite == 'socks-native-mtu' || inputs.suite == 'desktop-socks-child'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config
@@ -298,6 +306,26 @@ jobs:
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Install native GTK editor dependencies
+        if: inputs.suite == 'desktop-socks-editor'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libgtk-3-dev libjson-glib-dev pkg-config xvfb xauth
+      - name: Execute shipping GTK saved SOCKS profile callbacks
+        if: inputs.suite == 'desktop-socks-editor'
+        shell: bash
+        run: |
+          python3 validator/deploy/validate-desktop-socks-editor.py \
+            --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
+            --target linux/amd64 --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Compile and exercise the typed desktop child with preserved owners
+        if: inputs.suite == 'desktop-socks-child'
+        shell: bash
+        run: |
+          python3 validator/deploy/validate-desktop-socks-child.py \
+            --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests" --go "$(command -v go)"
       - name: Verify typed desktop parent and original ownership
         if: inputs.suite == 'desktop-socks-parent'
         shell: bash
@@ -557,6 +585,78 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: focused-windows-source-retirement-${{ matrix.slug }}-${{ inputs.source_sha }}
+          path: validation-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  desktop-socks-editor-windows:
+    if: inputs.suite == 'desktop-socks-editor'
+    name: Native Windows saved SOCKS editor on ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: windows/amd64
+            slug: windows-amd64
+          - runner: windows-11-arm
+            target: windows/arm64
+            slug: windows-arm64
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      SUITE: desktop-socks-editor
+      VALIDATOR_SHA: ${{ github.sha }}
+    steps:
+      - name: Require the captured main workflow and exact source identity
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REPOSITORY -cne 'Eabusham2/router-vpn' -or $env:GITHUB_REF -cne 'refs/heads/main') { throw 'Original main workflow required' }
+          foreach ($value in @($env:SOURCE_SHA, $env:VALIDATOR_SHA)) {
+            if ($value -cnotmatch '^[0-9a-f]{40}$') { throw 'Complete lowercase Git identity required' }
+          }
+      - name: Check out the trusted editor validator
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: validator
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check out the exact editor candidate and original parent
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: candidate
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Capture original source identity and verify native process ownership
+        shell: pwsh
+        run: |
+          python validator/deploy/focused_source_identity.py --suite $env:SUITE --source (Join-Path $env:GITHUB_WORKSPACE 'candidate') --source-sha $env:SOURCE_SHA --base-sha $env:VALIDATOR_SHA --output (Join-Path $env:GITHUB_WORKSPACE 'validation-output/selection.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Original editor source identity failed' }
+          python validator/deploy/test_validate_desktop_socks_editor.py
+          if ($LASTEXITCODE -ne 0) { throw 'Original editor verdict controls failed' }
+          python validator/deploy/test_windows_build_owner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Original native process ownership failed' }
+      - name: Execute actual WPF profiles with PowerShell 5.1 and 7
+        shell: pwsh
+        run: |
+          python validator/deploy/validate-desktop-socks-editor.py --source (Join-Path $env:GITHUB_WORKSPACE 'candidate') --source-sha $env:SOURCE_SHA --target '${{ matrix.target }}' --output (Join-Path $env:GITHUB_WORKSPACE 'validation-output/tests')
+          if ($LASTEXITCODE -ne 0) { throw 'Original WPF profile or SOCKS editor failed' }
+      - name: Recheck original editor source and validator identity
+        shell: pwsh
+        run: |
+          python validator/deploy/focused_source_identity.py --suite $env:SUITE --source (Join-Path $env:GITHUB_WORKSPACE 'candidate') --source-sha $env:SOURCE_SHA --base-sha $env:VALIDATOR_SHA --output (Join-Path $env:GITHUB_WORKSPACE 'validation-output/selection-after.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Original editor source changed during validation' }
+      - name: Preserve exact native editor results and failure logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: focused-desktop-socks-editor-${{ matrix.slug }}-${{ inputs.source_sha }}
           path: validation-output/
           if-no-files-found: error
           retention-days: 14
