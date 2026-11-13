@@ -35,6 +35,20 @@ ALLOWLISTS = {
         "client/macos/RouterVPNConnectionProfiles.swift",
         "deploy/test_desktop_connection_profile_modes.py",
     }),
+    "socks-runtime": frozenset({
+        "internal/mobilemultihop/node_chain_socks_runtime.go",
+        "internal/mobilemultihop/node_chain_socks_runtime_test.go",
+        "internal/mobilemultihop/node_chain.go",
+        "internal/mobilemultihop/node_chain_runtime.go",
+        "internal/mobilemultihop/node_chain_measurement.go",
+    }),
+    "socks-owner": frozenset({
+        "mobile/chain/socks_owner.go.tmpl",
+        "mobile/desktop/node_chain_socks_middle_test.go.tmpl",
+        "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
+        "deploy/prepare-mobile-node-chain.py",
+        "deploy/prepare-desktop-external.py",
+    }),
     "socks-source": frozenset({
         "internal/mobilemultihop/node_chain_imported_socks.go",
         "internal/mobilemultihop/node_chain_socks_source.go",

@@ -2747,6 +2747,57 @@ native capability guard remains unchanged. Actual Swift acceptance,
 complete native app packaging and the separate installed Darwin tunnel
 gate must still run before claiming their respective outcomes.
 
+
+## Typed SOCKS runtime and encrypted owner validation lanes — November 13, 2026
+
+Two additional fixed read-only suites preserve separate acceptance boundaries.
+`socks-runtime` admits exactly five shared source files and requires 36 new
+records, 27 original proof/measurement records and 17 original schema 1/2
+projection records. Its three separately compiled controls require the
+intended nine, five and one failure records for omitted initial observation,
+omitted current observation and an improperly widened middle measurement
+destination. Actual HTTP/TLS fixtures retain explicit native engine boundaries.
+The original Go1.26.3 race instrumentation and 120/600-second bounds remain.
+
+`socks-owner` admits exactly five native owner/template/preparer files.
+It uses the existing native preparation pipeline and actual compiled encrypted
+WG/AWG peers. Its gate requires 21 new owner records, 15 unchanged original
+WG/SS peer records, and three separately compiled controls for an omitted
+association join, an omitted late-factory join and foreign reconstructed source
+ownership. The original DNS pool and SOCKS caller remain pinned and unchanged;
+a private captured registry exercises this owner. No ordinary registration,
+public native admission, installed TUN or device acceptance is granted by
+this component gate.
+
+The expanded identity helper passed all 12 actual Git/CLI tests in 3.283 seconds,
+including both exact new file allowlists. The runtime driver passed 22 Python
+tests in 2.070 seconds. The native driver passed seven Python tests in
+0.135 seconds against its complete original module dependency closure, including
+an actual short joined child and exact mixed positive/negative event checks.
+The first isolated validation copy lacked that dependency closure; it produced
+no test verdict and was replaced by the complete source validation above.
+Workflow YAML and both embedded Python blocks parsed. The trusted clock
+executor remains byte-identical, SHA256
+`dbe2ecf83e4e4951465403f1801426f878a9ad5a2227bd3cebaf231453ea648d`.
+These Python results do not establish actual Go or encrypted-owner acceptance.
+
+Native Windows contract run `43405342645` completed successfully at historical
+source `c8c6a44e`, including job `131819358742` at 11:10:25 UTC.
+Its actual WPF profile/editor cases, installed and Portable session checks,
+owned Tor cleanup and runtime/command ownership steps passed. The complete
+decoded job log was preserved with SHA256
+`8d82c886614854208a0e71998215939d2eaf639ff50a023f30518adee8e4b383`.
+This is bounded evidence for that source, not the current combined release.
+
+Overlapping older Darwin run `43412112280` was deliberately cancelled after
+its failure-free job inventory was preserved; terminal cancellation was
+confirmed. Earlier `06b7016a` run `43408867759` retains both architectures'
+successful signed-child preflight and ongoing real native acceptance. The
+macOS profile candidate `615470fb` remains queued in focused run
+`43414997838`; no Swift success is asserted. Current full exact-SHA native
+release and publication remain required.
+
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
