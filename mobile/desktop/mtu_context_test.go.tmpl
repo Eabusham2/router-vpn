@@ -120,10 +120,10 @@ func TestRouterVPNDesktopMTUMailboxKeepsOriginalDeadline(t *testing.T) {
 				t.Fatal(err)
 			}
 			observation, finishObservation := context.WithCancel(context.Background())
+			defer finishObservation()
 			if err := mailbox.tickContext(observation); err != nil {
 				t.Fatal(err)
 			}
-			finishObservation()
 			if expired {
 				if m.request.Generation != 0 || m.controller.Running() || len(mailbox.inputs) != 0 || m.owner.invalid.Load() {
 					t.Fatal("expired input was adopted or retired owner")
@@ -135,18 +135,8 @@ func TestRouterVPNDesktopMTUMailboxKeepsOriginalDeadline(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("accepted worker was canceled at mailbox return")
 			}
-			if !m.controller.Running() {
-				t.Fatal("accepted operation lost original lifetime")
-			}
-			// A separate expired status observation cannot cancel the accepted operation.
-			observer, stop := context.WithCancel(context.Background())
-			stop()
-			if _, err := m.recordContext(observer); !errors.Is(err, context.Canceled) {
-				t.Fatal(err)
-			}
-			if !m.controller.Running() || m.owner.invalid.Load() {
-				t.Fatal("observer expiry retired operation")
-			}
+			// The original deadline may already have drained the accepted worker.
+			// Inspect its completion and rollback without requiring it to stay running.
 			limit := time.NewTimer(2 * time.Second)
 			defer limit.Stop()
 			tick := time.NewTicker(time.Millisecond)
@@ -169,6 +159,67 @@ func TestRouterVPNDesktopMTUMailboxKeepsOriginalDeadline(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+func TestRouterVPNDesktopMTUMailboxSeparatesAcceptedLifetimeFromObservation(t *testing.T) {
+	m, lease, _ := desktopMTUContextFixture(t, 1400)
+	lease.blocked = make(chan struct{})
+	lease.blockAt = 2
+	mailbox, directory := desktopMTUContextMailbox(t, m)
+	lifetime, cancelLifetime := context.WithCancel(context.Background())
+	defer cancelLifetime()
+	mailbox.lifetime = lifetime
+	request := routerVPNDesktopMTURequest{Schema: 1, Session: mailbox.session, SourceSHA256: mailbox.source, ConfigSHA256: mailbox.config, Generation: 1, Request: strings.Repeat("e", 32), Force: true, DeadlineNS: time.Now().Add(time.Minute).UnixNano()}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "mtu-request.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	observation, finishObservation := context.WithCancel(context.Background())
+	defer finishObservation()
+	if err := mailbox.tickContext(observation); err != nil {
+		t.Fatal(err)
+	}
+	finishObservation()
+	select {
+	case <-lease.blocked:
+	case <-time.After(time.Second):
+		t.Fatal("mailbox observation canceled accepted operation: original worker never reached its held proof")
+	}
+	if !m.controller.Running() || m.owner.invalid.Load() {
+		t.Fatal("mailbox observation canceled accepted operation: original lifetime was not retained")
+	}
+	observer, stop := context.WithCancel(context.Background())
+	stop()
+	if _, err := m.recordContext(observer); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if !m.controller.Running() || m.owner.invalid.Load() {
+		t.Fatal("mailbox observation canceled accepted operation: separate status observation retired the worker")
+	}
+	cancelLifetime()
+	limit := time.NewTimer(2 * time.Second)
+	defer limit.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		record, err := m.recordContext(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.Status.Complete && !record.Status.Running {
+			if !record.Status.Restored || record.Status.Measured || record.Status.EffectiveMTU != 1400 {
+				t.Fatalf("captured lifetime cancellation lost original rollback: %+v", record)
+			}
+			break
+		}
+		select {
+		case <-limit.C:
+			t.Fatal("captured lifetime cancellation did not drain original worker")
+		case <-tick.C:
+		}
 	}
 }
 func TestRouterVPNDesktopMTUCacheExpiredSaveIsNotACommit(t *testing.T) {
