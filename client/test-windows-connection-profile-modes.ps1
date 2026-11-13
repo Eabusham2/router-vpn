@@ -280,10 +280,10 @@ public sealed class ProfileModeOwner {
     $Window=$Owner;$ordered=[pscustomobject]@{IsChecked=$true};$chainButton=[pscustomobject]@{Tag=$null}
     $Owner.Controls['UnifiedOrdered']=$ordered;$Owner.Controls['UnifiedNodeChainButton']=$chainButton;$Owner.Controls['UnifiedNodeCombo']=$RouterCombo
     $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true}
-    foreach($mixed in @($false,$true)){foreach($nodeCount in @(2,3,4,8)){
+    foreach($finalMode in @('shadowsocks','hysteria2')){foreach($mixed in @($false,$true)){foreach($nodeCount in @(2,3,4,8)){
         $nodes=@();$profiles=@();$tokens=@{}
         for($i=0;$i-lt$nodeCount;$i++){
-            $id='ordered-'+$i;$mode=if($i-eq$nodeCount-1){'shadowsocks'}elseif($mixed){@('awg2-fast','wg','awg2-strong')[$i%3]}else{'wg'}
+            $id='ordered-'+$i;$mode=if($i-eq$nodeCount-1){$finalMode}elseif($mixed){@('awg2-fast','wg','awg2-strong')[$i%3]}else{'wg'}
             $nodes+=[pscustomobject]@{id=$id;mode=$mode;private_key='never-copy-member-secret'}
             $tokens[$id]=('{0:x64}' -f ($i+1))
             $profiles+=[pscustomobject]@{id=$id;name=('Node '+$i);node_kind='router-vpn';api_token='never-copy-token';profile_token=$tokens[$id]}
@@ -295,7 +295,7 @@ public sealed class ProfileModeOwner {
             $before=$script:Requests.Count;&$callback
             Check ($script:Requests.Count-eq$before+1) ('Ordered profile write failed: '+$profileStatus.Text)
             $body=$script:Requests[-1].Body
-            Check ($body.mode-ceq'shadowsocks'-and@($body.custom_layers).Count-eq0-and$body.multihop_execution-ceq'local') 'Ordered profile borrowed an unrelated logical mode or execution'
+            Check ($body.mode-ceq$finalMode-and@($body.custom_layers).Count-eq0-and$body.multihop_execution-ceq'local') 'Ordered profile borrowed an unrelated logical mode or execution'
             Check (@($body.multihop_nodes).Count-eq$nodeCount-and(@($body.multihop_nodes.id)-join',')-ceq(@($nodes.id)-join',')) 'Ordered profile truncated or reordered a middle node'
             Check ((@($body.multihop_nodes.mode)-join',')-ceq(@($nodes.mode)-join',')) 'Ordered profile changed per-position transports'
             foreach($field in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){Check ($null-eq$body.PSObject.Properties[$field]) 'Ordered profile mixed legacy pair fields'}
@@ -306,7 +306,7 @@ public sealed class ProfileModeOwner {
         $script:Loaded=$script:Requests[-1].Body
         $script:Loaded|Add-Member -NotePropertyName selected_node_id -NotePropertyValue $control
         $script:Loaded|Add-Member -NotePropertyName profile_tokens -NotePropertyValue $tokens
-        $script:Loaded|Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{name='Ordered saved profile';mode='shadowsocks'})
+        $script:Loaded|Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{name='Ordered saved profile';mode=$finalMode})
         $chainButton.Tag=$null;$ordered.IsChecked=$false;$toggle.IsChecked=$false;$script:ConnectBody=$null
         &$LoadCallback
         Check ($null-eq$script:ConnectBody-and$ordered.IsChecked-and$toggle.IsChecked) 'Ordered Load connected or lost its enabled choice'
@@ -316,7 +316,7 @@ public sealed class ProfileModeOwner {
         Check ($null-ne$body-and(@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'execution,expected_profile_tokens,expected_selected_node_id,nodes') 'Ordered Connect sent legacy pair/private fields or omitted source owners'
         Check ($body.expected_selected_node_id-ceq$control-and@($body.expected_profile_tokens.PSObject.Properties).Count-eq$nodeCount) 'Ordered Connect lost original selected control or all-source hash preconditions'
         foreach($node in $nodes){Check ((Get-RouterVPNOrderedValue $body.expected_profile_tokens $node.id)-ceq$tokens[$node.id]) 'Ordered Connect changed a source token'}
-        Check ($body.execution-ceq'local'-and(@($body.nodes.id)-join',')-ceq(@($nodes.id)-join',')-and$body.nodes[-1].mode-ceq'shadowsocks') 'Ordered Connect changed its complete path'
+        Check ($body.execution-ceq'local'-and(@($body.nodes.id)-join',')-ceq(@($nodes.id)-join',')-and$body.nodes[-1].mode-ceq$finalMode) 'Ordered Connect changed its complete path'
         Check ((@($body.nodes.mode)-join',')-ceq(@($nodes.mode)-join',')) 'Ordered Connect changed exact captured WG/AWG modes'
         $copy=@(Copy-RouterVPNOrderedNodes $nodes $control);$copy[0].id='replacement'
         Check ($nodes[0].id-ceq'ordered-0') 'Ordered copy retained mutable member references'
@@ -339,7 +339,7 @@ public sealed class ProfileModeOwner {
             Check ($null-eq$script:ConnectBody) ('Changed ordered selection reached Connect: '+$fault)
             $RouterCombo.Tag=$saved
         }
-    }}
+    }}}
     # Actual callbacks retain their original public owner and complete source
     # map across the request. No network, private source, or WPF is simulated.
     $originalStore=$RouterCombo.Tag|ConvertTo-Json -Depth 32|ConvertFrom-Json

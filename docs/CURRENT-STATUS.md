@@ -16,6 +16,26 @@ validation, and retains actual source gaps: general ordered pre-connect candidat
 testing, broader graph families and public ordered macOS admission pending native
 gates. The older published release is not current release evidence.
 
+### November 13: ordered source and editor additions
+
+The shared compiler now preserves a paired Hysteria2 final in 2–8-node Local
+paths with WG/AWG prefixes and final Start Layer Off. iOS (`d5fa4a7f`) and Android
+(`08013ed6`) source/editor adoption is published. The current desktop source
+and Windows/GTK editor changes preserve the same selected final through
+complete profiles, Startup Last and prefix-only preparation. The detailed
+[release-convergence evidence](CONTINUATION-EVIDENCE-2026-11-12-RELEASE-CONVERGENCE.md)
+records exact source, test boundaries and retained failure logs. Actual encrypted
+Hysteria2 acceptance, current native packages and device tests remain separate.
+Imported SS2022 middles still require an SS final; broader graph families,
+Server/Compare adoption and public ordered macOS acceptance remain open.
+
+Hostname SS2022 middles now have shared, Android, iOS and desktop source
+adoption, with explicit routed Custom TCP DNS and no ordinary-network lookup.
+The native encrypted hostname gate is mandatory in Linux host preflight and
+passed its separate 64-verdict inventory. This closes the older literal-only
+source statement for that bounded three-member path, while other imported
+protocols, positions, layers and installed/device acceptance remain open.
+
 ### Latest verified native ownership additions
 
 The original-engine MTU guard (`b535a16`), mobile lifetime retirement

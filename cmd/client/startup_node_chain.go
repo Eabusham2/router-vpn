@@ -141,7 +141,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		return nil
 	}
 	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2) || capture.Execution != "local" || selection.External != nil ||
-		selection.RuntimeMode != "shadowsocks" || selection.LogicalMode != "multihop" || selection.UpdatedAt.IsZero() ||
+		!desktopNodeChainFinalSupported(selection.RuntimeMode, "off") || capture.Schema == 2 && selection.RuntimeMode != "shadowsocks" || selection.LogicalMode != "multihop" || selection.UpdatedAt.IsZero() ||
 		!savedNodeChainDigest(capture.RootSHA256) || len(capture.Nodes) < 2 || len(capture.Nodes) > common.MultihopMaximumNodes {
 		return bad
 	}
@@ -160,12 +160,12 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		}
 		if !common.ValidNodeProofID(member.NodeProofID) || proofs[member.NodeProofID] || !savedNodeChainDigest(member.ProfileToken) ||
 			i < len(capture.Nodes)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) ||
-			i == len(capture.Nodes)-1 && member.Mode != "shadowsocks" {
+			i == len(capture.Nodes)-1 && !desktopNodeChainFinalSupported(member.Mode, "off") {
 			return bad
 		}
 		proofs[member.NodeProofID] = true
 		modes, err := savedNodeChainSourceModes(member.Mode, "off")
-		if member.Mode != "shadowsocks" && len(member.Sources) == len(modes)+1 {
+		if mobilemultihop.NodeChainPrefixMode(member.Mode) && len(member.Sources) == len(modes)+1 {
 			modes = append(modes, "shadowsocks")
 		}
 		if err != nil || len(member.Sources) != len(modes) {
@@ -178,7 +178,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		}
 	}
 	final := capture.Nodes[len(capture.Nodes)-1]
-	if common.ValidateMultihopNodes(refs) != nil || selection.RouterID != final.ID || selection.ProfileToken != final.ProfileToken ||
+	if common.ValidateMultihopNodes(refs) != nil || selection.RouterID != final.ID || selection.RuntimeMode != final.Mode || selection.ProfileToken != final.ProfileToken ||
 		selection.Base != desktopExternalEntryBase(capture.Nodes[0].Mode) {
 		return bad
 	}
@@ -396,7 +396,7 @@ func (a *app) nodeChainStartupDriver(ctx context.Context, capture *startupPolicy
 	}
 	wrapped := nativeMultihopConnectRuntime{
 		capture: func(owner *app, selection multihopSelection, modes []string) (multihopSelection, error) {
-			if owner != a || compiled != nil || !reflect.DeepEqual(modes, []string{"shadowsocks"}) {
+			if owner != a || compiled != nil || !reflect.DeepEqual(modes, []string{capture.nodeChain.selection.ExitMode}) {
 				return selection, errors.New("ordered startup changed its original native capture call")
 			}
 			if err := guard(selection); err != nil {

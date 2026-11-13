@@ -96,11 +96,11 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 		imported := found && desktopNodeChainImported(profile, selected.Mode)
 		paired := found && (profile.NodeKind == "" || profile.NodeKind == "router-vpn") && profile.External == nil && common.ValidNodeProofID(profile.NodeProofID)
 		if imported {
-			if len(nodes) != 3 || i != 1 {
-				return nil, errors.New("imported ordered member requires exactly one middle between a paired physical entry and paired final")
+			if len(nodes) != 3 || i != 1 || nodes[len(nodes)-1].Mode != "shadowsocks" {
+				return nil, errors.New("imported ordered member requires exactly one middle between a paired physical entry and paired SS2022 final")
 			}
-		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(nodes)-1 && selected.Mode != "shadowsocks" {
-			return nil, errors.New("ordered selection requires paired WireGuard or AWG2 prefixes, an optional captured imported SS2022 middle, and a paired SS2022 final")
+		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(nodes)-1 && !desktopNodeChainFinalSupported(selected.Mode, profile.StartLayer) {
+			return nil, errors.New("ordered selection requires paired WireGuard or AWG2 prefixes and a paired SS2022 or unlayered Hysteria2 final")
 		}
 		// Only the first closure owns physical bootstrap. An ambient lookup of
 		// any later transport would bypass its preceding selected prefix.

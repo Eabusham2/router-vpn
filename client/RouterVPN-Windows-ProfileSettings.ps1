@@ -272,6 +272,21 @@ function global:Test-RouterVPNOrderedPrefixMode {
     return $Mode-is[string]-and@('wg','awg2-fast','awg2-strong')-ccontains$Mode
 }
 
+function global:Test-RouterVPNOrderedFinalMode {
+    param($Mode)
+    return $Mode-is[string]-and@('shadowsocks','hysteria2')-ccontains$Mode
+}
+
+function global:Get-RouterVPNOrderedFinalModes {
+    param($Profile,$Prefixes)
+    if($null-eq$Profile-or[string](Get-RouterVPNOrderedValue $Profile 'node_kind' '')-cnotin@('','router-vpn')){return @()}
+    $choices=@('shadowsocks')
+    $layer=Get-RouterVPNOrderedValue $Profile 'start_layer' ''
+    $imported=@($Prefixes|Where-Object{(Get-RouterVPNOrderedValue $_ 'mode')-ceq'shadowsocks'}).Count-gt0
+    if($layer-is[string]-and$layer-cin@('','off')-and-not$imported){$choices+='hysteria2'}
+    return $choices
+}
+
 function global:Get-RouterVPNOrderedModeTitle {
     param($Mode)
     switch -CaseSensitive ($Mode) {
@@ -279,6 +294,7 @@ function global:Get-RouterVPNOrderedModeTitle {
         'awg2-fast' {return 'AmneziaWG Fast'}
         'awg2-strong' {return 'AmneziaWG Strong'}
         'shadowsocks' {return 'Shadowsocks 2022'}
+        'hysteria2' {return 'Hysteria2'}
         default {throw 'The ordered node has an unsupported exact transport.'}
     }
 }
@@ -291,7 +307,7 @@ function global:Copy-RouterVPNOrderedNodes {
     for($i=0;$i-lt$Nodes.Count;$i++){
         $id=Get-RouterVPNOrderedValue $Nodes[$i] 'id';$mode=Get-RouterVPNOrderedValue $Nodes[$i] 'mode'
         if($id-isnot[string]-or$id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or-not$seen.Add($id)){throw 'Ordered nodes require distinct linked node IDs.'}
-        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode)-and-not($Nodes.Count-eq3-and$i-eq1-and$mode-ceq'shadowsocks'))-or($i-eq$Nodes.Count-1-and$mode-cne'shadowsocks')){throw 'Choose paired WireGuard or AmneziaWG prefixes, optionally one imported SS2022 middle in a three-node path, and a paired Shadowsocks 2022 exit.'}
+        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode)-and-not($Nodes.Count-eq3-and$i-eq1-and$mode-ceq'shadowsocks'-and(Get-RouterVPNOrderedValue $Nodes[-1] 'mode')-ceq'shadowsocks'))-or($i-eq$Nodes.Count-1-and-not(Test-RouterVPNOrderedFinalMode $mode))){throw 'Choose paired WireGuard or AmneziaWG prefixes and a paired Shadowsocks 2022 or unlayered Hysteria2 exit. An imported SS2022 middle requires an SS2022 exit.'}
         [void]$copy.Add([pscustomobject]@{id=$id;mode=$mode})
     }
     if([string]::IsNullOrEmpty($ControlID)-or$copy[$copy.Count-1].id-cne$ControlID){throw 'The final ordered node must be the selected exit node.'}
@@ -319,6 +335,7 @@ function global:New-RouterVPNOrderedConnectPayload {
         $imported=Test-RouterVPNOrderedImportedMiddle $matchingProfiles[0]
         if($imported){if($nodes.Count-ne3-or$position-ne1-or$node.mode-cne'shadowsocks'){throw 'An imported SS2022 node requires one middle position between the paired entry and final.'}}
         elseif([string](Get-RouterVPNOrderedValue $matchingProfiles[0] 'node_kind' '')-cnotin@('','router-vpn')-or($position-lt$nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode))){throw 'The ordered source kind or transport changed.'}
+        if($position-eq$nodes.Count-1-and@(Get-RouterVPNOrderedFinalModes $matchingProfiles[0] @($nodes|Select-Object -SkipLast 1))-cnotcontains$node.mode){throw 'The selected final transport is incompatible with its captured Start Layer or imported middle.'}
         $token=Get-RouterVPNOrderedValue $expected $node.id
         if($token-isnot[string]-or$token-cnotmatch'\A[0-9a-f]{64}\z'-or[string](Get-RouterVPNOrderedValue $matchingProfiles[0] 'profile_token')-cne$token){throw 'An ordered node changed or was relinked. Reopen its editor before connecting.'}
         $tokens[$node.id]=$token
@@ -479,7 +496,7 @@ function global:Confirm-RouterVPNSetupResponse {
     if($null-ne$nodes-and@($nodes).Count-gt0){
         $nodes=@(Copy-RouterVPNOrderedNodes $nodes $resultID)
         $profile=Get-RouterVPNOrderedValue $Response 'profile'
-        if((Get-RouterVPNOrderedValue $Response 'multihop_enabled')-isnot[bool]-or-not$Response.multihop_enabled-or(Get-RouterVPNOrderedValue $Response 'multihop_execution')-cne'local'-or(Get-RouterVPNOrderedValue $profile 'mode')-cne'shadowsocks'){throw 'The profile response changed the ordered execution or final mode.'}
+        if((Get-RouterVPNOrderedValue $Response 'multihop_enabled')-isnot[bool]-or-not$Response.multihop_enabled-or(Get-RouterVPNOrderedValue $Response 'multihop_execution')-cne'local'-or(Get-RouterVPNOrderedValue $profile 'mode')-cne$nodes[-1].mode){throw 'The profile response changed the ordered execution or final mode.'}
         foreach($key in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){if([string](Get-RouterVPNOrderedValue $Response $key)){throw 'The profile response mixes ordered and pair selections.'}}
     }
     if(-not$Capture.Loading){
@@ -676,7 +693,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
         $body=@{name=$Name;mode=[string]$snap.mode;custom_layers=@($snap.custom_layers);multihop_enabled=[bool]$visible.multihop_enabled;multihop_entry_id=[string]$visible.multihop_entry_id;multihop_exit_id=[string]$visible.multihop_exit_id;multihop_exit_mode=[string]$visible.multihop_exit_mode;multihop_execution=[string]$visible.multihop_execution;multihop_entry_mode=[string]$visible.multihop_entry_mode}
         if($visible.ContainsKey('multihop_nodes')){
             $body.multihop_nodes=@(Copy-RouterVPNOrderedNodes $visible.multihop_nodes ([string]$Owner.FindName('UnifiedNodeCombo').SelectedValue))
-            $body.mode='shadowsocks';$body.custom_layers=@()
+            $body.mode=[string]$body.multihop_nodes[-1].mode;$body.custom_layers=@()
             foreach($key in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){[void]$body.Remove($key)}
         }
         if($ID){$body.id=$ID}

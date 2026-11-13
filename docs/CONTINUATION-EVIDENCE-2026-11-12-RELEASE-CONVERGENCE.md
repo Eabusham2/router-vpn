@@ -2062,6 +2062,58 @@ with explicit platform boundaries. Encrypted native transport, Android TUN,
 exact-current APK packaging and physical-device acceptance require their own
 results; this source unit does not claim those gates passed.
 
+## Desktop ordered Hysteria2 capture, profiles and native editors
+
+Desktop capture, complete profile Save/Load, Startup Last and temporary-prefix
+preparation now retain the exact paired Hysteria2 final instead of assuming
+Shadowsocks. The captured final mode must agree with both the requested mode
+and the last member. Original WG identity, Hysteria2 credentials and certificate
+assets remain attached to their own node; saved profiles retain source references
+and policy rather than copying secrets. The strict Last decoder rejects a
+borrowed mode, extra Start Layer inventory or a schema-2 Hysteria2 final.
+Temporary prefix preparation retains the uncontacted final only as provenance.
+Server/Compare, imported-middle, candidate-target and public Darwin bounds
+remain explicit and unchanged.
+
+The Windows and GTK ordered editors expose and retain the chosen paired final
+transport, use it in Add/Load/Update/Connect and reject Hysteria2 with imported
+middles or unsupported final layers. The selected final node stays pinned.
+GTK's actual parent-window close test also exposed an attempt to disconnect an
+already-removed signal handler. Cleanup now checks that its original handler
+is still connected before removing it, retaining the existing object references
+and ownership.
+
+Validation captured the ten Go files against `4bf0ed8e`, with all 5,090 source
+hashes preserved. The new protected-host projection fixture initially omitted
+its explicit kill-switch choice; the shipping protection guard rejected it.
+Only the new fixture was corrected to select its existing protected owner.
+All nine combinations of WG/AWG Fast/AWG Strong and 2/3/8 members then passed
+with the race detector, as did source/trust/credential refusal, complete-profile
+restore, strict Last and prefix-provenance cases (23 distinct new root/child
+verdicts). Eight original startup source roots passed 87 verdicts. The earlier
+batch also completed 165 other preservation verdicts on unchanged production
+sources.
+
+The initial broad 120-second batch and the first corrected 90-second batch
+exceeded their aggregate budgets; those failed logs remain recorded. Remaining
+cases were executed from the same compiled race image in separate 90-second
+groups, with no production or individual-operation timeout increase. The
+previously cut-off original `before-connected` Last ownership case passed
+independently in 40.946 seconds. Across these named runs, 277 distinct
+root/child verdicts completed successfully; this is not a claim that the two
+earlier complete batches exited successfully. The captured binary SHA-256 is
+`28a62b09726d83080b61bf57262858473423a058777422be46adb2f968b11b5d`.
+
+Actual Windows shipping callbacks and serialization passed 114 editor checks
+(including seven separately compiled defect controls) and 3,617 profile/Connect
+checks under PowerShell. WPF rendering remains an actual Windows gate. The GTK
+runner executed on an authenticated Xvfb display: 575 model checks, 760 actual
+editor/callback/persistence checks and all ten separately compiled controls
+passed. The controller boundary was doubled; these results do not claim a
+network tunnel or physical visual/accessibility acceptance. All seven UI file
+hashes remained unchanged after the passing runs. The held AppKit draft is not
+included in this publication, and public ordered macOS admission remains closed.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

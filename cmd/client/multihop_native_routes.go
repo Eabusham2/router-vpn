@@ -149,7 +149,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"platform_supported":         nativeMultihopPlatformSupported(),
 		"ordered_nodes_supported":    nativeNodeChainPlatformSupported(),
 		"ordered_prefix_modes":       []string{"wg", "awg2-fast", "awg2-strong"},
-		"ordered_exit_modes":         []string{"shadowsocks"},
+		"ordered_exit_modes":         []string{"shadowsocks", "hysteria2"},
 		"ordered_executions":         []string{"local"},
 		"ordered_max_nodes":          common.MultihopMaximumNodes,
 		"entry_id":                   entryID,

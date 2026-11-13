@@ -283,7 +283,7 @@ func TestNativeNodeChainStatusStatesActualHostAndModeBounds(t *testing.T) {
 		Connected  bool     `json:"connected"`
 	}
 	if json.Unmarshal(response.Body.Bytes(), &value) != nil || value.Supported != (runtime.GOOS == "linux" || runtime.GOOS == "windows") || value.Connected || value.Maximum != 8 ||
-		!reflect.DeepEqual(value.Prefixes, []string{"wg", "awg2-fast", "awg2-strong"}) || !reflect.DeepEqual(value.Exits, []string{"shadowsocks"}) || !reflect.DeepEqual(value.Executions, []string{"local"}) {
+		!reflect.DeepEqual(value.Prefixes, []string{"wg", "awg2-fast", "awg2-strong"}) || !reflect.DeepEqual(value.Exits, []string{"shadowsocks", "hysteria2"}) || !reflect.DeepEqual(value.Executions, []string{"local"}) {
 		t.Fatal("status invented host authority or lost exact admitted modes", response.Body.String())
 	}
 }

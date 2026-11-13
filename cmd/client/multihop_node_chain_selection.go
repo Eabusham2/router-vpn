@@ -61,8 +61,8 @@ func nodeChainSelectedReferences(members []desktopNodeChainMember) []common.Mult
 
 func captureNativeNodeChainSelection(ctx context.Context, root string, selection multihopSelection,
 	modes []string, lookup applexray.Lookup) (multihopSelection, error) {
-	if ctx == nil || ctx.Err() != nil || selection.Native != nil || len(modes) != 1 || modes[0] != "shadowsocks" ||
-		!mobilemultihop.NodeChainPrefixMode(selection.EntryMode) || selection.Base != desktopExternalEntryBase(selection.EntryMode) || selection.ExitMode != "shadowsocks" ||
+	if ctx == nil || ctx.Err() != nil || selection.Native != nil || len(modes) != 1 || modes[0] != selection.ExitMode ||
+		!mobilemultihop.NodeChainPrefixMode(selection.EntryMode) || selection.Base != desktopExternalEntryBase(selection.EntryMode) || !desktopNodeChainFinalSupported(selection.ExitMode, selection.Exit.StartLayer) ||
 		selection.serverPacketPublic != "" || selection.serverPQIdentity != "" {
 		return selection, errors.New("ordered native capture requires its complete explicit Local selection")
 	}
@@ -102,7 +102,7 @@ func (capture *nativeMultihopCapture) validateNodeChainSelection(selection multi
 	if capture == nil || capture.chain == nil || capture.chain.chain == nil || capture.imported || capture.importedHost != nil ||
 		capture.importedPlatform != nil || capture.openVPN != nil || capture.importedInput != "" || capture.importedOriginalSource != "" ||
 		selection.Native != capture || selection.Control.ID != selection.Exit.ID || !mobilemultihop.NodeChainPrefixMode(selection.EntryMode) ||
-		selection.Base != desktopExternalEntryBase(selection.EntryMode) || selection.ExitMode != "shadowsocks" ||
+		selection.Base != desktopExternalEntryBase(selection.EntryMode) || !desktopNodeChainFinalSupported(selection.ExitMode, selection.Exit.StartLayer) ||
 		capture.base != selection.Base || capture.entryMode != selection.EntryMode || capture.entrySelection != selection.EntryMode ||
 		capture.entryID != selection.Entry.ID || capture.exitID != selection.Exit.ID || capture.root != capture.chain.root || capture.endpoint != capture.chain.endpoint ||
 		capture.source != capture.chain.chain.SourceSHA256() || len(capture.configs) != 1 || capture.configs[selection.ExitMode] != capture.chain.chain.Config() ||
@@ -111,7 +111,7 @@ func (capture *nativeMultihopCapture) validateNodeChainSelection(selection multi
 		selection.serverPacketPublic != "" || selection.serverPQIdentity != "" {
 		return bad
 	}
-	if selection.EntryMode != selection.Nodes[0].Mode ||
+	if selection.EntryMode != selection.Nodes[0].Mode || selection.ExitMode != selection.Nodes[len(selection.Nodes)-1].Mode ||
 		liveMeasurementProfileToken(selection.Entry) != liveMeasurementProfileToken(selection.Nodes[0].Profile) ||
 		liveMeasurementProfileToken(selection.Exit) != liveMeasurementProfileToken(selection.Nodes[len(selection.Nodes)-1].Profile) {
 		return bad

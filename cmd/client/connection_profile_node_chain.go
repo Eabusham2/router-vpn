@@ -55,8 +55,8 @@ func savedNodeChainDigest(value string) bool {
 // AWG transport uses independent packet keys. Retain only the exact chosen raw
 // transport and, when needed, its separately captured Start Layer source.
 func savedNodeChainSourceModes(mode, startLayer string) ([]string, error) {
-	if !mobilemultihop.NodeChainPrefixMode(mode) && mode != "shadowsocks" {
-		return nil, errors.New("ordered path requires an exact WireGuard, AWG2 or SS2022 source")
+	if !mobilemultihop.NodeChainPrefixMode(mode) && !desktopNodeChainFinalSupported(mode, startLayer) {
+		return nil, errors.New("ordered path requires an exact WireGuard, AWG2, SS2022 or unlayered Hysteria2 source")
 	}
 	modes := []string{"wg"}
 	if mode != "wg" && mode != "shadowsocks" {
@@ -89,7 +89,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			return errors.New("saved ordered member differs from its selected position or source identity")
 		}
 		if captured.NodeKind == "external" {
-			if len(record.NodeChain) != 3 || i != 1 || captured.Mode != "shadowsocks" || captured.NodeProofID != "" || captured.Preferences != nil || captured.External == nil || captured.External.Protocol != "shadowsocks" || captured.External.validate() != nil || captured.External.StartLayer != "" && captured.External.StartLayer != "off" || len(captured.Sources) != 1 || captured.Sources[0].Mode != "external-shadowsocks" || !savedNodeChainDigest(captured.Sources[0].SHA256) {
+			if len(record.NodeChain) != 3 || i != 1 || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" || captured.Mode != "shadowsocks" || captured.NodeProofID != "" || captured.Preferences != nil || captured.External == nil || captured.External.Protocol != "shadowsocks" || captured.External.validate() != nil || captured.External.StartLayer != "" && captured.External.StartLayer != "off" || len(captured.Sources) != 1 || captured.Sources[0].Mode != "external-shadowsocks" || !savedNodeChainDigest(captured.Sources[0].SHA256) {
 				return errors.New("saved imported middle lost its original external policy or source")
 			}
 			continue
@@ -97,8 +97,8 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		if captured.NodeKind != "" || captured.External != nil || captured.Preferences == nil || !common.ValidNodeProofID(captured.NodeProofID) {
 			return errors.New("saved paired member lost its original Router identity")
 		}
-		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) || i == len(record.NodeChain)-1 && captured.Mode != "shadowsocks" {
-			return errors.New("saved ordered path requires WireGuard or AWG2 prefixes and an SS2022 final")
+		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) || i == len(record.NodeChain)-1 && !desktopNodeChainFinalSupported(captured.Mode, captured.Preferences.StartLayer) {
+			return errors.New("saved ordered path requires WireGuard or AWG2 prefixes and an SS2022 or unlayered Hysteria2 final")
 		}
 		modes, err := savedNodeChainSourceModes(captured.Mode, captured.Preferences.StartLayer)
 		if err != nil || len(captured.Sources) != len(modes) {
@@ -124,7 +124,7 @@ func captureSavedNodeChainSources(root string, node common.RouterProfile, mode s
 		return []connectionProfileNodeSource{{Mode: "external-shadowsocks", SHA256: hex.EncodeToString(digest[:])}}, nil
 	}
 	if node.NodeKind != "" && node.NodeKind != "router-vpn" || node.External != nil || !common.ValidNodeProofID(node.NodeProofID) {
-		return nil, errors.New("ordered path requires linked Router WireGuard, AWG2 or SS2022 sources")
+		return nil, errors.New("ordered path requires linked Router WireGuard, AWG2, SS2022 or Hysteria2 sources")
 	}
 	modes, err := savedNodeChainSourceModes(mode, node.StartLayer)
 	if err != nil {

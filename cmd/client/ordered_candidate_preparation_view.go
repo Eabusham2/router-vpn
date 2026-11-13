@@ -87,7 +87,7 @@ func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app,
 	if err != nil {
 		return nil, err
 	}
-	selection, err = captureNativeNodeChainSelection(ctx, clientRoot(a), selection, []string{"shadowsocks"}, nil)
+	selection, err = captureNativeNodeChainSelection(ctx, clientRoot(a), selection, []string{selection.ExitMode}, nil)
 	if err != nil {
 		return nil, err
 	}

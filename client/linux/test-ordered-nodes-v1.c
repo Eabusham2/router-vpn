@@ -42,7 +42,7 @@ static void post_and_log(App *app,const char *path,const char *body,long timeout
 
 static void change_choice(void) { gtk_combo_box_set_active_id(GTK_COMBO_BOX(unified->node),"n8");gtk_combo_box_set_active_id(GTK_COMBO_BOX(unified->node),"exit"); }
 static JsonObject *response_from(JsonObject *request) {
-    JsonObject *o=json_object_new();json_object_set_string_member(o,"selected_node_id",obj_string(request,"expected_selected_node_id"));json_object_set_string_member(o,"mode","shadowsocks");json_object_set_boolean_member(o,"multihop_enabled",TRUE);json_object_set_string_member(o,"multihop_execution","local");
+    JsonObject *o=json_object_new();json_object_set_string_member(o,"selected_node_id",obj_string(request,"expected_selected_node_id"));json_object_set_string_member(o,"mode",obj_string(request,"mode"));json_object_set_boolean_member(o,"multihop_enabled",TRUE);json_object_set_string_member(o,"multihop_execution","local");
     JsonArray *rows=linux_ordered_array_v1(request,"multihop_nodes");JsonObject*tokens=linux_ordered_object_v1(request,"expected_profile_tokens");
     if(rows)json_object_set_array_member(o,"multihop_nodes",json_array_ref(rows));if(tokens)json_object_set_object_member(o,"profile_tokens",json_object_ref(tokens));
     return o;
@@ -93,7 +93,7 @@ static gboolean drive_editor(gpointer data) {
         click(d,"Move up");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"awg2-strong")==0,"mode did not travel with member");
         select_row(list,1);check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"awg2-fast")==0,"reordered fast mode lost");
         choose(candidate,"n3");click(d,"Add entry / hop");click(d,"Remove");
-        select_row(list,2);check(!gtk_widget_get_sensitive(transport),"final transport editable");click(d,"Remove");
+        select_row(list,2);check(gtk_widget_get_sensitive(transport),"final transport chooser unavailable");choose(transport,"wg");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"packet mode accepted as final");click(d,"Remove");
         check(gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),2)!=NULL&&gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),3)==NULL,"final removed or middle truncated");
         gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_APPLY);
     } else if(editor_case==1) {
@@ -112,6 +112,16 @@ static gboolean drive_editor(gpointer data) {
         check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"custom middle acquired paired transport");
         choose(transport,"wg");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"custom middle accepted paired mode");
         gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_APPLY);
+    } else if(editor_case==7) {
+        choose(candidate,"n1");click(d,"Add entry / hop");choose(transport,"awg2-fast");
+        select_row(list,1);choose(transport,"hysteria2");
+        check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"hysteria2")==0,"selected Hysteria2 final ignored");
+        choose(candidate,"n2");click(d,"Add entry / hop");
+        check(gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),2)==NULL,"imported middle added to Hysteria2 final");
+        gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_APPLY);
+    } else if(editor_case==8) {
+        select_row(list,1);check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"hysteria2")==0,"reopen lost Hysteria2 final");
+        choose(transport,"shadowsocks");gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_CANCEL);
     } else if(editor_case==5) {
         gtk_widget_destroy(unified->app->window);
     }
@@ -130,13 +140,14 @@ static gboolean drive_profiles(gpointer data) {
 static void profiles(int kind) { profile_case=kind;stage=ticks=0;g_timeout_add(1,drive_profiles,NULL);linux_profile_manager_v11(NULL,unified); }
 
 static int model_only(void) {
-    for (guint count=2;count<=8;count++) {
+    for (guint count=2;count<=8;count++) for (guint final_choice=0;final_choice<2;final_choice++) {
+        const char *final_mode=final_choice==0?"shadowsocks":"hysteria2";
         JsonArray *nodes=json_array_new(),*profiles=json_array_new();JsonObject*tokens=json_object_new(),*store=json_object_new();
         json_object_set_string_member(store,"selected_id","exit");
         for(guint i=0;i<count;i++) {
             char*id=i+1==count?g_strdup("exit"):g_strdup_printf("n%u",i);char*token=g_strdup_printf("%064x",i+1);
             const char*modes[]={"wg","awg2-fast","awg2-strong"};JsonObject*row=json_object_new(),*profile=json_object_new();
-            json_object_set_string_member(row,"id",id);json_object_set_string_member(row,"mode",i+1==count?"shadowsocks":modes[i%3]);json_array_add_object_element(nodes,row);
+            json_object_set_string_member(row,"id",id);json_object_set_string_member(row,"mode",i+1==count?final_mode:modes[i%3]);json_array_add_object_element(nodes,row);
             json_object_set_string_member(profile,"id",id);json_object_set_string_member(profile,"profile_token",token);json_object_set_string_member(profile,"node_kind","router-vpn");json_array_add_object_element(profiles,profile);
             json_object_set_string_member(tokens,id,token);g_free(id);g_free(token);
         }
@@ -147,6 +158,19 @@ static int model_only(void) {
         check(json_object_get_size(linux_ordered_object_v1(q,"expected_profile_tokens"))==count,"original source inventory missing");
         JsonObject*value=linux_ordered_value_v1(selection);char*raw=linux_ordered_json_v1(value);JsonNode*disk=parse_json(raw);LinuxOrderedSelectionV1*reopened=linux_ordered_decode_v1(json_node_get_object(disk));check(reopened&&linux_ordered_current_v1(reopened,store),"disk reopen lost source inventory");
         JsonObject*selected=json_array_get_object_element(profiles,count-1);
+        if (final_choice==1) {
+            for (guint layer=0;layer<2;layer++) {
+                json_object_set_string_member(selected,"start_layer",layer==0?"aes-256-gcm":"aes-256-gcm+xor-whitening");
+                check(!linux_ordered_current_v1(selection,store),"layered Hysteria2 final admitted");
+            }
+            json_object_set_boolean_member(selected,"start_layer",FALSE);check(!linux_ordered_current_v1(selection,store),"malformed Hysteria2 layer admitted");
+            json_object_set_string_member(selected,"start_layer","off");check(linux_ordered_current_v1(selection,store),"original unlayered Hysteria2 final refused");
+            if (count==3) {
+                JsonObject *middle=json_array_get_object_element(nodes,1);char *original=g_strdup(obj_string(middle,"mode"));
+                json_object_set_string_member(middle,"mode","shadowsocks");check(!linux_ordered_rows_v1(nodes,"exit"),"imported middle acquired Hysteria2 final");
+                json_object_set_string_member(middle,"mode",original);g_free(original);
+            }
+        }
         json_object_set_boolean_member(selected,"multihop_enabled",TRUE);json_object_set_array_member(selected,"multihop_nodes",json_array_ref(nodes));
         char*load=linux_ordered_load_capture_v1(store,"exit","different-saved-profile");check(load!=NULL,"current ordered Load capture failed");JsonNode*load_node=parse_json(load);JsonObject*load_body=json_node_get_object(load_node);
         check(strcmp(obj_string(load_body,"id"),"different-saved-profile")==0&&strcmp(obj_string(load_body,"expected_selected_node_id"),"exit")==0&&json_object_get_size(linux_ordered_object_v1(load_body,"expected_profile_tokens"))==count,"Load lost complete current graph");g_free(load);json_node_free(load_node);
@@ -155,8 +179,9 @@ static int model_only(void) {
         json_object_set_boolean_member(selected,"multihop_enabled",FALSE);json_object_set_array_member(selected,"multihop_nodes",json_array_ref(nodes));
         load=linux_ordered_load_capture_v1(store,"exit","direct-target");check(load!=NULL,"direct Load capture failed");load_node=parse_json(load);check(json_object_get_size(linux_ordered_object_v1(json_node_get_object(load_node),"expected_profile_tokens"))==1,"Off included remembered draft in Load expectation");g_free(load);json_node_free(load_node);
         json_object_set_boolean_member(selected,"multihop_enabled",TRUE);JsonObject*first_source=json_array_get_object_element(profiles,0);char*first_token=g_strdup(obj_string(first_source,"profile_token"));json_object_remove_member(first_source,"profile_token");check(linux_ordered_load_capture_v1(store,"exit","different-target")==NULL,"Load substituted missing current member source");json_object_set_string_member(first_source,"profile_token",first_token);g_free(first_token);json_object_set_boolean_member(selected,"multihop_enabled",FALSE);
-        JsonObject*reply=json_object_new();json_object_set_string_member(reply,"selected_node_id","exit");json_object_set_string_member(reply,"mode","shadowsocks");json_object_set_boolean_member(reply,"multihop_enabled",TRUE);json_object_set_string_member(reply,"multihop_execution","local");json_object_set_array_member(reply,"multihop_nodes",json_array_ref(nodes));json_object_set_object_member(reply,"profile_tokens",json_object_ref(tokens));
+        JsonObject*reply=json_object_new();json_object_set_string_member(reply,"selected_node_id","exit");json_object_set_string_member(reply,"mode",final_mode);json_object_set_boolean_member(reply,"multihop_enabled",TRUE);json_object_set_string_member(reply,"multihop_execution","local");json_object_set_array_member(reply,"multihop_nodes",json_array_ref(nodes));json_object_set_object_member(reply,"profile_tokens",json_object_ref(tokens));
         LinuxOrderedSelectionV1*accepted=linux_ordered_response_v1(reply);check(accepted!=NULL,"complete committed source receipt rejected");linux_ordered_selection_free_v1(accepted);
+        json_object_set_string_member(reply,"mode",final_choice==0?"hysteria2":"shadowsocks");check(linux_ordered_response_v1(reply)==NULL,"different final mode borrowed committed receipt");json_object_set_string_member(reply,"mode",final_mode);
         json_object_set_string_member(tokens,"unlinked","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(linux_ordered_response_v1(reply)==NULL,"extra committed source receipt accepted");json_object_remove_member(tokens,"unlinked");
         char*response_token=g_strdup(obj_string(tokens,"n0"));json_object_remove_member(tokens,"n0");check(linux_ordered_response_v1(reply)==NULL,"missing committed source receipt accepted");json_object_set_string_member(tokens,"n0",response_token);g_free(response_token);json_object_unref(reply);
         LinuxOrderedStateV1 owner={0};check(linux_ordered_store_v1(&owner,linux_ordered_selection_v1("exit",nodes,tokens),TRUE),"disk receipt did not persist");
@@ -168,7 +193,7 @@ static int model_only(void) {
             json_object_set_string_member(p,"node_kind","external");check(!linux_ordered_current_v1(selection,store),"external source accepted");json_object_set_string_member(p,"node_kind","router-vpn");
         }
         JsonObject*final=json_array_get_object_element(nodes,count-1);json_object_set_string_member(final,"id","foreign");check(!linux_ordered_rows_v1(nodes,"exit"),"foreign final accepted");json_object_set_string_member(final,"id","exit");
-        json_object_set_string_member(final,"mode","wg");check(!linux_ordered_rows_v1(nodes,"exit"),"non-SS final accepted");json_object_set_string_member(final,"mode","shadowsocks");
+        json_object_set_string_member(final,"mode","wg");check(!linux_ordered_rows_v1(nodes,"exit"),"unsupported final accepted");json_object_set_string_member(final,"mode",final_mode);
         JsonObject*first=json_array_get_object_element(nodes,0);char*mode=g_strdup(obj_string(first,"mode"));json_object_set_string_member(first,"mode","wg-pq");check(!linux_ordered_rows_v1(nodes,"exit"),"unsupported prefix accepted");json_object_set_string_member(first,"mode",mode);g_free(mode);
         json_object_set_string_member(tokens,"unlinked","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(linux_ordered_selection_v1("exit",nodes,tokens)==NULL,"unlinked inventory accepted");json_object_remove_member(tokens,"unlinked");
         json_object_remove_member(tokens,"n0");check(linux_ordered_selection_v1("exit",nodes,tokens)==NULL,"missing original source accepted");check(linux_ordered_current_v1(selection,store),"mutable source map corrupted capture");
@@ -214,7 +239,11 @@ int main(int argc,char **argv) {
     before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before+1,"custom editor did not reach shipping Connect");
     request=parse_json(last_body);q=json_node_get_object(request);check(strcmp(obj_string(json_array_get_object_element(linux_ordered_array_v1(q,"nodes"),1),"mode"),"shadowsocks")==0,"custom Connect invented paired transport");json_node_free(request);
     json_object_set_boolean_member(external,"ordered_middle_supported",FALSE);before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before,"unsupported custom source retained Connect authority");json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);
-    g_free(original);original=snapshot();
+    refresh_all(&app);edit(7,TRUE);check(owned->selection!=NULL&&strcmp(obj_string(json_array_get_object_element(owned->selection->nodes,1),"mode"),"hysteria2")==0,"editor did not retain Hysteria2 final");
+    g_free(original);original=snapshot();edit(8,FALSE);after=snapshot();check(strcmp(original,after)==0,"cancel replaced selected Hysteria2 final");g_free(after);
+    before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before+1,"Hysteria2 path did not reach Connect");request=parse_json(last_body);q=json_node_get_object(request);check(strcmp(obj_string(json_array_get_object_element(linux_ordered_array_v1(q,"nodes"),1),"mode"),"hysteria2")==0,"Connect replaced Hysteria2 final");json_node_free(request);
+    profiles(0);request=parse_json(last_body);q=json_node_get_object(request);check(strcmp(obj_string(q,"mode"),"hysteria2")==0,"profile write replaced Hysteria2 final");json_node_free(request);
+    linux_ordered_store_v1(owned,NULL,FALSE);profiles(1);after=snapshot();check(strcmp(original,after)==0,"profile Load replaced Hysteria2 final");g_free(after);
     g_object_ref(app.window);edit(5,TRUE);after=snapshot();check(strcmp(original,after)==0,"parent close replaced original path");g_free(after);
     g_free(original);g_object_unref(app.window);gtk_widget_destroy(state.node);gtk_widget_destroy(state.mode);gtk_widget_destroy(state.multihop);json_node_free(catalog);if(saved)json_node_free(saved);g_free(last_body);g_free(last_path);g_free(keypath);
     printf("Shipping GTK ordered editor + Add/Load/Update/Connect: %u checks PASS; real callbacks/persistence, doubled controller boundary.\n",checks);return 0;

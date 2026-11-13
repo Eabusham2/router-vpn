@@ -20,6 +20,7 @@ function ShippingFunction([string]$Name){
 $Editor=ShippingFunction 'ShowUnifiedOrderedNodes'
 if($NegativeControl-ceq'add-mode'){$Editor=$Editor.Replace('id=[string]$available.SelectedValue;mode=$mode',"id=[string]`$available.SelectedValue;mode='wg'")}
 if($NegativeControl-ceq'change-mode'){$Editor=$Editor.Replace('id=$rows[$position].id;mode=$mode',"id=`$rows[`$position].id;mode='wg'")}
+if($NegativeControl-ceq'final-mode'){$Editor=$Editor.Replace('mode=[string]$finalMode.SelectedValue',"mode='shadowsocks'")}
 if($NegativeControl-ceq'row-label'){$Editor=$Editor.Replace('(Get-RouterVPNOrderedModeTitle $node.mode)',"'WireGuard'")}
 $EditorAST=([ScriptBlock]::Create($Editor)).Ast
 function Callback([string]$Name){
@@ -37,7 +38,7 @@ foreach($name in @('RefreshUnifiedOrderedSelection','RefreshUnifiedOrderedContro
 $xaml=[regex]::Match($Editor,'(?s)\[xml\]\$x=@"\r?\n(.*?)\r?\n"@')
 Check $xaml.Success 'actual editor XAML missing'
 [xml]$xml=$xaml.Groups[1].Value
-foreach($name in @('Available','PrefixMode','Order','Add','Up','Down','Remove','ChangeMode','Final','Status','Cancel','Apply')){
+foreach($name in @('Available','PrefixMode','Order','Add','Up','Down','Remove','ChangeMode','Final','FinalMode','Status','Cancel','Apply')){
     Check ($null-ne$xml.SelectSingleNode("//*[@Name='$name']")) ('actual editor control missing '+$name)
 }
 function New-Widget {
@@ -56,7 +57,7 @@ if($WPF){
     $dialog=[pscustomobject]@{Controls=@{};Closed=$false}
     $dialog|Add-Member ScriptMethod FindName {param($name)return $this.Controls[$name]}
     $dialog|Add-Member ScriptMethod Close {$this.Closed=$true}
-    foreach($name in @('Available','PrefixMode','Order','Add','Up','Down','Remove','ChangeMode','Final','Status','Cancel','Apply')){$dialog.Controls[$name]=New-Widget}
+    foreach($name in @('Available','PrefixMode','Order','Add','Up','Down','Remove','ChangeMode','Final','FinalMode','Status','Cancel','Apply')){$dialog.Controls[$name]=New-Widget}
 }
 try{
     $rows=New-Object 'Collections.Generic.List[object]';$id='selected-final'
@@ -64,7 +65,7 @@ try{
     for($i=0;$i-lt7;$i++){$store.profiles+=[pscustomobject]@{id=('prefix-'+$i);name=('Prefix '+$i);node_kind='router-vpn';api_token='must-not-copy';profile_token=('{0:x64}' -f ($i+1))}}
     $store.profiles+=[pscustomobject]@{id=$id;name='Selected final';node_kind='router-vpn';profile_token=('e'*64)}
     $store.profiles+=[pscustomobject]@{id='external';name='External';node_kind='external'}
-    $available=$dialog.FindName('Available');$list=$dialog.FindName('Order');$status=$dialog.FindName('Status');$prefixMode=$dialog.FindName('PrefixMode')
+    $available=$dialog.FindName('Available');$list=$dialog.FindName('Order');$status=$dialog.FindName('Status');$prefixMode=$dialog.FindName('PrefixMode');$finalMode=$dialog.FindName('FinalMode')
     foreach($name in @('$prefixMode.ItemsSource','$prefixMode.SelectedIndex')){
         $found=@($EditorAST.FindAll({param($n)$n-is[Management.Automation.Language.AssignmentStatementAst]-and$n.Left.Extent.Text-ceq$name},$true))
         if($found.Count-ne1){throw ('Shipping mode initialization missing: '+$name)};. ([ScriptBlock]::Create($found[0].Extent.Text))
@@ -154,8 +155,32 @@ try{
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $swapped $store)}catch{$rejected=$true};Check $rejected 'external source became physical entry'
     $custom.profile_token=('d'*64)
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $customSaved $store)}catch{$rejected=$true};Check $rejected 'relinked custom source retained admission'
+    # The same visible editor now selects a distinct paired final transport.
+    $rows.Clear();$finalMode.SelectedIndex=0;&$refresh
+    $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),'prefix-0');$prefixMode.SelectedIndex=2;&$add
+    Check (($finalMode.ItemsSource.id-join',')-ceq'shadowsocks,hysteria2') 'unlayered paired final choices omitted Hysteria2'
+    $finalMode.SelectedIndex=1;&$apply;$hysteriaSaved=$rootControls['UnifiedNodeChainButton'].Tag
+    Check ($hysteriaSaved.nodes[-1].mode-ceq'hysteria2'-and$hysteriaSaved.nodes[0].mode-ceq'awg2-strong') 'Apply substituted the explicitly selected Hysteria2 final'
+    Check ($rootControls['UnifiedNodeChainSummary'].Text.Contains('Hysteria2')-and$rootControls['UnifiedOrderedModeSummary'].Text.Contains('Hysteria2')) 'summary hid the selected Hysteria2 final'
+    $beforeRows=$rows.Count;$available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),'custom-middle');&$add
+    Check ($rows.Count-eq$beforeRows) 'imported middle was added to a Hysteria2 final'
+    $finalSource=@($store.profiles|Where-Object{[string]$_.id-ceq$id})[0]
+    foreach($layer in @('aes-256-gcm','aes-256-gcm+xor-whitening')){
+        $finalSource|Add-Member -NotePropertyName start_layer -NotePropertyValue $layer -Force
+        $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $hysteriaSaved $store)}catch{$rejected=$true}
+        Check $rejected 'layered Hysteria2 final gained ordered admission'
+        Check ((@(Get-RouterVPNOrderedFinalModes $finalSource $rows)-join',')-ceq'shadowsocks') 'final picker offered unimplemented Hysteria2 layers'
+    }
+    $finalSource.start_layer='off'
+    [void](New-RouterVPNOrderedConnectPayload $hysteriaSaved $store)
+    foreach($badMode in @('HYSTERIA2','hysteria2 ','wg','reality-vision',$null,1)){
+        $rejected=$false;try{[void](Copy-RouterVPNOrderedNodes @([pscustomobject]@{id='prefix-0';mode='wg'},[pscustomobject]@{id=$id;mode=$badMode}) $id)}catch{$rejected=$true}
+        Check $rejected 'ordered final accepted an alias or unsupported family'
+    }
+    $mixed=@([pscustomobject]@{id='prefix-0';mode='wg'},[pscustomobject]@{id='custom-middle';mode='shadowsocks'},[pscustomobject]@{id=$id;mode='hysteria2'})
+    $rejected=$false;try{[void](Copy-RouterVPNOrderedNodes $mixed $id)}catch{$rejected=$true};Check $rejected 'imported schema two acquired Hysteria2 final authority'
     if(-not$NegativeControl){
-        $controls=@{'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
+        $controls=@{'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
         foreach($key in $controls.Keys){
             $command="try { & '"+$PSCommandPath.Replace("'","''")+"' -Root '"+$Root.Replace("'","''")+"' -NegativeControl '"+$key+"' } catch { [Console]::Error.WriteLine(`$_.Exception.Message); exit 1 }"
             $child=New-Object Diagnostics.Process

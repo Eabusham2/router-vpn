@@ -44,17 +44,18 @@ def main():
     assert 'linux_profile_choose_hops_v11' in block(profiles, 'static void linux_install_connection_profiles_v11(')
     original = (HERE/'routervpn-ordered-nodes-v1.inc').read_text()
     controls = [
+        ('final-mode', 'strcmp(linux_ordered_string_v1(payload, "mode"), linux_ordered_string_v1(json_array_get_object_element(nodes, json_array_get_length(nodes) - 1), "mode")) != 0', 'FALSE', 'different final mode borrowed committed receipt'),
         ('source-token', 'strcmp(linux_ordered_string_v1(profile, "profile_token"), linux_ordered_string_v1(selection->tokens, id)) != 0', 'FALSE', 'replaced middle source connected'),
         ('generation', 'owned->generation == generation &&', '(void)generation,', 'late choice applied'),
         ('prefix-mode', 'editor->modes->pdata[target] = mode;', 'editor->modes->pdata[index] = mode;', 'mode did not travel with member'),
         ('capability', 'linux_ordered_flag_v1(json_node_get_object(capabilities), "ordered_nodes_supported")', 'TRUE', 'unavailable native capability connected'),
-        ('final-pin', 'strcmp(mode, "shadowsocks") != 0 || strcmp(id, control) != 0', 'strcmp(mode, "shadowsocks") != 0', 'foreign final accepted'),
+        ('final-pin', '!linux_ordered_final_v1(mode) || strcmp(id, control) != 0', '!linux_ordered_final_v1(mode)', 'foreign final accepted'),
         ('expected-inventory', 'json_object_set_object_member(body, "expected_profile_tokens", json_object_ref(selection->tokens));', 'json_object_set_object_member(body, "expected_profile_tokens", json_object_new());', 'original source inventory missing'),
         ('disk-receipt', 'if (!persisted) { linux_ordered_selection_free_v1(selection);', 'if (FALSE && !persisted) { linux_ordered_selection_free_v1(selection);', 'failed write acquired replacement receipt'),
         ('load-current-graph', 'if (linux_ordered_flag_v1(profile, "multihop_enabled")) {', 'if (FALSE) {', 'Load lost complete current graph'),
         ('response-inventory', 'if (supplied == NULL || json_object_get_size(supplied) != json_array_get_length(nodes)) return NULL;', 'if (supplied == NULL) return NULL;', 'extra committed source receipt accepted'),
     ]
-    if args.model_only: controls = [c for c in controls if c[0] in {'source-token', 'final-pin', 'expected-inventory', 'disk-receipt', 'load-current-graph', 'response-inventory'}]
+    if args.model_only: controls = [c for c in controls if c[0] in {'final-mode', 'source-token', 'final-pin', 'expected-inventory', 'disk-receipt', 'load-current-graph', 'response-inventory'}]
     flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'gtk+-3.0', 'json-glib-1.0'], text=True).split()
     with tempfile.TemporaryDirectory(prefix='routervpn-gtk-ordered-') as temporary:
         root = Path(temporary)
