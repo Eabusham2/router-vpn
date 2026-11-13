@@ -85,7 +85,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             self.assertNotEqual(before, after, label)
 
     def test_every_control_requires_exact_runtime_witness(self):
-        for _, package, _, _, _, witness, message in RUNNER.MUTATIONS:
+        for label, package, _, _, _, witness, message in RUNNER.MUTATIONS:
             validator = RUNNER.receipt(package)
             root = witness.split("/")[0]
             rows = [
@@ -96,12 +96,35 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
                 {"Action": "fail"},
             ]
             output = "\n".join(json.dumps({"Package": validator.PACKAGE, **row}) for row in rows)
-            validator.require_rejection(1, output, witness, message)
+            RUNNER.require_control(label, package, 1, output, witness, message)
             for code, changed in ((0, output), (2, output), (1, "compile failed"),
                                   (1, output.replace(message, "unrelated failure")),
                                   (1, "\n".join(output.splitlines()[:-1]))):
-                with self.assertRaises(ValueError):
-                    validator.require_rejection(code, changed, witness, message)
+                with self.assertRaises(ValueError) as rejected:
+                    RUNNER.require_control(label, package, code, changed, witness, message)
+                self.assertIn("Darwin lifecycle causal control failed: " + label, str(rejected.exception))
+
+    def test_wrong_witness_diagnostic_preserves_rejection_without_native_output(self):
+        label, package, _, _, _, witness, message = RUNNER.MUTATIONS[0]
+        validator = RUNNER.receipt(package)
+        root = witness.split("/")[0]
+        raw = "private-runtime-detail-must-not-be-logged"
+        rows = [
+            {"Action": "start"}, {"Action": "run", "Test": root},
+            {"Action": "run", "Test": witness},
+            {"Action": "output", "Test": witness, "Output": raw},
+            {"Action": "fail", "Test": witness}, {"Action": "fail", "Test": root},
+            {"Action": "fail"},
+        ]
+        output = "\n".join(json.dumps({"Package": validator.PACKAGE, **row}) for row in rows)
+        with self.assertRaises(ValueError) as rejected:
+            RUNNER.require_control(label, package, 1, output, witness, message)
+        diagnostic = str(rejected.exception)
+        self.assertIn("repeat-stack", diagnostic)
+        self.assertIn("exact_runs=True", diagnostic)
+        self.assertIn("exact_failures=True", diagnostic)
+        self.assertIn("witness_message=False", diagnostic)
+        self.assertNotIn(raw, diagnostic)
 
 
 if __name__ == "__main__":

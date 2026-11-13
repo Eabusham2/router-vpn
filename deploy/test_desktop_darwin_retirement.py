@@ -135,7 +135,12 @@ def require_rejection(code, output, witness, message):
     wanted = expected({root: (leaf,)})
     text = "".join(str(event.get("Output", "")) for event in observed if event.get("Test") == witness)
     if code != 1 or ended != "fail" or runs != wanted or failures != wanted or passes or message not in text:
-        raise ValueError("Native retirement negative control did not fail its original complete witness")
+        # Only fixed verdict categories and counts are diagnostic. Never relay
+        # arbitrary native output, captured paths or source JSON into the log.
+        raise ValueError("Native retirement negative control did not fail its original complete witness "
+                         f"(exit={code}, end={ended}, exact_runs={runs == wanted}, "
+                         f"exact_failures={failures == wanted}, passes={sum(passes.values())}, "
+                         f"witness_message={message in text})")
 
 
 def discover(output):

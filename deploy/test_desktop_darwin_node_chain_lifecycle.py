@@ -237,6 +237,13 @@ def execute(source, package, image, selection, env, failure=False):
                           "-test.timeout=" + TEST_TIMEOUT], cwd=source, env=env, failure=failure)
 
 
+def require_control(label, package, code, output, witness, message):
+    try:
+        receipt(package).require_rejection(code, output, witness, message)
+    except ValueError as error:
+        raise ValueError("Darwin lifecycle causal control failed: " + label + ": " + str(error)) from error
+
+
 def check(source, tags=""):
     source, env = source.resolve(), os.environ.copy()
     source_hash = checked_source(source, env)
@@ -268,7 +275,7 @@ def check(source, tags=""):
                 root, leaf = witness.split("/", 1)
                 selector = "^" + re.escape(root) + "$/^" + re.escape(leaf) + "$"
                 code, output = execute(source, package, image, selector, env, failure=True)
-                receipt(package).require_rejection(code, output, witness, message)
+                require_control(label, package, code, output, witness, message)
                 print("Rejected Darwin lifecycle control: " + label, flush=True)
             finally:
                 target.write_bytes(original)

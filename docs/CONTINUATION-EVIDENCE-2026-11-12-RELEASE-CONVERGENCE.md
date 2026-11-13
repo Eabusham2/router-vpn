@@ -636,6 +636,30 @@ physical-device acceptance. Prefix-only preparation when the saved final node
 is unusable, and the other original compatible graph families, remain separate
 requirements.
 
+## Darwin component causal-witness correction
+
+The retained installed-host pipeline at b2c295ed passed its four native PF and
+socket prerequisites, then both native runtime producers (jobs 131625105592 and
+131625105674) failed the ordered component lifecycle gate before any causal
+control was reported accepted. Its strict negative-control parser rejected the
+first fixture's failure record. Source inspection identifies the mismatch:
+the repeat-stack mutation bypasses the already-joined guard, so the retained
+already-tried guard refuses the next close before the final counter assertion.
+The fixture emitted a generic error at that earlier assertion, omitting its
+declared causal witness. Both existing retry assertions now retain failure and
+name that same original cleanup witness.
+
+The lifecycle runner now identifies a rejected control by its fixed label and
+verdict categories, without logging arbitrary native output. Exit status,
+complete run/failure inventory, package end, absence of passing controls and
+the exact witness message remain mandatory. Eight lifecycle-runner and eight
+retirement-runner checks pass, including rejection of unrelated errors. A local
+stdlib-only extraction of the unchanged shipping opaque-close helper confirms
+one close across three original calls and the ambiguous retained failure on the
+mutant's second call. This explains the fixture mismatch; it is not a Darwin
+compiler, utun or installed-host pass. Those native gates must rerun on the
+published source, including all nineteen original causal controls.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

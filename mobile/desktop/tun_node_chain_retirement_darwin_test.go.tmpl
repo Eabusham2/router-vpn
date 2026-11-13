@@ -66,8 +66,12 @@ func TestRouterVPNDarwinNodeChainInboundRetirement(t *testing.T) {
 		if routerVPNDarwinRetirementClose(owner) == nil || owner.routervpnReady || stack.calls.Load() != 1 || native.calls.Load() != 1 {
 			t.Fatal("failed native component was acknowledged or lost its original stack progress")
 		}
-		if err := routerVPNDarwinRetirementClose(owner); err != nil { t.Fatal(err) }
-		if err := routerVPNDarwinRetirementClose(owner); err != nil { t.Fatal(err) }
+		if err := routerVPNDarwinRetirementClose(owner); err != nil {
+			t.Fatal("original cleanup repeated or replaced an already joined component", err)
+		}
+		if err := routerVPNDarwinRetirementClose(owner); err != nil {
+			t.Fatal("original cleanup repeated or replaced an already joined component", err)
+		}
 		if stack.calls.Load() != 1 || native.calls.Load() != 2 || native.legacy.Load() != 0 ||
 			owner.tunStack != stack || owner.tunIf != native {
 			t.Fatal("original cleanup repeated or replaced an already joined component")
