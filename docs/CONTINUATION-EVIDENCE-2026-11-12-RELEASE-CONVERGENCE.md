@@ -2490,6 +2490,49 @@ the Python validation log SHA256 is
 `143a822fbf23035a06129bf420f5cc4721e8e6490aa3933d003281879b28dbc8`.
 All four original file modes remain `100644`.
 
+## Read-only exact-source hosted validation — November 13, 2026
+
+Two recovery sandboxes stopped responding during Go compilation. Their
+observed shutdowns do not establish an out-of-memory or compiler defect, and
+neither attempt produced a completed Go verdict for the pending clock units.
+The source changes, exact blobs and bounded logs were preserved separately.
+
+The manual focused-source workflow now runs the original clock and Android
+Tor checks on a standard hosted Linux runner. It checks out the trusted main
+validator separately from the exact candidate. The candidate must equal that
+captured base or be its single-parent child, with only the selected suite's
+regular source files changed. Repository/ref/SHA identity, source modes,
+hidden index flags, dirty/ignored files and before/after source checks are
+enforced. Workflow permissions are read-only; no ref, release, deployment or
+private target is changed by the workflow. Its receipts distinguish the
+validator commit from the source actually tested. Existing native and
+authoritative release gates remain required after publication.
+
+The identity helper passed 12 actual Git/CLI tests in 2.260 seconds. Two
+separate source-omission controls rejected the removed allowlist and parent
+guards. The clock driver passed 24 Python verdict/mutation self-tests; its
+required inventories retain 37 new ordered records, 32 original ordered
+records, 23 new legacy records and four original legacy records, plus the
+separately compiled causal controls. Original Go and outer test deadlines
+are retained. The driver limits package parallelism without rebuilding a
+local toolchain and keeps the pinned hosted Go cache.
+
+The workflow YAML and both embedded Python scripts were parsed. Its actual
+Android wrapper was executed against six synthetic Python/Git fixtures:
+one valid receipt passed, while missing/duplicate controls, a failed child,
+tracked-source mutation and an owned child leak were rejected. These are
+wrapper/process controls, not Java/Go, tunnel or device acceptance. The
+original Android fixture must independently execute its 348 graph and 160
+padding captures and both real compiler/host capacity controls.
+
+Identity manifest SHA256:
+`557b21c15746552104ef09caa24a83f88158b8f226e8b68a5aaf189dcc7f01cf`.
+Workflow validation receipt SHA256:
+`12f3ee674521fa10e4896637fc1cf13114d6f85e2d1ab9f176357fe290341f70`.
+Trusted clock-driver SHA256:
+`dbe2ecf83e4e4951465403f1801426f878a9ad5a2227bd3cebaf231453ea648d`.
+The pending candidate sources have not yet passed these hosted gates.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

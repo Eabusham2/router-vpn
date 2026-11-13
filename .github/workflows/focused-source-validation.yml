@@ -1,0 +1,206 @@
+name: Focused source validation
+
+run-name: Focused ${{ inputs.suite }} at ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character source commit to validate
+        required: true
+        type: string
+      suite:
+        description: Fixed validation suite
+        required: true
+        type: choice
+        options:
+          - ordered-clock
+          - legacy-clock
+          - android-tor
+
+permissions:
+  contents: read
+
+concurrency:
+  group: focused-source-${{ inputs.source_sha }}-${{ inputs.suite }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  CGO_ENABLED: '1'
+  GOTOOLCHAIN: local
+  GOFLAGS: '-p=2 -mod=readonly'
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      SUITE: ${{ inputs.suite }}
+      VALIDATOR_SHA: ${{ github.sha }}
+    steps:
+      - name: Validate the requested source and dispatch identity
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re
+          if os.environ.get("GITHUB_REPOSITORY") != "Eabusham2/router-vpn" or os.environ.get("GITHUB_REF") != "refs/heads/main":
+              raise SystemExit("Focused validation requires the captured main workflow.")
+          for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
+              if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
+                  raise SystemExit(name + " must be a complete lowercase Git commit.")
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor"):
+              raise SystemExit("Unknown focused validation suite.")
+          PY
+      - name: Check out the trusted validator
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: validator
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check out the exact candidate and its original parent
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: candidate
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify source identity and required validator controls
+        shell: bash
+        run: |
+          python3 validator/deploy/focused_source_identity.py --self-test
+          python3 validator/deploy/test_focused_multihop_clocks.py --self-test
+          python3 validator/deploy/focused_source_identity.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" --base-sha "$VALIDATOR_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/selection.json"
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache-dependency-path: candidate/go.sum
+      - name: Install the Java fixture toolchain
+        if: inputs.suite == 'android-tor'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install the original Android JSON implementation
+        if: inputs.suite == 'android-tor'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libandroid-json-java
+      - name: Require the original clock cases and compiled negative controls
+        if: inputs.suite != 'android-tor'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_multihop_clocks.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Execute the original Android Tor fixture and capacity controls
+        if: inputs.suite == 'android-tor'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, re, signal, subprocess, sys, time
+          source = Path(os.environ["GITHUB_WORKSPACE"]) / "candidate"
+          output = Path(os.environ["GITHUB_WORKSPACE"]) / "validation-output" / "tests"
+          output.mkdir(parents=True, exist_ok=False)
+          import runpy
+          trusted = runpy.run_path(str(Path(os.environ["GITHUB_WORKSPACE"]) / "validator" / "deploy" / "test_focused_multihop_clocks.py"))
+          def git(*args):
+              return trusted["git"](source, *args)
+          def snapshot():
+              return trusted["snapshot"](source)
+          before = snapshot()
+          actual = git("rev-parse", "HEAD").decode().strip()
+          if actual != os.environ["SOURCE_SHA"]:
+              raise SystemExit("Android source identity changed before execution.")
+          manifest = {
+              "schema": 1, "suite": "android-tor", "requested_source_sha": os.environ["SOURCE_SHA"],
+              "actual_source_sha": actual, "validator_sha": os.environ["VALIDATOR_SHA"],
+              "tree_sha": git("rev-parse", "HEAD^{tree}").decode().strip(),
+              "source_file_count": len(before),
+              "source_closure_sha256": hashlib.sha256(json.dumps(before, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+              "status": "running", "outer_seconds": 1200,
+          }
+          def save():
+              (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+          def alive(group):
+              try:
+                  os.killpg(group, 0)
+                  return True
+              except ProcessLookupError:
+                  return False
+          def join_group(group, seconds):
+              end = time.monotonic() + seconds
+              while alive(group) and time.monotonic() < end:
+                  time.sleep(0.02)
+              return not alive(group)
+          save()
+          log = output / "android-tor.log"
+          command = [sys.executable, str(source / "android/test_android_tor_profile.py")]
+          started = time.monotonic()
+          try:
+              with log.open("wb") as stream:
+                  process = subprocess.Popen(command, cwd=source, stdout=stream,
+                                             stderr=subprocess.STDOUT, start_new_session=True)
+                  manifest["pid"] = process.pid
+                  save()
+                  timed_out = False
+                  try:
+                      code = process.wait(timeout=1200)
+                  except subprocess.TimeoutExpired:
+                      timed_out = True
+                      os.killpg(process.pid, signal.SIGKILL)
+                      code = process.wait(timeout=10)
+                  joined = join_group(process.pid, 5)
+                  if not joined:
+                      os.killpg(process.pid, signal.SIGKILL)
+                      joined_after_kill = join_group(process.pid, 5)
+                  else:
+                      joined_after_kill = True
+              raw = log.read_bytes()
+              text = raw.decode("utf-8", "replace")
+              markers = (
+                  r"Android Tor: PASS \(348 shipping Java/Go graphs; [1-9][0-9]* checks; OS/startup doubled, native Tor traffic separate\)",
+                  r"Android Tor capacity negative controls: 2 rejected by real compiler/host preparation",
+                  r"Android Local Tor padding compiler: PASS \(160 shipping Java/Go captures; [1-9][0-9]* source/policy/session checks; actual production admission\)",
+              )
+              counts = [len(re.findall(marker, text)) for marker in markers]
+              manifest.update(exit=code, timed_out=timed_out, process_group_joined=joined,
+                              group_absent_after_cleanup=joined_after_kill, marker_counts=counts,
+                              elapsed_seconds=round(time.monotonic() - started, 3),
+                              log=log.name, log_sha256=hashlib.sha256(raw).hexdigest())
+              if timed_out or code != 0 or not joined or counts != [1, 1, 1]:
+                  raise RuntimeError("Original Android Tor execution or its required controls did not finish.")
+              if snapshot() != before or git("status", "--porcelain", "--untracked-files=no"):
+                  raise RuntimeError("Android fixture changed its original tracked source.")
+              manifest["status"] = "passed"
+              print(json.dumps(manifest, sort_keys=True), flush=True)
+          except BaseException as error:
+              manifest["status"] = "failed"
+              manifest["error"] = str(error)
+              raise
+          finally:
+              save()
+          PY
+      - name: Recheck the original source after successful validation
+        shell: bash
+        run: |
+          python3 validator/deploy/focused_source_identity.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" --base-sha "$VALIDATOR_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/selection-after.json"
+      - name: Preserve exact-source results and failure logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: focused-${{ inputs.suite }}-${{ inputs.source_sha }}
+          path: validation-output/
+          if-no-files-found: error
+          retention-days: 14
