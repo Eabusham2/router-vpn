@@ -1467,6 +1467,12 @@ The actual AMD64 and ARM64 generated-child jobs at 14b18bb3 failed their runner 
 
 All 18 runner tests passed. The new compiled defect that ignores a failed prefix join is rejected at the original prefix-before-native-retirement witness; the existing empty-source, ordered-proof and execution-join controls remain. This repairs the observed compile blocker and extends the modeled cleanup boundary. It does not substitute for real generated-child/TUN or installed-host acceptance.
 
+## MTU packet RTT uses the checked high-resolution clock
+
+The retained Windows native job 131664017817 failed the imported MTU controller cases with six authenticated packet replies but a zero median RTT for every candidate. Packet timing still used the ordinary duration source even though throughput already used the checked high-resolution interval. The MTU packet loop now captures and reads that same interval around each real authenticated exchange. Clock errors remain failures; it does not insert delays, clamp a zero result or weaken the positive finite score requirement. Socket deadlines, packet freshness, six-reply requirement, transferred bytes, selection and rollback remain unchanged.
+
+On an immutable source snapshot containing only this correction, all 67 shared MTU roots passed under the race detector (176 verdicts), as did 17 checked-clock roots (45 verdicts) and all 19 imported MTU client roots (105 verdicts). The latter include the real private-peer tests that correspond to the reported Windows failures, including cached Auto/Retest, cancellation, periodic reader and previous-commit rejection. A compiled omission of the captured interval was rejected at the authenticated-packet timing witness. The two source hashes stayed unchanged. These local results are not Windows QPC/kernel acceptance; the actual Windows workflow must rerun this source.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

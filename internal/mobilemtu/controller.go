@@ -461,8 +461,11 @@ func (c *Controller) packets(ctx context.Context, engine *probeEngine, result *C
 		if err = conn.SetDeadline(deadline); err != nil {
 			return errors.New("MTU socket cannot enforce its bounded deadline")
 		}
+		interval, err := hopmeasure.StartInterval()
+		if err != nil {
+			return err
+		}
 		result.PacketsSent++
-		started := time.Now()
 		n, err := conn.Write(request)
 		if err != nil || n != len(request) {
 			return errors.New("MTU packet write failed")
@@ -473,7 +476,11 @@ func (c *Controller) packets(ctx context.Context, engine *probeEngine, result *C
 			continue
 		}
 		result.PacketsReceived++
-		samples = append(samples, float64(time.Since(started).Nanoseconds())/1e6)
+		elapsed, err := interval.Milliseconds()
+		if err != nil {
+			return err
+		}
+		samples = append(samples, elapsed)
 	}
 	if result.PacketsReceived != 6 {
 		return errors.New("MTU candidate lost authenticated packet replies")

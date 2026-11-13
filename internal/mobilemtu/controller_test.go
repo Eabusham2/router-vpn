@@ -240,6 +240,9 @@ func TestRealPacketAndByteMeasurementAppliesBeforeReporting(t *testing.T) {
 		if !row.Working || row.MTU != applied[i] || row.PacketsSent != 6 || row.PacketsReceived != 6 || row.DatagramBytes != row.MTU-28 || row.Download == nil || row.Upload == nil {
 			t.Fatal("measurement not executed", row)
 		}
+		if row.MedianRTT <= 0 || math.IsNaN(row.MedianRTT) || math.IsInf(row.MedianRTT, 0) {
+			t.Fatal("authenticated packets lost their measured positive interval", row)
+		}
 		for _, transfer := range []*hopmeasure.Transfer{row.Download, row.Upload} {
 			if transfer.Bytes != 256<<10 || transfer.Seconds <= 0 {
 				t.Fatal("transfer measurement missing")
@@ -260,6 +263,22 @@ func TestRealPacketAndByteMeasurementAppliesBeforeReporting(t *testing.T) {
 	second := readStatus(t, c)
 	if second.OriginalMTU != state.MTU || !second.Measured || second.PathKey != result.PathKey {
 		t.Fatal("Retest did not capture the current applied state", second)
+	}
+}
+
+func TestPacketProbeMeasuresSixAuthenticatedIntervals(t *testing.T) {
+	c, owner, _ := fixtureController(t)
+	state, err := owner.Capture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := Candidate{MTU: state.MTU}
+	err = c.packets(ctx, &probeEngine{controller: c, state: state}, &result)
+	if err != nil || result.PacketsSent != 6 || result.PacketsReceived != 6 || result.DatagramBytes != state.MTU-28 ||
+		result.MedianRTT <= 0 || math.IsNaN(result.MedianRTT) || math.IsInf(result.MedianRTT, 0) {
+		t.Fatal("authenticated packet exchange did not retain its checked measurement interval", err, result)
 	}
 }
 func TestExactRollbackAfterApplyReadbackAndSaveFailure(t *testing.T) {
