@@ -43,6 +43,9 @@ type NodeChainCandidatePreparationRuntime struct {
 	startDone, observeDone chan struct{}
 	checkedAt              time.Time
 	progress               NodeChainCandidatePreparationProgress
+	// Tests may replace capture before StartContext. Production always retains
+	// the checked platform clock through the complete private proof exchange.
+	testInterval func() (hopmeasure.Interval, error)
 }
 
 func NewNodeChainCandidatePreparationRuntime(preparation *NodeChainCandidatePreparation, owner NodeChainCandidatePreparationOwner) (*NodeChainCandidatePreparationRuntime, error) {
@@ -123,10 +126,18 @@ func (r *NodeChainCandidatePreparationRuntime) dialProof(ctx context.Context, ta
 }
 
 func (r *NodeChainCandidatePreparationRuntime) provePrefixes(parent context.Context, publish bool) error {
+	startInterval := hopmeasure.StartInterval
+	if r.testInterval != nil {
+		startInterval = r.testInterval
+	}
 	for position, proof := range r.preparation.proofs {
 		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 		node := r.preparation.original.nodes[position]
-		started := time.Now()
+		interval, err := startInterval()
+		if err != nil {
+			cancel()
+			return err
+		}
 		data, err := externalProofHTTP(ctx, r.dialProof, proof.Tag, healthURL(predecessorText(node.profile, "router_api")), predecessorText(node.profile, "api_token"), nil)
 		if err == nil {
 			var value struct {
@@ -141,6 +152,10 @@ func (r *NodeChainCandidatePreparationRuntime) provePrefixes(parent context.Cont
 		if err == nil {
 			err = r.nativeCurrent(ctx)
 		}
+		var elapsed float64
+		if err == nil {
+			elapsed, err = interval.Milliseconds()
+		}
 		cancel()
 		if err != nil {
 			return err
@@ -153,7 +168,7 @@ func (r *NodeChainCandidatePreparationRuntime) provePrefixes(parent context.Cont
 				r.mu.Unlock()
 				return nodeChainCandidatePreparationError
 			}
-			r.progress.Prefixes = append(r.progress.Prefixes, NodeChainPrefixProgress{Position: position, ProfileID: proof.ProfileID, ResponseMS: float64(time.Since(started)) / float64(time.Millisecond), Proven: true})
+			r.progress.Prefixes = append(r.progress.Prefixes, NodeChainPrefixProgress{Position: position, ProfileID: proof.ProfileID, ResponseMS: elapsed, Proven: true})
 			r.mu.Unlock()
 		}
 	}

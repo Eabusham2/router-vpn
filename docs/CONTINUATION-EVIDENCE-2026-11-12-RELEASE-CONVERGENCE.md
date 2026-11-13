@@ -2303,6 +2303,45 @@ production deadlines and lifecycle behavior were unchanged. These are source
 and real HTTP/TLS fixture results with an explicit native routing boundary,
 not Windows counter execution, kernel TUN, packaged or device acceptance.
 
+## Checked intervals for selected-prefix preparation
+
+The protected Windows ARM64 diagnostic at `4bf0ed8e` failed during its first
+candidate-prefix heartbeat, before the application-substitution mutation. Its
+generic redacted error did not establish the exact failing stage. The source
+investigation did establish a mismatch: preparation used raw `time.Since`,
+while the readiness contract requires every proved prefix's response time to
+be positive. This repair addresses that producer without claiming a conclusive
+diagnosis of the older hosted failure.
+
+`NodeChainCandidatePreparationRuntime.provePrefixes` now retains the existing
+checked `hopmeasure.Interval` through each actual private HTTP proof. On
+Windows this uses the checked performance counter. Failed capture stops before
+target I/O; invalid completion retires the preparation without publishing the
+failed row or granting candidate authority. No positive floor or synthetic
+measurement is introduced. Original identity checks, five-second per-prefix
+deadlines, health ownership, cancellation and joined retirement are unchanged.
+
+The immutable `d294da4a` shared validation plus the two exact source files
+passed eight roots and all 23 root/child race verdicts in 8.641 seconds. It
+retains the original real HTTP, WG/AWG, fifty-connection, stale-owner and
+cancellation siblings. The new capture/completion failures check original
+exchange counts, no candidate lease and retired preparation; the positive
+case checks both actual measured prefix rows. A separately compiled control
+replaced only the checked completion with an unchecked zero. It failed the
+intended completion witness in 0.240 seconds after the real private proof.
+The driver accepted that failure as the causal control.
+
+The recovered production file has SHA256
+`24cd65ec09d55c8719d43586627bb5040c87e86e545e732236b40a54d61ab60c`;
+the new test has SHA256
+`3ec17073b1665910aa827e5fe6decb293a65900b13ef4c8cac2f323da0532be4`.
+Both recovered bytes and Git blob identities matched the pre-outage manifest.
+These are shared runtime fixture results, not Windows counter execution,
+installed TUN or device acceptance. The separately recovered native heartbeat
+diagnostics, their seven required verdicts and native validation remain pending
+at this publication; the interrupted native compiler supplied no observed
+verdict. Their source is preserved independently and is not counted as passed.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
