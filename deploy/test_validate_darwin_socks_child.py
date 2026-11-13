@@ -52,7 +52,7 @@ def envelope(arch):
 def require_workflow(raw):
     if not isinstance(raw, str) or len(raw) > 100000 or raw.count("          - darwin-socks-child\n") != 1:
         raise ValueError("Fixed native suite is absent or repeated")
-    if "  validate:\n    if: inputs.suite != 'darwin-socks-child'\n" not in raw:
+    if "  validate:\n    if: inputs.suite != 'darwin-socks-child' && inputs.suite != 'darwin-socks-installed'\n" not in raw:
         raise ValueError("Generated native suite acquired an extra generic runner")
     marker = "\n  darwin-socks-child:\n"
     if raw.count(marker) != 1:
