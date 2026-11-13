@@ -10,9 +10,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 )
 
 func speedLabTorPipelineFixture(t *testing.T) *desktopTorConnectFixture {
@@ -85,27 +87,138 @@ func connectSpeedLabTorPrior(t *testing.T, f *desktopTorConnectFixture, direct b
 
 func waitForSpeedLabTorPriorDNSAdoption(t *testing.T, a *app) {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := joinSpeedLabTorPriorDNSAdoption(ctx, a); err != nil {
+		t.Fatal("prior Tor fixture did not finish its actual selected-DNS adoption", err, sessionTrackerFor(a).snapshot(0).DNSProof)
+	}
+}
+
+func joinSpeedLabTorPriorDNSAdoption(ctx context.Context, a *app) error {
 	tracker := sessionTrackerFor(a)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if a.operationMu.TryLock() {
-			tracker.mu.Lock()
-			session := tracker.session
-			ready := session != nil && session.Connected && session.Phase == "connected" &&
-				session.DNSProof.Status == "passed" && !tracker.dnsProofRunning && tracker.dnsProofBinding != nil
+	if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+		return err
+	}
+	if tracker.session == nil || !tracker.session.Connected || tracker.session.Phase != "connected" {
+		tracker.mu.Unlock()
+		return errors.New("prior Tor DNS observation has no connected session")
+	}
+	identity := speedLabPathIdentity{Tracker: tracker, SessionID: tracker.session.ID}
+	tracker.mu.Unlock()
+	for ctx.Err() == nil {
+		if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+			return err
+		}
+		registered, found := sessionTrackers.Load(a)
+		current := found && registered == tracker && tracker.session != nil && tracker.session.ID == identity.SessionID &&
+			tracker.session.Connected && tracker.session.Phase == "connected"
+		work := tracker.dnsProofWork
+		tracker.mu.Unlock()
+		if !current {
+			return errors.New("prior Tor DNS observation lost its original session owner")
+		}
+		if work != nil {
+			// Join the original worker after its guarded adoption has released
+			// operationMu. Reserving that lock here can make the nonblocking
+			// adoption reject the very proof this fixture is waiting for.
+			if err := waitDesktopSpeedLabDNSObservation(ctx, identity); err != nil {
+				return err
+			}
+			if err := desktopnetwork.LockContext(ctx, &tracker.mu); err != nil {
+				return err
+			}
+			registered, found = sessionTrackers.Load(a)
+			current = found && registered == tracker && tracker.session != nil && tracker.session.ID == identity.SessionID &&
+				tracker.session.Connected && tracker.session.Phase == "connected" && tracker.dnsProofWork == work
+			ready := current && tracker.session.DNSProof.Status == "passed" && !tracker.dnsProofRunning && tracker.dnsProofBinding != nil
 			tracker.mu.Unlock()
-			a.operationMu.Unlock()
+			if !current {
+				return errors.New("prior Tor DNS worker was replaced before its adoption joined")
+			}
 			if ready {
-				return
+				return nil
 			}
 		}
-		// Wait for an observed completion, not a guessed scheduling interval.
-		// Production keeps its nonblocking operation ownership and all proof
-		// checks; this fixture starts its next transaction only after the
-		// prior connection's actual DNS adoption has released that owner.
-		time.Sleep(time.Millisecond)
+		// A worker discarded during Connect may be retried by the original
+		// observer. The same finite context covers every such observation;
+		// only an actual joined successful adoption can finish this fixture.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
 	}
-	t.Fatal("prior Tor fixture did not finish its actual selected-DNS adoption", tracker.snapshot(0).DNSProof)
+	return ctx.Err()
+}
+
+func TestDesktopTorPriorDNSAdoptionJoinsWithoutReservingOperation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		a, tracker, observed, sessionID := dnsPathFixture(t)
+		entered, release := make(chan struct{}), make(chan struct{})
+		work := startSessionDNSFixture(t, tracker, observed, sessionID, func(ctx context.Context, owner *app, s observedConnection, mode string) dnsProofState {
+			close(entered)
+			<-release
+			return successfulDNSProof(ctx, owner, s, mode)
+		})
+		<-entered
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		tracker.mu.Lock()
+		done := make(chan error, 1)
+		go func() { done <- joinSpeedLabTorPriorDNSAdoption(ctx, a) }()
+		synctest.Wait()
+		reserved := !a.operationMu.TryLock()
+		if !reserved {
+			a.operationMu.Unlock()
+		}
+		tracker.mu.Unlock()
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatal("original DNS adoption did not join", err)
+		}
+		if reserved {
+			t.Fatal("DNS fixture reserved the operation owner while waiting for its tracker")
+		}
+		select {
+		case <-work.done:
+		default:
+			t.Fatal("Tor fixture accepted DNS before the original worker joined")
+		}
+		if tracker.snapshot(0).DNSProof.Status != "passed" || !a.operationMu.TryLock() {
+			t.Fatal("joined Tor DNS observation lost proof or retained the operation owner")
+		}
+		a.operationMu.Unlock()
+	})
+}
+
+func TestDesktopTorPriorDNSAdoptionRejectsReplacedTracker(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		a, tracker, observed, sessionID := dnsPathFixture(t)
+		entered, release := make(chan struct{}), make(chan struct{})
+		work := startSessionDNSFixture(t, tracker, observed, sessionID, func(ctx context.Context, owner *app, s observedConnection, mode string) dnsProofState {
+			close(entered)
+			<-release
+			return successfulDNSProof(ctx, owner, s, mode)
+		})
+		<-entered
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- joinSpeedLabTorPriorDNSAdoption(ctx, a) }()
+		synctest.Wait()
+		tracker.mu.Lock()
+		replacementSession := *tracker.session
+		tracker.mu.Unlock()
+		sessionTrackers.Store(a, &sessionTracker{a: a, session: &replacementSession})
+		close(release)
+		if err := <-done; err == nil {
+			t.Fatal("Tor DNS fixture accepted an adoption from a replaced tracker")
+		}
+		<-work.done
+		if tracker.snapshot(0).DNSProof.Status == "passed" {
+			t.Fatal("retired DNS worker published its result into the original tracker")
+		}
+	})
 }
 
 func TestSpeedLabTorShippingPrepareStartAndRestoreExactNativePath(t *testing.T) {

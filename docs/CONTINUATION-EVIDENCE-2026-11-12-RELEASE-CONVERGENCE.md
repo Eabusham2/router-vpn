@@ -245,6 +245,27 @@ headers and Xvfb, so it does not provide a native GTK compilation or widget
 result. The existing actual shipping-widget test in hosted Linux remains the
 required executable acceptance for this repair.
 
+## Tor selected-DNS fixture ownership
+
+The prior Tor fixture no longer reserves the application's nonblocking operation
+lock while waiting for the selected-DNS worker that needs that same lock. It
+joins the exact worker with the existing five-second total context and then
+checks the original tracker, session, worker, passed proof and proof binding.
+A replaced tracker or worker cannot satisfy the original wait.
+
+The two new deterministic race tests passed (1.035 seconds) and each passed in
+five further repetitions. An isolated mutation restoring the operation-lock
+reservation failed the held-adoption test with the expected inability to join
+within its unchanged context; the Go synctest clock makes that control finite
+without a scheduling guess. No production deadlines or proof guards changed.
+
+The ten original public-preflight siblings and the Tor comparison case stopped
+before this helper because local physical-network capture returned EPERM. That
+aggregate is not a passing native result. Their current hosted execution remains
+required. The separate Windows failure in the one-second full connected-identity
+fixture wait precedes this DNS helper and remains under investigation; no shared
+cause or timeout repair is assumed.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
