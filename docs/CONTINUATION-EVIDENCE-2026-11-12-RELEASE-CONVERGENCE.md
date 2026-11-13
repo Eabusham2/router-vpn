@@ -155,8 +155,9 @@ access:
   shipping composition. The shared compiler now also preserves an imported
   SS2022 hostname with its explicitly saved Custom TCP resolver through the
   preceding prefix. The actual encrypted DNS/SS transport test now passes
-  and is mandatory in the Linux host preflight; platform producer integration
-  and installed hostname-path acceptance remain in progress. Other explicitly requested protocols, positions, layers and graph families
+  and is mandatory in the Linux host preflight. Android and desktop saved-source
+  producers are published; iOS producer integration and installed hostname-path
+  acceptance remain in progress. Other explicitly requested protocols, positions, layers and graph families
   remain requirements. This is not an invented requirement for every theoretical
   protocol permutation. Safe rejection is not implementation.
 - Public ordered macOS admission requires actual generated-child and installed
@@ -1870,6 +1871,44 @@ credential replacement and generation changes. This unit preserves that
 existing distinction. JVM/storage boundaries in these tests do not establish
 Android SDK packaging, physical VPN service, TUN, leaks or device acceptance.
 Those remain exact-source native/release and live acceptance work.
+
+## Desktop hostname middle preserves original source without bootstrap
+
+The desktop ordered catalog and capture now construct a hostname middle
+from its original SS2022 profile and explicitly saved Custom TCP resolver.
+The normal descriptor and transport validators still run. After they validate,
+the source-only builder restores the exact original hostname case in the
+transport envelope and passes the original profile to the shared ordered
+constructor. It never invokes ordinary physical bootstrap or substitutes a
+literal address. The generated source has no application DNS seed; the
+preceding prefix supplies the captured transport resolver and the final node
+supplies its independent application DNS.
+
+The same source constructor controls ordered eligibility, capture, public
+source-view adoption and saved-profile restoration. Invalid policy, wrong
+endpoint or case identity, borrowed credentials, unsupported positions and
+stale resolver selections reject before native work. The ordinary external
+physical compiler remains unchanged. Linux, Windows and Darwin source
+projections retain exact original credentials, per-node restrictions and only
+the first node's physical roots; projection is not platform admission.
+
+The immutable `4e9f712ad774ada48d571a39a1b40ef05e066e70` snapshot, five already
+published shared hostname files and the three desktop files passed all 52
+selected race-test records with no skips or failures. All 5,076 snapshot
+inputs remained unchanged, and the two final overlay files retained their
+recorded hashes. The tested inventory includes the existing imported/profile
+and startup tests plus hostname capture, explicit-policy rejection, stale
+public source adoption and complete saved-policy restoration. Both ordinary
+hostname-normalizing validators are retained; the positive fixture now compares
+every captured JSON field directly instead of round-tripping it through the
+ordinary profile import decoder. The existing malformed-source negatives
+remain intact.
+
+These are actual shipping desktop compiler/controller checks. The previously
+published 64-verdict encrypted peer gate supplies separate native transport
+evidence. Native installed Windows/Linux/macOS hostname paths and physical
+network, leak and transition acceptance still require their own evidence at
+the publication commit.
 
 ## Physical and private acceptance
 

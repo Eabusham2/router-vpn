@@ -58,7 +58,14 @@ func desktopNodeChainImported(profile common.RouterProfile, mode string) bool {
 	}
 	clear(key)
 	address, err := netip.ParseAddr(ss.Server)
-	return err == nil && address.Zone() == "" && !address.Is4In6() && !address.IsUnspecified() && !address.IsMulticast() && ss.Server == profile.Endpoint
+	if err == nil {
+		return address.Zone() == "" && !address.Is4In6() && !address.IsUnspecified() && !address.IsMulticast() && ss.Server == profile.Endpoint
+	}
+	// A middle hostname has no physical bootstrap authority. Eligibility uses
+	// the same sealed source constructor that will bind its saved TCP resolver
+	// to the preceding packet prefix at launch.
+	_, err = desktopNodeChainImportedHostnameInput(profile)
+	return err == nil
 }
 
 func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []common.RouterProfile, nodes []common.MultihopNodeSelection, execution string) ([]desktopNodeChainMember, error) {
@@ -93,11 +100,11 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 				return nil, errors.New("imported ordered member requires exactly one middle between a paired physical entry and paired final")
 			}
 		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(nodes)-1 && selected.Mode != "shadowsocks" {
-			return nil, errors.New("ordered selection requires paired WireGuard or AWG2 prefixes, an optional literal imported SS2022 middle, and a paired SS2022 final")
+			return nil, errors.New("ordered selection requires paired WireGuard or AWG2 prefixes, an optional captured imported SS2022 middle, and a paired SS2022 final")
 		}
 		// Only the first closure owns physical bootstrap. An ambient lookup of
 		// any later transport would bypass its preceding selected prefix.
-		if i > 0 {
+		if i > 0 && !imported {
 			if _, err := netip.ParseAddr(profile.Endpoint); err != nil {
 				return nil, errors.New("later ordered nodes require a captured literal transport endpoint")
 			}
@@ -171,11 +178,20 @@ func (capture *desktopNodeChainCapture) compileMember(ctx context.Context, membe
 		if !desktopNodeChainImported(member.Profile, member.Mode) {
 			return "", "", "", errors.New("ordered imported source changed kind or transport")
 		}
-		config, policy, endpoint, err := desktopImportedEntrySource(ctx, member.Profile, nil)
-		if err != nil {
-			return "", "", "", err
+		var input, endpoint string
+		var err error
+		if _, literalErr := netip.ParseAddr(member.Profile.Endpoint); literalErr != nil {
+			// Do not use the standalone entry's bootstrap, resolver projection or
+			// endpoint freezing for a transport below an existing packet prefix.
+			input, err = desktopNodeChainImportedHostnameInput(member.Profile)
+			endpoint = member.Profile.Endpoint
+		} else {
+			var config, policy string
+			config, policy, endpoint, err = desktopImportedEntrySource(ctx, member.Profile, nil)
+			if err == nil {
+				input, err = mobilemultihop.NodeChainImportedMemberInput(config, policy)
+			}
 		}
-		input, err := mobilemultihop.NodeChainImportedMemberInput(config, policy)
 		*total += len(input)
 		if *total > mobilemultihop.NodeChainInputLimit {
 			return "", "", "", errors.New("ordered imported source exceeds aggregate capture bound")
