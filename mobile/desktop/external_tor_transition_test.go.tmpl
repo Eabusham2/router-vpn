@@ -254,7 +254,17 @@ func TestRouterVPNDesktopTorMTUTransitionWaitsForActualCompletionBeforeHeartbeat
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
+	joined := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-joined:
+		case <-time.After(3 * time.Second):
+			t.Error("completion transition command did not join during fixture cleanup")
+		}
+	})
 	go func() {
+		defer close(joined)
 		done <- routerVPNRunTor(ctx, files.directory, routerVPNTorTestSession, files.binary, files.getenv, func(_ context.Context, owned *routerVPNTorFiles, _ *routerVPNTorBinary) (routerVPNTorOwner, error) {
 			owner.current = owned.current
 			return owner, nil
@@ -267,6 +277,8 @@ func TestRouterVPNDesktopTorMTUTransitionWaitsForActualCompletionBeforeHeartbeat
 	request := routerVPNTorMTUTransitionRequest{context: ctx, receipt: receipt, result: make(chan error, 1), finished: completed}
 	select {
 	case owner.transitions <- request:
+	case err := <-done:
+		t.Fatal("command retired before completion transition admission", err)
 	case <-time.After(time.Second):
 		t.Fatal("unblocked command did not receive transition")
 	}
@@ -275,6 +287,8 @@ func TestRouterVPNDesktopTorMTUTransitionWaitsForActualCompletionBeforeHeartbeat
 		if err != nil {
 			t.Fatal(err)
 		}
+	case err := <-done:
+		t.Fatal("command retired before completion transition acknowledgement", err)
 	case <-time.After(time.Second):
 		t.Fatal("transition publication was not acknowledged")
 	}

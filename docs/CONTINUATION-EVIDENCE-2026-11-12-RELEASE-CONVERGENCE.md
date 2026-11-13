@@ -585,6 +585,25 @@ Seven runner, eight preparation and fourteen encrypted-runner checks pass. This
 is component and runner evidence; exact-SHA ARM64 encrypted execution remains a
 required hosted gate after publication.
 
+## Windows Tor transition fixture cleanup
+
+The older cad6996f native Windows AMD64 job 131608547886 failed at
+`TestRouterVPNDesktopTorMTUTransitionWaitsForActualCompletionBeforeHeartbeat`:
+the transition send exceeded its one-second fixture watchdog, followed by a
+locked temporary session during cleanup. The latter exposed a definite fixture
+ownership gap: early failure cancelled the command but did not wait for it to
+return before TempDir cleanup.
+
+The fixture now always cancels and joins its original command during cleanup,
+including early assertion failures, and reports an actual command retirement
+while awaiting transition send/acknowledgement. Its original one-second
+admission/acknowledgement watchdogs, three-second cleanup bound and heartbeat
+assertions are unchanged. The six selected Tor transition/slow-control test
+functions passed under the race detector in 18.875 seconds on the local Linux
+generated component. This closes the fixture cleanup omission; it does not
+identify the original Windows send timeout or substitute for a new Windows
+native execution.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
