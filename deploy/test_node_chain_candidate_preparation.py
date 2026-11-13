@@ -15,6 +15,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'github.com/sagernet/sing-box'
+MAX_BUILD_OUTPUT_BYTES = 64 * 1024
 ROOTS = {
     PACKAGE: {
         'TestRouterVPNNodeChainCandidatePreparationNativeClosedPrefixAndFifty': ('wg', 'awg2-fast', 'awg2-strong'),
@@ -89,8 +90,26 @@ def verdict(raw, code):
         raise ValueError('native prefix preparation command failed')
     started, finished = set(), set()
     runs, passes = {p: set() for p in ROOTS}, {p: set() for p in ROOTS}
+    build_packages = {p+'.test': p for p in ROOTS}
+    build_output_bytes = {}
     for line in raw.splitlines():
         row = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError('invalid prefix event')
+        if row.get('Action') == 'build-output':
+            # Go 1.26 BuildEvent records carry ImportPath, not TestEvent.Package.
+            # Bounded pre-start linker output is diagnostic, never acceptance.
+            package = build_packages.get(row.get('ImportPath'))
+            output = row.get('Output')
+            if (set(row) != {'ImportPath', 'Action', 'Output'} or
+                    package is None or package in started or
+                    not isinstance(output, str) or not output or 'DATA RACE' in output):
+                raise ValueError('foreign, late or malformed prefix build output')
+            size = build_output_bytes.get(package, 0) + len(output.encode('utf-8'))
+            if size > MAX_BUILD_OUTPUT_BYTES:
+                raise ValueError('prefix build output exceeded its diagnostic bound')
+            build_output_bytes[package] = size
+            continue
         package, action, name = row.get('Package'), row.get('Action'), row.get('Test')
         if package not in ROOTS or package in finished or action in ('skip', 'fail') or 'DATA RACE' in row.get('Output', ''):
             raise ValueError('foreign, late, skipped, failed or racing prefix verdict')

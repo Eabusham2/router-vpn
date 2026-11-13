@@ -34,6 +34,66 @@ class PrefixGate(unittest.TestCase):
     def test_complete_inventory(self):
         self.assertEqual(GATE.verdict(raw(receipt()), 0), 41)
 
+
+    def build_output(self, package=GATE.PACKAGE, output=None):
+        # Exact Go 1.26 Darwin linker shape observed before Box/libbox start.
+        return dict(ImportPath=package+'.test', Action='build-output',
+                    Output=output if output is not None else
+                    '# '+package+'.test\nld: warning: ignoring duplicate libraries: \'-lobjc\'\n')
+
+    def test_actual_darwin_linker_records_preserve_exact_inventory(self):
+        rows = receipt()
+        augmented = []
+        for row in rows:
+            if row['Action'] == 'start':
+                augmented.append(self.build_output(row['Package']))
+            augmented.append(row)
+        self.assertEqual(GATE.verdict(raw(augmented), 0), 41)
+        split = [self.build_output(output='first linker fragment\n'),
+                 self.build_output()] + rows
+        self.assertEqual(GATE.verdict(raw(split), 0), GATE.verdict(raw(rows), 0))
+
+    def test_build_output_cannot_replace_runtime_acceptance(self):
+        rows = receipt()
+        for changed in ([self.build_output()], [self.build_output()]+rows[:-1],
+                        [self.build_output()]+[row for row in rows if row['Action'] != 'run']):
+            with self.assertRaises(ValueError): GATE.verdict(raw(changed), 0)
+
+    def test_foreign_late_named_or_malformed_build_output_is_refused(self):
+        base = self.build_output()
+        for changed in (dict(base, ImportPath='github.com/foreign/native.test'),
+                        dict(base, ImportPath=GATE.PACKAGE),
+                        dict(base, Package=GATE.PACKAGE),
+                        dict(base, Test='TestOtherOwner'),
+                        dict(base, Output=None), dict(base, Output=''),
+                        dict(base, Output='WARNING: DATA RACE')):
+            with self.subTest(record=changed), self.assertRaises(ValueError):
+                GATE.verdict(raw([changed]+receipt()), 0)
+        rows = receipt()
+        for position in (1, len(rows)):
+            changed = copy.deepcopy(rows); changed.insert(position, base)
+            with self.assertRaises(ValueError): GATE.verdict(raw(changed), 0)
+
+    def test_build_output_bound_counts_every_utf8_fragment(self):
+        exact = 'é'*(GATE.MAX_BUILD_OUTPUT_BYTES//2)
+        self.assertEqual(GATE.verdict(raw([self.build_output(output=exact)]+receipt()), 0), 41)
+        for rows in ([self.build_output(output=exact+'x')],
+                     [self.build_output(output=exact), self.build_output(output='x')]):
+            with self.assertRaises(ValueError): GATE.verdict(raw(rows+receipt()), 0)
+
+    def test_build_failure_unknown_events_and_nonzero_exit_still_refused(self):
+        for action in ('build-fail', 'build-unknown', 'timeout'):
+            with self.assertRaises(ValueError):
+                GATE.verdict(raw([dict(self.build_output(), Action=action)]+receipt()), 0)
+        for action in ('fail', 'skip', 'unknown'):
+            rows = receipt(); rows[2]['Action'] = action
+            with self.assertRaises(ValueError):
+                GATE.verdict(raw([self.build_output()]+rows), 0)
+        for code in (1, 124, -9):
+            with self.assertRaises(ValueError):
+                GATE.verdict(raw([self.build_output()]+receipt()), code)
+        with self.assertRaises(ValueError): GATE.verdict('[]', 0)
+
     def test_actual_templates_and_all_causal_controls_are_required(self):
         for package, template in ((GATE.PACKAGE, 'candidate_preparation_box_test.go.tmpl'), (GATE.PACKAGE+'/experimental/libbox', 'candidate_preparation_test.go.tmpl')):
             source = (ROOT/'mobile/chain'/template).read_text()
