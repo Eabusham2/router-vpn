@@ -44,6 +44,16 @@ UID = load('darwin_child_native_uid', 'test_desktop_socket_uid.py')
 BUILD = load('darwin_child_native_build', 'build-native-runtime.py')
 
 
+def native_stage(stage):
+    # Diagnostics cannot satisfy a verdict or receipt. Emit each bounded,
+    # constant stage before the next native operation; GitHub can retain the
+    # notice even when a lost runner never uploads its aggregate command log.
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        print('::notice title=Darwin ordered child stage::' + stage, flush=True)
+    else:
+        print('Darwin ordered child stage: ' + stage, flush=True)
+
+
 def digest(path):
     path = Path(path)
     if path.is_symlink() or not path.is_file():
@@ -211,8 +221,10 @@ def execute(source, go='go', *, environment=None):
         work.chmod(0o755)
         child, peer = work/'child.test', work/'peer.test'
         for image, package in ((child, './cmd/sing-box'), (peer, './protocol/routervpnamnezia')):
+            native_stage('compiling ' + image.name)
             UID.run(native_fixture_compile(compiler, image, package), cwd=source, env=captured, timeout=600)
             image.chmod(0o755)
+            native_stage('compiled ' + image.name)
         if checked_sources(source)[1] != before:
             raise ValueError('Darwin native sources changed while compiling original images')
         identities = {path: image_identity(path) for path in (child, peer)}
@@ -224,11 +236,14 @@ def execute(source, go='go', *, environment=None):
                    '-test.v', '-test.count=1', '-test.timeout=930s']
         if sudo:
             command = [sudo, '-n', '--', *command]
+        native_stage('starting actual inherited child, PF, utun and encrypted peer cases')
         output = UID.run(command, cwd=ROOT, env=captured, timeout=960, sudo=sudo)
+        native_stage('native process returned zero; exact verdict still required')
         print(output, end='' if output.endswith('\n') else '\n')
         check_verdict(output)
         if checked_sources(source)[1] != before or any(image_identity(path) != value for path, value in identities.items()):
             raise ValueError('Darwin native acceptance changed its original sources or images')
+        native_stage('verified every native case, joined receipt and original image')
         result = dict(schema=1, gate='generated-darwin-ordered-child', scope='generated-command-utun',
                       target='darwin/'+arch, toolchain=BUILD.TOOLCHAIN,
                       pins={'sing-box': BUILD.PIN, 'xray': BUILD.POLICY.XRAY.XRAY_PIN},
@@ -253,15 +268,19 @@ def standalone(go='go', *, environment=None, receipt=None, required_commit=None)
         core, xray = workspace/'core', workspace/'xray'
         try:
             os.environ.clear(); os.environ.update(captured)
+            native_stage('preparing exact pinned source repositories')
             BUILD.checkout(core, 'https://github.com/SagerNet/sing-box.git', BUILD.PIN)
             BUILD.checkout(xray, 'https://github.com/XTLS/Xray-core.git', BUILD.POLICY.XRAY.XRAY_PIN)
             BUILD.pristine(core, BUILD.PIN); BUILD.pristine(xray, BUILD.POLICY.XRAY.XRAY_PIN)
+            native_stage('pinned repositories verified; preparing native projections')
             BUILD.POLICY.prepare_native(core, xray)
             BUILD.PERFORMANCE.prepare(core); BUILD.OPENVPN.prepare(core)
             BUILD.EXTERNAL.prepare(core, go=str(compiler), env=captured); BUILD.BUFFERS.prepare(core)
+            native_stage('native projections prepared; verifying pinned module graph')
             BUILD.run([compiler, 'mod', 'tidy'], cwd=core, env=captured)
             BUILD.run([compiler, 'mod', 'verify'], cwd=core, env=captured)
             BUILD.POLICY.AMNEZIA.verify(core)
+            native_stage('pinned module graph verified; entering native compilation')
             result = execute(core, str(compiler), environment=captured)
         finally:
             os.environ.clear(); os.environ.update(previous)
@@ -269,6 +288,8 @@ def standalone(go='go', *, environment=None, receipt=None, required_commit=None)
         raise ValueError('Darwin source checkout changed during native acceptance')
     result['repository'] = repository
     publish_receipt(path, result, workspace)
+    native_stage('owned workspace retired and required receipt written' if path is not None
+                 else 'owned workspace retired; native validation complete without a requested receipt')
     return result
 
 

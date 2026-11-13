@@ -455,6 +455,51 @@ guard bypass. No production guard was removed. Both Android shipping inventories
 now require the new script, and all eight workflow-audit tests passed, including
 missing/duplicate gate and incomplete aggregate rejection.
 
+## Retained imported-middle encrypted peer execution
+
+The pending imported-middle reference completed all 73 exact root/child
+verdicts across nine WG/AWG Fast/AWG Strong by SS2022-cipher combinations.
+Actual execution took 17.300 seconds under the unchanged 90-second Go and
+100-second process bounds. Selected DNS, the 1,252-byte final benchmark and
+receipt, public-middle/private-final proof, wrong-middle-key, omitted-middle,
+wrong-final-key and Stop socket-drain cases passed.
+
+This reused the race-built full-tag native image from immutable 7be4ca43,
+SHA-256 `ca0e6b9549beae36923c6880bb7eac281e7d16e42cca3086ad452664864cfa07`.
+Before/after verification covered 2,803 copied inputs in that component's
+current b725c615 source closure, including every peer template and all five
+Darwin projections; the image hash stayed unchanged. This is a source-matched
+component result, not a new b725c615 package build or full release receipt.
+It does not supply actual Darwin PF/utun or the twenty-eight installed-host
+cases; public Darwin ordered admission remains closed pending those gates.
+
+## Darwin runner loss and stage diagnostics
+
+Both b2c295ed generated-child jobs in
+[run 43336393116](https://github.com/Eabusham2/router-vpn/actions/runs/43336393116)
+finished with failure. Their public check annotations, independently read at
+jobs 131593528859 and 131593529173, report loss of communication with the hosted
+runner. They do not report a compiler assertion or a step-timeout cause. The
+completed job log requests returned `404 BlobNotFound`; neither missing output
+nor elapsed time identifies the failing native line.
+
+Source inspection confirms that the actual fixture applies the production
+whole-host PF baseline before starting its child, and its native projection
+retains automatic/strict routing. That creates a concrete control-channel risk
+if execution reaches that stage. Resource exhaustion remains another possible
+explanation for the generic runner annotation; neither is called the observed
+cause without further evidence. Production PF policy, native deadlines and
+all mandatory verdicts remain unchanged.
+
+The runner now flushes bounded stage notices for pinned source preparation,
+each original image compilation, entry into actual PF/utun execution, successful
+native return, exact verdict validation and final workspace/receipt handling.
+GitHub notice annotations provide another place to retain completed-stage
+evidence when an aggregate log is unavailable. They never substitute for a
+native verdict or receipt. All eighteen existing runner tests passed, preserving
+both required architectures, every child case, authenticated retirement and
+source/image identity checks. Actual hosted execution remains required.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
