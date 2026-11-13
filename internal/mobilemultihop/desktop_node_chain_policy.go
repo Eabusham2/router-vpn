@@ -178,10 +178,10 @@ func captureDesktopNodeChain(base, projected *NodeChain) (DesktopPhysicalCapture
 	}
 	kill, ipv6, lan := "off", "on", true
 	for position, node := range base.nodes {
-		var capture ExternalDesktopCapture
+		var capture nodeChainImportedDevicePolicy
 		var err error
 		if position == 1 && base.importedMiddle != nil {
-			capture, err = base.importedMiddle.policy.DesktopCapture()
+			capture, err = base.importedMiddle.devicePolicy()
 		} else {
 			var paired NodeDesktopCapture
 			paired, err = node.DesktopCapture()

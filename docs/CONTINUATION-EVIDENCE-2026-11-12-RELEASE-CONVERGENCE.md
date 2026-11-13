@@ -152,7 +152,10 @@ access:
   of each new platform flow must be recorded separately from these source tests.
 - Ordered graphs still cover a bounded set of WG/AWG prefixes and SS finals,
   with one literal, unlayered SS2022 imported middle in the three-member
-  composition. Other explicitly requested protocols, positions, layers and graph families
+  shipping composition. The shared compiler now also preserves an imported
+  SS2022 hostname with its explicitly saved Custom TCP resolver through the
+  preceding prefix; native hostname execution and platform producer integration
+  remain in progress. Other explicitly requested protocols, positions, layers and graph families
   remain requirements. This is not an invented requirement for every theoretical
   protocol permutation. Safe rejection is not implementation.
 - Public ordered macOS admission requires actual generated-child and installed
@@ -1682,6 +1685,41 @@ PF, utun or the installed macOS host. Later shared-source changes and the
 publication SHA still require their own exact-source hosted verification.
 The parent adapter, installed acceptance and public macOS admission remain
 separate unfinished work.
+
+## Ordered hostname transport keeps its selected prefix resolver
+
+The shared three-node Local compiler now accepts an original, unlayered
+SS2022 hostname middle between a paired WG/AWG prefix and paired SS2022
+final. Its raw hostname, port, cipher, key and expected public identity must
+agree with the separately captured imported profile. Existing mixed-case
+DNS names remain unchanged. The original profile must explicitly select
+Custom TCP DNS with a canonical literal resolver address and nonzero port;
+Home, Fastest, Rescue, encrypted DNS and ambient bootstrap are not silently
+converted into that transport policy.
+
+The source compiler creates a separate named resolver and binds both the
+hostname lookup and middle transport to the same preceding packet prefix.
+The final member retains its application DNS, including Home AdGuard.
+The ordinary external physical-root compiler remains unchanged and still
+refuses this unresolved standalone hostname source. Every physical root of
+the composed path must remain the original first node. Full-path and
+selected-prefix preparation preserve the middle's captured kill-switch,
+IPv6 and Home LAN restrictions without inventing standalone native authority.
+An unselected hostname suffix does not become executable during a closed
+prefix test.
+
+An immutable `c6b963b5e55b74ae691dd754c34c3554ad7875b1` snapshot plus the
+five changed shared files passed 259 recorded tests across 24 roots under
+the race detector, with no skips or failures and 77.052 seconds of package
+execution. Coverage includes all three eligible packet prefix modes and
+three SS2022 ciphers, all supported graph projections, source replay,
+explicit resolver ownership, rejected foreign graph options, exact profile
+binding and retained device restrictions. All 1,255 captured source inputs
+remained unchanged. Three separately compiled omissions were rejected by the
+original physical-root guard, sealed desktop policy guard and saved endpoint
+binding assertion. Those are portable compiler and policy results; the
+encrypted DNS/SS runtime fixture and desktop, Android and iOS producers are
+separate work and are not claimed complete by this shared-source unit.
 
 ## Physical and private acceptance
 

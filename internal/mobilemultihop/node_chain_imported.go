@@ -19,12 +19,13 @@ type nodeChainImportedMember struct {
 	input, source, seal string
 	selection           externalPolicyCapture
 	policy              *ExternalPolicy
+	hostname            *nodeChainImportedHostname
 }
 
 // NodeChainImportedMemberInput captures the only imported member admitted by
-// schema 2: a literal, unlayered SS2022 middle between paired packet and SS
-// members. Original standalone DNS is retained as source, but does not replace
-// the ordered final member's selected application resolver.
+// schema 2: an unlayered SS2022 middle between paired packet and SS members.
+// A hostname requires its exact saved Custom TCP literal resolver through the
+// preceding packet prefix. It never replaces the final application resolver.
 func NodeChainImportedMemberInput(config, capture string) (string, error) {
 	raw, err := json.Marshal(nodeChainImportedInput{"routervpn-node-chain-imported-member", 1, config, capture})
 	if err != nil || len(raw) > NodeChainInputLimit {
@@ -36,7 +37,7 @@ func NodeChainImportedMemberInput(config, capture string) (string, error) {
 	return string(raw), nil
 }
 func parseNodeChainImportedMember(input string) (*nodeChainImportedMember, error) {
-	bad := errors.New("ordered imported middle requires its original literal unlayered SS2022 external source")
+	bad := errors.New("ordered imported middle requires its original unlayered SS2022 external source")
 	var record nodeChainImportedInput
 	if exactJSON([]byte(input), &record, NodeChainInputLimit) != nil || record.Kind != "routervpn-node-chain-imported-member" || record.Schema != 1 {
 		return nil, bad
@@ -57,6 +58,9 @@ func parseNodeChainImportedMember(input string) (*nodeChainImportedMember, error
 	layer := predecessorText(selected.Profile, "start_layer")
 	if layer != "" && layer != "off" {
 		return nil, bad
+	}
+	if member, handled, err := parseNodeChainImportedHostname(input, record, selected); handled {
+		return member, err
 	}
 	// As with the existing imported-entry constructor, only a private transport
 	// projection uses rescue DNS. Exact original capture bytes remain immutable.
@@ -101,14 +105,30 @@ func parseNodeChainImportedMember(input string) (*nodeChainImportedMember, error
 }
 func (m *nodeChainImportedMember) id() string { return m.selection.ExitID }
 func (m *nodeChainImportedMember) digest() string {
-	if m == nil || m.policy == nil {
+	if m == nil {
+		return ""
+	}
+	if m.hostname != nil {
+		raw, _ := json.Marshal([]any{m.input, m.source, m.selection, m.hostname})
+		return externalDigest(raw)
+	}
+	if m.policy == nil {
 		return ""
 	}
 	raw, _ := json.Marshal([]any{m.input, m.source, m.selection, m.policy.Config(), m.policy.Metadata()})
 	return externalDigest(raw)
 }
 func (m *nodeChainImportedMember) validate() error {
-	if m == nil || m.seal == "" || m.seal != m.digest() || m.policy == nil {
+	if m == nil || m.seal == "" || m.seal != m.digest() {
+		return nodeChainError
+	}
+	if m.hostname != nil {
+		if m.policy != nil || m.hostname.Config == "" {
+			return nodeChainError
+		}
+		return nil
+	}
+	if m.policy == nil {
 		return nodeChainError
 	}
 	_, err := m.policy.DesktopCapture()
@@ -119,7 +139,13 @@ func (m *nodeChainImportedMember) closure() (*externalPredecessor, error) {
 		return nil, nodeChainError
 	}
 	graph := map[string]any{}
-	if exactJSON([]byte(m.policy.Config()), &graph, 4<<20) != nil {
+	config := ""
+	if m.hostname != nil {
+		config = m.hostname.Config
+	} else {
+		config = m.policy.Config()
+	}
+	if exactJSON([]byte(config), &graph, 4<<20) != nil {
 		return nil, nodeChainError
 	}
 	final := graph["outbounds"].([]any)[0].(map[string]any)
@@ -127,7 +153,14 @@ func (m *nodeChainImportedMember) closure() (*externalPredecessor, error) {
 	result := &externalPredecessor{graph: graph, tun: tun, final: final, finalTag: ExternalFinalTag, nodes: map[string]map[string]any{ExternalFinalTag: final}, resolvers: map[string]map[string]any{}}
 	// Literal SS has no transport DNS dependency. Its standalone application DNS
 	// is not installed into the chain; the final paired member owns that policy.
-	graph["dns"] = map[string]any{"servers": []any{}}
+	if m.hostname == nil {
+		graph["dns"] = map[string]any{"servers": []any{}}
+	} else {
+		for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
+			server := raw.(map[string]any)
+			result.resolvers[predecessorText(server, "tag")] = server
+		}
+	}
 	for _, raw := range graph["route"].(map[string]any)["rules"].([]any) {
 		rule := raw.(map[string]any)
 		if rule["action"] == "reject" {

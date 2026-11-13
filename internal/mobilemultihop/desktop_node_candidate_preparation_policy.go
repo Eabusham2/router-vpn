@@ -182,10 +182,10 @@ func captureDesktopCandidatePrefix(p *NodeChainCandidatePreparation, graph map[s
 	}
 	kill, ipv6, lan := "off", "on", true
 	for position, node := range p.original.nodes {
-		var capture ExternalDesktopCapture
+		var capture nodeChainImportedDevicePolicy
 		if position == 1 && p.original.importedMiddle != nil {
 			var err error
-			capture, err = p.original.importedMiddle.policy.DesktopCapture()
+			capture, err = p.original.importedMiddle.devicePolicy()
 			if err != nil {
 				return bad()
 			}
