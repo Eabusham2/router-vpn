@@ -1445,7 +1445,7 @@ func TestRouterVPNNodeChainDarwinNativeHandshake(t *testing.T) {
 	authority := darwinChildAuthorityStart(t)
 	policy := desktopNodeChainCommandPolicyWithIdentity(t, 3, "darwin", 1400, true)
 	meta := policy.Metadata()
-	directory, err := os.MkdirTemp(macosprocess.InstallRoot+"/run/native-node", "handshake-")
+	directory, err := os.MkdirTemp(macosprocess.InstallRoot+"/run/native-node", "session-")
 	if err != nil { t.Fatal(err) }
 	if err := os.Chmod(directory, 0700); err != nil { t.Fatal(err) }
 	// Preserve the valid config and its captured hash. Only the bounded source
