@@ -176,6 +176,58 @@ final class AndroidStandardExitStore {
     }
 
     static void validate(Entry e) throws Exception {
+        validateTransport(e);
+        if(importedHostname(e))validateImportedHostnamePolicy(e);
+    }
+
+    /** The unsaved add form collects transport first, then the full DNS policy.
+     * This grants neither a stored node nor an ordinary runnable connection. */
+    static void validateForPolicyEditor(Entry e) throws Exception {
+        if(e==null||e.wasPersisted)throw new IllegalArgumentException("Open the current saved node's settings before editing its policy.");
+        validateTransport(e);
+    }
+
+    /** Hostnames here belong only to a captured ordered SS2022 middle. Numeric
+     * parsing stays strict; malformed numeric addresses cannot become names. */
+    static boolean importedHostname(Entry e) {
+        return e!=null&&e.server!=null&&e.server.indexOf(':')<0&&e.server.matches(".*[A-Za-z].*");
+    }
+
+    private static void validateImportedHostnameTransport(Entry e) throws Exception {
+        String host=e.server;
+        if(!"shadowsocks".equals(e.protocol)||host.length()>253||!host.equals(host.trim())
+                ||host.endsWith(".")||host.equalsIgnoreCase("localhost")||host.toLowerCase(Locale.ROOT).endsWith(".localhost")
+                ||host.split("\\.",-1).length<2||e.startLayer!=null
+                ||e.policy!=null&&!Arrays.asList("","off").contains(e.policy.optString("start_layer","off")))
+            throw new IllegalArgumentException("A hostname middle requires its original unlayered Shadowsocks 2022 transport.");
+        for(String label:host.split("\\.",-1))if(label.isEmpty()||label.length()>63
+                ||!label.matches("[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"))
+            throw new IllegalArgumentException("Use the original DNS hostname without a port, trailing dot or numeric-address alias.");
+        int size;
+        switch(e.method){
+            case "2022-blake3-aes-128-gcm":size=16;break;
+            case "2022-blake3-aes-256-gcm":case "2022-blake3-chacha20-poly1305":size=32;break;
+            default:throw new IllegalArgumentException("A hostname middle requires Shadowsocks 2022.");
+        }
+        byte[] key=java.util.Base64.getDecoder().decode(e.secret);
+        try{if(key.length!=size||!java.util.Base64.getEncoder().encodeToString(key).equals(e.secret))
+            throw new IllegalArgumentException("A hostname middle requires one original canonical Shadowsocks 2022 key.");}
+        finally{Arrays.fill(key,(byte)0);}
+    }
+
+    static void validateImportedHostnamePolicy(Entry e) throws Exception {
+        validateImportedHostnameTransport(e);
+        JSONObject p=e.policy;AndroidExternalPolicy.checkPolicy(p);
+        if(!"custom".equals(p.optString("dns_mode"))||!"tcp".equals(p.optString("dns_protocol"))
+                ||p.optInt("dns_port",0)<1||p.optInt("dns_port",0)>65535||p.has("dns_bootstrap")
+                ||!p.optString("dns_server_name","").isEmpty()||!p.optString("dns_path","").isEmpty())
+            throw new IllegalArgumentException("Choose Custom TCP DNS with an explicit resolver IP and port for this ordered middle.");
+        String resolver=p.getString("dns_host");
+        if(!resolver.equals(AndroidNumericAddress.canonical(resolver)))
+            throw new IllegalArgumentException("The hostname middle needs its exact canonical DNS resolver IP.");
+    }
+
+    private static void validateTransport(Entry e) throws Exception {
         if(e==null)throw new IllegalArgumentException("Custom exit is required.");
         validateStartup(e);
         validateLocation(e);
@@ -196,7 +248,8 @@ final class AndroidStandardExitStore {
             e.server=primary.getString("server");e.serverPort=primary.getInt("server_port");
         }
         if(!Arrays.asList("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn").contains(e.protocol))throw new IllegalArgumentException("Unsupported custom exit protocol: "+e.protocol);
-        e.server=AndroidNumericAddress.canonical(e.server); validateResponseProbe(e); validateStartLayer(e); if(e.serverPort<1||e.serverPort>65535)throw new IllegalArgumentException("Custom exit port must be 1..65535.");
+        if(!importedHostname(e))e.server=AndroidNumericAddress.canonical(e.server);
+        validateResponseProbe(e); validateStartLayer(e); if(e.serverPort<1||e.serverPort>65535)throw new IllegalArgumentException("Custom exit port must be 1..65535.");
         InetAddress expected=AndroidNumericAddress.parse(e.expectedPublicIp); if(isPrivate(expected))throw new IllegalArgumentException("Expected public exit IP must be public.");e.expectedPublicIp=AndroidNumericAddress.canonical(e.expectedPublicIp);
         if(!"openvpn".equals(e.protocol)){e.username=credential(e.username,"username");e.password=credential(e.password,"password");}e.secret=credential(e.secret,"secret");e.method=trimBound(e.method,"method").toLowerCase(Locale.ROOT);e.tlsServerName=trimBound(e.tlsServerName,"TLS server name");
         e.wgPrivateKey=trimBound(e.wgPrivateKey,"WireGuard private key");e.wgPeerPublicKey=trimBound(e.wgPeerPublicKey,"WireGuard public key");e.wgPreSharedKey=trimBound(e.wgPreSharedKey,"WireGuard preshared key");
@@ -216,6 +269,7 @@ final class AndroidStandardExitStore {
         AndroidOpenVPN.validatePairing(e);
         AndroidOpenVPN.validateResponseProbes(e);
         AndroidExternalProtection.validate(e.policy);
+        if(importedHostname(e))validateImportedHostnameTransport(e);
     }
 
     /** Same-server HTTPS response identity; the native compiler repeats this validation. */

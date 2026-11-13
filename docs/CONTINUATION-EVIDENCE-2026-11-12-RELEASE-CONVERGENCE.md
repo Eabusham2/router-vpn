@@ -1831,6 +1831,46 @@ No runner-egress exemption or protection relaxation was added. Public Darwin
 ordered/prefix admission and the held macOS interface change remain separate
 from this mandatory gate publication.
 
+## Android saved hostname-middle producer and visible creation path
+
+Android now preserves a bounded original SS2022 hostname for the middle of
+an ordered three-node path. The initial unsaved add form validates transport
+before opening the existing settings form; save and every subsequent store
+read require explicit Custom TCP DNS, a canonical literal resolver IP and
+positive port. The original hostname survives private storage and source
+capture unchanged. Malformed numeric addresses cannot become hostnames, and
+legacy ciphers, invalid PSKs, Start Layers, DNS bootstrap and borrowed policy
+are not admitted by this new path. The ordinary numeric parser is unchanged.
+
+The settings form validates the exact generated source with the actual shared
+ordered imported-member constructor. Ordered editor, capture, replay and saved
+profile restoration use that same source. No ambient lookup or placeholder IP
+is introduced. Ordinary direct preparation still reaches the strict shared
+physical-root compiler before checkConfig, session files or native startup;
+the visible direct/pair actions explain that this saved hostname belongs in
+an ordered middle route. The preceding node owns transport lookup while the
+independently captured final node retains Home AdGuard.
+
+The immutable `b4c31e15e176a55f626b4c82f3358443fc7ae847` snapshot plus six
+changed files passed 69 original imported-method checks and 360 hostname
+checks through actual shipping Java and the real shared Go constructors.
+The new matrix covers WG, AWG Fast and AWG Strong with all three SS2022
+ciphers, exact mixed-case host binding, separate resolver/final DNS,
+editor Save, replay, complete saved policy, source changes and malformed
+policy/credentials. Four separately compiled Java controls were rejected by
+their required witnesses: omitted hostname policy, resolver change-away/back,
+invalid PSK and imported source change-away/back. All six source hashes stayed
+unchanged; the original native fixture generator passed in 0.159 seconds.
+
+Android saved connection profiles retain private node references rather than
+copying secrets. Explicit future Load revalidates the current credential for
+the same referenced node; it cannot restore a stale secret copy or substitute
+a different public node identity. In-flight captures and editors reject
+credential replacement and generation changes. This unit preserves that
+existing distinction. JVM/storage boundaries in these tests do not establish
+Android SDK packaging, physical VPN service, TUN, leaks or device acceptance.
+Those remain exact-source native/release and live acceptance work.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

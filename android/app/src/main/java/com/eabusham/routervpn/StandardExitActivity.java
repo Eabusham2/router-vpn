@@ -166,7 +166,7 @@ public final class StandardExitActivity extends Activity {
     private String capabilityText() {
         StringBuilder s=new StringBuilder("Supported now:");
         for(AndroidStandardExitStore.Capability c:AndroidStandardExitStore.capabilities()) s.append("\n").append(c.supported?"✓ ":"— ").append(c.protocol).append(c.supported?"":" — "+c.reason);
-        s.append("\n\nHTTP is HTTP CONNECT. HTTPS uses certificate-verified TLS/SNI. Saved default direct custom exits and Tor paths require Android Always-on VPN plus ‘Block connections without VPN’. Settings can save an explicit exit protection choice; a strict entry and Android system lockdown remain independent. Tor uses one embedded VPN runtime with ordinary Tor, obfs4, meek, Snowflake, WebTunnel or a supported custom bridge block. Its exit can change; the native circuit and selected DNS are proved before Connected. Tor carries TCP; UDP and DoH3 DNS are rejected. Other supported native external exits retain their saved DNS, IPv6, LAN and MTU settings and prove the selected public exit before Connected. Choose the exact Router VPN entry mode and Start Layer for either path; the entry's private authenticated identity is also required. OpenVPN preserves its complete saved remote list and inline TLS settings within the same VPN. Secrets remain in app-private storage. External servers use literal IPs; a selected DNS hostname requires the explicit bootstrap saved in its settings. Tor transport hostnames use captured protected networking.");
+        s.append("\n\nHTTP is HTTP CONNECT. HTTPS uses certificate-verified TLS/SNI. Saved default direct custom exits and Tor paths require Android Always-on VPN plus ‘Block connections without VPN’. Settings can save an explicit exit protection choice; a strict entry and Android system lockdown remain independent. Tor uses one embedded VPN runtime with ordinary Tor, obfs4, meek, Snowflake, WebTunnel or a supported custom bridge block. Its exit can change; the native circuit and selected DNS are proved before Connected. Tor carries TCP; UDP and DoH3 DNS are rejected. Other supported native external exits retain their saved DNS, IPv6, LAN and MTU settings and prove the selected public exit before Connected. Choose the exact Router VPN entry mode and Start Layer for either path; the entry's private authenticated identity is also required. OpenVPN preserves its complete saved remote list and inline TLS settings within the same VPN. Secrets remain in app-private storage. Direct external servers use literal IPs. An unlayered Shadowsocks 2022 hostname can be saved for an ordered middle hop with an explicit Custom TCP resolver IP and port. A selected DNS hostname requires the explicit bootstrap saved in its settings. Tor transport hostnames use captured protected networking.");
         return s.toString();
     }
 
@@ -186,7 +186,7 @@ public final class StandardExitActivity extends Activity {
         if("amneziawg".equals(protocol)){showAmneziaForm();return;}
         if(AndroidTorProfile.isTor(protocol)){showTorForm(protocol,null);return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int p=dp(10);form.setPadding(p,p,p,p);
-        EditText name=field("Name",false),server=field("Server literal IP",false),port=field("Server port",false),expected=field("Expected public exit IP",false);
+        EditText name=field("Name",false),server=field("shadowsocks".equals(protocol)?"Server IP or ordered middle hostname":"Server literal IP",false),port=field("Server port",false),expected=field("Expected public exit IP",false);
         port.setInputType(InputType.TYPE_CLASS_NUMBER);form.addView(name);form.addView(server);form.addView(port);form.addView(expected);
         List<EditText> extra=new ArrayList<>();
         if("socks5".equals(protocol)||"http".equals(protocol)||"https".equals(protocol)){extra.add(field("Username (optional)",false));extra.add(field("Password (optional)",true));if("https".equals(protocol))extra.add(field("TLS server name / SNI for certificate verification",false));}
@@ -202,7 +202,7 @@ public final class StandardExitActivity extends Activity {
                 else if("shadowsocks".equals(protocol)){e.method=extra.get(i++).getText().toString();e.secret=extra.get(i).getText().toString();}
                 else if("hysteria2".equals(protocol)){e.secret=extra.get(i++).getText().toString();e.tlsServerName=extra.get(i).getText().toString();}
                 else{e.wgAddresses.addAll(csv(extra.get(i++).getText().toString()));e.wgPrivateKey=extra.get(i++).getText().toString();e.wgPeerPublicKey=extra.get(i++).getText().toString();e.wgPreSharedKey=extra.get(i++).getText().toString();e.wgAllowedIps.addAll(csv(extra.get(i++).getText().toString()));String m=extra.get(i).getText().toString().trim();e.wgMtu=m.isEmpty()?0:Integer.parseInt(m);}
-                AndroidStandardExitStore.validate(e);e.policy=AndroidExternalPolicy.editorPolicy(null);showExternalPolicyForm(e);
+                AndroidStandardExitStore.validateForPolicyEditor(e);e.policy=AndroidExternalPolicy.editorPolicy(null);showExternalPolicyForm(e);
             }catch(Exception e){toast("Save failed: "+safe(e));}
         }).setNegativeButton("Cancel",null).show();
     }
@@ -483,6 +483,7 @@ public final class StandardExitActivity extends Activity {
         try{captured=draft==null?AndroidStandardExitStore.copy(saved):draft.apply(saved);policy=AndroidExternalPolicy.editorPolicy(captured);storedSource=exitStore.storedSnapshot(captured.id);if(saved.wasPersisted&&storedSource.isEmpty()||!storedSource.isEmpty()&&!storedSource.equals(AndroidStandardExitStore.snapshot(saved)))throw new IllegalStateException("The saved external node changed or was removed before opening its settings.");}
         catch(Exception invalid){toast("The saved external policy could not be restored safely.");return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int pad=dp(12);form.setPadding(pad,pad,pad,pad);
+        if(AndroidStandardExitStore.importedHostname(captured))form.addView(text("Use this Shadowsocks 2022 hostname as the middle of an ordered route. Choose Custom TCP DNS with the resolver IP and port reachable through the preceding node. The final node keeps its own DNS settings.",13,false));
         Spinner dns=choice(new String[]{"Home AdGuard through captured Router VPN entry","Rescue DoH (Cloudflare)","Custom UDP DNS","Custom TCP DNS","Custom DoT","Custom DoH","Custom DoH3","Previously saved legacy Fastest setting"});
         String mode=policy.optString("dns_mode","home"),protocol="custom".equals(mode)?policy.optString("dns_protocol",""):mode;
         int selected="home".equals(mode)?0:"rescue".equals(mode)?1:"fastest".equals(mode)?7:("dot".equals(protocol)||"tls".equals(protocol))?4:("doh".equals(protocol)||"https".equals(protocol))?5:("doh3".equals(protocol)||"h3".equals(protocol))?6:"tcp".equals(protocol)?3:2;
@@ -601,6 +602,7 @@ public final class StandardExitActivity extends Activity {
     }
 
     private void requestDirect(AndroidStandardExitStore.Entry exit) {
+        if(AndroidStandardExitStore.importedHostname(exit)){dialog("Ordered middle node","Add this saved Shadowsocks 2022 node in Multihop between a WireGuard or AmneziaWG entry and a Router VPN exit.");return;}
         if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
         try{capturePending(null,exit,true,"external");rememberExternalPath(null,exit,"wg");}catch(Exception invalid){clearPending();toast(safe(invalid));return;}
         if(selectionOnly()){clearPending();toast("External path selected. Press Connect when ready.");finish();return;}
@@ -609,6 +611,7 @@ public final class StandardExitActivity extends Activity {
     }
 
     private void chooseEntry(AndroidStandardExitStore.Entry exit) {
+        if(AndroidStandardExitStore.importedHostname(exit)){dialog("Ordered middle node","Add this saved Shadowsocks 2022 node in Multihop between a WireGuard or AmneziaWG entry and a Router VPN exit.");return;}
         if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
         try{
             List<AndroidNodeStore.Node> nodes=nodeStore.list();List<AndroidStandardExitStore.Entry> ordinary=new ArrayList<>();List<String>labels=new ArrayList<>();

@@ -23,7 +23,7 @@ GENERATOR = r'''package mobilemultihop
 import("encoding/json";"encoding/base64";"crypto/ecdh";"bytes";"strings";"os";"testing";"fmt")
 func TestAndroidOrderedSourceFixture(t *testing.T){
  result:=map[string]any{}
- for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{3,"awg-strong"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"}}{
+ for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{2,"awg-strong"},{3,"awg-strong"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"}}{
   layer:=test.layer;if layer=="fixed-middle"{layer=""}
   mixed:=strings.Contains(layer,"awg")||layer=="mixed-options"
   modes,layers:=make([]string,test.count),make([]string,test.count)
@@ -432,7 +432,7 @@ public final class NodeChainCaptureHarness {
   String original=custom.name;custom.name="Replaced";exits.save(custom);custom.name=original;exits.save(custom);
   reject(live::requireCurrent,"imported change-away/back revived old native source");reject(stale::save,"imported change-away/back revived old editor");
   AndroidStandardExitStore.Entry changed=AndroidStandardExitStore.copy(custom);changed.method="aes-256-gcm";reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"legacy SS admitted as custom middle");
-  changed.method=custom.method;changed.server="example.com";reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"hostname middle bypassed literal source bound");
+  changed.method=custom.method;changed.server="example.com";reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"hostname middle bypassed its explicit saved resolver policy");
   changed.server=custom.server;
   for(String secret:List.of(Base64.getEncoder().encodeToString(new byte[keySize==16?32:16]),Base64.getEncoder().encodeToString(new byte[keySize+1]),custom.secret.replace("=",""),custom.secret+":"+custom.secret,"invalid!")){
    changed.secret=secret;reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"invalid single PSK shown as ordered eligible");
@@ -444,8 +444,86 @@ public final class NodeChainCaptureHarness {
   changed.server="2001:db8::76";AndroidNodeStore.ChainSource.requireImported(changed);check(true,"strict IPv6 custom source eligibility");
   }
  }
+ static AndroidStandardExitStore.Entry hostnameEntry(String method)throws Exception{
+  var custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Original DNS middle";custom.protocol="shadowsocks";
+  custom.server="Middle.Example.Test";custom.serverPort=443;custom.expectedPublicIp="203.0.113.76";custom.method=method;
+  custom.secret=Base64.getEncoder().encodeToString(new byte[method.equals("2022-blake3-aes-128-gcm")?16:32]);
+  custom.policy.put("dns_mode","custom").put("dns_protocol","tcp").put("dns_host","10.81.0.53").put("dns_port",5353)
+   .put("start_layer","off").put("ipv6_mode","off").put("home_lan_access",false).put("kill_switch",true).put("kill_switch_policy","always");
+  return custom;
+ }
+ static JSONObject tagged(JSONArray values,String tag)throws Exception{
+  JSONObject found=null;for(int i=0;i<values.length();i++)if(tag.equals(values.getJSONObject(i).optString("tag"))){check(found==null,"duplicate native DNS or transport tag");found=values.getJSONObject(i);}
+  check(found!=null,"native graph lost captured DNS or transport tag");return found;
+ }
+ static void hostnameMiddle(Path root)throws Exception{
+  for(String fixture:List.of("2/","2/awg-fast","2/awg-strong"))for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305")){
+   Fixture f=new Fixture(root,fixture);AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);var custom=hostnameEntry(method);
+   var unsaved=AndroidStandardExitStore.copy(custom);unsaved.policy=new JSONObject();AndroidStandardExitStore.validateForPolicyEditor(unsaved);
+   check(unsaved.server.equals(custom.server),"transport editor normalized the exact saved hostname");
+   reject(()->exits.save(unsaved),"transport-only hostname escaped final saved-policy validation");
+   AndroidExternalPolicy.validateDraft(custom);exits.save(custom);String original=AndroidStandardExitStore.snapshot(exits.get(custom.id));
+   AndroidOrderedPathSelection editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+   check(editor.prefixModes(custom.id).equals(List.of("shadowsocks")),"hostname middle omitted from actual editor");editor.addPrefix(custom.id,"shadowsocks");
+   reject(()->editor.movePrefix(1,0),"hostname middle acquired physical first position");var saved=editor.save();
+   check(saved.members.size()==3&&saved.members.get(1).imported&&saved.members.get(1).proofId.isEmpty(),"hostname middle borrowed paired Router identity");
+   try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(saved)){
+    JSONObject member=new JSONObject(capture.memberInputs.get(1)),selection=new JSONObject(member.getString("capture")),p=selection.getJSONObject("profile");
+    JSONObject source=new JSONObject(member.getString("config"));
+    check(p.getString("endpoint").equals(custom.server)&&p.getJSONObject("external").getJSONObject("shadowsocks").getString("server").equals(custom.server)
+      &&source.getJSONArray("outbounds").getJSONObject(0).getString("server").equals(custom.server),"hostname capture replaced an original endpoint copy");
+    check(!source.has("dns")&&p.getString("dns_protocol").equals("tcp")&&p.getInt("dns_port")==5353,"hostname source lost its saved resolver or invented application DNS");
+    reject(()->io.nekohasekai.libbox.Libbox.routerCompileExternalPolicy(member.getString("config"),member.getString("capture")),"hostname middle acquired ordinary physical native policy");
+    JSONObject graph=new JSONObject(capture.config),middle=null;JSONArray outs=graph.getJSONArray("outbounds");
+    for(int i=0;i<outs.length();i++)if(custom.server.equals(outs.getJSONObject(i).optString("server")))middle=outs.getJSONObject(i);
+    check(middle!=null&&middle.getString("password").equals(custom.secret)&&middle.getString("method").equals(method),"hostname graph replaced exact transport credentials");
+    String prefix=graph.getJSONArray("endpoints").getJSONObject(0).getString("tag"),finalTag=tagged(outs,graph.getJSONObject("route").getString("final")).getString("default");
+    JSONObject dns=graph.getJSONObject("dns"),query=middle.getJSONObject("domain_resolver"),transport=tagged(dns.getJSONArray("servers"),query.getString("server")),application=tagged(dns.getJSONArray("servers"),dns.getString("final"));
+    check(middle.getString("detour").equals(prefix)&&query.getString("strategy").equals("ipv4_only")&&transport.getString("detour").equals(prefix)
+      &&transport.getString("type").equals("tcp")&&transport.getString("server").equals("10.81.0.53")&&transport.getInt("server_port")==5353,"hostname resolver escaped original preceding packet prefix");
+    check(!transport.getString("tag").equals(application.getString("tag"))&&application.getString("detour").equals(finalTag)
+      &&application.getString("type").equals("udp")&&application.getString("server").equals(profile(f.original.get(1)).getString("adguard_ipv4")),"hostname resolver replaced final Home application DNS");
+    check(capture.identityInputs.get(1).isEmpty()&&new JSONObject(capture.launchInput).getInt("schema")==2,"hostname source borrowed native identity authority");
+    try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(capture.launchInput,saved)){check(replay.launchInput.equals(capture.launchInput)&&replay.config.equals(capture.config),"hostname replay changed original source or DNS route");}
+    for(String fault:List.of("profile-endpoint","external-endpoint","outbound-endpoint","resolver-port")){
+     JSONObject altered=new JSONObject(member.getString("capture")),config=new JSONObject(member.getString("config"));
+     switch(fault){case "profile-endpoint"->altered.getJSONObject("profile").put("endpoint","middle.example.test");case "external-endpoint"->altered.getJSONObject("profile").getJSONObject("external").getJSONObject("shadowsocks").put("server","other.example.test");case "outbound-endpoint"->config.getJSONArray("outbounds").getJSONObject(0).put("server","other.example.test");case "resolver-port"->altered.getJSONObject("profile").put("dns_port",0);}
+     reject(()->io.nekohasekai.libbox.Libbox.routerNodeChainImportedMemberInput(config.toString(),altered.toString()),"shared hostname source accepted "+fault);
+    }
+   }
+   check(original.equals(AndroidStandardExitStore.snapshot(exits.get(custom.id))),"hostname compile mutated saved original source");
+   var row=f.profiles.add("Original hostname middle route");String serialized=Files.readString(f.rows);
+   check(!serialized.contains(custom.secret)&&!serialized.contains("api_token"),"hostname saved profile copied private credentials");
+   var changed=exits.get(custom.id);changed.policy.put("dns_port",5354).put("home_lan_access",true);exits.save(changed);
+   f.profiles.load(row.id);var restored=exits.get(custom.id);
+   check(restored.server.equals(custom.server)&&restored.secret.equals(custom.secret)&&restored.method.equals(method)&&restored.policy.getInt("dns_port")==5353&&!restored.policy.getBoolean("home_lan_access"),"hostname profile restore lost original resolver, source or protection");
+   var live=f.profiles.currentOrderedPath();var stale=new AndroidOrderedPathSelection(f.nodes,f.profiles);changed=exits.get(custom.id);changed.policy.put("dns_port",5354);exits.save(changed);
+   reject(live::requireCurrent,"hostname live source ignored a changed saved resolver");reject(stale::save,"hostname editor ignored a changed saved resolver");
+   changed.policy.put("dns_port",5353);exits.save(changed);
+   reject(live::requireCurrent,"hostname resolver change-away/back revived old native source");reject(stale::save,"hostname resolver change-away/back revived old editor");
+   var credentialCapture=f.profiles.currentOrderedPath();var credentialEditor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+   var replacement=exits.get(custom.id);byte[] key=Base64.getDecoder().decode(replacement.secret);key[0]=1;replacement.secret=Base64.getEncoder().encodeToString(key);exits.save(replacement);
+   reject(credentialCapture::requireCurrent,"hostname live capture accepted replacement credentials");reject(credentialEditor::save,"hostname live editor accepted replacement credentials");
+   // Saved profiles retain node references and settings, never stale secret
+   // copies. Explicit future Load revalidates the same node's current key.
+   f.profiles.load(row.id);check(exits.get(custom.id).secret.equals(replacement.secret)&&!exits.get(custom.id).secret.equals(custom.secret),"hostname profile Load restored stale private credentials");
+   replacement=exits.get(custom.id);replacement.expectedPublicIp="203.0.113.77";exits.save(replacement);
+   reject(()->f.profiles.load(row.id),"hostname saved profile accepted replaced public identity");
+   exits.remove(custom.id);replacement.id="fedcba0987654321fedcba0987654321";exits.save(replacement);
+   reject(()->f.profiles.load(row.id),"hostname saved profile borrowed another imported node");
+  }
+ }
+ static void hostnamePolicyControls(Path root)throws Exception{
+  for(String fault:List.of("home","rescue","fastest","udp","tls","resolver-hostname","resolver-loopback","missing-port","zero-port","negative-port","large-port","fractional-port","text-port","bootstrap","tls-name","dns-path","layer","legacy-method","bad-key","colon-key","trailing-dot","numeric-looking","unicode-host")){
+   var custom=hostnameEntry("2022-blake3-aes-128-gcm");
+   switch(fault){case "home","rescue","fastest"->custom.policy.put("dns_mode",fault);case "udp","tls"->custom.policy.put("dns_protocol",fault);case "resolver-hostname"->custom.policy.put("dns_host","resolver.example.test");case "resolver-loopback"->custom.policy.put("dns_host","127.0.0.1");case "missing-port"->custom.policy.remove("dns_port");case "zero-port"->custom.policy.put("dns_port",0);case "negative-port"->custom.policy.put("dns_port",-1);case "large-port"->custom.policy.put("dns_port",65536);case "fractional-port"->custom.policy.put("dns_port",5353.5);case "text-port"->custom.policy.put("dns_port","5353");case "bootstrap"->custom.policy.put("dns_bootstrap",new JSONObject());case "tls-name"->custom.policy.put("dns_server_name","resolver.example.test");case "dns-path"->custom.policy.put("dns_path","/dns-query");case "layer"->custom.policy.put("start_layer","aes-256-gcm");case "legacy-method"->custom.method="aes-256-gcm";case "bad-key"->custom.secret="invalid!";case "colon-key"->custom.secret=custom.secret+":"+custom.secret;case "trailing-dot"->custom.server="middle.example.test.";case "numeric-looking"->custom.server="192.168.001.1";case "unicode-host"->custom.server="m\u00e9dia.example.test";}
+   if(!fault.equals("resolver-loopback"))reject(()->AndroidStandardExitStore.validate(custom),"hostname saved policy accepted "+fault);
+   reject(()->AndroidExternalPolicy.validateDraft(custom),"hostname policy editor accepted "+fault);
+  }
+ }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";
+  if(family.equals("hostname")){hostnamePolicyControls(root);hostnameMiddle(root);System.out.println("Android hostname ordered sources: "+checks+" shipping Java/shared Go checks passed; no native execution");return;}
   if(family.equals("imported")){importedMiddle(root);System.out.println("Android imported ordered methods: "+checks+" shipping Java/shared Go checks passed");return;}
   if(family.equals("source")){sourceControls(root);return;}if(family.equals("generation")){generationControls(root);return;}
   if(family.equals("atomic")){captureAtomicity(root);return;}
@@ -527,6 +605,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     data.mkdir()
     command = ["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.NodeChainCaptureHarness", str(data)]
     subprocess.run(command + (["imported"] if imported_only else []), env=env, check=True, timeout=180)
+    subprocess.run(command + ["hostname"], env=env, check=True, timeout=180)
     node = (app / "AndroidNodeStore.java").read_text()
     store = (app / "AndroidConnectionProfileStore.java").read_text()
     permission = (app / "AndroidConnectionSelection.java").read_text()
@@ -534,6 +613,10 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     editor_ui = (app / "OrderedProductSurface.java").read_text()
     product_ui = (app / "ProductConnectSurface.java").read_text()
     capture = (app / "AndroidNodeChainCapture.java").read_text()
+    standard = (app / "AndroidStandardExitStore.java").read_text()
+    from test_android_connection_profiles import method
+    hostname_policy = method("AndroidStandardExitStore.java", "static void validateImportedHostnamePolicy(")
+    assert standard.count(hostname_policy) == 1
     preview_start = editor.index("        RouterNodeChain preview=")
     preview_end = editor.index("        AndroidNodeStore.ChainCapture captured=", preview_start)
     publication_lock = "synchronized <T> T publishChainCatalog(ChainCatalog captured, ChainPublication<T> publication) throws Exception { synchronized (STORE_LOCK)"
@@ -545,6 +628,8 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     stage = store[stage_start:stage_end]
     assert stage.count("for(int i=0;i<members.length();i++)") == 1
     controls = (
+        ("hostname", "AndroidStandardExitStore", standard.replace(hostname_policy, "static void validateImportedHostnamePolicy(Entry e) throws Exception {}"), "hostname saved policy accepted home"),
+        ("hostname", "AndroidNodeStore", node.replace("source.importedGeneration!=AndroidStandardExitStore.publicationGeneration()", "false"), "hostname resolver change-away/back revived old native source"),
         ("imported", "AndroidNodeStore", node.replace('if(key.length!=expected||!java.util.Base64.getEncoder().encodeToString(key).equals(entry.secret))', 'if(false)'), "invalid single PSK shown as ordered eligible"),
         ("imported", "AndroidNodeStore", node.replace("source.importedGeneration!=AndroidStandardExitStore.publicationGeneration()", "false"), "imported change-away/back revived old native source"),
         ("native-identity", "AndroidNodeChainCapture", capture.replace('record.getJSONArray("identity_sources")', 'record.has("identity_sources")?record.getJSONArray("identity_sources"):new JSONArray(identityInputs)'), "Android accepted a different native identity inventory: missing"),
@@ -572,7 +657,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     )
     assert node.count(source_guard) == node.count(epoch_guard) == node.count(capture_lock) == 1
     for index, (family, name, changed, witness) in enumerate(controls):
-        if imported_only and family != "imported":
+        if imported_only and family not in ("imported", "hostname"):
             continue
         control_id = f"{index}-{family}"
         negative = work / ("ordered-negative-" + control_id)

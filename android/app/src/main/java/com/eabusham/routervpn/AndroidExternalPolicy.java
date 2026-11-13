@@ -127,6 +127,7 @@ final class AndroidExternalPolicy {
                         .put("username", exit.username).put("password", exit.password)); break;
             default: throw new IllegalArgumentException("Unowned external transport.");
         }
+        if(AndroidStandardExitStore.importedHostname(exit))policy.put("endpoint",exit.server);
         return policy.put("id", exit.id).put("node_kind", "external").put("external", ext);
     }
 
@@ -181,6 +182,12 @@ final class AndroidExternalPolicy {
     static void validateDraft(AndroidStandardExitStore.Entry selected)throws Exception{
         AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(selected);
         Captured input=capture(exit,null,"external",null,"local");
+        if(AndroidStandardExitStore.importedHostname(exit)){
+            // This is source-only ordered authority. The ordinary physical
+            // compiler still refuses an unresolved external transport.
+            Libbox.routerNodeChainImportedMemberInput(input.source,input.capture);
+            return;
+        }
         JSONObject selectedCapture=new JSONObject(input.capture),profile=selectedCapture.getJSONObject("profile");
         if(selectedCapture.has("dns_bootstrap"))profile.put("dns_bootstrap",selectedCapture.getJSONObject("dns_bootstrap"));
         Libbox.routerValidateExternalTransport(input.source,input.capture);

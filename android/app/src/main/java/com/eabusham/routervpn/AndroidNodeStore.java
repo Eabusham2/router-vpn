@@ -102,7 +102,6 @@ final class AndroidNodeStore {
             catch(IllegalArgumentException invalid) { throw new IllegalStateException("The custom middle needs one original canonical base64 PSK.",invalid); }
             if(key.length!=expected||!java.util.Base64.getEncoder().encodeToString(key).equals(entry.secret))throw new IllegalStateException("The custom middle PSK has the wrong length or encoding.");
             AndroidStandardExitStore.validate(entry);
-            AndroidNumericAddress.parse(entry.server);
         }
         AndroidStandardExitStore.Entry external() throws Exception {
             if(!imported)throw new IllegalStateException("This ordered source is a paired Router node.");
