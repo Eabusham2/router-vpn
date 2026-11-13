@@ -19,8 +19,6 @@ jobs:
       ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE: '1'
       CGO_ENABLED: '1'
       PYTHONDONTWRITEBYTECODE: '1'
-      ROUTERVPN_DIAGNOSTIC_CHECKPOINT: ${{ runner.temp }}/darwin-wg-three-scheduled.json
-      ROUTERVPN_DIAGNOSTIC_RECEIPT: ${{ runner.temp }}/darwin-wg-three-diagnostic.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,7 +33,7 @@ jobs:
       - name: Verify original native and diagnostic boundaries
         run: python3 deploy/test_darwin_node_child_tun_runner.py
       - name: Capture scheduled exact source and original case without PF
-        run: python3 deploy/test_darwin_node_child_tun.py --require-commit "$GITHUB_SHA" --write-diagnostic-checkpoint "$ROUTERVPN_DIAGNOSTIC_CHECKPOINT"
+        run: python3 deploy/test_darwin_node_child_tun.py --require-commit "$GITHUB_SHA" --write-diagnostic-checkpoint "$RUNNER_TEMP/darwin-wg-three-scheduled.json"
       - name: Preserve scheduled source and case before PF
         uses: actions/upload-artifact@v4
         with:
@@ -45,7 +43,7 @@ jobs:
           retention-days: 14
       - name: Attempt only original wg-three with unchanged native ownership
         timeout-minutes: 45
-        run: python3 deploy/test_darwin_node_child_tun.py --standalone --require-commit "$GITHUB_SHA" --diagnostic-original-case --diagnostic-checkpoint "$ROUTERVPN_DIAGNOSTIC_CHECKPOINT" --diagnostic-receipt "$ROUTERVPN_DIAGNOSTIC_RECEIPT"
+        run: python3 deploy/test_darwin_node_child_tun.py --standalone --require-commit "$GITHUB_SHA" --diagnostic-original-case --diagnostic-checkpoint "$RUNNER_TEMP/darwin-wg-three-scheduled.json" --diagnostic-receipt "$RUNNER_TEMP/darwin-wg-three-diagnostic.json"
       - name: Preserve joined diagnostic result when available
         if: always()
         uses: actions/upload-artifact@v4
