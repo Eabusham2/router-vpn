@@ -570,6 +570,13 @@ def main():
     boundaries=boundaries.replace(old,'AndroidExternalPolicy.supports(e.protocol)&&!e.responseMap.isEmpty()||AndroidTorProfile.isTor(e.protocol)')
     boundaries=boundaries.replace('int starts;String mode,execution=', 'int starts,restores;String mode,execution=').replace('winner,Callback cb){connect(f,e,mode,execution,cb);selected=winner;}', 'winner,Callback cb){restores++;connect(f,e,mode,execution,cb);selected=winner;}')
     for name in ('AndroidStartupPolicy','AndroidHomeStateStore'):boundaries=replace_class(boundaries,name,'')
+    # Cold startup uses the actual persistent Home implementation. Candidate
+    # permission has its own native-owner gate; startup must never create that
+    # temporary purpose or write the permission fixture's in-memory Home.
+    preparation=block(boundaries,'final class AndroidNodeCandidatePreparation {')
+    preparation_start=block(preparation,' void start()')
+    assert boundaries.count(preparation_start)==1
+    boundaries=boundaries.replace(preparation_start,' void start(){throw new AssertionError("startup fixture must not start candidate preparation");}')
     if 'final class AndroidExternalPolicy ' in boundaries:boundaries=replace_class(boundaries,'AndroidExternalPolicy','')
     if 'final class AndroidConnectionProfileStore ' in boundaries:boundaries=replace_class(boundaries,'AndroidConnectionProfileStore','')
     boundaries=replace_class(boundaries,'AndroidNodeStore',NODE);boundaries=replace_class(boundaries,'AndroidModeOrchestrator',ORCHESTRATOR)

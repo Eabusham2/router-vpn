@@ -1479,6 +1479,12 @@ The macOS authenticated process protocol now has a separate candidate-prefix fam
 
 The complete macosprocess package passed under the race detector. Two compiled defects were rejected: omitting the prefix transfer domain and bypassing the captured family during the handshake. These four files provide the process-identity foundation for the Darwin prefix child and host adapters. They do not enable public prefix admission or establish real PF, utun, encrypted-path or installed-host acceptance.
 
+## Android startup fixture keeps its real Home state boundary
+
+The retained Android runtime-truth job at 14b18bb3 reached the original startup-policy gate and failed Java compilation because an inherited candidate-permission fixture still wrote `AndroidHomeStateStore.current`. This startup gate composes the actual persistent Home implementation, which has no such fake field. The startup fixture now rejects any attempt to launch that separate temporary candidate purpose with an explicit assertion. Its shipping StartupPolicy, UnifiedConnectionController, Home-state, selection and Settings sources remain unchanged; ordinary startup cannot invent a candidate proof or mutate a fake Home record.
+
+The repaired original gate passed 4,398 main startup checks and all eight imported families, 9,718 positive checks in total. All 28 independently compiled negative controls were rejected at their original assertions, including source substitution, permission ownership, ordered history, Last/Compare preservation, cancellation and strict private-JSON validation. The gate still builds and invokes the real exported private-JSON parser. This corrects the observed prerequisite compilation failure without claiming a new SDK/APK or Android native-network verdict.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
