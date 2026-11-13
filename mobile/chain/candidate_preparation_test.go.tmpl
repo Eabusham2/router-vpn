@@ -9,14 +9,20 @@ import (
 	"testing"
 	"time"
 
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/daemon"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/logger"
+	"github.com/sagernet/sing/service"
 )
 
 // Real source compiler, daemon instance lookup, callback lifetime and close
 // methods run. Native Box/proof transport executes in the separate pinned Box
 // suite; these component fixtures do not claim an Android VPN or packet path.
-func candidatePreparationBridgeFixture(t *testing.T) (*RouterNodeChainCandidatePreparation, *routerCandidatePreparationState, *candidateBridgeCatalog) {
+func candidatePreparationBridgeSource(t *testing.T) *RouterNodeChainCandidatePreparation {
 	t.Helper()
 	chain := candidateBridgeSource(t)
 	source, err := chain.LaunchInput()
@@ -45,13 +51,46 @@ func candidatePreparationBridgeFixture(t *testing.T) (*RouterNodeChainCandidateP
 	if m.OriginalSourceSHA256() != chain.SourceSHA256() {
 		t.Fatal("fixture changed original saved source")
 	}
-	original, _ := routerNodeChainNativeOwnerFixture(t)
-	lifetime, cancel := context.WithCancel(original.server.ctx)
+	return m
+}
+func candidatePreparationReservedService(t *testing.T, m *RouterNodeChainCandidatePreparation, platform adapter.PlatformInterface) *CommandServer {
+	t.Helper()
+	if platform == nil {
+		platform = &executionBridgePlatform{}
+	}
+	ctx := box.Context(service.ContextWith[adapter.PlatformInterface](context.Background(), platform), include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	started := daemon.NewStartedService(daemon.ServiceOptions{Context: ctx, LogMaxLines: 16})
+	server := &CommandServer{StartedService: started, ctx: ctx}
+	if err := m.BindNative(server); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close(); _ = started.CloseService(); started.Close() })
+	return server
+}
+func candidatePreparationBridgeFixture(t *testing.T) (*RouterNodeChainCandidatePreparation, *routerCandidatePreparationState, *candidateBridgeCatalog) {
+	t.Helper()
+	m := candidatePreparationBridgeSource(t)
+	server := candidatePreparationReservedService(t, m, nil)
+	if err := server.StartedService.StartOrReloadService(server.ctx, executionBridgeEmptyNativeConfig, nil); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := m.native.Load().capture.InstanceContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifetime, cancel := context.WithCancel(server.ctx)
 	t.Cleanup(cancel)
 	catalog := &candidateBridgeCatalog{digest: m.inventorySHA}
-	state := &routerCandidatePreparationState{server: original.server, instance: original.instance, catalog: catalog, lifetime: lifetime, cancel: cancel, done: make(chan struct{})}
+	state := &routerCandidatePreparationState{server: server, nativeService: server.StartedService, instance: instance, catalog: catalog, lifetime: lifetime, cancel: cancel, done: make(chan struct{})}
 	close(state.done)
 	m.state.Store(state)
+	// Identity-fault cases restore only fixture pointers before owned cleanup;
+	// the assertion is made while the original native pointer is still changed.
+	t.Cleanup(func() {
+		m.state.Store(state)
+		server.StartedService = state.nativeService
+		*routerMTUField[*daemon.Instance](t, state.nativeService, "instance") = instance
+	})
 	return m, state, catalog
 }
 func TestRouterNodeChainBridgeCandidatePreparationSourceAndIdentity(t *testing.T) {
@@ -220,5 +259,212 @@ func TestRouterNodeChainBridgeCandidatePreparationLaunchIsExact(t *testing.T) {
 				t.Fatal("strict prefix reopen admitted changed private capture", fault)
 			}
 		})
+	}
+}
+
+// The actual daemon and Box construct/start/close. Only platform monitoring
+// is controlled; an empty direct graph acquires no privileged TUN or packets.
+type candidatePreparationClosePlatform struct {
+	executionBridgePlatform
+	initialize func() error
+	close      func() error
+}
+
+func (p *candidatePreparationClosePlatform) Initialize(adapter.NetworkManager) error {
+	if p.initialize != nil {
+		return p.initialize()
+	}
+	return nil
+}
+func (p *candidatePreparationClosePlatform) CreateDefaultInterfaceMonitor(logger.Logger) tun.DefaultInterfaceMonitor {
+	return &candidatePreparationCloseMonitor{close: p.close}
+}
+
+type candidatePreparationCloseMonitor struct {
+	executionBridgeMonitor
+	close func() error
+}
+
+func (m *candidatePreparationCloseMonitor) Close() error {
+	if m.close != nil {
+		return m.close()
+	}
+	return nil
+}
+
+func TestRouterNodeChainBridgeCandidatePreparationNativeCloseReceipt(t *testing.T) {
+	for _, fault := range []string{"never-constructed", "constructed", "held-close", "failed-close", "foreign-service"} {
+		t.Run(fault, func(t *testing.T) {
+			m := candidatePreparationBridgeSource(t)
+			entered, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			defer unblock()
+			sentinel := errors.New("original prefix native monitor close failed")
+			platform := &candidatePreparationClosePlatform{}
+			if fault == "held-close" {
+				platform.close = func() error { close(entered); <-release; return nil }
+			}
+			if fault == "failed-close" {
+				platform.close = func() error { return sentinel }
+			}
+			server := candidatePreparationReservedService(t, m, platform)
+			if m.NativeClosed() || m.BindNative(server) == nil {
+				t.Fatal("active or replaceable binding fabricated native retirement")
+			}
+			if fault != "never-constructed" {
+				if err := server.StartedService.StartOrReloadService(server.ctx, executionBridgeEmptyNativeConfig, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := m.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if fault == "never-constructed" {
+				if !m.NativeClosed() {
+					t.Fatal("sealed never-acquired prefix capture lost its positive empty receipt")
+				}
+				if server.StartedService.StartOrReloadService(server.ctx, executionBridgeEmptyNativeConfig, nil) == nil {
+					t.Fatal("sealed prefix reservation admitted a later construction")
+				}
+				return
+			}
+			if m.NativeClosed() {
+				t.Fatal("prefix Close fabricated original Box retirement")
+			}
+			if fault == "held-close" {
+				done := make(chan error, 1)
+				go func() { done <- server.CloseService() }()
+				<-entered
+				if actual, _ := server.StartedService.RouterVPNInstanceContext(t.Context()); actual != nil {
+					t.Fatal("fixture did not exercise removed daemon slot during actual Box close")
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+				err := m.nativeClosedContext(ctx)
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("early Box done or nil daemon slot fabricated joined native close", err)
+				}
+				unblock()
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				err := server.CloseService()
+				if fault == "failed-close" {
+					if !errors.Is(err, sentinel) || m.NativeClosed() {
+						t.Fatal("failed original native close released prefix ownership", err)
+					}
+					if err := server.CloseService(); err != nil {
+						t.Fatal("fixture empty-slot retry changed", err)
+					}
+					if m.NativeClosed() {
+						t.Fatal("empty daemon retry erased failed original Box receipt")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !m.NativeClosed() {
+				t.Fatal("successful exact prefix native close lost its receipt")
+			}
+			if fault == "foreign-service" {
+				original := server.StartedService
+				server.StartedService = &daemon.StartedService{}
+				accepted := m.NativeClosed()
+				server.StartedService = original
+				if accepted {
+					t.Fatal("foreign daemon borrowed the original prefix close receipt")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainBridgeCandidatePreparationLateConstructionJoin(t *testing.T) {
+	m := candidatePreparationBridgeSource(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	server := candidatePreparationReservedService(t, m, &candidatePreparationClosePlatform{initialize: func() error { close(entered); <-release; return nil }})
+	done := make(chan error, 1)
+	go func() {
+		done <- server.StartedService.StartOrReloadService(server.ctx, executionBridgeEmptyNativeConfig, nil)
+	}()
+	<-entered
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	err := m.closeContext(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || m.closed.Load() {
+		t.Fatal("late native construction escaped the prefix close join", err)
+	}
+	ctx, cancel = context.WithTimeout(t.Context(), 20*time.Millisecond)
+	if m.nativeClosedContext(ctx) == nil {
+		cancel()
+		t.Fatal("pending construction became empty prefix receipt")
+	}
+	cancel()
+	unblock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Close(); err != nil || m.NativeClosed() {
+		t.Fatal("late acquired Box lost original prefix cleanup", err)
+	}
+	if err := server.CloseService(); err != nil || !m.NativeClosed() {
+		t.Fatal("late constructed original Box did not complete exact close", err)
+	}
+}
+
+func TestRouterNodeChainBridgeCandidatePreparationCancelledBinding(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cancelled", true: "already-closed"}[closed], func(t *testing.T) {
+			m := candidatePreparationBridgeSource(t)
+			m.NetworkChanged()
+			if closed {
+				if err := m.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if m.NativeClosed() {
+				t.Fatal("unbound prefix owner fabricated native DOWN")
+			}
+			started := daemon.NewStartedService(daemon.ServiceOptions{Context: context.Background(), LogMaxLines: 16})
+			t.Cleanup(started.Close)
+			server := &CommandServer{StartedService: started, ctx: context.Background()}
+			if m.BindNative(server) == nil || m.native.Load() == nil {
+				t.Fatal("cancelled prefix binding reopened admission or lost cleanup")
+			}
+			if err := m.Close(); err != nil || !m.NativeClosed() {
+				t.Fatal("cancelled prefix binding lost sealed empty cleanup", err)
+			}
+			if started.StartOrReloadService(server.ctx, executionBridgeEmptyNativeConfig, nil) == nil {
+				t.Fatal("cancelled prefix binding admitted native construction")
+			}
+			foreign := &CommandServer{StartedService: daemon.NewStartedService(daemon.ServiceOptions{Context: context.Background(), LogMaxLines: 16}), ctx: context.Background()}
+			t.Cleanup(foreign.StartedService.Close)
+			if m.BindNative(foreign) == nil || m.native.Load().server != server {
+				t.Fatal("prefix cleanup retargeted a foreign service")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainBridgeCandidatePreparationBindingIsRequired(t *testing.T) {
+	bound := candidatePreparationBridgeSource(t)
+	server := candidatePreparationReservedService(t, bound, nil)
+	if err := server.StartedService.StartOrReloadService(server.ctx, executionBridgeEmptyNativeConfig, nil); err != nil {
+		t.Fatal(err)
+	}
+	unbound := candidatePreparationBridgeSource(t)
+	catalog := &candidateBridgeCatalog{digest: unbound.inventorySHA}
+	if unbound.Run(server, catalog) == nil || unbound.state.Load() != nil || catalog.calls.Load() != 0 {
+		t.Fatal("unreserved prefix Run adopted another native construction")
+	}
+	if unbound.NativeClosed() {
+		t.Fatal("unreserved prefix capture borrowed another native close")
 	}
 }

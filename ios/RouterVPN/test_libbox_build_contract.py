@@ -339,6 +339,8 @@ FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxRou
 - (NSString* _Nonnull)captureSHA256;
 - (NSString* _Nonnull)metadata;
 - (NSString* _Nonnull)progressJSON;
+- (BOOL)bindNative:(LibboxCommandServer* _Nullable)server error:(NSError* _Nullable* _Nullable)error;
+- (BOOL)nativeClosed;
 - (BOOL)run:(LibboxCommandServer* _Nullable)server catalog:(id<LibboxRouterNodeChainCandidateCatalog> _Nullable)catalog error:(NSError* _Nullable* _Nullable)error;
 - (BOOL)healthy;
 - (BOOL)start:(NSString* _Nullable)request candidateID:(NSString* _Nullable)candidateID error:(NSError* _Nullable* _Nullable)error;

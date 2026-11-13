@@ -1273,6 +1273,25 @@ native-DOWN review, never-admitted cancellation, saved-write retention and
 measurement-expiry behavior remain exercised. Prefix-only UI activation is
 not part of this current complete-saved protocol repair.
 
+## Prefix cleanup requires the original native close receipt
+
+The shared prefix preparation now reserves its original command-server daemon
+before native construction. Run must bind to that same reservation and Box;
+Close seals construction and joins the candidate workers and closed ingress
+gate. A separate NativeClosed result requires a positive close receipt from
+the original reserved native instance. An empty daemon slot after a failed
+Box.Close cannot be treated as DOWN, including on a later cleanup retry.
+Unbound preparation objects cannot report native closure. Android and Apple
+packaging contracts require the exact BindNative and NativeClosed bindings.
+
+The actual composed native gate passed all 41 required records and all 13
+compiled causal controls, including failed close, foreign daemon, late native
+construction and cancelled binding witnesses. Its strict phase/verdict runner
+passed eight tests. The Apple ABI contract passed 27 tests. These checks cover
+the actual Box/daemon ownership composition with controlled physical I/O;
+they do not establish physical-device tunnel teardown. Native host callers
+and their public prefix-only flow remain separate integration work.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

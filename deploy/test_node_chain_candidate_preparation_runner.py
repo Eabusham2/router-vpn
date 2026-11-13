@@ -32,7 +32,7 @@ def raw(rows):
 
 class PrefixGate(unittest.TestCase):
     def test_complete_inventory(self):
-        self.assertEqual(GATE.verdict(raw(receipt()), 0), 30)
+        self.assertEqual(GATE.verdict(raw(receipt()), 0), 41)
 
     def test_actual_templates_and_all_causal_controls_are_required(self):
         for package, template in ((GATE.PACKAGE, 'candidate_preparation_box_test.go.tmpl'), (GATE.PACKAGE+'/experimental/libbox', 'candidate_preparation_test.go.tmpl')):
@@ -40,7 +40,7 @@ class PrefixGate(unittest.TestCase):
             names = re.findall(r'^func (Test\w+)\(t \*testing.T\)', source, re.M)
             self.assertEqual(set(names), set(GATE.ROOTS[package]))
             self.assertEqual(len(names), len(set(names)))
-        self.assertEqual(len(GATE.CONTROLS), 9)
+        self.assertEqual(len(GATE.CONTROLS), 13)
         for label, relative, before, after, package, selected, witness in GATE.CONTROLS:
             template = 'candidate_preparation.go.tmpl' if package == './experimental/libbox' else 'candidate_preparation_box.go.tmpl'
             self.assertEqual((ROOT/'mobile/chain'/template).read_text().count(before), 1, label)

@@ -26,22 +26,30 @@ type RouterNodeChainCandidatePreparation struct {
 	inventorySHA   string
 	mu             sync.Mutex
 	state          atomic.Pointer[routerCandidatePreparationState]
+	native         atomic.Pointer[routerCandidatePreparationNative]
 	retired        atomic.Bool
+	closed         atomic.Bool
 	measuring      atomic.Bool
 	observation    sync.Mutex
 	pending        *routerNodeChainCatalogCall
 	callbackActive atomic.Bool
 }
+type routerCandidatePreparationNative struct {
+	server  *CommandServer
+	service *daemon.StartedService
+	capture *daemon.RouterVPNInstanceCloseCapture
+}
 type routerCandidatePreparationState struct {
-	server   *CommandServer
-	instance *daemon.Instance
-	catalog  RouterNodeChainCandidateCatalog
-	lifetime context.Context
-	cancel   context.CancelFunc
-	done     chan struct{}
-	engine   atomic.Pointer[box.RouterVPNNodeChainCandidatePreparationEngine]
-	runtime  atomic.Pointer[mobilemultihop.NodeChainCandidatePreparationRuntime]
-	service  atomic.Pointer[hopmeasure.CandidateService]
+	server        *CommandServer
+	nativeService *daemon.StartedService
+	instance      *daemon.Instance
+	catalog       RouterNodeChainCandidateCatalog
+	lifetime      context.Context
+	cancel        context.CancelFunc
+	done          chan struct{}
+	engine        atomic.Pointer[box.RouterVPNNodeChainCandidatePreparationEngine]
+	runtime       atomic.Pointer[mobilemultihop.NodeChainCandidatePreparationRuntime]
+	service       atomic.Pointer[hopmeasure.CandidateService]
 }
 
 func NewRouterNodeChainCandidatePreparation(source string, prefixPosition int32, inventory string) (*RouterNodeChainCandidatePreparation, error) {
@@ -84,6 +92,61 @@ func (m *RouterNodeChainCandidatePreparation) OriginalSourceSHA256() string {
 func (m *RouterNodeChainCandidatePreparation) CaptureSHA256() string { return m.prep.CaptureSHA256() }
 func (m *RouterNodeChainCandidatePreparation) Metadata() string      { return m.prep.Metadata() }
 
+// Reserve the original fresh daemon before native construction. A failed or
+// cancelled Run cannot later mistake an empty service slot for native DOWN.
+func (m *RouterNodeChainCandidatePreparation) BindNative(server *CommandServer) error {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	if m == nil || m.prep == nil || server == nil || server.ctx == nil || server.StartedService == nil {
+		return errRouterCandidatePreparation()
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return err
+	}
+	defer m.mu.Unlock()
+	if m.state.Load() != nil || m.native.Load() != nil {
+		return errRouterCandidatePreparation()
+	}
+	service := server.StartedService
+	capture, err := service.RouterVPNReserveInstanceCloseContext(ctx)
+	if err != nil {
+		return err
+	}
+	m.native.Store(&routerCandidatePreparationNative{server: server, service: service, capture: capture})
+	if m.retired.Load() || server.StartedService != service || server.ctx.Err() != nil {
+		m.retired.Store(true)
+		return errors.Join(errRouterCandidatePreparation(), capture.SealContext(ctx))
+	}
+	return ctx.Err()
+}
+
+// Called only after the original host closes its service. Candidate Close
+// proves its workers and gate joined, independently of the actual Box/TUN.
+func (m *RouterNodeChainCandidatePreparation) NativeClosed() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	return m.nativeClosedContext(ctx) == nil
+}
+func (m *RouterNodeChainCandidatePreparation) nativeClosedContext(ctx context.Context) error {
+	if m == nil || ctx == nil || !m.retired.Load() || !m.closed.Load() {
+		return errRouterCandidatePreparation()
+	}
+	native, state := m.native.Load(), m.state.Load()
+	if native == nil || native.server == nil || native.service == nil || native.server.StartedService != native.service || native.capture == nil {
+		return errRouterCandidatePreparation()
+	}
+	if state != nil && (state.server != native.server || state.nativeService != native.service || !native.capture.Owns(state.instance, state.instance.Box())) {
+		return errRouterCandidatePreparation()
+	}
+	if err := native.capture.ClosedContext(ctx); err != nil {
+		return err
+	}
+	if m.native.Load() != native || m.state.Load() != state || !m.retired.Load() || !m.closed.Load() {
+		return errRouterCandidatePreparation()
+	}
+	return ctx.Err()
+}
+
 // Run is called only after the original command server has started Config.
 // That configuration closes TUN/DNS ingress at native construction, before
 // this binding. The caller retains this object even when Run fails.
@@ -101,8 +164,14 @@ func (m *RouterNodeChainCandidatePreparation) Run(server *CommandServer, catalog
 		stop()
 		return errRouterCandidatePreparation()
 	}
-	instance, err := server.StartedService.RouterVPNInstanceContext(ctx)
-	if err != nil || instance == nil || instance.Box() == nil || m.retired.Load() {
+	native := m.native.Load()
+	if native == nil || native.server != server || native.service != server.StartedService || native.capture == nil {
+		m.mu.Unlock()
+		stop()
+		return errRouterCandidatePreparation()
+	}
+	instance, err := native.capture.InstanceContext(ctx)
+	if err != nil || instance == nil || instance.Box() == nil || m.retired.Load() || server.StartedService != native.service {
 		m.mu.Unlock()
 		stop()
 		return errors.Join(err, errRouterCandidatePreparation())
@@ -114,7 +183,7 @@ func (m *RouterNodeChainCandidatePreparation) Run(server *CommandServer, catalog
 		return err
 	}
 	lifetime, cancel := context.WithCancel(server.ctx)
-	state := &routerCandidatePreparationState{server: server, instance: instance, catalog: catalog, lifetime: lifetime, cancel: cancel, done: make(chan struct{})}
+	state := &routerCandidatePreparationState{server: server, nativeService: native.service, instance: instance, catalog: catalog, lifetime: lifetime, cancel: cancel, done: make(chan struct{})}
 	m.state.Store(state)
 	m.mu.Unlock()
 	stop()
@@ -161,7 +230,11 @@ func errRouterCandidatePreparation() error {
 // invoke Box observation from it; doing so would recurse through the gate.
 func (m *RouterNodeChainCandidatePreparation) nativeCurrent(ctx context.Context, state *routerCandidatePreparationState) error {
 	if m == nil || ctx == nil || ctx.Err() != nil || state == nil || m.retired.Load() || m.state.Load() != state || state.lifetime.Err() != nil ||
-		state.server == nil || state.server.ctx == nil || state.server.ctx.Err() != nil || state.server.StartedService == nil || state.instance == nil {
+		state.server == nil || state.server.ctx == nil || state.server.ctx.Err() != nil || state.nativeService == nil || state.server.StartedService != state.nativeService || state.instance == nil {
+		return errRouterCandidatePreparation()
+	}
+	native := m.native.Load()
+	if native == nil || native.server != state.server || native.service != state.nativeService || native.capture == nil || !native.capture.Owns(state.instance, state.instance.Box()) {
 		return errRouterCandidatePreparation()
 	}
 	actual, err := state.server.StartedService.RouterVPNInstanceContext(ctx)
@@ -379,8 +452,22 @@ func (m *RouterNodeChainCandidatePreparation) closeContext(ctx context.Context) 
 		return errRouterCandidatePreparation()
 	}
 	m.NetworkChanged()
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return err
+	}
 	state := m.state.Load()
+	native := m.native.Load()
+	m.mu.Unlock()
+	if native != nil {
+		if native.capture == nil {
+			return errRouterCandidatePreparation()
+		}
+		if err := native.capture.SealContext(ctx); err != nil {
+			return err
+		}
+	}
 	if state == nil {
+		m.closed.Store(true)
 		return ctx.Err()
 	}
 	select {
@@ -409,5 +496,6 @@ func (m *RouterNodeChainCandidatePreparation) closeContext(ctx context.Context) 
 			return err
 		}
 	}
+	m.closed.Store(true)
 	return ctx.Err()
 }
