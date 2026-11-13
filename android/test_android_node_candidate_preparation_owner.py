@@ -80,7 +80,7 @@ CASES = r'''
  static void retire(AndroidNodeCandidatePreparation operation)throws Exception{operation.cancelFromUser();await(()->!activePreparation(),"original preparation observer did not close");}
  static void completePreparation()throws Exception {
   try(Fixture f=new Fixture(3)){
-   int history=AndroidStartupPolicy.recorded;Completion detached=new Completion(),callback=new Completion();var operation=prepare(f,detached);operation.attach(callback);
+   int history=AndroidStartupPolicy.recorded;Completion detached=new Completion(),callback=new Completion();var operation=prepare(f,detached);operation.attach(callback);operation.detach(detached);check(operation.observes(callback),"old Activity detached its replacement observer");
    check(callback.detail.contains("Waiting for Android VPN permission"),"recreated Activity lost captured waiting-permission progress");
    check(AndroidNodeCandidatePreparation.busy()&&AndroidMTUMeasurementGate.held()&&f.owner()==null,"permission capture did not retain an idle outer hold");
    operation.start();callback.awaitDone();f.drain();
@@ -101,6 +101,7 @@ CASES = r'''
    int created=CommandServer.created;Completion callback=new Completion();callback.throwsObserver=true;var operation=prepare(f,callback);
    if(cancel)operation.cancelFromUser();else f.service.getSharedPreferences("router-vpn-unified",0).edit().putString("mode","changed").apply();
    callback.awaitDone();await(()->!activePreparation(),"cancelled permission capture retained its observer");
+   Completion late=new Completion();operation.attach(late);check(late.done.await(5,TimeUnit.SECONDS)&&late.choices.isEmpty(),"late Activity attachment lost terminal failed or empty completion");
    check(CommandServer.created==created&&!AndroidMTUMeasurementGate.held()&&!f.runtime.isActiveOrTransitioning()&&callback.choices.isEmpty(),"cancelled or stale permission capture started a native graph or leaked its lease");
    reject(operation::start,"cancelled original permission capture started later");
   }
@@ -161,6 +162,8 @@ def main():
         subprocess.run(['java', '-cp', os.pathsep.join((str(classes), str(jar))), 'com.eabusham.routervpn.OrderedRuntimeTest'], check=True, timeout=90)
         original = (base.JAVA / 'AndroidNodeCandidatePreparation.java').read_text()
         controls = (
+            ('if(terminalCompletionReady&&callback!=null)', 'if(false&&callback!=null)', 'permission', 'late Activity attachment lost terminal failed or empty completion'),
+            ('if(observer==callback){observer=null;observerVersion++;}', 'if(true){observer=null;observerVersion++;}', 'complete', 'old Activity detached its replacement observer'),
             ('boolean joined=false;', 'AndroidMTUMeasurementGate.release(lease);boolean joined=false;', 'graph-join', 'inner candidate join released outer hold before failed graph close'),
             ('network.requireProved(LayeredVpnService.prepareNodeCandidates(session,lease));', 'LayeredVpnService.prepareNodeCandidates(session,lease);', 'complete', 'temporary candidates bypassed the real native host or complete inventory'),
             ('catalog.requireSavedSourcesCurrent();', '', 'complete', 'post-DOWN candidate ignored captured catalog changes'),

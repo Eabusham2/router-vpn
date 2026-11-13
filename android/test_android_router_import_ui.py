@@ -148,6 +148,8 @@ final class AndroidStandardExitStore {
     sources['com/eabusham/routervpn/AndroidNodeChainRuntime.java']=r'''package com.eabusham.routervpn;
 // Native proof is outside this import/policy fixture and must never be invented.
 final class AndroidNodeChainRuntime {static final class ActiveCapture {long pathGeneration;String homeSession,progressJSON;java.util.List<AndroidNodeStore.ChainSource> sources;java.util.List<String> modes;}ActiveCapture captureActive(){throw new IllegalStateException("Import fixture has no native ordered owner");}}'''
+    # This import-only fixture never reserves or starts a temporary VPN purpose.
+    sources['com/eabusham/routervpn/AndroidNodeCandidatePreparation.java']='package com.eabusham.routervpn;final class AndroidNodeCandidatePreparation {static boolean busy(){return false;}static AndroidNodeCandidatePreparation retained(){return null;}}'
     sources['com/eabusham/routervpn/AndroidOrderedPathPresentation.java']=(JAVA/'AndroidOrderedPathPresentation.java').read_text()
     sources['com/eabusham/routervpn/RouterVpnNodeMapView.java']=r'''package com.eabusham.routervpn;final class RouterVpnNodeMapView{static final String ROLE_ENTRY="entry",ROLE_HOP="hop",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";static final class Marker{Marker(String id,String name,double latitude,double longitude,String role,double latency,boolean external){}}void setMarkers(java.util.List<Marker> markers){}void setOrderedPath(java.util.List<String> ids,boolean live){}}'''
     handlers='\n'.join(method(signature) for signature in METHODS)

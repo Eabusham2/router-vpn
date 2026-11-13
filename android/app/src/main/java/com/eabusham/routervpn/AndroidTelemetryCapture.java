@@ -58,7 +58,7 @@ final class AndroidTelemetryCapture {
         check();
     }
     private static void requireProved(AndroidHomeStateStore.Snapshot home){
-        if(!home.connected||!"connected".equals(home.phase)||!"passed".equals(home.pathProof)||home.sessionId.isEmpty()||"external".equals(home.logicalMode)||!home.activeExternalId.isEmpty())
+        if(AndroidNodeCandidatePreparation.testingHome(home.sessionId)||!home.connected||!"connected".equals(home.phase)||!"passed".equals(home.pathProof)||home.sessionId.isEmpty()||"external".equals(home.logicalMode)||!home.activeExternalId.isEmpty())
             throw new IllegalStateException("Connect a proved Router VPN path before measuring its private RTT or speed.");
     }
     private static String signature(AndroidHomeStateStore.Snapshot home){return home.sessionId+"|"+home.pathGeneration+"|"+home.logicalMode+"|"+home.runtimeMode+"|"+home.actualBase+"|"+home.activeNodeId+"|"+home.activeEntryId+"|"+home.activeEntryMode+"|"+home.activeExitId+"|"+home.activeExternalId;}

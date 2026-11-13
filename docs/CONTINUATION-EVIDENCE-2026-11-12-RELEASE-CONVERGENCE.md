@@ -604,6 +604,38 @@ generated component. This closes the fixture cleanup omission; it does not
 identify the original Windows send timeout or substitute for a new Windows
 native execution.
 
+## Android disconnected candidate preparation UI
+
+The Android product now exposes the process-owned temporary candidate operation
+for a complete saved Local ordered path. The original saved path must prove
+usable before its candidates are measured. The sheet requests the real Android
+VPN permission through an immutable preparation identity, reports Testing
+separately from Connected, and offers complete named profile Save only after
+the candidate worker and original native graph have both drained. Saved results
+retain their original source, settings, physical-network and fixed-expiry
+checks; Save does not implicitly Load or Connect the new profile.
+
+Activity recreation reattaches to the process owner and terminal results.
+Cancelling a recreated sheet clears only its exact pending permission receipt;
+a foreign or newer preparation cannot be cancelled by the old view. Testing
+does not publish normal usage, Home connection proof or current-path telemetry.
+Empty results and failed preparation still replay their terminal state to a
+reattached sheet. The displayed measurements are fifty-sample TCP handshake
+timings, with no claim that they are HTTP response times, ICMP or node proof.
+
+Focused executable verification passed 6,755 permission checks with twenty
+causal controls, forty-seven dialog/product integration checks with five
+controls, forty-two process-owner checks with seven controls, and 347 current
+telemetry checks with fourteen controls plus the watcher-start refusal control.
+Dependent usage checks passed 243 cases and nineteen controls; presentation
+passed its original two and four new controls, and import UI passed seventy-four
+checks with seven controls. Ten workflow checks preserve these required gates.
+These fixtures compile the selected actual shipping Java sources against
+explicit Android boundaries. They are not a complete SDK/Activity/APK build or
+physical-device acceptance. Prefix-only preparation when the saved final node
+is unusable, and the other original compatible graph families, remain separate
+requirements.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

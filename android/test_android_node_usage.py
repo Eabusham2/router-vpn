@@ -393,6 +393,10 @@ def sources():
     native = (JAVA / 'NativeSingBoxController.java').read_text()
     methods = [S.block(native, '    static boolean ' + name + '(') for name in ('nativeMultihopEntry', 'nativeWireGuardFamily', 'nativeNaiveFamily', 'nativePQFamily')]
     boundaries = boundaries.replace(' // PRODUCTION_TRANSPORT_PREDICATES', '\n'.join(methods)).replace(' // PRODUCTION_COMPOSITE_PREDICATE', S.block((JAVA / 'AndroidNativeCompositeProfile.java').read_text(), '    static boolean isMode('))
+    # Usage and presentation retain purpose identity but never launch a candidate VPN.
+    preparation_start = 'void start(){if(cancelled||retired||started)throw new IllegalStateException("retired original preparation");started=true;starts++;homeSession="temporary-purpose";AndroidHomeStateStore.current.sessionId=homeSession;AndroidHomeStateStore.current.connected=true;AndroidHomeStateStore.current.phase="connected";AndroidHomeStateStore.current.pathProof="passed";}'
+    assert boundaries.count(preparation_start) == 1
+    boundaries = boundaries.replace(preparation_start, 'void start(){throw new AssertionError("usage fixture must not start candidate permission flow");}')
     boundaries += NATIVE.replace(' // MULTIHOP_CAPTURE_TYPES', P.MULTIHOP_CAPTURE_TYPES)
     return ui, boundaries
 

@@ -38,6 +38,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
     private volatile AndroidNodeCandidateMeasurement measurement;
     private volatile AndroidNodeCandidateCatalog catalog;
     private volatile boolean started,startupDone,startupOK,startingMeasurement,stopRequested,userCancelled,batchDone,retired;
+    private volatile boolean terminalCompletionReady;
     private volatile Throwable failure;
     private volatile String homeSession="";
     private volatile List<Choice> choices=Collections.emptyList();
@@ -80,8 +81,11 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
     static synchronized boolean cancelActive(){if(active==null)return false;active.cancelFromUser();return true;}
     void attach(Callback callback){
         synchronized(this){observer=callback;observerVersion++;}
-        if(!retired&&callback!=null)try{callback.progress(detail);}catch(Throwable ignored){}
+        if(terminalCompletionReady&&callback!=null)try{callback.finished(choices,failure);}catch(Throwable ignored){}
+        else if(!retired&&callback!=null)try{callback.progress(detail);}catch(Throwable ignored){}
     }
+    void detach(Callback callback){synchronized(this){if(observer==callback){observer=null;observerVersion++;}}}
+    synchronized boolean observes(Callback callback){return observer==callback;}
     void cancelFromUser(){userCancelled=true;cancel();}
     void start() {
         synchronized(this){
@@ -155,15 +159,17 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
                 for(Choice choice:choices)requireSavedResultCurrent(choice.result);
             }
         } catch(Throwable invalid){failure=invalid;choices=Collections.emptyList();}
+        terminalCompletionReady=choices.isEmpty()||userCancelled;
         long delivered=deliverCompletion(-1);
         // Keep the captured network observer alive while the explicitly shown
         // result can authorize a future profile. A change-away/back retires it.
         while(!userCancelled&&!choices.isEmpty()){
             try{for(Choice choice:choices)requireSavedResultCurrent(choice.result);}
-            catch(Throwable expired){failure=expired;choices=Collections.emptyList();deliverCompletion(-1);break;}
+            catch(Throwable expired){failure=expired;choices=Collections.emptyList();terminalCompletionReady=true;deliverCompletion(-1);break;}
             delivered=deliverCompletion(delivered);
             pause();
         }
+        if(userCancelled){choices=Collections.emptyList();terminalCompletionReady=true;deliverCompletion(-1);}
         boolean closed=network==null;
         while(!closed){try{network.close();closed=true;}catch(Throwable pending){pause();}}
         synchronized(AndroidNodeCandidatePreparation.class){if(active==this)active=null;}

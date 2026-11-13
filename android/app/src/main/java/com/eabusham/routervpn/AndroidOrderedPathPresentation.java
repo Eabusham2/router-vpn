@@ -20,12 +20,13 @@ final class AndroidOrderedPathPresentation {
         }
     }
     final List<Member> members;
-    final boolean live;
+    final boolean live, testing;
+    private final AndroidNodeCandidatePreparation preparation;
     private final String selection,homeSession;
     private final long homeGeneration;
 
-    private AndroidOrderedPathPresentation(List<Member> members,boolean live,String selection,AndroidHomeStateStore.Snapshot home) {
-        this.members=Collections.unmodifiableList(new ArrayList<>(members));this.live=live;this.selection=selection;
+    private AndroidOrderedPathPresentation(List<Member> members,boolean live,boolean testing,AndroidNodeCandidatePreparation preparation,String selection,AndroidHomeStateStore.Snapshot home) {
+        this.members=Collections.unmodifiableList(new ArrayList<>(members));this.live=live;this.testing=testing;this.preparation=preparation;this.selection=selection;
         homeSession=home.sessionId;homeGeneration=home.pathGeneration;
     }
 
@@ -37,7 +38,9 @@ final class AndroidOrderedPathPresentation {
     /** Call on a worker: complete source and retained native-owner checks can block. */
     static AndroidOrderedPathPresentation capture(Context context,AndroidNodeStore nodes,AndroidStandardExitStore exits,AndroidNodeChainRuntime runtime)throws Exception {
         String choice=selection(context);AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
-        boolean live=home.connected&&"node-chain".equals(home.logicalMode);
+        final AndroidNodeCandidatePreparation preparation;final boolean testing;
+        synchronized(AndroidNodeCandidatePreparation.class){preparation=AndroidNodeCandidatePreparation.retained();testing=AndroidNodeCandidatePreparation.busy();}
+        boolean live=!testing&&home.connected&&"node-chain".equals(home.logicalMode);
         List<AndroidNodeStore.ChainSource> sources;List<String> modes;JSONObject progress=null;
         if(live) {
             AndroidNodeChainRuntime.ActiveCapture active=runtime.captureActive();
@@ -64,7 +67,7 @@ final class AndroidOrderedPathPresentation {
             }
             values.add(new Member(sources.get(i),modes.get(i),ms));
         }
-        AndroidOrderedPathPresentation out=new AndroidOrderedPathPresentation(values,live,choice,home);
+        AndroidOrderedPathPresentation out=new AndroidOrderedPathPresentation(values,live,testing,preparation,choice,home);
         if(!out.current(context))throw new IllegalStateException("The ordered display changed during capture.");
         return out;
     }
@@ -72,6 +75,9 @@ final class AndroidOrderedPathPresentation {
     /** Lightweight main-thread admission: only immutable Home and preference values. */
     boolean current(Context context) {
         AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+        synchronized(AndroidNodeCandidatePreparation.class){
+            if(preparation!=AndroidNodeCandidatePreparation.retained()||testing!=AndroidNodeCandidatePreparation.busy())return false;
+        }
         return homeGeneration==home.pathGeneration&&homeSession.equals(home.sessionId)
                 &&(!live||home.connected&&"node-chain".equals(home.logicalMode))&&selection.equals(selection(context));
     }

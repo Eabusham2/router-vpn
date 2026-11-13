@@ -153,7 +153,7 @@ final class AndroidDirectStandardExitController { EXTERNAL_TRANSPORT }
 PRODUCT = r'''package com.eabusham.routervpn;
 import android.content.*;import java.util.*;import org.json.*;import java.nio.charset.StandardCharsets;
 // Native-owned ordered display capture is exercised by the ordered usage suite.
-final class AndroidOrderedPathPresentation {static final class Member{String name,mode;double httpResponseMs;boolean imported;}boolean live;List<Member> members;}
+final class AndroidOrderedPathPresentation {static final class Member{String name,mode;double httpResponseMs;boolean imported;}boolean live,testing;List<Member> members;}
 // Only UI rendering and runtime dispatch are doubled. The shipping handler reads
 // the same actual profile/node/exit stores used by the persistence regression.
 final class ProductConnectSurface extends Context {

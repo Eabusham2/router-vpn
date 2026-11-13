@@ -32,7 +32,53 @@ TEST = r'''
    check(f.activity.orderedPresentation==null,"slow ordered worker published after a newer Home decision");
    check(f.activity.mapView.ordered.isEmpty()&&!f.activity.mapView.orderedLive,"retired ordered receipt animated the map");
   }
+  testing(Path.of(args[0]));
   System.out.println("Android actual Product ordered worker: single observation, off-main native/source capture, queued stale Home publication rejection PASS");
+ }
+
+ static AndroidOrderedPathPresentation capture(Fixture f)throws Exception{
+  AtomicReference<AndroidOrderedPathPresentation> value=new AtomicReference<>();AtomicReference<Throwable> failure=new AtomicReference<>();
+  Thread thread=new Thread(()->{try{value.set(AndroidOrderedPathPresentation.capture(f.activity,f.store,f.exits,AndroidRuntimeRegistry.get(f.activity).nodeChain));}catch(Throwable e){failure.set(e);}},"testing-display-worker");
+  thread.start();thread.join(4000);check(!thread.isAlive(),"testing display worker did not drain");if(failure.get()!=null)throw new IllegalStateException("testing capture refused",failure.get());return value.get();
+ }
+ static void storedTesting(Fixture f,AndroidNodeStore.ChainCapture source)throws Exception{
+  var runtime=AndroidRuntimeRegistry.get(f.activity).nodeChain;int before=runtime.activeReads;var shown=capture(f);
+  check(shown!=null&&shown.testing&&!shown.live&&runtime.activeReads==before,"temporary Testing display adopted native Connected proof");
+  check(shown.members.size()==source.members.size(),"Testing display lost the complete saved path");
+  for(int i=0;i<shown.members.size();i++){var member=shown.members.get(i);check(member.id.equals(source.members.get(i).id)&&member.mode.equals(source.modes.get(i))&&member.httpResponseMs==0,"Testing display invented live scores or changed an original member");}
+  check(!HomeObservation.connected(f.activity)&&"Testing".equals(HomeObservation.phase(f.activity)),"temporary purpose escaped Home Testing presentation");
+ }
+ static void testing(Path root)throws Exception{
+  try(Fixture f=new Fixture(root)){
+   var source=ordered(f);AndroidConnectionProfileStore.orderedChoice=source;
+   var idle=capture(f);check(idle!=null&&!idle.live&&!idle.testing,"ordinary saved display changed");
+   var first=new AndroidNodeCandidatePreparation();AndroidNodeCandidatePreparation.active=first;
+   check(!idle.current(f.activity),"saved display survived a new temporary purpose");
+   storedTesting(f,source);
+   // Permission and raw engine UP remain Testing, before a native Home proof exists.
+   for(String key:List.of(NativeSingBoxController.STATE_KEY,NativeXrayController.STATE_KEY)){
+    f.activity.getSharedPreferences("router-vpn",0).edit().putString(key,"UP").apply();storedTesting(f,source);f.activity.getSharedPreferences("router-vpn",0).edit().putString(key,"DOWN").apply();
+   }
+   var home=AndroidHomeStateStore.beginNodeChain(f.activity,source);check(AndroidHomeStateStore.connectedNodeChain(f.activity,home),"testing internal Home proof setup failed");first.homeSession=home.sessionId;
+   var runtime=AndroidRuntimeRegistry.get(f.activity).nodeChain;runtime.active=new AndroidNodeChainRuntime.ActiveCapture(source,home,orderedProgress(source).toString());
+   storedTesting(f,source);check(AndroidHomeStateStore.snapshot(f.activity).connected,"display corrupted internal native proof ownership");
+   var retained=capture(f);check(retained.current(f.activity),"retained draining purpose lost its display");
+   // Keep Home unchanged here to prove purpose identity is an independent barrier.
+   AndroidNodeCandidatePreparation.active=new AndroidNodeCandidatePreparation();
+   check(!retained.current(f.activity),"display survived a replaced temporary purpose");
+   retained=capture(f);AndroidNodeCandidatePreparation.active.retired=true;
+   check(!retained.current(f.activity),"display survived temporary purpose retirement");
+   AndroidNodeCandidatePreparation.active=new AndroidNodeCandidatePreparation();
+   AndroidConnectionProfileStore.beforeOrderedRead=()->AndroidNodeCandidatePreparation.active=new AndroidNodeCandidatePreparation();
+   boolean refused=false;try{capture(f);}catch(Exception expected){refused=true;}finally{AndroidConnectionProfileStore.beforeOrderedRead=null;}
+   check(refused,"testing source read published across purpose replacement");
+   AndroidHomeStateStore.disconnected(f.activity);AndroidNodeCandidatePreparation.active.retired=true;
+   var down=capture(f);check(!down.testing&&!down.live&&!HomeObservation.connected(f.activity)&&"off".equals(HomeObservation.phase(f.activity)),"joined temporary path retained Testing or Connected display");
+   AndroidNodeCandidatePreparation.active=null;check(!down.current(f.activity),"display survived retired result authority removal");
+   home=AndroidHomeStateStore.beginNodeChain(f.activity,source);check(AndroidHomeStateStore.connectedNodeChain(f.activity,home),"ordinary Home reconnect failed");
+   runtime.active=new AndroidNodeChainRuntime.ActiveCapture(source,home,orderedProgress(source).toString());var ordinary=capture(f);
+   check(ordinary.live&&!ordinary.testing&&ordinary.members.get(0).httpResponseMs==10&&HomeObservation.connected(f.activity),"Testing presentation changed ordinary proved connection");
+  }finally{AndroidNodeCandidatePreparation.active=null;AndroidConnectionProfileStore.beforeOrderedRead=null;AndroidConnectionProfileStore.orderedChoice=null;}
  }
  static void waitUI(UsageActivity a)throws Exception{long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);while(a.pendingUI.isEmpty()&&System.nanoTime()<end)Thread.yield();check(!a.pendingUI.isEmpty(),"ordered worker did not finish its captured observation");}
 '''
@@ -53,6 +99,13 @@ final class PresentationObservation {
  static void read(){if(Thread.currentThread().getName().equals("main"))onMain=true;entered.countDown();if(block)try{if(!release.await(4,java.util.concurrent.TimeUnit.SECONDS))throw new AssertionError("observation release missing");}catch(InterruptedException e){throw new AssertionError(e);}}
 }
 '''
+    home = (JAVA / "AndroidHomeSummary.java").read_text()
+    home_source = "package com.eabusham.routervpn;import android.content.*;import java.util.*;final class HomeObservation {" + "\n".join(U.S.block(home, signature) for signature in ("    private static final class RuntimeState", "    private static RuntimeState runtimeState(", "    private static String combineWarnings(")) + "static boolean connected(Context c){return runtimeState(c).connected;}static String phase(Context c){return runtimeState(c).phase;}}"
+    for name in ("NativeSingBoxController", "NativeXrayController"):
+        native = (JAVA / (name + ".java")).read_text()
+        constants = "\n".join(line for line in native.splitlines() if any("static final String " + key + " " in line for key in ("STATE_KEY", "MODE_KEY", "ERROR_KEY")))
+        assert len(constants.splitlines()) == 3
+        boundaries = boundaries.replace("final class " + name + " {", "final class " + name + " {" + constants)
     activity = U.ACTIVITY
     activity = activity.replace(' // SHIPPING_EXTERNAL_LATENCY', U.S.block(product, '    private double liveExternalMedian('))
     original = "AndroidOrderedPathPresentation orderedPresentation;AndroidOrderedPathPresentation currentOrderedPresentation(){return orderedPresentation!=null&&orderedPresentation.current(this)?orderedPresentation:null;}"
@@ -88,6 +141,7 @@ final class PresentationObservation {
         (app / "Boundaries.java").write_text(boundaries)
         (app / "UsageActivity.java").write_text(activity)
         (app / "NodeUsageTest.java").write_text(harness)
+        (app / "HomeObservation.java").write_text(home_source)
         for name in ("AndroidPrivateFileStore", "AndroidNodeUsage", "AndroidHomeStateStore", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidUnifiedNodeCatalog", "AndroidConnectionSelection", "AndroidUnifiedConnectionController", "AndroidNumericAddress", "AndroidOrderedPathPresentation"):
             (app / (name + ".java")).write_bytes((JAVA / (name + ".java")).read_bytes())
         compile_args = ["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(root / "classes"), *map(str, root.rglob("*.java"))]
@@ -103,6 +157,26 @@ final class PresentationObservation {
             if result.returncode == 0 or witness not in result.stderr:
                 raise AssertionError("Ordered Product worker mutation missed its defect: " + result.stdout + result.stderr)
             print("Ordered Product worker causal control rejected:", witness)
+        (app / "UsageActivity.java").write_text(activity)
+        presentation = (JAVA / "AndroidOrderedPathPresentation.java").read_text()
+        controls = (
+            ("HomeObservation.java", home_source, "if(AndroidNodeCandidatePreparation.busy())", "if(false)", "temporary purpose escaped Home Testing presentation"),
+            ("AndroidOrderedPathPresentation.java", presentation, "boolean live=!testing&&home.connected", "boolean live=home.connected", "temporary Testing display adopted native Connected proof"),
+            ("AndroidOrderedPathPresentation.java", presentation, "preparation!=AndroidNodeCandidatePreparation.retained()", "false", "display survived a replaced temporary purpose"),
+            ("AndroidOrderedPathPresentation.java", presentation, "testing!=AndroidNodeCandidatePreparation.busy()", "false", "display survived temporary purpose retirement"),
+        )
+        for filename, original, old, new, witness in controls:
+            assert original.count(old) == 1
+            changed = original.replace(old, new)
+            assert changed != original
+            (app / filename).write_text(changed)
+            subprocess.run(compile_args, check=True, timeout=45, capture_output=True)
+            result = subprocess.run(run, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 or witness not in result.stderr:
+                raise AssertionError("Testing presentation mutation missed its defect: " + result.stdout + result.stderr)
+            print("Testing presentation causal control rejected:", witness)
+            (app / filename).write_text(original)
+
 
 
 if __name__ == "__main__":
