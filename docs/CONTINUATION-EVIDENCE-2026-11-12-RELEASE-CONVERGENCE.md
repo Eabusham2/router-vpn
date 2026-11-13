@@ -1147,6 +1147,28 @@ native CI pipeline. Compilation and runner-parser results do not establish
 that those installed-network scenarios passed, nor do the earlier six
 Linux command/TUN cases substitute for this new host/API acceptance.
 
+## iOS prefix source capture and native binding contract
+
+The ordinary iOS source capture now privately retains the original plain
+compiler input at construction. The distinct prefix capture uses that input
+and the selected packet-prefix position/catalog to call the shared native
+constructor. Provider-side reopening uses the strict native private-launch
+parser; it does not discard receipt fields or reconstruct source authority
+from an opaque ready record. Its checks bind original full-source provenance,
+exact prefix members/proofs/modes/Start Layers, inventory, configuration and
+configured-only TUN/MTU bounds, and require application/DNS ingress closed.
+No prefix runtime or Connected adoption is enabled by this source change.
+
+The actual shipping Swift capture, using real shared Go constructors/parsers,
+passed 66 checks and six executable causal controls. Those controls cover
+lost original source, mismatched provenance, opened application/DNS ingress,
+wrong inventory and an ignored native reopening error. The Apple Libbox
+build contract passed 27 checks and now requires the native 30-record/nine-
+control prefix gate and exact exported header methods. Project and runtime
+fixture inventories include the new source. Provider request integration,
+retained runtime/UI flow, Xcode/NetworkExtension compilation and physical
+networking remain separate acceptance work.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

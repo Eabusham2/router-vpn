@@ -17,6 +17,9 @@ struct IOSNodeChainCapture {
     static let maximumInputBytes = 40 * 1024 * 1024
     let plan: LibboxRouterNodeChain
     let launchInput: String
+    // Retained only by the original compiler invocation. A sealed launch is
+    // never reduced to a new plain source by dropping its receipt fields.
+    let originalSource: String?
     let members: [Member]
     let strict: Bool
     let homeLANAccess: Bool
@@ -114,7 +117,7 @@ struct IOSNodeChainCapture {
         guard let plan = LibboxNewRouterNodeChain(source, &failure), failure == nil else {
             throw failure ?? issue("The selected ordered native graph is unavailable.")
         }
-        do { return try Self(plan: plan, selectionExecution: selectionExecution) }
+        do { return try Self(plan: plan, selectionExecution: selectionExecution, originalSource: source) }
         catch { try? plan.close(); throw error }
     }
 
@@ -136,6 +139,10 @@ struct IOSNodeChainCapture {
 
     // Inspect the retained original source without constructing another native plan.
     init(plan: LibboxRouterNodeChain, selectionExecution: String = "local") throws {
+        try self.init(plan: plan, selectionExecution: selectionExecution, originalSource: nil)
+    }
+
+    private init(plan: LibboxRouterNodeChain, selectionExecution: String, originalSource: String?) throws {
         guard ["local", "server", "auto"].contains(selectionExecution) else { throw Self.issue("The ordered source lost its explicit execution selection.") }
         var failure: NSError?
         let returned: String? = plan.launchInput(&failure)
@@ -196,7 +203,7 @@ struct IOSNodeChainCapture {
                 throw Self.issue("The original member order or selected transport changed.")
             }
         }
-        self.plan = plan; self.launchInput = launch; self.members = members; self.strict = strict; self.homeLANAccess = lan; self.selectionExecution = selectionExecution
+        self.plan = plan; self.launchInput = launch; self.originalSource = originalSource; self.members = members; self.strict = strict; self.homeLANAccess = lan; self.selectionExecution = selectionExecution
     }
 
     static func executionProfile(_ profile: [String: Any]) -> [String: Any] {

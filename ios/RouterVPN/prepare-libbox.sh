@@ -175,6 +175,26 @@ for header in headers:
     assert 'LibboxRouterStrategyCloseService' in header.read_text(), str(header)
     for symbol in ('LibboxNewRouterNodeChainExecution', 'LibboxRouterNodeChainExecutionFromLaunch', 'LibboxNewRouterNodeChainExecutionLaunch', 'LibboxNewRouterNodeChainExecutionRestore'):
         assert symbol+'(' in content, 'Missing ordered execution constructor: '+symbol
+    # PREFIX_PREPARATION_ABI_BEGIN
+    for signature in (
+        'FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxNewRouterNodeChainCandidatePreparation(NSString* _Nullable source, int32_t prefixPosition, NSString* _Nullable inventory, NSError* _Nullable* _Nullable error);',
+        'FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxRouterNodeChainCandidatePreparationLaunch(NSString* _Nullable input, NSError* _Nullable* _Nullable error);',
+    ):
+        assert signature in content, 'Prefix preparation constructor ABI changed: '+signature
+    preparation=re.search(r'@interface LibboxRouterNodeChainCandidatePreparation : NSObject .*?\n(.*?)@end',content,re.S)
+    assert preparation, 'Missing separate native prefix preparation owner'
+    for signature in (
+        '- (NSString* _Nonnull)config;', '- (NSString* _Nonnull)launchInput;',
+        '- (NSString* _Nonnull)sourceSHA256;', '- (NSString* _Nonnull)configSHA256;',
+        '- (NSString* _Nonnull)originalSourceSHA256;', '- (NSString* _Nonnull)captureSHA256;',
+        '- (NSString* _Nonnull)metadata;', '- (NSString* _Nonnull)progressJSON;',
+        '- (BOOL)run:(LibboxCommandServer* _Nullable)server catalog:(id<LibboxRouterNodeChainCandidateCatalog> _Nullable)catalog error:(NSError* _Nullable* _Nullable)error;',
+        '- (BOOL)healthy;', '- (BOOL)start:(NSString* _Nullable)request candidateID:(NSString* _Nullable)candidateID error:(NSError* _Nullable* _Nullable)error;',
+        '- (void)cancel:(NSString* _Nullable)request;', '- (BOOL)drain:(NSString* _Nullable)request error:(NSError* _Nullable* _Nullable)error;',
+        '- (NSString* _Nonnull)statusJSON;', '- (void)networkChanged;', '- (BOOL)close:(NSError* _Nullable* _Nullable)error;',
+    ):
+        assert signature in preparation.group(1), 'Prefix preparation lifecycle ABI changed: '+signature
+    # PREFIX_PREPARATION_ABI_END
     execution=re.search(r'@interface LibboxRouterNodeChainExecution : NSObject .*?\n(.*?)@end',content,re.S)
     assert execution, 'Missing native ordered execution owner'
     for signature in ('- (BOOL)bindNative:(LibboxCommandServer* _Nullable)server error:(NSError* _Nullable* _Nullable)error;',
@@ -259,6 +279,8 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   [[ $(go list -m -f '{{.Version}}' github.com/xtls/xray-core) == "$XRAY_VERSION" ]]
   bash "$ROOT/../../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_VENDOR"
   python3 "$ROOT/../../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"
+  python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation_runner.py"
+  python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_external_pinned.sh" "$VENDOR"

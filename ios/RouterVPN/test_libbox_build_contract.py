@@ -324,5 +324,69 @@ class AppleLibboxWorkflowVerification(unittest.TestCase):
         self.assertNotIn('Headers/Libbox.h', workflow)
 
 
+class ApplePrefixPreparationBuildContract(unittest.TestCase):
+    """Expected ABI shapes; real generated SDK headers remain the shipping gate."""
+    header = '''
+FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxNewRouterNodeChainCandidatePreparation(NSString* _Nullable source, int32_t prefixPosition, NSString* _Nullable inventory, NSError* _Nullable* _Nullable error);
+FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxRouterNodeChainCandidatePreparationLaunch(NSString* _Nullable input, NSError* _Nullable* _Nullable error);
+@interface LibboxRouterNodeChainCandidatePreparation : NSObject <goSeqRefInterface> {
+}
+- (NSString* _Nonnull)config;
+- (NSString* _Nonnull)launchInput;
+- (NSString* _Nonnull)sourceSHA256;
+- (NSString* _Nonnull)configSHA256;
+- (NSString* _Nonnull)originalSourceSHA256;
+- (NSString* _Nonnull)captureSHA256;
+- (NSString* _Nonnull)metadata;
+- (NSString* _Nonnull)progressJSON;
+- (BOOL)run:(LibboxCommandServer* _Nullable)server catalog:(id<LibboxRouterNodeChainCandidateCatalog> _Nullable)catalog error:(NSError* _Nullable* _Nullable)error;
+- (BOOL)healthy;
+- (BOOL)start:(NSString* _Nullable)request candidateID:(NSString* _Nullable)candidateID error:(NSError* _Nullable* _Nullable)error;
+- (void)cancel:(NSString* _Nullable)request;
+- (BOOL)drain:(NSString* _Nullable)request error:(NSError* _Nullable* _Nullable)error;
+- (NSString* _Nonnull)statusJSON;
+- (void)networkChanged;
+- (BOOL)close:(NSError* _Nullable* _Nullable)error;
+@end
+'''
+
+    def check_header(self, content):
+        block=p.split('    # PREFIX_PREPARATION_ABI_BEGIN\n',1)[1].split('    # PREFIX_PREPARATION_ABI_END',1)[0]
+        source='import re\ncontent='+repr(content)+'\n'+textwrap.dedent(block)
+        return subprocess.run(['python3','-c',source],text=True,capture_output=True,timeout=15)
+
+    def test_exact_prefix_api_passes(self):
+        result=self.check_header(self.header)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_each_constructor_and_owner_method_is_required(self):
+        for line in self.header.splitlines():
+            if line.startswith(('FOUNDATION_EXPORT','- (')):
+                with self.subTest(line=line):
+                    self.assertNotEqual(self.check_header(self.header.replace(line,'',1)).returncode,0)
+
+    def test_foreign_owner_cannot_supply_missing_close(self):
+        close='- (BOOL)close:(NSError* _Nullable* _Nullable)error;'
+        value=self.header.replace(close,'',1)+'\n@interface ForeignOwner : NSObject <goSeqRefInterface> {\n}\n'+close+'\n@end\n'
+        self.assertNotEqual(self.check_header(value).returncode,0)
+
+    def test_nonthrowing_or_unbound_run_is_rejected(self):
+        for before,after in [(' catalog:(id<LibboxRouterNodeChainCandidateCatalog> _Nullable)catalog',''),('int32_t prefixPosition','int64_t prefixPosition'),('NSError* _Nullable* _Nullable error','NSError* _Nullable error')]:
+            with self.subTest(before=before):
+                self.assertNotEqual(self.check_header(self.header.replace(before,after)).returncode,0)
+
+    def test_actual_native_inventory_and_runner_gate_are_mandatory(self):
+        commands=['python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation_runner.py"',
+                  'python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"']
+        def admitted(source):
+            lines=[line.strip() for line in source.splitlines()]
+            return all(lines.count(command)==1 and source.index(command)<source.index('go test ./experimental/libbox/routervpn/...') for command in commands)
+        self.assertTrue(admitted(p))
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertFalse(admitted(p.replace(command,'# '+command,1)))
+                self.assertFalse(admitted(p.replace(command,'',1)))
+
+
 if __name__ == '__main__':
     unittest.main()
