@@ -22,6 +22,7 @@ on:
           - ios-socks-host
           - linux-hy2
           - socks-source
+          - connect-source
           - macos-profiles
           - socks-runtime
           - socks-owner
@@ -29,6 +30,7 @@ on:
           - socks-run
           - socks-mtu
           - socks-native-mtu
+          - socks-preclose
           - android-sdk
           - ios-sdk
           - darwin-hy2
@@ -75,7 +77,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent", "desktop-socks-editor", "desktop-socks-child", "android-policy-fixtures"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "connect-source", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "socks-preclose", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent", "desktop-socks-editor", "desktop-socks-child", "android-policy-fixtures"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -158,6 +160,11 @@ jobs:
             python3 validator/deploy/test_focused_socks_bridge_runner.py
             python3 validator/deploy/test_focused_socks_native_mtu_runner.py
           fi
+          if [[ "$SUITE" == "socks-preclose" ]]; then
+            python3 validator/deploy/test_focused_socks_bridge_runner.py
+            python3 validator/deploy/test_focused_socks_native_mtu_runner.py
+            python3 validator/deploy/test_focused_socks_preclose_runner.py
+          fi
           if [[ "$SUITE" == "socks-bridge" ]]; then
             python3 validator/deploy/test_focused_socks_bridge_runner.py
           fi
@@ -166,6 +173,10 @@ jobs:
           fi
           if [[ "$SUITE" == "socks-source" ]]; then
             python3 validator/deploy/test_focused_socks_source_runner.py
+          fi
+          if [[ "$SUITE" == "connect-source" ]]; then
+            python3 validator/deploy/test_focused_socks_source_runner.py
+            python3 validator/deploy/test_focused_connect_source_runner.py
           fi
           if [[ "$SUITE" == "linux-hy2" ]]; then
             python3 validator/deploy/test_validate_linux_hy2_source.py
@@ -274,6 +285,14 @@ jobs:
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Require captured SOCKS preclose and preserved native ownership
+        if: inputs.suite == 'socks-preclose'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_socks_preclose.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
       - name: Execute retained native SOCKS MTU and every original bridge control
         if: inputs.suite == 'socks-native-mtu'
         shell: bash
@@ -352,6 +371,14 @@ jobs:
         shell: bash
         run: |
           python3 validator/deploy/test_focused_desktop_socks_capture.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Require captured CONNECT source and preserved compiler controls
+        if: inputs.suite == 'connect-source'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_connect_source.py \
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"
