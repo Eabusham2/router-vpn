@@ -69,7 +69,7 @@ func desktopWFPSSEntryInitialReceipt(request *desktopExternalWFPSSEntryRequest, 
 		return reply.SSEntryInner == "" && reply.SSEntryLayer == nil && reply.SSFinalLayer == nil
 	}
 	inner, err := netip.ParseAddrPort(reply.SSEntryInner)
-	if err != nil || inner.Addr() != local || inner.Port() == 0 || request.EntryLayer == "" && inner != remote || request.EntryLayer != "" && inner == remote || reply.SSEntryTCP != 0 || reply.SSEntryUDP != 0 || reply.SSEntryPublic != 0 || reply.SSEntryTLS != 0 || reply.SSEntryRejected != 0 {
+	if err != nil || inner.Addr() != local || inner.Port() == 0 || request.EntryLayer == "" && inner != remote || request.EntryLayer != "" && inner == remote || reply.AuthFailures != 0 || reply.SSEntryTCP != 0 || reply.SSEntryUDP != 0 || reply.SSEntryPublic != 0 || reply.SSEntryTLS != 0 || reply.SSEntryRejected != 0 {
 		return false
 	}
 	for _, row := range []struct {
@@ -1081,7 +1081,10 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 							for p.call(t, "stats", "").AuthFailures == 0 {
 								select {
 								case outcome := <-done:
-									if final != "hysteria2" || name != "reject/final-key" || p.call(t, "stats", "").AuthFailures == 0 {
+									// The original peer can publish its rejection after the
+									// loop snapshot and before this completion is selected.
+									// Refresh that same authenticated counter for every final.
+									if p.call(t, "stats", "").AuthFailures == 0 {
 										t.Fatal("SS credential proof ended without native authentication rejection", outcome.err)
 									}
 									done <- outcome

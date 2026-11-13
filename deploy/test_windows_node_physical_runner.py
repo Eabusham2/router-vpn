@@ -1427,6 +1427,132 @@ class OpenVPNWitnessCompilerScope(unittest.TestCase):
 class OrdinarySSEntryScope(unittest.TestCase):
     setUp = OrdinaryHysteria2Scope.setUp
 
+    @staticmethod
+    def credential_rejection_fragment(source):
+        begin = '\t\t\t\t\t\tif name == "reject/entry-key" || name == "reject/final-key" {'
+        end = '\t\t\t\t\t\tif strings.Contains(name, "-layer-")'
+        if source.count(begin) != 1 or source.count(end) != 1:
+            raise ValueError("SS credential completion boundary changed")
+        start = source.index(begin)
+        return source[start:source.index(end, start)]
+
+    def test_credential_completion_keeps_original_counter_and_bounds(self):
+        source = (ROOT / "mobile/desktop/external_box_windows_ss_entry_test.go.tmpl").read_text()
+        block = self.credential_rejection_fragment(source)
+        self.assertEqual(block.count('p.call(t, "stats", "").AuthFailures == 0'), 2)
+        self.assertIn("time.NewTimer(10 * time.Second)", block)
+        self.assertIn("case outcome := <-done:", block)
+        self.assertIn("done <- outcome", block)
+        self.assertIn("f.proof.Cancel()", block)
+        self.assertIn('t.Fatal("SS credential proof ended without native authentication rejection", outcome.err)', block)
+        self.assertNotIn('final != "hysteria2"', block)
+        self.assertIn("case <-time.After(12 * time.Second):", source)
+        self.assertIn('outcome.err == nil || outcome.raw != "" || f.proof.Healthy() || f.network.Current()', source)
+        initial = source[source.index("func desktopWFPSSEntryInitialReceipt("):source.index("func desktopWFPSSEntryReceiptIdentityControl(")]
+        self.assertIn("reply.AuthFailures != 0", initial)
+        for changed in (source.replace('if name == "reject/entry-key" || name == "reject/final-key" {', "if false {", 1), source + block):
+            with self.assertRaisesRegex(ValueError, "completion boundary"):
+                self.credential_rejection_fragment(changed)
+
+    def test_actual_credential_completion_refreshes_original_snapshot_and_refuses_no_rejection(self):
+        source = (ROOT / "mobile/desktop/external_box_windows_ss_entry_test.go.tmpl").read_text()
+        block = self.credential_rejection_fragment(source)
+        initial = source[source.index("func desktopWFPSSEntryInitialReceipt("):source.index("func desktopWFPSSEntryReceiptIdentityControl(")]
+        # Execute the actual native fixture's select/refresh/result handoff,
+        # with completion published between its first snapshot and select.
+        # These are ordering tests only; the native gate still requires the
+        # original independent encrypted peer, its auth counter and real WFP.
+        fixture = r'''package credential
+import("errors";"fmt";"net/netip";"strings";"testing";"time")
+type rejected string
+type recorder struct{}
+func(recorder)Helper(){}
+func(recorder)Fatal(v ...any){panic(rejected(fmt.Sprint(v...)))}
+type result struct{raw string;err error}
+var originalFailure=errors.New("original proof refusal")
+type proof struct{cancelled int}
+func(p *proof)Cancel(){p.cancelled++}
+type observation struct{calls int;publish bool;done chan result}
+func(p *observation)call(t recorder,operation,nonce string) desktopExternalWFPReply{
+ if operation!="stats"||nonce!=""{t.Fatal("foreign stats source")}
+ p.calls++
+ if p.calls==1{p.done<-result{err:originalFailure};return desktopExternalWFPReply{}}
+ if p.publish{return desktopExternalWFPReply{AuthFailures:1}}
+ return desktopExternalWFPReply{}
+}
+type desktopExternalWFPSSEntryRequest struct{Method,Final,EntryLayer,FinalLayer string}
+type desktopWFPSSEntryLayerReceipt struct{
+ Mode,Address,Private string
+ RawTCP,RawUDP,TCP,UDP,Rejected int32
+ UDPOnly bool
+}
+type desktopExternalWFPReply struct{
+ SSEntryInner string
+ AuthFailures,SSEntryTCP,SSEntryUDP,SSEntryPublic,SSEntryTLS,SSEntryRejected int32
+ SSEntryLayer,SSFinalLayer *desktopWFPSSEntryLayerReceipt
+}
+// ORIGINAL_INITIAL_RECEIPT
+func exercise(final,name string,publish bool)(failure string){
+ defer func(){if value:=recover();value!=nil{if reason,ok:=value.(rejected);ok{failure=string(reason)}else{panic(value)}}}()
+ t:=recorder{}
+ done:=make(chan result,1)
+ p:=&observation{publish:publish,done:done}
+ f:=struct{proof *proof}{proof:&proof{}}
+ // ORIGINAL_CREDENTIAL_COMPLETION
+ if p.calls!=2{t.Fatal("original completion did not refresh exactly once")}
+ if f.proof.cancelled!=1{t.Fatal("original proof cleanup changed")}
+ select{
+ case outcome:=<-done:
+  if outcome.err!=originalFailure||outcome.raw!=""{t.Fatal("completion result changed")}
+ default:t.Fatal("original completion was consumed without handoff")
+ }
+ return ""
+}
+func TestOriginalCredentialCompletion(t *testing.T){
+ for _,final:=range []string{"shadowsocks","http-connect","https-connect","hysteria2"}{
+  for _,name:=range []string{"reject/entry-key","reject/final-key"}{
+   t.Run(final+"/"+name,func(t *testing.T){
+    if failure:=exercise(final,name,true);failure!=""{t.Fatal("completed original auth rejection ignored",failure)}
+    if failure:=exercise(final,name,false);!strings.Contains(failure,"SS credential proof ended without native authentication rejection"){
+     t.Fatal("missing original authentication rejection accepted",failure)
+    }
+   })
+  }
+ }
+}
+func TestOriginalCredentialInitialCounter(t *testing.T){
+ local:=netip.MustParseAddr("192.0.2.1")
+ remote:=netip.AddrPortFrom(local,8388)
+ request:=&desktopExternalWFPSSEntryRequest{Final:"shadowsocks"}
+ original:=desktopExternalWFPReply{SSEntryInner:remote.String()}
+ if !desktopWFPSSEntryInitialReceipt(request,original,local,remote,"entry-key"){t.Fatal("fresh original peer refused")}
+ original.AuthFailures=1
+ if desktopWFPSSEntryInitialReceipt(request,original,local,remote,"entry-key"){t.Fatal("preexisting authentication rejection accepted")}
+}
+'''
+        compiler = shutil.which("go")
+        self.assertIsNotNone(compiler, "Go is required for actual SS credential completion ordering")
+        with tempfile.TemporaryDirectory(prefix="windows-ss-credential-completion-") as directory:
+            path = Path(directory) / "credential_test.go"
+            def execute(selected_block, selected_initial):
+                path.write_text(fixture.replace("// ORIGINAL_CREDENTIAL_COMPLETION", selected_block)
+                                .replace("// ORIGINAL_INITIAL_RECEIPT", selected_initial))
+                return subprocess.run([compiler, "test", "-count=1", "-timeout=10s", str(path)],
+                                      capture_output=True, text=True, timeout=90,
+                                      env=dict(os.environ, GOTOOLCHAIN="local"))
+            baseline = execute(block, initial)
+            self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+            guard = 'if p.call(t, "stats", "").AuthFailures == 0 {'
+            self.assertEqual(block.count(guard), 1)
+            old = block.replace(guard, 'if final != "hysteria2" || name != "reject/final-key" || p.call(t, "stats", "").AuthFailures == 0 {', 1)
+            stale = execute(old, initial)
+            self.assertNotEqual(stale.returncode, 0, stale.stdout + stale.stderr)
+            self.assertIn("completed original auth rejection ignored", stale.stdout + stale.stderr)
+            self.assertEqual(initial.count("reply.AuthFailures != 0 || "), 1)
+            preexisting = execute(block, initial.replace("reply.AuthFailures != 0 || ", "", 1))
+            self.assertNotEqual(preexisting.returncode, 0, preexisting.stdout + preexisting.stderr)
+            self.assertIn("preexisting authentication rejection accepted", preexisting.stdout + preexisting.stderr)
+
     def test_actual_peer_fault_admission_reaches_only_the_captured_final_trust_case(self):
         source = (ROOT / "mobile/desktop/external_box_windows_hysteria2_test.go.tmpl").read_text()
         start = source.index('\tif protocol != "packet" && protocol != "router-server" {',
