@@ -35,7 +35,8 @@ def execute(root):
 import("bytes";"context";"fmt";"os";"os/exec";"path/filepath";"time";"errors")
 var inspectPath func(string,bool)error
 func desktopDarwinProtectedPath(path string, private bool)error{return inspectPath(path,private)}
-func desktopPFEnterCommand(context.Context)(func(),error){return func(){},nil}
+var enterCommand func(context.Context)(func(),error)
+func desktopPFEnterCommand(ctx context.Context)(func(),error){if enterCommand!=nil{return enterCommand(ctx)};return func(){},nil}
 func desktopDarwinProcessAuthority(context.Context)[]*os.File{return nil}
 '''
     types = '''package mobiletor
@@ -44,7 +45,7 @@ type DesktopSocketCapture struct{SessionID,SourceSHA256,NetworkID string}
 type DesktopSocketKernelOwner struct{Kind,IdentitySHA256 string;Generation uint64;ProcessID uint32}
 '''
     regression = r'''package mobiletor
-import("context";"errors";"fmt";"os";"strings";"syscall";"testing";"time")
+import("context";"errors";"fmt";"os";"os/exec";"path/filepath";"strconv";"strings";"syscall";"testing";"time")
 func TestActualDarwinCommandObservation(t *testing.T){
  // Native path ownership and the PF command-budget boundary are modeled;
  // the exact shipping command/observer and actual process lifecycle run.
@@ -85,6 +86,62 @@ func TestActualDarwinCommandObservation(t *testing.T){
  output,err:=desktopDarwinCommand(ctx,"/bin/echo",nil,"actual-owned-command")
  if err!=nil||string(output)!="actual-owned-command\n"||calls!=1{t.Fatal("observation changed actual successful command",err,calls)}
  if _,err:=desktopDarwinCommand(ctx,"/bin/false",nil);err==nil{t.Fatal("observation changed actual native command failure")}
+}
+func TestDarwinCommandPipeChild(t *testing.T){
+ if len(os.Args)<3{return}
+ role:=os.Args[len(os.Args)-2];path:=os.Args[len(os.Args)-1]
+ if role=="escaped-native-writer" {
+  fmt.Fprintln(os.Stderr,"original escaped native stderr")
+  time.Sleep(20*time.Second)
+  return
+ }
+ if role!="native-command-parent"{return}
+ child:=exec.Command(os.Args[0],"-test.run=^TestDarwinCommandPipeChild$","--","escaped-native-writer",path)
+ child.SysProcAttr=&syscall.SysProcAttr{Setpgid:true}
+ child.Stdout=os.Stdout;child.Stderr=os.Stderr
+ if err:=child.Start();err!=nil{t.Fatal(err)}
+ if err:=os.WriteFile(path,[]byte(strconv.Itoa(child.Process.Pid)),0600);err!=nil{t.Fatal(err)}
+}
+func TestDarwinCommandInheritedOutput(t *testing.T){
+ for _,cancelled:=range []bool{false,true}{
+  name:="exited-parent";if cancelled{name="cancelled-original-context"}
+  t.Run(name,func(t *testing.T){
+   image,err:=os.Executable();if err!=nil{t.Fatal(err)}
+   inspectPath=func(path string,private bool)error{if path!=image||private{return errors.New("wrong original command image")};return nil}
+   released:=make(chan struct{})
+   enterCommand=func(context.Context)(func(),error){return func(){close(released)},nil}
+   defer func(){enterCommand=nil}()
+   ctx,cancel:=context.WithCancel(context.Background());defer cancel()
+   pidFile:=filepath.Join(t.TempDir(),"original-writer")
+   result:=make(chan error,1)
+   go func(){_,err:=desktopDarwinCommand(ctx,image,nil,"-test.run=^TestDarwinCommandPipeChild$","--","native-command-parent",pidFile);result<-err}()
+   pid:=0;until:=time.Now().Add(2*time.Second)
+   for pid==0&&time.Now().Before(until){if raw,err:=os.ReadFile(pidFile);err==nil{pid,err=strconv.Atoi(string(raw));if err!=nil{t.Fatal(err)}};if pid==0{time.Sleep(time.Millisecond)}}
+   if pid<=1{t.Fatal("original command never created its escaped output owner")}
+   group,err:=syscall.Getpgid(pid)
+   if err!=nil||group!=pid||group==syscall.Getpgrp(){t.Fatal("escaped output writer lost its exact separate process group",err)}
+   defer syscall.Kill(-pid,syscall.SIGKILL)
+   select{case <-released:t.Fatal("native command released its original slot before output join");default:}
+   if cancelled{cancel()}
+   var failure error
+   select{
+   case failure=<-result:
+   case <-time.After(7*time.Second):
+    syscall.Kill(-pid,syscall.SIGKILL)
+    select{case <-result:case <-time.After(time.Second):t.Fatal("disposable output writer could not be recovered")}
+    t.Fatal("original native command pipe outlived bounded join")
+   }
+   if failure==nil||!strings.Contains(failure.Error(),"original escaped native stderr")||!cancelled&&!errors.Is(failure,exec.ErrWaitDelay){
+    t.Fatal("inherited output lost original diagnostic or failed-join error",failure)
+   }
+   // CommandContext preserves cancellation ahead of ErrWaitDelay when its
+   // owner is cancelled while the independently retained output is draining.
+   if cancelled&&!errors.Is(failure,context.Canceled)||!cancelled&&ctx.Err()!=nil{
+    t.Fatal("output join changed the original command context",failure,ctx.Err())
+   }
+   select{case <-released:default:t.Fatal("joined failed command retained its command slot")}
+  })
+ }
 }
 func TestDarwinObservationDropsFullPipe(t *testing.T){
  reader,writer,err:=desktopDarwinObservationPipe();if err!=nil{t.Fatal(err)}
@@ -128,6 +185,10 @@ func TestDarwinObservationDropsFullPipe(t *testing.T){
     variants.append(('blocking-output', command, pipe.replace(write,
                      '_ = raw.Control(func(fd uintptr) { _ = syscall.SetNonblock(int(fd), false); _, _ = syscall.Write(int(fd), line) })'),
                      'diagnostic blocked original operation on full pipe'))
+    pipe_bound = 'command.WaitDelay = 5 * time.Second'
+    if command.count(pipe_bound) != 1:
+        raise RuntimeError('Darwin native command lost its exact inherited-output join bound')
+    variants.append(('unbounded-inherited-output', command.replace(pipe_bound, '// mutation: original output wait is unbounded', 1), pipe, 'original native command pipe outlived bounded join'))
     with tempfile.TemporaryDirectory(prefix='darwin-command-observation-') as temporary:
         folder = Path(temporary)
         (folder/'observer.go').write_text(observer)
@@ -137,12 +198,13 @@ func TestDarwinObservationDropsFullPipe(t *testing.T){
             (folder/'command.go').write_text(header+selected)
             (folder/'pipe.go').write_text(selected_pipe)
             files = [str(folder/name) for name in ('command.go','observer.go','owner.go','pipe.go','observation_test.go')]
-            result = subprocess.run([compiler,'test','-race','-v','-timeout=15s',*files],
+            selected_tests = [] if label == 'baseline' else ['-run=^TestDarwinCommandInheritedOutput$/exited-parent$'] if label == 'unbounded-inherited-output' else ['-run=^TestActualDarwinCommandObservation$|^TestDarwinObservationDropsFullPipe$']
+            result = subprocess.run([compiler,'test','-race','-v','-timeout=15s',*selected_tests,*files],
                                     text=True,capture_output=True,timeout=120,
                                     env=dict(os.environ,GOTOOLCHAIN='local'))
             output = result.stdout+result.stderr
             if witness is None:
-                required = ('TestActualDarwinCommandObservation', 'TestDarwinObservationDropsFullPipe')
+                required = ('TestActualDarwinCommandObservation', 'TestDarwinObservationDropsFullPipe', 'TestDarwinCommandInheritedOutput', 'TestDarwinCommandInheritedOutput/exited-parent', 'TestDarwinCommandInheritedOutput/cancelled-original-context')
                 if result.returncode or any(output.count('--- PASS: '+name+' (') != 1 for name in required):
                     raise AssertionError(output)
             elif not result.returncode or witness not in output:

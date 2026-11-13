@@ -113,6 +113,10 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 		return nil, err
 	}
 	command := exec.CommandContext(ctx, path, args...)
+	// A retained descendant may keep an inherited output pipe after the exact
+	// command exits. Bound only that copy join; expiration remains a native
+	// command error and cannot acknowledge PF or descendant retirement.
+	command.WaitDelay = 5 * time.Second
 	command.ExtraFiles = desktopDarwinProcessAuthority(ctx)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
 	command.Stdin = bytes.NewReader(input)
