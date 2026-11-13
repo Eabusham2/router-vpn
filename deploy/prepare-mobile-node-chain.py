@@ -11,6 +11,21 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-node-chain-source.json'
 TEMPLATES = {
+    'socks_owner.go.tmpl': 'protocol/routervpnnodesocks/socks_owner.go',
+    'socks_scope.go.tmpl': 'protocol/routervpnnodesocks/socks_scope.go',
+    'socks_box.go.tmpl': 'routervpn_node_chain_socks.go',
+    'socks_mtu_box.go.tmpl': 'routervpn_node_chain_socks_mtu.go',
+    'socks_mtu_box_test.go.tmpl': 'routervpn_node_chain_socks_mtu_test.go',
+    'socks_server.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_server.go',
+    'socks_bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks.go',
+    'socks_lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_lifecycle.go',
+    'socks_measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_measurement.go',
+    'socks_mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_mtu.go',
+    'socks_mtu_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_mtu_test.go',
+    'socks_bridge_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_test.go',
+    'socks_lifecycle_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_lifecycle_test.go',
+    'socks_measurement_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_measurement_test.go',
+    'socks_native_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_native_test.go',
     'candidate_preparation.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation.go',
     'candidate_preparation_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation_test.go',
     'box.go.tmpl': 'routervpn_node_chain.go',
@@ -74,9 +89,52 @@ def box_source(source):
                 raise ValueError('ordered native graph snapshot moved outside its construction boundary')
         else:
             source = replace_owned(source, before, before+added)
+    guard_before = '\tchainOptionsDigest := routerVPNNodeChainOptionsDigest(options.Context, options.Options)\n'
+    guard = ('\tif err := routerVPNNodeSOCKSOptions(options.Context, options.Options); err != nil {\n'
+             '\t\treturn nil, err\n\t}\n')
+    execution_snapshot = '\tchainExecutionOptionsDigest := routerVPNNodeChainExecutionOptionsDigest(options.Context, options.Options)\n'
+    # The original execution preparer adds exactly this immutable digest after
+    # the chain digest. Desktop -> mobile preparation must retain that owned
+    # neighbor without inserting another guard or allowing native work before it.
+    if execution_snapshot in source and source.count(execution_snapshot) != 1:
+        raise ValueError('ordered SOCKS native execution neighbor duplicated')
+    if 'routerVPNNodeSOCKSOptions' in source:
+        pattern = re.escape(guard_before)+'(?:'+re.escape(execution_snapshot)+')?'+re.escape(guard)
+        if source.count('routerVPNNodeSOCKSOptions') != 1 or source.count(guard) != 1 or len(re.findall(pattern, source)) != 1:
+            raise ValueError('ordered SOCKS native guard moved or duplicated')
+    else:
+        anchor = guard_before
+        if execution_snapshot in source:
+            anchor += execution_snapshot
+        if source.count(anchor) != 1:
+            raise ValueError('ordered SOCKS native guard lost its construction boundary')
+        source = source.replace(anchor, anchor+guard, 1)
     if source.count('routerVPNNodeChainOptions') != 3 or source.count('chainOptionsDigest') != 2:
         raise ValueError('unexpected ordered native graph snapshot')
     return source.encode()
+
+
+def command_source(vendor, source):
+    """Keep the pinned public constructor and extract its infallible body."""
+    relative = 'experimental/libbox/command_server.go'
+    original = subprocess.check_output(['git', '-C', str(vendor), 'show', PIN+':'+relative]).decode().replace('\r\n', '\n')
+    source = source.replace('\r\n', '\n')
+    signature = 'func NewCommandServer(handler CommandServerHandler, platformInterface PlatformInterface) (*CommandServer, error) {\n'
+    if original.count(signature) != 1:
+        raise ValueError('original native command constructor moved')
+    start = original.index(signature)
+    end = original.index('\n}\n', start)+2
+    method = original[start:end]
+    before = signature+'\tctx := baseContext(platformInterface)\n'
+    after = (signature+'\treturn newCommandServerWithContext(handler, platformInterface, baseContext(platformInterface)), nil\n}\n\n'
+        'func newCommandServerWithContext(handler CommandServerHandler, platformInterface PlatformInterface, ctx context.Context) *CommandServer {\n')
+    if method.count(before) != 1 or method.count('\treturn server, nil\n') != 1:
+        raise ValueError('original native command factory is no longer infallible')
+    rewritten = method.replace(before, after, 1).replace('\treturn server, nil\n', '\treturn server\n', 1)
+    expected = original[:start]+rewritten+original[end:]
+    if source not in (original, expected):
+        raise ValueError('original native command constructor differs from its complete owned projection')
+    return expected.encode()
 
 
 def network_source(source):
@@ -112,6 +170,9 @@ def prepare(vendor, *, mobile=True):
     network = destination(vendor, 'route/network.go')
     before_box, before_network = box.read_bytes(), network.read_bytes()
     derived_box, derived_network = box_source(before_box.decode()), network_source(before_network.decode())
+    command = destination(vendor, 'experimental/libbox/command_server.go') if mobile else None
+    before_command = command.read_bytes() if command is not None else None
+    derived_command = command_source(vendor, before_command.decode()) if command is not None else None
     owner = destination(vendor, OWNER)
     previous = {}
     if owner.exists():
@@ -138,13 +199,15 @@ def prepare(vendor, *, mobile=True):
         content[path] = source.read_bytes()
         if path.exists() and (not path.is_file() or relative not in previous and path.read_bytes() != content[path]):
             raise ValueError('refusing to overwrite changed ordered native chain source')
-    if box.read_bytes() != before_box or network.read_bytes() != before_network:
+    if box.read_bytes() != before_box or network.read_bytes() != before_network or (command is not None and command.read_bytes() != before_command):
         raise ValueError('ordered native chain input changed during preparation')
     for path, value in content.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(value)
     box.write_bytes(derived_box)
     network.write_bytes(derived_network)
+    if command is not None:
+        command.write_bytes(derived_command)
     owned = dict(previous)
     owned.update({path.relative_to(vendor).as_posix(): hashlib.sha256(value).hexdigest() for path, value in content.items()})
     owner.write_text(json.dumps({'schema': 1, 'core': PIN, 'files': owned}, sort_keys=True, separators=(',', ':'))+'\n')

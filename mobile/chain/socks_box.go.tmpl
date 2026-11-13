@@ -1,0 +1,280 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	"github.com/sagernet/sing/common/json"
+)
+
+type routerVPNNodeSOCKSContextKey struct{}
+type routerVPNNodeSOCKSConstruction struct {
+	source *mobilemultihop.NodeChainSOCKSSource
+	capture *ownedSOCKS.Capture
+	config string
+	metadata mobilemultihop.NodeChainSOCKSSourceMetadata
+	digest string
+	mu sync.Mutex
+	attempted bool
+}
+
+// RouterVPNNodeSOCKSContext binds one caller-local factory to the complete
+// original graph. It neither opens ordinary parsing nor grants Ready/DOWN.
+func RouterVPNNodeSOCKSContext(ctx context.Context, source *mobilemultihop.NodeChainSOCKSSource,
+	capture *ownedSOCKS.Capture) (context.Context, error) {
+	if ctx == nil || ctx.Err() != nil || source == nil || capture == nil ||
+		ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil {
+		return nil, errors.New("ordered SOCKS construction needs its one original context")
+	}
+	if err := capture.RequireOriginalContext(ctx, source); err != nil {
+		return nil, err
+	}
+	config, metadata, err := source.ReadValidated()
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(config))
+	if err != nil {
+		return nil, err
+	}
+	digest := routerVPNNodeChainOptionsDigest(ctx, compiled)
+	if digest == "" || ctx.Err() != nil {
+		return nil, errors.New("ordered SOCKS construction lost its complete original graph")
+	}
+	return context.WithValue(ctx, routerVPNNodeSOCKSContextKey{}, &routerVPNNodeSOCKSConstruction{
+		source: source, capture: capture, config: config, metadata: metadata, digest: digest,
+	}), nil
+}
+
+func (c *routerVPNNodeSOCKSConstruction) require(ctx, native context.Context,
+	source *mobilemultihop.NodeChainSOCKSSource) error {
+	if c == nil || ctx == nil || ctx.Err() != nil || native == nil || native.Err() != nil ||
+		source == nil || c.source != source || c.capture == nil ||
+		native.Value(routerVPNNodeSOCKSContextKey{}) != c {
+		return errors.New("ordered SOCKS construction has another original owner")
+	}
+	if err := c.capture.RequireOriginalContext(native, source); err != nil {
+		return err
+	}
+	config, metadata, err := source.ReadValidated()
+	if err != nil || config != c.config || !reflect.DeepEqual(metadata, c.metadata) {
+		return errors.New("ordered SOCKS construction source changed")
+	}
+	return ctx.Err()
+}
+
+// Called at the original Box.New boundary, before managers, inbounds or any
+// native component is constructed. Ordinary contexts retain their old path.
+func routerVPNNodeSOCKSOptions(ctx context.Context, options option.Options) error {
+	if ctx == nil {
+		return nil
+	}
+	value := ctx.Value(routerVPNNodeSOCKSContextKey{})
+	if value == nil {
+		return nil
+	}
+	original, ok := value.(*routerVPNNodeSOCKSConstruction)
+	if !ok || original == nil {
+		return errors.New("ordered SOCKS construction context is invalid")
+	}
+	if err := original.require(ctx, ctx, original.source); err != nil {
+		return err
+	}
+	if routerVPNNodeChainOptionsDigest(ctx, options) != original.digest {
+		return errors.New("ordered SOCKS native graph differs before construction")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &original.mu); err != nil {
+		return err
+	}
+	defer original.mu.Unlock()
+	if original.attempted || ctx.Err() != nil {
+		return errors.New("ordered SOCKS construction was already attempted or cancelled")
+	}
+	// Retain this first attempt even if Box.New later fails. Another Box
+	// must not acquire components before the original graph's close receipt.
+	original.attempted = true
+	return nil
+}
+
+type routerVPNNodeSOCKSReader interface {
+	RouterVPNExecutionMTUReadbackContext(context.Context) (string, int, int, error)
+}
+
+// This adapter retains typed schema-3 source and the actual per-position
+// association owner. The private common observer retains no generic NodeChain.
+type RouterVPNNodeChainSOCKSEngine struct {
+	observation *routerVPNNodeChainObservation
+	source *mobilemultihop.NodeChainSOCKSSource
+	middle *ownedSOCKS.Outbound
+	middleTag string
+	ipv6 bool
+	mtu atomic.Pointer[RouterVPNNodeChainSOCKSMTU]
+}
+
+var _ mobilemultihop.NodeChainSOCKSEngine = (*RouterVPNNodeChainSOCKSEngine)(nil)
+
+func (s *Box) RouterVPNNewNodeChainSOCKSEngine(ctx context.Context,
+	source *mobilemultihop.NodeChainSOCKSSource, session string,
+	current func(context.Context) error) (*RouterVPNNodeChainSOCKSEngine, error) {
+	if ctx == nil || ctx.Err() != nil || s == nil || s.ctx == nil || source == nil ||
+		current == nil || !routerVPNNodeChainSession(session) {
+		return nil, errors.New("ordered SOCKS engine needs its original native owner")
+	}
+	original, ok := s.ctx.Value(routerVPNNodeSOCKSContextKey{}).(*routerVPNNodeSOCKSConstruction)
+	if !ok || original == nil {
+		return nil, errors.New("ordinary native Box cannot adopt typed SOCKS source")
+	}
+	if err := original.require(ctx, s.ctx, source); err != nil {
+		return nil, err
+	}
+	meta := original.metadata
+	if len(meta.Proofs) != 3 || len(meta.Devices) != 3 || meta.Proofs[1].Mode != "socks5" {
+		return nil, errors.New("ordered SOCKS engine lost its original source inventory")
+	}
+	outbound, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, meta.Proofs[1].Tag)
+	middle, ok := outbound.(*ownedSOCKS.Outbound)
+	if err != nil || !found || !ok || middle == nil {
+		return nil, errors.Join(err, errors.New("ordered SOCKS middle has no retained native association owner"))
+	}
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil || len(inbounds) != 1 || inbounds[0].Type() != "tun" || inbounds[0].Tag() != meta.DNS.TUNTag {
+		return nil, errors.Join(err, errors.New("ordered SOCKS engine lost its actual native TUN"))
+	}
+	inbound := inbounds[0]
+	reader, ok := inbound.(routerVPNNodeSOCKSReader)
+	if !ok {
+		return nil, errors.New("ordered SOCKS native TUN has no actual bounded MTU reader")
+	}
+	name, index, mtu, err := reader.RouterVPNExecutionMTUReadbackContext(ctx)
+	if err != nil || name == "" || index <= 0 || mtu != meta.MTU.Original || mtu < 1280 || mtu > meta.MTU.Ceiling {
+		return nil, errors.Join(err, errors.New("ordered SOCKS native reader differs from captured MTU bounds"))
+	}
+	observe := func(call context.Context) error {
+		if call == nil || call.Err() != nil {
+			return errors.New("ordered SOCKS observation lost its original caller")
+		}
+		if err := current(call); err != nil {
+			return err
+		}
+		if err := original.require(call, s.ctx, source); err != nil {
+			return err
+		}
+		if err := middle.ObserveContext(call, source); err != nil {
+			return err
+		}
+		actual, found, err := adapter.RouterVPNInboundContext(call, s.inbound, meta.DNS.TUNTag)
+		if err != nil || !found || actual != inbound {
+			return errors.Join(err, errors.New("ordered SOCKS native TUN was replaced"))
+		}
+		actualName, actualIndex, actualMTU, err := reader.RouterVPNExecutionMTUReadbackContext(call)
+		if err != nil || actualName != name || actualIndex != index || actualMTU != mtu {
+			return errors.Join(err, errors.New("ordered SOCKS actual native reader changed"))
+		}
+		if err := current(call); err != nil {
+			return err
+		}
+		return call.Err()
+	}
+	tags := make([]string, len(meta.Proofs))
+	for i, proof := range meta.Proofs {
+		tags[i] = proof.Tag
+	}
+	observation, err := s.routerVPNNewNodeChainObservation(ctx, original.config, meta.DNS, tags,
+		meta.Proofs[2].Tag, meta.SourceSHA256, meta.ConfigSHA256, session, observe)
+	if err != nil {
+		return nil, err
+	}
+	engine := &RouterVPNNodeChainSOCKSEngine{observation: observation, source: source, middle: middle,
+		middleTag: meta.Proofs[1].Tag, ipv6: meta.Devices[1].IPv6Mode == "on"}
+	engine.bindSOCKSMTUObservation()
+	return engine, nil
+}
+
+func (e *RouterVPNNodeChainSOCKSEngine) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	if e == nil || e.observation == nil || e.source == nil || e.middle == nil {
+		return mobilemultihop.NodeChainIdentity{}, errors.New("ordered SOCKS observation has no retained engine")
+	}
+	if ctx == nil { return mobilemultihop.NodeChainIdentity{}, errors.New("ordered SOCKS observation has no caller") }
+	if err := ctx.Err(); err != nil { return mobilemultihop.NodeChainIdentity{}, err }
+	if pending := e.mtu.Load(); pending != nil && !pending.engineCurrent(e) {
+		return mobilemultihop.NodeChainIdentity{}, errors.New("ordered SOCKS proof is paused for its retained MTU operation")
+	}
+	return e.observation.ObserveChainContext(ctx)
+}
+func (e *RouterVPNNodeChainSOCKSEngine) ObserveSOCKSMiddleContext(ctx context.Context,
+	original *mobilemultihop.NodeChainSOCKSSource) error {
+	if e == nil || original == nil || original != e.source || e.middle == nil {
+		return errors.New("ordered SOCKS observation has another source pointer")
+	}
+	if err := e.middle.ObserveContext(ctx, original); err != nil {
+		return err
+	}
+	_, err := e.ObserveChainContext(ctx)
+	return err
+}
+func (e *RouterVPNNodeChainSOCKSEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return nil, err
+	}
+	if address != hopmeasure.PublicAddress {
+		return e.observation.Dial(ctx, tag, address)
+	}
+	if tag != e.middleTag || e.observation.instance.dnsRouter == nil || e.observation.resolver == nil {
+		return nil, errors.New("ordered SOCKS measurement requires its captured middle and DNS")
+	}
+	query, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	query = adapter.WithContext(query, &adapter.InboundContext{
+		Inbound: e.observation.dns.TUNTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns",
+	})
+	addresses, err := e.observation.instance.dnsRouter.Lookup(query, hopmeasure.PublicHost,
+		adapter.DNSQueryOptions{Transport: e.observation.resolver, DisableCache: true, DisableOptimisticCache: true})
+	_, observed := e.ObserveChainContext(ctx)
+	if err != nil || observed != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, observed, ctx.Err(), errors.New("ordered SOCKS captured DNS lookup failed"))
+	}
+	for _, ip := range addresses {
+		if !ip.IsValid() || ip.Zone() != "" || ip.Is4In6() || !ip.IsGlobalUnicast() ||
+			ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+			ip.Is6() && !e.ipv6 {
+			continue
+		}
+		connection, dialErr := e.observation.Dial(ctx, tag, net.JoinHostPort(ip.String(), "443"))
+		if dialErr == nil && connection != nil {
+			return connection, nil
+		}
+		if _, observeErr := e.ObserveChainContext(ctx); observeErr != nil {
+			return nil, errors.Join(dialErr, observeErr, ctx.Err())
+		}
+	}
+	return nil, errors.New("ordered SOCKS captured route could not reach its public measurement origin")
+}
+func (e *RouterVPNNodeChainSOCKSEngine) SelectedContext(ctx context.Context) (string, error) {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return "", err
+	}
+	return e.observation.SelectedContext(ctx)
+}
+func (e *RouterVPNNodeChainSOCKSEngine) SelectContext(ctx context.Context, tag string) error {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return err
+	}
+	return e.observation.SelectContext(ctx, tag)
+}
+func (e *RouterVPNNodeChainSOCKSEngine) DNSProofContext(ctx context.Context, capture mobilemultihop.NodeChainDNSCapture) error {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return err
+	}
+	return e.observation.DNSProofContext(ctx, capture)
+}

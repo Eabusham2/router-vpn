@@ -32,6 +32,13 @@ MTU = load('prepare-mobile-mtu')
 STRATEGY = load('prepare-mobile-strategy')
 NODE_CHAIN = load('prepare-mobile-node-chain')
 NODE_EXECUTION = tuple(load(name) for name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution', 'prepare-node-chain-execution-owner'))
+DAEMON_CAPTURE = load('prepare-mobile-node-chain-execution')
+DAEMON_CAPTURE_TEMPLATES = {
+    'instance_close.go.tmpl': 'daemon/routervpn_instance_close.go',
+    'instance_close_test.go.tmpl': 'daemon/routervpn_instance_close_test.go',
+    'instance_capture.go.tmpl': 'daemon/routervpn_instance_capture.go',
+    'instance_capture_test.go.tmpl': 'daemon/routervpn_instance_capture_test.go',
+}
 RELAY = load('prepare-relay-core')
 DESKTOP_MTU = load('prepare-desktop-mtu')
 TOR = load('prepare-mobile-tor')
@@ -172,6 +179,7 @@ PEER_TEMPLATES = {
     'node_chain_candidates_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_candidates_peer_test.go',
     'node_chain_imported_mtu_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_mtu_test.go',
     'node_chain_imported_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go',
+    'node_chain_socks_middle_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_middle_test.go',
     'node_chain_imported_hostname_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_hostname_test.go',
     'node_chain_hysteria_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_hysteria_final_test.go',
     'node_awg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_awg_peer_test.go',
@@ -286,7 +294,9 @@ def darwin_node_chain_peer_copies():
 
 
 def inputs():
-    files = [Path(__file__).resolve(), *(path for module in NODE_EXECUTION for path in module.inputs()), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
+    files = [Path(__file__).resolve(), Path(DAEMON_CAPTURE.__file__).resolve(),
+             *(ROOT/'mobile/chain_execution'/name for name in DAEMON_CAPTURE_TEMPLATES),
+             *(path for module in NODE_EXECUTION for path in module.inputs()), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
              ROOT/'mobile/toroutbound/padding_box.go.tmpl', ROOT/'mobile/toroutbound/padding_box_test.go.tmpl',
              ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-desktop-command-retirement.py', ROOT/'deploy/prepare-desktop-dbus.py', ROOT/'deploy/test_desktop_tun_retirement_projection.py', ROOT/'deploy/prepare-mobile-tor.py',
@@ -448,6 +458,15 @@ def pt_copies():
         if path.is_symlink() or not raw.startswith(b'package route\n'):
             raise ValueError('Desktop Tor native network package boundary changed')
         content[relative] = raw
+    for name, relative in DAEMON_CAPTURE_TEMPLATES.items():
+        path = ROOT/'mobile/chain_execution'/name
+        if DAEMON_CAPTURE.TEMPLATES.get(name) != relative or path.is_symlink() or not path.is_file():
+            raise ValueError('Desktop original daemon capture projection changed')
+        raw = path.read_bytes()
+        prefix = b'package daemon_test\n' if name == 'instance_capture_test.go.tmpl' else b'package daemon\n'
+        if not raw.startswith(prefix):
+            raise ValueError('Desktop original daemon capture package changed')
+        content[relative] = raw
     return content
 
 
@@ -530,7 +549,7 @@ def preflight_pt_files(vendor, content):
             raise ValueError('Desktop PT ownership record is invalid')
         previous = record['files']
         for relative, checksum in previous.items():
-            if (not relative.startswith(PT_NAMESPACES) and relative not in (*BOX_TEMPLATES.values(), *ROUTE_TEMPLATES.values(), *INBOUND_TEMPLATES.values(), *TUN_TEMPLATES.values())) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
+            if (not relative.startswith(PT_NAMESPACES) and relative not in (*BOX_TEMPLATES.values(), *ROUTE_TEMPLATES.values(), *INBOUND_TEMPLATES.values(), *TUN_TEMPLATES.values(), *DAEMON_CAPTURE_TEMPLATES.values())) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
                 raise ValueError('Desktop PT cannot own unrelated native source')
             path = TOR.destination(vendor, relative)
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != checksum:
@@ -656,6 +675,38 @@ def prepare_desktop_pt(vendor, go='go', *, env=None):
         dns_adapter_sha256=hashlib.sha256(dns).hexdigest(), registry_sha256=hashlib.sha256(registry).hexdigest(),
         network_sha256=hashlib.sha256(network).hexdigest(), module_sha256={name: hashlib.sha256(raw).hexdigest() for name, raw in modules.items()},
         files={name: hashlib.sha256(raw).hexdigest() for name, raw in sorted(content.items())}), indent=2, sort_keys=True)+'\n').encode())
+
+
+def daemon_capture_sources(vendor):
+    """Derive the existing exact original-instance receipt without mobile ABI."""
+    transforms = {
+        'daemon/instance.go': DAEMON_CAPTURE.instance_source,
+        'daemon/started_service.go': DAEMON_CAPTURE.service_source,
+    }
+    originals, derived = {}, {}
+    for relative, transform in transforms.items():
+        path = TOR.destination(vendor, relative)
+        if not path.is_file():
+            raise ValueError('Desktop original daemon capture source is absent')
+        originals[relative] = path.read_bytes()
+        derived[relative] = transform(originals[relative].decode())
+    return originals, derived
+
+
+def prepare_daemon_capture(vendor):
+    # The four shared receipt templates are adopted by the selective desktop
+    # projection owner. Reuse only their strict source transforms here; invoking
+    # the mobile execution preparer would install unrelated mobile bridge ABI.
+    originals, derived = daemon_capture_sources(vendor)
+    for name, relative in DAEMON_CAPTURE_TEMPLATES.items():
+        path = TOR.destination(vendor, relative)
+        original = ROOT/'mobile/chain_execution'/name
+        if not path.is_file() or path.read_bytes() != original.read_bytes():
+            raise ValueError('Desktop original daemon capture dependency changed')
+    if any(TOR.destination(vendor, relative).read_bytes() != raw for relative, raw in originals.items()):
+        raise ValueError('Desktop original daemon capture changed before adoption')
+    for relative, raw in derived.items():
+        write(vendor, relative, raw)
 
 
 def comparison_client_contract():
@@ -793,6 +844,7 @@ def prepare(vendor, go='go', *, env=None):
     prepare_node_capture(vendor)
     for module in NODE_EXECUTION:
         module.prepare(vendor)
+    prepare_daemon_capture(vendor)
     RELAY.OPENVPN_REMOTE.prepare(vendor)
     templates = [*sorted((ROOT/'mobile/desktop').glob('standard*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl')),
                  *sorted((ROOT/'mobile/desktop').glob('node*.go.tmpl')), ROOT/'mobile/desktop/network_command.go.tmpl',
@@ -837,7 +889,7 @@ def copy_encrypted_peer_templates(vendor):
             prefix = b'//go:build linux && !android && routervpn_openvpn_remote_test\n\n' + prefix
         elif name in ('node_external_hysteria_layer_installed_test.go.tmpl', 'node_external_wireguard_installed_test.go.tmpl', 'node_external_amnezia_installed_test.go.tmpl', 'node_external_openvpn_installed_test.go.tmpl'):
             prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)\n\n' + prefix
-        elif name in ('node_wg_peer_test.go.tmpl', 'node_imported_peer_linux_test.go.tmpl', 'node_chain_peer_linux_test.go.tmpl', 'node_chain_imported_test.go.tmpl', 'node_chain_imported_hostname_test.go.tmpl', 'node_chain_hysteria_final_test.go.tmpl', 'node_chain_imported_mtu_test.go.tmpl', 'node_chain_candidates_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_external_ss_entry_linux_test.go.tmpl', 'node_imported_packet_test.go.tmpl', 'node_imported_packet_final_test.go.tmpl', 'node_imported_nested_packet_test.go.tmpl', 'node_imported_socks_packet_test.go.tmpl'):
+        elif name in ('node_wg_peer_test.go.tmpl', 'node_imported_peer_linux_test.go.tmpl', 'node_chain_peer_linux_test.go.tmpl', 'node_chain_imported_test.go.tmpl', 'node_chain_socks_middle_test.go.tmpl', 'node_chain_imported_hostname_test.go.tmpl', 'node_chain_hysteria_final_test.go.tmpl', 'node_chain_imported_mtu_test.go.tmpl', 'node_chain_candidates_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_external_ss_entry_linux_test.go.tmpl', 'node_imported_packet_test.go.tmpl', 'node_imported_packet_final_test.go.tmpl', 'node_imported_nested_packet_test.go.tmpl', 'node_imported_socks_packet_test.go.tmpl'):
             prefix = b'//go:build linux && !android\n\n' + prefix
         if path.is_symlink():
             raise ValueError('Desktop encrypted peer test is a symlink: ' + name)

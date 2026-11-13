@@ -292,7 +292,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   go test ./experimental/libbox/routervpn/...
   go test -race ./adapter/inbound -run TestRouterVPN -count=1
   go test -race . ./daemon ./route -run '^TestRouterVPN(Strategy|NodeChain)' -count=1 -timeout=90s
-  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge)' -count=1
+  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge|NodeChainSOCKS)' -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
   python3 "$ROOT/../../deploy/test_amnezia_timers_pinned.py" "$VENDOR"
   python3 "$ROOT/../../deploy/test_gvisor_forwarder_pinned.py" "$VENDOR"

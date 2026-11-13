@@ -1,0 +1,391 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// These controls execute the real bridge and hopmeasure close implementations.
+// A held service mutex and startup completion channel are explicit lifetime
+// boundaries; they do not stand in for encrypted association or kernel proof.
+func TestRouterNodeChainSOCKSBridgeCloseAndNetworkKeepCallerDeadline(t *testing.T) {
+	for _, operation := range []string{"close", "network"} {
+		t.Run(operation, func(t *testing.T) {
+			owner := socksBridgeOwner(t, "wg")
+			service := new(hopmeasure.Service)
+			owner.measurement.Store(service)
+			held := routerMTUField[sync.Mutex](t, service, "mu")
+			held.Lock()
+			unlocked := false
+			unlock := func() {
+				if !unlocked {
+					unlocked = true
+					held.Unlock()
+				}
+			}
+			defer unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				if operation == "network" {
+					done <- owner.networkChangedContext(ctx)
+				} else {
+					done <- owner.closeContext(ctx)
+				}
+			}()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(200 * time.Millisecond):
+				// Release and join the original call before reporting the
+				// causal failure, rather than accepting a global test timeout.
+				unlock()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("original blocked close callback did not join after release")
+				}
+				t.Fatal("typed cancellation blocked outside its original caller context")
+			}
+			if !errors.Is(err, context.DeadlineExceeded) || !owner.retired.Load() ||
+				owner.closed.Load() || owner.measurement.Load() != service || owner.NativeClosed() {
+				t.Fatal("timed-out typed cleanup lost its original retained owner", err)
+			}
+			unlock()
+			joined, finish := context.WithTimeout(context.Background(), time.Second)
+			defer finish()
+			if err := owner.closeContext(joined); err != nil || !owner.closed.Load() {
+				t.Fatal("same original measurement cleanup retry failed", err)
+			}
+			if owner.NativeClosed() {
+				t.Fatal("shared measurement join fabricated a native close receipt")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainSOCKSBridgeCloseJoinsOriginalStartup(t *testing.T) {
+	owner := socksBridgeOwner(t, "wg")
+	runtime, err := mobilemultihop.NewNodeChainSOCKSRuntime(owner.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifetime, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	state := &routerNodeChainSOCKSState{runtime: runtime, lifetime: lifetime, cancel: cancel, done: make(chan struct{})}
+	owner.state.Store(state)
+	ctx, finish := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err = owner.closeContext(ctx)
+	finish()
+	if !errors.Is(err, context.DeadlineExceeded) || owner.closed.Load() || owner.state.Load() != state ||
+		lifetime.Err() == nil || !owner.retired.Load() {
+		close(state.done)
+		t.Fatal("pending original startup lost its join or cancellation", err)
+	}
+	close(state.done)
+	joined, finish := context.WithTimeout(context.Background(), time.Second)
+	defer finish()
+	if err := owner.closeContext(joined); err != nil || !owner.closed.Load() {
+		t.Fatal("original startup did not join on retry", err)
+	}
+	if owner.NativeClosed() || owner.Healthy() {
+		t.Fatal("shared startup cleanup fabricated native admission")
+	}
+}
+
+func TestRouterNodeChainSOCKSBridgeCloseRetainsActiveMeasurement(t *testing.T) {
+	owner := socksBridgeOwner(t, "wg")
+	owner.measuring = true
+	if err := owner.closeContext(context.Background()); err == nil || owner.closed.Load() {
+		t.Fatal("undischarged original measurement activity allowed retirement")
+	}
+	owner.measuring = false // Explicit original activity-release boundary.
+	if err := owner.closeContext(context.Background()); err != nil || !owner.closed.Load() {
+		t.Fatal("released original activity did not permit joined cleanup", err)
+	}
+}
+
+type socksBridgeHeldPlatform struct {
+ socksBridgePlatform
+ entered chan struct{}
+ release chan struct{}
+ once sync.Once
+}
+func (p *socksBridgeHeldPlatform) UseProcFS() bool {
+ p.once.Do(func(){close(p.entered)})
+ <-p.release
+ return false
+}
+
+func TestRouterNodeChainSOCKSBridgeRetainsLateCommandFactory(t *testing.T) {
+ for _, operation := range []string{"close", "network"} {
+  t.Run(operation,func(t *testing.T) {
+   owner:=socksBridgeOwner(t,"wg")
+   platform:=&socksBridgeHeldPlatform{entered:make(chan struct{}),release:make(chan struct{})}
+   type result struct { server *CommandServer; err error }
+   done:=make(chan result,1)
+   var release sync.Once
+   var original *CommandServer
+   received:=false
+   t.Cleanup(func(){
+    release.Do(func(){close(platform.release)})
+    if !received {
+     select {
+     case value:=<-done: original=value.server; received=true
+     case <-time.After(time.Second): t.Error("original command factory did not join cleanup"); return
+     }
+    }
+    if original!=nil {
+     _=owner.BindNative(original)
+     if err:=owner.Close();err!=nil {t.Error("late original bridge cleanup failed",err)}
+     if err:=original.StartedService.CloseService();err!=nil {t.Error("late original native cleanup failed",err)}
+     original.Close()
+    }
+   })
+   go func(){server,err:=owner.NewCommandServer(&socksBridgeHandler{},platform);done<-result{server,err}}()
+   select {
+   case <-platform.entered:
+   case <-time.After(time.Second): t.Fatal("actual command factory did not reach original platform boundary")
+   }
+   ctx,cancel:=context.WithTimeout(context.Background(),15*time.Millisecond)
+   var err error
+   if operation=="close" {err=owner.closeContext(ctx)} else {err=owner.networkChangedContext(ctx)}
+   cancel()
+   if operation=="close" && !errors.Is(err,context.DeadlineExceeded) {
+    t.Fatal("pending actual command factory lost bounded cleanup",err)
+   }
+   if operation=="network" && err!=nil {t.Fatal("network invalidation waited for command factory",err)}
+   if !owner.retired.Load() || owner.closed.Load() || owner.NativeClosed() || owner.native.Load()!=nil {
+    t.Fatal("pending factory was released or fabricated native DOWN")
+   }
+   release.Do(func(){close(platform.release)})
+   select {
+   case value:=<-done:
+    original=value.server
+    received=true
+    if value.err!=nil || original==nil {t.Fatal("late original server handle was hidden",value.err)}
+   case <-time.After(time.Second): t.Fatal("released actual command factory did not join")
+   }
+   native:=owner.native.Load()
+   if native==nil || native.server!=original || native.service!=original.StartedService || native.capture!=nil {
+    t.Fatal("late command server escaped its retired original owner")
+   }
+   if err:=owner.BindNative(original);err==nil {
+    t.Fatal("retired late factory acquired live binding authority")
+   }
+   if native=owner.native.Load();native==nil || native.server!=original || native.capture==nil {
+    t.Fatal("failed retired binding lost its exact cleanup reservation")
+   }
+   if err:=owner.Close();err!=nil {t.Fatal("late original cleanup failed",err)}
+   if err:=original.StartedService.CloseService();err!=nil || !owner.NativeClosed() {
+    t.Fatal("joined sealed never-acquired original did not prove cleanup",err)
+   }
+   if owner.Run(original)==nil || owner.Healthy() {
+    t.Fatal("late retired factory revived original proof")
+   }
+  })
+ }
+}
+
+// This state installs no shared proof receipt. It binds the actual started
+// daemon/Box only, so native-current and native-close can be tested without
+// manufacturing Run, Healthy, DNS proof or a measurement result.
+func socksBridgeNativeState(t *testing.T,f *socksBridgeNativeFixture)*routerNodeChainSOCKSState {
+ t.Helper()
+ runtime,err:=mobilemultihop.NewNodeChainSOCKSRuntime(f.owner.source)
+ if err!=nil {t.Fatal(err)}
+ lifetime,cancel:=context.WithCancel(f.server.ctx)
+ state:=&routerNodeChainSOCKSState{native:f.owner.native.Load(),instance:f.instance,box:f.box,
+  runtime:runtime,lifetime:lifetime,cancel:cancel,done:make(chan struct{}),session:"native-lifetime-component"}
+ close(state.done)
+ f.owner.state.Store(state)
+ return state
+}
+
+func TestRouterNodeChainSOCKSBridgeActualNativeIdentity(t *testing.T) {
+ for _,fault:=range []string{"source-object","native-record","captured-state","native-instance","lifetime","retired"} {
+  t.Run(fault,func(t *testing.T){
+   owner:=socksBridgeOwner(t,"wg")
+   f:=socksBridgeStarted(t,owner)
+   state:=socksBridgeNativeState(t,f)
+   if err:=owner.nativeCurrent(t.Context(),state);err!=nil {t.Fatal("actual original native identity",err)}
+   if owner.Healthy(){t.Fatal("native identity manufactured shared proof")}
+   reset:=func(){}
+   switch fault {
+   case "source-object":
+    original:=owner.source
+    raw,err:=original.Source();if err!=nil{t.Fatal(err)}
+    other,err:=mobilemultihop.NewNodeChainSOCKSSource(raw);if err!=nil{t.Fatal(err)}
+    owner.source=other
+    reset=func(){owner.source=original}
+   case "native-record":
+    original:=owner.native.Load()
+    replacement:=*original
+    owner.native.Store(&replacement)
+    reset=func(){owner.native.Store(original)}
+   case "captured-state":
+    replacement:=&routerNodeChainSOCKSState{native:state.native,instance:state.instance,box:state.box,
+     runtime:state.runtime,lifetime:state.lifetime,cancel:state.cancel,done:state.done,session:state.session}
+    owner.state.Store(replacement)
+    reset=func(){owner.state.Store(state)}
+   case "native-instance":
+    lock:=routerMTUField[sync.RWMutex](t,f.server.StartedService,"serviceAccess")
+    slot:=routerMTUField[*daemon.Instance](t,f.server.StartedService,"instance")
+    lock.Lock();*slot=&daemon.Instance{};lock.Unlock()
+    reset=func(){lock.Lock();*slot=f.instance;lock.Unlock()}
+   case "lifetime":state.cancel()
+   case "retired":owner.NetworkChanged()
+   }
+   defer reset()
+   if err:=owner.nativeCurrent(t.Context(),state);err==nil {
+    t.Fatal("changed original native identity retained bridge authority",fault)
+   }
+  })
+ }
+}
+
+func TestRouterNodeChainSOCKSBridgeActualNativeCloseReceipt(t *testing.T) {
+ for _,phase:=range []string{"joined","held","failed"} {
+  t.Run(phase,func(t *testing.T){
+   owner:=socksBridgeOwner(t,"wg")
+   f:=socksBridgeStarted(t,owner)
+   state:=socksBridgeNativeState(t,f)
+   if err:=owner.Close();err!=nil {t.Fatal("original shared close",err)}
+   if !owner.closed.Load()||owner.NativeClosed()||owner.state.Load()!=state {
+    t.Fatal("shared close substituted for original native Box join")
+   }
+   failure:=errors.New("fixture original TUN close failed")
+   entered,release:=make(chan struct{}),make(chan struct{})
+   if phase=="failed" {
+    f.expectedClose=failure
+    f.tun.mu.Lock();f.tun.closeError=failure;f.tun.mu.Unlock()
+   }
+   if phase=="held" {
+    f.tun.mu.Lock();f.tun.closeEntered=entered;f.tun.closeRelease=release;f.tun.mu.Unlock()
+   }
+   done:=make(chan error,1)
+   var unblock sync.Once
+   joined:=false
+   t.Cleanup(func(){
+    unblock.Do(func(){close(release)})
+    if !joined {
+     select {
+     case <-done:
+     case <-time.After(time.Second): t.Error("original native close worker did not join cleanup")
+     }
+    }
+   })
+   go func(){done<-f.server.StartedService.CloseService()}()
+   if phase=="held" {
+    select {
+    case <-entered:
+    case <-time.After(time.Second): t.Fatal("original native TUN close did not enter")
+    }
+    ctx,cancel:=context.WithTimeout(context.Background(),15*time.Millisecond)
+    err:=owner.nativeClosedContext(ctx)
+    cancel()
+    if !errors.Is(err,context.DeadlineExceeded)||owner.native.Load()!=state.native||!owner.closed.Load(){
+     t.Fatal("held original native close escaped its caller or owner",err)
+    }
+    unblock.Do(func(){close(release)})
+   }
+   var err error
+   select {
+   case err=<-done:joined=true
+   case <-time.After(time.Second): t.Fatal("original native Box close did not join")
+   }
+   if phase=="failed" {
+    if !errors.Is(err,failure)||owner.NativeClosed()||f.server.StartedService.Instance()!=nil {
+     t.Fatal("failed original Box close lost its receipt after daemon slot removal",err)
+    }
+    // The service slot is already empty; its next no-op cannot turn the
+    // retained failed Instance/Box close into successful native DOWN.
+    _=f.server.StartedService.CloseService()
+    if err:=owner.Close();err!=nil {t.Fatal("original shared close retry",err)}
+    if owner.NativeClosed()||owner.native.Load()!=state.native||owner.state.Load()!=state {
+     t.Fatal("nil-slot cleanup retry fabricated original native DOWN")
+    }
+   } else if err!=nil||!owner.NativeClosed() {
+    t.Fatal("joined actual original Box close did not prove native DOWN",err)
+   }
+  })
+ }
+}
+
+func TestRouterNodeChainSOCKSBridgeActualNativeReadKeepsDeadline(t *testing.T) {
+ owner:=socksBridgeOwner(t,"wg")
+ f:=socksBridgeStarted(t,owner)
+ state:=socksBridgeNativeState(t,f)
+ held:=routerMTUField[sync.RWMutex](t,f.server.StartedService,"serviceAccess")
+ held.Lock()
+ ctx,cancel:=context.WithTimeout(context.Background(),15*time.Millisecond)
+ err:=owner.nativeCurrent(ctx,state)
+ cancel();held.Unlock()
+ if !errors.Is(err,context.DeadlineExceeded){t.Fatal("actual bridge owner lookup lost its caller deadline",err)}
+ if err:=owner.nativeCurrent(t.Context(),state);err!=nil{t.Fatal("timed out observer retired unchanged original native owner",err)}
+}
+
+func TestRouterNodeChainSOCKSBridgeRetainsOnlyBoundedOriginalCleanup(t *testing.T) {
+ for _,fault:=range []string{"original","foreign-server","foreign-state","expired","unbounded"} {
+  t.Run(fault,func(t *testing.T){
+   owner:=socksBridgeOwner(t,"wg")
+   f:=socksBridgeStarted(t,owner)
+   state:=socksBridgeNativeState(t,f)
+   if owner.RetainsServerCleanup(f.server){t.Fatal("idle typed owner gained physical cleanup authority")}
+   state.done=make(chan struct{})
+   var release sync.Once
+   ctx,cancel:=context.WithTimeout(context.Background(),time.Second)
+   if fault=="unbounded" {cancel();ctx=context.Background();cancel=func(){}}
+   defer cancel()
+   done:=make(chan error,1)
+   joined:=false
+   t.Cleanup(func(){
+    owner.state.Store(state)
+    release.Do(func(){close(state.done)})
+    if !joined {
+     select{case <-done:case <-time.After(time.Second):t.Error("original cleanup permit worker did not join")}
+    }
+   })
+   go func(){done<-owner.closeContext(ctx)}()
+   until:=time.Now().Add(time.Second)
+   for owner.cleanup.Load()==nil && time.Now().Before(until){time.Sleep(time.Millisecond)}
+   if owner.cleanup.Load()==nil {t.Fatal("original shared drain did not retain its cleanup token")}
+   if fault=="unbounded" {
+    if owner.RetainsServerCleanup(f.server){t.Fatal("unbounded caller gained physical cleanup authority")}
+   } else {
+    if !owner.RetainsServerCleanup(f.server){t.Fatal("bounded original drain lost its exact native cleanup authority")}
+    switch fault {
+    case "foreign-server":
+     if owner.RetainsServerCleanup(&CommandServer{}){t.Fatal("foreign server borrowed physical cleanup authority")}
+    case "foreign-state":
+     owner.state.Store(&routerNodeChainSOCKSState{})
+     if owner.RetainsServerCleanup(f.server){t.Fatal("successor state borrowed original cleanup authority")}
+     owner.state.Store(state)
+    case "expired":
+     cancel()
+     if owner.RetainsServerCleanup(f.server){t.Fatal("expired cleanup caller retained physical network authority")}
+    }
+   }
+   release.Do(func(){close(state.done)})
+   select {
+   case err:=<-done:
+    joined=true
+    if fault!="expired"&&err!=nil{t.Fatal("original cleanup did not join",err)}
+    if fault=="expired"&&!errors.Is(err,context.Canceled){t.Fatal("original cleanup cancellation changed",err)}
+   case <-time.After(time.Second):t.Fatal("released original cleanup did not join")
+   }
+   if owner.RetainsServerCleanup(f.server)||owner.cleanup.Load()!=nil {
+    t.Fatal("completed cleanup token retained physical network authority")
+   }
+   if owner.NativeClosed(){t.Fatal("cleanup permit fabricated original native DOWN")}
+  })
+ }
+}

@@ -1,0 +1,270 @@
+package libbox
+
+import (
+ "context"
+ "errors"
+ "sync/atomic"
+ "time"
+
+ box "github.com/sagernet/sing-box"
+ "github.com/sagernet/sing-box/adapter"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// This claim outlives every failed constructor, proof pause and native reader
+// retirement. Only its checked Close releases the original plan's MTU slot.
+type routerNodeChainSOCKSMTU struct {
+ owner *RouterNodeChainSOCKS
+ native *routerMTUOwner
+ constructed chan struct{}
+ controller atomic.Pointer[mobilemtu.Controller]
+ run atomic.Pointer[routerNodeChainSOCKSMTURun]
+ closed atomic.Bool
+}
+type routerNodeChainSOCKSMTURun struct {
+ owner *routerNodeChainSOCKSMTU
+ operation context.Context
+ native *routerNodeChainSOCKSNative
+ state atomic.Pointer[routerNodeChainSOCKSState]
+ continuation atomic.Pointer[box.RouterVPNNodeChainSOCKSMTU]
+}
+type routerNodeChainSOCKSMTUCleanupKey struct{}
+
+// The pure profile describes the captured complete graph, never current proof
+// or a measured/effective MTU. It does not acquire a server, Box or interface.
+func (m *RouterNodeChainSOCKS) MTUProfile() string {
+ if m==nil || m.source==nil {return ""}
+ runtime,err:=mobilemultihop.NewNodeChainSOCKSRuntime(m.source)
+ if err!=nil{return ""}
+ return runtime.MTUProfile()
+}
+func RouterNodeChainSOCKSNewMTU(m *RouterNodeChainSOCKS, server *CommandServer, platform RouterMTUPlatform)(*RouterMTU,error){
+ ctx,cancel:=context.WithTimeout(context.Background(),routerMTUObservationBudget);defer cancel()
+ return m.newSOCKSMTUContext(ctx,server,platform)
+}
+func (m *RouterNodeChainSOCKS) newSOCKSMTUContext(ctx context.Context,server *CommandServer,platform RouterMTUPlatform)(*RouterMTU,error){
+ if m==nil||ctx==nil||server==nil||platform==nil{return nil,errRouterNodeChainSOCKS()}
+ if err:=adapter.RouterVPNLockContext(ctx,&m.mu);err!=nil{return nil,err}
+ defer m.mu.Unlock()
+ state,native:=m.state.Load(),m.native.Load()
+ if state==nil||native==nil||native.server!=server||state.native!=native||
+  m.mtu.Load()!=nil||m.measuring||m.healthyContext(ctx)!=nil{return nil,errRouterNodeChainSOCKS()}
+ actual,err:=routerMTUState(platform.CaptureMTU());if err!=nil{return nil,err}
+ plan,err:=state.runtime.MTUPlan()
+ if err!=nil||actual.MTU<1280||actual.MTU>plan.Ceiling{return nil,errors.Join(err,errRouterNodeChainSOCKS())}
+ reader,found,err:=adapter.RouterVPNInboundContext(ctx,state.box.Inbound(),plan.TUNTag)
+ if err!=nil||!found||reader==nil||reader.Type()!="tun"{return nil,errors.Join(err,errRouterNodeChainSOCKS())}
+ readback,ok:=reader.(interface{RouterVPNExecutionMTUReadbackContext(context.Context)(string,int,int,error)})
+ if !ok{return nil,errRouterNodeChainSOCKS()}
+ name,index,mtu,err:=readback.RouterVPNExecutionMTUReadbackContext(ctx)
+ if err!=nil||name!=actual.Interface||index<1||mtu!=actual.MTU||m.healthyContext(ctx)!=nil{return nil,errors.Join(err,errRouterNodeChainSOCKS())}
+ w:=&routerNodeChainSOCKSMTU{owner:m,constructed:make(chan struct{})}
+ w.native=&routerMTUOwner{platform:platform,server:server,instance:state.instance,inbound:reader,
+  session:actual.Session,path:actual.Path,chain:w,proofCurrentContext:w.currentProofContext,initialContext:ctx}
+ defer close(w.constructed)
+ defer func(){w.native.initialContext=nil}()
+ if !m.mtu.CompareAndSwap(nil,w){return nil,errRouterNodeChainSOCKS()}
+ controller,err:=state.runtime.NewMTUControllerContext(ctx,w.native,mobilemtu.NewCache(routerMTUPreferences{platform}))
+ if controller!=nil{w.controller.Store(controller)}
+ if err!=nil||controller==nil {
+  if controller==nil{m.mtu.CompareAndSwap(w,nil)}else{w.invalidate()}
+  return nil,errors.Join(err,errRouterNodeChainSOCKS())
+ }
+ current,err:=w.native.CaptureContext(ctx)
+ if err!=nil||current!=actual||m.state.Load()!=state||m.healthyContext(ctx)!=nil{
+  // The plan, not a partial gomobile return, retains a failed late acquisition.
+  w.invalidate()
+  return nil,errors.Join(err,errRouterNodeChainSOCKS())
+ }
+ return &RouterMTU{controller:controller,owner:w.native},nil
+}
+func (w *routerNodeChainSOCKSMTU) ownsMTU(native *routerMTUOwner)bool{
+ return w!=nil&&w.owner!=nil&&native!=nil&&w.native==native&&!w.closed.Load()&&w.owner.mtu.Load()==w
+}
+func (w *routerNodeChainSOCKSMTU) releaseMTU(native *routerMTUOwner){
+ if w!=nil&&w.native==native&&w.closed.Load(){w.owner.mtu.CompareAndSwap(w,nil)}
+}
+func (w *routerNodeChainSOCKSMTU) NetworkChanged(){if w!=nil&&w.owner!=nil{w.owner.NetworkChanged()}}
+func (w *routerNodeChainSOCKSMTU) invalidate(){
+ if w==nil{return};if w.native!=nil{w.native.invalid.Store(true)}
+ if controller:=w.controller.Load();controller!=nil{controller.Invalidate()}
+}
+func (m *RouterNodeChainSOCKS) mtuOccupied()bool{
+ w:=m.mtu.Load()
+ return w!=nil&&!w.closed.Load()&&w.run.Load()!=nil
+}
+func (w *routerNodeChainSOCKSMTU) startMTU(request string,force bool)error{
+ ctx,cancel:=context.WithTimeout(context.Background(),routerMTUObservationBudget);defer cancel()
+ if w==nil||!w.ownsMTU(w.native){return errRouterNodeChainSOCKS()}
+ m:=w.owner
+ if err:=adapter.RouterVPNLockContext(ctx,&m.mu);err!=nil{return err};defer m.mu.Unlock()
+ state:=m.state.Load();controller:=w.controller.Load()
+ if state==nil||controller==nil||w.run.Load()!=nil||m.measuring||w.native.invalid.Load()||m.healthyContext(ctx)!=nil{return errRouterNodeChainSOCKS()}
+ run:=&routerNodeChainSOCKSMTURun{owner:w,native:state.native};run.state.Store(state)
+ // Reuse the controller's original work/cleanup clocks. The provider returns
+ // that original admission deadline unchanged; it cannot renew the allowance.
+ return controller.StartContextWithCleanupProvider(ctx,state.native.server.ctx,request,force,
+  func(admission context.Context)(deadline time.Time,err error){
+   if admission==nil{return deadline,errRouterNodeChainSOCKS()}
+   deadline,ok:=admission.Deadline();if !ok{return deadline,errRouterNodeChainSOCKS()}
+   return deadline,admission.Err()
+  },
+  func(call context.Context)error{
+   if m.state.Load()!=state||m.retired.Load()||m.measuring||!w.ownsMTU(w.native)||m.healthyContext(call)!=nil{return errRouterNodeChainSOCKS()}
+   run.operation=call
+   if !w.run.CompareAndSwap(nil,run){return errRouterNodeChainSOCKS()}
+   return nil
+  },run.finalize)
+}
+func (w *routerNodeChainSOCKSMTU) currentProofContext(ctx context.Context)error{
+ if !w.ownsMTU(w.native){return errRouterNodeChainSOCKS()}
+ if err:=w.owner.healthyContext(ctx);err==nil{return nil}
+ run:=w.run.Load()
+ if run==nil||run.operation==nil||!mobilemtu.SameOperationContext(run.operation,ctx)||w.owner.retired.Load(){return errRouterNodeChainSOCKS()}
+ continuation:=run.continuation.Load()
+ if continuation==nil{return errRouterNodeChainSOCKS()}
+ // Only the accepted optimizer may observe a joined failed probe for rollback.
+ // Healthy/Connected and ordinary measurement never use this readback.
+ return continuation.ObserveContext(ctx)
+}
+func (r *routerNodeChainSOCKSMTURun) original(ctx context.Context)error{
+ if r==nil||r.owner==nil||ctx==nil{return errRouterNodeChainSOCKS()}
+ if err:=ctx.Err();err!=nil{return err}
+ w:=r.owner;m:=w.owner;state:=r.state.Load();native:=r.native
+ if !w.ownsMTU(w.native)||w.run.Load()!=r||state==nil||m.state.Load()!=state||native==nil||
+  m.native.Load()!=native||state.native!=native||native.server!=w.native.server||
+  native.service==nil||native.server.StartedService!=native.service||native.capture==nil||
+  state.instance!=w.native.instance||state.box==nil||state.instance.Box()!=state.box||
+  !native.capture.Owns(state.instance,state.box){return errRouterNodeChainSOCKS()}
+ if err:=requireRouterNodeSOCKSServer(ctx,native.server,m.source);err!=nil{return err}
+ current,err:=native.service.RouterVPNInstanceContext(ctx)
+ if err!=nil||current!=state.instance||m.state.Load()!=state||m.native.Load()!=native{return errors.Join(err,errRouterNodeChainSOCKS())}
+ return ctx.Err()
+}
+func (r *routerNodeChainSOCKSMTURun) ObserveSOCKSMTUContext(ctx context.Context,source *mobilemultihop.NodeChainSOCKSSource)error{
+ if r==nil||r.owner==nil||source!=r.owner.owner.source||!mobilemtu.SameOperationContext(r.operation,ctx){return errRouterNodeChainSOCKS()}
+ return r.original(ctx)
+}
+func (r *routerNodeChainSOCKSMTURun) PauseSOCKSMTUContext(ctx context.Context,source *mobilemultihop.NodeChainSOCKSSource,engine *box.RouterVPNNodeChainSOCKSEngine)error{
+ if r==nil||r.owner==nil||source!=r.owner.owner.source{return errRouterNodeChainSOCKS()}
+ cleanup:=ctx!=nil&&ctx.Value(routerNodeChainSOCKSMTUCleanupKey{})==r.owner
+ if !cleanup&&!mobilemtu.SameOperationContext(r.operation,ctx){return errRouterNodeChainSOCKS()}
+ if err:=r.original(ctx);err!=nil{return err}
+ state:=r.state.Load()
+ if engine==nil||state.engine.Load()!=engine{return errRouterNodeChainSOCKS()}
+ state.cancel()
+ if err:=state.runtime.CloseContext(ctx);err!=nil{return err}
+ select{case <-state.done:case <-ctx.Done():return ctx.Err()}
+ return r.original(ctx)
+}
+func (w *routerNodeChainSOCKSMTU) beforeMTUChange(ctx context.Context,native *routerMTUOwner,mtu int)(bool,error){
+ if !w.ownsMTU(native){return false,errRouterNodeChainSOCKS()}
+ r:=w.run.Load()
+ if r==nil||!mobilemtu.SameOperationContext(r.operation,ctx){return false,errRouterNodeChainSOCKS()}
+ if err:=r.original(ctx);err!=nil{return false,err}
+ plan,err:=r.state.Load().runtime.MTUPlan()
+ if err!=nil||mtu<1280||mtu>plan.Ceiling{return false,errors.Join(err,errRouterNodeChainSOCKS())}
+ continuation:=r.continuation.Load()
+ if continuation==nil{
+  engine:=r.state.Load().engine.Load();if engine==nil{return false,errRouterNodeChainSOCKS()}
+  continuation,err=engine.BeginSOCKSMTUContext(ctx,r)
+  if continuation!=nil{r.continuation.Store(continuation)}
+  if err!=nil{return continuation!=nil,err}
+ }
+ return true,continuation.PauseContext(ctx)
+}
+func (w *routerNodeChainSOCKSMTU) changeMTUContext(ctx context.Context,native *routerMTUOwner,expected adapter.Inbound,mtu int)(adapter.Inbound,error){
+ if !w.ownsMTU(native){return expected,errRouterNodeChainSOCKS()}
+ r:=w.run.Load();if r==nil||r.continuation.Load()==nil{return expected,errRouterNodeChainSOCKS()}
+ return r.continuation.Load().ChangeContext(ctx,expected,mtu)
+}
+func (w *routerNodeChainSOCKSMTU) afterMTUChange(ctx context.Context,native *routerMTUOwner)error{
+ if !w.ownsMTU(native){return errRouterNodeChainSOCKS()}
+ r:=w.run.Load()
+ if r==nil||r.continuation.Load()==nil||!mobilemtu.SameOperationContext(r.operation,ctx)||w.owner.retired.Load(){return errRouterNodeChainSOCKS()}
+ if err:=r.original(ctx);err!=nil{return err}
+ previous:=r.state.Load()
+ runtime,err:=mobilemultihop.NewNodeChainSOCKSRuntime(w.owner.source);if err!=nil{return err}
+ lifetime,cancel:=context.WithCancel(r.native.server.ctx)
+ state:=&routerNodeChainSOCKSState{native:r.native,instance:previous.instance,box:previous.box,runtime:runtime,
+  lifetime:lifetime,cancel:cancel,done:make(chan struct{}),session:previous.session}
+ // Publish every new proof owner before entering any callback. Failure keeps it
+ // reachable for the next original pause/rollback or final host retirement.
+ if err:=adapter.RouterVPNLockContext(ctx,&w.owner.mu);err!=nil{cancel();return err}
+ if w.owner.retired.Load()||w.owner.mtu.Load()!=w||!w.owner.state.CompareAndSwap(previous,state){
+  w.owner.mu.Unlock();cancel();return errRouterNodeChainSOCKS()
+ }
+ state.engine.Store(previous.engine.Load())
+ r.state.Store(state)
+ w.owner.mu.Unlock()
+ defer close(state.done)
+ engine,err:=r.continuation.Load().ResumeContext(ctx,func(call context.Context)error{return w.owner.nativeCurrent(call,state)})
+ if engine!=nil{state.engine.Store(engine)}
+ if err!=nil{cancel();return err}
+ joined:=make(chan struct{})
+ stop:=context.AfterFunc(ctx,func(){cancel();close(joined)})
+ err=runtime.Run(lifetime,engine)
+ if !stop(){<-joined;err=errors.Join(err,ctx.Err(),errRouterNodeChainSOCKS())}
+ if err==nil{err=errors.Join(runtime.HealthyContext(ctx),w.owner.nativeCurrent(ctx,state))}
+ if err==nil&&ctx.Err()==nil{return nil}
+ cancel()
+ cleanup:=ctx
+ if ctx.Err()!=nil{var cleanupErr error;cleanup,cleanupErr=mobilemtu.OperationCleanupContext(ctx);if cleanupErr!=nil{return errors.Join(err,cleanupErr)}}
+ return errors.Join(err,runtime.CloseContext(cleanup))
+}
+func (w *routerNodeChainSOCKSMTU) finishMTUChange(native *routerMTUOwner){
+ // Per-reader return does not release the whole-operation receipt. Its exact
+ // controller finalizer owns Finish after all probes, winner or Cancel rollback.
+ if w!=nil&&w.native==native&&native.invalid.Load(){w.owner.NetworkChanged()}
+}
+func (r *routerNodeChainSOCKSMTURun) finalize(ctx context.Context)error{
+ if r==nil||r.owner==nil||r.owner.run.Load()!=r{return errRouterNodeChainSOCKS()}
+ w:=r.owner;continuation:=r.continuation.Load()
+ if continuation==nil{w.run.CompareAndSwap(r,nil);return nil}
+ call:=ctx
+ if ctx.Err()!=nil{var err error;call,err=mobilemtu.OperationCleanupContext(ctx);if err!=nil{return err}}
+ if !w.owner.retired.Load()&&w.owner.healthyContext(call)==nil{
+  if err:=continuation.FinishContext(call);err!=nil{return err}
+  w.run.CompareAndSwap(r,nil);return nil
+ }
+ // A failed proof never becomes a winner. Keep even a joined retired result in
+ // the wrapper until checked host Close; its caller may have lost finalization.
+ return continuation.CloseContext(call)
+}
+func (w *routerNodeChainSOCKSMTU) closeMTUContext(ctx context.Context,native *routerMTUOwner)error{
+ if w==nil||native!=w.native{return errRouterNodeChainSOCKS()}
+ return w.closeContext(ctx)
+}
+func (w *routerNodeChainSOCKSMTU) closeContext(ctx context.Context)error{
+ if w==nil||ctx==nil||w.owner==nil||w.native==nil{return errRouterNodeChainSOCKS()}
+ if err:=ctx.Err();err!=nil{return err}
+ if w.closed.Load(){return nil}
+ w.invalidate()
+ select{case <-w.constructed:case <-ctx.Done():return ctx.Err()}
+ return w.withCleanup(ctx,func(call context.Context)error{
+  if controller:=w.controller.Load();controller!=nil{if err:=controller.CloseContext(call);err!=nil{return err}}
+  if r:=w.run.Load();r!=nil{
+   if continuation:=r.continuation.Load();continuation!=nil{
+    if err:=continuation.RetireContext(call,r);err!=nil{return err}
+   }
+  }
+  if err:=call.Err();err!=nil{return err}
+  w.closed.Store(true);w.owner.mtu.CompareAndSwap(w,nil)
+  return nil
+ })
+}
+func (w *routerNodeChainSOCKSMTU) withCleanup(ctx context.Context,work func(context.Context)error)error{
+ if ctx==nil||work==nil||!w.ownsMTU(w.native){return errRouterNodeChainSOCKS()}
+ if err:=ctx.Err();err!=nil{return err}
+ if _,bounded:=ctx.Deadline();!bounded{return errRouterNodeChainSOCKS()}
+ call:=context.WithValue(ctx,routerNodeChainSOCKSMTUCleanupKey{},w)
+ m:=w.owner;state,native:=m.state.Load(),m.native.Load()
+ // Idle optimizer closure does not retire a proved connection. Retired plans
+ // grant only this original bounded Close the socket-protection cleanup scope.
+ if !m.retired.Load(){return work(call)}
+ token:=&routerNodeChainSOCKSCleanup{ctx:call,state:state,native:native}
+ if !m.cleanup.CompareAndSwap(nil,token){return errRouterNodeChainSOCKS()}
+ defer m.cleanup.CompareAndSwap(token,nil)
+ return work(call)
+}

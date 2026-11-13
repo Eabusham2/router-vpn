@@ -1,0 +1,219 @@
+package libbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"reflect"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Sources use the existing paired constructor fixtures and the actual strict
+// typed SOCKS compiler. This helper supplies no substitute compiled graph,
+// credentials, proof receipt or native owner.
+func socksBridgeSource(t *testing.T, mode string) *mobilemultihop.NodeChainSOCKSSource {
+	t.Helper()
+	paired := candidateBridgeSourceModes(t, []string{mode, "wg"})
+	identities := candidateBridgeSourceModes(t, []string{"wg", "wg", "wg"})
+	decode := func(chain *mobilemultihop.NodeChain) mobilemultihop.NodeChainSource {
+		input, err := chain.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var source mobilemultihop.NodeChainSource
+		if err := json.Unmarshal([]byte(input), &source); err != nil {
+			t.Fatal(err)
+		}
+		return source
+	}
+	source, identity := decode(paired), decode(identities)
+	files := func(input string) string {
+		var record struct { Files string `json:"files"` }
+		if err := json.Unmarshal([]byte(input), &record); err != nil || record.Files == "" {
+			t.Fatal("original paired identity fixture has no files", err)
+		}
+		return record.Files
+	}
+	graph := map[string]any{
+		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn",
+			"address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280,
+			"auto_route": true, "strict_route": true, "stack": "system"}},
+		"outbounds": []any{map[string]any{"type": "socks", "tag": "custom-exit", "server": "203.0.113.20",
+			"server_port": 1080, "version": "5", "username": "original-middle-user", "password": "original-middle-password"}},
+		"route": map[string]any{"rules": []any{}, "final": "custom-exit", "auto_detect_interface": true},
+	}
+	profile := map[string]any{"id": "saved-socks-middle", "node_kind": "external", "dns_mode": "home",
+		"kill_switch_policy": "always", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "auto",
+		"external": map[string]any{"protocol": "socks5", "expected_public_ip": "203.0.113.88",
+			"socks5": map[string]any{"host": "203.0.113.20", "port": 1080,
+				"username": "original-middle-user", "password": "original-middle-password"}}}
+	capture := map[string]any{"schema": 1, "exit_id": "saved-socks-middle", "protocol": "socks5",
+		"expected_public_ip": "203.0.113.88", "profile": profile}
+	member, err := RouterNodeChainImportedSOCKSMemberInput(candidateBridgeJSON(t, graph), candidateBridgeJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Schema, source.Nodes[1] = 3, member
+	source.IdentitySources = []string{files(identity.Nodes[0]), "", files(identity.Nodes[2])}
+	result, err := mobilemultihop.NewNodeChainSOCKSSource(candidateBridgeJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+type socksBridgePlatform struct { PlatformInterface }
+func (*socksBridgePlatform) LocalDNSTransport() LocalDNSTransport { return nil }
+func (*socksBridgePlatform) UseProcFS() bool { return false }
+type socksBridgeHandler struct { CommandServerHandler }
+func (*socksBridgeHandler) WriteDebugMessage(string) {}
+
+func socksBridgeOwner(t *testing.T, mode string) *RouterNodeChainSOCKS {
+	t.Helper()
+	input, err := socksBridgeSource(t, mode).Source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := NewRouterNodeChainSOCKS(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return owner
+}
+func socksBridgeServer(t *testing.T, owner *RouterNodeChainSOCKS) *CommandServer {
+	t.Helper()
+	server, err := owner.NewCommandServer(&socksBridgeHandler{}, &socksBridgePlatform{})
+	if err != nil || server == nil {
+		t.Fatal("actual typed command factory failed", err)
+	}
+	t.Cleanup(func() {
+		if err := owner.Close(); err != nil {
+			t.Error("original bridge cleanup failed", err)
+		}
+		if err := server.StartedService.CloseService(); err != nil {
+			t.Error("original native service cleanup failed", err)
+		}
+		server.Close()
+	})
+	return server
+}
+
+func TestRouterNodeChainSOCKSBridgeKeepsSourceAndExplicitBinding(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			owner := socksBridgeOwner(t, mode)
+			input, err := owner.Source()
+			if err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := NewRouterNodeChainSOCKS(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, err := owner.Config()
+			again, otherErr := reopened.Config()
+			if err != nil || otherErr != nil || config != again || owner.Metadata() != reopened.Metadata() ||
+				owner.SourceSHA256() != reopened.SourceSHA256() || owner.ConfigSHA256() != reopened.ConfigSHA256() {
+				t.Fatal("private original typed source did not reopen exactly", err, otherErr)
+			}
+			if owner.Healthy() || owner.NativeClosed() {
+				t.Fatal("unacquired source fabricated native proof or DOWN")
+			}
+			server := socksBridgeServer(t, owner)
+			if owner.native.Load().capture != nil || owner.Run(server) == nil {
+				t.Fatal("factory implicitly bound or started native proof")
+			}
+			if err := owner.BindNative(server); err != nil {
+				t.Fatal(err)
+			}
+			if owner.Healthy() || owner.NativeClosed() {
+				t.Fatal("reserved daemon fabricated actual path proof or close")
+			}
+			if err := owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := server.StartedService.CloseService(); err != nil || !owner.NativeClosed() {
+				t.Fatal("positively sealed never-acquired daemon did not join", err)
+			}
+			if _, err := owner.NewCommandServer(&socksBridgeHandler{}, &socksBridgePlatform{}); err == nil {
+				t.Fatal("retired typed bridge created a replacement server")
+			}
+			if _, exists := reflect.TypeOf(owner).MethodByName("LaunchInput"); exists {
+				t.Fatal("typed bridge acquired generic launch authority")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainSOCKSBridgeBindingFailureKeepsHostHandle(t *testing.T) {
+	owner := socksBridgeOwner(t, "wg")
+	server := socksBridgeServer(t, owner)
+	held := routerMTUField[sync.RWMutex](t, server.StartedService, "serviceAccess")
+	held.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	owner.mu.Lock()
+	err := owner.bindNativeLocked(ctx, server)
+	owner.mu.Unlock()
+	cancel()
+	held.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) || owner.native.Load().server != server ||
+		owner.native.Load().capture != nil || owner.NativeClosed() {
+		t.Fatal("binding failure lost the already-returned original server", err)
+	}
+	if err := owner.BindNative(server); err != nil {
+		t.Fatal("same original binding retry failed", err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.StartedService.CloseService(); err != nil || !owner.NativeClosed() {
+		t.Fatal("original binding retry did not retain close authority", err)
+	}
+}
+
+func TestRouterNodeChainSOCKSBridgeRefusesForeignAndOrdinaryServer(t *testing.T) {
+	owner := socksBridgeOwner(t, "wg")
+	server := socksBridgeServer(t, owner)
+	foreign := socksBridgeOwner(t, "wg")
+	other := socksBridgeServer(t, foreign)
+	ordinary, err := NewCommandServer(&socksBridgeHandler{}, &socksBridgePlatform{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ordinary.Close()
+	for _, value := range []*CommandServer{other, ordinary} {
+		if owner.BindNative(value) == nil || owner.Run(value) == nil {
+			t.Fatal("foreign server adopted typed source or native receipt")
+		}
+	}
+	if requireRouterNodeSOCKSServer(t.Context(), other, owner.source) == nil ||
+		requireRouterNodeSOCKSServer(t.Context(), ordinary, owner.source) == nil {
+		t.Fatal("equal source or ordinary registry borrowed original source pointer")
+	}
+	if err := owner.BindNative(server); err != nil {
+		t.Fatal(err)
+	}
+	if err := foreign.BindNative(other); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterNodeChainSOCKSBridgeEmptyOwnerDoesNotProveDOWN(t *testing.T) {
+	if value, err := NewRouterNodeChainSOCKS("{}"); err == nil || value != nil {
+		t.Fatal("invalid source acquired a typed owner")
+	}
+	owner := socksBridgeOwner(t, "wg")
+	if _, err := owner.NewCommandServer(nil, nil); err == nil {
+		t.Fatal("missing platform/handler reached native construction")
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if owner.NativeClosed() || owner.Healthy() || (*RouterNodeChainSOCKS)(nil).Run(nil) == nil {
+		t.Fatal("unacquired owner fabricated native retirement")
+	}
+}

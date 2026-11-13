@@ -40,6 +40,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-tun"
 	wg "github.com/sagernet/sing-box/transport/wireguard"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
@@ -250,10 +251,13 @@ func desktopImportedWGSSStart(t *testing.T, request desktopImportedWGSSRequest, 
 // The original imported WG fixture keeps its own real WG constructor. Ordered
 // AWG prefixes reuse only its fixed final service and owned lifetime, supplying
 // their independently validated Amnezia factory; keys and bind remain checked.
-func desktopImportedWGSSStartWithFactory(t *testing.T, request desktopImportedWGSSRequest, local, remote netip.Addr, start desktopNodeUDPReferenceFactory) *desktopImportedWGSSPeer {
+func desktopImportedWGSSStartWithFactory(t *testing.T, request desktopImportedWGSSRequest, local, remote netip.Addr, start desktopNodeUDPReferenceFactory, decorate ...func(*desktopNodeWGHandler) tun.Handler) *desktopImportedWGSSPeer {
 	t.Helper()
 	if start == nil {
 		t.Fatal("imported reference requires its captured native constructor")
+	}
+	if len(decorate) > 1 {
+		t.Fatal("imported reference requires at most one handler decorator")
 	}
 	ipc, err := desktopImportedWGSSIdentity(request)
 	if err != nil {
@@ -427,7 +431,17 @@ func desktopImportedWGSSStartWithFactory(t *testing.T, request desktopImportedWG
 	}
 	entryContext, entryCancel := context.WithCancel(context.Background())
 	p.entry = &desktopNodeWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: entryContext, cancel: entryCancel, rules: rules, owned: map[io.Closer]bool{}}}
-	stack, err := wg.NewDevice(wg.DeviceOptions{Context: entryContext, Logger: log.NewNOPFactory().Logger(), Handler: p.entry, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+	var handler tun.Handler = p.entry
+	if len(decorate) == 1 {
+		if decorate[0] == nil {
+			t.Fatal("imported reference lost its original handler decorator")
+		}
+		handler = decorate[0](p.entry)
+		if handler == nil {
+			t.Fatal("imported reference decorator returned no handler")
+		}
+	}
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: entryContext, Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32"), netip.MustParsePrefix("fd78:78::1/128")}})
 	if err != nil {
 		p.entry.close()
 		t.Fatal(err)

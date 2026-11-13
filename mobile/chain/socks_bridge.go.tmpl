@@ -1,0 +1,117 @@
+package libbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// RouterNodeChainImportedSOCKSMemberInput preserves the complete original saved
+// import and its public identity; it never creates paired node credentials.
+func RouterNodeChainImportedSOCKSMemberInput(config, capture string) (string, error) {
+	return mobilemultihop.NodeChainImportedSOCKSMemberInput(config, capture)
+}
+
+// This distinct factory retains one private source object. It grants no
+// ordinary schema, Server/Compare, candidate or platform UI admission.
+func NewRouterNodeChainSOCKS(input string) (*RouterNodeChainSOCKS, error) {
+	source, err := mobilemultihop.NewNodeChainSOCKSSource(input)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterNodeChainSOCKS{source: source}, nil
+}
+
+// NewCommandServer installs only the source-bound local SOCKS registry. The
+// host first retains the returned server, then explicitly calls BindNative
+// before Start. Binding failures must not hide the server in gomobile's error
+// return; the host needs its original handle for exact native cleanup.
+func (m *RouterNodeChainSOCKS) NewCommandServer(handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if m == nil || m.source == nil || handler == nil || platform == nil {
+		return nil, errRouterNodeChainSOCKS()
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	if m.retired.Load() || m.native.Load() != nil || m.state.Load() != nil {
+		return nil, errRouterNodeChainSOCKS()
+	}
+	server, err := newRouterNodeSOCKSCommandServer(handler, platform, m.source)
+	if server != nil {
+		m.native.Store(&routerNodeChainSOCKSNative{server: server, service: server.StartedService})
+	}
+	if err != nil || server == nil {
+		return server, errors.Join(err, errRouterNodeChainSOCKS())
+	}
+	return server, nil
+}
+
+// Source is the exact private schema3 input for the original protected session
+// file. It carries no generic launch, Ready or native ownership authority.
+func (m *RouterNodeChainSOCKS) Source() (string, error) {
+	if m == nil || m.source == nil {
+		return "", errRouterNodeChainSOCKS()
+	}
+	return m.source.Source()
+}
+func (m *RouterNodeChainSOCKS) Config() (string, error) {
+	if m == nil || m.source == nil {
+		return "", errRouterNodeChainSOCKS()
+	}
+	config, _, err := m.source.ReadValidated()
+	return config, err
+}
+func (m *RouterNodeChainSOCKS) SourceSHA256() string {
+	if m == nil || m.source == nil {
+		return ""
+	}
+	_, meta, err := m.source.ReadValidated()
+	if err != nil {
+		return ""
+	}
+	return meta.SourceSHA256
+}
+func (m *RouterNodeChainSOCKS) ConfigSHA256() string {
+	if m == nil || m.source == nil {
+		return ""
+	}
+	_, meta, err := m.source.ReadValidated()
+	if err != nil {
+		return ""
+	}
+	return meta.ConfigSHA256
+}
+func (m *RouterNodeChainSOCKS) Metadata() string {
+	if m == nil || m.source == nil {
+		return ""
+	}
+	_, meta, err := m.source.ReadValidated()
+	if err != nil {
+		return ""
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+func (m *RouterNodeChainSOCKS) ProgressJSON() string {
+	progress := mobilemultihop.NodeChainProgress{Stage: "idle", Execution: "local"}
+	if m != nil {
+		if state := m.state.Load(); state != nil {
+			progress = state.runtime.Progress()
+		}
+		if m.retired.Load() {
+			progress.Ready = false
+		}
+	}
+	raw, _ := json.Marshal(progress)
+	return string(raw)
+}

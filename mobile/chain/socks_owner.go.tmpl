@@ -1,0 +1,471 @@
+package routervpnnodesocks
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+	"reflect"
+	"sync"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/service"
+)
+
+const operationLimit = 256
+
+var errCapture = errors.New("ordered SOCKS owner lost its original source, position or native detour")
+
+type captureKey struct{}
+
+// Capture is a dormant native construction scope. It grants no Ready, TUN,
+// application, DNS, physical socket, bridge or public launch authority.
+// Only an explicitly supplied local registry can use this factory; ordinary
+// include/registry.go and every current app launch retain their original path.
+type Capture struct {
+	mu sync.Mutex
+	ctx context.Context
+	source *mobilemultihop.NodeChainSOCKSSource
+	config string
+	metadata mobilemultihop.NodeChainSOCKSSourceMetadata
+	tag, lowerTag, lowerType string
+	options option.SOCKSOutboundOptions
+	registered bool
+	claimed bool
+}
+
+func NewCapture(ctx context.Context, source *mobilemultihop.NodeChainSOCKSSource) (*Capture, error) {
+	if ctx == nil || ctx.Err() != nil || source == nil {
+		return nil, errCapture
+	}
+	config, meta, err := source.ReadValidated()
+	if err != nil || meta.Kind != "routervpn-node-chain-socks-source" || meta.Schema != 1 ||
+		meta.NativeAdmission != "closed" || len(meta.Proofs) != 3 || len(meta.Devices) != 3 ||
+		meta.Proofs[1].Position != 1 || meta.Proofs[1].Mode != "socks5" ||
+		meta.Proofs[1].ProfileID == "" || meta.Proofs[1].SourceSHA256 == "" {
+		return nil, errCapture
+	}
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+		Endpoints []json.RawMessage `json:"endpoints"`
+	}
+	if json.Unmarshal([]byte(config), &graph) != nil {
+		return nil, errCapture
+	}
+	capture := &Capture{ctx: ctx, source: source, config: config, metadata: meta,
+		tag: meta.Proofs[1].Tag, lowerTag: meta.Proofs[0].Tag}
+	var selected, lower int
+	for _, raw := range append(graph.Outbounds, graph.Endpoints...) {
+		var identity struct { Type string `json:"type"`; Tag string `json:"tag"` }
+		if json.Unmarshal(raw, &identity) != nil {
+			return nil, errCapture
+		}
+		if identity.Tag == capture.tag {
+			selected++
+			if identity.Type != "socks" || json.Unmarshal(raw, &capture.options) != nil {
+				return nil, errCapture
+			}
+		}
+		if identity.Tag == capture.lowerTag {
+			lower++
+			capture.lowerType = identity.Type
+		}
+	}
+	address, parseErr := netip.ParseAddr(capture.options.Server)
+	if selected != 1 || lower != 1 || capture.tag == "" || capture.lowerTag == "" ||
+		capture.tag == capture.lowerTag || capture.lowerType == "" ||
+		capture.options.Detour != capture.lowerTag ||
+		!reflect.DeepEqual(capture.options.DialerOptions, option.DialerOptions{Detour: capture.lowerTag}) ||
+		capture.options.Version != "5" || capture.options.Network != "" || capture.options.UDPOverTCP != nil ||
+		parseErr != nil || address.String() != capture.options.Server || address.Is4In6() ||
+		address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || capture.options.ServerPort == 0 ||
+		(capture.options.Username == "") != (capture.options.Password == "") ||
+		len(capture.options.Username) > 255 || len(capture.options.Password) > 255 {
+		return nil, errCapture
+	}
+	return capture, nil
+}
+
+func (c *Capture) Context() context.Context {
+	if c == nil || c.ctx == nil {
+		return nil
+	}
+	return context.WithValue(c.ctx, captureKey{}, c)
+}
+
+// Register changes only this caller's new registry. The factory still requires
+// the original private construction context and exactly one captured member.
+func (c *Capture) Register(registry *outbound.Registry) error {
+	if c == nil || registry == nil || c.validate() != nil {
+		return errCapture
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.registered || c.claimed {
+		return errCapture
+	}
+	c.registered = true
+	outbound.Register[option.SOCKSOutboundOptions](registry, "socks", c.construct)
+	return nil
+}
+
+func (c *Capture) validate() error {
+	if c == nil || c.ctx == nil || c.ctx.Err() != nil || c.source == nil {
+		return errCapture
+	}
+	config, meta, err := c.source.ReadValidated()
+	if err != nil || config != c.config || !reflect.DeepEqual(meta, c.metadata) {
+		return errCapture
+	}
+	return nil
+}
+
+func (c *Capture) construct(ctx context.Context, _ adapter.Router, _ log.ContextLogger,
+	tag string, options option.SOCKSOutboundOptions) (adapter.Outbound, error) {
+	if ctx == nil || ctx.Err() != nil || ctx.Value(captureKey{}) != c ||
+		c.validate() != nil || tag != c.tag || !reflect.DeepEqual(options, c.options) {
+		return nil, errCapture
+	}
+	manager := service.FromContext[adapter.OutboundManager](ctx)
+	if manager == nil {
+		return nil, errCapture
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.registered || c.claimed || c.ctx.Err() != nil {
+		return nil, errCapture
+	}
+	c.claimed = true
+	return &Outbound{
+		Adapter: outbound.NewAdapterWithDialerOptions("socks", tag, []string{"tcp", "udp"}, options.DialerOptions),
+		capture: c, ctx: ctx, manager: manager, control: options.ServerOptions.Build(),
+		operations: make(map[*operation]struct{}),
+	}, nil
+}
+
+// Outbound owns every operation, including one already removed from a DNS pool
+// or an operation whose native factory has not yet returned. Closing a caller's
+// pool slot is never substituted for this retained association's joined Close.
+type Outbound struct {
+	outbound.Adapter
+	mu sync.Mutex
+	capture *Capture
+	ctx context.Context
+	manager adapter.OutboundManager
+	control M.Socksaddr
+	lower adapter.Outbound
+	operations map[*operation]struct{}
+	closed bool
+	closeOnce sync.Once
+	closeErr error
+}
+
+func (o *Outbound) Start(stage adapter.StartStage) error {
+	if stage != adapter.StartStateStart {
+		return nil
+	}
+	if o == nil || o.capture.validate() != nil || o.ctx.Err() != nil {
+		return errCapture
+	}
+	lower, found, err := adapter.RouterVPNOutboundContext(o.ctx, o.manager, o.capture.lowerTag)
+	if err != nil || !found || lower == nil || lower.Type() != o.capture.lowerType || lower.Tag() != o.capture.lowerTag {
+		return errors.Join(err, errCapture)
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed || o.lower != nil || len(o.operations) != 0 {
+		return errCapture
+	}
+	o.lower = lower
+	return nil
+}
+
+func (o *Outbound) current(ctx context.Context) error {
+	if o == nil || ctx == nil || ctx.Err() != nil || o.ctx == nil || o.ctx.Err() != nil || o.capture.validate() != nil {
+		return errCapture
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &o.mu); err != nil {
+		return err
+	}
+	lower, closed := o.lower, o.closed
+	o.mu.Unlock()
+	if closed || lower == nil {
+		return net.ErrClosed
+	}
+	actual, found, err := adapter.RouterVPNOutboundContext(ctx, o.manager, o.Tag())
+	if err != nil || !found || actual != o {
+		return errors.Join(err, errCapture)
+	}
+	actual, found, err = adapter.RouterVPNOutboundContext(ctx, o.manager, o.capture.lowerTag)
+	if err != nil || !found || actual != lower {
+		return errors.Join(err, errCapture)
+	}
+	return ctx.Err()
+}
+
+// ObserveContext proves only the original per-position native owner. It does
+// not prove private/public reachability, selected DNS, a whole Box or native
+// DOWN; the existing ordered engine and daemon receipt own those boundaries.
+func (o *Outbound) ObserveContext(ctx context.Context, original *mobilemultihop.NodeChainSOCKSSource) error {
+	if o == nil || o.capture == nil || original == nil || original != o.capture.source {
+		return errCapture
+	}
+	return o.current(ctx)
+}
+
+func (o *Outbound) dial(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, *operation, error) {
+	if err := o.current(ctx); err != nil {
+		return nil, nil, err
+	}
+	network = N.NetworkName(network)
+	if network != "tcp" && network != "udp" {
+		return nil, nil, errCapture
+	}
+	ctx, metadata := adapter.ExtendContext(ctx)
+	metadata.Outbound, metadata.Destination = o.Tag(), destination
+	operationCtx, cancel := context.WithCancel(ctx)
+	op := &operation{owner: o, ctx: operationCtx, cancel: cancel, network: network,
+		constructed: make(chan struct{}), drained: make(chan struct{})}
+	o.mu.Lock()
+	if o.closed || len(o.operations) >= operationLimit {
+		o.mu.Unlock()
+		cancel()
+		return nil, nil, net.ErrClosed
+	}
+	o.operations[op] = struct{}{}
+	o.mu.Unlock()
+	client := socks.NewClient(op, o.control, socks.Version5, o.capture.options.Username, o.capture.options.Password)
+	connection, failure := client.DialContext(operationCtx, network, destination)
+	op.mu.Lock()
+	op.result = connection
+	retired := op.retired
+	op.mu.Unlock()
+	if failure == nil && (connection == nil || retired || operationCtx.Err() != nil) {
+		failure = net.ErrClosed
+	}
+	if failure == nil {
+		failure = o.current(operationCtx)
+	}
+	close(op.constructed)
+	if failure != nil {
+		return nil, nil, errors.Join(failure, op.close())
+	}
+	return connection, op, nil
+}
+
+func (o *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	conn, op, err := o.dial(ctx, network, destination)
+	if err != nil { return nil, err }
+	return &ownedConn{Conn: conn, operation: op}, nil
+}
+
+func (o *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	conn, op, err := o.dial(ctx, "udp", destination)
+	if err != nil { return nil, err }
+	packet, ok := conn.(net.PacketConn)
+	if !ok { return nil, errors.Join(errCapture, op.close()) }
+	return &ownedPacket{PacketConn: packet, operation: op}, nil
+}
+
+func (o *Outbound) Close() error {
+	o.closeOnce.Do(func() {
+		o.mu.Lock()
+		o.closed = true
+		all := make([]*operation, 0, len(o.operations))
+		for op := range o.operations { all = append(all, op) }
+		o.mu.Unlock()
+		// Every retirement is started before waiting for an individual held
+		// reader. No sibling remains usable merely because another join waits.
+		for _, op := range all { op.retire() }
+		for _, op := range all { o.closeErr = errors.Join(o.closeErr, op.close()) }
+	})
+	return o.closeErr
+}
+
+type operation struct {
+	mu sync.Mutex
+	owner *Outbound
+	ctx context.Context
+	cancel context.CancelFunc
+	network string
+	tcp, udp *originalConn
+	result net.Conn
+	tcpAsked, udpAsked, retired bool
+	constructed, drained chan struct{}
+	closeOnce sync.Once
+	closeErr error
+}
+
+type originalConn struct {
+	net.Conn
+	once sync.Once
+	err error
+}
+
+func (c *originalConn) Close() error {
+	c.once.Do(func() { c.err = c.Conn.Close() })
+	return c.err
+}
+
+func (s *operation) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	if s == nil || ctx != s.ctx || s.owner.current(ctx) != nil {
+		return nil, errCapture
+	}
+	s.mu.Lock()
+	valid := !s.retired
+	switch network {
+	case "tcp":
+		valid = valid && !s.tcpAsked && !s.udpAsked && address == s.owner.control
+		if valid { s.tcpAsked = true }
+	case "udp":
+		valid = valid && s.network == "udp" && s.tcpAsked && s.tcp != nil && !s.udpAsked
+		if valid { s.udpAsked = true }
+	default:
+		valid = false
+	}
+	s.mu.Unlock()
+	remote, err := netip.ParseAddrPort(address.String())
+	if !valid || err != nil || address.IsDomain() || !remote.IsValid() || remote.Port() == 0 ||
+		remote.Addr().IsUnspecified() || remote.Addr().IsMulticast() || remote.Addr().Is4In6() || remote.Addr().Zone() != "" ||
+		remote.Addr().Is6() && s.owner.capture.metadata.Devices[1].IPv6Mode == "off" {
+		return nil, errCapture
+	}
+	// Both the permanent control and its one authenticated negotiated relay
+	// use the same captured predecessor object. No physical broker is called.
+	s.owner.mu.Lock()
+	lower := s.owner.lower
+	s.owner.mu.Unlock()
+	raw, failure := lower.DialContext(ctx, network, address)
+	var captured *originalConn
+	if raw != nil { captured = &originalConn{Conn: raw} }
+	s.mu.Lock()
+	if network == "tcp" { s.tcp = captured } else { s.udp = captured }
+	valid = !s.retired && captured != nil && ctx.Err() == nil
+	s.mu.Unlock()
+	if failure == nil && (!valid || s.owner.current(ctx) != nil) {
+		failure = net.ErrClosed
+	}
+	if failure != nil {
+		if captured != nil { failure = errors.Join(failure, captured.Close()) }
+		return nil, failure
+	}
+	return captured, nil
+}
+
+func (*operation) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errCapture
+}
+
+func (s *operation) retire() {
+	s.mu.Lock()
+	s.retired = true
+	s.mu.Unlock()
+	s.cancel()
+}
+
+func (s *operation) close() error {
+	s.closeOnce.Do(func() {
+		s.retire()
+		s.mu.Lock()
+		tcp, udp := s.tcp, s.udp
+		s.mu.Unlock()
+		for _, conn := range []*originalConn{udp, tcp} {
+			if conn != nil {
+				if err := conn.Close(); err != nil && !closedOnly(err, 0) {
+					s.closeErr = errors.Join(s.closeErr, err)
+				}
+			}
+		}
+		<-s.constructed
+		s.mu.Lock()
+		result := s.result
+		tcp, udp = s.tcp, s.udp
+		s.mu.Unlock()
+		// Include late lower handles even when the native Client returned nil.
+		for _, conn := range []*originalConn{udp, tcp} {
+			if conn != nil {
+				if err := conn.Close(); err != nil && !closedOnly(err, 0) {
+					s.closeErr = errors.Join(s.closeErr, err)
+				}
+			}
+		}
+		if result != nil {
+			if err := result.Close(); err != nil && !closedOnly(err, 0) {
+				s.closeErr = errors.Join(s.closeErr, err)
+			}
+		}
+		s.owner.mu.Lock()
+		// A failed original Close remains part of the Box owner's receipt.
+		// Removing it would let a later native teardown forget the failure.
+		if s.closeErr == nil {
+			delete(s.owner.operations, s)
+		}
+		s.owner.mu.Unlock()
+		close(s.drained)
+	})
+	return s.closeErr
+}
+
+func closedOnly(err error, depth int) bool {
+	if err == nil || err == net.ErrClosed { return true }
+	if depth >= 32 { return false }
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 || len(children) > 32 { return false }
+		for _, child := range children {
+			if child == nil || !closedOnly(child, depth+1) { return false }
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		child := wrapped.Unwrap()
+		return child != nil && closedOnly(child, depth+1)
+	}
+	return false
+}
+
+func (s *operation) current() error {
+	s.mu.Lock()
+	retired := s.retired
+	s.mu.Unlock()
+	if retired { return net.ErrClosed }
+	return s.owner.current(s.owner.ctx)
+}
+
+type ownedConn struct { net.Conn; operation *operation }
+func (c *ownedConn) Close() error { return c.operation.close() }
+func (c *ownedConn) Read(p []byte) (int, error) {
+	if err := c.operation.current(); err != nil { return 0, errors.Join(err, c.Close()) }
+	n, err := c.Conn.Read(p)
+	if current := c.operation.current(); current != nil { err = errors.Join(err, current, c.Close()) }
+	return n, err
+}
+func (c *ownedConn) Write(p []byte) (int, error) {
+	if err := c.operation.current(); err != nil { return 0, errors.Join(err, c.Close()) }
+	n, err := c.Conn.Write(p)
+	if current := c.operation.current(); current != nil { err = errors.Join(err, current, c.Close()) }
+	return n, err
+}
+
+type ownedPacket struct { net.PacketConn; operation *operation }
+func (c *ownedPacket) Close() error { return c.operation.close() }
+func (c *ownedPacket) ReadFrom(p []byte) (int, net.Addr, error) {
+	if err := c.operation.current(); err != nil { return 0, nil, errors.Join(err, c.Close()) }
+	n, address, err := c.PacketConn.ReadFrom(p)
+	if current := c.operation.current(); current != nil { err = errors.Join(err, current, c.Close()) }
+	return n, address, err
+}
+func (c *ownedPacket) WriteTo(p []byte, address net.Addr) (int, error) {
+	if err := c.operation.current(); err != nil { return 0, errors.Join(err, c.Close()) }
+	n, err := c.PacketConn.WriteTo(p, address)
+	if current := c.operation.current(); current != nil { err = errors.Join(err, current, c.Close()) }
+	return n, err
+}

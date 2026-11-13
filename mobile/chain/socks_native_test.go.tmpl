@@ -1,0 +1,391 @@
+package libbox
+
+import (
+    "context"
+    "errors"
+    "net"
+    "net/netip"
+    "os"
+    "path/filepath"
+    "runtime/debug"
+    "strings"
+    "sync"
+    "sync/atomic"
+    "testing"
+    "time"
+
+    box "github.com/sagernet/sing-box"
+    "github.com/sagernet/sing-box/adapter"
+    "github.com/sagernet/sing-box/adapter/endpoint"
+    "github.com/sagernet/sing-box/adapter/inbound"
+    "github.com/sagernet/sing-box/adapter/outbound"
+    C "github.com/sagernet/sing-box/constant"
+    "github.com/sagernet/sing-box/daemon"
+    "github.com/sagernet/sing-box/dns"
+    "github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+    "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+    "github.com/sagernet/sing-box/log"
+    "github.com/sagernet/sing-box/option"
+    AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+    ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+    SJ "github.com/sagernet/sing/common/json"
+    M "github.com/sagernet/sing/common/metadata"
+    "github.com/sagernet/sing/service"
+    mdns "github.com/miekg/dns"
+)
+
+// These tests execute the original command constructor, daemon, Box, managers,
+// exact-source middle owner and selector. TUN/OS interfaces, packet-prefix I/O
+// and selected DNS responses are explicit component boundaries. They make no
+// encrypted packet, kernel TUN, physical route or successful path-proof claim.
+type socksBridgeNativePlatform struct { socksBridgePlatform }
+func (*socksBridgeNativePlatform) UsePlatformAutoDetectInterfaceControl() bool { return true }
+func (*socksBridgeNativePlatform) AutoDetectInterfaceControl(int32) error { return nil }
+func (*socksBridgeNativePlatform) StartDefaultInterfaceMonitor(listener InterfaceUpdateListener) error {
+    listener.UpdateDefaultInterface("original-socks-physical", 31, false, false)
+    return nil
+}
+func (*socksBridgeNativePlatform) CloseDefaultInterfaceMonitor(InterfaceUpdateListener) error { return nil }
+func (*socksBridgeNativePlatform) GetInterfaces() (NetworkInterfaceIterator, error) {
+    return newIterator([]*NetworkInterface{{Index:31, MTU:1500, Name:"original-socks-physical",
+        Flags:1, Type:InterfaceTypeEthernet, Addresses:newIterator([]string{"192.0.2.2/24"}),
+        DNSServer:newIterator([]string{}), Gateway:newIterator([]string{})}}), nil
+}
+func (*socksBridgeNativePlatform) UnderNetworkExtension() bool { return false }
+func (*socksBridgeNativePlatform) IncludeAllNetworks() bool { return false }
+func (*socksBridgeNativePlatform) ReadWIFIState() *WIFIState { return nil }
+func (*socksBridgeNativePlatform) ClearDNSCache() {}
+func (*socksBridgeNativePlatform) StartNeighborMonitor(NeighborUpdateListener) error { return nil }
+func (*socksBridgeNativePlatform) CloseNeighborMonitor(NeighborUpdateListener) error { return nil }
+func (*socksBridgeNativePlatform) UsePlatformShell() bool { return false }
+func (*socksBridgeNativePlatform) UsePlatformBridge() bool { return false }
+func (*socksBridgeNativePlatform) OpenTun(TunOptions) (int32,error) { return -1,errors.New("unexpected real TUN acquisition") }
+func (*socksBridgeNativePlatform) RegisterMyInterface(string) {}
+func (*socksBridgeNativePlatform) SendNotification(*Notification) error { return nil }
+func (*socksBridgeNativePlatform) CancelNotification(string,int32) error { return nil }
+
+type socksBridgeNativeTUN struct {
+    inbound.Adapter
+    name string
+    index, mtu atomic.Int32
+    started atomic.Bool
+    mu sync.Mutex
+    closeEntered, closeRelease chan struct{}
+    closeError error
+}
+func (n *socksBridgeNativeTUN) Start(stage adapter.StartStage) error {
+    if stage == adapter.StartStateStart { n.started.Store(true) }
+    return nil
+}
+func (n *socksBridgeNativeTUN) Close() error {
+    n.mu.Lock()
+    entered, release, failure := n.closeEntered,n.closeRelease,n.closeError
+    n.mu.Unlock()
+    if entered != nil { close(entered) }
+    if release != nil { <-release }
+    n.started.Store(false)
+    return failure
+}
+func (n *socksBridgeNativeTUN) RouterVPNExecutionMTUReadbackContext(ctx context.Context) (string,int,int,error) {
+    if ctx == nil || !n.started.Load() { return "",0,0,errors.New("original TUN not started") }
+    if err:=ctx.Err();err!=nil{return "",0,0,err}
+    return n.name,int(n.index.Load()),int(n.mtu.Load()),nil
+}
+
+type socksBridgeNativePrefix struct {
+    outbound.Adapter
+    mu sync.Mutex
+    dial func(context.Context,string,M.Socksaddr)(net.Conn,error)
+    calls atomic.Int32
+}
+func (p *socksBridgeNativePrefix) Start(adapter.StartStage) error { return nil }
+func (p *socksBridgeNativePrefix) Close() error { return nil }
+func (p *socksBridgeNativePrefix) ListenPacket(context.Context,M.Socksaddr)(net.PacketConn,error){
+    return nil,errors.New("explicit packet boundary has no admitted association")
+}
+func (p *socksBridgeNativePrefix) DialContext(ctx context.Context, network string, destination M.Socksaddr)(net.Conn,error){
+    p.calls.Add(1);p.mu.Lock();call:=p.dial;p.mu.Unlock()
+    if call == nil {return nil,errors.New("explicit packet prefix boundary refuses traffic")}
+    return call(ctx,network,destination)
+}
+type socksBridgeNativeDNS struct {
+    dns.TransportAdapter
+    calls atomic.Int32
+    mu sync.Mutex
+    addresses []netip.Addr
+    hold func(context.Context) error
+}
+func (*socksBridgeNativeDNS) Start(adapter.StartStage) error{return nil}
+func (*socksBridgeNativeDNS) Close()error{return nil}
+func (*socksBridgeNativeDNS) Reset(){}
+func (d *socksBridgeNativeDNS) Exchange(ctx context.Context,q *mdns.Msg)(*mdns.Msg,error){
+    d.calls.Add(1)
+    if len(q.Question)!=1 || q.Question[0].Name != hopmeasure.PublicHost+"." {
+        return nil,errors.New("component resolver refuses non-measurement proof")
+    }
+    d.mu.Lock();addresses:=append([]netip.Addr(nil),d.addresses...);held:=d.hold;d.mu.Unlock()
+    if held!=nil {if err:=held(ctx);err!=nil{return nil,err}}
+    if err:=ctx.Err();err!=nil{return nil,err}
+    result:=new(mdns.Msg);result.SetReply(q)
+    for _,ip:=range addresses{
+        head:=mdns.RR_Header{Name:q.Question[0].Name,Class:mdns.ClassINET,Ttl:0}
+        if ip.Is4()&&q.Question[0].Qtype==mdns.TypeA {head.Rrtype=mdns.TypeA;result.Answer=append(result.Answer,&mdns.A{Hdr:head,A:net.IP(ip.AsSlice())})}
+        if ip.Is6()&&q.Question[0].Qtype==mdns.TypeAAAA {head.Rrtype=mdns.TypeAAAA;result.Answer=append(result.Answer,&mdns.AAAA{Hdr:head,AAAA:net.IP(ip.AsSlice())})}
+    }
+    return result,nil
+}
+func (d *socksBridgeNativeDNS) ExchangeAsync(ctx context.Context,q *mdns.Msg,callback func(*mdns.Msg,error)){
+    response,err:=d.Exchange(ctx,q);callback(response,err)
+}
+type socksBridgeNativeFixture struct {
+    owner *RouterNodeChainSOCKS
+    server *CommandServer
+    instance *daemon.Instance
+    box *box.Box
+    tun *socksBridgeNativeTUN
+    prefix *socksBridgeNativePrefix
+    resolver *socksBridgeNativeDNS
+    platform *socksBridgeNativePlatform
+    workingPath string
+    constructed atomic.Int32
+    expectedClose error
+    closeOnce sync.Once
+    closeError error
+}
+// The native host calls Setup before constructing a CommandServer. Component
+// tests use that same options application and real owned directories, while
+// leaving stderr attached so race/panic/control diagnostics remain observable.
+// These fixtures are deliberately sequential; cleanup restores the setup only
+// after the original server and every native component have been closed.
+func socksBridgeNativeSetup(t *testing.T) string {
+    t.Helper()
+    base:=t.TempDir()
+    working,temporary:=filepath.Join(base,"work"),filepath.Join(base,"temp")
+    for _,path:=range []string{working,temporary}{
+        if err:=os.Mkdir(path,0o700);err!=nil{t.Fatal("original libbox owned directory",err)}
+    }
+    oldBase,oldWork,oldTemp,oldUID,oldGID:=sBasePath,sWorkingPath,sTempPath,sUserID,sGroupID
+    memoryLimit:=debug.SetMemoryLimit(-1)
+    applySetupOptions(&SetupOptions{BasePath:base,WorkingPath:working,TempPath:temporary,
+        FixAndroidStack:sFixAndroidStack,CommandServerListenPort:int32(sCommandServerListenPort),
+        CommandServerSecret:sCommandServerSecret,LogMaxLines:sLogMaxLines,Debug:sDebug,
+        CrashReportSource:sCrashReportSource,AppVersion:sAppVersion,AppMarketingVersion:sAppMarketingVersion,
+        OomKillerEnabled:sOOMKillerEnabled,OomKillerDisabled:sOOMKillerDisabled,
+        OomMemoryLimit:sOOMMemoryLimit,PowerReportEnabled:sPowerReportEnabled})
+    debug.SetMemoryLimit(memoryLimit)
+    t.Cleanup(func(){
+        sBasePath,sWorkingPath,sTempPath,sUserID,sGroupID=oldBase,oldWork,oldTemp,oldUID,oldGID
+    })
+    if sBasePath!=base||sWorkingPath!=working||sTempPath!=temporary||sUserID!=os.Getuid()||sGroupID!=os.Getgid(){
+        t.Fatal("original libbox setup lost process filesystem ownership")
+    }
+    return working
+}
+
+func socksBridgeNativeReserved(t *testing.T,owner *RouterNodeChainSOCKS)*socksBridgeNativeFixture{
+    t.Helper()
+    working:=socksBridgeNativeSetup(t)
+    f:=&socksBridgeNativeFixture{owner:owner,platform:&socksBridgeNativePlatform{},workingPath:working}
+    server,err:=owner.NewCommandServer(&socksBridgeHandler{},f.platform)
+    if err!=nil||server==nil{t.Fatal("actual typed server constructor",err)}
+    f.server=server
+    // Modify only the fresh factory-local test boundaries before its first
+    // native construction. The original SOCKS registry/factory is untouched.
+    ins,ok:=service.FromContext[adapter.InboundRegistry](server.ctx).(*inbound.Registry)
+    if !ok{t.Fatal("original TUN registry type")}
+    ends,ok:=service.FromContext[adapter.EndpointRegistry](server.ctx).(*endpoint.Registry)
+    if !ok{t.Fatal("original packet-prefix registry type")}
+    resolvers,ok:=service.FromContext[adapter.DNSTransportRegistry](server.ctx).(*dns.TransportRegistry)
+    if !ok{t.Fatal("original resolver registry type")}
+    inbound.Register[option.TunInboundOptions](ins,C.TypeTun,func(_ context.Context,_ adapter.Router,_ log.ContextLogger,tag string,opts option.TunInboundOptions)(adapter.Inbound,error){
+        f.constructed.Add(1)
+        n:=&socksBridgeNativeTUN{Adapter:inbound.NewAdapter(C.TypeTun,tag),name:"original-socks-tun"}
+        n.index.Store(41);n.mtu.Store(int32(opts.MTU));f.tun=n;return n,nil
+    })
+    prefix:=func(kind,tag string)*socksBridgeNativePrefix{
+        f.constructed.Add(1)
+        p:=&socksBridgeNativePrefix{Adapter:outbound.NewAdapter(kind,tag,[]string{"tcp","udp"},nil)}
+        f.prefix=p;return p
+    }
+    endpoint.Register[option.WireGuardEndpointOptions](ends,C.TypeWireGuard,func(_ context.Context,_ adapter.Router,_ log.ContextLogger,tag string,_ option.WireGuardEndpointOptions)(adapter.Endpoint,error){
+        return prefix(C.TypeWireGuard,tag),nil
+    })
+    endpoint.Register[AWG.Options](ends,mobilemultihop.AmneziaType,func(_ context.Context,_ adapter.Router,_ log.ContextLogger,tag string,_ AWG.Options)(adapter.Endpoint,error){
+        return prefix(mobilemultihop.AmneziaType,tag),nil
+    })
+    dns.RegisterTransport[option.RemoteDNSServerOptions](resolvers,C.DNSTypeUDP,func(_ context.Context,_ log.ContextLogger,tag string,opts option.RemoteDNSServerOptions)(adapter.DNSTransport,error){
+        f.constructed.Add(1)
+        d:=&socksBridgeNativeDNS{TransportAdapter:dns.NewTransportAdapterWithRemoteOptions(C.DNSTypeUDP,tag,opts),addresses:[]netip.Addr{netip.MustParseAddr("1.1.1.1")}}
+        f.resolver=d;return d,nil
+    })
+    t.Cleanup(func(){
+        if err:=f.close();err!=nil&&!errors.Is(err,f.expectedClose){t.Error("original native fixture cleanup",err)}
+        server.Close()
+    })
+    if err=owner.BindNative(server);err!=nil{t.Fatal("original pre-start native reservation",err)}
+    return f
+}
+func socksBridgeStarted(t *testing.T,owner *RouterNodeChainSOCKS)*socksBridgeNativeFixture{
+    t.Helper()
+    f:=socksBridgeNativeReserved(t,owner)
+    config,err:=owner.Config();if err!=nil{t.Fatal(err)}
+    if err=f.server.StartedService.StartOrReloadService(f.server.ctx,config,nil);err!=nil{t.Fatal("actual original typed Box start",err)}
+    cache,err:=os.Lstat(filepath.Join(f.workingPath,"cache.db"))
+    if err!=nil||!cache.Mode().IsRegular(){t.Fatal("actual typed Box did not initialize its owned cache",err)}
+    f.instance=f.server.StartedService.Instance()
+    if f.instance==nil||f.instance.Box()==nil||f.tun==nil||f.prefix==nil||f.resolver==nil{
+        t.Fatal("actual typed native component was not constructed")
+    }
+    f.box=f.instance.Box()
+    return f
+}
+func (f *socksBridgeNativeFixture) close()error{
+    f.closeOnce.Do(func(){
+        f.closeError=errors.Join(f.owner.Close(),f.server.StartedService.CloseService())
+    })
+    return f.closeError
+}
+func (f *socksBridgeNativeFixture) capture(ctx context.Context)(*box.RouterVPNNodeChainSOCKSEngine,error){
+    return f.box.RouterVPNNewNodeChainSOCKSEngine(ctx,f.owner.source,strings.Repeat("s",32),func(call context.Context)error{
+        if err:=requireRouterNodeSOCKSServer(call,f.server,f.owner.source);err!=nil{return err}
+        native:=f.owner.native.Load()
+        if native==nil||native.capture==nil||!native.capture.Owns(f.instance,f.box){return errors.New("original component capture changed")}
+        actual,err:=f.server.StartedService.RouterVPNInstanceContext(call)
+        if err!=nil||actual!=f.instance{return errors.Join(err,errors.New("original instance changed"))}
+        return call.Err()
+    })
+}
+
+func TestRouterNodeChainSOCKSNativeCaptureKeepsOriginalSource(t *testing.T){
+    for _,mode:=range []string{"wg","awg2-fast","awg2-strong"}{t.Run(mode,func(t *testing.T){
+        owner:=socksBridgeOwner(t,mode);f:=socksBridgeStarted(t,owner)
+        engine,err:=f.capture(t.Context());if err!=nil{t.Fatal("original native typed capture",err)}
+        identity,err:=engine.ObserveChainContext(t.Context())
+        if err!=nil||identity.SourceSHA256!=owner.SourceSHA256()||identity.ConfigSHA256!=owner.ConfigSHA256(){
+            t.Fatal("original source identity was not retained",err)
+        }
+        input,err:=owner.source.Source();if err!=nil{t.Fatal(err)}
+        other,err:=mobilemultihop.NewNodeChainSOCKSSource(input);if err!=nil{t.Fatal(err)}
+        if engine.ObserveSOCKSMiddleContext(t.Context(),other)==nil{
+            t.Fatal("equal reconstructed source borrowed original native middle")
+        }
+        if _,err=f.box.RouterVPNNewNodeChainSOCKSEngine(t.Context(),other,strings.Repeat("z",32),func(context.Context)error{return nil});err==nil{
+            t.Fatal("typed native Box lent its original source pointer")
+        }
+        if owner.Healthy()||owner.NativeClosed(){t.Fatal("native construction invented path proof or DOWN")}
+    })}
+}
+
+func TestRouterNodeChainSOCKSNativeWholeGraphPrecedesAcquisition(t *testing.T){
+    for _,name:=range []string{"middle-password","middle-detour","dns","mtu","extra-inbound","route-final"}{
+        t.Run(name,func(t *testing.T){
+            owner:=socksBridgeOwner(t,"wg");f:=socksBridgeNativeReserved(t,owner)
+            config,err:=owner.Config();if err!=nil{t.Fatal(err)}
+            var graph map[string]any
+            if err=SJ.Unmarshal([]byte(config),&graph);err!=nil{t.Fatal(err)}
+            switch name{
+            case "middle-password","middle-detour":
+                found:=false
+                for _,raw:=range graph["outbounds"].([]any){
+                    row:=raw.(map[string]any);if row["type"]!="socks"{continue}
+                    if name=="middle-password"{row["password"]="foreign-secret"}else{row["detour"]="foreign-prefix"}
+                    found=true
+                }
+                if !found{t.Fatal("original source has no middle")}
+            case "dns":graph["dns"].(map[string]any)["final"]="foreign-resolver"
+            case "mtu":graph["inbounds"].([]any)[0].(map[string]any)["mtu"]=1401
+            case "extra-inbound":graph["inbounds"]=append(graph["inbounds"].([]any),map[string]any{"type":"mixed","tag":"foreign","listen":"127.0.0.1","listen_port":0})
+            case "route-final":graph["route"].(map[string]any)["final"]="foreign-final"
+            }
+            changed:=candidateBridgeJSON(t,graph);if changed==config{t.Fatal("graph control did not change original")}
+            err=f.server.StartedService.StartOrReloadService(f.server.ctx,changed,nil)
+            if err==nil||!strings.Contains(err.Error(),"ordered SOCKS native graph differs before construction"){
+                t.Fatal("altered complete graph did not fail at original preconstruction guard",err)
+            }
+            if f.constructed.Load()!=0||f.server.StartedService.Instance()!=nil{
+                t.Fatal("altered typed graph reached native component acquisition")
+            }
+        })
+    }
+}
+
+func TestRouterNodeChainSOCKSNativeSecondBoxCannotReacquire(t *testing.T){
+    owner:=socksBridgeOwner(t,"wg");f:=socksBridgeStarted(t,owner)
+    config,err:=owner.Config();if err!=nil{t.Fatal(err)}
+    options,err:=SJ.UnmarshalExtendedContext[option.Options](f.server.ctx,[]byte(config));if err!=nil{t.Fatal(err)}
+    before:=f.constructed.Load()
+    replacement,err:=box.New(box.Options{Context:f.server.ctx,Options:options})
+    if replacement!=nil{_ = replacement.Close()}
+    if err==nil||replacement!=nil||f.constructed.Load()!=before{
+        t.Fatal("same typed construction reacquired native components")
+    }
+    if _,err=f.capture(t.Context());err!=nil{t.Fatal("refused replacement stole original Box",err)}
+}
+
+func TestRouterNodeChainSOCKSNativeReadbackAndCallerStayCurrent(t *testing.T){
+    owner:=socksBridgeOwner(t,"wg");f:=socksBridgeStarted(t,owner)
+    engine,err:=f.capture(t.Context());if err!=nil{t.Fatal(err)}
+    originalMTU,originalIndex:=f.tun.mtu.Load(),f.tun.index.Load()
+    f.tun.mtu.Store(originalMTU+1)
+    if _,err=engine.ObserveChainContext(t.Context());err==nil{t.Fatal("changed actual MTU kept original engine")}
+    if _,err=f.capture(t.Context());err==nil{t.Fatal("fresh engine accepted MTU without continuation receipt")}
+    f.tun.mtu.Store(originalMTU)
+    f.tun.index.Store(originalIndex+1)
+    if _,err=engine.ObserveChainContext(t.Context());err==nil{t.Fatal("changed original interface reader stayed current")}
+    f.tun.index.Store(originalIndex)
+    ctx,cancel:=context.WithCancel(context.Background());cancel()
+    if _,err=engine.ObserveChainContext(ctx);!errors.Is(err,context.Canceled){t.Fatal("native observer discarded original caller cancellation",err)}
+    held:=routerMTUField[sync.RWMutex](t,f.server.StartedService,"serviceAccess")
+    held.Lock()
+    bounded,stop:=context.WithTimeout(context.Background(),15*time.Millisecond)
+    _,err=engine.ObserveChainContext(bounded)
+    stop();held.Unlock()
+    if !errors.Is(err,context.DeadlineExceeded){t.Fatal("actual native owner observation ignored caller deadline",err)}
+}
+
+func TestRouterNodeChainSOCKSNativePublicMeasurementUsesCapturedDNS(t *testing.T){
+    owner:=socksBridgeOwner(t,"wg");f:=socksBridgeStarted(t,owner)
+    engine,err:=f.capture(t.Context());if err!=nil{t.Fatal(err)}
+    _,meta,err:=owner.source.ReadValidated();if err!=nil{t.Fatal(err)}
+    ctx,cancel:=context.WithTimeout(t.Context(),time.Second);defer cancel()
+    for _,request:=range [][2]string{{meta.Proofs[0].Tag,hopmeasure.PublicAddress},{meta.Proofs[1].Tag,"foreign.example:443"}}{
+        if connection,err:=engine.Dial(ctx,request[0],request[1]);err==nil||connection!=nil{
+            t.Fatal("uncaptured hostname or prefix gained native measurement")
+        }
+    }
+    if f.resolver.calls.Load()!=0||f.prefix.calls.Load()!=0{t.Fatal("refused measurement reached resolver or native prefix")}
+    connection,err:=engine.Dial(ctx,meta.Proofs[1].Tag,hopmeasure.PublicAddress)
+    if connection!=nil{_ = connection.Close()}
+    if err==nil||f.resolver.calls.Load()==0||f.prefix.calls.Load()==0{
+        t.Fatal("original public measurement did not use selected DNS and original middle",err)
+    }
+    // The explicit packet boundary refuses the actual SOCKS control connect.
+    // A response from the selected resolver cannot by itself grant traffic.
+    f.resolver.mu.Lock();f.resolver.addresses=[]netip.Addr{netip.MustParseAddr("127.0.0.1"),netip.MustParseAddr("10.0.0.1"),netip.MustParseAddr("2001:4860:4860::8888")};f.resolver.mu.Unlock()
+    before:=f.prefix.calls.Load()
+    if connection,err=engine.Dial(ctx,meta.Proofs[1].Tag,hopmeasure.PublicAddress);err==nil||connection!=nil{t.Fatal("private or disabled IPv6 answer gained a native measurement")}
+    if f.prefix.calls.Load()!=before{t.Fatal("filtered resolver answer reached original packet prefix")}
+    original:=f.tun.mtu.Load()
+    f.resolver.mu.Lock();f.resolver.addresses=[]netip.Addr{netip.MustParseAddr("1.1.1.1")};f.resolver.hold=func(context.Context)error{f.tun.mtu.Store(original+1);return nil};f.resolver.mu.Unlock()
+    if connection,err=engine.Dial(ctx,meta.Proofs[1].Tag,hopmeasure.PublicAddress);err==nil||connection!=nil{t.Fatal("late native reader replacement escaped original DNS observation")}
+    if f.prefix.calls.Load()!=before{t.Fatal("late DNS result reached native middle after owner changed")}
+    f.tun.mtu.Store(original)
+}
+
+func TestRouterNodeChainSOCKSNativePrivateContextCannotBeBorrowed(t *testing.T){
+    source:=socksBridgeSource(t,"wg")
+    input,err:=source.Source();if err!=nil{t.Fatal(err)}
+    other,err:=mobilemultihop.NewNodeChainSOCKSSource(input);if err!=nil{t.Fatal(err)}
+    capture,err:=ownedSOCKS.NewCapture(baseContext(nil),source);if err!=nil{t.Fatal(err)}
+    for _,pair:=range []struct{ctx context.Context;source *mobilemultihop.NodeChainSOCKSSource}{
+        {context.Background(),source},{capture.Context(),other},
+    }{
+        if ctx,err:=box.RouterVPNNodeSOCKSContext(pair.ctx,pair.source,capture);err==nil||ctx!=nil{
+            t.Fatal("foreign context/source pair acquired original native construction")
+        }
+    }
+    original,err:=box.RouterVPNNodeSOCKSContext(capture.Context(),source,capture);if err!=nil{t.Fatal(err)}
+    if ctx,err:=box.RouterVPNNodeSOCKSContext(original,source,capture);err==nil||ctx!=nil{
+        t.Fatal("original construction context was wrapped twice")
+    }
+}

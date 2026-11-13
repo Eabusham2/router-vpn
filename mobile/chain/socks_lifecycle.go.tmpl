@@ -1,0 +1,355 @@
+package libbox
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type RouterNodeChainSOCKS struct {
+	source      *mobilemultihop.NodeChainSOCKSSource
+	mu          sync.Mutex
+	native      atomic.Pointer[routerNodeChainSOCKSNative]
+	state       atomic.Pointer[routerNodeChainSOCKSState]
+	retired     atomic.Bool
+	closed      atomic.Bool
+	measurement atomic.Pointer[hopmeasure.Service]
+	cleanup     atomic.Pointer[routerNodeChainSOCKSCleanup]
+	mtu         atomic.Pointer[routerNodeChainSOCKSMTU]
+	measuring   bool // mu; the original worker releases this only after its drain
+}
+type routerNodeChainSOCKSNative struct {
+	server  *CommandServer
+	service *daemon.StartedService
+	capture *daemon.RouterVPNInstanceCloseCapture
+}
+type routerNodeChainSOCKSState struct {
+	native   *routerNodeChainSOCKSNative
+	instance *daemon.Instance
+	box      *box.Box
+	runtime  *mobilemultihop.NodeChainSOCKSRuntime
+	engine   atomic.Pointer[box.RouterVPNNodeChainSOCKSEngine]
+	lifetime context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+	session  string
+}
+
+type routerNodeChainSOCKSCleanup struct {
+ ctx context.Context
+ state *routerNodeChainSOCKSState
+ native *routerNodeChainSOCKSNative
+}
+
+// RetainsServerCleanup grants only the host's original socket protection
+// during this bounded shared drain. It grants no fresh proof, traffic, native
+// DOWN or successor owner; an expired/failed attempt retains handles but not
+// an ambient physical-network permit.
+func (m *RouterNodeChainSOCKS) RetainsServerCleanup(server *CommandServer) bool {
+ if m==nil || server==nil || !m.retired.Load() || m.closed.Load() {return false}
+ token:=m.cleanup.Load()
+ if token==nil || token.ctx==nil || token.ctx.Err()!=nil {return false}
+ if _,bounded:=token.ctx.Deadline();!bounded{return false}
+ state,native:=token.state,token.native
+ if state==nil || native==nil || m.state.Load()!=state || m.native.Load()!=native ||
+  state.native!=native || native.server!=server || native.service==nil || server.StartedService!=native.service ||
+  native.capture==nil || state.instance==nil || state.box==nil || state.instance.Box()!=state.box ||
+  !native.capture.Owns(state.instance,state.box) {return false}
+ if err:=requireRouterNodeSOCKSServer(token.ctx,server,m.source);err!=nil{return false}
+ current,err:=native.service.RouterVPNInstanceContext(token.ctx)
+ return err==nil && current==state.instance && token.ctx.Err()==nil &&
+  m.cleanup.Load()==token && m.state.Load()==state && m.native.Load()==native &&
+  m.retired.Load() && !m.closed.Load()
+}
+
+func errRouterNodeChainSOCKS() error {
+	return errors.New("original native SOCKS ordered path changed or retired")
+}
+
+// BindNative retries only the server created by this typed owner. It cannot
+// adopt an ordinary CommandServer or reconstruct authority from equal JSON.
+func (m *RouterNodeChainSOCKS) BindNative(server *CommandServer) error {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	if m == nil {
+		return errRouterNodeChainSOCKS()
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return err
+	}
+	defer m.mu.Unlock()
+	return m.bindNativeLocked(ctx, server)
+}
+func (m *RouterNodeChainSOCKS) bindNativeLocked(ctx context.Context, server *CommandServer) error {
+	native := m.native.Load()
+	if ctx == nil || native == nil || server == nil || native.server != server ||
+		native.service == nil || server.StartedService != native.service || m.state.Load() != nil {
+		return errRouterNodeChainSOCKS()
+	}
+	if err := requireRouterNodeSOCKSServer(ctx, server, m.source); err != nil {
+		return err
+	}
+	if native.capture == nil {
+		capture, err := native.service.RouterVPNReserveInstanceCloseContext(ctx)
+		if err != nil {
+			return err
+		}
+		native = &routerNodeChainSOCKSNative{server: server, service: native.service, capture: capture}
+		m.native.Store(native)
+	}
+	if m.retired.Load() || server.ctx == nil || server.ctx.Err() != nil {
+		m.retired.Store(true)
+		return errors.Join(errRouterNodeChainSOCKS(), native.capture.SealContext(ctx))
+	}
+	return ctx.Err()
+}
+
+// Run starts only shared proof work on the already-started original instance.
+// The source-bound server factory and positive daemon construction capture
+// precede it; the caller retains both handles after every failed startup.
+func (m *RouterNodeChainSOCKS) Run(server *CommandServer) (failure error) {
+	if m == nil || m.source == nil || server == nil || server.ctx == nil {
+		return errRouterNodeChainSOCKS()
+	}
+	ctx, cancel := context.WithTimeout(server.ctx, hopmeasure.ObservationTimeout)
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		cancel()
+		return err
+	}
+	native := m.native.Load()
+	if m.retired.Load() || m.state.Load() != nil || native == nil || native.server != server ||
+		native.service == nil || server.StartedService != native.service || native.capture == nil {
+		m.mu.Unlock()
+		cancel()
+		return errRouterNodeChainSOCKS()
+	}
+	if err := requireRouterNodeSOCKSServer(ctx, server, m.source); err != nil {
+		m.mu.Unlock()
+		cancel()
+		return err
+	}
+	instance, err := native.capture.InstanceContext(ctx)
+	if err != nil || instance == nil || instance.Box() == nil {
+		m.mu.Unlock()
+		cancel()
+		return errors.Join(err, errRouterNodeChainSOCKS())
+	}
+	runtime, err := mobilemultihop.NewNodeChainSOCKSRuntime(m.source)
+	if err != nil {
+		m.mu.Unlock()
+		cancel()
+		return err
+	}
+	var nonce [32]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		m.mu.Unlock()
+		cancel()
+		return err
+	}
+	lifetime, retire := context.WithCancel(server.ctx)
+	state := &routerNodeChainSOCKSState{native: native, instance: instance, box: instance.Box(),
+		runtime: runtime, lifetime: lifetime, cancel: retire, done: make(chan struct{}),
+		session: hex.EncodeToString(nonce[:])}
+	m.state.Store(state)
+	m.mu.Unlock()
+	cancel()
+	defer close(state.done)
+	defer func() {
+		if failure != nil {
+			m.NetworkChanged()
+		}
+	}()
+	observe, end := context.WithTimeout(lifetime, hopmeasure.ObservationTimeout)
+	engine, err := state.box.RouterVPNNewNodeChainSOCKSEngine(observe, m.source, state.session,
+		func(call context.Context) error { return m.nativeCurrent(call, state) })
+	state.engine.Store(engine)
+	end()
+	if err != nil {
+		return err
+	}
+	if err := state.runtime.Run(lifetime, engine); err != nil {
+		return err
+	}
+	observe, end = context.WithTimeout(lifetime, hopmeasure.ObservationTimeout)
+	defer end()
+	return m.healthyContext(observe)
+}
+
+// The engine invokes this outer observation. It never takes the bridge/MTU
+// mutex or recursively observes the engine or shared proof controller.
+func (m *RouterNodeChainSOCKS) nativeCurrent(ctx context.Context, state *routerNodeChainSOCKSState) error {
+	if m == nil || ctx == nil {
+		return errRouterNodeChainSOCKS()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if state == nil || state.lifetime == nil || state.lifetime.Err() != nil ||
+		m.retired.Load() || m.state.Load() != state {
+		return errRouterNodeChainSOCKS()
+	}
+	native := m.native.Load()
+	if native == nil || state.native != native || native.server == nil || native.service == nil ||
+		native.server.StartedService != native.service || native.capture == nil ||
+		state.instance == nil || state.box == nil || state.instance.Box() != state.box ||
+		!native.capture.Owns(state.instance, state.box) {
+		return errRouterNodeChainSOCKS()
+	}
+	if err := requireRouterNodeSOCKSServer(ctx, native.server, m.source); err != nil {
+		return err
+	}
+	current, err := native.service.RouterVPNInstanceContext(ctx)
+	if err != nil || current != state.instance || m.native.Load() != native || m.state.Load() != state ||
+		m.retired.Load() || state.lifetime.Err() != nil {
+		return errors.Join(err, errRouterNodeChainSOCKS())
+	}
+	return ctx.Err()
+}
+func (m *RouterNodeChainSOCKS) healthyContext(ctx context.Context) error {
+	if m == nil || ctx == nil {
+		return errRouterNodeChainSOCKS()
+	}
+	state := m.state.Load()
+	if state == nil || state.runtime == nil || state.engine.Load() == nil {
+		return errRouterNodeChainSOCKS()
+	}
+	if err := m.nativeCurrent(ctx, state); err != nil {
+		return err
+	}
+	if err := state.runtime.HealthyContext(ctx); err != nil {
+		return err
+	}
+	return m.nativeCurrent(ctx, state)
+}
+func (m *RouterNodeChainSOCKS) Healthy() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	return m.healthyContext(ctx) == nil
+}
+func (m *RouterNodeChainSOCKS) retireProof() {
+	if m == nil {
+		return
+	}
+	m.retired.Store(true)
+	if state := m.state.Load(); state != nil {
+		state.cancel()
+	}
+}
+func (m *RouterNodeChainSOCKS) NetworkChanged() {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	_ = m.networkChangedContext(ctx)
+}
+func (m *RouterNodeChainSOCKS) networkChangedContext(ctx context.Context) error {
+	if m == nil || ctx == nil {
+		return errRouterNodeChainSOCKS()
+	}
+	m.retireProof()
+	if optimizer := m.mtu.Load(); optimizer != nil { optimizer.invalidate() }
+	if measurement := m.measurement.Load(); measurement != nil {
+		// This original service remains retained on timeout. Do not call its
+		// contextless Invalidate while a native status lock may be occupied.
+		return measurement.CloseContext(ctx)
+	}
+	return ctx.Err()
+}
+
+// Close joins shared proof and measurement activity only. NativeClosed also
+// requires the exact original daemon/Box close result, including its SOCKS
+// associations and actual TUN. A failed native close never becomes nil-slot DOWN.
+func (m *RouterNodeChainSOCKS) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.closeContext(ctx)
+}
+func (m *RouterNodeChainSOCKS) closeContext(ctx context.Context) error {
+	if m == nil || ctx == nil {
+		return errRouterNodeChainSOCKS()
+	}
+	m.retireProof()
+	if optimizer := m.mtu.Load(); optimizer != nil {
+		if err := optimizer.closeContext(ctx); err != nil { return err }
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return err
+	}
+	state, native := m.state.Load(), m.native.Load()
+	m.mu.Unlock()
+	if native != nil {
+		if native.capture == nil {
+			return errRouterNodeChainSOCKS() // Exact failed binding remains retryable.
+		}
+		if err := native.capture.SealContext(ctx); err != nil {
+			return err
+		}
+	}
+	var token *routerNodeChainSOCKSCleanup
+	if state != nil {
+		token = &routerNodeChainSOCKSCleanup{ctx: ctx, state: state, native: native}
+		if !m.cleanup.CompareAndSwap(nil, token) {
+			return errRouterNodeChainSOCKS()
+		}
+		defer m.cleanup.CompareAndSwap(token, nil)
+	}
+	if measurement := m.measurement.Load(); measurement != nil {
+		if err := measurement.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	if state != nil {
+		// This may run while native construction or Run still owns state.done.
+		// Retiring the shared runtime prevents a late callback from activating.
+		if err := state.runtime.CloseContext(ctx); err != nil {
+			return err
+		}
+		select {
+		case <-state.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return err
+	}
+	defer m.mu.Unlock()
+	if m.measuring || m.state.Load() != state || m.native.Load() != native {
+		return errRouterNodeChainSOCKS()
+	}
+	m.closed.Store(true)
+	return ctx.Err()
+}
+func (m *RouterNodeChainSOCKS) NativeClosed() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	return m.nativeClosedContext(ctx) == nil
+}
+func (m *RouterNodeChainSOCKS) nativeClosedContext(ctx context.Context) error {
+	if m == nil || ctx == nil || !m.retired.Load() || !m.closed.Load() {
+		return errRouterNodeChainSOCKS()
+	}
+	native, state := m.native.Load(), m.state.Load()
+	if native == nil || native.server == nil || native.service == nil ||
+		native.server.StartedService != native.service || native.capture == nil {
+		return errRouterNodeChainSOCKS()
+	}
+	if state != nil && (state.native != native || !native.capture.Owns(state.instance, state.box)) {
+		return errRouterNodeChainSOCKS()
+	}
+	if err := native.capture.ClosedContext(ctx); err != nil {
+		return err
+	}
+	if m.native.Load() != native || m.state.Load() != state || !m.retired.Load() || !m.closed.Load() {
+		return errRouterNodeChainSOCKS()
+	}
+	return ctx.Err()
+}

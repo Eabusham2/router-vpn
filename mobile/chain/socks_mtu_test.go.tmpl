@@ -1,0 +1,134 @@
+package libbox
+
+import (
+ "context"
+ "encoding/json"
+ "errors"
+ "testing"
+ "time"
+
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+// These lifetime tests use the actual typed server/Box, source factory,
+// managers and native continuation. TUN/packet I/O remains the existing
+// explicit component boundary. An unrun runtime is never presented as Healthy.
+func socksBridgeMTUClaim(t *testing.T,mode string)(*socksBridgeNativeFixture,*routerNodeChainSOCKSMTU,*routerNodeChainSOCKSMTURun,context.CancelFunc){
+ t.Helper()
+ owner:=&RouterNodeChainSOCKS{source:socksBridgeSource(t,mode)}
+ f:=socksBridgeStarted(t,owner)
+ state:=socksBridgeNativeState(t,f)
+ call,cancel:=context.WithTimeout(t.Context(),time.Second)
+ engine,err:=f.capture(call);cancel()
+ if err!=nil{t.Fatal(err)}
+ state.engine.Store(engine)
+ operation,finish,err:=mobilemtu.WithOperationContext(t.Context(),5*time.Second,time.Second);if err!=nil{t.Fatal(err)}
+ t.Cleanup(finish)
+ w:=&routerNodeChainSOCKSMTU{owner:owner,constructed:make(chan struct{})}
+ close(w.constructed)
+ w.native=&routerMTUOwner{server:f.server,instance:f.instance,inbound:f.tun,session:"actual-component",path:"original-network",chain:w}
+ r:=&routerNodeChainSOCKSMTURun{owner:w,operation:operation,native:state.native};r.state.Store(state)
+ w.run.Store(r);owner.mtu.Store(w)
+ continuation,err:=engine.BeginSOCKSMTUContext(operation,r)
+ if err!=nil{t.Fatal(err)}
+ r.continuation.Store(continuation)
+ return f,w,r,finish
+}
+func TestRouterNodeChainSOCKSMTUProfileIsPureCapturedSource(t *testing.T){
+ for _,mode:=range []string{"wg","awg2-fast","awg2-strong"}{t.Run(mode,func(t *testing.T){
+  owner:=&RouterNodeChainSOCKS{source:socksBridgeSource(t,mode)}
+  profile:=owner.MTUProfile()
+  if profile==""||!json.Valid([]byte(profile))||owner.native.Load()!=nil||owner.state.Load()!=nil||owner.Healthy()||owner.NativeClosed(){t.Fatal("pure SOCKS MTU profile acquired or invented native authority")}
+  if owner.MTUProfile()!=profile{t.Fatal("captured SOCKS MTU profile changed without source change")}
+ })}
+}
+func TestRouterNodeChainSOCKSMTUConstructorRequiresActualProof(t *testing.T){
+ owner:=&RouterNodeChainSOCKS{source:socksBridgeSource(t,"wg")}
+ f:=socksBridgeStarted(t,owner)
+ for _,server:=range []*CommandServer{nil,f.server}{
+  result,err:=RouterNodeChainSOCKSNewMTU(owner,server,&routerMTUContextPlatform{})
+  if err==nil||result!=nil||owner.mtu.Load()!=nil{t.Fatal("unproved SOCKS graph acquired native MTU controller")}
+ }
+ if owner.Healthy()||owner.NativeClosed(){t.Fatal("MTU refusal fabricated proof or native DOWN")}
+}
+func TestRouterNodeChainSOCKSMTUCloseKeepsOriginalCleanupToken(t *testing.T){
+ for _,mode:=range []string{"wg","awg2-fast","awg2-strong"}{t.Run(mode,func(t *testing.T){
+  f,w,r,finish:=socksBridgeMTUClaim(t,mode)
+  state:=r.state.Load();state.done=make(chan struct{})
+  // Finalized work grants no mutation. Only exact retained-handle retirement
+  // remains, and it must keep its temporary host protection token until join.
+  finish()
+  f.owner.NetworkChanged()
+  call,cancel:=context.WithTimeout(t.Context(),time.Second)
+  result:=make(chan error,1);go func(){result<-w.closeContext(call)}()
+  deadline:=time.Now().Add(time.Second)
+  for f.owner.cleanup.Load()==nil||state.lifetime.Err()==nil{
+   if time.Now().After(deadline){close(state.done);cancel();<-result;t.Fatal("original MTU close did not enter retained proof join")}
+   time.Sleep(time.Millisecond)
+  }
+  if !f.owner.RetainsServerCleanup(f.server){close(state.done);cancel();<-result;t.Fatal("MTU close omitted bounded original host cleanup token")}
+  if f.owner.RetainsServerCleanup(&CommandServer{}){close(state.done);cancel();<-result;t.Fatal("MTU cleanup token authorized replacement server")}
+  select{case err:=<-result:close(state.done);cancel();t.Fatal("held original MTU proof join reported completion",err);default:}
+  close(state.done)
+  if err:=<-result;err!=nil{cancel();t.Fatal(err)}
+  cancel()
+  if !w.closed.Load()||f.owner.mtu.Load()!=nil||f.owner.RetainsServerCleanup(f.server)||f.owner.NativeClosed(){t.Fatal("MTU retirement lost claim/token/native-DOWN separation")}
+  if f.owner.closed.Load(){t.Fatal("MTU close substituted for original plan Close")}
+ })}
+}
+func TestRouterNodeChainSOCKSMTUFailedJoinRetainsOriginalRetry(t *testing.T){
+ f,w,r,finish:=socksBridgeMTUClaim(t,"wg")
+ state:=r.state.Load();state.done=make(chan struct{})
+ finish();f.owner.NetworkChanged()
+ call,cancel:=context.WithTimeout(t.Context(),20*time.Millisecond)
+ err:=w.closeContext(call);cancel()
+ if !errors.Is(err,context.DeadlineExceeded)||w.closed.Load()||f.owner.mtu.Load()!=w||!r.continuation.Load().RetainsCleanup()||f.owner.NativeClosed(){
+  close(state.done);t.Fatal("failed SOCKS MTU join released original cleanup",err)
+ }
+ if f.owner.RetainsServerCleanup(f.server)||f.owner.cleanup.Load()!=nil{close(state.done);t.Fatal("failed MTU attempt retained an ambient cleanup permit")}
+ close(state.done)
+ call,cancel=context.WithTimeout(t.Context(),time.Second);defer cancel()
+ if err=w.closeContext(call);err!=nil||f.owner.mtu.Load()!=nil{t.Fatal("exact MTU retry could not join",err)}
+ if f.owner.NativeClosed(){t.Fatal("MTU retry manufactured original Box DOWN")}
+}
+func TestRouterNodeChainSOCKSMTUPlanCloseJoinsConstruction(t *testing.T){
+ f,w,_,finish:=socksBridgeMTUClaim(t,"wg");finish()
+ w.constructed=make(chan struct{})
+ call,cancel:=context.WithTimeout(t.Context(),20*time.Millisecond)
+ err:=f.owner.closeContext(call);cancel()
+ if !errors.Is(err,context.DeadlineExceeded)||f.owner.closed.Load()||f.owner.mtu.Load()!=w||f.owner.NativeClosed(){
+  close(w.constructed);t.Fatal("plan Close bypassed retained MTU constructor",err)
+ }
+ close(w.constructed)
+ call,cancel=context.WithTimeout(t.Context(),time.Second);defer cancel()
+ if err=f.owner.closeContext(call);err!=nil||f.owner.mtu.Load()!=nil||!f.owner.closed.Load(){t.Fatal("original plan could not join MTU construction retry",err)}
+ if f.owner.NativeClosed(){t.Fatal("joined plan and MTU replaced actual Box close")}
+}
+func TestRouterNodeChainSOCKSMTUForeignStateCannotRetire(t *testing.T){
+ f,w,r,finish:=socksBridgeMTUClaim(t,"wg");finish();f.owner.NetworkChanged()
+ original:=r.state.Load()
+ replacement:=socksBridgeNativeState(t,f)
+ call,cancel:=context.WithTimeout(t.Context(),time.Second);defer cancel()
+ if err:=w.closeContext(call);err==nil||w.closed.Load()||f.owner.mtu.Load()!=w{f.owner.state.Store(original);t.Fatal("replacement SOCKS proof state retired original MTU")}
+ replacement.cancel();f.owner.state.Store(original)
+ if err:=w.closeContext(call);err!=nil{t.Fatal("restored original cleanup identity did not join",err)}
+}
+
+func TestRouterNodeChainSOCKSMTUCleanupTokenEndsWithExactAttempt(t *testing.T){
+ f,w,_,finish:=socksBridgeMTUClaim(t,"wg");finish();f.owner.NetworkChanged()
+ call,cancel:=context.WithTimeout(t.Context(),time.Second);defer cancel()
+ sentinel:=errors.New("original bounded MTU cleanup remains pending")
+ err:=w.withCleanup(call,func(original context.Context)error{
+  if !f.owner.RetainsServerCleanup(f.server){t.Fatal("MTU cleanup omitted original bounded host token")}
+  if f.owner.RetainsServerCleanup(&CommandServer{}){t.Fatal("MTU cleanup token admitted foreign host")}
+  return sentinel
+ })
+ if !errors.Is(err,sentinel)||f.owner.cleanup.Load()!=nil||f.owner.RetainsServerCleanup(f.server)||w.closed.Load(){
+  t.Fatal("failed MTU cleanup erased original failure or leaked its token",err)
+ }
+ entered:=false
+ if err=w.withCleanup(context.Background(),func(context.Context)error{entered=true;return nil});err==nil||entered{t.Fatal("unbounded MTU cleanup acquired host authority")}
+ expired,stop:=context.WithCancel(call);stop()
+ if err=w.withCleanup(expired,func(context.Context)error{entered=true;return nil});!errors.Is(err,context.Canceled)||entered{t.Fatal("expired MTU cleanup acquired host authority",err)}
+ if err=w.closeContext(call);err!=nil{t.Fatal("original bounded cleanup retry",err)}
+}

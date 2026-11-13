@@ -1,0 +1,76 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func RouterNodeChainSOCKSNewHopMeasurement(plan *RouterNodeChainSOCKS, server *CommandServer) (*RouterHopMeasurement, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	return plan.newHopMeasurementContext(ctx, server)
+}
+func (m *RouterNodeChainSOCKS) newHopMeasurementContext(ctx context.Context, server *CommandServer) (*RouterHopMeasurement, error) {
+	if m == nil || ctx == nil || server == nil {
+		return nil, errRouterNodeChainSOCKS()
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	native, state := m.native.Load(), m.state.Load()
+	if native == nil || native.server != server || state == nil || m.measurement.Load() != nil ||
+		m.healthyContext(ctx) != nil {
+		return nil, errRouterNodeChainSOCKS()
+	}
+	service, err := state.runtime.NewHopMeasurementContext(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	m.measurement.Store(service)
+	if err := m.healthyContext(ctx); err != nil {
+		service.Invalidate()
+		return nil, err
+	}
+	return &RouterHopMeasurement{service: service}, nil
+}
+
+func (m *RouterNodeChainSOCKS) MeasurementSOCKSContext(ctx context.Context) (*mobilemultihop.NodeChainSOCKSRuntime, error) {
+	if m == nil || ctx == nil {
+		return nil, errRouterNodeChainSOCKS()
+	}
+	state := m.state.Load()
+	if err := m.healthyContext(ctx); err != nil {
+		return nil, err
+	}
+	if state == nil || m.state.Load() != state || state.lifetime.Err() != nil || m.retired.Load() {
+		return nil, errRouterNodeChainSOCKS()
+	}
+	return state.runtime, ctx.Err()
+}
+func (m *RouterNodeChainSOCKS) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if m == nil || ctx == nil {
+		return nil, errRouterNodeChainSOCKS()
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	if m.measuring || m.mtuOccupied() || m.healthyContext(ctx) != nil {
+		return nil, errors.New("original SOCKS measurement activity is occupied or retired")
+	}
+	m.measuring = true
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			m.measuring = false
+			m.mu.Unlock()
+		})
+	}, nil
+}

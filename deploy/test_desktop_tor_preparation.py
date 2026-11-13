@@ -94,6 +94,84 @@ class DesktopPTManifestPreflight(unittest.TestCase):
         self.rejected_without_writes('unowned desktop PT source')
 
 
+class DesktopDaemonCapturePreparation(unittest.TestCase):
+    def test_shipping_desktop_daemon_capture_is_exact_idempotent_and_fail_closed(self):
+        prep = PREP
+        shared = prep.DAEMON_CAPTURE
+        copies = prep.pt_copies()
+        expected = {
+            'instance_close.go.tmpl': 'daemon/routervpn_instance_close.go',
+            'instance_close_test.go.tmpl': 'daemon/routervpn_instance_close_test.go',
+            'instance_capture.go.tmpl': 'daemon/routervpn_instance_capture.go',
+            'instance_capture_test.go.tmpl': 'daemon/routervpn_instance_capture_test.go',
+        }
+        self.assertEqual(prep.DAEMON_CAPTURE_TEMPLATES, expected)
+        inputs = prep.inputs()
+        self.assertIn(Path(shared.__file__).resolve(), inputs)
+        for name, relative in expected.items():
+            self.assertEqual(shared.TEMPLATES[name], relative)
+            original = ROOT/'mobile/chain_execution'/name
+            self.assertIn(original, inputs)
+            self.assertEqual(copies[relative], original.read_bytes())
+        # These are the exact pinned native syntax boundaries consumed by the
+        # original shared projector. No replacement receipt implementation is
+        # used; its complete shared templates above remain byte-identical.
+        instance = ('package daemon\n\ntype Instance struct {\n}\n\n'
+            'func (i *Instance) Close() error {\n'
+            '\ti.cancel()\n\ti.urlTestHistoryStorage.Close()\n\treturn i.instance.Close()\n}\n\n'
+            'func (s *StartedService) newInstance(ctx context.Context, profileContent string, overrideOptions *OverrideOptions) (*Instance, error) {\n'
+            '\tboxInstance, err := box.New(box.Options{\n\t})\n\ti.instance = boxInstance\n}\n')
+        service = 'package daemon\n\ntype StartedService struct {\n}\n'
+        with tempfile.TemporaryDirectory() as directory:
+            core = Path(directory)
+            for relative, raw in copies.items():
+                if relative in expected.values():
+                    target = core/relative; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(raw)
+            (core/'daemon/instance.go').write_text(instance)
+            (core/'daemon/started_service.go').write_text(service)
+            before, derived = prep.daemon_capture_sources(core)
+            self.assertEqual(before['daemon/instance.go'], instance.encode())
+            self.assertEqual(derived['daemon/instance.go'], shared.instance_source(instance))
+            self.assertEqual(derived['daemon/started_service.go'], shared.service_source(service))
+            prep.prepare_daemon_capture(core)
+            self.assertEqual(prep.daemon_capture_sources(core), (derived, derived))
+            # A mobile-prepared original uses these identical transforms. A
+            # second desktop preparation must retain exactly one original hook.
+            prep.prepare_daemon_capture(core)
+            self.assertEqual(prep.daemon_capture_sources(core), (derived, derived))
+            self.assertEqual((core/'daemon/instance.go').read_text().count('routerVPNCloseOriginal'), 1)
+            self.assertEqual((core/'daemon/started_service.go').read_text().count('routerVPNCloseCapture'), 1)
+            for relative in expected.values():
+                target = core/relative
+                raw = target.read_bytes()
+                target.write_bytes(raw+b'\n// replaced original receipt\n')
+                snapshot = {p.relative_to(core).as_posix():p.read_bytes() for p in core.rglob('*') if p.is_file()}
+                with self.assertRaisesRegex(ValueError, 'dependency changed'):
+                    prep.prepare_daemon_capture(core)
+                self.assertEqual(snapshot, {p.relative_to(core).as_posix():p.read_bytes() for p in core.rglob('*') if p.is_file()})
+                target.write_bytes(raw)
+            broken = (
+                ('daemon/instance.go', derived['daemon/instance.go'].replace(b'routerVPNCloseOriginal', b'foreignCloseOriginal')),
+                ('daemon/instance.go', derived['daemon/instance.go']+b'\n// routerVPNCloseReceipt\n'),
+                ('daemon/started_service.go', derived['daemon/started_service.go'].replace(b'routerVPNConstructionStarted bool', b'foreignConstructionStarted bool')),
+            )
+            for relative, raw in broken:
+                target = core/relative
+                target.write_bytes(raw)
+                snapshot = {p.relative_to(core).as_posix():p.read_bytes() for p in core.rglob('*') if p.is_file()}
+                with self.assertRaises(ValueError):
+                    prep.prepare_daemon_capture(core)
+                self.assertEqual(snapshot, {p.relative_to(core).as_posix():p.read_bytes() for p in core.rglob('*') if p.is_file()})
+                target.write_bytes(derived[relative])
+            target = core/'daemon/instance.go'
+            target.unlink()
+            with self.assertRaisesRegex(ValueError, 'source is absent'):
+                prep.prepare_daemon_capture(core)
+            target.symlink_to(core/'daemon/started_service.go')
+            with self.assertRaises(ValueError):
+                prep.prepare_daemon_capture(core)
+
+
 class DesktopPTPreparation(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='desktop-tor-preparation-')
@@ -204,6 +282,7 @@ class DesktopPTPreparation(unittest.TestCase):
              patch.object(PREP.NODE_CHAIN, 'prepare') as chain, \
              patch.object(PREP, 'prepare_network_startup') as startup, \
              patch.object(PREP, 'prepare_node_capture') as node_capture, \
+             patch.object(PREP, 'prepare_daemon_capture') as daemon_capture, \
              patch.object(PREP.RELAY.OPENVPN_REMOTE, 'prepare'), \
              contextlib.redirect_stdout(io.StringIO()):
             # This orchestration fixture doubles prerequisite preparers. Keep
@@ -218,6 +297,7 @@ class DesktopPTPreparation(unittest.TestCase):
             selective.assert_called_once_with(self.vendor.resolve(), GO, env=captured)
             startup.assert_called_once_with(self.vendor.resolve())
             node_capture.assert_called_once_with(self.vendor.resolve())
+            daemon_capture.assert_called_once_with(self.vendor.resolve())
             chain.assert_called_once_with(self.vendor.resolve(), mobile=False)
             self.assertEqual(execution_calls, [
                 ('desktop_prepare_node_chain_execution_gate', self.vendor.resolve()),
@@ -764,9 +844,18 @@ class DesktopPTPreparation(unittest.TestCase):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--vendor', type=Path, required=True)
+    parser.add_argument('--vendor', type=Path)
+    parser.add_argument('--daemon-capture-only', action='store_true')
     parser.add_argument('--go', default=shutil.which('go') or 'go')
     args = parser.parse_args()
+    if args.daemon_capture_only:
+        if args.vendor is not None:
+            parser.error('--daemon-capture-only does not use a native checkout')
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(DesktopDaemonCapturePreparation)
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
+        raise SystemExit(not result.wasSuccessful())
+    if args.vendor is None:
+        parser.error('--vendor is required for the original full preparation suite')
     vendor = args.vendor.resolve()
     head = subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True).strip()
     if head != PREP.PIN:
@@ -780,6 +869,6 @@ if __name__ == '__main__':
                               'adapter/service/manager.go', 'dns/transport_manager.go',
                               'protocol/group/selector.go', 'common/interrupt/group.go', 'common/urltest/urltest.go')}
     suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
-                               for case in (DesktopPTManifestPreflight, DesktopPTPreparation))
+                               for case in (DesktopPTManifestPreflight, DesktopDaemonCapturePreparation, DesktopPTPreparation))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())

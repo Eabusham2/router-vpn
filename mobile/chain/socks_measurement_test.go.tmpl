@@ -1,0 +1,52 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestRouterNodeChainSOCKSBridgeMeasurementRequiresOriginalProof(t *testing.T) {
+	if probe, err := RouterNodeChainSOCKSNewHopMeasurement(nil, nil); err == nil || probe != nil {
+		t.Fatal("missing original SOCKS owner acquired measurement")
+	}
+	owner := socksBridgeOwner(t, "wg")
+	server := socksBridgeServer(t, owner)
+	if err := owner.BindNative(server); err != nil {
+		t.Fatal(err)
+	}
+	if probe, err := owner.newHopMeasurementContext(t.Context(), server); err == nil || probe != nil {
+		t.Fatal("reserved daemon fabricated complete SOCKS proof")
+	}
+	if release, err := owner.BeginMeasurementContext(t.Context()); err == nil || release != nil || owner.measuring {
+		t.Fatal("unproved SOCKS owner acquired native measurement exclusion")
+	}
+	owner.NetworkChanged()
+	if runtime, err := owner.MeasurementSOCKSContext(t.Context()); err == nil || runtime != nil {
+		t.Fatal("retired SOCKS owner exposed a measurement runtime")
+	}
+}
+
+func TestRouterNodeChainSOCKSBridgeMeasurementKeepsCallerContext(t *testing.T) {
+	owner := socksBridgeOwner(t, "wg")
+	owner.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	release, err := owner.BeginMeasurementContext(ctx)
+	cancel()
+	owner.mu.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) || release != nil || owner.measuring {
+		t.Fatal("held measurement exclusion ignored original deadline", err)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	cancel()
+	if release, err := owner.BeginMeasurementContext(ctx); !errors.Is(err, context.Canceled) || release != nil {
+		t.Fatal("cancelled measurement caller acquired native activity", err)
+	}
+	if err := owner.nativeCurrent(ctx, nil); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled native observation lost its caller before ownership lookup", err)
+	}
+	if release, err := owner.BeginMeasurementContext(nil); err == nil || release != nil {
+		t.Fatal("missing measurement caller reached original native owner")
+	}
+}

@@ -1,0 +1,438 @@
+package box
+
+import (
+	"context"
+	"errors"
+ "reflect"
+	"sync"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The libbox implementation retains the exact MTU owner, original daemon
+// capture and current proof state. Pause joins that state; Observe never calls
+// the cancelled proof's current callback or lends ordinary Healthy authority.
+type RouterVPNNodeChainSOCKSMTUOwner interface {
+	PauseSOCKSMTUContext(context.Context, *mobilemultihop.NodeChainSOCKSSource, *RouterVPNNodeChainSOCKSEngine) error
+	ObserveSOCKSMTUContext(context.Context, *mobilemultihop.NodeChainSOCKSSource) error
+}
+
+const (
+	routerVPNSOCKSMTUPausePending int32 = iota
+	routerVPNSOCKSMTUPaused
+	routerVPNSOCKSMTUActive
+	routerVPNSOCKSMTUClosed
+	routerVPNSOCKSMTUFinished
+)
+
+type routerVPNSOCKSMTUReadback struct {
+	inbound adapter.Inbound
+	name string
+	index, mtu int
+}
+type routerVPNSOCKSMTUStep struct {
+	before *routerVPNSOCKSMTUReadback
+	requested int
+	transaction *inbound.RouterVPNTunTransaction
+	result *routerVPNSOCKSMTUReadback
+	failure error
+	joined bool
+}
+
+// One accepted controller operation owns every probe and restore transition.
+// Failed or partial native results remain here before any post-check can fail.
+type RouterVPNNodeChainSOCKSMTU struct {
+	mu sync.Mutex
+	original *RouterVPNNodeChainSOCKSEngine
+	owner RouterVPNNodeChainSOCKSMTUOwner
+	operation context.Context
+	initial *routerVPNSOCKSMTUReadback
+	inbound *inbound.Manager
+	sameNative func() bool
+	reader atomic.Pointer[routerVPNSOCKSMTUReadback]
+	active atomic.Pointer[RouterVPNNodeChainSOCKSEngine]
+	phase atomic.Int32
+	step *routerVPNSOCKSMTUStep // mu; never discarded while unsettled
+}
+
+func routerVPNReadSOCKSMTU(ctx context.Context, value adapter.Inbound) (*routerVPNSOCKSMTUReadback, error) {
+	reader, ok := value.(routerVPNNodeSOCKSReader)
+	if ctx == nil || ctx.Err() != nil || value == nil || !ok {
+		return nil, errors.New("SOCKS MTU lost its actual original reader")
+	}
+	name, index, mtu, err := reader.RouterVPNExecutionMTUReadbackContext(ctx)
+	if err != nil || name == "" || index < 1 || mtu < 1280 || mtu > 9000 || ctx.Err() != nil {
+		return nil, errors.Join(err, ctx.Err(), errors.New("SOCKS MTU native readback is invalid"))
+	}
+	return &routerVPNSOCKSMTUReadback{value, name, index, mtu}, nil
+}
+func routerVPNSameSOCKSMTU(a, b *routerVPNSOCKSMTUReadback) bool {
+	return a != nil && b != nil && a.inbound == b.inbound && a.name == b.name && a.index == b.index && a.mtu == b.mtu
+}
+
+// Begin captures before the proof is cancelled. The caller retains this result
+// before PauseContext; no slow join can hide an acquired continuation.
+func (e *RouterVPNNodeChainSOCKSEngine) BeginSOCKSMTUContext(ctx context.Context,
+	owner RouterVPNNodeChainSOCKSMTUOwner) (*RouterVPNNodeChainSOCKSMTU, error) {
+	if e == nil || owner == nil || ctx == nil || ctx.Err() != nil ||
+		!mobilemtu.SameOperationContext(ctx, ctx) {
+		return nil, errors.New("SOCKS MTU requires its accepted bounded operation")
+	}
+	cleanup, err := mobilemtu.OperationCleanupOnly(ctx)
+	if err != nil || cleanup {
+		return nil, errors.Join(err, errors.New("SOCKS MTU cleanup cannot begin another operation"))
+	}
+	if _, err = e.ObserveChainContext(ctx); err != nil {
+		return nil, err
+	}
+	actual, err := routerVPNReadSOCKSMTU(ctx, e.observation.inbound)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := e.ObserveChainContext(ctx); err != nil { return nil, err }
+	s := e.observation.instance
+	ins, outs, resolver, network := s.inbound, s.outbound, s.dnsTransport, s.network
+	m := &RouterVPNNodeChainSOCKSMTU{original:e, owner:owner, operation:ctx, initial:actual, inbound:ins,
+		sameNative:func() bool { return s.inbound == ins && s.outbound == outs && s.dnsTransport == resolver && s.network == network }}
+	m.reader.Store(actual)
+	m.active.Store(e)
+	if !e.mtu.CompareAndSwap(nil, m) {
+		return nil, errors.New("SOCKS MTU original engine already has a retained operation")
+	}
+	return m, ctx.Err()
+}
+
+func (m *RouterVPNNodeChainSOCKSMTU) accepted(ctx context.Context) error {
+	if ctx == nil { return errors.New("SOCKS MTU observation has no original caller") }
+	if err := ctx.Err(); err != nil { return err }
+	if m == nil || m.original == nil || m.owner == nil || !mobilemtu.SameOperationContext(m.operation, ctx) {
+		return errors.New("SOCKS MTU changed its original operation or caller")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("SOCKS MTU observation lost its finite bound")
+	}
+	return nil
+}
+// Every nested observation (including Dial/Select's final check) observes the
+// same pause, so a caller cannot slip through a check made before retirement.
+func (e *RouterVPNNodeChainSOCKSEngine) bindSOCKSMTUObservation() {
+	original := e.observation.current
+	e.observation.current = func(ctx context.Context) error {
+		if ctx == nil { return errors.New("SOCKS MTU observation has no caller") }
+		if err := ctx.Err(); err != nil { return err }
+		if operation := e.mtu.Load(); operation != nil && !operation.engineCurrent(e) {
+			return errors.New("SOCKS MTU original proof observation is paused")
+		}
+		return original(ctx)
+	}
+}
+func (m *RouterVPNNodeChainSOCKSMTU) engineCurrent(e *RouterVPNNodeChainSOCKSEngine) bool {
+	return m != nil && e != nil && m.active.Load() == e && m.phase.Load() == routerVPNSOCKSMTUActive
+}
+func (m *RouterVPNNodeChainSOCKSMTU) Current() adapter.Inbound {
+	if m == nil { return nil }
+	if r := m.reader.Load(); r != nil { return r.inbound }
+	return nil
+}
+func (m *RouterVPNNodeChainSOCKSMTU) RetainsCleanup() bool {
+	if m == nil { return false }
+	phase := m.phase.Load()
+	return phase != routerVPNSOCKSMTUClosed && phase != routerVPNSOCKSMTUFinished
+}
+
+// This check deliberately omits only the reader during its owned replacement.
+// It keeps every original non-reader object and captured network generation.
+func (m *RouterVPNNodeChainSOCKSMTU) nativeCurrent(ctx context.Context) error {
+	if err := m.accepted(ctx); err != nil { return err }
+	e, observation := m.original, m.original.observation
+	if observation == nil || observation.instance == nil || e.source == nil || e.middle == nil ||
+		m.inbound == nil || m.sameNative == nil || !m.sameNative() {
+		return errors.New("SOCKS MTU has no original native capture")
+	}
+	s := observation.instance
+	if s.ctx == nil || s.ctx.Err() != nil || s.done == nil || s.network == nil {
+		return errors.New("SOCKS MTU original Box retired")
+	}
+	select { case <-s.done: return errors.New("SOCKS MTU original Box is closing"); default: }
+	original, ok := s.ctx.Value(routerVPNNodeSOCKSContextKey{}).(*routerVPNNodeSOCKSConstruction)
+	if !ok || original == nil { return errors.New("SOCKS MTU lost its construction capture") }
+	if err := original.require(ctx, s.ctx, e.source); err != nil { return err }
+	if err := m.owner.ObserveSOCKSMTUContext(ctx, e.source); err != nil { return err }
+	if err := e.middle.ObserveContext(ctx, e.source); err != nil { return err }
+	network, err := s.network.RouterVPNNodeChainNetworkContext(ctx)
+	if err != nil || network != observation.identity.NetworkID {
+		return errors.Join(err, errors.New("SOCKS MTU original network changed"))
+	}
+	resolver, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, observation.dns.ResolverTag)
+	if err != nil || !found || resolver != observation.resolver {
+		return errors.Join(err, errors.New("SOCKS MTU original DNS owner changed"))
+	}
+	for tag, expected := range observation.prefixes {
+		value, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil || !found || value != expected {
+			return errors.Join(err, errors.New("SOCKS MTU original outbound changed"))
+		}
+	}
+	selector, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, mobilemultihop.SelectorTag)
+	if err != nil || !found || selector != observation.selector || observation.selector.Now() != observation.finalTag {
+		return errors.Join(err, errors.New("SOCKS MTU original selection changed"))
+	}
+	if err := m.owner.ObserveSOCKSMTUContext(ctx, e.source); err != nil { return err }
+	return ctx.Err()
+}
+func (m *RouterVPNNodeChainSOCKSMTU) readCurrent(ctx context.Context, expected *routerVPNSOCKSMTUReadback) error {
+	if err := m.nativeCurrent(ctx); err != nil { return err }
+	if expected == nil { return errors.New("SOCKS MTU lost its retained reader") }
+	s := m.original.observation.instance
+	values, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil || len(values) != 1 || values[0] != expected.inbound {
+		return errors.Join(err, errors.New("SOCKS MTU actual reader is not the retained result"))
+	}
+	actual, err := routerVPNReadSOCKSMTU(ctx, expected.inbound)
+	if err != nil || !routerVPNSameSOCKSMTU(actual, expected) {
+		return errors.Join(err, errors.New("SOCKS MTU actual readback changed"))
+	}
+	return m.nativeCurrent(ctx)
+}
+
+func (m *RouterVPNNodeChainSOCKSMTU) PauseContext(ctx context.Context) error {
+	if err := m.accepted(ctx); err != nil { return err }
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil { return err }
+	defer m.mu.Unlock()
+	return m.pause(ctx)
+}
+func (m *RouterVPNNodeChainSOCKSMTU) pause(ctx context.Context) error {
+	phase := m.phase.Load()
+	if phase == routerVPNSOCKSMTUClosed || phase == routerVPNSOCKSMTUFinished {
+		return errors.New("SOCKS MTU operation is already retired")
+	}
+	if phase != routerVPNSOCKSMTUPaused {
+		m.phase.Store(routerVPNSOCKSMTUPausePending)
+		active := m.active.Load()
+		if active == nil || active.mtu.Load() != m {
+			return errors.New("SOCKS MTU lost its original proof engine")
+		}
+		if err := m.owner.PauseSOCKSMTUContext(ctx, m.original.source, active); err != nil { return err }
+		// Phase stays pending on a deadline or failed observation, even after
+		// the shared Close returns. No replacement is admitted by that alone.
+		if err := m.nativeCurrent(ctx); err != nil { return err }
+		m.phase.Store(routerVPNSOCKSMTUPaused)
+	}
+	if m.step != nil && !m.step.joined { return m.nativeCurrent(ctx) }
+	return m.readCurrent(ctx, m.reader.Load())
+}
+
+func (m *RouterVPNNodeChainSOCKSMTU) ChangeContext(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	return m.changeContext(ctx, expected, mtu, func(call context.Context, original adapter.Inbound, value int) (*inbound.RouterVPNTunTransaction, error) {
+		return m.original.observation.instance.RouterVPNChangeMTUTransaction(call, original, value)
+	})
+}
+
+// The factory seam is private to component tests. Shipping uses only the actual
+// native TUN constructor and the original manager's sealed transaction.
+func (m *RouterVPNNodeChainSOCKSMTU) changeContext(ctx context.Context, expected adapter.Inbound, mtu int,
+	acquire func(context.Context, adapter.Inbound, int) (*inbound.RouterVPNTunTransaction, error)) (adapter.Inbound, error) {
+	if err := m.accepted(ctx); err != nil { return m.Current(), err }
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil { return m.Current(), err }
+	defer m.mu.Unlock()
+	if m.phase.Load() != routerVPNSOCKSMTUPaused || acquire == nil {
+		return m.Current(), errors.New("SOCKS MTU replacement has no joined pause")
+	}
+	_, meta, err := m.original.source.ReadValidated()
+	if err != nil || mtu < 1280 || mtu > meta.MTU.Ceiling {
+		return m.Current(), errors.Join(err, errors.New("SOCKS MTU target exceeds captured bounds"))
+	}
+	cleanup, err := mobilemtu.OperationCleanupOnly(ctx)
+	if err != nil || cleanup && mtu != m.initial.mtu {
+		return m.Current(), errors.Join(err, errors.New("SOCKS MTU cleanup may only restore its initial actual MTU"))
+	}
+	if err := m.nativeCurrent(ctx); err != nil { return m.Current(), err }
+	if previous := m.step; previous != nil {
+		if !previous.joined {
+			if err := m.finishStep(ctx, previous); err != nil { return m.Current(), err }
+		}
+		if previous.before.inbound == expected && previous.requested == mtu {
+			if previous.result == nil || previous.result.mtu != mtu {
+				return m.Current(), errors.Join(previous.failure, errors.New("SOCKS MTU transaction retained its rollback reader"))
+			}
+			return m.Current(), nil
+		}
+	}
+	before := m.reader.Load()
+	if before == nil || before.inbound != expected {
+		return m.Current(), errors.New("SOCKS MTU replacement lost its actual prior reader")
+	}
+	if err := m.readCurrent(ctx, before); err != nil { return m.Current(), err }
+	step := &routerVPNSOCKSMTUStep{before:before, requested:mtu}
+	m.step = step
+	if before.mtu != mtu {
+		step.transaction, step.failure = acquire(ctx, expected, mtu)
+		// Current is read only after the original transaction call returns and
+		// while this operation excludes a concurrent retry of the same receipt.
+		if step.transaction != nil {
+			if retained := step.transaction.Current(); retained != nil {
+				m.reader.Store(&routerVPNSOCKSMTUReadback{inbound:retained})
+			}
+		}
+	}
+	joinErr := m.finishStep(ctx, step)
+	if step.failure != nil || joinErr != nil {
+		return m.Current(), errors.Join(step.failure, joinErr)
+	}
+	if step.result == nil || step.result.mtu != mtu {
+		return m.Current(), errors.New("SOCKS MTU did not retain its requested native readback")
+	}
+	return m.Current(), nil
+}
+func (m *RouterVPNNodeChainSOCKSMTU) finishStep(ctx context.Context, step *routerVPNSOCKSMTUStep) error {
+	if step == nil || m.step != step || m.phase.Load() != routerVPNSOCKSMTUPaused {
+		return errors.New("SOCKS MTU lost its original pending transition")
+	}
+	if err := m.nativeCurrent(ctx); err != nil { return err }
+	active := step.before.inbound
+	if step.transaction != nil {
+		if err := m.inbound.RouterVPNRetryTunTransaction(ctx, step.transaction); err != nil { return err }
+		var err error
+		active, err = m.inbound.RouterVPNReadTunTransactionContext(ctx, step.transaction, step.before.inbound)
+		if err != nil { return err }
+	}
+	actual, err := routerVPNReadSOCKSMTU(ctx, active)
+	if err != nil { return err }
+	_, meta, err := m.original.source.ReadValidated()
+	if err != nil || actual.mtu > meta.MTU.Ceiling {
+		return errors.Join(err, errors.New("SOCKS MTU result exceeds its captured ceiling"))
+	}
+	// Retain the actual original returned reader before any remaining identity
+	// check. A late cancellation cannot cause cleanup to use the old pointer.
+	m.reader.Store(actual)
+	if err := m.readCurrent(ctx, actual); err != nil { return err }
+	step.result, step.joined = actual, true
+	return nil
+}
+
+// Resume grants a new proof engine, never Healthy or a measured winner. The
+// bridge must bind current to its fresh retained state and re-run every proof.
+func (m *RouterVPNNodeChainSOCKSMTU) ResumeContext(ctx context.Context,
+	current func(context.Context) error) (*RouterVPNNodeChainSOCKSEngine, error) {
+	if err := m.accepted(ctx); err != nil { return nil, err }
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil { return nil, err }
+	defer m.mu.Unlock()
+	if current == nil || m.phase.Load() != routerVPNSOCKSMTUPaused ||
+		m.step == nil || !m.step.joined || m.step.result == nil {
+		return nil, errors.New("SOCKS MTU resume lacks its original joined reader receipt")
+	}
+	reader := m.reader.Load()
+	if reader != m.step.result { return nil, errors.New("SOCKS MTU resume replaced its reader receipt") }
+	cleanup, err := mobilemtu.OperationCleanupOnly(ctx)
+	if err != nil || cleanup && reader.mtu != m.initial.mtu {
+		return nil, errors.Join(err, errors.New("SOCKS MTU cleanup cannot resume an unrestored probe"))
+	}
+	if err := m.readCurrent(ctx, reader); err != nil { return nil, err }
+	original := m.original
+	observation := *original.observation
+	observation.inbound = reader.inbound
+	observation.current = func(call context.Context) error {
+		if call == nil || call.Err() != nil { return errors.New("SOCKS MTU resumed observation lost its caller") }
+		if err := current(call); err != nil { return err }
+		s := observation.instance
+		captured, ok := s.ctx.Value(routerVPNNodeSOCKSContextKey{}).(*routerVPNNodeSOCKSConstruction)
+		if !ok || captured == nil { return errors.New("SOCKS MTU resumed construction changed") }
+		if err := captured.require(call, s.ctx, original.source); err != nil { return err }
+		if err := original.middle.ObserveContext(call, original.source); err != nil { return err }
+		actual, err := routerVPNReadSOCKSMTU(call, reader.inbound)
+		if err != nil || !routerVPNSameSOCKSMTU(actual, reader) {
+			return errors.Join(err, errors.New("SOCKS MTU resumed reader changed"))
+		}
+		if err := current(call); err != nil { return err }
+		return call.Err()
+	}
+	next := &RouterVPNNodeChainSOCKSEngine{observation:&observation, source:original.source,
+		middle:original.middle, middleTag:original.middleTag, ipv6:original.ipv6}
+	next.bindSOCKSMTUObservation()
+	next.mtu.Store(m)
+	m.active.Store(next)
+	m.phase.Store(routerVPNSOCKSMTUActive)
+	if _, err := next.ObserveChainContext(ctx); err != nil {
+		m.phase.Store(routerVPNSOCKSMTUPausePending)
+		return next, err
+	}
+	return next, nil
+}
+
+// Finish detaches only an actually current resumed proof engine. It cannot
+// erase pending retirement; the caller keeps its MTU lease on any error.
+func (m *RouterVPNNodeChainSOCKSMTU) FinishContext(ctx context.Context) error {
+	if err := m.accepted(ctx); err != nil { return err }
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil { return err }
+	defer m.mu.Unlock()
+	engine := m.active.Load()
+	if !m.engineCurrent(engine) || m.step == nil || !m.step.joined {
+		return errors.New("SOCKS MTU finish has no current resumed engine")
+	}
+	reader := m.reader.Load()
+	cleanup, err := mobilemtu.OperationCleanupOnly(ctx)
+	if err != nil || reader == nil || cleanup && reader.mtu != m.initial.mtu {
+		return errors.Join(err, errors.New("SOCKS MTU cleanup cannot finish an unrestored probe"))
+	}
+	if err := m.readCurrent(ctx, reader); err != nil { return err }
+	if _, err := engine.ObserveChainContext(ctx); err != nil { return err }
+	if !engine.mtu.CompareAndSwap(m, nil) {
+		return errors.New("SOCKS MTU finish lost its retained operation")
+	}
+	m.phase.Store(routerVPNSOCKSMTUFinished)
+	return nil
+}
+
+// ObserveContext is an operation-only reader receipt for optimizer rollback.
+// It never grants ordinary Healthy or admits a new native reader.
+func (m *RouterVPNNodeChainSOCKSMTU) ObserveContext(ctx context.Context) error {
+ if err:=m.accepted(ctx);err!=nil{return err}
+ if err:=adapter.RouterVPNLockContext(ctx,&m.mu);err!=nil{return err}
+ defer m.mu.Unlock()
+ if m.step==nil||!m.step.joined||m.phase.Load()!=routerVPNSOCKSMTUActive{return errors.New("SOCKS MTU rollback has no joined active reader")}
+ return m.readCurrent(ctx,m.reader.Load())
+}
+
+// RetireContext grants the pointer-identical original native owner only a
+// bounded retry of retained handle retirement after the work token finalized.
+// Unlike CloseContext it cannot mutate, restore, resume or publish any proof.
+func (m *RouterVPNNodeChainSOCKSMTU) RetireContext(ctx context.Context, owner RouterVPNNodeChainSOCKSMTUOwner) error {
+ if ctx==nil{return errors.New("SOCKS MTU retirement lost its caller")}
+ if err:=ctx.Err();err!=nil{return err}
+ if _,bounded:=ctx.Deadline();!bounded{return errors.New("SOCKS MTU retirement lost its bound")}
+ if m==nil||m.owner==nil||owner==nil{return errors.New("SOCKS MTU retirement lost original owner")}
+ original,captured:=reflect.ValueOf(m.owner),reflect.ValueOf(owner)
+ if original.Kind()!=reflect.Pointer||captured.Kind()!=reflect.Pointer||original.Type()!=captured.Type()||original.Pointer()==0||original.Pointer()!=captured.Pointer(){return errors.New("SOCKS MTU retirement replaced original owner")}
+ if err:=adapter.RouterVPNLockContext(ctx,&m.mu);err!=nil{return err}
+ defer m.mu.Unlock()
+ return m.closeRetained(ctx)
+}
+
+// Close is a bounded cleanup of this original operation only. It cannot create
+// a replacement, admit a proof, release a failed receipt, or certify Box DOWN.
+func (m *RouterVPNNodeChainSOCKSMTU) CloseContext(ctx context.Context) error {
+	if err := m.accepted(ctx); err != nil { return err }
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil { return err }
+	defer m.mu.Unlock()
+ return m.closeRetained(ctx)
+}
+func (m *RouterVPNNodeChainSOCKSMTU) closeRetained(ctx context.Context) error {
+	if m.phase.Load() == routerVPNSOCKSMTUFinished || m.phase.Load() == routerVPNSOCKSMTUClosed { return ctx.Err() }
+	active := m.active.Load()
+	if active == nil || active.mtu.Load() != m {
+		return errors.New("SOCKS MTU cleanup lost its original proof owner")
+	}
+	m.phase.Store(routerVPNSOCKSMTUPausePending)
+	if err := m.owner.PauseSOCKSMTUContext(ctx, m.original.source, active); err != nil { return err }
+	if step := m.step; step != nil && step.transaction != nil {
+		// Original manager ownership is sufficient to retry retirement after
+		// source/network invalidation; no current graph or new TUN is acquired.
+		if err := m.inbound.RouterVPNRetryTunTransaction(ctx, step.transaction); err != nil { return err }
+	}
+	m.phase.Store(routerVPNSOCKSMTUClosed)
+	return ctx.Err()
+}
