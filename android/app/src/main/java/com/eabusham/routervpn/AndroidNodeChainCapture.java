@@ -17,7 +17,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static final int MAX_INPUT = 40 * 1024 * 1024;
     static final String SESSION_FILE = "routervpn-node-chain.json";
     final RouterNodeChain plan;
-    final String launchInput, config, sourceSHA256, configSHA256;
+    final String sourceInput, launchInput, config, sourceSHA256, configSHA256, selectionExecution;
     final List<String> memberInputs, identityInputs;
     final boolean strict, homeLANAccess;
     private final AndroidNodeStore.ChainCapture original;
@@ -25,10 +25,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture original) throws Exception {
         List<String> inputs = memberInputs(original);
         List<String> identities = identityInputs(original);
-        String source = bounded(new JSONObject().put("schema", sourceSchema(original.members)).put("execution", "local")
-                .put("nodes", new JSONArray(inputs)).put("identity_sources",new JSONArray(identities)).toString(), MAX_INPUT);
+        String source = sourceInput(original, inputs, identities);
         RouterNodeChain plan = Libbox.newRouterNodeChain(source);
-        try { return new AndroidNodeChainCapture(original, inputs, identities, plan); }
+        try { return new AndroidNodeChainCapture(original, inputs, identities, source, plan); }
         catch (Exception failure) { try { plan.close(); } catch (Exception close) { failure.addSuppressed(close); } throw failure; }
     }
 
@@ -37,18 +36,26 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         List<String> identities = identityInputs(original);
         RouterNodeChain plan = Libbox.routerNodeChainLaunch(bounded(input, MAX_INPUT));
         try {
-            AndroidNodeChainCapture capture = new AndroidNodeChainCapture(original, inputs, identities, plan);
+            AndroidNodeChainCapture capture = new AndroidNodeChainCapture(original, inputs, identities, sourceInput(original, inputs, identities), plan);
             if (!input.equals(capture.launchInput)) throw new IllegalStateException("The private ordered launch source is not its original canonical capture.");
             return capture;
         } catch (Exception failure) { try { plan.close(); } catch (Exception close) { failure.addSuppressed(close); } throw failure; }
     }
 
-    private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, RouterNodeChain plan) throws Exception {
+    private static String sourceInput(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities) throws Exception {
+        // Reconstruct only from the original captured members, never by removing
+        // receipt fields from an unchecked private launch document.
+        return bounded(new JSONObject().put("schema", sourceSchema(original.members)).put("execution", "local")
+                .put("nodes", new JSONArray(inputs)).put("identity_sources",new JSONArray(identities)).toString(), MAX_INPUT);
+    }
+
+    private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source, RouterNodeChain plan) throws Exception {
         if (plan == null) throw new IllegalStateException("The native ordered compiler returned no source owner.");
-        this.original = original; this.plan = plan;
+        this.original = original; this.plan = plan; selectionExecution = original.execution;
         if (inputs.size() != original.members.size()) throw new IllegalStateException("The native input omitted an original ordered member.");
         memberInputs = Collections.unmodifiableList(new ArrayList<>(inputs));
         identityInputs = Collections.unmodifiableList(new ArrayList<>(identities));
+        sourceInput = source;
         launchInput = bounded(plan.launchInput(), MAX_INPUT);
         config = bounded(plan.config(), 4 * 1024 * 1024);
         sourceSHA256 = plan.sourceSHA256(); configSHA256 = plan.configSHA256();

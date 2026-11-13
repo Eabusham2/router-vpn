@@ -1208,6 +1208,28 @@ witness. The standalone prefix-source fixture also compiles the repaired shared
 source set. No production cancellation or timeout behavior was changed; fresh
 CI and actual APK acceptance remain separate evidence.
 
+## Android strict prefix-source capture
+
+The ordinary Android ordered capture now retains the original plain compiler
+input and the selected execution choice. The distinct candidate-prefix capture
+accepts only a Local packet prefix before the existing final node and invokes
+the shared native prefix constructor from those original captured members.
+Strict reopening uses the native private-launch parser. It verifies original
+full-source identity, every selected prefix member and proof identity, exact
+mode and Start Layer, inventory, configuration digest and configured-only
+MTU/TUN bounds. The metadata must still report pending prefix proof with both
+application and DNS ingress closed; this source unit does not start a VPN or
+report Connected.
+
+The shipping Java 17 capture ran against the actual shared Go constructors and
+parsers: 65 checks passed, and all five separately compiled causal controls
+rejected changed original provenance, opened application ingress, wrong proof,
+wrong MTU and a late original-source change. The Android workflow audit passed
+11 checks and requires this fixture from both the standalone multihop contract
+and the aggregate runtime contract. Service ownership, catalog lifetime,
+temporary TUN cleanup and the public prefix-only UI flow remain separate work;
+these source checks are not encrypted packet or physical-device acceptance.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
