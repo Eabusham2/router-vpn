@@ -170,7 +170,8 @@ class InstalledNodeChainHostGate(unittest.TestCase):
     'node-chain-custom-wg-connect', 'node-chain-custom-awg-fast-connect', 'node-chain-custom-awg-strong-connect',
     'node-chain-custom-wg-wrong-middle-key', 'node-chain-custom-wg-wrong-middle-public', 'node-chain-custom-wg-final-dns-failure',
     'node-chain-custom-wg-middle-source', 'node-chain-custom-wg-prefix-lost')
-        self.assertEqual(G.NODE_CHAIN_HOST_CASES, expected)
+        self.assertEqual(G.NODE_CHAIN_HOST_CASES, expected + G.SAVED_CANDIDATE_HOST_CASES)
+        expected += G.SAVED_CANDIDATE_HOST_CASES
         self.assertEqual(G.CASES[-len(expected):], expected)
         self.assertEqual(len(set(G.CASES)), len(G.CASES))
         fixture = InstalledLinuxHostVerdict()
@@ -190,6 +191,25 @@ class InstalledNodeChainHostGate(unittest.TestCase):
         # the installed process/TUN/journal lifecycle required by this gate.
         with self.assertRaises(ValueError):
             G.check_verdict(InstalledNodeChainPeerPreflight().completed())
+
+    def test_saved_candidate_api_requires_each_original_native_decision_receipt(self):
+        expected = (
+            'node-chain-3-candidates-save', 'node-chain-3-candidates-cancel',
+            'node-chain-3-awg-fast-wg-candidates-save', 'node-chain-3-awg-fast-wg-candidates-cancel',
+            'node-chain-3-awg-strong-awg-fast-candidates-save', 'node-chain-3-awg-strong-awg-fast-candidates-cancel')
+        self.assertEqual(G.SAVED_CANDIDATE_HOST_CASES, expected)
+        fixture = InstalledLinuxHostVerdict()
+        for case in expected:
+            good = fixture.completed((case,))
+            G.check_verdict(good, case)
+            line = next(line for line in good.splitlines(True) if 'saved candidate API fifty samples' in line)
+            for changed in (good.replace(line, '', 1), good + line,
+                            good.replace(line, line.replace(case, case + '-foreign'), 1),
+                            good.replace(line, 'PASS\n', 1)):
+                with self.subTest(case=case), self.assertRaises(ValueError):
+                    G.check_verdict(changed, case)
+        self.assertIn("'saved_candidate_host_cases': list(SAVED_CANDIDATE_HOST_CASES)", inspect.getsource(G.execute))
+        self.assertIn('ordered_candidate_preparation_linux_tun_native_test.go', inspect.getsource(G.checked_sources))
 
     def test_actual_installed_source_authority_is_compiled_and_required(self):
         names = G.NODE_CHAIN_HOST_AUTHORITY_CASES
@@ -429,6 +449,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:18: verified installed host retained external succession: ' + case for case in cases if case in G.EXTERNAL_CASES),
                           *('    native_test.go:33: verified installed host imported independent WG entry and paired SS final: ' + case for case in cases if case in G.IMPORTED_CASES),
                           *('    native_test.go:34: verified installed host ordered independent prefixes and final: ' + case for case in cases if case in G.NODE_CHAIN_HOST_CASES),
+                          *('    native_test.go:35: verified installed host saved candidate API fifty samples native DOWN and explicit decision: ' + case for case in cases if case in G.SAVED_CANDIDATE_HOST_CASES),
                           *('    native_test.go:21: verified installed host independent WireGuard entry and CONNECT final: ' + case for case in cases if case in G.EXTERNAL_WG_CONNECT_CASES),
                           *('    native_test.go:20: verified installed host independent WireGuard entry and SS final: ' + case for case in cases if case in G.EXTERNAL_WG_ENTRY_CASES),
                           *('    native_test.go:19: verified installed host retained layered Hysteria2: ' + case for case in cases if case in (*G.EXTERNAL_HYSTERIA2_LAYER_CASES, *G.EXTERNAL_WG_HYSTERIA_LAYER_CASES))]) + '\n'

@@ -43,6 +43,9 @@ var linuxNodeChainHostCases = []string{
 	"node-chain-custom-wg-connect", "node-chain-custom-awg-fast-connect", "node-chain-custom-awg-strong-connect",
 	"node-chain-custom-wg-wrong-middle-key", "node-chain-custom-wg-wrong-middle-public", "node-chain-custom-wg-final-dns-failure",
 	"node-chain-custom-wg-middle-source", "node-chain-custom-wg-prefix-lost",
+	"node-chain-3-candidates-save", "node-chain-3-candidates-cancel",
+	"node-chain-3-awg-fast-wg-candidates-save", "node-chain-3-awg-fast-wg-candidates-cancel",
+	"node-chain-3-awg-strong-awg-fast-candidates-save", "node-chain-3-awg-strong-awg-fast-candidates-cancel",
 }
 
 type linuxNodeChainPrefixRequest struct {
@@ -405,8 +408,9 @@ func installLinuxNodeChainProfiles(t *testing.T, peer *linuxNodeChainPeer, fault
 
 type linuxNodeChainHostResult struct {
 	linuxImportedHostResult
-	Proof *mobilemultihop.DesktopNodeChainReadyRecord `json:"proof,omitempty"`
-	Nodes []common.MultihopNodeSelection              `json:"nodes,omitempty"`
+	Proof    *mobilemultihop.DesktopNodeChainReadyRecord `json:"proof,omitempty"`
+	Nodes    []common.MultihopNodeSelection              `json:"nodes,omitempty"`
+	Prepared *linuxOrderedPreparedHostReceipt            `json:"prepared,omitempty"`
 }
 
 func (process *linuxHostTUNController) readNodeChain(t *testing.T, scenario string) linuxNodeChainHostResult {
@@ -430,6 +434,10 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 	count := len(modes) + 1
 	peer := startLinuxNodeChainPeer(t, modes)
 	installLinuxNodeChainProfiles(t, peer, action)
+	if action == "candidates-save" || action == "candidates-cancel" {
+		linuxHostTUNPreparedCandidateParent(t, installed, scenario, action, modes, peer)
+		return
+	}
 	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure"
 	switch action {
 	case "wrong-middle-public":
@@ -536,6 +544,9 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
 	defer cancel()
+	if action == "candidates-save" || action == "candidates-cancel" {
+		return linuxHostTUNPreparedCandidateFixture(ctx, a, controller, gate, scenario, action)
+	}
 	releaseMTU, err := a.holdCapturedMTU(ctx)
 	if err != nil {
 		return err

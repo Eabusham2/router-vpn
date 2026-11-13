@@ -1118,6 +1118,35 @@ The bounded output join and retained pre-start baseline fixes are now in
 `07a426275`; their effect on actual Darwin execution still requires a newer
 native run. The required gates remain enabled.
 
+## Installed Linux acceptance for the saved-candidate API
+
+The required installed-host fixture preserves its existing 26 ordered graph
+cases and adds Save and Cancel for WG, AWG Fast and AWG Strong. Each of these
+six cases invokes the shipping catalog/POST202/status/Save/Cancel routes from
+the actual protected controller. It cancels the original HTTP context after
+202, requires the original native 50-sample receipt and an independent peer
+count of exactly 50 extra unauthenticated candidate TCP handshakes, and
+verifies the real original process wait, TUN absence and settled protection
+journal before review. The physical observer remains owned until explicit
+Save or Cancel. Wrong-view cancellation, unmeasured candidate adoption,
+duplicate Save and changes to original profile/startup bytes are rejected.
+The tests do not supply a ready flag, measurement or native-DOWN receipt.
+
+The complete runner passed 67 tests in 22.453 seconds, including exact native
+receipt and omitted/duplicate/foreign/generic-PASS rejection cases. The actual
+shipping controller test image compiled with race detection and the
+`routervpn_controller_privileged` tag; its two source-authority roots and 11
+children passed with all 13 required verdicts checked. All 2,311 captured
+application inputs remained byte-identical across compilation and those
+source tests. The original 65-second controller, 85-second process and
+150-second runner bounds remain unchanged.
+
+The six actual privileged API cases have not run locally: this environment
+rejects the required socket/network operations. They remain required in the
+native CI pipeline. Compilation and runner-parser results do not establish
+that those installed-network scenarios passed, nor do the earlier six
+Linux command/TUN cases substitute for this new host/API acceptance.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
