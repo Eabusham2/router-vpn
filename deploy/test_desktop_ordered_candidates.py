@@ -53,7 +53,7 @@ POLICY
 final class Form {
 FIELDS
 var window:NSWindow?=NSWindow()
-init(savedPath:Bool=false){self.savedPath=savedPath}
+init(savedPath:Bool=false,savedPrefix:Bool=false){self.savedPath=savedPath || savedPrefix;self.savedPrefix=savedPrefix}
 METHODS
 }
 var checks=0
@@ -139,6 +139,32 @@ let admitted=savedForm();try! admitted.receive(savedResult(admitted),action:"run
 var refusedLate=false;do{try admitted.receive(neverStarted(admitted),action:"cancel")}catch{refusedLate=true};check(refusedLate && admitted.pendingDrain,"never-started receipt retired an admitted job")
 var unproved=savedResult(admitted);unproved["drained"]=true;unproved["native_down"]=false
 var refusedDown=false;do{try admitted.receive(unproved,action:"cancel")}catch{refusedDown=true};check(refusedDown && admitted.pendingDrain,"admitted cleanup retired without native DOWN")
+var prefixCatalog=savedCatalog;prefixCatalog["scope"]="saved-prefix-local";prefixCatalog["application_open"]=false;prefixCatalog["dns_open"]=false;prefixCatalog["proof_scope"]="selected-prefix"
+func prefixResult(_ form:Form)->[String:Any]{var value=savedResult(form);value["scope"]="saved-prefix-local";value["application_open"]=false;value["dns_open"]=false;value["proof_scope"]="selected-prefix";return value}
+do{try Form(savedPrefix:true).receive(savedCatalog,action:"catalog");fatalError("complete catalog became prefix preparation")}catch{checks+=1}
+for key in ["application_open","dns_open","proof_scope"] {var missing=prefixCatalog;missing.removeValue(forKey:key);do{try Form(savedPrefix:true).receive(missing,action:"catalog");fatalError("prefix catalog omitted closed proof: "+key)}catch{checks+=1}}
+let pf=Form(savedPrefix:true);pf.capture();let prefixCapture=RouterVPNMacSpeedLabTransport.calls.last!
+check(prefixCapture.url.path=="/api/multihop/saved-candidates/catalog" && prefixCapture.url.query=="prefix_position=0&scope=saved-prefix-local","prefix catalog lost explicit captured purpose")
+prefixCapture.finish(prefixCatalog);settle();pf.measure();let prefixRun=RouterVPNMacSpeedLabTransport.calls.last!
+check(prefixRun.body?["scope"] as? String=="saved-prefix-local" && prefixRun.body?["samples"] as? Int==50 && MacViaEntryCandidateReservation.shared.active,"prefix Run lost captured purpose or reservation")
+var prefixTesting=prefixResult(pf);prefixTesting["running"]=true;prefixTesting["native_down"]=false;prefixTesting["accepted"]=false;prefixTesting["reviewing"]=false
+prefixRun.finish(prefixTesting);settle();check(pf.pendingDrain && pf.rows.isEmpty && !pf.save.isEnabled,"prefix Testing exposed choices before native DOWN")
+pf.nextRetry = .distantPast;pf.tick();RouterVPNMacSpeedLabTransport.calls.last!.finish(prefixResult(pf));settle()
+check(pf.pendingDrain && pf.rows.count==1 && pf.save.isEnabled && MacViaEntryCandidateReservation.shared.active,"prefix DOWN review lost its original observer")
+for action in ["run","poll","save","cancel"] {for key in ["scope","proof_scope","application_open","dns_open"] {
+ var foreign=prefixResult(pf);foreign["drained"]=true;foreign["saved_profile_id"]="foreign-write"
+ if key=="scope" {foreign[key]="saved-complete-local"} else if key=="proof_scope" {foreign[key]="ordinary-path"} else {foreign[key]=true}
+ var refused=false;do{try pf.receive(foreign,action:action)}catch{refused=true}
+ check(refused && pf.pendingDrain && pf.savedProfileID.isEmpty && MacViaEntryCandidateReservation.shared.active,"prefix response changed purpose or closed proof: "+action+":"+key)
+}}
+pf.profileName.stringValue="Prefix future profile";pf.saveProfile();let prefixSave=RouterVPNMacSpeedLabTransport.calls.last!
+check(prefixSave.body?["scope"] as? String=="saved-prefix-local" && (prefixSave.body?["proposed_path"] as? [[String:Any]])?.count==3,"prefix Save lost purpose or complete original graph")
+var prefixWritten=written(pf);prefixWritten["scope"]="saved-prefix-local";prefixWritten["application_open"]=false;prefixWritten["dns_open"]=false;prefixWritten["proof_scope"]="selected-prefix"
+prefixSave.finish(prefixWritten);settle();check(pf.pendingDrain && pf.savedProfileID=="profile-original" && !pf.save.isEnabled,"prefix Save lost committed identity before cleanup")
+pf.nextRetry = .distantPast;pf.tick();let prefixCancel=RouterVPNMacSpeedLabTransport.calls.last!
+check(prefixCancel.body?["scope"] as? String=="saved-prefix-local" && prefixCancel.body?["request_id"] as? String==pf.requestID,"prefix Cancel lost captured purpose")
+prefixWritten["drained"]=true;prefixWritten["cleanup_pending"]=false;prefixWritten["cleanup_error"]="";prefixCancel.finish(prefixWritten);settle()
+check(!pf.pendingDrain && !MacViaEntryCandidateReservation.shared.active && pf.savedProfileID=="profile-original","prefix cleanup did not retain the write and join its owner")
 check(productConnectionStatusLabel(connected:false,phase:"candidate:testing")=="○ Testing","temporary Home exposed its internal phase")
 check(productConnectionStatusLabel(connected:true,phase:"connected")=="● Connected","ordinary Connected label changed")
 let home:[String:Any]=["actual_exit_status":"proved","actual_exit_ip":"203.0.113.9","connection_phase":"candidate:testing","connected":false,"path_proof":"proved","dns_status":"unknown","lan_access":false,"kill_switch":"off","warnings":[]]
@@ -161,6 +187,10 @@ print("Swift shipping ordered-candidate controls: \(checks) checks PASS")
         ('never-started-view','value["view_token"] as? String == view?["view_token"] as? String,','true,','invalid never-started receipt retired original authority: view'),
         ('late-admission','guard action=="cancel",!savedAdmitted,savedProfileID.isEmpty,','guard action=="cancel",savedProfileID.isEmpty,','never-started receipt retired an admitted job'),
         ('native-join','guard !RouterVPNOrderedCandidateDisplay.flag(value,"drained") || RouterVPNOrderedCandidateDisplay.flag(value,"native_down") else','guard true else','admitted cleanup retired without native DOWN'),
+        ('prefix-application','falseFlag(value,"application_open") && ','','prefix catalog omitted closed proof: application_open'),
+        ('prefix-dns','falseFlag(value,"dns_open") && ','','prefix catalog omitted closed proof: dns_open'),
+        ('prefix-proof',' && value["proof_scope"] as? String == "selected-prefix"','','prefix catalog omitted closed proof: proof_scope'),
+        ('prefix-request','capturedBody?["scope"]="saved-prefix-local"','capturedBody?["scope"]="saved-complete-local"','prefix Run lost captured purpose or reservation'),
     ]
     for name,old,new,witness in controls:
         assert program.count(old)==1,(name,program.count(old))
@@ -206,6 +236,17 @@ admit("/api/multihop/saved-candidates/cancel",["request_id":id],25,false)
 admit("/api/multihop/saved-candidates/cancel",["request_id":id,"view_token":"foreign"],25,false)
 admit("/api/multihop/saved-candidates/cancel",["request_id":id,"view_token":view,"native_down":true],25,false)
 admit("/api/multihop/prefix-candidates/cancel",["request_id":id,"view_token":view],25,false)
+admit("/api/multihop/saved-candidates/catalog?prefix_position=0&scope=saved-prefix-local",nil,25,true)
+admit("/api/multihop/prefix-candidates/catalog?prefix_position=0&scope=saved-prefix-local",nil,25,false)
+admit("/api/multihop/saved-candidates/catalog?scope=saved-prefix-local&prefix_position=0",nil,25,false)
+admit("/api/multihop/saved-candidates/catalog?prefix_position=0&scope=saved-prefix-local&scope=saved-prefix-local",nil,25,false)
+admit("/api/multihop/saved-candidates/catalog?prefix_position=0&scope=foreign",nil,25,false)
+var prefixRun=run;prefixRun["scope"]="saved-prefix-local";admit("/api/multihop/saved-candidates",prefixRun,180,true)
+admit("/api/multihop/prefix-candidates",prefixRun,180,false)
+prefixRun["scope"]=true;admit("/api/multihop/saved-candidates",prefixRun,180,false)
+prefixRun["scope"]="foreign";admit("/api/multihop/saved-candidates",prefixRun,180,false)
+admit("/api/multihop/saved-candidates/cancel",["request_id":id,"view_token":view,"scope":"saved-prefix-local"],25,true)
+admit("/api/multihop/saved-candidates/save-profile",["request_id":id,"view_token":view,"scope":"saved-prefix-local","candidate_id":"original","name":"Explicit prefix next","proposed_path":[["id":"entry","mode":"wg"],["id":"original","mode":"shadowsocks"]]],25,true)
 '''
     harness=harness.replace(marker,'do {\n'+saved+'}\n'+extra+marker,1)
     path.write_text(transport+harness)
@@ -223,7 +264,7 @@ def linux_policy(directory):
     candidates=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
     helpers=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
     declarations=candidates[candidates.index('typedef struct {'):candidates.index('} LinuxOrderedCandidates;')+len('} LinuxOrderedCandidates;')]
-    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static JsonObject*linux_oc_root(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_view_fresh('])
+    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static JsonObject*linux_oc_root(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_view_fresh('])
     program=r"""
 #include <gtk/gtk.h>
 #include <glib-object.h>
@@ -267,14 +308,23 @@ int main(void){
  strcpy(candidate.saved_profile,"original-write");check(!linux_oc_ready(&candidate),"committed profile offered repeat adoption");candidate.saved_profile[0]=0;json_object_set_boolean_member(r,"accepted",FALSE);check(!linux_oc_ready(&candidate),"invalidated review retained adoption");
  json_object_set_boolean_member(r,"admission_cancelled",TRUE);check(!linux_oc_before_start(r),"missing started field proved no admission");json_object_set_boolean_member(r,"started",TRUE);check(!linux_oc_before_start(r),"started owner bypassed native retirement");json_object_set_string_member(r,"started","false");check(!linux_oc_before_start(r),"string started value became an absence receipt");json_object_set_boolean_member(r,"started",FALSE);check(linux_oc_before_start(r),"explicit original tombstone was not recognized");json_object_set_boolean_member(r,"accepted",TRUE);check(!linux_oc_ready(&candidate),"never-started cancellation exposed results");json_node_free(n);
 
+ n=parse_json("{\"schema\":1,\"scope\":\"saved-prefix-local\",\"measurement\":\"routed-tcp-connect\",\"samples\":50,\"prefix_position\":0,\"active_path_changed\":false,\"accepted\":true,\"native_down\":true,\"reviewing\":true,\"cleanup_pending\":false,\"application_open\":false,\"dns_open\":false,\"proof_scope\":\"selected-prefix\"}");candidate.receipt=n;candidate.saved_prefix=TRUE;r=json_node_get_object(n);json_object_set_string_member(json_node_get_object(view),"scope","saved-prefix-local");
+ check(linux_oc_saved_envelope(&candidate,r,TRUE)&&linux_oc_ready(&candidate),"closed prefix catalog and DOWN review rejected");
+ const char*closed_fields[]={"application_open","dns_open"};char witness[128];
+ for(unsigned i=0;i<2;i++){json_object_remove_member(r,closed_fields[i]);snprintf(witness,sizeof(witness),"prefix guard accepted missing %s",closed_fields[i]);check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),witness);json_object_set_string_member(r,closed_fields[i],"false");check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),"string closed flag became prefix proof");json_object_set_boolean_member(r,closed_fields[i],TRUE);check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),"open ingress became prefix proof");json_object_set_boolean_member(r,closed_fields[i],FALSE);}
+ json_object_set_string_member(r,"proof_scope","ordinary-path");check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),"foreign prefix proof scope accepted");json_object_remove_member(r,"proof_scope");check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),"missing prefix proof scope accepted");json_object_set_string_member(r,"proof_scope","selected-prefix");
+ json_object_set_string_member(r,"scope","saved-complete-local");check(!linux_oc_saved_envelope(&candidate,r,TRUE)&&!linux_oc_ready(&candidate),"complete saved path substituted for prefix preparation");json_object_set_string_member(r,"scope","saved-prefix-local");json_object_set_boolean_member(r,"native_down",FALSE);check(!linux_oc_ready(&candidate),"prefix review bypassed original native DOWN");json_object_set_boolean_member(r,"native_down",TRUE);check(linux_oc_ready(&candidate),"restored exact prefix review rejected");json_node_free(n);
  json_node_free(view);printf("Shipping GTK candidate status guards: %u checks PASS; actual GObject, controlled HTTP.\n",checks);return 0;
 }
 """
     flags=subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','gobject-2.0','json-glib-1.0'],text=True).split()
     controls=[('phase',' || g_str_has_prefix(lower, "candidate:")','', 'temporary candidate phase was treated as idle'),('review','if(app&&app->window&&g_object_get_data(G_OBJECT(app->window),"linux-ordered-candidates-pending")!=NULL)return TRUE;','', 'retained DOWN review did not block mutation before HTTP')]
     controls.append(('native-down','linux_ec_bool(receipt,"native_down")&&','', 'saved results were available before native DOWN'))
-    controls.append(('purpose','strcmp(linux_ec_string(o,"scope"),"saved-complete-local")||','', 'foreign saved catalog scope accepted'))
+    controls.append(('purpose','strcmp(linux_ec_string(o,"scope"),linux_oc_scope(s))||','strcmp(linux_oc_scope(s),linux_oc_scope(s))||', 'foreign saved catalog scope accepted'))
     controls.append(('prefix','linux_ec_number(o,"prefix_position")!=s->position||','', 'foreign saved prefix accepted'))
+    controls.append(('prefix-application','for(unsigned i=0;i<2;i++)','for(unsigned i=1;i<2;i++)','prefix guard accepted missing application_open'))
+    controls.append(('prefix-dns','for(unsigned i=0;i<2;i++)','for(unsigned i=0;i<1;i++)','prefix guard accepted missing dns_open'))
+    controls.append(('prefix-proof','if(strcmp(linux_ec_string(o,"proof_scope"),"selected-prefix"))return FALSE;','','foreign prefix proof scope accepted'))
     for label,before,after,witness in [('baseline','','',''),*controls]:
         text=guards
         if before:
@@ -288,7 +338,7 @@ int main(void){
         else:
             assert result.returncode==0,result.stdout
             print(result.stdout.strip(),flush=True)
-    print('GTK candidate phase, retained-review, native-DOWN, purpose and prefix causal controls: 5 PASS',flush=True)
+    print('GTK candidate phase, retained-review, native-DOWN, purpose, prefix and closed-proof causal controls: 8 PASS',flush=True)
 
 def linux_form(directory):
     import json, os, time
@@ -393,6 +443,21 @@ int main(int argc,char**argv){
  JsonNode*early=parse_json("{\"drained\":true,\"native_down\":false,\"started\":false,\"admission_cancelled\":true,\"active_path_changed\":false}");JsonObject*eo=linux_oc_root(early);fixture_saved_envelope(eo);json_object_set_string_member(eo,"request_id",s->request);json_object_set_string_member(eo,"view_token","foreign");reply(s,early);
  check(s->pending&&async_state.auxiliary_jobs==1,"foreign no-admission receipt retired original owner");s->retry=0;linux_oc_tick(s);json_object_set_string_member(eo,"view_token",linux_ec_string(linux_oc_root(catalog),"view_token"));reply(s,early);
  check(!s->pending&&async_state.auxiliary_jobs==0&&s->receipt==NULL&&strcmp(gtk_label_get_text(GTK_LABEL(s->status)),"Cancelled before the temporary path started.")==0,"typed original no-admission receipt claimed native shutdown or retained reservation");check(!gtk_widget_get_sensitive(s->save)&&gtk_tree_model_iter_n_children(GTK_TREE_MODEL(s->store),NULL)==0,"never-started cancellation exposed choices");gtk_widget_destroy(s->dialog);json_node_free(early);
+ /* Prefix-only uses the same owned workflow with its captured private purpose. */
+ char*prefix_raw=encode(catalog);JsonNode*prefix_catalog=parse_json(prefix_raw);g_free(prefix_raw);JsonObject*pco=linux_oc_root(prefix_catalog);json_object_set_string_member(pco,"scope","saved-prefix-local");json_object_set_boolean_member(pco,"application_open",FALSE);json_object_set_boolean_member(pco,"dns_open",FALSE);json_object_set_string_member(pco,"proof_scope","selected-prefix");
+ linux_ordered_candidates_open_captured(&app,TRUE,TRUE);s=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
+ check(s->saved_path&&s->saved_prefix&&strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/saved-candidates/catalog?prefix_position=0&scope=saved-prefix-local")==0,"prefix dialog lost explicit catalog purpose");
+ check(!linux_oc_receive(s,linux_oc_root(catalog),1)&&s->view==NULL,"complete catalog substituted for prefix preparation");json_object_remove_member(pco,"proof_scope");check(!linux_oc_receive(s,pco,1)&&s->view==NULL,"prefix catalog omitted selected proof");json_object_set_string_member(pco,"proof_scope","selected-prefix");reply(s,prefix_catalog);choose(s);gtk_button_clicked(GTK_BUTTON(s->test));
+ body=parse_json(g_ptr_array_index(bodies,paths->len-1));bo=linux_oc_root(body);check(strcmp(linux_ec_string(bo,"scope"),"saved-prefix-local")==0&&linux_ec_number(bo,"samples")==50&&s->pending&&async_state.auxiliary_jobs==1,"prefix Run lost purpose or exact samples");json_node_free(body);
+ prefix_raw=encode(result);JsonNode*prefix_result=parse_json(prefix_raw);g_free(prefix_raw);JsonObject*pro=linux_oc_root(prefix_result);json_object_set_string_member(pro,"request_id",s->request);json_object_set_string_member(pro,"scope","saved-prefix-local");json_object_set_boolean_member(pro,"application_open",FALSE);json_object_set_boolean_member(pro,"dns_open",FALSE);json_object_set_string_member(pro,"proof_scope","selected-prefix");json_object_set_boolean_member(pro,"drained",FALSE);json_object_set_boolean_member(pro,"native_down",FALSE);json_object_set_boolean_member(pro,"accepted",FALSE);json_object_set_boolean_member(pro,"reviewing",FALSE);json_object_set_boolean_member(pro,"running",TRUE);reply_code(s,prefix_result,202);
+ check(s->pending&&!gtk_widget_get_sensitive(s->save)&&gtk_tree_model_iter_n_children(GTK_TREE_MODEL(s->store),NULL)==0,"prefix Testing exposed choices before native DOWN");s->retry=0;linux_oc_tick(s);json_object_set_boolean_member(pro,"native_down",TRUE);json_object_set_boolean_member(pro,"accepted",TRUE);json_object_set_boolean_member(pro,"reviewing",TRUE);json_object_set_boolean_member(pro,"running",FALSE);reply(s,prefix_result);choose(s);linux_oc_controls(s);
+ check(s->pending&&gtk_widget_get_sensitive(s->save)&&!gtk_widget_get_sensitive(s->test)&&async_state.auxiliary_jobs==1,"prefix DOWN review lost original observer or explicit Save");
+ prefix_raw=encode(prefix_result);JsonNode*prefix_foreign=parse_json(prefix_raw);g_free(prefix_raw);JsonObject*pfo=linux_oc_root(prefix_foreign);json_object_set_string_member(pfo,"saved_profile_id","foreign-write");json_object_set_boolean_member(pfo,"drained",TRUE);
+ for(int phase=2;phase<=5;phase++){json_object_set_string_member(pfo,"scope","saved-complete-local");check(!linux_oc_receive(s,pfo,phase)&&s->pending&&!s->saved_profile[0],"foreign complete response retired prefix owner");json_object_set_string_member(pfo,"scope","saved-prefix-local");json_object_set_string_member(pfo,"proof_scope","ordinary-path");check(!linux_oc_receive(s,pfo,phase)&&s->pending&&!s->saved_profile[0],"foreign proof retired prefix owner");json_object_set_string_member(pfo,"proof_scope","selected-prefix");const char*closed_flags[]={"application_open","dns_open"};for(unsigned i=0;i<2;i++){json_object_set_boolean_member(pfo,closed_flags[i],TRUE);check(!linux_oc_receive(s,pfo,phase)&&s->pending&&!s->saved_profile[0],"open prefix ingress retired original owner");json_object_set_boolean_member(pfo,closed_flags[i],FALSE);}}json_node_free(prefix_foreign);
+ gtk_entry_set_text(GTK_ENTRY(s->name),"Prefix future profile");gtk_button_clicked(GTK_BUTTON(s->save));body=parse_json(g_ptr_array_index(bodies,paths->len-1));bo=linux_oc_root(body);check(strcmp(linux_ec_string(bo,"scope"),"saved-prefix-local")==0&&json_array_get_length(linux_ec_array(bo,"proposed_path"))==3,"prefix Save lost purpose or complete source path");json_node_free(body);
+ json_object_set_string_member(pro,"saved_profile_id","prefix-write");json_object_set_string_member(pro,"profile_name","Prefix future profile");json_object_set_boolean_member(pro,"accepted",FALSE);json_object_set_boolean_member(pro,"reviewing",FALSE);json_object_set_boolean_member(pro,"cleanup_pending",TRUE);reply(s,prefix_result);check(s->pending&&strcmp(s->saved_profile,"prefix-write")==0&&!gtk_widget_get_sensitive(s->save),"prefix Save lost committed write before observer join");
+ s->retry=0;linux_oc_tick(s);body=parse_json(g_ptr_array_index(bodies,paths->len-1));bo=linux_oc_root(body);check(strcmp(linux_ec_string(bo,"scope"),"saved-prefix-local")==0&&strcmp(linux_ec_string(bo,"request_id"),s->request)==0,"prefix Cancel lost captured purpose");json_node_free(body);json_object_set_boolean_member(pro,"drained",TRUE);json_object_set_boolean_member(pro,"cleanup_pending",FALSE);reply(s,prefix_result);
+ check(!s->pending&&async_state.auxiliary_jobs==0&&strcmp(s->saved_profile,"prefix-write")==0,"prefix cleanup did not retain write and release original observer");gtk_widget_destroy(s->dialog);json_node_free(prefix_catalog);json_node_free(prefix_result);
  check(freed==paths->len,"owned HTTP worker leaked");json_node_free(catalog);json_node_free(row);json_node_free(result);json_node_free(saved);json_node_free(cancel);gtk_widget_destroy(app.window);g_ptr_array_free(paths,TRUE);g_ptr_array_free(bodies,TRUE);printf("Shipping GTK ordered-candidate controls: %u checks PASS; real widgets, controlled HTTP delivery.\n",checks);return 0;
 }
 '''.replace('HELPERS',helpers).replace('METHODS',methods)

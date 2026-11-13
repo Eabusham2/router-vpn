@@ -1316,6 +1316,28 @@ Libbox and NetworkExtension I/O are controlled boundaries in these host tests.
 App-to-PacketTunnel activation and real Xcode/device execution remain distinct
 work and are not claimed by these passing fixtures.
 
+## Desktop controls retain the explicit prefix-only purpose
+
+Windows, AppKit and GTK now capture a separate saved-prefix-local dialog
+purpose. Its catalog query and Run/Save/Cancel bodies retain that purpose,
+while ordinary connected and complete-saved defaults remain distinct. Every
+prefix reply must report the selected-prefix proof scope and explicitly closed
+application and DNS ingress. A foreign full-path reply cannot release the
+original operation or record a committed profile. Fifty-sample timing, native
+DOWN before review, complete future-profile Save, result expiry and retained
+cleanup ownership still govern this purpose.
+
+The composed Windows callbacks passed 109 candidate checks and 38 existing
+Performance checks. Actual Swift controller methods passed 93 checks and all
+14 compiled causal controls; the bounded transport passed 48 cases. GTK's
+shipping guards passed 50 checks and eight compiled causal controls. The full
+GTK widget fixture now exercises the prefix catalog, Run, DOWN review, Save,
+foreign replies and Cancel with actual widgets and controlled HTTP delivery;
+it compiled with warnings as errors. Its display execution remains pending
+native CI because local AF_UNIX display sockets are denied. This protocol
+unit does not add the public prefix button; native child/API integration and
+its executable acceptance precede that separate activation.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

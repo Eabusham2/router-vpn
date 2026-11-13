@@ -20,7 +20,8 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
     init(url: URL, body: [String: Any]?, timeout: TimeInterval, completion: @escaping (Result<Data, Error>) -> Void) throws {
         let savedBase = "/api/multihop/saved-candidates"
         let candidateBase = url.path == savedBase || url.path.hasPrefix(savedBase + "/") ? savedBase : "/api/multihop/prefix-candidates"
-        let candidateCatalog = url.path == candidateBase + "/catalog" && url.query?.range(of: "^prefix_position=[0-7]$", options: .regularExpression) != nil
+        let prefixCatalog = candidateBase == savedBase && url.query?.range(of: "^prefix_position=[0-7]&scope=saved-prefix-local$", options: .regularExpression) != nil
+        let candidateCatalog = url.path == candidateBase + "/catalog" && (prefixCatalog || url.query?.range(of: "^prefix_position=[0-7]$", options: .regularExpression) != nil)
         let candidateStatus = url.path == candidateBase && url.query?.range(of: "^request_id=[a-f0-9]{32}$", options: .regularExpression) != nil
         guard url.scheme == "http", url.host == "127.0.0.1", url.user == nil, url.password == nil,
               ["/api/speed-lab/options", "/api/speed-lab/run", "/api/profile/fastest",
@@ -54,7 +55,13 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
         case candidateBase + "/catalog": performanceValid = candidateCatalog && body == nil && bounded(25)
         case candidateBase, candidateBase + "/cancel", candidateBase + "/save-profile":
             func token(_ key: String, _ count: Int) -> Bool { guard let id = identifier(key) else {return false};return id.utf8.count == count && id.range(of:"^[a-f0-9]+$",options:.regularExpression) != nil }
-            let keys = Set(body?.keys.map { $0 } ?? [])
+            let suppliedKeys = Set(body?.keys.map { $0 } ?? [])
+            if suppliedKeys.contains("scope") {
+                guard candidateBase == savedBase, let scope=body?["scope"] as? String, ["saved-prefix-local","saved-complete-local"].contains(scope) else {
+                    throw NSError(domain:"RouterVPNSpeedLab",code:1,userInfo:[NSLocalizedDescriptionKey:"Invalid saved candidate purpose."])
+                }
+            }
+            let keys = suppliedKeys.subtracting(["scope"])
             let original = token("request_id",32)
             if url.path == candidateBase + "/cancel" {
                 let saved = candidateBase == savedBase

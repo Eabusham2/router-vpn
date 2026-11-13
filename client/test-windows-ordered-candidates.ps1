@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 # witness, then extract this new dialog's shipping functions and callbacks.
 . (Join-Path $Root 'client/test-windows-performance.ps1') -Root $Root
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','OrderedCandidateBase','OrderedCandidateNumber','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
+foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','OrderedCandidateScopedBody','OrderedCandidateNumber','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
  $F=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true));if($F.Count-ne1){throw "Missing shipping candidate function $Name"};. ([ScriptBlock]::Create($F[0].Extent.Text))
 }
 $Count=0
@@ -117,4 +117,24 @@ Assert-Candidate ($S.PendingDrain-and$S.SavedProfileID-ceq'original-profile'-and
 $SavedReply.native_down=$true;ReceiveOrderedCandidates $S $SavedReply 'cancel';SetOrderedCandidateControls $S
 Assert-Candidate (-not$S.PendingDrain-and-not$S.Save.IsEnabled-and$S.Status.Text.Contains('Use Profiles')) 'final cleanup lost the saved write or automatically applied it'
 $SavedReply.saved_profile_id='replacement-profile';$Rejected=$false;try{ReceiveOrderedCandidates $S $SavedReply 'poll'}catch{$Rejected=$true};Assert-Candidate $Rejected 'retry changed the original committed profile identity'
+# Prefix-only uses its own immutable purpose and never borrows full-path proof.
+$S.SavedPrefix=$true;$S.SavedPath=$true;$S.SavedProfileID='';$S.SavedAdmitted=$false;$S.PendingDrain=$false;$S.CancelWanted=$false;$S.CloseWanted=$false;$S.Table.SelectedItem=$null;$S.RequestID=('7'*32)
+$PrefixCatalog=@{}+$Catalog;$PrefixCatalog.scope='saved-prefix-local';$PrefixCatalog.proof_scope='selected-prefix';$PrefixCatalog.application_open=$false;$PrefixCatalog.dns_open=$false
+Assert-Candidate ((OrderedCandidateCatalogPath $S)-ceq'/api/multihop/saved-candidates/catalog?prefix_position=0&scope=saved-prefix-local') 'prefix capture omitted its explicit purpose'
+$Rejected=$false;try{ReceiveOrderedCandidates $S $Catalog 'catalog'}catch{$Rejected=$true};Assert-Candidate $Rejected 'complete-path catalog substituted for prefix capture'
+foreach($Field in @('application_open','dns_open','proof_scope')){$Bad=@{}+$PrefixCatalog;$Bad.Remove($Field);$Rejected=$false;try{ReceiveOrderedCandidates $S $Bad 'catalog'}catch{$Rejected=$true};Assert-Candidate $Rejected ('missing closed prefix catalog field accepted: '+$Field)}
+ReceiveOrderedCandidates $S $PrefixCatalog 'catalog';SetOrderedCandidateControls $S
+Assert-Candidate ($S.Run.IsEnabled-and$S.Status.Text.Contains('only the selected saved prefix')) 'prefix catalog was described as full-path proof'
+$S.Table|Add-Member -MemberType NoteProperty -Name SelectedItems -Value @($S.Rows[0]) -Force
+$script:SavedRequest=$null;&$RunClick
+Assert-Candidate ($SavedRequest.Body.scope-ceq'saved-prefix-local'-and$SavedRequest.Body.request_id-ceq$S.RequestID-and$SavedRequest.Body.samples-eq50) 'prefix Test lost exact request purpose or samples'
+$PrefixValue=Add-SavedCandidateEnvelope @{request_id=$S.RequestID;view_token=$PrefixCatalog.view_token;running=$false;drained=$false;accepted=$true;native_down=$false;reviewing=$true;cleanup_pending=$false;results=@((New-CandidateRow))}
+$PrefixValue.scope='saved-prefix-local';$PrefixValue.proof_scope='selected-prefix';$PrefixValue.application_open=$false;$PrefixValue.dns_open=$false
+ReceiveOrderedCandidates $S $PrefixValue 'poll';SetOrderedCandidateControls $S;Assert-Candidate (-not$S.Save.IsEnabled-and$S.Rows.Count-eq0) 'prefix result was exposed before native DOWN'
+$PrefixValue.native_down=$true;ReceiveOrderedCandidates $S $PrefixValue 'poll';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
+Assert-Candidate ($S.Save.IsEnabled-and$S.PendingDrain) 'prefix DOWN review lost explicit Save or its retained observer'
+foreach($Phase in @('poll','save','cancel')){foreach($Fault in @(@{key='scope';value='saved-complete-local'},@{key='proof_scope';value='complete-path'},@{key='application_open';value=$true},@{key='dns_open';value='false'})){$Bad=@{}+$PrefixValue;$Bad[$Fault.key]=$Fault.value;$Rejected=$false;try{ReceiveOrderedCandidates $S $Bad $Phase}catch{$Rejected=$true};Assert-Candidate ($Rejected-and$S.PendingDrain-and-not$S.SavedProfileID) ('prefix receipt broadened its purpose: '+$Phase+'/'+$Fault.key)}}
+$S.ProfileName.Text='Named prefix choice';$script:SavedRequest=$null;&$Click
+Assert-Candidate ($SavedRequest.Body.scope-ceq'saved-prefix-local'-and$SavedRequest.Body.proposed_path.Count-eq3-and$SavedRequest.Body.view_token-ceq$PrefixCatalog.view_token) 'prefix Save lost its complete future profile or captured purpose'
+$CancelBody=OrderedCandidateCancelBody $S;Assert-Candidate ($CancelBody.scope-ceq'saved-prefix-local'-and$CancelBody.request_id-ceq$S.RequestID-and$CancelBody.view_token-ceq$PrefixCatalog.view_token) 'prefix Cancel changed its original purpose or owner'
 Write-Output "Composed Windows ordered candidates: PASS ($Count checks; actual functions and save callback, no WPF or VPN connection)"

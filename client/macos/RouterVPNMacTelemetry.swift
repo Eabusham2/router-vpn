@@ -892,9 +892,13 @@ private enum RouterVPNOrderedCandidateDisplay {
     static func falseFlag(_ value: [String: Any], _ key: String) -> Bool {
         guard let n = value[key] as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { return false }; return !n.boolValue
     }
-    static func review(_ value: [String: Any], savedPath: Bool) -> Bool {
+    static func purpose(_ value: [String: Any], scope: String) -> Bool {
+        guard ["saved-complete-local","saved-prefix-local"].contains(scope), value["scope"] as? String == scope else { return false }
+        return scope != "saved-prefix-local" || (falseFlag(value,"application_open") && falseFlag(value,"dns_open") && value["proof_scope"] as? String == "selected-prefix")
+    }
+    static func review(_ value: [String: Any], savedPath: Bool, scope: String = "saved-complete-local") -> Bool {
         guard flag(value, "accepted") else { return false }
-        return !savedPath || (value["scope"] as? String == "saved-complete-local" &&
+        return !savedPath || (purpose(value,scope:scope) &&
             flag(value, "native_down") && flag(value, "reviewing") && falseFlag(value, "cleanup_pending") &&
             falseFlag(value, "running") && falseFlag(value, "cancelled") && falseFlag(value, "drained") && (value["saved_profile_id"] as? String) == "")
     }
@@ -912,6 +916,9 @@ private enum RouterVPNOrderedCandidateDisplay {
 
 private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private let savedPath: Bool
+    private let savedPrefix: Bool
+    private var savedScope: String { savedPrefix ? "saved-prefix-local" : "saved-complete-local" }
+    private var catalogSuffix: String { savedPrefix ? "&scope=saved-prefix-local" : "" }
     private var endpoint: String { savedPath ? "/api/multihop/saved-candidates" : "/api/multihop/prefix-candidates" }
     private let prefix = NSPopUpButton(frame: .zero, pullsDown: false)
     private let table = NSTableView()
@@ -943,12 +950,12 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     private var timer: Timer?
     fileprivate private(set) var closed = false
 
-    init(savedPath: Bool = false) {
-        self.savedPath = savedPath
+    init(savedPath: Bool = false, savedPrefix: Bool = false) {
+        self.savedPath = savedPath || savedPrefix; self.savedPrefix = savedPrefix
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 820, height: 570), styleMask: [.titled,.closable,.resizable], backing: .buffered, defer: false)
-        super.init(window: panel); panel.title = savedPath ? "Test saved Local path" : "Candidates through connected prefix"; panel.delegate = self; panel.isReleasedWhenClosed = false
+        super.init(window: panel); panel.title = savedPrefix ? "Test saved prefix" : self.savedPath ? "Test saved Local path" : "Candidates through connected prefix"; panel.delegate = self; panel.isReleasedWhenClosed = false
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.edgeInsets = NSEdgeInsets(top: 18,left: 18,bottom: 18,right: 18)
-        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: savedPath ? "Temporarily test the complete saved Local path. Each candidate receives 50 TCP connections through its original WireGuard/AWG prefix. The VPN must return DOWN before review; Save creates a separate future profile. Timing does not authenticate candidate credentials." : "Measure 50 TCP connections to saved SS2022 candidates through an existing WireGuard/AWG prefix. This is not ICMP or candidate authentication. Save explicitly for the next connection; the active path stays unchanged."))
+        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: savedPrefix ? "Temporarily test only the selected WireGuard/AWG prefix and measure 50 TCP connections per supported candidate. The current exit does not need to respond. The VPN returns to Disconnected before choices appear. Timings do not authenticate candidate proxies or select a connection." : self.savedPath ? "Temporarily test the complete saved Local path. Each candidate receives 50 TCP connections through its original WireGuard/AWG prefix. The VPN must return DOWN before review; Save creates a separate future profile. Timing does not authenticate candidate credentials." : "Measure 50 TCP connections to saved SS2022 candidates through an existing WireGuard/AWG prefix. This is not ICMP or candidate authentication. Save explicitly for the next connection; the active path stays unchanged."))
         let top = NSStackView(views: [prefix,refresh]); top.orientation = .horizontal; stack.addArrangedSubview(top)
         for (id,title,width) in [("name","Saved candidate",360.0),("timing","TCP timing",300.0)] {let column = NSTableColumn(identifier:NSUserInterfaceItemIdentifier(id));column.title=title;column.width=width;table.addTableColumn(column)}
         table.dataSource=self;table.delegate=self;table.allowsMultipleSelection=true;table.usesAlternatingRowBackgroundColors=true
@@ -976,9 +983,9 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         if !pendingDrain,request == nil,let lease=editLease {MacViaEntryCandidateReservation.shared.release(lease);editLease=nil}
         let idle=request==nil && !pendingDrain;let captured=prefix.selectedItem?.representedObject as? Int == position;refresh.isEnabled=idle;prefix.isEnabled=idle;test.isEnabled=idle && captured && view != nil;cancel.isEnabled=pendingDrain;save.isEnabled=false
         let reviewIdle = request == nil && !cancelWanted && !closeWanted && savedProfileID.isEmpty && (savedPath || !pendingDrain)
-        if reviewIdle,captured,let receipt,RouterVPNOrderedCandidateDisplay.review(receipt,savedPath:savedPath),rows.indices.contains(table.selectedRow),let id=rows[table.selectedRow]["id"] as? String,let result=receipts[id],RouterVPNOrderedCandidateDisplay.score(result) != nil,let nodes=rows[table.selectedRow]["proposed_path"] as? [[String:Any]],nodes.count>=2 {save.isEnabled=true}
+        if reviewIdle,captured,let receipt,RouterVPNOrderedCandidateDisplay.review(receipt,savedPath:savedPath,scope:savedScope),rows.indices.contains(table.selectedRow),let id=rows[table.selectedRow]["id"] as? String,let result=receipts[id],RouterVPNOrderedCandidateDisplay.score(result) != nil,let nodes=rows[table.selectedRow]["proposed_path"] as? [[String:Any]],nodes.count>=2 {save.isEnabled=true}
     }
-    @objc private func capture(){guard request==nil,!pendingDrain else{return};position=prefix.selectedItem?.representedObject as? Int ?? position;view=nil;receipt=nil;receipts=[:];savedProfileID="";savedProfileName="";savedNativeDown=false;send("catalog",path:endpoint+"/catalog?prefix_position=\(position)")}
+    @objc private func capture(){guard request==nil,!pendingDrain else{return};position=prefix.selectedItem?.representedObject as? Int ?? position;view=nil;receipt=nil;receipts=[:];savedProfileID="";savedProfileName="";savedNativeDown=false;send("catalog",path:endpoint+"/catalog?prefix_position=\(position)"+catalogSuffix)}
     @objc private func measure(){
         controls();guard test.isEnabled,let view else{return};guard let expires=RouterVPNOrderedCandidateDisplay.number(view,"expires_at"),expires>Date().timeIntervalSince1970*1000 else{status.stringValue="The catalog expired. Capture this prefix again before testing.";return};let ids=table.selectedRowIndexes.compactMap{rows.indices.contains($0) ? rows[$0]["id"] as? String:nil};guard !ids.isEmpty else{status.stringValue="Select at least one candidate row.";return}
         if savedPath {guard let lease=MacViaEntryCandidateReservation.shared.acquire() else{status.stringValue="Another candidate transaction still owns editing; finish its Save or Cancel first.";return};editLease=lease}
@@ -1015,7 +1022,9 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         guard request==nil,!closed else{return};phase=action;generation &+= 1;let original=generation
         do {
             guard let url=URL(string:path,relativeTo:routerVPNProductBaseURL)?.absoluteURL else{throw Self.issue("Controller URL unavailable")}
-            request=try RouterVPNMacSpeedLabTransport(url:url,body:body,timeout:action=="run" ? 180:25){[weak self] result in DispatchQueue.main.async {[weak self] in
+            var capturedBody=body
+            if savedPrefix, capturedBody != nil {capturedBody?["scope"]="saved-prefix-local"}
+            request=try RouterVPNMacSpeedLabTransport(url:url,body:capturedBody,timeout:action=="run" ? 180:25){[weak self] result in DispatchQueue.main.async {[weak self] in
                 guard let self,!self.closed,self.generation==original else{return};self.request=nil;self.nextRetry=Date().addingTimeInterval(1)
                 do {let data=try result.get();guard let value=try JSONSerialization.jsonObject(with:data) as? [String:Any] else{throw Self.issue("Invalid candidate response")};try self.receive(value,action:action)}catch{
                     self.receipt=nil
@@ -1032,7 +1041,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     }
     private func receive(_ value:[String:Any],action:String)throws {
         if action=="catalog" {
-            if savedPath {guard value["scope"] as? String == "saved-complete-local",RouterVPNOrderedCandidateDisplay.number(value,"schema")==1,RouterVPNOrderedCandidateDisplay.number(value,"samples")==50,value["measurement"] as? String == "routed-tcp-connect" else{throw Self.issue("Catalog belongs to another candidate purpose")}}
+            if savedPath {guard RouterVPNOrderedCandidateDisplay.purpose(value,scope:savedScope),RouterVPNOrderedCandidateDisplay.number(value,"schema")==1,RouterVPNOrderedCandidateDisplay.number(value,"samples")==50,value["measurement"] as? String == "routed-tcp-connect" else{throw Self.issue("Catalog belongs to another candidate purpose")}}
             guard let token=value["view_token"] as? String,token.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil,RouterVPNOrderedCandidateDisplay.number(value,"prefix_position")==Double(position),let expires=RouterVPNOrderedCandidateDisplay.number(value,"expires_at"),expires>Date().timeIntervalSince1970*1000,let candidates=value["candidates"] as? [[String:Any]],!candidates.isEmpty else{throw Self.issue("Catalog expired or changed prefix")}
             view=value;choices=candidates;rows=candidates;receipts=[:];prefix.removeAllItems();for item in value["prefixes"] as? [[String:Any]] ?? [] {guard let p=RouterVPNOrderedCandidateDisplay.number(item,"position") else{continue};prefix.addItem(withTitle:"After node \(Int(p)+1) · \(item["name"] as? String ?? "") · \(item["mode"] as? String ?? "")");prefix.lastItem?.representedObject=Int(p);if Int(p)==position{prefix.select(prefix.lastItem)}};table.reloadData();status.stringValue="Select saved candidates and test through this captured prefix.";return
         }
@@ -1050,7 +1059,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
 
     private func receiveSaved(_ value:[String:Any],action:String)throws {
         guard value["request_id"] as? String == requestID else{throw Self.issue("Response belongs to another saved-path job")}
-        guard value["scope"] as? String == "saved-complete-local",RouterVPNOrderedCandidateDisplay.number(value,"schema")==1,
+        guard RouterVPNOrderedCandidateDisplay.purpose(value,scope:savedScope),value["scope"] as? String == view?["scope"] as? String,RouterVPNOrderedCandidateDisplay.number(value,"schema")==1,
               value["view_token"] as? String == view?["view_token"] as? String,
               RouterVPNOrderedCandidateDisplay.number(value,"prefix_position")==Double(position),
               value["measurement"] as? String == "routed-tcp-connect",RouterVPNOrderedCandidateDisplay.falseFlag(value,"active_path_changed") else{throw Self.issue("Saved-path receipt changed its original purpose or prefix")}
@@ -1089,7 +1098,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         }
         if cancelWanted || closeWanted {receipt=nil;receipts=[:];rows=[];table.reloadData();status.stringValue="Waiting for original saved-path cleanup.";return}
         receipt=value;receipts=[:]
-        let ready=RouterVPNOrderedCandidateDisplay.review(value,savedPath:true)
+        let ready=RouterVPNOrderedCandidateDisplay.review(value,savedPath:true,scope:savedScope)
         if ready {
             for result in value["results"] as? [[String:Any]] ?? [] {guard RouterVPNOrderedCandidateDisplay.score(result) != nil,let id=result["candidate_id"] as? String,choices.filter({$0["id"] as? String==id}).count==1 else{continue};receipts[id]=result}
         }
