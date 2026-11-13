@@ -1,0 +1,84 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"strings"
+)
+
+// Failure output is a fixed vocabulary. Never format the underlying native
+// error: it can contain credentials, private paths, source JSON or peer data.
+type routerVPNServerChainStageError struct {
+	stage string
+	cause error
+}
+
+func (e *routerVPNServerChainStageError) Error() string {
+	return "original ordered server stage failed"
+}
+func (e *routerVPNServerChainStageError) Unwrap() error { return e.cause }
+func routerVPNServerChainAtStage(stage string, cause error) error {
+	return &routerVPNServerChainStageError{stage: stage, cause: cause}
+}
+func routerVPNServerChainDiagnostic(operation string, failure error) string {
+	if operation != "construction" && operation != "snapshot" && operation != "bootstrap" {
+		operation = "unknown"
+	}
+	stage := "unknown"
+	var observed *routerVPNServerChainStageError
+	if errors.As(failure, &observed) {
+		switch observed.stage {
+		case "capture", "source", "carrier", "configuration", "binding", "dns-capture", "options", "box-create", "box-start", "outbounds", "dns-owner", "front-routes", "front-create", "initial-observation", "native-admission", "carrier-observation", "source-identity", "observation-context", "front-current", "snapshot-lifecycle":
+			stage = observed.stage
+		}
+	}
+	value := struct {
+		Operation string `json:"operation"`
+		Stage     string `json:"stage"`
+		Deadline  bool   `json:"deadline"`
+		Cancelled bool   `json:"cancelled"`
+	}{operation, stage, errors.Is(failure, context.DeadlineExceeded), errors.Is(failure, context.Canceled)}
+	raw, _ := json.Marshal(value)
+	return "ROUTERVPN_SERVER_FAILURE " + string(raw)
+}
+func routerVPNWriteServerChainDiagnostic(output io.Writer, operation string, failure error) {
+	if output != nil && failure != nil {
+		_, _ = io.WriteString(output, routerVPNServerChainDiagnostic(operation, failure)+"\n")
+	}
+}
+
+// The acceptance fixture reports only canonical records from the stderr
+// stream. Library logs, private error text and unknown fields cannot be copied
+// into a public failure merely because they share that stream.
+func routerVPNSafeServerChainDiagnostics(raw string) []string {
+	var records []string
+	for _, line := range strings.Split(raw, "\n") {
+		const prefix = "ROUTERVPN_SERVER_FAILURE "
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		var value struct {
+			Operation string `json:"operation"`
+			Stage     string `json:"stage"`
+			Deadline  bool   `json:"deadline"`
+			Cancelled bool   `json:"cancelled"`
+		}
+		if json.Unmarshal([]byte(strings.TrimPrefix(line, prefix)), &value) != nil {
+			continue
+		}
+		var cause error
+		if value.Deadline {
+			cause = context.DeadlineExceeded
+		}
+		if value.Cancelled {
+			cause = errors.Join(cause, context.Canceled)
+		}
+		records = append(records, routerVPNServerChainDiagnostic(value.Operation, routerVPNServerChainAtStage(value.Stage, cause)))
+		if len(records) > 8 {
+			records = records[len(records)-8:]
+		}
+	}
+	return records
+}

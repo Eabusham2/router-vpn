@@ -552,6 +552,39 @@ witness. These are source/compiler/ownership tests with explicit native
 boundaries. This unit exposes no public temporary-Test route yet: actual native
 purpose wiring, detached result Save, native UI and device acceptance follow.
 
+## Encrypted Server failure classification and cold-cache verdicts
+
+At fcfee64e, the ARM64 encrypted Server job 131624756524 failed its initial
+closed/pending snapshot in the wrong-first-key case, before bootstrap. The
+corresponding AMD64 job passed. Both architectures passed this gate at b725c615
+and again at 426206e0 (run 43347440627). Those outcomes do not identify why the
+single snapshot was refused, nor establish that a source fix cured it.
+
+The actual Server command now emits only fixed operation/stage categories and
+deadline/cancellation flags when construction, snapshot or bootstrap fails.
+Native observation preserves the failure category and cancellation cause; the
+encrypted fixture reports canonical bounded diagnostic records and numeric peer
+counters on initial pending failure. It never copies arbitrary native stderr,
+paths, keys or source JSON into that diagnostic. IPC fields, the one-second
+snapshot bound, native carrier/source checks and closed-until-proven admission
+are unchanged. Failed construction and snapshot tests still require refusal and
+joined Stop with the exact original receipt.
+
+Local verification also exposed a cold-cache runner defect: Go dependency
+downloads were merged from stderr into strict test2json stdout. The runner now
+keeps those streams separate, preserves compiler diagnostics, and still requires
+the exact JSON inventory and successful exit. Race output and compiler failures
+cannot qualify as successful negative controls. Its actual subprocess regression
+exercises distinct stdout/stderr streams.
+
+The generated shipping component suite passed all fifteen roots / forty-one
+required verdicts under the race detector, followed by all five original causal
+controls (prefix routing, UoT, failed close, late return and retained native close).
+The source seal is bcf0a0fab038323ffc838b7fcc7e933eebaea2c0d9345f9b52abaa7546ea57c6.
+Seven runner, eight preparation and fourteen encrypted-runner checks pass. This
+is component and runner evidence; exact-SHA ARM64 encrypted execution remains a
+required hosted gate after publication.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

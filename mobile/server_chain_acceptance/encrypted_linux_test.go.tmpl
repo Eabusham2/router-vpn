@@ -695,7 +695,7 @@ func serverChainEncryptedScenario(t *testing.T, name string) {
 	worker := serverChainEncryptedWorkerStart(t, p, policy, capture, name)
 	pending := worker.call(t, "snapshot")
 	if !pending.OK || pending.Receipt == nil || pending.Receipt.Phase != multihoprelay.NodeChainPending || pending.Receipt.TrafficAllowed {
-		t.Fatal("new actual encrypted worker is not closed pending proof")
+		t.Fatal("new actual encrypted worker is not closed pending proof", serverChainEncryptedDiagnostic(pending, p.control(t, "stats")), routerVPNSafeServerChainDiagnostics(worker.process.log.text()))
 	}
 	final := capture.Request.Users[len(capture.Request.Users)-1]
 	worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))

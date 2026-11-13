@@ -1,0 +1,87 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+)
+
+func TestServerChainCommandFailureDiagnosticsPreserveRefusal(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(map[bool]string{false: "snapshot-bootstrap", true: "construction"}[partial], func(t *testing.T) {
+			capture := serverChainCommandCapture(t)
+			directory := serverChainCommandDirectory(t, capture)
+			private := "private-source-key /private/node/profile.json"
+			failure := routerVPNServerChainAtStage("carrier-observation", errors.Join(errors.New(private), context.DeadlineExceeded))
+			owner := &serverChainCommandOwner{capture: capture, snapshotFailure: failure, beginFailure: failure}
+			var input, output, diagnostics bytes.Buffer
+			digest, _ := capture.Digest()
+			for _, operation := range []string{"snapshot", "bootstrap", "stop"} {
+				if err := json.NewEncoder(&input).Encode(multihoprelay.NodeChainIPCRequest{Schema: 1, Operation: operation, Nonce: strings.Repeat("a", 64), CaptureSHA256: digest}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := routerVPNRunNodeChainRelayWithDiagnostics(t.Context(), directory, &input, &output, &diagnostics,
+				func(context.Context, *os.Root, string, multihoprelay.NodeChainCapture) (routerVPNNodeChainRelayOwner, error) {
+					if partial {
+						return owner, routerVPNServerChainAtStage("carrier", failure)
+					}
+					return owner, nil
+				})
+			if err != nil || !owner.closed.Load() {
+				t.Fatal("diagnostic failure lost exact joined cleanup", err)
+			}
+			lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+			if len(lines) != 4 {
+				t.Fatal("failure diagnostic changed IPC inventory")
+			}
+			for i, line := range lines {
+				response, err := multihoprelay.DecodeNodeChainIPCResponse([]byte(line))
+				if err != nil || response.OK != (i >= 2) || response.Receipt != nil || response.CaptureSHA256 != digest {
+					t.Fatal("diagnostic changed original refusal or terminal receipt", i, err)
+				}
+			}
+			if partial && owner.begun.Load() != 0 {
+				t.Fatal("partial diagnostic acquired native bootstrap")
+			}
+			actual := routerVPNSafeServerChainDiagnostics(diagnostics.String())
+			want := 2
+			if partial {
+				want = 1
+			}
+			if len(actual) != want || strings.Contains(diagnostics.String(), private) || !strings.Contains(diagnostics.String(), `"deadline":true`) || strings.Contains(diagnostics.String(), digest) {
+				t.Fatal("failure diagnostic omitted stage or exposed private source", actual)
+			}
+		})
+	}
+}
+
+func TestServerChainFailureDiagnosticsSanitizeNativeErrors(t *testing.T) {
+	private := "secret-key-and-private-path"
+	wrapped := routerVPNServerChainAtStage("carrier-observation", errors.Join(errors.New(private), context.DeadlineExceeded, context.Canceled))
+	if !errors.Is(wrapped, context.DeadlineExceeded) || !errors.Is(wrapped, context.Canceled) {
+		t.Fatal("stage lost original cancellation cause")
+	}
+	line := routerVPNServerChainDiagnostic("snapshot", wrapped)
+	if strings.Contains(line, private) || !strings.Contains(line, `"stage":"carrier-observation"`) || !strings.Contains(line, `"deadline":true`) || !strings.Contains(line, `"cancelled":true`) {
+		t.Fatal("fixed diagnostic lost original category or disclosed source")
+	}
+	malicious := "ROUTERVPN_SERVER_FAILURE " + `{"operation":"` + private + `","stage":"` + private + `","deadline":false,"cancelled":false,"source":"` + private + `"}`
+	rows := routerVPNSafeServerChainDiagnostics(private + "\n" + strings.Repeat(line+"\n", 20) + malicious + "\nROUTERVPN_SERVER_FAILURE invalid-json")
+	if len(rows) != 8 || strings.Contains(strings.Join(rows, "\n"), private) || !strings.Contains(rows[7], `"stage":"unknown"`) {
+		t.Fatal("native stderr escaped bounded fixed vocabulary")
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	native := &routerVPNServerChain{ctx: cancelled}
+	_, err := native.Snapshot(cancelled, strings.Repeat("a", 64))
+	if err == nil || !errors.Is(err, context.Canceled) || !strings.Contains(routerVPNServerChainDiagnostic("snapshot", err), `"stage":"native-admission"`) {
+		t.Fatal("actual native snapshot dropped cancellation stage")
+	}
+}

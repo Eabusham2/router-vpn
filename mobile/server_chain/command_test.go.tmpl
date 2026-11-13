@@ -36,19 +36,24 @@ func serverChainCommandCapture(t *testing.T) multihoprelay.NodeChainCapture {
 }
 
 type serverChainCommandOwner struct {
-	capture multihoprelay.NodeChainCapture
-	fail    atomic.Bool
-	closed  atomic.Bool
-	begun   atomic.Int64
-	stops   atomic.Int64
-	calls   chan struct{}
+	capture         multihoprelay.NodeChainCapture
+	fail            atomic.Bool
+	closed          atomic.Bool
+	begun           atomic.Int64
+	stops           atomic.Int64
+	calls           chan struct{}
+	snapshotFailure error
+	beginFailure    error
 }
 
-func (o *serverChainCommandOwner) Begin() error { o.begun.Add(1); return nil }
+func (o *serverChainCommandOwner) Begin() error { o.begun.Add(1); return o.beginFailure }
 func (o *serverChainCommandOwner) Snapshot(ctx context.Context, nonce string) (multihoprelay.NodeChainReceipt, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok || time.Until(deadline) > time.Second {
 		return multihoprelay.NodeChainReceipt{}, errors.New("unbounded snapshot")
+	}
+	if o.snapshotFailure != nil {
+		return multihoprelay.NodeChainReceipt{}, o.snapshotFailure
 	}
 	c := o.capture
 	digest, _ := c.Digest()

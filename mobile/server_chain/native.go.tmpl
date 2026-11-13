@@ -68,6 +68,12 @@ type routerVPNServerChain struct {
 
 func routerVPNNewServerChain(parent context.Context, root *os.Root, directory string, capture multihoprelay.NodeChainCapture) (result routerVPNNodeChainRelayOwner, failure error) {
 	bad := errors.New("original ordered server construction failed")
+	stage := "capture"
+	defer func() {
+		if failure != nil {
+			failure = routerVPNServerChainAtStage(stage, failure)
+		}
+	}()
 	if parent == nil || globalCtx == nil || root == nil || capture.Validate() != nil {
 		return nil, bad
 	}
@@ -94,6 +100,7 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 	if err != nil || actualDigest != captureDigest {
 		return result, bad
 	}
+	stage = "source"
 	raw, err = n.captureFile("node-chain-source.json", mobilemultihop.NodeChainInputLimit)
 	if err != nil {
 		return result, bad
@@ -101,6 +108,7 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 	n.policy, err = mobilemultihop.NewNodeChainServerPolicy(string(raw))
 	carrierAdmission := false
 	if err == nil && n.policy.NativeCarrierRequired() {
+		stage = "carrier"
 		carrierAdmission = true
 		construction, finish := context.WithDeadline(owned, capture.BootstrapDeadline)
 		n.carrier, err = mobilemultihop.NewNodeChainServerCarrierContext(construction, owned, string(raw))
@@ -127,32 +135,39 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 		}
 		return result, bad
 	}
+	stage = "configuration"
 	config, err := n.policy.NativeConfig(capture)
 	if err != nil {
 		return result, bad
 	}
+	stage = "binding"
 	configSHA, err := n.policy.ConfigSHA256(capture)
 	if err != nil {
 		return result, bad
 	}
 	n.binding = mobilemultihop.NodeChainServerBinding{SourceSHA256: n.policy.SourceSHA256(), CaptureSHA256: captureDigest, ConfigSHA256: configSHA}
+	stage = "dns-capture"
 	n.dnsCapture, err = n.policy.DNSCapture(capture)
 	if err != nil || n.dnsCapture.Binding != n.binding {
 		return result, bad
 	}
+	stage = "options"
 	options, err := SJ.UnmarshalExtendedContext[option.Options](owned, []byte(config))
 	if err != nil || len(options.Inbounds) != 0 {
 		return result, bad
 	}
+	stage = "box-create"
 	n.box, err = box.New(box.Options{Context: owned, Options: options})
 	if err != nil {
 		return result, bad
 	}
+	stage = "box-start"
 	if err = n.box.RouterVPNStrategyStart(); err != nil {
 		return result, bad
 	}
 	initialize, finish := context.WithDeadline(owned, capture.BootstrapDeadline)
 	defer finish()
+	stage = "outbounds"
 	for _, proof := range n.policy.ProofInventory() {
 		outbound, found, err := adapter.RouterVPNOutboundContext(initialize, n.box.Outbound(), proof.Tag)
 		if err != nil || !found || outbound == nil || n.outputs[proof.Tag] != nil {
@@ -160,6 +175,7 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 		}
 		n.outputs[proof.Tag] = outbound
 	}
+	stage = "dns-owner"
 	n.dns = service.FromContext[adapter.DNSRouter](owned)
 	n.dnsManager = service.FromContext[adapter.DNSTransportManager](owned)
 	if n.dns == nil || n.dnsManager == nil {
@@ -169,16 +185,19 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 	if err != nil || n.dnsOwner == nil {
 		return result, bad
 	}
+	stage = "front-routes"
 	routes, err := n.policy.FrontRoutes(capture)
 	if err != nil {
 		return result, bad
 	}
+	stage = "front-create"
 	n.front, err = newRouterVPNServerChainFront(owned, capture, routes, n.trafficCurrent, n.resolve, n.dialApplication, n.packetApplication)
 	if err != nil {
 		return result, bad
 	}
+	stage = "initial-observation"
 	if _, err = n.ObserveServerContext(initialize); err != nil {
-		return result, bad
+		return result, err
 	}
 	return result, nil
 }
@@ -252,8 +271,26 @@ func (n *routerVPNServerChain) nativeCurrent(ctx context.Context) bool {
 	return len(n.outputs) == len(n.capture.Source.Members) && ctx.Err() == nil
 }
 func (n *routerVPNServerChain) ObserveServerContext(ctx context.Context) (mobilemultihop.NodeChainServerBinding, error) {
-	if !n.nativeCurrent(ctx) || n.carrier != nil && n.carrier.CurrentContext(ctx) != nil || !n.sourceCurrent(true) || ctx.Err() != nil {
-		return mobilemultihop.NodeChainServerBinding{}, errServerChainFront
+	if !n.nativeCurrent(ctx) {
+		failure := errServerChainFront
+		if ctx != nil {
+			failure = errors.Join(failure, ctx.Err())
+		}
+		if n != nil && n.ctx != nil {
+			failure = errors.Join(failure, n.ctx.Err())
+		}
+		return mobilemultihop.NodeChainServerBinding{}, routerVPNServerChainAtStage("native-admission", failure)
+	}
+	if n.carrier != nil {
+		if err := n.carrier.CurrentContext(ctx); err != nil {
+			return mobilemultihop.NodeChainServerBinding{}, routerVPNServerChainAtStage("carrier-observation", err)
+		}
+	}
+	if !n.sourceCurrent(true) {
+		return mobilemultihop.NodeChainServerBinding{}, routerVPNServerChainAtStage("source-identity", errServerChainFront)
+	}
+	if ctx.Err() != nil {
+		return mobilemultihop.NodeChainServerBinding{}, routerVPNServerChainAtStage("observation-context", ctx.Err())
 	}
 	return n.binding, nil
 }
@@ -444,13 +481,16 @@ func (n *routerVPNServerChain) run() {
 	}
 }
 func (n *routerVPNServerChain) Snapshot(ctx context.Context, nonce string) (multihoprelay.NodeChainReceipt, error) {
-	if _, err := n.ObserveServerContext(ctx); err != nil || n.front == nil || !n.front.Current() {
-		return multihoprelay.NodeChainReceipt{}, errServerChainFront
+	if _, err := n.ObserveServerContext(ctx); err != nil {
+		return multihoprelay.NodeChainReceipt{}, err
+	}
+	if n.front == nil || !n.front.Current() {
+		return multihoprelay.NodeChainReceipt{}, routerVPNServerChainAtStage("front-current", errServerChainFront)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if ctx.Err() != nil || n.closing || n.ctx.Err() != nil {
-		return multihoprelay.NodeChainReceipt{}, errServerChainFront
+		return multihoprelay.NodeChainReceipt{}, routerVPNServerChainAtStage("snapshot-lifecycle", errors.Join(errServerChainFront, ctx.Err(), n.ctx.Err()))
 	}
 	n.sequence++
 	now := time.Now()

@@ -3,6 +3,9 @@
 from pathlib import Path
 import importlib.util
 import json
+import io
+import contextlib
+import sys
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -27,7 +30,7 @@ def output(rows):return '\n'.join(json.dumps(row) for row in rows)+'\n'
 class NativeServerChainRunner(unittest.TestCase):
  def test_complete_exact_inventory(self):
   receipt=RUN.verdict(output(success()),0)
-  self.assertEqual(receipt['roots'],13);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),30)
+  self.assertEqual(receipt['roots'],15);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),30)
  def test_missing_leaf_cannot_pass(self):
   name=RUN.ROOTS[3]+'/prefix-uot';rows=[r for r in success() if r.get('Test')!=name]
   with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
@@ -46,9 +49,20 @@ class NativeServerChainRunner(unittest.TestCase):
   name=RUN.ROOTS[4];rows=[record('output',Output='build failed'),record('fail')]
   self.assertFalse(RUN.rejected(output(rows),1,name,'failed native close was acknowledged'))
   with self.assertRaises(ValueError):RUN.rejected('# compile failed\n',1,name,'failed native close was acknowledged')
+ def test_actual_child_keeps_tool_diagnostics_out_of_json_verdict(self):
+  payload=output(success())
+  with contextlib.redirect_stderr(io.StringIO()) as observed:
+   result=RUN.execute_test([sys.executable,'-c','import sys;sys.stdout.write(sys.argv[1]);sys.stderr.write("go: downloading exact-module v1.0.0\\n")',payload],ROOT)
+  self.assertEqual(result.returncode,0)
+  self.assertEqual(result.stdout,payload)
+  self.assertIn('go: downloading',observed.getvalue())
+  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],15)
+  with self.assertRaises(ValueError):RUN.verdict(result.stdout,1,result.stderr)
+  with self.assertRaises(ValueError):RUN.verdict(result.stdout,0,'WARNING: DATA RACE')
  def test_causal_control_requires_exact_test_and_witness(self):
   name=RUN.ROOTS[4];witness='failed native close was acknowledged';rows=[record('run',name),record('output',name,Output=witness),record('fail',name),record('fail')]
   self.assertTrue(RUN.rejected(output(rows),1,name,witness));self.assertFalse(RUN.rejected(output(rows),0,name,witness));self.assertFalse(RUN.rejected(output(rows),1,RUN.ROOTS[0],witness));self.assertFalse(RUN.rejected(output(rows),1,name,'unrelated failure'))
+  self.assertFalse(RUN.rejected(output(rows),1,name,witness,'build failed'));self.assertFalse(RUN.rejected(output(rows),1,name,witness,'WARNING: DATA RACE'))
  def test_actual_shipping_gate_and_original_families_remain(self):
   docker=(ROOT/'deploy/router-agent.Dockerfile').read_text();workflow=(ROOT/'.github/workflows/native-xray-exits.yml').read_text()
   self.assertIn("./cmd/sing-box ./routervpn/servertor -run '^TestServerTor' -count=1 -timeout 90s",docker)

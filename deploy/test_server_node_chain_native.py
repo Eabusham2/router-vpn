@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -22,11 +23,13 @@ ROOTS=('TestServerChainFrontPendingCannotForward','TestServerChainFrontOriginalC
  'TestServerChainCommandEOFWithholdsUntilOriginalJoin','TestServerChainCommandAmbiguousCaptureNeverCreatesOwner',
  'TestServerChainSelectedDNSChecksEveryLiteralAnswer','TestServerChainFrontLateNativeReturnRetainsFailedClose',
  'TestServerChainNativeCloseDeadlineRetainsOriginalAttempt','TestServerChainNativeCloseErrorRetriesSameObject',
- 'TestServerChainNativeUnreturnedTCPAndPacketRemainOwned')
+ 'TestServerChainNativeUnreturnedTCPAndPacketRemainOwned',
+ 'TestServerChainCommandFailureDiagnosticsPreserveRefusal','TestServerChainFailureDiagnosticsSanitizeNativeErrors')
 CHILDREN={
  ROOTS[3]:('wrong-password','foreign-user','no-auth','prefix-foreign-tuple','prefix-uot','legacy-uot','udp-associate','retired-proof'),
  ROOTS[5]:('native-owner','partial-construction'),ROOTS[7]:('duplicate','null','alias','foreign-request','linked-capture'),
- ROOTS[8]:('none','private-first','private-after-good','loopback-after-good','ipv6-after-good','mapped-after-good','zoned','invalid','over-bound')}
+ ROOTS[8]:('none','private-first','private-after-good','loopback-after-good','ipv6-after-good','mapped-after-good','zoned','invalid','over-bound'),
+ ROOTS[13]:('snapshot-bootstrap','construction')}
 EXPECTED=set(ROOTS)|{root+'/'+child for root,children in CHILDREN.items() for child in children}
 PACKAGE='github.com/sagernet/sing-box/cmd/sing-box'
 
@@ -42,7 +45,8 @@ def records(output):
  return rows
 
 
-def verdict(output,code):
+def verdict(output,code,diagnostics=''):
+ if 'WARNING: DATA RACE' in diagnostics:raise ValueError('Raced native component diagnostics')
  rows=records(output);runs={};passes={};package_pass=0
  for row in rows:
   action,name=row.get('Action'),row.get('Test')
@@ -57,9 +61,18 @@ def verdict(output,code):
  return {'roots':len(ROOTS),'required_records':len(EXPECTED),'executed_records':len(passes)}
 
 
-def rejected(output,code,name,witness):
+def rejected(output,code,name,witness,diagnostics=''):
  rows=records(output)
- return code!=0 and any(row.get('Action')=='fail' and row.get('Test')==name for row in rows) and any(witness in row.get('Output','') for row in rows) and not any('build failed' in row.get('Output','') for row in rows)
+ return code!=0 and 'build failed' not in diagnostics and 'WARNING: DATA RACE' not in diagnostics and any(row.get('Action')=='fail' and row.get('Test')==name for row in rows) and any(witness in row.get('Output','') for row in rows) and not any('build failed' in row.get('Output','') for row in rows)
+
+
+def execute_test(command,core):
+ # Go's toolchain/download diagnostics use stderr; test2json verdicts use
+ # stdout. Keep their streams intact instead of accepting arbitrary non-JSON
+ # lines in the verdict parser when the build cache happens to be cold.
+ result=subprocess.run(command,cwd=core,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ if result.stderr:sys.stderr.write(result.stderr);sys.stderr.flush()
+ return result
 
 
 def verify_sources(core):
@@ -77,8 +90,8 @@ def run(core,go,tags,race=False,ldflags='',receipt=None):
  if race:base+=['-race']
  if tags:base+=['-tags',tags]
  if ldflags:base+=['-ldflags',ldflags]
- baseline=subprocess.run([*base,'./cmd/sing-box','-run','^TestServerChain'],cwd=core,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
- print(baseline.stdout,end='');result=verdict(baseline.stdout,baseline.returncode)
+ baseline=execute_test([*base,'./cmd/sing-box','-run','^TestServerChain'],core)
+ print(baseline.stdout,end='');result=verdict(baseline.stdout,baseline.returncode,baseline.stderr)
  file=core/'cmd/sing-box/routervpn_server_chain_front.go';original=file.read_text()
  controls=(
  ('prefix',ROOTS[3]+'/prefix-foreign-tuple','refusal reached captured/native routing', [('!route.AllowsDestination("tcp", destination.String()) || ','')]),
@@ -94,8 +107,8 @@ def run(core,go,tags,race=False,ldflags='',receipt=None):
     if mutated.count(before)!=1:raise ValueError('Native causal anchor changed: '+label)
     mutated=mutated.replace(before,after,1)
    target=Path(directory)/(label+'.go');target.write_text(mutated);overlay=Path(directory)/(label+'.json');overlay.write_text(json.dumps({'Replace':{str(file):str(target)}}))
-   tested=subprocess.run([*base,'-overlay',str(overlay),'./cmd/sing-box','-run','^'+name.replace('/','$/^')+'$'],cwd=core,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-   if not rejected(tested.stdout,tested.returncode,name,witness):print(tested.stdout,end='');raise ValueError('Native causal control missed exact witness: '+label)
+   tested=execute_test([*base,'-overlay',str(overlay),'./cmd/sing-box','-run','^'+name.replace('/','$/^')+'$'],core)
+   if not rejected(tested.stdout,tested.returncode,name,witness,tested.stderr):print(tested.stdout,end='');raise ValueError('Native causal control missed exact witness: '+label)
    print('Rejected actual compiled native control:',label,name)
  result.update(schema=1,source_sha256=source,core=PREP.CORE,causal_controls=len(controls),scope='actual native protocol/component; encrypted multi-node acceptance remains separate')
  if receipt:Path(receipt).write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')

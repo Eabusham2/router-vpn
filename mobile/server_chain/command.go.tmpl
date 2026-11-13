@@ -33,6 +33,9 @@ func init() {
 	mainCommand.AddCommand(command)
 }
 func routerVPNRunNodeChainRelay(ctx context.Context, directory string, input io.Reader, output io.Writer, factory func(context.Context, *os.Root, string, multihoprelay.NodeChainCapture) (routerVPNNodeChainRelayOwner, error)) error {
+	return routerVPNRunNodeChainRelayWithDiagnostics(ctx, directory, input, output, os.Stderr, factory)
+}
+func routerVPNRunNodeChainRelayWithDiagnostics(ctx context.Context, directory string, input io.Reader, output, diagnostics io.Writer, factory func(context.Context, *os.Root, string, multihoprelay.NodeChainCapture) (routerVPNNodeChainRelayOwner, error)) error {
 	bad := errors.New("owned native ordered relay failed")
 	if ctx == nil || ctx.Err() != nil || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory || factory == nil {
 		return bad
@@ -63,6 +66,7 @@ func routerVPNRunNodeChainRelay(ctx context.Context, directory string, input io.
 	// Factory returns its original cleanup owner before native acquisition; even
 	// a partial construction failure remains addressable by subsequent Stop.
 	owner, constructionErr := factory(ctx, root, directory, capture)
+	routerVPNWriteServerChainDiagnostic(diagnostics, "construction", constructionErr)
 	if owner == nil {
 		return bad
 	}
@@ -109,10 +113,16 @@ func routerVPNRunNodeChainRelay(ctx context.Context, directory string, input io.
 				if err == nil {
 					response.OK = true
 					response.Receipt = &receipt
+				} else {
+					routerVPNWriteServerChainDiagnostic(diagnostics, "snapshot", err)
 				}
 			}
 		case "bootstrap":
-			response.OK = constructionErr == nil && owner.Begin() == nil
+			if constructionErr == nil {
+				err := owner.Begin()
+				response.OK = err == nil
+				routerVPNWriteServerChainDiagnostic(diagnostics, "bootstrap", err)
+			}
 		case "stop":
 			drain, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			response.OK = owner.Close(drain) == nil
