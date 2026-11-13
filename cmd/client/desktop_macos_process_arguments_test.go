@@ -29,6 +29,7 @@ func TestMacOSProcessArgumentsRetainExactConcreteFamily(t *testing.T) {
 		{"original-default", "", "routervpn-external"},
 		{"explicit-external", macosprocess.ExternalFamily, "routervpn-external"},
 		{"ordered-node-chain", macosprocess.NodeChainFamily, "routervpn-node-chain"},
+		{"candidate-prefix", macosprocess.CandidatePrefixFamily, "routervpn-node-candidate-prefix"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			scope := macOSArgumentScope()
@@ -67,6 +68,7 @@ func TestMacOSProcessArgumentsRejectUnknownConcreteFamily(t *testing.T) {
 		" ordered-node-chain-v1", "ordered-node-chain-v1 ",
 		"ordered-node-chain-v1\n", "ordered-node-chain-v1\x00",
 		"routervpn-external", "routervpn-node-chain", "--darwin-control",
+		"candidate-prefix", "node-candidate-prefix-v2", "Node-candidate-prefix-v1", "node-candidate-prefix-v1\n", "routervpn-node-candidate-prefix",
 	} {
 		t.Run(string(family), func(t *testing.T) {
 			scope := macOSArgumentScope()

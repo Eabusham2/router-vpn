@@ -1528,6 +1528,29 @@ The retained Windows native job at 01a01989 failed its complete-profile transpor
 
 The full original runner passed 3,115 Add/Load/Update and main-Connect callback checks. All 19 existing compiled mutations remained rejected, and the original ordered-node editor passed 97 callback checks. These executions use the real PowerShell functions with explicit WPF construction and transport boundaries; WPF rendering is false in this local receipt. The actual installation/runtime job remains a separate platform result.
 
+## Darwin prefix protection keeps its original saved control
+
+The native PF dispatcher now recognizes a distinct candidate-prefix family on
+the existing authenticated controller locks and durable protection journal.
+Its typed capture binds the original full saved control profile, session,
+source, prefix configuration, LAN choice and kill-switch policy. It cannot
+borrow ordinary external or complete-chain authority, and it grants no
+endpoint or process exemption. Apply and current readback preserve the exact
+captured source; retirement still requires the original PF reference and
+joined guardian state. On-connect release removes only that owned baseline,
+while Always retains its empty deny policy.
+
+The portable tests exercised the actual journal/file/lock/fsync code with an
+explicit PF backend double: all 18 baseline and 67 owned-PF tests passed, and
+all 33 compiled-source causal controls were rejected. The actual typed
+receipt and process-argument source passed 190 verdicts under the race
+detector in 1.142 seconds, including family/source substitution, exact JSON
+fields, original reference attribution and retirement-policy checks. The
+seven published source hashes matched the tested bytes. This foundation
+does not execute real PF/utun or open public macOS ordered admission; the
+separate native child, full parent adapter and actual macOS acceptance remain
+required.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device
