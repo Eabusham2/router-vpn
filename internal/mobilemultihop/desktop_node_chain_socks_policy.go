@@ -25,11 +25,11 @@ type DesktopNodeChainSOCKSPolicy struct {
 // This private binding is created only by the typed desktop derivation.
 // It does not make arbitrary graph bytes a NodeChainSOCKSSource.
 type nodeChainSOCKSDesktopBinding struct {
-	original   *NodeChainSOCKSSource
-	projection nodeChainProjection
-	metadata   DesktopNodeChainSOCKSMetadata
+	original       *NodeChainSOCKSSource
+	projection     nodeChainProjection
+	metadata       DesktopNodeChainSOCKSMetadata
 	nativeMetadata NodeChainSOCKSSourceMetadata
-	seal       string
+	seal           string
 }
 
 var desktopNodeChainSOCKSPolicyError = errors.New("desktop SOCKS path requires its exact original source and captured physical owner")
@@ -126,7 +126,7 @@ func deriveDesktopNodeChainSOCKSPolicy(original *NodeChainSOCKSSource, inputs de
 		meta.Roots = append(meta.Roots, DesktopNodeRootMetadata{Family: root.Family, Tag: root.Tag, Type: root.Type, OriginalSHA256: root.ConfigSHA256})
 	}
 	meta.SourceSHA256 = desktopExternalObjectDigest(struct {
-		Domain string `json:"domain"`
+		Domain string                        `json:"domain"`
 		Policy DesktopNodeChainSOCKSMetadata `json:"policy"`
 	}{"routervpn-desktop-node-chain-socks-source-v1", meta})
 	if !proofID.MatchString(meta.SourceSHA256) {
@@ -170,7 +170,7 @@ func deriveDesktopNodeChainSOCKSPolicy(original *NodeChainSOCKSSource, inputs de
 		metadata: nativeMeta, desktop: binding,
 	}
 	native.seal = native.digest()
-	if native.validate() != nil {
+	if native.retainIntegrity() != nil {
 		return bad()
 	}
 	policy := &DesktopNodeChainSOCKSPolicy{original: original, native: native, metadata: meta, inputs: inputs}
@@ -304,10 +304,10 @@ func (p *DesktopNodeChainSOCKSPolicy) PhysicalReadValidated() (string, DesktopPh
 }
 
 type desktopNodeChainSOCKSLaunch struct {
-	Kind string `json:"kind"`
-	Schema int `json:"schema"`
-	OriginalSource string `json:"original_source"`
-	Metadata DesktopNodeChainSOCKSMetadata `json:"metadata"`
+	Kind           string                        `json:"kind"`
+	Schema         int                           `json:"schema"`
+	OriginalSource string                        `json:"original_source"`
+	Metadata       DesktopNodeChainSOCKSMetadata `json:"metadata"`
 }
 
 func (p *DesktopNodeChainSOCKSPolicy) LaunchInput() (string, error) {

@@ -11,6 +11,7 @@ type NodeChainSOCKSSource struct {
 	middle                   *nodeChainSOCKSMember
 	metadata                 NodeChainSOCKSSourceMetadata
 	desktop                  *nodeChainSOCKSDesktopBinding
+	integrity                *nodeChainSOCKSIntegrity
 }
 
 type NodeChainSOCKSDevicePolicy struct {
@@ -52,7 +53,7 @@ func NewNodeChainSOCKSSource(input string) (*NodeChainSOCKSSource, error) {
 		return nil, err
 	}
 	paired := NodeChainSource{Schema: 1, Execution: "local",
-		Nodes: []string{source.Nodes[0], source.Nodes[2]},
+		Nodes:           []string{source.Nodes[0], source.Nodes[2]},
 		IdentitySources: []string{source.IdentitySources[0], source.IdentitySources[2]}}
 	pairJSON, err := json.Marshal(paired)
 	if err != nil {
@@ -140,7 +141,7 @@ func NewNodeChainSOCKSSource(input string) (*NodeChainSOCKSSource, error) {
 		})
 	}
 	result.seal = result.digest()
-	if result.validate() != nil {
+	if result.retainIntegrity() != nil {
 		return nil, nodeChainSOCKSSourceError
 	}
 	return result, nil
@@ -164,6 +165,13 @@ func (p *NodeChainSOCKSSource) digest() string {
 }
 
 func (p *NodeChainSOCKSSource) validate() error {
+	if p == nil || p.integrity == nil || !p.integrity.current(p) {
+		return nodeChainSOCKSSourceError
+	}
+	return nil
+}
+
+func (p *NodeChainSOCKSSource) validateCompiled() error {
 	if p == nil || p.seal == "" || p.digest() != p.seal || p.pair.validateCapture() != nil ||
 		p.middle.validate() != nil || p.metadata.Kind != "routervpn-node-chain-socks-source" ||
 		p.metadata.Schema != 1 || p.metadata.NativeAdmission != "closed" {
