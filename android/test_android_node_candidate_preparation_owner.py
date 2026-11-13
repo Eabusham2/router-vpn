@@ -21,7 +21,6 @@ NATIVE = base.NATIVE
 SOURCES = dict(base.SOURCES)
 # Preserve this gate's complete-saved fallback: testing the selected final WG
 # node needs the whole saved graph. Independent prefixes have a separate gate.
-SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('selected.add(i==count-1?"shadowsocks":"wg");','selected.add("wg");')
 SOURCES[APP+'AndroidNodeCandidatePrefixCapture.java']=SOURCES[APP+'AndroidNodeCandidatePrefixCapture.java'][:-1]+'''final String sourceSHA256="f".repeat(64),configSHA256="6".repeat(64);
  static AndroidNodeCandidatePrefixCapture compile(AndroidNodeChainCapture original,int prefix,String inventory){throw new IllegalStateException("No independent prefix in the complete-saved fallback fixture");}}'''
 SOURCES[NATIVE+'RouterNodeChainCandidatePreparation.java']=SOURCES[NATIVE+'RouterNodeChainCandidatePreparation.java'][:-1]+'''
@@ -86,12 +85,13 @@ CASES = r'''
  }
  static boolean activePreparation(){try{Field field=AndroidNodeCandidatePreparation.class.getDeclaredField("active");field.setAccessible(true);return field.get(null)!=null;}catch(Exception error){throw new AssertionError(error);}}
  static AndroidNodeCandidatePreparation prepare(Fixture f,Completion callback)throws Exception{
+  check(f.source.modes.equals(List.of("wg","wg","wg"))&&!AndroidNodeCandidatePreparation.packetPrefix(f.source,2),"complete-saved fallback lost its explicit original final packet node");
   RouterNodeChainCandidateMeasurement.latest=null;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateCatalog.sourcesValid=true;
   return AndroidNodeCandidatePreparation.reserve(f.service,f.runtime,f.source,AndroidHomeStateStore.snapshot(f.service),AndroidNodeChainSession.selection(f.service,f.source),2,callback);
  }
  static void retire(AndroidNodeCandidatePreparation operation)throws Exception{operation.cancelFromUser();await(()->!activePreparation(),"original preparation observer did not close");}
  static void completePreparation()throws Exception {
-  try(Fixture f=new Fixture(3)){
+  try(Fixture f=new Fixture(3,"wg","wg")){
    int history=AndroidStartupPolicy.recorded;Completion detached=new Completion(),callback=new Completion();var operation=prepare(f,detached);operation.attach(callback);operation.detach(detached);check(operation.observes(callback),"old Activity detached its replacement observer");
    check(callback.detail.contains("Waiting for Android VPN permission"),"recreated Activity lost captured waiting-permission progress");
    check(AndroidNodeCandidatePreparation.busy()&&AndroidMTUMeasurementGate.held()&&f.owner()==null,"permission capture did not retain an idle outer hold");
@@ -109,7 +109,7 @@ CASES = r'''
   }
  }
  static void capturedPermission()throws Exception {
-  for(boolean cancel:new boolean[]{true,false})try(Fixture f=new Fixture(3)){
+  for(boolean cancel:new boolean[]{true,false})try(Fixture f=new Fixture(3,"wg","wg")){
    int created=CommandServer.created;Completion callback=new Completion();callback.throwsObserver=true;var operation=prepare(f,callback);
    if(cancel)operation.cancelFromUser();else f.service.getSharedPreferences("router-vpn-unified",0).edit().putString("mode","changed").apply();
    callback.awaitDone();await(()->!activePreparation(),"cancelled permission capture retained its observer");
@@ -119,7 +119,7 @@ CASES = r'''
   }
  }
  static void failedNativeGraphJoin()throws Exception {
-  try(Fixture f=new Fixture(3)){
+  try(Fixture f=new Fixture(3,"wg","wg")){
    Completion callback=new Completion();var operation=prepare(f,callback);RouterNodeChain.configured=plan->plan.afterRun=()->plan.server.failClose=true;operation.start();
    await(()->RouterNodeChainCandidateMeasurement.latest!=null&&RouterNodeChainCandidateMeasurement.latest.closes>0,"candidate inner worker never reached native close");
    await(()->!AndroidNodeCandidateMeasurement.busy(),"candidate inner worker did not join");
@@ -131,7 +131,7 @@ CASES = r'''
   }
  }
  static void revokedWhileCandidateDrains()throws Exception {
-  try(Fixture f=new Fixture(3)){
+  try(Fixture f=new Fixture(3,"wg","wg")){
    Completion callback=new Completion();callback.throwsObserver=true;var operation=prepare(f,callback);RouterNodeChainCandidateMeasurement.holdClose=true;operation.start();
    await(()->RouterNodeChainCandidateMeasurement.latest!=null&&RouterNodeChainCandidateMeasurement.latest.closes>0,"held candidate close was not entered");
    var session=f.owner();var server=(CommandServer)get(f.service,"commandServer");f.service.onRevoke();f.drain();
