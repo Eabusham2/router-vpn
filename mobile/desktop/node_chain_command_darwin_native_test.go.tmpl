@@ -78,6 +78,7 @@ func darwinChildNonce(t *testing.T, n int) string {
 }
 func darwinChildCommand(ctx context.Context, path string, args ...string) ([]byte, error) {
 	c := exec.CommandContext(ctx, path, args...)
+	c.WaitDelay = 5 * time.Second
 	c.Dir = "/"
 	c.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
 	return c.CombinedOutput()
@@ -128,6 +129,13 @@ func darwinChildHarnessOutput(command *exec.Cmd) ([]byte, error) {
 	command.Stderr = command.Stdout
 	err := command.Run()
 	return output.Bytes(), err
+}
+
+// The actual engine can fail while a separately grouped guardian still owns
+// its inherited diagnostic pipe. An output timeout is an error, never Stop.
+func darwinChildEngineOutput(command *exec.Cmd, output io.Writer) {
+	command.WaitDelay = 5 * time.Second
+	command.Stdout, command.Stderr = output, output
 }
 
 // The parent creates only a new disposable fixed installation. It refuses any
@@ -471,6 +479,28 @@ func (p *darwinChildPeer) observe(t *testing.T, action string) darwinChildPeerRe
 	}
 	return p.read(t)
 }
+
+// A missed graceful join already fails acceptance. Reaping this exact owned
+// disposable peer after Kill has a separate bounded wait and never proves PF
+// or engine retirement. An absent waiter receipt must not hang all diagnostics.
+func darwinChildPeerJoin(command *exec.Cmd, done <-chan struct{}) (bool, error) {
+	if command == nil || command.Process == nil || done == nil {
+		return false, errors.New("real encrypted peer lost its original command waiter")
+	}
+	select {
+	case <-done:
+		return true, nil
+	case <-time.After(5 * time.Second):
+	}
+	failure := errors.Join(errors.New("real encrypted peer did not join"), command.Process.Kill())
+	select {
+	case <-done:
+		return true, failure
+	case <-time.After(5 * time.Second):
+		return false, errors.Join(failure, errors.New("original encrypted peer waiter remains unjoined"))
+	}
+}
+
 func darwinChildPeerStart(t *testing.T, mixed bool) *darwinChildPeer {
 	t.Helper()
 	p := &darwinChildPeer{done: make(chan struct{}), physical: darwinChildPhysical(t), finalClient: darwinChildKey(t), finalServer: darwinChildKey(t)}
@@ -524,15 +554,12 @@ func darwinChildPeerStart(t *testing.T, mixed bool) *darwinChildPeer {
 	go func() { p.failure = p.command.Wait(); close(p.done) }()
 	t.Cleanup(func() {
 		p.input.Close()
-		select {
-		case <-p.done:
-			if p.failure != nil {
-				t.Error("real encrypted peer failed joined cleanup", p.failure)
-			}
-		case <-time.After(5 * time.Second):
-			t.Error("real encrypted peer did not join")
-			p.command.Process.Kill()
-			<-p.done
+		joined, joinErr := darwinChildPeerJoin(p.command, p.done)
+		if joinErr != nil {
+			t.Error(joinErr)
+		}
+		if joined && p.failure != nil {
+			t.Error("real encrypted peer failed joined cleanup", p.failure)
 		}
 		p.output.Close()
 	})
@@ -878,8 +905,7 @@ func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChi
 	o.command.Dir = directory
 	o.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
 	o.command.ExtraFiles = append([]*os.File{child}, o.capture.Files()...)
-	o.command.Stdout = &o.output
-	o.command.Stderr = &o.output
+	darwinChildEngineOutput(o.command, &o.output)
 	fmt.Println("Darwin native child stage: starting original inherited child")
 	o.childStartAttempted = true
 	if e := o.command.Start(); e != nil {

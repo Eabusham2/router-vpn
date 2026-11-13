@@ -1455,6 +1455,12 @@ The production Darwin privileged-command helper now gives inherited stdout/stder
 
 The shipping helper and observer passed all seven execution variants, including five compiled defect controls. The new regression starts a real separately grouped subprocess that retains the original output pipe, checks that the command slot remains owned during the wait, and requires the original stderr and failed-join/cancellation result. Removing the bound fails at the required witness. Existing observation, full-pipe and late-retirement checks remain. These portable process-composition tests do not establish real Darwin PF/utun acceptance or identify the cause of the hosted runner disconnects.
 
+## Darwin native acceptance bounds its nested output and peer waits
+
+The generated Darwin acceptance fixture now applies the same five-second inherited-output bound to its utility commands and actual engine output capture. The engine lifetime still belongs to authenticated Stop; this bound applies after process exit or cancellation and does not kill a running engine to manufacture success. Disposable peer cleanup retains its original five-second graceful join and then allows five seconds for the original waiter after Kill. A missing receipt remains a failure instead of hanging the diagnostic runner.
+
+All 29 runner tests passed, retaining the original 28 tests and 11 pre-start ownership controls. Real independently grouped output writers exercise controller, engine and utility helpers; omitting each output bound is rejected. A real peer Kill with its waiter deliberately held exercises the post-Kill failure path, and removing that bound fails its witness. The original successful join remains required. These are runner and process-composition repairs; the encrypted path, every-node proof, selected DNS, PF, utun and authenticated Stop acceptance gates are unchanged and still require actual hosted execution.
+
 ## Physical and private acceptance
 
 Exact-source release publication does not establish physical device

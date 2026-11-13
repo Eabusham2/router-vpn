@@ -557,21 +557,105 @@ func verify(pidFile string) error {
  }
 }
 '''
+        def member(signature):
+            self.assertEqual(source.count(signature), 1)
+            begin = source.index(signature)
+            return source[begin:source.index('\n}', begin)+2]
+        engine = member('func darwinChildEngineOutput(')
+        utility = member('func darwinChildCommand(')
+        self.assertEqual(source.count('darwinChildEngineOutput(o.command, &o.output)'), 1)
+        engine_wrapper = '\nfunc darwinChildHarnessOutput(command *exec.Cmd) ([]byte,error) {var output bytes.Buffer;darwinChildEngineOutput(command,&output);err:=command.Run();return output.Bytes(),err}\n'
+        utility_wrapper = '\nfunc darwinChildHarnessOutput(command *exec.Cmd) ([]byte,error) {return darwinChildCommand(context.Background(),command.Path,command.Args[1:]...)}\n'
+        process_check = '  if command.ProcessState==nil || !command.ProcessState.Success() {\n   return errors.New("original direct controller did not exit successfully")\n  }\n'
+        self.assertEqual(fixture.count(process_check), 1)
+        fixture = fixture.replace('// SHIPPING_HARNESS_OUTPUT', 'var _ io.Writer = (*bytes.Buffer)(nil)\n// SHIPPING_HARNESS_OUTPUT', 1)
+        implementations = [('controller', original, fixture, needle),
+                           ('engine', engine+engine_wrapper, fixture, needle),
+                           # The utility constructs its own exec.Cmd; ErrWaitDelay
+                           # still requires its direct process to have exited zero.
+                           ('utility', utility+utility_wrapper, fixture.replace(process_check, '', 1), 'c.WaitDelay = 5 * time.Second')]
         with tempfile.TemporaryDirectory(prefix='darwin-child-reporting-') as temporary:
             work = Path(temporary); code = work/'main.go'; image = work/'reporting'
-            for mutated in (False, True):
-                helper = original.replace(needle, '', 1) if mutated else original
-                self.assertEqual(helper != original, mutated)
-                code.write_text(fixture.replace('// SHIPPING_HARNESS_OUTPUT', helper))
-                subprocess.run([go, 'build', '-p=1', '-o', str(image), str(code)], cwd=work, check=True, timeout=90)
-                result = subprocess.run([str(image), str(work/('mutant.pid' if mutated else 'original.pid'))],
-                                        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15)
+            for label, actual, selected_fixture, bound in implementations:
+                self.assertEqual(actual.count(bound), 1, label)
+                for mutated in (False, True):
+                    helper = actual.replace(bound, '', 1) if mutated else actual
+                    self.assertEqual(helper != actual, mutated)
+                    code.write_text(selected_fixture.replace('// SHIPPING_HARNESS_OUTPUT', helper))
+                    subprocess.run([go, 'build', '-p=1', '-o', str(image), str(code)], cwd=work, check=True, timeout=90)
+                    result = subprocess.run([str(image), str(work/(label+('-mutant.pid' if mutated else '-original.pid')))],
+                                            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15)
+                    if mutated:
+                        self.assertNotEqual(result.returncode, 0, result.stdout)
+                        self.assertIn('Darwin native harness waited beyond its retained output bound', result.stdout)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stdout)
+                        self.assertIn('actual escaped output pipe bounded; native retirement remains unproved', result.stdout)
+
+
+class BoundedPeerRetirement(unittest.TestCase):
+    def test_actual_peer_kill_cannot_wait_forever_or_claim_join(self):
+        source=(ROOT/'mobile/desktop/node_chain_command_darwin_native_test.go.tmpl').read_text()
+        signature='func darwinChildPeerJoin('
+        self.assertEqual(source.count(signature),1)
+        begin=source.index(signature);helper=source[begin:source.index('\n}',begin)+2]
+        self.assertEqual(source.count('joined, joinErr := darwinChildPeerJoin(p.command, p.done)'),1)
+        needle='\tcase <-time.After(5 * time.Second):\n\t\treturn false, errors.Join(failure, errors.New("original encrypted peer waiter remains unjoined"))'
+        self.assertEqual(helper.count(needle),1)
+        fixture=r'''package main
+import("errors";"fmt";"os";"os/exec";"strings";"sync";"time")
+// SHIPPING_PEER_JOIN
+func main(){
+ if len(os.Args)>1{if os.Args[1]=="held"{time.Sleep(30*time.Second)};return}
+ if err:=verify();err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
+ fmt.Println("actual peer join bounded; held original receipt remains failure")
+}
+func verify()error{
+ positive:=exec.Command(os.Args[0],"exit")
+ if err:=positive.Start();err!=nil{return err}
+ done:=make(chan struct{});var failure error
+ go func(){failure=positive.Wait();close(done)}()
+ joined,err:=darwinChildPeerJoin(positive,done)
+ if !joined||err!=nil||failure!=nil{return errors.New("original successful peer did not join")}
+ command:=exec.Command(os.Args[0],"held")
+ if err:=command.Start();err!=nil{return err}
+ reaped,release,held:=make(chan struct{}),make(chan struct{}),make(chan struct{})
+ var once sync.Once
+ go func(){_ = command.Wait();close(reaped);<-release;close(held)}()
+ defer func(){_ = command.Process.Kill();once.Do(func(){close(release)});select{case <-held:case <-time.After(time.Second):}}()
+ type result struct{joined bool;failure error}
+ results:=make(chan result,1)
+ go func(){joined,err:=darwinChildPeerJoin(command,held);results<-result{joined,err}}()
+ select{
+ case result:=<-results:
+  if result.joined||result.failure==nil||!strings.Contains(result.failure.Error(),"original encrypted peer waiter remains unjoined"){
+   return errors.New("missing original peer waiter receipt became successful retirement")
+  }
+  select{case <-reaped:default:return errors.New("cleanup did not signal its original disposable peer")}
+ case <-time.After(12*time.Second):
+  once.Do(func(){close(release)})
+  select{case <-results:case <-time.After(time.Second):return errors.New("disposable peer control could not be recovered")}
+  return errors.New("Darwin peer cleanup waited beyond its bounded post-kill join")
+ }
+ once.Do(func(){close(release)})
+ select{case <-held:case <-time.After(time.Second):return errors.New("original held peer waiter did not finally join")}
+ return nil
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='darwin-peer-join-') as directory:
+            work=Path(directory);code=work/'main.go';image=work/'join'
+            for mutated in (False,True):
+                changed=helper.replace(needle,'',1) if mutated else helper
+                self.assertEqual(changed!=helper,mutated)
+                code.write_text(fixture.replace('// SHIPPING_PEER_JOIN',changed))
+                subprocess.run([shutil.which('go'),'build','-p=1','-o',str(image),str(code)],cwd=work,check=True,timeout=90)
+                result=subprocess.run([str(image)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=18)
                 if mutated:
-                    self.assertNotEqual(result.returncode, 0, result.stdout)
-                    self.assertIn('Darwin native harness waited beyond its retained output bound', result.stdout)
+                    self.assertNotEqual(result.returncode,0,result.stdout)
+                    self.assertIn('Darwin peer cleanup waited beyond its bounded post-kill join',result.stdout)
                 else:
-                    self.assertEqual(result.returncode, 0, result.stdout)
-                    self.assertIn('actual escaped output pipe bounded; native retirement remains unproved', result.stdout)
+                    self.assertEqual(result.returncode,0,result.stdout)
+                    self.assertIn('actual peer join bounded; held original receipt remains failure',result.stdout)
 
 
 class UnstartedFixtureRetirement(unittest.TestCase):
