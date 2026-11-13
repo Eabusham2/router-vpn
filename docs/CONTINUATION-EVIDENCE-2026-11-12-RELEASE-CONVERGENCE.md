@@ -144,7 +144,7 @@ access:
   Independent selected-prefix preparation, usable when the old final node is
   unreachable, now has the iOS app/provider/engine and Android helper/service/UI integration recorded below.
   Windows and Linux now have distinct parent/native-child and saved-prefix API
-  integration; the desktop action is a separate UI delivery.
+  integration and native Performance actions.
   Darwin prefix process identity is published, while its child/host integration
   and public native admission remain in progress. Ordinary WireGuard or Android
   Network calls cannot substitute for the captured native owners. Native acceptance
@@ -1497,6 +1497,12 @@ An immutable snapshot containing the 47 changed implementation and acceptance pa
 The retained Android runtime-truth job at 14b18bb3 reached the original startup-policy gate and failed Java compilation because an inherited candidate-permission fixture still wrote `AndroidHomeStateStore.current`. This startup gate composes the actual persistent Home implementation, which has no such fake field. The startup fixture now rejects any attempt to launch that separate temporary candidate purpose with an explicit assertion. Its shipping StartupPolicy, UnifiedConnectionController, Home-state, selection and Settings sources remain unchanged; ordinary startup cannot invent a candidate proof or mutate a fake Home record.
 
 The repaired original gate passed 4,398 main startup checks and all eight imported families, 9,718 positive checks in total. All 28 independently compiled negative controls were rejected at their original assertions, including source substitution, permission ownership, ordered history, Last/Compare preservation, cancellation and strict private-JSON validation. The gate still builds and invokes the real exported private-JSON parser. This corrects the observed prerequisite compilation failure without claiming a new SDK/APK or Android native-network verdict.
+
+## Windows and Linux expose the distinct selected-prefix action
+
+The native Windows and GTK Performance panels now offer **Test selected prefix only**, beside the existing connected-prefix and complete-saved-path actions. The new callbacks capture `saved-prefix-local` and open the matching guarded dialog. Busy or closing measurement owners cannot lend their purpose to a new action, and the original dialog remains responsible for 50-sample requests, closed-traffic proof labels, native DOWN before review, cancellation and explicit profile Save. The published Windows/Linux backend supplies that distinct native purpose.
+
+The exact Windows action source passed 42 composed Performance checks and the existing 109 ordered-dialog checks. The Linux publication's actual callback source passed six action checks plus its compiled wrong-purpose control; all 50 GObject status guards and eight existing causal controls passed. These fixture tests execute the shipping callbacks and lifetime guards with explicit HTTP and toolkit-construction boundaries. Physical rendering, accessibility and the installed native network flow require their platform gates. AppKit activation is retained with the Darwin integration work; this UI publication does not claim macOS native prefix acceptance.
 
 ## Physical and private acceptance
 

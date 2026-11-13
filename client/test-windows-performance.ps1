@@ -54,6 +54,9 @@ $Live=Panel-Event "`$D.FindName('Live')" 'Add_Click'
 $Durable=Panel-Event "`$D.FindName('Durable')" 'Add_Click'
 $Speed=Panel-Event "`$D.FindName('Speed')" 'Add_Click'
 $Hop=Panel-Event "`$D.FindName('HopSpeed')" 'Add_Click'
+$ConnectedCandidates=Panel-Event "`$D.FindName('PrefixCandidates')" 'Add_Click'
+$SavedCandidates=Panel-Event "`$D.FindName('SavedCandidates')" 'Add_Click'
+$SavedPrefixCandidates=Panel-Event "`$D.FindName('SavedPrefixCandidates')" 'Add_Click'
 $Cancel=Panel-Event "`$D.FindName('CancelTest')" 'Add_Click'
 $Closed=Panel-Event '$D' 'Add_Closed'
 $Tick=Panel-Event '$State.Timer' 'Add_Tick'
@@ -184,4 +187,15 @@ Check ($State.Result.Text-ceq$Text-and[object]::ReferenceEquals($State.Current,$
 Finish-Performance
 Reset-Performance;$State=New-Panel;$script:UnifiedAsyncClient.ThrowOnSend=$true;& $Speed
 Check ($null-eq$State.Current-and-not(UnifiedAsyncBusy)-and$State.Buttons[0].IsEnabled) 'Transport startup failure leaked ownership'
+# Execute the actual composed button callbacks. Only the destination dialog is
+# doubled; these buttons must preserve three distinct captured test purposes.
+$script:CandidateLaunches=New-Object 'System.Collections.Generic.List[object]'
+function ShowOrderedCandidates([bool]$SavedPath=$false,[bool]$SavedPrefix=$false){$script:CandidateLaunches.Add([pscustomobject]@{SavedPath=$SavedPath;SavedPrefix=$SavedPrefix})}
+try {
+ & $ConnectedCandidates;& $SavedCandidates;& $SavedPrefixCandidates
+ Check ($CandidateLaunches.Count-eq3) 'Candidate buttons did not invoke their original native dialog'
+ Check (-not$CandidateLaunches[0].SavedPath-and-not$CandidateLaunches[0].SavedPrefix) 'Connected candidate button changed its purpose'
+ Check ($CandidateLaunches[1].SavedPath-and-not$CandidateLaunches[1].SavedPrefix) 'Complete saved candidate button changed its purpose'
+ Check (-not$CandidateLaunches[2].SavedPath-and$CandidateLaunches[2].SavedPrefix) 'Selected-prefix button launched a complete saved connection'
+} finally {Remove-Item Function:ShowOrderedCandidates}
 Write-Host "Composed Windows Advanced Performance: PASS ($script:Checks checks; actual callbacks and async owner, transport/WPF boundaries doubled)"

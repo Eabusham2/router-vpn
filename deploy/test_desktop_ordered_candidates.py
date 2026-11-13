@@ -340,6 +340,58 @@ int main(void){
             print(result.stdout.strip(),flush=True)
     print('GTK candidate phase, retained-review, native-DOWN, purpose, prefix and closed-proof causal controls: 8 PASS',flush=True)
 
+def linux_actions(directory):
+    source=(ROOT/'client/linux/routervpn-performance-v17.inc').read_text()
+    fields=source[source.index('typedef struct {'):source.index('} LinuxPerformanceV17;')+len('} LinuxPerformanceV17;')]
+    action=block(source,'static void linux_performance_response_v17(')
+    program=r'''
+#include <gtk/gtk.h>
+#include <json-glib/json-glib.h>
+#include <stdio.h>
+typedef struct {void *window;} App;
+FIELDS
+static gboolean busy,saved_path,saved_prefix;
+static unsigned launches,checks;
+static void check(gboolean ok,const char*message){checks++;if(!ok)g_error("%s",message);}
+static gboolean linux_async_busy_v16(App*a){(void)a;return busy;}
+static void linux_async_cancel_request_v17(App*a,guint64 generation){(void)a;(void)generation;}
+static const char*active_router_id(App*a){(void)a;return "original";}
+static void linux_mtu_dialog_v20(App*a){(void)a;}
+static void linux_external_comparison_open(App*a){(void)a;}
+static void linux_performance_begin_v17(LinuxPerformanceV17*p,const char*path,const char*body,long timeout,gboolean get){(void)p;(void)path;(void)body;(void)timeout;(void)get;g_error("candidate button issued ordinary measurement");}
+/* Only destination dialog construction is doubled. Actual signal dispatch,
+ * captured purpose arguments and asynchronous busy guards are unchanged. */
+static void linux_ordered_candidates_open_captured(App*a,gboolean path,gboolean prefix){(void)a;launches++;saved_path=path;saved_prefix=prefix;}
+static void linux_ordered_candidates_open_purpose(App*a,gboolean path){linux_ordered_candidates_open_captured(a,path,FALSE);}
+static void linux_ordered_candidates_open(App*a){linux_ordered_candidates_open_captured(a,FALSE,FALSE);}
+ACTION
+int main(void){
+ App app={0};LinuxPerformanceV17 panel={.app=&app};
+ linux_performance_response_v17(NULL,8,&panel);check(launches==1&&!saved_path&&!saved_prefix,"connected button changed purpose");
+ linux_performance_response_v17(NULL,9,&panel);check(launches==2&&saved_path&&!saved_prefix,"complete saved button changed purpose");
+ linux_performance_response_v17(NULL,10,&panel);check(launches==3&&saved_path&&saved_prefix,"prefix button launched complete saved connection");
+ panel.generation=1;linux_performance_response_v17(NULL,10,&panel);check(launches==3,"pending Performance launched prefix test");
+ panel.generation=0;busy=TRUE;linux_performance_response_v17(NULL,10,&panel);check(launches==3,"busy Performance launched prefix test");
+ busy=FALSE;linux_performance_response_v17(NULL,10,&panel);check(launches==4&&saved_path&&saved_prefix,"settled Performance lost prefix purpose");
+ printf("GTK actual Performance candidate actions: %u checks PASS; dialog construction doubled.\n",checks);return 0;
+}
+'''.replace('FIELDS',fields).replace('ACTION',action)
+    flags=subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','json-glib-1.0'],text=True).split()
+    anchor='linux_ordered_candidates_open_captured(p->app,TRUE,TRUE)'
+    assert program.count(anchor)==1
+    for mutation in [False,True]:
+        path=directory/'performance-candidate-actions.c';binary=directory/'performance-candidate-actions'
+        path.write_text(program.replace(anchor,'linux_ordered_candidates_open_captured(p->app,TRUE,FALSE)',1) if mutation else program)
+        subprocess.run(['gcc','-O1','-Wall','-Wextra','-Werror',str(path),'-o',str(binary),*flags],check=True,timeout=60)
+        result=subprocess.run([str(binary)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=15)
+        if mutation:
+            assert result.returncode!=0 and 'prefix button launched complete saved connection' in result.stdout,result.stdout
+            print('GTK selected-prefix button purpose control rejected',flush=True)
+        else:
+            assert result.returncode==0,result.stdout
+            print(result.stdout.strip(),flush=True)
+
+
 def linux_form(directory):
     import json, os, time
     source=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
@@ -474,6 +526,6 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--platform',choices=['windows','darwin','linux'],required=True);p.add_argument('--shell',default='pwsh');args=p.parse_args()
     with tempfile.TemporaryDirectory(prefix='ordered-candidate-forms-') as d:
         if args.platform=='darwin':swift_form(Path(d))
-        elif args.platform=='linux':linux_policy(Path(d));linux_form(Path(d))
+        elif args.platform=='linux':linux_actions(Path(d));linux_policy(Path(d));linux_form(Path(d))
         else:subprocess.run([args.shell,'-NoProfile','-File',str(ROOT/'client/test-windows-ordered-candidates.ps1'),'-Root',str(ROOT)],check=True,timeout=90)
 if __name__=='__main__':main()
