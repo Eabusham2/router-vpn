@@ -119,7 +119,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	control, _ := a.profileByIDLocked(a.profiles.SelectedID)
 	profiles := cloneRouterProfileStore(a.profiles).Profiles
-	state := a.state
+	state, command := a.state, a.cmd
 	a.mu.Unlock()
 	graph, graphOK := getActiveMultihopGraph(a)
 	entryID, exitID := control.MultihopEntryID, control.MultihopExitID
@@ -144,7 +144,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	payload := map[string]any{
 		"platform":                   runtime.GOOS,
 		"platform_supported":         nativeMultihopPlatformSupported(),
 		"ordered_nodes_supported":    nativeNodeChainPlatformSupported(),
@@ -185,7 +185,23 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"runtime_entry_mode": graph.EntryMode,
 		"runtime_exit_mode":  actualMode,
 		"nodes":              multihopNodeSummaries(profiles),
-	})
+	}
+	if state.Connected && state.Mode == "multihop" && (!graphOK || graph.ChainNodes != 0 || nativeOrderedRuntimeRetained(a)) {
+		execution, err := nativeOrderedExecutionStatusContext(r.Context(), a, command, graph, mtuStateSnapshotToken(state))
+		if err != nil {
+			http.Error(w, "ordered native route changed or is not ready for measurement", http.StatusConflict)
+			return
+		}
+		if !execution {
+			identity, capture, count, err := captureOrderedPerformanceContext(r.Context(), a)
+			if err != nil || identity.Graph != graph || identity.Command != command || identity.StateToken != mtuStateSnapshotToken(state) {
+				http.Error(w, "ordered native route changed or is not ready for measurement", http.StatusConflict)
+				return
+			}
+			payload["ordered_capture"], payload["ordered_nodes"] = capture, count
+		}
+	}
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func nativeMultihopPlatformCommand(a *app, sel multihopSelection) (*desktopNodeLaunch, error) {
