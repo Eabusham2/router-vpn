@@ -29,7 +29,7 @@ ORIGINAL = module("desktop_connect_original_parser_tests", "test_validate_deskto
 class CONNECTChildGate(unittest.TestCase):
     def test_original_regressions_and_bounds_are_unchanged(self):
         self.assertEqual(G.REGRESSIONS, G.ORIGINAL_REGRESSIONS)
-        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [16, 28, 52, 27, 11])
+        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [20, 28, 52, 27, 11])
         self.assertEqual(G.CHILD["limits"], {"compile_seconds": 600, "case_seconds": 90, "process_seconds": 100})
         self.assertEqual(len(G.CHILD["command_cases"]), 83)
         self.assertEqual(len(G.CHILD["box_cases"]), 15)

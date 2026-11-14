@@ -1184,6 +1184,13 @@ func routerVPNRunNodeMTULoopWithComplete(parent, ctx context.Context, files *rou
 			return nil
 		}
 		if err := chain.current(observe); err != nil {
+			// Cancellation can arrive after the loop-top check while the
+			// captured current proof is being observed. Only this original
+			// parent authorizes normal Stop; invalid proof, foreign context
+			// cancellation and a Stop file alone remain failures here.
+			if parent.Err() != nil {
+				return nil
+			}
 			return err
 		}
 		if complete != nil {

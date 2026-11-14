@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,12 +27,13 @@ import (
 // owner, exact-reader handoff and heartbeat code. Actual encrypted prefix/DNS
 // proof remains a separate mandatory native gate; a double cannot earn it.
 type desktopNodeChainProofFixture struct {
-	lifetime context.Context
-	ready    bool
-	closed   int
-	onRun    func(context.Context) error
-	onClose  func(context.Context) error
-	events   *[]string
+	lifetime  context.Context
+	ready     bool
+	closed    int
+	onRun     func(context.Context) error
+	onClose   func(context.Context) error
+	onHealthy func(context.Context) error
+	events    *[]string
 }
 
 func (proof *desktopNodeChainProofFixture) Run(ctx context.Context, engine mobilemultihop.NodeChainEngine) error {
@@ -51,6 +53,9 @@ func (proof *desktopNodeChainProofFixture) Run(ctx context.Context, engine mobil
 func (proof *desktopNodeChainProofFixture) HealthyContext(ctx context.Context) error {
 	if ctx.Err() != nil || proof.lifetime == nil || proof.lifetime.Err() != nil || !proof.ready {
 		return routerVPNExternalFailure
+	}
+	if proof.onHealthy != nil {
+		return proof.onHealthy(ctx)
 	}
 	return nil
 }
@@ -302,9 +307,38 @@ func TestRouterVPNDesktopNodeChainHeartbeatRejectsCurrentReaderSubstitution(t *t
 }
 
 func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *testing.T) {
-	for _, fault := range []string{"exact", "cancel", "reader-substitution"} {
+	for _, fault := range []string{"exact", "cancel", "reader-substitution", "parent-cancel-current", "graph-cancel-current", "wrong-parent-cancel-current", "invalid-proof-with-stop-current"} {
 		t.Run(fault, func(t *testing.T) {
 			f := desktopNodeChainRuntimeFixture(t)
+			currentFault := strings.HasSuffix(fault, "-current")
+			currentEntered := make(chan context.Context, 1)
+			currentRelease := make(chan struct{})
+			var releaseCurrent sync.Once
+			var currentArmed atomic.Bool
+			if currentFault {
+				f.create = func(_ int, proof *desktopNodeChainProofFixture, _ *desktopNodeChainEngineFixture) {
+					proof.onHealthy = func(ctx context.Context) error {
+						if !currentArmed.Load() {
+							return nil
+						}
+						if _, bounded := ctx.Deadline(); bounded {
+							return nil
+						}
+						select {
+						case currentEntered <- ctx:
+						default:
+						}
+						<-currentRelease
+						if fault == "wrong-parent-cancel-current" {
+							return context.Canceled
+						}
+						if fault == "invalid-proof-with-stop-current" {
+							return routerVPNExternalFailure
+						}
+						return ctx.Err()
+					}
+				}
+			}
 			fixture := &desktopNodeMTUHeartbeatFixture{entered: make(chan struct{}), release: make(chan struct{}), raw: desktopNetworkReceiptFixture(t, 17, 1420, strings.Repeat("d", 32))}
 			registry := include.InboundRegistry()
 			created := 0
@@ -345,6 +379,7 @@ func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *tes
 			var release sync.Once
 			finished := false
 			defer func() {
+				releaseCurrent.Do(func() { close(currentRelease) })
 				release.Do(func() { close(fixture.release) })
 				stopParent()
 				stopGraph()
@@ -374,7 +409,7 @@ func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *tes
 			}
 			release.Do(func() { close(fixture.release) })
 			var capturedReady mobilemultihop.DesktopNodeChainReadyRecord
-			if fault == "exact" {
+			if fault == "exact" || currentFault {
 				deadline := time.Now().Add(3 * time.Second)
 				for {
 					// The shipping heartbeat can revoke Ready after its atomic
@@ -401,18 +436,60 @@ func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *tes
 					}
 					time.Sleep(10 * time.Millisecond)
 				}
-				stopParent()
+				if !currentFault {
+					stopParent()
+				}
+			}
+			var originalState *routerVPNNodeChainProofState
+			if currentFault {
+				originalState = f.runtime.state.Load()
+				if originalState == nil || originalState.revoked.Load() || originalState.joined {
+					t.Fatal("current observation lost original proved state")
+				}
+				currentArmed.Store(true)
+				var observing context.Context
+				select {
+				case observing = <-currentEntered:
+				case err := <-done:
+					finished = true
+					t.Fatal("actual loop exited before held current observation", err)
+				case <-time.After(3 * time.Second):
+					t.Fatal("actual loop did not enter held current observation")
+				}
+				switch fault {
+				case "parent-cancel-current":
+					stopParent()
+				case "graph-cancel-current":
+					stopGraph()
+				case "wrong-parent-cancel-current":
+					foreign, stopForeign := context.WithCancel(context.Background())
+					stopForeign()
+					if foreign.Err() == nil || parent.Err() != nil || graph.Err() != nil {
+						t.Fatal("foreign cancellation changed the original owner")
+					}
+				case "invalid-proof-with-stop-current":
+					desktopExternalStopFile(t, f.runtime.files.root.Name(), meta.SessionID, meta.ConfigSHA256)
+				}
+				if fault == "parent-cancel-current" || fault == "graph-cancel-current" {
+					select {
+					case <-observing.Done():
+					case <-time.After(3 * time.Second):
+						t.Fatal("captured current observation did not receive cancellation")
+					}
+				}
+				releaseCurrent.Do(func() { close(currentRelease) })
 			}
 			select {
 			case err := <-done:
 				finished = true
-				if (err == nil) != (fault != "reader-substitution") {
+				wantSuccess := fault == "exact" || fault == "cancel" || fault == "parent-cancel-current"
+				if (err == nil) != wantSuccess {
 					t.Fatal("actual loop changed cancellation/substitution outcome", err)
 				}
 			case <-time.After(3 * time.Second):
 				t.Fatal("actual ordered loop did not join captured receipt")
 			}
-			if fault == "exact" {
+			if fault == "exact" || currentFault {
 				if capturedReady.Reader != 1 || capturedReady.Generation != 1 || capturedReady.MTU != 1420 {
 					t.Fatal("actual loop published another proof/reader", capturedReady)
 				}
@@ -421,6 +498,17 @@ func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *tes
 					if _, err := f.runtime.files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 						t.Fatal("invalid actual loop published success", name, err)
 					}
+				}
+			}
+			if currentFault {
+				if f.runtime.state.Load() != originalState || originalState.revoked.Load() || originalState.joined || len(f.proofs) != 1 || f.proofs[0].closed != 0 {
+					t.Fatal("loop exit acquired coordinator proof retirement")
+				}
+				join, cancelJoin := context.WithTimeout(context.Background(), 3*time.Second)
+				err := f.runtime.close(join)
+				cancelJoin()
+				if err != nil || f.runtime.state.Load() != originalState || !originalState.revoked.Load() || !originalState.joined || f.proofs[0].closed != 1 {
+					t.Fatal("original coordinator did not join captured proof before Box teardown", err)
 				}
 			}
 			if err := f.runtime.close(context.Background()); err != nil {

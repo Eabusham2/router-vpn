@@ -71,7 +71,7 @@ class ChildVerdictTests(unittest.TestCase):
     def test_exact_every_baseline_and_control_inventory(self):
         self.assertEqual(len(G.CHILD["command_cases"]), 83)
         self.assertEqual(len(G.CHILD["box_cases"]), 14)
-        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [16, 28, 52, 27, 11])
+        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [20, 28, 52, 27, 11])
         for family, key in (("cmd", "command_cases"), ("box", "box_cases")):
             cases = G.CHILD[key]
             G.require_verdict(raw(transcript(cases, G.PACKAGE[family])), 0, G.PACKAGE[family], cases)
@@ -84,6 +84,22 @@ class ChildVerdictTests(unittest.TestCase):
                 package = G.PACKAGE[control["package"]]
                 G.require_verdict(raw(transcript(control["cases"], package, control)), 1,
                                   package, control["cases"], control=control)
+
+    def test_original_loop_requires_exact_parent_cancellation_boundaries(self):
+        root = "TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader"
+        suite = next(item for item in G.REGRESSIONS if item["name"] == "original-ordered-runtime")
+        expected = {root + "/" + leaf for leaf in (
+            "exact", "cancel", "reader-substitution", "parent-cancel-current",
+            "graph-cancel-current", "wrong-parent-cancel-current",
+            "invalid-proof-with-stop-current")}
+        self.assertEqual({name for name in suite["cases"] if name.startswith(root + "/")}, expected)
+        package = G.PACKAGE[suite["package"]]
+        events = transcript(suite["cases"], package)
+        G.require_verdict(raw(events), 0, package, suite["cases"])
+        for omitted in expected:
+            with self.subTest(omitted=omitted), self.assertRaises(ValueError):
+                G.require_verdict(raw([event for event in events if event.get("Test") != omitted]),
+                                  0, package, suite["cases"])
 
     def test_physical_slash_siblings_keep_real_nested_parent_authority(self):
         root = "TestRouterVPNDesktopNodeChainPhysicalAWGModesAndOriginalBox"
