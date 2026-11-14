@@ -24,6 +24,7 @@ S = P.M.STUBS
 preserve = {'org/json/JSONObject.java', 'io/nekohasekai/libbox/Libbox.java', 'io/nekohasekai/libbox/RouterMultihop.java',
             'com/eabusham/routervpn/AndroidMAXProfilePreparation.java', 'com/eabusham/routervpn/AndroidMAXDNSOwner.java',
             'com/eabusham/routervpn/AndroidMultihopStartLayer.java',
+            'com/eabusham/routervpn/AndroidPrivateFileStore.java',
             'com/eabusham/routervpn/RouterPQNative.java', 'com/eabusham/routervpn/AndroidKillSwitchPolicy.java',
             'android/net/Network.java', 'android/net/NetworkCapabilities.java', 'android/net/ConnectivityManager.java',
             'android/net/LinkProperties.java', 'android/util/Base64.java'}
