@@ -671,6 +671,15 @@ def sources():
     ui['android/widget/SeekBar.java']='package android.widget;public final class SeekBar extends android.view.View{int value;OnSeekBarChangeListener listener;public SeekBar(android.content.Context c){super(c);}public void setMax(int v){}public void setProgress(int v){value=v;if(listener!=null)listener.onProgressChanged(this,v,false);}public int getProgress(){return value;}public void setOnSeekBarChangeListener(OnSeekBarChangeListener l){listener=l;}public interface OnSeekBarChangeListener{void onStartTrackingTouch(SeekBar b);void onStopTrackingTouch(SeekBar b);void onProgressChanged(SeekBar b,int p,boolean u);}}'
     ui['android/app/AlertDialog.java']=ui['android/app/AlertDialog.java'].replace('public void dismiss(){','public boolean isShowing(){return showing;}public void dismiss(){')
     boundaries=P.BOUNDARIES.replace('String id="saved-exit",protocol','String name="Saved exit",id="saved-exit",protocol')
+    # Candidate permission owns a different native purpose and is exercised by
+    # its complete preparation fixture. This restoration fixture must never
+    # acquire, start or retire that purpose through the permission-only double.
+    preparation=S.block(boundaries,'final class AndroidNodeCandidatePreparation {')
+    for signature in (' static AndroidNodeCandidatePreparation reserve(', ' void start()', ' void cancelFromUser()'):
+        original=S.block(preparation,signature)
+        closed=original[:original.index('{')+1]+'throw new AssertionError("Speed Lab restoration fixture must not enter candidate preparation");}'
+        assert boundaries.count(original)==1
+        boundaries=boundaries.replace(original,closed)
     boundaries=boundaries.replace(S.block(boundaries,'static final class ChainSource {'),ORDERED_SOURCE)
     boundaries=boundaries.replace(S.block(boundaries,'static final class ChainCapture {'),ORDERED_CAPTURE)
     for name in ('AndroidHomeStateStore','AndroidModeOrchestrator','AndroidMultihopRuntime','AndroidStandardExitRuntime','AndroidConnectionProfileStore','AndroidNodeChainRuntime'):
