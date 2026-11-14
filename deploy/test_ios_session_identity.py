@@ -70,6 +70,14 @@ func chainInput(_ members:[String] = ["original-first-source", "original-middle-
 let chain=try chainInput(),ordered=try captured(["nodeChainSource":chain],"multihop-libbox","shadowsocks")
 try check("ordered identity captures all private source bytes",ordered.nodeChainSource==Data(chain.utf8) && ordered.entryBundleData==nil)
 try check("identical ordered readback remains equal",ordered==captured(["nodeChainSource":chain],"multihop-libbox","shadowsocks"))
+// Equality capture only; native typed parsing/proof has its independent gate.
+let socks=String(decoding:try JSONSerialization.data(withJSONObject:["schema":3,"execution":"local","nodes":["first","middle","final"],"identity_sources":["first-identity","","final-identity"]]),as:UTF8.self)
+let typed=try captured(["nodeChainSOCKSSource":socks],"multihop-libbox","shadowsocks")
+try check("typed session retains complete source",typed.nodeChainSource==Data(socks.utf8) && typed != ordered)
+reject("typed source cannot use ordinary provider discriminator"){_ = try captured(["nodeChainSource":socks],"multihop-libbox","shadowsocks")}
+reject("ordinary source cannot use typed provider discriminator"){_ = try captured(["nodeChainSOCKSSource":chain],"multihop-libbox","shadowsocks")}
+reject("typed source cannot mix ordinary owner"){_ = try captured(["nodeChainSOCKSSource":socks,"nodeChainSource":chain],"multihop-libbox","shadowsocks")}
+reject("typed source cannot borrow legacy pair"){_ = try captured(["nodeChainSOCKSSource":socks,"entryBundle":Data("legacy".utf8)],"multihop-libbox","shadowsocks")}
 for sources in [["original-first-source","changed-middle-source","original-final-source"],
                 ["original-middle-source","original-first-source","original-final-source"],
                 ["original-first-source","original-final-source"]] {

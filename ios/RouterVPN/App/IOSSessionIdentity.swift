@@ -31,7 +31,8 @@ struct IOSSessionIdentity: Equatable, Sendable {
             guard engine == "multihop-libbox", entryBundleData == nil, entryMode == nil,
                   !nodeChainSource.isEmpty, nodeChainSource.count <= 40 * 1024 * 1024,
                   let source = try JSONSerialization.jsonObject(with: nodeChainSource) as? [String: Any],
-                  source["kind"] as? String == "routervpn-node-chain-launch-input", source["execution"] as? String == "local",
+                  (source["kind"] as? String == "routervpn-node-chain-launch-input" ||
+                   source["schema"] as? Int == 3 && Set(source.keys) == Set(["schema", "execution", "nodes", "identity_sources"]) && (source["nodes"] as? [String])?.count == 3), source["execution"] as? String == "local",
                   source["projection_kind"] == nil, source["session_id"] == nil, source["target_os"] == nil, source["restored_mtu"] == nil,
                   let nodes = source["nodes"] as? [String], (2...8).contains(nodes.count) else { throw Self.invalid() }
         } else if engine == "multihop-libbox" || engine == "external-libbox" && entryBundleData != nil {
@@ -75,7 +76,15 @@ struct IOSSessionIdentity: Equatable, Sendable {
             execution = Data(input.utf8)
         }
         if let source = configuration["nodeChainSource"] {
-            guard let input = source as? String else { throw Self.invalid() }
+            guard let input = source as? String, !input.isEmpty, input.utf8.count <= 40 * 1024 * 1024,
+                  let value = try JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any],
+                  value["schema"] as? Int != 3 else { throw Self.invalid() }
+            chain = Data(input.utf8)
+        }
+        if let source = configuration["nodeChainSOCKSSource"] {
+            guard chain == nil, execution == nil, let input = source as? String, !input.isEmpty, input.utf8.count <= 40 * 1024 * 1024,
+                  let value = try JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any],
+                  value["schema"] as? Int == 3 else { throw Self.invalid() }
             chain = Data(input.utf8)
         }
         if engine == "external-libbox" {

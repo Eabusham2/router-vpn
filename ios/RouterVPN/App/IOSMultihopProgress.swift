@@ -31,7 +31,11 @@ extension RouterVPNModel {
             return
         }
         let connectedAt = session.connectedDate
-        let chainSource = configuration["nodeChainSource"] as? String
+        guard configuration["nodeChainSource"] == nil || configuration["nodeChainSOCKSSource"] == nil else {
+            multihopProgressInFlight = nil; return
+        }
+        let chainKey = configuration["nodeChainSOCKSSource"] == nil ? "nodeChainSource" : "nodeChainSOCKSSource"
+        let chainSource = configuration[chainKey] as? String
         if let identity {
             guard identity.connectedAt == connectedAt, identity.bundleData == bundleData,
                   identity.nodeChainSource == chainSource.map({ Data($0.utf8) }) else {
@@ -40,7 +44,7 @@ extension RouterVPNModel {
             }
         }
         let orderedNodes = chainSource.flatMap { IOSNodeChainPresentation.captured(source: Data($0.utf8), bundleData: bundleData) }
-        guard configuration["nodeChainSource"] == nil || orderedNodes != nil else {
+        guard configuration[chainKey] == nil || orderedNodes != nil else {
             if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }
             return
         }
@@ -53,7 +57,8 @@ extension RouterVPNModel {
                       self.iosConnectGeneration == connectionGeneration, self.activeSessionIdentity == identity,
                       session.connectedDate == connectedAt, [.connecting, .connected, .reasserting].contains(session.status),
                       let current = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
-                      current["bundle"] as? Data == bundleData, current["nodeChainSource"] as? String == chainSource,
+                      current["bundle"] as? Data == bundleData, current[chainKey] as? String == chainSource,
+                      current[chainKey == "nodeChainSource" ? "nodeChainSOCKSSource" : "nodeChainSource"] == nil,
                       self.selectedNodeProfile?.id == nodeID, self.connected || self.tunnelTransitioning,
                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
                 if let orderedNodes {

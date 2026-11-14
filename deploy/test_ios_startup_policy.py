@@ -110,12 +110,12 @@ private struct IOSLastRuntime:Codable {let routerID:String,rawProfileID:String,l
 // fixture owns no real native status/proof from which to derive that authority.
 enum FixtureOptionalUsageOwner {}
 struct FixtureNodeChainBoundary {
- struct Plan {func close()throws{}}
- let plan=Plan(),launchInput=""
+ let launchInput=""
+ func close()throws{}
 }
 @MainActor final class RouterVPNModel {
  var bundle:ClientBundle?,entry:ClientBundle?
- func captureIOSNodeChain(_ bundle:ClientBundle)throws->FixtureNodeChainBoundary {throw NSError(domain:"SeparateNativeChainFixture",code:1)}
+ func captureIOSOrderedRoute(_ bundle:ClientBundle)throws->FixtureNodeChainBoundary {throw NSError(domain:"SeparateNativeChainFixture",code:1)}
  var connected=false,tunnelTransitioning=false,iosUserDisconnectInProgress=false
  var profileMutationBlocked:Bool{connected || tunnelTransitioning || iosUserDisconnectInProgress}
  var iosConnectGeneration=UUID(),message="",auto=false,activeRawProfile="",activeEngine="libbox",imports=0,failImport=false
@@ -124,7 +124,7 @@ struct FixtureNodeChainBoundary {
  var routerHook:(()async->Void)?
  let iosStartupPolicy=IOSStartupPolicy(),iosSpeedLabOwnership=IOSSpeedLabOwnership()
  var iosStrategyProfile:RouterProfile?{selectedNodeProfile}
- static func iosStrategyDigest(_ data:Data)->String {let hash=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",hash),count:4)}
+ nonisolated static func iosStrategyDigest(_ data:Data)->String {let hash=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",hash),count:4)}
  func connect()async{await routerHook?();guard await iosSpeedLabOwnership.admitConnection()else{return};routerDispatches.append(auto ? "auto":"manual")}
  func runIOSSmartAuto()async{await routerHook?();guard await iosSpeedLabOwnership.admitConnection()else{return};routerDispatches.append("smart-auto")}
  func connectIOSRawCandidate(_ id:String)async->Bool{
@@ -441,6 +441,11 @@ def source():
         'private func requireExternalPreparation(', 'func externalTorEntryData(',
         'func externalRuntimeBundleData(', 'private func externalStrict(',
         'private func waitExternalConnection(')]
+    # The OS boundary gives the otherwise unknown future NEVPNStatus value an
+    # explicit test case. Preserve the shipping fallback body while spelling that
+    # one case explicitly for this closed local enum under Swift 6.
+    assert snippets[-1].count('@unknown default:') == 1
+    snippets[-1] = snippets[-1].replace('@unknown default:', 'case .unknown:')
     editor = '\n'.join(member(settings, signature).replace('private func ', 'func ') for signature in (
         'private func selectedProfile()', 'private func load()', 'private func save()'))
     mtu = (APP / 'IOSMTUControl.swift').read_text()

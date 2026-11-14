@@ -36,6 +36,11 @@ public final class LibboxRouterNodeChainExecution:NSObject {
  public func healthy()->Bool{valid}
  public func mtuProfile()->String{"{\"mtu_policy\":\"auto\"}"}
 }
+public final class LibboxRouterNodeChainSOCKS:NSObject {
+ public var valid=true,automatic=true
+ public func healthy()->Bool{valid}
+ public func mtuProfile()->String{"{\"mtu_policy\":\"auto\"}"}
+}
 public final class LibboxRouterExternalProofRequest:NSObject { public var valid=true }
 public final class LibboxRouterTorProofRequest:NSObject { public var valid=true;public var entryJumbo=false;public var entryFixedMTU:Int32=0 }
 public enum FakeOS {
@@ -108,6 +113,11 @@ public func LibboxNewRouterExternalMTU(_ server:LibboxCommandServer?,_ platform:
  FakeOS.externalCreated?();return core
 }
 public func LibboxRouterNodeChainExecutionNewMTU(_ plan:LibboxRouterNodeChainExecution?,_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
+ guard let plan,plan.healthy() else{error?.pointee=NSError(domain:"ExecutionMTUFixture",code:1);return nil}
+ let core=LibboxNewRouterMTU(server,platform,"captured actual execution graph",plan.mtuProfile(),error)
+ core?.automatic=plan.automatic;return core
+}
+public func LibboxRouterNodeChainSOCKSNewMTU(_ plan:LibboxRouterNodeChainSOCKS?,_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
  guard let plan,plan.healthy() else{error?.pointee=NSError(domain:"ExecutionMTUFixture",code:1);return nil}
  let core=LibboxNewRouterMTU(server,platform,"captured actual execution graph",plan.mtuProfile(),error)
  core?.automatic=plan.automatic;return core
@@ -539,6 +549,23 @@ for automatic in [false,true] { for startupHold in ["",id] {
  try retained.drainForNodeChainExecutionCleanup()
  check(FakeOS.current?.closed==true,"ordered cleanup lost original optimizer")
  check(retained.observePhysicalPath(name:"en0",signature:"ordered-cleanup-change"),"ordered cleanup disabled physical observation before DELETE")
+ try retained.stopChecked()
+}}
+for automatic in [false,true] { for startupHold in ["",id] {
+ FakeOS.newCloseFailures=0;FakeOS.returnOwnerWithError=false
+ let retained=ready(startupHold),plan=LibboxRouterNodeChainSOCKS(),calls=FakeOS.startCalls
+ plan.automatic=automatic
+ try retained.activateNodeChainSOCKS(server:LibboxCommandServer(),plan:plan){_ in}
+ let session=retained.captureMTU()!.session
+ let status=request(retained,"mtu-status",other,session)!
+ check(status["tor_connection"] as? Bool==false,"typed SOCKS execution mislabeled Tor")
+ check(status["optimization_allowed"] as? Bool==automatic,"typed SOCKS full-path native Auto authority ignored")
+ check(FakeOS.startCalls==calls + ((automatic && startupHold.isEmpty) ? 1:0),"typed SOCKS native Auto entry ignored original hold")
+ if !startupHold.isEmpty{_=request(retained,"mtu-release",id,session)}
+ check(FakeOS.startCalls==calls + (automatic ? 1:0),"typed SOCKS held Auto lost original native policy")
+ try retained.drainForNodeChainExecutionCleanup()
+ check(FakeOS.current?.closed==true,"typed SOCKS cleanup lost original optimizer")
+ check(retained.observePhysicalPath(name:"en0",signature:"ordered-cleanup-change"),"typed SOCKS cleanup disabled physical observation before DELETE")
  try retained.stopChecked()
 }}
 for startupHold in ["",id] {

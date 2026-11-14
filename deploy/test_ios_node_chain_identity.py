@@ -147,18 +147,22 @@ def main():
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(stub), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         capture = APP / 'IOSNodeChainCapture.swift'
-        sources = [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainLaunch.swift')]
+        sources = [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainLaunch.swift')]
         binary = work / 'tests'
         subprocess.run(command + sources + [str(code), '-o', str(binary)], check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
 
         source = capture.read_text()
-        before = '''              let nodes = root["nodes"] as? [String], (2...8).contains(nodes.count),
-              let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,
-              identitySources.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 16 * 1024 * 1024 }) else {'''
-        after = '''              let nodes = root["nodes"] as? [String], (2...8).contains(nodes.count) else {'''
-        assert source.count(before) == 1
-        mutated = work / 'MissingIdentityReceipt.swift'; mutated.write_text(source.replace(before, after, 1))
+        # The schema-two imported member has no paired identity, while every
+        # native member still requires one. Remove both inventory-presence and
+        # native-role requirements to reproduce the original missing-receipt
+        # defect without weakening the source schema check or positive cases.
+        before = '              let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,'
+        after = '              let identitySources = Optional((root["identity_sources"] as? [String]) ?? []),'
+        native_identity = 'guard !identitySources[position].isEmpty, !(schema == 2 && position == 1),'
+        assert source.count(before) == 1 and source.count(native_identity) == 1
+        changed = source.replace(before, after, 1).replace(native_identity, 'guard !(schema == 2 && position == 1),', 1)
+        mutated = work / 'MissingIdentityReceipt.swift'; mutated.write_text(changed)
         variants = [
             ('required-native-inventory', [str(mutated) if path == str(capture) else path for path in sources], body, 'ACCEPTED native handoff missing identity inventory'),
             ('post-await-identity', sources, body.replace('try requireCurrentIOSNodeChain(nodeChainSource, selected: bundle)', '_ = nodeChainSource', 1), 'ACCEPTED save changed-identity'),

@@ -54,14 +54,15 @@ PLAN_METHODS = (
 )
 C_FUNCTIONS = (
     ("LibboxNewRouterNodeChainSOCKS", "LibboxRouterNodeChainSOCKS* _Nullable", ("NSString* _Nullable", "NSError* _Nullable* _Nullable")),
+    ("LibboxRouterNodeChainSOCKSNewCommandServer", "LibboxCommandServer* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "id<LibboxCommandServerHandler> _Nullable", "id<LibboxPlatformInterface> _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainImportedSOCKSMemberInput", "NSString* _Nonnull", ("NSString* _Nullable", "NSString* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainSOCKSNewHopMeasurement", "LibboxRouterHopMeasurement* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "LibboxCommandServer* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainSOCKSNewMTU", "LibboxRouterMTU* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "LibboxCommandServer* _Nullable", "id<LibboxRouterMTUPlatform> _Nullable", "NSError* _Nullable* _Nullable")),
 )
 SHARED_PACKET_SOURCES = (
-    "App/IOSImportedSOCKSSource.swift",
+    "App/Models.swift",
     "App/IOSNodeChainSOCKSCapture.swift",
-    "App/IOSNodeChainSOCKSProviderCapture.swift",
+    "App/IOSNodeChainProviderCapture.swift",
 )
 
 def sha_file(path):

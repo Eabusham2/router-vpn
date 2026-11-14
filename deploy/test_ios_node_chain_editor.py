@@ -57,7 +57,7 @@ enum IOSRuntimeSelector {}
  let iosSpeedLabOwnership=IOSSpeedLabOwnership()
  var selectedNodeProfile:RouterProfile? {bundle.flatMap{IOSDNSRuntimePolicy.selectedProfile(in:$0)}}
  var allNodeProfiles:[RouterProfile]{IOSNodeBundleStore.shared.profiles(current:bundle)}
- static func iosStrategyDigest(_ data:Data)->String{try! LibboxEditorDigest(data)}
+ nonisolated static func iosStrategyDigest(_ data:Data)->String{try! LibboxEditorDigest(data)}
  func commitLinkedNodeBundle(_ data:Data)throws {
   attempts+=1;if failWrite{throw IOSMultihopNodeSelection.issue("persistence boundary refused commit")}
   let value=try JSONDecoder().decode(ClientBundle.self,from:data)
@@ -96,6 +96,19 @@ TESTS = r'''
  }
  static func run()throws {
   try runOriginal()
+  do {
+   IOSNodeBundleStore.shared.records=[:]
+   let nodes=try sources(3,false,"",true),model=RouterVPNModel();model.bundle=nodes.last!
+   for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
+   let owner=try model.captureIOSNodeChainEditorOwner(),selection=model.selectedNodeProfile!.multihopNodes!
+   try model.saveIOSNodeChain(selection,owner:owner)
+   let capture=try model.captureIOSOrderedRoute(model.bundle!);defer{try? capture.close()}
+   try check("typed SOCKS editor saves original three member source",model.writes==1 && capture.members[1].mode=="socks5" && capture.providerKey==IOSNodeChainSOCKSCapture.providerKey)
+   let stale=try model.captureIOSNodeChainEditorOwner()
+   try editMiddle{$0.routerProfiles[0].external?.socks5?.password="relinked-password"}
+   try reject("typed SOCKS editor cannot reuse relinked private source"){try model.saveIOSNodeChain(selection,owner:stale)}
+  }
+  try visibleSOCKS()
   for mode in ["wg","awg2-fast","awg2-strong"] {
    let model=try setup(3,false,mode),owner=try model.captureIOSNodeChainEditorOwner()
    var draft=IOSNodeChainDraft(saved:model.selectedNodeProfile!.multihopNodes,finalID:owner.controlID)
@@ -111,6 +124,55 @@ TESTS = r'''
   var importedDraft=IOSNodeChainDraft(saved:[.init(id:"entry",mode:"wg"),.init(id:"custom",mode:"shadowsocks"),.init(id:"final",mode:"shadowsocks")],finalID:"final")
   try reject("HY2 final cannot adopt imported middle"){try importedDraft.chooseFinalMode("hysteria2")}
   for mode in ["wg","naive-h3","Hysteria2",""] {try reject("unsupported final chooser "+mode){try importedDraft.chooseFinalMode(mode)}}
+ }
+ static func visibleSOCKS()throws {
+  let cases=["auth","anonymous","ipv6","ipv6-expanded","user-limit","password-limit","hostname","zero-ip","scoped","zero-port","large-port","missing-pass","long-user","long-pass","router-api","api-token","proof","layer","endpoint","multicast"]
+  for (index,label) in cases.enumerated() {
+   IOSNodeBundleStore.shared.records=[:]
+   var nodes=try sources(3,false,"",true),middle=nodes[1].routerProfiles[0]
+   switch label {
+   case "anonymous":middle.external?.socks5?.username=nil;middle.external?.socks5?.password=nil
+   case "ipv6":middle.endpoint="2001:db8::20";middle.external?.socks5?.host=middle.endpoint
+   case "ipv6-expanded":middle.endpoint="2001:0db8:0:0:0:0:0:20";middle.external?.socks5?.host=middle.endpoint
+   case "user-limit":middle.external?.socks5?.username=String(repeating:"u",count:255)
+   case "password-limit":middle.external?.socks5?.password=String(repeating:"p",count:255)
+   case "hostname":middle.endpoint="socks.example.test";middle.external?.socks5?.host=middle.endpoint
+   case "zero-ip":middle.endpoint="192.168.001.1";middle.external?.socks5?.host=middle.endpoint
+   case "scoped":middle.endpoint="fe80::1%en0";middle.external?.socks5?.host=middle.endpoint
+   case "zero-port":middle.external?.socks5?.port=0
+   case "large-port":middle.external?.socks5?.port=65536
+   case "missing-pass":middle.external?.socks5?.password=nil
+   case "long-user":middle.external?.socks5?.username=String(repeating:"u",count:256)
+   case "long-pass":middle.external?.socks5?.password=String(repeating:"p",count:256)
+   case "router-api":middle.routerAPI="http://10.81.0.1:8787"
+   case "api-token":middle.apiToken="borrowed-token"
+   case "proof":middle.nodeProofID=String(repeating:"a",count:64)
+   case "layer":middle.startLayer="aes-256-gcm"
+   case "endpoint":middle.endpoint="203.0.113.99"
+   case "multicast":middle.endpoint="224.0.0.1";middle.external?.socks5?.host=middle.endpoint
+   default:break
+   }
+   nodes[1].routerProfiles=[middle]
+   let model=RouterVPNModel();model.bundle=nodes.last!
+   for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
+   let owner=try model.captureIOSNodeChainEditorOwner(),eligible=index<6
+   let selection=model.selectedNodeProfile!.multihopNodes!
+   try check("visible SOCKS eligibility "+label,IOSNodeChainEditorVisible.eligible(middle)==eligible)
+   try check("visible SOCKS mode "+label,IOSNodeChainEditorVisible.modes(middle)==(eligible ? ["socks5"]:[]))
+   try check("visible SOCKS exact middle "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:selection,position:1).contains(where:{$0.id==middle.id})==eligible)
+   var firstRole=selection;firstRole[1].id="other-middle";firstRole[0].id=middle.id
+   try check("visible SOCKS excludes first "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:firstRole,position:0).isEmpty)
+   var four=selection;four.insert(.init(id:"other-prefix",mode:"wg"),at:1)
+   try check("visible SOCKS excludes longer path "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:four,position:2).isEmpty)
+   var duplicate=selection;duplicate[0].id=middle.id
+   try check("visible SOCKS excludes reused selected source "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:duplicate,position:1).isEmpty)
+   try check("visible SOCKS unique original source "+label,IOSNodeChainEditorVisible.unique([middle,middle]).isEmpty)
+   let before=model.iosNodeChainEditorProfiles(owner:owner).contains(where:{$0.id==middle.id})
+   nodes[1].routerProfiles[0].external?.socks5?.password="different-private-source"
+   IOSNodeBundleStore.shared.records[middle.id]=try JSONEncoder().encode(nodes[1])
+   let after=model.iosNodeChainEditorProfiles(owner:owner).contains(where:{$0.id==middle.id})
+   try check("visible SOCKS original source admission "+label,before==eligible && !after)
+  }
  }
  static func runOriginal()throws {
   var draft=IOSNodeChainDraft(finalID:"final")
@@ -250,7 +312,9 @@ def main(selected_mutations=None):
     for call in ('draft.choose(id, at: position)', 'draft.move(from: position, to: position - 1)',
                  'draft.move(from: position, to: position + 1)', 'draft.remove(at: position)',
                  'draft.append()', 'draft.chooseFinalMode(mode)', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner)',
-                 'model.captureIOSNodeChainEditorOwner()'):
+                 'model.captureIOSNodeChainEditorOwner()', 'model.iosNodeChainEditorProfiles(owner: owner)',
+                 'IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position)',
+                 'IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}))'):
         assert call in view, 'shipping editor callback removed: ' + call
     with tempfile.TemporaryDirectory(prefix='.ios-chain-editor-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-editor-') as directory:
         go_dir, work = Path(go_dir), Path(directory)
@@ -264,19 +328,24 @@ def main(selected_mutations=None):
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(lib), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainLaunch.swift')]
+        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainLaunch.swift')]
         binary = work / 'tests'
         command += [str(shipping), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
         late = '        try requireIOSNodeChainEditorOwner(owner, nodes: nodes)'
-        compile_source = '        let capture = try captureIOSNodeChain(value)\n        defer { try? capture.plan.close() }\n        _ = try IOSRuntimeSelector.selectNodeChain(capture)'
+        compile_source = '        let capture = try captureIOSOrderedRoute(value)\n        defer { try? capture.close() }\n        _ = try IOSRuntimeSelector.selectNodeChain(capture)'
         mutants = (
             ('hysteria-final-scope', editor.replace('mode == "shadowsocks" || nodes.dropLast().allSatisfy(', 'true || nodes.dropLast().allSatisfy(', 1), 'ACCEPTED HY2 final cannot adopt imported middle'),
             ('pinned-final', editor.replace('position < nodes.count - 1,\n              id.isEmpty', 'position < nodes.count,\n              id.isEmpty', 1), 'ACCEPTED changing pinned final'),
             ('original-fingerprints', editor.replace('try iosNodeChainEditorFingerprint(node.id) == expected', '!expected.isEmpty', 1), 'ACCEPTED stale editor middle-token'),
             ('late-source-owner', editor[:editor.rindex(late)] + editor[editor.rindex(late):].replace(late, '        // Lost final editor ownership check', 1), 'ACCEPTED source changed during compile preparation middle-token'),
             ('compile-before-save', editor.replace(compile_source, '        _ = value', 1), 'ACCEPTED invalid draft prefix-mode'),
+            ('visible-socks-eligibility', editor.replace('IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile)\n    }','IOSImportedShadowsocksSource.eligible(profile)\n    }',1), 'visible SOCKS eligibility auth'),
+            ('visible-socks-mode', editor.replace('return [profile.external?.protocolName ?? ""]','return ["shadowsocks"]',1), 'visible SOCKS mode auth'),
+            ('visible-middle-position', editor.replace('nodes.count == 3 && position == 1 && nodes.last?.mode == "shadowsocks") &&','true) &&',1), 'visible SOCKS excludes first auth'),
+            ('visible-source-admission', editor.replace('actualHash == expectedHash else','!expectedHash.isEmpty else',1), 'visible SOCKS original source admission auth'),
+            ('visible-unique-source', editor.replace('profiles.filter({ $0.id == profile.id }).count == 1','!profile.id.isEmpty',1), 'visible SOCKS unique original source auth'),
         )
         for name, changed, failure in mutants:
             if selected_mutations and name not in selected_mutations:
@@ -291,5 +360,5 @@ def main(selected_mutations=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mutation', action='append', choices=['hysteria-final-scope', 'pinned-final', 'original-fingerprints', 'late-source-owner', 'compile-before-save'])
+    parser.add_argument('--mutation', action='append', choices=['hysteria-final-scope', 'pinned-final', 'original-fingerprints', 'late-source-owner', 'compile-before-save','visible-socks-eligibility','visible-socks-mode','visible-middle-position','visible-source-admission','visible-unique-source'])
     main(parser.parse_args().mutation)

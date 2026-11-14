@@ -87,7 +87,7 @@ enum IOSMultihopExecution {
  struct Identity {let nodeChainSource:Data?}
  var activeSessionIdentity:Identity?
  let iosSpeedLabOwnership=IOSSpeedLabOwnership()
- static func iosStrategyDigest(_ data:Data)->String{"boundary"}
+ nonisolated static func iosStrategyDigest(_ data:Data)->String{"boundary"}
  func iosMultihopEntryBundle(for bundle:ClientBundle)throws->ClientBundle{throw CancellationError()}
  func launch(_ manager:NETunnelProviderManager,_ selected:ClientBundle,_ selection:IOSRuntimeSelection)async throws->Bool {
   try await start(manager:manager,bundle:selected,selection:selection)
@@ -113,8 +113,8 @@ TESTS = r'''
   do{try await action()}catch{checks+=1;return};throw NSError(domain:"ChainAppRejected",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])
  }
  static func reset(){NETunnelProviderManager.reset();IOSNodeBundleStore.shared.records=[:];IOSMAXSourceSelection.calls=0;IOSStartupLastChoice.restores=0;IOSMTUMeasurementGate.current=""}
- static func sources(_ count:Int,_ mixed:Bool=false,_ hysteriaPrefix:String="")throws->[ClientBundle] {
-  let raw=try !hysteriaPrefix.isEmpty ? LibboxTestHysteriaFixture(count,hysteriaPrefix) : (mixed ? LibboxTestAWGFixture(count,"off"):LibboxTestFixture(count,"off"))
+ static func sources(_ count:Int,_ mixed:Bool=false,_ hysteriaPrefix:String="",_ socks:Bool=false)throws->[ClientBundle] {
+  let raw=try socks ? LibboxTestSOCKSFixture() : !hysteriaPrefix.isEmpty ? LibboxTestHysteriaFixture(count,hysteriaPrefix) : (mixed ? LibboxTestAWGFixture(count,"off"):LibboxTestFixture(count,"off"))
   let roots=try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [[String:Any]]
   return try roots.map{original in
    var root=original,profiles=root["routerProfiles"] as! [[String:Any]],p=profiles[0]
@@ -141,6 +141,17 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}
  }
  static func run()async throws {
+  do {
+   reset();let nodes=try sources(3,false,"",true),model=RouterVPNModel(),manager=NETunnelProviderManager(),selected=nodes.last!
+   model.bundle=selected
+   for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
+   let capture=try model.captureIOSOrderedRoute(selected);defer{try? capture.close()}
+   let selection=try IOSRuntimeSelector.selectNodeChain(capture)
+   _ = try await model.launch(manager,selected,selection)
+   let configuration=(manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+   try check("typed SOCKS reaches one original manager and separate provider source",NETunnelProviderManager.starts==1 && configuration[IOSNodeChainSOCKSCapture.providerKey] as? String==capture.launchInput && configuration[IOSNodeChainProviderCapture.key]==nil)
+   let reopened=try IOSNodeChainSOCKSCapture.reopenProvider(configuration);try reopened.plan.close()
+  }
   do {
    let(model,manager,selected,selection)=try setup(4,true)
    try check("mixed packet launch keeps all original raw modes",selected.routerProfiles[0].multihopNodes?.map(\.mode)==["awg2-fast","awg2-strong","wg","shadowsocks"] && selection.nodeChainInput != nil)
@@ -289,7 +300,7 @@ def main():
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(stub), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainLaunch.swift')]
+        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainLaunch.swift')]
         binary = work / 'tests'
         subprocess.run(command + [str(code), '-o', str(binary)], check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)

@@ -72,6 +72,28 @@ func (*socksBridgePlatform) UseProcFS() bool { return false }
 type socksBridgeHandler struct { CommandServerHandler }
 func (*socksBridgeHandler) WriteDebugMessage(string) {}
 
+func TestRouterNodeChainSOCKSExportedFactoryRetainsTypedOwner(t *testing.T) {
+	if server, err := RouterNodeChainSOCKSNewCommandServer(nil, &socksBridgeHandler{}, &socksBridgePlatform{}); err == nil || server != nil {
+		t.Fatal("nil typed factory owner accepted")
+	}
+	input, err := socksBridgeSource(t, "wg").Source()
+	if err != nil { t.Fatal(err) }
+	owner, err := NewRouterNodeChainSOCKS(input)
+	if err != nil { t.Fatal(err) }
+	server, err := RouterNodeChainSOCKSNewCommandServer(owner, &socksBridgeHandler{}, &socksBridgePlatform{})
+	if server != nil { defer server.Close() }
+	if err != nil || server == nil { t.Fatal("typed factory did not return original server", err) }
+	if native := owner.native.Load(); native == nil || native.server != server || native.service != server.StartedService {
+		t.Fatal("exported factory replaced the original typed construction")
+	}
+	if replacement, err := RouterNodeChainSOCKSNewCommandServer(owner, &socksBridgeHandler{}, &socksBridgePlatform{}); err == nil || replacement != nil {
+		t.Fatal("exported factory acquired a second native owner")
+	}
+	if err := owner.BindNative(server); err != nil { t.Fatal(err) }
+	if err := owner.Close(); err != nil { t.Fatal(err) }
+	if !owner.NativeClosed() { t.Fatal("original unstarted construction did not retain its close receipt") }
+}
+
 func socksBridgeOwner(t *testing.T, mode string) *RouterNodeChainSOCKS {
 	t.Helper()
 	input, err := socksBridgeSource(t, mode).Source()

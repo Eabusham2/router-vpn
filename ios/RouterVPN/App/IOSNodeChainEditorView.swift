@@ -8,7 +8,7 @@ struct IOSNodeChainEditorView: View {
     @State private var detail = ""
 
     private var available: [RouterProfile] {
-        model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" && $0.external == nil || IOSImportedShadowsocksSource.eligible($0) }
+        model.iosNodeChainEditorProfiles(owner: owner)
     }
 
     var body: some View {
@@ -33,11 +33,11 @@ struct IOSNodeChainEditorView: View {
                             get: { draft.nodes[position].id },
                             set: { id in change {
                                 try draft.choose(id, at: position)
-                                if let profile=available.first(where:{$0.id==id}) { try draft.chooseMode(profile.normalizedNodeKind=="external" ? "shadowsocks" : "wg", at:position) }
+                                if let profile=available.first(where:{$0.id==id}) { try draft.chooseMode(profile.normalizedNodeKind=="external" ? (profile.external?.protocolName ?? "") : "wg", at:position) }
                             } }
                         )) {
                             Text("Choose linked node").tag("")
-                            ForEach(available.filter { candidate in (candidate.normalizedNodeKind != "external" || draft.nodes.count == 3 && position == 1) && (candidate.id == node.id || !draft.nodes.contains(where: { $0.id == candidate.id })) }) { candidate in
+                            ForEach(IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position)) { candidate in
                                 Text(candidate.name.isEmpty ? candidate.id : candidate.name).tag(candidate.id)
                             }
                             if !node.id.isEmpty && !available.contains(where: { $0.id == node.id }) {
@@ -48,10 +48,10 @@ struct IOSNodeChainEditorView: View {
                             get: { draft.nodes[position].mode },
                             set: { mode in change { try draft.chooseMode(mode, at: position) } }
                         )) {
-                            ForEach(available.first(where:{$0.id==node.id})?.normalizedNodeKind == "external" ? ["shadowsocks"] : IOSMultihopNodeSelection.nativePrefixModes, id: \.self) { mode in
+                            ForEach(IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id})), id: \.self) { mode in
                                 Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
                             }
-                            if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && node.mode != "shadowsocks" {
+                            if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && !["shadowsocks", "socks5"].contains(node.mode) {
                                 Text(IOSMultihopNodeSelection.transportName(node.mode)).tag(node.mode)
                             }
                         }
@@ -69,7 +69,7 @@ struct IOSNodeChainEditorView: View {
                 Button("Add preceding node") { change { try draft.append() } }.disabled(draft.nodes.count >= IOSMultihopNodeSelection.maximumNodes)
             }
             Section("Local execution") {
-                Text("Traffic follows this order through one VPN connection. Paired preceding nodes use WireGuard or AWG2. The selected final Router node can use Shadowsocks 2022 or Hysteria2; Hysteria2 requires Start Layer Off on that final node. A three-node route with one saved Shadowsocks 2022 custom middle (AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305, Start Layer Off) still requires a Shadowsocks 2022 final node.")
+                Text("Traffic follows this order through one VPN connection. Paired preceding nodes use WireGuard or AWG2. The selected final Router node can use Shadowsocks 2022 or Hysteria2; Hysteria2 requires Start Layer Off on that final node. A three-node route supports one saved SOCKS5 or Shadowsocks 2022 custom middle with Start Layer Off and a Shadowsocks 2022 final node. SOCKS5 retains its original literal server address and credentials.")
                 Text("Each node keeps its own saved credentials, Start Layer and protection settings. DNS uses the final node. Every node must pass verification before Connected.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Save ordered route") {

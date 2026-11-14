@@ -630,6 +630,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         case "awg2-fast": return "AWG2 Fast"
         case "awg2-strong": return "AWG2 Strong"
         case "shadowsocks": return "Shadowsocks 2022"
+        case "socks5": return "SOCKS5"
         case "hysteria2": return "Hysteria2"
         default: return "Saved transport: \(mode)"
         }
@@ -1032,7 +1033,7 @@ enum IOSImportedShadowsocksSource {
         }
         return false
     }
-    private static func literal(_ host: String) -> Bool {
+    fileprivate static func literal(_ host: String) -> Bool {
         guard !host.utf8.contains(0), !host.contains("%"), !host.contains("["), !host.contains("]") else { return false }
         // Darwin accepts zero-prefixed IPv4 octets that the shared Go parser
         // rejects. Check decimal spelling before libc, including IPv4 tails in
@@ -1059,5 +1060,43 @@ enum IOSImportedShadowsocksSource {
         let frozen=try JSONSerialization.jsonObject(with:encoder.encode(profile))
         let selected:[String:Any] = ["schema":1,"exit_id":profile.id,"protocol":external.protocolName,"expected_public_ip":external.expectedPublicIP,"profile":frozen]
         return (String(decoding:try JSONSerialization.data(withJSONObject:config,options:[.sortedKeys]),as:UTF8.self),String(decoding:try JSONSerialization.data(withJSONObject:selected,options:[.sortedKeys]),as:UTF8.self))
+    }
+}
+
+/// Source eligibility only. The typed compiler and native owner still validate
+/// the complete graph before a SOCKS intermediate can carry any traffic.
+enum IOSImportedSOCKSSource {
+    static func eligible(_ profile: RouterProfile) -> Bool {
+        guard profile.normalizedNodeKind == "external", let external = profile.external,
+              external.protocolName == "socks5", let socks = external.socks5,
+              external.startLayer == nil, [nil, "", "off"].contains(profile.startLayer),
+              [nil, ""].contains(profile.nodeProofID), profile.routerAPI.isEmpty, profile.apiToken.isEmpty,
+              profile.endpoint == socks.host, (1...65535).contains(socks.port),
+              (socks.username ?? "").isEmpty == (socks.password ?? "").isEmpty,
+              (socks.username ?? "").utf8.count <= 255, (socks.password ?? "").utf8.count <= 255,
+              IOSImportedShadowsocksSource.literal(socks.host) else { return false }
+        var v4 = in_addr(), v6 = in6_addr()
+        if inet_pton(AF_INET, socks.host, &v4) == 1 {
+            let bytes = withUnsafeBytes(of: &v4) { Array($0) }
+            return bytes.contains(where: { $0 != 0 }) && !(224...239).contains(bytes[0])
+        }
+        guard inet_pton(AF_INET6, socks.host, &v6) == 1 else { return false }
+        let bytes = withUnsafeBytes(of: &v6) { Array($0) }
+        return bytes.contains(where: { $0 != 0 }) && bytes[0] != 255 &&
+            !(bytes.prefix(10).allSatisfy({ $0 == 0 }) && bytes[10] == 255 && bytes[11] == 255)
+    }
+
+    static func capture(_ profile: RouterProfile) throws -> (config: String, capture: String) {
+        guard eligible(profile), let external = profile.external, let socks = external.socks5 else {
+            throw IOSMultihopNodeSelection.issue("The original literal SOCKS5 intermediate is unavailable.")
+        }
+        var outbound: [String: Any] = ["tag": "custom-exit", "type": "socks", "version": "5", "server": socks.host, "server_port": socks.port]
+        if let username = socks.username, !username.isEmpty { outbound["username"] = username; outbound["password"] = socks.password! }
+        let config: [String: Any] = ["inbounds": [["type": "tun", "tag": "tun-in", "address": ["172.29.94.1/30", "fd29:94::1/126"], "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"]], "endpoints": [], "outbounds": [outbound], "route": ["final": "custom-exit", "auto_detect_interface": true]]
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let frozen = try JSONSerialization.jsonObject(with: encoder.encode(profile))
+        let selected: [String: Any] = ["schema": 1, "exit_id": profile.id, "protocol": "socks5", "expected_public_ip": external.expectedPublicIP, "profile": frozen]
+        return (String(decoding: try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]), as: UTF8.self),
+                String(decoding: try JSONSerialization.data(withJSONObject: selected, options: [.sortedKeys]), as: UTF8.self))
     }
 }

@@ -104,6 +104,21 @@ TESTS = r'''
    try editMiddle{$0.routerProfiles[0].apiToken="later-replacement"}
    try check("advanced startup generation still binds original middle",!model.matches(intent))
   }
+
+  for mode in ["auto","smart-auto","last"] {
+   IOSNodeBundleStore.shared.records=[:]
+   let nodes=try sources(3,false,"",true),model=RouterVPNModel();model.bundle=nodes.last!
+   for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
+   let captured=try model.capture(),intent=IOSStartupIntent(captured),owner=try model.captureIOSOrderedRoute(model.bundle!)
+   defer{try? owner.close()}
+   try check("typed cold startup keeps exact source",captured.nodeChainSource==Data(owner.launchInput.utf8) && owner.providerKey==IOSNodeChainSOCKSCapture.providerKey)
+   await model.start(mode,intent:intent)
+   try check("typed cold startup dispatches only complete ordered source",model.events==["ordered"])
+   try editMiddle{$0.routerProfiles[0].external?.socks5?.password="replacement-private-password"}
+   try check("changed typed startup refuses credential",!model.matches(intent))
+   model.events=[];await model.start(mode,intent:intent)
+   try check("changed typed startup makes no raw or ordered dispatch",model.events.isEmpty)
+  }
   do {
    let model=try setup(),source=try model.capture(),bundle=model.bundle!
    try reject("ordered source omitted"){_ = try IOSStartupCapture(bundle:bundle,entry:nil,generation:model.iosConnectGeneration)}
@@ -144,7 +159,7 @@ def main():
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(stub), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainLaunch.swift')]
+        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainLaunch.swift')]
         code = work / 'Tests.swift'; binary = work / 'tests'
 
         def run(current_body, current_policy, expected=None):
@@ -164,6 +179,17 @@ def main():
         branch = S.member(strategy, '        if profile.multihopNodes != nil {')
         assert body.count(branch) == 1
         run(body.replace(branch, '', 1), policy, 'ordered startup never selects a raw member')
+        typed_tests=tests.replace('  for count in [3,4,8] {for mode in ["auto","smart-auto","last"] {','  for count in [Int]() {for mode in ["auto","smart-auto","last"] {',1)
+        start=typed_tests.index('  for fault in ["middle-token"')
+        end=typed_tests.index('  for mode in ["auto","smart-auto","last"] {',start)
+        typed_tests=typed_tests[:start]+typed_tests[end:]
+        original_tests=tests
+        tests=typed_tests
+        try:
+            run(body,policy.replace(anchor,'',1),'changed typed startup refuses credential')
+        finally:
+            tests=original_tests
+
 
 
 if __name__ == '__main__':

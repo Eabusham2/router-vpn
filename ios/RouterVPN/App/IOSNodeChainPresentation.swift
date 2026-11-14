@@ -74,7 +74,7 @@ enum IOSNodeChainPresentation {
                    (position == nodes.count - 1 ? node.mode == "shadowsocks" || node.mode == "hysteria2" &&
                     ["", "off"].contains(profile.startLayer ?? "") &&
                     points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode)) ||
-                   nodes.count == 3 && position == 1 && node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile)) else { return nil }
+                   nodes.count == 3 && position == 1 && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile))) else { return nil }
             points.append(IOSNodePathPoint(profile, mode: node.mode))
         }
         return points
@@ -89,6 +89,10 @@ enum IOSNodeChainPresentation {
     }
 
     static func captured(source: Data, bundleData: Data) -> [IOSNodePathPoint]? {
+        guard !source.isEmpty, source.count <= 40 * 1024 * 1024 else { return nil }
+        if let root = try? JSONSerialization.jsonObject(with: source) as? [String: Any], root["schema"] as? Int == 3 {
+            return capturedSOCKS(source: source, bundleData: bundleData)
+        }
         guard !source.isEmpty, source.count <= 40 * 1024 * 1024,
               !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024,
               let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
@@ -116,6 +120,37 @@ enum IOSNodeChainPresentation {
                       let raw=member.profile_json, !raw.isEmpty, raw.utf8.count<=256*1024, let transport=member.mode,
                       let source=try? JSONDecoder().decode(RouterProfile.self,from:Data(raw.utf8)) else { return nil }
                 profile=source;mode=transport
+            }
+            profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
+        }
+        guard profiles.last == control, control.multihopNodes == nodes else { return nil }
+        return planned(selected: control, catalog: profiles)
+    }
+
+    private static func capturedSOCKS(source: Data, bundleData: Data) -> [IOSNodePathPoint]? {
+        guard !source.isEmpty, source.count <= 40 * 1024 * 1024, !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024,
+              let root = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
+              Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]), root["schema"] as? Int == 3,
+              root["execution"] as? String == "local", let inputs = root["nodes"] as? [String], inputs.count == 3,
+              let identities = root["identity_sources"] as? [String], identities.count == 3,
+              !identities[0].isEmpty, identities[1].isEmpty, !identities[2].isEmpty,
+              let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
+              bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
+              let control = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) else { return nil }
+        var profiles: [RouterProfile] = [], nodes: [IOSMultihopNodeSelection] = []
+        for (position, input) in inputs.enumerated() {
+            guard let member = try? JSONDecoder().decode(Member.self, from: Data(input.utf8)), member.schema == 1 else { return nil }
+            let profile: RouterProfile, mode: String
+            if position == 1 {
+                guard member.kind == "routervpn-node-chain-socks-member", let raw = member.capture,
+                      let capture = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                      let saved = capture["profile"], let data = try? JSONSerialization.data(withJSONObject: saved),
+                      let value = try? JSONDecoder().decode(RouterProfile.self, from: data), IOSImportedSOCKSSource.eligible(value) else { return nil }
+                profile = value; mode = "socks5"
+            } else {
+                guard member.kind == "routervpn-node-launch-input", let raw = member.profile_json, let selected = member.mode,
+                      let value = try? JSONDecoder().decode(RouterProfile.self, from: Data(raw.utf8)) else { return nil }
+                profile = value; mode = selected
             }
             profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
         }

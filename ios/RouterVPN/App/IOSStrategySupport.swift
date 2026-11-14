@@ -293,8 +293,8 @@ extension RouterVPNModel {
         guard let bundle, let profile = iosStrategyProfile else { throw CancellationError() }
         let entry: Data?
         if profile.multihopNodes != nil {
-            let chain = try captureIOSNodeChain(bundle)
-            defer { try? chain.plan.close() }
+            let chain = try captureIOSOrderedRoute(bundle)
+            defer { try? chain.close() }
             return try IOSStartupCapture(bundle: bundle, entry: nil, generation: iosConnectGeneration,
                                          nodeChainSource: Data(chain.launchInput.utf8))
         }

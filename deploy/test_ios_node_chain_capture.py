@@ -22,11 +22,16 @@ anchor = ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Fil
 assert GO.count(anchor) == 1
 GO = GO.replace(anchor, r'''
  case "chain-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixture(count,r.Policy)}
+ case "chain-socks-fixture":value,err=chainSOCKSFixture()
  case "chain-awg-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixtureModes(count,r.Policy,true)}
  case "chain-hysteria-fixture":var count int;count,err=strconv.Atoi(r.Node);if err==nil{value,err=chainHysteriaFixture(count,r.Mode,r.Policy)}
  case "chain-execution":_,err=mobilemultihop.NewNodeChainExecutionPreparation(r.Source,r.Mode)
  case "chain-candidate-supported":value=strconv.FormatBool(mobilemultihop.NodeChainCandidateInputSupported(r.Source))
  case "chain-imported":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Source,r.Policy)
+ case "chain-socks-imported":value,err=mobilemultihop.NodeChainImportedSOCKSMemberInput(r.Source,r.Policy)
+ case "chain-socks-new":
+  var source *mobilemultihop.NodeChainSOCKSSource;source,err=mobilemultihop.NewNodeChainSOCKSSource(r.Source)
+  if err==nil{var config,input string;var meta mobilemultihop.NodeChainSOCKSSourceMetadata;config,meta,err=source.ReadValidated();if err==nil{input,err=source.Source()};if err==nil{var metadata,encoded []byte;metadata,err=json.Marshal(meta);if err==nil{encoded,err=json.Marshal(map[string]string{"source":input,"config":config,"metadata":string(metadata),"source_sha":meta.SourceSHA256,"config_sha":meta.ConfigSHA256});value=string(encoded)}}}
  case "chain-ordinary":value,err=mobilemultihop.CompileExternalPolicy(r.Source,r.Policy)
  case "chain-member":
   var node *mobilemultihop.NodeProfile;node,err=mobilemultihop.NewNodeProfile(r.Mode,r.Files,r.Policy,r.Source,r.Node)
@@ -42,6 +47,16 @@ GO = GO.replace(anchor, r'''
 ''' + anchor, 1)
 GO += r'''
 func chainFixture(count int,layer string)(string,error){return chainFixtureModes(count,layer,false)}
+func chainSOCKSFixture()(string,error){
+ raw,err:=chainFixture(3,"off");if err!=nil{return "",err};var bundles []map[string]any
+ if err=json.Unmarshal([]byte(raw),&bundles);err!=nil{return "",err}
+ middle:=bundles[1]["routerProfiles"].([]any)[0].(map[string]any)
+ middle["node_kind"]="external";delete(middle,"node_proof_id");middle["router_api"]="";middle["api_token"]="";middle["endpoint"]="203.0.113.20"
+ middle["external"]=map[string]any{"protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":map[string]any{"host":"203.0.113.20","port":1080,"username":"saved user","password":"saved:password"}}
+ bundles[1]["profiles"]=map[string]any{}
+ final:=bundles[2]["routerProfiles"].([]any)[0].(map[string]any);final["multihop_nodes"].([]any)[1].(map[string]any)["mode"]="socks5"
+ data,err:=json.Marshal(bundles);return string(data),err
+}
 func chainHysteriaFixture(count int,first,layer string)(string,error){
  raw,err:=chainFixtureModes(count,layer,true);if err!=nil{return "",err}
  var bundles []map[string]any;if err=json.Unmarshal([]byte(raw),&bundles);err!=nil{return "",err}
@@ -119,6 +134,22 @@ func api<T>(_ error:UnsafeMutablePointer<NSError?>?,_ action:()throws->T)->T?{
 public func LibboxRouterNodeChainImportedMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
  api(error){try bridge(["Op":"chain-imported","Source":config,"Policy":capture])}
 }
+public final class LibboxRouterNodeChainSOCKS {
+ private let receipt:[String:String]
+ init(_ receipt:[String:String]){self.receipt=receipt}
+ public func source(_ error:UnsafeMutablePointer<NSError?>?)->String{receipt["source"]!}
+ public func config(_ error:UnsafeMutablePointer<NSError?>?)->String{receipt["config"]!}
+ public func sourceSHA256()->String{receipt["source_sha"]!}
+ public func configSHA256()->String{receipt["config_sha"]!}
+ public func metadata()->String{receipt["metadata"]!}
+ public func close()throws{}
+}
+public func LibboxRouterNodeChainImportedSOCKSMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
+ api(error){try bridge(["Op":"chain-socks-imported","Source":config,"Policy":capture])}
+}
+public func LibboxNewRouterNodeChainSOCKS(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainSOCKS?{
+ api(error){let raw=try bridge(["Op":"chain-socks-new","Source":source]);return LibboxRouterNodeChainSOCKS(try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:String])}
+}
 public func LibboxRouterNodeChainMemberInput(_ mode:String,_ files:String,_ profile:String,_ start:String,_ bootstrap:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
  api(error){try bridge(["Op":"chain-member","Mode":mode,"Files":files,"Policy":profile,"Source":start,"Node":bootstrap])}
 }
@@ -130,6 +161,7 @@ func make(_ operation:String,_ source:String)throws->LibboxRouterNodeChain{
 public func LibboxNewRouterNodeChain(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChain?{api(error){try make("chain-new",source)}}
 public func LibboxRouterNodeChainLaunch(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChain?{api(error){try make("chain-open",source)}}
 public func LibboxTestFixture(_ count:Int,_ layer:String)throws->String{try bridge(["Op":"chain-fixture","Mode":String(count),"Policy":layer])}
+public func LibboxTestSOCKSFixture()throws->String{try bridge(["Op":"chain-socks-fixture"])}
 public func LibboxTestAWGFixture(_ count:Int,_ layer:String)throws->String{try bridge(["Op":"chain-awg-fixture","Mode":String(count),"Policy":layer])}
 public func LibboxTestHysteriaFixture(_ count:Int,_ first:String,_ layer:String="off")throws->String{try bridge(["Op":"chain-hysteria-fixture","Node":String(count),"Mode":first,"Policy":layer])}
 public func LibboxTestChainExecution(_ source:String,_ mode:String)throws{_ = try bridge(["Op":"chain-execution","Source":source,"Mode":mode])}
@@ -165,6 +197,7 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
  static func main(){defer{LibboxTestClose()};do{try run();print("Apple ordered native capture: PASS (\(checks) shipping Swift / shared Go checks; no native connection)")}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
  static func run()throws {
+  try socksMiddle()
 
   try hostnameMiddle()
 
@@ -338,6 +371,56 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
    }
   }}
  }
+ static func socksMiddle()throws {
+  for mode in ["wg","awg2-fast","awg2-strong"] {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   var bundles=try sources(3,layer,true)
+   for position in bundles.indices {
+    bundles[position]=try editProfile(bundles[position]){p in
+     p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""
+    }
+   }
+   let originalMiddle=try profile(bundles[1]),id="saved-socks-middle"
+   var middle=originalMiddle
+   middle["id"]=id;middle["node_kind"]="external";middle.removeValue(forKey:"node_proof_id")
+   middle["router_api"]="";middle["api_token"]="";middle["endpoint"]="203.0.113.20";middle["start_layer"]="off"
+   middle["home_lan_access"]=false;middle["kill_switch_policy"]="always"
+   middle["external"]=["protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":["host":"203.0.113.20","port":1080,"username":"saved user","password":"saved:password"]] as [String:Any]
+   bundles[1]=try data(["selectedRouterID":id,"routerProfiles":[middle],"profiles":[String:[String:String]]()])
+   bundles[2]=try editProfile(bundles[2]){p in var nodes=p["multihop_nodes"] as! [[String:Any]];nodes[0]["mode"]=mode;nodes[1]=["id":id,"mode":"socks5"];p["multihop_nodes"]=nodes}
+   let capture=try IOSNodeChainSOCKSCapture.compile(bundles:bundles);defer{try? capture.plan.close()}
+   let source=try object(Data(capture.source.utf8)),graph=try object(Data(capture.config.utf8))
+   try check("typed SOCKS source schema",source["schema"] as? Int==3 && source["kind"]==nil && (source["identity_sources"] as? [String])?[1]=="")
+   try check("typed SOCKS device policy",capture.strict && !capture.homeLANAccess && capture.members[0].mode==mode && capture.members[1].mode=="socks5")
+   let out=(graph["outbounds"] as! [[String:Any]]).first{$0["type"] as? String=="socks"}!
+   try check("typed SOCKS original credentials and detour",out["username"] as? String=="saved user" && out["password"] as? String=="saved:password" && out["server"] as? String=="203.0.113.20" && out["detour"] is String)
+   try check("typed SOCKS single original TUN",(graph["inbounds"] as! [Any]).count==1)
+   let replay=try IOSNodeChainSOCKSCapture.reopen(capture.source,selectedProfile:profile(bundles[2]));defer{try? replay.plan.close()}
+   try check("typed SOCKS exact replay",replay.source==capture.source && replay.config==capture.config)
+   try reject("SOCKS cannot borrow generic launch"){_ = try IOSNodeChainCapture.reopen(capture.source,selectedProfile:profile(bundles[2]))}
+   var provider:[String:Any]=["engine":"multihop-libbox","mode":"shadowsocks","rawProfileID":"shadowsocks","modeCandidates":["shadowsocks"],"bundle":bundles[2],IOSNodeChainSOCKSCapture.providerKey:capture.source]
+   let reopened=try IOSNodeChainSOCKSCapture.reopenProvider(provider);try reopened.plan.close()
+   var replacedFinal=try profile(bundles[2]);replacedFinal["api_token"]="relinked-final"
+   try reject("SOCKS replaced final control"){_ = try IOSNodeChainSOCKSCapture.reopen(capture.source,selectedProfile:replacedFinal)}
+   var staleProvider=provider
+   staleProvider["bundle"]=try edit(bundles[2]){root in var files=root["profiles"] as! [String:[String:String]];files["shadowsocks"]!["sing-box.json"]=Data("replacement".utf8).base64EncodedString();root["profiles"]=files}
+   try reject("SOCKS replaced provider assets"){_ = try IOSNodeChainSOCKSCapture.reopenProvider(staleProvider)}
+   provider[IOSNodeChainProviderCapture.key]=capture.source
+   try reject("SOCKS mixed provider owner"){_ = try IOSNodeChainSOCKSCapture.reopenProvider(provider)}
+   for fault in ["credential","token","endpoint","layer","order","dns","final-assets"] {
+    var changed=bundles
+    if fault=="order"{changed.swapAt(0,1)}
+    else if fault=="dns"{changed[2]=try editProfile(changed[2]){$0["dns_mode"]="custom";$0["dns_protocol"]="tcp";$0["dns_host"]="resolver.example.test";$0["dns_port"]=53}}
+    else if fault=="final-assets"{changed[2]=try edit(changed[2]){$0["profiles"]=[String:[String:String]]()}}
+    else {changed[1]=try editProfile(changed[1]){p in
+     if fault=="token"{p["api_token"]="borrowed"}
+     if fault=="endpoint"{p["endpoint"]="203.0.113.21"}
+     if fault=="layer"{p["start_layer"]="aes-256-gcm"}
+     if fault=="credential"{var ext=p["external"] as! [String:Any],socks=ext["socks5"] as! [String:Any];socks["password"]="";ext["socks5"]=socks;p["external"]=ext}
+    }}
+    try reject("SOCKS captured refusal "+fault){_ = try IOSNodeChainSOCKSCapture.compile(bundles:changed)}
+   }
+  }}
+ }
  static func hostnameMiddle()throws {
   for mode in ["wg","awg2-fast","awg2-strong"] {
    for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
@@ -410,7 +493,7 @@ def main():
         options = ['swiftc', '-j', '1', '-swift-version', '6', '-module-cache-path', str(work / 'modules')]
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(stub), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
-        command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopStartLayer.swift'), str(APP / 'Models.swift')]
+        command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopStartLayer.swift'), str(APP / 'Models.swift'), str(APP / 'IOSNodeChainSOCKSCapture.swift')]
         provider = APP / 'IOSNodeChainProviderCapture.swift'
         source = APP / 'IOSNodeChainCapture.swift'
         binary = work / 'tests'
@@ -437,6 +520,21 @@ def main():
         failed=subprocess.run([str(executable),str(compiler)],capture_output=True,text=True,timeout=180)
         assert failed.returncode != 0 and 'ACCEPTED provider stale final assets' in failed.stdout+failed.stderr,'Provider assets were not bound to the original compiled source'
         print('Rejected ordered-source defect mutation: provider-final-assets')
+        typed_source = APP / 'IOSNodeChainSOCKSCapture.swift'
+        typed_text = typed_source.read_text()
+        for name, before, after, witness in (
+            ('typed-final-control', 'try json(selectedProfile) == json(result.finalProfile)', 'true', 'ACCEPTED SOCKS replaced final control'),
+            ('typed-final-assets', 'selected == original else', 'true else', 'ACCEPTED SOCKS replaced provider assets'),
+            ('typed-device-policy', 'self.strict = strict; self.homeLANAccess = lan', 'self.strict = false; self.homeLANAccess = true', 'typed SOCKS device policy'),
+        ):
+            assert typed_text.count(before) == 1, name
+            changed = work / (name + '.swift'); changed.write_text(typed_text.replace(before, after, 1))
+            executable = work / name
+            typed_command = [str(changed) if item == str(typed_source) else item for item in command]
+            subprocess.run(typed_command + [str(source), str(provider), str(tests), '-o', str(executable)], check=True, timeout=90)
+            failed = subprocess.run([str(executable), str(compiler)], capture_output=True, text=True, timeout=180)
+            assert failed.returncode != 0 and witness in failed.stdout + failed.stderr, name + ': missing causal refusal: ' + (failed.stdout + failed.stderr)[-1000:]
+            print('Rejected typed SOCKS source defect mutation: ' + name)
 
 
 if __name__ == '__main__':

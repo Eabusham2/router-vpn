@@ -6,7 +6,7 @@ import Libbox
 /// All candidate assets are frozen before PacketTunnel starts. Later IPC can
 /// reference this catalog, but cannot replace credentials, DNS or node policy.
 @MainActor extension RouterVPNModel {
-    static func iosStrategyDigest(_ data: Data) -> String {
+    nonisolated static func iosStrategyDigest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 

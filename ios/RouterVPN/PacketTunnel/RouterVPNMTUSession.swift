@@ -223,6 +223,15 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
               }) else { throw failure("Ordered execution MTU lost its exact proved native path") }
     }
 
+    func activateNodeChainSOCKS(server: LibboxCommandServer, plan: LibboxRouterNodeChainSOCKS,
+                               onAbort: @escaping @Sendable (String) -> Void) throws {
+        let profile = plan.mtuProfile()
+        guard !profile.isEmpty, profile.utf8.count <= 65536, plan.healthy(),
+              activateOwned(profile: profile, onAbort: onAbort, nativeExecutionAuthority: true, create: { createError in
+                  LibboxRouterNodeChainSOCKSNewMTU(plan, server, self, &createError)
+              }) else { throw failure("Ordered SOCKS MTU lost its original typed path and TUN owner") }
+    }
+
     func activateExternal(server: LibboxCommandServer, proof: LibboxRouterExternalProofRequest,
                           source: String, capture: String,
                           onAbort: @escaping @Sendable (String) -> Void) throws {

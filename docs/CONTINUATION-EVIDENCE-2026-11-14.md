@@ -451,3 +451,55 @@ No production timeout, rejection condition or native-admission guard was
 relaxed. Public typed-platform admission remains closed until the real
 installed-host gates pass; exact-SHA native workflows and publication remain
 separate from these source results.
+
+
+## iOS typed SOCKS capture, retained host and complete profiles
+
+The app and PacketTunnel now carry the typed SOCKS ordered route through one
+owned CommandServer. The captured route keeps its original private source,
+credentials, DNS/device policy and measurement owner. Construction retains the
+native handle before binding; failed binding remains eligible for cleanup and
+retry, entered operations join before retirement, and MTU reproof keeps the
+same typed measurement service. A top-level native factory preserves an
+allocated handle alongside an error across the Apple binding boundary. The
+actual generated Apple header and framework still require native validation.
+
+The visible ordered-route editor and complete connection-profile callbacks
+now admit the supported saved SOCKS middle with the same source and position
+rules used by native preparation. Add, Update, Load and Delete retain pinned
+source references and existing private credential records transactionally.
+Concurrent relinking or replacement identities reject restoration without
+partially installing a profile. Restoring an ordered profile no longer displays
+the unrelated legacy two-node warning. The pure hexadecimal helper in
+`IOSNodeUsage.swift` is explicitly nonisolated for Swift 6 callback checking;
+its body and validation rules are unchanged.
+
+The reviewed 47-path source union preserves the original 38-path package and
+its 15-path follow-on. All affected preimages were independently checked against
+`5c48b14b89bbbf7c96c5329a7d9446897cda44ad`; the full patch SHA-256 is
+`ed9aa127a9f2885b1b7d355bd6e3c12ace8c6a3224424374ebe4f7559fd1af0b`.
+Ten individual source phases passed their required checks: typed capture 144,
+typed retained host 21, ordered launch 166, editor 274, captured identity 32,
+ordered startup 64, complete typed profiles 416, original external profiles
+1,365, original Tor profiles 20,905, and original legacy startup 310. All 54
+required fault controls passed, preserving the original 53 and adding failed
+binding retry. These overlapping check counts are not a product completion
+measure. Additional native-base API compatibility (407 checks), node usage
+(50), app/provider owned strategies (196 plus eight original mutations), and
+nine gate selftests passed.
+
+These are Linux-hosted Swift source fixtures with explicit OS/native doubles,
+not Apple SDK or physical-device acceptance. Earlier direct command exits
+retain that attribution. Replacement Tor, legacy startup, launch, identity and
+compatibility phases have measured joined process-group receipts. The earlier
+lost execution handle remains archived as unknown and was not relabeled as
+passed. The legacy fixture explicitly spells its closed enum's unknown case
+while retaining the shipping fallback body and unknown-status assertion;
+production `@unknown default` remains unchanged.
+
+The coherent source must now pass the existing exact-SHA `socks-bridge`,
+`ios-socks-host` and `ios-sdk` workflows using pristine separate validator and
+candidate checkouts. The bridge gate contains 36 bridge and 15 native Box
+verdicts; those 51 actual native verdicts and generated-header/Xcode results
+are pending for this increment. CONNECT, 50-sample host adoption, signing,
+physical iPhone/iPad networking and deployment remain separate requirements.

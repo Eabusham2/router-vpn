@@ -26,6 +26,16 @@ func NewRouterNodeChainSOCKS(input string) (*RouterNodeChainSOCKS, error) {
 	return &RouterNodeChainSOCKS{source: source}, nil
 }
 
+// The C-function export leaves NSError explicit in Swift. An instance method
+// ending in error: can be imported as throwing, hiding a nonnil original
+// server returned with an error. Preserve both values for host retirement.
+func RouterNodeChainSOCKSNewCommandServer(m *RouterNodeChainSOCKS, handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+	if m == nil {
+		return nil, errRouterNodeChainSOCKS()
+	}
+	return m.NewCommandServer(handler, platform)
+}
+
 // NewCommandServer installs only the source-bound local SOCKS registry. The
 // host first retains the returned server, then explicitly calls BindNative
 // before Start. Binding failures must not hide the server in gomobile's error

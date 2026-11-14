@@ -148,7 +148,7 @@ class Composition:
 
 class TypedSOCKSBridgeValidator(unittest.TestCase):
     def test_exact_combined_inventory_and_every_original_bound(self):
-        self.assertEqual((len(V.BRIDGE),len(V.NATIVE),len(V.VERDICTS)),(35,15,50))
+        self.assertEqual((len(V.BRIDGE),len(V.NATIVE),len(V.VERDICTS)),(36,15,51))
         self.assertEqual((len(V.ORIGINAL_LIBBOX),len(V.ORIGINAL_BOX)),(13,27))
         self.assertEqual([len(x["cases"]) for x in V.CONTROLS],[7,1,1,1,4,1])
         for names in (V.VERDICTS,V.ORIGINAL_LIBBOX,V.ORIGINAL_BOX):self.assertEqual(len(names),len(set(names)))

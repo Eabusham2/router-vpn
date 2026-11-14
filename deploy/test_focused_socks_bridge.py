@@ -53,6 +53,7 @@ BRIDGE_ROOTS = (
     B+"MeasurementKeepsCallerContext", B+"RetainsLateCommandFactory",
     B+"ActualNativeIdentity", B+"ActualNativeCloseReceipt", B+"ActualNativeReadKeepsDeadline",
     B+"RetainsOnlyBoundedOriginalCleanup",
+    "TestRouterNodeChainSOCKSExportedFactoryRetainsTypedOwner",
 )
 BRIDGE = (
     *BRIDGE_ROOTS,

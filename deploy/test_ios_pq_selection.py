@@ -327,10 +327,12 @@ def verify_pq_factory_registration(engine):
     starts = list(re.finditer(r'^    (?:private )?func ', engine, re.MULTILINE))
     bodies = [engine[start.start():starts[i + 1].start() if i + 1 < len(starts) else len(engine)]
               for i, start in enumerate(starts)]
-    constructors = ('func start(candidatePrefix ', 'func startOrderedExecution(',
-                    'func start(files: [String: Data], strict: Bool, multihopMetadata:')
-    install, create = 'try RouterVPNPQFactory.install()', 'LibboxNewCommandServer('
-    for signature in constructors:
+    constructors = {signature: 'LibboxNewCommandServer(' for signature in (
+        'func start(candidatePrefix ', 'func startOrderedExecution(',
+        'func start(files: [String: Data], strict: Bool, multihopMetadata:')}
+    constructors['func start(nodeChainSOCKS '] = 'LibboxRouterNodeChainSOCKSNewCommandServer('
+    install = 'try RouterVPNPQFactory.install()'
+    for signature, create in constructors.items():
         matches = [body for body in bodies if signature in body.split('\n', 1)[0]]
         assert len(matches) == 1, signature + ': missing or duplicate constructor'
         body = matches[0]
@@ -338,14 +340,15 @@ def verify_pq_factory_registration(engine):
         assert body.count(create) == 1, signature + ': must create exactly once'
         assert body.index(install) < body.index(create), signature + ': install must precede creation'
     assert engine.count(install) == len(constructors), 'PQ installation outside covered constructors'
-    assert engine.count(create) == len(constructors), 'Uncovered native constructor'
+    for create in set(constructors.values()):
+        assert engine.count(create) == list(constructors.values()).count(create), 'Uncovered native constructor'
     return constructors
 
 
 def test_pq_factory_registration(engine):
     constructors = verify_pq_factory_registration(engine)
-    install, create = 'try RouterVPNPQFactory.install()', 'LibboxNewCommandServer('
-    for signature in constructors:
+    install = 'try RouterVPNPQFactory.install()'
+    for signature, create in constructors.items():
         begin = engine.index(signature)
         position = engine.index(install, begin)
         missing = engine[:position] + engine[position:].replace(install, '', 1)
@@ -360,7 +363,7 @@ def test_pq_factory_registration(engine):
                 assert signature in str(failure), (signature, fault, str(failure))
             else:
                 raise AssertionError(signature + ': accepted ' + fault + ' PQ factory installation')
-    print('Apple PQ factory registration: PASS (3 constructors, 9 defect controls)')
+    print('Apple PQ factory registration: PASS (4 constructors, 12 defect controls)')
 
 
 def main():
@@ -368,13 +371,13 @@ def main():
         go_dir,temp=Path(go_dir),Path(temp)
         (go_dir/'main.go').write_text(GO)
         binary=temp/'compiler'
-        subprocess.run(['go','build','-o',str(binary),str(go_dir/'main.go')],cwd=ROOT,check=True,timeout=120)
+        subprocess.run(['go','build','-p','1','-o',str(binary),str(go_dir/'main.go')],cwd=ROOT,check=True,timeout=120)
         dns=APP/'IOSDNSRuntimePolicy.swift'
         if platform.system()!='Darwin':
             body=dns.read_text();assert body.count('import Network\n')==1
             dns=temp/dns.name;dns.write_text(body.replace('import Network\n',F.NETWORK_SHIM))
         source=temp/'Tests.swift';source.write_text(SWIFT)
-        subprocess.run(['swiftc','-swift-version','6',str(APP/'Models.swift'),str(APP/'IOSHomeDNSPolicy.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'),str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSMultihopExecution.swift'),str(APP/'IOSRuntimeSelection.swift'),str(TUN/'RouterVPNMultihopGraph.swift'),str(TUN/'RouterVPNMTUPolicy.swift'),str(TUN/'IOSStartLayer.swift'),str(source),'-o',str(temp/'tests')],check=True,timeout=120)
+        subprocess.run(['swiftc','-j','1','-swift-version','6',str(APP/'Models.swift'),str(APP/'IOSHomeDNSPolicy.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'),str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSMultihopExecution.swift'),str(APP/'IOSRuntimeSelection.swift'),str(TUN/'RouterVPNMultihopGraph.swift'),str(TUN/'RouterVPNMTUPolicy.swift'),str(TUN/'IOSStartLayer.swift'),str(source),'-o',str(temp/'tests')],check=True,timeout=120)
         subprocess.run([str(temp/'tests'),str(binary)],check=True,timeout=150)
     provider=(TUN/'PacketTunnelProvider.swift').read_text()
     start=provider[provider.index('    private func startLibbox('):provider.index('    private struct LibboxCompilation')]

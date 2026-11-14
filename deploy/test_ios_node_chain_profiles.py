@@ -269,7 +269,7 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
 '''
 
 
-def main():
+def main(*, extra_sources=(), extra_flags=(), binary_args=()):
     swift = shutil.which('swiftc')
     if not swift:
         raise SystemExit('swiftc required')
@@ -287,16 +287,16 @@ def main():
     body = body.replace(' // SHIPPING_CHAIN_CAPTURE', multihop[multihop.index('    func iosNodeChainBundles('):multihop.index('    static let ordinaryExternalHopProtocols')])
     with tempfile.TemporaryDirectory(prefix='ios-node-chain-profiles-') as temporary:
         work = Path(temporary)
-        options = [swift, '-j', '1', '-swift-version', '6', '-module-cache-path', str(work / 'modules')]
+        options = [swift, '-j', '1', '-swift-version', '6', '-module-cache-path', str(work / 'modules'), *map(str, extra_flags)]
         if platform.system() != 'Darwin':
             network = work / 'Network.swift'; network.write_text(NETWORK)
             subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Network', str(network), '-emit-module-path', str(work / 'Network.swiftmodule'), '-o', str(work / 'libNetwork.so')], check=True, timeout=60)
             options += ['-I', str(work), '-L', str(work), '-lNetwork', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         code = work / 'Tests.swift'; code.write_text(source + '\n' + body)
         binary = work / 'tests'
-        command = options + [str(APP / 'Models.swift'), str(APP / 'IOSHomeDNSPolicy.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), str(code), '-o', str(binary)]
+        command = options + [str(APP / 'Models.swift'), str(APP / 'IOSHomeDNSPolicy.swift'), str(APP / 'IOSSpeedLabOwnership.swift'), *map(str, extra_sources), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)
-        subprocess.run([str(binary)], check=True, timeout=30)
+        subprocess.run([str(binary), *map(str, binary_args)], check=True, timeout=30)
         actual = code.read_text()
         controls = {
             'candidate-final-source-guard': ('        try current() // Final fresh source/receipt observation immediately before atomic profile write.', '        // Mutant omits final original-source observation.'),
@@ -308,7 +308,7 @@ def main():
                 raise AssertionError('shipping causal control moved: ' + label)
             code.write_text(actual.replace(before, after, 1))
             subprocess.run(command, check=True, timeout=120)
-            result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+            result = subprocess.run([str(binary), *map(str, binary_args)], capture_output=True, text=True, timeout=30)
             if result.returncode != 1 or 'FAIL ordered profile persistence:' not in result.stderr:
                 raise AssertionError('control did not reject the changed shipping behavior: ' + label + result.stdout + result.stderr)
             if label == 'candidate-final-source-guard' and 'expected rejection: candidate changed at atomic profile commit' not in result.stderr:

@@ -114,6 +114,15 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
  static func run()async throws {
+  do {
+   let nodes=try sources(3,false,"",true),capture=try IOSNodeChainSOCKSCapture.compile(bundles:nodes.map{try bundleData($0)})
+   defer{try? capture.plan.close()}
+   let final=try bundleData(nodes.last!),source=Data(capture.source.utf8)
+   let identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:final,configuration:["nodeChainSOCKSSource":capture.source])
+   try check("typed SOCKS active map keeps original middle",IOSNodeChainPresentation.active(identity)?.map(\.mode)==["wg","socks5","shadowsocks"])
+   var changed=nodes.last!;changed.routerProfiles[0].apiToken="relinked-final"
+   try check("typed SOCKS map rejects replaced final source",IOSNodeChainPresentation.captured(source:source,bundleData:bundleData(changed))==nil)
+  }
   try await runOriginal()
   for mode in ["wg","awg2-fast","awg2-strong"] {
    let (model,_,nodes)=try setup(3,false,mode)
@@ -307,7 +316,7 @@ def main(selected_mutations=None):
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(lib), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        command += [str(APP / name) for name in ('Models.swift', 'IOSSessionIdentity.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift')]
+        command += [str(APP / name) for name in ('Models.swift', 'IOSSessionIdentity.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift')]
         binary = work / 'tests'; command += [str(source), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
@@ -320,7 +329,7 @@ def main(selected_mutations=None):
             ('mutable-map-source', presentation.replace('if connected && !iosCandidateTesting { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 'if false { return IOSNodeChainPresentation.active(activeSessionIdentity) }', 1), body, 'FAIL connected map keeps original middle source'),
             ('middle-map-shortcut', presentation, body.replace('let routeIDs = ordered?.map(\\.id)', 'let routeIDs = ordered.map { [$0.first!.id, $0.last!.id] }', 1), 'FAIL all adjacent captured route legs are drawn'),
             ('stale-session', presentation, body.replace('self.activeSessionIdentity == identity,', 'true,', 1), 'FAIL late progress ownership identity'),
-            ('stale-provider-source', presentation, body.replace('current["nodeChainSource"] as? String == chainSource,', 'true,', 1), 'FAIL late progress ownership source'),
+            ('stale-provider-source', presentation, body.replace('current[chainKey] as? String == chainSource,', 'true,', 1), 'FAIL late progress ownership source'),
         )
         for name, changed_source, changed_body, failure in mutants:
             if selected_mutations and name not in selected_mutations: continue

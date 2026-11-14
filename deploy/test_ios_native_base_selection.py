@@ -274,8 +274,8 @@ def main():
     assert '''            let selection: IOSRuntimeSelection
             if IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopNodes != nil {
                 guard rawProfileID == nil else { throw IOSMultihopNodeSelection.issue("Connect the saved ordered graph or disable multihop before choosing one raw transport.") }
-                let capture = try captureIOSNodeChain(bundle)
-                defer { try? capture.plan.close() }
+                let capture = try captureIOSOrderedRoute(bundle)
+                defer { try? capture.close() }
                 selection = try IOSRuntimeSelector.selectNodeChain(capture)
             } else { selection = try IOSRuntimeSelector.selectMultihop(bundle: bundle, rawProfileID: rawProfileID) }''' in model
     assert 'IOSRuntimeSelector.candidates(bundle: bundle, logicalModeID: kind == .all ? "all" : selectedLogicalMode)' in owned

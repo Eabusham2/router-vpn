@@ -468,7 +468,7 @@ private enum IOSConnectionProfileStore {
                   let profile = source.routerProfiles.first(where: { $0.id == capture.nodeID }),
                   profile.normalizedNodeKind == capture.nodeKind, profile.nodeProofID == capture.nodeProofID,
                   (profile.external == nil && capture.externalProtocol == nil && capture.externalPublicIP == nil ||
-                   nodes.count == 3 && position == 1 && nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
+                   nodes.count == 3 && position == 1 && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile)) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
                 throw issue("A saved chain member is missing or its original paired/external identity changed. Update the saved connection profile.")
             }
             if capture.nodeID == saved.nodeID {
@@ -621,8 +621,8 @@ private enum IOSConnectionProfileStore {
                 for position in captures.indices {
                     var capture = captures[position]
                     if capture.nodeKind == "external" {
-                        guard nodes.count == 3, position == 1, nodes[position].mode == "shadowsocks", capture.nodeID == nodes[position].id,
-                              capture.nodeProofID == nil || capture.nodeProofID == "", capture.externalProtocol == "shadowsocks", capture.externalPublicIP?.isEmpty == false,
+                        guard nodes.count == 3, position == 1, ["shadowsocks", "socks5"].contains(nodes[position].mode), capture.nodeID == nodes[position].id,
+                              capture.nodeProofID == nil || capture.nodeProofID == "", capture.externalProtocol == nodes[position].mode, capture.externalPublicIP?.isEmpty == false,
                               capture.preferences.startLayer == "off" else { throw issue("The saved imported middle lost its original external identity.") }
                         capture.preferences = try validatePreferences(capture.preferences, external:true)
                         captures[position] = capture; continue
@@ -917,7 +917,7 @@ struct IOSConnectionProfilesView: View {
     }
     private func add() { do { let p = try IOSConnectionProfileStore.add(model: model, name: name); status = "Added \(p.name) • \(p.mode) • \(p.autoRequirementsSummary)."; refresh(); selectedID = p.id } catch { status = error.localizedDescription } }
     private func update() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.update(model: model, id: selectedID, name: name); status = "Updated \(p.name) • \(p.mode) • \(p.autoRequirementsSummary)."; refresh() } catch { status = error.localizedDescription } }
-    private func load() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.load(model: model, id: selectedID); status = "Loaded \(p.name) • \(p.mode) • \(p.autoRequirementsSummary). Connect separately to prove the path."; if p.preferences?.multihopEnabled == true && p.entryPolicy == nil { status += " Older profile: entry settings use the current linked node. Update to capture them." } } catch { status = error.localizedDescription } }
+    private func load() { guard let selectedID else { return }; do { let p = try IOSConnectionProfileStore.load(model: model, id: selectedID); status = "Loaded \(p.name) • \(p.mode) • \(p.autoRequirementsSummary). Connect separately to prove the path."; if p.preferences?.multihopEnabled == true && p.entryPolicy == nil && p.chainPolicies == nil { status += " Older profile: entry settings use the current linked node. Update to capture them." } } catch { status = error.localizedDescription } }
     private func delete() { guard let selectedID else { return }; do { try IOSConnectionProfileStore.delete(model: model, id: selectedID); status = "Deleted saved connection profile."; self.selectedID = nil; refresh() } catch { status = error.localizedDescription } }
 }
 

@@ -387,8 +387,8 @@ final class RouterVPNModel: ObservableObject {
             let selection: IOSRuntimeSelection
             if IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopNodes != nil {
                 guard rawProfileID == nil else { throw IOSMultihopNodeSelection.issue("Connect the saved ordered graph or disable multihop before choosing one raw transport.") }
-                let capture = try captureIOSNodeChain(bundle)
-                defer { try? capture.plan.close() }
+                let capture = try captureIOSOrderedRoute(bundle)
+                defer { try? capture.close() }
                 selection = try IOSRuntimeSelector.selectNodeChain(capture)
             } else { selection = try IOSRuntimeSelector.selectMultihop(bundle: bundle, rawProfileID: rawProfileID) }
             let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
@@ -523,14 +523,14 @@ final class RouterVPNModel: ObservableObject {
         var nodeChainTimeout: TimeInterval?
         if selection.engine == .multihop {
             if IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopNodes != nil {
-                let capture = try captureIOSNodeChain(bundle)
-                defer { try? capture.plan.close() }
+                let capture = try captureIOSOrderedRoute(bundle)
+                defer { try? capture.close() }
                 guard capture.members.last?.mode == selection.rawProfileID,
                       selection.nodeChainInput == capture.launchInput else {
                     throw IOSMultihopNodeSelection.issue("The ordered source changed before startup, or its selected final transport differs.")
                 }
                 nodeChainSource = capture.launchInput; nodeChainTimeout = capture.startupTimeout
-                configuration[IOSNodeChainProviderCapture.key] = capture.launchInput
+                configuration[capture.providerKey] = capture.launchInput
                 entryStrict = capture.strict; entryAllowsLAN = capture.homeLANAccess
             } else {
                 let entry = try iosMultihopEntryBundle(for: bundle)
