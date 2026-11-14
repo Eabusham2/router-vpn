@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"router-vpn/internal/common"
@@ -127,18 +128,42 @@ func TestNativeNodeChainRestoreCatalogRequiresEveryCapturedMember(t *testing.T) 
 	}
 }
 
-func TestNativeNodeChainSelectionRequiresFinalControlAndExplicitLocal(t *testing.T) {
+func TestNativeNodeChainSelectionRequiresFinalControlAndExplicitExecution(t *testing.T) {
 	a, nodes := desktopNodeChainCaptureFixture(t, 3)
 	control, _ := a.profileByIDLocked(a.profiles.SelectedID)
-	for _, execution := range []string{"", "auto", "server"} {
+	before := cloneRouterProfileStore(a.profiles)
+	for _, execution := range []string{"", "compare", "AUTO", "Server", " local"} {
 		if _, err := resolveDesktopNodeChainSelection(control, a.profiles.Profiles, nodes, execution); err == nil {
-			t.Fatal("ordered native selection silently chose execution", execution)
+			t.Fatal("ordered native selection normalized or invented execution", execution)
 		}
 	}
 	foreign := common.CloneRouterProfile(control)
 	foreign.ID = "third-control"
 	profiles := append(cloneRouterProfileStore(a.profiles).Profiles, foreign)
-	if _, err := resolveDesktopNodeChainSelection(foreign, profiles, nodes, "local"); err == nil {
-		t.Fatal("third control borrowed final native authority")
+	for _, execution := range []string{"local", "server", "auto"} {
+		selection, err := resolveDesktopNodeChainSelection(control, a.profiles.Profiles, nodes, execution)
+		if err != nil || !reflect.DeepEqual(nodeChainSelectedReferences(selection.Nodes), nodes) ||
+			!reflect.DeepEqual(selection.Control, control) || selection.Native != nil ||
+			!reflect.DeepEqual(before, a.profiles) {
+			t.Fatal("explicit execution lost original references or fabricated native preparation", execution, err)
+		}
+		if _, exists := getActiveMultihopGraph(a); exists {
+			t.Fatal("source selection published an active execution owner", execution)
+		}
+		if launch, err := compileRetainedNativeMultihopLaunch(selection, nil); err == nil || launch != nil {
+			t.Fatal("unprepared selection borrowed a native execution owner", execution)
+		}
+		if _, err := resolveDesktopNodeChainSelection(foreign, profiles, nodes, execution); err == nil {
+			t.Fatal("third control borrowed final native authority", execution)
+		}
+	}
+	for _, execution := range []string{"server", "auto"} {
+		for _, mode := range []string{"socks5", "http-connect", "https-connect"} {
+			unsupported := append([]common.MultihopNodeSelection(nil), nodes...)
+			unsupported[1].Mode = mode
+			if _, err := resolveDesktopNodeChainSelection(control, a.profiles.Profiles, unsupported, execution); err == nil {
+				t.Fatal("typed proxy selection borrowed unsupported execution authority", execution, mode)
+			}
+		}
 	}
 }

@@ -300,6 +300,15 @@ func TestDesktopCandidateReceiptRequiresCompleteFiftySampleSource(t *testing.T) 
 // prefix test separately counts all fifty actual destination TCP handshakes.
 func TestDesktopCandidateMailboxJoinsBeforePublication(t *testing.T) {
 	f, c, id := desktopCandidateTestCatalog(t, "")
+	// Each completed mailbox releases its real MTU hold and resumes Auto.
+	// Join those application workers before the native model and TempDir retire.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := retireDesktopOrderedLatencyFixture(ctx, f.a, f.launch.command); err != nil {
+			t.Error("candidate mailbox fixture left background work before native/file cleanup", err)
+		}
+	})
 	for _, fault := range []string{"success", "cancel", "cancel-delayed", "wrong-capture", "partial-samples", "catalog-away-back"} {
 		t.Run(fault, func(t *testing.T) {
 			generation := f.launch.chain.candidateGeneration
