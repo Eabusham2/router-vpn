@@ -114,7 +114,51 @@ public final class NodeChainExecutionCaptureHarness {
    try{reject(()->AndroidNodeChainExecutionCapture.compile(local,"auto"),"execution survived original source replacement during compile");}finally{Libbox.afterExecution=null;}
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";if(family.equals("all")||family.equals("source"))source(root);if(family.equals("all")||family.equals("readback"))nativeReadback(root);if(family.equals("all")||family.equals("changed"))changedSource(root);System.out.println("Android execution source: "+checks+" checks; actual shared preparation with original all-member captures PASS");}
+ static AndroidNodeChainCapture importedLocal(Path root,String first,String method)throws Exception{
+  var fixture=new NodeChainCaptureHarness.Fixture(root,"2/"+first);
+  var exits=new AndroidStandardExitStore(fixture.context);var custom=NodeChainCaptureHarness.hostnameEntry(method);
+  custom.server="198.51.100.76";custom.name="Original execution middle";
+  exits.save(custom);var editor=new AndroidOrderedPathSelection(fixture.nodes,fixture.profiles);
+  editor.addPrefix(custom.id,"shadowsocks");return AndroidNodeChainCapture.compile(editor.save());
+ }
+ static void importedSource(Path root)throws Exception{
+  for(String first:List.of("","awg-fast","awg-strong"))for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"))for(String requested:List.of("server","auto")){
+   try(var local=importedLocal(root,first,method)){
+    AndroidNodeChainExecutionCapture captured;
+    try{captured=AndroidNodeChainExecutionCapture.compile(local,requested);}catch(Exception refused){throw new AssertionError("imported SS execution was refused",refused);}
+    try(captured){
+     JSONObject source=new JSONObject(captured.source),retained=new JSONObject(source.getString("local_source")),launch=new JSONObject(captured.launchInput);
+     check(source.getInt("schema")==1&&launch.getInt("schema")==1&&retained.getInt("schema")==2,"imported execution conflated preparation, Local, and saved Last schemas");
+     JSONArray nodes=retained.getJSONArray("nodes"),identities=retained.getJSONArray("identity_sources");
+     check(nodes.length()==3&&identities.length()==3&&identities.getString(1).isEmpty()&&!identities.getString(0).isEmpty()&&!identities.getString(2).isEmpty(),"imported execution invented or omitted paired identity");
+     for(int i=0;i<3;i++)check(nodes.getString(i).equals(local.memberInputs.get(i))&&identities.getString(i).equals(local.identityInputs.get(i)),"imported execution substituted original source at "+i);
+     JSONObject middle=new JSONObject(nodes.getString(1)),external=new JSONObject(middle.getString("capture")).getJSONObject("profile");
+     check("external".equals(external.getString("node_kind"))&&!external.has("node_proof_id")&&!external.has("api_token")&&!external.has("router_api"),"imported execution manufactured Router authority");
+     check(method.equals(external.getJSONObject("external").getJSONObject("shadowsocks").getString("method")),"imported execution changed the captured cipher");
+     try(var replay=AndroidNodeChainExecutionCapture.reopen(local,captured.launchInput)){check(replay.source.equals(captured.source)&&replay.config.equals(captured.config),"imported execution replay changed source or policy");}
+     check(!captured.healthy()&&!captured.nativeClosed(),"source-only imported execution claimed native readiness");
+     reject(captured::captureRestore,"source-only imported execution fabricated saved proof");
+    }
+   }
+  }
+ }
+ static void importedReadback(Path root)throws Exception{
+  for(String fault:List.of("local-schema","imported-identity","member-order","local-execution","preparation-schema","launch-schema")){
+   try(var local=importedLocal(root,"","2022-blake3-aes-256-gcm")){
+    Libbox.afterExecution=plan->{try{
+     JSONObject launch=new JSONObject(plan.value.getString("launch")),prep=new JSONObject(plan.value.getString("source")),source=new JSONObject(prep.getString("local_source"));
+     if(fault.equals("local-schema"))source.put("schema",1);
+     if(fault.equals("imported-identity")){JSONArray ids=source.getJSONArray("identity_sources");ids.put(1,ids.getString(0));}
+     if(fault.equals("member-order")){JSONArray nodes=source.getJSONArray("nodes");String first=nodes.getString(0);nodes.put(0,nodes.getString(1));nodes.put(1,first);}
+     if(fault.equals("local-execution"))source.put("execution","server");
+     prep.put("local_source",source.toString());if(fault.equals("preparation-schema"))prep.put("schema",2);
+     plan.value.put("source",prep.toString());launch.put("source",prep.toString());if(fault.equals("launch-schema"))launch.put("schema",2);plan.value.put("launch",launch.toString());
+    }catch(Exception error){throw new IllegalStateException(error);}};
+    reject(()->AndroidNodeChainExecutionCapture.compile(local,"auto"),"imported execution accepted native readback substitution: "+fault);
+   }finally{Libbox.afterExecution=null;}
+  }
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";if(family.equals("all")||family.equals("source"))source(root);if(family.equals("all")||family.equals("readback"))nativeReadback(root);if(family.equals("all")||family.equals("changed"))changedSource(root);if(family.equals("all")||family.equals("imported"))importedSource(root);if(family.equals("all")||family.equals("imported-readback"))importedReadback(root);System.out.println("Android execution source: "+checks+" checks; actual shared preparation with original all-member captures PASS");}
 }
 '''
 
@@ -160,6 +204,9 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ("local-digest", '!local.sourceSHA256.equals(plan.localSourceSHA256())', 'false', 'readback', 'execution accepted native readback substitution: local-digest'),
         ("member-order", '!sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))', 'false', 'readback', 'execution accepted native readback substitution: member-order'),
         ("identity-order", '!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))', 'false', 'readback', 'execution accepted native readback substitution: identity-order'),
+        ("imported-schema", '(originalSchema != 1 && originalSchema != 2)', 'originalSchema != 1', 'imported', 'imported SS execution was refused'),
+        ("schema-substitution", 'returned.getInt("schema") != originalSchema', 'false', 'imported-readback', 'imported execution accepted native readback substitution: local-schema'),
+        ("imported-identity", '!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))', 'false', 'imported-readback', 'imported execution accepted native readback substitution: imported-identity'),
         ("source-change", '        local.requireCurrent();\n        if (restore != null) plan.requireRestore(restore.nativeCapture);\n    }\n\n    void requireCurrent()', '        if (restore != null) plan.requireRestore(restore.nativeCapture);\n    }\n\n    void requireCurrent()', 'changed', 'execution survived original source replacement during compile'),
     )
     for name, old, new, family, witness in controls:

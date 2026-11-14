@@ -86,11 +86,15 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         }
         JSONObject original = privateJSON(local.launchInput, AndroidNodeChainCapture.MAX_INPUT);
         JSONObject returned = privateJSON(preparation.getString("local_source"), AndroidNodeChainCapture.MAX_INPUT);
-        if (returned.length() != 4 || original.getInt("schema") != 1 || returned.getInt("schema") != 1
+        // The embedded Local source uses schema two for an imported SS member.
+        // This does not change the execution preparation/ordinary launch schema.
+        int originalSchema = original.getInt("schema");
+        if (returned.length() != 4 || (originalSchema != 1 && originalSchema != 2)
+                || returned.getInt("schema") != originalSchema
                 || !"local".equals(returned.getString("execution"))
                 || !sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))
                 || !sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))) {
-            throw new IllegalStateException("Server execution requires every original paired node in its exact Local order.");
+            throw new IllegalStateException("Server execution requires every original member and private identity in its exact Local order.");
         }
         local.requireCurrent();
         if (restore != null) plan.requireRestore(restore.nativeCapture);

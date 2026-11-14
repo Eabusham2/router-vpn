@@ -65,17 +65,23 @@ public final class LibboxRouterNodeChainExecution {
  private var receipt:[String:String];private var closed=false;private var launchError=false
  init(_ receipt:[String:String])throws{
   self.receipt=receipt
-  switch ExecutionFault.shared.take(){
+  let fault=ExecutionFault.shared.take()
+  switch fault{
   case "config":self.receipt["config"]=receipt["config"]!+" "
   case "requested":self.receipt["requested"]="local"
   case "launch-error":launchError=true
-  case "local-node":
+  case "local-node","local-schema","local-identity","local-execution","preparation-schema","launch-schema":
    var source=try JSONSerialization.jsonObject(with:Data(receipt["source"]!.utf8)) as! [String:Any]
    var local=try JSONSerialization.jsonObject(with:Data((source["local_source"] as! String).utf8)) as! [String:Any]
-   var nodes=local["nodes"] as! [String];nodes.swapAt(0,1);local["nodes"]=nodes
+   if fault=="local-node"{var nodes=local["nodes"] as! [String];nodes.swapAt(0,1);local["nodes"]=nodes}
+   if fault=="local-schema"{local["schema"]=(local["schema"] as? Int)==1 ? 2:1}
+   if fault=="local-identity"{var identities=local["identity_sources"] as! [String];identities[1]=identities[0];local["identity_sources"]=identities}
+   if fault=="local-execution"{local["execution"]="server"}
    source["local_source"]=String(decoding:try JSONSerialization.data(withJSONObject:local,options:[.sortedKeys]),as:UTF8.self)
+   if fault=="preparation-schema"{source["schema"]=2}
    self.receipt["source"]=String(decoding:try JSONSerialization.data(withJSONObject:source,options:[.sortedKeys]),as:UTF8.self)
    var launch=try JSONSerialization.jsonObject(with:Data(receipt["launch"]!.utf8)) as! [String:Any];launch["source"]=self.receipt["source"]!
+   if fault=="launch-schema"{launch["schema"]=2}
    self.receipt["launch"]=String(decoding:try JSONSerialization.data(withJSONObject:launch,options:[.sortedKeys]),as:UTF8.self)
   default:break
   }
@@ -120,6 +126,16 @@ func profile(_ value:Data)throws->[String:Any]{try (object(value)["routerProfile
 func edit(_ value:Data,_ change:(inout [String:Any])->Void)throws->Data{var root=try object(value);change(&root);return try data(root)}
 func editProfile(_ value:Data,_ change:(inout [String:Any])->Void)throws->Data{var root=try object(value);var p=(root["routerProfiles"] as! [[String:Any]])[0];change(&p);root["routerProfiles"]=[p];return try data(root)}
 func fixture(_ count:Int,_ layer:String,_ requested:String,_ awg:Bool)throws->[Data]{let raw=try awg ? LibboxTestAWGFixture(count,layer):LibboxTestFixture(count,layer);var bundles=try (JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)};bundles[count-1]=try editProfile(bundles[count-1]){$0["multihop_execution"]=requested};return bundles}
+func importedFixture(_ requested:String,_ first:String,_ method:String)throws->[Data]{
+ var bundles=try fixture(3,"off",requested,false),middle=try object(bundles[1]),custom=try profile(bundles[1])
+ let id="original-execution-middle",keySize=method=="2022-blake3-aes-128-gcm" ? 16:32
+ custom["id"]=id;custom["name"]="Original execution middle";custom["node_kind"]="external";custom.removeValue(forKey:"node_proof_id")
+ for key in ["router_api","api_token","adguard_ipv6","socks_host","socks_username","socks_password"]{custom[key]=""};custom["socks_port"]=0
+ custom["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":method,"password":Data(repeating:0,count:keySize).base64EncodedString()]]
+ middle["selectedRouterID"]=id;middle["routerProfiles"]=[custom];middle["profiles"]=[String:[String:String]]();bundles[1]=try data(middle)
+ bundles[2]=try editProfile(bundles[2]){final in var refs=final["multihop_nodes"] as! [[String:Any]];refs[0]["mode"]=first;refs[1]=["id":id,"mode":"shadowsocks"];final["multihop_nodes"]=refs}
+ return bundles
+}
 @main struct Tests {
  @MainActor static var checks=0
  @MainActor static func check(_ yes:Bool,_ name:String){guard yes else{fatalError(name)};checks+=1}
@@ -143,6 +159,29 @@ func fixture(_ count:Int,_ layer:String,_ requested:String,_ awg:Bool)throws->[D
    try reopened.close();try capture.close()
    reject("closed capture remained usable"){try capture.requireCurrent()}
   }}}}
+  for requested in ["server","auto"]{for first in ["wg","awg2-fast","awg2-strong"]{for method in ["2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"]{
+   let bundles=try importedFixture(requested,first,method)
+   let capture:IOSNodeChainExecutionCapture
+   do{capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)}catch{fatalError("imported SS execution was refused: \(error)")}
+   let preparation=try object(Data(capture.source.utf8)),launch=try object(Data(capture.launchInput.utf8)),local=try object(Data((preparation["local_source"] as! String).utf8)),original=try object(Data(capture.local.launchInput.utf8))
+   check(preparation["schema"] as? Int==1 && launch["schema"] as? Int==1 && local["schema"] as? Int==2,"imported execution conflated preparation, Local, and saved Last schemas")
+   let nodes=local["nodes"] as! [String],identities=local["identity_sources"] as! [String]
+   check(nodes.count==3 && identities.count==3 && identities[1].isEmpty && !identities[0].isEmpty && !identities[2].isEmpty,"imported execution invented or omitted paired identity")
+   check(nodes==original["nodes"] as? [String] && identities==original["identity_sources"] as? [String],"imported execution substituted original member source")
+   let middle=capture.members[1].profile,external=middle["external"] as! [String:Any],ss=external["shadowsocks"] as! [String:Any]
+   check(middle["node_kind"] as? String=="external" && middle["node_proof_id"]==nil && (middle["router_api"] as? String ?? "").isEmpty && (middle["api_token"] as? String ?? "").isEmpty,"imported execution manufactured Router authority")
+   check(ss["method"] as? String==method && capture.members[0].mode==first && capture.finalProfile["dns_mode"] as? String=="home","imported execution changed captured transport or final DNS")
+   let replay=try IOSNodeChainExecutionCapture.reopen(capture.launchInput,selectedProfile:profile(bundles.last!))
+   check(replay.source==capture.source && replay.config==capture.config,"imported execution replay changed source or policy")
+   check(!capture.healthy() && !capture.nativeClosed(),"source-only imported execution claimed native readiness")
+   reject("source-only imported execution fabricated saved proof"){_ = try capture.captureRestoration()}
+   try replay.close();try capture.close()
+  }}}
+  let imported=try importedFixture("server","wg","2022-blake3-aes-256-gcm")
+  for fault in ["local-node","local-schema","local-identity","local-execution","preparation-schema","launch-schema"]{
+   LibboxTestExecutionFault(fault)
+   reject("imported execution "+fault){_ = try IOSNodeChainExecutionCapture.compile(bundles:imported,requested:"server")}
+  }
   var tooSmall=try fixture(8,"aes-256-gcm+xor-whitening","server",true)
   for position in tooSmall.indices {
    tooSmall[position]=try edit(tooSmall[position]){root in
@@ -195,13 +234,19 @@ def main():
           ('requested','plan.requestedExecution() == requested,','true,'),
           ('launch-error','guard failure == nil, let input else {','guard let input else {'),
           ('local-node','nodes == original["nodes"] as? [String], identities == original["identity_sources"] as? [String] else {','!nodes.isEmpty, identities == original["identity_sources"] as? [String] else {'),
+          ('imported-schema','schema == 1 || schema == 2,','schema == 1,'),
+          ('local-schema','returned["schema"] as? Int == schema,','true,'),
+          ('local-identity','identities == original["identity_sources"] as? [String] else {','!identities.isEmpty else {'),
           ('cleanup-bind-order','func bindNative(_ server: LibboxCommandServer) throws { try plan.bindNative(server); try requireCurrent() }','func bindNative(_ server: LibboxCommandServer) throws { try requireCurrent(); try plan.bindNative(server) }'),
         ):
             assert text.count(before)==1,name
             mutant=work/(name+'.swift');mutant.write_text(text.replace(before,after,1));binary=work/name
             subprocess.run(command+[str(mutant),str(tests),'-o',str(binary)],check=True,timeout=90)
             result=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
-            witness='cancelled capture failed to reserve original native cleanup' if name=='cleanup-bind-order' else 'ACCEPTED native execution '+name
+            witness=('cancelled capture failed to reserve original native cleanup' if name=='cleanup-bind-order'
+                     else 'imported SS execution was refused' if name=='imported-schema'
+                     else 'ACCEPTED imported execution '+name if name in ('local-node','local-schema','local-identity')
+                     else 'ACCEPTED native execution '+name)
             assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,(result.stdout+result.stderr)[-1500:])
             print('Rejected Apple execution source control:',name)
 

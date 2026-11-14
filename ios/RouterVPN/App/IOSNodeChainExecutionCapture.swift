@@ -101,11 +101,14 @@ final class IOSNodeChainExecutionCapture {
         }
         let returned = try Self.object(localSource, limit: IOSNodeChainCapture.maximumInputBytes)
         let original = try Self.object(local.launchInput, limit: IOSNodeChainCapture.maximumInputBytes)
+        // Embedded Local schema two identifies the imported SS member. It is
+        // independent of the ordinary execution and saved Last launch schemas.
         guard Set(returned.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
-              returned["schema"] as? Int == 1, original["schema"] as? Int == 1, returned["execution"] as? String == "local",
+              let schema = original["schema"] as? Int, schema == 1 || schema == 2,
+              returned["schema"] as? Int == schema, returned["execution"] as? String == "local",
               let nodes = returned["nodes"] as? [String], let identities = returned["identity_sources"] as? [String],
               nodes == original["nodes"] as? [String], identities == original["identity_sources"] as? [String] else {
-            throw Self.issue("Server execution requires the exact complete paired-node order and independent private identities.")
+            throw Self.issue("Server execution requires the exact complete member order and independent private identities.")
         }
     }
 

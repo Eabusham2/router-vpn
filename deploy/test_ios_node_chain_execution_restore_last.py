@@ -52,7 +52,7 @@ func executionSavedRecord(input,selected string)(string,error){
  m,err:=NewRouterNodeChainExecutionLaunch(input);if err!=nil{return "",err}
  var source mobilemultihop.NodeChainSource;if err=json.Unmarshal([]byte(m.prep.LocalSource()),&source);err!=nil{return "",err}
  chain,err:=mobilemultihop.NewNodeChain(m.prep.LocalSource());if err!=nil{return "",err};proof:=chain.ProofInventory()[0]
- raw,err:=json.Marshal(mobilemultihop.NodeChainServerSource{Schema:1,EntryID:proof.ProfileID,EntryNodeID:proof.NodeID,EntryMode:proof.Mode,Nodes:source.Nodes[1:],IdentitySources:source.IdentitySources[1:]});if err!=nil{return "",err}
+ raw,err:=json.Marshal(mobilemultihop.NodeChainServerSource{Schema:source.Schema,EntryID:proof.ProfileID,EntryNodeID:proof.NodeID,EntryMode:proof.Mode,Nodes:source.Nodes[1:],IdentitySources:source.IdentitySources[1:]});if err!=nil{return "",err}
  policy,err:=mobilemultihop.NewNodeChainServerPolicy(string(raw));if err!=nil{return "",err};descriptor:=policy.Descriptor();identity,err:=descriptor.Digest();if err!=nil{return "",err}
  discovery,err:=m.prep.Discovery();if err!=nil{return "",err};api,err:=url.Parse(discovery.API);if err!=nil{return "",err}
  record:=savedLast{Schema:1,LocalSourceSHA256:m.LocalSourceSHA256(),LocalInputSHA256:digest([]byte(m.prep.LocalSource())),Setting:m.RequestedExecution(),Execution:selected,Target:mobilemultihop.Targets[0],Descriptor:descriptor,DescriptorSHA256:identity,DNSPolicySHA256:descriptor.DNSPolicySHA256,EntryHost:api.Hostname(),Peer:"10.80.0.2",FirstPort:27100,LastPort:27107,Port:27104}
@@ -139,8 +139,11 @@ SWIFT=SOURCE.SWIFT[:SOURCE.SWIFT.index('@main struct Tests')]+r'''
  @MainActor static func reject(_ name:String,_ action:()throws->Void){do{try action();fatalError("ACCEPTED "+name)}catch{checks+=1}}
  @MainActor static func main()throws{
   defer{LibboxTestClose()}
-  for count in [2,3,4]{for mixed in [false,true]{for selected in ["local","server"]{
-   let bundles=try fixture(count,"off","auto",mixed),final=try profile(bundles.last!)
+  var paths=[[Data]]()
+  for count in [2,3,4]{for mixed in [false,true]{paths.append(try fixture(count,"off","auto",mixed))}}
+  for first in ["wg","awg2-fast","awg2-strong"]{paths.append(try importedFixture("auto",first,"2022-blake3-aes-256-gcm"))}
+  for bundles in paths{for selected in ["local","server"]{
+   let final=try profile(bundles.last!)
    let original=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"auto")
    let saved=try LibboxTestSavedLast(original.launchInput,selected)
    original.plan.fixtureProve(selected,saved)
@@ -179,7 +182,7 @@ SWIFT=SOURCE.SWIFT[:SOURCE.SWIFT.index('@main struct Tests')]+r'''
    reject("changed selected execution"){_ = try next.execution()}
    reject("second restore claim"){_ = try restore.makeCapture(ordinaryInput:original.launchInput,selectedProfile:final)}
    try next.close()
-  }}}
+  }}
   let bundles=try fixture(3,"off","auto",true),final=try profile(bundles.last!)
   let original=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"auto")
   let saved=try LibboxTestSavedLast(original.launchInput,"server")
