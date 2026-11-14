@@ -76,12 +76,43 @@ func (t *NativeTun) routervpnNetworkObjects(receipt DesktopNetworkReceipt) ([]De
 		if object.Index != receipt.Index || routervpnNetworkHasObject(objects, object) {
 			continue
 		}
-		if object.Flags&syscall.RTF_STATIC != 0 || !routervpnNetworkAddressRoute(receipt, object) {
+		if object.Flags&syscall.RTF_STATIC != 0 || !routervpnDarwinNetworkAddressRoute(receipt, object) {
 			return nil, routervpnDarwinUnrelatedRouteError(receipt, object)
 		}
 		objects = append(objects, object)
 	}
 	return objects, nil
+}
+
+// A Darwin utun also installs a LOCAL|HOST route to its own address with that
+// same address as gateway. Classify only the exact native shape observed on
+// the originally captured interface. This records the whole current object;
+// it neither adds it to successful explicit-route calls nor deletes it.
+func routervpnDarwinNetworkAddressRoute(receipt DesktopNetworkReceipt, object DesktopNetworkObject) bool {
+	if routervpnNetworkAddressRoute(receipt, object) {
+		return true
+	}
+	if receipt.TargetOS != "darwin" || receipt.Index == 0 || receipt.LUID != 0 ||
+		object.Kind != "route" || object.Index != receipt.Index || object.LUID != receipt.LUID ||
+		object.Table != 0 || object.Native != "" || object.Flags != syscall.RTF_LOCAL|syscall.RTF_HOST {
+		return false
+	}
+	prefix, err := netip.ParsePrefix(object.Destination)
+	if err != nil || prefix.String() != object.Destination || prefix.Bits() != prefix.Addr().BitLen() ||
+		(object.Family != 4 && object.Family != 6) || prefix.Addr().Is4() != (object.Family == 4) {
+		return false
+	}
+	for _, value := range receipt.Addresses {
+		address, err := netip.ParsePrefix(value)
+		if err != nil || address.String() != value || address.Addr().IsUnspecified() ||
+			address.Addr().IsMulticast() || address.Addr().Zone() != "" {
+			continue
+		}
+		if prefix.Addr() == address.Addr() && object.Gateway == address.Addr().String() {
+			return true
+		}
+	}
+	return false
 }
 
 // Failure-only numeric shape: retain the original refusal and disclose no
@@ -97,7 +128,7 @@ func routervpnDarwinUnrelatedRouteError(receipt DesktopNetworkReceipt, object De
 		}
 	}
 	return fmt.Errorf("native Darwin TUN has an unrelated route: family=%d flags=%#x prefix_bits=%d gateway_present=%t destination_is_address=%t gateway_is_address=%t address_route=%t",
-		object.Family, object.Flags, prefix.Bits(), object.Gateway != "", destinationIsAddress, gatewayIsAddress, routervpnNetworkAddressRoute(receipt, object))
+		object.Family, object.Flags, prefix.Bits(), object.Gateway != "", destinationIsAddress, gatewayIsAddress, routervpnDarwinNetworkAddressRoute(receipt, object))
 }
 
 func (t *NativeTun) routervpnNetworkAddresses(current *net.Interface) ([]net.Addr, error) {

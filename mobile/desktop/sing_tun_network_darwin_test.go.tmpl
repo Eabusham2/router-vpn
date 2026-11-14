@@ -190,9 +190,8 @@ func TestRouterVPNDarwinRouteDump2RefusesUnprovedCache(t *testing.T) {
 }
 
 func TestRouterVPNDarwinRouteDump2ReadBoundary(t *testing.T) {
-	// The diagnostic never grants ownership. A self-address gateway remains
-	// refused by the existing address-route predicate until native evidence
-	// proves its creator; the log exposes only its bounded numeric shape.
+	// HOST alone never grants local-address ownership. The diagnostic exposes
+	// only the bounded numeric shape, including for a self-address gateway.
 	receipt := DesktopNetworkReceipt{Index: 7, Addresses: []string{"10.254.241.1/30"}}
 	peer := DesktopNetworkObject{Kind: "route", Family: 4, Index: 7, Destination: "10.254.241.1/32", Gateway: "10.254.241.1", Flags: 4}
 	want := "native Darwin TUN has an unrelated route: family=4 flags=0x4 prefix_bits=32 gateway_present=true destination_is_address=true gateway_is_address=true address_route=false"
@@ -228,6 +227,102 @@ func TestRouterVPNDarwinRouteDump2ReadBoundary(t *testing.T) {
 			if calls != 1 || (fault == "empty" && (err != nil || len(result) != 0)) ||
 				(fault != "empty" && (err == nil || result != nil)) || (fault == "native-error" && !errors.Is(err, original)) {
 				t.Fatal("native TUN changed its original error, bound or empty inventory", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDarwinRouteLocalAddress(t *testing.T) {
+	for _, fault := range []string{"ipv4", "ipv6", "generic", "target", "zero-index", "interface", "luid", "foreign-luid", "kind", "table", "native", "flags", "family", "unknown-family", "prefix", "destination", "gateway", "other-captured-gateway", "absent-address", "malformed-address", "noncanonical-address", "malformed-destination", "noncanonical-destination", "unspecified", "multicast"} {
+		t.Run(fault, func(t *testing.T) {
+			receipt := DesktopNetworkReceipt{TargetOS: "darwin", Index: 7, Addresses: []string{"10.254.241.1/30"}}
+			object := DesktopNetworkObject{Kind: "route", Family: 4, Index: 7,
+				Destination: "10.254.241.1/32", Gateway: "10.254.241.1", Flags: syscall.RTF_LOCAL | syscall.RTF_HOST}
+			want := false
+			switch fault {
+			case "ipv4":
+				want = true
+			case "ipv6":
+				receipt.Addresses = []string{"2001:db8::1/64"}
+				object.Family, object.Destination, object.Gateway = 6, "2001:db8::1/128", "2001:db8::1"
+				want = true
+			case "generic":
+				object.Destination, object.Gateway, object.Flags = "10.254.241.0/30", "", 0
+				if !routervpnNetworkAddressRoute(receipt, object) {
+					t.Fatal("original generic address route changed")
+				}
+				want = true
+			case "target":
+				receipt.TargetOS = "linux"
+			case "zero-index":
+				receipt.Index, object.Index = 0, 0
+			case "interface":
+				object.Index++
+			case "luid":
+				receipt.LUID, object.LUID = 1, 1
+			case "foreign-luid":
+				object.LUID = 1
+			case "kind":
+				object.Kind = "rule"
+			case "table":
+				object.Table = 1
+			case "native":
+				object.Native = "foreign native route"
+			case "flags":
+				for bit := uint32(1); bit != 0; bit <<= 1 {
+					changed := object
+					changed.Flags ^= bit
+					if routervpnDarwinNetworkAddressRoute(receipt, changed) {
+						t.Fatal("local address route admitted changed flags", bit)
+					}
+				}
+				return
+			case "family":
+				object.Family = 6
+			case "unknown-family":
+				object.Family = 0
+			case "prefix":
+				object.Destination = "10.254.241.1/30"
+			case "destination":
+				object.Destination = "10.254.241.2/32"
+			case "gateway":
+				object.Gateway = "10.254.241.2"
+			case "other-captured-gateway":
+				receipt.Addresses = append(receipt.Addresses, "10.254.241.2/30")
+				object.Gateway = "10.254.241.2"
+			case "absent-address":
+				receipt.Addresses = nil
+			case "malformed-address":
+				receipt.Addresses = []string{"invalid"}
+			case "noncanonical-address":
+				receipt.Addresses = []string{"2001:db8:0:0::1/64"}
+				object.Family, object.Destination, object.Gateway = 6, "2001:db8::1/128", "2001:db8::1"
+			case "malformed-destination":
+				object.Destination = "invalid"
+			case "noncanonical-destination":
+				receipt.Addresses = []string{"2001:db8::1/64"}
+				object.Family, object.Destination, object.Gateway = 6, "2001:db8:0:0::1/128", "2001:db8::1"
+			case "unspecified":
+				receipt.Addresses = []string{"0.0.0.0/30"}
+				object.Destination, object.Gateway = "0.0.0.0/32", "0.0.0.0"
+			case "multicast":
+				receipt.Addresses = []string{"224.0.0.1/30"}
+				object.Destination, object.Gateway = "224.0.0.1/32", "224.0.0.1"
+			}
+			originalObject, originalAddresses := object, append([]string(nil), receipt.Addresses...)
+			if actual := routervpnDarwinNetworkAddressRoute(receipt, object); actual != want {
+				t.Fatalf("local address route classification changed: got %t want %t", actual, want)
+			}
+			if object != originalObject || len(receipt.Addresses) != len(originalAddresses) {
+				t.Fatal("local address route classification mutated original capture")
+			}
+			for index := range originalAddresses {
+				if receipt.Addresses[index] != originalAddresses[index] {
+					t.Fatal("local address route classification replaced original address")
+				}
+			}
+			if fault != "generic" && routervpnNetworkAddressRoute(receipt, object) {
+				t.Fatal("Darwin local route widened the generic address predicate")
 			}
 		})
 	}

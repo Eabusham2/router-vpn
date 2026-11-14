@@ -6,6 +6,8 @@ import contextlib
 import io
 import importlib.util
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -258,6 +260,92 @@ class DarwinRouteTransformation(unittest.TestCase):
                 G.restore_takeover_overlay(root, root)
             self.assertFalse((root / 'takeover.go').exists())
             self.assertFalse((root / 'takeover-overlay.json').exists())
+
+
+class DarwinLocalAddressRoute(unittest.TestCase):
+    def test_original_helpers_and_native_cases_with_causal_controls(self):
+        # Compile the complete shipping predicates, original data declarations
+        # and new native test body. Only Darwin's two ABI flag constants are
+        # projected for this portable stdlib check; the required native gate
+        # separately executes the unchanged real route and retirement cases.
+        def declaration(raw, signature):
+            self.assertEqual(raw.count(signature), 1, signature)
+            start = raw.index(signature)
+            return raw[start:raw.index('\n}\n', start) + 3]
+        network = (ROOT / 'mobile/desktop/sing_tun_network.go.tmpl').read_text()
+        darwin = (ROOT / 'mobile/desktop/sing_tun_network_darwin.go.tmpl').read_text()
+        native_tests = (ROOT / 'mobile/desktop/sing_tun_network_darwin_test.go.tmpl').read_text()
+        types = (ROOT / 'internal/desktopnetwork/desktop_network_receipt.go').read_text()
+        generic = declaration(network, 'func routervpnNetworkAddressRoute(')
+        local = declaration(darwin, 'func routervpnDarwinNetworkAddressRoute(')
+        name = 'TestRouterVPNDarwinRouteLocalAddress'
+        native = declaration(native_tests, 'func ' + name + '(')
+        cases = G.INVENTORY_CASES[name]
+        self.assertEqual(tuple(re.findall(r'"([^"]+)"', native.split('[]string{', 1)[1].split('}', 1)[0])), cases)
+        # This is the actual positive selector sent to the native image.
+        arguments = []
+        with tempfile.TemporaryDirectory(prefix='darwin-local-selector-') as directory:
+            root = Path(directory)
+            image = root / 'route.test'
+            image.write_bytes(b'captured selector fixture')
+            image.chmod(0o500)
+            def record(command, **kwargs):
+                arguments.extend(str(arg) for arg in command)
+                return ''
+            with patch.object(G.UID, 'run', side_effect=record):
+                G.run_fixture_image(root, image, G.digest(image), False)
+        selector = next(arg.split('=', 1)[1] for arg in arguments if arg.startswith('-test.run='))
+        self.assertTrue(re.search(selector, name), 'new local-address cases omitted from native selector')
+        fixture = ('package route\nimport ("net/netip"; "testing")\n'
+                   'const darwinLocal, darwinHost = 0x200000, 0x4\n'
+                   'type desktopDarwinCacheObservation struct{}\n' +
+                   declaration(types, 'type DesktopNetworkObject struct {') + '\n' +
+                   declaration(types, 'type DesktopNetworkReceipt struct {') + '\n' + generic + '\n')
+        controls = {
+            'original-refusal': (local, 'func routervpnDarwinNetworkAddressRoute(receipt DesktopNetworkReceipt, object DesktopNetworkObject) bool { return routervpnNetworkAddressRoute(receipt, object) }', 'ipv4', 'classification changed: got false want true'),
+            'target': ('receipt.TargetOS != "darwin" || ', '', 'target', 'classification changed: got true want false'),
+            'interface': ('object.Index != receipt.Index || ', '', 'interface', 'classification changed: got true want false'),
+            'luid': ('object.LUID != receipt.LUID ||', '', 'foreign-luid', 'classification changed: got true want false'),
+            'flags': ('object.Flags != syscall.RTF_LOCAL|syscall.RTF_HOST', 'false', 'flags', 'admitted changed flags'),
+            'family': ('prefix.Addr().Is4() != (object.Family == 4)', 'false', 'family', 'classification changed: got true want false'),
+            'host-prefix': ('prefix.Bits() != prefix.Addr().BitLen() ||', '', 'prefix', 'classification changed: got true want false'),
+            'destination': ('prefix.Addr() == address.Addr() && ', '', 'destination', 'classification changed: got true want false'),
+            'gateway': ('object.Gateway == address.Addr().String()', 'true', 'other-captured-gateway', 'classification changed: got true want false'),
+        }
+        bodies = local + '\n' + native + '\n'
+        for index, (label, (before, after, leaf, witness)) in enumerate(controls.items()):
+            self.assertEqual(local.count(before), 1, label)
+            variant = local.replace(before, after, 1)
+            helper = 'routervpnDarwinNetworkAddressRoute' + str(index)
+            bodies += variant.replace('routervpnDarwinNetworkAddressRoute', helper) + '\n'
+            bodies += native.replace(name, name + str(index)).replace('routervpnDarwinNetworkAddressRoute', helper) + '\n'
+        fixture += bodies.replace('syscall.RTF_LOCAL', 'darwinLocal').replace('syscall.RTF_HOST', 'darwinHost')
+        compiler = shutil.which('go')
+        self.assertIsNotNone(compiler, 'Go is required for actual Darwin local-route classification')
+        env = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', GOFLAGS='', GOMAXPROCS='1')
+        with tempfile.TemporaryDirectory(prefix='darwin-local-address-') as directory:
+            source, image = Path(directory) / 'route_test.go', Path(directory) / 'route.test'
+            source.write_text(fixture)
+            built = subprocess.run([compiler, 'test', '-c', '-o', str(image), str(source)],
+                                   capture_output=True, text=True, timeout=90, env=env)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            def execute(selector):
+                return subprocess.run([str(image), '-test.v', '-test.count=1', '-test.timeout=10s', '-test.run=' + selector],
+                                      capture_output=True, text=True, timeout=15, env=env)
+            actual = execute('^' + name + '$')
+            output = actual.stdout + actual.stderr
+            self.assertEqual(actual.returncode, 0, output)
+            for case in ('', *('/' + case for case in cases)):
+                self.assertRegex(output, r'--- PASS: ' + re.escape(name + case) + r' \(', output)
+            for index, (label, (_, _, leaf, witness)) in enumerate(controls.items()):
+                with self.subTest(control=label):
+                    result = execute('^' + name + str(index) + '$/^' + leaf + '$')
+                    output = result.stdout + result.stderr
+                    self.assertEqual(result.returncode, 1, output)
+                    self.assertIn('--- FAIL: ' + name + str(index) + '/' + leaf + ' ', output)
+                    self.assertIn(witness, output)
+                    for forbidden in ('panic:', 'test timed out', 'WARNING: DATA RACE', '[build failed]'):
+                        self.assertNotIn(forbidden, output)
 
 
 if __name__ == '__main__':

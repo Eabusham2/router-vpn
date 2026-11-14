@@ -43,6 +43,12 @@ INVENTORY_CASES = {
         'referenced', 'no-expiry', 'wrong-parent', 'foreign-interface', 'foreign-gateway',
         'missing-parent', 'duplicate-parent', 'ordinary-dump', 'truncated'),
     'TestRouterVPNDarwinRouteDump2ReadBoundary': ('native-error', 'oversized', 'empty'),
+    'TestRouterVPNDarwinRouteLocalAddress': (
+        'ipv4', 'ipv6', 'generic', 'target', 'zero-index', 'interface', 'luid', 'foreign-luid',
+        'kind', 'table', 'native', 'flags', 'family', 'unknown-family', 'prefix', 'destination',
+        'gateway', 'other-captured-gateway', 'absent-address', 'malformed-address',
+        'noncanonical-address', 'malformed-destination', 'noncanonical-destination',
+        'unspecified', 'multicast'),
 }
 REQUIRED = frozenset((*GROUPS, *(root + '/' + family for root in GROUPS for family in ('ipv4', 'ipv6')),
                       *INVENTORY_CASES, *(root + '/' + case for root, cases in INVENTORY_CASES.items() for case in cases)))

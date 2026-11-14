@@ -288,7 +288,7 @@ func (t *NativeTun) routervpnDarwinNodeChainCloseContext(ctx context.Context,
 		}
 		for _, original := range actual {
 			if original.Index == uint32(state.index) &&
-				(original.Flags&syscall.RTF_STATIC != 0 || !routervpnNetworkAddressRoute(state.receipt, original)) {
+				(original.Flags&syscall.RTF_STATIC != 0 || !routervpnDarwinNetworkAddressRoute(state.receipt, original)) {
 				return errors.New("Darwin native retirement retains an unjoined or replacement route")
 			}
 		}
