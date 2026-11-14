@@ -279,12 +279,25 @@ class OwnedBuildCheckout:
         if not self.prepared:
             raise ValueError("SDK build clone was never captured")
         require_pristine_candidate(self.source,self.sha,self.expected)
-        if (CORE.git(self.path,"rev-parse","HEAD").decode().strip()!=self.sha or
-                CORE.git(self.path,"rev-parse","HEAD^{tree}").decode().strip()!=self.tree or
-                full_history_version(self.path)!=self.version or
-                CORE.snapshot(self.path)!=self.expected or
-                CORE.git(self.path,"status","--porcelain","--untracked-files=all")):
-            raise ValueError("Owned SDK build clone changed its original tracked source or history")
+        head=CORE.git(self.path,"rev-parse","HEAD").decode().strip()
+        tree=CORE.git(self.path,"rev-parse","HEAD^{tree}").decode().strip()
+        version=full_history_version(self.path)
+        observed=CORE.snapshot(self.path)
+        status=CORE.git(self.path,"status","--porcelain","--untracked-files=all")
+        if (head!=self.sha or tree!=self.tree or version!=self.version or
+                observed!=self.expected or status):
+            # Preserve a bounded failure witness before the owned build clone
+            # is retired. File contents and Git credentials never enter it.
+            changed=[path for path in sorted(set(observed)|set(self.expected))
+                     if observed.get(path)!=self.expected.get(path)]
+            lines=status.decode("utf-8","backslashreplace").splitlines()
+            diagnostics=dict(schema=1,head=head,tree=tree,version_code=version,
+                tracked_changed_count=len(changed),tracked_changed_paths=[path[:2048] for path in changed[:40]],
+                status_count=len(lines),status_lines=[line[:2048] for line in lines[:40]],
+                status_sha256=hashlib.sha256(status).hexdigest(),
+                truncated=len(changed)>40 or len(lines)>40 or any(len(line)>2048 for line in (*changed[:40],*lines[:40])))
+            raise ValueError("Owned SDK build clone changed its original tracked source or history; diagnostics="+
+                             json.dumps(diagnostics,sort_keys=True,ensure_ascii=True))
         return dict(source_sha=self.sha,source_tree=self.tree,complete_history=True,
                     version_code=self.version,tracked_file_count=len(self.expected),
                     independent_clone=True,build_path=str(self.path),
@@ -410,14 +423,14 @@ def self_test():
                 for name in ("libbox.so","libroutervpn_tor.so","libroutervpn_rosenpass_jni.so","libwg-go.so","libawg-go.so"):z.writestr("lib/"+abi+"/"+name,elf(abi))
         return aar,apk
 
-    def git_fixture(root):
+    def git_fixture(root, project_ignore=False):
         source=root/"candidate";source.mkdir()
         def git(*args):
             return subprocess.check_output(["git",*map(str,args)],stderr=subprocess.STDOUT,timeout=10)
         git("init","-q",source)
         git("-C",source,"config","user.name","SDK workspace fixture")
         git("-C",source,"config","user.email","sdk-workspace@example.invalid")
-        (source/".gitignore").write_text("generated/\n")
+        (source/".gitignore").write_bytes((ROOT/".gitignore").read_bytes() if project_ignore else b"generated/\n")
         for index in range(3):
             (source/"source.txt").write_text("original "+str(index))
             git("-C",source,"add",".gitignore","source.txt")
@@ -439,6 +452,67 @@ def self_test():
         return record,phases
 
     class Checks(unittest.TestCase):
+        def test_owned_clone_preserves_real_android_generated_output_boundary(self):
+            # These paths are emitted by the original Gradle/native builders;
+            # the failed58e SDK receipt recorded the AAR, stamps and PQ source.
+            outputs=("libbox.aar","libbox.commit","libbox.openvpn.sha256","libbox-LICENSE.txt",
+                     "libxray-LICENSE.txt","native-amneziawg-LICENSE.txt","amneziawg-tunnel.aar",
+                     "amneziawg-tunnel.commit","amneziawg-tunnel-LICENSE.txt",
+                     "rosenpass-native/source.json","rosenpass-native/jni/arm64-v8a/libroutervpn_rosenpass_jni.so",
+                     "tor-native/source.json","tor-native/jni/arm64-v8a/libroutervpn_tor.so","tor-notices/manifest.json")
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);source,sha,output,scratch=git_fixture(root,project_ignore=True)
+                before=CORE.snapshot(source);workspace=OwnedBuildCheckout(source,output,sha,before,4,parent=scratch)
+                try:
+                    prepare_fixture(workspace,output)
+                    for relative in outputs:
+                        path=workspace.path/"android/app/libs"/relative
+                        path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b"fixture generated output")
+                    ignored={name.decode() for name in CORE.git(workspace.path,"ls-files","--others","--ignored","--exclude-standard","-z").split(b"\0") if name}
+                    self.assertEqual(ignored,{"android/app/libs/"+name for name in outputs})
+                    self.assertEqual(CORE.git(workspace.path,"status","--porcelain","--untracked-files=all"),b"")
+                    workspace.verify();require_pristine_candidate(source,sha,before)
+                    for relative in ("android/app/libs/foreign-engine.so","android/app/libs/foreign-helper.java","android/src/foreign.java"):
+                        path=workspace.path/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b"unowned output")
+                        with self.subTest(path=relative),self.assertRaisesRegex(ValueError,"tracked source or history"):
+                            workspace.verify()
+                        self.assertEqual(path.read_bytes(),b"unowned output");path.unlink()
+                    tracked=workspace.path/"source.txt";tracked.write_bytes(b"changed source even when generated outputs exist")
+                    with self.assertRaisesRegex(ValueError,"tracked source or history"):workspace.verify()
+                finally:workspace.cleanup(True)
+
+        def test_real_generated_output_never_enters_the_pristine_candidate(self):
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);source,sha,output,scratch=git_fixture(root,project_ignore=True)
+                before=CORE.snapshot(source)
+                for relative in ("libbox.aar","rosenpass-native/source.json","tor-native/source.json"):
+                    path=source/"android/app/libs"/relative
+                    path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b"unowned candidate output")
+                    with self.subTest(path=relative),self.assertRaisesRegex(ValueError,"no longer pristine"):
+                        OwnedBuildCheckout(source,output,sha,before,4,parent=scratch)
+                    self.assertEqual(path.read_bytes(),b"unowned candidate output");path.unlink()
+                require_pristine_candidate(source,sha,before)
+
+        def test_failed_source_check_keeps_bounded_metadata_and_rejects_changes(self):
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);source,sha,output,scratch=git_fixture(root)
+                before=CORE.snapshot(source);workspace=OwnedBuildCheckout(source,output,sha,before,4,parent=scratch)
+                try:
+                    prepare_fixture(workspace,output)
+                    for number in range(65):
+                        (workspace.path/("unowned-%03d"%number)).write_bytes(b"private file bytes must not appear")
+                    (workspace.path/"source.txt").write_bytes(b"private tracked bytes must not appear")
+                    with self.assertRaisesRegex(ValueError,"tracked source or history") as caught:workspace.verify()
+                    diagnostic=json.loads(str(caught.exception).split("; diagnostics=",1)[1])
+                    self.assertEqual(diagnostic["tracked_changed_count"],1)
+                    self.assertEqual(diagnostic["tracked_changed_paths"],["source.txt"])
+                    self.assertEqual(diagnostic["status_count"],66);self.assertEqual(len(diagnostic["status_lines"]),40)
+                    self.assertTrue(diagnostic["truncated"]);self.assertEqual(diagnostic["head"],sha)
+                    self.assertNotIn("private file bytes",str(caught.exception));self.assertNotIn("private tracked bytes",str(caught.exception))
+                    self.assertEqual(len(list(workspace.path.glob("unowned-*"))),65)
+                    require_pristine_candidate(source,sha,before)
+                finally:workspace.cleanup(True)
+
         def test_real_owned_clone_keeps_complete_history_and_generated_files_separate(self):
             with tempfile.TemporaryDirectory() as directory:
                 root=Path(directory);source,sha,output,scratch=git_fixture(root)
