@@ -37,7 +37,8 @@ def linux_dns_measurement_controls() -> None:
     """Follow the packaged GTK callback through its captured measurement owner."""
     build = require("client/linux/build-native-app.sh",
                     'DNS_INC="$ROOT/client/linux/routervpn-dns-measurement-v1.inc"',
-                    '"$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC"',
+                    'ORDERED_LATENCY_INC="$ROOT/client/linux/routervpn-ordered-latency-v1.inc"',
+                    '"$MTU_INC" "$DNS_INC" "$ORDERED_LATENCY_INC" "$SHUTDOWN_INC"',
                     '#include "routervpn-dns-measurement-v1.inc"\\n',
                     'G_CALLBACK(linux_dns_parent_delete_v1)', 'G_CALLBACK(on_delete)')
     if build.find('G_CALLBACK(linux_dns_parent_delete_v1)') > build.find('G_CALLBACK(on_delete)'):
