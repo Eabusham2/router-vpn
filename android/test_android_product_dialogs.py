@@ -77,6 +77,7 @@ final class AndroidNodeStore {
    original=source.toString();
   }
   JSONObject bundle()throws Exception{return new JSONObject(original);}
+  JSONObject profile()throws Exception{return selectedProfile(bundle());}
   // SHIPPING_PAIRED_IDENTITY
  }
  // SHIPPING_NODE_IDENTITY_HELPERS
@@ -306,6 +307,12 @@ HARNESS_SUFFIX = r'''
   h=new ProductDialogHarness();h.nodeStore.identityFault="wrong-proof";h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);check(h.ordered==null&&h.message.contains("proof does not match"),"ordered constructor accepted a substituted paired proof");
   h=new ProductDialogHarness();h.nodeStore.staleCatalog=true;h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);
   check(h.ordered==null&&h.message.contains("catalog changed"),"ordered constructor adopted changed original catalog");
+  // An empty draft skips final-mode discovery and still needs the terminal
+  // constructor guard; retain its independent causal control.
+  h=new ProductDialogHarness();h.nodeStore.selected="";h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);
+  check(h.ordered!=null&&h.ordered.members().isEmpty()&&h.saved.writes==0,"valid empty ordered draft cannot open without publishing selection");
+  h=new ProductDialogHarness();h.nodeStore.selected="";h.nodeStore.staleCatalog=true;h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);
+  check(h.ordered==null&&h.message.contains("catalog changed"),"ordered constructor adopted changed original catalog for empty draft");
   h=new ProductDialogHarness();ProductDialogHarness original=h;h.nodeStore.duringCapture=()->original.saved.values.put(SELECTED_ID,"b");h.configureMultihop();shown(2,"Choose multihop path").clickItem(0);
   check(h.ordered==null&&h.message.contains("connection changed"),"ordered constructor adopted changed preferences");
  }
@@ -395,7 +402,8 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
         ordered_source=(JAVA/'AndroidOrderedPathSelection.java').read_text()
         ordered_fields=ordered_source[ordered_source.index('    static final class Member'):ordered_source.index('    AndroidOrderedPathSelection(')]
         ordered_methods="\n".join(block(ordered_source,marker) for marker in (
-            '    AndroidOrderedPathSelection(', '    List<Member> members(', '    void requireCurrent(', '    private static boolean hasMode('))
+            '    AndroidOrderedPathSelection(', '    List<Member> members(', '    List<String> finalModes(',
+            '    void requireCurrent(', '    private static boolean hasMode('))
         ordered_java=('package com.eabusham.routervpn;import org.json.*;import java.util.*;final class AndroidOrderedPathSelection{'
             +ordered_fields+ordered_methods+'}')
         sources['com/eabusham/routervpn/AndroidOrderedPathSelection.java']=ordered_java
@@ -425,7 +433,7 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
         assert original_constructor.count('        requireCurrent();')==1
         ordered_target.write_text(ordered_java.replace(original_constructor,original_constructor.replace('        requireCurrent();','        // defect: omit original complete capture validation'),1))
         try:
-            compile_run(handlers,7,'ordered constructor adopted changed original catalog')
+            compile_run(handlers,7,'ordered constructor adopted changed original catalog for empty draft')
         finally:
             ordered_target.write_text(ordered_java)
         assert ordered_java.count('source.requirePairedIdentity();')==1
