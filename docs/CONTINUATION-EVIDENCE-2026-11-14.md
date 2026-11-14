@@ -277,6 +277,26 @@ SOCKS preclose job `132292468087` at `3dff2d60`, and desktop SOCKS child job
 `132296739124` at `f8047686`. Their original commit identities remain distinct
 from the current main release.
 
+## Accompanying Darwin diagnostic PID publication correction
+
+The exact `fcc7fe042ba447366ca7d0ce0b545dd159323a95` Intel macOS
+controller job `132308357679` exposed a fixture race: its independent output
+writer created the PID receipt before its contents were written, so the parent
+occasionally parsed an empty file. The fixture now writes and closes its own
+pending file before atomically publishing that receipt. A failed publication
+joins the exact child it created. The reader still rejects malformed PIDs;
+no production process handling, timeout or failure assertion was relaxed.
+
+All seven observation variants passed using the shipping observer/command
+source and actual subprocess lifecycle on the local Go 1.26.3 toolchain.
+Missing observation, blocking output, unbounded inherited output, missing late
+observation and discarded late output still produced their required failure
+witnesses. The original expected failed-probe outcome remains a failure.
+The joined log has SHA-256
+`7e43db7c889ebad788e3dc29603dd45a5612c8023b3a39b76d94aa395ae8cf23`.
+Native Darwin PF and the complete macOS controller workflow remain separate
+hosted checks.
+
 ## Active source work and acceptance still required
 
 Windows/Linux typed retained-parent adapters and full native-host acceptance

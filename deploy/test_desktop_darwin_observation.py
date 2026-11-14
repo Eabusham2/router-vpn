@@ -108,7 +108,14 @@ func TestDarwinCommandPipeChild(t *testing.T){
  child.SysProcAttr=&syscall.SysProcAttr{Setpgid:true}
  child.Stdout=os.Stdout;child.Stderr=os.Stderr
  if err:=child.Start();err!=nil{t.Fatal(err)}
- if err:=os.WriteFile(path,[]byte(strconv.Itoa(child.Process.Pid)),0600);err!=nil{t.Fatal(err)}
+ // The original reader treats this path as a complete PID receipt. Publish
+ // only after the private pending file has been written and closed.
+ publish:=func()error{
+  pending:=path+".pending"
+  if err:=os.WriteFile(pending,[]byte(strconv.Itoa(child.Process.Pid)),0600);err!=nil{return err}
+  return os.Rename(pending,path)
+ }
+ if err:=publish();err!=nil{_ = child.Process.Kill();_ = child.Wait();t.Fatal(err)}
 }
 func TestDarwinCommandInheritedOutput(t *testing.T){
  for _,cancelled:=range []bool{false,true}{
