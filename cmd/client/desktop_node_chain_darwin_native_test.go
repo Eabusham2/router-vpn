@@ -30,51 +30,15 @@ import (
 
 const macOSNodeChainNativeMarker = "fixture-node-chain-host"
 
-// Ordinary and SOCKS cases use the shipping public handler. Only the separately
-// closed CONNECT fixture retains its explicit private bridge; its source and
-// installed receipt must transition together in the CONNECT owner's unit.
-func macOSNodeChainNativeConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime, privateCONNECT bool, public *atomic.Bool) {
+// Every ordered family enters the actual shipping public handler. Its typed
+// admission, original-source capture and installation authority remain required.
+func macOSNodeChainNativeConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime, public *atomic.Bool) {
 	if public == nil {
 		http.Error(w, "native fixture lost its public-route observation", http.StatusConflict)
 		return
 	}
-	if !privateCONNECT {
-		public.Store(true)
-		a.nativeMultihopConnectOwned(w, r, driver)
-		return
-	}
-	if nativeNodeChainCONNECTPlatformSupported() {
-		http.Error(w, "CONNECT fixture requires its own public-route receipt transition", http.StatusConflict)
-		return
-	}
-	operation, finish, err := a.beginConnectionOperationContext(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	defer finish()
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))
-	if err != nil || !q.ordered() || len(q.Nodes) != 3 ||
-		(q.Nodes[1].Mode != "http-connect" && q.Nodes[1].Mode != "https-connect") {
-		http.Error(w, "original private CONNECT request required", http.StatusBadRequest)
-		return
-	}
-	if execution, err := routeExecution(q); err != nil || execution != "local" {
-		http.Error(w, "original local execution required", http.StatusBadRequest)
-		return
-	}
-	a.mu.Lock()
-	selection, err := a.resolveNativeMultihopRequestLocked(q)
-	a.mu.Unlock()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	a.nativeMultihopConnectLocalOwned(w, r, operation, selection, driver)
+	public.Store(true)
+	a.nativeMultihopConnectOwned(w, r, driver)
 }
 
 func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error) {
@@ -120,11 +84,11 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 22 {
 		return true, errors.New("ordered native test lost actual mode catalog")
 	}
-	if len(modes) == 2 && modes[1] == "socks5" {
+	if len(modes) == 2 && (modes[1] == "socks5" || modes[1] == "http-connect" || modes[1] == "https-connect") {
 		middle, found := a.profileByIDLocked(control.MultihopNodes[1].ID)
 		public := publicProfileFor(middle)
 		if !found || public.External == nil || !public.External.OrderedMiddle {
-			return true, errors.New("installed SOCKS source lacks its shipping public middle capability")
+			return true, errors.New("installed typed middle source lacks its shipping public capability")
 		}
 	}
 	captured, err := captureDesktopMacOSSession(context.Background(), a)
@@ -228,9 +192,8 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 		_ = json.NewEncoder(w).Encode(multihopConnectRequest{Nodes: append([]common.MultihopNodeSelection(nil), control.MultihopNodes...), Execution: "local",
 			desktopProfileExpectations: desktopProfileExpectations{ExpectedSelectedNodeID: &selected, ExpectedProfileTokens: tokens}})
 	})
-	privateCONNECT := len(modes) == 2 && (modes[1] == "http-connect" || modes[1] == "https-connect")
 	mux.HandleFunc("/api/multihop/connect", func(w http.ResponseWriter, r *http.Request) {
-		macOSNodeChainNativeConnect(a, w, r, driver, privateCONNECT, &publicConnect)
+		macOSNodeChainNativeConnect(a, w, r, driver, &publicConnect)
 	})
 	mux.HandleFunc("/api/multihop/status", func(w http.ResponseWriter, r *http.Request) {
 		publicStatus.Store(true)
@@ -633,16 +596,12 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 	if receipt.ExitCode != 0 {
 		t.Fatal("original ordered controller did not join", receipt.ExitCode)
 	}
-	if peer.middleCONNECT == "" {
-		if !live.PublicConnect || !retired.PublicConnect || !negative && !retired.PublicStatus {
-			t.Fatal("installed ordinary/SOCKS case bypassed its actual public Connect or status handler")
-		}
-		t.Logf("actual sealed Darwin public ordered route verified %s: shipping Connect and original joined retirement", scenario)
-		if !negative {
-			t.Logf("actual sealed Darwin public ordered status verified %s: shipping capture and retired-capture refusal", scenario)
-		}
-	} else if live.PublicConnect || retired.PublicConnect {
-		t.Fatal("private CONNECT case borrowed ordinary/SOCKS public-route acceptance")
+	if !live.PublicConnect || !retired.PublicConnect || !negative && !retired.PublicStatus {
+		t.Fatal("installed ordered case bypassed its actual public Connect or status handler")
+	}
+	t.Logf("actual sealed Darwin public ordered route verified %s: shipping Connect and original joined retirement", scenario)
+	if !negative {
+		t.Logf("actual sealed Darwin public ordered status verified %s: shipping capture and retired-capture refusal", scenario)
 	}
 	t.Logf("actual sealed Darwin ordered host verified %s: original native transaction and intended proof boundary, complete captured identities, stopped acknowledgment, PF and utun retirement, controller join", scenario)
 }

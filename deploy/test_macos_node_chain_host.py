@@ -97,30 +97,28 @@ def require_public_entrypoints(source):
     # Structural closure only; all actual installed cases still run below.
     audit = load('darwin_public_native_entrypoints', 'native_multihop_audit.py')
     tokens = audit._tokens(source)
-    connect = audit._function(tokens, 'func macOSNodeChainNativeConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime, privateCONNECT bool, public *atomic.Bool)')
+    connect = audit._function(tokens, 'func macOSNodeChainNativeConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime, public *atomic.Bool)')
     controller = audit._function(tokens, 'func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)')
     case = audit._function(tokens, 'func macOSNodeChainNativeCase(t *testing.T, scenario string)')
     fragments = (
-        (connect, 'if !privateCONNECT { public.Store(true) a.nativeMultihopConnectOwned(w, r, driver) return }'),
-        (connect, 'if nativeNodeChainCONNECTPlatformSupported() {'),
-        (connect, 'operation, finish, err := a.beginConnectionOperationContext(r.Context())'),
-        (connect, 'len(q.Nodes) != 3'),
-        (connect, 'q.Nodes[1].Mode != "http-connect" && q.Nodes[1].Mode != "https-connect"'),
-        (controller, 'privateCONNECT := len(modes) == 2 && (modes[1] == "http-connect" || modes[1] == "https-connect")'),
-        (controller, 'macOSNodeChainNativeConnect(a, w, r, driver, privateCONNECT, &publicConnect)'),
+        (connect, 'if public == nil {'),
+        (connect, 'public.Store(true) a.nativeMultihopConnectOwned(w, r, driver)'),
+        (controller, 'if len(modes) == 2 && (modes[1] == "socks5" || modes[1] == "http-connect" || modes[1] == "https-connect") {'),
+        (controller, 'macOSNodeChainNativeConnect(a, w, r, driver, &publicConnect)'),
         (controller, 'mux.HandleFunc("/api/multihop/status", func(w http.ResponseWriter, r *http.Request) { publicStatus.Store(true) a.nativeMultihopStatus(w, r) })'),
         (controller, 'value.PublicConnect, value.PublicStatus = publicConnect.Load(), publicStatus.Load()'),
         (controller, 'public := publicProfileFor(middle)'),
         (controller, 'public.External == nil || !public.External.OrderedMiddle'),
-        (case, 'if peer.middleCONNECT == "" { if !live.PublicConnect || !retired.PublicConnect || !negative && !retired.PublicStatus {'),
+        (case, 'if !live.PublicConnect || !retired.PublicConnect || !negative && !retired.PublicStatus {'),
         (case, 't.Logf("actual sealed Darwin public ordered route verified %s: shipping Connect and original joined retirement", scenario)'),
         (case, 'if !negative { t.Logf("actual sealed Darwin public ordered status verified %s: shipping capture and retired-capture refusal", scenario) }'),
-        (case, 'else if live.PublicConnect || retired.PublicConnect {'),
     )
     if any(body is None or len(audit._positions(body, fragment)) != 1 for body, fragment in fragments):
-        raise ValueError('Installed native source lost its actual public entrypoint or separate private CONNECT boundary')
-    if len(audit._positions(connect, 'a.nativeMultihopConnectOwned(w, r, driver)')) != 1 or audit._positions(connect, 'a.nativeMultihopConnectOwned(w, r, driver)')[0] > audit._positions(connect, 'a.beginConnectionOperationContext(r.Context())')[0]:
-        raise ValueError('Installed ordinary/SOCKS source bypassed its original public dispatcher')
+        raise ValueError('Installed native source lost its actual public entrypoint or typed capability boundary')
+    if len(audit._positions(connect, 'a.nativeMultihopConnectOwned(w, r, driver)')) != 1 or any(
+            audit._positions(body, fragment) for body in (connect, controller)
+            for fragment in ('a.nativeMultihopConnectLocalOwned(', 'a.beginConnectionOperationContext(', 'privateCONNECT')):
+        raise ValueError('Installed ordered source bypassed its original public dispatcher')
     return True
 
 

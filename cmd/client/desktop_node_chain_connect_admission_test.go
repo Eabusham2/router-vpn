@@ -23,7 +23,7 @@ func TestDesktopCONNECTPublicAdmissionRequiresOriginalHost(t *testing.T) {
 		for _, arch := range []string{"amd64", "arm64", "386", "arm", "riscv64", ""} {
 			for _, retained := range []bool{false, true} {
 				for _, orderedHost := range []bool{false, true} {
-					want := retained && orderedHost && (target == "linux" || target == "windows") && (arch == "amd64" || arch == "arm64")
+					want := retained && orderedHost && (target == "linux" || target == "windows" || target == "darwin") && (arch == "amd64" || arch == "arm64")
 					if got := desktopNodeChainCONNECTAdmissionSupported(target, arch, retained, orderedHost); got != want {
 						t.Fatalf("public CONNECT target %s/%s retained=%v ordered=%v: %v", target, arch, retained, orderedHost, got)
 					}
@@ -38,7 +38,7 @@ func TestDesktopCONNECTPublicAdmissionRequiresOriginalHost(t *testing.T) {
 
 func desktopCONNECTExpectedPublicHost() bool {
 	return retainedNativeMultihopSelected() && nativeNodeChainPlatformSupported() &&
-		(runtime.GOOS == "linux" || runtime.GOOS == "windows") &&
+		(runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin") &&
 		(runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64")
 }
 

@@ -6,7 +6,7 @@ import "runtime"
 // ordinary ordered host on the same supported native target. This capability
 // does not grant a source, transport proof or another platform's admission.
 func desktopNodeChainCONNECTAdmissionSupported(targetOS, targetArch string, retained, orderedHost bool) bool {
-	return retained && orderedHost && (targetOS == "linux" || targetOS == "windows") &&
+	return retained && orderedHost && (targetOS == "linux" || targetOS == "windows" || targetOS == "darwin") &&
 		(targetArch == "amd64" || targetArch == "arm64")
 }
 

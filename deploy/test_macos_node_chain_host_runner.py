@@ -116,21 +116,24 @@ class OrderedNativeVerdicts(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     G.check_verdict(broken, case)
 
-    def test_native_source_uses_actual_public_callbacks_and_preserves_private_CONNECT(self):
+    def test_native_source_uses_actual_public_callbacks_for_every_family(self):
         source = (ROOT/'cmd/client/desktop_node_chain_darwin_native_test.go').read_text()
         self.assertTrue(G.require_public_entrypoints(source))
-        fragments = ('if !privateCONNECT {', 'a.nativeMultihopConnectOwned(w, r, driver)',
-                     'if nativeNodeChainCONNECTPlatformSupported() {', 'len(q.Nodes) != 3',
-                     'q.Nodes[1].Mode != "http-connect" && q.Nodes[1].Mode != "https-connect"',
-                     'macOSNodeChainNativeConnect(a, w, r, driver, privateCONNECT, &publicConnect)',
+        fragments = ('if public == nil {', 'public.Store(true)', 'a.nativeMultihopConnectOwned(w, r, driver)',
+                     'if len(modes) == 2 && (modes[1] == "socks5" || modes[1] == "http-connect" || modes[1] == "https-connect") {',
+                     'macOSNodeChainNativeConnect(a, w, r, driver, &publicConnect)',
                      'a.nativeMultihopStatus(w, r)', 'publicConnect.Load(), publicStatus.Load()',
                      'public := publicProfileFor(middle)', 'public.External == nil || !public.External.OrderedMiddle',
-                     '!live.PublicConnect || !retired.PublicConnect || !negative && !retired.PublicStatus',
-                     'else if live.PublicConnect || retired.PublicConnect {')
+                     '!live.PublicConnect || !retired.PublicConnect || !negative && !retired.PublicStatus')
         for fragment in fragments:
             self.assertEqual(source.count(fragment), 1)
             changed = source.replace(fragment, 'removedActualBoundary', 1)+'\n// '+fragment+'\nvar publicRouteDecoy = `'+fragment+'`\n'
             with self.subTest(fragment=fragment), self.assertRaises(ValueError):
+                G.require_public_entrypoints(changed)
+        for private in ('a.nativeMultihopConnectLocalOwned(w, r, operation, selection, driver)',
+                        'a.beginConnectionOperationContext(r.Context())', 'privateCONNECT := true'):
+            changed = source.replace('public.Store(true)', private+'\n\tpublic.Store(true)', 1)
+            with self.subTest(private=private), self.assertRaises(ValueError):
                 G.require_public_entrypoints(changed)
 
     def test_exact_source_inventory_preserves_original_paths_and_adds_nine_hysteria_cases(self):

@@ -32,8 +32,8 @@ def require_verdicts(output):
 
 
 def execute(binary, target, run, root, captured):
-    if target not in ('linux', 'windows'):
-        raise ValueError('Public CONNECT source gate requires its admitted Windows/Linux target')
+    if target not in ('linux', 'windows', 'darwin'):
+        raise ValueError('Public CONNECT source gate requires its admitted Windows/Linux/Darwin target')
     command = [str(binary), '-test.v', '-test.count=1', '-test.timeout=90s',
                '-test.run=^('+'|'.join(ROOTS)+')$']
     status, output = run(command, cwd=root, env=captured, timeout=100)

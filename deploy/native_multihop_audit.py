@@ -1106,7 +1106,7 @@ def native_multihop_shipping_chain(source: str, read=None) -> bool:
     connect_host = _function(connect_admission, "func nativeNodeChainCONNECTHostSupported() bool")
     if (connect_support != _tokens("return nativeNodeChainCONNECTHostSupported()") or
         connect_bounds != _tokens('''
-            return retained && orderedHost && (targetOS == "linux" || targetOS == "windows") &&
+            return retained && orderedHost && (targetOS == "linux" || targetOS == "windows" || targetOS == "darwin") &&
                 (targetArch == "amd64" || targetArch == "arm64")
         ''') or connect_host != _tokens('''
             return desktopNodeChainCONNECTAdmissionSupported(runtime.GOOS, runtime.GOARCH,

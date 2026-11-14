@@ -37,7 +37,7 @@ class PublicCONNECTSourceGate(unittest.TestCase):
                 G.execute('/captured/controller', 'linux', Mock(return_value=(status, output)), ROOT, {})
 
     def test_original_process_bound_and_source_only_scope(self):
-        for target in ('windows', 'linux'):
+        for target in ('windows', 'linux', 'darwin'):
             run = Mock(return_value=(0, completed()))
             env = {'GOTOOLCHAIN': 'local'}
             with redirect_stdout(io.StringIO()):
@@ -48,7 +48,7 @@ class PublicCONNECTSourceGate(unittest.TestCase):
             self.assertEqual(receipt['cases'], list(G.REQUIRED))
             self.assertEqual(run.call_args.kwargs, dict(cwd=ROOT, env=env, timeout=100))
             self.assertIn('-test.timeout=90s', run.call_args.args[0])
-        for target in ('darwin', 'linux/amd64', '', None):
+        for target in ('freebsd', 'linux/amd64', 'darwin/arm64', '', None):
             run = Mock()
             with self.assertRaises(ValueError):
                 G.execute('/captured/controller', target, run, ROOT, {})

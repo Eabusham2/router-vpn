@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('connect_host_original', ROOT/'deploy/test_macos_node_chain_host.py')
 BASE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(BASE)
+public_spec = importlib.util.spec_from_file_location('darwin_connect_public_source', ROOT/'deploy/test_desktop_connect_admission.py')
+PUBLIC = importlib.util.module_from_spec(public_spec)
+public_spec.loader.exec_module(PUBLIC)
 socks_spec = importlib.util.spec_from_file_location('connect_host_socks', ROOT/'deploy/test_macos_socks_node_chain_host.py')
 SOCKS = importlib.util.module_from_spec(socks_spec)
 socks_spec.loader.exec_module(SOCKS)
@@ -55,6 +58,8 @@ FIFTY_RECEIPT = "actual installed Darwin CONNECT fifty: all three original membe
 STREAMS_RECEIPT = "actual installed Darwin CONNECT streams: original authenticated TCP owners joined before controller release"
 SOURCES = (
     'deploy/test_macos_connect_node_chain_host.py', 'deploy/test_macos_connect_node_chain_host_runner.py',
+    'deploy/test_desktop_connect_admission.py', 'deploy/test_desktop_connect_admission_runner.py',
+    'cmd/client/desktop_node_chain_connect_admission.go', 'cmd/client/desktop_node_chain_connect_admission_test.go',
     'cmd/client/connection_profile_node_chain.go', 'cmd/client/desktop_macos_process_arguments.go',
     'cmd/client/desktop_macos_process_arguments_test.go', 'cmd/client/desktop_native_workspace.go',
     'cmd/client/desktop_node_chain_darwin.go', 'cmd/client/desktop_node_chain_darwin_baseline.go',
@@ -111,7 +116,7 @@ def source_identity(core):
 
 
 def check_verdict(output, case):
-    BASE.check_verdict(output, case, test=TEST, cases=CASES, mtu_cases=(), measurement_cases=MEASUREMENT_CASES)
+    BASE.check_verdict(output, case, test=TEST, cases=CASES, mtu_cases=(), measurement_cases=MEASUREMENT_CASES, public_cases=CASES)
     receipts = [match[1] for line in output.splitlines() if (match := re.match(r'^\s+[^ ]+\.go:[0-9]+: (.*)$', line))]
     if receipts.count(FIFTY_RECEIPT) != (1 if case in MEASUREMENT_CASES else 0) or receipts.count(STREAMS_RECEIPT) != 1:
         raise ValueError('Installed CONNECT case lost actual fifty or joined TCP owner receipt')
@@ -122,6 +127,39 @@ def check_verdict(output, case):
 def check_authority_verdict(output):
     BASE.check_authority_verdict(output, selected=(AUTHORITY_TEST, AUTHORITY_CASES))
 
+
+
+def execute_public_controls(controller, digest, environment):
+    if EXTERNAL.sha(controller) != digest:
+        raise ValueError('Public CONNECT controls lost the original installed controller image')
+    def run(command, **kwargs):
+        result = subprocess.run(command, **kwargs, check=False, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        return result.returncode, result.stdout
+    value = PUBLIC.execute(controller, 'darwin', run, ROOT, environment)
+    if EXTERNAL.sha(controller) != digest:
+        raise ValueError('Public CONNECT controls replaced the original installed controller image')
+    return value
+
+
+def require_public_receipt(value):
+    controls = value.get('public_source_controls', {})
+    if (type(value.get('schema')) is not int or value['schema'] != 2 or
+            value.get('gate') != 'installed-darwin-ordered-connect-host' or
+            value.get('scope') != 'installed-public-controller-actual-connect-and-original37-socks8-preservation' or
+            value.get('public_darwin_admission') != 'enabled' or
+            value.get('target') not in ('darwin/amd64', 'darwin/arm64') or value.get('native') is not True or
+            value.get('public_entrypoint') != 'nativeMultihopConnectOwned' or
+            value.get('public_status_entrypoint') != 'nativeMultihopStatus' or
+            value.get('public_cases') != list((*BASE.CASES, *SOCKS.CASES, *CASES)) or
+            value.get('completed') != value.get('public_cases') or value.get('cases') != list(CASES) or
+            value.get('original_cases') != list(BASE.CASES) or value.get('socks_cases') != list(SOCKS.CASES) or
+            not isinstance(controls, dict) or controls.get('scope') != 'registered-public-connect-source-controls' or
+            controls.get('native_kernel_acceptance') is not False or controls.get('target') != 'darwin' or
+            controls.get('cases') != list(PUBLIC.REQUIRED) or
+            not re.fullmatch('[0-9a-f]{64}', str(controls.get('output_sha256', '')))):
+        raise ValueError('Closed or incomplete Darwin CONNECT evidence is not public installed acceptance')
+    return True
 
 
 def execute_parent_controls(controller, digest, environment):
@@ -225,6 +263,7 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
                 raise ValueError('Compiled native image omitted original or typed installed root')
         if source_identity(core) != before or BUILD.digest() != policy:
             raise ValueError('Native ordered source changed during compilation')
+        public_controls = execute_public_controls(controller, identities['controller'], captured)
         socks_parent_output = SOCKS.execute_parent_controls(controller, identities['controller'], captured)
         parent_output = execute_parent_controls(controller, identities['controller'], captured)
         authority_output = BASE.execute_authority(controller, identities['controller'], captured)
@@ -261,7 +300,8 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
             raise ValueError('Native ordered acceptance changed its captured signed copy')
         if repository_identity(required_commit) != repository:
             raise ValueError('Native ordered acceptance changed its exact source commit or tree')
-        receipt_value = dict(schema=1, gate='installed-darwin-ordered-connect-host', scope='installed-controller-actual-connect-and-original37-socks8-preservation', public_darwin_admission='closed',
+        receipt_value = dict(schema=2, gate='installed-darwin-ordered-connect-host', scope='installed-public-controller-actual-connect-and-original37-socks8-preservation', public_darwin_admission='enabled',
+                             public_entrypoint='nativeMultihopConnectOwned', public_status_entrypoint='nativeMultihopStatus', public_cases=list(cases), public_source_controls=public_controls,
                              target=target, validation_toolchain=CONTROLLER.UID.RACE.TOOLCHAIN, repository=repository, source_sha256=policy, bundle_sha256=original_hash,
                              sealed_bundle_sha256=signed_hash, images=identities, cases=list(CASES), original_cases=list(BASE.CASES), socks_cases=list(SOCKS.CASES), completed=list(completed),
                              sources=before, authority_cases=list(BASE.AUTHORITY_CASES),
@@ -277,6 +317,7 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
                              typed_authority_cases=list(AUTHORITY_CASES),
                              typed_authority_output_sha256=hashlib.sha256(typed_authority_output.encode()).hexdigest(), typed_source_control=typed_control,
                              output_sha256=output_digest.hexdigest(), native=True)
+    require_public_receipt(receipt_value)
     if work.exists() or work.is_symlink():
         raise ValueError('Native ordered acceptance did not retire its exact compilation workspace')
     if receipt_file is not None:
