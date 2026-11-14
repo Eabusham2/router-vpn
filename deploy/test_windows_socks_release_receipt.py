@@ -39,14 +39,14 @@ def receipts(digest):
                 "application_open": False, "dns_open": False, "samples_per_case": 50, "original_final_unreachable": True,
                 "native_down_before_review": True, "sources": {"actual": "b" * 64}, "scope_sources": scope,
                 "images": {"controller": "d" * 64, "peer": "e" * 64, "scoped_engine": "f" * 64}}
-    typed = {"schema": 1, "native": True, "target": "windows/amd64", "source_sha256": "a" * 64,
+    typed = {"schema": 2, "native": True, "target": "windows/amd64", "source_sha256": "a" * 64,
              "bundle_sha256": digest,
              "cases": ["wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source"],
              "unmodified_shipping_image": False, "test_scope": "captured-native-child-app-id",
              "typed_full_path": True, "positive_application_and_selected_dns_proved": True,
              "measurement_bytes_per_direction_per_hop": 8 << 20, "measurement_hops": 3,
              "native_joined": True, "command_job_joined": True, "tun_absent_all_outcomes": True,
-             "remote_associations_after_retirement": 0, "public_admission": "closed",
+             "remote_associations_after_retirement": 0, "public_admission": "enabled", "public_connect_path": "/api/multihop/connect",
              "original_prefix_acceptance": copy.deepcopy(original), "sources": {"actual": "1" * 64},
              "scope_sources": {name: "2" * 64 for name in scope},
              "images": {"controller": "3" * 64, "peer": "4" * 64, "scoped_engine": "5" * 64},
@@ -71,7 +71,7 @@ class WindowsSOCKSReleaseReceipt(unittest.TestCase):
 
     def test_failure_or_substitution_cannot_publish(self):
         original, typed = receipts("7" * 64)
-        faults = (("schema", True), ("native", 1), ("target", "windows/arm64"), ("source_sha256", "8" * 64),
+        faults = (("schema", True), ("schema", 1), ("native", 1), ("target", "windows/arm64"), ("source_sha256", "8" * 64),
                   ("bundle_sha256", "9" * 64), ("cases", typed["cases"][:-1]),
                   ("unmodified_shipping_image", True), ("test_scope", "modeled"),
                   ("typed_full_path", 1), ("positive_application_and_selected_dns_proved", False),
@@ -80,7 +80,8 @@ class WindowsSOCKSReleaseReceipt(unittest.TestCase):
                   ("native_joined", 1), ("command_job_joined", False), ("command_job_joined", 1),
                   ("tun_absent_all_outcomes", False), ("tun_absent_all_outcomes", 1),
                   ("remote_associations_after_retirement", 1), ("remote_associations_after_retirement", False),
-                  ("public_admission", "complete"), ("original_prefix_acceptance", {}),
+                  ("public_admission", "complete"), ("public_admission", "closed"),
+                  ("public_connect_path", "/api/native-socks/connect"), ("original_prefix_acceptance", {}),
                   ("sources", {}), ("images", {"controller": "3" * 64}), ("scope_sources", {"foreign": "2" * 64}),
                   ("sources", {"actual": "invalid"}))
         for field, value in faults:

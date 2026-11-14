@@ -923,12 +923,19 @@ def native_multihop_shipping_chain(source: str, read=None) -> bool:
     if not native_multihop_request_admission(read):
         return False
     # Typed source retention is not public native acceptance. Require the
-    # actual closed shipping gate and complete-node detector, not decoy text.
+    # exact installed-target gate and complete-node detector, not decoy text.
     support = _function(_tokens(read("cmd/client/desktop_node_chain_policy_dispatch.go")),
                         "func nativeNodeChainSOCKSPlatformSupported() bool")
     detector = _function(_tokens(read("cmd/client/multihop_node_chain_socks_selection.go")),
                          "func desktopNodeChainHasSOCKS(nodes []common.MultihopNodeSelection) bool")
-    if support != _tokens("return false") or detector != _tokens('''
+    admission = _tokens(read("cmd/client/desktop_node_chain_socks_admission.go"))
+    host = _function(admission, "func nativeNodeChainSOCKSHostSupported() bool")
+    target = _function(admission, "func desktopNodeChainSOCKSAdmissionSupported(targetOS, targetArch string, retained bool) bool")
+    if (support != _tokens("return nativeNodeChainSOCKSHostSupported()") or
+            host != _tokens("return desktopNodeChainSOCKSAdmissionSupported(runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected())") or
+            target != _tokens('return retained && (targetOS == "linux" || targetOS == "windows") && (targetArch == "amd64" || targetArch == "arm64")')):
+        return False
+    if detector != _tokens('''
         for _, node := range nodes {
             if node.Mode == "socks5" { return true }
         }

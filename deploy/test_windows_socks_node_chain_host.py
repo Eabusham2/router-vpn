@@ -85,8 +85,10 @@ def require_verdicts(output):
     if len(runs) != len(REQUIRED) or set(runs) != set(REQUIRED) or len(passes) != len(REQUIRED) or set(passes) != set(REQUIRED):
         raise ValueError("Installed typed full-path native gate omitted or duplicated an exact required verdict")
     for case in CASES:
-        if len(re.findall(r"(?m)^\s*(?:[A-Za-z0-9_./\\-]+\.go:[0-9]+: )?" + re.escape("verified installed Windows typed SOCKS full path and joined retirement: " + case) + r"\r?$", output)) != 1:
-            raise ValueError("Installed typed full-path native gate omitted its original lifecycle receipt: " + case)
+        for marker in ("verified installed Windows typed SOCKS full path and joined retirement: ",
+                       "verified installed Windows public SOCKS /api/multihop/connect: "):
+            if len(re.findall(r"(?m)^\s*(?:[A-Za-z0-9_./\\-]+\.go:[0-9]+: )?" + re.escape(marker + case) + r"\r?$", output)) != 1:
+                raise ValueError("Installed typed full-path native gate omitted its original public lifecycle receipt: " + case)
     if len(re.findall(r"^PASS\s*$", output, re.M)) != 1:
         raise ValueError("Installed typed full-path native gate omitted its successful process footer")
 
@@ -238,14 +240,15 @@ def execute_typed(source, bundle, go, env, before, original_prefix_receipt, owne
                           for name, path in (("controller", controller), ("peer", peer), ("scoped_engine", child))}:
             raise ValueError("Installed prefix original executable changed during acceptance")
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
-        receipt = {"schema": 1, "native": True, "target": target, "cases": list(CASES),
+        receipt = {"schema": 2, "native": True, "target": target, "cases": list(CASES),
                    "bundle_sha256": original_manifest, "source_sha256": original["policy_sha256"],
                    "unmodified_shipping_image": False, "test_scope": "captured-native-child-app-id",
                    "typed_full_path": True, "positive_application_and_selected_dns_proved": True,
                    "measurement_bytes_per_direction_per_hop": 8 << 20, "measurement_hops": 3,
                    "native_joined": True, "remote_associations_after_retirement": 0,
                    "command_job_joined": owner.retired, "tun_absent_all_outcomes": True,
-                   "public_admission": "closed", "original_prefix_acceptance": original_prefix_receipt,
+                   "public_admission": "enabled", "public_connect_path": "/api/multihop/connect",
+                   "original_prefix_acceptance": original_prefix_receipt,
                    "sources": before, "scope_sources": native_records, "images": identities,
                    "typed_socks_parent_controls": socks_parent_controls}
         print(PREFIX + json.dumps(receipt, sort_keys=True), flush=True)

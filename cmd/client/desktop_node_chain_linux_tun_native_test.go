@@ -621,6 +621,7 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 			t.Fatal("typed installed retirement retained original SOCKS association", after.Associations)
 		}
 		t.Log("verified installed host typed SOCKS association joined:", scenario)
+	t.Log("verified installed Linux public SOCKS /api/multihop/connect:", scenario)
 	}
 	if peer.middleCONNECT != "" {
 		after := peer.observe(t, "stats")

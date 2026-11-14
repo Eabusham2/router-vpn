@@ -767,7 +767,9 @@ def check_verdict(output, case=None):
     )}
     for value in cases:
         if value in membership['NODE_CHAIN_SOCKS_HOST_CASES']:
-            if suffix_receipts['verified installed host typed SOCKS association joined: ' + value] != 1 or chain_receipts[value] != 1 or exact_passes[value] != 1:
+            if (suffix_receipts['verified installed host typed SOCKS association joined: ' + value] != 1 or
+                    suffix_receipts['verified installed Linux public SOCKS /api/multihop/connect: ' + value] != 1 or
+                    chain_receipts[value] != 1 or exact_passes[value] != 1):
                 raise ValueError('Installed typed SOCKS omitted or duplicated original encrypted traffic and joined association retirement: ' + value)
         if value in membership['NODE_CHAIN_CONNECT_HOST_CASES']:
             if suffix_receipts['verified installed host typed CONNECT UoT2 streams joined: ' + value] != 1 or chain_receipts[value] != 1 or exact_passes[value] != 1:
@@ -1252,6 +1254,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'node_chain_hysteria_host_cases': list(NODE_CHAIN_HYSTERIA_HOST_CASES),
                   'saved_candidate_host_cases': list(SAVED_CANDIDATE_HOST_CASES), 'saved_prefix_host_cases': list(SAVED_PREFIX_HOST_CASES),
                   'typed_socks_parent_controls': socks_parent_controls, 'typed_socks_installed_cases': list(NODE_CHAIN_SOCKS_HOST_CASES),
+                  'typed_socks_public_admission': {'schema': 1, 'enabled': True, 'path': '/api/multihop/connect', 'cases': list(NODE_CHAIN_SOCKS_HOST_CASES)},
                   'typed_connect_parent_controls': connect_parent_controls, 'typed_connect_installed_cases': list(NODE_CHAIN_CONNECT_HOST_CASES),
                   'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
                   'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS),

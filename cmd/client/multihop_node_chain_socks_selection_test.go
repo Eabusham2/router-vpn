@@ -38,6 +38,7 @@ func TestDesktopSOCKSParentRetainsExactTypedAuthority(t *testing.T) {
 	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(mode, func(t *testing.T) {
 			a, selected, launch := desktopSOCKSParentFixture(t, mode)
+			publicBefore := nativeNodeChainSOCKSPlatformSupported()
 			original := selected.Native.chain.socks
 			if original.original.chain != nil || original.original.host != nil || original.original.socks != nil || selected.Native.chain.chain != nil || launch.chain.policy != nil || launch.chain.socksPolicy == nil {
 				t.Fatal("typed parent acquired generic authority")
@@ -68,8 +69,8 @@ func TestDesktopSOCKSParentRetainsExactTypedAuthority(t *testing.T) {
 			}
 			for _, target := range []string{"linux", "windows"} {
 				native, err := newDesktopNodeChainLaunch(selected, strings.Repeat("b", 32), target)
-				if err != nil || native.chain.socksPolicy == nil || native.chain.policy != nil || !native.chain.originalPolicyCurrent() || nativeNodeChainSOCKSPlatformSupported() {
-					t.Fatal("typed internal adapter changed source or opened public admission before native acceptance", target, err)
+				if err != nil || native.chain.socksPolicy == nil || native.chain.policy != nil || !native.chain.originalPolicyCurrent() || nativeNodeChainSOCKSPlatformSupported() != publicBefore {
+					t.Fatal("typed internal adapter changed source or granted public admission", target, err)
 				}
 			}
 		})

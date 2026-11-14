@@ -14,7 +14,7 @@ G=importlib.util.module_from_spec(spec);spec.loader.exec_module(G)
 
 
 def completed():
-    return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\n' for name in G.REQUIRED)+''.join('verified installed Windows typed SOCKS full path and joined retirement: '+case+'\n' for case in G.CASES)+'PASS\n'
+    return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\n' for name in G.REQUIRED)+''.join(marker+case+'\n' for case in G.CASES for marker in ('verified installed Windows typed SOCKS full path and joined retirement: ', 'verified installed Windows public SOCKS /api/multihop/connect: '))+'PASS\n'
 
 
 class FullPathGate(unittest.TestCase):
@@ -30,6 +30,22 @@ class FullPathGate(unittest.TestCase):
                 with self.subTest(line=line),self.assertRaises(ValueError):G.require_verdicts(bad)
         for fault in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE'):
             with self.assertRaises(ValueError):G.require_verdicts(completed()+fault)
+    def test_public_handler_has_no_closed_admission_bridge(self):
+        controller=(ROOT/'cmd/client/desktop_node_chain_socks_windows_controller_native_test.go').read_text()
+        caller=(ROOT/'cmd/client/desktop_node_chain_socks_windows_native_test.go').read_text()
+        self.assertNotIn('nativeMultihopConnectLocalOwned',controller)
+        self.assertNotIn('windowsSOCKSNativeConnect',controller)
+        self.assertIn('mux.HandleFunc("/api/multihop/connect",',controller)
+        self.assertIn('a.nativeMultihopConnectOwned(w, r, driver)',controller)
+        self.assertIn('!nativeNodeChainSOCKSPlatformSupported()',controller)
+        self.assertIn('!middle.External.OrderedMiddle',controller)
+        self.assertIn('call("POST", "/api/multihop/connect", request.Body)',caller)
+        self.assertNotIn('/api/native-socks/connect',caller)
+        # The older private bridge output remains insufficient even with all
+        # original native lifecycle assertions and process verdicts present.
+        closed=''.join(line for line in completed().splitlines(True) if 'public SOCKS /api/multihop/connect:' not in line)
+        with self.assertRaises(ValueError):G.require_verdicts(closed)
+
     def test_crypto_overlay_changes_only_explicit_platform_tuple(self):
         values=G.SCOPE.peer_sources();base=G.SCOPE.BASE.peer_sources()
         for name,raw in base.items():self.assertEqual(values[name],raw)

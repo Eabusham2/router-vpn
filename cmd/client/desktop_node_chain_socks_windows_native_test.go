@@ -126,6 +126,11 @@ func TestWindowsInstalledSOCKSNodeChain(t *testing.T) {
 				t.Fatal("typed installed case omitted unique original native receipt", string(output))
 			}
 			t.Log(witness)
+			public := "verified installed Windows public SOCKS /api/multihop/connect: " + scenario
+			if strings.Count(string(output), public) != 1 {
+				t.Fatal("typed installed case omitted unique public Connect receipt", string(output))
+			}
+			t.Log(public)
 		})
 	}
 }
@@ -210,7 +215,7 @@ func TestWindowsSOCKSLauncher(t *testing.T) {
 	if request.Status != 200 {
 		t.Fatal("typed request capture", request.Status, string(request.Body))
 	}
-	response := call("POST", "/api/native-socks/connect", request.Body)
+	response := call("POST", "/api/multihop/connect", request.Body)
 	negative := action != "connect" && action != "middle-source"
 	if negative && response.Status == 200 || !negative && response.Status != 200 {
 		t.Fatal("typed Connect crossed intended proof boundary", response.Status, string(response.Body))
@@ -289,4 +294,5 @@ func TestWindowsSOCKSLauncher(t *testing.T) {
 	}
 	closeController()
 	t.Log("verified installed Windows typed SOCKS full path and joined retirement:", scenario)
+	t.Log("verified installed Windows public SOCKS /api/multihop/connect:", scenario)
 }

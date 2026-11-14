@@ -60,6 +60,7 @@ func TestDesktopNodeChainSOCKSCaptureOriginalSources(t *testing.T) {
 			t.Run(mode+"/"+authentication, func(t *testing.T) {
 				a, nodes := desktopSOCKSCaptureFixture(t, mode, authentication, "off")
 				before := cloneRouterProfileStore(a.profiles)
+				publicBefore := publicProfileFor(before.Profiles[1])
 				lookups := 0
 				capture, err := captureDesktopNodeChainSOCKS(context.Background(), clientRoot(a), a.profiles.Profiles[2], a.profiles.Profiles, nodes, "local",
 					func(context.Context, string) ([]netip.Addr, error) {
@@ -153,8 +154,8 @@ func TestDesktopNodeChainSOCKSCaptureOriginalSources(t *testing.T) {
 				if _, err := captureDesktopNodeChain(context.Background(), clientRoot(a), a.profiles.Profiles[2], a.profiles.Profiles, nodes, "local", nil); err == nil {
 					t.Fatal("typed source escaped through generic desktop capture")
 				}
-				if view := publicProfileFor(before.Profiles[1]); view.External != nil && view.External.OrderedMiddle {
-					t.Fatal("source-only capture opened unimplemented desktop native admission")
+				if view := publicProfileFor(before.Profiles[1]); !reflect.DeepEqual(view, publicBefore) || view.External == nil || view.External.OrderedMiddle != nativeNodeChainSOCKSPlatformSupported() {
+					t.Fatal("source-only capture changed public availability or bypassed installed host admission")
 				}
 				for i := range a.profiles.Profiles {
 					a.profiles.Profiles[i].EffectiveMTU = 1300 + i

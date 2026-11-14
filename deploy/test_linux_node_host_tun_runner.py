@@ -267,11 +267,19 @@ class InstalledNodeChainHostGate(unittest.TestCase):
         for case in expected:
             good = InstalledLinuxHostVerdict().completed((case,))
             G.check_verdict(good, case)
-            receipt = next(line for line in good.splitlines(True) if 'typed SOCKS association joined:' in line)
-            for changed in (good.replace(receipt, '', 1), good + receipt,
-                            good.replace(receipt, receipt.replace(case, case + '-foreign'))):
-                with self.subTest(case=case), self.assertRaises(ValueError):
-                    G.check_verdict(changed, case)
+            for marker in ('typed SOCKS association joined:', 'public SOCKS /api/multihop/connect:'):
+                receipt = next(line for line in good.splitlines(True) if marker in line)
+                for changed in (good.replace(receipt, '', 1), good + receipt,
+                                good.replace(receipt, receipt.replace(case, case + '-foreign'))):
+                    with self.subTest(case=case, marker=marker), self.assertRaises(ValueError):
+                        G.check_verdict(changed, case)
+        source=(ROOT/'cmd/client/desktop_node_chain_socks_linux_tun_native_test.go').read_text()
+        bridge=source.split('func linuxNodeChainNativeConnect(',1)[1].split('\nfunc ',1)[0]
+        self.assertNotIn('nativeMultihopConnectLocalOwned',bridge)
+        self.assertNotIn('linuxNodeChainInstalledConnect(',bridge)
+        self.assertIn('a.nativeMultihopConnectOwned(w, r, driver)',bridge)
+        self.assertIn('!nativeNodeChainSOCKSPlatformSupported()',bridge)
+        self.assertIn('!middle.External.OrderedMiddle',bridge)
 
     def test_typed_connect_requires_both_protocols_original_ciphers_and_joined_streams(self):
         expected = tuple('node-chain-connect-' + protocol + '-' + mode + '-connect'
@@ -609,6 +617,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:34: verified installed host ordered independent prefixes and final: ' + case for case in cases if case in (*G.NODE_CHAIN_HOST_CASES, *G.NODE_CHAIN_SOCKS_HOST_CASES, *G.NODE_CHAIN_CONNECT_HOST_CASES) and case not in G.SAVED_PREFIX_HOST_CASES),
                           *('    native_test.go:36: verified installed host closed selected prefix fifty samples final unopened native DOWN and explicit decision: ' + case for case in cases if case in G.SAVED_PREFIX_HOST_CASES),
                           *('    native_test.go:38: verified installed host typed SOCKS association joined: ' + case for case in cases if case in G.NODE_CHAIN_SOCKS_HOST_CASES),
+                          *('    native_test.go:40: verified installed Linux public SOCKS /api/multihop/connect: ' + case for case in cases if case in G.NODE_CHAIN_SOCKS_HOST_CASES),
                           *('    native_test.go:39: verified installed host typed CONNECT UoT2 streams joined: ' + case for case in cases if case in G.NODE_CHAIN_CONNECT_HOST_CASES),
                           *('    native_test.go:37: verified installed host ordered Hysteria2 native final and joined retirement: ' + case for case in cases if case in G.NODE_CHAIN_HYSTERIA_HOST_CASES),
                           *('    native_test.go:35: verified installed host saved candidate API fifty samples native DOWN and explicit decision: ' + case for case in cases if case in G.SAVED_CANDIDATE_HOST_CASES),

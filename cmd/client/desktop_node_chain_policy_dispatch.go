@@ -277,8 +277,8 @@ func (c *desktopNodeChainLaunch) commandName() string {
 }
 
 // Public admission follows installed native WFP/nft acceptance, not compilation.
-// Native fixtures use the explicit internal retained-parent constructors.
-func nativeNodeChainSOCKSPlatformSupported() bool { return false }
+// The isolated helper retains the exact supported controller/target bounds.
+func nativeNodeChainSOCKSPlatformSupported() bool { return nativeNodeChainSOCKSHostSupported() }
 
 func desktopNodeChainSelectionHasSOCKS(selection multihopSelection) bool {
 	for _, member := range selection.Nodes {

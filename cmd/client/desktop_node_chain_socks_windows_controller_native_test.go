@@ -28,47 +28,17 @@ type windowsSOCKSInspection struct {
 	Proof           *mobilemultihop.DesktopNodeChainReadyRecord `json:"proof,omitempty"`
 }
 
-// Only the tagged disposable controller adds this private bridge. The shipping
-// decoder, profile transaction, typed preflight, child, proofs and stop run
-// unchanged. No public platform admission is changed by this fixture.
-func windowsSOCKSNativeConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime) {
-	if nativeNodeChainSOCKSPlatformSupported() {
-		a.nativeMultihopConnectOwned(w, r, driver)
-		return
-	}
-	operation, finish, err := a.beginConnectionOperationContext(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), 409)
-		return
-	}
-	defer finish()
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", 405)
-		return
-	}
-	q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))
-	if err != nil || !q.ordered() || !desktopNodeChainHasSOCKS(q.Nodes) {
-		http.Error(w, "original typed ordered request required", 400)
-		return
-	}
-	if execution, err := routeExecution(q); err != nil || execution != "local" {
-		http.Error(w, "original Local source required", 400)
-		return
-	}
-	a.mu.Lock()
-	selection, err := a.resolveNativeMultihopRequestLocked(q)
-	a.mu.Unlock()
-	if err != nil {
-		http.Error(w, err.Error(), 409)
-		return
-	}
-	a.nativeMultihopConnectLocalOwned(w, r, operation, selection, driver)
-}
-
 func windowsSOCKSRegisterRoutes(mux *http.ServeMux, a *app, original common.RouterProfileStore) (func(), error) {
 	selected, found := a.profileByIDLocked(original.SelectedID)
 	if !found || !desktopNodeChainHasSOCKS(selected.MultihopNodes) {
 		return func() {}, nil
+	}
+	if !nativeNodeChainSOCKSPlatformSupported() || len(original.Profiles) != 3 {
+		return nil, errors.New("installed SOCKS gate requires public Connect admission")
+	}
+	middle := publicProfileFor(original.Profiles[1])
+	if middle.External == nil || !middle.External.OrderedMiddle {
+		return nil, errors.New("original SOCKS middle has no public capability")
 	}
 	hold, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	release, err := a.holdCapturedMTU(hold)
@@ -119,7 +89,8 @@ func windowsSOCKSRegisterRoutes(mux *http.ServeMux, a *app, original common.Rout
 		id := a.profiles.SelectedID
 		_ = json.NewEncoder(w).Encode(multihopConnectRequest{Nodes: control.MultihopNodes, Execution: "local", desktopProfileExpectations: desktopProfileExpectations{ExpectedSelectedNodeID: &id, ExpectedProfileTokens: tokens}})
 	})
-	mux.HandleFunc("/api/native-socks/connect", func(w http.ResponseWriter, r *http.Request) { windowsSOCKSNativeConnect(a, w, r, driver) })
+	// Exercise the shipping public handler with only an observational preflight wrapper.
+	mux.HandleFunc("/api/multihop/connect", func(w http.ResponseWriter, r *http.Request) { a.nativeMultihopConnectOwned(w, r, driver) })
 	mux.HandleFunc("/api/disconnect", a.disconnect)
 	mux.HandleFunc("/api/native-socks/middle-source", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

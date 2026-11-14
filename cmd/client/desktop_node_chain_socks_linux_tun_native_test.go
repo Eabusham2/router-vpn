@@ -135,12 +135,31 @@ func TestDesktopLinuxInstalledSOCKSNodeChainFixtureKeepsOriginalSources(t *testi
 	}
 }
 
-// Installed-only admission bridge. All source, operation, staging, proof,
-// publication and retirement remain the shipping retained-host path.
+// The installed gate must enter the same public handler and capability used by
+// the editor. The driver only records the original launch; all operations remain
+// shipping capture, preflight, staging, proof, publication and retirement.
 func linuxNodeChainNativeConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime) {
-	linuxNodeChainInstalledConnect(a, w, r, driver, nativeNodeChainSOCKSPlatformSupported())
+	if !nativeNodeChainSOCKSPlatformSupported() || r.URL.Path != "/api/multihop/connect" {
+		http.Error(w, "installed SOCKS gate requires public Connect admission", http.StatusNotImplemented)
+		return
+	}
+	a.mu.Lock()
+	if len(a.profiles.Profiles) != 3 {
+		a.mu.Unlock()
+		http.Error(w, "original three-member SOCKS graph is unavailable", http.StatusBadRequest)
+		return
+	}
+	middle := publicProfileFor(a.profiles.Profiles[1])
+	a.mu.Unlock()
+	if middle.External == nil || !middle.External.OrderedMiddle {
+		http.Error(w, "original SOCKS middle has no public capability", http.StatusBadRequest)
+		return
+	}
+	a.nativeMultihopConnectOwned(w, r, driver)
 }
 
+// Installed-only admission bridge. All source, operation, staging, proof,
+// publication and retirement remain the shipping retained-host path.
 func linuxNodeChainInstalledConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime, public bool) {
 	if public {
 		a.nativeMultihopConnectOwned(w, r, driver)

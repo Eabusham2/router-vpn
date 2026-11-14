@@ -348,9 +348,10 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.assert_backend_proof_admission(False)
         self.assert_multihop_scores(False)
 
-    def test_typed_public_admission_stays_closed_and_checks_every_requested_node(self):
+    def test_typed_public_admission_keeps_installed_target_bounds_and_checks_every_requested_node(self):
         route = "cmd/client/multihop_native_routes.go"
         policy = "cmd/client/desktop_node_chain_policy_dispatch.go"
+        admission = "cmd/client/desktop_node_chain_socks_admission.go"
         detector = "cmd/client/multihop_node_chain_socks_selection.go"
         connect_detector = "cmd/client/multihop_node_chain_connect_selection.go"
         self.assert_multihop_chain(True)
@@ -359,8 +360,14 @@ class NativeShippingAuditTests(unittest.TestCase):
             (route, "!nativeNodeChainPlatformSupported() ||", "false ||"),
             (route, "desktopNodeChainHasSOCKS(q.Nodes)", "desktopNodeChainHasSOCKS(other.Nodes)"),
             (route, "!nativeNodeChainSOCKSPlatformSupported()", "false"),
-            (policy, "func nativeNodeChainSOCKSPlatformSupported() bool { return false }",
+            (policy, "func nativeNodeChainSOCKSPlatformSupported() bool { return nativeNodeChainSOCKSHostSupported() }",
              "func nativeNodeChainSOCKSPlatformSupported() bool { return true }"),
+            (admission, 'return retained &&', 'return true &&'),
+            (admission, 'targetOS == "windows"', 'targetOS == "windows" || targetOS == "darwin"'),
+            (admission, 'targetArch == "amd64" || targetArch == "arm64"', 'targetArch != ""'),
+            (admission, 'runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected()', '"linux", runtime.GOARCH, retainedNativeMultihopSelected()'),
+            (admission, 'runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected()', 'runtime.GOOS, "amd64", retainedNativeMultihopSelected()'),
+            (admission, 'runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected()', 'runtime.GOOS, runtime.GOARCH, true'),
             (route, "|| desktopNodeChainHasCONNECT(q.Nodes) && !nativeNodeChainCONNECTPlatformSupported()", ""),
             (route, "desktopNodeChainHasCONNECT(q.Nodes)", "desktopNodeChainHasCONNECT(other.Nodes)"),
             (route, "!nativeNodeChainCONNECTPlatformSupported()", "false"),
@@ -381,7 +388,9 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.changes[path] += "\n// " + before + "\nvar auditDecoy = `" + before + "`\n"
                 self.assert_multihop_chain(False)
         for path, declaration in (
-            (policy, "func nativeNodeChainSOCKSPlatformSupported() bool { return false }"),
+            (policy, "func nativeNodeChainSOCKSPlatformSupported() bool { return nativeNodeChainSOCKSHostSupported() }"),
+            (admission, "func nativeNodeChainSOCKSHostSupported() bool { return true }"),
+            (admission, "func desktopNodeChainSOCKSAdmissionSupported(targetOS, targetArch string, retained bool) bool { return true }"),
             (policy, "func nativeNodeChainCONNECTPlatformSupported() bool { return false }"),
             (detector, "func desktopNodeChainHasSOCKS(nodes []common.MultihopNodeSelection) bool { return false }"),
             (connect_detector, "func desktopNodeChainHasCONNECT(nodes []common.MultihopNodeSelection) bool { return false }"),

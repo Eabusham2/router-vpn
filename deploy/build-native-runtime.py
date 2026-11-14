@@ -1208,7 +1208,7 @@ def verify_installed_windows_socks_receipt(output, target, original, digest_befo
         raise ValueError('Installed Windows SOCKS omitted its exact source/image hash maps')
     cases = ['wg-connect', 'awg-fast-connect', 'awg-strong-connect', 'wg-wrong-middle-key',
              'wg-wrong-middle-public', 'wg-final-dns-failure', 'wg-final-node-failure', 'wg-middle-source']
-    if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or
+    if (type(receipt.get('schema')) is not int or receipt.get('schema') != 2 or receipt.get('native') is not True or
             receipt.get('target') != target or receipt.get('source_sha256') != original['policy_sha256'] or
             receipt.get('bundle_sha256') != digest_before or receipt.get('cases') != cases or
             receipt.get('unmodified_shipping_image') is not False or receipt.get('test_scope') != 'captured-native-child-app-id' or
@@ -1217,7 +1217,8 @@ def verify_installed_windows_socks_receipt(output, target, original, digest_befo
             type(receipt.get('measurement_hops')) is not int or receipt.get('measurement_hops') != 3 or
             receipt.get('native_joined') is not True or receipt.get('command_job_joined') is not True or
             receipt.get('tun_absent_all_outcomes') is not True or type(receipt.get('remote_associations_after_retirement')) is not int or
-            receipt.get('remote_associations_after_retirement') != 0 or receipt.get('public_admission') != 'closed' or
+            receipt.get('remote_associations_after_retirement') != 0 or receipt.get('public_admission') != 'enabled' or
+            receipt.get('public_connect_path') != '/api/multihop/connect' or
             receipt.get('original_prefix_acceptance') != prefix_receipt or
             set(receipt['scope_sources']) != set(prefix_receipt['scope_sources']) or
             set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
