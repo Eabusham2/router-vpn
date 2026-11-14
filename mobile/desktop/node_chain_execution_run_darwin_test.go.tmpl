@@ -1,0 +1,142 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestRouterVPNNodeChainExecutionDarwinEarlyStop(t *testing.T) {
+	t.Run("receipt-before-acquisition", func(t *testing.T) {
+		control, _, _, _ := routerVPNDarwinExecutionControlFixture(t, "auto")
+		if control.native != nil || control.retirementReceipt() == nil {
+			t.Fatal("unpublished no-resource retirement acknowledged authenticated Stop")
+		}
+	})
+	t.Run("authenticated-before-run", func(t *testing.T) {
+		control, files, capture, _ := routerVPNDarwinExecutionControlFixture(t, "auto")
+		acknowledged := false
+		err := routerVPNExternalControlledLifetime(context.Background(), func(ctx context.Context) error {
+			// The actual joined command does not begin until authenticated
+			// Stop has cancelled it, before source parsing or native creation.
+			<-ctx.Done()
+			return routerVPNRunDarwinNodeChainExecution(ctx, control)
+		}, func(ctx context.Context, retire func(context.Context) error) error {
+			if err := retire(ctx); err != nil {
+				return err
+			}
+			acknowledged = true
+			return nil
+		}, control.retirementReceipt, func() error { return nil })
+		if err != nil || !acknowledged || control.retirementReceipt() != nil ||
+			control.policy != nil || control.prep != nil || capture.reads != 0 || control.native == nil ||
+			!control.native.joined || control.native.manager != nil || control.native.source != nil ||
+			control.native.proof != nil || len(control.native.components) != 0 {
+			t.Fatal("early authenticated Stop omitted its original no-resource retirement", err)
+		}
+		raw, err := files.read("stopped.json", 1024)
+		var actual struct {
+			routerVPNExternalStop
+			Closed bool `json:"closed"`
+		}
+		if err != nil || json.Unmarshal(raw, &actual) != nil || actual.Schema != 1 ||
+			actual.Session != control.scope.Session || actual.SourceSHA256 != control.scope.Config || !actual.Closed {
+			t.Fatal("early stopped receipt lost original session/config authority", err)
+		}
+	})
+}
+
+// Execute the actual command through admission and no-resource retirement;
+// the fixture refuses at original process capture before native construction.
+func TestRouterVPNNodeChainExecutionDarwinMailboxStartup(t *testing.T) {
+	cases := []struct{ name, mailbox, kind string }{{name: "absent"}}
+	for _, mailbox := range []string{"adoption", "ready", "last"} {
+		for _, kind := range []string{"regular", "directory", "symlink"} {
+			cases = append(cases, struct{ name, mailbox, kind string }{mailbox + "-" + kind, mailbox, kind})
+		}
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			control, files, capture, _ := routerVPNDarwinExecutionControlFixture(t, "auto")
+			var before os.FileInfo
+			var path, target string
+			const foreign = "foreign original measurement input\n"
+			if test.mailbox != "" {
+				path = filepath.Join(files.root.Name(), "node-chain-execution-"+test.mailbox+".json")
+				switch test.kind {
+				case "regular":
+					if err := os.WriteFile(path, []byte(foreign), 0600); err != nil {
+						t.Fatal(err)
+					}
+				case "directory":
+					if err := os.Mkdir(path, 0700); err != nil {
+						t.Fatal(err)
+					}
+				case "symlink":
+					target = filepath.Join(t.TempDir(), "original-foreign-input")
+					if err := os.WriteFile(target, []byte(foreign), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(target, path); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var err error
+				before, err = os.Lstat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			advanced := false
+			capture.after = func() {
+				// Admission reads the original capture once and complete manifest
+				// compilation reads it twice. The next read belongs to prepare.
+				if capture.reads > 3 {
+					advanced, capture.failure = true, true
+				}
+			}
+			err := routerVPNRunDarwinNodeChainExecution(context.Background(), control)
+			if test.mailbox != "" && (advanced || capture.reads != 3) {
+				t.Fatal("preexisting execution output reached native preparation")
+			}
+			if test.mailbox == "" && (!advanced || capture.reads != 4) {
+				t.Fatal("absent execution outputs did not reach original preparation")
+			}
+			if err == nil || control.policy == nil || control.native == nil || !control.native.joined ||
+				control.native.manager != nil || control.native.source != nil || control.native.proof != nil ||
+				len(control.native.components) != 0 || control.retirementReceipt() != nil {
+				t.Fatal("execution admission refusal lost original no-resource retirement", err)
+			}
+			if before != nil {
+				after, err := os.Lstat(path)
+				if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+					t.Fatal("execution admission replaced or removed foreign mailbox", err)
+				}
+				if test.kind != "directory" {
+					raw, err := os.ReadFile(path)
+					if err != nil || string(raw) != foreign {
+						t.Fatal("execution admission changed foreign input bytes", err)
+					}
+				}
+				if target != "" {
+					if actual, err := os.Readlink(path); err != nil || actual != target {
+						t.Fatal("execution admission relinked foreign input", err)
+					}
+				}
+			}
+			raw, err := files.read("stopped.json", 1024)
+			var stopped struct {
+				routerVPNExternalStop
+				Closed bool `json:"closed"`
+			}
+			if err != nil || json.Unmarshal(raw, &stopped) != nil || stopped.Schema != 1 || !stopped.Closed ||
+				stopped.Session != control.scope.Session || stopped.SourceSHA256 != control.scope.Config {
+				t.Fatal("execution refusal omitted original stopped receipt", err)
+			}
+		})
+	}
+}

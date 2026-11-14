@@ -26,7 +26,7 @@ def wire(package, cases):
 
 class DarwinLifecycleRunnerTests(unittest.TestCase):
     def test_exact_required_inventory_and_bounds(self):
-        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 170),
+        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 235),
                                ("experimental/libbox/routervpn/mobilemultihop", 33),
                                ("routervpn/desktoppt", 7), (".", 11)):
             validator = RUNNER.receipt(package)
@@ -37,7 +37,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             self.assertEqual(validator.PROCESS_TIMEOUT, RUNNER.PROCESS_TIMEOUT)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
-        self.assertEqual(len(RUNNER.MUTATIONS), 33)
+        self.assertEqual(len(RUNNER.MUTATIONS), 43)
 
     def test_each_measurement_mailbox_has_original_refusal_and_causal_omission(self):
         cases = RUNNER.PHASES["cmd/sing-box"]["TestRouterVPNNodeChainDarwinMeasurementStartup"]
@@ -52,6 +52,21 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             control, = [control for control in selected if control[0] == "preexisting-measurement-" + name]
             self.assertIn('"node-chain-measure-' + name + '.json"', control[3])
             self.assertEqual(control[5], "TestRouterVPNNodeChainDarwinMeasurementStartup/" + name + "-regular")
+
+    def test_execution_phase_retains_every_original_case_and_bound(self):
+        cases = RUNNER.PHASES["cmd/sing-box"]
+        original, execution = RUNNER.phase_groups("cmd/sing-box", cases)
+        self.assertEqual(sum(1 + len(leaves) for leaves in original.values()), 170)
+        self.assertEqual(sum(1 + len(leaves) for leaves in execution.values()), 65)
+        self.assertFalse(set(original) & set(execution))
+        self.assertEqual(dict(original, **execution), cases)
+        self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
+        for package, phase in RUNNER.PHASES.items():
+            if package != "cmd/sing-box":
+                self.assertEqual(RUNNER.phase_groups(package, phase), (phase,))
+        for phase in (original, execution, {}):
+            with self.assertRaises(ValueError):
+                RUNNER.phase_groups("cmd/sing-box", phase)
 
     def test_prefix_phase_keeps_original_lifecycle_and_distinct_native_source(self):
         cases = RUNNER.PHASES["cmd/sing-box"]

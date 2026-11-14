@@ -1,0 +1,121 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"os"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// The inherited process capture binds the exact private execution input. Its
+// physical source and execution preparation remain distinct identities: the
+// same Local graph must not let Server borrow a Compare launch or vice versa.
+type routerVPNDarwinNodeChainExecutionControl struct {
+	capture   routerVPNDarwinNodeChainCapture
+	bootstrap routerVPNDarwinNodeChainBootstrap
+	scope     macosprocess.Scope
+	selection macosprocess.Selection
+	transfer  string
+	execution string
+	prep      *mobilemultihop.NodeChainExecutionPreparation
+	policy    *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	retiring  atomic.Bool
+	retired   atomic.Bool
+	native    *routerVPNDarwinNodeChainNative // assigned by the one joined command loop
+}
+
+func (owner *routerVPNDarwinNodeChainExecutionControl) original(ctx context.Context) error {
+	if owner == nil || ctx == nil || ctx.Err() != nil || owner.capture == nil || owner.bootstrap == nil ||
+		!routerVPNExternalSource.MatchString(owner.execution) ||
+		owner.scope.Family != macosprocess.NodeChainExecutionFamily || owner.selection.Family != macosprocess.NodeChainExecutionFamily ||
+		owner.selection.Session != owner.scope.Session || owner.selection.Source != owner.scope.Source ||
+		owner.selection.Config != owner.scope.Config || owner.capture.Current(ctx) != nil ||
+		owner.bootstrap.Current(ctx) != nil || owner.capture.Selection() != owner.selection {
+		return routerVPNExternalFailure
+	}
+	transfer, err := macosprocess.NodeChainExecutionTransferSHA256(owner.selection)
+	if err != nil || transfer != owner.transfer {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (owner *routerVPNDarwinNodeChainExecutionControl) compile(ctx context.Context, files *routerVPNExternalFiles) (*mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy, error) {
+	if owner == nil || owner.prep != nil || owner.policy != nil || owner.retiring.Load() || files == nil || files.root == nil ||
+		owner.original(ctx) != nil || owner.workspace(files) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	prep, err := routerVPNNodeChainExecutionCommandCapture(files, owner.scope.Session, owner.scope.Config, owner.scope.Source, owner.execution, "darwin")
+	if err != nil || prep == nil {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := prep.DesktopPhysicalPolicy()
+	if err != nil || policy == nil || owner.original(ctx) != nil || owner.retiring.Load() {
+		return nil, routerVPNExternalFailure
+	}
+	// Retain the parser's exact preparation and sealed physical object together.
+	// A later equivalent replay cannot replace either native owner.
+	owner.prep, owner.policy = prep, policy
+	return policy, nil
+}
+
+func (owner *routerVPNDarwinNodeChainExecutionControl) prepare(ctx context.Context, policy *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy) (context.Context, error) {
+	if owner == nil || owner.policy == nil || owner.policy != policy || owner.current(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	files := owner.capture.Files()
+	if len(files) != 7 || files[3] == nil || files[4] == nil {
+		return nil, routerVPNExternalFailure
+	}
+	// The original installed/process locks continue into each PF helper and
+	// physical guardian. No newly opened pathname supplies this authority.
+	return mobiletor.WithDesktopDarwinProcessAuthority(ctx, files[3:5]), nil
+}
+
+func (owner *routerVPNDarwinNodeChainExecutionControl) current(ctx context.Context) error {
+	if owner == nil || owner.prep == nil || owner.policy == nil || owner.retiring.Load() || owner.original(ctx) != nil ||
+		owner.prep.SourceSHA256() != owner.execution {
+		return routerVPNExternalFailure
+	}
+	policy, err := owner.prep.DesktopPhysicalPolicy()
+	if err != nil || policy != owner.policy {
+		return routerVPNExternalFailure
+	}
+	_, meta, _, err := policy.PhysicalReadValidated()
+	if err != nil || meta.Kind != "node-chain-execution" || meta.TargetOS != "darwin" ||
+		meta.SessionID != owner.scope.Session || meta.SourceSHA256 != owner.scope.Source ||
+		meta.ConfigSHA256 != owner.scope.Config || owner.prep.ConfigSHA256() != owner.scope.Config {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+// Cancelled admission still owns its no-resource retirement, but may publish
+// its receipt only under the originally inherited workspace description.
+func (owner *routerVPNDarwinNodeChainExecutionControl) workspace(files *routerVPNExternalFiles) error {
+	if owner == nil || owner.capture == nil || files == nil || files.root == nil {
+		return routerVPNExternalFailure
+	}
+	inherited := owner.capture.Files()
+	if len(inherited) != 7 || inherited[0] == nil {
+		return routerVPNExternalFailure
+	}
+	wanted, first := inherited[0].Stat()
+	actual, second := files.root.Stat(".")
+	if first != nil || second != nil || !os.SameFile(wanted, actual) {
+		return routerVPNExternalFailure
+	}
+	return nil
+}
+
+func (owner *routerVPNDarwinNodeChainExecutionControl) retirementReceipt() error {
+	if owner == nil || !owner.retired.Load() {
+		return routerVPNExternalFailure
+	}
+	return nil
+}

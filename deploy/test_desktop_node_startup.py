@@ -20,7 +20,7 @@ def check():
     test = (ROOT/'mobile/desktop/node_startup_lifecycle_test.go.tmpl').read_text()
     # Check the actual constructor handoff in every outer producer. Native
     # integration still compiles/runs those complete producers separately.
-    for name in ('node_chain_run_darwin', 'node_candidate_prefix_run_darwin', 'node_command_run_linux', 'mtu_node'):
+    for name in ('node_chain_run_darwin', 'node_chain_execution_run_darwin', 'node_candidate_prefix_run_darwin', 'node_command_run_linux', 'mtu_node'):
         raw = (ROOT/'mobile/desktop'/(name+'.go.tmpl')).read_text()
         begin = raw.index('instance, ')
         capture = raw.index('native.startupOwner.original = instance', begin)

@@ -1,0 +1,268 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+)
+
+// Only installed-capture/handshake observations are doubled. The execution
+// compiler, sealed policy, private-root identity and cleanup writer are real.
+func routerVPNDarwinExecutionControlContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), routerVPNNodeAdmissionLimit)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func routerVPNDarwinExecutionControlFixture(t *testing.T, mode string) (*routerVPNDarwinNodeChainExecutionControl, *routerVPNExternalFiles, *routerVPNDarwinChainCaptureRead, *routerVPNDarwinChainBootstrapRead) {
+	t.Helper()
+	local := desktopNodeChainCommandPolicyWithIdentity(t, 3, "darwin", 1400, true)
+	prep, err := mobilemultihop.NewDesktopNodeChainExecutionPreparation(local, mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := prep.DesktopPhysicalPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, meta, _, err := policy.PhysicalReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := desktopImportedCommandFiles(t, map[string]string{"node-chain-execution-source.json": prep.Source(), "sing-box.json": prep.Config()})
+	root, err := files.root.Open(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	selection := macosprocess.Selection{Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256,
+		CallerUID: 501, WorkspaceDevice: 7, WorkspaceInode: 9, Family: macosprocess.NodeChainExecutionFamily,
+		EngineSHA256: strings.Repeat("1", 64), ControllerSHA256: strings.Repeat("2", 64), CatalogSHA256: strings.Repeat("3", 64), InputsSHA256: strings.Repeat("4", 64)}
+	capture := &routerVPNDarwinChainCaptureRead{selection: selection, files: make([]*os.File, 7)}
+	capture.files[0], capture.files[3], capture.files[4] = root, root, root
+	bootstrap := &routerVPNDarwinChainBootstrapRead{}
+	transfer, err := macosprocess.NodeChainExecutionTransferSHA256(selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := &routerVPNDarwinNodeChainExecutionControl{capture: capture, bootstrap: bootstrap, selection: selection, transfer: transfer, execution: prep.SourceSHA256(),
+		scope: macosprocess.Scope{Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, Workspace: files.root.Name(), Family: macosprocess.NodeChainExecutionFamily}}
+	return control, files, capture, bootstrap
+}
+
+func TestRouterVPNNodeChainExecutionDarwinOriginalControl(t *testing.T) {
+	for _, mode := range []string{"server", "auto"} {
+		t.Run(mode, func(t *testing.T) {
+			control, files, capture, _ := routerVPNDarwinExecutionControlFixture(t, mode)
+			cancelled, cancel := context.WithCancel(context.Background())
+			cancel()
+			for _, ctx := range []context.Context{nil, cancelled} {
+				if policy, err := control.compile(ctx, files); err == nil || policy != nil || control.prep != nil || capture.reads != 0 {
+					t.Fatal("missing or cancelled caller replayed execution source")
+				}
+			}
+			ctx := routerVPNDarwinExecutionControlContext(t)
+			policy, err := control.compile(ctx, files)
+			if err != nil || policy == nil || control.policy != policy || control.prep == nil || control.prep.Execution() != mode || control.current(ctx) != nil {
+				t.Fatal("original execution capture did not retain exact preparation", err)
+			}
+			_, meta, _, err := policy.PhysicalReadValidated()
+			if err != nil || meta.RestoredMTU != 1400 || meta.TargetOS != "darwin" || meta.Kind != "node-chain-execution" {
+				t.Fatal("execution replay lost captured native policy", err)
+			}
+			if prepared, err := control.prepare(ctx, policy); err != nil || prepared == nil {
+				t.Fatal(err)
+			}
+			if again, err := control.compile(ctx, files); err == nil || again != nil {
+				t.Fatal("execution capture replaced its original preparation")
+			}
+		})
+	}
+	for _, fault := range []string{"policy-pointer", "preparation-pointer", "execution-source", "replacement-root", "late-source", "late-cancel", "missing-authority", "capture", "handshake", "retiring"} {
+		t.Run(fault, func(t *testing.T) {
+			control, files, capture, bootstrap := routerVPNDarwinExecutionControlFixture(t, "auto")
+			ctx, cancel := context.WithCancel(routerVPNDarwinExecutionControlContext(t))
+			defer cancel()
+			switch fault {
+			case "execution-source":
+				control.execution = strings.Repeat("d", 64)
+			case "replacement-root":
+				foreign, err := os.Open(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer foreign.Close()
+				capture.files[0] = foreign
+			case "late-source":
+				capture.after = func() {
+					if capture.reads == 2 {
+						capture.failure = true
+					}
+				}
+			case "late-cancel":
+				capture.after = func() {
+					if capture.reads == 2 {
+						cancel()
+					}
+				}
+			}
+			policy, err := control.compile(ctx, files)
+			switch fault {
+			case "execution-source", "replacement-root", "late-source", "late-cancel":
+				if err == nil || policy != nil || control.prep != nil || control.policy != nil {
+					t.Fatal("substituted or cancelled execution replay published authority")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "policy-pointer", "preparation-pointer":
+				other, err := mobilemultihop.ParseDesktopNodeChainExecutionPreparation(control.prep.Source())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if fault == "preparation-pointer" {
+					control.prep = other
+				} else {
+					policy, err = other.DesktopPhysicalPolicy()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "missing-authority":
+				capture.files[4] = nil
+			case "capture":
+				capture.failure = true
+			case "handshake":
+				bootstrap.failure = true
+			case "retiring":
+				control.retiring.Store(true)
+			}
+			if prepared, err := control.prepare(ctx, policy); err == nil || prepared != nil {
+				t.Fatal("foreign or retired execution owner prepared native authority")
+			}
+			if fault != "policy-pointer" && fault != "missing-authority" && control.current(ctx) == nil {
+				t.Fatal("replaced execution owner remained current")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeChainExecutionDarwinSelectionBinding(t *testing.T) {
+	for _, field := range []string{"Session", "Source", "Config", "CallerUID", "WorkspaceDevice", "WorkspaceInode", "EngineSHA256", "ControllerSHA256", "CatalogSHA256", "InputsSHA256", "Family"} {
+		t.Run(field, func(t *testing.T) {
+			control, files, capture, _ := routerVPNDarwinExecutionControlFixture(t, "server")
+			value := reflect.ValueOf(&capture.selection).Elem().FieldByName(field)
+			if value.Kind() == reflect.String {
+				value.SetString("foreign-original-" + value.String())
+			} else {
+				value.SetUint(value.Uint() + 1)
+			}
+			if capture.selection == control.selection {
+				t.Fatal("selection control did not change its original field")
+			}
+			if policy, err := control.compile(routerVPNDarwinExecutionControlContext(t), files); err == nil || policy != nil {
+				t.Fatal("changed original execution selection reached replay")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeChainExecutionDarwinSeparateRequestedExecution(t *testing.T) {
+	t.Run("same-physical-source", func(t *testing.T) {
+		server, _, _, _ := routerVPNDarwinExecutionControlFixture(t, "server")
+		compare, files, _, _ := routerVPNDarwinExecutionControlFixture(t, "auto")
+		if server.scope.Source != compare.scope.Source || server.execution == compare.execution {
+			t.Fatal("fixture did not preserve equal physical source and distinct execution")
+		}
+		compare.execution = server.execution
+		if policy, err := compare.compile(routerVPNDarwinExecutionControlContext(t), files); err == nil || policy != nil {
+			t.Fatal("Server source authorized a Compare launch sharing the physical graph")
+		}
+
+	})
+}
+
+func TestRouterVPNNodeChainExecutionDarwinStoppedReceipt(t *testing.T) {
+	for _, fault := range []string{"joined", "proof-retry", "source-retry", "box-failure", "foreign-file", "foreign-workspace", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			control, files, capture, _ := routerVPNDarwinExecutionControlFixture(t, "auto")
+			control.native, _, _ = routerVPNDarwinChainTestRetirement()
+			if control.retirementReceipt() == nil {
+				t.Fatal("unpublished execution retirement acknowledged Stop")
+			}
+			ctx := routerVPNDarwinExecutionControlContext(t)
+			if _, err := control.compile(ctx, files); err != nil {
+				t.Fatal(err)
+			}
+			if err := files.publish("node-chain-execution-ready.json", map[string]bool{"ready": true}); err != nil {
+				t.Fatal(err)
+			}
+			native, parts, _ := routerVPNDarwinChainTestRetirement()
+			control.native = native
+			ctx = routerVPNDarwinChainControlContext(t)
+			switch fault {
+			case "proof-retry":
+				parts[0].failures = 1
+			case "source-retry":
+				parts[2].failures = 1
+			case "box-failure":
+				parts[3].failures = 1
+			case "foreign-file":
+				if err := files.root.WriteFile("stopped.json", []byte("foreign"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "foreign-workspace":
+				foreign, err := os.Open(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer foreign.Close()
+				capture.files[0] = foreign
+			case "cancelled":
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = cancelled
+			}
+			err := control.finish(ctx, files)
+			if fault != "joined" {
+				if err == nil || control.retired.Load() || control.retirementReceipt() == nil {
+					t.Fatal("unjoined execution source or foreign writer acknowledged Stop", err)
+				}
+				if fault == "proof-retry" || fault == "source-retry" {
+					if err := control.finish(routerVPNDarwinChainControlContext(t), files); err != nil {
+						t.Fatal("original execution retry did not join", err)
+					}
+				} else {
+					return
+				}
+			}
+			if !control.native.joined || control.retirementReceipt() != nil {
+				t.Fatal("execution Stop omitted its original native join")
+			}
+			if _, err := files.root.Lstat("node-chain-execution-ready.json"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("execution readiness survived original retirement")
+			}
+			raw, err := files.read("stopped.json", 1024)
+			var receipt struct {
+				routerVPNExternalStop
+				Closed bool `json:"closed"`
+			}
+			if err != nil || json.Unmarshal(raw, &receipt) != nil || receipt.Schema != 1 || !receipt.Closed || receipt.Session != control.scope.Session || receipt.SourceSHA256 != control.scope.Config {
+				t.Fatal("execution stopped receipt lost original identity", err)
+			}
+		})
+	}
+}

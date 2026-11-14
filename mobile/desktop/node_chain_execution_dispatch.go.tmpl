@@ -18,6 +18,7 @@ import (
 // execution source. Platform authentication still precedes private source reads.
 type routerVPNNodeChainExecutionCommand struct {
 	directory, session, config, physical, source, transfer string
+	darwin                                                 string
 	mtu                                                    int
 	windows                                                routerVPNNodeJournalOptions
 	linux                                                  routerVPNNodeLinuxParentOptions
@@ -31,6 +32,16 @@ func routerVPNNewNodeChainExecutionCommand(run func(context.Context, routerVPNNo
 	var capture routerVPNNodeChainExecutionCommand
 	command := &cobra.Command{Use: "routervpn-node-chain-execution", Short: "Run one captured ordered Server or Compare path", Args: cobra.NoArgs, SilenceUsage: true,
 		RunE: func(command *cobra.Command, _ []string) error {
+			if command.Flags().Changed("darwin-control") && capture.darwin != "inherited-v1" {
+				return routerVPNExternalFailure
+			}
+			if capture.darwin != "" {
+				for _, name := range []string{"physical-transfer-sha256", "physical-mtu", "journal-parent-handle", "journal-parent-image", "journal-pipe", "journal-capture-sha256", "linux-parent-channel", "linux-parent-directory", "linux-parent-capture"} {
+					if command.Flags().Changed(name) {
+						return routerVPNExternalFailure
+					}
+				}
+			}
 			if run == nil || capture.validate() != nil {
 				return routerVPNExternalFailure
 			}
@@ -48,6 +59,7 @@ func routerVPNNewNodeChainExecutionCommand(run func(context.Context, routerVPNNo
 	command.Flags().StringVar(&capture.source, "execution-source-sha256", "", "captured Server or Compare preparation")
 	command.Flags().StringVar(&capture.transfer, "physical-transfer-sha256", "", "captured protection predecessor")
 	command.Flags().IntVar(&capture.mtu, "physical-mtu", 0, "captured physical policy MTU")
+	command.Flags().StringVar(&capture.darwin, "darwin-control", "", "original inherited Darwin controller")
 	command.Flags().Uint64Var(&capture.windows.ParentHandle, "journal-parent-handle", 0, "inherited native controller capability")
 	command.Flags().StringVar(&capture.windows.ParentImage, "journal-parent-image", "", "retained native controller image")
 	command.Flags().StringVar(&capture.windows.Pipe, "journal-pipe", "", "native durable transaction rendezvous")
@@ -61,7 +73,17 @@ func routerVPNNewNodeChainExecutionCommand(run func(context.Context, routerVPNNo
 func (capture routerVPNNodeChainExecutionCommand) validate() error {
 	if !filepath.IsAbs(capture.directory) || !routerVPNExternalSession.MatchString(capture.session) ||
 		!routerVPNExternalSource.MatchString(capture.config) || !routerVPNExternalSource.MatchString(capture.physical) ||
-		!routerVPNExternalSource.MatchString(capture.source) || !routerVPNExternalSource.MatchString(capture.transfer) ||
+		!routerVPNExternalSource.MatchString(capture.source) {
+		return routerVPNExternalFailure
+	}
+	if capture.darwin != "" {
+		if capture.darwin != "inherited-v1" || capture.transfer != "" || capture.mtu != 0 ||
+			capture.windows != (routerVPNNodeJournalOptions{}) || capture.linux != (routerVPNNodeLinuxParentOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}
+	if !routerVPNExternalSource.MatchString(capture.transfer) ||
 		capture.mtu != 0 && (capture.mtu < 1280 || capture.mtu > 9000) ||
 		capture.windows != (routerVPNNodeJournalOptions{}) && capture.linux != (routerVPNNodeLinuxParentOptions{}) {
 		return routerVPNExternalFailure
@@ -72,6 +94,12 @@ func (capture routerVPNNodeChainExecutionCommand) validate() error {
 func routerVPNRunNodeChainExecutionCommand(parent context.Context, capture routerVPNNodeChainExecutionCommand) (failure error) {
 	if parent == nil || parent.Err() != nil || capture.validate() != nil {
 		return routerVPNExternalFailure
+	}
+	if capture.darwin != "" {
+		if runtime.GOOS != "darwin" {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunDarwinNodeChainExecutionControlled(parent, capture.directory, capture.session, capture.physical, capture.config, capture.source)
 	}
 	if capture.linux != (routerVPNNodeLinuxParentOptions{}) {
 		return routerVPNRunLinuxNodeChainExecutionControlled(parent, capture)

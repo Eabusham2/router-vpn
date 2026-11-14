@@ -83,6 +83,25 @@ PHASES["cmd/sing-box"].update({
         "joined", "source-retry", "box-failure", "foreign-file", "foreign-workspace", "authenticated-ack"),
     "TestRouterVPNNodeCandidatePrefixDarwinRuntimeClosedFifty": (),
 })
+# Server/Compare owns a separate inherited preparation and native retirement.
+# These records extend the original Local/prefix inventory.
+PHASES["cmd/sing-box"].update({
+    "TestRouterVPNNodeChainExecutionDarwinEarlyStop": ("receipt-before-acquisition", "authenticated-before-run"),
+    "TestRouterVPNNodeChainExecutionDarwinMailboxStartup": ("absent", "adoption-regular", "adoption-directory", "adoption-symlink", "ready-regular", "ready-directory", "ready-symlink", "last-regular", "last-directory", "last-symlink"),
+    "TestRouterVPNNodeChainExecutionDarwinOriginalControl": (
+        "server", "auto", "policy-pointer", "preparation-pointer", "execution-source", "replacement-root",
+        "late-source", "late-cancel", "missing-authority", "capture", "handshake", "retiring"),
+    "TestRouterVPNNodeChainExecutionDarwinSelectionBinding": (
+        "Session", "Source", "Config", "CallerUID", "WorkspaceDevice", "WorkspaceInode", "EngineSHA256",
+        "ControllerSHA256", "CatalogSHA256", "InputsSHA256", "Family"),
+    "TestRouterVPNNodeChainExecutionDarwinSeparateRequestedExecution": ("same-physical-source",),
+    "TestRouterVPNNodeChainExecutionDarwinStoppedReceipt": (
+        "joined", "proof-retry", "source-retry", "box-failure", "foreign-file", "foreign-workspace", "cancelled"),
+    "TestRouterVPNNodeChainExecutionDarwinCommandFlags": (
+        "server", "auto", "physical-transfer-sha256", "physical-mtu", "journal-parent-handle", "journal-parent-image",
+        "journal-pipe", "journal-capture-sha256", "linux-parent-channel", "linux-parent-directory", "linux-parent-capture",
+        "empty-family", "unknown-family", "missing-execution", "cancelled"),
+})
 PHASES["routervpn/desktoppt"] = {
     "TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinProjection": ("wg", "awg2-fast", "awg2-strong", "three-prefix"),
     "TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinCleanupRetainsOriginal": ("original-owner",),
@@ -117,6 +136,10 @@ for name in ("node_candidate_prefix_command", "node_candidate_prefix_dispatch", 
              "node_candidate_prefix_control_command_test", "node_candidate_prefix_control_darwin_test",
              "node_candidate_prefix_retirement_darwin_test", "node_candidate_prefix_runtime_test"):
     COPIES["mobile/desktop/" + name + ".go.tmpl"] = "cmd/sing-box/routervpn_" + name + ".go"
+for name in ("node_chain_execution_command", "node_chain_execution_dispatch", "node_chain_execution_control_darwin",
+             "node_chain_execution_control_darwin_other", "node_chain_execution_run_darwin", "node_chain_execution_retirement_darwin",
+             "node_chain_execution_control_darwin_test", "node_chain_execution_run_darwin_test", "node_chain_execution_darwin_dispatch_test"):
+    COPIES["mobile/desktop/" + name + ".go.tmpl"] = "cmd/sing-box/routervpn_" + name + ".go"
 COPIES.update({
     "mobile/desktop/node_candidate_prefix_box_darwin.go.tmpl": "routervpn_desktop_node_candidate_prefix_box_darwin.go",
     "mobile/desktop/node_candidate_prefix_box_physical.go.tmpl": "routervpn_desktop_node_candidate_prefix_box_physical.go",
@@ -129,6 +152,7 @@ COPIES.update({
     "internal/macosprocess/scope.go": "routervpn/macosprocess/scope.go",
     "internal/macosprocess/protocol.go": "routervpn/macosprocess/protocol.go",
     "internal/macosprocess/candidate_prefix_transfer.go": "routervpn/macosprocess/candidate_prefix_transfer.go",
+    "internal/macosprocess/node_chain_execution_transfer.go": "routervpn/macosprocess/node_chain_execution_transfer.go",
 })
 MUTATIONS = (
     ("repeat-stack", "protocol/tun", "protocol/tun/routervpn_node_chain_retirement_darwin.go",
@@ -281,6 +305,28 @@ for mailbox in ("request", "live", "cancel", "result"):
                    "preexisting prefix measurement mailbox reached native preparation"),)
 
 
+
+MUTATIONS += (
+    ('execution-selection', 'cmd/sing-box', 'cmd/sing-box/routervpn_node_chain_execution_control_darwin.go', 'owner.capture.Selection() != owner.selection', 'false', 'TestRouterVPNNodeChainExecutionDarwinSelectionBinding/InputsSHA256', 'changed original execution selection reached replay'),
+    ('execution-physical-pointer', 'cmd/sing-box', 'cmd/sing-box/routervpn_node_chain_execution_control_darwin.go', 'owner.policy != policy', 'false', 'TestRouterVPNNodeChainExecutionDarwinOriginalControl/policy-pointer', 'foreign or retired execution owner prepared native authority'),
+    ('execution-preparation-pointer', 'cmd/sing-box', 'cmd/sing-box/routervpn_node_chain_execution_control_darwin.go', 'err != nil || policy != owner.policy', 'err != nil', 'TestRouterVPNNodeChainExecutionDarwinOriginalControl/preparation-pointer', 'foreign or retired execution owner prepared native authority'),
+    ('execution-execution-source', 'cmd/sing-box', 'cmd/sing-box/routervpn_node_chain_execution_command.go', 'prep.SourceSHA256() != executionSource || ', '', 'TestRouterVPNNodeChainExecutionDarwinSeparateRequestedExecution/same-physical-source', 'Server source authorized a Compare launch sharing the physical graph'),
+    ('execution-source-join', 'cmd/sing-box', 'cmd/sing-box/routervpn_node_chain_retirement_darwin.go', 'if err := owner.source.CloseSource(ctx); err != nil {\n\t\t\t\treturn err\n\t\t\t}', 'if err := owner.source.CloseSource(ctx); err != nil { _ = err }', 'TestRouterVPNNodeChainExecutionDarwinStoppedReceipt/source-retry', 'unjoined execution source or foreign writer acknowledged Stop'),
+    ('execution-foreign-flag', 'cmd/sing-box', 'cmd/sing-box/routervpn_node_chain_execution_dispatch.go', 'if command.Flags().Changed(name) {', 'if command.Flags().Changed(name) && false {', 'TestRouterVPNNodeChainExecutionDarwinCommandFlags/physical-mtu', 'explicit foreign or cancelled Darwin execution reached native dispatch'),
+)
+
+for mailbox in ("adoption", "ready", "last"):
+    MUTATIONS += (("execution-preexisting-" + mailbox, "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_execution_run_darwin.go",
+                   '"node-chain-execution-' + mailbox + '.json",', '',
+                   "TestRouterVPNNodeChainExecutionDarwinMailboxStartup/" + mailbox + "-regular",
+                   "preexisting execution output reached native preparation"),)
+MUTATIONS += (("execution-cancelled-admission-before-cleanup", "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_execution_run_darwin.go",
+               "defer stopAdmission()\n\tfiles, err := routerVPNOpenExternalFiles(control.scope.Workspace)",
+               "defer stopAdmission()\n\tif err := control.original(admission); err != nil { return err }\n\tfiles, err := routerVPNOpenExternalFiles(control.scope.Workspace)",
+               "TestRouterVPNNodeChainExecutionDarwinEarlyStop/authenticated-before-run",
+               "early authenticated Stop omitted its original no-resource retirement"),)
+
+
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, ROOT / "deploy" / path)
     module = importlib.util.module_from_spec(spec)
@@ -300,6 +346,20 @@ def discover(output, cases):
     roots = output.strip().splitlines()
     if len(roots) != len(set(roots)) or set(roots) != set(cases):
         raise ValueError("Darwin lifecycle changed its exact compiled roots")
+
+
+def phase_groups(package, cases):
+    # Retain the complete original command suite in its original invocation.
+    # Execution admission replays another complete graph; its additive suite
+    # gets the same existing 120-second bound on the same compiled image.
+    if package != "cmd/sing-box":
+        return (cases,)
+    execution = {name: leaves for name, leaves in cases.items()
+                 if name.startswith("TestRouterVPNNodeChainExecutionDarwin")}
+    original = {name: leaves for name, leaves in cases.items() if name not in execution}
+    if not execution or not original:
+        raise ValueError("Darwin lifecycle lost its original or execution phase")
+    return original, execution
 
 
 def checked_source(source, env):
@@ -366,10 +426,13 @@ def check(source, tags=""):
             validator = receipt(package)
             _, listing = validator.run([image, "-test.list=" + selector], cwd=source, env=env)
             discover(listing, cases)
-            code, output = execute(source, package, image, selector, env)
-            if code != 0:
-                raise ValueError("Darwin lifecycle baseline did not exit successfully")
-            verdicts[package] = validator.require_pass(output, cases)
+            verdicts[package] = 0
+            for phase in phase_groups(package, cases):
+                selector = "^(" + "|".join(phase) + ")$"
+                code, output = execute(source, package, image, selector, env)
+                if code != 0:
+                    raise ValueError("Darwin lifecycle baseline did not exit successfully")
+                verdicts[package] += validator.require_pass(output, phase)
             images[package] = hashlib.sha256(image.read_bytes()).hexdigest()
         for label, package, relative, before, after, witness, message in MUTATIONS:
             target = source / relative
@@ -381,8 +444,7 @@ def check(source, tags=""):
                 target.write_bytes(raw.replace(before, after, 1).encode("utf-8"))
                 image = directory / (label + ".test")
                 compile_image(source, package, image, tags, env)
-                root, leaf = witness.split("/", 1)
-                selector = "^" + re.escape(root) + "$/^" + re.escape(leaf) + "$"
+                selector = "/".join("^" + re.escape(part) + "$" for part in witness.split("/"))
                 code, output = execute(source, package, image, selector, env, failure=True)
                 require_control(label, package, code, output, witness, message)
                 print("Rejected Darwin lifecycle control: " + label, flush=True)

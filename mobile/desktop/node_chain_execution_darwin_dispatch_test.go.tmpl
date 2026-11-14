@@ -1,0 +1,86 @@
+package main
+
+import (
+	"context"
+	"io"
+	"reflect"
+	"testing"
+)
+
+func desktopExecutionDarwinDispatchArguments(c routerVPNNodeChainExecutionCommand) []string {
+	return []string{"--runtime-dir", c.directory, "--session", c.session, "--config-sha256", c.config,
+		"--physical-source-sha256", c.physical, "--execution-source-sha256", c.source, "--darwin-control", "inherited-v1"}
+}
+
+func TestRouterVPNNodeChainExecutionDarwinCommandFlags(t *testing.T) {
+	for _, mode := range []string{"server", "auto"} {
+		t.Run(mode, func(t *testing.T) {
+			files, expected := desktopExecutionDispatchFixture(t, "darwin", mode)
+			expected.windows = routerVPNNodeJournalOptions{}
+			expected.transfer, expected.mtu, expected.darwin = "", 0, "inherited-v1"
+			calls := 0
+			type callerKey struct{}
+			ctx := context.WithValue(t.Context(), callerKey{}, "original-execution-caller")
+			command := routerVPNNewNodeChainExecutionCommand(func(call context.Context, capture routerVPNNodeChainExecutionCommand) error {
+				calls++
+				if !reflect.DeepEqual(capture, expected) || call.Value(callerKey{}) != "original-execution-caller" {
+					t.Fatal("Darwin execution CLI replaced original capture or caller")
+				}
+				prep, err := routerVPNNodeChainExecutionCommandCapture(files, capture.session, capture.config, capture.physical, capture.source, "darwin")
+				if err != nil || prep.Execution() != mode {
+					t.Fatal("Darwin execution CLI lost captured preparation", err)
+				}
+				policy, err := prep.DesktopPhysicalPolicy()
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, meta, _, err := policy.PhysicalReadValidated()
+				if err != nil || meta.RestoredMTU != 1400 {
+					t.Fatal("Darwin execution CLI replaced manifest MTU", err)
+				}
+				return nil
+			})
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			command.SetArgs(desktopExecutionDarwinDispatchArguments(expected))
+			if err := command.ExecuteContext(ctx); err != nil || calls != 1 {
+				t.Fatal("captured Darwin execution did not enter once", err, calls)
+			}
+		})
+	}
+	_, original := desktopExecutionDispatchFixture(t, "darwin", "auto")
+	for _, foreign := range []struct{ name, value string }{
+		{"physical-transfer-sha256", ""}, {"physical-mtu", "0"}, {"journal-parent-handle", "0"},
+		{"journal-parent-image", ""}, {"journal-pipe", ""}, {"journal-capture-sha256", ""},
+		{"linux-parent-channel", "0"}, {"linux-parent-directory", "0"}, {"linux-parent-capture", ""},
+		{"empty-family", ""}, {"unknown-family", "inherited-v2"}, {"missing-execution", ""}, {"cancelled", ""},
+	} {
+		t.Run(foreign.name, func(t *testing.T) {
+			args := desktopExecutionDarwinDispatchArguments(original)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			switch foreign.name {
+			case "empty-family", "unknown-family":
+				args[len(args)-1] = foreign.value
+			case "missing-execution":
+				for i := range args {
+					if args[i] == "--execution-source-sha256" {
+						args[i+1] = ""
+					}
+				}
+			case "cancelled":
+				cancel()
+			default:
+				args = append(args, "--"+foreign.name, foreign.value)
+			}
+			calls := 0
+			command := routerVPNNewNodeChainExecutionCommand(func(context.Context, routerVPNNodeChainExecutionCommand) error { calls++; return nil })
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			command.SetArgs(args)
+			if err := command.ExecuteContext(ctx); err == nil || calls != 0 {
+				t.Fatal("explicit foreign or cancelled Darwin execution reached native dispatch", err, calls)
+			}
+		})
+	}
+}
