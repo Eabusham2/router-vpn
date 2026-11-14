@@ -147,18 +147,24 @@ func (o *OrderedLatencyService) cancelLocked(op *measurementAdmission) {
 	}
 }
 func (o *OrderedLatencyService) Drain(request string) error {
-	if o == nil || o.self != o || o.service == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), DrainTimeout)
+	defer cancel()
+	return o.DrainContext(ctx, request)
+}
+
+func (o *OrderedLatencyService) DrainContext(ctx context.Context, request string) error {
+	if o == nil || o.self != o || o.service == nil || ctx == nil {
 		return ErrStale
 	}
 	s := o.service
-	s.mu.Lock()
+	if err := o.lockContext(ctx); err != nil {
+		return err
+	}
 	op := o.operation
 	s.mu.Unlock()
 	if op == nil || op.id != request {
 		return errors.New("ordered latency drain belongs to another request")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), DrainTimeout)
-	defer cancel()
 	return orderedLatencyJoin(ctx, op)
 }
 func orderedLatencyJoin(ctx context.Context, op *measurementAdmission) error {
@@ -300,6 +306,16 @@ func (o *OrderedLatencyService) SavedJSON(hopID string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), ObservationTimeout)
 	defer cancel()
 	o.adoptJoined(ctx)
+	return o.CommittedJSON(hopID)
+}
+
+// CommittedJSON reads already committed history without observing the native
+// path or adopting a pending result. A stronger native wrapper uses it while
+// its original socket or activity release is still joining.
+func (o *OrderedLatencyService) CommittedJSON(hopID string) string {
+	if o == nil || o.self != o || o.service == nil {
+		return ""
+	}
 	o.service.mu.Lock()
 	defer o.service.mu.Unlock()
 	return o.saved[hopID]
