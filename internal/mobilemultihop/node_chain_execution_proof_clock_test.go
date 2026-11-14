@@ -136,8 +136,11 @@ func TestNodeChainExecutionProofClockRetainsRealMeasurements(t *testing.T) {
 				len(dns) != 1 || dns[0] != execution || p.Comparison.Target != executionProofClockTarget(f) {
 				t.Fatal("checked clock changed actual proof inventory or selected DNS/target", captures.Load(), proofCalls, publicCalls, dns)
 			}
-			host := strings.Split(strings.TrimPrefix(executionProofClockTarget(f), "https://"), "/")[0]
-			for _, call := range publicCalls {
+			// Admission proves the fixed public endpoint before the captured
+			// comparison endpoint is measured. Both must retain their own host.
+			for index, target := range []string{Targets[0], executionProofClockTarget(f)} {
+				host := strings.Split(strings.TrimPrefix(target, "https://"), "/")[0]
+				call := publicCalls[index]
 				if !strings.HasSuffix(call, "/"+host) {
 					t.Fatal("checked interval changed the captured public target", publicCalls)
 				}
@@ -284,7 +287,12 @@ func TestNodeChainExecutionProofClockCancellationKeepsOriginalJoin(t *testing.T)
 					if err != nil {
 						t.Fatal(err)
 					}
-					host := strings.Split(strings.TrimPrefix(executionProofClockTarget(f), "https://"), "/")[0]
+					// Cancellation stops the initial public admission proof, which
+					// precedes scoring and always uses Targets[0]. A restored Local
+					// winner can retain a different randomly selected scoring target.
+					// Intercepting that later target would leave the admission request
+					// talking to the old peer with this new peer's trust root.
+					host := strings.Split(strings.TrimPrefix(Targets[0], "https://"), "/")[0]
 					position := len(proofs) - 1
 					node, proof := f.runtime.projection.policy.local.nodes[position], proofs[position]
 					api, _ := privateAPI(predecessorText(node.profile, "router_api"))
@@ -361,6 +369,8 @@ func TestNodeChainExecutionProofClockCancellationKeepsOriginalJoin(t *testing.T)
 					go func() { done <- f.runtime.Run(ctx) }()
 					select {
 					case <-entered:
+					case err := <-done:
+						t.Fatal("original proof stopped before entering the cancellation witness", err)
 					case <-time.After(5 * time.Second):
 						t.Fatal("actual original HTTP/TLS proof never entered")
 					}
