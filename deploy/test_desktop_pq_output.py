@@ -128,14 +128,19 @@ class NativeRuntimeOutput(unittest.TestCase):
 
     def metadata(self, stdout, stderr=b'', exit_code=0):
         real_run = subprocess.run
-        env = {**os.environ, 'ROUTERVPN_NATIVE_LICENSE_TEST': 'captured'}
+        env = {**os.environ, 'ROUTERVPN_NATIVE_LICENSE_TEST': 'captured',
+               'PYTHONIOENCODING': 'cp1252:strict'}
+        original_env = dict(env)
+        child_env = {key: value for key, value in env.items()
+                     if key.upper() != 'PYTHONIOENCODING'}
+        child_env['PYTHONIOENCODING'] = 'utf-8:strict'
         expected = ['cargo', 'metadata', '--locked', '--format-version=1',
                     '--manifest-path', str(ROOT/'mobile/rosenpass/Cargo.toml')]
         calls = []
 
         def execute(command, **kwargs):
             self.assertEqual(command, expected)
-            self.assertEqual(kwargs['env'], env)
+            self.assertEqual(kwargs['env'], child_env)
             self.assertEqual(kwargs['timeout'], 1800)
             # Exercise the shipping license collector and real pipe/exit
             # handling. Only replace the Cargo executable at its boundary.
@@ -153,6 +158,7 @@ class NativeRuntimeOutput(unittest.TestCase):
                 NATIVE.stage_pq_licenses(self.stage, env)
             finally:
                 self.assertEqual(len(calls), 1)
+                self.assertEqual(env, original_env)
 
     def encoded(self, packages=None):
         return json.dumps({'packages': [self.package] if packages is None else packages},
