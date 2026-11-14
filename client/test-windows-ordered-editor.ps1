@@ -6,6 +6,11 @@ Import-Module (Join-Path $Client 'RouterVPN-Windows-ControllerTransport.psm1') -
 $Settings=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-ProfileSettings.ps1'),[Text.Encoding]::UTF8)
 if($NegativeControl-ceq'raw-mode'){$Settings=$Settings.Replace("@('wg','awg2-fast','awg2-strong')-ccontains`$Mode","@('wg','awg2-fast','awg2-strong')-contains`$Mode")}
 if($NegativeControl-ceq'source-token'){$Settings=$Settings.Replace("-or[string](Get-RouterVPNOrderedValue `$matchingProfiles[0] 'profile_token')-cne`$token",'')}
+if($NegativeControl-ceq'connect-protocol'){
+    $before='$node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])'
+    if(([regex]::Matches($Settings,[regex]::Escape($before))).Count-ne1){throw 'Shipping CONNECT protocol guard changed.'}
+    $Settings=$Settings.Replace($before,'($node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])-and$node.mode-cnotin@(''http-connect'',''https-connect''))')
+}
 . ([ScriptBlock]::Create($Settings))
 $Unified=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-UnifiedShell.ps1'),[Text.Encoding]::UTF8)
 if($NegativeControl-ceq'summary-reset'){$Unified=$Unified.Replace("`$description.Text='Choose each intermediate transport and the final node.'",'')}
@@ -26,6 +31,11 @@ if($NegativeControl-ceq'socks-mode'){
     $anchor='$mode=Get-RouterVPNOrderedImportedMode $available.SelectedItem'
     if(([regex]::Matches($Editor,[regex]::Escape($anchor))).Count-ne1){throw 'Shipping SOCKS Add anchor changed.'}
     $Editor=$Editor.Replace($anchor,'$mode=''shadowsocks''')
+}
+if($NegativeControl-ceq'connect-mode'){
+    $anchor='$mode=Get-RouterVPNOrderedImportedMode $available.SelectedItem'
+    if(([regex]::Matches($Editor,[regex]::Escape($anchor))).Count-ne1){throw 'Shipping CONNECT Add anchor changed.'}
+    $Editor=$Editor.Replace($anchor,$anchor+';if($mode-ceq''https-connect''){$mode=''http-connect''}')
 }
 $EditorAST=([ScriptBlock]::Create($Editor)).Ast
 function Callback([string]$Name){
@@ -75,8 +85,8 @@ try{
         $found=@($EditorAST.FindAll({param($n)$n-is[Management.Automation.Language.AssignmentStatementAst]-and$n.Left.Extent.Text-ceq$name},$true))
         if($found.Count-ne1){throw ('Shipping mode initialization missing: '+$name)};. ([ScriptBlock]::Create($found[0].Extent.Text))
     }
-    Check (($prefixMode.ItemsSource.id-join',')-ceq'wg,awg2-fast,awg2-strong,shadowsocks,socks5') 'mode picker offered an unsupported or normalized transport'
-    foreach($invalid in @('WG','AWG2-FAST','awg','awg2-pq','wg-pq','shadowsocks','socks5',' awg2-fast','awg2-strong ',$null,1)){
+    Check (($prefixMode.ItemsSource.id-join',')-ceq'wg,awg2-fast,awg2-strong,shadowsocks,socks5,http-connect,https-connect') 'mode picker offered an unsupported or normalized transport'
+    foreach($invalid in @('WG','AWG2-FAST','awg','awg2-pq','wg-pq','shadowsocks','socks5','http-connect','https-connect',' awg2-fast','awg2-strong ',$null,1)){
         $refused=$false;try{[void](Copy-RouterVPNOrderedNodes @([pscustomobject]@{id='prefix-0';mode=$invalid},[pscustomobject]@{id=$id;mode='shadowsocks'}) $id)}catch{$refused=$true}
         Check $refused 'raw ordered mode whitelist admitted an alias or unsupported transport'
     }
@@ -187,6 +197,50 @@ try{
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $swapped $store)}catch{$rejected=$true};Check $rejected 'SOCKS middle became physical entry'
     $socks.profile_token=('f'*64)
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $socksSaved $store)}catch{$rejected=$true};Check $rejected 'SOCKS relinking retained old draft authority'
+    # Run the real Add/Apply and request-source guard for both original CONNECT
+    # protocols. Capability remains explicit and no native admission is invented.
+    foreach($protocol in @('http-connect','https-connect')){foreach($packet in @('wg','awg2-fast','awg2-strong')){
+        $rows.Clear();$finalMode.SelectedIndex=0
+        $middleID='connect-'+$protocol+'-'+$packet
+        $connect=[pscustomobject]@{id=$middleID;name=('Original '+$protocol);node_kind='external';profile_token=('b'*64);external=[pscustomobject]@{protocol=$protocol;ordered_middle_supported=$true}}
+        $store.profiles+=$connect;$script:CurrentStore=$store;&$refresh
+        $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),'prefix-0')
+        $prefixMode.SelectedIndex=[array]::IndexOf(@($prefixMode.ItemsSource.id),$packet);&$add
+        $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),$middleID);&$add
+        Check ($rows.Count-eq2-and$rows[0].mode-ceq$packet-and$rows[1].id-ceq$middleID-and$rows[1].mode-ceq$protocol) 'CONNECT Add substituted its exact saved transport'
+        Check (($finalMode.ItemsSource.id-join',')-ceq'shadowsocks') 'CONNECT middle offered an unsupported final'
+        $list.SelectedIndex=1;$prefixMode.SelectedIndex=3;&$changeMode
+        Check ($rows[1].mode-ceq$protocol) 'CONNECT Change mode substituted another protocol'
+        &$apply;$connectSaved=$rootControls['UnifiedNodeChainButton'].Tag
+        $payload=New-RouterVPNOrderedConnectPayload $connectSaved $store
+        Check (($payload.nodes.mode-join',')-ceq($packet+','+$protocol+',shadowsocks')-and$payload.execution-ceq'local') 'CONNECT request lost complete Local ordering'
+        Check ($payload.expected_profile_tokens[$middleID]-ceq('b'*64)-and$payload.expected_selected_node_id-ceq$id) 'CONNECT request lost original source tokens or final owner'
+        Check ($rootControls['UnifiedNodeChainSummary'].Text.Contains((Get-RouterVPNOrderedModeTitle $protocol))) 'CONNECT summary concealed selected protocol'
+        $serialized=$payload|ConvertTo-Json -Depth 8
+        Check ($serialized-notmatch'must-not-copy|api_token|password') 'CONNECT editor copied private credentials'
+        $roundTrip=$serialized|ConvertFrom-Json
+        Check (($roundTrip.nodes.mode-join',')-ceq($packet+','+$protocol+',shadowsocks')) 'CONNECT JSON transport changed protocol'
+        $other=if($protocol-ceq'http-connect'){'https-connect'}else{'http-connect'}
+        foreach($foreign in @($other,'shadowsocks',$protocol.ToUpperInvariant(),($protocol+' '))){
+            $connect.external.protocol=$foreign;$rejected=$false
+            try{[void](New-RouterVPNOrderedConnectPayload $connectSaved $store)}catch{$rejected=$true}
+            Check $rejected 'CONNECT request borrowed a different saved protocol'
+        }
+        $connect.external.protocol=$protocol
+        foreach($flag in @($false,1,'true',$null)){
+            $connect.external.ordered_middle_supported=$flag;$rejected=$false
+            try{[void](New-RouterVPNOrderedConnectPayload $connectSaved $store)}catch{$rejected=$true}
+            Check $rejected 'CONNECT request accepted invalid native capability'
+        }
+        $connect.external.ordered_middle_supported=$true
+        $swapped=[pscustomobject]@{control_id=$id;profile_tokens=$connectSaved.profile_tokens;nodes=@($connectSaved.nodes[1],$connectSaved.nodes[0],$connectSaved.nodes[2])}
+        $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $swapped $store)}catch{$rejected=$true};Check $rejected 'CONNECT middle acquired physical entry authority'
+        $wrongFinal=@([pscustomobject]@{id='prefix-0';mode=$packet},[pscustomobject]@{id=$middleID;mode=$protocol},[pscustomobject]@{id=$id;mode='hysteria2'})
+        $rejected=$false;try{[void](Copy-RouterVPNOrderedNodes $wrongFinal $id)}catch{$rejected=$true};Check $rejected 'CONNECT middle acquired unsupported final authority'
+        $connect.profile_token=('c'*64);$rejected=$false
+        try{[void](New-RouterVPNOrderedConnectPayload $connectSaved $store)}catch{$rejected=$true}
+        Check $rejected 'CONNECT relinking retained old source authority'
+    }}
     $rows.Clear();$finalMode.SelectedIndex=0;&$refresh
     $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),'prefix-0');$prefixMode.SelectedIndex=2;&$add
     Check (($finalMode.ItemsSource.id-join',')-ceq'shadowsocks,hysteria2') 'unlayered paired final choices omitted Hysteria2'
@@ -211,7 +265,7 @@ try{
     $mixed=@([pscustomobject]@{id='prefix-0';mode='wg'},[pscustomobject]@{id='custom-middle';mode='shadowsocks'},[pscustomobject]@{id=$id;mode='hysteria2'})
     $rejected=$false;try{[void](Copy-RouterVPNOrderedNodes $mixed $id)}catch{$rejected=$true};Check $rejected 'imported schema two acquired Hysteria2 final authority'
     if(-not$NegativeControl){
-        $controls=@{'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
+        $controls=@{'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
         foreach($key in $controls.Keys){
             $command="try { & '"+$PSCommandPath.Replace("'","''")+"' -Root '"+$Root.Replace("'","''")+"' -NegativeControl '"+$key+"' } catch { [Console]::Error.WriteLine(`$_.Exception.Message); exit 1 }"
             $child=New-Object Diagnostics.Process
