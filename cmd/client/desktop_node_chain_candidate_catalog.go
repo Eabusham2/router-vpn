@@ -179,7 +179,7 @@ func captureDesktopNodeChainCandidateSources(ctx context.Context, a *app, launch
 // lookup can gain access to the retained packet prefix.
 func (capture *desktopNodeChainCapture) compileCandidateMember(ctx context.Context, profile common.RouterProfile, total *int) (string, error) {
 	if profile.NodeKind != "external" || profile.External == nil ||
-		profile.External.Protocol != "http-connect" && profile.External.Protocol != "https-connect" {
+		profile.External.Protocol != "socks5" && profile.External.Protocol != "http-connect" && profile.External.Protocol != "https-connect" {
 		input, _, _, err := capture.compileMember(ctx, desktopNodeChainMember{Profile: profile, Mode: "shadowsocks"}, total, nil)
 		return input, err
 	}
@@ -189,25 +189,41 @@ func (capture *desktopNodeChainCapture) compileCandidateMember(ctx context.Conte
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	proxy := profile.External.HTTPConnect
-	if profile.External.Protocol == "https-connect" {
-		proxy = profile.External.HTTPSConnect
+	var host string
+	switch profile.External.Protocol {
+	case "socks5":
+		if proxy := profile.External.SOCKS5; proxy != nil {
+			host = proxy.Host
+		}
+	case "http-connect":
+		if proxy := profile.External.HTTPConnect; proxy != nil {
+			host = proxy.Host
+		}
+	case "https-connect":
+		if proxy := profile.External.HTTPSConnect; proxy != nil {
+			host = proxy.Host
+		}
 	}
-	if proxy == nil {
-		return "", errors.New("CONNECT candidate lost its original transport")
+	if host == "" {
+		return "", errors.New("proxy candidate lost its original transport")
 	}
-	address, err := netip.ParseAddr(proxy.Host)
-	if err != nil || address.Zone() != "" || address.Is4In6() || address.IsUnspecified() || address.IsMulticast() || proxy.Host != profile.Endpoint {
-		return "", errors.New("CONNECT candidate requires its original literal endpoint")
+	address, err := netip.ParseAddr(host)
+	if err != nil || address.Zone() != "" || address.Is4In6() || address.IsUnspecified() || address.IsMulticast() || host != profile.Endpoint {
+		return "", errors.New("proxy candidate requires its original literal endpoint")
 	}
 	config, policy, endpoint, err := desktopImportedEntrySource(ctx, profile, nil)
 	if err != nil {
 		return "", err
 	}
 	if endpoint != profile.Endpoint {
-		return "", errors.New("CONNECT candidate replaced its captured endpoint")
+		return "", errors.New("proxy candidate replaced its captured endpoint")
 	}
-	input, err := mobilemultihop.NodeChainImportedCONNECTMemberInput(config, policy)
+	var input string
+	if profile.External.Protocol == "socks5" {
+		input, err = mobilemultihop.NodeChainImportedSOCKSMemberInput(config, policy)
+	} else {
+		input, err = mobilemultihop.NodeChainImportedCONNECTMemberInput(config, policy)
+	}
 	if err != nil {
 		return "", err
 	}
