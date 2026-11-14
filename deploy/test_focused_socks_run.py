@@ -194,6 +194,7 @@ def validate(source,source_sha,output,go="go"):
             gate.NODE.require_native_verdicts(raw.decode(),ORIGINAL,"unchanged original imported peer")
             receipt.update(UDP_REUSE.validate(BASE,gate,run,compiler,owner,work,owner_flags))
             receipt.update(REFERENCE.validate(BASE,gate,run,compiler,owner,peer,work,owner_flags))
+            receipt.update(FIFTY.validate_first_proof(BASE,gate,run,compiler,owner,peer,work,owner_flags))
             records=[]
             for case in CASES:
                 selected=dict(env,ROUTERVPN_SOCKS_RUN_PEER=str(peer),ROUTERVPN_SOCKS_RUN_CASE=case,GODEBUG="x509usefallbackroots=1")

@@ -73,6 +73,7 @@ class Composition:
             if name=="prepare-owner":
                 original=core/V.REFERENCE.PROJECTION
                 original.parent.mkdir(parents=True);original.write_text('bindHost: "127.0.0.1", handshakeDeadline: true, controlOwnedUDP: true}')
+                (core/V.FIFTY.PROOF_PROJECTION).write_text(V.FIFTY.PROOF_BEFORE)
                 by_path={}
                 for control in V.UDP_REUSE.CONTROLS:by_path.setdefault(control["path"],[]).append(control["before"])
                 for path,anchors in by_path.items():
@@ -135,6 +136,11 @@ class Composition:
             assert list(replacements)==[str(original)]
             assert Path(replacements[str(original)]).read_text()==original.read_text().replace('controlOwnedUDP: true}', 'controlOwnedUDP: false}')
             raw=("=== RUN   "+V.REFERENCE.IDLE_ROOT+"\nlive original control lost idle relay\n--- FAIL: "+V.REFERENCE.IDLE_ROOT+" (5.50s)\nFAIL\n").encode();status=1
+        elif name=="socks-first-proof-reference":raw=plain(V.FIFTY.PROOF_NAMES).encode()
+        elif name=="socks-first-proof-old-close":
+            raw=("".join("=== RUN   "+x+"\n" for x in V.FIFTY.PROOF_CONTROL_NAMES)+
+                 "".join(V.FIFTY.PROOF_WITNESS+"\n--- FAIL: "+x+" (0.01s)\n" for x in V.FIFTY.PROOF_CONTROL_NAMES[1:])+
+                 "--- FAIL: "+V.FIFTY.PROOF_ROOT+" (0.02s)\nFAIL\n").encode();status=1
         elif name.startswith("fifty-"):
             mode=env["ROUTERVPN_SOCKS_FIFTY_CASE"];assert mode in V.FIFTY.MODES
             assert cwd==self.roles["mobile"][0] and Path(env["ROUTERVPN_SOCKS_RUN_PEER"])==self.images[0]
@@ -180,6 +186,9 @@ class Composition:
         if self.fault=="idle-missing" and name=="socks-idle-reference":raw=b"PASS\n"
         if self.fault=="idle-control-pass" and name=="socks-idle-old-expiry":status=0
         if self.fault=="idle-control-witness" and name=="socks-idle-old-expiry":raw=raw.replace(b"live original control lost idle relay",b"unrelated")
+        if self.fault=="first-proof-missing" and name=="socks-first-proof-reference":raw=plain(V.FIFTY.PROOF_NAMES[:-1]).encode()
+        if self.fault=="first-proof-control-pass" and name=="socks-first-proof-old-close":status=0
+        if self.fault=="first-proof-control-witness" and name=="socks-first-proof-old-close":raw=raw.replace(V.FIFTY.PROOF_WITNESS.encode(),b"unrelated")
         if self.fault=="case-missing" and name=="run-wg":raw=encoded(events("wg")[:-1])
         if self.fault=="case-failed" and name=="run-wg":status=1
         if self.fault=="control-pass" and name==V.CONTROLS[0]["name"]:status=0
@@ -210,16 +219,17 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
         table=next(ast.literal_eval(node.value) for node in tree.body if isinstance(node,ast.Assign)
                    and any(isinstance(target,ast.Name) and target.id=="PEER_TEMPLATES" for target in node.targets))
         self.assertEqual(V.REFERENCE.PROJECTION,table["node_imported_socks_entry_test.go.tmpl"])
+        self.assertEqual(V.FIFTY.PROOF_PROJECTION,table["node_chain_socks_process_test.go.tmpl"])
     def test_all_actual_cases_original_cipher_inventory_and_bounds_are_required(self):
         self.assertEqual(len(V.CASES),8);self.assertEqual(len(set(V.CASES)),8)
         self.assertEqual(len(V.ORIGINAL),73);self.assertEqual(len(set(V.ORIGINAL)),73)
         self.assertEqual(len(V.CONTROLS),4)
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
-            self.assertEqual(len(c.calls),35)
-            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,*([600]*5),40,600,30,600,*([190]*8),*([600]*4),*([190]*3),*([600]*5)])
+            self.assertEqual(len(c.calls),37)
+            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,*([600]*5),40,600,30,600,40,600,*([190]*8),*([600]*4),*([190]*3),*([600]*5)])
             self.assertEqual([x[0] for x in c.calls[6:11]],["udp-dns-reuse-positive",*(control["name"] for control in V.UDP_REUSE.CONTROLS)])
-            self.assertEqual(c.original,[V.ORIGINAL,V.UDP_REUSE.NAMES,V.REFERENCE.NAMES,(V.REFERENCE.IDLE_ROOT,)])
+            self.assertEqual(c.original,[V.ORIGINAL,V.UDP_REUSE.NAMES,V.REFERENCE.NAMES,(V.REFERENCE.IDLE_ROOT,),V.FIFTY.PROOF_NAMES])
             self.assertEqual([x["case"] for x in receipt["case_records"]],list(V.CASES))
             self.assertEqual(len(receipt["controls"]),4)
             self.assertEqual(receipt["socks_reference_handoff_records"],list(V.REFERENCE.NAMES))
@@ -229,6 +239,8 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
             self.assertEqual(len(receipt["ordered_fifty_records"]),3)
             self.assertEqual(len(receipt["ordered_fifty_controls"]),5)
             self.assertFalse(receipt["ordered_fifty_host_persistence_accepted"])
+            self.assertEqual(receipt["socks_first_proof_records"],list(V.FIFTY.PROOF_NAMES))
+            self.assertTrue(receipt["socks_first_proof_control"]["expected_failure"])
             self.assertEqual(receipt["udp_dns_reuse_records"],list(V.UDP_REUSE.NAMES))
             self.assertEqual([item["name"] for item in receipt["udp_dns_reuse_controls"]],[item["name"] for item in V.UDP_REUSE.CONTROLS])
             self.assertTrue(all(item["expected_failure"] for item in receipt["udp_dns_reuse_controls"]))
@@ -295,6 +307,22 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
         for changed in (raw+raw,raw.replace(b"live original control lost idle relay",b"unrelated"),raw+b"DATA RACE",raw+b"panic:",raw+b"--- SKIP: unrelated (0.00s)\n"):
             with self.assertRaises(ValueError):V.REFERENCE.idle_control_events(changed,1)
 
+    def test_first_proof_control_requires_original_early_close(self):
+        root=V.FIFTY.PROOF_ROOT
+        raw=("".join("=== RUN   "+x+"\n" for x in V.FIFTY.PROOF_CONTROL_NAMES)+
+             "".join(V.FIFTY.PROOF_WITNESS+"\n--- FAIL: "+x+" (0.01s)\n" for x in V.FIFTY.PROOF_CONTROL_NAMES[1:])+
+             "--- FAIL: "+root+" (0.02s)\nFAIL\n").encode()
+        self.assertTrue(V.FIFTY.proof_control_events(raw,1)["expected_failure"])
+        for status in (0,-9,124):
+            with self.assertRaises(ValueError):V.FIFTY.proof_control_events(raw,status)
+        for changed in (raw+raw,raw.replace(b"/refused",b"/foreign"),raw.replace(V.FIFTY.PROOF_WITNESS.encode(),b"unrelated"),raw+b"DATA RACE",raw+b"panic:",raw+b"--- SKIP: unrelated (0.00s)\n"):
+            with self.assertRaises(ValueError):V.FIFTY.proof_control_events(changed,1)
+        original=(ROOT/"mobile/desktop/node_chain_socks_process_test.go.tmpl").read_text()
+        control=dict(name="first-proof",before=V.FIFTY.PROOF_BEFORE,after=V.FIFTY.PROOF_AFTER)
+        self.assertNotEqual(V.BASE.mutate(control,original),original)
+        for changed in (original+original,original.replace(V.FIFTY.PROOF_BEFORE,"missing")):
+            with self.assertRaises(ValueError):V.BASE.mutate(control,changed)
+
     def test_ordered_fifty_original_checks_witnesses_and_mutation_anchors(self):
         self.assertEqual(len(V.FIFTY.MODES),3);self.assertEqual(len(V.FIFTY.LEAVES),14)
         for mode in V.FIFTY.MODES:
@@ -319,6 +347,7 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
         for fault in ("preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
                       "udp-positive-failed","udp-positive-missing","udp-control-pass","udp-control-witness","udp-timeout","udp-unjoined",
                       "handshake-missing","handshake-control-pass","handshake-control-witness","idle-missing","idle-control-pass","idle-control-witness",
+                      "first-proof-missing","first-proof-control-pass","first-proof-control-witness",
                       "control-pass","control-signal","control-panic","control-witness","candidate-changed","owner-changed",
                       "mobile-changed","image-changed","selection-changed","diagnostic-changed","timeout","unjoined"):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:

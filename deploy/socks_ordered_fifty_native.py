@@ -72,3 +72,28 @@ def validate_compiled(base,run,compiler,mobile,peer,client,work,flags,env,diagno
     return dict(ordered_fifty_records=records,ordered_fifty_controls=controls,ordered_fifty_native_borrow_accepted=True,
                 ordered_fifty_mtu_scope="exact original optimizer admission reservation; no physical MTU execution",
                 ordered_fifty_host_persistence_accepted=False)
+
+PROOF_ROOT="TestRouterVPNSOCKSReferenceFirstProofReciprocalClose"
+PROOF_PROJECTION="protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_process_test.go"
+PROOF_NAMES=(PROOF_ROOT,*(PROOF_ROOT+"/"+x for x in ("reciprocal","refused","held","cancelled")))
+PROOF_CONTROL_NAMES=(PROOF_ROOT,PROOF_ROOT+"/reciprocal",PROOF_ROOT+"/refused")
+PROOF_BEFORE="h.original.desktopReferenceHandler.newReciprocalConnectionEx(ctx,c,source,destination,done);return"
+PROOF_AFTER="h.original.desktopReferenceHandler.NewConnectionEx(ctx,c,source,destination,done);return"
+PROOF_WITNESS="reference closed original first proof before reciprocal EOF"
+def proof_control_events(raw,status):
+    output=raw.decode();runs=re.findall(r"(?m)^=== RUN\s+(\S+)\s*$",output)
+    failed=re.findall(r"(?m)^\s*--- FAIL: (\S+) \([^\n]*\)$",output)
+    passed=re.findall(r"(?m)^\s*--- PASS: (\S+) \([^\n]*\)$",output)
+    if status!=1 or sorted(runs)!=sorted(PROOF_CONTROL_NAMES) or sorted(failed)!=sorted(PROOF_CONTROL_NAMES) or passed or output.count(PROOF_WITNESS)!=2 or any(x in output for x in ("DATA RACE","panic:","--- SKIP:","[build failed]")):
+        raise ValueError("Original SOCKS first-proof reciprocal control failed")
+    return dict(expected_failure=True,witness=PROOF_WITNESS,failed=failed)
+def validate_first_proof(base,gate,run,compiler,owner,peer,work,owner_flags):
+    status,raw=run("socks-first-proof-reference",[peer,"-test.run=^"+PROOF_ROOT+"$","-test.count=1","-test.timeout=30s","-test.v"],owner,40)
+    if status:raise ValueError("Original SOCKS first-proof reciprocal handoff failed")
+    gate.NODE.require_native_verdicts(raw.decode(),PROOF_NAMES,"SOCKS first-proof reciprocal handoff and bounded cancellation")
+    original=owner/PROOF_PROJECTION
+    changed=base.mutate(dict(name="original-socks-first-proof-close",before=PROOF_BEFORE,after=PROOF_AFTER),original.read_text())
+    replacement=work/"old-socks-first-proof-close.go";replacement.write_text(changed)
+    overlay=work/"old-socks-first-proof-close.json";overlay.write_text(json.dumps({"Replace":{str(original):str(replacement)}}))
+    status,raw=run("socks-first-proof-old-close",[compiler,"test",*owner_flags,"-overlay="+str(overlay),"-run=^"+PROOF_ROOT+"$/(reciprocal|refused)$","-count=1","-timeout=30s","-v","./protocol/routervpnamnezia"],owner,600)
+    return dict(socks_first_proof_records=list(PROOF_NAMES),socks_first_proof_control=proof_control_events(raw,status))

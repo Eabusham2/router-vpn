@@ -22,6 +22,7 @@ import (
  "runtime"
  "strconv"
  "strings"
+ "sync"
  "sync/atomic"
  "testing"
  "time"
@@ -66,9 +67,203 @@ func(h *nodeSOCKSRunPrefix) JudgeFlow(protocol uint8, source,destination netip.A
 }
 func(h *nodeSOCKSRunPrefix) NewConnectionEx(ctx context.Context,c net.Conn,source,destination M.Socksaddr,done N.CloseHandlerFunc){
  if destination.String()==h.first{
-  h.original.NewConnectionEx(ctx,c,source,destination,done);return
+  if _,ok:=h.original.rule("tcp",destination);ok{h.original.tcp.Add(1)}
+  h.original.desktopReferenceHandler.newReciprocalConnectionEx(ctx,c,source,destination,done);return
  }
  h.nodeSOCKSPrefixHandler.NewConnectionEx(ctx,c,source,destination,done)
+}
+
+// This observes the actual first-proof socket. The reference must retain its
+// upload reader after a target response EOF, until the original caller sends
+// its reciprocal FIN or the bounded drain is explicitly cancelled.
+type nodeSOCKSProofObservedConn struct {
+	net.Conn
+	eof, early atomic.Bool
+	eofOnce, closeOnce sync.Once
+	eofSeen, closed chan struct{}
+}
+
+func (c *nodeSOCKSProofObservedConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if err == io.EOF {
+		c.eof.Store(true)
+		c.eofOnce.Do(func() { close(c.eofSeen) })
+	}
+	return n, err
+}
+
+func (c *nodeSOCKSProofObservedConn) Close() error {
+	if !c.eof.Load() {
+		c.early.Store(true)
+	}
+	err := c.Conn.Close()
+	c.closeOnce.Do(func() { close(c.closed) })
+	return err
+}
+
+func (c *nodeSOCKSProofObservedConn) CloseWrite() error {
+	return c.Conn.(interface{ CloseWrite() error }).CloseWrite()
+}
+
+func TestRouterVPNSOCKSReferenceFirstProofReciprocalClose(t *testing.T) {
+	for _, phase := range []string{"reciprocal", "refused", "held", "cancelled"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			backend, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer backend.Close()
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			const first = "10.78.0.1:8787"
+			owner := &desktopReferenceHandler{ctx: ctx, cancel: cancel, owned: make(map[io.Closer]bool), rules: map[string]desktopReferenceRule{
+				"tcp/" + first: {Network: "tcp", Address: "10.78.0.1", Port: 8787, Target: backend.Addr().String()},
+			}}
+			handler := &nodeSOCKSRunPrefix{nodeSOCKSPrefixHandler: &nodeSOCKSPrefixHandler{original: &desktopNodeWGHandler{desktopReferenceHandler: owner}}, first: first}
+			backendDone := make(chan error, 1)
+			backendFinished := make(chan struct{})
+			go func() {
+				defer close(backendFinished)
+				accepted, failure := backend.Accept()
+				if failure != nil {
+					backendDone <- failure
+					return
+				}
+				defer accepted.Close()
+				stop := context.AfterFunc(ctx, func() { _ = accepted.Close() })
+				defer stop()
+				request := make([]byte, len("request"))
+				_, failure = io.ReadFull(accepted, request)
+				if failure != nil || string(request) != "request" {
+					backendDone <- errors.Join(failure, errors.New("original first-proof request changed"))
+					return
+				}
+				if phase != "refused" {
+					_, failure = io.WriteString(accepted, "response")
+				}
+				if failure == nil {
+					failure = accepted.(*net.TCPConn).CloseWrite()
+				}
+				if failure == nil {
+					_, failure = io.Copy(io.Discard, accepted)
+				}
+				backendDone <- failure
+			}()
+			captured := make(chan *nodeSOCKSProofObservedConn, 1)
+			routeDone := make(chan error, 1)
+			routeFinished := make(chan struct{})
+			go func() {
+				defer close(routeFinished)
+				raw, failure := listener.Accept()
+				if failure != nil {
+					routeDone <- failure
+					return
+				}
+				original := &nodeSOCKSProofObservedConn{Conn: raw, eofSeen: make(chan struct{}), closed: make(chan struct{})}
+				captured <- original
+				handler.NewConnectionEx(ctx, original, M.Socksaddr{}, M.ParseSocksaddr(first), func(err error) { routeDone <- err })
+				owner.workers.Wait()
+			}()
+			client, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			var original *nodeSOCKSProofObservedConn
+			select {
+			case original = <-captured:
+			case <-ctx.Done():
+				t.Fatal("original first-proof socket missing")
+			}
+			t.Cleanup(func() {
+				cancel()
+				_ = client.Close()
+				_ = original.Close()
+				for _, done := range []<-chan struct{}{routeFinished, backendFinished} {
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Error("original first-proof regression worker did not join cleanup")
+					}
+				}
+			})
+			if _, err = io.WriteString(client, "request"); err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(client)
+			expected := "response"
+			if phase == "refused" {
+				expected = ""
+			}
+			if err != nil || string(body) != expected {
+				t.Fatal("original first-proof response/EOF changed", err)
+			}
+			clean := phase == "reciprocal" || phase == "refused"
+			if clean {
+				held := time.NewTimer(25 * time.Millisecond)
+				select {
+				case <-original.closed:
+					held.Stop()
+					t.Fatal("reference closed original first proof before reciprocal EOF")
+				case <-held.C:
+				}
+				if original.eof.Load() {
+					t.Fatal("reference invented first-proof EOF while caller held it")
+				}
+				if err = client.(*net.TCPConn).CloseWrite(); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-original.eofSeen:
+				case <-ctx.Done():
+					t.Fatal("original first-proof reciprocal FIN was not read")
+				}
+			} else if phase == "cancelled" {
+				cancel()
+			}
+			var failure error
+			select {
+			case failure = <-routeDone:
+			case <-time.After(1500 * time.Millisecond):
+				t.Fatal("original first-proof close exceeded its one-second drain budget")
+			}
+			if clean {
+				if failure != nil || !original.eof.Load() || original.early.Load() {
+					t.Fatal("original reciprocal first proof lost its joined receipt", failure)
+				}
+			} else if phase == "held" {
+				if !errors.Is(failure, context.DeadlineExceeded) || original.eof.Load() {
+					t.Fatal("held first-proof close escaped original one-second budget", failure)
+				}
+			} else if !errors.Is(failure, context.Canceled) {
+				t.Fatal("cancelled first proof lost original cause", failure)
+			}
+			select {
+			case err = <-backendDone:
+				if clean && err != nil {
+					t.Fatal("original first-proof target half-close failed", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("original first-proof target copy did not join")
+			}
+			select {
+			case <-routeFinished:
+			case <-time.After(time.Second):
+				t.Fatal("original first-proof reference worker did not join")
+			}
+			owner.mu.Lock()
+			left := len(owner.owned)
+			owner.mu.Unlock()
+			if left != 0 || handler.original.tcp.Load() != 1 {
+				t.Fatal("original first-proof owner or target count changed", left, handler.original.tcp.Load())
+			}
+		})
+	}
 }
 
 func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
