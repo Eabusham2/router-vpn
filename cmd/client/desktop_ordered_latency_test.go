@@ -291,6 +291,13 @@ func TestDesktopOrderedLatencyOrdinaryController(t *testing.T) {
 func desktopOrderedLatencyControllerFixture(t *testing.T, a *app, selection multihopSelection, position int) {
 	t.Helper()
 	f := newDesktopNodeChainOwnedFixtureWith(t, a, selection)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := retireDesktopOrderedLatencyFixture(ctx, a, f.launch.command); err != nil {
+			t.Error("ordered latency fixture left background work before native/file cleanup", err)
+		}
+	})
 	a.cfg.StateFile = filepath.Join(clientRoot(a), "ordered-fifty-state.json")
 	f.stagePublish(t)
 	if err := startDesktopOwnedNodeChainLaunch(f.operation, f.operation, a, f.launch); err != nil {
