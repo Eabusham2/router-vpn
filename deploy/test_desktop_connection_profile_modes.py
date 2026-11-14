@@ -49,7 +49,20 @@ def run(command, *, negative=False, witness=None, observation=None):
     started = time.monotonic()
     if observation is not None:
         print("Native profile fixture started: " + observation, flush=True)
-    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=90)
+    try:
+        result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=90)
+    except subprocess.TimeoutExpired as expired:
+        # subprocess.run has already killed and joined this child. Preserve its
+        # native milestones and diagnostics, then fail on the original timeout;
+        # a preceding behavioral assertion cannot turn this into a verdict.
+        print("Native profile fixture timed out: " + (observation or str(command[0])) +
+              "; elapsed=" + format(time.monotonic() - started, ".3f"), flush=True)
+        for captured in (expired.stdout, expired.stderr):
+            if captured:
+                if isinstance(captured, bytes):
+                    captured = captured.decode("utf-8", errors="replace")
+                print(captured, end="" if captured.endswith("\n") else "\n", flush=True)
+        raise
     if observation is not None:
         print("Native profile fixture finished: " + observation +
               "; exit=" + str(result.returncode) +

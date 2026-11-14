@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Keep PowerShell negative verdicts tied to the exact behavioral failure."""
 import importlib.util
+import contextlib
+import io
 from pathlib import Path
 import subprocess
 import unittest
@@ -73,12 +75,40 @@ class PowerShellDiagnosticVerdict(unittest.TestCase):
     def test_timeout_preserves_original_exception_and_bound(self):
         command = ["captured-pwsh"]
         expired = subprocess.TimeoutExpired(command, 90, output="PROFILE-CHECK: " + WITNESS)
-        with patch.object(G.subprocess, "run", side_effect=expired) as original:
+        with patch.object(G.subprocess, "run", side_effect=expired) as original, contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(subprocess.TimeoutExpired) as caught:
                 G.run(command, negative=True, witness=WITNESS)
         self.assertIs(caught.exception, expired)
         original.assert_called_once_with(command, cwd=G.ROOT, text=True,
                                          capture_output=True, timeout=90)
+
+    def test_timeout_keeps_native_milestones_and_errors_without_accepting_them(self):
+        for binary in (False, True):
+            with self.subTest(binary=binary):
+                milestone = "Profile fixture stage: callbacks-extracted; checks=0\n"
+                diagnostic = "PROFILE-CHECK: " + WITNESS
+                expired = subprocess.TimeoutExpired(["captured-pwsh"], 90,
+                    output=milestone.encode() if binary else milestone,
+                    stderr=diagnostic.encode() if binary else diagnostic)
+                output = io.StringIO()
+                with patch.object(G.subprocess, "run", side_effect=expired), contextlib.redirect_stdout(output):
+                    with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                        G.run(["captured-pwsh"], negative=True, witness=WITNESS,
+                              observation="profile:shipping")
+                self.assertIs(caught.exception, expired)
+                self.assertIn("timed out: profile:shipping", output.getvalue())
+                self.assertIn(milestone, output.getvalue())
+                self.assertIn(diagnostic, output.getvalue())
+
+    def test_timeout_without_output_remains_a_failed_native_child(self):
+        expired = subprocess.TimeoutExpired(["captured-pwsh"], 90)
+        output = io.StringIO()
+        with patch.object(G.subprocess, "run", side_effect=expired), contextlib.redirect_stdout(output):
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                G.run(["captured-pwsh"], observation="profile:shipping")
+        self.assertIs(caught.exception, expired)
+        self.assertIn("timed out: profile:shipping", output.getvalue())
+        self.assertNotIn("finished:", output.getvalue())
 
 if __name__ == "__main__":
     unittest.main()

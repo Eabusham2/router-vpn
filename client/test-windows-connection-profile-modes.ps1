@@ -13,14 +13,39 @@ $Launcher=Get-Content -LiteralPath (Join-Path $Client 'RouterVPN-Windows-App.ps1
 $FixtureStateRoot=Join-Path ([IO.Path]::GetTempPath()) ('routervpn-profile-modes-'+[Guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $FixtureStateRoot)
 $script:Count=0
+$script:FixtureClock=[Diagnostics.Stopwatch]::StartNew()
+$script:ShippingSourceIndexes=[System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
 function Check([bool]$Value,[string]$Message){$script:Count++;if(-not$Value){throw ('PROFILE-CHECK: '+$Message)}}
+function ProfileStage([string]$Name){
+    [Console]::Out.WriteLine(('Profile fixture stage: {0}; mutation={1}; checks={2}; elapsed={3:F3}'-f$Name,$Mutation,$script:Count,$script:FixtureClock.Elapsed.TotalSeconds))
+}
+function ShippingIndex([string]$Source){
+    if($script:ShippingSourceIndexes.ContainsKey($Source)){return $script:ShippingSourceIndexes[$Source]}
+    # Each immutable shipping composition is parsed and traversed once. Keep
+    # every exact-name match so duplicate/missing definitions still fail at the
+    # same lookup boundary; never replace source execution with cached results.
+    $AST=([ScriptBlock]::Create($Source)).Ast
+    $Functions=[System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    $Callbacks=[System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    foreach($Node in $AST.FindAll({param($Node)$Node-is[System.Management.Automation.Language.FunctionDefinitionAst]-or($Node-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$Node.Member.Extent.Text-ceq'Add_Click')},$true)){
+        if($Node-is[System.Management.Automation.Language.FunctionDefinitionAst]){$Map=$Functions;$Key=$Node.Name}
+        else{$Map=$Callbacks;$Key=$Node.Expression.Extent.Text}
+        if(-not$Map.ContainsKey($Key)){$Map.Add($Key,[System.Collections.Generic.List[object]]::new())}
+        $Map[$Key].Add($Node)
+    }
+    $Index=[pscustomobject]@{AST=$AST;Functions=$Functions;Callbacks=$Callbacks}
+    $script:ShippingSourceIndexes.Add($Source,$Index)
+    return $Index
+}
 function ShippingFunction([string]$Source,[string]$Name){
-    $Found=@(([ScriptBlock]::Create($Source)).Ast.FindAll({param($Node)$Node-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$Node.Name-ceq$Name},$true))
+    $Index=ShippingIndex $Source
+    $Found=@();if($Index.Functions.ContainsKey($Name)){$Found=@($Index.Functions[$Name].ToArray())}
     if($Found.Count-ne1){throw ('Shipping function count drifted: '+$Name)}
     return $Found[0].Extent.Text
 }
 function ShippingCallback([string]$Source,[string]$Control){
-    $Found=@(([ScriptBlock]::Create($Source)).Ast.FindAll({param($Node)$Node-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$Node.Member.Extent.Text-ceq'Add_Click'-and$Node.Expression.Extent.Text-ceq$Control},$true))
+    $Index=ShippingIndex $Source
+    $Found=@();if($Index.Callbacks.ContainsKey($Control)){$Found=@($Index.Callbacks[$Control].ToArray())}
     if($Found.Count-ne1-or$Found[0].Arguments.Count-ne1-or$Found[0].Arguments[0]-isnot[System.Management.Automation.Language.ScriptBlockExpressionAst]){throw ('Shipping callback count drifted: '+$Control)}
     $Text=$Found[0].Arguments[0].ScriptBlock.Extent.Text
     return [ScriptBlock]::Create($Text.Substring(1,$Text.Length-2))
@@ -30,6 +55,7 @@ function ReplaceOnce([string]$Source,[string]$Old,[string]$New){
     return $Source.Replace($Old,$New)
 }
 try{
+    ProfileStage 'composition-start'
     $LoadStart=$Launcher.IndexOf('$ProfileSettingsHelpers=')
     $LoadEnd=$Launcher.IndexOf('# The shipping Windows product',$LoadStart)
     $ComposeStart=$Launcher.IndexOf('$Product=Join-Path')
@@ -39,6 +65,7 @@ try{
     . ([ScriptBlock]::Create((ShippingFunction $Launcher 'Set-RouterVPNProductHelpBinding')))
     . ([ScriptBlock]::Create($Launcher.Substring($ComposeStart,$ComposeEnd-$ComposeStart).Replace('$PSScriptRoot','$Client')))
     [void][ScriptBlock]::Create($ProductSource)
+    ProfileStage 'composition-ready'
 
     $Helpers=''
     foreach($Name in @('global:Get-RouterVPNCurrentModeSnapshot','global:Set-RouterVPNLoadedModeSnapshot','global:Get-RouterVPNSetupGraphIDs','global:Get-RouterVPNSetupViewKey','global:Get-RouterVPNSetupCapture','global:Confirm-RouterVPNSetupResponse','global:Invoke-RouterVPNConnectionSetup','global:Get-RouterVPNVisibleConnectionSnapshot','global:Apply-RouterVPNLoadedConnectionSnapshot','global:Get-RouterVPNOrderedValue','global:Test-RouterVPNOrderedPrefixMode','global:Copy-RouterVPNOrderedNodes','global:New-RouterVPNOrderedConnectPayload','global:Get-RouterVPNOrderedConnectionSnapshot','global:Set-RouterVPNLoadedOrderedSnapshot')){
@@ -71,13 +98,14 @@ try{
     }
     . ([ScriptBlock]::Create($Helpers))
     . ([ScriptBlock]::Create($Choice))
-    $SettingsAST=([ScriptBlock]::Create($ProfileSettingsSource)).Ast
+    $SettingsAST=(ShippingIndex $ProfileSettingsSource).AST
     $BodyAssignments=@($SettingsAST.FindAll({param($Node)$Node-is[System.Management.Automation.Language.AssignmentStatementAst]-and$Node.Left.Extent.Text-ceq'$makeSetupBody'},$true))
     if($BodyAssignments.Count-ne1){throw 'Settings body callback count drifted'}
     . ([ScriptBlock]::Create($BodyAssignments[0].Extent.Text))
     $AddCallback=ShippingCallback $ProfileSettingsSource '$profileAdd'
     $UpdateCallback=ShippingCallback $ProfileSettingsSource '$profileUpdate'
     $LoadCallback=ShippingCallback $ProfileSettingsSource '$profileLoad'
+    ProfileStage 'callbacks-extracted'
 
     Add-Type -TypeDefinition @'
 using System;
@@ -165,6 +193,7 @@ public sealed class ProfileModeOwner {
         Check ($Body.mode-ceq'custom:Saved layers'-and(@($Body.custom_layers)-join',')-ceq'wg,pq') 'Snapshot changed the mode or CUSTOM layers'
         if($Updating){Check ($Body.id-ceq'saved-profile') 'Update changed the saved profile identity'}
     }
+    ProfileStage 'pair-matrix-start'
     for($m=0;$m-lt$ExpectedModes.Count;$m++){
         for($e=0;$e-lt$ExpectedExecutions.Count;$e++){
             $toggle.IsChecked=$true;$entry.SelectedValue='entry_private';$exit.SelectedValue='exit_private'
@@ -191,6 +220,7 @@ public sealed class ProfileModeOwner {
             VerifyBody $script:Requests[-1].Body $ExpectedModes[$m] $ExpectedExecutions[$e] $true $ExpectedEntries[$EntryIndex]
         }
     }
+    ProfileStage 'pair-matrix-finished'
     # Execute the actual generated Connect callback as well as profile storage.
     . ([ScriptBlock]::Create($Connect))
     . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'UnifiedSelectedProfile')))
@@ -231,6 +261,7 @@ public sealed class ProfileModeOwner {
         Check ($script:ConnectTimeout-eq$ExpectedTimeout) 'Main Connect lost the captured native startup deadline'
 
     }}
+    ProfileStage 'connect-matrix-finished'
     foreach($i in @(-1,$ExpectedEntries.Count,100)){
         $MultihopEntryModeCombo.SelectedIndex=$i;$script:ConnectBody=$null;UnifiedConnect
         Check ($null-eq$script:ConnectBody) 'Unavailable main entry reached Connect'
@@ -275,6 +306,7 @@ public sealed class ProfileModeOwner {
     $Disabled=Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner
     Check (-not$Disabled.multihop_enabled-and$Disabled.multihop_entry_id-ceq''-and$Disabled.multihop_exit_id-ceq''-and$Disabled.multihop_exit_mode-ceq''-and$Disabled.multihop_execution-ceq'') 'Disabled multihop retained another graph'
 
+    ProfileStage 'pair-invalid-finished'
     # Ordered paths execute the same actual Add/Load/Update/Connect callbacks.
     # Widget and HTTP boundaries are doubled; no private node source is copied.
     $Window=$Owner;$ordered=[pscustomobject]@{IsChecked=$true};$chainButton=[pscustomobject]@{Tag=$null}
@@ -353,6 +385,7 @@ public sealed class ProfileModeOwner {
             $RouterCombo.Tag=$saved
         }
     }
+    ProfileStage 'ordered-matrix-finished'
     # Actual callbacks retain their original public owner and complete source
     # map across the request. No network, private source, or WPF is simulated.
     $originalStore=$RouterCombo.Tag|ConvertTo-Json -Depth 32|ConvertFrom-Json
@@ -433,6 +466,7 @@ public sealed class ProfileModeOwner {
     }
     $toggle.IsChecked=$false
     Check (-not(Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner).ContainsKey('multihop_nodes')) 'Disabled ordered path leaked into a direct profile'
+    ProfileStage 'setup-ownership-finished'
     Write-Output ("Actual WPF profile Add/Load/Update and main Connect callbacks: $script:Count checks PASS")
 }finally{
     if(Test-Path -LiteralPath $FixtureStateRoot){Remove-Item -LiteralPath $FixtureStateRoot -Recurse -Force}
