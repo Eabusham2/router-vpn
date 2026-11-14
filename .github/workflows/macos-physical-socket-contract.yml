@@ -48,6 +48,12 @@ on:
 permissions:
   contents: read
 
+# These native race executables fork privileged PF/identity helpers. Go 1.26.5
+# contains golang/go#79806's Darwin pre-exec race fix; retain -race and all
+# native deadlines. Production package toolchain pins are separate.
+env:
+  GOTOOLCHAIN: go1.26.5
+
 jobs:
   anchor-lifetime-probe:
     name: Native single-filter PF anchor lifetime on ${{ matrix.runner }}
@@ -69,7 +75,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.3'
+          go-version: '1.26.5'
           cache: false
       - name: Prove actual shipping baseline journal and reference recovery contracts
         run: python3 deploy/test_darwin_pf_journal.py
@@ -117,7 +123,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.3'
+          go-version: '1.26.5'
           cache: false
       - name: Verify bounded native failure diagnostics
         run: python3 deploy/test_desktop_darwin_guardian_runner.py
