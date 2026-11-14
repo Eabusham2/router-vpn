@@ -26,7 +26,7 @@ if($Initializers.Count-ne1){throw 'Actual options callback changed.'}
 $Initializer=@($Initializers[0].Right.FindAll({param($N)$N-is[System.Management.Automation.Language.ScriptBlockExpressionAst]},$false))[0].ScriptBlock.GetScriptBlock()
 $Markup=@($Ast.FindAll({param($N)($N-is[System.Management.Automation.Language.ExpandableStringExpressionAst]-or$N-is[System.Management.Automation.Language.StringConstantExpressionAst])-and$N.Value.TrimStart().StartsWith('<Window')},$true))
 if($Markup.Count-ne1){throw 'Actual Speed Lab XAML changed.'};[xml]$Xml=$Markup[0].Value
-foreach($Name in @('EntryMode','Execution')){if($Xml.SelectNodes('//*[@Name="'+$Name+'"]').Count-ne1){throw "Missing real $Name control."}}
+foreach($Name in @('EntryMode','Execution','Ordered')){if($Xml.SelectNodes('//*[@Name="'+$Name+'"]').Count-ne1){throw "Missing real $Name control."}}
 
 # WPF selection semantics only. The actual callback, saved-default loading,
 # eligibility checks and request builder above execute without replacement.
@@ -51,7 +51,7 @@ $Scope=Combo (Tags @('current','temporary')) 'Tag';$Topology=Combo (Tags @('syst
 $Base=Combo (Tags @('auto','wg','awg')) 'Tag';$ExitMode=Combo (Tags @($Xml.SelectNodes('//*[@Name="ExitMode"]/*')|ForEach-Object{[string]$_.Tag})) 'Tag';$DurationMode=Combo (Tags @('auto','custom')) 'Tag'
 $Mode=Combo @();$Node=Combo @();$Entry=Combo @();$Exit=Combo @();$EntryMode=Combo @();$Execution=Combo @()
 $Layers=[pscustomobject]@{Text='';IsEnabled=$false};$MinTime=[pscustomobject]@{Value=4;IsEnabled=$true};$MaxTime=[pscustomobject]@{Value=12;IsEnabled=$true}
-$Run=[pscustomobject]@{IsEnabled=$true};$Advanced=[pscustomobject]@{IsEnabled=$true};$Status=[pscustomobject]@{Text=''};$Detail=[pscustomobject]@{Text=''}
+$Run=[pscustomobject]@{IsEnabled=$true};$Advanced=[pscustomobject]@{IsEnabled=$true};$Ordered=[pscustomobject]@{IsEnabled=$true};$Status=[pscustomobject]@{Text=''};$Detail=[pscustomobject]@{Text=''}
 $Fields=@{};foreach($Name in @('DAITA','Jumbo','Encrypted','Obfuscated')){$Fields[$Name]=[pscustomobject]@{IsChecked=$false;IsEnabled=$true}}
 $D=[pscustomobject]@{Tag='initial';Fields=$Fields};$D|Add-Member ScriptMethod FindName {param($Name)return $this.Fields[$Name]}
 $SpeedLabOptions=@{nodes=@();router_vpn_entry_modes=@();execution_choices=@();updating=$false}
@@ -72,7 +72,7 @@ function RefreshProduct{}
 function RefreshUnifiedTelemetry{}
 $script:Captured=$null
 $script:DeferCompletion=$false;$script:UnifiedAsyncCancelled=$false;$script:UnifiedAsyncActive=$false;$script:UnifiedAsyncClosed=$false;$script:UnifiedComparisonWatching=$false;$script:UnifiedComparisonExpectedID='';$script:CapturedComparison=$null;$script:CapturedFinally=$null
-function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Failure,$Finally,$Comparison){Check ($Path-eq'/api/speed-lab/run'-and$Method-eq'POST') 'Unexpected native Run endpoint.';$script:Captured=$Body;$script:CapturedTimeout=$Timeout;$script:CapturedComparison=$Comparison;$script:CapturedFinally=$Finally;$script:UnifiedAsyncActive=$true;$script:UnifiedComparisonExpectedID=[string](SpeedLabValue $Body 'comparison_request_id');$script:UnifiedComparisonWatching=[bool]$script:UnifiedComparisonExpectedID;if(-not$script:DeferCompletion-and$null-ne$Finally){&$Finally;$script:UnifiedAsyncActive=$false;$script:UnifiedComparisonWatching=$false};return $true}
+function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Failure,$Finally,$Comparison){Check ($Path-eq'/api/speed-lab/run'-and$Method-eq'POST') 'Unexpected native Run endpoint.';Check (-not$Run.IsEnabled-and-not$Advanced.IsEnabled-and-not$Ordered.IsEnabled) 'Active Speed Lab left a competing measurement control enabled.';$script:Captured=$Body;$script:CapturedTimeout=$Timeout;$script:CapturedComparison=$Comparison;$script:CapturedFinally=$Finally;$script:UnifiedAsyncActive=$true;$script:UnifiedComparisonExpectedID=[string](SpeedLabValue $Body 'comparison_request_id');$script:UnifiedComparisonWatching=[bool]$script:UnifiedComparisonExpectedID;if(-not$script:DeferCompletion-and$null-ne$Finally){&$Finally;Check ($Run.IsEnabled-and$Advanced.IsEnabled-and$Ordered.IsEnabled) 'Completed Speed Lab did not restore its measurement controls.';$script:UnifiedAsyncActive=$false;$script:UnifiedComparisonWatching=$false};return $true}
 & $Initializer $Opt
 Check ($Node.SelectedValue-ceq'exit'-and$Entry.SelectedValue-ceq'entry'-and$EntryMode.SelectedValue-ceq'awg2-strong'-and$Execution.SelectedValue-ceq'auto') 'Saved external path was replaced by unrelated defaults.'
 Check ($SpeedLabOptions.router_vpn_entry_modes.Count-eq19) 'Entry mode catalog was reduced.'
@@ -130,7 +130,7 @@ foreach($TorProtocol in @('tor','tor-bridge')){
  $script:UnifiedAsyncCancelled=$true;&$script:CapturedComparison @{comparison=@{request_id=$progressID;complete=$false}} 'cancelled'
  Check ($Detail.Text-ceq'exact captured Tor HTTP progress') 'Cancelled Speed Lab accepted progress.'
  $script:UnifiedAsyncCancelled=$false;$D.Tag='closed';&$script:CapturedComparison @{comparison=@{request_id=$progressID;complete=$true}} 'late'; &$script:CapturedFinally
- Check ($D.Tag-ceq'closed'-and$Detail.Text-ceq'exact captured Tor HTTP progress') 'Late progress/finalizer revived a closed Speed Lab dialog.'
+ Check ($D.Tag-ceq'closed'-and$Detail.Text-ceq'exact captured Tor HTTP progress'-and-not$Ordered.IsEnabled) 'Late progress/finalizer revived a closed Speed Lab dialog.'
  $script:DeferCompletion=$false;$D.Tag='ready'
 }
 $Node.SelectedValue='exit';SpeedLabPathChanged 'node'
