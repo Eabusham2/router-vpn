@@ -639,7 +639,6 @@ func TestLinuxStandardServiceMonitorPreservesOnlyPureObservationExpiry(t *testin
 			f := newStandardMonitorFixture(t)
 			var calls atomic.Int32
 			resumed := make(chan struct{})
-			var resumedOnce sync.Once
 			fault := errors.New("original runtime proof was independently lost")
 			f.start(t, func(ctx context.Context) error {
 				attempt := calls.Add(1)
@@ -650,8 +649,14 @@ func TestLinuxStandardServiceMonitorPreservesOnlyPureObservationExpiry(t *testin
 					}
 					return fmt.Errorf("original observation: %w", ctx.Err())
 				}
-				resumedOnce.Do(func() { close(resumed) })
-				return nil
+				if attempt == 3 {
+					close(resumed)
+					return nil
+				}
+				// Only the third read can commit success. Further reads wait for
+				// cancellation rather than obscuring an extra adopted observation.
+				<-ctx.Done()
+				return ctx.Err()
 			}, nil)
 			f.finish()
 			// Exercise two actual unchanged four-second observation budgets.
@@ -666,6 +671,20 @@ func TestLinuxStandardServiceMonitorPreservesOnlyPureObservationExpiry(t *testin
 					t.Fatal("two expired reads retired the healthy original activation")
 				case <-wait.Done():
 					t.Fatal("expired original observation was never retried")
+				}
+				// The probe returning is earlier than its guarded observation
+				// commit. Cancelling at resumed would correctly revoke that proof
+				// and make this test race its own explicit Stop.
+				committed := time.NewTicker(time.Millisecond)
+				defer committed.Stop()
+				for f.m.observations.Load() == 0 {
+					select {
+					case <-committed.C:
+					case <-f.m.finished:
+						t.Fatal("resumed observation ended before its guarded commit")
+					case <-wait.Done():
+						t.Fatal("resumed observation did not commit within its original budget")
+					}
 				}
 				if err := f.o.stopMonitor(wait); err != nil {
 					t.Fatal("explicit monitor cancellation failed", err)
