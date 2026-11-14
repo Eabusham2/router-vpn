@@ -67,6 +67,7 @@ type desktopImportedH3PeerReply struct {
 	Observed, Bootstrap, Selected, TCP, UDP, Private, Public, QUIC, Rejected        int64
 	SOCKS                                                                           []desktopExternalSOCKSWFPReceipt
 	Closed                                                                          bool
+	EntryFailure, FinalFailure                                                      string
 }
 
 func desktopImportedH3JSON(t *testing.T, value any) string {
@@ -1043,6 +1044,12 @@ func TestRouterVPNWindowsImportedNaiveH3Peer(t *testing.T) {
 		observed := int64(s.probe.observed[nonce])
 		s.probe.mu.Unlock()
 		value := desktopImportedH3PeerReply{Schema: 1, Probe: s.probe.LocalAddr().String(), Kind: r.Kind, EntryLayer: r.EntryLayer, FinalLayer: r.FinalLayer, Address: s.physical, Source: s.source, SourceSHA256: s.sourceSHA, ConfigSHA256: s.configSHA, AppID: appID, Nonce: nonce, Observed: observed, Bootstrap: s.bootstrap.Load(), Selected: s.selected.Load(), TCP: s.tcp.Load(), UDP: s.udp.Load(), Private: s.private.Load(), Public: int64(s.entry.publicRequests.Load()), QUIC: s.quic.Load(), Rejected: s.rejected.Load(), Closed: closed}
+		s.entry.mu.Lock()
+		value.EntryFailure = s.entry.failure
+		s.entry.mu.Unlock()
+		s.final.mu.Lock()
+		value.FinalFailure = s.final.failure
+		s.final.mu.Unlock()
 		if s.socks != nil {
 			value.SOCKS = s.socks.receipts()
 		}

@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -215,6 +216,39 @@ func (p *desktopImportedH3Reference) observe(t *testing.T) desktopImportedH3Peer
 	}
 	return r
 }
+
+// Read the original peer only after a selected-DNS failure. Diagnostics cannot
+// replace the original verdict or authorize a retry. Never format the complete
+// reply: its source captures contain private profile and authentication data.
+func desktopImportedH3FailureSummary(reply desktopImportedH3PeerReply) string {
+	bounded := func(value string) string {
+		if len(value) > 1024 {
+			return value[:1024] + " [truncated]"
+		}
+		return value
+	}
+	return fmt.Sprintf("original peer bootstrap=%d selected=%d tcp=%d udp=%d private=%d public=%d quic=%d rejected=%d entry_failure=%q final_failure=%q",
+		reply.Bootstrap, reply.Selected, reply.TCP, reply.UDP, reply.Private, reply.Public, reply.QUIC, reply.Rejected,
+		bounded(reply.EntryFailure), bounded(reply.FinalFailure))
+}
+
+func (p *desktopImportedH3Reference) failureDiagnostic() string {
+	if p.closed {
+		return "original peer diagnostic unavailable: peer already retired"
+	}
+	if err := json.NewEncoder(p.input).Encode(desktopImportedH3PeerRequest{Schema: 1, Operation: "observe"}); err != nil {
+		return "original peer diagnostic unavailable: request failed"
+	}
+	reply, err := p.read()
+	if err != nil {
+		return "original peer diagnostic unavailable: original readback failed"
+	}
+	if !p.same(reply) || reply.Closed {
+		return "original peer diagnostic unavailable: original identity changed or retired"
+	}
+	return desktopImportedH3FailureSummary(reply)
+}
+
 func (p *desktopImportedH3Reference) close() error {
 	if p.closed {
 		return nil
@@ -717,7 +751,7 @@ func (f *desktopImportedH3WindowsFixture) prove(t *testing.T, p *desktopImported
 		t.Fatal("protected imported H3 original bootstrap DNS", e)
 	}
 	if e := f.query(ctx, true); e != nil {
-		t.Fatal("protected imported H3 original selected final DNS", e)
+		t.Fatal("protected imported H3 original selected final DNS", e, p.failureDiagnostic())
 	}
 	if e := f.proofLane(ctx, false); e != nil {
 		t.Fatal("protected imported H3 paired final identity proof", e)

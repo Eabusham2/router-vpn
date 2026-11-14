@@ -443,6 +443,92 @@ func TestFailedPeerDiagnosticIsStrictlyBounded(t *testing.T){
             self.assertIn('its cause lost', result.stdout)
 
 
+    def test_selected_dns_failure_diagnostic_keeps_original_identity_and_private_fields(self):
+        source = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text()
+        peer = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_peer_test.go.tmpl').read_text()
+        helper = 'func desktopImportedH3FailureSummary' + source.split('func desktopImportedH3FailureSummary', 1)[1].split('func (p *desktopImportedH3Reference) close()', 1)[0]
+        messages = 'type desktopImportedH3PeerRequest struct {' + peer.split('type desktopImportedH3PeerRequest struct {', 1)[1].split('func desktopImportedH3JSON(', 1)[0]
+        proof = source.split('func (f *desktopImportedH3WindowsFixture) prove(', 1)[1].split('func (f *desktopImportedH3WindowsFixture) drain(', 1)[0]
+        self.assertEqual(source.count('p.failureDiagnostic()'), 1)
+        self.assertIn('t.Fatal("protected imported H3 original selected final DNS", e, p.failureDiagnostic())', proof)
+        self.assertEqual(proof.count('f.query(ctx, true)'), 1)
+        self.assertIn('context.WithTimeout(context.Background(), 15*time.Second)', proof)
+        self.assertIn('s.entry.mu.Lock()\n\t\tvalue.EntryFailure = s.entry.failure\n\t\ts.entry.mu.Unlock()', peer)
+        self.assertIn('s.final.mu.Lock()\n\t\tvalue.FinalFailure = s.final.failure\n\t\ts.final.mu.Unlock()', peer)
+        header = '''package diagnostic
+import("encoding/json";"fmt";"io")
+type desktopExternalSOCKSWFPReceipt struct{Control,Client,Relay string}
+type desktopImportedH3Reference struct{closed bool;input io.Writer;readback func()(desktopImportedH3PeerReply,error);matches bool;reads int}
+func(p *desktopImportedH3Reference)read()(desktopImportedH3PeerReply,error){p.reads++;return p.readback()}
+func(p *desktopImportedH3Reference)same(desktopImportedH3PeerReply)bool{return p.matches}
+'''
+        cases = r'''package diagnostic
+import("bytes";"encoding/json";"errors";"strings";"testing")
+func TestOriginalFailureReadbackKeepsCauseAndOmitsPrivateCapture(t *testing.T){
+ var input bytes.Buffer
+ original:=desktopImportedH3PeerReply{Schema:1,Bootstrap:11,Selected:12,TCP:13,UDP:14,Private:15,Public:16,QUIC:17,Rejected:18,
+  EntryFailure:"original entry relay closed",FinalFailure:"original final stream reset",
+  Source:[]string{"private-profile-password","private-api-token"},AppID:[]byte("private-app-id"),
+  Address:"private-physical-address",SourceSHA256:"private-source-digest",ConfigSHA256:"private-config-digest",
+  SOCKS:[]desktopExternalSOCKSWFPReceipt{{Control:"private-control",Client:"private-client",Relay:"private-relay"}}}
+ p:=&desktopImportedH3Reference{input:&input,matches:true,readback:func()(desktopImportedH3PeerReply,error){return original,nil}}
+ got:=p.failureDiagnostic()
+ for _,want:=range []string{"bootstrap=11","selected=12","tcp=13","udp=14","private=15","public=16","quic=17","rejected=18",original.EntryFailure,original.FinalFailure}{
+  if !strings.Contains(got,want){t.Fatalf("original diagnostic lost cause or counter %q: %s",want,got)}
+ }
+ for _,secret:=range []string{"private-profile-password","private-api-token","private-app-id","private-physical-address","private-source-digest","private-config-digest","private-control","private-client","private-relay"}{
+  if strings.Contains(got,secret){t.Fatalf("diagnostic exposed private capture: %q",secret)}
+ }
+ var request desktopImportedH3PeerRequest
+ if json.Unmarshal(input.Bytes(),&request)!=nil||request.Schema!=1||request.Operation!="observe"||p.reads!=1||len(request.Source)!=0||len(request.Certificate)!=0||len(request.Key)!=0{
+  t.Fatal("failure diagnostic changed the single original readback request",request,p.reads)
+ }
+}
+type refusalWriter struct{}
+func(refusalWriter)Write([]byte)(int,error){return 0,errors.New("private write error")}
+func TestDiagnosticCannotAdoptChangedFailedOrRetiredPeer(t *testing.T){
+ for _,fault:=range []string{"retired","request","readback","identity","closed"}{t.Run(fault,func(t *testing.T){
+  var input bytes.Buffer;reply:=desktopImportedH3PeerReply{Selected:999,FinalFailure:"foreign diagnostic must not escape"}
+  p:=&desktopImportedH3Reference{input:&input,matches:true}
+  p.readback=func()(desktopImportedH3PeerReply,error){if fault=="readback"{return reply,errors.New("private read error")};return reply,nil}
+  switch fault{case "retired":p.closed=true;case "request":p.input=refusalWriter{};case "identity":p.matches=false;case "closed":reply.Closed=true}
+  got:=p.failureDiagnostic()
+  if !strings.HasPrefix(got,"original peer diagnostic unavailable:")||strings.Contains(got,"999")||strings.Contains(got,"foreign")||strings.Contains(got,"private"){
+   t.Fatal("changed or failed original peer diagnostic was adopted",got)
+  }
+  want:=1;if fault=="retired"||fault=="request"{want=0};if p.reads!=want{t.Fatal("original diagnostic read was retried",p.reads,want)}
+ })}
+}
+func TestDiagnosticFailureTextIsBoundedAndEscaped(t *testing.T){
+ reply:=desktopImportedH3PeerReply{EntryFailure:strings.Repeat("e",2048),FinalFailure:"original\n--- PASS: fabricated\n"+strings.Repeat("f",2048)}
+ got:=desktopImportedH3FailureSummary(reply)
+ if len(got)>2400||strings.Contains(got,"\n")||strings.Count(got,"[truncated]")!=2||!strings.Contains(got,"original\\n--- PASS"){
+  t.Fatal("native failure diagnostic exceeded its bound or injected a verdict line",len(got))
+ }
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='routervpn-h3-selected-diagnostic-') as directory:
+            work = Path(directory)
+            (work / 'go.mod').write_text('module routervpn-h3-selected-diagnostic\n\ngo 1.26.3\n')
+            target = work / 'diagnostic.go'
+            target.write_text(header + messages + helper)
+            (work / 'diagnostic_test.go').write_text(cases)
+            command = [shutil.which('go') or 'go', 'test', '-race', '-count=1', '-timeout=10s', '.']
+            result = subprocess.run(command, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            mutations = (
+                (helper.replace('bounded(reply.FinalFailure)', 'bounded("")', 1), '^TestOriginalFailureReadbackKeepsCauseAndOmitsPrivateCapture$', 'diagnostic lost cause'),
+                (helper.replace('!p.same(reply) || reply.Closed', 'reply.Closed', 1), '^TestDiagnosticCannotAdoptChangedFailedOrRetiredPeer$/identity$', 'peer diagnostic was adopted'),
+                (helper.replace('return fmt.Sprintf("original peer', 'return fmt.Sprintf("%+v original peer', 1).replace('reply.Bootstrap, reply.Selected', 'reply, reply.Bootstrap, reply.Selected', 1), '^TestOriginalFailureReadbackKeepsCauseAndOmitsPrivateCapture$', 'diagnostic exposed private capture'),
+            )
+            for changed, selected, witness in mutations:
+                self.assertNotEqual(changed, helper)
+                target.write_text(header + messages + changed)
+                result = subprocess.run(command + ['-run', selected], cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(witness, result.stdout)
+                self.assertNotIn('panic:', result.stdout)
+
     def test_native_openvpn_readiness_preserves_original_owner_and_caller(self):
         source = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text()
         helper = source.split('type desktopImportedH3OpenVPN interface {', 1)[1].split('func (f *desktopImportedH3WindowsFixture) awaitEntryReady', 1)[0]
