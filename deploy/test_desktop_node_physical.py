@@ -486,6 +486,16 @@ SIP003_CREDENTIAL_CASES = tuple(layer + '/' + fault for layer in SIP003_LAYERS f
     'hysteria-password', 'hysteria-trust', 'hysteria-salamander')) + tuple(layer + '/aes-key' for layer in SIP003_LAYERS[1:])
 SIP003_IDENTITY_CASES = ('owned', 'not-started', 'cancelled', 'closed', 'owner-replaced', 'tcp-replaced', 'udp-replaced', 'tcp-missing', 'udp-missing', 'split', 'max')
 
+# The Windows retained proof, credential and whitening roots consumed 179.52 s
+# before the final-bypass root began. Keep the original operation deadlines
+# and 180-second child limit; these disjoint groups reuse one compiled image.
+SIP003_SUITES = (
+    ("sip003-retained", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeSIP003(RetainedProof|WrongWhitening|OuterCannotBypassFinal)$",
+     tuple("TestRouterVPNDesktopNodeSIP003" + suffix for suffix in ("RetainedProof", "WrongWhitening", "OuterCannotBypassFinal"))),
+    ("sip003-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeSIP003RetainedWrongCredential$",
+     ("TestRouterVPNDesktopNodeSIP003RetainedWrongCredential",)),
+)
+
 
 def layer_reference_sources():
     return [ROOT / "go.mod", *([ROOT / "go.sum"] if (ROOT / "go.sum").exists() else []),
@@ -1433,13 +1443,18 @@ def execute_baseline_suite(baselines, suite):
     # Encrypted graph/layer and selected-DNS cases alone consumed 89.58 s on
     # Windows before the required pre-ready cases began. Keep those aggregate
     # bounds and every per-operation bound; each disjoint HY2 phase keeps 90 s.
-    duration = 180 if name in ("encrypted", "composite-credentials", "sip003-retained", "ordered-measurement") else 90
+    duration = 180 if name in ("encrypted", "composite-credentials", "sip003-retained", "sip003-credentials", "ordered-measurement") else 90
     if name == OPENVPN_CAPACITY_SUITE[0]:
         duration = 60
     status, output = baselines.execute(name, package, selector, duration)
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
     if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
         raise ValueError("Node " + name + " omitted a required native boundary")
+    if name in ("sip003-retained", "sip003-credentials"):
+        groups = (("RetainedProof", SIP003_PROOF_CASES), ("OuterCannotBypassFinal", SIP003_LAYERS[1:])) if name == "sip003-retained" else (("RetainedWrongCredential", SIP003_CREDENTIAL_CASES),)
+        for group, cases in groups:
+            if any("--- PASS: TestRouterVPNDesktopNodeSIP003" + group + "/" + case + " (" not in output for case in cases):
+                raise ValueError("Node SIP003 gate omitted independent encrypted proof, selected DNS, cover or captured credential rejection")
     if name in (NODE_SOURCE_RETIRE_SUITE[0], NODE_BOX_RETIRE_SUITE[0]):
         require_native_verdicts(output, required, "captured source before irreversible Box retirement")
     if name == ORDINARY_FIFTY_SUITE[0]:
@@ -1649,8 +1664,7 @@ def baseline_suites(windows, *, bootstrap_only=False):
          ("TestRouterVPNDesktopNodeCompositeTraffic",)),
         ("composite-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeCompositeWrongCredential$",
          ("TestRouterVPNDesktopNodeCompositeWrongCredential",)),
-        ("sip003-retained", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeSIP003(RetainedProof|RetainedWrongCredential|WrongWhitening|OuterCannotBypassFinal)$",
-         tuple("TestRouterVPNDesktopNodeSIP003" + suffix for suffix in ("RetainedProof", "RetainedWrongCredential", "WrongWhitening", "OuterCannotBypassFinal"))),
+        *SIP003_SUITES,
         ("sip003-cover-identity", "./protocol/routervpncomposite", "^TestNativeCompositePerformance(RequiresExactSIP003Owners|ObservationKeepsCaller)$",
          ("TestNativeCompositePerformanceRequiresExactSIP003Owners", "TestNativeCompositePerformanceObservationKeepsCaller")),
         ("cover-lifecycle", "./service/routervpnperformance", "^TestNativePerformance",
@@ -1895,11 +1909,6 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node Naive gate omitted a complete HTTP version/Start Layer")
             if name == "naive-credentials" and any("--- PASS: TestRouterVPNDesktopNodeNaiveWrongCredential/" + case + " (" not in output for case in NAIVE_CREDENTIAL_CASES):
                 raise ValueError("Node Naive gate omitted a captured user, password, certificate or layer credential negative")
-            if name == "sip003-retained":
-                for group, cases in (("RetainedProof", SIP003_PROOF_CASES), ("RetainedWrongCredential", SIP003_CREDENTIAL_CASES),
-                                     ("OuterCannotBypassFinal", SIP003_LAYERS[1:])):
-                    if any("--- PASS: TestRouterVPNDesktopNodeSIP003" + group + "/" + case + " (" not in output for case in cases):
-                        raise ValueError("Node SIP003 gate omitted independent encrypted proof, selected DNS, cover or captured credential rejection")
             if name == "sip003-cover-identity" and any("--- PASS: TestNativeCompositePerformanceRequiresExactSIP003Owners/" + case + " (" not in output for case in SIP003_IDENTITY_CASES):
                 raise ValueError("Node SIP003 cover capability omitted a captured lifecycle or lane replacement control")
             if name == "composite-traffic" and any("--- PASS: TestRouterVPNDesktopNodeCompositeTraffic/" + case + " (" not in output for case in (*COMPOSITE_CASES, *COMPOSITE_ALLOCATION_CASES)):

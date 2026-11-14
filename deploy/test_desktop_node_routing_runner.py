@@ -1281,5 +1281,127 @@ class HysteriaPhaseDispatch(unittest.TestCase):
         self.assertEqual(len(self.invocations), 1)
 
 
+class SIP003PhaseDispatch(unittest.TestCase):
+    """Exercise real cached-image dispatch; compiler/process I/O are modeled."""
+
+    ROOTS = {
+        "sip003-retained": ("RetainedProof", "WrongWhitening", "OuterCannotBypassFinal"),
+        "sip003-credentials": ("RetainedWrongCredential",),
+    }
+    LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
+    PREFIX = "TestRouterVPNDesktopNodeSIP003"
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="node-sip003-phases-")
+        self.addCleanup(temporary.cleanup)
+        self.work = Path(temporary.name)
+        self.source = self.work / "source"; self.source.mkdir()
+        self.input = self.source / "captured.go"
+        self.input.write_bytes(b"original shipping source")
+        records = {"captured.go": hashlib.sha256(self.input.read_bytes()).hexdigest()}
+        self.env = {"GOOS": "windows", "CGO_ENABLED": "1", "EXACT_COMPILER_ENV": "captured"}
+        self.build = ["captured-go", "test", "-c", "-mod=readonly", "-race"]
+        self.baselines = NODE.BaselineBinaries(self.source, self.work, self.build, self.env, records)
+        self.compiles, self.invocations = [], []
+        self.status, self.mutation = 0, None
+        self.outputs = {}
+        leaves = {
+            "RetainedProof": tuple(layer + "/" + case for layer in self.LAYERS for case in ("owned", "wrong-node", "drop-cover")),
+            "RetainedWrongCredential": tuple(layer + "/" + fault for layer in self.LAYERS for fault in (
+                "sip003-key", "sip003-host", "sip003-path", "sip003-server-name", "sip003-certificate",
+                "hysteria-password", "hysteria-trust", "hysteria-salamander")) + tuple(layer + "/aes-key" for layer in self.LAYERS[1:]),
+            "OuterCannotBypassFinal": self.LAYERS[1:],
+        }
+        for suite in NODE.SIP003_SUITES:
+            roots = self.ROOTS[suite[0]]
+            names = [self.PREFIX + name for name in roots]
+            names += [self.PREFIX + name + "/" + leaf for name in roots for leaf in leaves.get(name, ())]
+            self.outputs[suite[2]] = "".join("--- PASS: " + name + " (0.01s)\n" for name in names)
+        quiet = contextlib.redirect_stdout(io.StringIO()); quiet.__enter__()
+        self.addCleanup(quiet.__exit__, None, None, None)
+        runner = patch.object(NODE, "run", side_effect=self.observe_run); runner.start()
+        self.addCleanup(runner.stop)
+
+    def observe_run(self, command, *, cwd, env, timeout):
+        self.assertEqual(cwd, self.source); self.assertEqual(env, self.env)
+        if command[0] == "captured-go":
+            self.assertEqual(command[:-3], self.build)
+            self.assertEqual(command[-3], "-o")
+            self.assertEqual(command[-1], "./protocol/routervpnamnezia")
+            self.assertEqual(timeout, 600)
+            self.compiles.append(command)
+            Path(command[-2]).write_bytes(b"one captured encrypted peer test image")
+            return 0, "compiled fixture boundary\n"
+        self.assertEqual(command[2:], ["-test.count=1", "-test.timeout=180s", "-test.v"])
+        self.assertEqual(timeout, 195)
+        selector = command[1].removeprefix("-test.run=")
+        self.assertIn(selector, self.outputs)
+        self.invocations.append((tuple(command), timeout))
+        if self.mutation is not None: self.mutation(Path(command[0]))
+        return self.status, self.outputs[selector]
+
+    def test_disjoint_original_four_roots_reuse_one_image_and_original_bounds(self):
+        roots = {self.PREFIX + name for names in self.ROOTS.values() for name in names}
+        self.assertEqual(len(NODE.SIP003_SUITES), 2)
+        self.assertEqual(NODE.SOURCE_PHASE_TIMEOUT, 1800)
+        admitted = []
+        for suite in NODE.SIP003_SUITES:
+            name, package, selector, required = suite
+            self.assertEqual(package, "./protocol/routervpnamnezia")
+            self.assertEqual(required, tuple(self.PREFIX + root for root in self.ROOTS[name]))
+            selected = {root for root in roots if re.search(selector, root)}
+            self.assertEqual(selected, set(required))
+            self.assertFalse(any(re.search(selector, root + "Unselected") for root in roots))
+            admitted.extend(selected)
+            for windows in (False, True): self.assertEqual(NODE.baseline_suites(windows).count(suite), 1)
+            NODE.execute_baseline_suite(self.baselines, suite)
+        self.assertCountEqual(admitted, roots)
+        self.assertEqual(len(self.compiles), 1)
+        self.assertEqual(len(self.invocations), 2)
+        self.assertEqual(len({command[0] for command, _ in self.invocations}), 1)
+
+    def test_each_original_root_and_all_thirty_seven_leaves_are_required(self):
+        self.assertEqual(sum(len(value.splitlines()) for value in self.outputs.values()), 41)
+        for suite in NODE.SIP003_SUITES:
+            selector = suite[2]; original = self.outputs[selector]
+            for line in original.splitlines(keepends=True):
+                with self.subTest(phase=suite[0], missing=line.strip()):
+                    self.outputs[selector] = original.replace(line, "", 1)
+                    with self.assertRaisesRegex(ValueError, "omitted"):
+                        NODE.execute_baseline_suite(self.baselines, suite)
+            self.outputs[selector] = original
+        self.assertEqual(len(self.compiles), 1)
+
+    def test_passed_text_cannot_hide_failure_skip_or_race(self):
+        for suite in NODE.SIP003_SUITES:
+            original = self.outputs[suite[2]]
+            for status, trailer in ((1, ""), (124, ""), (0, "--- SKIP: hidden boundary\n"), (0, "WARNING: DATA RACE\n")):
+                with self.subTest(phase=suite[0], status=status, trailer=trailer):
+                    self.status = status; self.outputs[suite[2]] = original + trailer
+                    with self.assertRaisesRegex(ValueError, "required native boundary"):
+                        NODE.execute_baseline_suite(self.baselines, suite)
+            self.status = 0; self.outputs[suite[2]] = original
+
+    def test_timeout_propagates_without_recompilation_or_next_phase(self):
+        def timeout(_): raise subprocess.TimeoutExpired("captured test image", 195)
+        self.mutation = timeout
+        with self.assertRaises(subprocess.TimeoutExpired):
+            NODE.execute_baseline_suite(self.baselines, NODE.SIP003_SUITES[0])
+        self.assertEqual(len(self.compiles), 1); self.assertEqual(len(self.invocations), 1)
+
+    def test_changed_source_cannot_reuse_first_phase_image(self):
+        NODE.execute_baseline_suite(self.baselines, NODE.SIP003_SUITES[0])
+        self.input.write_bytes(b"replacement source")
+        with self.assertRaisesRegex(ValueError, "captured source input"):
+            NODE.execute_baseline_suite(self.baselines, NODE.SIP003_SUITES[1])
+        self.assertEqual(len(self.compiles), 1); self.assertEqual(len(self.invocations), 1)
+
+    def test_replaced_image_cannot_supply_a_phase_verdict(self):
+        self.mutation = lambda binary: binary.write_bytes(b"replacement executable")
+        with self.assertRaisesRegex(ValueError, "original compiled image"):
+            NODE.execute_baseline_suite(self.baselines, NODE.SIP003_SUITES[0])
+        self.assertEqual(len(self.compiles), 1); self.assertEqual(len(self.invocations), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
