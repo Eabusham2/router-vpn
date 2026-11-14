@@ -62,12 +62,35 @@ class LinuxNodeTransactionRunner(unittest.TestCase):
         for group in RUNNER.GROUPS:
             RUNNER.check_verdict("\n".join(completed(group)), group)
 
+    def test_stop_completion_requires_each_exact_model_and_native_boundary(self):
+        roots = ("TestDesktopLinuxNodeStopCompletionHeldPublicationRetainsExactRetry",
+                 "TestDesktopLinuxNodeStopCompletionRejectsReplacement",
+                 "TestDesktopLinuxNodeStopCompletionNeverInfersJoinFromEmptyFields",
+                 "TestDesktopLinuxNodeStopCompletionParentClosePreservesPendingPublication",
+                 "TestDesktopLinuxNodeStopCompletionFailedConstructorRetainsOriginalError")
+        for root in roots:
+            self.assertIn(root, RUNNER.UNIT_CASES)
+        self.assertEqual(len(RUNNER.UNIT_CASES[roots[0]]), 10)
+        self.assertEqual(len(RUNNER.UNIT_CASES[roots[1]]), 18)
+        rows = completed_units()
+        for root in roots:
+            for name in (root, *(root + "/" + leaf for leaf in RUNNER.UNIT_CASES[root])):
+                marker = "--- PASS: " + name + " (0.10s)"
+                with self.subTest(missing=name), self.assertRaises(ValueError):
+                    RUNNER.check_unit_verdict("\n".join(row for row in rows if row != marker))
+        rows = completed("NodeStop")
+        with self.assertRaises(ValueError):
+            RUNNER.check_verdict("\n".join(row for row in rows if "/completion-retry " not in row), "NodeStop")
+        closure = RUNNER.checked_sources()
+        for relative in ("cmd/client/desktop_node_stop_completion_linux.go", "cmd/client/desktop_node_stop_completion_linux_test.go"):
+            self.assertIn(relative, closure)
+
     def test_app_stop_requires_its_owned_native_cases_and_sources(self):
         self.assertEqual(RUNNER.STOP_CASES,
                          ("on-connect", "hold-on-connect", "request-ended", "mtu-drain", "cancelled-retirement", "retirement-retry",
                           "replaced-command", "replaced-operation", "replaced-session", "duplicate-legacy-owner", "partial-journal",
                           "unused-session", "released-legacy", "released-legacy-closing", "released-node-guard",
-                          "released-journal-change", "closing-active", "always"))
+                          "released-journal-change", "closing-active", "always", "completion-retry"))
         self.assertEqual(RUNNER.GROUPS["NodeStop"], RUNNER.STOP_CASES)
         closure = RUNNER.checked_sources()
         for relative in ("cmd/client/main.go", "cmd/client/desktop_node_stop_linux.go", "cmd/client/desktop_node_stop_other.go",

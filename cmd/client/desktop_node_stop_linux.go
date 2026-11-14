@@ -26,6 +26,7 @@ type desktopNodeStopCapture struct {
 	journal     *desktopLinuxNodeJournal
 	operation   context.Context
 	command     *exec.Cmd
+	completion  *desktopLinuxStopCompletion
 }
 
 func (a *app) captureDesktopNodeStop() (*desktopNodeStopCapture, error) {
@@ -67,6 +68,20 @@ func (a *app) captureDesktopNodeStopContext(caller context.Context) (*desktopNod
 	if session.parent == nil || session.parent.app != a || session.parent.controller != controller || session.parent.parent != parent {
 		return nil, errors.New("Linux Node Stop cannot borrow another application's session")
 	}
+	// A completed native retirement may still owe its original app publication.
+	// Recover that exact retained capability before considering empty dispatch.
+	if pending := session.stopCompletion; pending != nil {
+		if err := pending.currentAppContext(ctx, command, pending.completion.commandRetired.Load()); err != nil {
+			return nil, err
+		}
+		if pending.completion.hostReleased && pending.completion.failedConstructor != nil {
+			if session.active != nil || session.journalErr != pending.completion.failedConstructor || session.journal != pending.journal {
+				return nil, errors.New("Linux Stop lost its original failed constructor cleanup")
+			}
+			return nil, pending.completion.failedConstructor
+		}
+		return pending, nil
+	}
 	// An unused or completely released session has no claim on a later legacy
 	// connection, including its terminal Stop. This read-only comparison uses
 	// the original retirement parent; it cannot reopen Node admission.
@@ -90,6 +105,7 @@ func (a *app) captureDesktopNodeStopContext(caller context.Context) (*desktopNod
 	}
 	captured := &desktopNodeStopCapture{app: a, session: session, host: session.active, predecessor: session.predecessor,
 		journal: session.journal, operation: operation, command: command}
+	captured.completion = &desktopLinuxStopCompletion{owner: captured}
 	if err := captured.currentAppContext(ctx, command, false); err != nil {
 		return nil, err
 	}
@@ -103,7 +119,7 @@ func (a *app) captureDesktopNodeStopContext(caller context.Context) (*desktopNod
 // The caller retains the original session gate and application operation lock.
 func (s *desktopLinuxNodeSession) unclaimedStopLocked(ctx context.Context) error {
 	current := func() error {
-		if s.closed || s.released || s.active != nil || s.predecessor != nil || s.off != nil || s.journalErr != nil ||
+		if s.closed || s.released || s.stopCompletion != nil || s.active != nil || s.predecessor != nil || s.off != nil || s.journalErr != nil ||
 			s.parent == nil || s.parent.parent == nil {
 			return errors.New("Linux empty Stop dispatch lost its original unclaimed session")
 		}
@@ -161,15 +177,23 @@ func (captured *desktopNodeStopCapture) currentApp(command *exec.Cmd, retired bo
 }
 
 func (captured *desktopNodeStopCapture) currentAppContext(ctx context.Context, command *exec.Cmd, retired bool) error {
+	return captured.currentAppModeContext(ctx, command, retired, false)
+}
+
+func (captured *desktopNodeStopCapture) currentAppModeContext(ctx context.Context, command *exec.Cmd, retired, shutdown bool) error {
 	if captured == nil || captured.app == nil || captured.session == nil || captured.session.parent == nil {
 		return errors.New("Linux Node Stop lost its captured session")
 	}
+	if captured.completion == nil || captured.completion.owner != captured {
+		return errors.New("Linux Node Stop lost its original completion identity")
+	}
+	retired = retired || captured.completion.commandRetired.Load()
 	a := captured.app
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		return err
 	}
 	defer a.mu.Unlock()
-	if captured.session.parent.currentAppLocked(false) != nil || a.connectionContext != captured.operation || command != captured.command {
+	if captured.session.parent.currentAppLocked(shutdown) != nil || a.connectionContext != captured.operation || command != captured.command && !(retired && command == nil) {
 		return errors.New("Linux Node Stop belongs to a replaced application or operation")
 	}
 	if !retired && a.cmd != captured.command || retired && a.cmd != nil {
@@ -195,60 +219,28 @@ func (captured *desktopNodeStopCapture) Retire(ctx context.Context, command *exe
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("Linux Node Stop requires a live bounded retirement caller")
 	}
-	if err := captured.currentApp(command, false); err != nil {
+	if err := captured.retainCompletion(ctx, command, disconnect); err != nil {
 		return err
 	}
-	session := captured.session
-	if err := session.enter(ctx); err != nil {
-		return err
+	if captured.completion.published.Load() {
+		return nil
 	}
-	current := session.currentLocked(ctx)
-	if current == nil && (session.active != captured.host || session.predecessor != captured.predecessor || session.journal != captured.journal) {
-		current = errors.New("Linux Node Stop belongs to a replaced original session selection")
-	}
-	session.gate <- struct{}{}
-	if current != nil {
-		return current
-	}
-	if err := captured.currentApp(command, false); err != nil {
-		return err
-	}
-	if err := session.Retire(ctx, captured.host, disconnect); err != nil {
-		// A failed retirement is still an owned failure, never Connected or a
-		// successful release. Preserve its exact source for the next Stop.
-		if captured.currentApp(command, false) == nil {
+	if err := captured.session.retireCaptured(ctx, captured.host, disconnect, captured); err != nil {
+		// The original session retains both partial cleanup and any positive
+		// command-retirement receipt. A cancelled failure tail cannot block.
+		locked := desktopnetwork.LockContext(ctx, &captured.app.mu) == nil
+		if !locked {
+			locked = captured.app.mu.TryLock()
+		} // one nonblocking owned-failure publication attempt
+		if locked {
 			a := captured.app
-			a.mu.Lock()
-			if a.connectionContext == captured.operation && a.cmd == command && captured.session.parent.currentAppLocked(false) == nil {
+			if a.connectionContext == captured.operation && captured.session.parent.currentAppLocked(false) == nil &&
+				(a.cmd == captured.command || captured.completion.commandRetired.Load() && a.cmd == nil) {
 				a.state.Connected, a.state.Phase, a.state.LastError = false, "failed", err.Error()
 			}
 			a.mu.Unlock()
 		}
-		return err // The session retains partial retirement for an explicit retry.
-	}
-	if err := captured.currentApp(command, true); err != nil {
 		return err
 	}
-	// Retire has joined the original engine and durably settled/released only
-	// its selected source. Finish ordinary app presentation without falling
-	// through to a legacy stop command or a second command wait.
-	a := captured.app
-	a.mu.Lock()
-	if captured.session.parent.currentAppLocked(false) != nil || a.connectionContext != captured.operation || a.cmd != nil {
-		a.mu.Unlock()
-		return errors.New("Linux Node Stop cannot publish over a replacement owner")
-	}
-	coverCancel := a.daitaCancel
-	a.daitaCancel = nil
-	a.state.Connected = false
-	a.state.Mode, a.state.LogicalMode, a.state.RuntimeMode, a.state.Base = "off", "", "", ""
-	a.state.Phase, a.state.LastError = "off", ""
-	a.mu.Unlock()
-	if coverCancel != nil {
-		coverCancel()
-	}
-	clearActiveDNSRuntimeConfig(a)
-	invalidateDesktopDNSResults(a)
-	clearActiveMultihopGraph(a)
-	return nil
+	return captured.publishCompletion(ctx, command)
 }

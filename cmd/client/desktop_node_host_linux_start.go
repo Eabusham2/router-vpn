@@ -222,6 +222,10 @@ func (h *desktopLinuxNodeHost) runningLocked(ctx context.Context) error {
 // Temporary operations retain the closed predecessor. Ordinary disconnect may
 // release On-connect; Always remains closed under the original transaction.
 func (h *desktopLinuxNodeHost) Retire(ctx context.Context, disconnect bool) error {
+	return h.retireForStop(ctx, disconnect, nil)
+}
+
+func (h *desktopLinuxNodeHost) retireForStop(ctx context.Context, disconnect bool, stop *desktopNodeStopCapture) error {
 	if err := h.stopMonitorBeforeRetirement(ctx); err != nil {
 		return err
 	}
@@ -230,10 +234,16 @@ func (h *desktopLinuxNodeHost) Retire(ctx context.Context, disconnect bool) erro
 	}
 	defer func() { h.gate <- struct{}{} }()
 	h.closing = true
-	return h.retireLocked(ctx, disconnect)
+	return h.retireForStopLocked(ctx, disconnect, stop)
 }
 
 func (h *desktopLinuxNodeHost) retireLocked(ctx context.Context, disconnect bool) error {
+	return h.retireForStopLocked(ctx, disconnect, nil)
+}
+
+// A nonnil Stop is entered only by its original session while retaining that
+// session gate; the receipt records actual command publication, never nil inference.
+func (h *desktopLinuxNodeHost) retireForStopLocked(ctx context.Context, disconnect bool, stop *desktopNodeStopCapture) error {
 	if h.mtu != nil {
 		if err := h.mtu.closeLocked(ctx); err != nil {
 			// A naturally closing graph may already be waiting for this
@@ -326,13 +336,18 @@ func (h *desktopLinuxNodeHost) retireLocked(ctx context.Context, disconnect bool
 	// A newer connection may already own the app. Retire the old resources,
 	// but only clear presentation state if this exact original command remains.
 	a := h.parent.app
-	a.mu.Lock()
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
 	if h.launch.command != nil && a.cmd == h.launch.command {
 		if a.state.RouterID != desktopExternalPathProfileID(h.launch) || a.state.RuntimeMode != h.launch.mode {
 			a.mu.Unlock()
 			return errors.New("Linux host retirement cannot change a replacement presentation")
 		}
 		a.cmd = nil
+		if stop != nil && stop.host == h && stop.session.stopCompletion == stop && stop.completion.owner == stop {
+			stop.completion.commandRetired.Store(true)
+		}
 		a.state.Connected, a.state.Mode, a.state.RuntimeMode, a.state.Phase = false, "off", "", "off"
 	}
 	a.mu.Unlock()

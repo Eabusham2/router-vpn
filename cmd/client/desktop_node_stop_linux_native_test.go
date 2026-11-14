@@ -25,7 +25,7 @@ import (
 
 var linuxNodeStopCases = []string{"on-connect", "hold-on-connect", "request-ended", "mtu-drain", "cancelled-retirement", "retirement-retry",
 	"replaced-command", "replaced-operation", "replaced-session", "duplicate-legacy-owner", "partial-journal", "unused-session",
-	"released-legacy", "released-legacy-closing", "released-node-guard", "released-journal-change", "closing-active", "always"}
+	"released-legacy", "released-legacy-closing", "released-node-guard", "released-journal-change", "closing-active", "always", "completion-retry"}
 
 // The production app Stop owns an actual installed controller, original
 // engine/guardian, authenticated source and native nft table. The established
@@ -240,7 +240,9 @@ func linuxNodeStopFixture(controller *ownedDesktopController, scenario string) e
 				}
 			}
 			var stopErr error
-			if scenario == "mtu-drain" {
+			if scenario == "completion-retry" {
+				stopErr = linuxNodeStopCompletionRetryFixture(ctx, a, session, host, capture)
+			} else if scenario == "mtu-drain" {
 				lock := mtuRetestLockFor(a)
 				lock.Lock()
 				pending := make(chan error, 1)
@@ -481,6 +483,90 @@ func linuxNodeStopClosingFixture(ctx context.Context, a *app, parent *desktopLin
 	parent.controller.close()
 	_, err = fmt.Fprintln(os.Stdout, "captured-parent-retired")
 	return err
+}
+
+// The engine, journal, guardian and command are actual original native owners.
+// Only the held result operation is a publication-boundary fixture.
+func linuxNodeStopCompletionRetryFixture(ctx context.Context, a *app, session *desktopLinuxNodeSession, host *desktopLinuxNodeHost, capture *desktopNodeStopCapture) (failure error) {
+	operationCtx, operationCancel := context.WithCancel(ctx)
+	defer operationCancel()
+	_ = operationCtx
+	operation := &desktopDNSOperation{cancel: operationCancel}
+	a.mu.Lock()
+	a.dnsMeasurements = &desktopDNSSlot{current: operation, used: map[string]bool{"original": true}}
+	a.mu.Unlock()
+	operation.mu.Lock()
+	held := true
+	caller, cancel := context.WithCancel(ctx)
+	pending := make(chan error, 1)
+	joined := false
+	defer func() {
+		cancel()
+		if held {
+			operation.mu.Unlock()
+		}
+		if !joined {
+			select {
+			case err := <-pending:
+				failure = errors.Join(failure, err)
+			case <-time.After(2 * time.Second):
+				failure = errors.Join(failure, errors.New("original completion fixture child did not join"))
+			}
+		}
+	}()
+	go func() { pending <- capture.Retire(caller, capture.command, true) }()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for !capture.completion.joined.Load() {
+		select {
+		case err := <-pending:
+			joined = true
+			return errors.Join(err, errors.New("native Stop returned before held publication"))
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+	// Cancellation occurs after the positive session-owned completion receipt,
+	// while the original result lock still prevents final app publication.
+	cancel()
+	select {
+	case err := <-pending:
+		joined = true
+		if !errors.Is(err, context.Canceled) {
+			return errors.Join(err, errors.New("held publication lost original cancellation"))
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	operation.mu.Unlock()
+	held = false
+	if !capture.completion.joined.Load() || capture.completion.published.Load() || session.stopCompletion != capture || session.active != nil ||
+		a.cmd != nil || !host.closed || !host.released || !host.transaction.engineJoined || !host.transaction.retired || host.process.command.ProcessState == nil {
+		return errors.New("cancelled terminal publication lost its actual joined original native completion")
+	}
+	if err := session.journal.enter(ctx); err != nil {
+		return err
+	}
+	settled := append([]byte(nil), session.journal.currentBytes...)
+	session.journal.gate <- struct{}{}
+	originalExit := host.process.command.ProcessState
+	fresh, err := a.captureDesktopNodeStopContext(ctx)
+	if err != nil || fresh != capture {
+		return errors.Join(err, errors.New("fresh Stop fell through empty native session"))
+	}
+	if err := fresh.Retire(ctx, nil, true); err != nil {
+		return err
+	}
+	if err := session.journal.enter(ctx); err != nil {
+		return err
+	}
+	same := bytes.Equal(settled, session.journal.currentBytes)
+	session.journal.gate <- struct{}{}
+	if !same || host.process.command.ProcessState != originalExit || !capture.completion.published.Load() || session.stopCompletion != nil || !operation.invalid || a.state.Phase != "off" {
+		return errors.New("completion retry replayed native/journal work or failed original publication")
+	}
+	return nil
 }
 
 func TestDesktopLinuxGuardianKernelNodeStop(t *testing.T) {

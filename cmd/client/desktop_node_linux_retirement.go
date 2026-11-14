@@ -213,7 +213,7 @@ func (p *desktopLinuxNodeParent) prepareTransactionShutdown(ctx context.Context)
 			return err
 		}
 	}
-	return nil
+	return p.finishStopCompletionForShutdown(ctx)
 }
 
 func (t *desktopLinuxNodeTransaction) prepareParentShutdown(ctx context.Context, path map[*desktopLinuxNodeTransaction]bool, remaining int) error {

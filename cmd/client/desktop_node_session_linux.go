@@ -17,17 +17,18 @@ import (
 // table name can create this owner. Callers retain operationMu around changes;
 // gate also joins terminal parent cleanup with any entered change.
 type desktopLinuxNodeSession struct {
-	reverse       *linuxStandardNodeReverseTransfer
-	gate          chan struct{}
-	parent        *desktopLinuxNodeParentCapture
-	journal       *desktopLinuxNodeJournal
-	journalErr    error
-	emptyRecovery *desktopLinuxEmptyJournalRecovery
-	active        *desktopLinuxNodeHost
-	predecessor   *desktopLinuxNodeTransaction
-	off           *desktopLinuxNodeProtectionOff
-	closed        bool
-	released      bool
+	reverse        *linuxStandardNodeReverseTransfer
+	gate           chan struct{}
+	parent         *desktopLinuxNodeParentCapture
+	journal        *desktopLinuxNodeJournal
+	journalErr     error
+	emptyRecovery  *desktopLinuxEmptyJournalRecovery
+	active         *desktopLinuxNodeHost
+	predecessor    *desktopLinuxNodeTransaction
+	off            *desktopLinuxNodeProtectionOff
+	closed         bool
+	released       bool
+	stopCompletion *desktopNodeStopCapture // guarded by gate; never reconstructed from empty fields
 }
 
 func captureDesktopLinuxNodeSession(ctx context.Context, a *app) (*desktopLinuxNodeSession, error) {
@@ -116,7 +117,7 @@ func (s *desktopLinuxNodeSession) startWithVerifier(ctx context.Context, host *d
 	if err := s.currentLocked(ctx); err != nil {
 		return err
 	}
-	if s.active != nil || s.off != nil || host == nil || verify == nil || !sameDesktopLinuxParentCapture(s.parent, host.parent) {
+	if s.stopCompletion != nil || s.active != nil || s.off != nil || host == nil || verify == nil || !sameDesktopLinuxParentCapture(s.parent, host.parent) {
 		return errors.New("Linux Node session cannot replace an unjoined or foreign host")
 	}
 	if err := host.enter(ctx); err != nil {
@@ -208,6 +209,33 @@ func (s *desktopLinuxNodeSession) selectedPredecessorLocked(ctx context.Context,
 // already joined, for an explicit Disconnect releasing retained On-connect.
 // Always remains closed until its original successor or saved-policy change.
 func (s *desktopLinuxNodeSession) Retire(ctx context.Context, host *desktopLinuxNodeHost, disconnect bool) error {
+	return s.retireCaptured(ctx, host, disconnect, nil)
+}
+
+func (s *desktopLinuxNodeSession) retireCaptured(ctx context.Context, host *desktopLinuxNodeHost, disconnect bool, stop *desktopNodeStopCapture) error {
+	// A completed Stop retries only publication; do not re-enter even an
+	// unrelated reverse-transfer cleanup before checking its captured receipt.
+	if err := s.enter(ctx); err != nil {
+		return err
+	}
+	if s.stopCompletion != stop || stop != nil && (stop.session != s || stop.host != host || stop.completion == nil || stop.completion.owner != stop || !stop.completion.retained || stop.completion.disconnect != disconnect || stop.completion.reverse != s.reverse) {
+		s.gate <- struct{}{}
+		return errors.New("Linux retirement changed its original pending Stop or reverse owner")
+	}
+	if stop != nil && stop.completion.hostReleased && stop.completion.failedConstructor != nil {
+		err := stop.completion.failedConstructor
+		if s.active != nil || s.journalErr != err || s.journal != stop.journal {
+			err = errors.New("Linux failed constructor cleanup lost its original retained error")
+		}
+		s.gate <- struct{}{}
+		return err
+	}
+	if stop != nil && stop.completion.joined.Load() {
+		err := stop.completedSelectionLocked(ctx)
+		s.gate <- struct{}{}
+		return err
+	}
+	s.gate <- struct{}{}
 	if err := s.drainStandardReverse(ctx); err != nil {
 		return err
 	}
@@ -215,11 +243,21 @@ func (s *desktopLinuxNodeSession) Retire(ctx context.Context, host *desktopLinux
 		return err
 	}
 	defer func() { s.gate <- struct{}{} }()
+	if s.stopCompletion != stop || stop != nil && (stop.session != s || stop.host != host ||
+		stop.completion == nil || stop.completion.owner != stop || stop.completion.disconnect != disconnect) {
+		return errors.New("Linux retirement cannot replace its pending Stop completion")
+	}
+	if stop != nil && stop.completion.joined.Load() {
+		return stop.completedSelectionLocked(ctx)
+	}
 	if s.off != nil {
 		if host != nil || !disconnect {
 			return errors.New("finish the original pending Linux Kill Switch Off change before another retirement")
 		}
 		_, err := s.resumeProtectionOffLocked(ctx, s.off, true)
+		if err == nil && stop != nil {
+			stop.joinedLocked()
+		}
 		return err
 	}
 	if err := s.currentLocked(ctx); err != nil {
@@ -233,7 +271,7 @@ func (s *desktopLinuxNodeSession) Retire(ctx context.Context, host *desktopLinux
 		if !sameDesktopLinuxParentCapture(s.parent, host.parent) {
 			return errors.New("Linux Node stop cannot retire another parent")
 		}
-		if err := host.Retire(ctx, disconnect); err != nil {
+		if err := host.retireForStop(ctx, disconnect, stop); err != nil {
 			return err
 		}
 		if transaction := host.transaction; transaction != nil {
@@ -256,7 +294,16 @@ func (s *desktopLinuxNodeSession) Retire(ctx context.Context, host *desktopLinux
 			}
 		}
 		s.active = nil
-		return s.journalErr
+		if s.journalErr != nil {
+			if stop != nil {
+				stop.completion.hostReleased, stop.completion.failedConstructor = true, s.journalErr
+			}
+			return s.journalErr // original closed-host error stays retained; never publish success
+		}
+		if stop != nil {
+			stop.joinedLocked()
+		}
+		return nil
 	}
 	selected, err := s.selectedPredecessorLocked(ctx, candidate)
 	if err != nil {
@@ -290,6 +337,9 @@ func (s *desktopLinuxNodeSession) Retire(ctx context.Context, host *desktopLinux
 		}
 	}
 	s.active, s.predecessor = nil, selected
+	if stop != nil {
+		stop.joinedLocked()
+	}
 	return nil
 }
 
@@ -301,6 +351,9 @@ func (s *desktopLinuxNodeSession) Close(ctx context.Context) error {
 		return err
 	}
 	defer func() { s.gate <- struct{}{} }()
+	if pending := s.stopCompletion; pending != nil && pending.completion != nil && pending.completion.joined.Load() && !pending.completion.published.Load() {
+		return errors.New("Linux session Close retains its joined unpublished Stop; finish original parent publication first")
+	}
 	if !s.closed {
 		p := s.parent.parent
 		select {
