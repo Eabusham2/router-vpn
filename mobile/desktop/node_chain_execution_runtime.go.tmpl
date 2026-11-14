@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"sync"
@@ -28,6 +29,7 @@ type routerVPNDesktopExecutionProof interface {
 	HealthyContext(context.Context) error
 	Progress() mobilemultihop.NodeChainExecutionProgress
 	CloseContext(context.Context) error
+	CaptureLastContext(context.Context) (mobilemultihop.NodeChainExecutionLast, error)
 }
 
 type routerVPNDesktopExecutionEngineRef struct {
@@ -39,29 +41,31 @@ type routerVPNDesktopExecutionProofRef struct {
 
 type routerVPNDesktopExecutionFactory func(context.Context, *mobilemultihop.NodeChainExecutionPreparation, string, func(context.Context) error) (routerVPNDesktopExecutionEngine, error)
 type routerVPNDesktopExecutionProofFactory func(*mobilemultihop.NodeChainExecutionProjection, routerVPNDesktopExecutionEngine) (routerVPNDesktopExecutionProof, error)
+type routerVPNDesktopExecutionLastProofFactory func(context.Context, mobilemultihop.NodeChainExecutionLast, routerVPNDesktopExecutionEngine) (*mobilemultihop.NodeChainExecutionProjection, routerVPNDesktopExecutionProof, error)
 
 // This child owns the exact discovery/proof/gate lifetime. Its original native
 // coordinator owns Box.Close, physical protection and workspace retirement,
 // and may enter those only after close has positively joined this owner.
 type routerVPNNodeChainExecutionRuntime struct {
-	ctx      context.Context
-	files    *routerVPNExternalFiles
-	prep     *mobilemultihop.NodeChainExecutionPreparation
-	physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
-	meta     mobilemultihop.DesktopPhysicalMetadata
-	transfer string
-	instance *box.Box
-	host     func(context.Context) error
-	factory  routerVPNDesktopExecutionFactory
-	proof    routerVPNDesktopExecutionProofFactory
-	mu       sync.Mutex
-	closeMu  sync.Mutex
-	started  bool
-	retired  atomic.Bool
-	closed   atomic.Bool
-	state    atomic.Pointer[routerVPNDesktopExecutionState]
-	activity atomic.Pointer[routerVPNDesktopExecutionActivity]
-	mtu      atomic.Pointer[routerVPNDesktopExecutionMTU]
+	ctx       context.Context
+	files     *routerVPNExternalFiles
+	prep      *mobilemultihop.NodeChainExecutionPreparation
+	physical  *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	meta      mobilemultihop.DesktopPhysicalMetadata
+	transfer  string
+	instance  *box.Box
+	host      func(context.Context) error
+	factory   routerVPNDesktopExecutionFactory
+	proof     routerVPNDesktopExecutionProofFactory
+	lastProof routerVPNDesktopExecutionLastProofFactory
+	mu        sync.Mutex
+	closeMu   sync.Mutex
+	started   bool
+	retired   atomic.Bool
+	closed    atomic.Bool
+	state     atomic.Pointer[routerVPNDesktopExecutionState]
+	activity  atomic.Pointer[routerVPNDesktopExecutionActivity]
+	mtu       atomic.Pointer[routerVPNDesktopExecutionMTU]
 }
 
 type routerVPNDesktopExecutionState struct {
@@ -112,7 +116,7 @@ func routerVPNNewNodeChainExecutionRuntimeFactory(ctx context.Context, files *ro
 		return nil, errors.Join(err, routerVPNExternalFailure)
 	}
 	return &routerVPNNodeChainExecutionRuntime{ctx: ctx, files: files, prep: prep, physical: physical,
-		meta: meta, transfer: transfer, host: current, factory: factory, proof: proof}, nil
+		meta: meta, transfer: transfer, host: current, factory: factory, proof: proof, lastProof: routerVPNDesktopExecutionLastProof}, nil
 }
 
 // Native callbacks never reenter the shared proof controller or read the
@@ -159,7 +163,7 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 		if failure != nil {
 			owner.retired.Store(true)
 			cancel()
-			failure = errors.Join(failure, owner.files.remove("node-chain-execution-adoption.json"))
+			failure = errors.Join(failure, owner.files.remove("node-chain-execution-adoption.json"), owner.files.remove("node-chain-execution-last.json"))
 		}
 		close(state.runDone)
 	}()
@@ -194,11 +198,27 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 	if discovery.FirstPort < 1024 || discovery.LastPort > 65535 || discovery.LastPort < discovery.FirstPort || discovery.LastPort-discovery.FirstPort > 63 {
 		return routerVPNExternalFailure
 	}
-	random, err := rand.Int(rand.Reader, big.NewInt(int64(discovery.LastPort-discovery.FirstPort+1)))
+	last, restore, err := owner.prep.DesktopLast()
 	if err != nil {
 		return err
 	}
-	projection, err := engine.AdoptContext(startup, "", discovery.FirstPort+int(random.Int64()))
+	var projection *mobilemultihop.NodeChainExecutionProjection
+	var controller routerVPNDesktopExecutionProof
+	if restore {
+		if owner.lastProof == nil {
+			return routerVPNExternalFailure
+		}
+		projection, controller, err = owner.lastProof(startup, last, engine)
+		if controller != nil {
+			state.controller.Store(&routerVPNDesktopExecutionProofRef{controller})
+		}
+	} else {
+		var random *big.Int
+		random, err = rand.Int(rand.Reader, big.NewInt(int64(discovery.LastPort-discovery.FirstPort+1)))
+		if err == nil {
+			projection, err = engine.AdoptContext(startup, "", discovery.FirstPort+int(random.Int64()))
+		}
+	}
 	if err != nil || projection == nil {
 		return errors.Join(err, routerVPNExternalFailure)
 	}
@@ -207,9 +227,11 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 		return errors.Join(err, routerVPNExternalFailure)
 	}
 	state.projection.Store(projection)
-	controller, err := owner.proof(projection, engine)
-	if controller != nil {
-		state.controller.Store(&routerVPNDesktopExecutionProofRef{controller})
+	if !restore {
+		controller, err = owner.proof(projection, engine)
+		if controller != nil {
+			state.controller.Store(&routerVPNDesktopExecutionProofRef{controller})
+		}
 	}
 	if err != nil || controller == nil {
 		return errors.Join(err, routerVPNExternalFailure)
@@ -235,6 +257,17 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 		return err
 	}
 	if err := owner.files.publish("node-chain-execution-adoption.json", adoption); err != nil {
+		return err
+	}
+	saved, err := controller.CaptureLastContext(startup)
+	progress := controller.Progress()
+	if err != nil || saved.ValidateDesktopProjection(projection) != nil || saved.Execution() != progress.Execution || saved.Target() != progress.Comparison.Target {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	if err := owner.current(startup); err != nil {
+		return err
+	}
+	if err := owner.files.publish("node-chain-execution-last.json", json.RawMessage(saved.JSON())); err != nil {
 		return err
 	}
 	return owner.current(startup)
@@ -291,7 +324,7 @@ func (owner *routerVPNNodeChainExecutionRuntime) close(ctx context.Context) erro
 		}
 		// The startup publisher may still be finishing when retirement begins.
 		// Join it before touching any file's shared publication bookkeeping.
-		removeErr = errors.Join(owner.files.remove("node-chain-execution-ready.json"), owner.files.remove("node-chain-execution-adoption.json"))
+		removeErr = errors.Join(owner.files.remove("node-chain-execution-ready.json"), owner.files.remove("node-chain-execution-adoption.json"), owner.files.remove("node-chain-execution-last.json"))
 		if err := owner.joinMTUActivity(ctx); err != nil {
 			return errors.Join(removeErr, err)
 		}

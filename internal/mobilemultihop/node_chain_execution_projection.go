@@ -16,6 +16,7 @@ type NodeChainExecutionPreparationSource struct {
 	Execution   string                    `json:"execution"`
 	LocalSource string                    `json:"local_source"`
 	Desktop     *DesktopNodeChainMetadata `json:"desktop,omitempty"`
+	DesktopLast string                    `json:"desktop_last,omitempty"`
 }
 
 // NodeChainExecutionDiscoveryCapture is private original-route authority. The

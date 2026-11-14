@@ -1,0 +1,30 @@
+package main
+
+import (
+	"context"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The original native engine owns fresh entry discovery and in-place adoption.
+// A stored winner never authorizes the ordinary Compare proof factory, even
+// when its setting remains auto. LastRuntime freshly proves only that choice
+// and the original common target, using a new authenticated isolated lease.
+func routerVPNDesktopExecutionLastProof(ctx context.Context, last mobilemultihop.NodeChainExecutionLast, engine routerVPNDesktopExecutionEngine) (*mobilemultihop.NodeChainExecutionProjection, routerVPNDesktopExecutionProof, error) {
+	original, ok := engine.(interface {
+		AdoptLastContext(context.Context, mobilemultihop.NodeChainExecutionLast) (mobilemultihop.NodeChainExecutionLastPlan, error)
+	})
+	if !ok || ctx == nil || ctx.Err() != nil {
+		return nil, nil, routerVPNExternalFailure
+	}
+	plan, err := original.AdoptLastContext(ctx, last)
+	if err != nil {
+		return nil, nil, err
+	}
+	projection, err := plan.Projection()
+	if err != nil {
+		return nil, nil, err
+	}
+	controller, err := mobilemultihop.NewNodeChainExecutionLastRuntime(ctx, plan, engine)
+	return projection, controller, err
+}

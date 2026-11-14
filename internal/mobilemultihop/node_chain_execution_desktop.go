@@ -36,7 +36,13 @@ func ParseNodeChainExecutionPreparation(input string) (*NodeChainExecutionPrepar
 			return nil, nodeChainExecutionError
 		}
 	}
-	preparation, err := newNodeChainExecutionPreparation(source.LocalSource, source.Execution, desktop)
+	var preparation *NodeChainExecutionPreparation
+	var err error
+	if source.DesktopLast != "" {
+		preparation, err = NewDesktopNodeChainExecutionLastPreparation(desktop, source.Execution, source.DesktopLast)
+	} else {
+		preparation, err = newNodeChainExecutionPreparation(source.LocalSource, source.Execution, desktop)
+	}
 	if err != nil || preparation.Source() != input {
 		return nil, nodeChainExecutionError
 	}

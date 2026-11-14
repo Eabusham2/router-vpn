@@ -94,6 +94,9 @@ func (o *NodeChainExecutionDiscoveryOwner) PlanLastContext(ctx context.Context, 
 	if o == nil || ctx == nil || last.ValidatePreparation(o.prep) != nil {
 		return NodeChainExecutionLastPlan{}, nodeChainExecutionError
 	}
+	if saved := o.prep.source.DesktopLast; saved != "" && last.JSON() != saved {
+		return NodeChainExecutionLastPlan{}, nodeChainExecutionError
+	}
 	if err := o.io.observe(ctx); err != nil {
 		return NodeChainExecutionLastPlan{}, err
 	}

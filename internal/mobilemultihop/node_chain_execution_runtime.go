@@ -216,6 +216,9 @@ func (r *NodeChainExecutionRuntime) Run(parent context.Context) (failure error) 
 	if r == nil || parent == nil || r.projection.validateCapture() != nil {
 		return nodeChainExecutionError
 	}
+	if !r.desktopSavedChoiceCurrent() {
+		return nodeChainExecutionError
+	}
 	r.mu.Lock()
 	if r.retired.Load() || !r.started.CompareAndSwap(false, true) {
 		r.mu.Unlock()

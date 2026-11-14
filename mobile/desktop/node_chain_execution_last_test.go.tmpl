@@ -1,0 +1,182 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/routechoice"
+)
+
+// This command-boundary fixture carries no actual proof. The actual shared and
+// native LastRuntime tests separately require original authenticated discovery,
+// fresh lease acquisition, one selected proof and no Compare rerun.
+func desktopExecutionSavedChoice(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation, projection *mobilemultihop.NodeChainExecutionProjection, execution string, targets ...string) mobilemultihop.NodeChainExecutionLast {
+	t.Helper()
+	var source mobilemultihop.NodeChainExecutionSource
+	if json.Unmarshal([]byte(projection.Source()), &source) != nil {
+		t.Fatal("source fixture")
+	}
+	policy, err := mobilemultihop.NewNodeChainExecutionPolicy(projection.Source())
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, _ := prep.DesktopPhysicalPolicy()
+	_, meta, _, _ := physical.PhysicalReadValidated()
+	descriptor, _ := source.Server.Digest()
+	input := sha256.Sum256([]byte(prep.LocalSource()))
+	target := mobilemultihop.Targets[0]
+	if len(targets) == 1 {
+		target = targets[0]
+	} else if len(targets) > 1 {
+		t.Fatal("saved choice requires one common target")
+	}
+	r := struct {
+		Schema            int                               `json:"schema"`
+		LocalSourceSHA256 string                            `json:"local_source_sha256"`
+		LocalInputSHA256  string                            `json:"local_input_sha256"`
+		Setting           string                            `json:"setting"`
+		Execution         string                            `json:"execution"`
+		Target            string                            `json:"target"`
+		Descriptor        multihoprelay.NodeChainDescriptor `json:"descriptor"`
+		DescriptorSHA256  string                            `json:"descriptor_sha256"`
+		DNSPolicySHA256   string                            `json:"dns_policy_sha256"`
+		EntryHost         string                            `json:"entry_host"`
+		Peer              string                            `json:"peer"`
+		FirstPort         int                               `json:"first_port"`
+		LastPort          int                               `json:"last_port"`
+		Port              int                               `json:"listen_port"`
+		DesktopTargetOS   string                            `json:"desktop_target_os,omitempty"`
+		Digest            string                            `json:"digest"`
+	}{1, prep.LocalSourceSHA256(), hex.EncodeToString(input[:]), prep.Execution(), execution, target, source.Server, descriptor, source.Request.DNSPolicySHA256, policy.Front().Host, source.Request.Peer, source.FirstPort, source.LastPort, source.Request.Port, meta.TargetOS, ""}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(append([]byte("routervpn-node-chain-execution-last-v1\x00"), raw...))
+	r.Digest = hex.EncodeToString(digest[:])
+	raw, _ = json.Marshal(r)
+	last, err := mobilemultihop.ParseNodeChainExecutionLast(string(raw), prep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return last
+}
+
+func TestRouterVPNDesktopNodeChainExecutionSavedChoiceSkipsCompareFactory(t *testing.T) {
+	for _, winner := range []string{"local", "server"} {
+		t.Run(winner, func(t *testing.T) {
+			f := newDesktopExecutionRuntimeFixture(t)
+			target := mobilemultihop.Targets[0]
+			if winner == "server" {
+				target = mobilemultihop.Targets[1]
+			}
+			last := desktopExecutionSavedChoice(t, f.owner.prep, f.engine.projection, winner, target)
+			original, _ := f.owner.physical.OriginalDesktopPolicy()
+			prep, err := mobilemultihop.NewDesktopNodeChainExecutionLastPreparation(original, "auto", last.JSON())
+			if err != nil {
+				t.Fatal(err)
+			}
+			files := desktopImportedCommandFiles(t, map[string]string{"node-chain-execution-source.json": prep.Source(), "sing-box.json": prep.Config()})
+			physical, _ := prep.DesktopPhysicalPolicy()
+			_, meta, _, _ := physical.PhysicalReadValidated()
+			parsed, err := routerVPNNodeChainExecutionCommandCapture(files, meta.SessionID, prep.ConfigSHA256(), meta.SourceSHA256, prep.SourceSHA256(), "linux")
+			if err != nil || parsed.Source() != prep.Source() {
+				t.Fatal("command lost authenticated saved choice", err)
+			}
+			if _, err := routerVPNNodeChainExecutionCommandCapture(files, meta.SessionID, prep.ConfigSHA256(), meta.SourceSHA256, f.owner.prep.SourceSHA256(), "linux"); err == nil {
+				t.Fatal("equal construction config replaced fresh Compare with a saved choice")
+			}
+			policy, _ := mobilemultihop.NewNodeChainExecutionPolicy(f.engine.projection.Source())
+			projection, err := prep.BindExecution(policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.engine.projection = projection
+			f.engine.identity.SourceSHA256, f.engine.identity.ConfigSHA256 = projection.SourceSHA256(), projection.ConfigSHA256()
+			f.engine.readback.Identity = f.engine.identity
+			f.proof.last = last
+			f.proof.progress.Execution = winner
+			f.proof.progress.Comparison.Target = target
+			choice := *f.proof.progress.Comparison.Winner
+			choice.Execution = routechoice.Execution(winner)
+			f.proof.progress.Comparison.Winner = &choice
+			f.proof.progress.Comparison.Final.Candidate = choice
+			f.proof.progress.Comparison.Measurements = nil
+			f.owner, err = routerVPNNewNodeChainExecutionRuntimeFactory(context.Background(), files, prep, f.owner.transfer,
+				func(ctx context.Context) error {
+					if !f.valid.Load() {
+						return routerVPNExternalFailure
+					}
+					return ctx.Err()
+				},
+				func(ctx context.Context, source *mobilemultihop.NodeChainExecutionPreparation, session string, current func(context.Context) error) (routerVPNDesktopExecutionEngine, error) {
+					if source != prep || session != meta.SessionID {
+						t.Fatal("restore replaced original command capture")
+					}
+					f.engine.current = current
+					return f.engine, ctx.Err()
+				}, func(*mobilemultihop.NodeChainExecutionProjection, routerVPNDesktopExecutionEngine) (routerVPNDesktopExecutionProof, error) {
+					return nil, errors.New("restore reran ordinary Compare factory")
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.owner.lastProof = func(ctx context.Context, captured mobilemultihop.NodeChainExecutionLast, engine routerVPNDesktopExecutionEngine) (*mobilemultihop.NodeChainExecutionProjection, routerVPNDesktopExecutionProof, error) {
+				if captured.JSON() != last.JSON() || engine != f.engine || ctx.Err() != nil {
+					t.Fatal("restore replaced captured choice or engine")
+				}
+				f.events = append(f.events, "restore")
+				return projection, f.proof, nil
+			}
+			if err := f.owner.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(f.events, ",") != "discover,restore,prove" {
+				t.Fatal("restore reselected port or reran Compare", f.events)
+			}
+			raw, err := files.read("node-chain-execution-last.json", 16<<10)
+			if err != nil || string(raw) != last.JSON() {
+				t.Fatal("child changed proved restore winner or target", err)
+			}
+			if err := f.owner.heartbeat(context.Background(), f.record); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.owner.close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := files.root.Lstat("node-chain-execution-last.json"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("retired child retained saved-choice output", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionSavedChoiceRevokesLatePublication(t *testing.T) {
+	f := newDesktopExecutionRuntimeFixture(t)
+	published := false
+	f.engine.observe = func() {
+		if _, err := f.owner.files.root.Lstat("node-chain-execution-last.json"); err == nil {
+			published = true
+			f.valid.Store(false)
+		}
+	}
+	if err := f.owner.run(context.Background()); err == nil || !published {
+		t.Fatal("original host was not revoked across saved-choice publication", err)
+	}
+	for _, name := range []string{"node-chain-execution-adoption.json", "node-chain-execution-last.json"} {
+		if _, err := f.owner.files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("late saved-choice publication survived original revocation", name, err)
+		}
+	}
+	if err := f.owner.close(context.Background()); err != nil || !f.owner.closed.Load() {
+		t.Fatal("failed saved-choice publication did not join original runtime", err)
+	}
+}

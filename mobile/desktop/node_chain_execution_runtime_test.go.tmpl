@@ -151,6 +151,7 @@ type desktopExecutionProofFixture struct {
 	lifetime context.Context
 	progress mobilemultihop.NodeChainExecutionProgress
 	closeErr error
+	last     mobilemultihop.NodeChainExecutionLast
 	events   *[]string
 }
 
@@ -165,6 +166,13 @@ func (p *desktopExecutionProofFixture) HealthyContext(ctx context.Context) error
 	}
 	return ctx.Err()
 }
+func (p *desktopExecutionProofFixture) CaptureLastContext(ctx context.Context) (mobilemultihop.NodeChainExecutionLast, error) {
+	if err := p.HealthyContext(ctx); err != nil {
+		return mobilemultihop.NodeChainExecutionLast{}, err
+	}
+	return p.last, ctx.Err()
+}
+
 func (p *desktopExecutionProofFixture) Progress() mobilemultihop.NodeChainExecutionProgress {
 	return p.progress
 }
@@ -284,6 +292,7 @@ func newDesktopExecutionRuntimeFixture(t *testing.T) *desktopExecutionRuntimeFix
 	}
 	progress.Comparison = routechoice.Result{Target: mobilemultihop.Targets[0], Winner: &candidate, Final: &measured, Measurements: []routechoice.Measurement{measured}}
 	f.proof.progress = progress
+	f.proof.last = desktopExecutionSavedChoice(t, prep, projection, progress.Execution)
 	f.owner, err = routerVPNNewNodeChainExecutionRuntimeFactory(context.Background(), files, prep, strings.Repeat("d", 64), func(ctx context.Context) error {
 		if !f.valid.Load() {
 			return routerVPNExternalFailure
