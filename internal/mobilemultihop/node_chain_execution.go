@@ -66,11 +66,13 @@ func NewNodeChainExecutionPolicy(sourceJSON string) (*NodeChainExecutionPolicy, 
 		return nil, nodeChainExecutionError
 	}
 	local, err := NewNodeChain(source.LocalSource)
-	if err != nil || local.importedMiddle != nil || local.validateCapture() != nil || len(local.nodes) != len(source.Server.Members)+1 {
+	if err != nil || local.validateCapture() != nil || len(local.nodes) != len(source.Server.Members)+1 ||
+		local.importedMiddle != nil && local.importedMiddle.hostname != nil {
 		return nil, nodeChainExecutionError
 	}
 	var original NodeChainSource
-	if exactJSON([]byte(source.LocalSource), &original, NodeChainInputLimit) != nil || original.Schema != 1 || len(original.IdentitySources) != len(local.nodes) {
+	if exactJSON([]byte(source.LocalSource), &original, NodeChainInputLimit) != nil || original.Schema != source.Server.Schema ||
+		len(original.IdentitySources) != len(local.nodes) {
 		return nil, nodeChainExecutionError
 	}
 	entry := local.nodes[0]
@@ -86,12 +88,27 @@ func NewNodeChainExecutionPolicy(sourceJSON string) (*NodeChainExecutionPolicy, 
 	if err != nil || host.Is4In6() || host.String() != api.Hostname() {
 		return nil, nodeChainExecutionError
 	}
+	packetIndex := 0
 	for index, node := range local.nodes {
-		if index < len(local.nodes)-1 {
-			key, err := node.PacketClientPublicKey()
-			if err != nil || key != source.Request.LocalPacketPublicKeys[index] {
+		if node == nil {
+			if index != 1 || local.importedMiddle == nil || source.Server.Schema != 2 {
 				return nil, nodeChainExecutionError
 			}
+			member, proof, middle := source.Server.Members[index-1], local.proofs[index], local.importedMiddle
+			if member.Position != index || member.ProfileID != proof.ProfileID || member.NodeID != "" || member.Mode != proof.Mode ||
+				member.StartLayer != proof.StartLayer || member.NodeKind != proof.NodeKind || member.ProofKind != proof.Kind ||
+				member.SourceSHA256 != middle.source || member.SourceSHA256 != proof.SourceSHA256 || member.ExpectedPublicIP != middle.selection.ExpectedPublicIP {
+				return nil, nodeChainExecutionError
+			}
+			continue
+		}
+		if index < len(local.nodes)-1 {
+			key, err := node.PacketClientPublicKey()
+			if err != nil || packetIndex >= len(source.Request.LocalPacketPublicKeys) || key != source.Request.LocalPacketPublicKeys[packetIndex] ||
+				source.Request.Schema == 2 && source.Request.LocalPacketPositions[packetIndex] != index {
+				return nil, nodeChainExecutionError
+			}
+			packetIndex++
 		}
 		if index == 0 {
 			closure, err := nodeMultihopPredecessor(node)
@@ -130,6 +147,9 @@ func NewNodeChainExecutionPolicy(sourceJSON string) (*NodeChainExecutionPolicy, 
 				return nil, nodeChainExecutionError
 			}
 		}
+	}
+	if packetIndex != len(source.Request.LocalPacketPublicKeys) {
+		return nil, nodeChainExecutionError
 	}
 	last := local.nodes[len(local.nodes)-1]
 	var finalGraph map[string]any

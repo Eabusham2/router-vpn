@@ -75,7 +75,7 @@ func nodeChainServerCaptureFixture(t *testing.T, policy *NodeChainServerPolicy) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := multihoprelay.NodeChainRequest{Schema: 1, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID,
+	request := multihoprelay.NodeChainRequest{Schema: descriptor.Schema, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID,
 		SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256,
 		Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: 1794484810, Port: 26240}
 	for i := range descriptor.Members {
@@ -83,7 +83,12 @@ func nodeChainServerCaptureFixture(t *testing.T, policy *NodeChainServerPolicy) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()))
+		if descriptor.Schema == 1 || i == 0 {
+			request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()))
+			if descriptor.Schema == 2 {
+				request.LocalPacketPositions = append(request.LocalPacketPositions, 0)
+			}
+		}
 		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1,
 			Username: fmt.Sprintf("%048x", 101+i*2), Password: fmt.Sprintf("%048x", 102+i*2)})
 	}

@@ -85,7 +85,7 @@ func nodeChainServerCarrierTarget(p *NodeChainServerPolicy) (PhysicalEgress, err
 		return PhysicalEgress{}, nodeChainServerCarrierError
 	}
 	first := p.nodes[0]
-	if first.mode != "wg" && first.mode != "awg2-fast" && first.mode != "awg2-strong" {
+	if first == nil || first.mode != "wg" && first.mode != "awg2-fast" && first.mode != "awg2-strong" {
 		return PhysicalEgress{}, nodeChainServerCarrierError
 	}
 	egress, err := first.PhysicalEgress()
@@ -273,7 +273,7 @@ func (c *NodeChainServerCarrier) Done() <-chan struct{} {
 // NativeCarrierRequired identifies the bounded WG/AWG first-carrier family.
 // Other existing Server families retain their separate admission boundaries.
 func (p *NodeChainServerPolicy) NativeCarrierRequired() bool {
-	if p == nil || p.validateCapture() != nil || len(p.nodes) == 0 {
+	if p == nil || p.validateCapture() != nil || len(p.nodes) == 0 || p.nodes[0] == nil {
 		return false
 	}
 	mode := p.nodes[0].mode

@@ -63,7 +63,8 @@ func (p *nodeChainExecutionRuntimeWorker) Snapshot(ctx context.Context, nonce st
 		r.PublicProven = true
 		r.ProofAt = p.proofAt.Load()
 		for _, m := range c.Source.Members {
-			r.Prefixes = append(r.Prefixes, multihoprelay.NodeChainPrefixReceipt{Position: m.Position, ProfileID: m.ProfileID, NodeID: m.NodeID, Mode: m.Mode, Proven: true, ResponseMS: 1.5})
+			r.Prefixes = append(r.Prefixes, multihoprelay.NodeChainPrefixReceipt{Position: m.Position, ProfileID: m.ProfileID, NodeID: m.NodeID, Mode: m.Mode, Proven: true, ResponseMS: 1.5,
+				NodeKind: m.NodeKind, ProofKind: m.ProofKind, SourceSHA256: m.SourceSHA256})
 		}
 	}
 	return r, ctx.Err()
@@ -428,11 +429,16 @@ func nodeChainExecutionRuntimeTLS(t *testing.T, handler http.Handler) (*httptest
 func newNodeChainExecutionRuntimeFixture(t *testing.T, execution string) *nodeChainExecutionRuntimeFixture {
 	t.Helper()
 	source := nodeChainExecutionFixtureSource(t, 3, "", execution)
+	return newNodeChainExecutionRuntimeFixtureFromSource(t, source)
+}
+
+func newNodeChainExecutionRuntimeFixtureFromSource(t *testing.T, source NodeChainExecutionSource) *nodeChainExecutionRuntimeFixture {
+	t.Helper()
 	policy, err := NewNodeChainExecutionPolicy(startJSON(t, source))
 	if err != nil {
 		t.Fatal(err)
 	}
-	prep, err := NewNodeChainExecutionPreparation(source.LocalSource, execution)
+	prep, err := NewNodeChainExecutionPreparation(source.LocalSource, source.Execution)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,6 +456,9 @@ func newNodeChainExecutionRuntimeFixture(t *testing.T, execution string) *nodeCh
 		t.Fatal(err)
 	}
 	for position, node := range policy.local.nodes {
+		if node == nil && position == 1 && policy.local.importedMiddle != nil {
+			continue
+		}
 		api, _ := privateAPI(predecessorText(node.profile, "router_api"))
 		token := predecessorText(node.profile, "api_token")
 		endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -513,6 +522,10 @@ func newNodeChainExecutionRuntimeFixture(t *testing.T, execution string) *nodeCh
 		_, _ = w.Write([]byte(body))
 	}))
 	e.publicPeer = public.Listener.Addr().String()
+	if policy.local.importedMiddle != nil {
+		e.peers[local[1].Tag+"/1.1.1.1:443"] = e.publicPeer
+		e.peers[serverProofs[1].Tag+"/1.1.1.1:443"] = e.publicPeer
+	}
 	f.trust = trust
 	f.runtime, err = NewNodeChainExecutionRuntime(projection, e)
 	if err != nil {

@@ -208,19 +208,28 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 	if err != nil {
 		return nil, err
 	}
-	request := multihoprelay.NodeChainRequest{Schema: 1, EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256,
+	request := multihoprelay.NodeChainRequest{Schema: descriptor.Schema, EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256,
 		DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: discovery.Challenge.Epoch,
 		Peer: discovery.Challenge.Peer, AcquireExpiresAt: discovery.Challenge.ExpiresAt, Port: port}
 	request.SessionID, err = randomHex(16)
 	if err != nil {
 		return nil, err
 	}
-	for _, node := range p.local.nodes[:len(p.local.nodes)-1] {
+	for position, node := range p.local.nodes[:len(p.local.nodes)-1] {
+		if node == nil {
+			if position != 1 || p.local.importedMiddle == nil || descriptor.Schema != 2 {
+				return nil, nodeChainExecutionError
+			}
+			continue
+		}
 		key, err := node.PacketClientPublicKey()
 		if err != nil {
 			return nil, err
 		}
 		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, key)
+		if descriptor.Schema == 2 {
+			request.LocalPacketPositions = append(request.LocalPacketPositions, position)
+		}
 	}
 	for _, member := range descriptor.Members {
 		username, err := randomHex(24)

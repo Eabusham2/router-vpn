@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	M "github.com/sagernet/sing/common/metadata"
 )
@@ -33,5 +34,45 @@ func TestServerChainSelectedDNSChecksEveryLiteralAnswer(t *testing.T) {
 	original.Fqdn = ""
 	if _, err := routerVPNServerChainResolved(route, "tcp", original, []netip.Addr{good}); err == nil {
 		t.Fatal("uncaptured hostname was substituted")
+	}
+}
+
+func TestServerChainImportedBenchmarkChecksEverySelectedAnswer(t *testing.T) {
+	route := mobilemultihop.NodeChainServerFrontRoute{PublicPathBenchmark: true, BlockIPv6: true,
+		Destinations: []mobilemultihop.NodeChainServerDestination{{Network: "tcp", Address: "1.1.1.1:443"}, {Network: "tcp", Address: hopmeasure.PublicAddress}}}
+	original := M.Socksaddr{Fqdn: hopmeasure.PublicHost, Port: 443}
+	good := netip.MustParseAddr("93.184.216.34")
+	resolved, err := routerVPNServerChainResolved(route, "tcp", original, []netip.Addr{good})
+	if err != nil || resolved.Addr != good || route.AllowsDestination("tcp", resolved.String()) {
+		t.Fatal("scoped selected resolver result failed or granted a raw prefix route", err)
+	}
+	for name, answers := range map[string][]netip.Addr{
+		"private-after-good":  {good, netip.MustParseAddr("10.77.0.1")},
+		"loopback-after-good": {good, netip.MustParseAddr("127.0.0.1")},
+		"disabled-ipv6":       {good, netip.MustParseAddr("2606:4700:4700::1111")},
+		"mapped":              {good, netip.MustParseAddr("::ffff:93.184.216.34")},
+		"empty":               nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := routerVPNServerChainResolved(route, "tcp", original, answers); err == nil {
+				t.Fatal("imported benchmark accepted a foreign selected-DNS answer")
+			}
+		})
+	}
+	for _, network := range []string{"udp", ""} {
+		if _, err := routerVPNServerChainResolved(route, network, original, []netip.Addr{good}); err == nil {
+			t.Fatal("imported benchmark gained datagram authority")
+		}
+	}
+	original.Fqdn = "other.example"
+	if _, err := routerVPNServerChainResolved(route, "tcp", original, []netip.Addr{good}); err == nil {
+		t.Fatal("imported prefix gained arbitrary hostname resolution")
+	}
+	// A pure front-boundary case exercises the actual all-answer policy loop.
+	// This does not claim a public CIDR is an importable home-LAN setting.
+	original.Fqdn = hopmeasure.PublicHost
+	route.BlockedCIDRs = []string{"93.184.216.0/24"}
+	if _, err := routerVPNServerChainResolved(route, "tcp", original, []netip.Addr{netip.MustParseAddr("1.0.0.1"), good}); err == nil {
+		t.Fatal("a good first answer concealed a later captured-policy rejection")
 	}
 }

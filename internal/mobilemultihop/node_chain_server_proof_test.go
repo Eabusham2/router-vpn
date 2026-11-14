@@ -49,6 +49,9 @@ func newNodeChainServerProofTestEngine(t *testing.T, p *NodeChainServerPolicy, c
 	}
 	e := &nodeChainServerProofTestEngine{policy: p, capture: c.Clone(), binding: binding, peers: map[string]string{}, wrongPrefix: -1, deadPrefix: -1, publicBody: "ip=203.0.113.88\n", publicStatus: 200}
 	for index, target := range p.proofTargets {
+		if target.Proof.NodeKind == "external" {
+			continue
+		}
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/health" || r.Host != target.Address || r.Header.Get("Authorization") != "Bearer "+target.Token || r.Header.Get("Cache-Control") != "no-store" || r.Header.Get("Accept-Encoding") != "identity" {
 				t.Error("proof changed captured API/authentication/request policy")
@@ -89,6 +92,11 @@ func newNodeChainServerProofTestEngine(t *testing.T, p *NodeChainServerPolicy, c
 		_, _ = w.Write([]byte(body))
 	}))
 	e.publicPeer, e.trust = public.Listener.Addr().String(), trust
+	for _, target := range p.proofTargets {
+		if target.Proof.NodeKind == "external" {
+			e.peers[target.Proof.Tag] = e.publicPeer
+		}
+	}
 	return e
 }
 

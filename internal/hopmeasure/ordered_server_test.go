@@ -63,3 +63,40 @@ func TestOrderedServerMeasurementAdmitsOnlyOnePositionalSource(t *testing.T) {
 		})
 	}
 }
+
+func TestOrderedImportedServerMeasurementPreservesTypedPrefixAuthority(t *testing.T) {
+	original := orderedServerAdmissionHops()[:3]
+	original[2].Role = "exit"
+	original[1].Kind, original[1].API, original[1].Token, original[1].Proof = "public-path", "", "", ""
+	service, err := NewOrderedImportedServerContext(context.Background(), orderedServerAdmissionEngine{}, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewOrderedServerContext(context.Background(), orderedServerAdmissionEngine{}, original); err == nil {
+		t.Fatal("ordinary Server admitted an imported identity")
+	}
+	if _, err := NewOrderedImportedMiddleContext(context.Background(), orderedServerAdmissionEngine{}, original); err == nil {
+		t.Fatal("ordinary imported Local admitted Server tags")
+	}
+	for name, mutate := range map[string]func([]Hop){
+		"fake-api":            func(h []Hop) { h[1].API = "http://10.81.0.1:8787" },
+		"fake-token":          func(h []Hop) { h[1].Token = "private-token" },
+		"fake-proof":          func(h []Hop) { h[1].Proof = strings.Repeat("b", 64) },
+		"wrong-position":      func(h []Hop) { h[1].Tag = h[2].Tag },
+		"source-substitution": func(h []Hop) { h[2].Tag = "routervpn-chain-server-2-" + strings.Repeat("b", 16) },
+		"server-entry":        func(h []Hop) { h[0].Tag = "routervpn-chain-server-0-" + strings.Repeat("a", 16) },
+		"external-final":      func(h []Hop) { h[2].Kind = "public-path" },
+		"wrong-role":          func(h []Hop) { h[1].Role = "exit" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := append([]Hop(nil), original...)
+			mutate(candidate)
+			if _, err := NewOrderedImportedServerContext(context.Background(), orderedServerAdmissionEngine{}, candidate); err == nil {
+				t.Fatal("imported Server borrowed another proof or source")
+			}
+		})
+	}
+}

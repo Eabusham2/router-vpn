@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/multihoprelay"
 )
 
@@ -33,12 +34,13 @@ type NodeChainServerBinding struct {
 // A proof target is private worker input. It cannot be published as capability
 // metadata: its original API credential belongs only to this captured member.
 type NodeChainServerProof struct {
-	Binding NodeChainServerBinding `json:"binding"`
-	Proof   NodeChainProof         `json:"proof"`
-	API     string                 `json:"api"`
-	Token   string                 `json:"token"`
-	Network string                 `json:"network"`
-	Address string                 `json:"address"`
+	Binding          NodeChainServerBinding `json:"binding"`
+	Proof            NodeChainProof         `json:"proof"`
+	API              string                 `json:"api"`
+	Token            string                 `json:"token"`
+	Network          string                 `json:"network"`
+	Address          string                 `json:"address"`
+	ExpectedPublicIP string                 `json:"expected_public_ip,omitempty"`
 }
 
 type NodeChainServerDestination struct {
@@ -62,18 +64,19 @@ type NodeChainServerDNSCapture struct {
 // the original union of node policies. Its Destinations are exact captured
 // control/DNS exceptions, not CIDR or wildcard grants. A restricted hostname
 // must first be resolved by the retained selected DNS owner and every resolved
-// literal checked with AllowsDestination before the worker dispatches it.
+// literal checked with AllowsResolvedDestination before the worker dispatches it.
 type NodeChainServerFrontRoute struct {
-	Binding           NodeChainServerBinding       `json:"binding"`
-	Position          int                          `json:"position"`
-	Username          string                       `json:"username"`
-	Password          string                       `json:"password"`
-	Tag               string                       `json:"tag"`
-	Final             bool                         `json:"final"`
-	UDPOverTCPVersion int                          `json:"udp_over_tcp_version"`
-	Destinations      []NodeChainServerDestination `json:"destinations"`
-	BlockIPv6         bool                         `json:"block_ipv6"`
-	BlockedCIDRs      []string                     `json:"blocked_cidrs"`
+	Binding             NodeChainServerBinding       `json:"binding"`
+	Position            int                          `json:"position"`
+	Username            string                       `json:"username"`
+	Password            string                       `json:"password"`
+	Tag                 string                       `json:"tag"`
+	Final               bool                         `json:"final"`
+	PublicPathBenchmark bool                         `json:"public_path_benchmark,omitempty"`
+	UDPOverTCPVersion   int                          `json:"udp_over_tcp_version"`
+	Destinations        []NodeChainServerDestination `json:"destinations"`
+	BlockIPv6           bool                         `json:"block_ipv6"`
+	BlockedCIDRs        []string                     `json:"blocked_cidrs"`
 }
 
 // AllowsDestination is a pure tuple check, not front admission or readiness.
@@ -112,6 +115,31 @@ func (r NodeChainServerFrontRoute) AllowsDestination(network, address string) bo
 	return true
 }
 
+// AllowsResolvedDestination is a second check after the original selected
+// resolver has returned. An imported benchmark may resolve only its one fixed
+// HTTPS hostname; that result never becomes permission to request a raw IP or
+// another hostname with the same prefix credential. Every answer is checked.
+func (r NodeChainServerFrontRoute) AllowsResolvedDestination(network, original, resolved string) bool {
+	if original == resolved || r.Final {
+		return r.AllowsDestination(network, resolved)
+	}
+	if !r.PublicPathBenchmark || network != "tcp" || original != hopmeasure.PublicAddress || !r.AllowsDestination(network, original) {
+		return false
+	}
+	host, port, err := net.SplitHostPort(resolved)
+	ip, parseErr := netip.ParseAddr(host)
+	if err != nil || parseErr != nil || port != "443" || ip.String() != host || !externalPublicIP(host) || r.BlockIPv6 && ip.Is6() {
+		return false
+	}
+	for _, value := range r.BlockedCIDRs {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil || prefix.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
 // NodeChainServerPolicy holds a sealed no-inbound native graph. Creating it
 // opens no socket and proves no connectivity. The worker owns the separate
 // authenticated front and must not forward while proofs are pending.
@@ -119,6 +147,7 @@ type NodeChainServerPolicy struct {
 	carrier                                        *NodeChainServerCarrier
 	sourceJSON, sourceSHA, config, configSHA, seal string
 	nodes                                          []*NodeProfile
+	importedMiddle                                 *nodeChainImportedMember
 	descriptor                                     multihoprelay.NodeChainDescriptor
 	proofs                                         []NodeChainProof
 	proofTargets                                   []NodeChainServerProof
@@ -135,9 +164,12 @@ func NewNodeChainServerPolicy(sourceJSON string) (*NodeChainServerPolicy, error)
 
 func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier) (*NodeChainServerPolicy, error) {
 	var source NodeChainServerSource
-	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || source.Schema != 1 ||
+	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || (source.Schema != 1 && source.Schema != 2) ||
 		!exactID.MatchString(source.EntryID) || !proofID.MatchString(source.EntryNodeID) || !NodeChainPrefixMode(source.EntryMode) ||
 		len(source.Nodes) < 1 || len(source.Nodes) > multihoprelay.NodeChainMaximumMembers || len(source.IdentitySources) != len(source.Nodes) {
+		return nil, nodeChainServerError
+	}
+	if source.Schema == 2 && (len(source.Nodes) != 2 || source.IdentitySources[0] != "" || source.IdentitySources[1] == "") {
 		return nil, nodeChainServerError
 	}
 	raw, err := json.Marshal(source)
@@ -145,15 +177,47 @@ func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier
 		return nil, nodeChainServerError
 	}
 	p := &NodeChainServerPolicy{sourceJSON: string(raw)}
-	digest, _ := json.Marshal([]string{"routervpn-server-node-chain-source-v1", p.sourceJSON})
+	domain := "routervpn-server-node-chain-source-v1"
+	if source.Schema == 2 {
+		domain = "routervpn-server-node-chain-source-v2"
+	}
+	digest, _ := json.Marshal([]string{domain, p.sourceJSON})
 	p.sourceSHA = externalDigest(digest)
 	clear(digest)
-	p.descriptor = multihoprelay.NodeChainDescriptor{Schema: 1, EntryID: source.EntryID, EntryNodeID: source.EntryNodeID,
+	p.descriptor = multihoprelay.NodeChainDescriptor{Schema: source.Schema, EntryID: source.EntryID, EntryNodeID: source.EntryNodeID,
 		EntryMode: source.EntryMode, SourceSHA256: p.sourceSHA}
 	members := make([]nodeChainGraphMember, 0, len(source.Nodes))
 	closures := make([]*externalPredecessor, 0, len(source.Nodes))
 	blocked := map[string]bool{}
 	for index, launch := range source.Nodes {
+		if source.Schema == 2 && index == 0 {
+			middle, err := parseNodeChainImportedMember(launch)
+			// A saved hostname depends on the preceding Local packet resolver.
+			// This server suffix has no such preceding owner or ambient DNS grant.
+			if err != nil || middle == nil || middle.hostname != nil || middle.validate() != nil {
+				return nil, nodeChainServerError
+			}
+			closure, err := middle.closure()
+			if err != nil {
+				return nil, err
+			}
+			ipv6, ranges, err := externalDevicePolicy(middle.selection.Profile)
+			if err != nil {
+				return nil, err
+			}
+			p.blockIPv6 = p.blockIPv6 || ipv6 == "off"
+			for _, value := range ranges {
+				blocked[value] = true
+			}
+			p.importedMiddle = middle
+			p.nodes = append(p.nodes, nil)
+			p.descriptor.Members = append(p.descriptor.Members, multihoprelay.NodeChainMember{
+				Position: 1, ProfileID: middle.id(), Mode: "shadowsocks", StartLayer: "off", NodeKind: "external", ProofKind: "public-path",
+				SourceSHA256: middle.source, ExpectedPublicIP: middle.selection.ExpectedPublicIP})
+			members = append(members, nodeChainGraphMember{profile: middle.selection.Profile, source: middle.source, mode: "shadowsocks", imported: true})
+			closures = append(closures, closure)
+			continue
+		}
 		node, err := ParseNodeLaunchInput(launch)
 		if err != nil || node == nil || validateNodeChainIdentity(source.IdentitySources[index], node) != nil ||
 			index < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) || index == len(source.Nodes)-1 && node.mode != "shadowsocks" {
@@ -224,7 +288,12 @@ func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier
 	if p.descriptor.Validate() != nil {
 		return nil, nodeChainServerError
 	}
-	expected, err := p.nodes[0].PhysicalEgress()
+	var expected []PhysicalEgress
+	if p.importedMiddle != nil {
+		expected, err = p.importedMiddle.policy.DirectPhysicalEgress([]string{"tcp", "udp"})
+	} else {
+		expected, err = p.nodes[0].PhysicalEgress()
+	}
 	if err != nil {
 		return nil, nodeChainServerError
 	}
@@ -268,6 +337,11 @@ func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier
 	for index, proof := range proofs {
 		proof.Position = index + 1
 		p.proofs = append(p.proofs, proof)
+		if p.importedMiddle != nil && index == 0 {
+			p.proofTargets = append(p.proofTargets, NodeChainServerProof{Proof: proof, Network: "tcp", Address: "1.1.1.1:443",
+				ExpectedPublicIP: p.importedMiddle.selection.ExpectedPublicIP})
+			continue
+		}
 		node := p.nodes[index]
 		api := predecessorText(node.profile, "router_api")
 		url, err := privateAPI(api)
@@ -329,6 +403,16 @@ func (p *NodeChainServerPolicy) validateCapture() error {
 	}
 	for index, node := range p.nodes {
 		proof := p.proofs[index]
+		if p.importedMiddle != nil && index == 0 {
+			middle, target := p.importedMiddle, p.proofTargets[index]
+			if node != nil || middle.validate() != nil || proof.Position != 1 || proof.SourceSHA256 != middle.source ||
+				proof.ProfileID != middle.id() || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" ||
+				proof.Mode != "shadowsocks" || proof.StartLayer != "off" || target.API != "" || target.Token != "" ||
+				target.Network != "tcp" || target.Address != "1.1.1.1:443" || target.ExpectedPublicIP != middle.selection.ExpectedPublicIP {
+				return nodeChainServerError
+			}
+			continue
+		}
 		if node == nil || node.validateNodeDesktopCapture() != nil || proof.Position != index+1 || proof.SourceSHA256 != node.source ||
 			proof.Mode != node.mode || proof.ProfileID != predecessorText(node.profile, "id") || proof.NodeID != predecessorText(node.profile, "node_proof_id") {
 			return nodeChainServerError
@@ -398,6 +482,14 @@ func (p *NodeChainServerPolicy) FrontRoutes(capture multihoprelay.NodeChainCaptu
 		route := NodeChainServerFrontRoute{Binding: binding, Position: proof.Position, Username: user.Username,
 			Password: user.Password, Tag: proof.Tag, Final: index == len(p.proofs)-1,
 			Destinations: []NodeChainServerDestination{{Network: target.Network, Address: target.Address}}}
+		if proof.NodeKind == "external" {
+			// This is the existing explicitly labelled public path benchmark,
+			// scoped to the imported prefix. It grants no arbitrary hostname,
+			// UDP relay or direct resolver; the worker retains selected DNS.
+			route.Destinations = append(route.Destinations, NodeChainServerDestination{Network: "tcp", Address: hopmeasure.PublicAddress})
+			route.PublicPathBenchmark = true
+			route.BlockIPv6, route.BlockedCIDRs = p.blockIPv6, append([]string(nil), p.blockedCIDRs...)
+		}
 		if route.Final {
 			route.UDPOverTCPVersion = 2
 			route.BlockIPv6, route.BlockedCIDRs = p.blockIPv6, append([]string(nil), p.blockedCIDRs...)

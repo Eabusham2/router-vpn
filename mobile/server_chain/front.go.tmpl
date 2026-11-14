@@ -229,8 +229,9 @@ func (f *routerVPNServerChainFront) NewConnectionEx(ctx context.Context, conn ne
 	if destination.Fqdn == uot.LegacyMagicAddress {
 		return
 	}
+	original := destination
 	destination, err := f.resolve(ctx, route, "tcp", destination)
-	if err != nil || !route.AllowsDestination("tcp", destination.String()) || !f.allowed() {
+	if err != nil || !route.AllowsResolvedDestination("tcp", original.String(), destination.String()) || !f.allowed() {
 		return
 	}
 	remote, err := f.dial(ctx, route.Tag, "tcp", destination)

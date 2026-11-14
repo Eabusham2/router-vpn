@@ -60,12 +60,21 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 			role = "exit"
 		}
 		node := r.projection.policy.local.nodes[position]
+		if position == 1 && r.projection.policy.local.importedMiddle != nil {
+			hops[position] = hopmeasure.Hop{ID: proof.ProfileID, Role: role, Tag: proof.Tag, Kind: "public-path",
+				Label: fmt.Sprintf("Cumulative %s path through custom node 2 of 3 → Cloudflare edge", trial.execution)}
+			continue
+		}
 		hops[position] = hopmeasure.Hop{ID: proof.ProfileID, Role: role, Tag: proof.Tag,
 			API: predecessorText(node.profile, "router_api"), Token: predecessorText(node.profile, "api_token"), Proof: proof.NodeID,
 			Kind: "private-node", Label: fmt.Sprintf("Cumulative %s path through node %d of %d", trial.execution, position+1, len(proofs))}
 	}
 	var service *hopmeasure.Service
-	if trial.execution == "server" {
+	if trial.execution == "server" && r.projection.policy.local.importedMiddle != nil {
+		service, err = hopmeasure.NewOrderedImportedServerContext(ctx, e, hops)
+	} else if trial.execution == "local" && r.projection.policy.local.importedMiddle != nil {
+		service, err = hopmeasure.NewOrderedImportedMiddleContext(ctx, e, hops)
+	} else if trial.execution == "server" {
 		service, err = hopmeasure.NewOrderedServerContext(ctx, e, hops)
 	} else if trial.execution == "local" {
 		service, err = hopmeasure.NewOrderedContext(ctx, e, hops)
@@ -144,6 +153,10 @@ func (e *nodeChainExecutionMeasurementEngine) Dial(ctx context.Context, tag, add
 	}
 	allowed := false
 	for position, proof := range proofs {
+		if position == 1 && e.runtime.projection.policy.local.importedMiddle != nil {
+			allowed = allowed || proof.Tag == tag && address == hopmeasure.PublicAddress
+			continue
+		}
 		api, parseErr := privateAPI(predecessorText(e.runtime.projection.policy.local.nodes[position].profile, "router_api"))
 		allowed = allowed || parseErr == nil && proof.Tag == tag && api.Host == address
 	}

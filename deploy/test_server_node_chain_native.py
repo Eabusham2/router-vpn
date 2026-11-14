@@ -24,12 +24,14 @@ ROOTS=('TestServerChainFrontPendingCannotForward','TestServerChainFrontOriginalC
  'TestServerChainSelectedDNSChecksEveryLiteralAnswer','TestServerChainFrontLateNativeReturnRetainsFailedClose',
  'TestServerChainNativeCloseDeadlineRetainsOriginalAttempt','TestServerChainNativeCloseErrorRetriesSameObject',
  'TestServerChainNativeUnreturnedTCPAndPacketRemainOwned',
- 'TestServerChainCommandFailureDiagnosticsPreserveRefusal','TestServerChainFailureDiagnosticsSanitizeNativeErrors')
+ 'TestServerChainCommandFailureDiagnosticsPreserveRefusal','TestServerChainFailureDiagnosticsSanitizeNativeErrors',
+ 'TestServerChainImportedBenchmarkChecksEverySelectedAnswer')
 CHILDREN={
  ROOTS[3]:('wrong-password','foreign-user','no-auth','prefix-foreign-tuple','prefix-uot','legacy-uot','udp-associate','retired-proof'),
  ROOTS[5]:('native-owner','partial-construction'),ROOTS[7]:('duplicate','null','alias','foreign-request','linked-capture'),
  ROOTS[8]:('none','private-first','private-after-good','loopback-after-good','ipv6-after-good','mapped-after-good','zoned','invalid','over-bound'),
- ROOTS[13]:('snapshot-bootstrap','construction')}
+ ROOTS[13]:('snapshot-bootstrap','construction'),
+ ROOTS[15]:('private-after-good','loopback-after-good','disabled-ipv6','mapped','empty')}
 EXPECTED=set(ROOTS)|{root+'/'+child for root,children in CHILDREN.items() for child in children}
 PACKAGE='github.com/sagernet/sing-box/cmd/sing-box'
 
@@ -94,14 +96,15 @@ def run(core,go,tags,race=False,ldflags='',receipt=None):
  print(baseline.stdout,end='');result=verdict(baseline.stdout,baseline.returncode,baseline.stderr)
  file=core/'cmd/sing-box/routervpn_server_chain_front.go';original=file.read_text()
  controls=(
- ('prefix',ROOTS[3]+'/prefix-foreign-tuple','refusal reached captured/native routing', [('!route.AllowsDestination("tcp", destination.String()) || ','')]),
+ ('prefix',ROOTS[3]+'/prefix-foreign-tuple','refusal reached captured/native routing', [('!route.AllowsResolvedDestination("tcp", original.String(), destination.String()) || ','false && !route.AllowsResolvedDestination("tcp", original.String(), destination.String()) || ')]),
  ('uot',ROOTS[3]+'/prefix-uot','prefix UoT negotiation was accepted', [('if !route.Final || route.UDPOverTCPVersion != 2 {','if false && (!route.Final || route.UDPOverTCPVersion != 2) {')]),
  ('close',ROOTS[4],'failed native close was acknowledged',[('if remaining != 0 {','if false && remaining != 0 {')]),
  ('late',ROOTS[9],'late original native close was acknowledged',[('f.originals[original] = true','if f.retiring { return false }; f.originals[original] = true')]),
- ('native-close',ROOTS[11],'failed original native resource was discarded',[('n.connections[owner] = true','// removed original close retention')]))
+ ('native-close',ROOTS[11],'failed original native resource was discarded',[('n.connections[owner] = true','// removed original close retention')]),
+ ('benchmark-answers',ROOTS[15]+'/private-after-good','imported benchmark accepted a foreign selected-DNS answer', [('for _, address := range answers {','for _, address := range answers[:1] {')]))
  with tempfile.TemporaryDirectory(prefix='server-chain-controls-') as directory:
   for label,name,witness,changes in controls:
-   file=core/('cmd/sing-box/routervpn_server_chain_resources.go' if label=='native-close' else 'cmd/sing-box/routervpn_server_chain_front.go')
+   file=core/('cmd/sing-box/routervpn_server_chain_resources.go' if label=='native-close' else 'cmd/sing-box/routervpn_server_chain_native.go' if label=='benchmark-answers' else 'cmd/sing-box/routervpn_server_chain_front.go')
    mutated=file.read_text()
    for before,after in changes:
     if mutated.count(before)!=1:raise ValueError('Native causal anchor changed: '+label)

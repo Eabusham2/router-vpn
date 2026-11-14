@@ -108,6 +108,17 @@ func (p *NodeChainServerPolicy) prove(parent context.Context, original multihopr
 	for _, target := range targets {
 		proofCtx, done := context.WithTimeout(ctx, 5*time.Second)
 		started := time.Now()
+		if target.Proof.NodeKind == "external" {
+			err := proveExternalPublicIP(proofCtx, dial, target.Proof.Tag, target.ExpectedPublicIP, testTLS)
+			elapsed := time.Since(started)
+			valid := err == nil && elapsed > 0 && current(proofCtx) == nil
+			done()
+			if !valid {
+				return fail()
+			}
+			result.Prefixes = append(result.Prefixes, NodeChainServerPrefixResult{target.Proof, float64(elapsed) / float64(time.Millisecond)})
+			continue
+		}
 		data, err := externalProofHTTP(proofCtx, dial, target.Proof.Tag, healthURL(target.API), target.Token, testTLS)
 		elapsed := time.Since(started)
 		var proof struct {

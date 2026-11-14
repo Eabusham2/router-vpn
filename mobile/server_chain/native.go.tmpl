@@ -354,8 +354,9 @@ func (n *routerVPNServerChain) resolve(ctx context.Context, route mobilemultihop
 	if !n.trafficCurrent() || route.Binding != n.binding || destination.Port == 0 {
 		return M.Socksaddr{}, errServerChainFront
 	}
+	original := destination
 	if destination.Fqdn != "" {
-		if !route.Final {
+		if !route.Final && (!route.PublicPathBenchmark || !route.AllowsDestination(network, destination.String())) {
 			return M.Socksaddr{}, errServerChainFront
 		}
 		bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -370,7 +371,7 @@ func (n *routerVPNServerChain) resolve(ctx context.Context, route mobilemultihop
 			return M.Socksaddr{}, err
 		}
 	}
-	if !destination.Addr.IsValid() || !route.AllowsDestination(network, destination.String()) || !n.trafficCurrent() {
+	if !destination.Addr.IsValid() || !route.AllowsResolvedDestination(network, original.String(), destination.String()) || !n.trafficCurrent() {
 		return M.Socksaddr{}, errServerChainFront
 	}
 	return destination, nil
@@ -379,12 +380,12 @@ func (n *routerVPNServerChain) resolve(ctx context.Context, route mobilemultihop
 // Every selected-resolver answer must obey the original final policy. A good
 // first record cannot conceal a private, mapped or disabled-family alternate.
 func routerVPNServerChainResolved(route mobilemultihop.NodeChainServerFrontRoute, network string, original M.Socksaddr, answers []netip.Addr) (M.Socksaddr, error) {
-	if !route.Final || original.Fqdn == "" || original.Port == 0 || len(answers) == 0 || len(answers) > 128 {
+	if !route.Final && !route.PublicPathBenchmark || original.Fqdn == "" || original.Port == 0 || len(answers) == 0 || len(answers) > 128 {
 		return M.Socksaddr{}, errServerChainFront
 	}
 	for _, address := range answers {
 		literal := M.Socksaddr{Addr: address, Port: original.Port}
-		if !address.IsValid() || address.Zone() != "" || address.Is4In6() || !route.AllowsDestination(network, literal.String()) {
+		if !address.IsValid() || address.Zone() != "" || address.Is4In6() || !route.AllowsResolvedDestination(network, original.String(), literal.String()) {
 			return M.Socksaddr{}, errServerChainFront
 		}
 	}
@@ -505,7 +506,11 @@ func (n *routerVPNServerChain) Snapshot(ctx context.Context, nonce string) (mult
 		r.PublicProven = n.proof.PublicProven
 		r.ProofAt = n.proof.ProvenAt.UnixMilli()
 		for _, row := range n.proof.Prefixes {
-			r.Prefixes = append(r.Prefixes, multihoprelay.NodeChainPrefixReceipt{Position: row.Proof.Position, ProfileID: row.Proof.ProfileID, NodeID: row.Proof.NodeID, Mode: row.Proof.Mode, Proven: true, ResponseMS: row.ResponseMS})
+			prefix := multihoprelay.NodeChainPrefixReceipt{Position: row.Proof.Position, ProfileID: row.Proof.ProfileID, NodeID: row.Proof.NodeID, Mode: row.Proof.Mode, Proven: true, ResponseMS: row.ResponseMS}
+			if row.Proof.NodeKind == "external" {
+				prefix.NodeKind, prefix.ProofKind, prefix.SourceSHA256 = row.Proof.NodeKind, row.Proof.Kind, row.Proof.SourceSHA256
+			}
+			r.Prefixes = append(r.Prefixes, prefix)
 		}
 	}
 	return r, nil

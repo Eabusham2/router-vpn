@@ -22,3 +22,14 @@ func NewOrderedServerContext(ctx context.Context, engine Engine, hops []Hop) (*S
 	}
 	return newContext(ctx, engine, hops, true, false, true)
 }
+
+// NewOrderedImportedServerContext retains one authenticated entry, one actual
+// imported public-path proof and the authenticated final node. The two Server
+// tags must have the same captured source digest and exact original positions.
+// This does not widen either the ordinary Server or ordinary Local constructor.
+func NewOrderedImportedServerContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	if len(hops) != 3 || hops[0].Kind != "private-node" || hops[1].Kind != "public-path" || hops[2].Kind != "private-node" {
+		return nil, errors.New("ordered imported server measurement requires one original public middle")
+	}
+	return newContext(ctx, engine, hops, true, true, true)
+}

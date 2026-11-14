@@ -29,6 +29,10 @@ func (s *nodeChainExecutionTrial) retainDial(operation *leaseStopIO, ctx context
 	}
 	allowed := false
 	for i, proof := range proofs {
+		if i == 1 && s.runtime.projection.policy.local.importedMiddle != nil {
+			allowed = allowed || tag == proof.Tag && address == "1.1.1.1:443"
+			continue
+		}
 		api, err := privateAPI(predecessorText(s.runtime.projection.policy.local.nodes[i].profile, "router_api"))
 		allowed = allowed || err == nil && tag == proof.Tag && address == api.Host
 	}
@@ -78,9 +82,13 @@ func (s *nodeChainExecutionTrial) provePrefix(parent context.Context, position i
 	}
 	_, err = s.proofIO.run(ctx, func(call context.Context, operation *leaseStopIO) ([]byte, error) {
 		node, proof := s.runtime.projection.policy.local.nodes[position], proofs[position]
-		data, err := externalProofHTTP(call, func(dialCtx context.Context, tag, address string) (net.Conn, error) {
+		dial := func(dialCtx context.Context, tag, address string) (net.Conn, error) {
 			return s.retainDial(operation, dialCtx, tag, address)
-		}, proof.Tag,
+		}
+		if position == 1 && s.runtime.projection.policy.local.importedMiddle != nil {
+			return nil, proveExternalPublicIP(call, dial, proof.Tag, s.runtime.projection.policy.local.importedMiddle.selection.ExpectedPublicIP, s.runtime.testTLS)
+		}
+		data, err := externalProofHTTP(call, dial, proof.Tag,
 			healthURL(predecessorText(node.profile, "router_api")), predecessorText(node.profile, "api_token"), s.runtime.testTLS)
 		if err != nil {
 			return nil, err
