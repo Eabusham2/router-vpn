@@ -79,7 +79,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          go-version: '1.26.3'
           cache: false
       - name: Compile MTU policy and optimizers
         run: python3 -m py_compile modes/network_context.py modes/mtu-policy.py modes/mtu-throughput-tuner.py modes/mtu-throughput-tuner-platform.py modes/test_mtu_policy.py modes/test_generated_profile_fingerprint_fail_closed.py modes/test_mtu_optimizer_owner.py

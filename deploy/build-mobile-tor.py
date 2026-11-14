@@ -109,7 +109,7 @@ def negative_control(source, output, compiler, flags, env):
 def go_control(source, output, env, go):
     fixture = output / 'go-control'
     fixture.mkdir()
-    (fixture / 'go.mod').write_text('module router-vpn/mobile/torfixture\n\ngo 1.24.13\n\n'
+    (fixture / 'go.mod').write_text('module router-vpn/mobile/torfixture\n\ngo 1.25.0\n\ntoolchain go1.26.3\n\ngodebug default=go1.24\n\n'
         'require router-vpn v0.0.0\nreplace router-vpn => ' + json.dumps(str(ROOT)) + '\n')
     for name in ('routervpn_tor_host.c', 'routervpn_tor_host.h'):
         shutil.copyfile(SOURCE / name, fixture / name)
