@@ -581,6 +581,7 @@ jobs:
           python3 ../../deploy/test_ios_mtu_client.py
           python3 ../../deploy/test_ios_libbox_delivery.py
           python3 ../../deploy/test_ios_naive_multihop.py
+          python3 ../../deploy/test_verify_ios_generated_sdk.py
       - name: Install XcodeGen
         run: |
           brew install xcodegen autoconf automake libtool pkg-config
@@ -620,6 +621,14 @@ jobs:
           for marker in 'WireGuardAdapter(with: self)' 'startLibbox' 'RouterVPNLibboxEngine' 'body["node_id"] as? String == expectedNodeID' 'body["proof"] as? String == Self.proofKind'; do grep -Fq "$marker" PacketTunnel/PacketTunnelProvider.swift || { echo "::error::PacketTunnel source contract missing: $marker"; exit 1; }; done
           rm -rf build/unsigned; mkdir -p build/unsigned/Payload; ditto "$APP" build/unsigned/Payload/RouterVPN.app; (cd build/unsigned && zip -qry ../RouterVPN-native-unsigned-resignable.ipa Payload); unzip -tq "$IPA" >/dev/null
           python3 ../../server/scripts/mobile-artifact-provenance.py --name router-vpn-ios.ipa --path "$IPA" --sha "$GITHUB_SHA" --repo Eabusham2/router-vpn
+      - name: Read back generated SDK APIs from the release Xcode build
+        run: python3 deploy/verify-ios-generated-sdk.py --source-sha "$GITHUB_SHA" --output ios/RouterVPN/build/generated-sdk-receipt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-generated-sdk-${{ github.sha }}
+          path: ios/RouterVPN/build/generated-sdk-receipt
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/upload-artifact@v4
         with: {name: RouterVPN-iOS-release-candidate, path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa, if-no-files-found: error, retention-days: 1}
 
