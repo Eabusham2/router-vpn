@@ -38,7 +38,7 @@ func NewNodeChainSOCKSRuntime(source *NodeChainSOCKSSource) (*NodeChainSOCKSRunt
 	}
 	chain := &NodeChain{
 		sourceJSON: source.sourceJSON, sourceSHA: meta.SourceSHA256, config: config,
-		nodes: []*NodeProfile{source.pair.nodes[0], nil, source.pair.nodes[1]},
+		nodes:       []*NodeProfile{source.pair.nodes[0], nil, source.pair.nodes[1]},
 		socksSource: source, proofs: meta.Proofs, dns: meta.DNS, physical: meta.Physical,
 		originalConfigSHA: source.originalConfigSHA256(), projection: source.runtimeProjection(),
 	}
@@ -53,7 +53,7 @@ func NewNodeChainSOCKSRuntime(source *NodeChainSOCKSSource) (*NodeChainSOCKSRunt
 }
 
 func (c *NodeChain) validateSOCKSSource() error {
-	if c == nil || c.socksSource == nil || c.importedMiddle != nil {
+	if c == nil || c.socksSource == nil || c.importedMiddle != nil || c.connectSource != nil {
 		return nodeChainSOCKSSourceError
 	}
 	source := c.socksSource
@@ -90,10 +90,13 @@ func (c *NodeChain) observeSOCKSMiddleContext(ctx context.Context, engine NodeCh
 }
 
 func (c *NodeChain) hasImportedMiddle() bool {
-	return c != nil && (c.importedMiddle != nil || c.socksSource != nil)
+	return c != nil && (c.importedMiddle != nil || c.socksSource != nil || c.connectSource != nil)
 }
 
 func (c *NodeChain) importedMiddlePublicIP() string {
+	if c.connectSource != nil {
+		return c.connectSource.middle.selection.ExpectedPublicIP
+	}
 	if c.socksSource != nil {
 		return c.socksSource.middle.selection.ExpectedPublicIP
 	}

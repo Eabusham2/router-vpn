@@ -85,6 +85,7 @@ type NodeChain struct {
 	nodes                                         []*NodeProfile
 	importedMiddle                                *nodeChainImportedMember
 	socksSource                                   *NodeChainSOCKSSource
+	connectSource                                 *NodeChainCONNECTSource
 	proofs                                        []NodeChainProof
 	dns                                           NodeChainDNSCapture
 	physical                                      []PhysicalEgress
@@ -276,12 +277,15 @@ func (c *NodeChain) validateCapture() error {
 	if c == nil || c.seal == "" || c.captureSeal() != c.seal || len(c.nodes) != len(c.proofs) {
 		return nodeChainError
 	}
+	if c.connectSource != nil && c.validateCONNECTSource() != nil {
+		return nodeChainError
+	}
 	if c.socksSource != nil && c.validateSOCKSSource() != nil {
 		return nodeChainError
 	}
 	for position, node := range c.nodes {
 		proof := c.proofs[position]
-		if position == 1 && c.socksSource != nil {
+		if position == 1 && (c.socksSource != nil || c.connectSource != nil) {
 			continue // The exact source, nil middle and complete proof inventory were validated above.
 		}
 		if position == 1 && c.importedMiddle != nil {
@@ -331,7 +335,7 @@ func (c *NodeChain) PhysicalEgress() ([]PhysicalEgress, error) {
 }
 
 func (c *NodeChain) LaunchInput() (string, error) {
-	if c.validateCapture() != nil || c.socksSource != nil {
+	if c.validateCapture() != nil || c.socksSource != nil || c.connectSource != nil {
 		return "", nodeChainError
 	}
 	var source NodeChainSource

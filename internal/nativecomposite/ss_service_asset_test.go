@@ -63,3 +63,61 @@ func TestPairedSSServiceCompanionPreservesCompositeLayers(t *testing.T) {
 		}
 	}
 }
+
+func TestPairedSSServiceCompanionRetainsExactSS2022Credentials(t *testing.T) {
+	for _, method := range []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"} {
+		t.Run(method, func(t *testing.T) {
+			size := 32
+			if method == "2022-blake3-aes-128-gcm" {
+				size = 16
+			}
+			password := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", size)))
+			node := strings.Repeat("a", 64)
+			validate := func(cipher, secret string) error {
+				out := map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "203.0.113.20", "server_port": 8388, "method": cipher, "password": secret}
+				source := []byte(encoded(map[string]any{"outbounds": []any{out}}))
+				sum, key := sha256.Sum256(source), sha256.Sum256([]byte(secret))
+				claim := map[string]any{"schema": 1, "node_id": node, "configured_image": SSServiceImage, "uot_version": 2, "endpoint": out["server"], "port": out["server_port"], "method": cipher, "key_sha256": hex.EncodeToString(key[:]), "source_sha256": hex.EncodeToString(sum[:])}
+				return ValidateSSServiceCompanion(source, []byte(encoded(claim)), node)
+			}
+			if err := validate(method, password); err != nil {
+				t.Fatal("captured SS2022 method and exact canonical key were rejected", err)
+			}
+			if err := validate(method, password+":"+password); (err == nil) != (method != "2022-blake3-chacha20-poly1305") {
+				t.Fatal("configured receiver changed the cipher's identity-chain rule", err)
+			}
+			for _, fault := range []string{"short", "long", "newline", "unpadded", "trailing-key", "empty", "oversized", "legacy", "case-alias", "noncanonical-padding"} {
+				t.Run(fault, func(t *testing.T) {
+					cipher, secret := method, password
+					switch fault {
+					case "short":
+						secret = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", size-1)))
+					case "long":
+						secret = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", size+1)))
+					case "newline":
+						secret += "\n"
+					case "unpadded":
+						secret = strings.TrimRight(secret, "=")
+					case "trailing-key":
+						secret += ":"
+					case "empty":
+						secret = ""
+					case "oversized":
+						secret = strings.Repeat(password+":", 4096/len(password)+1) + password
+					case "legacy":
+						cipher = "aes-256-gcm"
+					case "case-alias":
+						cipher = strings.ToUpper(cipher)
+					case "noncanonical-padding":
+						index := len(strings.TrimRight(secret, "=")) - 1
+						const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+						secret = secret[:index] + string(alphabet[strings.IndexByte(alphabet, secret[index])+1]) + secret[index+1:]
+					}
+					if err := validate(cipher, secret); err == nil {
+						t.Fatal("matching hashes authorized an unsupported method or noncanonical credential")
+					}
+				})
+			}
+		})
+	}
+}

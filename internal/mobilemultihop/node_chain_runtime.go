@@ -125,6 +125,9 @@ func (c *NodeChain) currentContext(ctx context.Context, selected bool) error {
 	if observed != identity {
 		return errors.New("ordered chain native source, session or network changed")
 	}
+	if err := c.observeCONNECTMiddleContext(ctx, engine); err != nil {
+		return err
+	}
 	if err := c.observeSOCKSMiddleContext(ctx, engine); err != nil {
 		return err
 	}
@@ -334,6 +337,9 @@ func (c *NodeChain) Run(parent context.Context, engine NodeChainEngine) (failure
 	identity, err := engine.ObserveChainContext(ctx)
 	if err != nil || !c.identityMatches(identity) {
 		return errors.Join(ctx.Err(), err, errors.New("ordered chain native capture differs from its original source"))
+	}
+	if err := c.observeCONNECTMiddleContext(ctx, engine); err != nil {
+		return err
 	}
 	if err := c.observeSOCKSMiddleContext(ctx, engine); err != nil {
 		return err

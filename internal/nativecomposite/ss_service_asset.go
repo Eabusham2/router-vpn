@@ -2,9 +2,11 @@ package nativecomposite
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"strings"
 )
 
 const SSServiceAsset = "routervpn-ss-service.json"
@@ -53,7 +55,7 @@ func ValidateSSServiceCompanion(originalData, data []byte, node string) error {
 			source = row
 		}
 	}
-	if len(source) != 6 || source["type"] != "shadowsocks" || source["method"] != "2022-blake3-aes-256-gcm" {
+	if len(source) != 6 || source["type"] != "shadowsocks" {
 		return bad
 	}
 	endpoint, ok := source["server"].(string)
@@ -65,7 +67,8 @@ func ValidateSSServiceCompanion(originalData, data []byte, node string) error {
 		return bad
 	}
 	key, ok := source["password"].(string)
-	if !ok || key == "" {
+	method, methodOK := source["method"].(string)
+	if !ok || !methodOK || !ssServiceCredentials(method, key) {
 		return bad
 	}
 	sourceHash, keyHash := sha256.Sum256(originalData), sha256.Sum256([]byte(key))
@@ -73,4 +76,34 @@ func ValidateSSServiceCompanion(originalData, data []byte, node string) error {
 		return bad
 	}
 	return nil
+}
+
+// The configured receiver keeps the exact SS2022 method and key text. AES
+// permits identity chains; ChaCha permits one PSK. This does not authorize
+// CONNECT datagrams without the independently captured UoT-v2 declaration.
+func ssServiceCredentials(method, password string) bool {
+	if password == "" || len(password) > 4096 {
+		return false
+	}
+	size := 32
+	switch method {
+	case "2022-blake3-aes-128-gcm":
+		size = 16
+	case "2022-blake3-aes-256-gcm":
+	case "2022-blake3-chacha20-poly1305":
+		if strings.Contains(password, ":") {
+			return false
+		}
+	default:
+		return false
+	}
+	for _, encoded := range strings.Split(password, ":") {
+		decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+		valid := err == nil && len(decoded) == size && base64.StdEncoding.EncodeToString(decoded) == encoded
+		clear(decoded)
+		if !valid {
+			return false
+		}
+	}
+	return true
 }

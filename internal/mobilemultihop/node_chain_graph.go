@@ -49,9 +49,18 @@ type nodeChainGraphMember struct {
 }
 
 func compileNodeChainClosures(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+	return compileNodeChainClosuresWithCONNECT(nodes, closures, expected, nil)
+}
+
+func compileNodeChainClosuresWithCONNECT(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect *nodeChainCONNECTProofScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 	bad := errors.New("ordered chain lost a complete captured node closure")
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
+	}
+	if connect != nil {
+		if err := connect.validate(nodes, closures); err != nil {
+			return fail(err)
+		}
 	}
 	if err := applyNodeChainMemberMTU(nodes, closures); err != nil {
 		return fail(err)
@@ -161,9 +170,21 @@ func compileNodeChainClosures(nodes []nodeChainGraphMember, closures []*external
 	projection := predecessorCopy(graph)
 	projection["route"].(map[string]any)["final"] = finalTag
 	projected, _ := json.Marshal(projection)
+	var connectPhysical *nodeChainCONNECTPhysicalProof
+	if connect != nil {
+		connectPhysical, err = connect.capturePhysical(string(projected), proofs)
+		if err != nil {
+			return fail(err)
+		}
+	}
 	var physical []PhysicalEgress
 	for _, proof := range proofs {
-		physical, err = compiledPhysicalEgressWithDesktopProof(string(projected), []string{"tcp", "udp"}, nil, proof.Tag)
+		networks := []string{"tcp", "udp"}
+		if connect == nil {
+			physical, err = compiledPhysicalEgressWithDesktopProof(string(projected), networks, nil, proof.Tag)
+		} else {
+			physical, err = connect.physicalEgress(string(projected), networks, proof.Tag, connectPhysical)
+		}
 		if err != nil || !nodeChainSamePhysical(physical, expected) {
 			return fail(errors.New("ordered chain introduced physical egress outside its original first node"))
 		}

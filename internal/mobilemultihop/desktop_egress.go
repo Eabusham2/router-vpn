@@ -103,6 +103,13 @@ func compiledPhysicalEgressWithDesktopProof(configJSON string, networks []string
 // optional literal final-layer resolver as dormant. It stays in the executable and capture;
 // recording its identity must not manufacture an unsupported lower UDP socket.
 func compiledPhysicalEgressWithCapturedNaive(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string, dormantNaiveDNS bool) ([]PhysicalEgress, error) {
+	return compiledPhysicalEgressWithCapturedTransports(configJSON, networks, desktop, proofTag, dormantNaiveDNS, nil)
+}
+
+func compiledPhysicalEgressWithCapturedTransports(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string, dormantNaiveDNS bool, connect *nodeChainCONNECTPhysicalProof) ([]PhysicalEgress, error) {
+	if connect != nil && connect.validate(configJSON) != nil {
+		return nil, nodePhysicalEgressError
+	}
 	var graph map[string]any
 	if exactJSON([]byte(configJSON), &graph, 4<<20) != nil {
 		return nil, nodePhysicalEgressError
@@ -110,7 +117,7 @@ func compiledPhysicalEgressWithCapturedNaive(configJSON string, networks []strin
 	p := nodeEgressProjection{
 		nodes: map[string]map[string]any{}, resolvers: map[string]map[string]any{},
 		active: map[string]bool{}, visited: map[string]bool{}, tuples: map[PhysicalEgress]bool{},
-		desktop: desktop, dormantNaiveDNS: dormantNaiveDNS,
+		desktop: desktop, dormantNaiveDNS: dormantNaiveDNS, connect: connect,
 	}
 	for _, family := range []string{"endpoints", "outbounds"} {
 		rows, _ := graph[family].([]any)
@@ -169,6 +176,7 @@ type nodeEgressProjection struct {
 	tuples           map[PhysicalEgress]bool
 	desktop          *externalDesktopRecorder
 	dormantNaiveDNS  bool
+	connect          *nodeChainCONNECTPhysicalProof
 }
 
 func (p *nodeEgressProjection) add(host string, port any, network string) error {
@@ -339,6 +347,15 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 				if payload != "tcp" || value["network"] != "tcp" {
 					return nodePhysicalEgressError
 				}
+				network = "tcp"
+			}
+		}
+		if payload == "udp" && p.connect != nil {
+			stream, err := p.connect.udpOverTCP(tag, value)
+			if err != nil {
+				return err
+			}
+			if stream {
 				network = "tcp"
 			}
 		}

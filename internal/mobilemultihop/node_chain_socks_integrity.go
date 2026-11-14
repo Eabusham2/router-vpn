@@ -61,7 +61,7 @@ func nodeChainSOCKSIntegrityCopy[T any](value T) (T, error) {
 // No read can install, refresh or replace this receipt.
 func (p *NodeChainSOCKSSource) retainIntegrity() error {
 	if p == nil || p.integrity != nil || p.validateCompiled() != nil ||
-		p.pair.importedMiddle != nil || p.pair.socksSource != nil || len(p.pair.nodes) != 2 {
+		p.pair.importedMiddle != nil || p.pair.socksSource != nil || p.pair.connectSource != nil || len(p.pair.nodes) != 2 {
 		return nodeChainSOCKSSourceError
 	}
 	saved := &nodeChainSOCKSIntegrity{
@@ -133,7 +133,7 @@ func (saved *nodeChainSOCKSIntegrity) current(p *NodeChainSOCKSSource) bool {
 		return false
 	}
 	pair, old := p.pair, &saved.paired
-	if pair == nil || pair.importedMiddle != nil || pair.socksSource != nil ||
+	if pair == nil || pair.importedMiddle != nil || pair.socksSource != nil || pair.connectSource != nil ||
 		pair.sourceJSON != old.sourceJSON || pair.sourceSHA != old.sourceSHA ||
 		pair.config != old.config || pair.metadata != old.metadata || pair.seal != old.seal ||
 		pair.originalConfigSHA != old.originalConfigSHA || pair.dns != old.dns ||
