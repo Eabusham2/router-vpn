@@ -131,7 +131,7 @@ public final class OrderedExecutionRuntimeTest {
   try(Fixture f=new Fixture(3,"server")){
    f.connected();var owner=f.owner();var plan=owner.execution.plan;var server=(CommandServer)get(f.service,"commandServer");Object tun=get(f.service,"tunDescriptor");plan.failCloses=1;
    plan.duringClose=()->{try{
-    check(owner.retainsServerCleanup(server),"cleanup token did not belong to original native server");check(!owner.retainsServerCleanup(new CommandServer(server.platform,null)),"foreign native server obtained cleanup socket authority");
+    check(owner.retainsServerCleanup(server),"cleanup token did not belong to original native server");check(!owner.retainsServerCleanup(new CommandServer(f.service,server.platform)),"foreign native server obtained cleanup socket authority");
     Object scope=get(f.service,"nodeChainCleanup");long deadline=(Long)get(scope,"deadline");set(scope,"deadline",0L);
     try{reject(()->f.service.autoDetectInterfaceControl(10),"expired execution cleanup scope opened a physical socket");}finally{set(scope,"deadline",deadline);}
     plan.cleanupToken=false;try{reject(()->f.service.autoDetectInterfaceControl(10),"Java scope bypassed the original native cleanup token");}finally{plan.cleanupToken=true;}
@@ -192,7 +192,7 @@ public final class OrderedExecutionRuntimeTest {
    platform.beginMTUChange(mtu.captureMTU());mtu.failEnd=true;try{reject(platform::endMTUChange,"failed platform readback was swallowed");}finally{mtu.failEnd=false;}
    check(!mtu.changing&&get(f.service,"nodeChainCleanup")==null,"failed MTU End retained expired physical cleanup authority");
    var nativeOwner=(AndroidNodeChainSession.Owner)get(owner,"owner");
-   reject(()->nativeOwner.beginMTUCleanup(owner,new CommandServer(server.platform,null),mtu),"foreign server borrowed MTU cleanup");
+   reject(()->nativeOwner.beginMTUCleanup(owner,new CommandServer(f.service,server.platform),mtu),"foreign server borrowed MTU cleanup");
    reject(()->nativeOwner.beginMTUCleanup(owner,server,new RouterMTUPlatform(){}),"foreign MTU platform borrowed cleanup");
    check(get(f.service,"nodeChainCleanup")==null,"refused foreign MTU callback changed cleanup owner");
    f.stop();
