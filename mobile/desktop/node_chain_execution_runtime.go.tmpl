@@ -159,6 +159,7 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 		if failure != nil {
 			owner.retired.Store(true)
 			cancel()
+			failure = errors.Join(failure, owner.files.remove("node-chain-execution-adoption.json"))
 		}
 		close(state.runDone)
 	}()
@@ -226,6 +227,16 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 	}
 	state.identity.Store(&identity)
 	state.proofGeneration.Store(1)
+	if err := owner.current(startup); err != nil {
+		return err
+	}
+	adoption, err := mobilemultihop.NewDesktopNodeChainExecutionAdoptionRecord(projection, identity, owner.transfer)
+	if err != nil {
+		return err
+	}
+	if err := owner.files.publish("node-chain-execution-adoption.json", adoption); err != nil {
+		return err
+	}
 	return owner.current(startup)
 }
 
@@ -271,13 +282,16 @@ func (owner *routerVPNNodeChainExecutionRuntime) close(ctx context.Context) erro
 		state.cancel()
 	}
 	owner.mu.Unlock()
-	removeErr := owner.files.remove("node-chain-execution-ready.json")
+	var removeErr error
 	if state != nil {
 		select {
 		case <-state.runDone:
 		case <-ctx.Done():
 			return errors.Join(removeErr, ctx.Err())
 		}
+		// The startup publisher may still be finishing when retirement begins.
+		// Join it before touching any file's shared publication bookkeeping.
+		removeErr = errors.Join(owner.files.remove("node-chain-execution-ready.json"), owner.files.remove("node-chain-execution-adoption.json"))
 		if err := owner.joinMTUActivity(ctx); err != nil {
 			return errors.Join(removeErr, err)
 		}

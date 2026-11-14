@@ -184,6 +184,7 @@ type desktopExecutionEngineFixture struct {
 	events     *[]string
 	retireErr  error
 	read       func()
+	observe    func()
 }
 
 func (e *desktopExecutionEngineFixture) DiscoverContext(ctx context.Context) (mobilemultihop.NodeChainExecutionDiscovery, error) {
@@ -198,6 +199,9 @@ func (e *desktopExecutionEngineFixture) AdoptContext(ctx context.Context, source
 	return e.projection, e.current(ctx)
 }
 func (e *desktopExecutionEngineFixture) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	if e.observe != nil {
+		e.observe()
+	}
 	return e.identity, e.current(ctx)
 }
 func (e *desktopExecutionEngineFixture) SelectedContext(ctx context.Context) (string, error) {
@@ -326,6 +330,18 @@ func TestRouterVPNDesktopNodeChainExecutionRuntimeKeepsActualProjection(t *testi
 	if !reflect.DeepEqual(f.events, []string{"discover", "adopt", "prove"}) {
 		t.Fatal(f.events)
 	}
+	adoption, err := f.owner.files.read("node-chain-execution-adoption.json", mobilemultihop.DesktopNodeChainExecutionAdoptionRecordLimit)
+	if err != nil {
+		t.Fatal("child did not publish original adoption before readiness", err)
+	}
+	parent, err := mobilemultihop.ParseDesktopNodeChainExecutionPreparation(f.owner.prep.Source())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, identity, err := mobilemultihop.ParseDesktopNodeChainExecutionAdoptionRecord(adoption, parent, f.owner.transfer)
+	if err != nil || identity != f.engine.identity || projection.Config() != f.engine.projection.Config() {
+		t.Fatal("parent lost original execution projection", err)
+	}
 	if err := f.owner.heartbeat(context.Background(), f.record); err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +349,7 @@ func TestRouterVPNDesktopNodeChainExecutionRuntimeKeepsActualProjection(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	ready, err := mobilemultihop.ParseDesktopNodeChainExecutionReadyRecord(raw, f.engine.projection, f.owner.transfer)
+	ready, err := mobilemultihop.ParseDesktopNodeChainExecutionAdoptedReadyRecord(raw, projection, identity, f.owner.transfer)
 	if err != nil || ready.Identity.ConfigSHA256 == ready.PreparationConfigSHA256 || ready.Identity != f.engine.identity || ready.SelectionEpoch != 7 {
 		t.Fatal("heartbeat relabeled preparation as executed graph", err)
 	}
@@ -345,6 +361,9 @@ func TestRouterVPNDesktopNodeChainExecutionRuntimeKeepsActualProjection(t *testi
 	}
 	if _, err := f.owner.files.root.Lstat("node-chain-execution-ready.json"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("closed owner retained readiness", err)
+	}
+	if _, err := f.owner.files.root.Lstat("node-chain-execution-adoption.json"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("closed owner retained adoption receipt", err)
 	}
 	if f.owner.run(context.Background()) == nil {
 		t.Fatal("closed child restarted")
@@ -395,6 +414,9 @@ func TestRouterVPNDesktopNodeChainExecutionRuntimeRejectsReplacedOwners(t *testi
 			if fault == "foreign-projection" || fault == "preparation-identity" {
 				if err == nil {
 					t.Fatal("foreign execution owner admitted")
+				}
+				if _, err := f.owner.files.root.Lstat("node-chain-execution-adoption.json"); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("failed original owner published adoption", err)
 				}
 				return
 			}
@@ -453,7 +475,30 @@ func TestRouterVPNDesktopNodeChainExecutionRuntimeJoinsLateConstructor(t *testin
 	if f.owner.state.Load().engine.Load() == nil {
 		t.Fatal("partial native owner discarded")
 	}
+	if _, err := f.owner.files.root.Lstat("node-chain-execution-adoption.json"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("late canceled constructor published adoption", err)
+	}
 	if err := f.owner.close(context.Background()); err != nil || !reflect.DeepEqual(f.events, []string{"retire"}) {
 		t.Fatal("original late engine was not retired", err, f.events)
+	}
+}
+
+func TestRouterVPNDesktopNodeChainExecutionAdoptionRevokesLatePublication(t *testing.T) {
+	f := newDesktopExecutionRuntimeFixture(t)
+	published := false
+	f.engine.observe = func() {
+		if _, err := f.owner.files.root.Lstat("node-chain-execution-adoption.json"); err == nil {
+			published = true
+			f.valid.Store(false)
+		}
+	}
+	if err := f.owner.run(context.Background()); err == nil || !published {
+		t.Fatal("original host was not revoked across adoption publication", err)
+	}
+	if _, err := f.owner.files.root.Lstat("node-chain-execution-adoption.json"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("late publication survived original owner revocation", err)
+	}
+	if err := f.owner.close(context.Background()); err != nil || !f.owner.closed.Load() {
+		t.Fatal("failed adoption did not join original owned runtime", err)
 	}
 }
