@@ -166,6 +166,16 @@ func TestOrderedCandidateSaveHTTPRequiresFreshOriginalOwner(t *testing.T) {
 
 func testOrderedCandidateSaveHTTPRequiresFreshOriginalOwner(t *testing.T, f *desktopNodeChainOwnedFixture, catalog *desktopNodeChainCandidateCatalog, id string) {
 	t.Helper()
+	// Successful measurement and Save both release their MTU hold and resume
+	// Auto. Join this original fixture's workers before native and file cleanup.
+	capturedCommand := f.launch.command
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := retireDesktopOrderedLatencyFixture(ctx, f.a, capturedCommand); err != nil {
+			t.Error("ordered candidate Save left background work before native/file cleanup", err)
+		}
+	})
 	owner := orderedCandidateTestOwner(t, catalog, id)
 	c := viaEntryControlFor(f.a)
 	_, token, _, captureErr := captureOrderedPerformanceContext(context.Background(), f.a)
