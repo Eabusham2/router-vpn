@@ -1,0 +1,255 @@
+//go:build linux && !android
+
+package libbox
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+)
+
+type ordinaryRemainingCounters struct {
+	Prefixes []struct {
+		RawUDP int64  `json:"raw_udp"`
+		Proof  uint64 `json:"proof_queries"`
+	} `json:"prefixes"`
+	Final struct {
+		Queries uint64 `json:"router_queries"`
+		DNS     uint64 `json:"dns_queries"`
+		RawTCP  int64  `json:"final_raw_tcp"`
+	} `json:"final"`
+	Middle struct {
+		RawTCP   int64  `json:"raw_tcp"`
+		Download uint64 `json:"download_bytes"`
+	} `json:"middle"`
+}
+
+func ordinaryRemainingSnapshot(t *testing.T, reply ordinaryFiftyReply) ordinaryRemainingCounters {
+	t.Helper()
+	var value ordinaryRemainingCounters
+	if json.Unmarshal(reply.Peer, &value) != nil || len(value.Prefixes) == 0 {
+		t.Fatal("original remaining peer counters missing")
+	}
+	return value
+}
+func ordinaryRemainingDrain(t *testing.T, facade *RouterOrderedLatency, request string) hopmeasure.Status {
+	t.Helper()
+	deadline := time.Now().Add(hopmeasure.RequestTimeout + hopmeasure.ObservationTimeout)
+	for time.Now().Before(deadline) {
+		var value hopmeasure.Status
+		if json.Unmarshal([]byte(facade.StatusJSON()), &value) != nil {
+			t.Fatal("original native status missing")
+		}
+		if value.Complete {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := facade.Drain(request); err != nil {
+		t.Fatal("remaining fifty original drain", err)
+	}
+	var value hopmeasure.Status
+	if json.Unmarshal([]byte(facade.StatusJSON()), &value) != nil || !value.Complete || !value.Drained || value.Request != request {
+		t.Fatal("remaining fifty joined status missing", facade.StatusJSON())
+	}
+	return value
+}
+func TestRouterNodeChainRemainingEncryptedOrderedFifty(t *testing.T) {
+	graph := os.Getenv("ROUTERVPN_ORDINARY_FIFTY_GRAPH")
+	if graph == "" {
+		t.Skip("original remaining graph reference required")
+	}
+	mode, method := os.Getenv("ROUTERVPN_ORDINARY_FIFTY_MODE"), os.Getenv("ROUTERVPN_ORDINARY_FIFTY_METHOD")
+	var count, position int
+	if _, err := fmt.Sscan(os.Getenv("ROUTERVPN_ORDINARY_FIFTY_COUNT"), &count); err != nil || count < 2 || count > 8 {
+		t.Fatal("uncaptured remaining count")
+	}
+	if _, err := fmt.Sscan(os.Getenv("ROUTERVPN_ORDINARY_FIFTY_POSITION"), &position); err != nil || position < 0 || position >= count {
+		t.Fatal("uncaptured remaining position")
+	}
+	peer := ordinaryFiftyStartPeerGraph(t, mode, count, graph, method)
+	owner, server, _ := ordinaryFiftyNative(t, peer)
+	probe, err := RouterNodeChainNewHopMeasurement(owner, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := owner.measurement.Load()
+	state := owner.state.Load()
+	plan, err := owner.chain.MTUPlan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform := &socksRunMTUPlatform{routerMTUContextPlatform: routerMTUContextPlatform{state: RouterMTUState{Session: owner.session, Path: "original-ordinary-physical", Interface: "original-ordinary-tun", MTU: int32(plan.Original)}}}
+	optimizer, err := RouterNodeChainNewMTU(owner, server, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := optimizer.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	held, err := owner.BeginMeasurementContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, blocked := owner.beforeMTUChange(t.Context(), optimizer.owner, 1280)
+	held()
+	if changed || blocked == nil || owner.state.Load() != state || !owner.Healthy() {
+		t.Fatal("remaining fifty lost original MTU exclusion")
+	}
+	proofs := owner.chain.ProofInventory()
+	if len(proofs) != count {
+		t.Fatal("remaining proof inventory mismatch")
+	}
+	node := proofs[position]
+	expectedKind, metric, endpoint, label := "private-node", "routed-private-response-including-connection", "", fmt.Sprintf("Cumulative path through node %d of %d", position+1, count)
+	if graph == "ss-middle" && position == 1 {
+		expectedKind, metric, endpoint, label = "public-path", "routed-https-response-after-tls", "https://speed.cloudflare.com/__down?bytes=1", "Cumulative path through custom node 2 of 3 → Cloudflare edge"
+	}
+	role := "intermediate"
+	if position == 0 {
+		role = "entry"
+	} else if position == count-1 {
+		role = "exit"
+	}
+	actualKind := node.Kind
+	if actualKind == "" {
+		actualKind = "private-node"
+	}
+	if actualKind != expectedKind {
+		t.Fatal("remaining captured kind changed")
+	}
+	// The ordinary adapter must preserve literal-only proof observation and grant
+	// a public hostname only to the exact imported-middle measurement tag.
+	engine, err := owner.instance.Box().RouterVPNNewNodeChainEngine(t.Context(), owner.chain, owner.session, func(ctx context.Context) error { return owner.nativeCurrent(ctx, state) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := peer.observe(t)
+	a := ordinaryRemainingSnapshot(t, before)
+	for _, wrong := range [][2]string{{proofs[0].Tag, hopmeasure.PublicAddress}, {proofs[count-1].Tag, hopmeasure.PublicAddress}, {node.Tag, "foreign.example:443"}} {
+		conn, err := engine.Dial(t.Context(), wrong[0], wrong[1])
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if conn != nil || err == nil {
+			t.Fatal("ordinary public measurement escaped captured imported tag")
+		}
+	}
+	if peer.observe(t).PublicDNS != before.PublicDNS {
+		t.Fatal("foreign public capture reached selected DNS")
+	}
+	facade, err := RouterNodeChainNewLatencyBenchmark(owner, server, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := strings.Repeat("a", 32)
+	if err := facade.Start(request, node.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	status := ordinaryRemainingDrain(t, facade, request)
+	if status.Failure != "" || len(status.Results) != 1 {
+		t.Fatal("remaining actual fifty failed", facade.StatusJSON())
+	}
+	row := status.Results[0]
+	if !row.Ready && expectedKind == "public-path" {
+		call, cancel := context.WithTimeout(t.Context(), hopmeasure.ObservationTimeout)
+		connection, diagnostic := engine.Dial(call, node.Tag, hopmeasure.PublicAddress)
+		if connection != nil {
+			_ = connection.Close()
+		}
+		cancel()
+		t.Fatalf("remaining actual public fifty refused: native dial=%v; result=%+v", diagnostic, row)
+	}
+	if !row.Ready || row.ID != node.ProfileID || row.Role != role || row.Kind != expectedKind || row.Label != label || row.Benchmark == nil || row.Benchmark.Attempts != 50 || row.Benchmark.Failed != 0 || row.Benchmark.Distribution == nil || row.Benchmark.Distribution.Samples != 50 || row.Benchmark.Measurement != metric || row.Benchmark.Endpoint != endpoint || row.Idle != nil || row.Download != nil || row.Upload != nil {
+		t.Fatal("remaining original fifty metric changed", row)
+	}
+	var saved hopmeasure.OrderedLatencyReceipt
+	if json.Unmarshal([]byte(facade.SavedJSON(node.ProfileID)), &saved) != nil || saved.NodeID != node.ProfileID || saved.Position != position || saved.SourceSHA256 != owner.SourceSHA256() || saved.ConfigSHA256 != owner.ConfigSHA256() || saved.Request != request || !reflect.DeepEqual(saved.Result, row) {
+		t.Fatal("remaining saved identity changed")
+	}
+	after := peer.observe(t)
+	b := ordinaryRemainingSnapshot(t, after)
+	if len(a.Prefixes) != len(b.Prefixes) || b.Final.DNS == 0 {
+		t.Fatal("remaining original selected DNS proof absent")
+	}
+	for i, prefix := range b.Prefixes {
+		if prefix.RawUDP <= a.Prefixes[i].RawUDP || prefix.Proof == 0 {
+			t.Fatal("remaining encrypted cumulative prefix absent", i)
+		}
+	}
+	if expectedKind == "public-path" {
+		if after.PublicDNS-before.PublicDNS != 50 || b.Middle.Download-a.Middle.Download != 50 || b.Middle.RawTCP <= a.Middle.RawTCP {
+			t.Fatal("remaining public fifty bypassed original selected DNS or one-byte responses")
+		}
+	} else if position == count-1 {
+		if b.Final.Queries-a.Final.Queries < 50 {
+			t.Fatal("remaining final omitted real private50")
+		}
+	} else if b.Prefixes[position].Proof-a.Prefixes[position].Proof < 50 {
+		t.Fatal("remaining entry omitted real private50")
+	}
+	if graph == "hysteria2-final" {
+		var hy struct {
+			RawUDP int64  `json:"raw_udp"`
+			TCP    int64  `json:"tcp"`
+			UDP    int64  `json:"udp"`
+			Auth   uint32 `json:"auth_failures"`
+		}
+		if json.Unmarshal(after.Hysteria, &hy) != nil || hy.RawUDP == 0 || hy.TCP < 50 || hy.UDP == 0 || hy.Auth != 0 || b.Final.RawTCP != 0 {
+			t.Fatal("remaining final did not use original authenticated HY2 provider", hy, b.Final.RawTCP)
+		}
+	}
+	previous := facade.SavedJSON(node.ProfileID)
+	if expectedKind == "public-path" {
+		if _, err := peer.input.Write([]byte("fail-dns\n")); err != nil {
+			t.Fatal(err)
+		}
+		peer.reply(t)
+		rejected := strings.Repeat("b", 32)
+		if err := facade.Start(rejected, node.ProfileID); err != nil {
+			t.Fatal(err)
+		}
+		failure := ordinaryRemainingDrain(t, facade, rejected)
+		if len(failure.Results) == 1 && failure.Results[0].Ready || facade.SavedJSON(node.ProfileID) != previous {
+			t.Fatal("public benchmark bypassed captured selected DNS")
+		}
+		if _, err := peer.input.Write([]byte("restore-dns\n")); err != nil {
+			t.Fatal(err)
+		}
+		peer.reply(t)
+	}
+	cancelRequest := strings.Repeat("c", 32)
+	if err := facade.Start(cancelRequest, node.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	facade.Cancel(cancelRequest)
+	if err := facade.Drain(cancelRequest); err != nil {
+		t.Fatal(err)
+	}
+	if facade.SavedJSON(node.ProfileID) != previous {
+		t.Fatal("remaining cancellation replaced completed history")
+	}
+	if err := facade.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if owner.measurement.Load() != original || !owner.Healthy() {
+		t.Fatal("remaining facade retired original service")
+	}
+	next, err := RouterNodeChainNewLatencyBenchmark(owner, server, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("ORDINARY_REMAINING_FIFTY graph=%s mode=%s count=%d position=%d method=%s samples=50", graph, mode, count, position, method)
+}

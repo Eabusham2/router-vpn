@@ -29,6 +29,8 @@ func TestRouterVPNDesktopNodeChainOrdinaryFiftyReference(t *testing.T) {
 		Schema int    `json:"schema"`
 		Count  int    `json:"count"`
 		Mode   string `json:"mode"`
+		Graph  string `json:"graph,omitempty"`
+		Method string `json:"method,omitempty"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.DisallowUnknownFields()
@@ -40,6 +42,13 @@ func TestRouterVPNDesktopNodeChainOrdinaryFiftyReference(t *testing.T) {
 			fmt.Fprintln(os.Stdout, "ORDINARY_FIFTY_PEER_JOINED")
 		}
 	})
+	if input.Graph != "" {
+		desktopNodeChainOrdinaryRemainingPeer(t, reader, input.Mode, input.Count, input.Graph, input.Method)
+		return
+	}
+	if input.Method != "" {
+		t.Fatal("ordinary paired source acquired an uncaptured method")
+	}
 	request, clients := desktopNodeChainPeerFixture(t, input.Count-1)
 	modes := make([]string, input.Count-1)
 	for i := range modes {

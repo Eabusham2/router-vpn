@@ -42,6 +42,7 @@ type ordinaryFiftyReply struct {
 	Address      string          `json:"address"`
 	PublicCA     string          `json:"public_ca,omitempty"`
 	Peer         json.RawMessage `json:"peer"`
+	Hysteria     json.RawMessage `json:"hysteria,omitempty"`
 	DNS          uint64          `json:"dns"`
 	PublicDNS    uint64          `json:"public_dns"`
 	FinalAuth    uint64          `json:"final_auth"`
@@ -62,6 +63,10 @@ type ordinaryFiftyPeer struct {
 }
 
 func ordinaryFiftyStartPeer(t *testing.T, mode string, count int) *ordinaryFiftyPeer {
+	return ordinaryFiftyStartPeerGraph(t, mode, count, "", "")
+}
+
+func ordinaryFiftyStartPeerGraph(t *testing.T, mode string, count int, graph, method string) *ordinaryFiftyPeer {
 	t.Helper()
 	image := os.Getenv("ROUTERVPN_ORDINARY_FIFTY_PEER")
 	if !filepath.IsAbs(image) {
@@ -114,7 +119,14 @@ func ordinaryFiftyStartPeer(t *testing.T, mode string, count int) *ordinaryFifty
 			t.Error("original encrypted peer did not join", err)
 		}
 	})
-	if err = json.NewEncoder(input).Encode(map[string]any{"schema": 1, "mode": mode, "count": count}); err != nil {
+	request := map[string]any{"schema": 1, "mode": mode, "count": count}
+	if graph != "" {
+		request["graph"] = graph
+	}
+	if method != "" {
+		request["method"] = method
+	}
+	if err = json.NewEncoder(input).Encode(request); err != nil {
 		t.Fatal(err)
 	}
 	p.original = p.reply(t)

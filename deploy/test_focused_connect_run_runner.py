@@ -39,6 +39,14 @@ def ordinary_rows(case,control=None):
     action="fail" if control else "pass"
     rows.extend((dict(Action=action,Package=V.BASE.LIBBOX,Test=root),dict(Action=action,Package=V.BASE.LIBBOX)))
     return rows
+def remaining_rows(case,control=None):
+    root=V.REMAINING.ROOT
+    rows=[dict(Action="start",Package=V.BASE.LIBBOX),dict(Action="run",Package=V.BASE.LIBBOX,Test=root)]
+    output=control["witness"] if control else V.REMAINING.witness(case)
+    rows.append(dict(Action="output",Package=V.BASE.LIBBOX,Test=root,Output=output+"\n"))
+    action="fail" if control else "pass"
+    rows.extend((dict(Action=action,Package=V.BASE.LIBBOX,Test=root),dict(Action=action,Package=V.BASE.LIBBOX)))
+    return rows
 def reference_rows(control=False,tcp=False,packet=False):
     selected=V.REFERENCE_PACKET_CONTROL if packet else V.REFERENCE_TCP_CONTROL if tcp else V.REFERENCE_CONTROL
     positive=V.REFERENCE_TCP_CASES if tcp else V.REFERENCE_CASES
@@ -96,13 +104,14 @@ class Composition:
                 sources={
                     "experimental/libbox/routervpn_node_chain_latency.go":"mobile/chain/latency.go.tmpl",
                     "routervpn_node_chain_connect.go":"mobile/chain/connect_box.go.tmpl",
+                    "routervpn_node_chain.go":"mobile/chain/box.go.tmpl",
                     "experimental/libbox/routervpn_node_chain_connect_lifecycle.go":"mobile/chain/connect_lifecycle.go.tmpl",
                     "experimental/libbox/routervpn/mobilemultihop/node_chain_runtime.go":"internal/mobilemultihop/node_chain_runtime.go",
                     "experimental/libbox/routervpn_node_chain_connect_latency.go":"mobile/chain/connect_latency.go.tmpl",
                     "experimental/libbox/routervpn/hopmeasure/ordered_latency.go":"internal/hopmeasure/ordered_latency.go",
                     "experimental/libbox/routervpn_ordered_latency.go":"mobile/chain/ordered_latency_bridge.go.tmpl",
                 }
-                for control in (*V.CONTROLS,*V.FIFTY.CONTROLS,*V.ORDINARY.CONTROLS):
+                for control in (*V.CONTROLS,*V.FIFTY.CONTROLS,*V.ORDINARY.CONTROLS,V.REMAINING.CONTROL):
                     target=core/control["path"];target.parent.mkdir(parents=True,exist_ok=True)
                     target.write_bytes((ROOT/sources[control["path"]]).read_bytes())
         elif name.endswith("-build"):
@@ -134,6 +143,27 @@ class Composition:
             assert Path(replacements[original]).read_text()==V.BASE.mutate(V.LIFETIME.CONTROL,Path(original).read_text())
             root=V.LIFETIME.ROOT
             raw=(f"=== RUN   {root}\n=== RUN   {root}/retained\n"+V.LIFETIME.CONTROL["witness"]+f"\n--- FAIL: {root} (31.00s)\n    --- FAIL: {root}/retained (31.00s)\nFAIL\n").encode();status=1
+        elif name.startswith("ordinary-remaining-fifty-"):
+            case=(env["ROUTERVPN_ORDINARY_FIFTY_GRAPH"],env["ROUTERVPN_ORDINARY_FIFTY_MODE"],int(env["ROUTERVPN_ORDINARY_FIFTY_COUNT"]),int(env["ROUTERVPN_ORDINARY_FIFTY_POSITION"]),env["ROUTERVPN_ORDINARY_FIFTY_METHOD"])
+            assert case in V.REMAINING.CASES
+            assert "ROUTERVPN_CONNECT_FIFTY_CASE" not in env and "ROUTERVPN_CONNECT_RUN_CASE" not in env
+            assert env["GODEBUG"]=="x509usefallbackroots=1"
+            assert Path(env["ROUTERVPN_ORDINARY_FIFTY_PEER"])==self.images[0] and cwd==self.roles["mobile"][0]
+            if name==V.REMAINING.CONTROL["name"]:
+                control=V.REMAINING.CONTROL;assert case==V.REMAINING.CASES[1]
+                overlay=Path(next(x.split("=",1)[1] for x in command if x.startswith("-overlay=")))
+                replacements=json.loads(overlay.read_text())["Replace"];original=str(cwd/control["path"])
+                assert list(replacements)==[original]
+                assert Path(replacements[original]).read_text()==V.BASE.mutate(control,Path(original).read_text())
+                raw=encoded(remaining_rows(case,control));status=1
+            else:
+                assert name==V.REMAINING.name(case);raw=encoded(remaining_rows(case))
+            if self.fault==("remaining-terminal",name):raw=encoded([json.loads(line) for line in raw.splitlines()][:-1])
+            if self.fault=="remaining-witness" and name!=V.REMAINING.CONTROL["name"]:raw=raw.replace(b"samples=50",b"samples=49")
+            if self.fault=="remaining-control-pass" and name==V.REMAINING.CONTROL["name"]:raw=encoded(remaining_rows(case));status=0
+            if self.fault=="remaining-control-witness" and name==V.REMAINING.CONTROL["name"]:raw=raw.replace(V.REMAINING.CONTROL["witness"].encode(),b"unrelated failure")
+            if self.fault=="remaining-image-changed":self.images[0].write_bytes(b"foreign image")
+            if self.fault=="remaining-source-changed":(cwd/"original.go").write_text("foreign source")
         elif name.startswith("ordinary-fifty-"):
             case=(env["ROUTERVPN_ORDINARY_FIFTY_MODE"],int(env["ROUTERVPN_ORDINARY_FIFTY_COUNT"]),int(env["ROUTERVPN_ORDINARY_FIFTY_POSITION"]))
             assert case in V.ORDINARY.CASES
@@ -256,8 +286,8 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
         self.assertEqual(len(V.FIFTY.MODES),6);self.assertEqual(len(V.FIFTY.LEAVES),14);self.assertEqual(len(V.FIFTY.CONTROLS),7)
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
-            self.assertEqual(len(c.calls),60)
-            self.assertEqual([x[0] for x in c.calls[44:]],[V.ORDINARY.name(c) for c in V.ORDINARY.CASES]+[c["name"] for c in V.ORDINARY.CONTROLS])
+            self.assertEqual(len(c.calls),69)
+            self.assertEqual([x[0] for x in c.calls[44:60]],[V.ORDINARY.name(c) for c in V.ORDINARY.CASES]+[c["name"] for c in V.ORDINARY.CONTROLS])
             self.assertEqual([x[4] for x in c.calls[:44]],[60,600,600,600,600,100,30,600,30,600,600,60,600,*([190]*14),*([600]*4),*([190]*6),*([600]*7)])
             self.assertEqual([x[0] for x in c.calls[11:13]],["reference-established-positive",V.LIFETIME.CONTROL["name"]])
             self.assertEqual([x[0] for x in c.calls[31:44]],["fifty-"+value for value in V.FIFTY.MODES]+[value["name"] for value in V.FIFTY.CONTROLS])
@@ -283,13 +313,18 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
             self.assertTrue(receipt["ordinary_ordered_fifty_native_borrow_accepted"])
             self.assertEqual([(r["mode"],r["count"],r["position"]) for r in receipt["ordinary_ordered_fifty_records"]],list(V.ORDINARY.CASES))
             self.assertEqual([r["name"] for r in receipt["ordinary_ordered_fifty_controls"]],[c["name"] for c in V.ORDINARY.CONTROLS])
-            self.assertEqual([x[4] for x in c.calls[44:]],[190]*11+[600]*5)
+            self.assertEqual([x[4] for x in c.calls[44:60]],[190]*11+[600]*5)
+            self.assertEqual([x[0] for x in c.calls[60:]],[V.REMAINING.name(c) for c in V.REMAINING.CASES]+[V.REMAINING.CONTROL["name"]])
+            self.assertEqual([x[4] for x in c.calls[60:]],[190]*8+[600])
+            self.assertTrue(receipt["ordinary_remaining_fifty_native_borrow_accepted"])
+            self.assertEqual([(r["graph"],r["mode"],r["count"],r["position"],r["method"]) for r in receipt["ordinary_remaining_fifty_records"]],list(V.REMAINING.CASES))
+            self.assertTrue(receipt["ordinary_remaining_fifty_control"]["accepted"])
             self.assertEqual(json.loads((c.output/"receipt.json").read_text()),receipt)
             for name,command,_,_,_ in c.calls:
-                if name.endswith("-build") or name in {v["name"] for v in (*V.CONTROLS,*V.FIFTY.CONTROLS,*V.ORDINARY.CONTROLS,V.LIFETIME.CONTROL)}:
+                if name.endswith("-build") or name in {v["name"] for v in (*V.CONTROLS,*V.FIFTY.CONTROLS,*V.ORDINARY.CONTROLS,V.REMAINING.CONTROL,V.LIFETIME.CONTROL)}:
                     self.assertIn("-race",command);self.assertIn("-p=1",command)
-                if name.startswith("run-") or name in {"fifty-"+value for value in V.FIFTY.MODES} or name in {V.ORDINARY.name(c) for c in V.ORDINARY.CASES}:self.assertIn("-test.timeout=180s",command)
-                if name in {v["name"] for v in (*V.CONTROLS,*V.FIFTY.CONTROLS,*V.ORDINARY.CONTROLS)}:self.assertIn("-timeout=180s",command)
+                if name.startswith("run-") or name in {"fifty-"+value for value in V.FIFTY.MODES} or name in {V.ORDINARY.name(c) for c in V.ORDINARY.CASES} or name in {V.REMAINING.name(c) for c in V.REMAINING.CASES}:self.assertIn("-test.timeout=180s",command)
+                if name in {v["name"] for v in (*V.CONTROLS,*V.FIFTY.CONTROLS,*V.ORDINARY.CONTROLS,V.REMAINING.CONTROL)}:self.assertIn("-timeout=180s",command)
                 if name=="original-imported-middle":self.assertIn("-test.timeout=90s",command)
                 if name=="reference-established-positive":self.assertIn("-test.timeout=45s",command)
                 if name==V.LIFETIME.CONTROL["name"]:self.assertIn("-timeout=45s",command)
@@ -305,6 +340,15 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
                       "fifty-check-missing","fifty-case-failed","fifty-timeout","fifty-unjoined",
                       "fifty-control-pass","fifty-control-signal","fifty-control-panic","fifty-control-witness","fifty-control-timeout","fifty-control-unjoined",
                       "fifty-candidate-changed","fifty-owner-changed","fifty-mobile-changed","fifty-image-changed","fifty-selection-changed"):
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                c=Composition(Path(directory),fault)
+                with self.assertRaises((ValueError,RuntimeError)):c.run()
+                self.assertFalse((c.output/"receipt.json").exists())
+                self.assertEqual(json.loads((c.output/"progress.json").read_text())["status"],"failed")
+    def test_remaining_every_phase_and_independent_guard_are_required(self):
+        faults=[("remaining-terminal",name) for name in [V.REMAINING.name(c) for c in V.REMAINING.CASES]+[V.REMAINING.CONTROL["name"]]]
+        faults += ["remaining-witness","remaining-control-pass","remaining-control-witness","remaining-image-changed","remaining-source-changed"]
+        for fault in faults:
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
                 c=Composition(Path(directory),fault)
                 with self.assertRaises((ValueError,RuntimeError)):c.run()

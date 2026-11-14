@@ -1,0 +1,217 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing/service/pause"
+)
+
+// These graph variants reuse the original independently encrypted providers.
+// Their explicit inner targets never authorize another physical destination.
+func desktopNodeChainOrdinaryRemainingPeer(t *testing.T, reader *bufio.Reader, mode string, count int, graph, method string) {
+	t.Helper()
+	loopback := netip.MustParseAddr("127.0.0.1")
+	var chain *mobilemultihop.NodeChain
+	var address, ca string
+	var observe func() any
+	var control func(string) error
+	var publicDNS atomic.Uint64
+	var hysteria func() any
+	switch graph {
+	case "hysteria2-final":
+		if method != "" {
+			t.Fatal("Hysteria2 final acquired an SS method")
+		}
+		request, clients := desktopNodeChainPeerFixture(t, count-1)
+		modes := make([]string, count-1)
+		for i := range modes {
+			modes[i] = mode
+		}
+		desktopNodeChainSetModes(t, &request, modes)
+		peer := desktopNodeChainPeerStartBounds(t, request, loopback, loopback, 1, 7)
+		ctx, cancel := context.WithCancel(pause.WithDefaultManager(context.Background()))
+		t.Cleanup(cancel)
+		const password, mask = "ordinary-fifty-Hysteria2-password", "ordinary-fifty-Salamander-mask"
+		provider := desktopNodeChainHysteriaProviderStart(t, ctx, peer, password, mask, nil)
+		original := desktopNodeChainPeerSource(t, request, clients, "192.168.210.2:51820")
+		input, err := original.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var source mobilemultihop.NodeChainSource
+		if json.Unmarshal([]byte(input), &source) != nil || len(source.Nodes) != count {
+			t.Fatal("original HY2 source missing")
+		}
+		var final struct {
+			Profile string `json:"profile_json"`
+		}
+		if json.Unmarshal([]byte(source.Nodes[count-1]), &final) != nil || final.Profile == "" {
+			t.Fatal("original final profile missing")
+		}
+		out := map[string]any{"type": "hysteria2", "tag": "proxy", "server": "10.77.0.1", "server_port": 443, "password": password,
+			"obfs": map[string]any{"type": "salamander", "password": mask}, "tls": map[string]any{"enabled": true, "server_name": "captured-final.example", "certificate_path": "cert.pem"}}
+		config := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}}, "outbounds": []any{out}, "route": map[string]any{"final": "proxy", "rules": []any{}}}
+		files := map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(desktopNodeChainJSON(t, config))), "cert.pem": base64.StdEncoding.EncodeToString([]byte(provider.ca))}
+		profile, err := mobilemultihop.NewNodeProfile("hysteria2", desktopNodeChainJSON(t, files), final.Profile, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		source.Nodes[count-1], err = profile.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		chain, err = mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		address, ca = peer.prefixes[0].bind.address(), peer.final.ca
+		observe = func() any { return peer.snapshot() }
+		control = peer.control
+		hysteria = func() any {
+			return desktopNodeChainHysteriaReferenceObservation{CA: provider.ca, ServerName: "captured-final.example", RawUDP: provider.final.rawUDP.Load(), TCP: provider.final.plainTCP.Load(), UDP: provider.final.plainUDP.Load(), AuthFailures: provider.observation.authFailures.Load()}
+		}
+	case "ss-middle":
+		if count != 3 || (method != "2022-blake3-aes-128-gcm" && method != "2022-blake3-aes-256-gcm" && method != "2022-blake3-chacha20-poly1305") {
+			t.Fatal("uncaptured imported middle inventory")
+		}
+		request, clients := desktopNodeChainPeerFixture(t, 1)
+		desktopNodeChainSetModes(t, &request, []string{mode})
+		key, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		public := base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())
+		proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+		request.FinalNodeProofID = hex.EncodeToString(proof[:])
+		wg := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/32\nPrivateKey=%s\nMTU=1420\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", clients[0], public)
+		identity := desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(wg))})
+		size := 32
+		if method == "2022-blake3-aes-128-gcm" {
+			size = 16
+		}
+		password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, size))
+		peer := desktopNodeChainImportedPeerStart(t, desktopNodeChainImportedRequest{1, request, method, password}, loopback, loopback)
+		chain = desktopNodeChainImportedSource(t, request, clients, "192.168.210.2:51820", method, password, identity)
+		address, ca = peer.paired.address, peer.paired.ca
+		observe = func() any { return peer.snapshot() }
+		control = peer.control
+		// The same selected Home resolver owns both the original path proof and
+		// each public50 lookup. Only its retained final-service route is replaced.
+		packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		started := make(chan struct{})
+		server := &dns.Server{PacketConn: packet, NotifyStartedFunc: func() { close(started) }, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+			peer.paired.dns.Add(1)
+			answer := new(dns.Msg).SetReply(q)
+			if len(q.Question) != 1 || q.Question[0].Qclass != dns.ClassINET {
+				answer.Rcode = dns.RcodeRefused
+			} else if peer.paired.failedDNS.Load() {
+				answer.Rcode = dns.RcodeNameError
+			} else {
+				question := q.Question[0]
+				ip := ""
+				switch question.Name {
+				case "example.com.":
+					if question.Qtype == dns.TypeA {
+						ip = "93.184.216.34"
+					}
+				case "speed.cloudflare.com.":
+					if question.Qtype == dns.TypeA {
+						ip = "1.1.1.1"
+						publicDNS.Add(1)
+					}
+				default:
+					answer.Rcode = dns.RcodeRefused
+				}
+				if ip != "" {
+					answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: question.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP(ip)}}
+				}
+			}
+			_ = w.WriteMsg(answer)
+		})}
+		done := make(chan error, 1)
+		go func() { done <- server.ActivateAndServe() }()
+		t.Cleanup(func() {
+			_ = server.Shutdown()
+			_ = packet.Close()
+			if err := <-done; err != nil {
+				t.Error(err)
+			}
+		})
+		select {
+		case <-started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("original selected DNS fixture did not start")
+		}
+		matched := 0
+		for i, route := range peer.paired.final.routes {
+			if route.Network == "udp" && route.Destination == "192.168.50.133:53" {
+				peer.paired.final.routes[i].Physical = packet.LocalAddr().String()
+				matched++
+			}
+		}
+		if matched != 1 {
+			t.Fatal("original selected DNS route missing")
+		}
+	default:
+		t.Fatal("uncaptured ordinary fifty graph")
+	}
+	input, err := chain.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func(first bool) map[string]any {
+		v := map[string]any{"schema": 1, "source_sha256": chain.SourceSHA256(), "config_sha256": chain.ConfigSHA256(), "address": address, "public_ca": ca, "peer": observe(), "public_dns": publicDNS.Load()}
+		if first {
+			v["source"] = input
+		}
+		if hysteria != nil {
+			v["hysteria"] = hysteria()
+		}
+		return v
+	}
+	fmt.Fprintln(os.Stdout, desktopNodeChainJSON(t, snapshot(true)))
+	for {
+		line, err := reader.ReadSlice('\n')
+		if err == io.EOF {
+			return
+		}
+		if err != nil || len(line) > 128 {
+			t.Fatal("bounded original command missing")
+		}
+		command := strings.TrimSpace(string(line))
+		switch command {
+		case "snapshot":
+		case "quit":
+			return
+		default:
+			if err := control(command); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fmt.Fprintln(os.Stdout, desktopNodeChainJSON(t, snapshot(false)))
+	}
+}

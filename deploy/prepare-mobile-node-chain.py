@@ -19,6 +19,7 @@ TEMPLATES = {
     "latency.go.tmpl": "experimental/libbox/routervpn_node_chain_latency.go",
     "latency_test.go.tmpl": "experimental/libbox/routervpn_node_chain_latency_test.go",
     "latency_native_test.go.tmpl": "experimental/libbox/routervpn_node_chain_latency_native_test.go",
+    "latency_remaining_native_test.go.tmpl": "experimental/libbox/routervpn_node_chain_latency_remaining_native_test.go",
     "socks_latency.go.tmpl": "experimental/libbox/routervpn_node_chain_socks_latency.go",
     'socks_owner.go.tmpl': 'protocol/routervpnnodesocks/socks_owner.go',
     'socks_owner_close_test.go.tmpl': 'protocol/routervpnnodesocks/socks_owner_close_test.go',

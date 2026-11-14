@@ -26,6 +26,7 @@ BASE=module("connect_run_trusted_bridge",BASE_PATH)
 BASE.SUITE=SUITE
 FIFTY=module("connect_run_ordered_fifty",ROOT/"deploy/connect_ordered_fifty_native.py")
 ORDINARY=module("connect_run_ordinary_fifty",ROOT/"deploy/ordinary_ordered_fifty_native.py")
+REMAINING=module("connect_run_remaining_fifty",ROOT/"deploy/ordinary_remaining_fifty_native.py")
 LIFETIME=module("connect_run_reference_lifetime",ROOT/"deploy/connect_reference_lifetime.py")
 CASE_ROOT="TestRouterNodeChainCONNECTEncryptedRun"
 CASES=("http-wg","http-awg2-fast","http-awg2-strong","https-wg","https-awg2-fast","https-awg2-strong","middle-password","final-key","final-token","selected-dns","middle-public","hold-prefix","tls-trust","tls-name")
@@ -117,6 +118,7 @@ def sources(source,mobile,mobile_xray,owner,owner_xray):
     FIFTY.checked_projection(source,mobile,connect.TEMPLATES,shared.TEMPLATES)
     desktop=BASE.module("ordinary_fifty_peer_projection",source/"deploy/prepare-desktop-external.py")
     ORDINARY.checked_projection(source,mobile,owner,shared.TEMPLATES,desktop.PEER_TEMPLATES)
+    REMAINING.checked_projection(source,mobile,owner,shared.TEMPLATES,desktop.PEER_TEMPLATES)
     return captured
 def native_events(raw,status,case,control=None):
     names=case_names(case)
@@ -251,6 +253,7 @@ def validate(source,source_sha,output,go="go"):
                     **native_events(raw,status,control["case"],control)))
             fifty=FIFTY.validate_compiled(BASE,run,compiler,mobile,peer,client,work,flags,env)
             ordinary=ORDINARY.validate_compiled(BASE,run,compiler,mobile,peer,client,work,flags,env)
+            remaining=REMAINING.validate_compiled(BASE,run,compiler,mobile,peer,client,work,flags,env)
             if sources(source,mobile,mobile_xray,owner,owner_xray)!=native_before or BASE.CORE.snapshot(source)!=before:
                 raise ValueError("Original encrypted native/candidate source changed")
             if BASE.COMMON.git(source,"status","--porcelain","--untracked-files=all"):
@@ -263,7 +266,7 @@ def validate(source,source_sha,output,go="go"):
                 peer_image=list(peer_identity),client_image=list(client_identity),reference_tls_close=reference_positive,reference_tls_close_control=reference_negative,
                 reference_tcp_close=reference_tcp_positive,reference_tcp_close_control=reference_tcp_negative,
                 reference_packet_close_control=reference_packet_negative,
-                successful_run_accepted=True,ordered_measurement_accepted=True,native_mtu_constructor_accepted=False,**fifty,**lifetime,**ordinary)
+                successful_run_accepted=True,ordered_measurement_accepted=True,native_mtu_constructor_accepted=False,**fifty,**lifetime,**ordinary,**remaining)
             (output/"receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
     except BaseException as error:
         receipt.update(status="failed",error=str(error));raise

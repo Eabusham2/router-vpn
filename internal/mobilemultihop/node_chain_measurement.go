@@ -152,3 +152,28 @@ func (e *nodeChainMeasurementEngine) Dial(ctx context.Context, tag, address stri
 	}
 	return connection, nil
 }
+
+// PublicMeasurementCapture exposes only the sealed ordinary SS2022 middle's
+// fixed benchmark prefix and aggregate device policy. It grants no resolver,
+// arbitrary hostname, physical route, or authority over typed SOCKS/CONNECT.
+func (c *NodeChain) PublicMeasurementCapture() (tag string, ipv6 bool, err error) {
+	if c.validateCapture() != nil || c.socksSource != nil || c.connectSource != nil {
+		return "", false, nodeChainError
+	}
+	if c.importedMiddle == nil {
+		return "", false, nil
+	}
+	ipv6 = true
+	for position, node := range c.nodes {
+		profile := c.importedMiddle.selection.Profile
+		if position != 1 {
+			profile = node.profile
+		}
+		mode, _, policyErr := externalDevicePolicy(profile)
+		if policyErr != nil {
+			return "", false, nodeChainError
+		}
+		ipv6 = ipv6 && mode != "off"
+	}
+	return c.proofs[1].Tag, ipv6, nil
+}

@@ -9,10 +9,12 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
@@ -61,7 +63,11 @@ type routerVPNNodeChainObservation struct {
 
 // A private observation core is shared by separately typed source adapters.
 // It retains no generic NodeChain and grants no source/parser authority.
-type RouterVPNNodeChainEngine routerVPNNodeChainObservation
+type RouterVPNNodeChainEngine struct {
+	observation *routerVPNNodeChainObservation
+	publicTag   string
+	ipv6        bool
+}
 
 var _ mobilemultihop.NodeChainEngine = (*RouterVPNNodeChainEngine)(nil)
 
@@ -88,9 +94,16 @@ func (s *Box) RouterVPNNewNodeChainEngine(ctx context.Context, chain *mobilemult
 	if _, err := chain.LaunchInput(); err != nil {
 		return nil, err
 	}
+	publicTag, ipv6, err := chain.PublicMeasurementCapture()
+	if err != nil {
+		return nil, err
+	}
 	original, err := s.routerVPNNewNodeChainObservation(ctx, chain.Config(), chain.DNSCapture(),
 		chain.PrefixTags(), chain.FinalTag(), chain.SourceSHA256(), chain.ConfigSHA256(), session, current)
-	return (*RouterVPNNodeChainEngine)(original), err
+	if err != nil {
+		return nil, err
+	}
+	return &RouterVPNNodeChainEngine{observation: original, publicTag: publicTag, ipv6: ipv6}, nil
 }
 
 func (s *Box) routerVPNNewNodeChainObservation(ctx context.Context, config string,
@@ -278,17 +291,65 @@ func (e *routerVPNNodeChainObservation) DNSProofContext(ctx context.Context, cap
 }
 
 func (e *RouterVPNNodeChainEngine) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
-	return (*routerVPNNodeChainObservation)(e).ObserveChainContext(ctx)
+	if e == nil || e.observation == nil {
+		return mobilemultihop.NodeChainIdentity{}, errors.New("ordered native engine lost its original observation")
+	}
+	return e.observation.ObserveChainContext(ctx)
 }
 func (e *RouterVPNNodeChainEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
-	return (*routerVPNNodeChainObservation)(e).Dial(ctx, tag, address)
+	if e == nil {
+		return nil, errors.New("ordered native engine lost its original observation")
+	}
+	if address != hopmeasure.PublicAddress {
+		return e.observation.Dial(ctx, tag, address)
+	}
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return nil, err
+	}
+	if e.publicTag == "" || tag != e.publicTag || e.observation.instance.dnsRouter == nil || e.observation.resolver == nil {
+		return nil, errors.New("ordered imported measurement requires its captured middle and DNS")
+	}
+	query, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	query = adapter.WithContext(query, &adapter.InboundContext{
+		Inbound: e.observation.dns.TUNTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns",
+	})
+	addresses, err := e.observation.instance.dnsRouter.Lookup(query, hopmeasure.PublicHost,
+		adapter.DNSQueryOptions{Transport: e.observation.resolver, DisableCache: true, DisableOptimisticCache: true})
+	_, observed := e.ObserveChainContext(ctx)
+	if err != nil || observed != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, observed, ctx.Err(), errors.New("ordered imported captured DNS lookup failed"))
+	}
+	for _, ip := range addresses {
+		if !ip.IsValid() || ip.Zone() != "" || ip.Is4In6() || !ip.IsGlobalUnicast() ||
+			ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.Is6() && !e.ipv6 {
+			continue
+		}
+		connection, dialErr := e.observation.Dial(ctx, tag, net.JoinHostPort(ip.String(), "443"))
+		if dialErr == nil && connection != nil {
+			return connection, nil
+		}
+		if _, observeErr := e.ObserveChainContext(ctx); observeErr != nil {
+			return nil, errors.Join(dialErr, observeErr, ctx.Err())
+		}
+	}
+	return nil, errors.New("ordered imported captured route could not reach its public measurement origin")
 }
 func (e *RouterVPNNodeChainEngine) SelectedContext(ctx context.Context) (string, error) {
-	return (*routerVPNNodeChainObservation)(e).SelectedContext(ctx)
+	if e == nil {
+		return "", errors.New("ordered native engine lost its original observation")
+	}
+	return e.observation.SelectedContext(ctx)
 }
 func (e *RouterVPNNodeChainEngine) SelectContext(ctx context.Context, tag string) error {
-	return (*routerVPNNodeChainObservation)(e).SelectContext(ctx, tag)
+	if e == nil {
+		return errors.New("ordered native engine lost its original observation")
+	}
+	return e.observation.SelectContext(ctx, tag)
 }
 func (e *RouterVPNNodeChainEngine) DNSProofContext(ctx context.Context, capture mobilemultihop.NodeChainDNSCapture) error {
-	return (*routerVPNNodeChainObservation)(e).DNSProofContext(ctx, capture)
+	if e == nil {
+		return errors.New("ordered native engine lost its original observation")
+	}
+	return e.observation.DNSProofContext(ctx, capture)
 }
