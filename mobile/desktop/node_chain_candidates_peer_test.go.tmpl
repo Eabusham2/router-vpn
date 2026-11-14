@@ -4,7 +4,10 @@ package routervpnamnezia
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -464,4 +467,277 @@ func TestRouterVPNDesktopNodeChainEncryptedPrefixCandidates(t *testing.T) {
 			})
 		})
 	}
+}
+
+// Keep the original SS2022 witness unchanged. CONNECT TCP timing reaches its
+// actual HTTP/HTTPS listener without sending CONNECT credentials or TLS bytes.
+func TestRouterVPNDesktopNodeChainEncryptedCONNECTCandidates(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, protocol := range []string{"http-connect", "https-connect"} {
+				t.Run(protocol, func(t *testing.T) { desktopNodeChainEncryptedCONNECTCandidate(t, mode, protocol) })
+			}
+		})
+	}
+}
+
+func desktopCONNECTCandidateInput(t *testing.T, protocol, password string) string {
+	t.Helper()
+	transport := map[string]any{"host": "10.79.0.1", "port": 1080, "username": "original-candidate-user", "password": password}
+	outbound := map[string]any{"type": "http", "tag": "custom-exit", "server": "10.79.0.1", "server_port": 1080, "username": "original-candidate-user", "password": password}
+	if protocol == "https-connect" {
+		transport["tls_server_name"] = "speed.cloudflare.com"
+		outbound["tls"] = map[string]any{"enabled": true, "server_name": "speed.cloudflare.com"}
+	}
+	graph := map[string]any{
+		"inbounds":  []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}},
+		"endpoints": []any{}, "outbounds": []any{outbound}, "route": map[string]any{"final": "custom-exit", "rules": []any{}, "auto_detect_interface": true}}
+	profile := map[string]any{"id": "original-connect-candidate", "node_kind": "external", "external": map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88", strings.ReplaceAll(protocol, "-", "_"): transport},
+		"endpoint": "10.79.0.1", "dns_mode": "home", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": false, "kill_switch_policy": "on-connect"}
+	capture := map[string]any{"schema": 1, "exit_id": "original-connect-candidate", "protocol": protocol, "expected_public_ip": "203.0.113.88", "profile": profile}
+	input, err := mobilemultihop.NodeChainImportedCONNECTMemberInput(desktopNodeChainJSON(t, graph), desktopNodeChainJSON(t, capture))
+	if err != nil {
+		t.Fatal("original CONNECT source", err)
+	}
+	return input
+}
+
+func desktopNodeChainEncryptedCONNECTCandidate(t *testing.T, mode, protocol string) {
+	request, clients := desktopNodeChainPeerFixture(t, 2)
+	desktopNodeChainSetModes(t, &request, []string{mode, mode})
+	loopback := netip.MustParseAddr("127.0.0.1")
+	peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
+	_, port, err := net.SplitHostPort(peer.prefixes[0].bind.address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := desktopNodeChainPeerSource(t, request, clients, net.JoinHostPort(request.Address, port))
+	lifetime, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 45*time.Second)
+	defer cancel()
+	outbounds := desktopNodeChainPeerOutbounds(t, lifetime, chain, peer.prefixes[0].bind.address(), nil)
+	// The target is a real bounded CONNECT listener. The encrypted prefix's
+	// allowlist exposes this captured virtual tuple only; the host TCP socket
+	// is never returned to the candidate service or present in its source.
+	const targetAddress = "10.79.0.1:1080"
+	const password = "original-candidate-connect-password"
+	peerContext, stopPeer := context.WithCancel(lifetime)
+	connectServer := &desktopNodeLayerServer{ctx: peerContext, cancel: stopPeer, connections: map[io.Closer]bool{}}
+	certificate, _ := desktopNodeChainImportedCertificate(t)
+	var secured *tls.Certificate
+	if protocol == "https-connect" {
+		secured = &certificate
+	}
+	provider := desktopStartImportedCONNECTPeer(t, connectServer, "original-candidate-user", password, secured, nil, "")
+	peer.prefixes[1].handler.rules["tcp/"+targetAddress] = desktopReferenceRule{Network: "tcp", Address: "10.79.0.1", Port: 1080, Target: provider.address}
+	input := desktopCONNECTCandidateInput(t, protocol, password)
+	inventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-native-connect-catalog-1", Inputs: []string{input}})
+	plan, err := chain.NewCandidatePlan(1, inventory)
+	if err != nil {
+		t.Fatal("original CONNECT candidate source rejected", err)
+	}
+	changedInput := desktopCONNECTCandidateInput(t, protocol, password+"-changed")
+	changedInventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-native-connect-catalog-1", Inputs: []string{changedInput}})
+	changedPlan, err := chain.NewCandidatePlan(1, changedInventory)
+	if err != nil || changedPlan.CaptureSHA256() == plan.CaptureSHA256() {
+		t.Fatal("changed CONNECT credentials reused candidate capture", err)
+	}
+	proofs := chain.ProofInventory()
+	digest := sha256.Sum256([]byte(desktopNodeChainJSON(t, []string{"routervpn-node-chain-connect-member-v1", input})))
+	target := hopmeasure.CandidateTarget{ID: "original-connect-candidate", SourceSHA256: hex.EncodeToString(digest[:]), Address: targetAddress}
+	var metadata struct {
+		Targets []struct {
+			ID     string `json:"id"`
+			Source string `json:"source_sha256"`
+		} `json:"targets"`
+	}
+	if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil || len(metadata.Targets) != 1 || metadata.Targets[0].ID != target.ID || metadata.Targets[0].Source != target.SourceSHA256 {
+		t.Fatal("CONNECT candidate lost exact original source identity")
+	}
+	prefix := hopmeasure.CandidatePrefix{Position: 1, ID: proofs[1].ProfileID, Tag: proofs[1].Tag, CaptureSHA256: plan.CaptureSHA256()}
+	newService := func(t *testing.T) (*hopmeasure.CandidateService, *desktopCandidateNativeBoundary) {
+		t.Helper()
+		engine := &desktopCandidateNativeBoundary{original: outbounds[1], active: outbounds[1], chain: chain, source: chain.SourceSHA256(), config: chain.ConfigSHA256(), inventory: inventory, currentInventory: inventory, prefix: prefix, target: target, proof: proofs[1], token: request.Prefixes[1].APIToken}
+		service, err := hopmeasure.NewPrefixCandidatesContext(lifetime, engine, prefix, []hopmeasure.CandidateTarget{target})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := service.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		return service, engine
+	}
+	requestID := strings.Repeat("a", 32)
+	t.Run("fifty-original-destination-handshakes", func(t *testing.T) {
+		service, engine := newService(t)
+		before := connectServer.rawTCP.Load()
+		firstPackets := peer.prefixes[0].bind.packets.Load()
+		beforeTCP, beforeProof := peer.prefixes[1].handler.tcp.Load(), peer.prefixes[1].proof.Load()
+		if err := service.StartContext(lifetime, requestID, target.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopCandidateNativeDrain(lifetime, service, requestID); err != nil {
+			t.Fatal(err)
+		}
+		status := desktopCandidateNativeStatus(t, service)
+		if !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 1 {
+			t.Fatal("complete CONNECT candidate receipt", status)
+		}
+		result := status.Results[0]
+		if !result.Ready || result.Kind != "tcp-connect" || result.Role != "candidate" || result.Benchmark == nil || result.Benchmark.Attempts != 50 || result.Benchmark.Distribution.Samples != 50 || result.Benchmark.TrimmedMean <= 0 || result.Benchmark.Measurement != "routed-tcp-connect" || result.Benchmark.Endpoint != "" || status.CandidateSourceSHA256 != target.SourceSHA256 || status.CaptureSHA256 != plan.CaptureSHA256() {
+			t.Fatal("wrong CONNECT TCP timing semantics", status)
+		}
+		desktopCandidateNativeCount(t, connectServer, before+50)
+		// Each original private observation owns exactly one TCP connection;
+		// every other connection here must be one of the fifty candidate dials.
+		// Proof traffic alone cannot witness the candidate's encrypted route.
+		if peer.prefixes[1].handler.tcp.Load()-beforeTCP != int64(peer.prefixes[1].proof.Load()-beforeProof)+50 {
+			t.Fatal("CONNECT candidate bypassed exact encrypted prefix")
+		}
+		if engine.dials.Load() != 50 || engine.closed.Load() != 50 || engine.released.Load() != 1 || engine.held.Load() || peer.prefixes[0].bind.packets.Load() <= firstPackets || connectServer.plainTCP.Load() != 0 || provider.auth.Load() != 0 || provider.denied.Load() != 0 || provider.tlsRefused.Load() != 0 {
+			t.Fatal("CONNECT candidate lost encrypted prefix/socket ownership or claimed proxy authentication")
+		}
+		raw := service.StatusJSON()
+		if strings.Contains(raw, target.Address) || strings.Contains(raw, password) || strings.Contains(raw, "icmp") {
+			t.Fatal("private endpoint/credential or false ICMP result")
+		}
+	})
+	t.Run("uncaptured-candidate-and-prefix", func(t *testing.T) {
+		service, engine := newService(t)
+		before := connectServer.rawTCP.Load()
+		if service.StartContext(lifetime, requestID, "foreign") == nil {
+			t.Fatal("foreign candidate admitted")
+		}
+		release, e := engine.BeginMeasurementContext(lifetime)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer release()
+		for _, v := range [][2]string{{proofs[2].Tag, target.Address}, {prefix.Tag, "10.79.0.1:1081"}} {
+			if c, e := engine.Dial(lifetime, v[0], v[1]); e == nil || c != nil {
+				t.Fatal("foreign native routing capability")
+			}
+		}
+		if connectServer.rawTCP.Load() != before || engine.dials.Load() != 0 {
+			t.Fatal("foreign input reached peer")
+		}
+		if _, e := chain.NewCandidatePlan(2, inventory); e == nil {
+			t.Fatal("lazy SS prefix timed upstream handshake")
+		}
+	})
+	for _, fault := range []string{"source-change", "prefix-owner-change"} {
+		t.Run(fault, func(t *testing.T) {
+			service, engine := newService(t)
+			before := connectServer.rawTCP.Load()
+			engine.onClose = func() {
+				engine.mu.Lock()
+				if fault == "source-change" {
+					engine.currentInventory = changedInventory
+				} else {
+					engine.active = nil
+				}
+				engine.mu.Unlock()
+			}
+			if e := service.StartContext(lifetime, requestID, target.ID); e != nil {
+				t.Fatal(e)
+			}
+			if e := desktopCandidateNativeDrain(lifetime, service, requestID); e != nil {
+				t.Fatal(e)
+			}
+			status := desktopCandidateNativeStatus(t, service)
+			if status.Stage != "invalidated" || len(status.Results) != 0 || engine.dials.Load() != 1 || engine.held.Load() {
+				t.Fatal("changed source/prefix retained score", status)
+			}
+			desktopCandidateNativeCount(t, connectServer, before+1)
+			engine.mu.Lock()
+			engine.currentInventory = inventory
+			engine.active = engine.original
+			engine.mu.Unlock()
+			if _, e := engine.IdentityContext(lifetime); e == nil {
+				t.Fatal("old capture revived after change-back")
+			}
+		})
+	}
+	t.Run("cancel-retains-real-socket-drain", func(t *testing.T) {
+		service, engine := newService(t)
+		engine.closeEntered = make(chan struct{})
+		engine.closeRelease = make(chan struct{})
+		var once sync.Once
+		release := func() { once.Do(func() { close(engine.closeRelease) }) }
+		defer release()
+		before := connectServer.rawTCP.Load()
+		if e := service.StartContext(lifetime, requestID, target.ID); e != nil {
+			t.Fatal(e)
+		}
+		select {
+		case <-engine.closeEntered:
+		case <-lifetime.Done():
+			t.Fatal("actual native socket never reached close")
+		}
+		service.Cancel(requestID)
+		short, stop := context.WithTimeout(lifetime, 25*time.Millisecond)
+		e := service.CloseContext(short)
+		stop()
+		if e == nil || !engine.held.Load() || engine.closed.Load() != 0 {
+			t.Fatal("cancel released live original socket ownership", e)
+		}
+		release()
+		if e := service.CloseContext(lifetime); e != nil {
+			t.Fatal(e)
+		}
+		status := desktopCandidateNativeStatus(t, service)
+		if len(status.Results) != 0 || engine.held.Load() || engine.closed.Load() != 1 || engine.released.Load() != 1 {
+			t.Fatal("original socket drain failed", status)
+		}
+		desktopCandidateNativeCount(t, connectServer, before+1)
+	})
+	t.Run("wrong-live-private-proof", func(t *testing.T) {
+		service, engine := newService(t)
+		before := connectServer.rawTCP.Load()
+		peer.prefixes[1].wrong.Store(true)
+		defer peer.prefixes[1].wrong.Store(false)
+		if e := service.StartContext(lifetime, requestID, target.ID); e != nil {
+			t.Fatal(e)
+		}
+		if e := desktopCandidateNativeDrain(lifetime, service, requestID); e != nil {
+			t.Fatal(e)
+		}
+		status := desktopCandidateNativeStatus(t, service)
+		if len(status.Results) != 0 || status.Stage != "invalidated" || engine.dials.Load() != 0 || connectServer.rawTCP.Load() != before {
+			t.Fatal("foreign live proof scored candidate", status)
+		}
+	})
+	t.Run("destination-listener-refused", func(t *testing.T) {
+		service, engine := newService(t)
+		before := connectServer.rawTCP.Load()
+		provider.close()
+		if e := service.StartContext(lifetime, requestID, target.ID); e != nil {
+			t.Fatal(e)
+		}
+		if e := desktopCandidateNativeDrain(lifetime, service, requestID); e != nil {
+			t.Fatal(e)
+		}
+		status := desktopCandidateNativeStatus(t, service)
+		if len(status.Results) != 1 || status.Results[0].Ready || status.Results[0].Benchmark != nil || status.Results[0].Failure == "" || engine.dials.Load() != 1 || connectServer.rawTCP.Load() != before {
+			t.Fatal("refused actual destination produced a score", status)
+		}
+	})
+	t.Run("retained-encrypted-prefix-lost", func(t *testing.T) {
+		service, _ := newService(t)
+		before := connectServer.rawTCP.Load()
+		if e := peer.prefixes[1].bind.Close(); e != nil {
+			t.Fatal(e)
+		}
+		if e := service.StartContext(lifetime, requestID, target.ID); e != nil {
+			t.Fatal(e)
+		}
+		if e := desktopCandidateNativeDrain(lifetime, service, requestID); e != nil {
+			t.Fatal(e)
+		}
+		status := desktopCandidateNativeStatus(t, service)
+		if len(status.Results) != 0 || connectServer.rawTCP.Load() != before {
+			t.Fatal("lost retained encrypted path retained score", status)
+		}
+	})
 }

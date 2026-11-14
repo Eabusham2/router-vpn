@@ -501,6 +501,32 @@ def execute_node_chain_candidates(peer, source, captured):
     return output
 
 
+NODE_CHAIN_CONNECT_CANDIDATES = 'TestRouterVPNDesktopNodeChainEncryptedCONNECTCandidates'
+NODE_CHAIN_CONNECT_CANDIDATE_VERDICTS = (NODE_CHAIN_CONNECT_CANDIDATES,
+    *(NODE_CHAIN_CONNECT_CANDIDATES + '/' + mode for mode in ('wg', 'awg2-fast', 'awg2-strong')),
+    *(NODE_CHAIN_CONNECT_CANDIDATES + '/' + mode + '/' + protocol + suffix
+      for mode in ('wg', 'awg2-fast', 'awg2-strong')
+      for protocol in ('http-connect', 'https-connect')
+      for suffix in ('', '/fifty-original-destination-handshakes', '/uncaptured-candidate-and-prefix',
+                     '/source-change', '/prefix-owner-change', '/cancel-retains-real-socket-drain',
+                     '/wrong-live-private-proof', '/destination-listener-refused', '/retained-encrypted-prefix-lost')))
+
+
+def check_node_chain_connect_candidate_verdict(output):
+    NODE.require_native_verdicts(output, NODE_CHAIN_CONNECT_CANDIDATE_VERDICTS, 'encrypted original-prefix CONNECT candidate connections')
+
+
+def execute_node_chain_connect_candidates(peer, source, captured):
+    status, output = NODE.run([str(peer), '-test.v', '-test.timeout=90s',
+                              '-test.run=^' + NODE_CHAIN_CONNECT_CANDIDATES + '$'],
+                             cwd=source, env=captured, timeout=100)
+    if status:
+        raise ValueError('Encrypted CONNECT candidate reference failed:\n' + output[-16384:])
+    check_node_chain_connect_candidate_verdict(output)
+    print(output, end='' if output.endswith('\n') else '\n')
+    return output
+
+
 NODE_CHAIN_PEER_CAPTURE = 'TestRouterVPNDesktopNodeChainPeerCapture'
 NODE_CHAIN_PEER_AWG_CAPTURE = 'TestRouterVPNDesktopNodeChainPeerAWGCapture'
 NODE_CHAIN_PEER_TRAFFIC = 'TestRouterVPNDesktopNodeChainPeerTraffic'
@@ -1126,6 +1152,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         node_chain_hysteria_final_output = HYSTERIA_FINAL.execute_peer(peer, source, captured)
         node_chain_imported_mtu_output = execute_node_chain_imported_mtu(peer, source, captured)
         node_chain_candidate_output = execute_node_chain_candidates(peer, source, captured)
+        node_chain_connect_candidate_output = execute_node_chain_connect_candidates(peer, source, captured)
         socks_parent_controls = SOCKS_PARENT.execute(binary, 'linux', NODE.run, ROOT, captured)
         node_chain_host_authority_output = execute_node_chain_host_authority(binary, captured)
         logs = []
@@ -1172,7 +1199,10 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'saved_candidate_host_cases': list(SAVED_CANDIDATE_HOST_CASES), 'saved_prefix_host_cases': list(SAVED_PREFIX_HOST_CASES),
                   'typed_socks_parent_controls': socks_parent_controls, 'typed_socks_installed_cases': list(NODE_CHAIN_SOCKS_HOST_CASES),
                   'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
-                  'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS), 'node_chain_candidate_output_sha256': hashlib.sha256(node_chain_candidate_output.encode()).hexdigest(),
+                  'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS),
+                  'node_chain_connect_candidate_cases': list(NODE_CHAIN_CONNECT_CANDIDATE_VERDICTS),
+                  'node_chain_candidate_output_sha256': hashlib.sha256(node_chain_candidate_output.encode()).hexdigest(),
+                  'node_chain_connect_candidate_output_sha256': hashlib.sha256(node_chain_connect_candidate_output.encode()).hexdigest(),
                   'node_chain_imported_mtu_cases': list(NODE_CHAIN_IMPORTED_MTU_VERDICTS), 'node_chain_imported_mtu_output_sha256': hashlib.sha256(node_chain_imported_mtu_output.encode()).hexdigest(),
                   'node_chain_imported_cases': list(NODE_CHAIN_IMPORTED_VERDICTS), 'node_chain_imported_output_sha256': hashlib.sha256(node_chain_imported_output.encode()).hexdigest(),
                   'node_chain_hysteria_final_cases': list(HYSTERIA_FINAL.VERDICTS), 'node_chain_hysteria_final_output_sha256': hashlib.sha256(node_chain_hysteria_final_output.encode()).hexdigest(),

@@ -90,8 +90,9 @@ func NodeChainCandidateInputSupported(input string) bool {
 	return err == nil
 }
 
-// Only original literal SS2022 sources currently supply a candidate TCP
-// endpoint. UDP-only transports never gain a guessed TCP port or a zero score.
+// Original literal SS2022 and HTTP/HTTPS CONNECT sources supply a candidate
+// TCP endpoint. This measures connection establishment, not the candidate's
+// authentication or TLS. UDP-only transports never gain a guessed TCP port.
 func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string, error) {
 	bad := errors.New("candidate requires its original literal unlayered SS2022 source")
 	var header struct {
@@ -99,6 +100,21 @@ func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string,
 	}
 	if json.Unmarshal([]byte(input), &header) != nil {
 		return hopmeasure.CandidateTarget{}, "", bad
+	}
+	if header.Kind == "routervpn-node-chain-connect-member" {
+		// Keep CONNECT's complete source compiler authoritative for protocol,
+		// credentials, verified-TLS configuration, literal address and Off layer.
+		// No ordinary NodeProfile or host-provided endpoint grants this scope.
+		middle, err := parseNodeChainCONNECTMember(input)
+		if err != nil {
+			return hopmeasure.CandidateTarget{}, "", err
+		}
+		closure, err := middle.closure()
+		if err != nil {
+			return hopmeasure.CandidateTarget{}, "", err
+		}
+		target, err := nodeChainCandidateLiteralTarget(middle.selection.ExitID, middle.source, closure.final)
+		return target, "", err
 	}
 	var closure *externalPredecessor
 	var id, source, proof string
@@ -128,13 +144,20 @@ func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string,
 		!importedSS2022Credentials(predecessorText(closure.final, "method"), predecessorText(closure.final, "password")) {
 		return hopmeasure.CandidateTarget{}, "", bad
 	}
-	address, err := netip.ParseAddr(predecessorText(closure.final, "server"))
-	port, ok := closure.final["server_port"].(float64)
+	target, err := nodeChainCandidateLiteralTarget(id, source, closure.final)
+	return target, proof, err
+}
+
+// Called only after the candidate's original typed compiler validated its
+// complete closure. Never resolve an arbitrary host or infer a default port.
+func nodeChainCandidateLiteralTarget(id, source string, final map[string]any) (hopmeasure.CandidateTarget, error) {
+	address, err := netip.ParseAddr(predecessorText(final, "server"))
+	port, ok := final["server_port"].(float64)
 	if err != nil || address.Zone() != "" || address.Is4In6() || address.IsUnspecified() || address.IsMulticast() ||
 		!ok || math.IsNaN(port) || math.IsInf(port, 0) || math.Trunc(port) != port || port < 1 || port > 65535 {
-		return hopmeasure.CandidateTarget{}, "", bad
+		return hopmeasure.CandidateTarget{}, errors.New("candidate requires its captured literal TCP address and port")
 	}
-	return hopmeasure.CandidateTarget{ID: id, SourceSHA256: source, Address: net.JoinHostPort(address.String(), strconv.Itoa(int(port)))}, proof, nil
+	return hopmeasure.CandidateTarget{ID: id, SourceSHA256: source, Address: net.JoinHostPort(address.String(), strconv.Itoa(int(port)))}, nil
 }
 
 func (p *NodeChainCandidatePlan) CaptureSHA256() string {
