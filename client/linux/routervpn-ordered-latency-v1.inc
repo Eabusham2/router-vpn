@@ -67,12 +67,23 @@ static gboolean linux_ol_same_capture_v1(JsonObject *a, JsonObject *b) {
         if (g_strcmp0(linux_ol_string_v1(a, keys[i]), linux_ol_string_v1(b, keys[i])) != 0) return FALSE;
     return TRUE;
 }
+static int linux_ol_label_kind_v1(JsonObject *n, int position, int count) {
+    const char *prefixes[] = {"Cumulative path", "Cumulative local path", "Cumulative server path"};
+    gboolean public_path = g_strcmp0(linux_ol_string_v1(n, "kind"), "public-path") == 0;
+    char label[128];
+    for (guint i = 0; i < G_N_ELEMENTS(prefixes); i++) {
+        if (public_path) g_snprintf(label, sizeof(label), "%s through custom node 2 of 3 → Cloudflare edge", prefixes[i]);
+        else g_snprintf(label, sizeof(label), "%s through node %d of %d", prefixes[i], position+1, count);
+        if (g_strcmp0(linux_ol_string_v1(n, "label"), label) == 0) return (int)i;
+    }
+    return -1;
+}
 static gboolean linux_ol_node_v1(JsonObject *n, int position, int count) {
     const char *id = linux_ol_string_v1(n, "node_id"), *kind = linux_ol_string_v1(n, "kind");
     const char *role = position == 0 ? "entry" : position == count - 1 ? "exit" : "intermediate";
     gboolean public_path = g_strcmp0(kind, "public-path") == 0;
     return count >= 2 && count <= 8 && position >= 0 && position < count && linux_ol_text_v1(id, 64) && strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == strlen(id) &&
-        linux_ol_text_v1(linux_ol_string_v1(n, "label"), 256) && linux_ol_number_v1(n, "position", position, position, TRUE) &&
+        linux_ol_text_v1(linux_ol_string_v1(n, "label"), 256) && linux_ol_label_kind_v1(n, position, count) >= 0 && linux_ol_number_v1(n, "position", position, position, TRUE) &&
         g_strcmp0(linux_ol_string_v1(n, "role"), role) == 0 &&
         (g_strcmp0(kind, "private-node") == 0 || (public_path && count == 3 && position == 1)) &&
         g_strcmp0(linux_ol_string_v1(n, "measurement"), public_path ? "routed-https-response-after-tls" : "routed-private-response-including-connection") == 0;
@@ -93,10 +104,7 @@ static gboolean linux_ol_receipt_v1(JsonObject *r, JsonObject *capture, JsonObje
     const char *keys[] = {"node_id", "kind", "role"};
     for (guint i = 0; i < G_N_ELEMENTS(keys); i++)
         if (g_strcmp0(linux_ol_string_v1(result, keys[i]), linux_ol_string_v1(node, keys[i])) != 0) return FALSE;
-    char label[128];
-    if (public_path) g_strlcpy(label, "Cumulative path through custom node 2 of 3 → Cloudflare edge", sizeof(label));
-    else g_snprintf(label, sizeof(label), "Cumulative path through node %d of %d", position+1, count);
-    if (g_strcmp0(linux_ol_string_v1(result, "label"), label)) return FALSE;
+    if (g_strcmp0(linux_ol_string_v1(result, "label"), linux_ol_string_v1(node, "label"))) return FALSE;
     const char *unrelated[] = {"idle", "download", "upload", "response"};
     for (guint i = 0; i < G_N_ELEMENTS(unrelated); i++) {
         JsonNode *extra = json_object_get_member(result, unrelated[i]);
@@ -162,6 +170,7 @@ static gboolean linux_ol_receive_v1(LinuxOrderedLatencyV1 *s, JsonObject *reply,
         for (guint i = 0; i < json_array_get_length(nodes); i++) {
             JsonNode *n = json_array_get_element(nodes, i);
             if (!JSON_NODE_HOLDS_OBJECT(n) || !linux_ol_node_v1(json_node_get_object(n), (int)i, (int)json_array_get_length(nodes))) return FALSE;
+            if (i > 0 && linux_ol_label_kind_v1(json_node_get_object(n), (int)i, (int)json_array_get_length(nodes)) != linux_ol_label_kind_v1(json_array_get_object_element(nodes, 0), 0, (int)json_array_get_length(nodes))) return FALSE;
             for (guint j = 0; j < i; j++) if (!g_strcmp0(linux_ol_string_v1(json_node_get_object(n), "node_id"), linux_ol_string_v1(json_array_get_object_element(nodes, j), "node_id"))) return FALSE;
         }
         for (guint i = 0; history != NULL && i < json_array_get_length(history); i++) {

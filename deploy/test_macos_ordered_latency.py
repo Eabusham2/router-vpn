@@ -30,9 +30,12 @@ func decoded(_ value: [String: Any]) throws -> RouterVPNOrderedLatencyReply { tr
 let fixedNow = Date(timeIntervalSince1970: 1794630000)
 let capture: [String: Any] = ["session_id":"session-1794630000000-7", "profile_id":"home-a", "profile_token":String(repeating:"a", count:64),
     "source_sha256":String(repeating:"b", count:64), "config_sha256":String(repeating:"c", count:64), "generation_sha256":String(repeating:"d", count:64)]
-let nodes: [[String: Any]] = (0..<3).map { position in
-    ["node_id":"node-\(position)", "position":position, "role":["entry", "intermediate", "exit"][position], "label":"Hop \(position+1)",
-     "kind":position == 1 ? "public-path" : "private-node", "measurement":position == 1 ? "routed-https-response-after-tls" : "routed-private-response-including-connection"]
+let nodes: [[String: Any]] = (0..<3).map { position -> [String: Any] in
+    let role: String = ["entry", "intermediate", "exit"][position]
+    let label: String = position == 1 ? "Cumulative path through custom node 2 of 3 → Cloudflare edge" : "Cumulative path through node \(position+1) of 3"
+    let kind: String = position == 1 ? "public-path" : "private-node"
+    let measurement: String = position == 1 ? "routed-https-response-after-tls" : "routed-private-response-including-connection"
+    return ["node_id":"node-\(position)", "position":position, "role":role, "label":label, "kind":kind, "measurement":measurement]
 }
 func receipt(_ request: String, _ position: Int = 0) -> [String: Any] {
     ["schema":1, "position":position, "source_sha256":capture["source_sha256"]!, "config_sha256":capture["config_sha256"]!, "generation_sha256":capture["generation_sha256"]!,
@@ -74,7 +77,7 @@ final class Driver {
 func pairedNodes(_ count: Int) -> [[String: Any]] {
     (0..<count).map { position in
         ["node_id":"node-\(position)", "position":position, "role":position == 0 ? "entry" : position == count-1 ? "exit" : "intermediate",
-         "label":"Private hop \(position+1)", "kind":"private-node", "measurement":"routed-private-response-including-connection"]
+         "label":"Cumulative path through node \(position+1) of \(count)", "kind":"private-node", "measurement":"routed-private-response-including-connection"]
     }
 }
 func pairedReceipt(_ count: Int, _ position: Int, _ request: String) -> [String: Any] {
@@ -147,6 +150,46 @@ for position in 0..<3 {
         rejected("receipt \(position) \(change)") { try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(bad)).validate(capture:cap,node:row,current:true,now:fixedNow) }
     }
 }
+
+// Direct decoded validators reject out-of-range positions before label arithmetic.
+var overflowNode=nodes[0];overflowNode["position"]=Int.max
+rejected("maximum integer position is a refusal, not an arithmetic trap") { try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(overflowNode)).validate(count:3) }
+
+// Each selected label remains bound to its captured node in current and history replies.
+for execution in ["local", "server"] {
+    for layout in [0,2,3,4,5,6,7,8] {
+        let count = layout == 0 ? 3 : layout
+        var rows = layout == 0 ? nodes : pairedNodes(count)
+        var records = (0..<count).map { layout == 0 ? receipt(String(repeating:"e",count:32),$0) : pairedReceipt(count,$0,String(repeating:"e",count:32)) }
+        for position in 0..<count {
+            rows[position]["label"] = (rows[position]["label"] as! String).replacingOccurrences(of:"Cumulative path",with:"Cumulative \(execution) path")
+            var result=records[position]["result"] as! [String:Any];result["label"]=rows[position]["label"]!;records[position]["result"]=result
+            let node=try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(rows[position]))
+            let saved=try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(records[position]))
+            do { try node.validate(count:count);try saved.validate(capture:cap,node:node,count:count,current:true,now:fixedNow);try saved.validate(capture:cap,node:node,count:count,current:false,now:fixedNow);checks += 3 }
+            catch { check(false,"canonical selected receipt \(execution)/\(layout)/\(position)") }
+            for other in ["ordinary","local","server"] where other != execution {
+                var bad=records[position], changed=bad["result"] as! [String:Any]
+                let prefix=other == "ordinary" ? "Cumulative path" : "Cumulative \(other) path"
+                changed["label"]=(changed["label"] as! String).replacingOccurrences(of:"Cumulative \(execution) path",with:prefix);bad["result"]=changed
+                for current in [false,true] { rejected("receipt cannot borrow another selected path") { try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(bad)).validate(capture:cap,node:node,count:count,current:current,now:fixedNow) } }
+            }
+            var badNode=rows[position];badNode["label"]=(node.label).replacingOccurrences(of:"Cumulative \(execution) path",with:"Cumulative auto path")
+            rejected("only canonical selected labels are admitted") { try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(badNode)).validate(count:count) }
+        }
+        let owner=Driver();owner.controller.open();var info=response();info["nodes"]=rows;info["history"]=[records[0]]
+        var mixed=info, mixedRows=rows;mixedRows[1]["label"]=(mixedRows[1]["label"] as! String).replacingOccurrences(of:"Cumulative \(execution) path",with:"Cumulative path");mixed["nodes"]=mixedRows
+        rejected("mixed selected inventory cannot be captured") { try owner.controller.receive(decoded(mixed),kind:"capture") }
+        var foreign=info, wrong=records[0], result=wrong["result"] as! [String:Any];result["label"]=(result["label"] as! String).replacingOccurrences(of:"Cumulative \(execution) path",with:"Cumulative path");wrong["result"]=result;foreign["history"]=[wrong]
+        rejected("foreign selected history cannot be captured") { try owner.controller.receive(decoded(foreign),kind:"capture") }
+        try owner.jobs[0].reply(info);owner.pump();check(owner.controller.canRetest,"selected callback capture")
+        owner.controller.retest(position:count-1);let request=owner.controller.requestID;var saved=records[count-1];saved["request_id"]=request
+        try owner.jobs.last!.reply(response(request,position:count-1,stage:"complete",saved:saved));owner.pump()
+        check(owner.controller.drained && owner.controller.history.contains(where:{$0.request_id == request && $0.result.label == rows[count-1]["label"] as! String}),"selected callback retains exact durable label")
+        check(owner.controller.requestClose(),"selected path joins original workers");owner.controller.stop()
+    }
+}
+
 var wrong=response();var wrongCapture=capture;wrongCapture["session_id"]=String(repeating:"e",count:32);wrong["capture"]=wrongCapture
 rejected("ordinary hex session substituted for tracker capture") { _=try decoded(wrong) }
 wrong=response();wrong["schema"]=2;rejected("response schema") { _=try decoded(wrong) }
@@ -236,6 +279,9 @@ print("PASS \(checks) shipping ordered-fifty checks")
 '''
 
 CONTROLS = {
+    "selected_labels": ('["ordinary", "local", "server"].first', '["ordinary"].first'),
+    "selected_receipt": ('result.label == node.label', 'true'),
+    "mixed_inventory": ('Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1', 'true'),
     "three_only": ("(2...8).contains(rows.count)", "rows.count == 3"),
     "private_middle_budget": ("maximum = node.kind == \"public-path\" ? 5000.0 : 2000.0", "maximum = node.position == 1 ? 5000.0 : 2000.0"),
     "foreign_capture": ("reply.capture == capture", "true"),

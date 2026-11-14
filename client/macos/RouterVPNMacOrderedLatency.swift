@@ -31,12 +31,18 @@ struct RouterVPNOrderedLatencyNode: Decodable, Equatable {
     let node_id, kind, role, label, measurement: String
     let position: Int
     var timingLabel: String { kind == "private-node" ? "HTTP response including connection" : "HTTPS response after TLS" }
-    func receiptLabel(count: Int) -> String { kind == "public-path" ? "Cumulative path through custom node 2 of 3 → Cloudflare edge" : "Cumulative path through node \(position + 1) of \(count)" }
+    func receiptLabel(count: Int, execution: String = "ordinary") -> String {
+        let prefix = execution == "ordinary" ? "Cumulative path" : "Cumulative \(execution) path"
+        return kind == "public-path" ? "\(prefix) through custom node 2 of 3 → Cloudflare edge" : "\(prefix) through node \(position + 1) of \(count)"
+    }
+    func receiptKind(count: Int) -> String? {
+        ["ordinary", "local", "server"].first { label == receiptLabel(count: count, execution: $0) }
+    }
     func validate(count: Int = 3) throws {
         let expectedRole = position == 0 ? "entry" : position == count - 1 ? "exit" : "intermediate"
         let isPublic = kind == "public-path"
         guard RouterVPNOrderedCapture.text(node_id), RouterVPNOrderedCapture.text(label, maximum: 256),
-              (2...8).contains(count), position >= 0, position < count, role == expectedRole,
+              (2...8).contains(count), position >= 0, position < count, role == expectedRole, receiptKind(count: count) != nil,
               kind == "private-node" || isPublic && count == 3 && position == 1,
               measurement == (isPublic ? "routed-https-response-after-tls" : "routed-private-response-including-connection") else {
             throw orderedLatencyIssue("A measured hop changed its original position or timing method.")
@@ -87,7 +93,7 @@ struct RouterVPNOrderedLatencyReceipt: Decodable {
               RouterVPNOrderedCapture.hex(generation_sha256), !current || generation_sha256 == capture.generation_sha256,
               position == node.position, node_id == node.node_id, RouterVPNOrderedCapture.hex(request_id, count: 32),
               measured_at > 0, measured_at <= Int64(now.timeIntervalSince1970 * 1000) + 1000,
-              result.node_id == node_id, result.kind == node.kind, result.role == node.role, result.label == node.receiptLabel(count: count),
+              result.node_id == node_id, result.kind == node.kind, result.role == node.role, result.label == node.label,
               result.ready, (result.failure ?? "").isEmpty,
               b.schema == 1, b.measurement == node.measurement, b.attempts == 50, b.failed == 0, d.samples == 50,
               [d.min_ms, d.median_ms, d.average_ms, d.p90_ms, d.max_ms, b.trimmed_mean_ms].allSatisfy({ $0.isFinite && $0 > 0 && $0 <= maximum }),
@@ -271,6 +277,9 @@ final class RouterVPNMacOrderedLatencyController {
                 throw orderedLatencyIssue("Connect the selected ordered route, then reopen hop measurements.")
             }
             for row in rows { try row.validate(count: rows.count) }
+            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {
+                throw orderedLatencyIssue("Measured hops belong to different selected paths.")
+            }
             for record in reply.history ?? [] {
                 guard let node = rows.first(where: { $0.node_id == record.node_id && $0.position == record.position }) else {
                     throw orderedLatencyIssue("Saved history belongs to another hop.")

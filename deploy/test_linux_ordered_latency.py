@@ -25,7 +25,7 @@ SOURCE = ROOT / "client/linux/routervpn-ordered-latency-v1.inc"
 FIXTURE = ROOT / "client/linux/test-ordered-latency-v1.c"
 CAPTURE = dict(session_id="session-123-456", profile_id="exit-a", profile_token="a"*64,
                source_sha256="b"*64, config_sha256="c"*64, generation_sha256="d"*64)
-NODES = [dict(node_id=f"node-{i}", position=i, label=f"Hop {i+1}", role=("entry","intermediate","exit")[i],
+NODES = [dict(node_id=f"node-{i}", position=i, label="Cumulative path through custom node 2 of 3 → Cloudflare edge" if i == 1 else f"Cumulative path through node {i+1} of 3", role=("entry","intermediate","exit")[i],
               kind="public-path" if i == 1 else "private-node",
               measurement="routed-https-response-after-tls" if i == 1 else "routed-private-response-including-connection") for i in range(3)]
 
@@ -49,7 +49,7 @@ def info():
 
 
 def ordinary_fixture(count):
-    nodes = [dict(node_id=f"node-{i}", position=i, label=f"Private hop {i+1}",
+    nodes = [dict(node_id=f"node-{i}", position=i, label=f"Cumulative path through node {i+1} of {count}",
                   role="entry" if i == 0 else "exit" if i == count-1 else "intermediate",
                   kind="private-node", measurement="routed-private-response-including-connection") for i in range(count)]
     receipts = []
@@ -63,9 +63,20 @@ def ordinary_fixture(count):
                           status=dict(request_id="", stage="idle", complete=True, drained=True, results=[])), receipts=receipts)
 
 
+def selected_fixture(execution, count):
+    value = ordinary_fixture(count) if count else dict(info=info(), receipts=[receipt(i) for i in range(3)])
+    for node in value['info']['nodes']:
+        node['label'] = node['label'].replace('Cumulative path', 'Cumulative '+execution+' path')
+    for saved in [*value['receipts'], *value['info']['history']]:
+        saved['result']['label'] = saved['result']['label'].replace('Cumulative path', 'Cumulative '+execution+' path')
+    value['execution'] = execution
+    return value
+
+
 def fixture_data():
     return {'info': info(), **{f'receipt{i}': receipt(i) for i in range(3)},
-            'ordinary': [ordinary_fixture(count) for count in range(2, 9)]}
+            'ordinary': [ordinary_fixture(count) for count in range(2, 9)],
+            'selected': [selected_fixture(execution, count) for execution in ('local','server') for count in (0,2,3,4,5,6,7,8)]}
 
 
 def receipt_model(directory, data):
@@ -79,8 +90,10 @@ def receipt_model(directory, data):
     flags = shlex.split(subprocess.check_output(['pkg-config', '--cflags', '--libs', 'json-glib-1.0'], text=True))
     fixture = ROOT/'client/linux/test-ordered-latency-receipts-v1.c'
     controls = {
+        'selected-labels': ('"Cumulative path", "Cumulative local path", "Cumulative server path"', '"Cumulative path"'),
+        'selected-receipt': ('if (g_strcmp0(linux_ol_string_v1(result, "label"), linux_ol_string_v1(node, "label"))) return FALSE;', 'if (FALSE) return FALSE;'),
         'private-budget': ('double maximum = public_path ? 5000 : 2000;', 'double maximum = position == 1 ? 5000 : 2000;'),
-        'path-length': ('g_snprintf(label, sizeof(label), "Cumulative path through node %d of %d", position+1, count);', 'g_snprintf(label, sizeof(label), "Cumulative path through node %d of %d", position+1, 3);'),
+        'path-length': ('g_snprintf(label, sizeof(label), "%s through node %d of %d", prefixes[i], position+1, count);', 'g_snprintf(label, sizeof(label), "%s through node %d of %d", prefixes[i], position+1, ((void)count, 3));'),
     }
     for name, change in [('shipping', None), *controls.items()]:
         text = block
@@ -240,6 +253,7 @@ def main():
             binary=directory/name;run([*command,FIXTURE,'-o',binary,*flags,'-lm','-pthread']);return binary
         binary=compile_to('shipping');run(['xvfb-run','-a',binary,data])
         source=SOURCE.read_text();mutations={
+            'mixed-inventory': ('if (i > 0 && linux_ol_label_kind_v1', 'if (FALSE && linux_ol_label_kind_v1'),
             'native-drain':('!JSON_NODE_HOLDS_OBJECT(record) || !complete || !drained ||','!JSON_NODE_HOLDS_OBJECT(record) || !complete ||'),
             'http-join':('for (int i = 0; i < OL_JOBS_V1; i++) if (s->jobs[i] != NULL) return FALSE;','/* mutation: unfinished workers ignored */'),
             'capture-owner':('if (g_strcmp0(linux_ol_string_v1(a, keys[i]), linux_ol_string_v1(b, keys[i])) != 0) return FALSE;','if (FALSE) return FALSE;'),
@@ -258,6 +272,6 @@ def main():
                 if scenario=='early':assert not state['admitted']
             print('Real GTK/libcurl ordered-latency scenario: '+scenario,flush=True)
     assert sources()==before,'original GTK source changed during validation'
-    print('GTK ordered latency: shipping callbacks,4 compiled controls,10 real HTTP scenarios PASS',flush=True)
+    print('GTK ordered latency: shipping callbacks,5 compiled controls,10 real HTTP scenarios PASS',flush=True)
 
 if __name__=='__main__':main()

@@ -21,7 +21,7 @@ SOURCE = ROOT / "client/RouterVPN-Windows-SpeedLab.ps1"
 TEST = ROOT / "client/test-windows-ordered-latency.ps1"
 CAPTURE = dict(session_id="session-1794630000000-7", profile_id="home-a", profile_token="a"*64,
                source_sha256="b"*64, config_sha256="c"*64, generation_sha256="d"*64)
-NODES = [dict(node_id=f"node-{p}", position=p, role=("entry", "intermediate", "exit")[p], label=f"Hop {p+1}",
+NODES = [dict(node_id=f"node-{p}", position=p, role=("entry", "intermediate", "exit")[p], label="Cumulative path through custom node 2 of 3 → Cloudflare edge" if p == 1 else f"Cumulative path through node {p+1} of 3",
               kind="public-path" if p == 1 else "private-node",
               measurement="routed-https-response-after-tls" if p == 1 else "routed-private-response-including-connection") for p in range(3)]
 
@@ -100,6 +100,9 @@ def controller(scenario):
     finally: server.shutdown();server.server_close();thread.join()
 
 CONTROLS = {
+    "selected_labels": ("@('ordinary','local','server')", "@('ordinary')"),
+    "selected_receipt": ("if([string](Get-RouterVPNOrderedValue $Result 'label')-cne$Label)", "if($false)"),
+    "mixed_inventory": ("if($Index-gt0-and(Get-RouterVPNOrderedLabelKind", "if($false-and(Get-RouterVPNOrderedLabelKind"),
     "three_only": ("$Rows.Count-lt2-or$Rows.Count-gt8", "$Rows.Count-ne3"),
     "private_middle_budget": ("$Maximum=if($Public){5000}else{2000}", "$Maximum=if($Position-eq1){5000}else{2000}"),
     "foreign_capture": ("if([string](Get-RouterVPNOrderedValue $Capture $Key)-cne[string](Get-RouterVPNOrderedValue $State.Capture $Key))", "if($false)"),

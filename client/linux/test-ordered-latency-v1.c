@@ -7,9 +7,19 @@
 typedef struct { GtkWidget *window; const char *selected; } App;
 static const char *active_router_id(App *app) { return app->selected; }
 static void append_diag(App *app, const char *text) { (void)app; (void)text; }
+/* Mutable fixture faults must not share nested objects with the positive source. */
+static JsonNode *fixture_copy(JsonNode *node) {
+    char *text = json_to_string(node, FALSE);
+    GError *error = NULL;
+    JsonNode *copy = json_from_string(text, &error);
+    g_free(text);
+    if (copy == NULL) g_error("Cannot clone exact JSON fixture: %s", error != NULL ? error->message : "unknown error");
+    g_clear_error(&error);
+    return copy;
+}
 static JsonNode *parse_json(const char *text) {
     JsonParser *p = json_parser_new(); JsonNode *n = NULL;
-    if (text != NULL && json_parser_load_from_data(p, text, -1, NULL)) n = json_node_copy(json_parser_get_root(p));
+    if (text != NULL && json_parser_load_from_data(p, text, -1, NULL)) n = fixture_copy(json_parser_get_root(p));
     g_object_unref(p); return n;
 }
 static int checks;
@@ -49,7 +59,7 @@ static LinuxOrderedLatencyV1 *panel(App *app) {
 }
 #ifndef ROUTERVPN_ORDERED_LIVE
 static JsonNode *fixture;
-static JsonNode *field_copy(const char *key) { return json_node_copy(json_object_get_member(json_node_get_object(fixture), key)); }
+static JsonNode *field_copy(const char *key) { return fixture_copy(json_object_get_member(json_node_get_object(fixture), key)); }
 static void reply(RVHttpJobV16 *job, long code, JsonNode *node) {
     check(job != NULL && !record(job)->freed, "response retains its HTTP worker");
     JsonGenerator *g = json_generator_new(); json_generator_set_root(g, node); job->response = json_generator_to_data(g, &job->length);
@@ -98,10 +108,10 @@ static void validation(App *app) {
         char key[24]; g_snprintf(key, sizeof key, "receipt%d", position); JsonNode *n = field_copy(key); JsonObject *r = json_node_get_object(n), *node = json_array_get_object_element(json_node_get_array(s->nodes), (guint)position);
         check(linux_ol_receipt_v1(r, capture, node, 3, TRUE), "fifty actual responses accepted for each timing method");
         const char *fields[] = {"source_sha256", "config_sha256", "generation_sha256", "request_id", "node_id"};
-        for (guint i = 0; i < G_N_ELEMENTS(fields); i++) { JsonNode *bad = json_node_copy(n); json_object_set_string_member(json_node_get_object(bad), fields[i], "foreign"); check(!linux_ol_receipt_v1(json_node_get_object(bad), capture, node, 3, TRUE), "foreign receipt owner refused"); json_node_free(bad); }
+        for (guint i = 0; i < G_N_ELEMENTS(fields); i++) { JsonNode *bad = fixture_copy(n); json_object_set_string_member(json_node_get_object(bad), fields[i], "foreign"); check(!linux_ol_receipt_v1(json_node_get_object(bad), capture, node, 3, TRUE), "foreign receipt owner refused"); json_node_free(bad); }
         const char *faults[] = {"samples", "attempts", "failed", "endpoint", "measurement", "median_ms", "jitter_ms", "trimmed_mean_ms", "date", "position", "ready", "probe-budget", "jitter-range", "unrelated", "label"};
         for (guint i = 0; i < G_N_ELEMENTS(faults); i++) {
-            JsonNode *bad = json_node_copy(n); JsonObject *o = json_node_get_object(bad), *result = linux_ol_object_v1(o, "result"), *b = linux_ol_object_v1(result, "benchmark"), *d = linux_ol_object_v1(b, "distribution");
+            JsonNode *bad = fixture_copy(n); JsonObject *o = json_node_get_object(bad), *result = linux_ol_object_v1(o, "result"), *b = linux_ol_object_v1(result, "benchmark"), *d = linux_ol_object_v1(b, "distribution");
             switch(i) { case 0:json_object_set_int_member(d,"samples",49);break;case 1:json_object_set_int_member(b,"attempts",49);break;case 2:json_object_set_int_member(b,"failed",1);break;case 3:json_object_set_string_member(b,"endpoint","https://foreign.invalid/");break;case 4:json_object_set_string_member(b,"measurement","direct");break;case 5:json_object_set_double_member(d,"median_ms",0);break;case 6:json_object_set_double_member(d,"jitter_ms",-1);break;case 7:json_object_set_double_member(b,"trimmed_mean_ms",99999);break;case 8:json_object_set_int_member(o,"measured_at",g_get_real_time()/1000+60000);break;case 9:json_object_set_int_member(o,"position",(position+1)%3);break;case 10:json_object_set_boolean_member(result,"ready",FALSE);break;case 11:json_object_set_double_member(d,"max_ms",5001);break;case 12:json_object_set_double_member(d,"jitter_ms",5);break;case 13:json_object_set_object_member(result,"download",json_object_new());break;case 14:json_object_set_string_member(result,"label","foreign label");break; }
             check(!linux_ol_receipt_v1(o, capture, node, 3, TRUE), faults[i]); json_node_free(bad);
         }
@@ -126,12 +136,12 @@ static void ordinary_validation(App *app) {
         JsonArray *receipts = json_object_get_array_member(item, "receipts");
         int count = (int)json_array_get_length(receipts);
         LinuxOrderedLatencyV1 *s = panel(app); freeze(s);
-        reply(s->jobs[OL_INFO_V1], 200, json_node_copy(json_object_get_member(item, "info"))); linux_ol_tick_v1(s);
+        reply(s->jobs[OL_INFO_V1], 200, fixture_copy(json_object_get_member(item, "info"))); linux_ol_tick_v1(s);
         check(s->capture != NULL && !s->invalid && (int)json_array_get_length(json_node_get_array(s->nodes)) == count, "whole private inventory admitted by shipping GTK callback");
         GtkTreeModel *model = gtk_combo_box_get_model(GTK_COMBO_BOX(s->hops));
         check(gtk_tree_model_iter_n_children(model, NULL) == count, "all private hops appear in actual GTK chooser");
         start(s, count-1);
-        JsonNode *terminal = status(s, "complete", TRUE, TRUE, FALSE), *saved = json_node_copy(json_array_get_element(receipts, count-1));
+        JsonNode *terminal = status(s, "complete", TRUE, TRUE, FALSE), *saved = fixture_copy(json_array_get_element(receipts, count-1));
         json_object_set_string_member(json_node_get_object(saved), "request_id", s->request);
         json_object_set_member(json_node_get_object(terminal), "receipt", saved);
         check(linux_ol_receive_v1(s, json_node_get_object(terminal), FALSE), "last private hop durable receipt accepted");
@@ -139,6 +149,38 @@ static void ordinary_validation(App *app) {
         json_node_free(terminal);finish_jobs(s);dispose(s);
     }
 }
+
+static void selected_validation(App *app) {
+    JsonArray *cases = json_object_get_array_member(json_node_get_object(fixture), "selected");
+    check(json_array_get_length(cases) == 16, "all selected GTK path fixtures retained");
+    for (guint index = 0; index < json_array_get_length(cases); index++) {
+        JsonObject *item = json_array_get_object_element(cases, index);
+        JsonArray *receipts = json_object_get_array_member(item, "receipts");
+        int count = (int)json_array_get_length(receipts);
+        LinuxOrderedLatencyV1 *s = panel(app);freeze(s);
+        JsonNode *mixed = fixture_copy(json_object_get_member(item, "info"));
+        JsonObject *middle = json_array_get_object_element(linux_ol_array_v1(json_node_get_object(mixed), "nodes"), 1);
+        const char *suffix = strstr(linux_ol_string_v1(middle, "label"), " path");
+        char *other = g_strconcat("Cumulative path", suffix+5, NULL);json_object_set_string_member(middle, "label", other);g_free(other);
+        check(!linux_ol_receive_v1(s, json_node_get_object(mixed), TRUE), "mixed selected inventory cannot be captured");json_node_free(mixed);
+        JsonNode *foreign = fixture_copy(json_object_get_member(item, "info"));
+        JsonObject *old = json_array_get_object_element(linux_ol_array_v1(json_node_get_object(foreign), "history"), 0), *result = linux_ol_object_v1(old, "result");
+        suffix = strstr(linux_ol_string_v1(result, "label"), " path");other = g_strconcat("Cumulative path", suffix+5, NULL);
+        json_object_set_string_member(result, "label", other);g_free(other);
+        check(!linux_ol_receive_v1(s, json_node_get_object(foreign), TRUE), "foreign selected history cannot be captured");json_node_free(foreign);
+        reply(s->jobs[OL_INFO_V1], 200, fixture_copy(json_object_get_member(item, "info")));linux_ol_tick_v1(s);
+        check(s->capture != NULL && !s->invalid && (int)json_array_get_length(json_node_get_array(s->nodes)) == count, "selected inventory admitted by shipping GTK callback");
+        start(s, count-1);
+        JsonNode *terminal = status(s, "complete", TRUE, TRUE, FALSE), *saved = fixture_copy(json_array_get_element(receipts, count-1));
+        json_object_set_string_member(json_node_get_object(saved), "request_id", s->request);json_object_set_member(json_node_get_object(terminal), "receipt", saved);
+        check(linux_ol_receive_v1(s, json_node_get_object(terminal), FALSE), "selected durable receipt accepted by shipping GTK callback");
+        check(s->complete && s->drained && json_array_get_length(json_node_get_array(s->history)) == 2, "selected history changes only after original native drain");
+        JsonObject *adopted = json_array_get_object_element(json_node_get_array(s->history), 1), *node = json_array_get_object_element(json_node_get_array(s->nodes), count-1);
+        check(g_strcmp0(linux_ol_string_v1(linux_ol_object_v1(adopted,"result"),"label"), linux_ol_string_v1(node,"label")) == 0, "selected callback preserved exact captured label");
+        json_node_free(terminal);finish_jobs(s);dispose(s);
+    }
+}
+
 static void cancellation(App *app) {
     LinuxOrderedLatencyV1 *s = ready(app); start(s, 0); RVHttpJobV16 *original = s->jobs[OL_START_V1]; char *request = g_strdup(s->request);
     check(linux_ordered_latency_parent_delete_v1(app->window,NULL,app), "parent close waits captured native and HTTP cleanup"); s->parent_closing = FALSE;
@@ -171,7 +213,10 @@ static void live(App *app, const char *scenario) {
     while (!linux_ol_settled_v1(s) && g_get_monotonic_time()<until) { pump();g_usleep(10000); }
     check(linux_ol_settled_v1(s),"real original native receipt and all HTTP workers joined");
     check(json_array_get_length(json_node_get_array(s->history))==(saved?2u:1u),"only durable exact receipt changes historical results");
-    if (saved) check(strstr(s->message,"saved")!=NULL,"saved result rendered honestly");
+    if (saved) {
+        const char *expected = !strcmp(scenario, "saved") ? "Saved 50 responses for the selected hop." : "The test finished before cancellation; its 50 responses were saved.";
+        check(g_strcmp0(s->message, expected) == 0 && g_strcmp0(gtk_label_get_text(GTK_LABEL(s->message_label)), expected) == 0, "saved result rendered honestly");
+    }
     if (early) check(s->cancelled,"prestart cancellation retained original tombstone");
     if (!strcmp(scenario,"replacement-commit")) check(s->invalid && !linux_ol_start_v1(s),"replaced display drains original commit without adopting or retesting");
     app->selected="exit-a";gtk_dialog_response(GTK_DIALOG(s->dialog),GTK_RESPONSE_CLOSE);pump();
@@ -181,7 +226,7 @@ int main(int argc,char **argv) {
     gtk_init(&argc,&argv);curl_global_init(CURL_GLOBAL_DEFAULT);App app={gtk_window_new(GTK_WINDOW_TOPLEVEL),"exit-a"};gtk_widget_show_all(app.window);
 #ifndef ROUTERVPN_ORDERED_LIVE
     check(argc==2,"fixture JSON supplied");char *text=NULL;check(g_file_get_contents(argv[1],&text,NULL,NULL),"read fixture");fixture=parse_json(text);g_free(text);check(fixture!=NULL,"fixture JSON valid");records=g_ptr_array_new();
-    validation(&app);ordinary_validation(&app);cancellation(&app);checked_parent_shutdown=TRUE;gtk_widget_destroy(app.window);pump();
+    validation(&app);ordinary_validation(&app); selected_validation(&app);cancellation(&app);checked_parent_shutdown=TRUE;gtk_widget_destroy(app.window);pump();
     for(guint i=0;i<records->len;i++){Record*r=g_ptr_array_index(records,i);check(r->freed,"every original HTTP worker released");g_free(r->path);g_free(r->body);g_free(r);}g_ptr_array_free(records,TRUE);json_node_free(fixture);
 #else
     check(argc==2,"live scenario supplied");live(&app,argv[1]);gtk_widget_destroy(app.window);pump();
