@@ -67,8 +67,9 @@ func TestDesktopSOCKSParentRetainsExactTypedAuthority(t *testing.T) {
 				t.Fatal("typed readiness changed original complete budget", budget, err)
 			}
 			for _, target := range []string{"linux", "windows"} {
-				if _, err := newDesktopNodeChainLaunch(selected, strings.Repeat("b", 32), target); err == nil {
-					t.Fatal("unvalidated platform admitted typed parent", target)
+				native, err := newDesktopNodeChainLaunch(selected, strings.Repeat("b", 32), target)
+				if err != nil || native.chain.socksPolicy == nil || native.chain.policy != nil || !native.chain.originalPolicyCurrent() || nativeNodeChainSOCKSPlatformSupported() {
+					t.Fatal("typed internal adapter changed source or opened public admission before native acceptance", target, err)
 				}
 			}
 		})

@@ -37,6 +37,7 @@ CHILD = load('linux_installed_host_child', 'test_linux_node_child_tun.py')
 TRANSACTION = load('linux_installed_host_transaction', 'test_linux_node_transaction.py')
 HOSTNAME = load('linux_hostname_native_preflight', 'test_desktop_node_imported_hostname.py')
 HYSTERIA_FINAL = load('linux_hysteria_final_native_preflight', 'test_desktop_node_chain_hysteria_final.py')
+SOCKS_PARENT = load('linux_installed_socks_parent', 'test_desktop_socks_parent.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
 WIREGUARD_CASES = tuple('wg-' + case for case in ('public-connect', 'home-lan', 'wrong-key', 'resolver-failure', 'wrong-node',
                                                 'active-network-change', 'cancelled-proof', 'restore-sealed', 'always',
@@ -242,7 +243,11 @@ NODE_CHAIN_HYSTERIA_HOST_CASES = (
     'node-chain-hy2-wg-wg-middle-source',
     'node-chain-hy2-wg-wg-prefix-lost')
 NODE_CHAIN_HOST_CASES += SAVED_CANDIDATE_HOST_CASES + SAVED_PREFIX_HOST_CASES + NODE_CHAIN_HYSTERIA_HOST_CASES
-CASES += NODE_CHAIN_HOST_CASES
+NODE_CHAIN_SOCKS_HOST_CASES = (
+    'node-chain-socks-wg-connect', 'node-chain-socks-awg-fast-connect', 'node-chain-socks-awg-strong-connect',
+    'node-chain-socks-wg-wrong-middle-key', 'node-chain-socks-wg-wrong-middle-public',
+    'node-chain-socks-wg-final-dns-failure', 'node-chain-socks-wg-final-node-failure', 'node-chain-socks-wg-middle-source')
+CASES += NODE_CHAIN_HOST_CASES + NODE_CHAIN_SOCKS_HOST_CASES
 NODE_CHAIN_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledNodeChainFixtureKeepsCompiledAuthority'
 NODE_CHAIN_CIPHER_CASES = (
     ('3-nodes', 3, False), ('4-nodes', 4, False),
@@ -253,6 +258,9 @@ NODE_CHAIN_CIPHER_CASES = (
 NODE_CHAIN_HOST_AUTHORITY_CASES = (NODE_CHAIN_HOST_AUTHORITY_ROOT,
     *(NODE_CHAIN_HOST_AUTHORITY_ROOT + '/' + name for name, _, _ in NODE_CHAIN_CIPHER_CASES))
 
+NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledSOCKSNodeChainFixtureKeepsOriginalSources'
+NODE_CHAIN_HOST_AUTHORITY_CASES += (NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT,
+    *(NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg2-fast', 'awg2-strong')))
 NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledImportedNodeChainFixtureKeepsOriginalSources'
 NODE_CHAIN_HOST_AUTHORITY_CASES += (NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT,
     *(NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '/' + name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong')))
@@ -270,7 +278,7 @@ def check_node_chain_host_authority_verdict(output):
 
 def execute_node_chain_host_authority(binary, captured):
     status, output = NODE.run([str(binary), '-test.v', '-test.timeout=30s',
-        '-test.run=^(' + NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '|' + PREFIX_HOST_AUTHORITY_ROOT + '|' + HYSTERIA_HOST_AUTHORITY_ROOT + ')$'], cwd=ROOT, env=captured, timeout=40)
+        '-test.run=^(' + NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '|' + NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '|' + PREFIX_HOST_AUTHORITY_ROOT + '|' + HYSTERIA_HOST_AUTHORITY_ROOT + ')$'], cwd=ROOT, env=captured, timeout=40)
     if status:
         raise ValueError('Installed ordered source authority failed:\n' + output[-16384:])
     check_node_chain_host_authority_verdict(output)
@@ -296,9 +304,12 @@ def checked_sources(source):
         raise ValueError('Ordered custom tight MTU native source is absent')
     if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go' not in native:
         raise ValueError('Installed custom ordered host lost its original encrypted middle peer')
+    if 'protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_peer_test.go' not in native:
+        raise ValueError('Installed typed SOCKS host lost its original independent association peer')
     if HYSTERIA_FINAL.NATIVE_TEMPLATE not in native:
         raise ValueError('Ordered Hysteria2 native preflight lost its original encrypted peer source')
-    for name in ('test_desktop_node_chain_hysteria_final.py', 'test_desktop_node_chain_hysteria_final_runner.py'):
+    for name in ('test_desktop_node_chain_hysteria_final.py', 'test_desktop_node_chain_hysteria_final_runner.py',
+                 'test_desktop_socks_parent.py', 'test_desktop_socks_parent_runner.py'):
         path = ROOT / 'deploy' / name
         if path.is_symlink() or not path.is_file():
             raise ValueError('Ordered Hysteria2 native preflight lost its original runner')
@@ -321,7 +332,13 @@ def checked_sources(source):
     if catalog.is_symlink() or not catalog.is_file():
         raise ValueError('Installed public Connect lost its actual runtime catalog')
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
-    required = {'cmd/client/desktop_node_chain_linux_hysteria_tun_native_test.go',
+    required = {'cmd/client/desktop_node_chain_socks_linux_tun_native_test.go',
+                'cmd/client/desktop_node_chain_socks_linux_test.go',
+                'cmd/client/desktop_node_chain_socks_platform_test.go',
+                'cmd/client/desktop_node_chain_policy_dispatch.go',
+                'cmd/client/multihop_node_chain_socks_selection.go',
+                'cmd/client/multihop_node_chain_socks_capture.go',
+                'cmd/client/desktop_node_chain_linux_hysteria_tun_native_test.go',
                 'cmd/client/desktop_node_chain_linux_tun_native_test.go',
                 'cmd/client/ordered_candidate_prefix_linux_tun_native_test.go',
                 'cmd/client/ordered_candidate_prefix_runtime.go', 'cmd/client/desktop_node_candidate_prefix_linux.go',
@@ -657,6 +674,7 @@ def check_verdict(output, case=None):
         ('HYSTERIA2_LAYER_CASES', HYSTERIA2_LAYER_CASES),
         ('IMPORTED_CASES', IMPORTED_CASES),
         ('NODE_CHAIN_HOST_CASES', NODE_CHAIN_HOST_CASES),
+        ('NODE_CHAIN_SOCKS_HOST_CASES', NODE_CHAIN_SOCKS_HOST_CASES),
         ('NODE_CHAIN_HYSTERIA_HOST_CASES', NODE_CHAIN_HYSTERIA_HOST_CASES),
         ('SAVED_CANDIDATE_HOST_CASES', SAVED_CANDIDATE_HOST_CASES),
         ('SAVED_PREFIX_HOST_CASES', SAVED_PREFIX_HOST_CASES),
@@ -673,6 +691,9 @@ def check_verdict(output, case=None):
         ('WIREGUARD_LAYER_CASES', WIREGUARD_LAYER_CASES),
     )}
     for value in cases:
+        if value in membership['NODE_CHAIN_SOCKS_HOST_CASES']:
+            if suffix_receipts['verified installed host typed SOCKS association joined: ' + value] != 1 or chain_receipts[value] != 1 or exact_passes[value] != 1:
+                raise ValueError('Installed typed SOCKS omitted or duplicated original encrypted traffic and joined association retirement: ' + value)
         if value in membership['NODE_CHAIN_HYSTERIA_HOST_CASES']:
             if suffix_receipts['verified installed host ordered Hysteria2 native final and joined retirement: ' + value] != 1 or exact_passes[value] != 1:
                 raise ValueError('Installed ordered Hysteria2 omitted or duplicated original encrypted final and joined native retirement: ' + value)
@@ -1105,6 +1126,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         node_chain_hysteria_final_output = HYSTERIA_FINAL.execute_peer(peer, source, captured)
         node_chain_imported_mtu_output = execute_node_chain_imported_mtu(peer, source, captured)
         node_chain_candidate_output = execute_node_chain_candidates(peer, source, captured)
+        socks_parent_controls = SOCKS_PARENT.execute(binary, 'linux', NODE.run, ROOT, captured)
         node_chain_host_authority_output = execute_node_chain_host_authority(binary, captured)
         logs = []
         for case in (*CASES, *REVERSE_CASES):
@@ -1148,6 +1170,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'layer_peer_cases': list(LAYER_PEER_CASES), 'layer_peer_output_sha256': hashlib.sha256(layer_output.encode()).hexdigest(),
                   'node_chain_hysteria_host_cases': list(NODE_CHAIN_HYSTERIA_HOST_CASES),
                   'saved_candidate_host_cases': list(SAVED_CANDIDATE_HOST_CASES), 'saved_prefix_host_cases': list(SAVED_PREFIX_HOST_CASES),
+                  'typed_socks_parent_controls': socks_parent_controls, 'typed_socks_installed_cases': list(NODE_CHAIN_SOCKS_HOST_CASES),
                   'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
                   'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS), 'node_chain_candidate_output_sha256': hashlib.sha256(node_chain_candidate_output.encode()).hexdigest(),
                   'node_chain_imported_mtu_cases': list(NODE_CHAIN_IMPORTED_MTU_VERDICTS), 'node_chain_imported_mtu_output_sha256': hashlib.sha256(node_chain_imported_mtu_output.encode()).hexdigest(),

@@ -31,10 +31,10 @@ func (owned *desktopOwnedNodeRuntime) physicalPolicy() (mobilemultihop.DesktopPh
 		return owned.candidatePrefix.policy, nil
 	}
 	if owned != nil && owned.chain != nil {
-		if owned.policy != nil || owned.imported != nil || owned.chain.policy == nil {
+		if owned.policy != nil || owned.imported != nil || !owned.chain.hasPolicy() {
 			return nil, errors.New("native ordered owner mixed its concrete policy family")
 		}
-		return owned.chain.policy, nil
+		return owned.chain.physicalPolicy()
 	}
 	if owned == nil || (owned.policy == nil) == (owned.imported == nil) {
 		return nil, errors.New("native physical owner requires exactly one captured policy family")
@@ -111,7 +111,7 @@ func (owned *desktopOwnedNodeRuntime) sourceFile() (string, int) {
 		return "node-candidate-prefix-source.json", mobilemultihop.NodeChainInputLimit
 	}
 	if owned != nil && owned.chain != nil {
-		return "node-chain-source.json", mobilemultihop.NodeChainInputLimit
+		return owned.chain.sourceName(), mobilemultihop.NodeChainInputLimit
 	}
 	if owned != nil && owned.imported != nil {
 		return "imported-source.json", mobilemultihop.ImportedLaunchInputLimit

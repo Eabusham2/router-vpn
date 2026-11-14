@@ -100,7 +100,7 @@ func captureDesktopLinuxNodePathWith(ctx context.Context, a *app, command *exec.
 		return nil, true, err
 	}
 	defer func() { h.gate <- struct{}{} }()
-	if h.chain != nil {
+	if h.chain != nil || h.socksChain != nil {
 		if h.activation == nil || h.launch == nil || h.launch.command != command || h.launch.chain == nil || h.launch.chain.platform == nil {
 			return nil, true, errors.New("Linux ordered Speed Lab path has no original activated command")
 		}

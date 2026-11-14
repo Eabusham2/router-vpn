@@ -237,7 +237,7 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	if q.ordered() && !nativeNodeChainPlatformSupported() {
+	if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported()) {
 		http.Error(w, "this platform has not enabled its protected ordered native host", http.StatusNotImplemented)
 		return
 	}

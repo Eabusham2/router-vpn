@@ -106,6 +106,11 @@ func windowsPrefixController() error {
 	original := cloneRouterProfileStore(a.profiles)
 	mux := http.NewServeMux()
 	registerOrderedCandidateRoutes(mux, a)
+	releaseSOCKS, err := windowsSOCKSRegisterRoutes(mux, a, original)
+	if err != nil {
+		return err
+	}
+	defer releaseSOCKS()
 	mux.HandleFunc("/api/native-prefix-capture", func(w http.ResponseWriter, r *http.Request) {
 		result, err := windowsPrefixInspect(r.Context(), a, original)
 		if err != nil {
@@ -253,7 +258,7 @@ type windowsPrefixPeerReply struct {
 		FinalPublicQueries uint64 `json:"final_public_queries"`
 		RouterQueries      uint64 `json:"router_queries"`
 		DNSQueries         uint64 `json:"dns_queries"`
-		DirectQueries      uint64 `json:"direct_queries"`
+		DirectQueries      uint64 `json:"direct_router_queries"`
 	} `json:"final"`
 }
 

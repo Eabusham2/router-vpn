@@ -26,8 +26,8 @@ func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
 	if h.candidatePrefix != nil {
 		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"node-candidate-prefix-source.json", h.source}}
 	}
-	if h.chain != nil {
-		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"node-chain-source.json", h.source}}
+	if h.chain != nil || h.socksChain != nil {
+		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {h.launch.chain.sourceName(), h.source}}
 	}
 	if h.imported != nil {
 		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"imported-source.json", h.source}}
@@ -44,6 +44,9 @@ func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
 func validateDesktopLinuxProtectedArguments(arguments []string, directory string) ([]string, error) {
 	if len(arguments) > 0 && arguments[0] == "routervpn-node-candidate-prefix" {
 		return validateDesktopNodeCandidatePrefixProcessArguments(arguments, directory)
+	}
+	if len(arguments) > 0 && arguments[0] == "routervpn-node-chain-socks" {
+		return validateDesktopNodeChainSOCKSProcessArguments(arguments, directory)
 	}
 	if len(arguments) > 0 && arguments[0] == "routervpn-node-chain" {
 		return validateDesktopNodeChainProcessArguments(arguments, directory)
@@ -394,7 +397,7 @@ func newDesktopLinuxExternalTransactionWithStartup(startup context.Context, h *d
 
 func (t *desktopLinuxNodeTransaction) validatePolicy() error {
 	if t.candidatePrefix != nil {
-		if t.chain != nil || t.policy != nil || t.imported != nil || t.external != nil || t.prefixSources == nil || t.candidatePrefix.Validate() != nil {
+		if (t.chain != nil || t.socksChain != nil) || t.policy != nil || t.imported != nil || t.external != nil || t.prefixSources == nil || t.candidatePrefix.Validate() != nil {
 			return errors.New("Linux candidate prefix mixed its concrete native policy")
 		}
 		meta := t.candidatePrefix.Metadata()
@@ -408,16 +411,20 @@ func (t *desktopLinuxNodeTransaction) validatePolicy() error {
 		}
 		return nil
 	}
-	if t.chain != nil {
-		if t.policy != nil || t.imported != nil || t.external != nil || t.chainSources == nil || t.chain.Validate() != nil {
+	if t.chain != nil || t.socksChain != nil {
+		if t.policy != nil || t.imported != nil || t.external != nil || t.chainSources == nil {
 			return errors.New("Linux ordered transaction mixed its concrete policy family")
 		}
-		meta := t.chain.Metadata()
+		original := &desktopNodeChainLaunch{policy: t.chain, socksPolicy: t.socksChain, selection: t.chainSources.selection}
+		_, meta, _, err := original.readPolicy()
+		if err != nil || !original.originalPolicyCurrent() {
+			return errors.Join(err, errors.New("Linux ordered transaction lost its original concrete source"))
+		}
 		wanted := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
 		selection := t.chainSources.selection
 		if meta.TargetOS != "linux" || t.selection != wanted || t.mode != meta.Mode || selection.Native == nil ||
 			selection.Native.chain == nil || selection.Native.validate(selection) != nil || selection.Native.source != meta.OriginalSourceSHA256 ||
-			t.chain.OriginalChain() != selection.Native.chain.chain || t.profileID != selection.Control.ID ||
+			t.profileID != selection.Control.ID ||
 			meta.ProfileID != selection.Control.ID || meta.NodeID != selection.Exit.NodeProofID || len(meta.Prefixes) != len(selection.Nodes) {
 			return errors.New("Linux ordered transaction changed its original full source")
 		}

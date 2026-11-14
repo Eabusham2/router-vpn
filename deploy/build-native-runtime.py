@@ -60,6 +60,10 @@ WINDOWS_SYSTEM_DLLS = frozenset((
     'userenv.dll', 'winhttp.dll', 'winmm.dll', 'ws2_32.dll',
 ))
 MAX_BUILD_DIAGNOSTIC = 64*1024
+# One composed invocation preserves the original six prefix cases (3000s)
+# and adds the eight full-path cases, their three builds and readbacks (4200s).
+# The inner compiler, native case, proof and retirement deadlines are unchanged.
+WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT = 3000 + 4200
 
 
 def run(command, *, cwd=None, env=None, timeout=1800):
@@ -150,6 +154,13 @@ def inputs():
                              ROOT/'deploy/test_windows_physical_tunnel_runner.py',
                              ROOT/'deploy/test_windows_candidate_prefix.py',
                              ROOT/'deploy/test_windows_candidate_prefix_runner.py',
+                             ROOT/'deploy/test_desktop_socks_parent.py',
+                             ROOT/'deploy/test_desktop_socks_parent_runner.py',
+                             ROOT/'deploy/test_windows_socks_node_chain_host.py',
+                             ROOT/'deploy/test_windows_socks_node_chain_host_runner.py',
+                             ROOT/'deploy/test_windows_socks_release_receipt.py',
+                             ROOT/'deploy/windows_socks_node_chain_overlay.py',
+                             *sorted((ROOT/'deploy/fixtures/windows-socks-node-chain').glob('*.go')),
                              ROOT/'deploy/windows_candidate_prefix_overlay.py',
                              *sorted((ROOT/'deploy/fixtures/windows-candidate-prefix').glob('*.go')),
                              ROOT/'cmd/client/ordered_candidate_prefix_windows_native_test.go',
@@ -1139,8 +1150,13 @@ def verify_installed_windows_prefix(source, bundle, target, env):
     original = reuse(bundle, target, env=env)
     digest_before = hashlib.sha256((Path(bundle)/'NATIVE-RUNTIME.json').read_bytes()).hexdigest()
     run([sys.executable, ROOT/'deploy/test_windows_candidate_prefix_runner.py'], cwd=ROOT, env=env, timeout=60)
-    output = run([sys.executable, ROOT/'deploy/test_windows_candidate_prefix.py', source, '--bundle', bundle],
-                 cwd=ROOT, env=env, timeout=3000)
+    run([sys.executable, ROOT/'deploy/test_windows_socks_node_chain_host_runner.py'], cwd=ROOT, env=env, timeout=60)
+    run([sys.executable, ROOT/'deploy/test_windows_socks_release_receipt.py'], cwd=ROOT, env=env, timeout=60)
+    # The full-path gate executes the original six closed-prefix cases exactly
+    # once before the eight typed Connect cases. Both native receipts remain
+    # mandatory on fresh and reused bundles before publication.
+    output = run([sys.executable, ROOT/'deploy/test_windows_socks_node_chain_host.py', source, '--bundle', bundle],
+                 cwd=ROOT, env=env, timeout=WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT)
     prefix = 'Native Windows selected-prefix acceptance: '
     rows = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
     if len(rows) != 1:
@@ -1162,8 +1178,52 @@ def verify_installed_windows_prefix(source, bundle, target, env):
             receipt.get('original_final_unreachable') is not True or receipt.get('native_down_before_review') is not True or
             set(receipt['scope_sources']) != scope_names or set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
         raise ValueError('Installed Windows prefix lost actual closed purpose, native DOWN or exact image provenance')
+    verify_installed_windows_socks_receipt(output, target, original, digest_before, receipt)
     if reuse(bundle, target, env=env) != original:
         raise ValueError('Installed Windows prefix changed the original completed shipping bundle')
+
+
+def verify_installed_windows_socks_receipt(output, target, original, digest_before, prefix_receipt):
+    prefix = 'Native Windows typed SOCKS full-path acceptance: '
+    rows = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
+    if len(rows) != 1:
+        raise ValueError('Installed Windows SOCKS omitted its unique full-path native receipt')
+    receipt = json.loads(rows[0], object_pairs_hook=unique_object)
+    if not isinstance(receipt, dict):
+        raise ValueError('Installed Windows SOCKS receipt is not an object')
+    mappings = [receipt.get(name) for name in ('sources', 'scope_sources', 'images')]
+    if not all(isinstance(values, dict) and values and all(isinstance(name, str) and name and
+               isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest) for name, digest in values.items()) for values in mappings):
+        raise ValueError('Installed Windows SOCKS omitted its exact source/image hash maps')
+    cases = ['wg-connect', 'awg-fast-connect', 'awg-strong-connect', 'wg-wrong-middle-key',
+             'wg-wrong-middle-public', 'wg-final-dns-failure', 'wg-final-node-failure', 'wg-middle-source']
+    if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or
+            receipt.get('target') != target or receipt.get('source_sha256') != original['policy_sha256'] or
+            receipt.get('bundle_sha256') != digest_before or receipt.get('cases') != cases or
+            receipt.get('unmodified_shipping_image') is not False or receipt.get('test_scope') != 'captured-native-child-app-id' or
+            receipt.get('typed_full_path') is not True or receipt.get('positive_application_and_selected_dns_proved') is not True or
+            type(receipt.get('measurement_bytes_per_direction_per_hop')) is not int or receipt.get('measurement_bytes_per_direction_per_hop') != 8 << 20 or
+            type(receipt.get('measurement_hops')) is not int or receipt.get('measurement_hops') != 3 or
+            receipt.get('native_joined') is not True or receipt.get('command_job_joined') is not True or
+            receipt.get('tun_absent_all_outcomes') is not True or type(receipt.get('remote_associations_after_retirement')) is not int or
+            receipt.get('remote_associations_after_retirement') != 0 or receipt.get('public_admission') != 'closed' or
+            receipt.get('original_prefix_acceptance') != prefix_receipt or
+            set(receipt['scope_sources']) != set(prefix_receipt['scope_sources']) or
+            set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
+        raise ValueError('Installed Windows SOCKS lost its complete native path, joined retirement or original prefix evidence')
+    roots = {
+        'TestDesktopSOCKSOwnedParentRetainsStartProofAndJoinedRetirement': ('wg', 'awg2-fast', 'awg2-strong'),
+        'TestDesktopSOCKSProtectionRejectsForeignAndMixedOwners': ('foreign-policy', 'ordinary-policy', 'foreign-source', 'foreign-attempt', 'foreign-launch', 'wrong-command'),
+        'TestDesktopSOCKSPhysicalPolicyKeepsConcreteFamily': ('linux', 'windows', 'darwin'),
+    }
+    parent_cases = [name for root, leaves in roots.items() for name in (root, *(root + '/' + leaf for leaf in leaves))]
+    parent = receipt.get('typed_socks_parent_controls')
+    if (not isinstance(parent, dict) or parent.get('scope') != 'compiled-parent-model-and-source-controls' or
+            parent.get('native_kernel_acceptance') is not False or parent.get('target') != 'windows' or
+            parent.get('cases') != parent_cases or not isinstance(parent.get('output_sha256'), str) or
+            not re.fullmatch('[0-9a-f]{64}', parent['output_sha256'])):
+        raise ValueError('Installed Windows SOCKS lost its distinct complete compiled parent controls')
+    return receipt
 
 
 def verify_reused_windows_prefix(bundle, target, env):

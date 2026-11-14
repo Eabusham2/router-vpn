@@ -54,8 +54,13 @@ func startDesktopProtectedProcessWithJournal(ctx context.Context, arguments, env
 				return nil, errors.New("prefix native process requires its original typed journal")
 			}
 			arguments, err = validateDesktopNodeCandidatePrefixProcessArguments(arguments, directory)
+		} else if len(arguments) > 0 && arguments[0] == "routervpn-node-chain-socks" {
+			if journal == nil || journal.launch == nil || journal.launch.chain == nil || !journal.launch.chain.hasPolicy() || journal.launch.chain.socksPolicy == nil || !journal.launch.chain.originalPolicyCurrent() {
+				return nil, errors.New("typed ordered native process requires its original typed journal")
+			}
+			arguments, err = validateDesktopNodeChainSOCKSProcessArguments(arguments, directory)
 		} else if len(arguments) > 0 && arguments[0] == "routervpn-node-chain" {
-			if journal == nil || journal.launch == nil || journal.launch.chain == nil {
+			if journal == nil || journal.launch == nil || journal.launch.chain == nil || !journal.launch.chain.hasPolicy() || journal.launch.chain.policy == nil || !journal.launch.chain.originalPolicyCurrent() {
 				return nil, errors.New("ordered native process requires its original typed journal")
 			}
 			arguments, err = validateDesktopNodeChainProcessArguments(arguments, directory)

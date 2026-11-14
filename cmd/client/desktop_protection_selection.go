@@ -31,9 +31,14 @@ func desktopProtectionSelectionForAllCaptured(node *mobilemultihop.DesktopNodePo
 func desktopProtectionSelectionForAllPurposes(node *mobilemultihop.DesktopNodePolicy, external *mobilemultihop.DesktopExternalPolicy,
 	imported *mobilemultihop.DesktopImportedPolicy, chain *mobilemultihop.DesktopNodeChainPolicy,
 	prefix *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (desktopProtectionSelection, error) {
+	return desktopProtectionSelectionForConcretePurposes(node, external, imported, chain, nil, prefix)
+}
+func desktopProtectionSelectionForConcretePurposes(node *mobilemultihop.DesktopNodePolicy, external *mobilemultihop.DesktopExternalPolicy,
+	imported *mobilemultihop.DesktopImportedPolicy, chain *mobilemultihop.DesktopNodeChainPolicy, socksChain *mobilemultihop.DesktopNodeChainSOCKSPolicy,
+	prefix *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (desktopProtectionSelection, error) {
 	var empty desktopProtectionSelection
 	families := 0
-	for _, present := range []bool{node != nil, external != nil, imported != nil, chain != nil, prefix != nil} {
+	for _, present := range []bool{node != nil, external != nil, imported != nil, chain != nil, socksChain != nil, prefix != nil} {
 		if present {
 			families++
 		}
@@ -49,6 +54,13 @@ func desktopProtectionSelectionForAllPurposes(node *mobilemultihop.DesktopNodePo
 			return empty, errors.Join(err, controlErr, errors.New("prefix protection lost its sealed closed native policy"))
 		}
 		return desktopProtectionSelection{control, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil
+	}
+	if socksChain != nil {
+		_, meta, _, err := socksChain.ReadValidated()
+		if err != nil || meta.TargetOS != "windows" || !validProfileID(meta.ProfileID) || meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
+			return empty, errors.Join(err, errors.New("typed ordered protection lost its sealed native policy"))
+		}
+		return desktopProtectionSelection{meta.ProfileID, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil
 	}
 	if chain != nil {
 		_, meta, _, err := chain.ReadValidated()
@@ -114,12 +126,12 @@ func (attempt *desktopNodeProtectionAttempt) selection() (desktopProtectionSelec
 	if attempt == nil {
 		return desktopProtectionSelection{}, errors.New("native protection lost its original selection")
 	}
-	return desktopProtectionSelectionForAllPurposes(attempt.policy, attempt.external, attempt.imported, attempt.chain, attempt.candidatePrefix)
+	return desktopProtectionSelectionForConcretePurposes(attempt.policy, attempt.external, attempt.imported, attempt.chain, attempt.socksChain, attempt.candidatePrefix)
 }
 
 func (attempt *desktopNodeProtectionAttempt) matchesOwned(owned *desktopOwnedNodeRuntime) bool {
 	if owned != nil && owned.candidatePrefix != nil {
-		return attempt != nil && attempt.external == nil && attempt.policy == nil && attempt.imported == nil && attempt.chain == nil &&
+		return attempt != nil && attempt.external == nil && attempt.policy == nil && attempt.imported == nil && attempt.chain == nil && attempt.socksChain == nil &&
 			owned.policy == nil && owned.imported == nil && owned.chain == nil && owned.candidatePrefix.policy != nil &&
 			attempt.candidatePrefix == owned.candidatePrefix.policy && attempt.launch != nil && attempt.launch.candidatePrefix == owned.candidatePrefix && attempt.launch.chain == nil
 	}
@@ -128,9 +140,9 @@ func (attempt *desktopNodeProtectionAttempt) matchesOwned(owned *desktopOwnedNod
 	}
 	if owned != nil && owned.chain != nil {
 		return attempt != nil && attempt.external == nil && attempt.policy == nil && attempt.imported == nil && owned.policy == nil && owned.imported == nil &&
-			owned.chain.policy != nil && attempt.chain == owned.chain.policy && attempt.launch != nil && attempt.launch.chain == owned.chain
+			owned.chain.hasPolicy() && owned.chain.originalPolicyCurrent() && attempt.chain == owned.chain.policy && attempt.socksChain == owned.chain.socksPolicy && attempt.launch != nil && attempt.launch.chain == owned.chain
 	}
-	if attempt != nil && attempt.chain != nil {
+	if attempt != nil && (attempt.chain != nil || attempt.socksChain != nil) {
 		return false
 	}
 	if attempt == nil || owned == nil || attempt.external != nil || (owned.policy == nil) == (owned.imported == nil) {

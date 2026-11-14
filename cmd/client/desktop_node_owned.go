@@ -299,7 +299,11 @@ func stageDesktopOwnedNodeInputsContext(ctx context.Context, a *app, launch *des
 	if owned.candidatePrefix != nil {
 		attempt, err = slot.beginCandidatePrefix(ctx, launch, owned.candidatePrefix.policy)
 	} else if owned.chain != nil {
-		attempt, err = slot.beginNodeChain(ctx, launch, owned.chain.policy)
+		if owned.chain.socksPolicy != nil {
+			attempt, err = slot.beginNodeChainSOCKS(ctx, launch, owned.chain.socksPolicy)
+		} else {
+			attempt, err = slot.beginNodeChain(ctx, launch, owned.chain.policy)
+		}
 	} else if owned.imported != nil {
 		attempt, err = slot.beginImported(ctx, launch, owned.imported.policy)
 	} else {
@@ -341,7 +345,10 @@ func desktopOwnedNodeArguments(launch *desktopNodeLaunch) ([]string, error) {
 		return validateDesktopNodeCandidatePrefixProcessArguments(args, launch.directory)
 	}
 	if owned.chain != nil {
-		args[0] = "routervpn-node-chain"
+		args[0] = owned.chain.commandName()
+		if owned.chain.socksPolicy != nil {
+			return validateDesktopNodeChainSOCKSProcessArguments(args, launch.directory)
+		}
 		return validateDesktopNodeChainProcessArguments(args, launch.directory)
 	}
 	return validateDesktopNodeProcessArguments(args, launch.directory)

@@ -237,6 +237,9 @@ func captureStartupNodeChain(a *app, profile common.RouterProfile, profiles []co
 		}
 		execution = last.NodeChain.Execution
 	}
+	if desktopNodeChainHasSOCKS(refs) && !nativeNodeChainSOCKSPlatformSupported() {
+		return nil, errors.New("typed ordered startup awaits installed native platform acceptance")
+	}
 	selection, err := resolveDesktopNodeChainSelection(profile, profiles, refs, execution)
 	if err != nil {
 		return nil, err
@@ -383,6 +386,9 @@ func (a *app) nodeChainStartupDriver(ctx context.Context, capture *startupPolicy
 		return empty, errors.New("ordered startup has no supported original policy or proved Last receipt")
 	}
 	selection := capture.nodeChain.selection
+	if desktopNodeChainSelectionHasSOCKS(selection) && !nativeNodeChainSOCKSPlatformSupported() {
+		return empty, errors.New("typed ordered startup awaits installed native platform acceptance")
+	}
 	if err := capture.nodeChainSelectionCurrent(ctx, a, selection); err != nil {
 		return empty, err
 	}

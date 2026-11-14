@@ -32,6 +32,10 @@ type desktopNodeChainOwnedFixture struct {
 func newDesktopNodeChainOwnedFixture(t *testing.T, count int) *desktopNodeChainOwnedFixture {
 	t.Helper()
 	a, selection := desktopNodeChainHostSelectionFixture(t, count)
+	return newDesktopNodeChainOwnedFixtureWith(t, a, selection)
+}
+func newDesktopNodeChainOwnedFixtureWith(t *testing.T, a *app, selection multihopSelection) *desktopNodeChainOwnedFixture {
+	t.Helper()
 	operation, cancel := context.WithCancel(context.Background())
 	f := &desktopNodeChainOwnedFixture{desktopImportedOwnedFixture: &desktopImportedOwnedFixture{
 		a: a, selection: selection, operation: operation, cancel: cancel, kernel: &desktopNodeProtectionFixture{}}}
@@ -63,7 +67,7 @@ func newDesktopNodeChainOwnedFixture(t *testing.T, count int) *desktopNodeChainO
 		start: func(ctx context.Context, owner *app, launch *desktopNodeLaunch, arguments, environment []string, directory string) (desktopNodeProcess, error) {
 			want, err := desktopOwnedNodeArguments(launch)
 			if err != nil || owner != a || launch != f.launch || directory != launch.directory || launch.command.Process != nil ||
-				!reflect.DeepEqual(arguments, want) || !reflect.DeepEqual(environment, launch.command.Env) || arguments[0] != "routervpn-node-chain" {
+				!reflect.DeepEqual(arguments, want) || !reflect.DeepEqual(environment, launch.command.Env) || arguments[0] != launch.chain.commandName() {
 				return nil, errors.New("chain substituted original typed command")
 			}
 			process, err := f.nativeStart(t)
@@ -118,16 +122,30 @@ func newDesktopNodeChainOwnedFixture(t *testing.T, count int) *desktopNodeChainO
 func (f *desktopNodeChainOwnedFixture) nativeStart(t *testing.T) (*desktopImportedOwnedProcess, error) {
 	t.Helper()
 	launch, owned := f.launch, f.launch.ownedNode
-	raw, err := readDesktopRuntimeFile(launch, "node-chain-source.json", mobilemultihop.NodeChainInputLimit)
+	raw, err := readDesktopRuntimeFile(launch, launch.chain.sourceName(), mobilemultihop.NodeChainInputLimit)
 	if err != nil {
 		return nil, err
 	}
-	policy, err := mobilemultihop.ParseDesktopNodeChainLaunchInput(string(raw))
-	if err != nil || policy.Config() != launch.chain.policy.Config() || !reflect.DeepEqual(policy.Metadata(), launch.chain.policy.Metadata()) ||
-		len(policy.NodeChain().ProofInventory()) != len(f.selection.Nodes) {
-		return nil, errors.Join(err, errors.New("child replay changed captured ordered graph"))
+	_, meta, capture, err := launch.chain.readPolicy()
+	if err != nil {
+		return nil, err
 	}
-	meta := policy.Metadata()
+	if launch.chain.socksPolicy != nil {
+		policy, parseErr := mobilemultihop.ParseDesktopNodeChainSOCKSLaunchInput(string(raw))
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		parsedConfig, parsedMeta, parsedCapture, parseErr := policy.ReadValidated()
+		originalConfig, originalMeta, originalCapture, originalErr := launch.chain.socksPolicy.ReadValidated()
+		if parseErr != nil || originalErr != nil || parsedConfig != originalConfig || !reflect.DeepEqual(parsedMeta, originalMeta) || !reflect.DeepEqual(parsedCapture, originalCapture) || len(parsedMeta.Prefixes) != len(f.selection.Nodes) {
+			return nil, errors.Join(parseErr, originalErr, errors.New("child replay changed original typed ordered graph"))
+		}
+	} else {
+		policy, parseErr := mobilemultihop.ParseDesktopNodeChainLaunchInput(string(raw))
+		if parseErr != nil || policy.Config() != launch.chain.policy.Config() || !reflect.DeepEqual(policy.Metadata(), launch.chain.policy.Metadata()) || len(policy.NodeChain().ProofInventory()) != len(f.selection.Nodes) {
+			return nil, errors.Join(parseErr, errors.New("child replay changed captured ordered graph"))
+		}
+	}
 	handoff := desktopNodeHandoffRecord{Schema: 1, Kind: "routervpn-node-physical-handoff-v2", SessionID: meta.SessionID,
 		SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, TransferSHA256: owned.attempt.digest,
 		NetworkID: strings.Repeat("d", 32), Policy: meta.KillSwitchPolicy, BaselineSHA256: strings.Repeat("e", 64), Nonce: strings.Repeat("a", 64)}
@@ -138,10 +156,6 @@ func (f *desktopNodeChainOwnedFixture) nativeStart(t *testing.T) (*desktopImport
 	}
 	f.kernel.target, f.kernel.locked = copyDesktopNodeProtectionTarget(&target), true
 	desktopOwnedNodeTestWrite(t, launch, "node-physical-handoff-ready.json", handoff)
-	_, _, capture, err := policy.ReadValidated()
-	if err != nil {
-		return nil, err
-	}
 	f.ready, f.live, _ = desktopNodeChainReadyFixture(t, launch)
 	f.ready.TransferSHA256 = owned.attempt.digest
 	ready := mobilemultihop.DesktopNodeReadyRecord{Schema: 1, Kind: "routervpn-node-ready-v1", SessionID: meta.SessionID,
@@ -197,8 +211,8 @@ func (f *desktopNodeChainOwnedFixture) publishHeartbeatLocked() error {
 	if err := desktopExternalDirectoryCurrent(f.launch); err != nil {
 		return err
 	}
-	for name, record := range map[string]any{"node-chain-ready.json": f.ready, "node-mtu-status.json": f.live} {
-		if name == "node-chain-ready.json" && f.omitProof {
+	for name, record := range map[string]any{f.launch.chain.readyName(): f.ready, "node-mtu-status.json": f.live} {
+		if name == f.launch.chain.readyName() && f.omitProof {
 			if err := f.launch.directoryRoot.Remove(name); err != nil && !os.IsNotExist(err) {
 				return err
 			}

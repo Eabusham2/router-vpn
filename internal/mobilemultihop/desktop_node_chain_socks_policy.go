@@ -264,6 +264,28 @@ func (p *DesktopNodeChainSOCKSPolicy) ReadValidated() (string, DesktopNodeChainS
 	return p.native.config, meta, capture, nil
 }
 
+// DesktopNodeChainSOCKSLaunchCapture keeps the distinct typed constructor and
+// one fully validated launch observation. It contains no live proof or owner.
+type DesktopNodeChainSOCKSLaunchCapture struct {
+	Config   string
+	Metadata DesktopNodeChainSOCKSMetadata
+	Physical DesktopPhysicalCapture
+	Original *NodeChainSOCKSSource
+	Input    string
+}
+
+func (p *DesktopNodeChainSOCKSPolicy) ReadValidatedLaunch() (DesktopNodeChainSOCKSLaunchCapture, error) {
+	config, metadata, physical, err := p.ReadValidated()
+	if err != nil {
+		return DesktopNodeChainSOCKSLaunchCapture{}, err
+	}
+	input, err := p.launchInputValidated()
+	if err != nil {
+		return DesktopNodeChainSOCKSLaunchCapture{}, err
+	}
+	return DesktopNodeChainSOCKSLaunchCapture{config, metadata, physical, p.original, input}, nil
+}
+
 // NativeSource retains the typed constructor object for the actual local SOCKS
 // registry and opaque proof/MTU runtime. It never returns a generic NodeChain.
 func (p *DesktopNodeChainSOCKSPolicy) NativeSource() (*NodeChainSOCKSSource, error) {
@@ -314,6 +336,11 @@ func (p *DesktopNodeChainSOCKSPolicy) LaunchInput() (string, error) {
 	if p.Validate() != nil {
 		return "", desktopNodeChainSOCKSPolicyError
 	}
+	return p.launchInputValidated()
+}
+
+// Called only immediately after this exact concrete policy's full validation.
+func (p *DesktopNodeChainSOCKSPolicy) launchInputValidated() (string, error) {
 	raw, err := json.Marshal(desktopNodeChainSOCKSLaunch{
 		"routervpn-desktop-node-chain-socks", 1, p.original.sourceJSON, p.metadata,
 	})

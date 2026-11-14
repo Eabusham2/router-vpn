@@ -50,13 +50,14 @@ func validateDesktopOwnedNodeChainSourceContext(ctx context.Context, launch *des
 		launch.ownedNode.policy != nil || launch.ownedNode.imported != nil || launch.chain.platform != nil {
 		return errors.New("ordered Windows source lost its exact concrete owner")
 	}
-	if err := validateDesktopNodeChainLaunch(ctx, launch); err != nil {
+	metadata, err := readValidatedDesktopNodeChainLaunch(ctx, launch)
+	if err != nil {
 		return err
 	}
 	owned, chain := launch.ownedNode, launch.chain
 	capture := chain.selection.Native.chain.host
 	if capture == nil || chain.capture != capture || capture.sources == nil || capture.windows == nil || capture.platform != nil || owned.host != capture.windows ||
-		owned.host.capture.dataRoot != launch.root || chain.policy.Metadata().TargetOS != "windows" ||
+		owned.host.capture.dataRoot != launch.root || metadata.TargetOS != "windows" ||
 		owned.network != capture.network || owned.profileToken != desktopOwnedNodeProfileToken(chain.selection.Control) ||
 		owned.options != capture.sources.options {
 		return errors.New("ordered Windows source changed its native capture")

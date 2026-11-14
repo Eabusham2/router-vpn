@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+ "runtime"
 	"strings"
 	"testing"
 
@@ -112,8 +113,8 @@ func TestRouterVPNDesktopNodeChainSOCKSInstalledReferenceProcess(t *testing.T) {
 	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || desktopNodeChainImportedRequestValid(request) != nil {
 		t.Fatal("installed SOCKS reference source changed")
 	}
-	physical, err := nodeSOCKSRunPhysical(true)
-	if err != nil || request.Paired.Address != physical.String() || request.Paired.ClientAddress != physical.String() {
+	physical, client, err := nodeSOCKSInstalledPhysical(request.Paired.Address, request.Paired.ClientAddress)
+ if err != nil {
 		t.Fatal("installed SOCKS reference lost original physical tuple", err)
 	}
 	const control = "10.79.0.1:1080"
@@ -137,7 +138,7 @@ func TestRouterVPNDesktopNodeChainSOCKSInstalledReferenceProcess(t *testing.T) {
 			return provider
 		},
 	}
-	peer := desktopNodeChainImportedPeerStartWithHooks(t, request, physical, physical, nil, hooks)
+	peer := desktopNodeChainImportedPeerStartWithHooks(t, request, physical, client, nil, hooks)
 	delete(peer.paired.entry.rules, "tcp/10.79.0.1:8388")
 	delete(peer.paired.entry.rules, "udp/10.79.0.1:8388")
 	respond := func() {
@@ -172,4 +173,18 @@ func TestRouterVPNDesktopNodeChainSOCKSInstalledReferenceProcess(t *testing.T) {
 		}
 		respond()
 	}
+}
+
+// The installed Linux namespace uses its fixed original peer/client tuple.
+// This is distinct from the loopback-only ordinary Run process purpose.
+func nodeSOCKSInstalledPhysical(address, client string) (netip.Addr, netip.Addr, error) {
+ bad := errors.New("installed SOCKS peer lost its exact native physical purpose")
+ if os.Getenv("ROUTERVPN_SOCKS_INSTALLED_REFERENCE") != "1" { return netip.Addr{}, netip.Addr{}, bad }
+ if runtime.GOOS == "linux" {
+ if os.Getenv("ROUTERVPN_DARWIN_SOCKS_RUN_REFERENCE") != "" || address != "192.168.210.2" || client != "192.168.210.1" { return netip.Addr{}, netip.Addr{}, bad }
+ return netip.MustParseAddr(address), netip.MustParseAddr(client), nil
+ }
+ physical, err := nodeSOCKSRunPhysical(true)
+ if err != nil || address != physical.String() || client != physical.String() { return netip.Addr{}, netip.Addr{}, errors.Join(err, bad) }
+ return physical, physical, nil
 }

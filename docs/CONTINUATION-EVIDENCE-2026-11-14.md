@@ -319,10 +319,10 @@ remain required.
 
 ## Active source work and acceptance still required
 
-Windows/Linux typed retained-parent adapters and full native-host acceptance
-are the next separate source increment. Their source review preserves the
-original policy, journal, physical owner, credentials and restoration capture.
-Actual Windows WFP and Linux TUN results are still required before admission.
+Windows/Linux typed retained-parent adapters are now source-implemented in
+the increment recorded below. They preserve the original policy, journal,
+physical owner, credentials and restoration capture. Actual Windows WFP and
+Linux TUN results are still required before public admission.
 
 CONNECT's shared source/runtime checkpoint requires an actual native
 HTTP/HTTPS CONNECT implementation, retained TLS/SNI/authentication and exact
@@ -395,3 +395,59 @@ with Go 1.26.3: 12 test records, no failures or skips. The joined log has
 SHA-256 `ac06a794195c991b9d5e58941fb850374ab8c99c6db7584cbb315580f7f52283`.
 This repairs the obsolete source assertion; native networking remains a
 separate acceptance check, and new exact-SHA workflows still need to finish.
+
+
+## Windows/Linux typed SOCKS retained-parent integration
+
+The Windows and Linux parent adapters now keep the typed SOCKS policy through
+source capture, protected launch, process arguments, journal ownership,
+readiness, measurements, MTU continuation and restoration. They retain the
+original entry credentials, physical network, selected DNS, IPv6/LAN policy
+and complete three-node source. Ordinary ordered and imported families keep
+their separate policy branches. A captured validated launch observation avoids
+recompiling the same immutable graph at every field read; live proof and
+current-owner checks remain mandatory and are not cached.
+
+Linux external and ordinary host adoption uses the same explicit family
+selection. The runtime-directory reader now recognizes the sealed SOCKS
+command shape, validates its complete arguments and retains its original
+private directory. Foreign directories, extra arguments and mixed policies
+still fail. Windows native fixture and release wiring preserve the original
+six candidate-prefix scenarios exactly once and add eight typed scenarios.
+The receipt checks bind source, bundle, complete case inventory, measured
+transfers and joined Job/TUN ownership to the actual generated binaries.
+
+Validation used the frozen 54-path platform increment, plus the separately
+reviewed three release-runner files. The race-instrumented controller suite
+completed 128 of its 129 selected primary roots and an additional ordinary
+runtime-directory root: 758 distinct PASS records, including 622 subtest
+leaves. The original ordinary three/four-node lifecycle checks, typed parent
+startup/proof/MTU/restore/retirement checks, foreign-owner controls and
+four-second MTU operation limit remain intact. The aggregate is explicitly
+**incomplete_environment_blocked**, because the unchanged
+`TestDesktopLinuxSOCKSRunningCaptureKeepsOnlySealedControl` cannot enumerate
+interfaces here: the actual netlink socket returns `EPERM`. That root and its
+eleven unreached negative leaves must execute unchanged on hosted Linux.
+They were not skipped or rewritten to report success.
+
+The final source also passed all three Linux native-tag fixture roots
+(17 records) and compiled the actual native-tag controller test binary for
+both Windows AMD64 and ARM64. These are compilation and fixture results,
+not execution of Windows WFP or Linux kernel TUN. The respective Windows
+binary SHA-256 values are
+`972d8d501457569076fa6456201f8e58d8fde13e9301c205dde23db83a2dad02`
+and `3fb8f0b2fea7e666c384fc526112d12f4dc36121549a7256e73971ddb7de9eef`.
+The unchanged source freeze has SHA-256
+`f845001efbb69dfd419397ce7f059453b7d804e292e5b95e413c35519aa09346`.
+The root composition's 32 release-receipt, ordinary prefix-runner and typed
+host parser tests also passed. These overlapping suites are not a product
+completion denominator.
+
+Two execution handles disappeared during earlier local attempts. Their
+unfinished receipts remain unknown rather than passed. Replacement work
+used isolated source/output namespaces, the verified frozen test binary,
+and terminal completion records. Already completed cases were preserved.
+No production timeout, rejection condition or native-admission guard was
+relaxed. Public typed-platform admission remains closed until the real
+installed-host gates pass; exact-SHA native workflows and publication remain
+separate from these source results.

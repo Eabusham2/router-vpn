@@ -79,6 +79,17 @@ func TestDesktopNodeChainLaunchRejectsCrossFamilyAndSourceSubstitution(t *testin
 			case "middle":
 				launch.chain.selection.Nodes[1].Profile.APIToken = "replacement-middle-credential"
 			case "source":
+				originalPolicy := launch.chain.policy
+				copiedSource := *launch.chain.selection.Native.chain.chain
+				copiedPolicy, err := mobilemultihop.NewDesktopNodeChainPolicy(&copiedSource, launch.mtuSession, "windows", 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				launch.chain.policy = copiedPolicy
+				if validateDesktopNodeChainLaunch(context.Background(), launch) == nil {
+					t.Fatal("equal copied source replaced original launch authority")
+				}
+				launch.chain.policy = originalPolicy
 				launch.chain.input += "\n"
 			case "profile":
 				launch.profileID = launch.chain.selection.Entry.ID
@@ -102,7 +113,7 @@ func TestDesktopNodeChainLaunchRejectsCrossFamilyAndSourceSubstitution(t *testin
 
 func desktopNodeChainReadyFixture(t *testing.T, launch *desktopNodeLaunch) (mobilemultihop.DesktopNodeChainReadyRecord, desktopNodeMTURecord, time.Time) {
 	t.Helper()
-	_, meta, capture, err := launch.chain.policy.ReadValidated()
+	_, meta, capture, err := launch.chain.readPolicy()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +123,9 @@ func desktopNodeChainReadyFixture(t *testing.T, launch *desktopNodeLaunch) (mobi
 		Identity: mobilemultihop.NodeChainIdentity{EngineID: "original-engine", SessionID: meta.SessionID, NetworkID: "original-network",
 			SourceSHA256: meta.OriginalSourceSHA256, ConfigSHA256: meta.ConfigSHA256}, Generation: 1, Reader: 1,
 		InterfaceName: "router-vpn", InterfaceIndex: 91, MTU: capture.ConfiguredMTU, ObservedAt: now.UnixMilli()}
+	if launch.chain.socksPolicy != nil {
+		record.Kind = "routervpn-node-chain-socks-ready-v1"
+	}
 	if meta.RestoredMTU != 0 {
 		record.MTU = meta.RestoredMTU
 	}

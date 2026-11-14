@@ -315,6 +315,29 @@ func (p *DesktopNodeChainPolicy) ReadValidated() (string, DesktopNodeChainMetada
 	return p.chain.config, meta, capture, nil
 }
 
+// DesktopNodeChainLaunchCapture is one validated immutable launch observation.
+// Original retains constructor identity; callers must compare its exact pointer.
+// It grants no readiness, physical ownership, or lifetime authority.
+type DesktopNodeChainLaunchCapture struct {
+	Config   string
+	Metadata DesktopNodeChainMetadata
+	Physical DesktopPhysicalCapture
+	Original *NodeChain
+	Input    string
+}
+
+func (p *DesktopNodeChainPolicy) ReadValidatedLaunch() (DesktopNodeChainLaunchCapture, error) {
+	config, metadata, physical, err := p.ReadValidated()
+	if err != nil {
+		return DesktopNodeChainLaunchCapture{}, err
+	}
+	input, err := p.chain.LaunchInput()
+	if err != nil {
+		return DesktopNodeChainLaunchCapture{}, err
+	}
+	return DesktopNodeChainLaunchCapture{config, metadata, physical, p.original, input}, nil
+}
+
 func (p *DesktopNodeChainPolicy) Config() string {
 	if p.Validate() != nil {
 		return ""

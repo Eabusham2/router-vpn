@@ -74,9 +74,10 @@ type linuxNodeChainPeerReply struct {
 		ProofQueries     uint64 `json:"proof_queries"`
 		AuthRefusals     uint64 `json:"auth_refusals"`
 	} `json:"prefixes"`
-	Final    linuxImportedPeerReply             `json:"final"`
-	Middle   *linuxNodeChainImportedCounters    `json:"middle,omitempty"`
-	Hysteria *linuxNodeChainHysteriaObservation `json:"hysteria,omitempty"`
+	Final        linuxImportedPeerReply             `json:"final"`
+	Middle       *linuxNodeChainImportedCounters    `json:"middle,omitempty"`
+	Hysteria     *linuxNodeChainHysteriaObservation `json:"hysteria,omitempty"`
+	Associations *int                               `json:"associations,omitempty"`
 }
 
 type linuxNodeChainPeer struct {
@@ -92,6 +93,7 @@ type linuxNodeChainPeer struct {
 	password         string
 	middlePassword   string
 	middleMethod     string
+	middleSOCKS      bool
 	hysteriaPassword string
 	hysteriaMask     string
 	reply            linuxNodeChainPeerReply
@@ -120,7 +122,7 @@ func linuxNodeChainCipherCases() []linuxNodeChainCipherCase {
 }
 func linuxNodeChainScenario(scenario string) ([]string, string, error) {
 	found := false
-	for _, name := range linuxNodeChainHostCases {
+	for _, name := range append(append([]string(nil), linuxNodeChainHostCases...), linuxNodeChainSOCKSHostCases...) {
 		if scenario == name {
 			found = true
 			break
@@ -131,6 +133,11 @@ func linuxNodeChainScenario(scenario string) ([]string, string, error) {
 	}
 	if modes, action, ok := linuxNodeChainHysteriaScenario(scenario); ok {
 		return modes, action, nil
+	}
+	for _, item := range linuxNodeChainSOCKSCipherCases() {
+		if action, ok := strings.CutPrefix(scenario, item.prefix); ok {
+			return append([]string(nil), item.modes...), action, nil
+		}
 	}
 	for _, item := range linuxNodeChainImportedCipherCases() {
 		if action, ok := strings.CutPrefix(scenario, item.prefix); ok {
@@ -233,7 +240,7 @@ func (peer *linuxNodeChainPeer) read(t *testing.T) linuxNodeChainPeerReply {
 		}
 	}
 	if peer.middlePassword != "" {
-		if reply.Middle == nil || reply.Middle.Method != peer.middleMethod {
+		if reply.Middle == nil || reply.Middle.Method != peer.observedMiddleMethod() {
 			t.Fatal("custom peer lost its independently captured middle cipher")
 		}
 	} else if reply.Middle != nil {
@@ -274,6 +281,9 @@ func startLinuxNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *
 	root, child := "TestRouterVPNDesktopNodeChainReferenceProcess", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1"
 	if peer.middlePassword != "" {
 		root, child = "TestRouterVPNDesktopNodeChainImportedMiddleReferenceProcess", "ROUTERVPN_NODE_CHAIN_IMPORTED_REFERENCE_CHILD=1"
+	}
+	if peer.middleSOCKS {
+		root, child = "TestRouterVPNDesktopNodeChainSOCKSInstalledReferenceProcess", "ROUTERVPN_SOCKS_INSTALLED_REFERENCE=1"
 	}
 	if hysteria {
 		root, child = "TestRouterVPNDesktopNodeChainHysteriaReferenceProcess", "ROUTERVPN_NODE_CHAIN_HYSTERIA_REFERENCE_CHILD=1"
@@ -382,8 +392,11 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, faul
 		MultihopEnabled: true, MultihopExecution: "local"}
 	if peer.middlePassword != "" {
 		middle := linuxNodeChainImportedProfile(t, peer, fault)
+		if peer.middleSOCKS {
+			middle = linuxNodeChainSOCKSProfile(t, peer, fault)
+		}
 		profiles = append(profiles, middle)
-		nodes = append(nodes, common.MultihopNodeSelection{ID: middle.ID, Mode: "shadowsocks"})
+		nodes = append(nodes, common.MultihopNodeSelection{ID: middle.ID, Mode: peer.observedMiddleProtocol()})
 	}
 	finalMode := "shadowsocks"
 	if peer.hysteriaPassword != "" {
@@ -547,6 +560,13 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("ordered installed controller did not join")
 	}
+	if peer.middleSOCKS {
+		after := peer.observe(t, "stats")
+		if after.Associations == nil || *after.Associations != 0 {
+			t.Fatal("typed installed retirement retained original SOCKS association", after.Associations)
+		}
+		t.Log("verified installed host typed SOCKS association joined:", scenario)
+	}
 	t.Log("verified installed host native lifecycle:", scenario)
 	t.Log("verified installed host ordered independent prefixes and final:", scenario)
 	if peer.hysteriaPassword != "" {
@@ -619,7 +639,12 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			return constructed, err
 		}, stage: stageOwnedNativeMultihopCommand, proof: (*app).proveNativeMultihop}
 	response := httptest.NewRecorder()
-	a.nativeMultihopConnectOwned(response, httptest.NewRequest(http.MethodPost, "/api/multihop/connect", bytes.NewReader(body)).WithContext(ctx), driver)
+	request := httptest.NewRequest(http.MethodPost, "/api/multihop/connect", bytes.NewReader(body)).WithContext(ctx)
+	if strings.HasPrefix(scenario, "node-chain-socks-") {
+		linuxNodeChainNativeConnect(a, response, request, driver)
+	} else {
+		a.nativeMultihopConnectOwned(response, request, driver)
+	}
 	session, err := captureDesktopLinuxNodeSession(ctx, a)
 	if err != nil {
 		return err
@@ -638,7 +663,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			return fmt.Errorf("ordered native negative admitted, retained a command or failed before construction: %d %s", response.Code, response.Body.String())
 		}
 		h := constructed.chain.platform.host
-		if h == nil || h.process == nil || h.process.command.ProcessState == nil || !h.closed || !h.released || h.chain != nil || len(h.source) != 0 {
+		if h == nil || h.process == nil || h.process.command.ProcessState == nil || !h.closed || !h.released || h.chain != nil || h.socksChain != nil || len(h.source) != 0 {
 			return errors.New("ordered negative did not join its actual original process/source")
 		}
 		select {
@@ -652,7 +677,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			return fmt.Errorf("installed ordered native Connect failed: %d %s", response.Code, response.Body.String())
 		}
 		h := session.active
-		if h == nil || h.chain == nil || h.activation == nil || h.ready == nil || h.monitor == nil || h.monitor.Load() == nil || h.Current(ctx) != nil || !a.state.Connected {
+		if h == nil || (h.chain == nil) == (h.socksChain == nil) || h.activation == nil || h.ready == nil || h.monitor == nil || h.monitor.Load() == nil || h.Current(ctx) != nil || !a.state.Connected {
 			return errors.New("ordered native Connect lost original activation, proof or monitor")
 		}
 		if _, duplicate := desktopNodeOwners.Load(a); duplicate {
@@ -707,7 +732,11 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		if action == "middle-source" {
 			a.mu.Lock()
 			if a.profiles.Profiles[1].NodeKind == "external" {
-				a.profiles.Profiles[1].External.Shadowsocks.Password = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32)))
+				if a.profiles.Profiles[1].External.SOCKS5 != nil {
+					a.profiles.Profiles[1].External.SOCKS5.Password += "-replaced-after-admission"
+				} else {
+					a.profiles.Profiles[1].External.Shadowsocks.Password = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32)))
+				}
 			} else {
 				a.profiles.Profiles[1].APIToken += "-replaced-after-admission"
 			}

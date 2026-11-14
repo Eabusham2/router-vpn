@@ -234,7 +234,13 @@ func validateDesktopNodeProcessArguments(arguments []string, directory string) (
 }
 
 func validateDesktopNodeChainProcessArguments(arguments []string, directory string) ([]string, error) {
-	if len(arguments) == 0 || arguments[0] != "routervpn-node-chain" {
+	return validateDesktopOrderedProcessArguments(arguments, directory, "routervpn-node-chain")
+}
+func validateDesktopNodeChainSOCKSProcessArguments(arguments []string, directory string) ([]string, error) {
+	return validateDesktopOrderedProcessArguments(arguments, directory, "routervpn-node-chain-socks")
+}
+func validateDesktopOrderedProcessArguments(arguments []string, directory, command string) ([]string, error) {
+	if len(arguments) == 0 || arguments[0] != command {
 		return nil, errors.New("ordered native process requires its exact child command")
 	}
 	for _, argument := range arguments {
@@ -248,7 +254,7 @@ func validateDesktopNodeChainProcessArguments(arguments []string, directory stri
 	if err != nil {
 		return nil, err
 	}
-	validated[0] = "routervpn-node-chain"
+	validated[0] = command
 	return validated, nil
 }
 

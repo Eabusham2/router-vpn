@@ -34,11 +34,14 @@ SCOPE = load("windows_prefix_scope", "windows_candidate_prefix_overlay.py")
 CONTROLLER = load("windows_prefix_controller", "test_windows_controller_privilege.py")
 NODE = load("windows_prefix_native_source", "test_desktop_node_physical.py")
 BUILD = load("windows_prefix_complete_bundle", "build-native-runtime.py")
+SOCKS_PARENT = load("windows_retained_socks_parent", "test_desktop_socks_parent.py")
 ROOT_TEST = "TestWindowsInstalledPrefixCandidates"
 CASES = ("wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel")
 REQUIRED = (ROOT_TEST, *(ROOT_TEST + "/" + case for case in CASES))
 PREFIX = "Native Windows selected-prefix acceptance: "
-OWNED = ("cmd/client/ordered_candidate_prefix_windows_native_test.go",
+OWNED = ("deploy/test_desktop_socks_parent.py", "deploy/test_desktop_socks_parent_runner.py",
+         "cmd/client/desktop_node_chain_socks_platform_test.go",
+         "cmd/client/ordered_candidate_prefix_windows_native_test.go",
          "cmd/client/ordered_candidate_prefix_windows_sources_native_test.go",
          "deploy/test_windows_candidate_prefix.py", "deploy/test_windows_candidate_prefix_runner.py",
          "deploy/windows_candidate_prefix_overlay.py",
@@ -159,6 +162,10 @@ def execute(source, bundle, go="go", *, env=None):
         BUILD.reuse(native, target, env=captured)
         identities = {name: hashlib.sha256(path.read_bytes()).hexdigest()
                       for name, path in (("controller", controller), ("peer", peer), ("scoped_engine", child))}
+        # These retain the actual compiled platform parent, but their kernel
+        # boundary is modeled. The following native prefix cases are unchanged
+        # and do not constitute typed full-chain Connect acceptance.
+        socks_parent_controls = SOCKS_PARENT.execute(controller, 'windows', run, ROOT, captured)
         child_env = dict(captured, ROUTERVPN_WINDOWS_PREFIX_ROOT=str(installed), ROUTERVPN_WINDOWS_PREFIX_PEER=str(peer))
         status, output = run([controller, "-test.v", "-test.count=1", "-test.timeout=700s", "-test.run=^" + ROOT_TEST + "$"],
                              cwd=ROOT, env=child_env, timeout=720)
@@ -176,7 +183,8 @@ def execute(source, bundle, go="go", *, env=None):
                    "unmodified_shipping_image": False, "test_scope": "captured-native-child-app-id",
                    "application_open": False, "dns_open": False, "samples_per_case": 50,
                    "original_final_unreachable": True, "native_down_before_review": True,
-                   "sources": before, "scope_sources": native_records, "images": identities}
+                   "sources": before, "scope_sources": native_records, "images": identities,
+                   "typed_socks_parent_controls": socks_parent_controls}
         print(PREFIX + json.dumps(receipt, sort_keys=True), flush=True)
         return receipt
 

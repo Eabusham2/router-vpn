@@ -105,10 +105,14 @@ class PrefixRunner(unittest.TestCase):
                    "images":{"controller":"d"*64,"peer":"e"*64,"scoped_engine":"f"*64}}
             def invoke(record):
                 with patch.object(build.platform,"system",return_value="Windows"),patch.object(build,"native_host_target",return_value="windows/amd64"), \
-                     patch.object(build,"reuse",return_value=original),patch.object(build,"run",side_effect=["",GATE.PREFIX+json.dumps(record)]) as run:
+                     patch.object(build,"reuse",return_value=original),patch.object(build,"run",side_effect=["","","",GATE.PREFIX+json.dumps(record)]) as run, \
+                     patch.object(build,"verify_installed_windows_socks_receipt") as full_path:
                     build.verify_installed_windows_prefix(ROOT,bundle,"windows/amd64",{})
                     self.assertEqual(Path(run.call_args_list[0].args[0][1]).name,"test_windows_candidate_prefix_runner.py")
-                    self.assertEqual(Path(run.call_args_list[1].args[0][1]).name,"test_windows_candidate_prefix.py")
+                    self.assertEqual(Path(run.call_args_list[1].args[0][1]).name,"test_windows_socks_node_chain_host_runner.py")
+                    self.assertEqual(Path(run.call_args_list[2].args[0][1]).name,"test_windows_socks_release_receipt.py")
+                    self.assertEqual(Path(run.call_args_list[3].args[0][1]).name,"test_windows_socks_node_chain_host.py")
+                    full_path.assert_called_once_with(GATE.PREFIX+json.dumps(record),"windows/amd64",original,value['bundle_sha256'],record)
             invoke(value)
             for key in value:
                 with self.subTest(field=key):

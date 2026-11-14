@@ -70,24 +70,30 @@ func newDesktopNodeChainLaunch(selection multihopSelection, session, target stri
 }
 
 func validateDesktopNodeChainLaunch(ctx context.Context, launch *desktopNodeLaunch) error {
+	_, err := readValidatedDesktopNodeChainLaunch(ctx, launch)
+	return err
+}
+
+func readValidatedDesktopNodeChainLaunch(ctx context.Context, launch *desktopNodeLaunch) (mobilemultihop.DesktopNodeChainMetadata, error) {
+	var empty mobilemultihop.DesktopNodeChainMetadata
 	if ctx == nil || ctx.Err() != nil || launch == nil || !launch.chain.hasPolicy() ||
 		launch.importedEntry || launch.importedPlatform != nil || launch.external != nil || launch.tor != nil || launch.candidatePrefix != nil {
-		return errors.New("ordered native launch lost its concrete policy family or original caller")
+		return empty, errors.New("ordered native launch lost its concrete policy family or original caller")
 	}
 	owner := launch.chain
 	selection := owner.selection
 	if selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil {
-		return errors.New("ordered native launch changed a captured member")
+		return empty, errors.New("ordered native launch changed a captured member")
 	}
 	if owner.capture != nil && selection.Native.chain.host != owner.capture {
-		return errors.New("ordered native launch replaced its original host capture")
+		return empty, errors.New("ordered native launch replaced its original host capture")
 	}
-	config, meta, _, err := owner.readPolicy()
+	config, meta, input, err := owner.readLaunchPolicy()
 	actual := string(launch.config)
 	if len(launch.config) == 0 && launch.ownedNode != nil && launch.ownedNode.chain == owner && launch.command != nil && launch.directory != "" {
 		raw, readErr := readDesktopRuntimeFileContext(ctx, launch, "sing-box.json", mobilemultihop.NodeChainInputLimit)
 		if readErr != nil {
-			return readErr
+			return empty, readErr
 		}
 		actual = string(raw)
 		clear(raw)
@@ -95,14 +101,13 @@ func validateDesktopNodeChainLaunch(ctx context.Context, launch *desktopNodeLaun
 	if err != nil || config != actual || meta.ConfigSHA256 != launch.configSHA256 || meta.SessionID != launch.mtuSession ||
 		meta.ProfileID != launch.profileID || launch.policyProfileID != selection.Control.ID || meta.NodeID != selection.Exit.NodeProofID ||
 		meta.Mode != launch.mode || meta.OriginalSourceSHA256 != selection.Native.source || launch.root != selection.Native.root ||
-		launch.endpoint != selection.Native.endpoint || !owner.originalPolicyCurrent() {
-		return errors.Join(err, errors.New("ordered native launch changed its sealed derived graph or original authority"))
+		launch.endpoint != selection.Native.endpoint {
+		return empty, errors.Join(err, errors.New("ordered native launch changed its sealed derived graph or original authority"))
 	}
-	input, err := owner.launchInput()
-	if err != nil || input != owner.input {
-		return errors.Join(err, errors.New("ordered native launch changed its exact projected private input"))
+	if input != owner.input {
+		return empty, errors.New("ordered native launch changed its exact projected private input")
 	}
-	return ctx.Err()
+	return meta, ctx.Err()
 }
 
 // Initial chain proofs use the core's bounded complete-inventory budget. The
