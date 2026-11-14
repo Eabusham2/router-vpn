@@ -232,6 +232,136 @@ func TestOrderedLatencyRefusesForeignOwnerAndInventory(t *testing.T) {
 	}
 }
 
+func TestOrderedLatencyStartRejectsCancelledCallerBeforeOriginalLock(t *testing.T) {
+	for _, fault := range []string{"nil", "cancelled", "deadline"} {
+		t.Run(fault, func(t *testing.T) {
+			service, engine := orderedLatencyFixture(t)
+			var ctx context.Context
+			var expected error
+			switch fault {
+			case "cancelled":
+				call, cancel := context.WithCancel(t.Context())
+				cancel()
+				ctx, expected = call, context.Canceled
+			case "deadline":
+				call, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+				defer cancel()
+				ctx, expected = call, context.DeadlineExceeded
+			}
+			base := service.service
+			base.mu.Lock()
+			var release sync.Once
+			unlock := func() { release.Do(base.mu.Unlock) }
+			defer unlock()
+			entered, done := make(chan struct{}), make(chan error, 1)
+			go func() {
+				close(entered)
+				done <- service.StartContext(ctx, strings.Repeat("f", 32), base.hops[0].ID)
+			}()
+			<-entered
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(time.Second):
+				// Join even the broken original implementation before reporting
+				// failure; no blocked goroutine or native fixture escapes cleanup.
+				unlock()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("original StartContext did not join after lock release")
+				}
+				t.Fatal("cancelled StartContext waited for the original service lock")
+			}
+			unlock()
+			if err == nil || expected != nil && !errors.Is(err, expected) {
+				t.Fatal("original caller cancellation was not preserved", err)
+			}
+			if base.pending != nil || service.operation != nil || engine.held.Load() {
+				t.Fatal("rejected caller borrowed original measurement ownership")
+			}
+		})
+	}
+}
+
+type orderedLatencyWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *orderedLatencyWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func TestOrderedLatencyCancelledMutexWaitDoesNotAdoptOrBorrow(t *testing.T) {
+	for _, phase := range []string{"start", "adopt"} {
+		t.Run(phase, func(t *testing.T) {
+			service, engine := orderedLatencyFixture(t)
+			base := service.service
+			if phase == "adopt" {
+				request := strings.Repeat("a", 32)
+				if err := service.Start(request, base.hops[0].ID); err != nil {
+					t.Fatal(err)
+				}
+				if err := service.Drain(request); err != nil {
+					t.Fatal(err)
+				}
+				if service.pending == nil || len(service.saved) != 0 {
+					t.Fatal("original joined receipt was not retained for adoption")
+				}
+			}
+			pending, operation := service.pending, service.operation
+			parent, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx := &orderedLatencyWaitContext{Context: parent, waiting: make(chan struct{})}
+			base.mu.Lock()
+			var release sync.Once
+			unlock := func() { release.Do(base.mu.Unlock) }
+			defer unlock()
+			done := make(chan error, 1)
+			go func() {
+				if phase == "adopt" {
+					done <- service.adoptJoined(ctx)
+				} else {
+					done <- service.StartContext(ctx, strings.Repeat("b", 32), base.hops[0].ID)
+				}
+			}()
+			// Done is observed only once the held mutex actually requires a
+			// cancellable wait. Cancel after that rendezvous, without a sleep.
+			select {
+			case <-ctx.waiting:
+			case <-time.After(time.Second):
+				cancel()
+				unlock()
+				receiveMeasurement(t, done)
+				t.Fatal("original mutex wait never observed its caller")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal("mutex wait lost original cancellation", err)
+				}
+			case <-time.After(time.Second):
+				unlock()
+				receiveMeasurement(t, done)
+				t.Fatal("cancelled original mutex wait did not return")
+			}
+			if service.pending != pending || service.operation != operation || len(service.saved) != 0 || base.pending != nil || engine.held.Load() {
+				t.Fatal("cancelled caller adopted a receipt or borrowed a worker")
+			}
+			unlock()
+			if phase == "adopt" {
+				if err := service.adoptJoined(t.Context()); err != nil || service.pending != nil || service.saved[pending.NodeID] == "" {
+					t.Fatal("original retry could not adopt its retained joined receipt", err)
+				}
+			}
+		})
+	}
+}
+
 func TestOrderedLatencyCancelBeforeOriginalDrainPreservesSavedReceipt(t *testing.T) {
 	service, engine := orderedLatencyFixture(t)
 	hop := service.service.hops[1]

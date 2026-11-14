@@ -259,6 +259,68 @@ func TestMeasurementRejectedAdmissionKeepsScopeUntilOriginalReleaseJoins(t *test
 	}
 }
 
+func TestMeasurementCancelledAdmissionRetainsJoinedTokenWhileMutexHeld(t *testing.T) {
+	service, engine := observedService(t)
+	entered, released := make(chan struct{}), make(chan struct{})
+	var releases, calls atomic.Int32
+	engine.setBegin(func(ctx context.Context) (func(), error) {
+		close(entered)
+		<-ctx.Done()
+		return func() {
+			releases.Add(1)
+			// Transfer this held lock to the test at the real release boundary.
+			// Failed admission must retain its joined token, not block on mu.
+			service.mu.Lock()
+			close(released)
+		}, nil
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	started := make(chan error, 1)
+	go func() {
+		started <- service.startContext(ctx, strings.Repeat("d", 32), func(context.Context) { calls.Add(1) })
+	}()
+	receiveMeasurement(t, entered)
+	service.mu.Lock()
+	original := service.pending
+	service.mu.Unlock()
+	if original == nil {
+		t.Fatal("original admission was not retained")
+	}
+	cancel()
+	receiveMeasurement(t, released)
+	var release sync.Once
+	unlock := func() { release.Do(service.mu.Unlock) }
+	defer unlock()
+	select {
+	case err := <-started:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("failed admission lost original cancellation", err)
+		}
+	case <-time.After(time.Second):
+		unlock()
+		receiveMeasurement(t, started)
+		t.Fatal("cancelled admission blocked after its actual release joined")
+	}
+	if service.pending != original || calls.Load() != 0 || releases.Load() != 1 {
+		t.Fatal("failed admission discarded ownership or ran work")
+	}
+	select {
+	case <-original.done:
+	default:
+		t.Fatal("retained admission did not record its actual joined release")
+	}
+	unlock()
+	engine.setBegin(func(context.Context) (func(), error) { return func() { releases.Add(1) }, nil })
+	next := strings.Repeat("e", 32)
+	if err := service.startContext(t.Context(), next, func(context.Context) { calls.Add(1) }); err != nil {
+		t.Fatal("original retry could not reap its joined rejected admission", err)
+	}
+	if err := service.Drain(next); err != nil || calls.Load() != 1 || releases.Load() != 2 {
+		t.Fatal("original retry did not own and drain exactly one worker", err)
+	}
+}
+
 func TestMeasurementCallbacksRetainOneDeadlineAndNeverHoldStatusLock(t *testing.T) {
 	service, engine := observedService(t)
 	parent, cancel := context.WithTimeout(context.Background(), 2*time.Second)

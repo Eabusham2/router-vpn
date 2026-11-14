@@ -89,22 +89,29 @@ func newOrderedLatencyContext(ctx context.Context, service *Service, sourceSHA25
 	service.orderedLatency = value
 	return value, nil
 }
-func (o *OrderedLatencyService) original() bool {
-	if o == nil || o.self != o || o.service == nil {
-		return false
+func (o *OrderedLatencyService) originalContext(ctx context.Context) error {
+	if o == nil || o.self != o || o.service == nil || ctx == nil {
+		return errors.New("original ordered latency owner is unavailable")
 	}
-	o.service.mu.Lock()
+	if err := o.lockContext(ctx); err != nil {
+		return err
+	}
 	defer o.service.mu.Unlock()
-	return o.service.ordered && o.service.orderedLatency == o && !o.closed
+	if !o.service.ordered || o.service.orderedLatency != o || o.closed {
+		return errors.New("original ordered latency owner is unavailable")
+	}
+	return ctx.Err()
 }
 func (o *OrderedLatencyService) Start(request, hopID string) error {
 	return o.StartContext(context.Background(), request, hopID)
 }
 func (o *OrderedLatencyService) StartContext(ctx context.Context, request, hopID string) error {
-	if !o.original() || ctx == nil {
-		return errors.New("original ordered latency owner is unavailable")
+	if err := o.originalContext(ctx); err != nil {
+		return err
 	}
-	o.adoptJoined(ctx)
+	if err := o.adoptJoined(ctx); err != nil {
+		return err
+	}
 	for position, hop := range o.service.hops {
 		if hop.ID == hopID {
 			return o.service.startContextOwned(ctx, request, func(work context.Context) { o.run(work, request, position, hop) }, o)
@@ -373,34 +380,40 @@ func (o *OrderedLatencyService) run(ctx context.Context, request string, positio
 
 // Commit only after the original work, sockets and resource release have all
 // joined. Cancel/stale/failure before that boundary cannot replace saved data.
-func (o *OrderedLatencyService) adoptJoined(ctx context.Context) {
+func (o *OrderedLatencyService) adoptJoined(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("ordered latency receipt has no caller")
+	}
 	s := o.service
 	if boundary, ok := s.engine.(MeasurementBoundary); ok {
-		if boundary.VerifyMeasurement(ctx) != nil {
-			return
+		if err := boundary.VerifyMeasurement(ctx); err != nil {
+			return err
 		}
 	}
-	if s.valid(ctx) != nil {
-		return
+	if err := s.valid(ctx); err != nil {
+		return err
 	}
-	s.mu.Lock()
+	if err := o.lockContext(ctx); err != nil {
+		return err
+	}
 	defer s.mu.Unlock()
 	pending := o.pending
 	if pending == nil || o.closed || s.closed || s.orderedLatency != o || o.operation == nil || s.done != o.operation.done || s.pending != nil || o.operation.id != pending.Request || s.state.Request != pending.Request || !s.state.Complete || s.state.Stage != "complete" || s.state.Failure != "" || len(s.state.Results) != 1 || !s.state.Results[0].Ready || ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
 	if s.done == nil {
-		return
+		return nil
 	}
 	select {
 	case <-s.done:
 	default:
-		return
+		return nil
 	}
 	raw, err := json.Marshal(pending)
-	if err != nil {
-		return
+	if err != nil || ctx.Err() != nil {
+		return errors.Join(err, ctx.Err())
 	}
 	o.saved[pending.NodeID] = string(raw)
 	o.pending = nil
+	return nil
 }

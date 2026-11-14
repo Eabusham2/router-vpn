@@ -299,7 +299,9 @@ func (s *Service) valid(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	s.mu.Lock()
+	if err := lockOrderedLatencyService(ctx, s); err != nil {
+		return err
+	}
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
@@ -309,7 +311,9 @@ func (s *Service) valid(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
+	if err := lockOrderedLatencyService(ctx, s); err != nil {
+		return err
+	}
 	closed = s.closed
 	s.mu.Unlock()
 	if closed || identity != s.identity {
@@ -353,21 +357,34 @@ func (s *Service) startContextOwned(parent context.Context, id string, work func
 				release()
 			}
 			close(op.done)
-			s.mu.Lock()
-			if s.pending == op {
-				s.pending = nil
+			// The real release above must join before ownership can end. If
+			// another observer holds mu, retain this closed admission token;
+			// the next original admission can reap it without background work.
+			if s.mu.TryLock() {
+				if s.pending == op {
+					s.pending = nil
+				}
+				s.mu.Unlock()
 			}
-			s.mu.Unlock()
 		}
 	}()
-	s.mu.Lock()
+	if err := lockOrderedLatencyService(ctx, s); err != nil {
+		return err
+	}
 	if s.closed {
 		s.mu.Unlock()
 		return ErrStale
 	}
 	if s.pending != nil {
-		s.mu.Unlock()
-		return errors.New("another hop measurement still owns this session")
+		select {
+		case <-s.pending.done:
+			// Only a rejected admission's joined release closes this token.
+			// An accepted worker is retained separately by s.done.
+			s.pending = nil
+		default:
+			s.mu.Unlock()
+			return errors.New("another hop measurement still owns this session")
+		}
 	}
 	if s.done != nil {
 		select {
@@ -409,7 +426,9 @@ func (s *Service) startContextOwned(parent context.Context, id string, work func
 	if err := s.valid(ctx); err != nil {
 		return err
 	}
-	s.mu.Lock()
+	if err := lockOrderedLatencyService(ctx, s); err != nil {
+		return err
+	}
 	defer s.mu.Unlock()
 	if s.closed || s.pending != op || latency != nil && (latency.closed || s.orderedLatency != latency || latency.operation != op) {
 		return ErrStale
