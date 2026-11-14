@@ -327,3 +327,54 @@ func TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor(t *testing
 		t.Fatal("typed nil acquired native owner authority")
 	}
 }
+
+func TestDesktopNodeChainPolicyDerivationRetainsConstructorIdentity(t *testing.T) {
+	for name, change := range map[string]func(*testing.T, *DesktopNodeChainPolicy) *DesktopNodeChainPolicy{
+		"copied-policy":      func(t *testing.T, p *DesktopNodeChainPolicy) *DesktopNodeChainPolicy { copied := *p; return &copied },
+		"missing-derivation": func(t *testing.T, p *DesktopNodeChainPolicy) *DesktopNodeChainPolicy { p.derivation = nil; return p },
+		"borrowed-derivation": func(t *testing.T, p *DesktopNodeChainPolicy) *DesktopNodeChainPolicy {
+			other := desktopChainPolicy(t, p.original, "linux", 0)
+			p.derivation = other.derivation
+			return p
+		},
+		"identical-fresh-original": func(t *testing.T, p *DesktopNodeChainPolicy) *DesktopNodeChainPolicy {
+			replacement, err := NewNodeChain(p.original.sourceJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.original = replacement
+			return p
+		},
+		"identical-fresh-derived": func(t *testing.T, p *DesktopNodeChainPolicy) *DesktopNodeChainPolicy {
+			other := desktopChainPolicy(t, p.original, "linux", 0)
+			p.chain = other.chain
+			return p
+		},
+		"resealed-original": func(t *testing.T, p *DesktopNodeChainPolicy) *DesktopNodeChainPolicy {
+			p.original.sourceJSON += " "
+			p.original.seal = p.original.captureSeal()
+			return p
+		},
+		"changed-retained-capture": func(t *testing.T, p *DesktopNodeChainPolicy) *DesktopNodeChainPolicy {
+			p.derivation.captureJSON = strings.Replace(p.derivation.captureJSON, "198.51.100.10", "198.51.100.11", 1)
+			return p
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := desktopChainPolicy(t, desktopChainFixture(t, 3, "", nil), "linux", 0)
+			if _, _, _, err := p.ReadValidated(); err != nil {
+				t.Fatal(err)
+			}
+			p = change(t, p)
+			if p.Validate() == nil {
+				t.Fatal("derivation admitted replaced constructor authority")
+			}
+			if _, err := p.ReadValidatedLaunch(); err == nil {
+				t.Fatal("launch reader admitted replaced constructor authority")
+			}
+			if _, _, _, err := ReadDesktopPhysicalPolicy(p); err == nil {
+				t.Fatal("physical reader admitted replaced constructor authority")
+			}
+		})
+	}
+}
