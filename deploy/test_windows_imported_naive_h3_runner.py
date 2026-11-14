@@ -18,6 +18,17 @@ ENV = {'GITHUB_REPOSITORY': 'owner/router', 'GITHUB_SHA': 'a' * 40,
        'GITHUB_RUN_ID': '1234', 'GITHUB_RUN_ATTEMPT': '2'}
 
 
+def selected_diagnostic_command(compiler):
+    result = subprocess.run([compiler, 'env', '-json', 'GOOS', 'GOARCH'],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, timeout=30, check=True)
+    target = json.loads(result.stdout)
+    # The native Windows ARM64 compiler cannot execute -race. Run the same
+    # helper and every causal control there; supported targets retain -race.
+    race = [] if (target['GOOS'], target['GOARCH']) == ('windows', 'arm64') else ['-race']
+    return [compiler, 'test', *race, '-count=1', '-timeout=10s', '.']
+
+
 def output(cases, verdict='PASS'):
     return '\n'.join('--- ' + verdict + ': ' + name + ' (0.01s)' for name in cases) + '\n' + verdict + '\n'
 
@@ -513,7 +524,7 @@ func TestDiagnosticFailureTextIsBoundedAndEscaped(t *testing.T){
             target = work / 'diagnostic.go'
             target.write_text(header + messages + helper)
             (work / 'diagnostic_test.go').write_text(cases)
-            command = [shutil.which('go') or 'go', 'test', '-race', '-count=1', '-timeout=10s', '.']
+            command = selected_diagnostic_command(shutil.which('go') or 'go')
             result = subprocess.run(command, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stdout)
             mutations = (
@@ -528,6 +539,26 @@ func TestDiagnosticFailureTextIsBoundedAndEscaped(t *testing.T){
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn(witness, result.stdout)
                 self.assertNotIn('panic:', result.stdout)
+
+    def test_selected_dns_diagnostic_requires_compiler_target_and_supported_race(self):
+        for goos, goarch, race in (('windows', 'arm64', []), ('windows', 'amd64', ['-race']),
+                                  ('linux', 'amd64', ['-race']), ('darwin', 'arm64', ['-race'])):
+            result = subprocess.CompletedProcess([], 0, json.dumps({'GOOS': goos, 'GOARCH': goarch}))
+            with self.subTest(target=(goos, goarch)), mock.patch.object(subprocess, 'run', return_value=result) as run:
+                self.assertEqual(selected_diagnostic_command('captured-go'),
+                                 ['captured-go', 'test', *race, '-count=1', '-timeout=10s', '.'])
+                run.assert_called_once_with(['captured-go', 'env', '-json', 'GOOS', 'GOARCH'],
+                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                            text=True, timeout=30, check=True)
+        for raw in ('{}', '{"GOOS":"windows"}', 'not compiler JSON'):
+            result = subprocess.CompletedProcess([], 0, raw)
+            with self.subTest(raw=raw), mock.patch.object(subprocess, 'run', return_value=result):
+                with self.assertRaises((KeyError, ValueError)):
+                    selected_diagnostic_command('captured-go')
+        failure = subprocess.CalledProcessError(1, ['captured-go', 'env'])
+        with mock.patch.object(subprocess, 'run', side_effect=failure):
+            with self.assertRaises(subprocess.CalledProcessError):
+                selected_diagnostic_command('captured-go')
 
     def test_native_openvpn_readiness_preserves_original_owner_and_caller(self):
         source = (ROOT / 'mobile/desktop/node_imported_naive_h3_windows_test.go.tmpl').read_text()
