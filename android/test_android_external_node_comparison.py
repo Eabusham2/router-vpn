@@ -274,7 +274,7 @@ def sources():
     boundaries=U.S.replace_class(boundaries,'AndroidExternalPolicy',policy[:-1]+captured+imported_boundary+U.S.block(policy_source,'    static String entryDigest(')+'}')
     libbox='io/nekohasekai/libbox/Libbox.java'
     imported_methods=''.join('public static String '+method+'(String config,String capture){throw new AssertionError("Ordered imported compilation is outside ordinary comparison");}' for method in (
-        'routerNodeChainImportedMemberInput','routerNodeChainImportedSOCKSMemberInput'))
+        'routerNodeChainImportedMemberInput','routerNodeChainImportedSOCKSMemberInput','routerNodeChainImportedCONNECTMemberInput'))
     ui[libbox]=ui[libbox].rstrip()[:-1]+imported_methods+'}'
     speed=U.S.block(R.METERS,'final class AndroidSpeedLab')
     duration=U.S.block((JAVA/'AndroidSpeedLab.java').read_text(),'    static final class DurationPolicy')
