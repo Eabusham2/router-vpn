@@ -6,6 +6,26 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 14: complete CONNECT profiles and native editor corrections
+
+Desktop CONNECT candidate Save/Load is published in `658414f3`, preserving
+exact HTTP/HTTPS sources through the complete transaction. The
+[updated evidence ledger](CONTINUATION-EVIDENCE-2026-11-14-CANDIDATE-PROFILES.md)
+records its race, actual route/store and compiled regression results, plus
+macOS (`d7ec85ee`), Windows (`3e3a554b`) and GTK (`3e0b8035`) editor adoption.
+Apple's compatible final picker and explicit unavailable saved row are
+published in `c8d731ca`, with 248 source checks and six compiled controls.
+
+The GTK source/model passed 683 checks and nine controls; its actual widget
+gate remains required because local AF_UNIX socket permission prevented Xvfb.
+The Windows local result uses PowerShell 7 with WPF disabled, and the Apple
+source fixture excludes SwiftUI rendering. None enables an unproved native
+capability. The ledger separately records `72dcb481`'s Darwin execution child
+and cross-build, `0211bb5b`'s CONNECT PF dispatcher correction and `cee86ee2`'s
+two current CI fixture repairs. Parent execution integration, the complete
+current release, private deployment and physical acceptance are not closed by
+these bounded results.
+
 ## November 14: published ordered fifty-response integration
 
 The typed SOCKS fifty-response facade, all three host callers, private history
@@ -47,9 +67,9 @@ the correct source compiler in both connected and prepared Save. Nine
 source/Load roots and 36 subcases, both complete HTTP Save workflows, and two
 compiled old-behavior controls passed. Existing private-node references,
 selected policy, original session, atomic append and rollback remain intact.
-The actual CONNECT desktop runtime is separately published in `d0b99255`; its
-candidate Save addition and the wider graph/platform obligations remain
-separate work. The ledger identifies the bounded imported-middle shape and
+The actual CONNECT desktop runtime is separately published in `d0b99255`, and
+its candidate Save addition is now published in `658414f3`. Wider graph and
+platform obligations remain separate. The ledger identifies the bounded imported-middle shape and
 does not count refused combinations as completed requirements.
 
 ## November 14: exact-source Windows Naive HTTP/3 native evidence
