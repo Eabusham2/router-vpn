@@ -874,7 +874,7 @@ print("original command completed",flush=True)
         # The parent owns and fills the report pipe, then withholds all reads.
         # Both implementations run the real imported function in one original
         # process. The old blocking behavior is released and joined afterward.
-        script = r"""import fcntl,importlib.util,json,os,pathlib,subprocess,sys,types
+        script = r"""import fcntl,importlib.util,json,os,pathlib,select,signal,subprocess,sys,types
 source,receipt,mode,ready=sys.argv[1:]
 # A real delayed startup exceeds the original reporting window. It must not
 # consume the native deadline, and cannot rescue the blocking causal control.
@@ -888,7 +888,18 @@ if mode=='blocking':
  exec(helper.replace(needle,'flags',1),g.__dict__)
 children=[];original=subprocess.Popen
 def capture(*args,**kwargs):
- p=original(*args,**kwargs);children.append(p);return p
+ p=original(*args,**kwargs);children.append(p)
+ try:
+  # Wait for this real child's bytes without consuming or forwarding them.
+  # Interpreter startup is setup, not part of the native reporting deadline.
+  if not select.select([p.stdout],[],[],2)[0] or p.poll() is not None:
+   raise RuntimeError('original native child did not provide live output before setup deadline')
+ except BaseException:
+  try:os.killpg(p.pid,signal.SIGKILL)
+  except ProcessLookupError:pass
+  p.communicate(timeout=5)
+  raise
+ return p
 subprocess.Popen=capture
 # Signal only when the original helper starts its native deadline, after
 # imports, child creation and selector setup. Never replace its clock values.
@@ -930,10 +941,11 @@ pathlib.Path(receipt).write_text(json.dumps(result))
                 os.close(ready_write)
                 completed_while_held = False
                 try:
-                    # Setup has its own finite watchdog. The unchanged 1.5s
-                    # assertion measures the actual native deadline, not the
-                    # interpreter/module startup on a loaded hosted runner.
-                    self.assertTrue(select.select([ready_read], [], [], 5)[0], 'native reporter did not start its original deadline')
+                    # The setup-only watchdog includes the 1.6s delayed startup,
+                    # 2s original-child output readiness, and up to 5s exact-child
+                    # cleanup on setup failure. The native deadline remains
+                    # 0.10s and the held-pipe observation below remains 1.5s.
+                    self.assertTrue(select.select([ready_read], [], [], 10)[0], 'native reporter did not start its original deadline')
                     self.assertEqual(os.read(ready_read, 1), b'1')
                     try:
                         process.wait(timeout=1.5)
@@ -952,6 +964,7 @@ pathlib.Path(receipt).write_text(json.dumps(result))
                     _, errors = process.communicate(timeout=2)
                     self.assertEqual(process.returncode, 0, errors.decode())
                     result = json.loads(receipt.read_text())
+                    self.assertIn('captured native output', result.get('error',''), result)
                     self.assertEqual(completed_while_held, mode=='bounded', result)
                     self.assertIn('timed out after its process group was joined', result['error'])
                     self.assertEqual(result['cause'], 'TimeoutExpired')
