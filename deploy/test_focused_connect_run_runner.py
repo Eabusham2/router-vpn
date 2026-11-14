@@ -21,6 +21,16 @@ def events(case,control=None):
     rows.extend(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX,Test=x) for x in (leaf,root))
     rows.append(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX))
     return rows
+def fifty_rows(mode,control=None):
+    root,leaf=V.FIFTY.names(mode)
+    rows=[dict(Action="start",Package=V.BASE.LIBBOX)]
+    rows.extend(dict(Action="run",Package=V.BASE.LIBBOX,Test=x) for x in (root,leaf))
+    outputs=[control["witness"]] if control else ["CONNECT_FIFTY_CHECK "+name for name in V.FIFTY.LEAVES]
+    rows.extend(dict(Action="output",Package=V.BASE.LIBBOX,Test=leaf,Output=x+"\n") for x in outputs)
+    action="fail" if control else "pass"
+    rows.extend(dict(Action=action,Package=V.BASE.LIBBOX,Test=x) for x in (leaf,root))
+    rows.append(dict(Action=action,Package=V.BASE.LIBBOX))
+    return rows
 def reference_rows(control=False,tcp=False,packet=False):
     selected=V.REFERENCE_PACKET_CONTROL if packet else V.REFERENCE_TCP_CONTROL if tcp else V.REFERENCE_CONTROL
     positive=V.REFERENCE_TCP_CASES if tcp else V.REFERENCE_CASES
@@ -32,14 +42,6 @@ def reference_rows(control=False,tcp=False,packet=False):
         if control:rows.append(dict(Action="output",Package=package,Test=name,Output=selected["witness"]+"\n"))
         rows.append(dict(Action=action,Package=package,Test=name))
     rows.extend((dict(Action=action,Package=package,Test=names[0]),dict(Action=action,Package=package)))
-    return rows
-def fifty_events(mode,control=None):
-    names=V.FIFTY.names(mode);rows=[dict(Action="start",Package=V.BASE.LIBBOX)]
-    rows.extend(dict(Action="run",Package=V.BASE.LIBBOX,Test=x) for x in names)
-    if not control:rows.extend(dict(Action="output",Package=V.BASE.LIBBOX,Test=names[-1],Output="CONNECT_FIFTY_CHECK "+leaf+"\n") for leaf in V.FIFTY.LEAVES)
-    if control:rows.append(dict(Action="output",Package=V.BASE.LIBBOX,Test=names[-1],Output=control["witness"]+"\n"))
-    rows.extend(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX,Test=x) for x in reversed(names))
-    rows.append(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX))
     return rows
 def encoded(rows):return ("\n".join(json.dumps(x) for x in rows)+"\n").encode()
 def plain(names):return "".join("=== RUN   "+x+"\n--- PASS: "+x+" (0.01s)\n" for x in names)+"PASS\n"
@@ -81,11 +83,19 @@ class Composition:
                 target=core/V.REFERENCE_CONTROL["path"];target.parent.mkdir(parents=True,exist_ok=True);target.write_text(V.REFERENCE_CONTROL["before"]+V.REFERENCE_TCP_CONTROL["before"]+V.REFERENCE_PACKET_CONTROL["before"])
                 lifetime=core/V.LIFETIME.CONTROL["path"];lifetime.parent.mkdir(parents=True,exist_ok=True);lifetime.write_text(V.LIFETIME.CONTROL["before"])
             if name=="prepare-mobile":
-                by_path={}
-                for control in V.CONTROLS:by_path.setdefault(control["path"],[]).append(control["before"])
-                for control in V.FIFTY.CONTROLS:by_path.setdefault(control["path"],[]).extend(x[0] for x in control["changes"])
-                for path,anchors in by_path.items():
-                    target=core/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text("\n".join(dict.fromkeys(anchors)))
+                # Both the original Run controls and the additive fifty controls
+                # mutate their real source text through the unchanged evaluator.
+                sources={
+                    "routervpn_node_chain_connect.go":"mobile/chain/connect_box.go.tmpl",
+                    "experimental/libbox/routervpn_node_chain_connect_lifecycle.go":"mobile/chain/connect_lifecycle.go.tmpl",
+                    "experimental/libbox/routervpn/mobilemultihop/node_chain_runtime.go":"internal/mobilemultihop/node_chain_runtime.go",
+                    "experimental/libbox/routervpn_node_chain_connect_latency.go":"mobile/chain/connect_latency.go.tmpl",
+                    "experimental/libbox/routervpn/hopmeasure/ordered_latency.go":"internal/hopmeasure/ordered_latency.go",
+                    "experimental/libbox/routervpn_ordered_latency.go":"mobile/chain/ordered_latency_bridge.go.tmpl",
+                }
+                for control in (*V.CONTROLS,*V.FIFTY.CONTROLS):
+                    target=core/control["path"];target.parent.mkdir(parents=True,exist_ok=True)
+                    target.write_bytes((ROOT/sources[control["path"]]).read_bytes())
         elif name.endswith("-build"):
             assert cwd==self.roles["owner" if name=="peer-build" else "mobile"][0]
             image=Path(command[command.index("-o")+1]);image.write_bytes(("original "+name).encode());self.images.append(image)
@@ -117,15 +127,20 @@ class Composition:
             raw=(f"=== RUN   {root}\n=== RUN   {root}/retained\n"+V.LIFETIME.CONTROL["witness"]+f"\n--- FAIL: {root} (31.00s)\n    --- FAIL: {root}/retained (31.00s)\nFAIL\n").encode();status=1
         elif name.startswith("fifty-"):
             mode=env["ROUTERVPN_CONNECT_FIFTY_CASE"];assert mode in V.FIFTY.MODES
-            assert cwd==self.roles["mobile"][0] and Path(env["ROUTERVPN_CONNECT_RUN_PEER"])==self.images[0]
-            if name in {"fifty-"+x for x in V.FIFTY.MODES}:raw=encoded(fifty_events(mode))
+            assert "ROUTERVPN_CONNECT_RUN_CASE" not in env
+            assert env["GODEBUG"]=="x509usefallbackroots=1"
+            assert Path(env["ROUTERVPN_CONNECT_RUN_PEER"])==self.images[0]
+            assert cwd==self.roles["mobile"][0]
+            if name in {"fifty-"+value for value in V.FIFTY.MODES}:
+                assert mode==name.removeprefix("fifty-");raw=encoded(fifty_rows(mode))
             else:
                 control=next(c for c in V.FIFTY.CONTROLS if c["name"]==name)
+                assert mode=="http-wg"
                 overlay=Path(next(x.split("=",1)[1] for x in command if x.startswith("-overlay=")))
-                replacements=json.loads(overlay.read_text())["Replace"]
-                self_path=str(cwd/control["path"])
-                assert Path(replacements[self_path]).read_text()==V.FIFTY.mutation(V.BASE,control,Path(self_path).read_text())
-                raw=encoded(fifty_events(mode,control));status=1
+                replacements=json.loads(overlay.read_text())["Replace"];original=str(cwd/control["path"])
+                assert list(replacements)==[original]
+                assert Path(replacements[original]).read_text()==V.FIFTY.mutation(V.BASE,control,Path(original).read_text())
+                raw=encoded(fifty_rows(mode,control));status=1
         else:
             case=env["ROUTERVPN_CONNECT_RUN_CASE"];assert case in V.CASES
             assert env["GODEBUG"]=="x509usefallbackroots=1"
@@ -161,22 +176,35 @@ class Composition:
         if self.fault=="control-signal" and name==V.CONTROLS[0]["name"]:status=-9
         if self.fault=="control-panic" and name==V.CONTROLS[0]["name"]:raw+=b"panic: unrelated\n"
         if self.fault=="control-witness" and name==V.CONTROLS[0]["name"]:raw=raw.replace(V.CONTROLS[0]["witness"].encode(),b"unrelated")
+        if self.fault=="lifetime-positive-missing" and name=="reference-established-positive":raw=plain(V.LIFETIME.NAMES[:-1]).encode()
+        if self.fault=="lifetime-positive-failed" and name=="reference-established-positive":status=1
+        if self.fault=="lifetime-negative-pass" and name==V.LIFETIME.CONTROL["name"]:status=0
+        if self.fault=="lifetime-negative-witness" and name==V.LIFETIME.CONTROL["name"]:raw=raw.replace(V.LIFETIME.CONTROL["witness"].encode(),b"unrelated")
+        if self.fault==("fifty-phase-terminal",name):raw=encoded([json.loads(row) for row in raw.splitlines()][:-1])
+        if self.fault=="fifty-check-missing" and name=="fifty-http-wg":raw=encoded([row for row in fifty_rows("http-wg") if row.get("Output")!="CONNECT_FIFTY_CHECK copied-plan\n"])
+        if self.fault=="fifty-case-failed" and name=="fifty-http-wg":status=1
+        if self.fault=="fifty-control-pass" and name==V.FIFTY.CONTROLS[0]["name"]:status=0
+        if self.fault=="fifty-control-signal" and name==V.FIFTY.CONTROLS[0]["name"]:status=-9
+        if self.fault=="fifty-control-panic" and name==V.FIFTY.CONTROLS[0]["name"]:raw+=b"panic: unrelated\n"
+        if self.fault=="fifty-control-witness" and name==V.FIFTY.CONTROLS[0]["name"]:raw=raw.replace(V.FIFTY.CONTROLS[0]["witness"].encode(),b"unrelated")
         if name==V.CONTROLS[-1]["name"]:
             if self.fault=="candidate-changed":(self.source/"original.go").write_text("changed")
             if self.fault=="owner-changed":(self.roles["owner"][0]/"original.go").write_text("changed")
             if self.fault=="mobile-changed":(self.roles["mobile"][0]/"original.go").write_text("changed")
             if self.fault=="image-changed":self.images[0].write_bytes(b"changed")
             if self.fault=="selection-changed":self.selection.write_text(json.dumps(dict(self.metadata,source_tree="1"*40)))
-        if self.fault=="fifty-case-missing" and name=="fifty-http-wg":raw=encoded(fifty_events("http-wg")[:-1])
-        if self.fault=="fifty-case-failed" and name=="fifty-http-wg":status=1
-        if self.fault=="fifty-control-pass" and name==V.FIFTY.CONTROLS[0]["name"]:status=0
-        if self.fault=="fifty-control-witness" and name==V.FIFTY.CONTROLS[0]["name"]:raw=raw.replace(V.FIFTY.CONTROLS[0]["witness"].encode(),b"unrelated")
-        if self.fault=="lifetime-positive-missing" and name=="reference-established-positive":raw=plain(V.LIFETIME.NAMES[:-1]).encode()
-        if self.fault=="lifetime-positive-failed" and name=="reference-established-positive":status=1
-        if self.fault=="lifetime-negative-pass" and name==V.LIFETIME.CONTROL["name"]:status=0
-        if self.fault=="lifetime-negative-witness" and name==V.LIFETIME.CONTROL["name"]:raw=raw.replace(V.LIFETIME.CONTROL["witness"].encode(),b"unrelated")
+        if name==V.FIFTY.CONTROLS[-1]["name"]:
+            if self.fault=="fifty-candidate-changed":(self.source/"original.go").write_text("changed")
+            if self.fault=="fifty-owner-changed":(self.roles["owner"][0]/"original.go").write_text("changed")
+            if self.fault=="fifty-mobile-changed":(self.roles["mobile"][0]/"original.go").write_text("changed")
+            if self.fault=="fifty-image-changed":self.images[0].write_bytes(b"changed")
+            if self.fault=="fifty-selection-changed":self.selection.write_text(json.dumps(dict(self.metadata,source_tree="1"*40)))
         log.write_bytes(raw)
-        return status,self.fault=="timeout" and name=="run-http-wg",not((self.fault=="unjoined" and name=="run-http-wg") or (self.fault=="reference-unjoined" and name=="reference-tls-close") or (self.fault=="tcp-reference-unjoined" and name=="reference-tcp-close") or (self.fault=="packet-reference-unjoined" and name==V.REFERENCE_PACKET_CONTROL["name"]))
+        timed_out=(self.fault=="timeout" and name=="run-http-wg") or (self.fault=="fifty-timeout" and name=="fifty-http-wg") or (self.fault=="fifty-control-timeout" and name==V.FIFTY.CONTROLS[0]["name"])
+        timed_out=timed_out or (self.fault=="lifetime-positive-timeout" and name=="reference-established-positive") or (self.fault=="lifetime-negative-timeout" and name==V.LIFETIME.CONTROL["name"])
+        unjoined=(self.fault=="unjoined" and name=="run-http-wg") or (self.fault=="reference-unjoined" and name=="reference-tls-close") or (self.fault=="tcp-reference-unjoined" and name=="reference-tcp-close") or (self.fault=="packet-reference-unjoined" and name==V.REFERENCE_PACKET_CONTROL["name"]) or (self.fault=="fifty-unjoined" and name=="fifty-http-wg") or (self.fault=="fifty-control-unjoined" and name==V.FIFTY.CONTROLS[0]["name"])
+        unjoined=unjoined or (self.fault=="lifetime-positive-unjoined" and name=="reference-established-positive") or (self.fault=="lifetime-negative-unjoined" and name==V.LIFETIME.CONTROL["name"])
+        return status,timed_out,not unjoined
     def run(self):
         with patch.object(V.BASE.COMMON,"git",side_effect=self.git),patch.object(V.BASE.CORE,"snapshot",side_effect=self.snapshot),\
              patch.object(V.BASE.CORE,"execute",side_effect=self.execute),patch.object(V,"sources",side_effect=self.sources),\
@@ -185,27 +213,22 @@ class Composition:
             return V.validate(self.source,self.metadata["source_sha"],self.output,"/captured/go")
 
 class EncryptedCONNECTRunValidator(unittest.TestCase):
-    def test_fifty_integration_rejects_missing_cases_and_false_controls(self):
-        for fault in ("fifty-case-missing","fifty-case-failed","fifty-control-pass","fifty-control-witness"):
-            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
-                with self.assertRaises(ValueError):Composition(Path(directory),fault).run()
     def test_all_actual_cases_original_cipher_inventory_and_bounds_are_required(self):
         self.assertEqual(len(V.CASES),14);self.assertEqual(len(set(V.CASES)),14)
         self.assertEqual(len(V.ORIGINAL),73);self.assertEqual(len(set(V.ORIGINAL)),73)
         self.assertEqual(len(V.CONTROLS),4)
+        self.assertEqual(len(V.FIFTY.MODES),6);self.assertEqual(len(V.FIFTY.LEAVES),14);self.assertEqual(len(V.FIFTY.CONTROLS),7)
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
             self.assertEqual(len(c.calls),44)
             self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,30,600,30,600,600,60,600,*([190]*14),*([600]*4),*([190]*6),*([600]*7)])
+            self.assertEqual([x[0] for x in c.calls[11:13]],["reference-established-positive",V.LIFETIME.CONTROL["name"]])
+            self.assertEqual([x[0] for x in c.calls[-13:]],["fifty-"+value for value in V.FIFTY.MODES]+[value["name"] for value in V.FIFTY.CONTROLS])
             self.assertEqual(c.original,[V.ORIGINAL,V.LIFETIME.NAMES])
             self.assertEqual(receipt["reference_established_records"],list(V.LIFETIME.NAMES))
             self.assertTrue(receipt["reference_established_control"]["expected_failure"])
             self.assertEqual([x["case"] for x in receipt["case_records"]],list(V.CASES))
             self.assertEqual(len(receipt["controls"]),4)
-            self.assertEqual([row["mode"] for row in receipt["ordered_fifty_records"]],list(V.FIFTY.MODES))
-            self.assertEqual([row["name"] for row in receipt["ordered_fifty_controls"]],[item["name"] for item in V.FIFTY.CONTROLS])
-            self.assertTrue(receipt["ordered_fifty_native_borrow_accepted"])
-            self.assertFalse(receipt["ordered_fifty_host_persistence_accepted"])
             self.assertTrue(receipt["reference_tls_close"]["accepted"])
             self.assertTrue(receipt["reference_tls_close_control"]["accepted"])
             self.assertTrue(receipt["reference_tcp_close"]["accepted"])
@@ -216,24 +239,41 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
             self.assertFalse(receipt["native_mtu_continuation_accepted"])
             self.assertFalse(receipt["native_mtu_constructor_accepted"])
             self.assertFalse(receipt["typed_connect_fifty_sample_benchmark_accepted"])
+            self.assertTrue(receipt["ordered_fifty_native_borrow_accepted"])
+            self.assertEqual([row["mode"] for row in receipt["ordered_fifty_records"]],list(V.FIFTY.MODES))
+            self.assertEqual([row["name"] for row in receipt["ordered_fifty_controls"]],[value["name"] for value in V.FIFTY.CONTROLS])
+            self.assertFalse(receipt["ordered_fifty_host_persistence_accepted"])
             self.assertEqual(json.loads((c.output/"receipt.json").read_text()),receipt)
             for name,command,_,_,_ in c.calls:
-                if name.endswith("-build") or name in {v["name"] for v in V.CONTROLS}:
+                if name.endswith("-build") or name in {v["name"] for v in (*V.CONTROLS,*V.FIFTY.CONTROLS,V.LIFETIME.CONTROL)}:
                     self.assertIn("-race",command);self.assertIn("-p=1",command)
-                if name.startswith("run-"):self.assertIn("-test.timeout=180s",command)
-                if name in {v["name"] for v in V.CONTROLS}:self.assertIn("-timeout=180s",command)
+                if name.startswith("run-") or name in {"fifty-"+value for value in V.FIFTY.MODES}:self.assertIn("-test.timeout=180s",command)
+                if name in {v["name"] for v in (*V.CONTROLS,*V.FIFTY.CONTROLS)}:self.assertIn("-timeout=180s",command)
                 if name=="original-imported-middle":self.assertIn("-test.timeout=90s",command)
+                if name=="reference-established-positive":self.assertIn("-test.timeout=45s",command)
+                if name==V.LIFETIME.CONTROL["name"]:self.assertIn("-timeout=45s",command)
     def test_no_failed_missing_or_unjoined_phase_can_publish_acceptance(self):
-        for fault in ("lifetime-positive-missing","lifetime-positive-failed","lifetime-negative-pass","lifetime-negative-witness",
-                      "preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
+        for fault in ("preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
                       "reference-missing","reference-control-pass","reference-control-witness","reference-unjoined",
                       "tcp-reference-missing","tcp-reference-control-pass","tcp-reference-control-witness","tcp-reference-unjoined",
                       "packet-reference-control-pass","packet-reference-control-witness","packet-reference-unjoined",
+                      "lifetime-positive-missing","lifetime-positive-failed","lifetime-positive-timeout","lifetime-positive-unjoined",
+                      "lifetime-negative-pass","lifetime-negative-witness","lifetime-negative-timeout","lifetime-negative-unjoined",
                       "control-pass","control-signal","control-panic","control-witness","candidate-changed","owner-changed",
-                      "mobile-changed","image-changed","selection-changed","timeout","unjoined"):
+                      "mobile-changed","image-changed","selection-changed","timeout","unjoined",
+                      "fifty-check-missing","fifty-case-failed","fifty-timeout","fifty-unjoined",
+                      "fifty-control-pass","fifty-control-signal","fifty-control-panic","fifty-control-witness","fifty-control-timeout","fifty-control-unjoined",
+                      "fifty-candidate-changed","fifty-owner-changed","fifty-mobile-changed","fifty-image-changed","fifty-selection-changed"):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
                 c=Composition(Path(directory),fault)
                 with self.assertRaises((ValueError,RuntimeError)):c.run()
+                self.assertFalse((c.output/"receipt.json").exists())
+                self.assertEqual(json.loads((c.output/"progress.json").read_text())["status"],"failed")
+    def test_each_additive_fifty_mode_and_control_requires_its_terminal(self):
+        for name in ["fifty-"+mode for mode in V.FIFTY.MODES]+[control["name"] for control in V.FIFTY.CONTROLS]:
+            with self.subTest(phase=name),tempfile.TemporaryDirectory() as directory:
+                c=Composition(Path(directory),("fifty-phase-terminal",name))
+                with self.assertRaises(ValueError):c.run()
                 self.assertFalse((c.output/"receipt.json").exists())
                 self.assertEqual(json.loads((c.output/"progress.json").read_text())["status"],"failed")
     def test_exact_source_selection_precedes_preparation(self):
@@ -272,7 +312,7 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
         bad=encoded(reference_rows(True)).replace(V.REFERENCE_CONTROL["witness"].encode(),b"unrelated failure")
         with self.assertRaises(ValueError):V.reference_events(bad,1,True)
     def test_each_control_requires_one_exact_original_anchor(self):
-        for control in (*V.CONTROLS,V.REFERENCE_CONTROL,V.REFERENCE_TCP_CONTROL,V.REFERENCE_PACKET_CONTROL):
+        for control in (*V.CONTROLS,V.REFERENCE_CONTROL,V.REFERENCE_TCP_CONTROL,V.REFERENCE_PACKET_CONTROL,V.LIFETIME.CONTROL):
             original="before\n"+control["before"]+"\nafter"
             self.assertNotEqual(V.BASE.mutate(control,original),original)
             for text in ("foreign",original+original):
@@ -280,8 +320,9 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
     def test_causal_anchors_exist_in_original_shipping_templates(self):
         sources={"routervpn_node_chain_connect.go":"mobile/chain/connect_box.go.tmpl",
                  "experimental/libbox/routervpn_node_chain_connect_lifecycle.go":"mobile/chain/connect_lifecycle.go.tmpl",
-                 "experimental/libbox/routervpn/mobilemultihop/node_chain_runtime.go":"internal/mobilemultihop/node_chain_runtime.go",V.PEER_PROJECTION:V.PEER_TEMPLATE}
-        for control in (*V.CONTROLS,V.REFERENCE_CONTROL,V.REFERENCE_TCP_CONTROL,V.REFERENCE_PACKET_CONTROL):
+                 "experimental/libbox/routervpn/mobilemultihop/node_chain_runtime.go":"internal/mobilemultihop/node_chain_runtime.go",V.PEER_PROJECTION:V.PEER_TEMPLATE,
+                 V.LIFETIME.CONTROL["path"]:"mobile/amnezia/desktop_reference_test.go.tmpl"}
+        for control in (*V.CONTROLS,V.REFERENCE_CONTROL,V.REFERENCE_TCP_CONTROL,V.REFERENCE_PACKET_CONTROL,V.LIFETIME.CONTROL):
             with self.subTest(control=control["name"]):
                 original=(ROOT/sources[control["path"]]).read_text()
                 self.assertEqual(original.count(control["before"]),1)
