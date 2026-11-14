@@ -27,6 +27,7 @@ type routerVPNNodeSOCKSConstruction struct {
 	digest string
 	mu sync.Mutex
 	attempted bool
+	box *Box
 }
 
 // RouterVPNNodeSOCKSContext binds one caller-local factory to the complete
@@ -72,6 +73,51 @@ func (c *routerVPNNodeSOCKSConstruction) require(ctx, native context.Context,
 		return errors.New("ordered SOCKS construction source changed")
 	}
 	return ctx.Err()
+}
+
+// The exact constructor return binds the acquired Box without another fallible
+// acquisition step. Original options/factory guards already claimed this
+// construction once. The binding is separate from readiness and native DOWN.
+func routerVPNNodeSOCKSBind(s *Box) *Box {
+	if s == nil || s.ctx == nil {
+		return s
+	}
+	original, ok := s.ctx.Value(routerVPNNodeSOCKSContextKey{}).(*routerVPNNodeSOCKSConstruction)
+	if !ok || original == nil {
+		return s
+	}
+	original.mu.Lock()
+	if original.box == nil {
+		original.box = s
+	}
+	original.mu.Unlock()
+	// Bind the existing receipt before the Box can escape to a copied value.
+	s.RouterVPNCaptureCloseReceipt()
+	return s
+}
+
+// RouterVPNCloseSOCKSMiddle runs before Instance cancellation and before direct
+// Box endpoint retirement. It shares the exact captured Outbound.Close result;
+// it is not a native close receipt and cannot establish Ready or DOWN.
+func (s *Box) RouterVPNCloseSOCKSMiddle() error {
+	if s == nil {
+		return errors.New("ordered SOCKS close has no original Box")
+	}
+	if s.ctx == nil || s.ctx.Value(routerVPNNodeSOCKSContextKey{}) == nil {
+		return nil
+	}
+	original, ok := s.ctx.Value(routerVPNNodeSOCKSContextKey{}).(*routerVPNNodeSOCKSConstruction)
+	if !ok || original == nil {
+		return errors.New("ordered SOCKS close has a foreign construction")
+	}
+	original.mu.Lock()
+	valid := original.box == s && original.attempted && original.capture != nil
+	capture := original.capture
+	original.mu.Unlock()
+	if !valid {
+		return errors.New("ordered SOCKS close lost its original constructed Box")
+	}
+	return capture.CloseOriginal()
 }
 
 // Called at the original Box.New boundary, before managers, inbounds or any

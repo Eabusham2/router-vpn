@@ -28,7 +28,7 @@ func New(options Options) (*Box, error) {
     preserveExistingPreparation()
 \treturn &Box{
         unrelated: "original",
-    }, nil
+\t}, nil
 }
 '''
 NETWORK = '''package route
@@ -111,7 +111,7 @@ class NodeChainPreparation(unittest.TestCase):
         for anchor, owned in (
             ('type Box struct {\n', '\trouterVPNExternalOptions string\n\trouterVPNTorOptions string\n\trouterVPNNodeOptions string\n'),
             ('func New(options Options) (*Box, error) {\n', '\texternalOptionsDigest := routerVPNExternalOptionsDigest(options.Context, options.Options)\n\ttorOptionsSnapshot := routerVPNTorOptionsSnapshot(options.Context, options.Options)\n\tnodeOptionsDigest := routerVPNNodeOptionsDigest(options.Context, options.Options)\n'),
-            ('\treturn &Box{\n', '\t\trouterVPNExternalOptions: externalOptionsDigest,\n\t\trouterVPNTorOptions: torOptionsSnapshot,\n\t\trouterVPNNodeOptions: nodeOptionsDigest,\n')):
+            ('\treturn routerVPNNodeSOCKSBind(&Box{\n', '\t\trouterVPNExternalOptions: externalOptionsDigest,\n\t\trouterVPNTorOptions: torOptionsSnapshot,\n\t\trouterVPNNodeOptions: nodeOptionsDigest,\n')):
             source = source.replace(anchor, anchor+owned)
         self.assertEqual(PREP.box_source(source).decode(), source)
         for fault in (source.replace('type Box struct {\n', 'type Box struct {\n\tforeign string\n'),
@@ -164,6 +164,48 @@ class NodeChainPreparation(unittest.TestCase):
                 self.assertNotEqual(changed, source)
                 with self.assertRaises(ValueError):
                     PREP.box_source(changed)
+
+    def test_acquired_box_binding_is_exact_infallible_and_idempotent(self):
+        source = PREP.box_source(BOX).decode()
+        self.assertEqual(source.count('return routerVPNNodeSOCKSBind(&Box{'), 1)
+        self.assertEqual(PREP.box_source(source).decode(), source)
+        plain = PREP.box_close_binding(source, bind=False)
+        self.assertIn('return &Box{', plain)
+        self.assertEqual(PREP.box_close_binding(plain, bind=True), source)
+        self.assertIn('return s', (ROOT/'mobile/chain/socks_box.go.tmpl').read_text())
+        for changed in (
+            source.replace('routerVPNNodeSOCKSBind', 'foreignBind'),
+            source.replace('routerVPNNodeSOCKSBind(&Box{', 'routerVPNNodeSOCKSBind(other('),
+            source.replace('\t}), nil\n}', '\t}, nil\n}'),
+            source + '\n// routerVPNNodeSOCKSBind\n',
+        ):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(changed, source)
+                with self.assertRaises(ValueError):
+                    PREP.box_source(changed)
+
+    def test_acquired_box_binding_preserves_external_snapshot_order(self):
+        spec = importlib.util.spec_from_file_location('preclose_external', ROOT/'deploy/prepare-mobile-external-policy.py')
+        external = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(external)
+        with tempfile.TemporaryDirectory() as directory:
+            vendor = self.vendor(directory)
+            # Only the external Box projection executes; its unchanged later
+            # selected-runtime source stage is stopped at the explicit boundary.
+            class ProjectionFinished(Exception): pass
+            def finish(_vendor): raise ProjectionFinished()
+            for starting in (BOX, PREP.box_source(BOX).decode()):
+                (vendor/'box.go').write_text(starting)
+                with (
+                    patch.object(external.subprocess, 'check_output', return_value=external.PIN+'\n'),
+                    patch.object(external, 'selection_sources', side_effect=finish),
+                ):
+                    with self.assertRaises(ProjectionFinished):
+                        external.prepare(vendor)
+                projected = PREP.box_source((vendor/'box.go').read_text()).decode()
+                self.assertEqual(projected.count('routerVPNNodeSOCKSBind'), 1)
+                self.assertEqual(projected.count('routerVPNExternalOptions: externalOptionsDigest'), 1)
+                self.assertEqual(PREP.box_source(projected).decode(), projected)
 
     def test_source_tampering_and_foreign_ownership_are_rejected_before_mutation(self):
         for fault in ('owned-source', 'foreign-owner', 'unowned-source', 'linked-source', 'linked-parent', 'wrong-pin'):
@@ -285,7 +327,7 @@ class NodeChainPreparation(unittest.TestCase):
                 continue
             package = './'+str(Path(relative).parent) if '/' in relative else '.'
             roots.setdefault(package, []).extend(re.findall(r'^func (Test\w+)\(', (ROOT/'mobile/chain'/template).read_text(), re.M))
-        self.assertEqual({'.', './route', './experimental/libbox'}, set(roots))
+        self.assertEqual({'.', './route', './experimental/libbox', './protocol/routervpnnodesocks'}, set(roots))
         for relative in ('android/build-sing-box-libbox.sh', 'ios/RouterVPN/prepare-libbox.sh'):
             commands = [shlex.split(line) for line in (ROOT/relative).read_text().splitlines()
                         if re.match(r'\s*(?:go|go_retry) test ', line)]

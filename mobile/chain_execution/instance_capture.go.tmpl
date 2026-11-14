@@ -77,6 +77,15 @@ func (c *RouterVPNInstanceCloseCapture) routerVPNCompleteInstanceCapture(instanc
 	c.boxAttempted = boxAttempted
 	if instance != nil {
 		c.original = instance.Box()
+		// Bind the actual acquired Instance before it escapes to a copied value.
+		r := &instance.routerVPNCloseReceipt
+		r.mu.Lock()
+		if r.owner != nil && r.owner != instance || r.original != nil && r.original != c.original {
+			c.failure = errors.Join(c.failure, errRouterVPNInstanceCapture)
+		} else {
+			r.owner, r.original = instance, c.original
+		}
+		r.mu.Unlock()
 	}
 	close(c.done)
 }

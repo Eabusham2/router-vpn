@@ -12,6 +12,7 @@ PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-node-chain-source.json'
 TEMPLATES = {
     'socks_owner.go.tmpl': 'protocol/routervpnnodesocks/socks_owner.go',
+    'socks_owner_close_test.go.tmpl': 'protocol/routervpnnodesocks/socks_owner_close_test.go',
     'socks_scope.go.tmpl': 'protocol/routervpnnodesocks/socks_scope.go',
     'socks_box.go.tmpl': 'routervpn_node_chain_socks.go',
     'socks_mtu_box.go.tmpl': 'routervpn_node_chain_socks_mtu.go',
@@ -26,6 +27,8 @@ TEMPLATES = {
     'socks_lifecycle_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_lifecycle_test.go',
     'socks_measurement_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_measurement_test.go',
     'socks_native_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_native_test.go',
+    'socks_close_native_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_close_test.go',
+    'socks_run_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_run_test.go',
     'candidate_preparation.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation.go',
     'candidate_preparation_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation_test.go',
     'box.go.tmpl': 'routervpn_node_chain.go',
@@ -67,8 +70,35 @@ def replace_owned(source, before, after, count=1):
     return source.replace(before, after)
 
 
+def box_close_binding(source, *, bind):
+    """Only the complete exact constructor-return wrapper may coexist."""
+    plain = '\treturn &Box{\n'
+    bound = '\treturn routerVPNNodeSOCKSBind(&Box{\n'
+    plain_tail = '\n\t}, nil\n}'
+    bound_tail = '\n\t}), nil\n}'
+    if 'routerVPNNodeSOCKSBind' in source:
+        if source.count(bound) != 1 or source.count('routerVPNNodeSOCKSBind') != 1:
+            raise ValueError('ordered SOCKS acquired Box binding changed')
+        start = source.index(bound)
+        end = source.find(bound_tail, start)
+        if end < 0 or source.find('\nfunc ', start, end) != -1:
+            raise ValueError('ordered SOCKS acquired Box binding tail changed')
+        source = source[:end]+source[end:].replace(bound_tail, plain_tail, 1)
+        source = source.replace(bound, plain, 1)
+    if not bind:
+        return source
+    if source.count(plain) != 1:
+        raise ValueError('ordered SOCKS acquired Box constructor changed')
+    start = source.index(plain)
+    end = source.find(plain_tail, start)
+    if end < 0 or source.find('\nfunc ', start, end) != -1:
+        raise ValueError('ordered SOCKS acquired Box constructor tail changed')
+    source = source[:end]+source[end:].replace(plain_tail, bound_tail, 1)
+    return source.replace(plain, bound, 1)
+
+
 def box_source(source):
-    source = source.replace('\r\n', '\n')
+    source = box_close_binding(source.replace('\r\n', '\n'), bind=False)
     for before, added, neighbors in (
         ('type Box struct {\n', '\trouterVPNNodeChainOptions string\n',
          ('\trouterVPNExternalOptions string\n', '\trouterVPNTorOptions string\n', '\trouterVPNNodeOptions string\n')),
@@ -111,7 +141,7 @@ def box_source(source):
         source = source.replace(anchor, anchor+guard, 1)
     if source.count('routerVPNNodeChainOptions') != 3 or source.count('chainOptionsDigest') != 2:
         raise ValueError('unexpected ordered native graph snapshot')
-    return source.encode()
+    return box_close_binding(source, bind=True).encode()
 
 
 def command_source(vendor, source):

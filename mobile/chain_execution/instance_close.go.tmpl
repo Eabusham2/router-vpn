@@ -15,12 +15,17 @@ type routerVPNInstanceCloseReceipt struct {
 	mu       sync.Mutex
 	done     chan struct{}
 	original *box.Box
+	owner    *Instance
 	result   error
 }
 
 func (i *Instance) routerVPNCloseOriginal(closeOriginal func() error) error {
 	r := &i.routerVPNCloseReceipt
 	r.mu.Lock()
+	if r.owner != nil && r.owner != i || r.original != nil && r.original != i.instance {
+		r.mu.Unlock()
+		return errors.New("original native Instance close owner changed")
+	}
 	if r.done != nil {
 		done := r.done
 		r.mu.Unlock()
@@ -30,10 +35,14 @@ func (i *Instance) routerVPNCloseOriginal(closeOriginal func() error) error {
 		r.mu.Unlock()
 		return result
 	}
-	r.done, r.original = make(chan struct{}), i.instance
+	r.done, r.original, r.owner = make(chan struct{}), i.instance, i
 	done := r.done
 	r.mu.Unlock()
+	preclose := i.instance.RouterVPNCloseSOCKSMiddle()
 	result := closeOriginal()
+	if preclose != nil {
+		result = errors.Join(preclose, result)
+	}
 	r.mu.Lock()
 	r.result = result
 	close(done)
@@ -47,9 +56,9 @@ func (i *Instance) RouterVPNClosedContext(ctx context.Context, original *box.Box
 	}
 	r := &i.routerVPNCloseReceipt
 	r.mu.Lock()
-	done, captured := r.done, r.original
+	done, captured, owner := r.done, r.original, r.owner
 	r.mu.Unlock()
-	if done == nil || captured != original {
+	if done == nil || captured != original || owner != i {
 		return errors.New("original native close has not joined")
 	}
 	select {
@@ -59,7 +68,7 @@ func (i *Instance) RouterVPNClosedContext(ctx context.Context, original *box.Box
 	}
 	r.mu.Lock()
 	result := r.result
-	valid := r.done == done && r.original == original && i.instance == original
+	valid := r.done == done && r.original == original && r.owner == i && i.instance == original
 	r.mu.Unlock()
 	if !valid {
 		return errors.New("original native close receipt was replaced")

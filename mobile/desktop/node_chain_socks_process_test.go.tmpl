@@ -1,0 +1,231 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+ "bufio"
+ "bytes"
+ "context"
+ "crypto/ecdh"
+ "crypto/rand"
+ "crypto/sha256"
+ "encoding/base64"
+ "encoding/hex"
+ "encoding/json"
+ "errors"
+ "fmt"
+ "io"
+ "net"
+ "net/http"
+ "net/netip"
+ "os"
+ "strconv"
+ "strings"
+ "sync/atomic"
+ "testing"
+ "time"
+
+ "github.com/miekg/dns"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+ "github.com/sagernet/sing-tun"
+ M "github.com/sagernet/sing/common/metadata"
+ N "github.com/sagernet/sing/common/network"
+)
+
+// The separate process reuses the original peer providers. Its only client
+// input is a finite mode/fault choice; it cannot proxy an arbitrary target.
+type nodeSOCKSRunRequest struct {
+ Schema int `json:"schema"`
+ Mode string `json:"mode"`
+ Fault string `json:"fault"`
+}
+type nodeSOCKSRunReply struct {
+ Schema int `json:"schema"`
+ Source string `json:"source,omitempty"`
+ SourceSHA256 string `json:"source_sha256"`
+ ConfigSHA256 string `json:"config_sha256"`
+ Address string `json:"address"`
+ PublicCA string `json:"public_ca,omitempty"`
+ Peer desktopNodeChainImportedReply `json:"peer"`
+ DNS uint64 `json:"dns"`
+ PublicDNS uint64 `json:"public_dns"`
+ FinalAuth uint64 `json:"final_auth"`
+ HeldProofs uint64 `json:"held_proofs"`
+ Associations int `json:"associations"`
+}
+type nodeSOCKSRunPrefix struct {
+ *nodeSOCKSPrefixHandler
+ first string
+}
+func(h *nodeSOCKSRunPrefix) JudgeFlow(protocol uint8, source,destination netip.AddrPort, packet []byte)tun.FlowVerdict{
+ if protocol==6&&destination.String()==h.first{return tun.FlowVerdict{Action:tun.ActionAccept}}
+ if h.server==nil||h.relays==nil{return tun.FlowVerdict{Action:tun.ActionReject}}
+ return h.nodeSOCKSPrefixHandler.JudgeFlow(protocol,source,destination,packet)
+}
+func(h *nodeSOCKSRunPrefix) NewConnectionEx(ctx context.Context,c net.Conn,source,destination M.Socksaddr,done N.CloseHandlerFunc){
+ if destination.String()==h.first{
+  h.original.NewConnectionEx(ctx,c,source,destination,done);return
+ }
+ h.nodeSOCKSPrefixHandler.NewConnectionEx(ctx,c,source,destination,done)
+}
+
+func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
+ if os.Getenv("ROUTERVPN_SOCKS_RUN_REFERENCE")==""{t.Skip("isolated inherited SOCKS Run peer only")}
+ if os.Getenv("ROUTERVPN_SOCKS_RUN_REFERENCE")!="1"{t.Fatal("SOCKS Run peer requires original inherited invocation")}
+ reader:=bufio.NewReaderSize(os.Stdin,4097)
+ line,err:=reader.ReadSlice('\n')
+ if err!=nil||len(line)>4096{t.Fatal("bounded original SOCKS Run request missing")}
+ var input nodeSOCKSRunRequest
+ decoder:=json.NewDecoder(bytes.NewReader(line));decoder.DisallowUnknownFields()
+ if decoder.Decode(&input)!=nil||decoder.Decode(new(any))!=io.EOF||input.Schema!=1{t.Fatal("SOCKS Run request changed")}
+ if input.Mode!="wg"&&input.Mode!="awg2-fast"&&input.Mode!="awg2-strong"{t.Fatal("uncaptured SOCKS Run mode")}
+ switch input.Fault{case "", "middle-password","final-token","selected-dns","middle-public","hold-prefix":default:t.Fatal("uncaptured SOCKS Run fault")}
+ // Registered first: this is emitted only after every original provider,
+ // packet reader, association and HTTP/DNS server cleanup has returned.
+ t.Cleanup(func(){if !t.Failed(){fmt.Fprintln(os.Stdout,"SOCKS_RUN_PEER_JOINED")}})
+ request,clients:=desktopNodeChainPeerFixture(t,1)
+ desktopNodeChainSetModes(t,&request,[]string{input.Mode})
+ finalKey,err:=ecdh.X25519().GenerateKey(rand.Reader);if err!=nil{t.Fatal(err)}
+ finalPublic:=base64.StdEncoding.EncodeToString(finalKey.PublicKey().Bytes())
+ proof:=sha256.Sum256([]byte("router-vpn-node-proof-v1\n"+finalPublic))
+ request.FinalNodeProofID=hex.EncodeToString(proof[:])
+ identity:=desktopNodeChainJSON(t,map[string]string{"wg.conf":base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf(
+  "[Interface]\nAddress=10.77.0.2/32\nPrivateKey=%s\nMTU=1420\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n",clients[0],finalPublic)))})
+ const control="10.79.0.1:1080"
+ const password="captured-socks-run-password"
+ var handler *nodeSOCKSRunPrefix
+ var relays *desktopImportedSOCKSLayerRoutes
+ hooks:=&desktopNodeChainImportedPeerHooks{
+  decorate:func(original *desktopNodeWGHandler)tun.Handler{
+   handler=&nodeSOCKSRunPrefix{nodeSOCKSPrefixHandler:&nodeSOCKSPrefixHandler{original:original,control:control},first:"10.78.0.1:8787"}
+   return handler
+  },
+  middle:func(middle *desktopNodeLayerServer)desktopExternalInstalledSSPeer{
+   provider,socks:=desktopStartImportedSOCKSProvider(t,middle,password,"")
+   ctx,cancel:=context.WithCancel(context.Background())
+   relays=&desktopImportedSOCKSLayerRoutes{parent:ctx,control:provider.address,private:"10.79.0.1",leases:map[string]*desktopImportedSOCKSRelayLease{},physical:map[string]string{}}
+   socks.mu.Lock();socks.entryRelay=relays.relay;socks.mu.Unlock()
+   server:=&desktopNodeLayerServer{ctx:ctx,cancel:cancel,connections:map[io.Closer]bool{},
+    routes:[]desktopNodeLayerRoute{{Network:"tcp",Destination:control,Physical:provider.address}},ownedUDP:relays.acquire}
+   handler.server,handler.relays=server,relays
+   t.Cleanup(func(){relays.close();nodeSOCKSCloseServer(server)})
+   return provider
+  },
+ }
+ middleKey:=base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73},32))
+ fixtureRequest:=desktopNodeChainImportedRequest{1,request,mobilemultihop.NativeStartLayerMethod,middleKey}
+ loopback:=netip.MustParseAddr("127.0.0.1")
+ peer:=desktopNodeChainImportedPeerStartWithHooks(t,fixtureRequest,loopback,loopback,nil,hooks)
+ // No obsolete SS-middle route is admitted by this captured SOCKS handler.
+ delete(peer.paired.entry.rules,"tcp/10.79.0.1:8388")
+ delete(peer.paired.entry.rules,"udp/10.79.0.1:8388")
+ var selectedQueries,publicQueries,finalAuth,heldProofs atomic.Uint64
+ var releaseHeld atomic.Bool
+ prefixRule:=peer.paired.entry.rules["tcp/10.78.0.1:8787"]
+ if prefixRule.Target==""{t.Fatal("original first private proof missing")}
+ // Require the exact final token before forwarding to the original final
+ // private service. Its original HTTP/body/proof implementation is reused.
+ finalTarget,ok:=peer.paired.final.route("tcp",desktopNodeRouterHealthTarget);if !ok{t.Fatal("original final private proof missing")}
+ forward:=func(target string)*http.Transport{
+  transport:=&http.Transport{Proxy:nil,DisableKeepAlives:true,ResponseHeaderTimeout:2*time.Second,
+   DialContext:func(ctx context.Context,network,address string)(net.Conn,error){
+    if network!="tcp"||address!=target{return nil,errors.New("reference proof escaped original target")}
+    return (&net.Dialer{}).DialContext(ctx,network,address)
+   }}
+  t.Cleanup(transport.CloseIdleConnections);return transport
+ }
+ serve:=func(w http.ResponseWriter,r *http.Request,target string,transport *http.Transport){
+  copy:=r.Clone(r.Context());copy.RequestURI="";copy.URL.Scheme="http";copy.URL.Host=target
+  response,err:=transport.RoundTrip(copy);if err!=nil{http.Error(w,"original proof unavailable",502);return}
+  defer response.Body.Close()
+  for key,values:=range response.Header{for _,value:=range values{w.Header().Add(key,value)}}
+  w.WriteHeader(response.StatusCode);_,_=io.Copy(w,io.LimitReader(response.Body,16<<20+1))
+ }
+ finalTransport:=forward(finalTarget)
+ finalHTTP:=desktopImportedWGSSHTTP(t,nil,http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  if r.Host!=desktopNodeRouterHealthTarget||r.Header.Get("Authorization")!="Bearer "+request.FinalAPIToken{
+   finalAuth.Add(1);http.Error(w,"forbidden",403);return
+  }
+  serve(w,r,finalTarget,finalTransport)
+ }))
+ firstTarget:=prefixRule.Target
+ firstTransport:=forward(firstTarget)
+ firstHTTP:=desktopImportedWGSSHTTP(t,nil,http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  if input.Fault=="hold-prefix"&&!releaseHeld.Load(){heldProofs.Add(1);<-r.Context().Done();return}
+  serve(w,r,firstTarget,firstTransport)
+ }))
+ prefixRule.Target=firstHTTP;peer.paired.entry.rules["tcp/10.78.0.1:8787"]=prefixRule
+ packet,err:=net.ListenPacket("udp4","127.0.0.1:0");if err!=nil{t.Fatal(err)}
+ dnsServer:=&dns.Server{PacketConn:packet,Handler:dns.HandlerFunc(func(w dns.ResponseWriter,q *dns.Msg){
+  reply:=new(dns.Msg).SetReply(q)
+  if len(q.Question)!=1{reply.Rcode=dns.RcodeRefused}else{
+   question:=q.Question[0]
+   address:=""
+   switch question.Name{
+   case "example.com.":selectedQueries.Add(1);address="93.184.216.34"
+   case "speed.cloudflare.com.":publicQueries.Add(1);address="1.1.1.1"
+   default:reply.Rcode=dns.RcodeRefused
+   }
+   if input.Fault=="selected-dns"{reply.Rcode=dns.RcodeNameError;address=""}
+   if address!=""&&question.Qtype==dns.TypeA{
+    reply.Answer=[]dns.RR{&dns.A{Hdr:dns.RR_Header{Name:question.Name,Rrtype:dns.TypeA,Class:dns.ClassINET,Ttl:0},A:net.ParseIP(address)}}
+   }
+  }
+  _=w.WriteMsg(reply)
+ })}
+ dnsDone:=make(chan error,1);go func(){dnsDone<-dnsServer.ActivateAndServe()}()
+ t.Cleanup(func(){_=dnsServer.Shutdown();_=packet.Close();if err:=<-dnsDone;err!=nil{t.Error(err)}})
+ for i:=range peer.paired.final.routes{
+  route:=&peer.paired.final.routes[i]
+  if route.Network=="tcp"&&route.Destination==desktopNodeRouterHealthTarget{route.Physical=finalHTTP}
+  if route.Network=="udp"&&route.Destination=="192.168.50.133:53"{route.Physical=packet.LocalAddr().String()}
+ }
+ // The measurement engine must use a public literal returned by this final
+ // resolver. The original middle HTTPS responder still checks its TLS/Host.
+ if mustSOCKSRunRoute(t,peer.middle,"tcp","1.1.1.1:443")!=mustSOCKSRunRoute(t,peer.middle,"tcp","speed.cloudflare.com:443"){t.Fatal("public literal and TLS hostname escaped original middle responder")}
+ if input.Fault=="middle-public"{peer.wrongPublic.Store(true)}
+ socket:=netip.MustParseAddrPort(peer.paired.address)
+ sourceRequest:=request
+ if input.Fault=="final-token"{sourceRequest.FinalAPIToken="different-final-private-token"}
+ base:=desktopNodeChainImportedSource(t,sourceRequest,clients,net.JoinHostPort(request.Address,strconv.Itoa(int(socket.Port()))),mobilemultihop.NativeStartLayerMethod,middleKey,identity)
+ launch,err:=base.LaunchInput();if err!=nil{t.Fatal(err)}
+ var source mobilemultihop.NodeChainSource
+ if json.Unmarshal([]byte(launch),&source)!=nil{t.Fatal("original captured source vanished")}
+ secret:=password;if input.Fault=="middle-password"{secret+="-wrong"}
+ memberConfig:=map[string]any{
+  "inbounds":[]any{map[string]any{"type":"tun","tag":"tun-in","interface_name":"router-vpn","address":[]string{"172.29.91.1/30","fd29:91::1/126"},"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}},
+  "endpoints":[]any{},"outbounds":[]any{map[string]any{"type":"socks","tag":"custom-exit","server":"10.79.0.1","server_port":1080,"version":"5","username":"captured-native-user","password":secret}},
+  "route":map[string]any{"final":"custom-exit","rules":[]any{},"auto_detect_interface":true}}
+ profile:=map[string]any{"id":"captured-socks-middle","node_kind":"external","external":map[string]any{"protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":map[string]any{"host":"10.79.0.1","port":1080,"username":"captured-native-user","password":secret}},
+  "endpoint":"10.79.0.1","dns_mode":"home","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":false,"kill_switch_policy":"on-connect"}
+ capture:=map[string]any{"schema":1,"exit_id":"captured-socks-middle","protocol":"socks5","expected_public_ip":"203.0.113.88","profile":profile}
+ middle,err:=mobilemultihop.NodeChainImportedSOCKSMemberInput(desktopNodeChainJSON(t,memberConfig),desktopNodeChainJSON(t,capture));if err!=nil{t.Fatal("original SOCKS member",err)}
+ source.Schema,source.Nodes[1]=3,middle
+ sealed,err:=mobilemultihop.NewNodeChainSOCKSSource(desktopNodeChainJSON(t,source));if err!=nil{t.Fatal("original typed Run source",err)}
+ _,meta,err:=sealed.ReadValidated();if err!=nil{t.Fatal(err)}
+ original,err:=sealed.Source();if err!=nil{t.Fatal(err)}
+ if meta.NativeAdmission!="closed"||len(meta.Physical)!=1||meta.DNS.ResolverTag==""{t.Fatal("peer source widened native admission")}
+ respond:=func(include bool){
+  relays.mu.Lock();associations:=len(relays.all);relays.mu.Unlock()
+  peerReply:=peer.snapshot();peerReply.Middle.Method="socks5"
+  reply:=nodeSOCKSRunReply{Schema:1,SourceSHA256:meta.SourceSHA256,ConfigSHA256:meta.ConfigSHA256,Address:peer.paired.address,
+   Peer:peerReply,DNS:selectedQueries.Load(),PublicDNS:publicQueries.Load(),FinalAuth:finalAuth.Load(),HeldProofs:heldProofs.Load(),Associations:associations}
+  if include{reply.Source=original;reply.PublicCA=peer.paired.ca}
+  if json.NewEncoder(os.Stdout).Encode(reply)!=nil{t.Fatal("original SOCKS Run response pipe")}
+ }
+ respond(true)
+ for{
+  line,err=reader.ReadSlice('\n')
+  if err!=nil||len(line)>64{t.Fatal("original SOCKS Run control pipe",err)}
+  command:=strings.TrimSuffix(string(line),"\n")
+  switch command{
+  case "snapshot":respond(false)
+  case "release-prefix":releaseHeld.Store(true);respond(false)
+  case "quit":return
+  default:t.Fatal("uncaptured SOCKS Run control")
+  }
+ }
+}
+func mustSOCKSRunRoute(t *testing.T,server *desktopNodeLayerServer,network,destination string)string{
+ t.Helper();result,ok:=server.route(network,destination);if !ok||result==""{t.Fatal("original peer route vanished")};return result
+}

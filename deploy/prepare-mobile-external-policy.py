@@ -87,10 +87,15 @@ def prepare(vendor, *, mobile=True):
     path=vendor/'box.go'
     if path.is_symlink():raise ValueError('linked native external policy boundary')
     source=path.read_text()
+    box_return = '\treturn &Box{\n'
+    if 'routerVPNNodeSOCKSBind' in source:
+        box_return = '\treturn routerVPNNodeSOCKSBind(&Box{\n'
+        if source.count(box_return) != 1 or source.count('routerVPNNodeSOCKSBind') != 1:
+            raise ValueError('native external configuration has a foreign acquired Box binding')
     for before,after in (
         ('type Box struct {\n','type Box struct {\n\trouterVPNExternalOptions string\n'),
         ('func New(options Options) (*Box, error) {\n','func New(options Options) (*Box, error) {\n\texternalOptionsDigest := routerVPNExternalOptionsDigest(options.Context, options.Options)\n'),
-        ('\treturn &Box{\n','\treturn &Box{\n\t\trouterVPNExternalOptions: externalOptionsDigest,\n'),
+        (box_return, box_return+'\t\trouterVPNExternalOptions: externalOptionsDigest,\n'),
         ('\trouterVPNExternalOptions string\n', '\trouterVPNExternalOptions string\n\trouterVPNTorOptions string\n'),
         ('\texternalOptionsDigest := routerVPNExternalOptionsDigest(options.Context, options.Options)\n', '\texternalOptionsDigest := routerVPNExternalOptionsDigest(options.Context, options.Options)\n\ttorOptionsSnapshot := routerVPNTorOptionsSnapshot(options.Context, options.Options)\n'),
         ('\t\trouterVPNExternalOptions: externalOptionsDigest,\n', '\t\trouterVPNExternalOptions: externalOptionsDigest,\n\t\trouterVPNTorOptions: torOptionsSnapshot,\n'),

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
@@ -21,6 +23,11 @@ import (
 )
 
 const operationLimit = 256
+
+// One native retirement budget covers every captured association.
+const controlCloseBudget = time.Second
+
+var errControlCloseUnproved = errors.New("original SOCKS control close lacks remote EOF")
 
 var errCapture = errors.New("ordered SOCKS owner lost its original source, position or native detour")
 
@@ -40,6 +47,8 @@ type Capture struct {
 	options option.SOCKSOutboundOptions
 	registered bool
 	claimed bool
+	retired bool
+	original *Outbound
 }
 
 func NewCapture(ctx context.Context, source *mobilemultihop.NodeChainSOCKSSource) (*Capture, error) {
@@ -109,7 +118,7 @@ func (c *Capture) Register(registry *outbound.Registry) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.registered || c.claimed {
+	if c.registered || c.claimed || c.retired {
 		return errCapture
 	}
 	c.registered = true
@@ -140,15 +149,34 @@ func (c *Capture) construct(ctx context.Context, _ adapter.Router, _ log.Context
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.registered || c.claimed || c.ctx.Err() != nil {
+	if !c.registered || c.claimed || c.retired || c.ctx.Err() != nil {
 		return nil, errCapture
 	}
 	c.claimed = true
-	return &Outbound{
+	original := &Outbound{
 		Adapter: outbound.NewAdapterWithDialerOptions("socks", tag, []string{"tcp", "udp"}, options.DialerOptions),
 		capture: c, ctx: ctx, manager: manager, control: options.ServerOptions.Build(),
 		operations: make(map[*operation]struct{}),
-	}, nil
+	}
+	c.original = original
+	return original, nil
+}
+
+// CloseOriginal seals the one factory and joins only its retained Outbound.
+// Cleanup does not require a live source/proof context, manager lookup or tag.
+// A late caller cannot reopen registration after this captured retirement.
+func (c *Capture) CloseOriginal() error {
+	if c == nil {
+		return errCapture
+	}
+	c.mu.Lock()
+	c.retired = true
+	original := c.original
+	c.mu.Unlock()
+	if original == nil {
+		return nil
+	}
+	return original.Close()
 }
 
 // Outbound owns every operation, including one already removed from a DNS pool
@@ -164,6 +192,7 @@ type Outbound struct {
 	lower adapter.Outbound
 	operations map[*operation]struct{}
 	closed bool
+	closeDeadline time.Time
 	closeOnce sync.Once
 	closeErr error
 }
@@ -246,6 +275,9 @@ func (o *Outbound) dial(ctx context.Context, network string, destination M.Socks
 	connection, failure := client.DialContext(operationCtx, network, destination)
 	op.mu.Lock()
 	op.result = connection
+	if failure == nil && connection != nil && network == "udp" && op.tcp != nil {
+		op.tcp.enableControlClose()
+	}
 	retired := op.retired
 	op.mu.Unlock()
 	if failure == nil && (connection == nil || retired || operationCtx.Err() != nil) {
@@ -279,12 +311,14 @@ func (o *Outbound) Close() error {
 	o.closeOnce.Do(func() {
 		o.mu.Lock()
 		o.closed = true
+		o.closeDeadline = time.Now().Add(controlCloseBudget)
+		deadline := o.closeDeadline
 		all := make([]*operation, 0, len(o.operations))
 		for op := range o.operations { all = append(all, op) }
 		o.mu.Unlock()
 		// Every retirement is started before waiting for an individual held
 		// reader. No sibling remains usable merely because another join waits.
-		for _, op := range all { op.retire() }
+		for _, op := range all { op.retireBefore(deadline) }
 		for _, op := range all { o.closeErr = errors.Join(o.closeErr, op.close()) }
 	})
 	return o.closeErr
@@ -302,17 +336,112 @@ type operation struct {
 	constructed, drained chan struct{}
 	closeOnce sync.Once
 	closeErr error
+	closeDeadline time.Time
 }
 
 type originalConn struct {
 	net.Conn
+	owner *Outbound
 	once sync.Once
 	err error
+	controlMu sync.Mutex
+	control bool
+	deadline time.Time
+	halfOnce sync.Once
+	halfErr error
+	readEOF chan struct{}
+	eofOnce sync.Once
+}
+
+// Capture the same original owner used by operation retirement. A concurrent
+// caller can see its published close deadline before the retirement pass reaches
+// this connection; no reconstructed owner or later per-connection budget is used.
+func newOriginalConn(owner *Outbound, raw net.Conn) *originalConn {
+	return &originalConn{Conn: raw, owner: owner, readEOF: make(chan struct{})}
+}
+
+func (c *originalConn) enableControlClose() {
+	c.controlMu.Lock()
+	c.control = true
+	c.controlMu.Unlock()
+}
+
+func (c *originalConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if errors.Is(err, io.EOF) && c.readEOF != nil {
+		c.eofOnce.Do(func() { close(c.readEOF) })
+	}
+	return n, err
+}
+
+func (c *originalConn) beginControlClose(deadline time.Time) bool {
+	c.controlMu.Lock()
+	if c.deadline.IsZero() || deadline.Before(c.deadline) { c.deadline = deadline }
+	control := c.control
+	c.controlMu.Unlock()
+	half, ok := c.Conn.(interface{ CloseWrite() error })
+	if !control || !ok { return false }
+	c.halfOnce.Do(func() { c.halfErr = half.CloseWrite() })
+	return true
 }
 
 func (c *originalConn) Close() error {
-	c.once.Do(func() { c.err = c.Conn.Close() })
+	c.once.Do(func() {
+		// Capture this attempt first. If the outbound starts later, its budget
+		// is later too; if it already started, retain its original deadline.
+		deadline := time.Now().Add(controlCloseBudget)
+		if c.owner != nil {
+			c.owner.mu.Lock()
+			if captured := c.owner.closeDeadline; !captured.IsZero() && captured.Before(deadline) {
+				deadline = captured
+			}
+			c.owner.mu.Unlock()
+		}
+		if c.beginControlClose(deadline) {
+			// A gVisor Close schedules FIN asynchronously. Keep the original
+			// lower alive until its existing control reader receives remote EOF.
+			// Outbound retirement starts all half-closes under one deadline.
+			if c.halfErr != nil {
+				c.err = errors.Join(c.err, c.halfErr)
+				select {
+				case <-c.readEOF:
+				default:
+					c.err = errors.Join(c.err, errControlCloseUnproved)
+				}
+			} else {
+				c.controlMu.Lock()
+				deadline := c.deadline
+				c.controlMu.Unlock()
+				c.err = errors.Join(c.err, c.joinControlEOF(deadline))
+			}
+		}
+		c.err = errors.Join(c.err, c.Conn.Close())
+	})
 	return c.err
+}
+
+func (c *originalConn) joinControlEOF(deadline time.Time) error {
+	// A completed original observation wins over an already expired budget.
+	// Without it, expiry still forces the raw close and retains the failure.
+	select {
+	case <-c.readEOF:
+		return nil
+	default:
+	}
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-c.readEOF:
+		return nil
+	case <-timer.C:
+		// The reader may have completed while this goroutine was descheduled.
+		select {
+		case <-c.readEOF:
+			return nil
+		default:
+			return context.DeadlineExceeded
+		}
+	}
 }
 
 func (s *operation) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
@@ -345,9 +474,12 @@ func (s *operation) DialContext(ctx context.Context, network string, address M.S
 	s.owner.mu.Unlock()
 	raw, failure := lower.DialContext(ctx, network, address)
 	var captured *originalConn
-	if raw != nil { captured = &originalConn{Conn: raw} }
+	if raw != nil { captured = newOriginalConn(s.owner, raw) }
 	s.mu.Lock()
-	if network == "tcp" { s.tcp = captured } else { s.udp = captured }
+	if network == "tcp" {
+		s.tcp = captured
+		if captured != nil && !s.closeDeadline.IsZero() { captured.beginControlClose(s.closeDeadline) }
+	} else { s.udp = captured }
 	valid = !s.retired && captured != nil && ctx.Err() == nil
 	s.mu.Unlock()
 	if failure == nil && (!valid || s.owner.current(ctx) != nil) {
@@ -364,11 +496,18 @@ func (*operation) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, er
 	return nil, errCapture
 }
 
-func (s *operation) retire() {
+func (s *operation) retire() { s.retireBefore(time.Time{}) }
+
+func (s *operation) retireBefore(deadline time.Time) {
 	s.mu.Lock()
 	s.retired = true
+	if !deadline.IsZero() && (s.closeDeadline.IsZero() || deadline.Before(s.closeDeadline)) {
+		s.closeDeadline = deadline
+	}
+	tcp := s.tcp
 	s.mu.Unlock()
 	s.cancel()
+	if tcp != nil && !deadline.IsZero() { tcp.beginControlClose(deadline) }
 }
 
 func (s *operation) close() error {

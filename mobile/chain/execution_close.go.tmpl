@@ -79,7 +79,11 @@ func (s *Box) Close() error {
 	state.started = true
 	state.mu.Unlock()
 	// Do not defer publication: a panic or abandoned close cannot prove join.
+	preclose := s.RouterVPNCloseSOCKSMiddle()
 	err := s.routerVPNCloseOriginal()
+	if preclose != nil {
+		err = errors.Join(preclose, err)
+	}
 	state.mu.Lock()
 	state.err = err
 	close(state.done)

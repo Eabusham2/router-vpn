@@ -325,31 +325,33 @@ class DesktopEncryptedPeerSourceCopies(unittest.TestCase):
                 self.assertEqual((self.vendor / relative).read_bytes(), (self.sources / name).read_bytes())
 
     def test_wg_and_awg_changed_platform_or_package_is_rejected_before_copy(self):
-        for name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl'):
+        for name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_chain_socks_process_test.go.tmpl'):
             source = self.sources / name
             original = source.read_bytes()
-            for modified in (
+            for index, modified in enumerate((
                     original.replace(b'linux && !android', b'linux'),
                     original.replace(b'linux && !android', b'windows'),
                     original.replace(b'//go:build linux && !android\n\n', b''),
-                    original.replace(b'package routervpnamnezia\n', b'package main\n')):
+                    original.replace(b'package routervpnamnezia\n', b'package main\n'))):
                 with self.subTest(name=name, prefix=modified.split(b'import', 1)[0]):
                     source.write_bytes(modified)
+                    vendor = self.vendor / name / str(index)
                     with self.assertRaisesRegex(ValueError, 'test-only package or platform: ' + name.removesuffix('.go.tmpl')):
-                        self.prep.copy_encrypted_peer_templates(self.vendor)
-                    self.assertFalse((self.vendor / self.prep.PEER_TEMPLATES[name]).exists())
+                        self.prep.copy_encrypted_peer_templates(vendor)
+                    self.assertFalse((vendor / self.prep.PEER_TEMPLATES[name]).exists())
             source.write_bytes(original)
 
     def test_wg_and_awg_source_symlink_cannot_enter_test_package(self):
-        for name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl'):
+        for name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_chain_socks_process_test.go.tmpl'):
             with self.subTest(name=name):
                 source = self.sources / name
                 other = self.sources / 'borrowed.go'
                 source.rename(other)
                 source.symlink_to(other)
+                vendor = self.vendor / name
                 with self.assertRaisesRegex(ValueError, 'peer test is a symlink: ' + name.removesuffix('.go.tmpl')):
-                    self.prep.copy_encrypted_peer_templates(self.vendor)
-                self.assertFalse((self.vendor / self.prep.PEER_TEMPLATES[name]).exists())
+                    self.prep.copy_encrypted_peer_templates(vendor)
+                self.assertFalse((vendor / self.prep.PEER_TEMPLATES[name]).exists())
                 source.unlink()
                 other.rename(source)
 

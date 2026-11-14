@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	M "github.com/sagernet/sing/common/metadata"
@@ -167,6 +168,16 @@ func desktopNodeChainImportedPeerStart(t *testing.T, request desktopNodeChainImp
 	return desktopNodeChainImportedPeerStartWithFactory(t, request, local, remote, nil)
 }
 func desktopNodeChainImportedPeerStartWithFactory(t *testing.T, request desktopNodeChainImportedRequest, local, remote netip.Addr, wrap func(desktopNodeUDPReferenceFactory) desktopNodeUDPReferenceFactory) *desktopNodeChainImportedPeer {
+	return desktopNodeChainImportedPeerStartWithHooks(t, request, local, remote, wrap, nil)
+}
+
+// These optional hooks select only test providers and packet-handler composition.
+// Every original caller retains the exact SS constructor and its original close.
+type desktopNodeChainImportedPeerHooks struct {
+	decorate func(*desktopNodeWGHandler) tun.Handler
+	middle func(*desktopNodeLayerServer) desktopExternalInstalledSSPeer
+}
+func desktopNodeChainImportedPeerStartWithHooks(t *testing.T, request desktopNodeChainImportedRequest, local, remote netip.Addr, wrap func(desktopNodeUDPReferenceFactory) desktopNodeUDPReferenceFactory, hooks *desktopNodeChainImportedPeerHooks) *desktopNodeChainImportedPeer {
 	t.Helper()
 	if err := desktopNodeChainImportedRequestValid(request); err != nil {
 		t.Fatal(err)
@@ -178,7 +189,12 @@ func desktopNodeChainImportedPeerStartWithFactory(t *testing.T, request desktopN
 	if wrap != nil {
 		factory = wrap(factory)
 	}
-	p.paired = desktopImportedWGSSStartWithFactory(t, desktopImportedWGSSRequest{Schema: 1, Address: r.Address, ClientAddress: r.ClientAddress, PrivateKey: prefix.PrivateKey, ClientPublicKey: prefix.ClientPublicKey, PreSharedKey: prefix.PreSharedKey, FinalPassword: r.FinalPassword, NodeProofID: r.FinalNodeProofID, Token: r.FinalAPIToken, Cover: true}, local, remote, factory)
+	var decorators []func(*desktopNodeWGHandler) tun.Handler
+	if hooks != nil {
+		if hooks.decorate == nil || hooks.middle == nil { t.Fatal("partial imported reference provider hooks") }
+		decorators = append(decorators, hooks.decorate)
+	}
+	p.paired = desktopImportedWGSSStartWithFactory(t, desktopImportedWGSSRequest{Schema: 1, Address: r.Address, ClientAddress: r.ClientAddress, PrivateKey: prefix.PrivateKey, ClientPublicKey: prefix.ClientPublicKey, PreSharedKey: prefix.PreSharedKey, FinalPassword: r.FinalPassword, NodeProofID: r.FinalNodeProofID, Token: r.FinalAPIToken, Cover: true}, local, remote, factory, decorators...)
 	peer := p.paired
 	if r.BenchmarkPort != 0 {
 		p.benchmark = desktopNodeChainBenchmarkStart(t, r.BenchmarkPort)
@@ -290,7 +306,12 @@ func desktopNodeChainImportedPeerStartWithFactory(t *testing.T, request desktopN
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	p.middle = &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8388", Physical: finalAddress}, {Network: "udp", Destination: "10.77.0.1:8388", Physical: finalAddress}, {Network: "tcp", Destination: "1.1.1.1:443", Physical: middlePublic}, {Network: "tcp", Destination: "speed.cloudflare.com:443", Physical: middlePublic}}}
-	p.provider = desktopStartSSProvider(t, p.middle, request.MiddleMethod, request.MiddlePassword, netip.MustParseAddr("127.0.0.1"))
+	if hooks == nil {
+		p.provider = desktopStartSSProvider(t, p.middle, request.MiddleMethod, request.MiddlePassword, netip.MustParseAddr("127.0.0.1"))
+	} else {
+		p.provider = hooks.middle(p.middle)
+		if p.provider.address == "" || p.provider.close == nil { t.Fatal("selected reference provider lost owned endpoint or close") }
+	}
 	delete(peer.entry.rules, "tcp/10.77.0.1:8388")
 	delete(peer.entry.rules, "udp/10.77.0.1:8388")
 	delete(peer.entry.rules, "tcp/1.1.1.1:443")

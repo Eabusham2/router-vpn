@@ -1,0 +1,249 @@
+package libbox
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/include"
+	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+// The original typed factory, native managers, SOCKS client association,
+// daemon Instance and Box.Close execute. Only the packet-prefix sockets are
+// finite in-memory transports; the held original control Close exposes order.
+type socksPrecloseControl struct {
+	net.Conn
+	entered, release chan struct{}
+	once sync.Once
+	calls atomic.Int32
+	failure, result error
+}
+func (c *socksPrecloseControl) Close() error {
+	c.once.Do(func() {
+		c.calls.Add(1)
+		close(c.entered)
+		<-c.release
+		c.result = errors.Join(c.Conn.Close(), c.failure)
+	})
+	return c.result
+}
+
+func socksPrecloseAssociation(t *testing.T, f *socksBridgeNativeFixture) (*socksPrecloseControl, func()) {
+	t.Helper()
+	_, meta, err := f.owner.source.ReadValidated()
+	if err != nil { t.Fatal(err) }
+	raw, found := f.box.Outbound().Outbound(meta.Proofs[1].Tag)
+	middle, ok := raw.(*ownedSOCKS.Outbound)
+	if !found || !ok || middle == nil { t.Fatal("original constructed SOCKS owner absent") }
+	client, server := net.Pipe()
+	udp, remoteUDP := net.Pipe()
+	control := &socksPrecloseControl{Conn:client, entered:make(chan struct{}), release:make(chan struct{})}
+	var release sync.Once
+	unblock := func() { release.Do(func(){close(control.release)}) }
+	handshake := make(chan error, 1)
+	go func() {
+		defer server.Close()
+		reader := bufio.NewReader(server)
+		request, err := socks5.ReadAuthRequest(reader)
+		if err != nil { handshake <- err; return }
+		if len(request.Methods) != 1 { handshake <- errors.New("original SOCKS auth method missing"); return }
+		method := request.Methods[0]
+		if method != socks5.AuthTypeUsernamePassword && method != socks5.AuthTypeNotRequired {
+			handshake <- errors.New("original SOCKS auth method changed"); return
+		}
+		if err = socks5.WriteAuthResponse(server, socks5.AuthResponse{Method:method}); err != nil {
+			handshake <- err; return
+		}
+		if method == socks5.AuthTypeUsernamePassword {
+			credentials, e := socks5.ReadUsernamePasswordAuthRequest(reader)
+			if e != nil || credentials.Username == "" || credentials.Password == "" {
+				handshake <- errors.New("original SOCKS credential exchange missing"); return
+			}
+			if err = socks5.WriteUsernamePasswordAuthResponse(server, socks5.UsernamePasswordAuthResponse{Status:socks5.UsernamePasswordStatusSuccess}); err != nil {
+				handshake <- err; return
+			}
+		}
+		association, e := socks5.ReadRequest(reader)
+		if e != nil || association.Command != socks5.CommandUDPAssociate {
+			handshake <- errors.New("original SOCKS UDP association missing"); return
+		}
+		if err = socks5.WriteResponse(server, socks5.Response{ReplyCode:socks5.ReplyCodeSuccess, Bind:M.ParseSocksaddr("192.0.2.60:18081")}); err != nil {
+			handshake <- err; return
+		}
+		var unexpected [1]byte
+		_, err = reader.Read(unexpected[:])
+		if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+			handshake <- errors.New("original SOCKS control did not terminate"); return
+		}
+		handshake <- nil
+	}()
+	f.prefix.mu.Lock()
+	f.prefix.dial = func(ctx context.Context, network string, destination M.Socksaddr)(net.Conn,error) {
+		if err := ctx.Err(); err != nil { return nil, err }
+		switch network {
+		case "tcp": return control,nil
+		case "udp":
+			if destination.String() != "192.0.2.60:18081" { return nil,errors.New("foreign negotiated relay") }
+			return udp,nil
+		}
+		return nil,errors.New("foreign original prefix network")
+	}
+	f.prefix.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	t.Cleanup(cancel)
+	var packet net.PacketConn
+	t.Cleanup(func(){
+		unblock()
+		if packet != nil { _ = packet.Close() }
+		_ = control.Close()
+		_ = server.Close()
+		_ = udp.Close()
+		_ = remoteUDP.Close()
+		select {
+		case err := <-handshake: if err != nil { t.Error(err) }
+		case <-time.After(3*time.Second): t.Error("original SOCKS handshake fixture failed to join")
+		}
+	})
+	packet, err = middle.ListenPacket(ctx, M.ParseSocksaddr("1.1.1.1:53"))
+	if err != nil { t.Fatal("actual original SOCKS association",err) }
+	return control,unblock
+}
+
+func TestRouterNodeChainSOCKSPrecloseBeforeNativeRetirement(t *testing.T) {
+	for _, route := range []string{"box","instance"} {
+		for _, failure := range []bool{false,true} {
+			name := route+"-joined"
+			if failure { name=route+"-failed" }
+			t.Run(name,func(t *testing.T){
+				f:=socksBridgeStarted(t,socksBridgeOwner(t,"wg"))
+				control,release:=socksPrecloseAssociation(t,f)
+				sentinel:=errors.New("original captured control close failure")
+				if failure { control.failure=sentinel;f.expectedClose=sentinel
+				} else if route=="box" { f.expectedClose=os.ErrClosed }
+				if err:=f.owner.Close();err!=nil{t.Fatal("original unrun proof close",err)}
+				receipt:=f.box.RouterVPNCaptureCloseReceipt()
+				done:=make(chan error,1)
+				go func(){
+					if route=="box" { done<-f.box.Close() } else { done<-f.instance.Close() }
+				}()
+				t.Cleanup(func(){release();select{case <-done:case <-time.After(3*time.Second):t.Error("original preclose worker did not join")}})
+				select{case <-control.entered:case <-time.After(3*time.Second):t.Fatal("original control preclose was not entered")}
+				if f.prefix.ctx.Err()!=nil||f.prefix.closed.Load()||!f.tun.started.Load(){
+					t.Error("native cancellation or endpoint close preceded original SOCKS join")
+				}
+				ctx,cancel:=context.WithTimeout(t.Context(),20*time.Millisecond)
+				if err:=receipt.JoinContext(ctx,f.box);err==nil{t.Error("held SOCKS close fabricated native joined receipt")}
+				cancel()
+				if f.owner.NativeClosed(){t.Error("held SOCKS close fabricated original daemon DOWN")}
+				select{case err:=<-done:t.Error("held original SOCKS close returned before join",err);default:}
+				release()
+				select{
+				case err:=<-done:
+					// Put the exact consumed result back for the cleanup join.
+					done<-err
+					if failure&&!errors.Is(err,sentinel)||!failure&&err!=nil{t.Error("native close lost original preclose result",err)}
+				case <-time.After(3*time.Second):t.Fatal("original native close did not join captured association")
+				}
+				if !f.prefix.closed.Load()||f.tun.started.Load(){t.Error("preclose error skipped remaining original native close")}
+				if control.calls.Load()!=1{t.Error("daemon and Box did not share original association close")}
+				if err:=receipt.JoinContext(t.Context(),f.box);failure&&!errors.Is(err,sentinel)||!failure&&err!=nil{
+					t.Error("final Box receipt lost original captured preclose result",err)
+				}
+				if route=="instance" {
+					if f.owner.NativeClosed()==failure{t.Error("original daemon receipt discarded held or failed preclose")}
+					if err:=f.instance.Close();failure&&!errors.Is(err,sentinel)||!failure&&err!=nil{t.Error("retry replaced original Instance result",err)}
+				}
+			})
+		}
+	}
+}
+
+func TestRouterNodeChainSOCKSPrecloseRejectsCopiedOwners(t *testing.T) {
+	for _, kind:=range []string{"box","instance"}{t.Run(kind,func(t *testing.T){
+		f:=socksBridgeStarted(t,socksBridgeOwner(t,"wg"))
+		control,release:=socksPrecloseAssociation(t,f)
+		done:=make(chan error,1)
+		go func(){
+			if kind=="box" {
+				copied:=new(box.Box)
+				reflect.ValueOf(copied).Elem().Set(reflect.ValueOf(f.box).Elem())
+				if copied.RouterVPNCloseSOCKSMiddle()==nil { done<-nil; return }
+				done<-copied.Close()
+			} else {
+				copied:=new(daemon.Instance)
+				reflect.ValueOf(copied).Elem().Set(reflect.ValueOf(f.instance).Elem())
+				done<-copied.Close()
+			}
+		}()
+		var err error
+		retiredOriginal := false
+		select{
+		case err=<-done:
+		case <-control.entered:
+			retiredOriginal = true
+			release()
+			select{case err=<-done:case <-time.After(3*time.Second):t.Fatal("foreign close control failed to join")}
+		case <-time.After(3*time.Second):
+			release()
+			t.Fatal("foreign close did not reject its copied owner")
+		}
+		if err==nil{t.Error("copied native owner borrowed original retirement")}
+		select{case <-control.entered:retiredOriginal = true;default:}
+		if retiredOriginal { t.Error("foreign native close retired original association") }
+		if f.prefix.ctx.Err()!=nil||f.prefix.closed.Load()||!f.tun.started.Load(){t.Error("foreign native close touched original lower")}
+		release()
+	})}
+}
+
+func TestRouterNodeChainSOCKSPrecloseSurvivesRetiredProof(t *testing.T){
+	f:=socksBridgeStarted(t,socksBridgeOwner(t,"wg"))
+	control,release:=socksPrecloseAssociation(t,f)
+	f.owner.NetworkChanged()
+	release()
+	if err:=f.close();err!=nil{t.Fatal("retired proof stranded original native association",err)}
+	if control.calls.Load()!=1||!f.prefix.closed.Load()||!f.owner.NativeClosed(){
+		t.Fatal("retired proof lost original captured cleanup authority")
+	}
+}
+
+func TestRouterNodeChainSOCKSPrecloseKeepsInvalidatedSourceCleanup(t *testing.T){
+	f:=socksBridgeStarted(t,socksBridgeOwner(t,"wg"))
+	control,release:=socksPrecloseAssociation(t,f)
+	original:=reflect.ValueOf(f.owner.source).Elem()
+	retained:=reflect.New(original.Type()).Elem()
+	retained.Set(original)
+	original.Set(reflect.Zero(original.Type()))
+	// Restore only this test's exact value before the ordinary plan fixture
+	// cleans up; the preclose itself must not validate this erased source.
+	t.Cleanup(func(){original.Set(retained)})
+	release()
+	err:=f.box.RouterVPNCloseSOCKSMiddle()
+	original.Set(retained)
+	if err!=nil||control.calls.Load()!=1{t.Fatal("retained original source cleanup was not joined",err)}
+	if f.prefix.ctx.Err()!=nil||f.prefix.closed.Load()||!f.tun.started.Load()||f.owner.NativeClosed(){
+		t.Fatal("captured middle preclose substituted for original native close")
+	}
+	if err:=f.close();err!=nil{t.Fatal("original native close after captured cleanup",err)}
+}
+
+func TestRouterNodeChainSOCKSPrecloseSealsUnacquiredFactory(t *testing.T){
+	owner:=socksBridgeOwner(t,"wg")
+	capture,err:=ownedSOCKS.NewCapture(t.Context(),owner.source)
+	if err!=nil{t.Fatal(err)}
+	if err=capture.CloseOriginal();err!=nil{t.Fatal("pure owner cleanup",err)}
+	if capture.Register(include.OutboundRegistry())==nil{t.Fatal("retired captured factory reopened registration")}
+	if owner.NativeClosed(){t.Fatal("pure captured cleanup fabricated native DOWN")}
+}

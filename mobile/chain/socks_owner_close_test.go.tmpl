@@ -1,0 +1,287 @@
+package routervpnnodesocks
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type controlCloseProbe struct {
+	net.Conn
+	half   func() error
+	closes atomic.Int32
+}
+
+func (c *controlCloseProbe) CloseWrite() error { return c.half() }
+func (c *controlCloseProbe) Close() error      { c.closes.Add(1); return c.Conn.Close() }
+
+func TestOriginalSOCKSControlCloseWaitsForRemoteEOF(t *testing.T) {
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	client, err := net.DialTCP("tcp4", nil, listener.Addr().(*net.TCPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	peer, err := listener.AcceptTCP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	_ = peer.SetReadDeadline(time.Now().Add(2 * time.Second))
+	probe := &controlCloseProbe{Conn: client, half: client.CloseWrite}
+	original := &originalConn{Conn: probe, readEOF: make(chan struct{})}
+	original.enableControlClose()
+	read := make(chan error, 1)
+	go func() { var b [1]byte; _, err := original.Read(b[:]); read <- err }()
+	done := make(chan error, 1)
+	go func() { done <- original.Close() }()
+	var b [1]byte
+	if _, err := peer.Read(b[:]); !errors.Is(err, io.EOF) {
+		t.Fatal("original TCP half-close did not reach peer", err)
+	}
+	select {
+	case err := <-done:
+		t.Fatal("control close escaped original remote EOF", err)
+	default:
+	}
+	if probe.closes.Load() != 0 {
+		t.Fatal("control force-closed before remote EOF")
+	}
+	if err := peer.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-read:
+		if !errors.Is(err, io.EOF) {
+			t.Fatal("original observer lost remote EOF", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("original observer did not join")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("original close did not join")
+	}
+	if err := original.Close(); err != nil || probe.closes.Load() != 1 {
+		t.Fatal("retry replaced original close", err, probe.closes.Load())
+	}
+}
+
+func TestOriginalSOCKSControlCloseRetainsHalfCloseFailure(t *testing.T) {
+	for _, item := range []struct {
+		name    string
+		failure error
+	}{
+		{"sentinel", errors.New("original half-close failed")},
+		{"closed", net.ErrClosed},
+		{"wrapped-closed", fmt.Errorf("original lower: %w", net.ErrClosed)},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			probe := &controlCloseProbe{Conn: client, half: func() error { return item.failure }}
+			original := &originalConn{Conn: probe, readEOF: make(chan struct{})}
+			original.enableControlClose()
+			err := original.Close()
+			if !errors.Is(err, item.failure) {
+				t.Fatal("failed original half-close was forgotten", err)
+			}
+			if !errors.Is(err, errControlCloseUnproved) || closedOnly(err, 0) {
+				t.Fatal("unproved original half-close became benign", err)
+			}
+			if again := original.Close(); again != err || probe.closes.Load() != 1 {
+				t.Fatal("failed original close receipt changed", again)
+			}
+		})
+	}
+}
+
+func TestOriginalSOCKSControlCloseKeepsObservedEOF(t *testing.T) {
+	client, peer := net.Pipe()
+	probe := &controlCloseProbe{Conn: client, half: func() error { return net.ErrClosed }}
+	original := &originalConn{Conn: probe, readEOF: make(chan struct{})}
+	original.enableControlClose()
+	_ = peer.Close()
+	var b [1]byte
+	if _, err := original.Read(b[:]); !errors.Is(err, io.EOF) {
+		t.Fatal("original remote EOF was not observed", err)
+	}
+	if err := original.Close(); !closedOnly(err, 0) || errors.Is(err, errControlCloseUnproved) {
+		t.Fatal("observed original EOF gained an unproved close failure", err)
+	}
+	if probe.closes.Load() != 1 {
+		t.Fatal("observed EOF bypassed original raw close")
+	}
+}
+
+func TestOriginalSOCKSOutboundCloseUsesOneBudget(t *testing.T) {
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	var readers sync.WaitGroup
+	probes := make([]*controlCloseProbe, 0, 3)
+	halfClosed := make(chan struct{}, 3)
+	for range 3 {
+		client, peer := net.Pipe()
+		defer peer.Close()
+		probe := &controlCloseProbe{Conn: client, half: func() error { halfClosed <- struct{}{}; return nil }}
+		original := &originalConn{Conn: probe, readEOF: make(chan struct{})}
+		original.enableControlClose()
+		readers.Add(1)
+		go func() { defer readers.Done(); var b [1]byte; _, _ = original.Read(b[:]) }()
+		ctx, cancel := context.WithCancel(t.Context())
+		constructed := make(chan struct{})
+		close(constructed)
+		owner.operations[&operation{owner: owner, ctx: ctx, cancel: cancel, tcp: original, constructed: constructed, drained: make(chan struct{})}] = struct{}{}
+		probes = append(probes, probe)
+	}
+	started := time.Now()
+	done := make(chan error, 1)
+	go func() { done <- owner.Close() }()
+	for range 3 {
+		select {
+		case <-halfClosed:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("retirement did not start every original half-close before joining")
+		}
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("unjoined original remote EOF gained successful close", err)
+		}
+	case <-time.After(1800 * time.Millisecond):
+		t.Fatal("per-association waits multiplied original close budget")
+	}
+	if time.Since(started) > 1800*time.Millisecond {
+		t.Fatal("per-association waits multiplied original close budget")
+	}
+	readers.Wait()
+	for _, p := range probes {
+		if p.closes.Load() != 1 {
+			t.Fatal("bounded retirement did not force-close original handle")
+		}
+	}
+	if len(owner.operations) != 3 {
+		t.Fatal("failed remote EOF disappeared from original native receipt")
+	}
+	if err := owner.Close(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("retry replaced failed original EOF receipt", err)
+	}
+}
+
+func TestOriginalSOCKSControlEOFPrecedesExpiredDeadline(t *testing.T) {
+	for attempt := 0; attempt < 64; attempt++ {
+		client, peer := net.Pipe()
+		probe := &controlCloseProbe{Conn: client, half: func() error { return nil }}
+		original := &originalConn{Conn: probe, readEOF: make(chan struct{})}
+		original.enableControlClose()
+		_ = peer.Close()
+		var b [1]byte
+		if _, err := original.Read(b[:]); !errors.Is(err, io.EOF) {
+			t.Fatal("original remote EOF was not observed", err)
+		}
+		original.beginControlClose(time.Now().Add(-time.Second))
+		if err := original.Close(); err != nil {
+			t.Fatal("completed original EOF became an expired close", err)
+		}
+		if probe.closes.Load() != 1 {
+			t.Fatal("completed EOF bypassed original raw close")
+		}
+	}
+}
+
+func TestOriginalSOCKSConcurrentCloseRetainsOutboundBudget(t *testing.T) {
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	first := make(chan int, 1)
+	release := make(chan struct{})
+	var released sync.Once
+	releaseFirst := func() { released.Do(func() { close(release) }) }
+	defer releaseFirst()
+	var firstHalf atomic.Bool
+	var readers sync.WaitGroup
+	var operations [2]*operation
+	var probes [2]*controlCloseProbe
+	for position := range 2 {
+		client, peer := net.Pipe()
+		defer peer.Close()
+		probe := &controlCloseProbe{Conn: client, half: func() error {
+			if firstHalf.CompareAndSwap(false, true) {
+				first <- position
+				<-release
+			}
+			return nil
+		}}
+		original := newOriginalConn(owner, probe)
+		original.enableControlClose()
+		readers.Add(1)
+		go func() { defer readers.Done(); var b [1]byte; _, _ = original.Read(b[:]) }()
+		ctx, cancel := context.WithCancel(t.Context())
+		constructed := make(chan struct{})
+		close(constructed)
+		op := &operation{owner: owner, ctx: ctx, cancel: cancel, tcp: original, constructed: constructed, drained: make(chan struct{})}
+		owner.operations[op] = struct{}{}
+		operations[position], probes[position] = op, probe
+	}
+	ownerDone := make(chan error, 1)
+	go func() { ownerDone <- owner.Close() }()
+	var position int
+	select {
+	case position = <-first:
+	case <-time.After(2 * time.Second):
+		t.Fatal("original outbound did not start retirement")
+	}
+	// The held first half-close models a descheduled retirement pass. Cross its
+	// one original budget before another owned caller starts closing a sibling.
+	deadline := time.NewTimer(controlCloseBudget)
+	<-deadline.C
+	sibling := make(chan error, 1)
+	go func() { sibling <- operations[1-position].close() }()
+	var siblingErr error
+	late := false
+	select {
+	case siblingErr = <-sibling:
+	case <-time.After(200 * time.Millisecond):
+		late = true
+	}
+	releaseFirst()
+	if late {
+		select {
+		case siblingErr = <-sibling:
+		case <-time.After(2 * time.Second):
+			t.Fatal("late original sibling did not force-close")
+		}
+	}
+	select {
+	case err := <-ownerDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("unproved original outbound acquired successful close", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("original outbound did not join")
+	}
+	readers.Wait()
+	for _, probe := range probes {
+		if probe.closes.Load() != 1 {
+			t.Fatal("concurrent retirement replaced original raw close")
+		}
+	}
+	if late {
+		t.Fatal("concurrent original close renewed outbound budget")
+	}
+	if !errors.Is(siblingErr, context.DeadlineExceeded) {
+		t.Fatal("expired original sibling lost failed EOF receipt", siblingErr)
+	}
+}

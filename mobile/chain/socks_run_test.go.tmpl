@@ -1,0 +1,446 @@
+//go:build linux && !android
+
+package libbox
+
+import (
+ "bufio"
+ "bytes"
+ "context"
+ "crypto/x509"
+ "encoding/json"
+ "errors"
+ "io"
+ "math"
+ "net"
+ "net/netip"
+ "os"
+ "os/exec"
+ "path/filepath"
+ "reflect"
+ "strconv"
+ "strings"
+ "sync"
+ "sync/atomic"
+ "syscall"
+ "testing"
+ "time"
+
+ "github.com/sagernet/sing-box/adapter"
+ "github.com/sagernet/sing-box/adapter/endpoint"
+ C "github.com/sagernet/sing-box/constant"
+ BDNS "github.com/sagernet/sing-box/dns"
+ DNST "github.com/sagernet/sing-box/dns/transport"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+ "github.com/sagernet/sing-box/log"
+ "github.com/sagernet/sing-box/option"
+ AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+ WG "github.com/sagernet/sing-box/protocol/wireguard"
+ M "github.com/sagernet/sing/common/metadata"
+ "github.com/sagernet/sing/service"
+)
+
+type socksRunReply struct {
+ Schema int `json:"schema"`
+ Source string `json:"source,omitempty"`
+ SourceSHA256 string `json:"source_sha256"`
+ ConfigSHA256 string `json:"config_sha256"`
+ Address string `json:"address"`
+ PublicCA string `json:"public_ca,omitempty"`
+ Peer json.RawMessage `json:"peer"`
+ DNS uint64 `json:"dns"`
+ PublicDNS uint64 `json:"public_dns"`
+ FinalAuth uint64 `json:"final_auth"`
+ HeldProofs uint64 `json:"held_proofs"`
+ Associations int `json:"associations"`
+}
+type socksRunPeer struct{
+ command *exec.Cmd
+ input io.WriteCloser
+ reader *bufio.Reader
+ stderr bytes.Buffer
+ cancel context.CancelFunc
+ mu sync.Mutex
+ done chan struct{}
+ waitErr error
+ joined bool
+ original socksRunReply
+}
+func socksRunStartPeer(t *testing.T,mode,fault string)*socksRunPeer{
+ t.Helper()
+ image:=os.Getenv("ROUTERVPN_SOCKS_RUN_PEER")
+ if !filepath.IsAbs(image){t.Fatal("original separately compiled peer image missing")}
+ // Cover the original proof (40s), measurement (90s), drain (5s), and
+ // finite startup/observation/teardown overhead. The independent peer still
+ // has its own earlier deadline and must join the captured process owner.
+ ctx,cancel:=context.WithTimeout(context.Background(),175*time.Second)
+ p:=&socksRunPeer{cancel:cancel,done:make(chan struct{})}
+ p.command=exec.CommandContext(ctx,image,"-test.run=^TestRouterVPNDesktopNodeChainSOCKSRunReference$","-test.timeout=170s","-test.v=false")
+ p.command.Env=append(os.Environ(),"ROUTERVPN_SOCKS_RUN_REFERENCE=1")
+ p.command.SysProcAttr=&syscall.SysProcAttr{Setpgid:true}
+ p.command.WaitDelay=2*time.Second
+ p.command.Cancel=func()error{
+  if p.command.Process==nil{return nil}
+  err:=syscall.Kill(-p.command.Process.Pid,syscall.SIGKILL)
+  if errors.Is(err,syscall.ESRCH){return os.ErrProcessDone};return err
+ }
+ input,err:=p.command.StdinPipe();if err!=nil{cancel();t.Fatal(err)};p.input=input
+ output,writer,err:=os.Pipe();if err!=nil{cancel();t.Fatal(err)}
+ p.command.Stdout=writer
+ p.reader=bufio.NewReaderSize(output,mobilemultihop.NodeChainInputLimit+65536)
+ t.Cleanup(func(){_=output.Close()})
+ p.command.Stderr=&p.stderr
+ if err=p.command.Start();err!=nil{_=writer.Close();_=output.Close();cancel();t.Fatal(err)}
+ _=writer.Close()
+ go func(){p.waitErr=p.command.Wait();close(p.done)}()
+ t.Cleanup(func(){if err:=p.close();err!=nil{t.Error("original encrypted peer did not join",err)}})
+ if err=json.NewEncoder(input).Encode(map[string]any{"schema":1,"mode":mode,"fault":fault});err!=nil{t.Fatal(err)}
+ p.original=p.reply(t)
+ address,err:=netip.ParseAddrPort(p.original.Address)
+ if err!=nil||!address.Addr().Is4()||address.Addr()!=netip.MustParseAddr("127.0.0.1")||address.Port()==0||
+  p.original.Source==""||p.original.PublicCA==""||p.original.Schema!=1{t.Fatal("original peer's bounded physical/source receipt changed")}
+ return p
+}
+func(p *socksRunPeer) reply(t *testing.T)socksRunReply{
+ t.Helper()
+ type value struct{line []byte;err error}
+ done:=make(chan value,1)
+ go func(){line,err:=p.reader.ReadSlice('\n');done<-value{append([]byte(nil),line...),err}}()
+ var result value
+ select{
+ case result=<-done:
+ case <-time.After(3*time.Second):
+  p.cancel();<-p.done;result=<-done;t.Fatal("original peer response did not join",result.err)
+ }
+ if result.err!=nil||len(result.line)>mobilemultihop.NodeChainInputLimit+65535{t.Fatal("original peer reply missing or oversized",result.err)}
+ var response socksRunReply
+ decoder:=json.NewDecoder(bytes.NewReader(result.line));decoder.DisallowUnknownFields()
+ if decoder.Decode(&response)!=nil||decoder.Decode(new(any))!=io.EOF||response.Schema!=1{t.Fatal("original peer reply schema changed")}
+ if p.original.Source!=""&&(response.SourceSHA256!=p.original.SourceSHA256||response.ConfigSHA256!=p.original.ConfigSHA256||response.Address!=p.original.Address){
+  t.Fatal("original peer identity changed during observation")
+ }
+ return response
+}
+func(p *socksRunPeer) observe(t *testing.T)socksRunReply{
+ t.Helper()
+ if _,err:=io.WriteString(p.input,"snapshot\n");err!=nil{t.Fatal(err)}
+ return p.reply(t)
+}
+func(p *socksRunPeer) close()error{
+ p.mu.Lock();defer p.mu.Unlock()
+ if p.joined{return p.waitErr}
+ _,writeErr:=io.WriteString(p.input,"quit\n")
+ _=p.input.Close()
+ var tail []byte
+ readDone:=make(chan struct{})
+ go func(){tail,_=io.ReadAll(io.LimitReader(p.reader,65537));close(readDone)}()
+ select{
+ case <-p.done:
+ case <-time.After(5*time.Second):p.cancel();<-p.done
+ }
+ <-readDone
+ p.cancel();p.joined=true
+ if p.waitErr!=nil||writeErr!=nil||len(tail)>65536||
+  strings.Count(string(tail),"SOCKS_RUN_PEER_JOINED\n")!=1||
+  strings.Contains(string(tail),"FAIL")||strings.Contains(p.stderr.String(),"WARNING: DATA RACE"){
+  return errors.Join(p.waitErr,writeErr,errors.New("original peer cleanup receipt absent or failed"))
+ }
+ return nil
+}
+
+// Only this exact physical UDP tuple is translated to the separately owned
+// loopback peer. Every WG/AWG/SOCKS/SS packet and proof above it is real.
+type socksRunPhysical struct{
+ adapter.Outbound
+ virtual,original string
+ calls atomic.Int64
+}
+func(p *socksRunPhysical)DialContext(ctx context.Context,network string,destination M.Socksaddr)(net.Conn,error){
+ if network!="udp"||destination.String()!=p.virtual{return nil,errors.New("foreign physical tuple refused")}
+ p.calls.Add(1);return (&net.Dialer{}).DialContext(ctx,network,p.original)
+}
+func(*socksRunPhysical)ListenPacket(context.Context,M.Socksaddr)(net.PacketConn,error){
+ return nil,errors.New("physical fixture requires the original connected UDP tuple")
+}
+type socksRunPhysicalManager struct{adapter.OutboundManager;lower adapter.Outbound}
+func(m *socksRunPhysicalManager)Outbound(tag string)(adapter.Outbound,bool){
+ if tag=="captured-socks-run-physical"{return m.lower,true};return m.OutboundManager.Outbound(tag)
+}
+type socksRunEndpoint struct{adapter.Endpoint}
+// The private physical mapping is not a new graph member. The wrapped native
+// endpoint is checked before this explicit physical dependency boundary.
+func(*socksRunEndpoint)Dependencies()[]string{return nil}
+
+func socksRunNative(t *testing.T,p *socksRunPeer)(*socksBridgeNativeFixture,*socksRunPhysical){
+ t.Helper()
+ owner,err:=NewRouterNodeChainSOCKS(p.original.Source);if err!=nil{t.Fatal("original strict source",err)}
+ if owner.SourceSHA256()!=p.original.SourceSHA256||owner.ConfigSHA256()!=p.original.ConfigSHA256{t.Fatal("peer source/config seal mismatch")}
+ roots:=x509.NewCertPool()
+ if !roots.AppendCertsFromPEM([]byte(p.original.PublicCA)){t.Fatal("original isolated TLS certificate missing")}
+ // One selected case per fresh test process: production TLS verification uses
+ // its real certificate path against this explicit isolated fixture root.
+ if os.Getenv("GODEBUG")!="x509usefallbackroots=1"{t.Fatal("isolated TLS root process contract missing")}
+ x509.SetFallbackRoots(roots)
+ f:=socksBridgeNativeReserved(t,owner)
+ _,meta,err:=owner.source.ReadValidated();if err!=nil||len(meta.Physical)!=1||len(meta.Proofs)!=3{t.Fatal("complete typed source missing",err)}
+ physical:=meta.Physical[0]
+ lower:=&socksRunPhysical{virtual:net.JoinHostPort(physical.Host,strconv.Itoa(physical.Port)),original:p.original.Address}
+ ends,ok:=service.FromContext[adapter.EndpointRegistry](f.server.ctx).(*endpoint.Registry);if !ok{t.Fatal("original endpoint registry missing")}
+ resolvers,ok:=service.FromContext[adapter.DNSTransportRegistry](f.server.ctx).(*BDNS.TransportRegistry);if !ok{t.Fatal("original DNS registry missing")}
+ contextFor:=func(ctx context.Context,tag string)(context.Context,error){
+  if tag!=meta.Proofs[0].Tag{return nil,errors.New("foreign first endpoint")}
+  actual:=service.FromContext[adapter.OutboundManager](ctx);if actual==nil{return nil,errors.New("original manager absent")}
+  child:=service.ExtendContext(ctx)
+  physical:=&socksRunPhysicalManager{OutboundManager:actual,lower:lower}
+  child=service.ContextWith[adapter.OutboundManager](child,physical)
+  if service.FromContext[adapter.OutboundManager](ctx)!=actual||service.FromContext[adapter.OutboundManager](child)!=physical{return nil,errors.New("physical fixture replaced original Box manager")}
+  return child,nil
+ }
+ capture:=func(native adapter.Endpoint,err error)(adapter.Endpoint,error){
+  if err!=nil{return native,err}
+  if native==nil||!reflect.DeepEqual(native.Dependencies(),[]string{"captured-socks-run-physical"}){
+   if native!=nil{_=native.Close()};return nil,errors.New("original endpoint physical dependency changed")
+  }
+  return &socksRunEndpoint{native},nil
+ }
+ endpoint.Register[option.WireGuardEndpointOptions](ends,C.TypeWireGuard,func(ctx context.Context,r adapter.Router,l log.ContextLogger,tag string,o option.WireGuardEndpointOptions)(adapter.Endpoint,error){
+  ctx,err:=contextFor(ctx,tag);if err!=nil{return nil,err}
+  if o.Detour!=""{return nil,errors.New("first endpoint acquired a detour")}
+  o.Detour="captured-socks-run-physical";return capture(WG.NewEndpoint(ctx,r,l,tag,o))
+ })
+ endpoint.Register[AWG.Options](ends,mobilemultihop.AmneziaType,func(ctx context.Context,r adapter.Router,l log.ContextLogger,tag string,o AWG.Options)(adapter.Endpoint,error){
+  ctx,err:=contextFor(ctx,tag);if err!=nil{return nil,err}
+  if o.Detour!=""{return nil,errors.New("first AWG endpoint acquired a detour")}
+  o.Detour="captured-socks-run-physical";return capture(AWG.NewEndpoint(ctx,r,l,tag,o))
+ })
+ // Replace the object-only resolver boundary with the original UDP transport:
+ // all selected DNS packets now traverse final SS, SOCKS UDP and WG/AWG.
+ DNST.RegisterUDP(resolvers)
+ config,err:=owner.Config();if err!=nil{t.Fatal(err)}
+ if err=f.server.StartedService.StartOrReloadService(f.server.ctx,config,nil);err!=nil{t.Fatal("actual encrypted typed native start",err)}
+ cache,err:=os.Lstat(filepath.Join(f.workingPath,"cache.db"))
+ if err!=nil||!cache.Mode().IsRegular(){t.Fatal("actual encrypted Box omitted original owned cache",err)}
+ f.instance=f.server.StartedService.Instance()
+ if f.instance==nil||f.instance.Box()==nil||f.tun==nil{t.Fatal("original native Box/TUN capture absent")}
+ f.box=f.instance.Box()
+ if owner.Healthy()||owner.NativeClosed(){t.Fatal("native construction fabricated Ready or DOWN")}
+ return f,lower
+}
+func socksRunCounters(t *testing.T,r socksRunReply)map[string]any{
+ t.Helper()
+ var record map[string]any
+ if json.Unmarshal(r.Peer,&record)!=nil{t.Fatal("original peer counters missing")}
+ return record
+}
+func socksRunCounter(t *testing.T,record map[string]any,name string)float64{
+ t.Helper()
+ number,ok:=record[name].(float64)
+ if !ok||number<0||math.IsNaN(number)||math.IsInf(number,0)||math.Trunc(number)!=number{t.Fatal("original peer counter changed",name)}
+ return number
+}
+func socksRunRequireProofs(t *testing.T,p *socksRunPeer,f *socksBridgeNativeFixture,lower *socksRunPhysical) socksRunReply{
+ t.Helper()
+ if err:=f.owner.Run(f.server);err!=nil{t.Fatal("actual encrypted typed Run failed",err)}
+ if !f.owner.Healthy(){t.Fatal("actual proved original runtime is not healthy")}
+ var progress mobilemultihop.NodeChainProgress
+ if json.Unmarshal([]byte(f.owner.ProgressJSON()),&progress)!=nil||!progress.Complete||!progress.Ready||
+  !progress.DNSProven||!progress.PublicProven||len(progress.Prefixes)!=3{t.Fatal("complete original prefix/DNS/public proof missing")}
+ observed:=p.observe(t);record:=socksRunCounters(t,observed)
+ prefixes,ok:=record["prefixes"].([]any);if !ok||len(prefixes)!=1{t.Fatal("original packet prefix inventory changed")}
+ prefix:=prefixes[0].(map[string]any)
+ final:=record["final"].(map[string]any)
+ middle:=record["middle"].(map[string]any)
+ if lower.calls.Load()<1||socksRunCounter(t,prefix,"raw_udp")<1||socksRunCounter(t,prefix,"proof_queries")<2||
+  socksRunCounter(t,middle,"public_queries")<2||socksRunCounter(t,final,"router_queries")<2||
+  socksRunCounter(t,final,"final_public_queries")<1||socksRunCounter(t,final,"final_udp")<1||
+  observed.DNS<1||observed.FinalAuth!=0||socksRunCounter(t,final,"direct_router_queries")!=0{t.Fatal("proved runtime bypassed original encrypted prefix/DNS")}
+ return observed
+}
+// Constructor-only MTU adoption uses the actual retained TUN readback. This
+// boundary cannot create probe sockets or replace the native reader; those
+// operation/rollback paths have their separate retained-transaction gate.
+type socksRunMTUPlatform struct {
+ routerMTUContextPlatform
+ binds atomic.Int32
+}
+func (p *socksRunMTUPlatform) BeginMTUChange(*RouterMTUState) error {
+ p.begins++;return errors.New("constructor-only fixture cannot replace original TUN")
+}
+func (p *socksRunMTUPlatform) BindMTUSocket(*RouterMTUState,int64) error {
+ p.binds.Add(1);return errors.New("constructor-only fixture cannot open MTU probe")
+}
+func socksRunAdoptMTU(t *testing.T,f *socksBridgeNativeFixture)(*RouterMTU,*socksRunMTUPlatform,string){
+ t.Helper()
+ state:=f.owner.state.Load()
+ if state==nil||!f.owner.Healthy(){t.Fatal("MTU adoption requires actual complete encrypted proof")}
+ profile:=f.owner.MTUProfile()
+ if profile==""||!json.Valid([]byte(profile))||profile!=state.runtime.MTUProfile(){t.Fatal("actual SOCKS MTU profile lost original complete source")}
+ platform:=&socksRunMTUPlatform{routerMTUContextPlatform:routerMTUContextPlatform{state:RouterMTUState{
+  Session:state.session,Path:"original-socks-run-physical",Interface:f.tun.name,MTU:f.tun.mtu.Load(),
+ }}}
+ optimizer,err:=RouterNodeChainSOCKSNewMTU(f.owner,f.server,platform)
+ if err!=nil||optimizer==nil{t.Fatal("proved original encrypted graph did not adopt native MTU",err)}
+ t.Cleanup(func(){if err:=optimizer.Close();err!=nil{t.Error("original adopted MTU cleanup",err)}})
+ claim:=f.owner.mtu.Load()
+ if claim==nil||claim.native!=optimizer.owner||claim.controller.Load()!=optimizer.controller||
+  optimizer.owner.server!=f.server||optimizer.owner.instance!=f.instance||optimizer.owner.inbound!=f.tun||
+  platform.reads<2||platform.begins!=0||platform.ends!=0||platform.aborts!=0||platform.binds.Load()!=0||
+  !f.owner.Healthy()||f.owner.NativeClosed(){t.Fatal("actual MTU adoption changed native ownership or proof")}
+ if duplicate,err:=RouterNodeChainSOCKSNewMTU(f.owner,f.server,platform);err==nil||duplicate!=nil||f.owner.mtu.Load()!=claim{
+  t.Fatal("duplicate MTU constructor replaced original claim")
+ }
+ return optimizer,platform,profile
+}
+
+func socksRunCloseNative(t *testing.T,f *socksBridgeNativeFixture){
+ t.Helper()
+ if err:=f.owner.Close();err!=nil{t.Fatal("original proof/measurement did not join",err)}
+ if f.owner.NativeClosed(){t.Fatal("shared join fabricated native DOWN")}
+ if err:=f.server.StartedService.CloseService();err!=nil{t.Fatal("original native Box/association close",err)}
+ if !f.owner.NativeClosed(){t.Fatal("original native joined close receipt absent")}
+ if f.owner.Healthy(){t.Fatal("closed original runtime remained healthy")}
+}
+
+// Failure-only observations preserve the original measurement verdict and
+// caller budgets. Fixed categories never print config, source or credentials.
+func socksRunDiagnosticClass(err error) string {
+ if err==nil{return "current"}
+ if errors.Is(err,context.DeadlineExceeded){return "deadline"}
+ if errors.Is(err,context.Canceled){return "cancelled"}
+ if errors.Is(err,net.ErrClosed){return "closed"}
+ return "rejected"
+}
+func socksRunMeasurementDiagnostic(t *testing.T,p *socksRunPeer,f *socksBridgeNativeFixture,lastCall time.Duration){
+ t.Helper()
+ state:=f.owner.state.Load()
+ progress:=mobilemultihop.NodeChainProgress{}
+ parsed:=json.Unmarshal([]byte(f.owner.ProgressJSON()),&progress)==nil
+ t.Logf("SOCKS_RUN_DIAGNOSTIC status_call_ms=%.3f progress_parsed=%t stage=%q ready=%t complete=%t dns=%t public=%t failure=%q retired=%t closed=%t state_present=%t",
+  float64(lastCall)/float64(time.Millisecond),parsed,progress.Stage,progress.Ready,progress.Complete,
+  progress.DNSProven,progress.PublicProven,progress.Failure,f.owner.retired.Load(),f.owner.closed.Load(),state!=nil)
+ if state!=nil{
+  t.Logf("SOCKS_RUN_DIAGNOSTIC lifetime=%s original_instance=%t original_box=%t engine_present=%t",
+   socksRunDiagnosticClass(state.lifetime.Err()),state.instance==f.instance,state.box==f.box,state.engine.Load()!=nil)
+  observe:=func(label string,read func(context.Context)error){
+   ctx,cancel:=context.WithTimeout(context.Background(),hopmeasure.ObservationTimeout)
+   started:=time.Now();err:=read(ctx)
+   t.Logf("SOCKS_RUN_DIAGNOSTIC observation=%s result=%s caller=%s elapsed_ms=%.3f",
+    label,socksRunDiagnosticClass(err),socksRunDiagnosticClass(ctx.Err()),float64(time.Since(started))/float64(time.Millisecond))
+   cancel()
+  }
+  observe("native-owner",func(ctx context.Context)error{return f.owner.nativeCurrent(ctx,state)})
+  if engine:=state.engine.Load();engine!=nil{
+   observe("native-engine",func(ctx context.Context)error{_,err:=engine.ObserveChainContext(ctx);return err})
+  }
+ }
+ observed:=p.observe(t);record:=socksRunCounters(t,observed)
+ prefixes,_:=record["prefixes"].([]any)
+ var prefix map[string]any
+ if len(prefixes)==1{prefix,_=prefixes[0].(map[string]any)}
+ middle,_:=record["middle"].(map[string]any);final,_:=record["final"].(map[string]any)
+ if prefix!=nil&&middle!=nil&&final!=nil{
+  t.Logf("SOCKS_RUN_DIAGNOSTIC peer_prefix_proofs=%.0f middle_public=%.0f middle_download=%.0f middle_upload=%.0f final_proofs=%.0f final_download=%.0f final_upload=%.0f dns=%d public_dns=%d auth_failures=%d associations=%d",
+   socksRunCounter(t,prefix,"proof_queries"),socksRunCounter(t,middle,"public_queries"),
+   socksRunCounter(t,middle,"download_bytes"),socksRunCounter(t,middle,"upload_bytes"),
+   socksRunCounter(t,final,"router_queries"),socksRunCounter(t,final,"download_bytes"),socksRunCounter(t,final,"upload_bytes"),
+   observed.DNS,observed.PublicDNS,observed.FinalAuth,observed.Associations)
+ }
+}
+
+func TestRouterNodeChainSOCKSEncryptedRun(t *testing.T){
+ chosen:=os.Getenv("ROUTERVPN_SOCKS_RUN_CASE")
+ if chosen==""{t.Skip("separate encrypted peer and exact captured case required")}
+ allowed:=map[string]bool{"wg":true,"awg2-fast":true,"awg2-strong":true,"middle-password":true,"final-token":true,"selected-dns":true,"middle-public":true,"hold-prefix":true}
+ if !allowed[chosen]{t.Fatal("exact composed test case required")}
+ t.Run(chosen,func(t *testing.T){
+  mode,fault:=chosen,"";if chosen!="wg"&&chosen!="awg2-fast"&&chosen!="awg2-strong"{mode,fault="wg",chosen}
+  peer:=socksRunStartPeer(t,mode,fault);f,physical:=socksRunNative(t,peer)
+  if fault!=""{
+   done:=make(chan error,1);go func(){done<-f.owner.Run(f.server)}()
+   if fault=="hold-prefix"{
+    deadline:=time.Now().Add(3*time.Second)
+    held:=false
+    for time.Now().Before(deadline){if peer.observe(t).HeldProofs>0{held=true;break};time.Sleep(5*time.Millisecond)}
+    if !held{t.Fatal("cancel control missed real first private HTTP")}
+    f.owner.NetworkChanged()
+   }
+   bound:=15*time.Second;if fault=="hold-prefix"{bound=hopmeasure.ObservationTimeout}
+   select{
+   case err:=<-done:if err==nil{t.Fatal("wrong original encrypted proof was accepted",fault)}
+   case <-time.After(bound):
+    if fault=="hold-prefix"{t.Fatal("cancelled original proof did not join before observation deadline")}
+    t.Fatal("failed original proof did not join")
+   }
+   if f.owner.Healthy(){t.Fatal("failed original proof remained Ready")}
+   var progress mobilemultihop.NodeChainProgress;_=json.Unmarshal([]byte(f.owner.ProgressJSON()),&progress)
+   if progress.Ready{t.Fatal("failed proof published ready progress")}
+   observed:=peer.observe(t)
+   if physical.calls.Load()==0{t.Fatal("negative never reached original packet prefix")}
+   if fault=="final-token"&&observed.FinalAuth==0{t.Fatal("wrong final token missed actual private refusal")}
+   if fault=="selected-dns"&&observed.DNS==0{t.Fatal("wrong DNS missed actual full-prefix packet query")}
+   socksRunCloseNative(t,f)
+   if err:=peer.close();err!=nil{t.Fatal(err)}
+   return
+  }
+  before:=socksRunRequireProofs(t,peer,f,physical)
+  optimizer,mtuPlatform,mtuProfile:=socksRunAdoptMTU(t,f)
+  measurement,err:=RouterNodeChainSOCKSNewHopMeasurement(f.owner,f.server);if err!=nil{t.Fatal("original measurement adoption",err)}
+  _,meta,err:=f.owner.source.ReadValidated();if err!=nil{t.Fatal(err)}
+  id:=strings.Repeat("a",32)
+  // This is the original three-member throughput API. The unrelated
+  // external-final 50-sample endpoint must not adopt an intermediate node.
+  if measurement.StartLatency(id,meta.Proofs[1].ProfileID)==nil{t.Fatal("middle borrowed external-final latency authority")}
+  if err=measurement.Start(id,65536);err!=nil{t.Fatal("original routed measurement start",err)}
+  var status hopmeasure.Status
+  measurementStarted:=time.Now()
+  // The original worker owns its full 90-second, fifty-sample budget. Allow
+  // one bounded observation to report that worker's terminal state; this
+  // observer does not change proof, sample, cancellation or drain deadlines.
+  deadline:=time.Now().Add(hopmeasure.RequestTimeout+hopmeasure.ObservationTimeout)
+  lastStage:="";var lastCall time.Duration
+  for time.Now().Before(deadline){
+   started:=time.Now();raw:=measurement.StatusJSON();lastCall=time.Since(started)
+   if json.Unmarshal([]byte(raw),&status)!=nil{t.Fatal("original measurement status")}
+   if status.Stage!=lastStage{
+    t.Logf("SOCKS_RUN_STAGE stage=%q complete=%t results=%d elapsed_ms=%.3f status_call_ms=%.3f",
+     status.Stage,status.Complete,len(status.Results),float64(time.Since(measurementStarted))/float64(time.Millisecond),float64(lastCall)/float64(time.Millisecond))
+    lastStage=status.Stage
+   }
+   if status.Complete{break};time.Sleep(10*time.Millisecond)
+  }
+  if !status.Complete||status.Stage!="complete"||status.Failure!=""||len(status.Results)!=3{
+   socksRunMeasurementDiagnostic(t,peer,f,lastCall)
+   t.Fatal("complete real ordered measurement missing",status.Stage,status.Failure)
+  }
+  for position,result:=range status.Results{
+   expected:="private-node";if position==1{expected="public-path"}
+   if !result.Ready||result.Kind!=expected||result.ID!=meta.Proofs[position].ProfileID||
+    result.Idle==nil||result.Download==nil||result.Upload==nil{t.Fatal("actual ordered result lost original identity/transfer",position,result.Failure)}
+  }
+  if err=measurement.Drain(id);err!=nil{t.Fatal("original measurement worker not joined",err)}
+  if measurement.Start(id,65536)==nil{t.Fatal("completed measurement request replayed")}
+  after:=peer.observe(t)
+  peerRecord:=socksRunCounters(t,after)
+  middle:=peerRecord["middle"].(map[string]any);final:=peerRecord["final"].(map[string]any)
+  if after.PublicDNS<=before.PublicDNS||after.DNS<before.DNS||
+   socksRunCounter(t,middle,"download_bytes")<65536||socksRunCounter(t,middle,"upload_bytes")!=65536||
+   socksRunCounter(t,final,"download_bytes")!=65536||socksRunCounter(t,final,"upload_bytes")!=65536{
+   t.Fatal("real measurement bypassed original selected DNS/byte sink")
+  }
+  if err=measurement.Close();err!=nil{t.Fatal("original measurement close",err)}
+  if err=optimizer.Close();err!=nil{t.Fatal("original proved MTU owner did not join before plan Close",err)}
+  if f.owner.mtu.Load()!=nil||!f.owner.Healthy()||f.owner.NativeClosed()||f.owner.MTUProfile()!=mtuProfile||
+   mtuPlatform.begins!=0||mtuPlatform.ends!=0||mtuPlatform.aborts!=0||mtuPlatform.binds.Load()!=0{
+   t.Fatal("idle MTU close changed original proved path or manufactured native DOWN")
+  }
+  socksRunCloseNative(t,f)
+  // NativeClosed proves the client-side joins. The independent peer may
+  // publish its EOF observation on a later scheduler turn; require that exact
+  // terminal counter within the original observation allowance.
+  observed:=peer.observe(t)
+  joinedBy:=time.Now().Add(hopmeasure.ObservationTimeout)
+  for observed.Associations!=0&&time.Now().Before(joinedBy){time.Sleep(time.Millisecond);observed=peer.observe(t)}
+  if observed.Associations!=0{t.Fatal("original peer association did not observe joined native close")}
+  if err:=peer.close();err!=nil{t.Fatal(err)}
+ })
+}

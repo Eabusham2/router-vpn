@@ -1583,6 +1583,9 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_desktop_darwin_guardian.py', source, '--mutations'],
                     env=env, timeout=1800)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
+                 '-ldflags=-checklinkname=0', './protocol/routervpnnodesocks', '-run', '^TestOriginalSOCKS',
+                 '-count=1', '-timeout=90s'], cwd=source, env=env, timeout=600)
+            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPN(DesktopTorNetwork|NodeChain|Execution)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),

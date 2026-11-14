@@ -93,13 +93,15 @@ func (n *socksBridgeNativeTUN) RouterVPNExecutionMTUReadbackContext(ctx context.
 }
 
 type socksBridgeNativePrefix struct {
+    ctx context.Context
+    closed atomic.Bool
     outbound.Adapter
     mu sync.Mutex
     dial func(context.Context,string,M.Socksaddr)(net.Conn,error)
     calls atomic.Int32
 }
 func (p *socksBridgeNativePrefix) Start(adapter.StartStage) error { return nil }
-func (p *socksBridgeNativePrefix) Close() error { return nil }
+func (p *socksBridgeNativePrefix) Close() error { p.closed.Store(true); return nil }
 func (p *socksBridgeNativePrefix) ListenPacket(context.Context,M.Socksaddr)(net.PacketConn,error){
     return nil,errors.New("explicit packet boundary has no admitted association")
 }
@@ -202,16 +204,16 @@ func socksBridgeNativeReserved(t *testing.T,owner *RouterNodeChainSOCKS)*socksBr
         n:=&socksBridgeNativeTUN{Adapter:inbound.NewAdapter(C.TypeTun,tag),name:"original-socks-tun"}
         n.index.Store(41);n.mtu.Store(int32(opts.MTU));f.tun=n;return n,nil
     })
-    prefix:=func(kind,tag string)*socksBridgeNativePrefix{
+    prefix:=func(ctx context.Context,kind,tag string)*socksBridgeNativePrefix{
         f.constructed.Add(1)
-        p:=&socksBridgeNativePrefix{Adapter:outbound.NewAdapter(kind,tag,[]string{"tcp","udp"},nil)}
+        p:=&socksBridgeNativePrefix{Adapter:outbound.NewAdapter(kind,tag,[]string{"tcp","udp"},nil),ctx:ctx}
         f.prefix=p;return p
     }
-    endpoint.Register[option.WireGuardEndpointOptions](ends,C.TypeWireGuard,func(_ context.Context,_ adapter.Router,_ log.ContextLogger,tag string,_ option.WireGuardEndpointOptions)(adapter.Endpoint,error){
-        return prefix(C.TypeWireGuard,tag),nil
+    endpoint.Register[option.WireGuardEndpointOptions](ends,C.TypeWireGuard,func(ctx context.Context,_ adapter.Router,_ log.ContextLogger,tag string,_ option.WireGuardEndpointOptions)(adapter.Endpoint,error){
+        return prefix(ctx,C.TypeWireGuard,tag),nil
     })
-    endpoint.Register[AWG.Options](ends,mobilemultihop.AmneziaType,func(_ context.Context,_ adapter.Router,_ log.ContextLogger,tag string,_ AWG.Options)(adapter.Endpoint,error){
-        return prefix(mobilemultihop.AmneziaType,tag),nil
+    endpoint.Register[AWG.Options](ends,mobilemultihop.AmneziaType,func(ctx context.Context,_ adapter.Router,_ log.ContextLogger,tag string,_ AWG.Options)(adapter.Endpoint,error){
+        return prefix(ctx,mobilemultihop.AmneziaType,tag),nil
     })
     dns.RegisterTransport[option.RemoteDNSServerOptions](resolvers,C.DNSTypeUDP,func(_ context.Context,_ log.ContextLogger,tag string,opts option.RemoteDNSServerOptions)(adapter.DNSTransport,error){
         f.constructed.Add(1)
