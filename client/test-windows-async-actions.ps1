@@ -74,14 +74,17 @@ function Test-OrderedAsyncControls {
     # A saved ordered path has already rendered before an HTTP action begins.
     # Completion must preserve these restrictions when it releases busy state.
     RefreshUnifiedOrderedControls
+    Assert ((Control 'UnifiedExecution').IsEnabled) 'Idle ordered path disabled its supported execution selector.'
     Assert (StartUnifiedApiAsync 'Save ordered setup' '/api/connection-profile/setup/save' 'POST' @{} 30 $null $null $null) 'Ordered setup action did not start'
     Assert ((Control 'UnifiedModeCombo').Visibility-ceq'Collapsed'-and(Control 'UnifiedOrderedModeSummary').Visibility-ceq'Visible') 'Busy ordered action showed the unrelated single-node mode.'
+    Assert (-not(Control 'UnifiedExecution').IsEnabled) 'Busy ordered action allowed execution replacement.'
     [void](Finish-Response)
     CompleteUnifiedApiAsync
-    foreach($Name in @('UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedExecution','UnifiedCandidatesButton','UnifiedPresetsButton')){
+    foreach($Name in @('UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedCandidatesButton','UnifiedPresetsButton')){
         Assert (-not(Control $Name).IsEnabled) ('HTTP completion enabled a pair selector for an ordered path: '+$Name)
     }
     Assert (-not(UnifiedAsyncBusy)-and(Control 'UnifiedOrdered').IsEnabled-and(Control 'UnifiedNodeChainButton').IsEnabled) 'Ordered completion did not release its own idle controls.'
+    Assert ((Control 'UnifiedExecution').IsEnabled) 'Ordered completion did not release its supported execution selector.'
     Assert ((Control 'UnifiedModeCombo').Visibility-ceq'Collapsed'-and(Control 'UnifiedOrderedModeSummary').Visibility-ceq'Visible') 'Ordered completion lost its per-member mode display.'
     (Control 'UnifiedOrdered').IsChecked=$false
     SetUnifiedAsyncUI $false
@@ -100,7 +103,18 @@ try { Test-OrderedAsyncControls } catch { $orderedFailure=$_.Exception.Message }
 finally { . ([ScriptBlock]::Create($asyncDefinition)) }
 Assert ($orderedFailure-ceq'HTTP completion enabled a pair selector for an ordered path: UnifiedEntryCombo') ('Ordered async causal control missed its completion boundary: '+$orderedFailure)
 Test-OrderedAsyncControls
-Write-Host 'PASS ordered completion retains exact mode/pair controls and missing-refresh causal control fails'
+# The published ordered runtime supports Local, Server and Compare. Reintroducing
+# the old disabled execution selector must fail the original idle/action case.
+$orderedDefinition=@($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'RefreshUnifiedOrderedControls'},$true))[0].Extent.Text
+$executionAnchor="'UnifiedBaseCombo','UnifiedCandidatesButton'"
+Assert ($orderedDefinition.Split(@($executionAnchor),[StringSplitOptions]::None).Count-eq2) 'Ordered execution causal-control anchor changed.'
+. ([ScriptBlock]::Create($orderedDefinition.Replace($executionAnchor,"'UnifiedBaseCombo','UnifiedExecution','UnifiedCandidatesButton'")))
+$executionFailure=''
+try { Test-OrderedAsyncControls } catch { $executionFailure=$_.Exception.Message }
+finally { . ([ScriptBlock]::Create($orderedDefinition)) }
+Assert ($executionFailure-ceq'Idle ordered path disabled its supported execution selector.') ('Ordered execution causal control missed its idle boundary: '+$executionFailure)
+Test-OrderedAsyncControls
+Write-Host 'PASS ordered completion retains mode/pair controls and execution ownership; both causal controls fail at their intended boundaries'
 
 # A settled HTTP action cannot re-enable connection/profile mutations while
 # the captured protection owner is still pending. Explicit protection recovery
