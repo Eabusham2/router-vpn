@@ -296,6 +296,85 @@ class NativeShippingAuditTests(unittest.TestCase):
                     self.assert_backend_proof_admission(False)
                     self.assert_speedlab_imported_platform(False)
 
+    def test_execution_owner_dispatch_keeps_original_source_and_selected_child_proof(self):
+        policy = "cmd/client/desktop_node_chain_policy_dispatch.go"
+        dispatch = "cmd/client/desktop_node_chain_dispatch.go"
+        launch = "cmd/client/desktop_node_chain_execution_launch.go"
+        graph = "cmd/client/desktop_node_chain_execution_graph.go"
+        changes = (
+            (policy, "c.execution.original == c", "true"),
+            (policy, "c.preparation == nil", "true"),
+            (policy, "return c.execution.readPolicy()", "return other.readPolicy()"),
+            (policy, "c.execution.preparation.Source()", "other.preparation.Source()"),
+            (dispatch, "owner.execution.currentContext(ctx, owner.launch, graph)", "error(nil)"),
+            (dispatch, "owner.execution.currentContext(ctx, owner.launch, graph)",
+             "owner.execution.currentContext(context.Background(), owner.launch, graph)"),
+            (launch, "e.original.selection.Native.validate(e.original.selection) != nil", "false"),
+            (launch, "e.original.execution != nil && e.original.execution != e", "false"),
+            (launch, "physical != e.physical", "false"),
+            (launch, "original != e.original.policy", "false"),
+            (launch, "original.OriginalChain() != e.original.selection.Native.chain.chain", "false"),
+            (launch, "if err := e.validateSource(); err != nil {", "if err := error(nil); err != nil {"),
+            (launch, "physical.ConfigSHA256 != e.preparation.ConfigSHA256()", "false"),
+            (launch, 'physical.Kind != "node-chain-execution"', "false"),
+            (launch, "launch.chain != e.original", "false"),
+            (launch, "e.original.input != e.preparation.Source()", "false"),
+            (graph, "desktopnetwork.LockContext(ctx, &e.mu)",
+             "desktopnetwork.LockContext(context.Background(), &e.mu)"),
+            (graph, "!e.ready.Progress.DNSProven", "false"),
+            (graph, "!e.ready.Progress.PublicProven", "false"),
+            (graph, "!e.ready.Progress.Complete", "false"),
+            (graph, "e.ready.SelectionEpoch == 0", "false"),
+            (graph, 'e != nil || launch != nil && launch.chain != nil && graph.Execution != "local"', "false"),
+            (graph, "e != proof.execution", "false"),
+            (graph, "e.physical != proof.physical", "false"),
+            (graph, "graph.Execution != string(proof.winner.Execution)", "false"),
+            (graph, "e.projection != proof.projection", "false"),
+            (graph, "e.ready.Identity != proof.identity", "false"),
+            (graph, "e.ready.SelectionEpoch < proof.epoch", "false"),
+            (graph, "e.ready.Progress.Comparison.Target != proof.target", "false"),
+            (graph, "*e.ready.Progress.Comparison.Winner != proof.winner", "false"),
+            (graph, "a.connectionContext != e.operation", "false"),
+            (graph, "a.checkCapturedConnectionOperationLocked(e.operation) != nil", "false"),
+            (graph, "e.original.capture.sources.currentLocked(a) != nil", "false"),
+        )
+        self.assert_backend_proof_admission(True)
+        self.assert_multihop_scores(True)
+        for path, before, after in changes:
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                # Inert copies cannot satisfy a removed executable guard.
+                self.changes[path] += "\n// " + before + "\nvar executionAuditDecoy = `" + before + "`\n"
+                self.assert_backend_proof_admission(False)
+                self.assert_multihop_scores(False)
+        self.changes.clear()
+        self.replace(graph, "return errors.Join(proof.currentState(e, graph), ctx.Err())",
+                     "return errors.Join(/* exact original child */ proof.currentState(e, graph),\nctx.Err())")
+        self.assert_backend_proof_admission(True)
+        self.assert_multihop_scores(True)
+
+    def test_speedlab_retains_execution_proof_during_native_owner_adoption(self):
+        path = "cmd/client/multihop_native_launch.go"
+        changes = (
+            ("captureDesktopNodeChainExecutionProofContext(ctx, launch)",
+             "captureDesktopNodeChainExecutionProofContext(context.Background(), launch)"),
+            ("if err := execution.currentContext(ctx, launch, graph); err != nil {", "if err := error(nil); err != nil {"),
+            ("desktopnetwork.LockContext(ctx, &a.mu)", "desktopnetwork.LockContext(context.Background(), &a.mu)"),
+            ("execution.execution.publicationCurrentLocked(ctx, a, launch, sel)", "error(nil)"),
+            ("!found || !sameMTUMultihopGraph(current, graph)", "false"),
+            ("if _, found := nativeMultihopOwners.Load(a); found {", "if false {"),
+            ("&nativeMultihopRuntime{execution: execution,", "&nativeMultihopRuntime{execution: nil,"),
+            ("owner.execution.currentContext(ctx, owner.launch, graph)", "error(nil)"),
+        )
+        self.assert_speedlab_imported_platform(True)
+        for before, after in changes:
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\nvar adoptionAuditDecoy = `" + before + "`\n"
+                self.assert_speedlab_imported_platform(False)
+
     def test_typed_policy_sum_retains_three_exclusive_owners_and_validated_dispatch(self):
         linux = "cmd/client/desktop_node_chain_linux.go"
         policy = "cmd/client/desktop_node_chain_policy_dispatch.go"

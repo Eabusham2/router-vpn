@@ -219,7 +219,22 @@ def need_imported_speed_lab_current() -> None:
             'if err != nil || ctx.Err() != nil { return errors.Join(err, ctx.Err()) }',
             '!a.ownsConnectionRuntime(launch.command) || network == "" || actual != network',
             'if err := nativeMultihopLaunchCurrent(ctx, a, launch); err != nil { return err }',
-            'nativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})')
+            '''execution, err := captureDesktopNodeChainExecutionProofContext(ctx, launch)
+            if err != nil { return err }''',
+            'if err := execution.currentContext(ctx, launch, graph); err != nil { return err }',
+            '''if execution != nil {
+                if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil { return err }
+                defer a.mu.Unlock()
+                if err := execution.execution.publicationCurrentLocked(ctx, a, launch, sel); err != nil { return err }
+                current, found := getActiveMultihopGraph(a)
+                if !found || !sameMTUMultihopGraph(current, graph) {
+                    return errors.New("ordered execution graph changed before native adoption")
+                }
+                if _, found := nativeMultihopOwners.Load(a); found {
+                    return errors.New("ordered execution native adoption cannot replace an existing owner")
+                }
+            }''',
+            'nativeMultihopOwners.Store(a, &nativeMultihopRuntime{execution: execution, launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})')
         and _native_module._ordered_once(observe,
             'if err := nativeMultihopLaunchCurrent(ctx, a, owner.launch); err != nil { return nil, err }',
             '''if owner.launch.ownedNode != nil && owner.launch.ownedNode.imported != nil {
@@ -227,7 +242,8 @@ def need_imported_speed_lab_current() -> None:
                     return nil, err
                 }
             }''',
-            'network, err := owner.physicalNetworkContext(ctx)')
+            'network, err := owner.physicalNetworkContext(ctx)',
+            'if err := owner.execution.currentContext(ctx, owner.launch, graph); err != nil { return nil, err }')
         and has(network,
             'if ctx == nil || owner == nil || owner.networkIdentityContext == nil {',
             'network, err := owner.networkIdentityContext(ctx)',

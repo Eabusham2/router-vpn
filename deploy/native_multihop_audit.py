@@ -60,7 +60,8 @@ def native_multihop_ordered_owner(read) -> bool:
 	if c == nil {
 		return false
 	}
-	return desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1
+	return desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1 &&
+		(c.execution == nil || c.policy != nil && c.execution.original == c && c.preparation == nil)
         '''),
         ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func desktopNodeChainConcretePolicyCount(chain *mobilemultihop.DesktopNodeChainPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSPolicy, connect *mobilemultihop.DesktopNodeChainCONNECTPolicy) int', r'''
 	count := 0
@@ -72,6 +73,9 @@ def native_multihop_ordered_owner(read) -> bool:
 	return count
         '''),
         ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func (c *desktopNodeChainLaunch) readPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, mobilemultihop.DesktopPhysicalCapture, error)', r'''
+	if c != nil && c.execution != nil {
+		return c.execution.readPolicy()
+	}
 	if !c.hasPolicy() {
 		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, errors.New("ordered parent lost its exclusive concrete policy")
 	}
@@ -86,6 +90,13 @@ def native_multihop_ordered_owner(read) -> bool:
 	return c.policy.ReadValidated()
         '''),
         ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func (c *desktopNodeChainLaunch) readLaunchPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, string, error)', r'''
+	if c != nil && c.execution != nil {
+		config, meta, _, err := c.execution.readPolicy()
+		if err != nil {
+			return "", meta, "", err
+		}
+		return config, meta, c.execution.preparation.Source(), nil
+	}
 	bad := errors.New("ordered launch lost its exact concrete original source")
 	if !c.hasPolicy() || c.selection.Native == nil || c.selection.Native.chain == nil {
 		return "", mobilemultihop.DesktopNodeChainMetadata{}, "", bad
@@ -125,11 +136,14 @@ def native_multihop_ordered_owner(read) -> bool:
 	return meta
         '''),
         ('cmd/client/desktop_node_chain_dispatch.go', 'func proveDesktopNodeChainContext(ctx context.Context, a *app, selection multihopSelection, command *exec.Cmd) error', r'''
-graph, found := getActiveMultihopGraph(a)
+	graph, found := getActiveMultihopGraph(a)
 	owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
 	if err != nil || !found || owner == nil || owner.launch.chain == nil || owner.selection.Native != selection.Native ||
-		owner.launch.chain.selection.Native != selection.Native || graph.ChainNodes != len(selection.Nodes) || graph.Execution != "local" {
+		owner.launch.chain.selection.Native != selection.Native || graph.ChainNodes != len(selection.Nodes) {
 		return errors.Join(err, errors.New("ordered native proof lost its full original runtime"))
+	}
+	if err := owner.execution.currentContext(ctx, owner.launch, graph); err != nil {
+		return err
 	}
 	if owner.launch.chain.platform != nil {
 		return owner.launch.chain.platform.prove(ctx)
@@ -348,6 +362,139 @@ if launch != nil && launch.chain != nil {
 		return errors.New("native platform retirement lost its original launch")
 	}
 	return launch.importedPlatform.Close(ctx)
+        '''),
+        # The execution branch keeps the original physical source and a fresh
+        # selected-child proof. Local-only refusal moved into proof.original;
+        # accepting the new dispatch without these callees would weaken it.
+        ('cmd/client/desktop_node_chain_execution_launch.go', 'func desktopNodeChainLaunchExecution(launch *desktopNodeLaunch) *desktopNodeChainExecutionLaunch', r'''
+	if launch == nil || launch.chain == nil {
+		return nil
+	}
+	return launch.chain.execution
+        '''),
+        ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) validateSource() error', r'''
+	bad := errors.New("execution launch changed its exact original source or physical preparation")
+	if e == nil || e.original == nil || e.preparation == nil || e.physical == nil || e.original.policy == nil ||
+		!e.original.hasPolicy() || e.original.socksPolicy != nil || e.original.preparation != nil || e.original.selection.Native == nil ||
+		e.original.selection.Native.chain == nil || e.original.selection.Native.validate(e.original.selection) != nil {
+		return bad
+	}
+	if e.original.execution != nil && e.original.execution != e {
+		return bad
+	}
+	physical, err := e.preparation.DesktopPhysicalPolicy()
+	if err != nil || physical != e.physical {
+		return bad
+	}
+	original, err := physical.OriginalDesktopPolicy()
+	if err != nil || original != e.original.policy || original.OriginalChain() != e.original.selection.Native.chain.chain {
+		return bad
+	}
+	meta := original.Metadata()
+	if meta.TargetOS != "linux" && meta.TargetOS != "windows" && meta.TargetOS != "darwin" {
+		return bad
+	}
+	return nil
+        '''),
+        ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) readPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, mobilemultihop.DesktopPhysicalCapture, error)', r'''
+	if err := e.validateSource(); err != nil {
+		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, err
+	}
+	config, physical, capture, err := e.physical.PhysicalReadValidated()
+	meta := e.original.policy.Metadata()
+	if err != nil || physical.ConfigSHA256 != e.preparation.ConfigSHA256() || physical.SourceSHA256 != meta.SourceSHA256 ||
+		physical.SessionID != meta.SessionID || physical.TargetOS != meta.TargetOS || physical.Kind != "node-chain-execution" {
+		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, errors.New("execution physical capture differs from its original desktop policy")
+	}
+	meta.ConfigSHA256, meta.FinalTag = physical.ConfigSHA256, mobilemultihop.SelectorTag
+	return config, meta, capture, nil
+        '''),
+        ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) bound(launch *desktopNodeLaunch) error', r'''
+	if err := e.validateSource(); err != nil {
+		return err
+	}
+	if launch == nil || launch.chain != e.original || launch.chain.execution != e || launch.configSHA256 != e.preparation.ConfigSHA256() ||
+		launch.mtuSession != e.original.policy.Metadata().SessionID || e.original.input != e.preparation.Source() {
+		return errors.New("execution observation lost its exact staged parent launch")
+	}
+	return nil
+        '''),
+        ('cmd/client/desktop_node_chain_execution_graph.go', 'func captureDesktopNodeChainExecutionProofContext(ctx context.Context, launch *desktopNodeLaunch) (*desktopNodeChainExecutionProof, error)', r'''
+	if ctx == nil {
+		return nil, errors.New("execution proof capture has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	e := desktopNodeChainLaunchExecution(launch)
+	if e == nil {
+		return nil, nil
+	}
+	if err := e.bound(launch); err != nil {
+		return nil, err
+	}
+	if err := desktopnetwork.LockContext(ctx, &e.mu); err != nil {
+		return nil, err
+	}
+	defer e.mu.Unlock()
+	if e.projection == nil || e.ready == nil || e.ready.Identity != e.identity || e.ready.Progress.Comparison.Winner == nil ||
+		!e.ready.Progress.Complete || !e.ready.Progress.Ready || !e.ready.Progress.DNSProven || !e.ready.Progress.PublicProven || e.ready.SelectionEpoch == 0 {
+		return nil, errors.New("ordered execution graph preceded its selected native proof")
+	}
+	return &desktopNodeChainExecutionProof{execution: e, physical: e.physical, projection: e.projection, identity: e.identity,
+		winner: *e.ready.Progress.Comparison.Winner, target: e.ready.Progress.Comparison.Target, epoch: e.ready.SelectionEpoch}, nil
+        '''),
+        ('cmd/client/desktop_node_chain_execution_graph.go', 'func (proof *desktopNodeChainExecutionProof) currentContext(ctx context.Context, launch *desktopNodeLaunch, graph activeMultihopGraph) error', r'''
+	if ctx == nil {
+		return errors.New("execution observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	e, err := proof.original(launch, graph)
+	if err != nil || e == nil {
+		return errors.Join(err, ctx.Err())
+	}
+	if err := desktopnetwork.LockContext(ctx, &e.mu); err != nil {
+		return err
+	}
+	defer e.mu.Unlock()
+	return errors.Join(proof.currentState(e, graph), ctx.Err())
+        '''),
+        ('cmd/client/desktop_node_chain_execution_graph.go', 'func (proof *desktopNodeChainExecutionProof) original(launch *desktopNodeLaunch, graph activeMultihopGraph) (*desktopNodeChainExecutionLaunch, error)', r'''
+	e := desktopNodeChainLaunchExecution(launch)
+	if proof == nil {
+		if e != nil || launch != nil && launch.chain != nil && graph.Execution != "local" {
+			return nil, errors.New("ordered graph omitted its execution authority")
+		}
+		return nil, nil
+	}
+	if e == nil || e != proof.execution || e.bound(launch) != nil || e.physical != proof.physical || graph.Execution != string(proof.winner.Execution) {
+		return nil, errors.New("ordered execution graph replaced its original preparation")
+	}
+	return e, nil
+        '''),
+        ('cmd/client/desktop_node_chain_execution_graph.go', 'func (proof *desktopNodeChainExecutionProof) currentState(e *desktopNodeChainExecutionLaunch, graph activeMultihopGraph) error', r'''
+	if e.projection != proof.projection || e.identity != proof.identity || e.ready == nil || e.ready.Identity != proof.identity ||
+		e.ready.SelectionEpoch < proof.epoch || e.ready.Progress.Comparison.Target != proof.target || e.ready.Progress.Comparison.Winner == nil ||
+		*e.ready.Progress.Comparison.Winner != proof.winner || e.ready.Progress.Execution != graph.Execution {
+		return errors.New("ordered execution graph replaced its proved winner, target or identity")
+	}
+	return nil
+        '''),
+        ('cmd/client/desktop_node_chain_execution_graph.go', 'func (e *desktopNodeChainExecutionLaunch) publicationCurrentLocked(ctx context.Context, a *app, launch *desktopNodeLaunch, selection multihopSelection) error', r'''
+	if ctx == nil || ctx.Err() != nil || a == nil || e == nil || e.operation == nil || e.bound(launch) != nil ||
+		e.original.capture == nil || e.original.capture.app != a || e.original.capture.sources == nil ||
+		e.original.selection.Native != selection.Native || launch.command == nil || a.cmd != launch.command || a.closing ||
+		a.connectionContext != e.operation || a.checkCapturedConnectionOperationLocked(e.operation) != nil ||
+		e.original.capture.sources.currentLocked(a) != nil {
+		return errors.New("ordered execution publication lost its captured operation, source or command")
+	}
+	return ctx.Err()
         '''),
     )
     sources = {path: _tokens(read(path)) for path, _, _ in expected}
