@@ -25,6 +25,7 @@ on:
           - connect-source
           - connect-runtime
           - connect-run
+          - connect-native-mtu
           - macos-profiles
           - socks-runtime
           - socks-owner
@@ -65,7 +66,7 @@ jobs:
     runs-on: ${{ (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host' || inputs.suite == 'ios-sdk') && 'macos-15-intel' || 'ubuntu-24.04' }}
     # CONNECT adds two fresh projections, two images, fourteen encrypted cases
     # and four compiled controls; their individual process bounds are fixed.
-    timeout-minutes: ${{ inputs.suite == 'connect-run' && 150 || inputs.suite == 'ios-sdk' && 300 || inputs.suite == 'android-sdk' && 180 || inputs.suite == 'android-policy-fixtures' && 95 || (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host') && 45 || 30 }}
+    timeout-minutes: ${{ inputs.suite == 'connect-native-mtu' && 180 || inputs.suite == 'connect-run' && 150 || inputs.suite == 'ios-sdk' && 300 || inputs.suite == 'android-sdk' && 180 || inputs.suite == 'android-policy-fixtures' && 95 || (inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host') && 45 || 30 }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       SUITE: ${{ inputs.suite }}
@@ -81,7 +82,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "connect-source", "connect-runtime", "connect-run", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "socks-preclose", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent", "desktop-socks-editor", "desktop-socks-child", "android-policy-fixtures"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "connect-source", "connect-runtime", "connect-run", "connect-native-mtu", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "socks-preclose", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent", "desktop-socks-editor", "desktop-socks-child", "android-policy-fixtures"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -147,6 +148,11 @@ jobs:
           if [[ "$SUITE" == "connect-runtime" ]]; then
             python3 validator/deploy/test_focused_socks_runtime_runner.py
             python3 validator/deploy/test_focused_connect_runtime_runner.py
+          fi
+          if [[ "$SUITE" == "connect-native-mtu" ]]; then
+            python3 validator/deploy/test_focused_socks_bridge_runner.py
+            python3 validator/deploy/test_focused_socks_native_mtu_runner.py
+            python3 validator/deploy/test_focused_connect_native_mtu_runner.py
           fi
           if [[ "$SUITE" == "connect-run" ]]; then
             python3 validator/deploy/test_focused_socks_bridge_runner.py
@@ -318,6 +324,14 @@ jobs:
         shell: bash
         run: |
           python3 validator/deploy/test_focused_socks_native_mtu.py \
+            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
+            --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests"
+      - name: Execute distinct CONNECT MTU and every retained SOCKS native control
+        if: inputs.suite == 'connect-native-mtu'
+        shell: bash
+        run: |
+          python3 validator/deploy/test_focused_connect_native_mtu.py \
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests"

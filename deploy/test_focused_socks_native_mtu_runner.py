@@ -22,8 +22,9 @@ class NativeSOCKSMTUValidator(unittest.TestCase):
         return value
     def test_exact_native_wrapper_original_and_control_inventory(self):
         self.assertEqual((len(V.NATIVE_ROOTS),len(V.NATIVE_CASES),len(V.WRAPPER_ROOTS),len(V.WRAPPER_CASES)),(8,18,7,13))
-        self.assertEqual((len(V.ORIGINAL_TYPED),len(V.ORIGINAL_BOX),len(V.ORIGINAL_CONTROLS)),(50,27,6))
-        self.assertEqual((len(V.BASE.VERDICTS),len(V.BASE.ORIGINAL_BOX),len(V.BASE.CONTROLS)),(63,45,19))
+        self.assertEqual((len(V.ORIGINAL_TYPED),len(V.ORIGINAL_BOX),len(V.ORIGINAL_CONTROLS)),(51,27,6))
+        self.assertEqual((len(V.BASE.VERDICTS),len(V.BASE.ORIGINAL_BOX),len(V.BASE.CONTROLS)),(64,45,19))
+        self.assertIn("TestRouterNodeChainSOCKSExportedFactoryRetainsTypedOwner", V.ORIGINAL_TYPED)
         for names in (V.NATIVE_CASES,V.WRAPPER_CASES,V.BASE.VERDICTS,V.BASE.ORIGINAL_BOX):
             self.assertEqual(len(names),len(set(names)))
         self.assertEqual(len({x["name"] for x in V.BASE.CONTROLS}),19)

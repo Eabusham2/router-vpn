@@ -24,6 +24,7 @@ type RouterNodeChainCONNECT struct {
 	retired     atomic.Bool
 	closed      atomic.Bool
 	measurement atomic.Pointer[hopmeasure.Service]
+	mtu         atomic.Pointer[routerNodeChainCONNECTMTU]
 	cleanup     atomic.Pointer[routerNodeChainCONNECTCleanup]
 	measuring   bool // mu; the original worker releases this only after its drain
 }
@@ -264,6 +265,9 @@ func (m *RouterNodeChainCONNECT) networkChangedContext(ctx context.Context) erro
 		return errRouterNodeChainCONNECT()
 	}
 	m.retireProof()
+	if optimizer := m.mtu.Load(); optimizer != nil {
+		optimizer.invalidate()
+	}
 	if measurement := m.measurement.Load(); measurement != nil {
 		// This original service remains retained on timeout. Do not call its
 		// contextless Invalidate while a native status lock may be occupied.
@@ -285,6 +289,11 @@ func (m *RouterNodeChainCONNECT) closeContext(ctx context.Context) error {
 		return errRouterNodeChainCONNECT()
 	}
 	m.retireProof()
+	if optimizer := m.mtu.Load(); optimizer != nil {
+		if err := optimizer.closeContext(ctx); err != nil {
+			return err
+		}
+	}
 	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
 		return err
 	}

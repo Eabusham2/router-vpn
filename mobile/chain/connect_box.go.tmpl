@@ -6,6 +6,7 @@ import (
 	"net"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -159,6 +160,7 @@ type RouterVPNNodeChainCONNECTEngine struct {
 	middle      *ownedCONNECT.Outbound
 	middleTag   string
 	ipv6        bool
+	mtu         atomic.Pointer[RouterVPNNodeChainCONNECTMTU]
 }
 
 var _ mobilemultihop.NodeChainCONNECTEngine = (*RouterVPNNodeChainCONNECTEngine)(nil)
@@ -242,6 +244,7 @@ func (s *Box) RouterVPNNewNodeChainCONNECTEngine(ctx context.Context,
 	}
 	engine := &RouterVPNNodeChainCONNECTEngine{observation: observation, source: source, middle: middle,
 		middleTag: meta.Proofs[1].Tag, ipv6: meta.Devices[1].IPv6Mode == "on"}
+	engine.bindCONNECTMTUObservation()
 	return engine, nil
 }
 

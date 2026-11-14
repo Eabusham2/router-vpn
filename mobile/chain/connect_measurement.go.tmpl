@@ -61,7 +61,7 @@ func (m *RouterNodeChainCONNECT) BeginMeasurementContext(ctx context.Context) (f
 		return nil, err
 	}
 	defer m.mu.Unlock()
-	if m.measuring || m.healthyContext(ctx) != nil {
+	if m.measuring || m.mtuOccupied() || m.healthyContext(ctx) != nil {
 		return nil, errors.New("original CONNECT measurement activity is occupied or retired")
 	}
 	m.measuring = true

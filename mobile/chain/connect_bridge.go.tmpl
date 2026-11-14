@@ -53,6 +53,16 @@ func (m *RouterNodeChainCONNECT) NewCommandServer(handler CommandServerHandler, 
 	return server, nil
 }
 
+// RouterNodeChainCONNECTNewCommandServer exposes the original result and error
+// through gomobile's top-level factory ABI. A partial server remains available
+// to the host for exact cleanup; this wrapper neither retries nor discards it.
+func RouterNodeChainCONNECTNewCommandServer(m *RouterNodeChainCONNECT, handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+	if m == nil {
+		return nil, errRouterNodeChainCONNECT()
+	}
+	return m.NewCommandServer(handler, platform)
+}
+
 // Source is the exact private schema4 input for the original protected session
 // file. It carries no generic launch, Ready or native ownership authority.
 func (m *RouterNodeChainCONNECT) Source() (string, error) {

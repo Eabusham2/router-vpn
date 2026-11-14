@@ -25,7 +25,7 @@ REPOSITORY = "Eabusham2/router-vpn"
 WORKFLOW_REF = "refs/heads/main"
 # Encrypted CONNECT acceptance runs only from the already-published validator
 # commit. It does not expand any existing single-parent candidate allowlist.
-PUBLISHED_ONLY_SUITES = frozenset({"connect-run"})
+PUBLISHED_ONLY_SUITES = frozenset({"connect-run", "connect-native-mtu"})
 HEX40 = re.compile(r"[0-9a-f]{40}")
 ALLOWLISTS = {
     "socks-preclose": frozenset({
@@ -1038,13 +1038,16 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(captured["validator_sha"], self.base)
 
     def test_published_native_suite_requires_exact_validator_commit(self):
-        captured = self.capture("connect-run")
-        self.assertEqual(captured["relation"], "base")
-        self.assertEqual(captured["changes"], [])
+        for suite in sorted(PUBLISHED_ONLY_SUITES):
+            with self.subTest(suite=suite):
+                captured = self.capture(suite)
+                self.assertEqual(captured["relation"], "base")
+                self.assertEqual(captured["changes"], [])
         self.edit("internal/mobilemultihop/plan.go")
         self.commit(self.source, "unpublished native change")
-        with self.assertRaisesRegex(ValueError, "exact published main"):
-            self.capture("connect-run")
+        for suite in sorted(PUBLISHED_ONLY_SUITES):
+            with self.subTest(suite=suite), self.assertRaisesRegex(ValueError, "exact published main"):
+                self.capture(suite)
 
     def test_existing_executable_mode_is_preserved_but_new_executable_is_refused(self):
         self.edit("internal/mobilemultihop/plan.go")
