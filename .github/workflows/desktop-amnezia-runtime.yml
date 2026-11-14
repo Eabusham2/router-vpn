@@ -22,6 +22,7 @@ on:
       - 'client/linux/test-tor-bridge-update.c'
       - 'client/RouterVPN-Windows-SpeedLab.ps1'
       - 'client/test-windows-speed-lab-paths.ps1'
+      - 'client/test-windows-async-actions.ps1'
       - 'client/macos/RouterVPNMacSpeedLab*.swift'
       - 'client/macos/RouterVPNMacTelemetry.swift'
       - 'client/macos/RouterVPNMacOrderedLatency.swift'
@@ -65,6 +66,7 @@ on:
       - 'deploy/test_desktop_ordered_candidates.py'
       - 'deploy/test_desktop_live_response_forms.py'
       - 'deploy/test_desktop_network_cohort*.py'
+      - 'deploy/test_desktop_socket_uid*.py'
       - 'internal/desktopnetwork/**'
       - 'deploy/test_macos_speed_lab_transport.py'
       - 'deploy/test_macos_performance_measurement.py'
@@ -112,6 +114,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python3 deploy/test_desktop_socket_uid_runner.py TrustedPrivilegeExecutable
           python3 deploy/test_desktop_network_cohort.py 2>&1 | tee "$RUNNER_TEMP/desktop-network-cohort.log"
       - name: Execute captured Tor bridge updates and the actual importer
         shell: bash

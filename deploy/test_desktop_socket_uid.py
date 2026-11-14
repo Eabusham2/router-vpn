@@ -6,7 +6,7 @@ executes under root/sudo -n. It forks a temporary numeric test UID, transfers
 unconnected descriptors, and uses owned loopback peers; it creates no accounts,
 routes or firewall state. Missing privilege is a failure, never a skipped gate.
 """
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import argparse
 import hashlib
 import importlib.util
@@ -85,16 +85,62 @@ def run(command, *, cwd=None, env=None, timeout=180, sudo=None):
     return output.decode('utf-8')
 
 
+def trusted_privilege_executable(path):
+    # Ubuntu's sudo provider uses a root-owned alternatives chain. Resolve every
+    # component, including intermediate link destinations, before selecting the
+    # executable. A final resolve()/stat() alone hides a writable intermediate
+    # directory or an untrusted alias that could be retargeted after inspection.
+    original = PurePosixPath(path)
+    if not original.is_absolute():
+        raise ValueError('The native UID fixture requires an absolute system sudo path')
+    pending = list(original.parts[1:])
+    current = PurePosixPath('/')
+    links = 0
+    root = os.lstat(str(current))
+    if not stat.S_ISDIR(root.st_mode) or root.st_uid != 0 or root.st_mode & 0o022:
+        raise ValueError('The native UID fixture has no trusted system sudo root')
+    while pending:
+        part = pending.pop(0)
+        if part == '.':
+            continue
+        if part == '..':
+            current = current.parent
+            continue
+        candidate = current / part
+        info = os.lstat(str(candidate))
+        if info.st_uid != 0:
+            raise ValueError('The native UID fixture has an untrusted system sudo owner')
+        if stat.S_ISLNK(info.st_mode):
+            links += 1
+            if links > 40:
+                raise ValueError('The native UID fixture has a cyclic or excessive system sudo alias chain')
+            target = PurePosixPath(os.readlink(str(candidate)))
+            if target.is_absolute():
+                current = PurePosixPath('/')
+                pending = list(target.parts[1:]) + pending
+            else:
+                pending = list(target.parts) + pending
+            continue
+        if info.st_mode & 0o022:
+            raise ValueError('The native UID fixture has a writable system sudo path')
+        if pending:
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError('The native UID fixture system sudo parent is not a directory')
+            current = candidate
+            continue
+        if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
+            raise ValueError('The native UID fixture system sudo is not a regular executable')
+        return str(candidate)
+    raise ValueError('The native UID fixture system sudo alias has no executable target')
+
+
 def privilege_tool():
     if os.geteuid() == 0:
         return None
-    path = Path('/usr/bin/sudo')
-    if path.is_symlink() or not path.is_file():
-        raise ValueError('The native build requires root or /usr/bin/sudo -n for the explicit UID fixture')
-    info = path.stat()
-    if info.st_uid != 0 or info.st_mode & 0o022:
-        raise ValueError('The native UID fixture has no trusted system sudo')
-    return str(path)
+    try:
+        return trusted_privilege_executable('/usr/bin/sudo')
+    except OSError as error:
+        raise ValueError('The native build requires a trusted /usr/bin/sudo -n for the explicit UID fixture') from error
 
 
 def compiler_toolchain(source, go, env):

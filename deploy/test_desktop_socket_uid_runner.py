@@ -6,7 +6,9 @@ import importlib.util
 import io
 import json
 import os
+import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -32,6 +34,112 @@ def copied(path):
 def owned_sources():
     return sorted(path for pattern in ('desktop_socket_*.go', 'desktop_standard_*.go')
                   for path in (ROOT/'internal/mobiletor').glob(pattern))
+
+
+class TrustedPrivilegeExecutable(unittest.TestCase):
+    def setUp(self):
+        self.entries = {
+            path: SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o755)
+            for path in ('/', '/usr', '/usr/bin', '/usr/lib', '/usr/lib/cargo',
+                         '/usr/lib/cargo/bin', '/etc', '/etc/alternatives')
+        }
+        self.entries['/usr/lib/cargo/bin/sudo'] = SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o4755)
+        self.links = {'/usr/bin/sudo': '/etc/alternatives/sudo',
+                      '/etc/alternatives/sudo': '/usr/lib/cargo/bin/sudo'}
+        for path in self.links:
+            self.entries[path] = SimpleNamespace(st_uid=0, st_mode=stat.S_IFLNK | 0o777)
+        self.seen = []
+
+    def inspect(self, path='/usr/bin/sudo'):
+        def lstat(name):
+            self.seen.append(name)
+            if name not in self.entries:
+                raise FileNotFoundError(name)
+            return self.entries[name]
+
+        with patch.object(GATE.os, 'lstat', side_effect=lstat), \
+             patch.object(GATE.os, 'readlink', side_effect=lambda name: self.links[name]):
+            return GATE.trusted_privilege_executable(path)
+
+    def test_complete_system_alternatives_chain_selects_exact_executable(self):
+        self.assertEqual(self.inspect(), '/usr/lib/cargo/bin/sudo')
+        for path in self.entries:
+            self.assertIn(path, self.seen)
+
+    def test_direct_and_relative_root_owned_providers_remain_supported(self):
+        self.entries['/usr/bin/sudo'] = SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o4755)
+        self.assertEqual(self.inspect(), '/usr/bin/sudo')
+        self.entries['/usr/bin/sudo'] = SimpleNamespace(st_uid=0, st_mode=stat.S_IFLNK | 0o777)
+        self.links['/usr/bin/sudo'] = '../lib/cargo/bin/sudo'
+        self.assertEqual(self.inspect(), '/usr/lib/cargo/bin/sudo')
+
+    def test_every_directory_alias_and_final_owner_is_trusted(self):
+        for path, original in tuple(self.entries.items()):
+            with self.subTest(path=path):
+                self.entries[path] = SimpleNamespace(st_uid=1000, st_mode=original.st_mode)
+                try:
+                    with self.assertRaises(ValueError):
+                        self.inspect()
+                finally:
+                    self.entries[path] = original
+
+    def test_every_real_parent_and_executable_rejects_public_write(self):
+        for path, original in tuple(self.entries.items()):
+            if stat.S_ISLNK(original.st_mode):
+                continue
+            for permission in (0o020, 0o002):
+                with self.subTest(path=path, permission=permission):
+                    self.entries[path] = SimpleNamespace(st_uid=0, st_mode=original.st_mode | permission)
+                    try:
+                        with self.assertRaises(ValueError):
+                            self.inspect()
+                    finally:
+                        self.entries[path] = original
+
+    def test_safe_final_target_cannot_hide_an_untrusted_intermediate(self):
+        self.entries['/tmp'] = SimpleNamespace(st_uid=0, st_mode=stat.S_IFDIR | 0o1777)
+        self.entries['/tmp/provider'] = SimpleNamespace(st_uid=0, st_mode=stat.S_IFLNK | 0o777)
+        self.links['/tmp/provider'] = '/usr/lib/cargo/bin/sudo'
+        self.links['/etc/alternatives/sudo'] = '/tmp/provider'
+        with self.assertRaisesRegex(ValueError, 'writable'):
+            self.inspect()
+        self.assertNotIn('/usr/lib/cargo/bin/sudo', self.seen)
+
+    def test_directory_aliases_are_checked_before_their_target(self):
+        self.entries['/etc/alternatives'] = SimpleNamespace(st_uid=0, st_mode=stat.S_IFLNK | 0o777)
+        self.links['/etc/alternatives'] = '/usr/lib/cargo/bin'
+        self.assertEqual(self.inspect(), '/usr/lib/cargo/bin/sudo')
+        self.entries['/etc/alternatives'].st_uid = 1000
+        with self.assertRaisesRegex(ValueError, 'owner'):
+            self.inspect()
+
+    def test_missing_cyclic_directory_and_nonexecutable_targets_refuse(self):
+        target = '/usr/lib/cargo/bin/sudo'
+        original = self.entries[target]
+        del self.entries[target]
+        with self.assertRaises(FileNotFoundError):
+            self.inspect()
+        for mode in (stat.S_IFDIR | 0o755, stat.S_IFREG | 0o644, stat.S_IFIFO | 0o755):
+            with self.subTest(mode=mode):
+                self.entries[target] = SimpleNamespace(st_uid=0, st_mode=mode)
+                with self.assertRaisesRegex(ValueError, 'regular executable'):
+                    self.inspect()
+        self.entries[target] = original
+        self.links['/etc/alternatives/sudo'] = '/usr/bin/sudo'
+        with self.assertRaisesRegex(ValueError, 'cyclic or excessive'):
+            self.inspect()
+        with self.assertRaisesRegex(ValueError, 'absolute'):
+            self.inspect('usr/bin/sudo')
+
+    def test_only_fixed_system_entry_is_selected_for_nonroot_invocation(self):
+        with patch.object(GATE.os, 'geteuid', return_value=1000, create=True), \
+             patch.object(GATE, 'trusted_privilege_executable', return_value='/usr/lib/cargo/bin/sudo') as trusted:
+            self.assertEqual(GATE.privilege_tool(), '/usr/lib/cargo/bin/sudo')
+            trusted.assert_called_once_with('/usr/bin/sudo')
+        with patch.object(GATE.os, 'geteuid', return_value=0, create=True), \
+             patch.object(GATE, 'trusted_privilege_executable') as trusted:
+            self.assertIsNone(GATE.privilege_tool())
+            trusted.assert_not_called()
 
 
 class OwnedUIDRunner(unittest.TestCase):
