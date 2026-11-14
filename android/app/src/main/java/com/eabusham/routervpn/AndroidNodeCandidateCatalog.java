@@ -65,21 +65,28 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 JSONObject profile=candidate.profile();
                 String layer=profile.optString("start_layer","off");
                 if(!layer.isEmpty()&&!"off".equals(layer))throw new IllegalStateException("Layered candidate is unsupported");
-                input=AndroidNodeChainCapture.memberInput(candidate,"shadowsocks",profile);
+                input=AndroidNodeChainCapture.memberInput(candidate,candidateMode(candidate),profile);
                 if(!Libbox.routerNodeChainCandidateInputSupported(input))throw new IllegalStateException("Unsupported original candidate source");
-                // The shared constructor is authoritative for literal transport,
-                // canonical single PSK and exact three-method admission.
+                // The shared constructor admits the exact literal SS2022 or
+                // HTTP(S) CONNECT source. A TCP score is no authentication proof.
                 if(!identities.add(id))throw new IllegalStateException("Duplicate candidate identity");
                 reason="";
             } catch(Exception unsupported) { input=""; }
             if(!input.isEmpty())inputs.put(input);
             captured.add(new Row(node.id,id,node.name,input,reason));
         }
-        if(inputs.length()==0||inputs.length()>64)throw new IllegalStateException("No bounded eligible literal Shadowsocks 2022 candidate inventory is available.");
+        if(inputs.length()==0||inputs.length()>64)throw new IllegalStateException("No bounded eligible literal Shadowsocks 2022 or HTTP(S) CONNECT candidate inventory is available.");
         rows=java.util.Collections.unmodifiableList(captured);
         inventory=new JSONObject().put("schema",1).put("revision",signature).put("inputs",inputs).toString();
         inventorySHA=digest(inventory);
         requireSourcesCurrent();
+    }
+    static String candidateMode(AndroidNodeStore.ChainSource source)throws Exception {
+        if(!source.imported)return "shadowsocks";
+        String mode=AndroidExternalPolicy.protocol(source.external().protocol);
+        if(!java.util.Arrays.asList("shadowsocks","http-connect","https-connect").contains(mode))
+            throw new IllegalStateException("This saved transport has no supported candidate TCP score.");
+        return mode;
     }
     synchronized void bind(AndroidNodeChainSession original)throws Exception {
         if(session!=null||server!=null||original==null||original.source!=originalSource||invalidated)

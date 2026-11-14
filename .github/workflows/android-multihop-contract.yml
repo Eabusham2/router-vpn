@@ -14,6 +14,7 @@ on:
       - 'android/test_android_node_chain_execution_restore.py'
       - 'android/test_android_runtime_contract.py'
       - 'android/test_android_node_candidates.py'
+      - 'android/test_android_node_connect_candidates.py'
       - 'android/test_android_node_candidate_profile.py'
       - 'android/test_android_node_candidate_prefix_capture.py'
       - 'android/test_android_node_candidate_prefix_host.py'
@@ -91,6 +92,7 @@ on:
       - 'android/test_android_node_chain_execution_restore.py'
       - 'android/test_android_runtime_contract.py'
       - 'android/test_android_node_candidates.py'
+      - 'android/test_android_node_connect_candidates.py'
       - 'android/test_android_node_candidate_profile.py'
       - 'android/test_android_node_candidate_prefix_capture.py'
       - 'android/test_android_node_candidate_prefix_host.py'
@@ -186,6 +188,7 @@ jobs:
           python3 android/test_android_node_chain_capture.py
           python3 android/test_android_node_chain_execution_capture.py
           python3 android/test_android_node_candidates.py
+          python3 android/test_android_node_connect_candidates.py
           python3 android/test_android_node_candidate_profile.py
           python3 android/test_android_node_candidate_prefix_capture.py
           python3 android/test_android_node_candidate_prefix_host.py

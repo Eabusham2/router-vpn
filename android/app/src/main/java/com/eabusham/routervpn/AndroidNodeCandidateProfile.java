@@ -36,16 +36,18 @@ final class AndroidNodeCandidateProfile {
         for(AndroidNodeCandidateCatalog.Row row:catalog.rows)if(row.id.equals(result.id)&&!row.input.isEmpty()){if(selected!=null)throw new IllegalStateException("Duplicate candidate identity");selected=row;}
         if(selected==null)throw new IllegalStateException("The measured original source is missing.");
         AndroidNodeStore.ChainSource candidate=catalog.source(selected.localID);
-        String actual=AndroidNodeChainCapture.memberInput(candidate,"shadowsocks",candidate.profile());
+        String candidateMode=AndroidNodeCandidateCatalog.candidateMode(candidate);
+        String actual=AndroidNodeChainCapture.memberInput(candidate,candidateMode,candidate.profile());
         if(!selected.input.equals(actual))throw new IllegalStateException("The measured source changed before proposal.");
         for(int i=0;i<=catalog.prefix;i++){sources.add(catalog.session.source.members.get(i));modes.add(catalog.session.source.modes.get(i));}
-        sources.add(candidate);modes.add("shadowsocks");
+        sources.add(candidate);modes.add(candidateMode);
         if(candidate.imported){
             if(catalog.prefix!=0)throw new IllegalStateException("A custom candidate currently requires one first packet node and the original paired final node.");
             AndroidNodeStore.ChainSource last=catalog.session.source.control;
             sources.add(last);modes.add("shadowsocks");
         }
         JSONArray references=new JSONArray(),inputs=new JSONArray(),identities=new JSONArray();
+        List<String> capturedInputs=new ArrayList<>(),capturedIdentities=new ArrayList<>();
         StringBuilder preview=new StringBuilder();long bytes=0;
         for(int i=0;i<sources.size();i++){
             AndroidNodeStore.ChainSource source=sources.get(i);bytes+=source.bytes().length;
@@ -56,14 +58,22 @@ final class AndroidNodeCandidateProfile {
         for(int i=0;i<sources.size();i++){
             AndroidNodeStore.ChainSource source=sources.get(i);JSONObject policy=source.profile();
             if(i==sources.size()-1){policy.put("multihop_enabled",true).put("multihop_execution","local").put("multihop_nodes",references);for(String key:new String[]{"multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"})policy.remove(key);AndroidNodeStore.orderedSelection(policy);}
-            inputs.put(AndroidNodeChainCapture.memberInput(source,modes.get(i),policy));identities.put(AndroidNodeChainCapture.identityInput(source));
+            String member=AndroidNodeChainCapture.memberInput(source,modes.get(i),policy),identity=AndroidNodeChainCapture.identityInput(source);
+            inputs.put(member);identities.put(identity);capturedInputs.add(member);capturedIdentities.add(identity);
         }
-        String input=new JSONObject().put("schema",AndroidNodeChainCapture.sourceSchema(sources)).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString();
+        int schema=AndroidNodeChainCapture.sourceSchema(sources);
+        String input=new JSONObject().put("schema",schema).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString();
         if(input.getBytes(StandardCharsets.UTF_8).length>AndroidNodeChainCapture.MAX_INPUT)throw new IllegalStateException("The complete proposed source exceeds its bound.");
+        if(schema==4){
+            try(AndroidNodeChainCONNECTCapture compiled=AndroidNodeChainCONNECTCapture.compile(input,capturedInputs,capturedIdentities)){
+                requireCurrent();
+            }
+        }else{
         RouterNodeChain compiled=Libbox.newRouterNodeChain(input);
         if(compiled==null)throw new IllegalStateException("The compiler returned no proposed path.");
         try {if(compiled.config()==null||compiled.config().isEmpty())throw new IllegalStateException("The compiler returned no complete proposed graph.");requireCurrent();}
         finally {compiled.close();}
+        }
         description=preview.toString();
     }
     private void requireCurrent()throws Exception {operation.requireResult(result);}
