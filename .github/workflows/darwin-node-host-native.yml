@@ -36,7 +36,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: darwin-node-host-native-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}
+  # New main pushes supersede this standalone producer and its owned children.
+  # Explicit dispatches and PR evidence retain an independent run lane.
+  group: darwin-node-host-native-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:

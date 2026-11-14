@@ -18,7 +18,7 @@ CALL_ONLY = {
     ".github/workflows/darwin-node-host-tun.yml": "  group: darwin-node-host-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
 }
 STANDALONE = {
-    ".github/workflows/darwin-node-host-native.yml": "  group: darwin-node-host-native-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
+    ".github/workflows/darwin-node-host-native.yml": "  group: darwin-node-host-native-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.ref || github.run_id }}",
 }
 
 for filename, expected in {**EXPECTED, **CALL_ONLY, **STANDALONE}.items():
@@ -26,7 +26,7 @@ for filename, expected in {**EXPECTED, **CALL_ONLY, **STANDALONE}.items():
     assert path.is_file(), f"missing reusable release workflow: {filename}"
     lines = path.read_text(encoding="utf-8").splitlines()
     assert lines.count(expected) == 1, (
-        f"{filename} must isolate each caller-owned exact-SHA evidence run"
+        f"{filename} lost its automatic-push or caller-owned evidence lane"
     )
     if filename in STANDALONE:
         assert "  workflow_call:" not in lines, f"{filename} must remain the standalone producer wrapper"

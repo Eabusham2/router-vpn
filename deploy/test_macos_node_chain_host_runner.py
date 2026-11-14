@@ -2,6 +2,7 @@
 """Causal refusal checks for the actual Darwin ordered native host gate."""
 from pathlib import Path
 from types import SimpleNamespace
+import ast
 import importlib.util
 import hashlib
 import json
@@ -15,6 +16,22 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('ordered_native_host_gate', ROOT/'deploy/test_macos_node_chain_host.py')
 G = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(G)
+
+
+def standalone_concurrency_group(source, *, event, ref, run):
+    groups = re.findall(r'^  group: (.+)$', source, re.M)
+    if len(groups) != 1:
+        raise ValueError('Standalone host must have one concurrency lane')
+    context = {'event_name': event, 'ref': ref, 'run_id': run}
+    def expression(match):
+        code = re.sub(r'github\.(event_name|ref|run_id)\b',
+                      lambda item: repr(context[item.group(1)]), match.group(1))
+        tree = ast.parse(code.replace('&&', ' and ').replace('||', ' or ').strip(), mode='eval')
+        if any(not isinstance(node, (ast.Expression, ast.BoolOp, ast.And, ast.Or,
+                                     ast.Compare, ast.Eq, ast.Constant)) for node in ast.walk(tree)):
+            raise ValueError('Unexpected standalone host concurrency expression')
+        return str(eval(compile(tree, '<standalone host concurrency>', 'eval'), {'__builtins__': {}}))
+    return re.sub(r'\$\{\{\s*(.*?)\s*\}\}', expression, groups[0])
 
 
 def workflow_inventory(consumer, wrapper):
@@ -56,7 +73,7 @@ def workflow_inventory(consumer, wrapper):
     if re.findall(r'^  ([A-Za-z][\w-]*):', wrapper.split('jobs:\n')[1], re.M) != ['native-runtimes', 'host', 'prefix-host']:
         raise ValueError('Ordered native wrapper changed its complete producer/consumer jobs')
     for value in ('  workflow_dispatch:', '  push:', '  pull_request:',
-                  '  group: darwin-node-host-native-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}',
+                  "  group: darwin-node-host-native-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.ref || github.run_id }}",
                   '  native-runtimes:\n    uses: ./.github/workflows/desktop-native-runtime.yml\n    with:\n      platform: darwin',
                   '  host:\n    needs: native-runtimes\n    uses: ./.github/workflows/darwin-node-host-tun.yml',
                   '  prefix-host:\n    needs: native-runtimes\n    uses: ./.github/workflows/darwin-node-prefix-host-tun.yml'):
@@ -522,11 +539,37 @@ class OrderedNativeWorkflows(unittest.TestCase):
                 ('  host:\n', '  host:\n    if: false\n'),
                 ('  native-runtimes:\n', '  native-runtimes:\n    continue-on-error: true\n'),
                 ('./.github/workflows/desktop-native-runtime.yml', './.github/workflows/darwin-node-child-tun.yml'),
-                ('-${{ github.sha }}-${{ github.run_id }}', ''),
+                ("github.event_name == 'push' && github.ref == 'refs/heads/main' && github.ref || github.run_id", 'github.run_id'),
                 ('  workflow_dispatch:\n', '')):
             self.assertEqual(self.wrapper.count(before), 1)
             with self.subTest(change=before), self.assertRaises(ValueError):
                 workflow_inventory(self.consumer, self.wrapper.replace(before, after, 1))
+
+    def check_standalone_lanes(self, source):
+        def group(event, ref, run):
+            return standalone_concurrency_group(source, event=event, ref=ref, run=run)
+        main = group('push', 'refs/heads/main', 101)
+        self.assertEqual(main, group('push', 'refs/heads/main', 102))
+        independent = [group(event, ref, run)
+                       for event, ref in (('workflow_dispatch', 'refs/heads/main'),
+                                          ('pull_request', 'refs/pull/1/merge'),
+                                          ('push', 'refs/heads/other'))
+                       for run in (103, 104)]
+        self.assertTrue(all(lane != main for lane in independent))
+        # Each event pair owns distinct runs, even when its ref is unchanged.
+        for first, second in zip(independent[::2], independent[1::2]):
+            self.assertNotEqual(first, second)
+
+    def test_only_automatic_main_pushes_share_the_standalone_producer_lane(self):
+        self.check_standalone_lanes(self.wrapper)
+
+    def test_unique_push_or_shared_manual_lanes_are_rejected(self):
+        original = "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.ref || github.run_id"
+        for replacement in ('github.run_id', 'github.ref',
+                            "github.ref == 'refs/heads/main' && github.ref || github.run_id",
+                            "github.event_name == 'push' && github.ref || github.run_id"):
+            with self.subTest(replacement=replacement), self.assertRaises(AssertionError):
+                self.check_standalone_lanes(self.wrapper.replace(original, replacement))
 
 
 if __name__ == '__main__':
