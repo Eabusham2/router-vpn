@@ -201,15 +201,16 @@ def execute(bundle, source=None, go='go', environment=None):
                        cwd=ROOT, env=captured, check=True, timeout=300)
         BUILD.reuse(signed, target, env=captured)
         signed_hash = sha(signed/'NATIVE-RUNTIME.json')
+        race_compiler, race_environment = CONTROLLER.UID.RACE.capture(core, compiler, captured)
         controller, peer = work/'controller.test', work/'peer.test'
         commands = (
-            ([str(compiler), 'test', '-race', '-c', '-mod=readonly', '-tags=routervpn_controller_privileged',
+            ([str(race_compiler), 'test', '-race', '-c', '-mod=readonly', '-tags=routervpn_controller_privileged',
               '-o', str(controller), './cmd/client'], ROOT),
-            ([str(compiler), 'test', '-race', '-c', '-mod=readonly', '-tags='+PEER_TAGS,
+            ([str(race_compiler), 'test', '-race', '-c', '-mod=readonly', '-tags='+PEER_TAGS,
               '-ldflags=-checklinkname=0', '-o', str(peer), './protocol/routervpnamnezia'], core),
         )
         for command, cwd in commands:
-            subprocess.run(command, cwd=cwd, env=captured, check=True, timeout=300)
+            subprocess.run(command, cwd=cwd, env=race_environment, check=True, timeout=300)
         subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--timestamp=none',
                         '--identifier', 'routervpn.fixture.external.controller', str(controller)], check=True, timeout=30)
         controller.chmod(0o755)
@@ -234,7 +235,7 @@ def execute(bundle, source=None, go='go', environment=None):
             raise ValueError('Native acceptance changed the original delivered bundle')
         if sha(signed/'NATIVE-RUNTIME.json') != signed_hash:
             raise ValueError('Native acceptance changed its captured signed copy')
-        receipt = dict(schema=1, target=target, source_sha256=policy, bundle_sha256=original_hash,
+        receipt = dict(schema=1, target=target, validation_toolchain=CONTROLLER.UID.RACE.TOOLCHAIN, source_sha256=policy, bundle_sha256=original_hash,
                        sealed_bundle_sha256=signed_hash, images=identities, cases=list(CASES),
                        sources=before, native=True)
         print('Native Darwin retained external acceptance: '+json.dumps(receipt, sort_keys=True, separators=(',', ':')), flush=True)

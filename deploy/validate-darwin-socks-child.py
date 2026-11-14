@@ -83,12 +83,12 @@ def image_receipt(value, name):
     return image
 
 def require_native(value, arch, metadata, outputs):
-    if type(value.get("schema")) is not int or value["schema"] != 1 or value.get("gate") != "generated-darwin-ordered-socks-child" or value.get("scope") != "actual-generated-command-pf-utun" or value.get("target") != "darwin/"+arch or value.get("toolchain") != BASE.BUILD.TOOLCHAIN or value.get("cases") != list(TYPED) or value.get("public_darwin_admission") != "closed" or "native_accepted" in value:
+    if type(value.get("schema")) is not int or value["schema"] != 1 or value.get("gate") != "generated-darwin-ordered-socks-child" or value.get("scope") != "actual-generated-command-pf-utun" or value.get("target") != "darwin/"+arch or value.get("toolchain") != BASE.UID.RACE.TOOLCHAIN or value.get("cases") != list(TYPED) or value.get("public_darwin_admission") != "closed" or "native_accepted" in value:
         raise ValueError("Typed native receipt lost its original scope")
     if value.get("repository") != {"repository":"Eabusham2/router-vpn", "commit":metadata["source_sha"], "tree":metadata["source_tree"]}:
         raise ValueError("Native receipt substituted the original repository")
     original = value.get("original_eight")
-    if not isinstance(original, dict) or type(original.get("schema")) is not int or original["schema"] != 1 or original.get("gate") != "generated-darwin-ordered-child" or original.get("scope") != "generated-command-utun" or original.get("target") != "darwin/"+arch or original.get("cases") != list(ORIGINAL) or original.get("toolchain") != BASE.BUILD.TOOLCHAIN or "native_accepted" in original:
+    if not isinstance(original, dict) or type(original.get("schema")) is not int or original["schema"] != 1 or original.get("gate") != "generated-darwin-ordered-child" or original.get("scope") != "generated-command-utun" or original.get("target") != "darwin/"+arch or original.get("cases") != list(ORIGINAL) or original.get("toolchain") != BASE.UID.RACE.TOOLCHAIN or "native_accepted" in original:
         raise ValueError("Original eight native cases were replaced")
     if original.get("pins") != {"sing-box":BASE.BUILD.PIN, "xray":BASE.BUILD.POLICY.XRAY.XRAY_PIN}:
         raise ValueError("Original native source pins changed")

@@ -81,6 +81,7 @@ class ExecutionControls(unittest.TestCase):
         self.machine = self.stack.enter_context(patch.object(GATE.platform, 'machine', return_value='x86_64'))
         self.stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
         self.environment = {'GOWORK': '/unrelated/workspace', 'CAPTURED': 'unchanged'}
+        self.race = self.stack.enter_context(patch.object(GATE.RACE, 'capture', side_effect=lambda source, go, env: ('race-go', dict(env, VALIDATION='go1.26.5'))))
 
     def run_gate(self):
         GATE.run(self.vendor, 'owned-go', self.environment)
@@ -98,7 +99,7 @@ class ExecutionControls(unittest.TestCase):
                     self.assertEqual(self.verify.call_count, 2)
                     self.assertEqual(self.inputs.call_count, 2)
                     command = self.process.call_args.args[0]
-                    self.assertEqual(command[:3], ['owned-go', 'test', '-json'])
+                    self.assertEqual(command[:3], ['race-go' if system == 'Darwin' else 'owned-go', 'test', '-json'])
                     self.assertEqual('-race' in command, (goos, goarch) != ('windows', 'arm64'))
                     self.assertIn('-mod=readonly', command)
                     self.assertIn(GATE.PACKAGE, command)
@@ -107,7 +108,7 @@ class ExecutionControls(unittest.TestCase):
                     self.assertEqual(command[command.index('-run') + 1], '^TestRouterVPNForwarder')
                     options = self.process.call_args.kwargs
                     self.assertEqual(options['cwd'], self.vendor)
-                    self.assertEqual(options['env'], {'GOWORK': 'off', 'CAPTURED': 'unchanged'})
+                    self.assertEqual(options['env'], {'GOWORK': 'off', 'CAPTURED': 'unchanged', **({'VALIDATION':'go1.26.5'} if system == 'Darwin' else {})})
                     self.assertEqual(options['timeout'], 180)
                     self.assertEqual(self.verify.call_args.kwargs['env'], options['env'])
                     self.assertEqual(self.environment['GOWORK'], '/unrelated/workspace')

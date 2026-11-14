@@ -191,7 +191,7 @@ class Composition:
         return status, control and self.fault == 'control-timeout', not (control and self.fault == 'control-unjoined')
 
     def execute(self):
-        with patch.object(V, 'load_gate', return_value=self.gate), patch.object(V, 'prepare', side_effect=self.prepare), \
+        with patch.object(V.RACE, 'capture', side_effect=lambda source, go, env: (Path('/captured/go'), dict(env, VALIDATION_COMPILER='go1.26.5'))), patch.object(V, 'load_gate', return_value=self.gate), patch.object(V, 'prepare', side_effect=self.prepare), \
                 patch.object(V, 'git', side_effect=self.git), patch.object(V, 'execute', side_effect=self.execute_process), patch.object(V, 'execute_privileged', side_effect=self.execute_privileged), patch.object(V.platform, 'system', return_value='Darwin'), patch.object(V.platform, 'machine', return_value='arm64'):
             return V.validate(self.source, self.metadata['source_sha'], self.output, '/captured/go')
 

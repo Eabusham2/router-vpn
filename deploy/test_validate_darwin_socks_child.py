@@ -34,7 +34,7 @@ def envelope(arch):
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     child = {"bytes":1000, "sha256":"d"*64}; peer = {"bytes":2000, "sha256":"e"*64}
     ordinary = {"schema":1, "gate":"generated-darwin-ordered-child", "scope":"generated-command-utun",
-                "target":"darwin/"+arch, "toolchain":V.BASE.BUILD.TOOLCHAIN, "cases":list(V.ORIGINAL),
+                "target":"darwin/"+arch, "toolchain":V.BASE.UID.RACE.TOOLCHAIN, "cases":list(V.ORIGINAL),
                 "pins":{"sing-box":V.BASE.BUILD.PIN, "xray":V.BASE.BUILD.POLICY.XRAY.XRAY_PIN},
                 "source_files":sources, "source_sha256":hashed(sources),
                 "artifacts":{"generated-child-test":child,"independent-ordered-peer":peer},
@@ -42,7 +42,7 @@ def envelope(arch):
     typed_sources = dict(sources, **{"gate/test_darwin_socks_child_tun.py":"f"*64,
                                   "gate/test_darwin_socks_child_tun_runner.py":"1"*64})
     value = {"schema":1,"gate":"generated-darwin-ordered-socks-child","scope":"actual-generated-command-pf-utun",
-             "target":"darwin/"+arch,"toolchain":V.BASE.BUILD.TOOLCHAIN,"cases":list(V.TYPED),
+             "target":"darwin/"+arch,"toolchain":V.BASE.UID.RACE.TOOLCHAIN,"cases":list(V.TYPED),
              "public_darwin_admission":"closed","repository":{"repository":"Eabusham2/router-vpn", "commit":metadata["source_sha"], "tree":metadata["source_tree"]},
              "source_files":typed_sources,"source_sha256":hashed(typed_sources),
              "artifacts":{"generated-child-test":copy.deepcopy(child),"independent-encrypted-peer":copy.deepcopy(peer)},
@@ -157,7 +157,7 @@ class GeneratedNativeReceipt(unittest.TestCase):
             elif fault == "scope": value["scope"] = "native-compilation-only"
             elif fault == "admission": value["public_darwin_admission"] = "open"
             elif fault == "native-claim": value["native_accepted"] = True
-            elif fault == "toolchain": value["toolchain"] = "foreign"
+            elif fault == "toolchain": value["toolchain"] = "go1.26.3"
             elif fault == "schema-bool": value["schema"] = True
             elif fault == "cases": value["cases"] = value["cases"][:-1]
             elif fault == "original-cases": value["original_eight"]["cases"] = value["cases"]

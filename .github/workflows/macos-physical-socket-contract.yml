@@ -21,6 +21,8 @@ on:
       - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_desktop_darwin_observation.py'
       - 'deploy/test_desktop_socket_uid.py'
+      - 'deploy/darwin_race_toolchain.py'
+      - 'deploy/test_darwin_race_toolchain.py'
       - 'deploy/prepare-desktop-external.py'
       - '.github/workflows/macos-physical-socket-contract.yml'
   pull_request:
@@ -41,6 +43,8 @@ on:
       - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_desktop_darwin_observation.py'
       - 'deploy/test_desktop_socket_uid.py'
+      - 'deploy/darwin_race_toolchain.py'
+      - 'deploy/test_darwin_race_toolchain.py'
       - 'deploy/prepare-desktop-external.py'
       - '.github/workflows/macos-physical-socket-contract.yml'
   workflow_dispatch:
@@ -77,6 +81,8 @@ jobs:
         with:
           go-version: '1.26.5'
           cache: false
+      - name: Verify separate native race compiler identity controls
+        run: python3 deploy/test_darwin_race_toolchain.py
       - name: Prove actual shipping baseline journal and reference recovery contracts
         run: python3 deploy/test_darwin_pf_journal.py
       - name: Prove actual single-filter commit and rollback retire their native namespace
@@ -125,6 +131,8 @@ jobs:
         with:
           go-version: '1.26.5'
           cache: false
+      - name: Verify separate native race compiler identity controls
+        run: python3 deploy/test_darwin_race_toolchain.py
       - name: Verify bounded native failure diagnostics
         run: python3 deploy/test_desktop_darwin_guardian_runner.py
       - name: Prove actual kernel boundaries and reject broken production variants

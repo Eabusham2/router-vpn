@@ -6,6 +6,8 @@ are modeled. This is a portable causal channel regression, not native PF proof.
 """
 from pathlib import Path
 import os
+import importlib.util
+import platform
 import re
 import shutil
 import subprocess
@@ -108,6 +110,12 @@ def execute(root=ROOT, go=None, mutations=True):
     go = go or shutil.which('go')
     if not go:
         raise RuntimeError('Go is required for the actual Darwin control lifetime regression')
+    race_environment = dict(os.environ, GOTOOLCHAIN='local')
+    if platform.system() == 'Darwin':
+        spec = importlib.util.spec_from_file_location('darwin_race_portable', Path(__file__).resolve().parent/'darwin_race_toolchain.py')
+        race = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(race)
+        go, race_environment = race.capture(root, go, race_environment)
     original = sources(root)
     variants = [('baseline', original, None)]
     if mutations:
@@ -126,7 +134,7 @@ def execute(root=ROOT, go=None, mutations=True):
         folder = Path(name); source = folder/'control.go'; test = folder/'control_test.go'; test.write_text(TEST)
         for label, content, witness in variants:
             source.write_text(content)
-            result = subprocess.run([go, 'test', '-race', '-v', '-timeout=20s', str(source), str(test)], capture_output=True, text=True, timeout=120, env=dict(os.environ, GOTOOLCHAIN='local'))
+            result = subprocess.run([go, 'test', '-race', '-v', '-timeout=20s', str(source), str(test)], capture_output=True, text=True, timeout=120, env=race_environment)
             output = result.stdout + result.stderr
             if witness:
                 if result.returncode == 0 or witness not in output or re.search(r'panic:|fatal error:|WARNING: DATA RACE|\[build failed\]', output):

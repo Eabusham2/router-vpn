@@ -13,6 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location('pinned_gvisor_forwarder', ROOT / 'deploy/prepare-gvisor-scheduler.py')
 POLICY = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(POLICY)
+RACE_SPEC = importlib.util.spec_from_file_location('darwin_race_pinned', ROOT/'deploy/darwin_race_toolchain.py')
+RACE = importlib.util.module_from_spec(RACE_SPEC)
+RACE_SPEC.loader.exec_module(RACE)
 PACKAGE = 'github.com/sagernet/gvisor/pkg/tcpip/transport/tcp'
 GROUPS = (
     'TestRouterVPNForwarderTimeWaitRealTupleReopens',
@@ -67,6 +70,8 @@ def check_verdicts(output):
 
 
 def run(vendor, go='go', env=None):
+    if platform.system() == 'Darwin':
+        go, env = RACE.capture(vendor, go, dict(os.environ if env is None else env))
     vendor = Path(vendor).resolve()
     captured = dict(os.environ if env is None else env, GOWORK='off')
     POLICY.verify(vendor, go, env=captured)

@@ -33,6 +33,8 @@ on:
       - 'deploy/test_linux_controller_privilege.py'
       - 'deploy/test_linux_native_install.py'
       - 'deploy/test_desktop_socket_uid.py'
+      - 'deploy/darwin_race_toolchain.py'
+      - 'deploy/test_darwin_race_toolchain.py'
       - '.github/workflows/macos-native-installer-contract.yml'
   pull_request:
     paths:
@@ -64,6 +66,8 @@ on:
       - 'deploy/test_linux_controller_privilege.py'
       - 'deploy/test_linux_native_install.py'
       - 'deploy/test_desktop_socket_uid.py'
+      - 'deploy/darwin_race_toolchain.py'
+      - 'deploy/test_darwin_race_toolchain.py'
       - '.github/workflows/macos-native-installer-contract.yml'
   workflow_dispatch:
 
@@ -99,6 +103,8 @@ jobs:
         with:
           go-version: '1.26.5'
           cache: false
+      - name: Verify separate native race compiler identity controls
+        run: python3 deploy/test_darwin_race_toolchain.py
       - name: Observe process inventory before native fixtures without granting installation authority
         run: |
           python3 deploy/test_macos_native_install.py --observe-before-fixtures > "$RUNNER_TEMP/routervpn-macos-before.json"

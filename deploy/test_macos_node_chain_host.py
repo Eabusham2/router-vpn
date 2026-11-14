@@ -344,15 +344,16 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
                        cwd=ROOT, env=captured, check=True, timeout=300)
         BUILD.reuse(signed, target, env=captured)
         signed_hash = EXTERNAL.sha(signed/'NATIVE-RUNTIME.json')
+        race_compiler, race_environment = CONTROLLER.UID.RACE.capture(core, compiler, captured)
         controller, peer = work/'controller.test', work/'peer.test'
         commands = (
-            ([str(compiler), 'test', '-race', '-c', '-mod=readonly', '-tags=routervpn_controller_privileged',
+            ([str(race_compiler), 'test', '-race', '-c', '-mod=readonly', '-tags=routervpn_controller_privileged',
               '-o', str(controller), './cmd/client'], ROOT),
-            ([str(compiler), 'test', '-race', '-c', '-mod=readonly', '-tags='+PEER_TAGS,
+            ([str(race_compiler), 'test', '-race', '-c', '-mod=readonly', '-tags='+PEER_TAGS,
               '-ldflags=-checklinkname=0', '-o', str(peer), './protocol/routervpnamnezia'], core),
         )
         for command, cwd in commands:
-            subprocess.run(command, cwd=cwd, env=captured, check=True, timeout=300)
+            subprocess.run(command, cwd=cwd, env=race_environment, check=True, timeout=300)
         subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--timestamp=none',
                         '--identifier', 'routervpn.fixture.ordered.controller', str(controller)], check=True, timeout=30)
         controller.chmod(0o755)
@@ -366,7 +367,7 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
             raise ValueError('Native ordered source changed during compilation')
         authority_output = execute_authority(controller, identities['controller'], captured)
         hysteria_authority_output = execute_authority(controller, identities['controller'], captured, hysteria=True)
-        hysteria_control = execute_hysteria_control(compiler, work, captured)
+        hysteria_control = execute_hysteria_control(race_compiler, work, race_environment)
         completed, output_digest = [], hashlib.sha256((authority_output+hysteria_authority_output).encode())
         for case in cases:
             command = ['/usr/bin/env', 'ROUTERVPN_MACOS_CONTROLLER_PRIVILEGE_FIXTURE=1',
@@ -394,7 +395,7 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
         if repository_identity(required_commit) != repository:
             raise ValueError('Native ordered acceptance changed its exact source commit or tree')
         receipt_value = dict(schema=1, gate='installed-darwin-ordered-host', scope='installed-controller-public-mtu',
-                             target=target, repository=repository, source_sha256=policy, bundle_sha256=original_hash,
+                             target=target, validation_toolchain=CONTROLLER.UID.RACE.TOOLCHAIN, repository=repository, source_sha256=policy, bundle_sha256=original_hash,
                              sealed_bundle_sha256=signed_hash, images=identities, cases=list(completed),
                              sources=before, authority_cases=list(AUTHORITY_CASES),
                              authority_output_sha256=hashlib.sha256(authority_output.encode()).hexdigest(),

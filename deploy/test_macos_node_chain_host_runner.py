@@ -355,6 +355,7 @@ class ImportedSourceAuthority(unittest.TestCase):
                     return OrderedNativeVerdicts().completed(case)
                 with patch.object(G, 'required_host', return_value=('darwin/arm64', 501)), \
                      patch.object(G.CONTROLLER.UID, 'compiler_toolchain', return_value=(Path('captured-go'), {'CAPTURED_ENV':'1'})), \
+                     patch.object(G.CONTROLLER.UID.RACE, 'capture', return_value=(Path('race-go'), {'RACE_ENV':'1'})), \
                      patch.object(G.CONTROLLER.UID, 'privilege_tool', return_value=None), \
                      patch.object(G.CONTROLLER, 'discover_python', return_value='/usr/bin/python3'), \
                      patch.object(G.BUILD, 'reuse', return_value={'original':True}), \
@@ -365,6 +366,7 @@ class ImportedSourceAuthority(unittest.TestCase):
                      patch.object(G, 'execute_hysteria_control', side_effect=control), patch('builtins.print'):
                     if fault == 'success':
                         receipt = G.execute(bundle, source=root/'core')
+                        self.assertEqual(receipt['validation_toolchain'], 'go1.26.5')
                         self.assertEqual(receipt['authority_cases'], list(G.AUTHORITY_CASES))
                         self.assertEqual(receipt['authority_output_sha256'], hashlib.sha256(output.encode()).hexdigest())
                         self.assertEqual(receipt['hysteria_authority_cases'], list(G.HYSTERIA_AUTHORITY_CASES))

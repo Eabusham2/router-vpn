@@ -257,7 +257,7 @@ def main():
     if uid <= 0: raise RuntimeError('The native gate needs its captured ordinary build-user UID')
     before = source_identity()
     python = arguments.python or discover_python(uid)
-    compiler, environment = UID.compiler_toolchain(ROOT, arguments.go, dict(os.environ))
+    compiler, environment = UID.RACE.capture(ROOT, arguments.go, dict(os.environ))
     sudo = UID.privilege_tool()
     with tempfile.TemporaryDirectory(prefix='routervpn-macos-controller-') as temporary:
         work = Path(temporary)

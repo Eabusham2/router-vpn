@@ -261,7 +261,7 @@ class ActualHostSelection(unittest.TestCase):
 
 
 class CompilationDiagnostics(unittest.TestCase):
-    def execute_boundary(self, *, compile_only=True, preflight_only=False, diagnostic_original_case=False, failure=False, source_changed=False, image_changed=False):
+    def execute_boundary(self, *, compile_only=True, preflight_only=False, diagnostic_original_case=False, failure=False, source_changed=False, image_changed=False, wrong_image_compiler=False):
         calls=[]
         def run(command, **kwargs):
             calls.append((command,kwargs))
@@ -275,9 +275,12 @@ class CompilationDiagnostics(unittest.TestCase):
             return preflight_transcript() if preflight_only else diagnostic_transcript() if diagnostic_original_case else transcript()
         source=Path('/captured/source');before={'original':'a'*64}
         inventory=[(source,before),(source,{'changed':'b'*64})] if source_changed else None
-        with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run), patch.object(G,'native_output',side_effect=run):
+        with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID.RACE,'verify_image',side_effect=ValueError('wrong native compiler') if wrong_image_compiler else None) as image_readback, patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run), patch.object(G,'native_output',side_effect=run):
             result=G.execute(source,environment={},compile_only=compile_only,preflight_only=preflight_only,diagnostic_original_case=diagnostic_original_case)
-        for command,kwargs in calls[:2]:
+        self.assertEqual(image_readback.call_count,2)
+        self.assertEqual(result['toolchain'],'go1.26.5')
+        for index,(command,kwargs) in enumerate(calls[:2]):
+            self.assertEqual(image_readback.call_args_list[index].args,('/captured/go',command[command.index('-o')+1],source,{}))
             self.assertEqual(command[:6],G.native_fixture_compile('/captured/go',Path('/unused'),command[-1])[:6])
             self.assertEqual(kwargs['timeout'],600)
             self.assertFalse(Path(command[command.index('-o')+1]).exists())
@@ -309,6 +312,7 @@ class CompilationDiagnostics(unittest.TestCase):
 
     def test_failed_compilation_or_changed_source_has_no_diagnostic_success(self):
         with self.assertRaises(subprocess.CalledProcessError):self.execute_boundary(failure=True)
+        with self.assertRaisesRegex(ValueError,'wrong native compiler'):self.execute_boundary(wrong_image_compiler=True)
         with self.assertRaisesRegex(ValueError,'sources changed'):self.execute_boundary(source_changed=True)
         with self.assertRaisesRegex(ValueError,'purpose must be explicit'):G.execute(Path('/unused'),compile_only='true')
 

@@ -6,6 +6,8 @@ context cancellation execute here. This does not claim a Darwin PF verdict.
 """
 from pathlib import Path
 import os
+import importlib.util
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -16,6 +18,12 @@ def execute(root):
     compiler = shutil.which('go')
     if not compiler:
         raise RuntimeError('Go is required for the Darwin original command observation regression')
+    race_environment = dict(os.environ, GOTOOLCHAIN='local')
+    if platform.system() == 'Darwin':
+        spec = importlib.util.spec_from_file_location('darwin_race_portable', Path(__file__).resolve().parent/'darwin_race_toolchain.py')
+        race = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(race)
+        compiler, race_environment = race.capture(root, compiler, race_environment)
     sources = root/'internal/mobiletor'
     identity = (sources/'desktop_socket_darwin_identity.go').read_text()
     command = identity[identity.index('type desktopDarwinCommandBuffer struct'):identity.index('func desktopDarwinIdentityLock(')]
@@ -201,7 +209,7 @@ func TestDarwinObservationDropsFullPipe(t *testing.T){
             selected_tests = [] if label == 'baseline' else ['-run=^TestDarwinCommandInheritedOutput$/exited-parent$'] if label == 'unbounded-inherited-output' else ['-run=^TestActualDarwinCommandObservation$|^TestDarwinObservationDropsFullPipe$']
             result = subprocess.run([compiler,'test','-race','-v','-timeout=15s',*selected_tests,*files],
                                     text=True,capture_output=True,timeout=120,
-                                    env=dict(os.environ,GOTOOLCHAIN='local'))
+                                    env=race_environment)
             output = result.stdout+result.stderr
             if witness is None:
                 required = ('TestActualDarwinCommandObservation', 'TestDarwinObservationDropsFullPipe', 'TestDarwinCommandInheritedOutput', 'TestDarwinCommandInheritedOutput/exited-parent', 'TestDarwinCommandInheritedOutput/cancelled-original-context')
@@ -271,7 +279,7 @@ func TestDarwinLateOriginalReadbackAfterFailedProbe(t *testing.T){
             files = [str(folder/name) for name in ('command.go','observer.go','owner.go','pipe.go','fixture.go','late_test.go')]
             result = subprocess.run([compiler,'test','-race','-v','-timeout=15s',*files],
                                     text=True,capture_output=True,timeout=120,
-                                    env=dict(os.environ,GOTOOLCHAIN='local'))
+                                    env=race_environment)
             output = result.stdout+result.stderr
             captured = 'owned native readback observations phase=after-broker-drain: Darwin native observation:'
             lost = 'late original native observation was lost after bounded retirement'

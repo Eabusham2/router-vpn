@@ -90,7 +90,7 @@ def checked_sources(source):
     }
     if not required.issubset(records):
         raise ValueError('Darwin child omitted an actual generated owner or independent encrypted peer')
-    for name in ('test_darwin_node_child_tun.py', 'test_darwin_node_child_tun_runner.py'):
+    for name in ('test_darwin_node_child_tun.py', 'test_darwin_node_child_tun_runner.py', 'darwin_race_toolchain.py'):
         records['gate/'+name] = digest(ROOT/'deploy'/name)
     return source, records
 
@@ -107,7 +107,7 @@ def required_host(environment):
     return arch, uid
 
 
-def selected_compiler(go, source, environment):
+def preparation_compiler(go, source, environment):
     compiler, captured = UID.compiler_toolchain(source, go, environment)
     host = json.loads(UID.run([compiler, 'env', '-json', 'GOVERSION', 'GOHOSTOS', 'GOHOSTARCH'], cwd=source, env=captured, timeout=30))
     arch, _ = required_host(environment)
@@ -115,6 +115,13 @@ def selected_compiler(go, source, environment):
         raise ValueError('Darwin child requires the exact native Go 1.26.3 compiler')
     captured.update(GOOS='darwin', GOARCH=arch, CGO_ENABLED='1', GOFLAGS='', GOWORK='off',
                     PATH=str(compiler.parent)+os.pathsep+captured.get('PATH', os.defpath))
+    return compiler, captured
+
+
+def selected_compiler(go, source, environment):
+    required_host(environment)
+    compiler, captured = UID.RACE.capture(source, go, environment)
+    captured.update(CGO_ENABLED='1', GOFLAGS='', GOWORK='off')
     return compiler, captured
 
 
@@ -282,6 +289,7 @@ def execute(source, go='go', *, environment=None, compile_only=False, preflight_
         for image, package in ((child, './cmd/sing-box'), (peer, './protocol/routervpnamnezia')):
             native_stage('compiling ' + image.name)
             UID.run(native_fixture_compile(compiler, image, package), cwd=source, env=captured, timeout=600)
+            UID.RACE.verify_image(compiler, image, source, captured)
             image.chmod(0o755)
             native_stage('compiled ' + image.name)
         if checked_sources(source)[1] != before:
@@ -294,7 +302,7 @@ def execute(source, go='go', *, environment=None, compile_only=False, preflight_
             # receipt or reused as authority by the later native invocation.
             result = dict(schema=1, gate='generated-darwin-ordered-child-compilation',
                           scope='native-compilation-only', native_accepted=False,
-                          target='darwin/'+arch, toolchain=BUILD.TOOLCHAIN,
+                          target='darwin/'+arch, toolchain=UID.RACE.TOOLCHAIN,
                           source_sha256=hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                           artifacts={role: {'bytes': identities[path][2], 'sha256': identities[path][-1]}
                                      for role, path in (('generated-child-test', child), ('independent-ordered-peer', peer))})
@@ -441,7 +449,7 @@ def execute_preflight_images(source, before, captured, sudo, arch, uid, child, p
     native_stage('verified source refusal, authenticated Stop, original Wait and unchanged PF/utun')
     return dict(schema=1, gate='generated-darwin-ordered-child-handshake',
                 scope='native-handshake-only', native_accepted=False, target='darwin/'+arch,
-                toolchain=BUILD.TOOLCHAIN, source_files=before,
+                toolchain=UID.RACE.TOOLCHAIN, source_files=before,
                 source_sha256=hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                 artifacts={role: {'bytes': identities[path][2], 'sha256': identities[path][-1]}
                            for role, path in (('generated-child-test', child), ('independent-ordered-peer', peer))},
@@ -475,7 +483,7 @@ def execute_native_images(source, before, captured, sudo, arch, uid, child, peer
                       gate='generated-darwin-ordered-child-diagnostic' if diagnostic else 'generated-darwin-ordered-child',
                       scope='original-single-case-diagnostic' if diagnostic else 'generated-command-utun',
                       **({'native_accepted': False} if diagnostic else {}),
-                      target='darwin/'+arch, toolchain=BUILD.TOOLCHAIN,
+                      target='darwin/'+arch, toolchain=UID.RACE.TOOLCHAIN,
                       pins={'sing-box': BUILD.PIN, 'xray': BUILD.POLICY.XRAY.XRAY_PIN},
                       source_files=before, source_sha256=hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                       artifacts={role: {'bytes': identities[path][2], 'sha256': identities[path][-1]}
@@ -551,7 +559,7 @@ def standalone(go='go', *, environment=None, receipt=None, required_commit=None,
     path = receipt_path(receipt)
     diagnostic_path = receipt_path(diagnostic_receipt)
     checkpoint = read_diagnostic_checkpoint(diagnostic_checkpoint, required_commit, environment) if diagnostic_original_case else None
-    compiler, captured = selected_compiler(go, ROOT, environment)
+    compiler, captured = preparation_compiler(go, ROOT, environment)
     previous = dict(os.environ)
     with tempfile.TemporaryDirectory(prefix='routervpn-darwin-child-core-') as temporary:
         workspace = Path(temporary).resolve()

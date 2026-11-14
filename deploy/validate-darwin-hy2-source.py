@@ -15,6 +15,9 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+RACE_SPEC = importlib.util.spec_from_file_location('darwin_hy2_race', ROOT/'deploy/darwin_race_toolchain.py')
+RACE = importlib.util.module_from_spec(RACE_SPEC)
+RACE_SPEC.loader.exec_module(RACE)
 sys.dont_write_bytecode = True
 SUITE = 'darwin-hy2'
 ROOTS = (
@@ -302,7 +305,8 @@ def validate(source, source_sha, output, go='go'):
         architecture = {'x86_64': 'amd64', 'arm64': 'arm64'}.get(platform.machine())
         if architecture is None or captured.get('GOOS', 'darwin') != 'darwin' or captured.get('GOARCH', architecture) != architecture:
             raise ValueError('HY2 reference cannot execute a foreign architecture')
-        receipt.update(target='darwin/'+architecture, toolchain=gate.BUILD.TOOLCHAIN, compiler=str(compiler),
+        compiler, captured = RACE.capture(core, compiler, captured)
+        receipt.update(target='darwin/'+architecture, toolchain=RACE.TOOLCHAIN, compiler=str(compiler),
                        resource_limits=dict(parallel_packages=1, GOMAXPROCS=2, GOGC=100, GOMEMLIMIT='2GiB'), source_files=before,
                        source_sha256=hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
         controller, peer = work/'controller.test', work/'peer.test'

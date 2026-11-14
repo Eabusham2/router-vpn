@@ -372,6 +372,7 @@ def check(source, tags=""):
     print("Darwin ordered component lifecycle: " + json.dumps({
         "schema": 1, "kind": "darwin-ordered-component-lifecycle-v1",
         "source_sha256": source_hash, "race_image_sha256": images,
+        "validation_toolchain": receipt("protocol/tun").RACE.TOOLCHAIN,
         "component_verdicts": verdicts, "causal_controls": len(MUTATIONS),
     }, sort_keys=True), flush=True)
 

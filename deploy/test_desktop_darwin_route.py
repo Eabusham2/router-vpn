@@ -221,16 +221,17 @@ def execute(source, go='go', mutations=False):
     host_arch = {'x86_64': 'amd64', 'arm64': 'arm64'}.get(platform.machine())
     if target != ['darwin', host_arch] or host_arch is None:
         raise ValueError('Darwin route operations cannot execute a cross-compiled image')
+    race_compiler, race_environment = UID.RACE.capture(source, compiler, captured)
     sudo = UID.privilege_tool()
     with tempfile.TemporaryDirectory(prefix='routervpn-darwin-route-build-') as temporary:
         directory = Path(temporary).resolve()
         for mutant in ((False, True) if mutations else (False,)):
             binary = directory / ('takeover.test' if mutant else 'baseline.test')
-            command = [compiler, 'test', '-c', '-race', '-mod=readonly', '-tags=' + ','.join(NODE.TAGS),
+            command = [race_compiler, 'test', '-c', '-race', '-mod=readonly', '-tags=' + ','.join(NODE.TAGS),
                        '-ldflags=-checklinkname=0', '-o', binary, PACKAGE]
             if mutant:
                 command.insert(2, '-overlay=' + str(restore_takeover_overlay(source, directory)))
-            print(UID.run(command, cwd=source, env=captured, timeout=300), end='', flush=True)
+            print(UID.run(command, cwd=source, env=race_environment, timeout=300), end='', flush=True)
             if checked_sources(source, compiler, captured)[1] != before:
                 raise ValueError('Darwin route source changed during native compilation')
             expected = digest(binary)

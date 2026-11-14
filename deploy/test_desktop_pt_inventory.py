@@ -113,6 +113,8 @@ PLATFORM_ROOTS = {'linux': ('TestRouterVPNExternalPhysicalAmneziaStartupRevokesE
             'TestRouterVPNExternalPhysicalPacketFinalRejectsFinalPhysicalAuthority',
             'TestRouterVPNExternalPhysicalSSCONNECTRejectsUDPAndFinalAuthority',
             'TestRouterVPNExternalPhysicalSSEntryRejectsFinalPhysicalAuthority',
+            'TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinCleanupRetainsOriginal',
+            'TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinProjection',
             'TestRouterVPNNodePhysicalUnixOrderedDarwinProjection',
             'TestRouterVPNNodePhysicalUnixOrderedDarwinCleanupRetainsOriginal'),
  'windows': ('TestRouterVPNExternalPhysicalWindowsAdmissionCloseJoinsEnteredCallback',
@@ -253,6 +255,10 @@ def failed_test_diagnostics(raw):
 
 
 def run(command, *, cwd, env, timeout=PROCESS_TIMEOUT):
+    spec = importlib.util.spec_from_file_location('darwin_race_inventory', ROOT/'deploy/darwin_race_toolchain.py')
+    race = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(race)
+    command, env = race.command(command, cwd, env)
     try:
         if os.name == "nt":
             result = OWNER.run(command, cwd=cwd, env=env, timeout=timeout)

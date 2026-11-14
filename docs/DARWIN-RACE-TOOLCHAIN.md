@@ -25,6 +25,27 @@ successful native cleanup.
 This observation matches the upstream race/fork defect, but that attribution
 remains an inference until the unchanged native cases pass with the corrected
 compiler. A parsed workflow, Linux test, or cross-compilation does not establish
-Darwin PF, socket, process, or utun acceptance. Other native-runtime and ordered
-host gates have separately pinned compiler/provenance contracts; this scoped
-change does not claim to migrate or validate them.
+Darwin PF, socket, process, or utun acceptance.
+
+`deploy/darwin_race_toolchain.py` also separates native validation from product
+preparation in the runtime builder, copied-source UID/PF/route gates, retirement
+and lifecycle gates, pinned dependency race tests, generated ordered child, and
+installed external/ordered/prefix host gates. It resolves official `go1.26.5`,
+checks its native host and target, captures its absolute executable and GOROOT,
+then verifies identity again with automatic dispatch disabled. A production
+GOROOT is removed only from the copied validation environment. The official Go
+toolchain resolver can download that exact compiler on hosts where it is absent.
+Product builds, source preparation, bundle reuse, module locks and provenance
+continue to use their existing `go1.26.3` contract.
+
+Generated child receipts name `go1.26.5`, and read back the compiler version from
+each exact executable before signing, hashing or running it. Their consumer
+rejects a `go1.26.3` receipt, including one substituted for the original eight
+cases. Installed host and source-lifecycle receipts identify the validation
+compiler separately from the unchanged product bundle. Historical focused
+candidate sources must adopt this compiler contract before their new native
+receipt can pass; an older image is never relabeled.
+
+Portable compiler controls reject an old compiler, wrong host/architecture,
+changed captured identity, unavailable executable, and an image carrying another
+compiler version. Native Intel and ARM64 re-execution remains mandatory.

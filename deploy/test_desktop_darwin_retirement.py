@@ -14,6 +14,9 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+RACE_SPEC = importlib.util.spec_from_file_location('darwin_race_retirement', ROOT/'deploy/darwin_race_toolchain.py')
+RACE = importlib.util.module_from_spec(RACE_SPEC)
+RACE_SPEC.loader.exec_module(RACE)
 PACKAGE = "github.com/sagernet/sing-tun"
 TAG = "routervpn_darwin_node_chain_native"
 TEST_TIMEOUT = "120s"
@@ -43,6 +46,7 @@ MUTATIONS = (
 
 
 def run(command, *, cwd, env, failure=False):
+    command, env = RACE.command(command, cwd, env)
     result = subprocess.run([str(part) for part in command], cwd=cwd, env=env,
                             capture_output=True, timeout=PROCESS_TIMEOUT)
     output = (result.stdout or b"") + (result.stderr or b"")
@@ -238,6 +242,7 @@ def check(source, tags=""):
             raise ValueError("Darwin retirement did not restore the exact original source")
         receipt = {"schema": 1, "kind": "darwin-original-native-retirement-v1",
                    "source_sha256": source_hash, "race_image_sha256": image_hash,
+                   "validation_toolchain": RACE.TOOLCHAIN,
                    "source_verdicts": source_verdicts, "native_verdicts": native_verdicts,
                    "causal_controls": len(MUTATIONS)}
         print("Native Darwin original retirement: " + json.dumps(receipt, sort_keys=True), flush=True)

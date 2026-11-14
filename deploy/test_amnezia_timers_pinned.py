@@ -12,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('native_amnezia_timers', ROOT/'deploy/prepare-amnezia-timers.py')
 POLICY = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(POLICY)
+RACE_SPEC = importlib.util.spec_from_file_location('darwin_race_pinned', ROOT/'deploy/darwin_race_toolchain.py')
+RACE = importlib.util.module_from_spec(RACE_SPEC)
+RACE_SPEC.loader.exec_module(RACE)
 
 REQUIRED = frozenset({
     'TestRouterVPNAmneziaTimerExpirationAndDeleteShareLock',
@@ -22,6 +25,8 @@ PACKAGE = 'github.com/amnezia-vpn/amneziawg-go/v3/device'
 
 
 def run(vendor, go='go', env=None):
+    if platform.system() == 'Darwin':
+        go, env = RACE.capture(vendor, go, dict(os.environ if env is None else env))
     vendor = Path(vendor).resolve()
     env = dict(os.environ if env is None else env)
     POLICY.verify(vendor, go, env=env)

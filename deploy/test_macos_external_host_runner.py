@@ -150,7 +150,7 @@ class NativeHostVerdicts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             bundle = Path(directory)
             (bundle/'NATIVE-RUNTIME.json').write_bytes(b'original delivered receipt\n')
-            receipt = dict(schema=1, native=True, target='darwin/arm64', source_sha256='a'*64,
+            receipt = dict(schema=1, native=True, target='darwin/arm64', validation_toolchain='go1.26.5', source_sha256='a'*64,
                            bundle_sha256=hashlib.sha256((bundle/'NATIVE-RUNTIME.json').read_bytes()).hexdigest(),
                            sealed_bundle_sha256='b'*64, images=dict(controller='c'*64, peer='d'*64),
                            cases=list(G.CASES), sources=dict(application={'a': 'e'*64}, peer={'b': 'f'*64}))
@@ -163,7 +163,7 @@ class NativeHostVerdicts(unittest.TestCase):
                     G.BUILD.verify_installed_darwin_host(None, bundle, 'darwin/arm64', environment)
                     self.assertNotIn('--source', run.call_args.args[0])
             check(receipt)
-            for key, value in [('native', False), ('target', 'darwin/amd64'), ('source_sha256', 'f'*64),
+            for key, value in [('validation_toolchain', 'go1.26.3'), ('native', False), ('target', 'darwin/amd64'), ('source_sha256', 'f'*64),
                                ('bundle_sha256', 'f'*64), ('cases', list(G.CASES[:-1])), ('images', {'peer': 'd'*64}),
                                ('sources', {'application': {}, 'peer': {'b': 'f'*64}})]:
                 with self.subTest(key=key), self.assertRaises(ValueError):

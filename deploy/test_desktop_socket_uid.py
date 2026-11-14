@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('desktop_socket_uid_preparation', ROOT/'deploy/prepare-desktop-external.py')
 PREP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PREP)
+RACE_SPEC = importlib.util.spec_from_file_location('darwin_race_toolchain_uid', ROOT/'deploy/darwin_race_toolchain.py')
+RACE = importlib.util.module_from_spec(RACE_SPEC)
+RACE_SPEC.loader.exec_module(RACE)
 
 
 def checked_sources(source):
@@ -50,6 +53,7 @@ def checked_sources(source):
 
 
 def run(command, *, cwd=None, env=None, timeout=180, sudo=None):
+    command, env = RACE.command(command, cwd, dict(os.environ if env is None else env))
     # A separate group contains the fixture and its forked helpers. On timeout
     # the same available privilege kills only that freshly owned group; no PID
     # lookup, broad process name or ambient session is used for cleanup.

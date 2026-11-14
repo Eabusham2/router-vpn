@@ -27,6 +27,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("desktop_node_bootstrap", ROOT / "deploy/test_windows_physical_bootstrap.py")
 BOOT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOOT)
+RACE_SPEC = importlib.util.spec_from_file_location('darwin_race_node', ROOT/'deploy/darwin_race_toolchain.py')
+RACE = importlib.util.module_from_spec(RACE_SPEC)
+RACE_SPEC.loader.exec_module(RACE)
 PREP = BOOT.PREP
 TAGS = tuple(value for value in BOOT.TAGS if value not in ("routervpn_native_pq", "routervpn_windows_physical_composition"))
 NODE_SOURCE_RETIRE_ROOT = "TestRouterVPNNodeCapturedSourceRetirement"
@@ -653,6 +656,7 @@ def checked_sources(source):
 
 
 def run(command, *, cwd, env, timeout):
+    command, env = RACE.command(command, cwd, env)
     if platform.system() == "Windows":
         return BOOT.IDENTITY.run(command, cwd=cwd, env=env, timeout=timeout)
     process = subprocess.Popen([str(value) for value in command], cwd=cwd, env=env,
