@@ -26,7 +26,7 @@ def wire(package, cases):
 
 class DarwinLifecycleRunnerTests(unittest.TestCase):
     def test_exact_required_inventory_and_bounds(self):
-        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 157),
+        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 170),
                                ("experimental/libbox/routervpn/mobilemultihop", 33),
                                ("routervpn/desktoppt", 7), (".", 11)):
             validator = RUNNER.receipt(package)
@@ -37,7 +37,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             self.assertEqual(validator.PROCESS_TIMEOUT, RUNNER.PROCESS_TIMEOUT)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
-        self.assertEqual(len(RUNNER.MUTATIONS), 29)
+        self.assertEqual(len(RUNNER.MUTATIONS), 33)
 
     def test_each_measurement_mailbox_has_original_refusal_and_causal_omission(self):
         cases = RUNNER.PHASES["cmd/sing-box"]["TestRouterVPNNodeChainDarwinMeasurementStartup"]
@@ -60,7 +60,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
         self.assertEqual(sum(1 + len(leaves) for leaves in prefix.values()), 76)
         self.assertEqual(cases["TestRouterVPNNodeChainDarwinNativeRetirementOrder"], (
             "exact-order", "proof-retry", "tun-retry", "source-retry", "ambiguous-box",
-            "cancel-after-source", "missing-manager", "partial-components"))
+            "cancel-after-source", "missing-manager", "partial-components", "middle-before-cancel", "middle-retained", "startup-before-native"))
         self.assertEqual(prefix["TestRouterVPNNodeCandidatePrefixDarwinRuntimeClosedFifty"], ())
         for name in ("command", "dispatch", "control_darwin", "run_darwin", "retirement_darwin", "runtime", "measurement"):
             relative = "mobile/desktop/node_candidate_prefix_" + name + ".go.tmpl"

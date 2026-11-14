@@ -113,10 +113,11 @@ type macOSNodeChainPeerReply struct {
 		ProofQueries     uint64 `json:"proof_queries"`
 		AuthRefusals     uint64 `json:"auth_refusals"`
 	} `json:"prefixes"`
-	Middle    *macOSNodeChainImportedCounters    `json:"middle,omitempty"`
-	Final     macOSNodeChainFinalReply           `json:"final"`
-	Benchmark *macOSNodeChainBenchmarkReply      `json:"benchmark,omitempty"`
-	Hysteria  *macOSNodeChainHysteriaObservation `json:"hysteria,omitempty"`
+	Associations *int                               `json:"associations,omitempty"`
+	Middle       *macOSNodeChainImportedCounters    `json:"middle,omitempty"`
+	Final        macOSNodeChainFinalReply           `json:"final"`
+	Benchmark    *macOSNodeChainBenchmarkReply      `json:"benchmark,omitempty"`
+	Hysteria     *macOSNodeChainHysteriaObservation `json:"hysteria,omitempty"`
 }
 
 type macOSNodeChainPeer struct {
@@ -133,6 +134,7 @@ type macOSNodeChainPeer struct {
 	password         string
 	middlePassword   string
 	middleMethod     string
+	middleSOCKS      bool
 	hysteriaPassword string
 	hysteriaMask     string
 	reply            macOSNodeChainPeerReply
@@ -161,7 +163,7 @@ func macOSNodeChainCipherCases() []macOSNodeChainCipherCase {
 }
 func macOSNodeChainScenario(scenario string) ([]string, string, error) {
 	found := false
-	for _, name := range macOSNodeChainHostCases {
+	for _, name := range append(append([]string(nil), macOSNodeChainHostCases...), macOSNodeChainSOCKSHostCases...) {
 		if scenario == name {
 			found = true
 			break
@@ -172,6 +174,7 @@ func macOSNodeChainScenario(scenario string) ([]string, string, error) {
 	}
 	cases := append(macOSNodeChainCipherCases(), macOSNodeChainImportedCipherCases()...)
 	cases = append(cases, macOSNodeChainHysteriaCipherCases()...)
+	cases = append(cases, macOSNodeChainSOCKSCipherCases()...)
 	// Longest captured prefixes must win over the original WG-only names.
 	for i := len(cases) - 1; i >= 0; i-- {
 		if action, ok := strings.CutPrefix(scenario, cases[i].prefix); ok {
@@ -256,8 +259,11 @@ func (peer *macOSNodeChainPeer) read(t *testing.T) macOSNodeChainPeerReply {
 	if reply.Benchmark == nil || reply.Benchmark.Port != 45998 || reply.Benchmark.MaximumPayload > 8972 {
 		t.Fatal("ordered peer lost its exact separate bounded benchmark receipt")
 	}
-	if peer.middlePassword != "" && (reply.Middle == nil || reply.Middle.Method != peer.middleMethod) || peer.middlePassword == "" && reply.Middle != nil {
+	if peer.middlePassword != "" && (reply.Middle == nil || reply.Middle.Method != peer.observedMiddleMethod()) || peer.middlePassword == "" && reply.Middle != nil {
 		t.Fatal("ordered peer replaced its independently captured imported cipher")
+	}
+	if peer.middleSOCKS != (reply.Associations != nil) || reply.Associations != nil && *reply.Associations < 0 {
+		t.Fatal("installed peer lost original SOCKS association accounting")
 	}
 	for i, prefix := range peer.requests {
 		expected := ""
@@ -353,8 +359,11 @@ func macOSNodeChainInstalledSources(t *testing.T, peer *macOSNodeChainPeer, faul
 	}
 	if peer.middlePassword != "" {
 		middle := macOSNodeChainImportedProfile(t, peer, fault)
+		if peer.middleSOCKS {
+			middle = macOSNodeChainSOCKSProfile(t, peer, fault)
+		}
 		profiles = append(profiles, middle)
-		nodes = append(nodes, common.MultihopNodeSelection{ID: middle.ID, Mode: "shadowsocks"})
+		nodes = append(nodes, common.MultihopNodeSelection{ID: middle.ID, Mode: middle.External.Protocol})
 	}
 	final := common.RouterProfile{ID: "installed-ordered-final", Name: "Original ordered paired final", NodeProofID: macOSNodeChainProofID(peer.finalServer),
 		Endpoint: "10.77.0.1", RouterAPI: "http://10.77.0.1:8787", APIToken: "installed-ordered-final-token", AdGuardIPv4: "192.168.50.133", DNSMode: "home",
@@ -409,6 +418,9 @@ func startMacOSNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *
 	if peer.middlePassword != "" {
 		root, child = "TestRouterVPNDesktopNodeChainImportedMiddleReferenceProcess", "ROUTERVPN_NODE_CHAIN_IMPORTED_REFERENCE_CHILD=1"
 	}
+	if peer.middleSOCKS {
+		root, child = "TestRouterVPNDesktopNodeChainSOCKSInstalledReferenceProcess", "ROUTERVPN_SOCKS_INSTALLED_REFERENCE=1"
+	}
 	if hysteria {
 		root, child = "TestRouterVPNDesktopNodeChainHysteriaReferenceProcess", "ROUTERVPN_NODE_CHAIN_HYSTERIA_REFERENCE_CHILD=1"
 	}
@@ -416,6 +428,9 @@ func startMacOSNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *
 	peer.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "GORACE=atexit_sleep_ms=0",
 		child, "ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE=1",
 		"ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS=" + peer.physical.String()}
+	if peer.middleSOCKS {
+		peer.command.Env = append(peer.command.Env, "ROUTERVPN_DARWIN_SOCKS_RUN_REFERENCE=1")
+	}
 	peer.command.Stderr = os.Stderr
 	inputRead, inputWrite, err := os.Pipe()
 	if err != nil {

@@ -372,6 +372,8 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
         _darwin_external_profile(control_profile, runtime_id, control_id, external_capture)
     if node_chain_capture is not None:
         node_chain_capture = _darwin_node_chain_capture(node_chain_capture)
+        if retained_state is not None:
+            _darwin_node_chain_state(retained_state, node_chain_capture)
         _darwin_node_chain_profile(control_profile, runtime_id, control_id, node_chain_capture)
         if retained_state is None and store.get('selected_id') != node_chain_capture['profile_id']:
             raise RuntimeError('macOS ordered baseline changed its original selected Router control')
@@ -420,7 +422,7 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
         state['native_socket_family'] = 'external-v1'
         state['native_external_capture'] = external_capture
     if node_chain_capture is not None:
-        state['native_socket_family'] = 'ordered-node-chain-v1'
+        state['native_socket_family'] = node_chain_capture['family']
         state['native_node_chain_capture'] = node_chain_capture
     if candidate_prefix_capture is not None:
         state['native_socket_family'] = 'node-candidate-prefix-v1'
@@ -596,8 +598,9 @@ def darwin_reassert() -> int:
     if state.get('native_socket_family') == 'node-candidate-prefix-v1':
         capture = _darwin_candidate_prefix_capture(state.get('native_candidate_prefix_capture'))
         return darwin_apply(spawn_watch=False, retained_state=state, candidate_prefix_capture=capture)
-    if state.get('native_socket_family') == 'ordered-node-chain-v1':
+    if state.get('native_socket_family') in _NODE_CHAIN_FAMILIES:
         capture = _darwin_node_chain_capture(state.get('native_node_chain_capture'))
+        _darwin_node_chain_state(state, capture)
         return darwin_apply(spawn_watch=False, retained_state=state, node_chain_capture=capture)
     capture = (state.get('native_external_capture')
                if state.get('native_socket_family') == 'external-v1' else None)
@@ -754,6 +757,8 @@ def darwin_external(action, value):
     return result
 
 
+_NODE_CHAIN_FAMILIES = ('ordered-node-chain-v1', 'ordered-node-chain-socks-v1')
+
 _NODE_CHAIN_CAPTURE_FIELDS = ('schema', 'family', 'profile_id', 'session_id', 'source_sha256',
                              'config_sha256', 'home_lan_access', 'policy')
 
@@ -761,7 +766,7 @@ _NODE_CHAIN_CAPTURE_FIELDS = ('schema', 'family', 'profile_id', 'session_id', 's
 def _darwin_node_chain_capture(value):
     _darwin._baseline._fields(value, _NODE_CHAIN_CAPTURE_FIELDS)
     if (type(value['schema']) is not int or value['schema'] != 2
-            or value['family'] != 'ordered-node-chain-v1'
+            or type(value['family']) is not str or value['family'] not in _NODE_CHAIN_FAMILIES
             or type(value['home_lan_access']) is not bool
             or value['policy'] not in ('on-connect', 'always')
             or type(value['session_id']) is not str or not re.fullmatch('[0-9a-f]{32}', value['session_id'])
@@ -796,10 +801,11 @@ def _darwin_node_chain_selected(root, capture):
 
 def _darwin_node_chain_state(state, capture):
     if (not state or state.get('platform') != 'darwin'
-            or state.get('native_socket_family') != 'ordered-node-chain-v1'
+            or capture.get('family') not in _NODE_CHAIN_FAMILIES
+            or state.get('native_socket_family') != capture['family']
             or state.get('native_socket_broker') is not True
             or state.get('native_node_chain_capture') != capture
-            or 'native_external_capture' in state
+            or 'native_external_capture' in state or 'native_candidate_prefix_capture' in state
             or state.get('profile_id') != capture['profile_id']
             or state.get('policy_profile_id') != capture['profile_id']
             or state.get('policy') != capture['policy']

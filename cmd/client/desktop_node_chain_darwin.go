@@ -44,6 +44,7 @@ type desktopMacOSNodeChainHost struct {
 	runtime                                                            *desktopNodeChainPlatformRuntime
 	launch                                                             *desktopNodeLaunch
 	policy                                                             *mobilemultihop.DesktopNodeChainPolicy
+	socksPolicy                                                        *mobilemultihop.DesktopNodeChainSOCKSPolicy
 	selection                                                          desktopMacOSNodeChainSelection
 	operation                                                          context.Context
 	gate                                                               chan struct{}
@@ -120,11 +121,11 @@ func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Co
 		return nil, "", err
 	}
 	launch.chain.capture = owner
-	meta := launch.chain.policy.Metadata()
+	meta := launch.chain.policyMetadata()
 	runtime := &desktopNodeChainPlatformRuntime{capture: owner}
-	h := &desktopMacOSNodeChainHost{parent: capture.parent, runtime: runtime, launch: launch, policy: launch.chain.policy,
+	h := &desktopMacOSNodeChainHost{parent: capture.parent, runtime: runtime, launch: launch, policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy,
 		operation: operation, gate: make(chan struct{}, 1), baselineRun: runDesktopMacOSNodeChainBaseline,
-		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: macosprocess.NodeChainFamily, ProfileID: meta.ProfileID,
+		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
 			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
 	runtime.host, launch.chain.platform = h, runtime
 	// Publish a complete dependent before any private stage or PF mutation.
@@ -165,7 +166,7 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 	if h == nil || h.parent == nil || h.parent.session == nil || h.runtime == nil || h.runtime.host != h ||
 		h.runtime.capture == nil || h.runtime.capture.platform == nil || h.runtime.capture.platform.parent != h.parent ||
 		h.launch == nil || h.launch.chain == nil || h.launch.chain.platform != h.runtime ||
-		h.launch.chain.capture != h.runtime.capture || h.policy == nil || h.launch.chain.policy != h.policy ||
+		h.launch.chain.capture != h.runtime.capture || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy ||
 		h.launch.ownedNode != nil || h.operation == nil || h.baselineRun == nil || h.retiring || h.closed ||
 		h.launch.root != macOSOwnedControllerRoot {
 		return errors.New("macOS ordered host lost its unique original policy and parent")
@@ -176,8 +177,8 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 	if err := validateDesktopNodeChainLaunch(ctx, h.launch); err != nil {
 		return err
 	}
-	meta := h.policy.Metadata()
-	expected := desktopMacOSNodeChainSelection{Schema: 2, Family: macosprocess.NodeChainFamily, ProfileID: meta.ProfileID,
+	meta := h.launch.chain.policyMetadata()
+	expected := desktopMacOSNodeChainSelection{Schema: 2, Family: h.launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
 		Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}
 	if meta.TargetOS != "darwin" || h.selection != expected || !h.selection.valid() {
 		return errors.New("macOS ordered host changed its typed protection selection")
@@ -235,7 +236,7 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 		}
 	}
 	if running {
-		expectedScope := macosprocess.Scope{Family: macosprocess.NodeChainFamily, Session: h.selection.Session,
+		expectedScope := macosprocess.Scope{Family: h.selection.Family, Session: h.selection.Session,
 			Source: h.selection.Source, Config: h.selection.Config, Workspace: h.launch.directory}
 		if !h.published || h.process == nil || h.process.parent != h.parent || h.process.capture == nil ||
 			h.process.scope != expectedScope || h.process.command != h.launch.command || h.baseline == nil ||
@@ -365,7 +366,7 @@ func (owner *desktopNodeChainPlatformRuntime) stage(ctx context.Context) error {
 		name string
 		body []byte
 	}{
-		{"node-chain-source.json", []byte(h.launch.chain.input)},
+		{h.launch.chain.sourceName(), []byte(h.launch.chain.input)},
 		{"sing-box.json", h.launch.config},
 	} {
 		if err := writeDesktopRuntimeFile(h.launch, input.name, input.body, false); err != nil {
@@ -470,7 +471,7 @@ func (owner *desktopNodeChainPlatformRuntime) start(ctx context.Context) error {
 	if err := h.currentLocked(ctx, false); err != nil {
 		return err
 	}
-	scope := macosprocess.Scope{Family: macosprocess.NodeChainFamily, Session: h.selection.Session,
+	scope := macosprocess.Scope{Family: h.selection.Family, Session: h.selection.Session,
 		Source: h.selection.Source, Config: h.selection.Config, Workspace: h.launch.directory}
 	h.started = time.Now()
 	h.process, err = startDesktopMacOSProcessWithVerifier(ctx, h.parent, scope, owner.capture.platform.verify)
@@ -536,7 +537,7 @@ func (h *desktopMacOSNodeChainHost) readReadyLocked(ctx context.Context, fresh b
 	}
 	// The full inherited selection binds the exact installed images, input
 	// descriptors, original workspace and ordered family on both sides.
-	transfer, err := macosprocess.NodeChainTransferSHA256(h.process.capture.Selection())
+	transfer, err := h.launch.chain.macOSTransfer(h.process.capture.Selection())
 	if err != nil || h.transfer != "" && h.transfer != transfer {
 		return errors.Join(err, errors.New("macOS ordered readiness changed its original transfer"))
 	}
@@ -575,7 +576,7 @@ func (h *desktopMacOSNodeChainHost) readReadyLocked(ctx context.Context, fresh b
 	if err := h.currentLocked(ctx, true); err != nil {
 		return err
 	}
-	if next, err := macosprocess.NodeChainTransferSHA256(h.process.capture.Selection()); err != nil || next != transfer {
+	if next, err := h.launch.chain.macOSTransfer(h.process.capture.Selection()); err != nil || next != transfer {
 		return errors.Join(err, errors.New("macOS ordered receipt lost its original inherited transfer"))
 	}
 	h.transfer = transfer
@@ -814,7 +815,7 @@ func (h *desktopMacOSNodeChainHost) closeCaptured(ctx context.Context, hold bool
 		return nil
 	}
 	if h.parent == nil || h.parent.session == nil || h.runtime == nil || h.runtime.host != h || h.launch == nil ||
-		h.launch.chain == nil || h.launch.chain.platform != h.runtime || h.policy == nil || h.launch.chain.policy != h.policy ||
+		h.launch.chain == nil || h.launch.chain.platform != h.runtime || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy ||
 		h.baselineRun == nil {
 		return errors.New("macOS ordered retirement lost its original typed host")
 	}

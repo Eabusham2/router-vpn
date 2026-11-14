@@ -110,7 +110,7 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 		}
 		p := members[i].Profile
 		kind := "private-node"
-		imported := desktopNodeChainImported(p, members[i].Mode)
+		imported := desktopNodeChainImported(p, members[i].Mode) || desktopNodeChainSOCKSMiddle(p, members[i].Mode)
 		if imported {
 			if len(members) != 3 || i != 1 {
 				return nil, bad
@@ -183,7 +183,7 @@ func exchangeDesktopNodeChainMeasurement(parent context.Context, launch *desktop
 	if err != nil {
 		return empty, err
 	}
-	sourceFile, err := launch.directoryRoot.Lstat("node-chain-source.json")
+	sourceFile, err := launch.directoryRoot.Lstat(chain.sourceName())
 	if err != nil {
 		return empty, err
 	}
@@ -192,15 +192,15 @@ func exchangeDesktopNodeChainMeasurement(parent context.Context, launch *desktop
 			return err
 		}
 		configNow, configErr := launch.directoryRoot.Lstat("sing-box.json")
-		sourceNow, sourceErr := launch.directoryRoot.Lstat("node-chain-source.json")
+		sourceNow, sourceErr := launch.directoryRoot.Lstat(chain.sourceName())
 		if configErr != nil || sourceErr != nil || !os.SameFile(configFile, configNow) || !os.SameFile(sourceFile, sourceNow) {
 			return errors.New("ordered measurement source inode changed")
 		}
 		configRaw, err := readDesktopRuntimeFileContext(call, launch, "sing-box.json", mobilemultihop.NodeChainInputLimit)
-		if err != nil || string(configRaw) != chain.policy.Config() {
+		if err != nil || string(configRaw) != chain.policyConfig() {
 			return errors.Join(err, call.Err(), errors.New("ordered measurement config changed"))
 		}
-		raw, err := readDesktopRuntimeFileContext(call, launch, "node-chain-source.json", mobilemultihop.NodeChainInputLimit)
+		raw, err := readDesktopRuntimeFileContext(call, launch, chain.sourceName(), mobilemultihop.NodeChainInputLimit)
 		if err != nil || string(raw) != chain.input {
 			return errors.New("ordered measurement source changed")
 		}

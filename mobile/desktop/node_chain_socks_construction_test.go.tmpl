@@ -1,0 +1,125 @@
+package main
+
+import (
+ "context"
+ "crypto/sha256"
+ "encoding/hex"
+ "encoding/json"
+ "reflect"
+ "strings"
+ "testing"
+
+ box "github.com/sagernet/sing-box"
+ "github.com/sagernet/sing-box/adapter"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+ "github.com/sagernet/sing-box/include"
+ "github.com/sagernet/sing-box/option"
+ SJ "github.com/sagernet/sing/common/json"
+ "github.com/sagernet/sing/service"
+)
+
+func desktopSOCKSCommandPolicy(t *testing.T,target string,restored int) *mobilemultihop.DesktopNodeChainSOCKSPolicy {
+ t.Helper()
+ paired := desktopNodeChainCommandPolicyWithIdentity(t,3,target,0,true).OriginalChain()
+ raw,err:=paired.LaunchInput();if err!=nil{t.Fatal(err)}
+ // Fixture producer only: retain the original constructor fields from the
+ // actual paired helper. The shipping child never strips a supplied receipt.
+ var source mobilemultihop.NodeChainSource
+ if json.Unmarshal([]byte(raw),&source)!=nil{t.Fatal("original paired source fixture")}
+ var capture map[string]any
+ if json.Unmarshal([]byte(desktopExternalCapture),&capture)!=nil{t.Fatal("original imported source fixture")}
+ capture["profile"].(map[string]any)["kill_switch_policy"]="always"
+ selected,err:=json.Marshal(capture);if err!=nil{t.Fatal(err)}
+ member,err:=mobilemultihop.NodeChainImportedSOCKSMemberInput(desktopExternalSource,string(selected));if err!=nil{t.Fatal(err)}
+ source.Schema,source.Nodes[1],source.IdentitySources[1]=3,member,""
+ canonical,err:=json.Marshal(source);if err!=nil{t.Fatal(err)}
+ typed,err:=mobilemultihop.NewNodeChainSOCKSSource(string(canonical));if err!=nil{t.Fatal(err)}
+ policy,err:=mobilemultihop.NewDesktopNodeChainSOCKSPolicy(typed,desktopExternalSession,target,restored)
+ if err!=nil{t.Fatal(err)}
+ return policy
+}
+
+func TestRouterVPNDesktopSOCKSCommandExactSourceReplay(t *testing.T){
+ for _,target:=range []string{"linux","windows","darwin"}{t.Run(target,func(t *testing.T){
+  policy:=desktopSOCKSCommandPolicy(t,target,1400);input,err:=policy.LaunchInput();if err!=nil{t.Fatal(err)}
+  config,meta,physical,err:=policy.ReadValidated();if err!=nil{t.Fatal(err)}
+  files:=desktopImportedCommandFiles(t,map[string]string{"node-chain-socks-source.json":input,"sing-box.json":config})
+  actual,err:=routerVPNDesktopSOCKSPhysicalCapture(context.Background(),files,meta.SessionID,meta.ConfigSHA256,meta.SourceSHA256,target,1400)
+  if err!=nil||actual==nil||actual==policy{t.Fatal("typed child did not independently replay original source",err)}
+  again,receipt,captured,err:=actual.ReadValidated()
+  if err!=nil||again!=config||!reflect.DeepEqual(meta,receipt)||!reflect.DeepEqual(physical,captured){t.Fatal("typed child changed original graph, credentials or physical source",err)}
+ })}
+}
+
+func TestRouterVPNDesktopSOCKSCommandRefusesChangedCapture(t *testing.T){
+ for _,fault:=range []string{"missing","ordinary","raw-source","unknown","session","source","config","target","restore","graph","graph-rehash","cancelled","nil-caller"}{t.Run(fault,func(t *testing.T){
+  policy:=desktopSOCKSCommandPolicy(t,"linux",1400);input,err:=policy.LaunchInput();if err!=nil{t.Fatal(err)}
+  graph,meta,_,err:=policy.ReadValidated();if err!=nil{t.Fatal(err)}
+  session,config,source,target,restore:=meta.SessionID,meta.ConfigSHA256,meta.SourceSHA256,"linux",1400
+  ctx:=context.Background()
+  switch fault{
+  case "ordinary":input,_=desktopNodeChainCommandPolicy(t,3,"linux",1400).NodeChain().LaunchInput()
+  case "raw-source":original,_:=policy.OriginalSource();input,_=original.Source()
+  case "unknown":input=strings.TrimSuffix(input,"}")+`,"foreign":true}`
+  case "session":session=strings.Repeat("b",32)
+  case "source":source=meta.OriginalSourceSHA256
+  case "config":config=strings.Repeat("a",64)
+  case "target":target="windows"
+  case "restore":restore=0
+  case "graph","graph-rehash":graph+="\n";if fault=="graph-rehash"{sum:=sha256.Sum256([]byte(graph));config=hex.EncodeToString(sum[:])}
+  case "cancelled":cancelled,stop:=context.WithCancel(ctx);stop();ctx=cancelled
+  case "nil-caller":ctx=nil
+  }
+  inputs:=map[string]string{"node-chain-socks-source.json":input,"sing-box.json":graph};if fault=="missing"{delete(inputs,"node-chain-socks-source.json")}
+  files:=desktopImportedCommandFiles(t,inputs)
+  if actual,err:=routerVPNDesktopSOCKSPhysicalCapture(ctx,files,session,config,source,target,restore);err==nil||actual!=nil{t.Fatal("typed child adopted foreign source, caller or staged graph")}
+ })}
+}
+
+// Match the original command's complete include context. The typed constructor
+// replaces only its private outbound registries; DNS and other option parsers
+// must still come from the original captured command context.
+func desktopSOCKSCommandContext(parent context.Context) context.Context {
+ return box.Context(parent,include.InboundRegistry(),include.OutboundRegistry(),include.EndpointRegistry(),include.DNSTransportRegistry(),include.ServiceRegistry(),include.CertificateProviderRegistry())
+}
+
+func TestRouterVPNDesktopSOCKSConstructionKeepsLocalRegistry(t *testing.T){
+ parent:=desktopSOCKSCommandContext(context.Background())
+ registry:=include.OutboundRegistry()
+ parent=service.ContextWith[adapter.OutboundRegistry](parent,registry)
+ parent=service.ContextWith[option.OutboundOptionsRegistry](parent,registry)
+ policy:=desktopSOCKSCommandPolicy(t,"linux",0)
+ first,err:=routerVPNNewDesktopSOCKSConstruction(parent,policy);if err!=nil{t.Fatal(err)}
+ second,err:=routerVPNNewDesktopSOCKSConstruction(parent,policy);if err!=nil{t.Fatal(err)}
+ if first.registry==registry||first.registry==second.registry||first.capture==second.capture||first.ctx==second.ctx||
+  service.FromContext[adapter.OutboundRegistry](parent)!=registry||service.FromContext[option.OutboundOptionsRegistry](parent)!=registry{
+  t.Fatal("typed child constructor changed original parent registry")
+ }
+ for _,captured:=range []*routerVPNDesktopSOCKSConstruction{first,second}{
+  if err:=captured.current(context.Background());err!=nil{t.Fatal(err)}
+  if err:=captured.capture.RequireOriginalContext(captured.ctx,captured.source);err!=nil{t.Fatal(err)}
+  parsed,err:=SJ.UnmarshalExtendedContext[option.Options](captured.ctx,[]byte(captured.config))
+  if err!=nil||len(parsed.Inbounds)!=1||parsed.Route==nil||parsed.Route.Final!=mobilemultihop.SelectorTag{t.Fatal("typed child lost actual options registry",err)}
+ }
+}
+
+func TestRouterVPNDesktopSOCKSConstructionRejectsReplacement(t *testing.T){
+ for _,fault:=range []string{"source","policy","context","capture","registry","config","receipt","cancelled","nil-caller"}{t.Run(fault,func(t *testing.T){
+  lifetime,cancel:=context.WithCancel(desktopSOCKSCommandContext(context.Background()));defer cancel()
+  policy:=desktopSOCKSCommandPolicy(t,"linux",0)
+  owner,err:=routerVPNNewDesktopSOCKSConstruction(lifetime,policy);if err!=nil{t.Fatal(err)}
+  call:=context.Background()
+  switch fault{
+  case "source":other:=desktopSOCKSCommandPolicy(t,"linux",0);owner.source,_=other.NativeSource()
+  case "policy":owner.policy=desktopSOCKSCommandPolicy(t,"linux",0)
+  case "context":owner.ctx=lifetime
+  case "capture":other,err:=routerVPNNewDesktopSOCKSConstruction(lifetime,policy);if err!=nil{t.Fatal(err)};owner.capture=other.capture
+  case "registry":owner.registry=include.OutboundRegistry()
+  case "config":owner.config+="\n"
+  case "receipt":owner.metadata.SourceSHA256=strings.Repeat("a",64)
+  case "cancelled":cancel()
+  case "nil-caller":call=nil
+  }
+  if owner.current(call)==nil{t.Fatal("typed child replaced its original private construction")}
+ })}
+}

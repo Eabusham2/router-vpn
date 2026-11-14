@@ -96,7 +96,7 @@ func routerVPNRunDarwinNodeCandidatePrefix(parent context.Context, control *rout
 		lifetime = context.Background()
 	}
 	graph, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(context.WithoutCancel(lifetime))))
-	native := &routerVPNDarwinNodeChainNative{cancel: cancel}
+	native := &routerVPNDarwinNodeChainNative{cancel: cancel, startupOwner: &routerVPNNodeStartupOwner{cancel: cancel}}
 	control.native = native
 	defer func() {
 		control.retiring.Store(true)
@@ -153,27 +153,8 @@ func routerVPNRunDarwinNodeCandidatePrefix(parent context.Context, control *rout
 			return routerVPNExternalFailure
 		}
 	}
-	watchStop, watchDone := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		ticker := time.NewTicker(25 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			if parent.Err() != nil || files.stopRequested(control.scope.Session, control.scope.Config) {
-				cancel()
-				return
-			}
-			select {
-			case <-watchStop:
-				return
-			case <-parent.Done():
-				cancel()
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	defer func() { close(watchStop); <-watchDone }()
+	stopConstruction := routerVPNWatchNodeConstruction(admission, func() bool { return files.stopRequested(control.scope.Session, control.scope.Config) }, cancel)
+	defer stopConstruction()
 	if err := control.current(admission); err != nil {
 		return err
 	}
@@ -198,6 +179,8 @@ func routerVPNRunDarwinNodeCandidatePrefix(parent context.Context, control *rout
 		return errors.Join(constructErr, routerVPNExternalFailure)
 	}
 	native.components = append(native.components, routerVPNDarwinNodeChainComponent{original: instance})
+	native.startupOwner.original = instance
+	stopConstruction()
 	native.managerRequired = true
 	manager, ok := instance.Inbound().(routerVPNDarwinNodeChainManager)
 	if !ok {
@@ -232,7 +215,7 @@ func routerVPNRunDarwinNodeCandidatePrefix(parent context.Context, control *rout
 	if err := instance.RouterVPNDesktopStartupContext(admission); err != nil {
 		return err
 	}
-	if err := instance.RouterVPNStrategyStart(); err != nil {
+	if err := native.startupOwner.start(admission, func() bool { return files.stopRequested(control.scope.Session, control.scope.Config) }, instance.RouterVPNStrategyStart); err != nil {
 		return err
 	}
 	if err := control.current(admission); err != nil {

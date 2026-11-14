@@ -24,7 +24,7 @@ func normalizedOrderedCandidateSavedScope(scope string) (string, error) {
 }
 
 func captureDesktopNodeCandidatePrefixSource(ctx context.Context, selection multihopSelection, position int, inventory string) (*mobilemultihop.NodeChainCandidatePreparation, error) {
-	if ctx == nil || ctx.Err() != nil || selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil || position < 0 || position >= len(selection.Nodes)-1 {
+	if ctx == nil || ctx.Err() != nil || selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.chain == nil || selection.Native.chain.socks != nil || selection.Native.validate(selection) != nil || position < 0 || position >= len(selection.Nodes)-1 {
 		return nil, errors.New("candidate prefix requires its complete original saved source and a non-final position")
 	}
 	for _, member := range selection.Nodes[:position+1] {

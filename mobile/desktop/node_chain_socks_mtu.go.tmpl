@@ -1,0 +1,176 @@
+package main
+
+import (
+ "context"
+ "errors"
+ "sync"
+ "sync/atomic"
+
+ box "github.com/sagernet/sing-box"
+ "github.com/sagernet/sing-box/adapter"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type routerVPNDesktopSOCKSActivity struct {
+ owner *routerVPNDesktopSOCKSRuntime
+ done chan struct{}
+ once sync.Once
+}
+func (a *routerVPNDesktopSOCKSActivity) release(){if a!=nil{a.once.Do(func(){a.owner.activity.CompareAndSwap(a,nil);close(a.done)})}}
+func (owner *routerVPNDesktopSOCKSRuntime) claimActivity(ctx context.Context)(*routerVPNDesktopSOCKSActivity,error){
+ if owner==nil||owner.measurementHold.Load()||owner.current(ctx)!=nil{return nil,routerVPNExternalFailure}
+ activity:=&routerVPNDesktopSOCKSActivity{owner:owner,done:make(chan struct{})}
+ if !owner.activity.CompareAndSwap(nil,activity){return nil,errors.New("original SOCKS native activity remains owned")}
+ if err:=owner.current(ctx);err!=nil||owner.measurementHold.Load(){activity.release();return nil,errors.Join(err,routerVPNExternalFailure)}
+ return activity,nil
+}
+
+type routerVPNDesktopSOCKSMTUReadback struct {
+ state *routerVPNDesktopSOCKSState
+ inbound adapter.Inbound
+ record routerVPNNodeMTURecord
+}
+type routerVPNDesktopSOCKSMTU struct {
+ owner *routerVPNDesktopSOCKSRuntime
+ raw *routerVPNNodeMTU
+ base *routerVPNNodeMTUBox
+ pending atomic.Pointer[routerVPNDesktopSOCKSMTUOperation]
+ readback atomic.Pointer[routerVPNDesktopSOCKSMTUReadback]
+}
+type routerVPNDesktopSOCKSMTUOperation struct {
+ wrapper *routerVPNDesktopSOCKSMTU
+ activity *routerVPNDesktopSOCKSActivity
+ operation context.Context
+ original *routerVPNDesktopSOCKSState
+ state atomic.Pointer[routerVPNDesktopSOCKSState]
+ native *box.RouterVPNNodeChainSOCKSMTU
+ originalRecord routerVPNNodeMTURecord
+}
+
+func (owner *routerVPNDesktopSOCKSRuntime) attachMTU(ctx context.Context,raw *routerVPNNodeMTU,physical *box.RouterVPNDesktopNodePhysical)error{
+ if owner==nil||raw==nil||physical==nil||owner.physical!=physical||raw.chain!=nil||raw.execution!=nil||owner.mtu.Load()!=nil||
+  owner.current(ctx)!=nil||raw.currentContext(ctx)!=nil{return routerVPNExternalFailure}
+ base,ok:=raw.engine.(*routerVPNNodeMTUBox)
+ if !ok||base==nil||base.instance!=owner.instance||base.physical!=physical||
+  raw.record.Session!=owner.meta.SessionID||raw.record.Config!=owner.meta.ConfigSHA256{return routerVPNExternalFailure}
+ state:=owner.state.Load()
+ if state==nil{return routerVPNExternalFailure}
+ engine,ok:=state.engine.(*box.RouterVPNNodeChainSOCKSEngine)
+ if !ok||engine==nil{return routerVPNExternalFailure}
+ activity,err:=owner.claimActivity(ctx);if err!=nil{return err};defer activity.release()
+ retained:=&routerVPNDesktopSOCKSMTU{owner:owner,raw:raw,base:base}
+ retained.readback.Store(&routerVPNDesktopSOCKSMTUReadback{state:state,inbound:raw.inbound,record:raw.record})
+ if !owner.mtu.CompareAndSwap(nil,retained){return routerVPNExternalFailure}
+ raw.execution=retained
+ return retained.matchesReadback(ctx,state,raw.record)
+}
+func (w *routerVPNDesktopSOCKSMTU) owns(raw *routerVPNNodeMTU)bool{
+ return w!=nil&&w.owner!=nil&&raw!=nil&&raw==w.raw&&raw.execution==w&&raw.chain==nil&&raw.engine==w.base&&
+  w.base!=nil&&w.base.physical==w.owner.physical&&w.base.instance==w.owner.instance&&w.owner.mtu.Load()==w
+}
+func (w *routerVPNDesktopSOCKSMTU) matchesReadback(ctx context.Context,state *routerVPNDesktopSOCKSState,record routerVPNNodeMTURecord)error{
+ if !w.owns(w.raw)||state==nil||w.owner.state.Load()!=state||w.owner.current(ctx)!=nil||w.raw.currentContext(ctx)!=nil{return routerVPNExternalFailure}
+ receipt:=w.readback.Load()
+ if receipt==nil||receipt.state!=state||receipt.inbound!=w.raw.inbound||
+  !sameDesktopExecutionMTURecord(receipt.record,record)||!sameDesktopExecutionMTURecord(record,w.raw.record){return routerVPNExternalFailure}
+ return ctx.Err()
+}
+func (w *routerVPNDesktopSOCKSMTU) currentCommand(ctx context.Context,raw *routerVPNNodeMTU,_ routerVPNNodeMTUCommand)error{
+ if !w.owns(raw)||w.pending.Load()!=nil{return routerVPNExternalFailure}
+ return w.owner.current(ctx)
+}
+func (r *routerVPNDesktopSOCKSMTUOperation) ObserveSOCKSMTUContext(ctx context.Context,source *mobilemultihop.NodeChainSOCKSSource)error{
+ if r==nil||ctx==nil||ctx.Err()!=nil||r.wrapper==nil||!r.wrapper.owns(r.wrapper.raw)||
+  !mobilemtu.SameOperationContext(r.operation,ctx)||r.wrapper.pending.Load()!=r||source!=r.wrapper.owner.source||
+  r.wrapper.owner.activity.Load()!=r.activity||r.wrapper.owner.state.Load()!=r.state.Load(){return routerVPNExternalFailure}
+ return r.wrapper.owner.sourceIdentity(ctx)
+}
+func (r *routerVPNDesktopSOCKSMTUOperation) PauseSOCKSMTUContext(ctx context.Context,source *mobilemultihop.NodeChainSOCKSSource,engine *box.RouterVPNNodeChainSOCKSEngine)error{
+ if r==nil||ctx==nil||ctx.Err()!=nil||r.wrapper==nil||!r.wrapper.owns(r.wrapper.raw)||r.wrapper.pending.Load()!=r||
+  source!=r.wrapper.owner.source||engine==nil{return routerVPNExternalFailure}
+ if _,bounded:=ctx.Deadline();!bounded{return routerVPNExternalFailure}
+ state:=r.state.Load()
+ if state==nil||r.wrapper.owner.state.Load()!=state||state.engine!=engine{return routerVPNExternalFailure}
+ // Retirement permits only this original state and its held work to join.
+ // It deliberately does not require a live cancelled proof or revive source.
+ return r.wrapper.owner.joinState(ctx,state)
+}
+func (w *routerVPNDesktopSOCKSMTU) beforeChange(ctx context.Context,raw *routerVPNNodeMTU,value int)(func(),error){
+ if !w.owns(raw)||value<1280||value>w.owner.ceiling||w.pending.Load()!=nil||
+  !mobilemtu.SameOperationContext(ctx,ctx){return nil,routerVPNExternalFailure}
+ activity,err:=w.owner.claimActivity(ctx);if err!=nil{return nil,err}
+ state:=w.owner.state.Load()
+ engine,ok:=state.engine.(*box.RouterVPNNodeChainSOCKSEngine)
+ if !ok||engine==nil{activity.release();return nil,routerVPNExternalFailure}
+ operation:=&routerVPNDesktopSOCKSMTUOperation{wrapper:w,activity:activity,operation:ctx,original:state,originalRecord:raw.record}
+ operation.state.Store(state)
+ if !w.pending.CompareAndSwap(nil,operation){activity.release();return nil,routerVPNExternalFailure}
+ finish:=func(){activity.release()}
+ if err:=w.owner.files.remove("node-chain-socks-ready.json");err!=nil{return finish,err}
+ operation.native,err=engine.BeginSOCKSMTUContext(ctx,operation)
+ // Retain the exact continuation, including a result accompanied by an error.
+ if err!=nil{return finish,err}
+ if operation.native==nil{return finish,routerVPNExternalFailure}
+ if err:=operation.native.PauseContext(ctx);err!=nil{return finish,err}
+ return finish,nil
+}
+func (w *routerVPNDesktopSOCKSMTU) change(ctx context.Context,raw *routerVPNNodeMTU,expected adapter.Inbound,value int)(adapter.Inbound,error){
+ if !w.owns(raw)||ctx==nil{return expected,routerVPNExternalFailure}
+ operation:=w.pending.Load()
+ if operation==nil||operation.native==nil||operation.activity!=w.owner.activity.Load()||
+  expected!=raw.inbound||!mobilemtu.SameOperationContext(operation.operation,ctx){return expected,routerVPNExternalFailure}
+ if ctx.Err()!=nil{
+  cleanup,err:=mobilemtu.OperationCleanupContext(ctx);if err!=nil{return expected,errors.Join(err,ctx.Err())}
+  err=w.base.physical.RetainUnchangedNodeChainSOCKSMTUContext(cleanup,operation.native,expected,operation.originalRecord.MTU)
+  return operation.native.Current(),errors.Join(ctx.Err(),err)
+ }
+ if value==raw.record.MTU{
+  err:=w.base.physical.RetainUnchangedNodeChainSOCKSMTUContext(ctx,operation.native,expected,value)
+  return operation.native.Current(),err
+ }
+ return w.base.physical.ChangeNodeChainSOCKSMTUContext(ctx,operation.native,expected,value)
+}
+func (w *routerVPNDesktopSOCKSMTU) afterChange(ctx context.Context,raw *routerVPNNodeMTU)(failure error){
+ if !w.owns(raw)||ctx==nil{return routerVPNExternalFailure}
+ operation:=w.pending.Load()
+ if operation==nil||operation.native==nil||operation.activity!=w.owner.activity.Load()||
+  !mobilemtu.SameOperationContext(operation.operation,ctx)||operation.native.Current()!=raw.inbound{return routerVPNExternalFailure}
+ previous:=operation.state.Load()
+ if previous==nil||previous!=w.owner.state.Load()||!previous.revoked.Load(){return routerVPNExternalFailure}
+ proof,err:=mobilemultihop.NewNodeChainSOCKSRuntime(w.owner.source);if err!=nil{return err}
+ state:=w.owner.newState()
+ state.proof=proof
+ if !w.owner.state.CompareAndSwap(previous,state){state.cancel();return routerVPNExternalFailure}
+ operation.state.Store(state)
+ defer close(state.done)
+ defer func(){if failure!=nil{state.ready.Store(false);state.revoked.Store(true);state.cancel()}}()
+ state.engine,err=operation.native.ResumeContext(ctx,func(call context.Context)error{return w.owner.stateCurrent(call,state)})
+ if err!=nil{return err}
+ if state.engine==nil{return routerVPNExternalFailure}
+ stopped:=make(chan struct{})
+ stop:=context.AfterFunc(ctx,func(){state.cancel();close(stopped)})
+ var stopOnce sync.Once
+ stopStartup:=func(){stopOnce.Do(func(){if !stop(){<-stopped}})}
+ defer stopStartup()
+ if err:=proof.Run(state.lifetime,state.engine);err!=nil{return err}
+ stopStartup()
+ if err:=w.owner.finishProof(ctx,state);err!=nil{return err}
+ if err:=operation.native.FinishContext(ctx);err!=nil{return err}
+ if operation.native.RetainsCleanup(){return routerVPNExternalFailure}
+ w.readback.Store(&routerVPNDesktopSOCKSMTUReadback{state:state,inbound:raw.inbound,record:raw.record})
+ if !w.pending.CompareAndSwap(operation,nil){return routerVPNExternalFailure}
+ return ctx.Err()
+}
+func (w *routerVPNDesktopSOCKSMTU) closeContext(ctx context.Context)error{
+ if w==nil{return nil}
+ if !w.owns(w.raw)||ctx==nil{return routerVPNExternalFailure}
+ if operation:=w.pending.Load();operation!=nil{
+  if operation.native!=nil{
+   if err:=operation.native.RetireContext(ctx,operation);err!=nil{return err}
+   if operation.native.RetainsCleanup(){return routerVPNExternalFailure}
+  }else if err:=w.owner.joinState(ctx,operation.state.Load());err!=nil{return err}
+  if !w.pending.CompareAndSwap(operation,nil){return routerVPNExternalFailure}
+ }
+ return ctx.Err()
+}

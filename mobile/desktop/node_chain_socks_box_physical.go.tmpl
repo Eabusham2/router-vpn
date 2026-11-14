@@ -1,0 +1,82 @@
+package box
+
+import (
+ "context"
+ "errors"
+ "runtime"
+
+ "github.com/sagernet/sing-box/adapter"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func routerVPNDesktopNodeChainSOCKSPhysicalTarget(policy *mobilemultihop.DesktopNodeChainSOCKSPolicy, target string) bool {
+ if policy == nil { return false }
+ _, meta, capture, err := policy.ReadValidated()
+ if err != nil || meta.Kind != "routervpn-desktop-node-chain-socks" || meta.TargetOS != target || len(meta.Prefixes) != 3 { return false }
+ for position, prefix := range meta.Prefixes {
+  if prefix.Position != position { return false }
+  switch position {
+  case 0:
+   if !mobilemultihop.NodeChainPrefixMode(prefix.Mode) || !mobilemultihop.DesktopNodePhysicalGraphSupported(prefix.Mode, prefix.StartLayer) { return false }
+  case 1:
+   if prefix.Mode != "socks5" || prefix.NodeKind != "external" || prefix.Kind != "public-path" || prefix.StartLayer != "off" { return false }
+  case 2:
+   if prefix.Mode != "shadowsocks" || !mobilemultihop.DesktopNodePhysicalGraphSupported(prefix.Mode, prefix.StartLayer) { return false }
+  }
+ }
+ for _, root := range capture.PhysicalRoots { if root.Type == "socks" || root.DynamicSOCKSUDP { return false } }
+ return len(capture.PhysicalRoots) > 0
+}
+
+func (s *Box) RouterVPNDesktopNodeChainSOCKSPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainSOCKSPolicy) (*RouterVPNDesktopNodePreparation, error) {
+ if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainSOCKSPhysicalTarget(policy, "windows") { return nil, errors.New("ordered SOCKS Windows preparation lost its original physical graph") }
+ _, network, err := s.routerVPNDesktopNodePhysical(policy)
+ if err != nil { return nil, err }
+ owner := &RouterVPNDesktopNodePreparation{network:network, policy:policy}
+ return owner, network.PrepareNodeChainSOCKSPhysicalPolicy(policy)
+}
+func (s *Box) RouterVPNDesktopNodeChainSOCKSActivatePhysical(policy *mobilemultihop.DesktopNodeChainSOCKSPolicy) (*RouterVPNDesktopNodePhysical, error) {
+ if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainSOCKSPhysicalTarget(policy, "windows") { return nil, errors.New("ordered SOCKS Windows activation lost its original physical graph") }
+ return s.routerVPNDesktopNodeActivatePhysical(policy)
+}
+
+// This callback observes the original source generation while an authorized
+// MTU transaction has deliberately retired the old TUN's physical grant.
+// It does not stand in for current TUN/readback or complete proof authority.
+func (owner *RouterVPNDesktopNodePhysical) NodeChainSOCKSSourceCurrentContext(ctx context.Context, source *mobilemultihop.NodeChainSOCKSSource) error {
+ if ctx == nil || owner == nil || owner.instance == nil || source == nil { return errors.New("ordered SOCKS physical source has no original owner") }
+ if err := ctx.Err(); err != nil { return err }
+ policy, ok := owner.policy.(*mobilemultihop.DesktopNodeChainSOCKSPolicy)
+ if !ok || policy == nil { return errors.New("ordered SOCKS physical source has another policy family") }
+ captured, err := policy.NativeSource()
+ if err != nil || captured != source { return errors.Join(err, errors.New("ordered SOCKS physical source changed its original object")) }
+ return owner.generationCurrentContext(ctx)
+}
+
+// The existing physical permission transaction surrounds the exact retained
+// typed TUN transaction. It never substitutes an ordinary Box MTU operation.
+func (owner *RouterVPNDesktopNodePhysical) ChangeNodeChainSOCKSMTUContext(ctx context.Context, operation *RouterVPNNodeChainSOCKSMTU, expected adapter.Inbound, value int) (adapter.Inbound,error) {
+ if owner == nil || operation == nil || operation.original == nil || operation.original.observation == nil ||
+  operation.original.observation.instance != owner.instance || operation.Current() != expected ||
+  owner.NodeChainSOCKSSourceCurrentContext(ctx, operation.original.source) != nil {
+  return expected, errors.New("ordered SOCKS MTU lost its original Box or physical source")
+ }
+ return owner.changeMTU(ctx, expected, value, operation.ChangeContext)
+}
+
+// An unchanged cancelled trial retains the original physical grant. The typed
+// continuation still records and observes that same reader before reproof.
+func (owner *RouterVPNDesktopNodePhysical) RetainUnchangedNodeChainSOCKSMTUContext(ctx context.Context, operation *RouterVPNNodeChainSOCKSMTU, expected adapter.Inbound, value int) error {
+ if owner == nil || operation == nil || operation.original == nil || operation.original.observation == nil ||
+  operation.original.observation.instance != owner.instance || operation.Current() != expected ||
+  owner.NodeChainSOCKSSourceCurrentContext(ctx, operation.original.source) != nil { return errors.New("ordered SOCKS unchanged trial lost its original owner") }
+ if err:=adapter.RouterVPNLockContext(ctx,&owner.mu);err!=nil{return err}
+ defer owner.mu.Unlock()
+ name,index,mtu,err:=owner.readbackContext(ctx)
+ if err!=nil||owner.inbound!=expected||mtu!=value{return errors.Join(err,errors.New("ordered SOCKS unchanged trial changed its reader"))}
+ returned,err:=operation.ChangeContext(ctx,expected,value)
+ if err!=nil||returned!=expected{return errors.Join(err,errors.New("ordered SOCKS unchanged trial acquired another reader"))}
+ afterName,afterIndex,afterMTU,err:=owner.readbackContext(ctx)
+ if err!=nil||owner.inbound!=expected||name!=afterName||index!=afterIndex||mtu!=afterMTU{return errors.Join(err,errors.New("ordered SOCKS unchanged trial lost original readback"))}
+ return ctx.Err()
+}

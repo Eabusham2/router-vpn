@@ -1,0 +1,14 @@
+//go:build !linux && !windows && !darwin
+
+package routervpndesktoppt
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func (*NodeNetworkOwner) PrepareNodeChainSOCKSPhysicalPolicy(*mobilemultihop.DesktopNodeChainSOCKSPolicy) error {
+	return errors.New("ordered chain physical protection requires its platform's original native owner")
+}
+

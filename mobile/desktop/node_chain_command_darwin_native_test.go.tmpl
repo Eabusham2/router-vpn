@@ -49,7 +49,7 @@ var darwinChildCases = []string{"wg-three", "mixed-four", "captured-mtu", "mtu-r
 // Only this explicitly tagged native acceptance executable dispatches its real
 // generated command from init. The command itself is unchanged shipping code.
 func init() {
-	if len(os.Args) > 1 && os.Args[1] == "routervpn-node-chain" {
+	if len(os.Args) > 1 && (os.Args[1] == "routervpn-node-chain" || os.Args[1] == "routervpn-node-chain-socks") {
 		globalCtx = include.Context(service.ContextWithDefaultRegistry(context.Background()))
 		mainCommand.SilenceUsage = true
 		mainCommand.SilenceErrors = true
@@ -159,6 +159,12 @@ func darwinChildHarness(t *testing.T, preflight bool) {
 }
 
 func darwinChildSelectedHarness(t *testing.T, preflight, diagnostic bool) {
+	darwinChildSelectedFamilyHarness(t, preflight, diagnostic, false)
+}
+
+func darwinChildSelectedFamilyHarness(t *testing.T, preflight, diagnostic, socks bool) {
+	if socks && (preflight || diagnostic) { t.Fatal("typed SOCKS native purpose cannot borrow another fixture") }
+	if !socks && os.Getenv("ROUTERVPN_DARWIN_SOCKS_CHILD_ACCEPTANCE") != "" { t.Fatal("ordinary native fixture cannot borrow typed SOCKS purpose") }
 	if preflight && diagnostic {
 		t.Fatal("native diagnostic purposes must remain exclusive")
 	}
@@ -254,6 +260,10 @@ func darwinChildSelectedHarness(t *testing.T, preflight, diagnostic bool) {
 		target = "TestRouterVPNNodeChainDarwinNativeDiagnostic"
 		markerName, markerBody = "native-child-diagnostic-complete", "original wg-three diagnostic joined\n"
 	}
+	if socks {
+		target = "TestRouterVPNNodeChainSOCKSDarwinNativeCommand"
+		markerName, markerBody = "native-socks-child-complete", "all original SOCKS child owners joined\n"
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	command := exec.CommandContext(ctx, macosprocess.ControllerPath, "-test.run=^"+target+"$", "-test.v", "-test.count=1", "-test.timeout="+alarm)
@@ -262,6 +272,7 @@ func darwinChildSelectedHarness(t *testing.T, preflight, diagnostic bool) {
 	if diagnostic {
 		command.Env = append(command.Env, "ROUTERVPN_DARWIN_NODE_CHILD_DIAGNOSTIC=wg-three")
 	}
+	if socks { command.Env = append(command.Env, "ROUTERVPN_DARWIN_SOCKS_CHILD_ACCEPTANCE=1") }
 	_, e = darwinChildHarnessOutput(command)
 	if e != nil {
 		t.Fatal("actual installed generated-child fixture failed", e)
@@ -787,6 +798,7 @@ type darwinChildOwner struct {
 	channel   *mobiletor.DesktopDarwinControl
 	files     *routerVPNExternalFiles
 	policy    *mobilemultihop.DesktopNodeChainPolicy
+	socksPolicy *mobilemultihop.DesktopNodeChainSOCKSPolicy
 	transfer  string
 	baseline  *mobiletor.DesktopDarwinPFBaselineResult
 	output    darwinChildOutput
@@ -815,7 +827,8 @@ func darwinChildBaseline(ctx context.Context, r mobiletor.DesktopDarwinPFBaselin
 }
 
 func (o *darwinChildOwner) installBaseline(ctx context.Context) error {
-	meta := o.policy.Metadata()
+	meta, err := o.metadata()
+	if err != nil { return err }
 	request := mobiletor.DesktopDarwinPFBaselineRequest{Schema: 1, Action: "replace", SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, Expected: []mobiletor.DesktopDarwinPFBaselineProof{{}}}
 	plan, e := darwinChildBaseline(ctx, request, false)
 	if e != nil || plan.Previous.Present || !plan.Target.Present {
@@ -886,8 +899,13 @@ func (o *darwinChildOwner) stopUnstarted(ctx context.Context, failed bool) error
 func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChildAuthority, policy *mobilemultihop.DesktopNodeChainPolicy) {
 	t.Helper()
 	o.policy = policy
+	o.startCaptured(t, ctx, a)
+}
+func (o *darwinChildOwner) startCaptured(t *testing.T, ctx context.Context, a *darwinChildAuthority) {
+	t.Helper()
 	o.observed = map[int]string{}
-	meta := policy.Metadata()
+	meta, e := o.metadata()
+	if e != nil { t.Fatal(e) }
 	directory, e := os.MkdirTemp(macosprocess.InstallRoot+"/run/native-node", "session-")
 	if e != nil {
 		t.Fatal(e)
@@ -895,11 +913,11 @@ func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChi
 	if e := os.Chmod(directory, 0700); e != nil {
 		t.Fatal(e)
 	}
-	input, e := policy.NodeChain().LaunchInput()
+	input, config, e := o.input()
 	if e != nil {
 		t.Fatal(e)
 	}
-	for name, body := range map[string]string{"node-chain-source.json": input, "sing-box.json": policy.Config()} {
+	for name, body := range map[string]string{o.sourceName(): input, "sing-box.json": config} {
 		if e := os.WriteFile(filepath.Join(directory, name), []byte(body), 0600); e != nil {
 			t.Fatal(e)
 		}
@@ -908,7 +926,7 @@ func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChi
 	if e != nil {
 		t.Fatal(e)
 	}
-	scope := macosprocess.Scope{Family: macosprocess.NodeChainFamily, Workspace: directory, Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256}
+	scope := macosprocess.Scope{Family: o.family(), Workspace: directory, Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256}
 	workspace, e := os.OpenFile(directory, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if e != nil {
 		t.Fatal(e)
@@ -921,7 +939,7 @@ func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChi
 	if e := o.capture.Current(ctx); e != nil {
 		t.Fatal(e)
 	}
-	o.transfer, e = macosprocess.NodeChainTransferSHA256(o.capture.Selection())
+	o.transfer, e = o.transferDigest()
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -935,7 +953,7 @@ func (o *darwinChildOwner) start(t *testing.T, ctx context.Context, a *darwinChi
 		t.Fatal(e)
 	}
 	defer child.Close()
-	o.command = exec.Command(macosprocess.EnginePath, "routervpn-node-chain", "--runtime-dir", directory, "--session", scope.Session, "--physical-source-sha256", scope.Source, "--config-sha256", scope.Config, "--darwin-control", "inherited-v1")
+	o.command = exec.Command(macosprocess.EnginePath, o.commandName(), "--runtime-dir", directory, "--session", scope.Session, "--physical-source-sha256", scope.Source, "--config-sha256", scope.Config, "--darwin-control", "inherited-v1")
 	o.command.Dir = directory
 	o.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
 	o.command.ExtraFiles = append([]*os.File{child}, o.capture.Files()...)
@@ -970,7 +988,7 @@ func (o *darwinChildOwner) current(ctx context.Context) error {
 	if e := o.bootstrap.Current(ctx); e != nil {
 		return e
 	}
-	transfer, e := macosprocess.NodeChainTransferSHA256(o.capture.Selection())
+	transfer, e := o.transferDigest()
 	if e != nil || transfer != o.transfer {
 		return errors.Join(e, errors.New("native capture transfer changed"))
 	}
@@ -1000,15 +1018,16 @@ func (o *darwinChildOwner) observation(ctx context.Context) (routerVPNNodeMTURec
 	if !routerVPNMTUStrict(raw, &mtu) {
 		return mtu, proof, errors.New("malformed exact native MTU readback")
 	}
-	raw, e = o.files.read("node-chain-ready.json", mobilemultihop.DesktopNodeChainReadyRecordLimit)
+	raw, e = o.files.read(o.readyName(), mobilemultihop.DesktopNodeChainReadyRecordLimit)
 	if e != nil {
 		return mtu, proof, e
 	}
-	proof, e = mobilemultihop.ParseDesktopNodeChainReadyRecord(raw, o.policy, o.transfer)
+	proof, e = o.parseReady(raw)
 	if e != nil {
 		return mtu, proof, e
 	}
-	meta := o.policy.Metadata()
+	meta, e := o.metadata()
+	if e != nil { return mtu, proof, e }
 	now := time.Now().UnixMilli()
 	iface, e := net.InterfaceByName(mtu.Interface)
 	if e != nil || !darwinChildInterface(mtu.Interface) || iface.Index != mtu.Index || iface.MTU != mtu.MTU || iface.Flags&net.FlagUp == 0 || mtu.Session != meta.SessionID || mtu.Config != meta.ConfigSHA256 || mtu.Reader == 0 || mtu.Schema != 1 || mtu.Failure != "" || mtu.Heartbeat > now || now-mtu.Heartbeat > 10000 || proof.ObservedAt > now || now-proof.ObservedAt > 10000 || proof.Reader != mtu.Reader || proof.InterfaceName != mtu.Interface || int(proof.InterfaceIndex) != mtu.Index || proof.MTU != mtu.MTU {
@@ -1061,11 +1080,11 @@ func (o *darwinChildOwner) stop(ctx context.Context) error {
 		routerVPNExternalStop
 		Closed bool `json:"closed"`
 	}
-	meta := o.policy.Metadata()
-	if e != nil || !routerVPNMTUStrict(raw, &record) || record.Schema != 1 || record.Session != meta.SessionID || record.SourceSHA256 != meta.ConfigSHA256 || !record.Closed {
+	meta, metaErr := o.metadata()
+	if e != nil || metaErr != nil || !routerVPNMTUStrict(raw, &record) || record.Schema != 1 || record.Session != meta.SessionID || record.SourceSHA256 != meta.ConfigSHA256 || !record.Closed {
 		return errors.Join(e, errors.New("native stop lacks original joined receipt"))
 	}
-	for _, name := range []string{"node-ready.json", "node-chain-ready.json"} {
+	for _, name := range []string{"node-ready.json", "node-chain-ready.json", "node-chain-socks-ready.json"} {
 		if _, e := o.files.root.Lstat(name); !errors.Is(e, os.ErrNotExist) {
 			return errors.New("retired child retained readiness")
 		}
@@ -1168,7 +1187,7 @@ func darwinChildMTURollback(t *testing.T, ctx context.Context, o *darwinChildOwn
 	status, proof := o.wait(t, ctx, "")
 	original := status.MTU
 	lease := darwinChildNonce(t, 16)
-	plan, e := o.policy.NodeChain().MTUPlan()
+	plan, e := o.mtuPlan()
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -17,6 +17,7 @@ import (
 type desktopNodeChainLaunch struct {
 	preparation           *orderedCandidatePreparation // bound once before staging; nil for ordinary connections
 	policy                *mobilemultihop.DesktopNodeChainPolicy
+	socksPolicy           *mobilemultihop.DesktopNodeChainSOCKSPolicy
 	selection             multihopSelection
 	input                 string
 	platform              *desktopNodeChainPlatformRuntime
@@ -35,6 +36,9 @@ type desktopNodeChainLaunch struct {
 }
 
 func newDesktopNodeChainLaunch(selection multihopSelection, session, target string) (*desktopNodeLaunch, error) {
+	if selection.Native != nil && selection.Native.chain != nil && selection.Native.chain.socks != nil {
+		return newDesktopSOCKSNodeChainLaunch(selection, session, target)
+	}
 	if selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil ||
 		selection.Control.ID != selection.Exit.ID || target != "windows" && target != "linux" && target != "darwin" {
 		return nil, errors.New("ordered native launch requires its complete captured Local source")
@@ -66,7 +70,7 @@ func newDesktopNodeChainLaunch(selection multihopSelection, session, target stri
 }
 
 func validateDesktopNodeChainLaunch(ctx context.Context, launch *desktopNodeLaunch) error {
-	if ctx == nil || ctx.Err() != nil || launch == nil || launch.chain == nil || launch.chain.policy == nil ||
+	if ctx == nil || ctx.Err() != nil || launch == nil || !launch.chain.hasPolicy() ||
 		launch.importedEntry || launch.importedPlatform != nil || launch.external != nil || launch.tor != nil || launch.candidatePrefix != nil {
 		return errors.New("ordered native launch lost its concrete policy family or original caller")
 	}
@@ -78,7 +82,7 @@ func validateDesktopNodeChainLaunch(ctx context.Context, launch *desktopNodeLaun
 	if owner.capture != nil && selection.Native.chain.host != owner.capture {
 		return errors.New("ordered native launch replaced its original host capture")
 	}
-	config, meta, _, err := owner.policy.ReadValidated()
+	config, meta, _, err := owner.readPolicy()
 	actual := string(launch.config)
 	if len(launch.config) == 0 && launch.ownedNode != nil && launch.ownedNode.chain == owner && launch.command != nil && launch.directory != "" {
 		raw, readErr := readDesktopRuntimeFileContext(ctx, launch, "sing-box.json", mobilemultihop.NodeChainInputLimit)
@@ -91,10 +95,10 @@ func validateDesktopNodeChainLaunch(ctx context.Context, launch *desktopNodeLaun
 	if err != nil || config != actual || meta.ConfigSHA256 != launch.configSHA256 || meta.SessionID != launch.mtuSession ||
 		meta.ProfileID != launch.profileID || launch.policyProfileID != selection.Control.ID || meta.NodeID != selection.Exit.NodeProofID ||
 		meta.Mode != launch.mode || meta.OriginalSourceSHA256 != selection.Native.source || launch.root != selection.Native.root ||
-		launch.endpoint != selection.Native.endpoint || owner.policy.OriginalChain() != selection.Native.chain.chain {
+		launch.endpoint != selection.Native.endpoint || !owner.originalPolicyCurrent() {
 		return errors.Join(err, errors.New("ordered native launch changed its sealed derived graph or original authority"))
 	}
-	input, err := owner.policy.NodeChain().LaunchInput()
+	input, err := owner.launchInput()
 	if err != nil || input != owner.input {
 		return errors.Join(err, errors.New("ordered native launch changed its exact projected private input"))
 	}
@@ -112,9 +116,9 @@ func desktopNodeReadyBudget(launch *desktopNodeLaunch) (time.Duration, error) {
 		return 25 * time.Second, nil
 	}
 	chain := launch.chain
-	if chain.policy == nil || chain.policy.Validate() != nil || chain.selection.Native == nil ||
+	if !chain.hasPolicy() || !chain.originalPolicyCurrent() || chain.selection.Native == nil ||
 		chain.selection.Native.chain == nil || len(chain.selection.Nodes) < 2 || len(chain.selection.Nodes) > 8 ||
-		len(chain.policy.NodeChain().ProofInventory()) != len(chain.selection.Nodes) {
+		len(chain.policyMetadata().Prefixes) != len(chain.selection.Nodes) {
 		return 0, errors.New("ordered readiness lost its bounded complete proof inventory")
 	}
 	return time.Duration(35+10*len(chain.selection.Nodes)) * time.Second, nil
@@ -126,7 +130,7 @@ func desktopNodeReadyBudget(launch *desktopNodeLaunch) (time.Duration, error) {
 func readDesktopNodeChainReadyContext(ctx context.Context, launch *desktopNodeLaunch, transfer string,
 	started time.Time, fresh bool, live desktopNodeMTURecord) (mobilemultihop.DesktopNodeChainReadyRecord, error) {
 	var empty mobilemultihop.DesktopNodeChainReadyRecord
-	if ctx == nil || ctx.Err() != nil || launch == nil || launch.chain == nil || launch.chain.policy == nil {
+	if ctx == nil || ctx.Err() != nil || launch == nil || !launch.chain.hasPolicy() {
 		return empty, errors.New("ordered readiness has no original typed launch and caller")
 	}
 	owner := launch.chain
@@ -134,15 +138,15 @@ func readDesktopNodeChainReadyContext(ctx context.Context, launch *desktopNodeLa
 		return empty, err
 	}
 	defer owner.mu.Unlock()
-	raw, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-ready.json", mobilemultihop.DesktopNodeChainReadyRecordLimit)
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, owner.readyName(), mobilemultihop.DesktopNodeChainReadyRecordLimit)
 	if err != nil {
 		return empty, err
 	}
-	record, err := mobilemultihop.ParseDesktopNodeChainReadyRecord(raw, owner.policy, transfer)
+	record, err := owner.parseReady(raw, transfer)
 	if err != nil {
 		return empty, err
 	}
-	if err := validateDesktopNodeChainReadyForTarget(owner.policy.Metadata().TargetOS, record, live, started, time.Now(), owner.ready, fresh); err != nil {
+	if err := validateDesktopNodeChainReadyForTarget(owner.policyMetadata().TargetOS, record, live, started, time.Now(), owner.ready, fresh); err != nil {
 		return empty, err
 	}
 	if owner.mtuPath != "" && owner.mtuPath != live.Path || !desktopMTUPathPattern.MatchString(live.Path) {

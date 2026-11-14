@@ -19,6 +19,7 @@ import (
  "net/http"
  "net/netip"
  "os"
+ "runtime"
  "strconv"
  "strings"
  "sync/atomic"
@@ -38,6 +39,7 @@ type nodeSOCKSRunRequest struct {
  Schema int `json:"schema"`
  Mode string `json:"mode"`
  Fault string `json:"fault"`
+ Native bool `json:"native,omitempty"`
 }
 type nodeSOCKSRunReply struct {
  Schema int `json:"schema"`
@@ -83,6 +85,8 @@ func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
  // Registered first: this is emitted only after every original provider,
  // packet reader, association and HTTP/DNS server cleanup has returned.
  t.Cleanup(func(){if !t.Failed(){fmt.Fprintln(os.Stdout,"SOCKS_RUN_PEER_JOINED")}})
+ physical,err:=nodeSOCKSRunPhysical(input.Native)
+ if err!=nil{t.Fatal(err)}
  request,clients:=desktopNodeChainPeerFixture(t,1)
  desktopNodeChainSetModes(t,&request,[]string{input.Mode})
  finalKey,err:=ecdh.X25519().GenerateKey(rand.Reader);if err!=nil{t.Fatal(err)}
@@ -115,6 +119,7 @@ func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
  middleKey:=base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73},32))
  fixtureRequest:=desktopNodeChainImportedRequest{1,request,mobilemultihop.NativeStartLayerMethod,middleKey}
  loopback:=netip.MustParseAddr("127.0.0.1")
+ if input.Native{loopback=physical}
  peer:=desktopNodeChainImportedPeerStartWithHooks(t,fixtureRequest,loopback,loopback,nil,hooks)
  // No obsolete SS-middle route is admitted by this captured SOCKS handler.
  delete(peer.paired.entry.rules,"tcp/10.79.0.1:8388")
@@ -228,4 +233,36 @@ func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
 }
 func mustSOCKSRunRoute(t *testing.T,server *desktopNodeLayerServer,network,destination string)string{
  t.Helper();result,ok:=server.route(network,destination);if !ok||result==""{t.Fatal("original peer route vanished")};return result
+}
+
+// Native physical access is a separate, explicit Darwin fixture purpose.
+// The ordinary Linux process keeps its original loopback-only boundary.
+func nodeSOCKSRunPhysical(native bool)(netip.Addr,error){
+ bad:=errors.New("SOCKS reference lost its captured native physical owner")
+ marker:=os.Getenv("ROUTERVPN_DARWIN_SOCKS_RUN_REFERENCE")
+ if !native{
+  if runtime.GOOS=="darwin"||marker!=""{return netip.Addr{},bad}
+  return netip.MustParseAddr("127.0.0.1"),nil
+ }
+ address:=os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS")
+ if runtime.GOOS!="darwin"||marker!="1"||!desktopNodeChainReferenceAddressPair(address,address){return netip.Addr{},bad}
+ return netip.MustParseAddr(address),nil
+}
+func TestRouterVPNDesktopNodeChainSOCKSDarwinCapture(t *testing.T){
+ if runtime.GOOS!="darwin"{t.Skip("actual Darwin reference capture only")}
+ physical,err:=nodeSOCKSRunPhysical(true)
+ if err!=nil||physical.IsLoopback(){t.Fatal("original native SOCKS physical capture",err)}
+ for _,fault:=range []string{"ordinary-purpose","missing-socks-purpose","missing-reference","loopback","foreign-address"}{
+  t.Run(fault,func(t *testing.T){
+   native:=true
+   switch fault{
+   case "ordinary-purpose":native=false
+   case "missing-socks-purpose":t.Setenv("ROUTERVPN_DARWIN_SOCKS_RUN_REFERENCE","")
+   case "missing-reference":t.Setenv("ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE","")
+   case "loopback":t.Setenv("ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS","127.0.0.1")
+   case "foreign-address":t.Setenv("ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS","192.0.2.254")
+   }
+   if _,err:=nodeSOCKSRunPhysical(native);err==nil{t.Fatal("foreign native SOCKS physical capture accepted",fault)}
+  })
+ }
 }

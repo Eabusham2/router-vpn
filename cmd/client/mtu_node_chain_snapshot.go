@@ -9,17 +9,18 @@ import (
 // The snapshot retains the exact ordered native objects; no profile, graph
 // label, or interface alias can reconstruct this ownership after replacement.
 type mtuNodeChainSnapshot struct {
-	Launch   *desktopNodeLaunch
-	Chain    *desktopNodeChainLaunch
-	Native   *nativeMultihopCapture
-	Capture  *desktopNodeChainHostCapture
-	Sources  *desktopNodeChainSources
-	Platform *desktopNodeChainPlatformRuntime
-	Policy   *mobilemultihop.DesktopNodeChainPolicy
-	Network  string
-	Source   string
-	Config   string
-	Session  string
+	Launch      *desktopNodeLaunch
+	Chain       *desktopNodeChainLaunch
+	Native      *nativeMultihopCapture
+	Capture     *desktopNodeChainHostCapture
+	Sources     *desktopNodeChainSources
+	Platform    *desktopNodeChainPlatformRuntime
+	Policy      *mobilemultihop.DesktopNodeChainPolicy
+	SOCKSPolicy *mobilemultihop.DesktopNodeChainSOCKSPolicy
+	Network     string
+	Source      string
+	Config      string
+	Session     string
 }
 
 func captureMTUNodeChainSnapshot(owner *nativeMultihopRuntime) (*mtuNodeChainSnapshot, error) {
@@ -35,7 +36,7 @@ func captureMTUNodeChainSnapshot(owner *nativeMultihopRuntime) (*mtuNodeChainSna
 	}
 	chain, native := launch.chain, owner.selection.Native
 	capture := chain.capture
-	if native == nil || native.chain == nil || chain.policy == nil || capture == nil || capture.sources == nil ||
+	if native == nil || native.chain == nil || !chain.hasPolicy() || capture == nil || capture.sources == nil ||
 		chain.selection.Native != native || native.chain.host != capture || capture.sources.selection.Native != native ||
 		owner.graph.ChainNodes != len(owner.selection.Nodes) || owner.graph.ChainNodes < 2 || owner.graph.ChainNodes > 8 ||
 		owner.graph.Execution != "local" || owner.graph.ImportedEntry || owner.graph.SourceSHA != native.source ||
@@ -44,7 +45,7 @@ func captureMTUNodeChainSnapshot(owner *nativeMultihopRuntime) (*mtuNodeChainSna
 		return nil, errors.New("ordered MTU snapshot changed its full source or original platform")
 	}
 	return &mtuNodeChainSnapshot{Launch: launch, Chain: chain, Native: native, Capture: capture, Sources: capture.sources,
-		Platform: chain.platform, Policy: chain.policy, Network: owner.network, Source: native.source,
+		Platform: chain.platform, Policy: chain.policy, SOCKSPolicy: chain.socksPolicy, Network: owner.network, Source: native.source,
 		Config: launch.configSHA256, Session: launch.mtuSession}, nil
 }
 
@@ -55,10 +56,10 @@ func validateMTUNodeChainLocked(a *app, path *mtuMultihopSnapshot) error {
 	captured := path.Chain
 	owner := path.Native
 	if captured == nil || owner == nil || captured.Launch == nil || captured.Chain == nil || captured.Native == nil ||
-		captured.Capture == nil || captured.Sources == nil || captured.Policy == nil ||
+		captured.Capture == nil || captured.Sources == nil || (captured.Policy == nil) == (captured.SOCKSPolicy == nil) ||
 		owner.launch != captured.Launch || owner.selection.Native != captured.Native ||
 		captured.Launch.chain != captured.Chain || captured.Chain.selection.Native != captured.Native ||
-		captured.Chain.policy != captured.Policy || captured.Chain.platform != captured.Platform ||
+		captured.Chain.policy != captured.Policy || captured.Chain.socksPolicy != captured.SOCKSPolicy || captured.Chain.platform != captured.Platform ||
 		captured.Chain.capture != captured.Capture || captured.Native.chain == nil ||
 		captured.Native.chain.host != captured.Capture || captured.Capture.sources != captured.Sources ||
 		captured.Sources.selection.Native != captured.Native || captured.Capture.app != a ||

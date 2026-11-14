@@ -1,0 +1,163 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type routerVPNNodeStartupTestMiddle struct{ close func() error }
+
+func (m *routerVPNNodeStartupTestMiddle) RouterVPNCloseSOCKSMiddle() error { return m.close() }
+func routerVPNNodeStartupTestContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+func TestRouterVPNNodeStartupOwnership(t *testing.T) {
+	t.Run("constructor-cancel", func(t *testing.T) {
+		parent, cancel := context.WithCancel(context.Background())
+		graph, stop := context.WithCancel(context.Background())
+		defer stop()
+		joined := routerVPNWatchNodeConstruction(parent, func() bool { return false }, stop)
+		cancel()
+		select {
+		case <-graph.Done():
+		case <-time.After(time.Second):
+			t.Fatal("constructor lost its original cancellation")
+		}
+		joined()
+		joined()
+	})
+	t.Run("watcher-transfer", func(t *testing.T) {
+		for range 50 {
+			parent, cancel := context.WithCancel(context.Background())
+			var calls atomic.Int32
+			joined := routerVPNWatchNodeConstruction(parent, func() bool { return false }, func() { calls.Add(1) })
+			joined()
+			cancel()
+			joined()
+			if calls.Load() != 0 {
+				t.Fatal("constructor watcher survived original transfer")
+			}
+		}
+	})
+
+	t.Run("cancel-transfer-join", func(t *testing.T) {
+		parent, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		entered, release, callbackDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		stop := routerVPNWatchNodeConstruction(parent, func() bool { return false }, func() { close(entered); <-release; close(callbackDone) })
+		cancel()
+		<-entered
+		transferred := make(chan struct{})
+		go func() { stop(); close(transferred) }()
+		premature := false
+		select {
+		case <-transferred:
+			premature = true
+		case <-time.After(20 * time.Millisecond):
+		}
+		close(release)
+		<-callbackDone
+		<-transferred
+		if premature {
+			t.Fatal("constructor transfer returned before cancellation joined")
+		}
+	})
+	t.Run("exact-order", func(t *testing.T) {
+		order := []string{}
+		graph, cancel := context.WithCancel(context.Background())
+		owner := &routerVPNNodeStartupOwner{cancel: func() { order = append(order, "cancel"); cancel() }, original: &routerVPNNodeStartupTestMiddle{close: func() error {
+			if graph.Err() != nil {
+				t.Error("middle lost live original lower")
+			}
+			order = append(order, "middle")
+			return nil
+		}}}
+		if err := owner.start(routerVPNNodeStartupTestContext(t), nil, func() error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if err := owner.close(routerVPNNodeStartupTestContext(t)); err != nil || !reflect.DeepEqual(order, []string{"middle", "cancel"}) {
+			t.Fatal("middle did not precede original graph cancellation", err, order)
+		}
+		if err := owner.close(routerVPNNodeStartupTestContext(t)); err != nil || len(order) != 3 {
+			t.Fatal("retry repeated original middle", err, order)
+		}
+	})
+	t.Run("held-middle", func(t *testing.T) {
+		entered, release := make(chan struct{}), make(chan struct{})
+		graph, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var calls atomic.Int32
+		owner := &routerVPNNodeStartupOwner{cancel: cancel, original: &routerVPNNodeStartupTestMiddle{close: func() error { calls.Add(1); close(entered); <-release; return nil }}}
+		ctx, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer stop()
+		if owner.close(ctx) == nil || graph.Err() != nil {
+			t.Fatal("pending original middle cancelled lower or claimed join")
+		}
+		<-entered
+		close(release)
+		if err := owner.close(routerVPNNodeStartupTestContext(t)); err != nil || graph.Err() == nil || calls.Load() != 1 {
+			t.Fatal("retry lost original middle worker", err)
+		}
+	})
+	t.Run("held-startup", func(t *testing.T) {
+		entered, release := make(chan struct{}), make(chan struct{})
+		graph, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		owner := &routerVPNNodeStartupOwner{cancel: cancel, original: &routerVPNNodeStartupTestMiddle{close: func() error { return nil }}}
+		startup, stop := context.WithCancel(context.Background())
+		defer stop()
+		returned := make(chan error, 1)
+		go func() { returned <- owner.start(startup, nil, func() error { close(entered); <-release; return nil }) }()
+		<-entered
+		stop()
+		<-returned
+		ctx, end := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer end()
+		if owner.close(ctx) == nil || graph.Err() == nil {
+			t.Fatal("unjoined startup admitted native teardown")
+		}
+		close(release)
+		if err := owner.close(routerVPNNodeStartupTestContext(t)); err != nil {
+			t.Fatal("original startup retry did not join", err)
+		}
+	})
+	t.Run("middle-failure", func(t *testing.T) {
+		graph, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var calls atomic.Int32
+		failure := errors.New("original middle failed")
+		owner := &routerVPNNodeStartupOwner{cancel: cancel, original: &routerVPNNodeStartupTestMiddle{close: func() error { calls.Add(1); return failure }}}
+		for range 2 {
+			if !errors.Is(owner.close(routerVPNNodeStartupTestContext(t)), failure) || graph.Err() != nil {
+				t.Fatal("failed middle permitted lower teardown")
+			}
+		}
+		if calls.Load() != 1 {
+			t.Fatal("failed original close was repeated")
+		}
+	})
+	t.Run("partial-constructor", func(t *testing.T) {
+		graph, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		owner := &routerVPNNodeStartupOwner{cancel: cancel}
+		if err := owner.close(routerVPNNodeStartupTestContext(t)); err != nil || graph.Err() == nil {
+			t.Fatal("partial constructor lost its graph retirement", err)
+		}
+	})
+	t.Run("duplicate-start", func(t *testing.T) {
+		owner := &routerVPNNodeStartupOwner{cancel: func() {}, original: &routerVPNNodeStartupTestMiddle{close: func() error { return nil }}}
+		var calls atomic.Int32
+		start := func() error { calls.Add(1); return nil }
+		ctx := routerVPNNodeStartupTestContext(t)
+		if owner.start(ctx, nil, start) != nil || owner.start(ctx, nil, start) == nil || calls.Load() != 1 {
+			t.Fatal("startup replaced its original worker")
+		}
+	})
+}

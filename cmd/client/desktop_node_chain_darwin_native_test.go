@@ -227,7 +227,9 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 		}
 		a.mu.Lock()
 		middle := &a.profiles.Profiles[1]
-		if middle.NodeKind == "external" && middle.External != nil && middle.External.Shadowsocks != nil {
+		if middle.NodeKind == "external" && middle.External != nil && middle.External.SOCKS5 != nil {
+			middle.External.SOCKS5.Password += "-replaced-after-original-proof"
+		} else if middle.NodeKind == "external" && middle.External != nil && middle.External.Shadowsocks != nil {
 			middle.External.Shadowsocks.Password = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32)))
 		} else {
 			middle.APIToken += "-replaced-after-original-proof"
@@ -272,13 +274,13 @@ func macOSNodeChainNativeObservation(ctx context.Context, h *desktopMacOSNodeCha
 		return result, err
 	}
 	defer func() { h.gate <- struct{}{} }()
-	if h.policy == nil || h.policy.Validate() != nil || h.launch == nil || h.runtime == nil || h.runtime.host != h || h.process == nil {
+	if h.launch == nil || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy || h.runtime == nil || h.runtime.host != h || h.process == nil {
 		return result, errors.New("native ordered observation lost exact owner")
 	}
-	_, meta, capture, err := h.policy.ReadValidated()
+	_, meta, capture, err := h.launch.chain.readPolicy()
 	if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
 		capture.PhysicalRoots[0].Destinations[0].Network != "udp" || capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Host != "192.168.50.133" ||
-		meta.TargetOS != "darwin" || meta.ProfileID != "installed-ordered-final" || meta.Mode != "shadowsocks" {
+		meta.TargetOS != "darwin" || meta.ProfileID != "installed-ordered-final" || meta.Mode != h.launch.chain.selection.ExitMode {
 		return result, errors.New("native ordered observation changed full policy or selected Home DNS")
 	}
 	physical := capture.PhysicalRoots[0].Destinations[0]
@@ -289,7 +291,7 @@ func macOSNodeChainNativeObservation(ctx context.Context, h *desktopMacOSNodeCha
 		return result, errors.New("native ordered process never started")
 	}
 	result.ProcessID = h.process.command.Process.Pid
-	result.Transfer, err = macosprocess.NodeChainTransferSHA256(h.process.capture.Selection())
+	result.Transfer, err = h.launch.chain.macOSTransfer(h.process.capture.Selection())
 	if err != nil || h.transfer != "" && result.Transfer != h.transfer {
 		return result, errors.New("native ordered transfer changed")
 	}
@@ -556,6 +558,12 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		t.Fatal("ordered cleanup omitted exact original native/PF/workspace receipt", retired)
 	}
 	macOSExternalNativeRetiredKernel(t, ctx, retired.Baseline.Token, beforeTunnels)
+	if peer.middleSOCKS {
+		stats := peer.observe(t, "stats")
+		if stats.Associations == nil || *stats.Associations != 0 {
+			t.Fatal("installed typed child left a remote SOCKS association after joined retirement", stats.Associations)
+		}
+	}
 	if err := connection.CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
@@ -681,6 +689,9 @@ func macOSNodeChainNativeProved(t *testing.T, peer *macOSNodeChainPeer, request 
 		value.MTUActive || value.MTU.Failure != "" || value.Ready.InterfaceName != value.MTU.Interface || value.Ready.InterfaceIndex != uint32(value.MTU.Index) || value.Ready.MTU != value.MTU.MTU || value.Ready.Reader != value.MTU.Reader {
 		t.Fatal("ordered host lost original complete readiness/MTU/PF identity", value)
 	}
+	if peer.middleSOCKS && (value.Ready.Kind != "routervpn-node-chain-socks-ready-v1" || value.Baseline.Capture.Family != macosprocess.NodeChainSOCKSFamily) {
+		t.Fatal("typed installed host borrowed ordinary readiness or PF family")
+	}
 	link, err := net.InterfaceByIndex(value.MTU.Index)
 	if err != nil || link.Name != value.MTU.Interface || link.MTU != value.MTU.MTU || link.Flags&net.FlagUp == 0 {
 		t.Fatal("original actual utun readback failed", err, link)
@@ -692,8 +703,8 @@ func macOSNodeChainNativeProved(t *testing.T, peer *macOSNodeChainPeer, request 
 			t.Fatal("ordered path omitted actual independent authenticated prefix", i, prefix)
 		}
 	}
-	if peer.middlePassword != "" && (len(request.Nodes) != 3 || request.Nodes[1].Mode != "shadowsocks" || stats.Middle == nil ||
-		stats.Middle.Method != peer.middleMethod || stats.Middle.RawTCP == 0 || stats.Middle.RawUDP == 0 || stats.Middle.TCP == 0 || stats.Middle.UDP == 0 || stats.Middle.PublicQueries == 0) {
+	if peer.middlePassword != "" && (len(request.Nodes) != 3 || request.Nodes[1].Mode != peer.observedMiddleProtocol() || stats.Middle == nil ||
+		stats.Middle.Method != peer.observedMiddleMethod() || stats.Middle.RawTCP == 0 || stats.Middle.RawUDP == 0 || stats.Middle.TCP == 0 || stats.Middle.UDP == 0 || stats.Middle.PublicQueries == 0) {
 		t.Fatal("ordered path omitted actual independent imported cipher or public-path proof", stats.Middle)
 	}
 	if stats.Final.RouterQueries == 0 || stats.Final.DNSQueries == 0 || stats.Final.FinalPublicQueries == 0 || peer.hysteriaPassword == "" && (stats.Final.FinalTCP == 0 || stats.Final.FinalUDP == 0) || stats.Final.DirectQueries != 0 {

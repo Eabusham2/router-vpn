@@ -388,13 +388,13 @@ func (owner *desktopNodeMTUOwner) verifyReaderChangeContext(ctx context.Context,
 	}
 	launch := owner.launch
 	if owner.verifyReaderChange == nil || launch == nil || launch.chain == nil || launch.chain.platform == nil ||
-		launch.chain.policy == nil || launch.chain.policy.Validate() != nil || launch.chain.policy.Metadata().TargetOS != "darwin" ||
+		!launch.chain.hasPolicy() || launch.chain.policyMetadata().TargetOS != "darwin" ||
 		launch.external != nil || launch.importedEntry || launch.importedPlatform != nil || launch.tor != nil ||
 		next.Reader <= previous.Reader || !desktopNodeChainDarwinInterfaceName(previous.Interface) ||
 		!desktopNodeChainDarwinInterfaceName(next.Interface) {
 		return errors.New("native MTU acknowledgement changed its captured interface")
 	}
-	meta := launch.chain.policy.Metadata()
+	meta := launch.chain.policyMetadata()
 	if meta.SessionID != previous.Session || meta.ConfigSHA256 != previous.Config {
 		return errors.New("native MTU reader succession changed its original ordered policy")
 	}

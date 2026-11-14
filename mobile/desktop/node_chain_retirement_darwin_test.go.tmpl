@@ -140,6 +140,51 @@ func TestRouterVPNNodeChainDarwinNativeRetirementOrder(t *testing.T) {
 			t.Fatal("partial constructor discarded joined progress or repeated ambiguous close")
 		}
 	})
+	t.Run("middle-before-cancel", func(t *testing.T) {
+		owner, _, order := routerVPNDarwinChainTestRetirement()
+		owner.startupOwner = &routerVPNNodeStartupOwner{
+			original: &routerVPNNodeStartupTestMiddle{close: func() error { *order = append(*order, "middle"); return nil }},
+			cancel:   func() { *order = append(*order, "cancel") },
+		}
+		if err := owner.close(routerVPNDarwinChainTestContext(t)); err != nil || !reflect.DeepEqual(*order, []string{"proof", "middle", "cancel", "tun", "source", "box"}) {
+			t.Fatal("outer native cleanup bypassed original middle join", err, *order)
+		}
+	})
+	t.Run("middle-retained", func(t *testing.T) {
+		owner, parts, order := routerVPNDarwinChainTestRetirement()
+		entered, release := make(chan struct{}), make(chan struct{})
+		owner.startupOwner = &routerVPNNodeStartupOwner{
+			original: &routerVPNNodeStartupTestMiddle{close: func() error { close(entered); <-release; return nil }},
+			cancel:   func() { *order = append(*order, "cancel") },
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		if owner.close(ctx) == nil || owner.joined || !reflect.DeepEqual(*order, []string{"proof"}) {
+			t.Fatal("pending middle admitted native lower teardown", *order)
+		}
+		<-entered
+		close(release)
+		if err := owner.close(routerVPNDarwinChainTestContext(t)); err != nil || !owner.joined || parts[0].calls != 1 {
+			t.Fatal("outer retry lost original proof/middle progress", err, *order)
+		}
+	})
+	t.Run("startup-before-native", func(t *testing.T) {
+		owner, parts, _ := routerVPNDarwinChainTestRetirement()
+		entered, release := make(chan struct{}), make(chan struct{})
+		owner.startupOwner = &routerVPNNodeStartupOwner{original: &routerVPNNodeStartupTestMiddle{close: func() error { return nil }}, cancel: func() {}}
+		owner.startupOwner.startup = routerVPNNewNodeStartupWorker(func() error { close(entered); <-release; return nil })
+		<-entered
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		if owner.close(ctx) == nil || owner.joined || parts[1].calls != 0 || parts[2].calls != 0 || parts[3].calls != 0 {
+			t.Fatal("original startup still owns native managers")
+		}
+		close(release)
+		if err := owner.close(routerVPNDarwinChainTestContext(t)); err != nil || !owner.joined || parts[0].calls != 1 {
+			t.Fatal("original startup join did not resume native cleanup", err)
+		}
+	})
+
 }
 func TestRouterVPNNodeChainDarwinNativeRetirementAdmission(t *testing.T) {
 	for _, kind := range []string{"nil", "unbounded", "cancelled", "locked"} {

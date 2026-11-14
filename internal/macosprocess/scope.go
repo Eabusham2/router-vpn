@@ -10,6 +10,7 @@ type Family string
 const (
 	ExternalFamily        Family = ""
 	NodeChainFamily       Family = "ordered-node-chain-v1"
+	NodeChainSOCKSFamily  Family = "ordered-node-chain-socks-v1"
 	CandidatePrefixFamily Family = "node-candidate-prefix-v1"
 )
 
@@ -30,7 +31,7 @@ func (family Family) protocolSchema() int {
 	switch family {
 	case ExternalFamily:
 		return 1
-	case NodeChainFamily, CandidatePrefixFamily:
+	case NodeChainFamily, NodeChainSOCKSFamily, CandidatePrefixFamily:
 		return 2
 	default:
 		return 0
@@ -47,6 +48,10 @@ func (scope Scope) inputManifest() ([]scopeInput, error) {
 		// includes its validated capture/projection; no external-policy adapter
 		// or fabricated capture.json participates in this family.
 		return []scopeInput{{"node-chain-source.json", 40 << 20}, {"sing-box.json", 4 << 20}}, nil
+	case NodeChainSOCKSFamily:
+		// Typed SOCKS source cannot reuse an ordinary chain input, even when
+		// its outer packet prefix and final node have matching identities.
+		return []scopeInput{{"node-chain-socks-source.json", 40 << 20}, {"sing-box.json", 4 << 20}}, nil
 	case CandidatePrefixFamily:
 		// This sealed input retains the full saved path for provenance while
 		// authorizing only its selected packet prefix. Ordinary chain inputs

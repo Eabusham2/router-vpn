@@ -373,14 +373,31 @@ func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *tes
 				}
 			}
 			release.Do(func() { close(fixture.release) })
+			var capturedReady mobilemultihop.DesktopNodeChainReadyRecord
 			if fault == "exact" {
 				deadline := time.Now().Add(3 * time.Second)
 				for {
-					if _, err := f.runtime.files.read("node-chain-ready.json", mobilemultihop.DesktopNodeChainReadyRecordLimit); err == nil {
+					// The shipping heartbeat can revoke Ready after its atomic
+					// publication. Its matching MTU status is published only after
+					// those final current-owner checks have completed. Capture both
+					// while active; Stop must remain free to remove active files.
+					raw, readyErr := f.runtime.files.read("node-chain-ready.json", mobilemultihop.DesktopNodeChainReadyRecordLimit)
+					ready, parseErr := mobilemultihop.ParseDesktopNodeChainReadyRecord(raw, f.runtime.policy, f.runtime.transfer)
+					statusRaw, statusErr := f.runtime.files.read("node-mtu-status.json", routerVPNNodeMTURecordLimit)
+					var status routerVPNNodeMTURecord
+					if parent.Err() == nil && readyErr == nil && parseErr == nil && statusErr == nil &&
+						routerVPNMTUStrict(statusRaw, &status) && status.Schema == 1 &&
+						status.Session == meta.SessionID && status.Session == ready.Identity.SessionID &&
+						status.Config == meta.ConfigSHA256 && status.Config == ready.Identity.ConfigSHA256 &&
+						status.Reader == ready.Reader && status.Interface == ready.InterfaceName &&
+						status.Index > 0 && uint64(status.Index) == uint64(ready.InterfaceIndex) &&
+						status.MTU == ready.MTU && status.Heartbeat > 0 && status.Heartbeat <= ready.ObservedAt &&
+						status.Failure == "" && !status.Active {
+						capturedReady = ready
 						break
 					}
 					if time.Now().After(deadline) {
-						t.Fatal("complete current loop did not publish chain heartbeat")
+						t.Fatal("complete current loop did not publish matching chain and MTU heartbeat")
 					}
 					time.Sleep(10 * time.Millisecond)
 				}
@@ -396,9 +413,8 @@ func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *tes
 				t.Fatal("actual ordered loop did not join captured receipt")
 			}
 			if fault == "exact" {
-				ready := f.ready(t)
-				if ready.Reader != 1 || ready.Generation != 1 || ready.MTU != 1420 {
-					t.Fatal("actual loop published another proof/reader", ready)
+				if capturedReady.Reader != 1 || capturedReady.Generation != 1 || capturedReady.MTU != 1420 {
+					t.Fatal("actual loop published another proof/reader", capturedReady)
 				}
 			} else {
 				for _, name := range []string{"node-chain-ready.json", "node-mtu-status.json"} {
@@ -409,6 +425,9 @@ func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *tes
 			}
 			if err := f.runtime.close(context.Background()); err != nil {
 				t.Fatal(err)
+			}
+			if _, err := f.runtime.files.root.Lstat("node-chain-ready.json"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("closed original runtime retained active chain readiness", err)
 			}
 		})
 	}

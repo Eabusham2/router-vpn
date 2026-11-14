@@ -107,11 +107,11 @@ def receipt(case):
     return 'actual sealed Darwin ordered host verified '+case+': original native transaction and intended proof boundary, complete captured identities, stopped acknowledgment, PF and utun retirement, controller join'
 
 
-def check_verdict(output, case):
-    if case not in CASES or not isinstance(output, str) or re.search(
+def check_verdict(output, case, *, test=TEST, cases=CASES, mtu_cases=MTU_CASES, measurement_cases=MEASUREMENT_CASES):
+    if case not in cases or not isinstance(output, str) or re.search(
             r'(?im)^\s*(?:--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
         raise ValueError('Native ordered host output contains unknown/failure/skip/race evidence')
-    expected = {TEST, TEST+'/'+case}
+    expected = {test, test+'/'+case}
     runs, passes, receipts = Counter(), Counter(), Counter()
     package_pass = 0
     for line in output.splitlines():
@@ -120,7 +120,7 @@ def check_verdict(output, case):
         proof = re.fullmatch(r'\s+desktop_node_chain_darwin_native_test.go:\d+: (.*)', line)
         if run:
             name = run[1]
-            if name not in expected or package_pass or runs[name] or passes[TEST] or name != TEST and runs[TEST] != 1:
+            if name not in expected or package_pass or runs[name] or passes[test] or name != test and runs[test] != 1:
                 raise ValueError('Native ordered RUN is extra, duplicate or after completion')
             runs[name] += 1
         if passed:
@@ -129,7 +129,7 @@ def check_verdict(output, case):
                 raise ValueError('Native ordered PASS has no unique original RUN')
             passes[name] += 1
         if proof:
-            if package_pass or runs[TEST+'/'+case] != 1 or passes[TEST]:
+            if package_pass or runs[test+'/'+case] != 1 or passes[test]:
                 raise ValueError('Native ordered ownership receipt is outside its original case')
             receipts[proof[1]] += 1
         if line == 'PASS':
@@ -138,13 +138,13 @@ def check_verdict(output, case):
             package_pass += 1
     if set(runs) != expected or set(passes) != expected or any(runs[name] != 1 or passes[name] != 1 for name in expected):
         raise ValueError('Missing unique native ordered case execution')
-    if receipts[receipt(case)] != 1:
+    if receipts[('actual sealed Darwin ordered host verified '+case+': original native transaction and intended proof boundary, complete captured identities, stopped acknowledgment, PF and utun retirement, controller join')] != 1:
         raise ValueError('Native ordered case omitted its original joined ownership receipt')
-    if receipts[MTU_RECEIPT] != (1 if case in MTU_CASES else 0):
+    if receipts[MTU_RECEIPT] != (1 if case in mtu_cases else 0):
         raise ValueError('Native ordered case omitted or borrowed actual MTU transfer receipt')
-    if receipts[MEASUREMENT_RECEIPT] != (1 if case in MEASUREMENT_CASES else 0):
+    if receipts[MEASUREMENT_RECEIPT] != (1 if case in measurement_cases else 0):
         raise ValueError('Native ordered case omitted or borrowed actual prefix measurement receipt')
-    known = {receipt(case), MTU_RECEIPT, MEASUREMENT_RECEIPT}
+    known = {('actual sealed Darwin ordered host verified '+case+': original native transaction and intended proof boundary, complete captured identities, stopped acknowledgment, PF and utun retirement, controller join'), MTU_RECEIPT, MEASUREMENT_RECEIPT}
     if any(value.startswith('actual sealed Darwin ordered') and value not in known for value in receipts):
         raise ValueError('Native ordered case borrowed another case receipt')
     if package_pass != 1 or not output.rstrip().endswith('\nPASS'):
@@ -159,8 +159,15 @@ def source_identity(core):
     if projector is None:
         raise ValueError('Native ordered peer source projection is not installed')
     copies = projector()
-    if len(copies) != 7:
-        raise ValueError('Native ordered peer lost one of its seven complete projections')
+    expected = {
+        'routervpn_node_chain_wg_darwin_test.go', 'routervpn_node_chain_awg_darwin_test.go',
+        'routervpn_node_chain_imported_darwin_test.go', 'routervpn_node_chain_reference_darwin_test.go',
+        'routervpn_node_chain_imported_middle_darwin_test.go', 'routervpn_node_chain_hysteria_final_darwin_test.go',
+        'routervpn_node_chain_imported_hostname_darwin_test.go',
+        'routervpn_node_chain_socks_peer_darwin_test.go', 'routervpn_node_chain_socks_process_darwin_test.go',
+    }
+    if set(copies) != {'protocol/routervpnamnezia/'+name for name in expected}:
+        raise ValueError('Native ordered peer lost an original or typed complete projection')
     for relative, expected in copies.items():
         path = Path(core)/relative
         actual = EXTERNAL.sha(path)
@@ -170,9 +177,11 @@ def source_identity(core):
     return identity
 
 
-def check_authority_verdict(output, *, hysteria=False):
+def check_authority_verdict(output, *, hysteria=False, selected=None):
     root = HYSTERIA_AUTHORITY_TEST if hysteria else AUTHORITY_TEST
     cases = HYSTERIA_AUTHORITY_CASES if hysteria else AUTHORITY_CASES
+    if selected is not None:
+        root, cases = selected
     if not isinstance(output, str) or re.search(
             r'(?im)^\s*(?:--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
         raise ValueError('Imported source authority contains failure, skip or race evidence')
@@ -215,26 +224,27 @@ def execute_authority(controller, digest, environment, *, hysteria=False):
 
 
 
-def check_hysteria_control_verdict(output, returncode):
+def check_hysteria_control_verdict(output, returncode, *, selected=None):
     """Require the compiled original source-mask omission at all three exact leaves."""
     if returncode == 0 or not isinstance(output, str) or re.search(
             r'(?im)^\s*(?:--- (?:PASS|SKIP):|PASS(?:\s|$)|SKIP(?:\s|$)|WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
         raise ValueError('Hysteria source control did not reach its original assertion')
-    expected = set(HYSTERIA_AUTHORITY_CASES)
+    root, cases, witness_file, witness_text = selected or (HYSTERIA_AUTHORITY_TEST, HYSTERIA_AUTHORITY_CASES, "desktop_node_chain_hysteria_darwin_native_test.go", HYSTERIA_CONTROL_WITNESS)
+    expected = set(cases)
     runs, failures, witnesses = Counter(), Counter(), Counter()
     active, complete = None, 0
     for line in output.splitlines():
         run = re.fullmatch(r'=== RUN   (\S+)', line)
         failed = re.fullmatch(r'(?:    )?--- FAIL: (\S+) \([0-9]+(?:\.[0-9]+)?s\)', line)
-        witness = re.fullmatch(r'\s+desktop_node_chain_hysteria_darwin_native_test.go:\d+: '+re.escape(HYSTERIA_CONTROL_WITNESS), line)
+        witness = re.fullmatch(r'\s+'+re.escape(witness_file)+r':\d+: '+re.escape(witness_text), line)
         if run:
             name = run[1]
-            if name not in expected or complete or runs[name] or failures[HYSTERIA_AUTHORITY_TEST] or name != HYSTERIA_AUTHORITY_TEST and runs[HYSTERIA_AUTHORITY_TEST] != 1:
+            if name not in expected or complete or runs[name] or failures[root] or name != root and runs[root] != 1:
                 raise ValueError('Hysteria source control replaced its exact original execution')
             runs[name] += 1
             active = name
         if witness:
-            if active not in expected - {HYSTERIA_AUTHORITY_TEST} or complete or failures[active]:
+            if active not in expected - {root} or complete or failures[active]:
                 raise ValueError('Hysteria source control borrowed a foreign assertion')
             witnesses[active] += 1
         if failed:
@@ -248,7 +258,7 @@ def check_hysteria_control_verdict(output, returncode):
             complete += 1
     if set(runs) != expected or set(failures) != expected or complete != 1 or not output.rstrip().endswith('\nFAIL'):
         raise ValueError('Hysteria source control omitted an original verdict')
-    if set(witnesses) != expected - {HYSTERIA_AUTHORITY_TEST} or any(value != 1 for value in witnesses.values()):
+    if set(witnesses) != expected - {root} or any(value != 1 for value in witnesses.values()):
         raise ValueError('Hysteria source control omitted or duplicated its original mask assertion')
 
 

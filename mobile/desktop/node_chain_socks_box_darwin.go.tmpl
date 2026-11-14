@@ -1,0 +1,49 @@
+//go:build darwin
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+)
+
+// The preparation retains the original service and concrete policy through
+// partial startup and failed cleanup. It grants no public host admission,
+// whole-device baseline retirement, Router proof or Connected publication.
+type RouterVPNDesktopDarwinNodeChainSOCKSPreparation struct {
+	network *routervpndesktoppt.NodeNetworkOwner
+	policy  *mobilemultihop.DesktopNodeChainSOCKSPolicy
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodeChainSOCKSPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainSOCKSPolicy) (*RouterVPNDesktopDarwinNodeChainSOCKSPreparation, error) {
+	if !routerVPNDesktopNodeChainSOCKSPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("Darwin ordered SOCKS preparation lost its complete captured chain")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopDarwinNodeChainSOCKSPreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainSOCKSPhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopDarwinNodeChainSOCKSPreparation) CloseSource(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("Darwin ordered SOCKS cleanup lost its retained native preparation")
+	}
+	return p.network.CloseNodeChainSOCKSPhysicalSource(ctx, p.policy)
+}
+
+// Activation binds the native reader's retained utun descriptor. The matching
+// parent/guardian transaction, selected DNS and every captured Router proof
+// remain separate mandatory stages before application publication.
+func (s *Box) RouterVPNDesktopDarwinNodeChainSOCKSActivatePhysical(policy *mobilemultihop.DesktopNodeChainSOCKSPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if !routerVPNDesktopNodeChainSOCKSPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("Darwin ordered SOCKS activation lost its complete captured chain")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}
+

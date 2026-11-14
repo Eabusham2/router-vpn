@@ -1,0 +1,109 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+ "os"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type routerVPNDarwinNodeChainSOCKSControl struct {
+	capture   routerVPNDarwinNodeChainCapture
+	bootstrap routerVPNDarwinNodeChainBootstrap
+	scope     macosprocess.Scope
+	selection macosprocess.Selection
+	transfer  string
+	policy    *mobilemultihop.DesktopNodeChainSOCKSPolicy
+	retiring  atomic.Bool
+	retired   atomic.Bool
+	native    *routerVPNDarwinNodeChainNative // assigned only by the one joined command loop
+}
+
+func (owner *routerVPNDarwinNodeChainSOCKSControl) original(ctx context.Context) error {
+	if owner == nil || ctx == nil || ctx.Err() != nil || owner.capture == nil || owner.bootstrap == nil ||
+		owner.scope.Family != macosprocess.NodeChainSOCKSFamily || owner.selection.Family != macosprocess.NodeChainSOCKSFamily ||
+		owner.selection.Session != owner.scope.Session || owner.selection.Source != owner.scope.Source ||
+		owner.selection.Config != owner.scope.Config || owner.capture.Current(ctx) != nil ||
+		owner.bootstrap.Current(ctx) != nil || owner.capture.Selection() != owner.selection {
+		return routerVPNExternalFailure
+	}
+	transfer, err := macosprocess.NodeChainSOCKSTransferSHA256(owner.selection)
+	if err != nil || transfer != owner.transfer {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+func (owner *routerVPNDarwinNodeChainSOCKSControl) compile(ctx context.Context, files *routerVPNExternalFiles) (*mobilemultihop.DesktopNodeChainSOCKSPolicy, error) {
+	if owner == nil || owner.policy != nil || owner.retiring.Load() || files == nil || files.root == nil ||
+		owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	if owner.workspace(files) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := routerVPNDesktopSOCKSPhysicalManifest(ctx, files, owner.scope.Session, owner.scope.Config, owner.scope.Source, "darwin", nil)
+	if err != nil || policy == nil || owner.original(ctx) != nil || owner.retiring.Load() {
+		return nil, routerVPNExternalFailure
+	}
+	// ParseDesktopNodeChainSOCKSLaunchInput already replayed the exact complete
+	// capture and bounded RestoredMTU. No caller can substitute a zero value
+	// or a fresh MTU preference after authenticated source capture.
+	owner.policy = policy
+	return policy, nil
+}
+
+func (owner *routerVPNDarwinNodeChainSOCKSControl) prepare(ctx context.Context, policy *mobilemultihop.DesktopNodeChainSOCKSPolicy) (context.Context, error) {
+	if owner == nil || owner.policy == nil || owner.policy != policy || owner.retiring.Load() || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	files := owner.capture.Files()
+	if len(files) != 7 || files[3] == nil || files[4] == nil {
+		return nil, routerVPNExternalFailure
+	}
+	// Every actual PF helper and physical guardian inherits these original
+	// installed/process lock descriptions, including after immediate parent loss.
+	return mobiletor.WithDesktopDarwinProcessAuthority(ctx, files[3:5]), nil
+}
+
+func (owner *routerVPNDarwinNodeChainSOCKSControl) current(ctx context.Context) error {
+	if owner == nil || owner.policy == nil || owner.retiring.Load() || owner.original(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	_, meta, _, err := owner.policy.ReadValidated()
+	if err != nil || meta.TargetOS != "darwin" || meta.SessionID != owner.scope.Session ||
+		meta.SourceSHA256 != owner.scope.Source || meta.ConfigSHA256 != owner.scope.Config {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+
+// A cancelled admission may still retire its authenticated no-resource owner.
+// It can publish only under this same retained workspace description; matching
+// pathname text alone never grants the cleanup writer authority.
+func (owner *routerVPNDarwinNodeChainSOCKSControl) workspace(files *routerVPNExternalFiles) error {
+	if owner == nil || owner.capture == nil || files == nil || files.root == nil {
+		return routerVPNExternalFailure
+	}
+	inherited := owner.capture.Files()
+	if len(inherited) != 7 || inherited[0] == nil {
+		return routerVPNExternalFailure
+	}
+	wanted, first := inherited[0].Stat()
+	actual, second := files.root.Stat(".")
+	if first != nil || second != nil || !os.SameFile(wanted, actual) {
+		return routerVPNExternalFailure
+	}
+	return nil
+}
+func (owner *routerVPNDarwinNodeChainSOCKSControl) retirementReceipt() error {
+	if owner == nil || !owner.retired.Load() {
+		return routerVPNExternalFailure
+	}
+	return nil
+}

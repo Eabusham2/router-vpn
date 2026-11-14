@@ -96,6 +96,16 @@ func routerVPNRunLinuxExecutionFamilyControlled(parent context.Context, director
 
 func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, session, config, source, executionSource, prefixCapture, transfer string,
 	mtu int, options routerVPNNodeLinuxParentOptions, imported, ordered bool) (failure error) {
+ return routerVPNRunLinuxSOCKSFamilyControlled(parent,directory,session,config,source,executionSource,prefixCapture,transfer,mtu,options,imported,ordered,false)
+}
+
+func routerVPNRunLinuxNodeChainSOCKSControlled(parent context.Context,directory,session,config,source,transfer string,mtu int,options routerVPNNodeLinuxParentOptions)error{
+ return routerVPNRunLinuxSOCKSFamilyControlled(parent,directory,session,config,source,"","",transfer,mtu,options,false,false,true)
+}
+
+func routerVPNRunLinuxSOCKSFamilyControlled(parent context.Context,directory,session,config,source,executionSource,prefixCapture,transfer string,
+ mtu int,options routerVPNNodeLinuxParentOptions,imported,ordered,socks bool)(failure error){
+ if socks && (imported||ordered||executionSource!=""||prefixCapture!=""){return routerVPNExternalFailure}
 	if prefixCapture != "" && (executionSource != "" || imported || ordered || !routerVPNExternalSource.MatchString(prefixCapture)) {
 		return routerVPNExternalFailure
 	}
@@ -126,7 +136,10 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 	defer stopPreparation()
 	var policy mobilemultihop.DesktopPhysicalPolicy
 	var executionPreparation *mobilemultihop.NodeChainExecutionPreparation
-	if prefixCapture != "" {
+ if socks {
+  policy,err=control.compileSOCKS(ctx,files,session,source,config,transfer,mtu)
+  if err!=nil{return err}
+ } else if prefixCapture != "" {
 		capture := routerVPNNodeCandidatePrefixCommand{directory: directory, session: session, config: config, physical: source, capture: prefixCapture, transfer: transfer, mtu: mtu, linux: options}
 		policy, err = control.compileCandidatePrefix(ctx, files, capture)
 		if err != nil {
@@ -179,18 +192,20 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 		lifetime = context.Background()
 	}
 	graph, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(context.WithoutCancel(lifetime))))
-	native := &routerVPNExternalNative{cancel: cancel}
+	native := &routerVPNExternalNative{cancel: cancel, startupOwner: &routerVPNNodeStartupOwner{cancel: cancel}}
 	control.native = native
+	var socksRuntime *routerVPNDesktopSOCKSRuntime
+ var socksConstruction *routerVPNDesktopSOCKSConstruction
 	var chain *routerVPNNodeChainRuntime
 	var execution *routerVPNNodeChainExecutionRuntime
 	var prefix *routerVPNNodeCandidatePrefixRuntime
 	var stopped atomic.Bool
 	defer func() {
 		stopped.Store(true)
-		cancel()
 		readyErr := files.remove("node-ready.json")
 		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 		defer stop()
+		if err:=socksRuntime.close(cleanup);err!=nil{failure=errors.Join(failure,err);return}
 		if err := prefix.close(cleanup); err != nil {
 			failure = errors.Join(failure, err)
 			return
@@ -237,7 +252,7 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 		}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: config}, true}
 		failure = errors.Join(failure, files.publish("stopped.json", closed))
 	}()
-	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-chain-execution-ready.json", "node-candidate-prefix-ready.json", "node-candidate-prefix-request.json", "node-candidate-prefix-result.json", "node-candidate-prefix-live.json", "node-candidate-prefix-cancel.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json", "node-chain-candidate-cancel.json", "node-chain-candidate-result.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json"} {
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-chain-socks-ready.json", "node-chain-execution-ready.json", "node-candidate-prefix-ready.json", "node-candidate-prefix-request.json", "node-candidate-prefix-result.json", "node-candidate-prefix-live.json", "node-candidate-prefix-cancel.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json", "node-chain-candidate-cancel.json", "node-chain-candidate-result.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
 		}
@@ -249,6 +264,11 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 	if err != nil {
 		return err
 	}
+ if captured,ok:=policy.(*mobilemultihop.DesktopNodeChainSOCKSPolicy);ok{
+  socksConstruction,err=routerVPNNewDesktopSOCKSConstruction(graph,captured)
+  if err!=nil{return err}
+  graph=socksConstruction.ctx
+ }
 	parsed, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(policy.Config()))
 	if err != nil {
 		return err
@@ -259,40 +279,28 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 			return routerVPNExternalFailure
 		}
 	}
-	watchStop, watchDone := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		ticker := time.NewTicker(25 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			if parent.Err() != nil || files.stopRequested(session, config) {
-				cancel()
-				return
-			}
-			select {
-			case <-watchStop:
-				return
-			case <-parent.Done():
-				cancel()
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	defer func() { close(watchStop); <-watchDone }()
+	stopConstruction := routerVPNWatchNodeConstruction(ctx, func() bool { return files.stopRequested(session, config) }, cancel)
+	defer stopConstruction()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	instance, err := box.New(box.Options{Context: graph, Options: parsed})
-	if err != nil {
-		for _, partial := range routerVPNExternalConstructed(graph) {
-			if closer, ok := partial.(io.Closer); ok {
-				native.partial = append(native.partial, closer)
+	if instance != nil {
+		native.box = instance
+		native.startupOwner.original = instance
+	}
+	stopConstruction()
+	if err != nil || instance == nil {
+		if instance == nil {
+			for _, partial := range routerVPNExternalConstructed(graph) {
+				if closer, ok := partial.(io.Closer); ok {
+					native.partial = append(native.partial, closer)
+				}
 			}
 		}
-		return err
+		return errors.Join(err, routerVPNExternalFailure)
 	}
-	native.box = instance
+
 	switch original := policy.(type) {
 	case *mobilemultihop.DesktopNodePolicy:
 		prepared, prepareErr := instance.RouterVPNDesktopLinuxNodePreparePhysicalOwned(original)
@@ -306,6 +314,10 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 			control.preparation = prepared
 		}
 		err = prepareErr
+ case *mobilemultihop.DesktopNodeChainSOCKSPolicy:
+  prepared,prepareErr:=instance.RouterVPNDesktopLinuxNodeChainSOCKSPreparePhysicalOwned(original)
+  if prepared!=nil{control.preparation=prepared}
+  err=prepareErr
 	case *mobilemultihop.DesktopNodeChainPolicy:
 		prepared, prepareErr := instance.RouterVPNDesktopLinuxNodeChainPreparePhysicalOwned(original)
 		if prepared != nil {
@@ -333,7 +345,7 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 	if err := instance.RouterVPNDesktopStartupContext(ctx); err != nil {
 		return err
 	}
-	if err := instance.RouterVPNStrategyStart(); err != nil {
+	if err := native.startupOwner.start(ctx, func() bool { return files.stopRequested(session, config) }, instance.RouterVPNStrategyStart); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -347,6 +359,8 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 		physical, err = instance.RouterVPNDesktopLinuxNodeActivatePhysical(proof, original)
 	case *mobilemultihop.DesktopImportedPolicy:
 		physical, err = instance.RouterVPNDesktopLinuxImportedActivatePhysical(proof, original)
+ case *mobilemultihop.DesktopNodeChainSOCKSPolicy:
+  physical,err=instance.RouterVPNDesktopLinuxNodeChainSOCKSActivatePhysical(proof,original)
 	case *mobilemultihop.DesktopNodeChainPolicy:
 		physical, err = instance.RouterVPNDesktopLinuxNodeChainActivatePhysical(proof, original)
 	case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
@@ -365,6 +379,8 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 		cover, err = instance.RouterVPNDesktopLinuxNodeActivateCover(activation, original, physical)
 	case *mobilemultihop.DesktopImportedPolicy:
 		cover, err = instance.RouterVPNDesktopLinuxImportedActivateCover(activation, original, physical)
+ case *mobilemultihop.DesktopNodeChainSOCKSPolicy:
+  cover,err=instance.RouterVPNDesktopLinuxNodeChainSOCKSActivateCover(activation,original,physical)
 	case *mobilemultihop.DesktopNodeChainPolicy:
 		cover, err = instance.RouterVPNDesktopLinuxNodeChainActivateCover(activation, original, physical)
 	case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
@@ -388,6 +404,15 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 		}
 		return control.current(call)
 	}
+ if socksConstruction!=nil{
+  socksRuntime,err=routerVPNNewDesktopSOCKSRuntime(graph,files,socksConstruction,control.selectionHash,instance,physical,func(call context.Context)error{
+   if stopped.Load()||parent.Err()!=nil||graph.Err()!=nil{return routerVPNExternalFailure}
+   // Physical source observation is reentrant while its same TUN grant is
+   // detached for this owner's original MTU operation. Cover.Current is not.
+   return control.current(call)
+  })
+  if err!=nil{return err}
+ }
 	if captured, ok := policy.(*mobilemultihop.DesktopNodeChainPolicy); ok {
 		chain, err = routerVPNNewNodeChainRuntime(graph, files, captured, control.selectionHash, instance)
 		if err != nil {
@@ -416,7 +441,7 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 			return err
 		}
 	}
-	return routerVPNRunNodeMTULoopWithPrefix(parent, graph, files, instance, session, config, physical, current, func() error {
+	ready := func() error {
 		ctx, cancel := context.WithTimeout(graph, routerVPNNodeAdmissionLimit)
 		defer cancel()
 		if err := control.current(ctx); err != nil {
@@ -429,5 +454,7 @@ func routerVPNRunLinuxPrefixFamilyControlled(parent context.Context, directory, 
 			return err
 		}
 		return control.current(ctx)
-	}, chain, execution, prefix)
+ }
+ if socksRuntime!=nil{return routerVPNRunNodeMTULoopWithSOCKS(parent,graph,files,instance,session,config,physical,current,ready,socksRuntime)}
+ return routerVPNRunNodeMTULoopWithPrefix(parent,graph,files,instance,session,config,physical,current,ready,chain,execution,prefix)
 }

@@ -37,6 +37,9 @@ func nativeMultihopCapturedProfiles(selection multihopSelection) []common.Router
 func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []common.RouterProfile,
 	nodes []common.MultihopNodeSelection, execution string) (multihopSelection, error) {
 	members, err := resolveDesktopNodeChainMembers(control, profiles, nodes, execution)
+	if desktopNodeChainHasSOCKS(nodes) {
+		members, err = resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, execution)
+	}
 	if err != nil {
 		return multihopSelection{}, err
 	}
@@ -61,6 +64,9 @@ func nodeChainSelectedReferences(members []desktopNodeChainMember) []common.Mult
 
 func captureNativeNodeChainSelection(ctx context.Context, root string, selection multihopSelection,
 	modes []string, lookup applexray.Lookup) (multihopSelection, error) {
+	if desktopNodeChainHasSOCKS(nodeChainSelectedReferences(selection.Nodes)) {
+		return captureNativeSOCKSNodeChainSelection(ctx, root, selection, modes, lookup)
+	}
 	if ctx == nil || ctx.Err() != nil || selection.Native != nil || len(modes) != 1 || modes[0] != selection.ExitMode ||
 		!mobilemultihop.NodeChainPrefixMode(selection.EntryMode) || selection.Base != desktopExternalEntryBase(selection.EntryMode) || !desktopNodeChainFinalSupported(selection.ExitMode, selection.Exit.StartLayer) ||
 		selection.serverPacketPublic != "" || selection.serverPQIdentity != "" {
@@ -98,6 +104,9 @@ func captureNativeNodeChainSelection(ctx context.Context, root string, selection
 }
 
 func (capture *nativeMultihopCapture) validateNodeChainSelection(selection multihopSelection) error {
+	if capture != nil && capture.chain != nil && capture.chain.socks != nil {
+		return capture.validateSOCKSNodeChainSelection(selection)
+	}
 	bad := errors.New("ordered native source or any selected member changed")
 	if capture == nil || capture.chain == nil || capture.chain.chain == nil || capture.imported || capture.importedHost != nil ||
 		capture.importedPlatform != nil || capture.openVPN != nil || capture.importedInput != "" || capture.importedOriginalSource != "" ||

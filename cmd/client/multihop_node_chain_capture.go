@@ -30,6 +30,7 @@ type desktopNodeChainCapture struct {
 	assets                             []viaEntryAsset
 	input                              string
 	chain                              *mobilemultihop.NodeChain
+	socks                              *desktopNodeChainSOCKSCapture
 	host                               *desktopNodeChainHostCapture
 }
 
@@ -301,6 +302,12 @@ func (capture *desktopNodeChainCapture) profilesCurrent(control common.RouterPro
 }
 
 func (capture *desktopNodeChainCapture) validate(ctx context.Context, control common.RouterProfile, profiles []common.RouterProfile) error {
+	if capture != nil && capture.socks != nil {
+		if capture.chain != nil || capture.socks.original == nil || capture == capture.socks.original || capture.digest() != capture.socks.original.digest() || capture.seal != capture.socks.original.seal {
+			return errors.New("typed SOCKS host inventory changed its original capture")
+		}
+		return capture.socks.validate(ctx, control, profiles)
+	}
 	bad := errors.New("ordered source, catalog, or captured forwarding order changed")
 	if ctx == nil || ctx.Err() != nil || capture == nil || capture.chain == nil || capture.seal == "" || capture.seal != capture.digest() || !capture.profilesCurrent(control, profiles) {
 		return bad

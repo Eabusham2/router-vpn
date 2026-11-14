@@ -123,12 +123,12 @@ func validateDesktopNodeChainRestore(ctx context.Context, a *app, launch *deskto
 		return err
 	}
 	defer clear(config)
-	source, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-source.json", mobilemultihop.NodeChainInputLimit)
+	source, err := readDesktopRuntimeFileContext(ctx, launch, launch.chain.sourceName(), mobilemultihop.NodeChainInputLimit)
 	if err != nil {
 		return err
 	}
 	defer clear(source)
-	if string(config) != launch.chain.policy.Config() || string(source) != launch.chain.input {
+	if string(config) != launch.chain.policyConfig() || string(source) != launch.chain.input {
 		return errors.New("ordered restoration changed its original staged graph or full source")
 	}
 	return desktopNodeChainCurrent(ctx, a, launch)

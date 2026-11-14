@@ -193,7 +193,10 @@ def execute():
     source = (ROOT/'mobile/desktop/mtu_node.go.tmpl').read_text()
     loop = '\n'.join(function(source, signature) for signature in (
         'func routerVPNRunNodeMTULoop(', 'func routerVPNRunNodeMTULoopWithChain(',
-        'func routerVPNRunNodeMTULoopWithOwners(', 'func routerVPNRunNodeMTULoopWithPrefix('))
+        'func routerVPNRunNodeMTULoopWithOwners(', 'func routerVPNRunNodeMTULoopWithPrefix(',
+        'func routerVPNRunNodeMTULoopWithComplete('))
+    start = source.index('type routerVPNNodeMTUComplete interface {')
+    loop += '\n' + source[start:source.index('\n}', start) + 2]
     # Only native namespace/type aliases change; production control flow stays exact.
     for before, after in [('box.RouterVPNDesktopNodePhysical', 'fixturePhysical'), ('box.Box', 'fixtureBox'),
                           ('adapter.RouterVPNInboundsContext', 'fixtureInboundsContext'), ('adapter.Inbound', 'fixtureInbound')]:

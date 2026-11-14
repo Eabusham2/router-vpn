@@ -1,0 +1,122 @@
+package box
+
+import (
+ "context"
+ "encoding/json"
+ "runtime"
+ "strings"
+ "testing"
+
+ "github.com/sagernet/sing-box/adapter"
+ "github.com/sagernet/sing-box/adapter/certificate"
+ "github.com/sagernet/sing-box/adapter/endpoint"
+ "github.com/sagernet/sing-box/adapter/inbound"
+ "github.com/sagernet/sing-box/adapter/outbound"
+ boxService "github.com/sagernet/sing-box/adapter/service"
+ C "github.com/sagernet/sing-box/constant"
+ "github.com/sagernet/sing-box/dns"
+ DNST "github.com/sagernet/sing-box/dns/transport"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+ "github.com/sagernet/sing-box/log"
+ "github.com/sagernet/sing-box/option"
+ "github.com/sagernet/sing-box/protocol/group"
+ AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+ ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+ "github.com/sagernet/sing-box/protocol/shadowsocks"
+ "github.com/sagernet/sing-box/protocol/wireguard"
+ "github.com/sagernet/sing-box/routervpn/desktoppt"
+ SJ "github.com/sagernet/sing/common/json"
+)
+
+func desktopSOCKSPhysicalPolicy(t *testing.T,target string)*mobilemultihop.DesktopNodeChainSOCKSPolicy{
+ t.Helper()
+ policy,err:=mobilemultihop.NewDesktopNodeChainSOCKSPolicy(socksMTUSource(t),desktopTorBoxSession,target,0)
+ if err!=nil{t.Fatal("original typed desktop source",err)}
+ return policy
+}
+
+// Original real endpoint, SOCKS, SS, selector, DNS, network and Box factories
+// execute. Only privileged TUN creation is doubled. Nothing here starts a
+// physical socket or constitutes native interface acceptance.
+func desktopSOCKSPhysicalBox(t *testing.T,policy *mobilemultihop.DesktopNodeChainSOCKSPolicy,change func(map[string]any))(*Box,*desktopTorBoxTUN,error){
+ t.Helper()
+ source,err:=policy.NativeSource();if err!=nil{t.Fatal(err)}
+ capture,err:=ownedSOCKS.NewCapture(t.Context(),source);if err!=nil{t.Fatal(err)}
+ var tun *desktopTorBoxTUN
+ ins:=inbound.NewRegistry()
+ inbound.Register[option.TunInboundOptions](ins,C.TypeTun,func(_ context.Context,_ adapter.Router,_ log.ContextLogger,tag string,options option.TunInboundOptions)(adapter.Inbound,error){
+  tun=&desktopTorBoxTUN{Adapter:inbound.NewAdapter(C.TypeTun,tag),name:options.InterfaceName,index:772,mtu:int(options.MTU)}
+  return tun,nil
+ })
+ outs:=outbound.NewRegistry();group.RegisterSelector(outs);shadowsocks.RegisterOutbound(outs)
+ if err:=capture.Register(outs);err!=nil{t.Fatal(err)}
+ routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
+ ends:=endpoint.NewRegistry();wireguard.RegisterEndpoint(ends);AWG.RegisterEndpoint(ends)
+ ds:=dns.NewTransportRegistry();DNST.RegisterUDP(ds)
+ services:=boxService.NewRegistry();routervpndesktoppt.RegisterNodeNetworkOwner(services)
+ ctx:=Context(capture.Context(),ins,outs,ends,ds,services,certificate.NewRegistry())
+ ctx,err=RouterVPNNodeSOCKSContext(ctx,source,capture);if err!=nil{t.Fatal(err)}
+ var graph map[string]any
+ if err:=json.Unmarshal([]byte(policy.Config()),&graph);err!=nil{t.Fatal(err)}
+ if change!=nil{change(graph)}
+ raw,err:=json.Marshal(graph);if err!=nil{t.Fatal(err)}
+ options,err:=SJ.UnmarshalExtendedContext[option.Options](ctx,raw);if err!=nil{return nil,tun,err}
+ options.Log=&option.LogOptions{Disabled:true}
+ instance,err:=New(Options{Context:ctx,Options:options})
+ if instance!=nil{t.Cleanup(func(){if err:=instance.Close();err!=nil{t.Error("original typed Box failed close",err)}})}
+ return instance,tun,err
+}
+
+func TestRouterVPNDesktopNodeChainSOCKSPhysicalActualBox(t *testing.T){
+ if runtime.GOOS!="linux"&&runtime.GOOS!="windows"&&runtime.GOOS!="darwin"{t.Fatal("typed physical gate requires an original desktop target")}
+ policy:=desktopSOCKSPhysicalPolicy(t,runtime.GOOS)
+ instance,tun,err:=desktopSOCKSPhysicalBox(t,policy,nil)
+ if err!=nil||instance==nil||tun==nil{t.Fatal("original typed desktop Box construction failed",err)}
+ if !routerVPNDesktopNodeChainSOCKSPhysicalTarget(policy,runtime.GOOS)||instance.routerVPNNodeOptions==""{t.Fatal("typed desktop Box lost physical source receipt")}
+ _,network,err:=instance.routerVPNDesktopNodePhysical(policy)
+ if err!=nil||network==nil||network.Current()||network.SocketCurrent()||tun.ready||tun.claimed{t.Fatal("typed Box fabricated native preparation or TUN proof",err)}
+ if owner,err:=instance.routerVPNDesktopNodeActivatePhysical(policy);err==nil||owner!=nil{t.Fatal("unprepared typed Box acquired physical authority")}
+ if err:=instance.RouterVPNStrategyStart();err==nil{t.Fatal("typed graph bypassed original physical preparation")}
+ if tun.ready||tun.claimed||network.SocketCurrent(){t.Fatal("unprepared typed Box started a socket or TUN")}
+}
+
+func TestRouterVPNDesktopNodeChainSOCKSPhysicalRejectsGraphDrift(t *testing.T){
+ for _,fault:=range []string{"middle-user","middle-password","middle-detour","final-detour","dns","physical-source","mtu","interface"}{
+  t.Run(fault,func(t *testing.T){
+   policy:=desktopSOCKSPhysicalPolicy(t,runtime.GOOS)
+   _,meta,physical,err:=policy.ReadValidated();if err!=nil{t.Fatal(err)}
+   instance,tun,err:=desktopSOCKSPhysicalBox(t,policy,func(graph map[string]any){
+    find:=func(tag string)map[string]any{
+     for _,item:=range graph["outbounds"].([]any){row:=item.(map[string]any);if row["tag"]==tag{return row}}
+     t.Fatal("exact captured outbound missing");return nil
+    }
+    switch fault{
+    case "middle-user":find(meta.Prefixes[1].Tag)["username"]="foreign-user"
+    case "middle-password":find(meta.Prefixes[1].Tag)["password"]="foreign-password"
+    case "middle-detour":delete(find(meta.Prefixes[1].Tag),"detour")
+    case "final-detour":find(meta.Prefixes[2].Tag)["detour"]=meta.Prefixes[0].Tag
+    case "dns":
+     found:=false
+     for _,item:=range graph["dns"].(map[string]any)["servers"].([]any){row:=item.(map[string]any);if row["tag"]==physical.SelectedDNS.Tag{row["server"]="192.168.50.134";found=true}}
+     if !found{t.Fatal("original selected DNS missing")}
+    case "physical-source":graph["services"].([]any)[0].(map[string]any)["source_sha256"]=strings.Repeat("f",64)
+    case "mtu":row:=graph["inbounds"].([]any)[0].(map[string]any);row["mtu"]=row["mtu"].(float64)+16
+    case "interface":graph["inbounds"].([]any)[0].(map[string]any)["interface_name"]="foreign-socks"
+    }
+   })
+   if err==nil||instance!=nil||tun!=nil{t.Fatal("changed typed graph reached original native construction",err)}
+  })
+ }
+}
+
+func TestRouterVPNDesktopNodeChainSOCKSPhysicalExactTargets(t *testing.T){
+ for _,target:=range []string{"linux","windows","darwin"}{
+  t.Run(target,func(t *testing.T){
+   policy:=desktopSOCKSPhysicalPolicy(t,target)
+   if !routerVPNDesktopNodeChainSOCKSPhysicalTarget(policy,target){t.Fatal("typed original source lost its physical target")}
+   for _,other:=range []string{"linux","windows","darwin","android"}{if other!=target&&routerVPNDesktopNodeChainSOCKSPhysicalTarget(policy,other){t.Fatal("typed physical owner borrowed another target")}}
+   _,_,physical,err:=policy.ReadValidated();if err!=nil{t.Fatal(err)}
+   for _,root:=range physical.PhysicalRoots{if root.Type=="socks"||root.DynamicSOCKSUDP{t.Fatal("SOCKS middle acquired physical relay authority")}}
+  })
+ }
+}

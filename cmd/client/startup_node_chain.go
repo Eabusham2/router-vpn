@@ -140,8 +140,8 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		}
 		return nil
 	}
-	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2) || capture.Execution != "local" || selection.External != nil ||
-		!desktopNodeChainFinalSupported(selection.RuntimeMode, "off") || capture.Schema == 2 && selection.RuntimeMode != "shadowsocks" || selection.LogicalMode != "multihop" || selection.UpdatedAt.IsZero() ||
+	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2 && capture.Schema != 3) || capture.Execution != "local" || selection.External != nil ||
+		!desktopNodeChainFinalSupported(selection.RuntimeMode, "off") || capture.Schema >= 2 && selection.RuntimeMode != "shadowsocks" || selection.LogicalMode != "multihop" || selection.UpdatedAt.IsZero() ||
 		!savedNodeChainDigest(capture.RootSHA256) || len(capture.Nodes) < 2 || len(capture.Nodes) > common.MultihopMaximumNodes {
 		return bad
 	}
@@ -150,12 +150,12 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	for i, member := range capture.Nodes {
 		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
 		if member.NodeKind == "external" {
-			if capture.Schema != 2 || len(capture.Nodes) != 3 || i != 1 || member.Mode != "shadowsocks" || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-shadowsocks" || !savedNodeChainDigest(member.Sources[0].SHA256) {
+			if (capture.Schema != 2 && capture.Schema != 3) || len(capture.Nodes) != 3 || i != 1 || (capture.Schema == 2 && member.Mode != "shadowsocks" || capture.Schema == 3 && member.Mode != "socks5") || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-"+member.Mode || !savedNodeChainDigest(member.Sources[0].SHA256) {
 				return bad
 			}
 			continue
 		}
-		if member.NodeKind != "" || capture.Schema == 2 && i == 1 {
+		if member.NodeKind != "" || capture.Schema >= 2 && i == 1 {
 			return bad
 		}
 		if !common.ValidNodeProofID(member.NodeProofID) || proofs[member.NodeProofID] || !savedNodeChainDigest(member.ProfileToken) ||
@@ -270,6 +270,9 @@ func (capture *startupNodeChainCapture) receipt() *startupNodeChainSelection {
 		if member.Profile.NodeKind == "external" {
 			node.NodeKind = "external"
 			result.Schema = 2
+			if member.Mode == "socks5" {
+				result.Schema = 3
+			}
 		}
 		for _, source := range capture.assets {
 			if source.id == node.ID {
@@ -495,6 +498,19 @@ func (a *app) saveNodeChainStartupSelection(ctx context.Context, launch *desktop
 		return err
 	}
 	capture := &startupNodeChainCapture{root: selection.Native.root, selection: selection, assets: selection.Native.chain.assets}
+	if selection.Native.chain.socks != nil {
+		// The typed capture's assets contain only original paired files. Last
+		// also retains the original imported credential digest, never secrets.
+		capture.assets = append([]viaEntryAsset(nil), capture.assets...)
+		middle := selection.Nodes[1]
+		sources, err := captureSavedNodeChainSources(capture.root, middle.Profile, middle.Mode)
+		if err != nil {
+			return err
+		}
+		for _, source := range sources {
+			capture.assets = append(capture.assets, viaEntryAsset{middle.Profile.ID, source.Mode, source.SHA256})
+		}
+	}
 	last := startupSelection{RouterID: selection.Control.ID, RuntimeMode: selection.ExitMode, LogicalMode: "multihop", Base: selection.Base,
 		ProfileToken: startupExternalProfileToken(selection.Control), UpdatedAt: time.Now().UTC(), NodeChain: capture.receipt(), PathKind: startupNodeChainPathKind}
 	if err := validateStartupNodeChainSelection(last); err != nil {

@@ -1,0 +1,37 @@
+//go:build linux && !android
+
+package main
+
+import (
+ "context"
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+ "github.com/sagernet/sing-box/routervpn/linuxprotection"
+)
+
+func (owner *routerVPNLinuxNodeControl) compileSOCKS(ctx context.Context, files *routerVPNExternalFiles,
+	session, source, config, transfer string, mtu int) (*mobilemultihop.DesktopNodeChainSOCKSPolicy, error) {
+	if owner == nil || owner.policy != nil || owner.external != nil || owner.control != nil || owner.retiring.Load() ||
+		files == nil || files.root == nil || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := routerVPNDesktopSOCKSPhysicalCapture(ctx, files, session, config, source, "linux", mtu)
+	if err != nil {
+		return nil, err
+	}
+	_, meta, _, err := policy.ReadValidated()
+ if err != nil { return nil, err }
+	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
+		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+	command, commandErr := selection.CaptureSHA256()
+	selected, selectedErr := selection.ControlSHA256()
+	if commandErr != nil || selectedErr != nil || command != owner.commandHash || selected != transfer || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	owner.control, err = linuxprotection.NewNodeChildControl(ctx, owner.bootstrap, selection)
+	if err != nil {
+		return nil, err
+	}
+	owner.policy, owner.selection, owner.selectionHash = policy, selection, selected
+	return policy, nil
+}
+

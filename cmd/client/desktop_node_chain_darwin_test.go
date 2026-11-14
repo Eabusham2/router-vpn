@@ -15,7 +15,6 @@ import (
 	"time"
 	"testing"
 
-	"router-vpn/internal/macosprocess"
 )
 
 // The parent/session, source policy, workspace, stop capture and retirement
@@ -23,9 +22,15 @@ import (
 // explicitly marked native process receipt are modeled here. Native child,
 // PF/guardian, encrypted traffic and utun acceptance remain separate CI gates.
 func desktopMacOSNodeChainRetirementFixture(t *testing.T) (*desktopMacOSNodeChainHost, *[]string) {
+	return desktopMacOSNodeChainRetirementFixtureWith(t, func(t *testing.T) (*app, *desktopNodeLaunch) {
+		return desktopNodeChainLaunchFixture(t, 3, "darwin")
+	})
+}
+
+func desktopMacOSNodeChainRetirementFixtureWith(t *testing.T, makeLaunch func(*testing.T) (*app, *desktopNodeLaunch)) (*desktopMacOSNodeChainHost, *[]string) {
 	t.Helper()
 	p, s, c, _, _ := macOSParentFixture(t)
-	a, launch := desktopNodeChainLaunchFixture(t, 3, "darwin")
+	a, launch := makeLaunch(t)
 	a.localController = c
 	operation, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -35,11 +40,11 @@ func desktopMacOSNodeChainRetirementFixture(t *testing.T) (*desktopMacOSNodeChai
 	a.state.Mode, a.state.LogicalMode, a.state.RuntimeMode = "multihop", "multihop", launch.mode
 	a.state.RouterID, a.state.Base = launch.policyProfileID, launch.chain.selection.Base
 	parent := &desktopMacOSSessionCapture{app: a, controller: c, parent: p, session: s}
-	meta := launch.chain.policy.Metadata()
+	meta := launch.chain.policyMetadata()
 	runtime := &desktopNodeChainPlatformRuntime{registered: true}
-	h := &desktopMacOSNodeChainHost{parent: parent, runtime: runtime, launch: launch, policy: launch.chain.policy,
+	h := &desktopMacOSNodeChainHost{parent: parent, runtime: runtime, launch: launch, policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy,
 		operation: operation, gate: make(chan struct{}, 1), entered: true, published: true, staged: true, baselineEntered: true,
-		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: macosprocess.NodeChainFamily, ProfileID: meta.ProfileID,
+		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
 			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
 	runtime.host, launch.chain.platform = h, runtime
 	h.gate <- struct{}{}
@@ -69,7 +74,7 @@ func desktopMacOSNodeChainRetirementFixture(t *testing.T) (*desktopMacOSNodeChai
 		t.Fatal(err)
 	}
 	h.stageDirectory, h.stageInfo = directory, launch.directoryInfo
-	if err := writeDesktopRuntimeFile(launch, "node-chain-source.json", []byte(launch.chain.input), false); err != nil {
+	if err := writeDesktopRuntimeFile(launch, launch.chain.sourceName(), []byte(launch.chain.input), false); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeDesktopRuntimeFile(launch, "sing-box.json", launch.config, false); err != nil {

@@ -1,0 +1,334 @@
+//go:build darwin && routervpn_darwin_node_child_tun
+
+package main
+
+import (
+ "bufio"
+ "context"
+ "encoding/json"
+ "errors"
+ "io"
+ "math"
+ "net/http"
+ "net/netip"
+ "os"
+ "os/exec"
+ "regexp"
+ "strings"
+ "time"
+ "testing"
+
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+ "github.com/sagernet/sing-box/routervpn/macosprocess"
+)
+
+// These helpers dispatch only this fixture's exact original typed policy.
+// Every ordinary owner still uses its original parser/family/launch input.
+func(o *darwinChildOwner) metadata()(mobilemultihop.DesktopNodeChainMetadata,error){
+ if o==nil||(o.policy==nil)==(o.socksPolicy==nil){return mobilemultihop.DesktopNodeChainMetadata{},errors.New("native owner lost its exclusive graph family")}
+ if o.socksPolicy!=nil{_,meta,_,err:=o.socksPolicy.ReadValidated();return meta.DesktopNodeChainMetadata,err}
+ _,meta,_,err:=o.policy.ReadValidated();return meta,err
+}
+func(o *darwinChildOwner) input()(string,string,error){
+ if _,err:=o.metadata();err!=nil{return "","",err}
+ if o.socksPolicy!=nil{input,err:=o.socksPolicy.LaunchInput();return input,o.socksPolicy.Config(),err}
+ input,err:=o.policy.NodeChain().LaunchInput();return input,o.policy.Config(),err
+}
+func(o *darwinChildOwner) family()macosprocess.Family{
+ if o.socksPolicy!=nil{return macosprocess.NodeChainSOCKSFamily}
+ return macosprocess.NodeChainFamily
+}
+func(o *darwinChildOwner) sourceName()string{
+ if o.socksPolicy!=nil{return "node-chain-socks-source.json"};return "node-chain-source.json"
+}
+func(o *darwinChildOwner) readyName()string{
+ if o.socksPolicy!=nil{return "node-chain-socks-ready.json"};return "node-chain-ready.json"
+}
+func(o *darwinChildOwner) commandName()string{
+ if o.socksPolicy!=nil{return "routervpn-node-chain-socks"};return "routervpn-node-chain"
+}
+func(o *darwinChildOwner) transferDigest()(string,error){
+ if _,err:=o.metadata();err!=nil{return "",err}
+ if o.capture==nil{return "",errors.New("native owner has no original capture")}
+ if o.socksPolicy!=nil{return macosprocess.NodeChainSOCKSTransferSHA256(o.capture.Selection())}
+ return macosprocess.NodeChainTransferSHA256(o.capture.Selection())
+}
+func(o *darwinChildOwner) parseReady(raw []byte)(mobilemultihop.DesktopNodeChainReadyRecord,error){
+ if _,err:=o.metadata();err!=nil{return mobilemultihop.DesktopNodeChainReadyRecord{},err}
+ if o.socksPolicy!=nil{
+  typed,err:=mobilemultihop.ParseDesktopNodeChainSOCKSReadyRecord(raw,o.socksPolicy,o.transfer)
+  return mobilemultihop.DesktopNodeChainReadyRecord(typed),err
+ }
+ return mobilemultihop.ParseDesktopNodeChainReadyRecord(raw,o.policy,o.transfer)
+}
+func(o *darwinChildOwner) mtuPlan()(mobilemultihop.NodeChainMTUPlan,error){
+ if _,err:=o.metadata();err!=nil{return mobilemultihop.NodeChainMTUPlan{},err}
+ if o.socksPolicy!=nil{
+  source,err:=o.socksPolicy.NativeSource();if err!=nil{return mobilemultihop.NodeChainMTUPlan{},err}
+  _,meta,err:=source.ReadValidated();return meta.MTU,err
+ }
+ return o.policy.NodeChain().MTUPlan()
+}
+
+var darwinSOCKSChildCases=[]string{
+ "run-wg","run-awg-fast","run-awg-strong","middle-password","final-token","selected-dns","middle-public","held-proof-stop",
+}
+type darwinSOCKSMiddleStats struct{
+ Method string `json:"method"`
+ RawTCP int64 `json:"raw_tcp"`
+ RawUDP int64 `json:"raw_udp"`
+ TCP int64 `json:"tcp"`
+ UDP int64 `json:"udp"`
+ PublicQueries uint64 `json:"public_queries"`
+ DownloadBytes uint64 `json:"download_bytes"`
+ UploadBytes uint64 `json:"upload_bytes"`
+}
+type darwinSOCKSPeerStats struct{
+ darwinChildPeerReply
+ Middle darwinSOCKSMiddleStats `json:"middle"`
+ Benchmark json.RawMessage `json:"benchmark,omitempty"`
+}
+type darwinSOCKSPeerReply struct{
+ Schema int `json:"schema"`
+ Source string `json:"source,omitempty"`
+ SourceSHA256 string `json:"source_sha256"`
+ ConfigSHA256 string `json:"config_sha256"`
+ Address string `json:"address"`
+ PublicCA string `json:"public_ca,omitempty"`
+ Peer darwinSOCKSPeerStats `json:"peer"`
+ DNS uint64 `json:"dns"`
+ PublicDNS uint64 `json:"public_dns"`
+ FinalAuth uint64 `json:"final_auth"`
+ HeldProofs uint64 `json:"held_proofs"`
+ Associations int `json:"associations"`
+}
+type darwinSOCKSPeer struct{
+ command *exec.Cmd
+ input *os.File
+ output *os.File
+ reader *bufio.Reader
+ done chan struct{}
+ failure error
+ physical netip.Addr
+ mode string
+ first darwinSOCKSPeerReply
+ source *mobilemultihop.NodeChainSOCKSSource
+ joined bool
+}
+func(p *darwinSOCKSPeer) read(t *testing.T,initial bool)darwinSOCKSPeerReply{
+ t.Helper()
+ if err:=p.output.SetReadDeadline(time.Now().Add(15*time.Second));err!=nil{t.Fatal(err)}
+ raw,err:=p.reader.ReadSlice('\n')
+ var reply darwinSOCKSPeerReply
+ if err!=nil||len(raw)>4<<20||!routerVPNMTUStrict(raw,&reply)||reply.Schema!=1||reply.Peer.Schema!=1||len(reply.Peer.Prefixes)!=1||
+  reply.Peer.Prefixes[0].Mode!=p.mode||reply.Peer.Middle.Method!="socks5"||reply.Associations<0{
+  t.Fatal("typed native peer lost its complete captured receipt",err)
+ }
+ address,err:=netip.ParseAddrPort(reply.Address)
+ if err!=nil||address.Addr()!=p.physical||address.Port()==0||reply.Peer.Address!=reply.Address||reply.Peer.PublicCA==""||
+  reply.Peer.Final.FinalPublicIP!="203.0.113.89"{t.Fatal("typed native peer substituted physical/TLS identity")}
+ if initial{
+  source,err:=mobilemultihop.NewNodeChainSOCKSSource(reply.Source)
+  if err!=nil{t.Fatal("actual native peer source refused",err)}
+  _,meta,err:=source.ReadValidated()
+  if err!=nil||meta.SourceSHA256!=reply.SourceSHA256||meta.ConfigSHA256!=reply.ConfigSHA256||
+   reply.PublicCA!=reply.Peer.PublicCA||len(meta.Proofs)!=3||meta.Proofs[0].Mode!=p.mode||meta.Proofs[1].Mode!="socks5"||
+   meta.Proofs[2].Mode!="shadowsocks"||len(meta.Physical)!=1{t.Fatal("typed native peer changed its original complete source",err)}
+  p.source=source;p.first=reply
+ }else if reply.Source!=""||reply.PublicCA!=""||reply.SourceSHA256!=p.first.SourceSHA256||reply.ConfigSHA256!=p.first.ConfigSHA256||
+  reply.Address!=p.first.Address||reply.Peer.PublicCA!=p.first.PublicCA{t.Fatal("typed native peer replaced the original source")}
+ return reply
+}
+func(p *darwinSOCKSPeer) observe(t *testing.T)darwinSOCKSPeerReply{
+ t.Helper();if _,err:=io.WriteString(p.input,"snapshot\n");err!=nil{t.Fatal(err)};return p.read(t,false)
+}
+func(p *darwinSOCKSPeer) close(t *testing.T){
+ t.Helper();if p.joined{return}
+ if _,err:=io.WriteString(p.input,"quit\n");err!=nil{t.Fatal(err)}
+ if err:=p.output.SetReadDeadline(time.Now().Add(10*time.Second));err!=nil{t.Fatal(err)}
+ line,err:=p.reader.ReadString('\n')
+ if err!=nil||line!="SOCKS_RUN_PEER_JOINED\n"{t.Fatal("typed native peer lacks its original joined provider receipt",err,line)}
+ p.input.Close()
+ select{case <-p.done:if p.failure!=nil{t.Fatal("typed native peer original Wait failed",p.failure)}
+ case <-time.After(10*time.Second):t.Fatal("typed native peer did not join original process")}
+ p.output.Close();p.joined=true
+}
+func darwinSOCKSPeerStart(t *testing.T,mode,fault string)*darwinSOCKSPeer{
+ t.Helper()
+ p:=&darwinSOCKSPeer{done:make(chan struct{}),physical:darwinChildPhysical(t),mode:mode}
+ image:=os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER")
+ raw,err:=os.ReadFile(image)
+ if err!=nil||darwinChildDigest(raw)!=os.Getenv("ROUTERVPN_DARWIN_NODE_CHAIN_PEER_SHA256"){t.Fatal("typed peer lost original image",err)}
+ p.command=exec.Command(image,"-test.run=^TestRouterVPNDesktopNodeChainSOCKSRunReference$","-test.count=1","-test.timeout=240s")
+ p.command.Env=[]string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin","GORACE=atexit_sleep_ms=0","ROUTERVPN_SOCKS_RUN_REFERENCE=1",
+  "ROUTERVPN_DARWIN_SOCKS_RUN_REFERENCE=1","ROUTERVPN_DARWIN_NODE_CHAIN_REFERENCE=1","ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS="+p.physical.String()}
+ // Exercise the same finite physical guard before any peer provider starts.
+ captureCtx,captureCancel:=context.WithTimeout(context.Background(),35*time.Second)
+ capture:=exec.CommandContext(captureCtx,image,"-test.run=^TestRouterVPNDesktopNodeChainSOCKSDarwinCapture$","-test.v","-test.count=1","-test.timeout=30s")
+ capture.Env=append([]string(nil),p.command.Env...);capture.WaitDelay=5*time.Second
+ captureOutput,captureErr:=capture.CombinedOutput();captureCancel()
+ if captureErr!=nil||len(captureOutput)>32768||strings.Contains(string(captureOutput),"--- SKIP:")||strings.Contains(string(captureOutput),"WARNING: DATA RACE"){t.Fatal("original native SOCKS physical capture controls",captureErr,string(captureOutput))}
+ captureRoot:="TestRouterVPNDesktopNodeChainSOCKSDarwinCapture"
+ for _,name:=range []string{captureRoot,captureRoot+"/ordinary-purpose",captureRoot+"/missing-socks-purpose",captureRoot+"/missing-reference",captureRoot+"/loopback",captureRoot+"/foreign-address"}{
+  if strings.Count(string(captureOutput),"=== RUN   "+name+"\n")!=1||strings.Count(string(captureOutput),"--- PASS: "+name+" (")!=1{t.Fatal("native physical capture omitted original refusal",name,string(captureOutput))}
+ }
+ inputRead,inputWrite,err:=os.Pipe();if err!=nil{t.Fatal(err)}
+ outputRead,outputWrite,err:=os.Pipe();if err!=nil{inputRead.Close();inputWrite.Close();t.Fatal(err)}
+ p.input,p.output,p.reader=inputWrite,outputRead,bufio.NewReaderSize(outputRead,4<<20+1)
+ p.command.Stdin,p.command.Stdout,p.command.Stderr=inputRead,outputWrite,os.Stderr
+ if err:=p.command.Start();err!=nil{inputRead.Close();inputWrite.Close();outputRead.Close();outputWrite.Close();t.Fatal(err)}
+ inputRead.Close();outputWrite.Close()
+ go func(){p.failure=p.command.Wait();close(p.done)}()
+ t.Cleanup(func(){
+  if p.joined{return}
+  p.input.Close()
+  select{case <-p.done:case <-time.After(10*time.Second):_=p.command.Process.Kill();<-p.done}
+  p.output.Close();t.Error("typed native peer was forcibly cleaned without joined acceptance")
+ })
+ raw=darwinChildJSON(t,map[string]any{"schema":1,"mode":mode,"fault":fault,"native":true})
+ if _,err:=p.input.Write(append(raw,'\n'));err!=nil{t.Fatal(err)}
+ p.read(t,true);return p
+}
+
+func TestRouterVPNNodeChainSOCKSDarwinNativeHarness(t *testing.T){
+ if os.Getenv("ROUTERVPN_DARWIN_SOCKS_CHILD_ACCEPTANCE")!="1"{t.Fatal("typed native acceptance requires its exact fixture purpose")}
+ darwinChildSelectedFamilyHarness(t,false,false,true)
+}
+func TestRouterVPNNodeChainSOCKSDarwinNativeCommand(t *testing.T){
+ darwinChildNative(t)
+ image,err:=os.Executable()
+ if err!=nil||image!=macosprocess.ControllerPath||os.Getenv("ROUTERVPN_DARWIN_NODE_CHILD_INSTALLED")!="1"||
+  os.Getenv("ROUTERVPN_DARWIN_SOCKS_CHILD_ACCEPTANCE")!="1"{t.Fatal("typed native fixture lost original installed controller")}
+ authority:=darwinChildAuthorityStart(t)
+ authorityClosed:=false
+ t.Cleanup(func(){if !authorityClosed{t.Error("typed native authority retained after unproved join")}})
+ enable,cancel:=context.WithTimeout(context.Background(),10*time.Second)
+ raw,err:=darwinChildCommand(enable,"/sbin/pfctl","-E");cancel()
+ match:=regexp.MustCompile("(?m)^Token\\s*:\\s*([0-9]+)\\s*$").FindSubmatch(raw)
+ if err!=nil||len(match)!=2{t.Fatal("typed native PF reference unavailable",err,string(raw))}
+ token:=string(match[1]);allJoined:=true
+ t.Cleanup(func(){
+  if !allJoined{t.Error("typed native PF reference retained until original join");return}
+  ctx,cancel:=context.WithTimeout(context.Background(),10*time.Second);defer cancel()
+  if raw,err:=darwinChildCommand(ctx,"/sbin/pfctl","-X",token);err!=nil{t.Error("typed PF reference failed retirement",err,string(raw))}
+ })
+ for _,scenario:=range darwinSOCKSChildCases{
+  if !t.Run(scenario,func(t *testing.T){
+   ctx,cancel:=context.WithTimeout(context.Background(),90*time.Second);defer cancel()
+   mode,fault:="wg",scenario
+   switch scenario{case "run-wg":fault=""
+   case "run-awg-fast":mode,fault="awg2-fast",""
+   case "run-awg-strong":mode,fault="awg2-strong",""
+   case "held-proof-stop":fault="hold-prefix"}
+   peer:=darwinSOCKSPeerStart(t,mode,fault)
+   owner:=&darwinChildOwner{}
+   trust:=&darwinChildPeer{};trust.reply.PublicCA=peer.first.PublicCA
+   darwinChildTrust(t,trust,func()bool{return owner.closed||!owner.childStartAttempted})
+   t.Cleanup(func(){
+    cleanup,stop:=context.WithTimeout(context.Background(),15*time.Second);defer stop()
+    var err error
+    if owner.childStartAttempted{err=owner.stop(cleanup)}else{err=owner.stopUnstarted(cleanup,t.Failed())}
+    if err!=nil{allJoined=false;t.Error("typed native original cleanup unproved",err,owner.output.String())}
+   })
+   policy,err:=mobilemultihop.NewDesktopNodeChainSOCKSPolicy(peer.source,darwinChildNonce(t,16),"darwin",0)
+   if err!=nil{t.Fatal(err)}
+   owner.socksPolicy=policy;owner.startCaptured(t,ctx,authority)
+   if fault==""{
+    _,proof:=owner.wait(t,ctx,"")
+    if proof.Kind!="routervpn-node-chain-socks-ready-v1"||owner.capture.Selection().Family!=macosprocess.NodeChainSOCKSFamily{t.Fatal("typed native child borrowed ordinary family")}
+    if _,err:=macosprocess.NodeChainTransferSHA256(owner.capture.Selection());err==nil{t.Fatal("typed native process acquired ordinary transfer")}
+    darwinSOCKSMeasurement(t,ctx,owner,peer)
+    if scenario=="run-wg"{darwinChildMTURollback(t,ctx,owner)}
+    darwinChildForeignMTU(t,ctx,owner)
+    darwinSOCKSTraffic(t,ctx,peer)
+   }else{
+    darwinSOCKSAwaitRefusal(t,ctx,owner,peer,fault)
+   }
+   cleanup,stop:=context.WithTimeout(context.Background(),15*time.Second)
+   err=owner.stop(cleanup);stop()
+   if err!=nil{allJoined=false;t.Fatal("typed authenticated Stop did not join original PF/utun",err,owner.output.String())}
+   retirement:=time.Now().Add(5*time.Second)
+   for peer.observe(t).Associations!=0{
+    if time.Now().After(retirement){t.Fatal("original Box Stop retained a SOCKS control association")}
+    time.Sleep(20*time.Millisecond)
+   }
+   peer.close(t)
+   t.Log("verified original Darwin child retirement: "+scenario)
+  }){break}
+ }
+ if t.Failed()||!allJoined{return}
+ if err:=authority.close();err!=nil{t.Fatal(err)};authorityClosed=true
+ if err:=os.WriteFile(macosprocess.InstallRoot+"/native-socks-child-complete",[]byte("all original SOCKS child owners joined\n"),0600);err!=nil{t.Fatal(err)}
+}
+func darwinSOCKSAwaitRefusal(t *testing.T,ctx context.Context,o *darwinChildOwner,p *darwinSOCKSPeer,fault string){
+ t.Helper()
+ for{
+  if err:=o.current(ctx);err!=nil{t.Fatal(err,o.output.String())}
+  for _,name:=range []string{"node-ready.json","node-chain-ready.json","node-chain-socks-ready.json"}{
+   if _,err:=o.files.root.Lstat(name);!errors.Is(err,os.ErrNotExist){t.Fatal("invalid typed path published native readiness",name,err)}
+  }
+  stats:=p.observe(t)
+  reached:=false
+  switch fault{
+  case "middle-password":reached=stats.Peer.Prefixes[0].ProofQueries>0&&stats.Peer.Middle.RawTCP>0
+  case "middle-public":reached=stats.Peer.Middle.PublicQueries>0
+  case "final-token":reached=stats.FinalAuth>0
+  case "selected-dns":reached=stats.DNS>0
+  case "hold-prefix":reached=stats.HeldProofs>0
+  }
+  if reached{
+   if stats.Peer.Prefixes[0].RawUDP==0||stats.Peer.Final.DirectQueries!=0||stats.Peer.Final.DownloadBytes!=0{t.Fatal("negative bypassed captured encrypted boundary")}
+   if fault=="hold-prefix"{return}
+   if _,err:=o.files.read("stopped.json",4096);err==nil{return}else if !errors.Is(err,os.ErrNotExist){t.Fatal(err)}
+  }
+  select{case <-ctx.Done():t.Fatal("typed native refusal did not join original proof",ctx.Err(),o.output.String())
+  case <-o.done:t.Fatal("typed refusal lost inherited owner")
+  case <-time.After(20*time.Millisecond):}
+ }
+}
+func darwinSOCKSMeasurement(t *testing.T,ctx context.Context,o *darwinChildOwner,p *darwinSOCKSPeer){
+ t.Helper()
+ before:=p.observe(t)
+ status,proof:=o.wait(t,ctx,"")
+ typed:=mobilemultihop.DesktopNodeChainSOCKSReadyRecord(proof)
+ if typed.Validate(o.socksPolicy,o.transfer)!=nil{t.Fatal("typed measurement lost exact original Ready")}
+ request:=routerVPNDesktopSOCKSMeasurementRequest{Schema:1,Request:darwinChildNonce(t,16),Generation:1,Deadline:time.Now().Add(80*time.Second).UnixMilli(),Bytes:64<<10,Path:status.Path,Capture:typed}
+ if err:=o.files.publish("node-chain-measure-request.json",request);err!=nil{t.Fatal(err)}
+ for{
+  raw,err:=o.files.read("node-chain-measure-result.json",routerVPNDesktopSOCKSMeasurementLimit)
+  if err==nil{
+   var result routerVPNDesktopSOCKSMeasurementResult
+   if !routerVPNMTUStrict(raw,&result)||result.Request!=request.Request||result.Generation!=1||result.Capture!=typed||
+    !result.Status.Complete||!result.Status.Drained||result.Status.Failure!=""||len(result.Status.Results)!=3{t.Fatal("typed native measurement returned a foreign or incomplete result")}
+   for i,r:=range result.Status.Results{
+    if !r.Ready||r.Failure!=""||r.Idle==nil||r.Idle.Samples!=6||r.Idle.Min<=0||r.Download==nil||r.Upload==nil||
+     r.Download.Bytes!=64<<10||r.Upload.Bytes!=64<<10||r.Download.Seconds<=0||r.Upload.Seconds<=0||
+     math.IsNaN(r.Download.Mbps)||math.IsInf(r.Download.Mbps,0)||r.Download.Mbps<=0||r.Upload.Mbps<=0||
+     (i==1)!=(r.Kind=="public-path"){t.Fatal("typed native measurement lost actual routed samples/bytes",i,r)}
+   }
+   break
+  }
+  if !errors.Is(err,os.ErrNotExist){t.Fatal(err)}
+  if _,_,err:=o.observation(ctx);err!=nil{t.Fatal("native measurement lost live original PF/utun heartbeat",err)}
+  select{case <-ctx.Done():t.Fatal(ctx.Err(),o.output.String());case <-time.After(20*time.Millisecond):}
+ }
+ after:=p.observe(t)
+ if after.PublicDNS<=before.PublicDNS||after.Peer.Middle.DownloadBytes-before.Peer.Middle.DownloadBytes<64<<10||
+  after.Peer.Middle.UploadBytes-before.Peer.Middle.UploadBytes<64<<10||after.Peer.Final.DownloadBytes-before.Peer.Final.DownloadBytes<64<<10||
+  after.Peer.Final.UploadBytes-before.Peer.Final.UploadBytes<64<<10{t.Fatal("typed native measurement did not reach original encrypted providers")}
+}
+func darwinSOCKSTraffic(t *testing.T,ctx context.Context,p *darwinSOCKSPeer){
+ t.Helper()
+ before:=p.observe(t)
+ transport:=&http.Transport{Proxy:nil,DisableKeepAlives:true};defer transport.CloseIdleConnections()
+ for sample:=0;sample<50;sample++{
+  request,err:=http.NewRequestWithContext(ctx,http.MethodGet,"http://10.77.0.1:8787/api/benchmark/download?bytes=65536",nil);if err!=nil{t.Fatal(err)}
+  request.Header.Set("Authorization","Bearer ordered-final-private-token")
+  response,err:=transport.RoundTrip(request);if err!=nil{t.Fatal("actual typed utun TCP sample",sample,err)}
+  body,err:=io.ReadAll(io.LimitReader(response.Body,65537));response.Body.Close()
+  if err!=nil||response.StatusCode!=200||len(body)!=65536||response.Header.Get("X-Routervpn-Benchmark")!="download-v1"{t.Fatal("actual typed utun payload changed",sample,err)}
+ }
+ after:=p.observe(t)
+ if after.Peer.Final.FinalTCP-before.Peer.Final.FinalTCP<50||after.Peer.Final.DownloadBytes-before.Peer.Final.DownloadBytes<50*65536||
+  after.Peer.Final.DirectQueries!=0||after.Peer.Prefixes[0].RawUDP==0{t.Fatal("fifty actual typed TCP samples bypassed encrypted prefix")}
+}

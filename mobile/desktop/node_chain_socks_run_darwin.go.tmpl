@@ -1,0 +1,261 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"sync/atomic"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+)
+
+// A failed original native retirement keeps its inherited lock descriptions
+// and original owners reachable for this process's remaining lifetime. Neither
+// another command nor a later name lookup can replace that retained authority.
+var routerVPNDarwinNodeChainSOCKSProcessOwner atomic.Pointer[routerVPNDarwinNodeChainSOCKSControl]
+
+func routerVPNRunDarwinNodeChainSOCKSControlled(parent context.Context, directory, session, source, config string) (failure error) {
+	if parent == nil || parent.Err() != nil || !routerVPNExternalSession.MatchString(session) ||
+		!routerVPNExternalSource.MatchString(source) || !routerVPNExternalSource.MatchString(config) {
+		return routerVPNExternalFailure
+	}
+	scope := macosprocess.Scope{Session: session, Source: source, Config: config, Workspace: directory, Family: macosprocess.NodeChainSOCKSFamily}
+	bounded, stopBinding := context.WithTimeout(parent, 15*time.Second)
+	capture, err := macosprocess.InheritCapture(bounded, scope)
+	if err != nil {
+		stopBinding()
+		return routerVPNExternalFailure
+	}
+	bootstrap, err := macosprocess.BindInherited(bounded, capture)
+	if err != nil {
+		stopBinding()
+		return errors.Join(routerVPNExternalFailure, capture.Close())
+	}
+	if err := capture.Current(bounded); err != nil {
+		stopBinding()
+		_ = bootstrap.Close()
+		return errors.Join(routerVPNExternalFailure, capture.Close())
+	}
+	selection := capture.Selection()
+	transfer, err := macosprocess.NodeChainSOCKSTransferSHA256(selection)
+	stopBinding()
+	if err != nil {
+		_ = bootstrap.Close()
+		return errors.Join(routerVPNExternalFailure, capture.Close())
+	}
+	control := &routerVPNDarwinNodeChainSOCKSControl{capture: capture, bootstrap: bootstrap, scope: scope,
+		selection: selection, transfer: transfer}
+	if !routerVPNDarwinNodeChainSOCKSProcessOwner.CompareAndSwap(nil, control) {
+		_ = bootstrap.Close()
+		return errors.Join(routerVPNExternalFailure, capture.Close())
+	}
+	defer func() {
+		// Transport closure never claims that native resources have joined.
+		failure = errors.Join(failure, bootstrap.Close())
+		if !control.retired.Load() {
+			failure = errors.Join(failure, errors.New("Darwin ordered original native authority remains retained"))
+			return
+		}
+		if !routerVPNDarwinNodeChainSOCKSProcessOwner.CompareAndSwap(control, nil) {
+			failure = errors.Join(failure, routerVPNExternalFailure)
+			return
+		}
+		failure = errors.Join(failure, capture.Close())
+	}()
+	return routerVPNExternalControlledLifetime(parent,
+		func(ctx context.Context) error { return routerVPNRunDarwinNodeChainSOCKS(ctx, control) },
+		bootstrap.WaitStop,
+		control.retirementReceipt, bootstrap.Close)
+}
+
+func routerVPNRunDarwinNodeChainSOCKS(parent context.Context, control *routerVPNDarwinNodeChainSOCKSControl) (failure error) {
+	if parent == nil || control == nil || control.native != nil {
+		return routerVPNExternalFailure
+	}
+	admission, stopAdmission := context.WithTimeout(parent, routerVPNNodeAdmissionLimit)
+	defer stopAdmission()
+	files, err := routerVPNOpenExternalFiles(control.scope.Workspace)
+	if err != nil {
+		return err
+	}
+	defer files.root.Close()
+	if control.workspace(files) != nil {
+		return routerVPNExternalFailure
+	}
+	lifetime := globalCtx
+	if lifetime == nil {
+		lifetime = context.Background()
+	}
+	graph, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(context.WithoutCancel(lifetime))))
+	native := &routerVPNDarwinNodeChainNative{cancel: cancel, startupOwner: &routerVPNNodeStartupOwner{cancel: cancel}}
+	control.native = native
+	defer func() {
+		control.retiring.Store(true)
+		cleanup, stopCleanup := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stopCleanup()
+		var last error
+		for {
+			if err := control.finish(cleanup, files); err == nil {
+				return
+			} else {
+				last = err
+			}
+			select {
+			case <-cleanup.Done():
+				failure = errors.Join(failure, last, cleanup.Err())
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	}()
+	// The cleanup owner now exists even when authenticated Stop cancelled
+	// admission before any semantic input read or native constructor.
+	if err := control.original(admission); err != nil {
+		return err
+	}
+	policy, err := control.compile(admission, files)
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-socks-ready.json",
+		"stopped.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json",
+		"node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json", "node-chain-candidate-cancel.json", "node-chain-candidate-result.json",
+		"node-protection-retired.json", "node-protection-transfer.json"} {
+		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return routerVPNExternalFailure
+		}
+	}
+	if parent.Err() != nil || files.stopRequested(control.scope.Session, control.scope.Config) {
+		return nil
+	}
+	graph, err = control.prepare(graph, policy)
+	if err != nil {
+		return err
+	}
+ construction,err:=routerVPNNewDesktopSOCKSConstruction(graph,policy)
+ if err!=nil{return err}
+ graph=construction.ctx
+	parsed, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(policy.Config()))
+	if err != nil {
+		return err
+	}
+	parsed.Log = &option.LogOptions{Disabled: true}
+	for _, previous := range routerVPNExternalConstructed(graph) {
+		if previous != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	stopConstruction := routerVPNWatchNodeConstruction(admission, func() bool { return files.stopRequested(control.scope.Session, control.scope.Config) }, cancel)
+	defer stopConstruction()
+	if err := control.current(admission); err != nil {
+		return err
+	}
+	instance, constructErr := box.New(box.Options{Context: graph, Options: parsed})
+	if instance == nil {
+		// Box.New registers original managers in this private registry before
+		// constructing their contents. It never started any native component.
+		for _, partial := range routerVPNExternalConstructed(graph) {
+			if _, found := partial.(adapter.InboundManager); found {
+				native.managerRequired = true
+			}
+			if manager, ok := partial.(routerVPNDarwinNodeChainManager); ok {
+				if native.manager != nil {
+					return routerVPNExternalFailure
+				}
+				native.manager = manager
+			}
+			if closer, ok := partial.(io.Closer); ok {
+				native.components = append(native.components, routerVPNDarwinNodeChainComponent{original: closer})
+			}
+		}
+		return errors.Join(constructErr, routerVPNExternalFailure)
+	}
+	native.components = append(native.components, routerVPNDarwinNodeChainComponent{original: instance})
+	native.startupOwner.original = instance
+	stopConstruction()
+	native.managerRequired = true
+	manager, ok := instance.Inbound().(routerVPNDarwinNodeChainManager)
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	native.manager = manager
+	if constructErr != nil {
+		return constructErr
+	}
+	prepared, err := instance.RouterVPNDesktopDarwinNodeChainSOCKSPreparePhysicalOwned(policy)
+	if prepared != nil {
+		native.source = prepared
+	}
+	if err != nil || prepared == nil {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	_, _, captured, err := policy.ReadValidated()
+	if err != nil {
+		return err
+	}
+	reader, found, err := adapter.RouterVPNInboundContext(admission, instance.Inbound(), captured.TUNTag)
+	if err != nil || !found || reader == nil {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	retirement, ok := reader.(interface{ RouterVPNDesktopDarwinNodeChainRetirementContext(context.Context) error })
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	if err := retirement.RouterVPNDesktopDarwinNodeChainRetirementContext(admission); err != nil {
+		return err
+	}
+	if err := instance.RouterVPNDesktopStartupContext(admission); err != nil {
+		return err
+	}
+	if err := native.startupOwner.start(admission, func() bool { return files.stopRequested(control.scope.Session, control.scope.Config) }, instance.RouterVPNStrategyStart); err != nil {
+		return err
+	}
+	if err := control.current(admission); err != nil {
+		return err
+	}
+	stopAdmission()
+	physical, err := instance.RouterVPNDesktopDarwinNodeChainSOCKSActivatePhysical(policy)
+	if err != nil {
+		return err
+	}
+	current := func(call context.Context) error {
+		if call == nil || call.Err() != nil || parent.Err() != nil || graph.Err() != nil || control.retiring.Load() {
+			return routerVPNExternalFailure
+		}
+		if err := physical.CurrentContext(call); err != nil {
+			return err
+		}
+		return control.current(call)
+	}
+	chain, err := routerVPNNewDesktopSOCKSRuntime(graph, files, construction, control.transfer, instance, physical, func(call context.Context)error{
+  if call==nil||call.Err()!=nil||parent.Err()!=nil||graph.Err()!=nil||control.retiring.Load(){return routerVPNExternalFailure}
+  return control.current(call)
+ })
+	if chain != nil {
+		native.proof = chain
+	}
+	if err != nil {
+		return err
+	}
+	return routerVPNRunNodeMTULoopWithSOCKS(parent, graph, files, instance,
+		control.scope.Session, control.scope.Config, physical, current, func() error {
+			proof, stopProof := context.WithTimeout(graph, routerVPNNodeAdmissionLimit)
+			defer stopProof()
+			if err := control.current(proof); err != nil {
+				return err
+			}
+			if err := routerVPNProveNodeReadyCaptured(proof, files, policy, control.transfer, physical); err != nil {
+				return err
+			}
+			return control.current(proof)
+		}, chain)
+}

@@ -67,7 +67,7 @@ func desktopMacOSMTUHost(snapshot mtuRetestSnapshot) (*desktopMacOSNodeChainHost
 	if runtime == nil || runtime.host == nil || runtime.capture != capture.Capture ||
 		runtime.host.runtime != runtime || runtime.host.launch != capture.Launch ||
 		capture.Launch == nil || capture.Launch.chain != capture.Chain ||
-		capture.Policy == nil || capture.Policy.Metadata().TargetOS != "darwin" {
+		!capture.Chain.hasPolicy() || capture.Chain.policy != capture.Policy || capture.Chain.socksPolicy != capture.SOCKSPolicy || capture.Chain.policyMetadata().TargetOS != "darwin" {
 		return nil, true, errors.New("macOS ordered MTU capture lost its original platform host")
 	}
 	return runtime.host, true, nil
@@ -83,12 +83,12 @@ func validateDesktopMacOSMTUSnapshotLocked(h *desktopMacOSNodeChainHost, snapsho
 	}
 	path, chain := snapshot.Multihop, snapshot.Multihop.Chain
 	if h.runtime != chain.Platform || h.runtime.capture != chain.Capture || h.launch != chain.Launch ||
-		h.launch.chain != chain.Chain || h.policy != chain.Policy || h.launch.chain.policy != h.policy ||
+		h.launch.chain != chain.Chain || h.policy != chain.Policy || h.socksPolicy != chain.SOCKSPolicy || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy ||
 		h.launch.chain.platform != h.runtime || h.runtime.capture == nil || h.runtime.capture.platform == nil ||
 		h.runtime.capture.platform.parent != h.parent || h.bound != path.Native || h.graph == nil || *h.graph != path.Graph ||
 		path.Native.launch != h.launch || path.Native.selection.Native != chain.Native ||
 		h.process == nil || h.process.parent != h.parent || h.process.command != path.Command ||
-		h.launch.command != path.Command || h.policy == nil || h.policy.Metadata().TargetOS != "darwin" ||
+		h.launch.command != path.Command || !h.launch.chain.hasPolicy() || h.launch.chain.policyMetadata().TargetOS != "darwin" ||
 		!h.proved || !h.activated || h.retiring || h.closed ||
 		snapshot.Profile.ID != h.launch.profileID || snapshot.Mode != h.launch.mode ||
 		!strings.EqualFold(strings.TrimSpace(snapshot.Profile.MTUPolicy), "auto") {
@@ -266,8 +266,8 @@ func (owner *desktopMacOSNodeMTUOwner) originalLocked() error {
 		h.launch != owner.launch || h.bound != owner.bound || owner.runtime.host != h ||
 		owner.runtime.capture != chain.Capture || owner.runtime.capture == nil || owner.runtime.capture.platform == nil ||
 		owner.runtime.capture.platform.parent != owner.parent || owner.launch.chain != chain.Chain ||
-		owner.launch.chain == nil || owner.launch.chain.platform != owner.runtime || owner.launch.chain.policy != chain.Policy ||
-		h.policy != chain.Policy || h.policy == nil || h.policy.Metadata().TargetOS != "darwin" ||
+		owner.launch.chain == nil || owner.launch.chain.platform != owner.runtime || owner.launch.chain.policy != chain.Policy || owner.launch.chain.socksPolicy != chain.SOCKSPolicy ||
+		h.policy != chain.Policy || h.socksPolicy != chain.SOCKSPolicy || !h.launch.chain.hasPolicy() || h.launch.chain.policyMetadata().TargetOS != "darwin" ||
 		owner.snapshot.Multihop.Native != owner.bound || owner.bound.launch != owner.launch ||
 		chain.Native == nil || owner.bound.selection.Native != chain.Native || owner.launch.chain.selection.Native != chain.Native ||
 		chain.Native.chain == nil || chain.Native.chain.host != chain.Capture || chain.Capture == nil ||

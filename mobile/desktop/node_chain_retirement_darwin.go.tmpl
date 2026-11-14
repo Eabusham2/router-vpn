@@ -50,6 +50,7 @@ func (part *routerVPNDarwinNodeChainComponent) close(ctx context.Context) error 
 // never discovers a later manager, policy, interface name or service. Its
 // partial progress survives caller cancellation and failed native source join.
 type routerVPNDarwinNodeChainNative struct {
+	startupOwner                                     *routerVPNNodeStartupOwner
 	mu                                               sync.Mutex
 	cancel                                           context.CancelFunc
 	proof                                            routerVPNDarwinNodeChainProofOwner
@@ -85,7 +86,11 @@ func (owner *routerVPNDarwinNodeChainNative) close(ctx context.Context) error {
 		}
 		owner.proofJoined = true
 	}
-	if owner.cancel != nil {
+	if owner.startupOwner != nil {
+		if err := owner.startupOwner.close(ctx); err != nil {
+			return err
+		}
+	} else if owner.cancel != nil {
 		owner.cancel()
 	}
 	if !owner.managerJoined {

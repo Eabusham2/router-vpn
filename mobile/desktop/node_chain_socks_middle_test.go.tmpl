@@ -94,56 +94,6 @@ func (*nodeSOCKSMonitor) AndroidVPNEnabled() bool { return false }
 // Decrypted traffic reaches only the original SOCKS control tuple and a relay
 // currently leased by that authenticated association. It cannot reach SS,
 // DNS or public probes through a second plaintext fixture route.
-type nodeSOCKSPrefixHandler struct {
-	original *desktopNodeWGHandler
-	server *desktopNodeLayerServer
-	relays *desktopImportedSOCKSLayerRoutes
-	control string
-}
-func (h *nodeSOCKSPrefixHandler) JudgeFlow(protocol uint8, _, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
-	allowed := protocol == 6 && destination.String() == h.control
-	if protocol == 17 {
-		h.relays.mu.Lock()
-		allowed = !h.relays.closed && h.relays.leases[destination.String()] != nil
-		h.relays.mu.Unlock()
-	}
-	if allowed { return tun.FlowVerdict{Action: tun.ActionAccept} }
-	return tun.FlowVerdict{Action: tun.ActionReject}
-}
-func (*nodeSOCKSPrefixHandler) NewDNSPacket([]byte, M.Socksaddr, M.Socksaddr, N.PacketWriter) {}
-func (h *nodeSOCKSPrefixHandler) NewConnectionEx(ctx context.Context, c net.Conn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
-	if !h.original.adopt(c, true) { if done != nil { done(net.ErrClosed) }; return }
-	h.original.tcp.Add(1)
-	go func() {
-		defer h.original.workers.Done()
-		defer h.original.forget(c)
-		err := h.server.NewConnection(ctx, c, M.Metadata{Source: source, Destination: destination})
-		_ = c.Close()
-		if done != nil { done(err) }
-	}()
-}
-func (h *nodeSOCKSPrefixHandler) NewPacketConnectionEx(ctx context.Context, c N.PacketConn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
-	if !h.original.adopt(c, true) { if done != nil { done(net.ErrClosed) }; return }
-	h.original.udp.Add(1)
-	go func() {
-		defer h.original.workers.Done()
-		defer h.original.forget(c)
-		err := h.server.NewPacketConnection(ctx, c, M.Metadata{Source: source, Destination: destination})
-		_ = c.Close()
-		if done != nil { done(err) }
-	}()
-}
-func nodeSOCKSCloseServer(s *desktopNodeLayerServer) {
-	s.mu.Lock()
-	s.closing = true
-	all := make([]io.Closer, 0, len(s.connections))
-	for connection := range s.connections { all = append(all, connection) }
-	s.mu.Unlock()
-	s.cancel()
-	for _, connection := range all { _ = connection.Close() }
-	s.workers.Wait()
-}
-
 // The held reader is the original sing SOCKS control observer: its real native
 // Read must already return an error before this explicit test barrier holds it.
 type nodeSOCKSControl struct {

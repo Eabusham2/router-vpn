@@ -105,9 +105,9 @@ packages, images, production compose and publication must be verified together
 at the final resulting commit. The historical `745b3e41` release cannot stand
 in for that verification.
 
-## Accompanying SOCKS lifecycle source change
+## Published SOCKS lifecycle change at `3dff2d60`
 
-The accompanying nineteen-file change closes the captured SOCKS middle's
+The nineteen-file change in `3dff2d60729466904a3318665e80b14c05c381c7` closes the captured SOCKS middle's
 TCP/UDP associations before cancelling its lower path. Constructor-return
 binding and the native Instance capture retain the exact acquired Box and
 original close receipt. A copied owner cannot substitute for that capture.
@@ -146,19 +146,59 @@ Exact-main hosted Run/preclose verification remains required after publication.
 The earlier separate AWG Strong public-result failure remains preserved and
 unattributed; passing later runs does not establish its cause.
 
-## Active source work and acceptance still required
+## Accompanying typed desktop child and retained Darwin parent
 
 The previously accepted typed desktop child candidate
-`16a895f9d4530db48a1f04cf54722ac765c77114` is being reconciled with the newer
-published Windows source/protection retirement and PQ diagnostics. The desktop
-constructor watcher must join before the acquired Box starts. One retained
-startup worker and the original middle owner must survive cancellation until
-their cleanup joins. Darwin generated/installed and Windows/Linux native
-host acceptance remain separate gates. The retained Darwin parent now has an
+`16a895f9d4530db48a1f04cf54722ac765c77114` is reconciled with the published
+SOCKS retirement, Windows source/protection retirement and PQ diagnostics.
+The accompanying 84-path change retains a distinct typed child command and
+sealed policy; it does not cast an imported SOCKS middle into a paired node.
+The desktop constructor watcher joins before the acquired Box starts. One
+retained startup worker and the original middle owner survive cancellation
+until their cleanup joins. The retained Darwin parent now has an
 explicit typed-source path through selection, launch, staging, readiness,
-measurement, MTU capture and Last restoration. Its installed gate retains all
-37 original cases and adds eight SOCKS cases. This draft is not yet published
-or natively accepted, and public admission remains closed pending that evidence.
+measurement, MTU capture and Last restoration, including complete connection
+profile Add/Load/Update/Delete behavior and credential-reference validation.
+Its installed gate retains all 37 original cases and adds eight SOCKS cases.
+Public admission remains closed pending actual native-host acceptance.
+
+The composed source was frozen across 5,237 files with SHA-256
+`7d9afd831fd6ea20bcc37935c6c008fd4badb88468e0e4dbc5f7dd5baaba18f2`.
+Canonical fresh preparation and both generated race-instrumented command and
+Box binaries compiled with Go 1.26.3. Of the unchanged 216-record component
+inventory, 212 passed, including all 68 typed-command and fourteen typed-Box
+records. Three original actual-loop leaves (`exact`, `cancel`, and
+`reader-substitution`) could not create a netlink socket in this environment;
+their parent record failed as well. The failed aggregate is preserved and is
+not described as a complete pass. All four other original runtime/physical
+suites passed on the same two binaries.
+
+The generated command also passed ten startup-ownership records. All seven
+compiled negative controls failed at their required witnesses. Original
+heartbeat validation passed fifteen records and five controls; the startup
+helper passed nine leaves and four controls; the Darwin retirement component
+passed fifteen leaves and its compiled control. All child process groups
+joined, and the generated sources and original binary identities matched
+their before-execution snapshots. The compact validation summary has SHA-256
+`d753353ddef28e0d8f325e2d6df42be4f6cd0b68e0a055ff636755fff0a45557`.
+The exact command image has SHA-256
+`3d29ae3c30da43005a05a3209ad8dd6a5018fac276b855760c97445fb7f596cf`;
+the Box image has SHA-256
+`4c0470d84c453b1dcbd4a83739dca6162bd7f7a012317853f03a6879ed42ea3a`.
+
+The retained-parent focused Go tests, including complete profiles and captured
+MTU/Last restoration, passed separately. Repository contract validation also
+passed on the final composed source. These are local component/source results,
+not installed Darwin/Windows/Linux or physical-device acceptance. Exact-main
+`desktop-socks-child`, `darwin-socks-child`, and `darwin-socks-installed` runs
+remain required after publication; both Darwin architectures must be checked.
+
+## Active source work and acceptance still required
+
+Windows/Linux typed retained-parent adapters and full native-host acceptance
+are the next separate source increment. Their source review preserves the
+original policy, journal, physical owner, credentials and restoration capture.
+Actual Windows WFP and Linux TUN results are still required before admission.
 
 CONNECT's shared source/runtime checkpoint requires an actual native
 HTTP/HTTPS CONNECT implementation, retained TLS/SNI/authentication and exact
@@ -167,6 +207,12 @@ and later native-host/UI integration. The compiler's TCP-only CONNECT contract
 does not authorize generic HTTP UDP support. Broader graph families, positions,
 Start Layers, selected-prefix/pre-connect measurements, execution eligibility,
 and all requested platform surfaces remain accountable to the full ledger.
+
+The existing ordered throughput test uses six idle latency observations per
+hop. It is not the separately required fifty-sample node benchmark. A distinct
+typed ordered fifty-sample API, its real host/UI callers, and complete CONNECT
+Auto/Fixed/Retest/Cancel MTU execution remain follow-on work. Neither successful
+throughput measurement nor captured-MTU drift refusal closes those requirements.
 
 No private AI Board/Portainer deployment, ASUS forwarding change, signing or
 notarization, off-LAN interoperability, or physical-device networking/visual/

@@ -201,7 +201,7 @@ func (capture *desktopNodeChainSOCKSCapture) validate(ctx context.Context, contr
 		return bad
 	}
 	original := capture.original
-	if original.chain != nil || original.host != nil || original.seal == "" ||
+	if original.chain != nil || original.socks != nil || original.host != nil || original.seal == "" ||
 		original.seal != original.digest() || capture.seal == "" || capture.seal != capture.digest() ||
 		!original.profilesCurrent(control, profiles) {
 		return bad

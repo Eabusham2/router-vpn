@@ -1,0 +1,175 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-tun"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+type nodeSOCKSPrefixHandler struct {
+	original *desktopNodeWGHandler
+	server   *desktopNodeLayerServer
+	relays   *desktopImportedSOCKSLayerRoutes
+	control  string
+}
+
+func (h *nodeSOCKSPrefixHandler) JudgeFlow(protocol uint8, _, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
+	allowed := protocol == 6 && destination.String() == h.control
+	if protocol == 17 {
+		h.relays.mu.Lock()
+		allowed = !h.relays.closed && h.relays.leases[destination.String()] != nil
+		h.relays.mu.Unlock()
+	}
+	if allowed {
+		return tun.FlowVerdict{Action: tun.ActionAccept}
+	}
+	return tun.FlowVerdict{Action: tun.ActionReject}
+}
+func (*nodeSOCKSPrefixHandler) NewDNSPacket([]byte, M.Socksaddr, M.Socksaddr, N.PacketWriter) {}
+func (h *nodeSOCKSPrefixHandler) NewConnectionEx(ctx context.Context, c net.Conn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if !h.original.adopt(c, true) {
+		if done != nil {
+			done(net.ErrClosed)
+		}
+		return
+	}
+	h.original.tcp.Add(1)
+	go func() {
+		defer h.original.workers.Done()
+		defer h.original.forget(c)
+		err := h.server.NewConnection(ctx, c, M.Metadata{Source: source, Destination: destination})
+		_ = c.Close()
+		if done != nil {
+			done(err)
+		}
+	}()
+}
+func (h *nodeSOCKSPrefixHandler) NewPacketConnectionEx(ctx context.Context, c N.PacketConn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if !h.original.adopt(c, true) {
+		if done != nil {
+			done(net.ErrClosed)
+		}
+		return
+	}
+	h.original.udp.Add(1)
+	go func() {
+		defer h.original.workers.Done()
+		defer h.original.forget(c)
+		err := h.server.NewPacketConnection(ctx, c, M.Metadata{Source: source, Destination: destination})
+		_ = c.Close()
+		if done != nil {
+			done(err)
+		}
+	}()
+}
+func nodeSOCKSCloseServer(s *desktopNodeLayerServer) {
+	s.mu.Lock()
+	s.closing = true
+	all := make([]io.Closer, 0, len(s.connections))
+	for connection := range s.connections {
+		all = append(all, connection)
+	}
+	s.mu.Unlock()
+	s.cancel()
+	for _, connection := range all {
+		_ = connection.Close()
+	}
+	s.workers.Wait()
+}
+
+// This installed-only peer retains the exact caller-supplied WG/AWG and SS
+// identities. Only the independent middle provider is SOCKS; no paired key is
+// issued to the imported profile, and no physical route bypasses that provider.
+func TestRouterVPNDesktopNodeChainSOCKSInstalledReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_SOCKS_INSTALLED_REFERENCE") == "" {
+		t.Skip("isolated inherited installed SOCKS peer only")
+	}
+	if os.Getenv("ROUTERVPN_SOCKS_INSTALLED_REFERENCE") != "1" {
+		t.Fatal("uncaptured installed SOCKS reference")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, 32<<10+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 32<<10 {
+		t.Fatal("bounded original installed SOCKS request required")
+	}
+	var request desktopNodeChainImportedRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || desktopNodeChainImportedRequestValid(request) != nil {
+		t.Fatal("installed SOCKS reference source changed")
+	}
+	physical, err := nodeSOCKSRunPhysical(true)
+	if err != nil || request.Paired.Address != physical.String() || request.Paired.ClientAddress != physical.String() {
+		t.Fatal("installed SOCKS reference lost original physical tuple", err)
+	}
+	const control = "10.79.0.1:1080"
+	var handler *nodeSOCKSRunPrefix
+	var relays *desktopImportedSOCKSLayerRoutes
+	hooks := &desktopNodeChainImportedPeerHooks{
+		decorate: func(original *desktopNodeWGHandler) tun.Handler {
+			handler = &nodeSOCKSRunPrefix{nodeSOCKSPrefixHandler: &nodeSOCKSPrefixHandler{original: original, control: control}, first: "10.78.0.1:8787"}
+			return handler
+		},
+		middle: func(middle *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			provider, socks := desktopStartImportedSOCKSProvider(t, middle, request.MiddlePassword, "")
+			ctx, cancel := context.WithCancel(context.Background())
+			relays = &desktopImportedSOCKSLayerRoutes{parent: ctx, control: provider.address, private: "10.79.0.1", leases: map[string]*desktopImportedSOCKSRelayLease{}, physical: map[string]string{}}
+			socks.mu.Lock()
+			socks.entryRelay = relays.relay
+			socks.mu.Unlock()
+			server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: control, Physical: provider.address}}, ownedUDP: relays.acquire}
+			handler.server, handler.relays = server, relays
+			t.Cleanup(func() { relays.close(); nodeSOCKSCloseServer(server) })
+			return provider
+		},
+	}
+	peer := desktopNodeChainImportedPeerStartWithHooks(t, request, physical, physical, nil, hooks)
+	delete(peer.paired.entry.rules, "tcp/10.79.0.1:8388")
+	delete(peer.paired.entry.rules, "udp/10.79.0.1:8388")
+	respond := func() {
+		original := peer.snapshot()
+		original.Middle.Method = "socks5"
+		relays.mu.Lock()
+		associations := len(relays.all)
+		relays.mu.Unlock()
+		reply := struct {
+			desktopNodeChainImportedReply
+			Associations *int `json:"associations"`
+		}{original, &associations}
+		if json.NewEncoder(os.Stdout).Encode(reply) != nil {
+			t.Fatal("original installed SOCKS reply pipe failed")
+		}
+	}
+	respond()
+	for {
+		line, err = reader.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > 64 {
+			t.Fatal("original installed SOCKS control pipe failed")
+		}
+		command := strings.TrimSuffix(string(line), "\n")
+		if command == "quit" {
+			return
+		}
+		if peer.control(command) != nil {
+			t.Fatal("uncaptured installed SOCKS control")
+		}
+		respond()
+	}
+}

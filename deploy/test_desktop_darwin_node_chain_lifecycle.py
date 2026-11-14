@@ -28,6 +28,7 @@ PHASES = {
             "nil", "unbounded", "cancelled", "lifecycle", "access"),
     },
     "cmd/sing-box": {
+        "TestRouterVPNNodeStartupOwnership": ("constructor-cancel", "watcher-transfer", "cancel-transfer-join", "exact-order", "held-middle", "held-startup", "middle-failure", "partial-constructor", "duplicate-start"),
         "TestRouterVPNNodeChainDarwinCommandFlags": (
             "physical-transfer-sha256", "physical-mtu", "journal-parent-handle", "journal-parent-image",
             "journal-pipe", "journal-capture-sha256", "linux-parent-channel", "linux-parent-directory",
@@ -37,7 +38,7 @@ PHASES = {
             "session", "platform", "graph", "ordinary"),
         "TestRouterVPNNodeChainDarwinNativeRetirementOrder": (
             "exact-order", "proof-retry", "tun-retry", "source-retry", "ambiguous-box",
-            "cancel-after-source", "missing-manager", "partial-components"),
+            "cancel-after-source", "missing-manager", "partial-components", "middle-before-cancel", "middle-retained", "startup-before-native"),
         "TestRouterVPNNodeChainDarwinNativeRetirementAdmission": ("nil", "unbounded", "cancelled", "locked"),
         "TestRouterVPNNodeChainDarwinStoppedReceipt": ("joined", "source-retry", "box-failure", "foreign-file", "foreign-workspace", "authenticated-ack"),
         "TestRouterVPNNodeChainDarwinOriginalControl": (
@@ -92,6 +93,8 @@ PHASES["."] = {
     "TestRouterVPNDesktopCandidatePrefixPhysicalKeepsTypedTarget": ("linux", "windows", "darwin"),
 }
 COPIES = {
+    "mobile/desktop/node_startup_lifecycle.go.tmpl": "cmd/sing-box/routervpn_node_startup_lifecycle.go",
+    "mobile/desktop/node_startup_lifecycle_test.go.tmpl": "cmd/sing-box/routervpn_node_startup_lifecycle_test.go",
     "mobile/mtu/manager.go.tmpl": "adapter/inbound/routervpn_mtu.go",
     "mobile/mtu/tun.go.tmpl": "protocol/tun/routervpn_mtu.go",
     "mobile/desktop/tun_node_chain_retirement_darwin.go.tmpl": "protocol/tun/routervpn_node_chain_retirement_darwin.go",
@@ -225,6 +228,14 @@ MUTATIONS = (
 
 # Same original strict rejection parser and bounded compiled control execution.
 MUTATIONS += (
+    ("joined-constructor-transfer", "cmd/sing-box", "cmd/sing-box/routervpn_node_startup_lifecycle.go",
+     "close(stop); <-done", "close(stop)",
+     "TestRouterVPNNodeStartupOwnership/cancel-transfer-join",
+     "constructor transfer returned before cancellation joined"),
+    ("outer-original-middle", "cmd/sing-box", "cmd/sing-box/routervpn_node_chain_retirement_darwin.go",
+     "if owner.startupOwner != nil {", "if false {",
+     "TestRouterVPNNodeChainDarwinNativeRetirementOrder/middle-before-cancel",
+     "outer native cleanup bypassed original middle join"),
     ("prefix-foreign-command-flag", "cmd/sing-box", "cmd/sing-box/routervpn_node_candidate_prefix_dispatch.go",
      "if command.Flags().Changed(name) {", "if command.Flags().Changed(name) && false {",
      "TestRouterVPNNodeCandidatePrefixDarwinCommandFlags/physical-mtu",
@@ -252,6 +263,16 @@ MUTATIONS += (
      "n.policy != nil || n.policy == nil && n.factory == nil && n.preparing == nil",
      "TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinCleanupRetainsOriginal/original-owner",
      "foreign policy pointer retired the original before cleanup"),
+)
+MUTATIONS += (
+    ("middle-before-graph-cancel", "cmd/sing-box", "cmd/sing-box/routervpn_node_startup_lifecycle.go",
+     "owner.original.RouterVPNCloseSOCKSMiddle", "func() error { return nil }",
+     "TestRouterVPNNodeStartupOwnership/exact-order",
+     "middle did not precede original graph cancellation"),
+    ("retained-startup-join", "cmd/sing-box", "cmd/sing-box/routervpn_node_startup_lifecycle.go",
+     "if owner.startup != nil {", "if false {",
+     "TestRouterVPNNodeStartupOwnership/held-startup",
+     "unjoined startup admitted native teardown"),
 )
 for mailbox in ("request", "live", "cancel", "result"):
     MUTATIONS += (("prefix-preexisting-" + mailbox, "cmd/sing-box", "cmd/sing-box/routervpn_node_candidate_prefix_run_darwin.go",

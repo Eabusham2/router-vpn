@@ -167,7 +167,7 @@ func writeDesktopRuntimeFile(launch *desktopNodeLaunch, name string, data []byte
 	if launch != nil && name == "imported-source.json" {
 		limit = mobilemultihop.ImportedLaunchInputLimit
 	}
-	if launch != nil && name == "node-chain-source.json" {
+	if launch != nil && (name == "node-chain-source.json" || name == "node-chain-socks-source.json") {
 		limit = mobilemultihop.NodeChainInputLimit
 	}
 	if launch == nil || !desktopRuntimeFilename(name) || len(data) == 0 || len(data) > limit {
@@ -232,7 +232,7 @@ func writeDesktopRuntimeFileAdmissionContext(ctx context.Context, launch *deskto
 	if launch != nil && name == "imported-source.json" {
 		limit = mobilemultihop.ImportedLaunchInputLimit
 	}
-	if launch != nil && name == "node-chain-source.json" {
+	if launch != nil && (name == "node-chain-source.json" || name == "node-chain-socks-source.json") {
 		limit = mobilemultihop.NodeChainInputLimit
 	}
 	if launch == nil || !desktopRuntimeFilename(name) || len(data) == 0 || len(data) > limit {
@@ -297,11 +297,11 @@ func desktopRuntimeOwnedFile(name string) bool {
 		"path-request.json", "path-cancel.json", "path-status.json", ".path-status.json.pending",
 		"dns-request.json", "dns-cancel.json", "dns-status.json", ".dns-status.json.pending",
 		"latency-request.json", "latency-cancel.json", "latency-status.json", ".latency-status.json.pending",
-		"node-source.json", "imported-source.json", "node-chain-source.json", "node-protection-transfer.json", "node-protection-retired.json", ".node-protection-retired.json.pending",
+		"node-source.json", "imported-source.json", "node-chain-source.json", "node-chain-socks-source.json", "node-protection-transfer.json", "node-protection-retired.json", ".node-protection-retired.json.pending",
 		"node-physical-handoff-ready.json", ".node-physical-handoff-ready.json.pending", "node-physical-handoff-ack.json",
 		"node-chain-measure-request.json", ".node-chain-measure-request.json.pending", "node-chain-measure-cancel.json", ".node-chain-measure-cancel.json.pending", "node-chain-measure-result.json", ".node-chain-measure-result.json.pending",
 		"node-chain-candidate-request.json", ".node-chain-candidate-request.json.pending", "node-chain-candidate-source.json", ".node-chain-candidate-source.json.pending", "node-chain-candidate-live.json", ".node-chain-candidate-live.json.pending", "node-chain-candidate-cancel.json", ".node-chain-candidate-cancel.json.pending", "node-chain-candidate-result.json", ".node-chain-candidate-result.json.pending",
-		"node-ready.json", ".node-ready.json.pending", "node-chain-ready.json", ".node-chain-ready.json.pending",
+		"node-ready.json", ".node-ready.json.pending", "node-chain-socks-ready.json", ".node-chain-socks-ready.json.pending", "node-chain-ready.json", ".node-chain-ready.json.pending",
 		"node-dns-request.json", ".node-dns-request.json.pending", "node-dns-cancel.json", ".node-dns-cancel.json.pending", "node-dns-result.json", ".node-dns-result.json.pending",
 		"external-journal-capture.json", "external-protection-transfer.json", "external-protection-retired.json", ".external-protection-retired.json.pending",
 		"node-mtu-request.json", "node-mtu-status.json", ".node-mtu-status.json.pending":

@@ -1,0 +1,124 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"time"
+)
+
+// The constructor alone may cancel the graph directly. Stop joins that exact
+// watcher before an acquired Box can start endpoints or retain middle traffic.
+func routerVPNWatchNodeConstruction(ctx context.Context, stopped func() bool, cancel context.CancelFunc) func() {
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(25 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			if ctx.Err() != nil || stopped() {
+				cancel()
+				return
+			}
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				cancel()
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	return sync.OnceFunc(func() { close(stop); <-done })
+}
+
+type routerVPNNodeOriginalMiddle interface{ RouterVPNCloseSOCKSMiddle() error }
+type routerVPNNodeStartupWorker struct {
+	done    chan struct{}
+	failure error
+}
+
+func routerVPNNewNodeStartupWorker(work func() error) *routerVPNNodeStartupWorker {
+	worker := &routerVPNNodeStartupWorker{done: make(chan struct{})}
+	go func() { defer close(worker.done); worker.failure = work() }()
+	return worker
+}
+
+func (worker *routerVPNNodeStartupWorker) wait(ctx context.Context, stopped func() bool) error {
+	if worker == nil || ctx == nil {
+		return errors.New("missing original startup worker or caller")
+	}
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if stopped != nil && stopped() {
+			return context.Canceled
+		}
+		select {
+		case <-worker.done:
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if stopped != nil && stopped() {
+				return context.Canceled
+			}
+			return worker.failure
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
+// One command assigns the original Box and starts one worker. Its existing
+// native cleanup mutex serializes close; expiry retains both original workers.
+// This owner grants no Healthy, physical-source or stopped-receipt authority.
+type routerVPNNodeStartupOwner struct {
+	original        routerVPNNodeOriginalMiddle
+	cancel          context.CancelFunc
+	startup, middle *routerVPNNodeStartupWorker
+}
+
+func (owner *routerVPNNodeStartupOwner) start(ctx context.Context, stopped func() bool, start func() error) error {
+	if owner == nil || owner.original == nil || owner.cancel == nil || owner.startup != nil || ctx == nil || ctx.Err() != nil || start == nil {
+		return errors.New("startup lost its original Box or caller")
+	}
+	if stopped != nil && stopped() {
+		return context.Canceled
+	}
+	owner.startup = routerVPNNewNodeStartupWorker(start)
+	return owner.startup.wait(ctx, stopped)
+}
+
+func (owner *routerVPNNodeStartupOwner) close(ctx context.Context) error {
+	if owner == nil || ctx == nil || ctx.Err() != nil {
+		return errors.New("startup cleanup has no live original caller")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return errors.New("startup cleanup requires its original deadline")
+	}
+	if owner.original != nil {
+		if owner.middle == nil {
+			owner.middle = routerVPNNewNodeStartupWorker(owner.original.RouterVPNCloseSOCKSMiddle)
+		}
+		if err := owner.middle.wait(ctx, nil); err != nil {
+			return err
+		}
+	}
+	// Cancel only after the retained middle has joined while the lower is alive.
+	if owner.cancel != nil {
+		owner.cancel()
+	}
+	if owner.startup != nil {
+		select {
+		case <-owner.startup.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return ctx.Err()
+}

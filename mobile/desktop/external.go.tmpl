@@ -228,24 +228,25 @@ type routerVPNExternalOwner interface {
 type routerVPNExternalFactory func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error)
 
 type routerVPNExternalNative struct {
-	mu           sync.Mutex
-	startup      context.Context
-	box          *box.Box
-	proof        *box.RouterVPNExternalProofRequest
-	physical     *mobilemultihop.DesktopExternalPolicy
-	preparation  *box.RouterVPNDesktopExternalPreparation
+	startupOwner   *routerVPNNodeStartupOwner
+	mu             sync.Mutex
+	startup        context.Context
+	box            *box.Box
+	proof          *box.RouterVPNExternalProofRequest
+	physical       *mobilemultihop.DesktopExternalPolicy
+	preparation    *box.RouterVPNDesktopExternalPreparation
 	retirePhysical func(context.Context) error
-	cancel       context.CancelFunc
-	source       string
-	capture      string
-	session      string
-	boxClosed    bool
-	boxCloseFail error
-	joined       bool
-	partial      []io.Closer
-	mtu          *routerVPNDesktopMTU
-	dns          *dnsmeasure.Service
-	latency      *hopmeasure.Service
+	cancel         context.CancelFunc
+	source         string
+	capture        string
+	session        string
+	boxClosed      bool
+	boxCloseFail   error
+	joined         bool
+	partial        []io.Closer
+	mtu            *routerVPNDesktopMTU
+	dns            *dnsmeasure.Service
+	latency        *hopmeasure.Service
 }
 
 // Box.New registers each constructed component before constructing the next.
@@ -471,6 +472,20 @@ func (n *routerVPNExternalNative) CloseContext(ctx context.Context) error {
 		// Failed deletion retains this owner and is retried by the command.
 		if err := n.proof.Close(); err != nil {
 			return routerVPNExternalFailure
+		}
+	}
+	if n.startupOwner != nil {
+		cleanup := ctx
+		var stop context.CancelFunc
+		if cleanup == nil {
+			cleanup, stop = context.WithTimeout(context.Background(), 3*time.Second)
+		}
+		err := n.startupOwner.close(cleanup)
+		if stop != nil {
+			stop()
+		}
+		if err != nil {
+			return err
 		}
 	}
 	if !n.boxClosed {

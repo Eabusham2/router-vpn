@@ -216,14 +216,16 @@ class OrderedNativeVerdicts(unittest.TestCase):
             files = ('one', 'two')
             for name in files:
                 (root/name).write_text('captured '+name)
-            copies = {f'peer-{i}.go':('original-'+str(i)).encode() for i in range(7)}
+            copies = G.BUILD.EXTERNAL.darwin_node_chain_peer_copies()
+            self.assertEqual(len(copies), 9)
             for name, raw in copies.items():
+                (root/name).parent.mkdir(parents=True, exist_ok=True)
                 (root/name).write_bytes(raw)
             with patch.object(G, 'ROOT', root), patch.object(G, 'SOURCE_FILES', files), \
                  patch.object(G.EXTERNAL, 'source_identity', side_effect=lambda core: {'application':{},'peer':{}}), \
                  patch.object(G.BUILD, 'EXTERNAL', SimpleNamespace(darwin_node_chain_peer_copies=lambda:copies)):
                 original = G.source_identity(root)
-                self.assertEqual(len(original['peer']), 7)
+                self.assertEqual(len(original['peer']), 9)
                 self.assertEqual(set(original['application']), set(files))
                 for name in copies:
                     (root/name).write_bytes(b'replaced')
