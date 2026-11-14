@@ -175,7 +175,8 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                 namespace=dict(target=target,host=target,stage=stage,destination=destination,binary=stage/N.binary_name(target),
                     policy='policy',marker=lambda _: 'original',source=Path('prepared-core'),env={'original':'1'},run=run,
                     verify_imported_desktop_configs=gate,verify_installed_linux_host=lambda *a: self.fail('later Linux gate ran'),
-                    verify_installed_darwin_host=lambda *a:self.fail('later Darwin gate ran'),os=N.os)
+                    verify_installed_darwin_host=lambda *a:self.fail('later Darwin gate ran'),
+                    verify_installed_windows_prefix=lambda *a:self.fail('later Windows prefix gate ran'),os=N.os)
                 with self.assertRaises(RequiredFailure):exec(compile(tail,'actual native build tail','exec'),namespace)
                 self.assertEqual(calls,[(stage,target,{'original':'1'})])
                 self.assertFalse(destination.exists())
@@ -327,7 +328,8 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                         receipt = stack.enter_context(patch.object(N,'reuse',return_value={'captured':'receipt'}))
                         stack.enter_context(patch.object(N,'native_host_target',return_value=target))
                         stack.enter_context(patch.object(N,'verify_linux_stock_dns'))
-                        stack.enter_context(patch.multiple(N, verify_installed_darwin_host=unittest.mock.DEFAULT, verify_reused_linux_host=unittest.mock.DEFAULT))
+                        host_gates = stack.enter_context(patch.multiple(N, verify_installed_darwin_host=unittest.mock.DEFAULT,
+                            verify_reused_linux_host=unittest.mock.DEFAULT, verify_reused_windows_prefix=unittest.mock.DEFAULT))
                         stack.enter_context(patch.object(N.DNSSEC,'test_native_bundle'))
                         run = stack.enter_context(patch.object(N,'run'))
                         packet = stack.enter_context(patch.object(N,'verify_imported_desktop_packet_configs'))
@@ -345,6 +347,8 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                     gate.assert_called_once_with(bundle,target,env)
                     if failure is None: packet.assert_called_once_with(bundle,target,env)
                     else: packet.assert_not_called()
+                    self.assertEqual(host_gates['verify_reused_windows_prefix'].call_args_list,
+                        [unittest.mock.call(bundle,target,env)] if failure is None and target.startswith('windows/') else [])
                     receipt.assert_called_once_with(bundle,target,'original',env)
                     self.assertEqual(go_sockets.call_args_list, [unittest.mock.call(env=env)] if target.startswith('windows/') else [])
                     run.assert_not_called()

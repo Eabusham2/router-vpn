@@ -186,14 +186,15 @@ class ImportedPacketRuntimeGate(unittest.TestCase):
                         policy='policy',marker=lambda _: 'original',source=Path('prepared-core'),env=env,run=run,os=N.os,
                         verify_imported_desktop_configs=original,verify_imported_desktop_packet_configs=packet,verify_imported_desktop_openvpn_configs=lambda *args: None,
                         verify_imported_desktop_pq_configs=lambda *args: None, verify_imported_desktop_xhttp_configs=lambda *args: None, verify_imported_desktop_naive_h2_configs=lambda *args: None, verify_imported_desktop_naive_h3_configs=lambda *args: None,
-                        verify_installed_linux_host=installed,verify_installed_darwin_host=installed)
+                        verify_installed_linux_host=installed,verify_installed_darwin_host=installed,verify_installed_windows_prefix=installed)
                     if failure is None: exec(compile(tail,'actual completed native build tail','exec'),namespace)
                     else:
                         with self.assertRaises(type(failure)): exec(compile(tail,'actual completed native build tail','exec'),namespace)
                     self.assertEqual(calls[:2],[('original',(stage,target,env)),('packet',(stage,target,env))])
                     self.assertEqual(destination.exists(),failure is None)
                     self.assertEqual(stage.exists(),failure is not None)
-                    self.assertEqual(len(calls),3 if failure is None and target.startswith(('linux/','darwin/')) else 2)
+                    self.assertEqual(len(calls),3 if failure is None and target.startswith(('linux/','darwin/','windows/')) else 2)
+                    if failure is None: self.assertEqual(calls[-1],('installed',(Path('prepared-core'),stage,target,env)))
         self.assertIn(ROOT/'deploy/test_desktop_imported_packet_runtime.py',N.inputs())
 
     @patch.object(N.GO_SOCKETS, 'environment', side_effect=lambda **options: options['env'])
@@ -216,7 +217,8 @@ class ImportedPacketRuntimeGate(unittest.TestCase):
                         receipt = stack.enter_context(patch.object(N,'reuse',return_value={'captured':'receipt'}))
                         stack.enter_context(patch.object(N,'native_host_target',return_value=target))
                         stack.enter_context(patch.object(N,'verify_linux_stock_dns'))
-                        stack.enter_context(patch.multiple(N, verify_installed_darwin_host=unittest.mock.DEFAULT, verify_reused_linux_host=unittest.mock.DEFAULT))
+                        host_gates = stack.enter_context(patch.multiple(N, verify_installed_darwin_host=unittest.mock.DEFAULT,
+                            verify_reused_linux_host=unittest.mock.DEFAULT, verify_reused_windows_prefix=unittest.mock.DEFAULT))
                         stack.enter_context(patch.object(N.DNSSEC,'test_native_bundle'))
                         run = stack.enter_context(patch.object(N,'run'))
                         stack.enter_context(patch.object(N,'verify_imported_desktop_configs',side_effect=original))
@@ -232,6 +234,8 @@ class ImportedPacketRuntimeGate(unittest.TestCase):
                             with self.assertRaises(type(failure)) as caught: N.build(target,bundle)
                             self.assertIs(caught.exception,failure)
                     self.assertEqual(calls,[('original',(bundle,target,env)),('packet',(bundle,target,env))])
+                    self.assertEqual(host_gates['verify_reused_windows_prefix'].call_args_list,
+                        [unittest.mock.call(bundle,target,env)] if failure is None and target.startswith('windows/') else [])
                     receipt.assert_called_once_with(bundle,target,'original',env)
                     self.assertEqual(go_sockets.call_args_list, [unittest.mock.call(env=env)] if target.startswith('windows/') else [])
                     run.assert_not_called()

@@ -178,13 +178,15 @@ class ImportedPQRuntimeGate(unittest.TestCase):
                 run=lambda command,**options: 'sing-box version original\n' if command[-1] == 'version' else '--runtime-dir --session',
                 verify_imported_desktop_configs=record('ordinary'), verify_imported_desktop_packet_configs=record('packet'),
                 verify_imported_desktop_openvpn_configs=record('openvpn'), verify_imported_desktop_pq_configs=record('pq'), verify_imported_desktop_xhttp_configs=lambda *args: None, verify_imported_desktop_naive_h2_configs=lambda *args: None, verify_imported_desktop_naive_h3_configs=lambda *args: None,
-                verify_installed_linux_host=record('installed'), verify_installed_darwin_host=record('installed'))
+                verify_installed_linux_host=record('installed'), verify_installed_darwin_host=record('installed'),
+                verify_installed_windows_prefix=record('installed'))
             if failure is None: exec(compile(self.completed_tail(source), 'actual completed native tail', 'exec'), namespace)
             else:
                 with self.assertRaises(type(failure)) as caught: exec(compile(self.completed_tail(source), 'actual completed native tail', 'exec'), namespace)
                 self.assertIs(caught.exception, failure)
             self.assertEqual(calls[:4], [(name, (stage,target,env)) for name in ('ordinary','packet','openvpn','pq')])
-            self.assertEqual(len(calls), 5 if failure is None and target.startswith(('linux/','darwin/')) else 4)
+            self.assertEqual(len(calls), 5 if failure is None and target.startswith(('linux/','darwin/','windows/')) else 4)
+            if failure is None: self.assertEqual(calls[-1],('installed',(Path('prepared-core'),stage,target,env)))
             self.assertEqual(destination.exists(), failure is None); self.assertEqual(stage.exists(), failure is not None)
 
     def test_fresh_bundle_requires_pq_after_unchanged_ordinary_gates(self):
@@ -216,7 +218,8 @@ class ImportedPQRuntimeGate(unittest.TestCase):
                         receipt = stack.enter_context(patch.object(N, 'reuse', return_value={'captured':'receipt'}))
                         stack.enter_context(patch.object(N, 'native_host_target', return_value=target))
                         stack.enter_context(patch.object(N, 'verify_linux_stock_dns'))
-                        stack.enter_context(patch.multiple(N, verify_installed_darwin_host=unittest.mock.DEFAULT, verify_reused_linux_host=unittest.mock.DEFAULT))
+                        host_gates = stack.enter_context(patch.multiple(N, verify_installed_darwin_host=unittest.mock.DEFAULT,
+                            verify_reused_linux_host=unittest.mock.DEFAULT, verify_reused_windows_prefix=unittest.mock.DEFAULT))
                         stack.enter_context(patch.object(N.DNSSEC, 'test_native_bundle'))
                         run = stack.enter_context(patch.object(N, 'run'))
                         stack.enter_context(patch.object(N, 'verify_imported_desktop_configs', side_effect=record('ordinary')))
@@ -232,6 +235,8 @@ class ImportedPQRuntimeGate(unittest.TestCase):
                             with self.assertRaises(type(failure)) as caught: N.build(target, bundle)
                             self.assertIs(caught.exception, failure)
                     self.assertEqual(calls, [(name,(bundle,target,env)) for name in ('ordinary','packet','openvpn','pq')])
+                    self.assertEqual(host_gates['verify_reused_windows_prefix'].call_args_list,
+                        [unittest.mock.call(bundle,target,env)] if failure is None and target.startswith('windows/') else [])
                     receipt.assert_called_once_with(bundle,target,'original',env); run.assert_not_called()
                     self.assertEqual(go_sockets.call_args_list, [unittest.mock.call(env=env)] if target.startswith('windows/') else [])
                     self.assertEqual('Reused verified complete native runtime' in stdout.getvalue(), failure is None)
