@@ -208,7 +208,7 @@ func ordinaryFiftyNative(t *testing.T, p *ordinaryFiftyPeer) (*RouterNodeChain, 
 		t.Fatal("isolated TLS root process required")
 	}
 	x509.SetFallbackRoots(roots)
-	server, err := NewCommandServer(&socksBridgeHandler{}, &socksBridgeNativePlatform{})
+	server, err := NewCommandServer(&socksBridgeHandler{}, &socksBridgeNativePlatform{physical: nodeChainNativeFixtureInterface(t, "original-ordinary-physical")})
 	if err != nil {
 		t.Fatal(err)
 	}

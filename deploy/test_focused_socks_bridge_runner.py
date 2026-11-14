@@ -11,6 +11,9 @@ import types
 import unittest
 from unittest.mock import patch
 
+# Execute the same Apple platform fixture boundaries before the native bridge.
+from test_node_chain_native_platform_fixture import NativePlatformFixture
+
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location("typed_socks_bridge_validator",ROOT/"deploy/test_focused_socks_bridge.py")
 V=importlib.util.module_from_spec(spec);sys.modules[spec.name]=V;spec.loader.exec_module(V)

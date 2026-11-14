@@ -7,6 +7,7 @@ import (
     "net/netip"
     "os"
     "path/filepath"
+    "runtime"
     "runtime/debug"
     "strings"
     "sync"
@@ -38,16 +39,48 @@ import (
 // exact-source middle owner and selector. TUN/OS interfaces, packet-prefix I/O
 // and selected DNS responses are explicit component boundaries. They make no
 // encrypted packet, kernel TUN, physical route or successful path-proof claim.
-type socksBridgeNativePlatform struct { socksBridgePlatform }
+// Darwin's pinned interface finder resolves platform callbacks against the
+// actual host table. Only this component fixture's interface identity is real;
+// its TUN, packet-prefix I/O and selected DNS boundaries above are unchanged.
+func nodeChainNativeFixtureInterfaceValid(iif net.Interface) bool {
+    return iif.Index > 0 && iif.Index <= 2147483647 && strings.TrimSpace(iif.Name) != "" &&
+        iif.MTU > 0 && iif.MTU <= 2147483647 && iif.Flags&net.FlagUp != 0 && iif.Flags&net.FlagLoopback == 0
+}
+func nodeChainNativeFixtureSelectInterface(goos, placeholder string, enumerate func() ([]net.Interface, error)) (net.Interface, error) {
+    if goos != "darwin" && goos != "ios" {
+        return net.Interface{Index:31, MTU:1500, Name:placeholder, Flags:net.FlagUp}, nil
+    }
+    interfaces, err := enumerate()
+    if err != nil {
+        return net.Interface{}, errors.Join(errors.New("native fixture cannot enumerate original host interfaces"), err)
+    }
+    for _, iif := range interfaces {
+        if nodeChainNativeFixtureInterfaceValid(iif) { return iif, nil }
+    }
+    return net.Interface{}, errors.New("native fixture has no eligible up non-loopback host interface")
+}
+func nodeChainNativeFixtureInterface(t *testing.T, placeholder string) net.Interface {
+    t.Helper()
+    iif, err := nodeChainNativeFixtureSelectInterface(runtime.GOOS, placeholder, net.Interfaces)
+    if err != nil || !nodeChainNativeFixtureInterfaceValid(iif) { t.Fatal("original native fixture physical interface", err) }
+    return iif
+}
+
+type socksBridgeNativePlatform struct {
+    socksBridgePlatform
+    physical net.Interface
+}
 func (*socksBridgeNativePlatform) UsePlatformAutoDetectInterfaceControl() bool { return true }
 func (*socksBridgeNativePlatform) AutoDetectInterfaceControl(int32) error { return nil }
-func (*socksBridgeNativePlatform) StartDefaultInterfaceMonitor(listener InterfaceUpdateListener) error {
-    listener.UpdateDefaultInterface("original-socks-physical", 31, false, false)
+func (p *socksBridgeNativePlatform) StartDefaultInterfaceMonitor(listener InterfaceUpdateListener) error {
+    if p == nil || !nodeChainNativeFixtureInterfaceValid(p.physical) { return errors.New("native SOCKS fixture physical interface is invalid") }
+    listener.UpdateDefaultInterface(p.physical.Name, int32(p.physical.Index), false, false)
     return nil
 }
 func (*socksBridgeNativePlatform) CloseDefaultInterfaceMonitor(InterfaceUpdateListener) error { return nil }
-func (*socksBridgeNativePlatform) GetInterfaces() (NetworkInterfaceIterator, error) {
-    return newIterator([]*NetworkInterface{{Index:31, MTU:1500, Name:"original-socks-physical",
+func (p *socksBridgeNativePlatform) GetInterfaces() (NetworkInterfaceIterator, error) {
+    if p == nil || !nodeChainNativeFixtureInterfaceValid(p.physical) { return nil, errors.New("native SOCKS fixture physical interface is invalid") }
+    return newIterator([]*NetworkInterface{{Index:int32(p.physical.Index), MTU:int32(p.physical.MTU), Name:p.physical.Name,
         Flags:1, Type:InterfaceTypeEthernet, Addresses:newIterator([]string{"192.0.2.2/24"}),
         DNSServer:newIterator([]string{}), Gateway:newIterator([]string{})}}), nil
 }
@@ -187,7 +220,7 @@ func socksBridgeNativeSetup(t *testing.T) string {
 func socksBridgeNativeReserved(t *testing.T,owner *RouterNodeChainSOCKS)*socksBridgeNativeFixture{
     t.Helper()
     working:=socksBridgeNativeSetup(t)
-    f:=&socksBridgeNativeFixture{owner:owner,platform:&socksBridgeNativePlatform{},workingPath:working}
+    f:=&socksBridgeNativeFixture{owner:owner,platform:&socksBridgeNativePlatform{physical:nodeChainNativeFixtureInterface(t,"original-socks-physical")},workingPath:working}
     server,err:=owner.NewCommandServer(&socksBridgeHandler{},f.platform)
     if err!=nil||server==nil{t.Fatal("actual typed server constructor",err)}
     f.server=server

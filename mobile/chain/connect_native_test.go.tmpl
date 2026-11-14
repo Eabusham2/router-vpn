@@ -47,19 +47,28 @@ import (
 // exact-source middle owner and selector. TUN/OS interfaces, packet-prefix I/O
 // and selected DNS responses are explicit component boundaries. They make no
 // encrypted packet, kernel TUN, physical route or successful path-proof claim.
-type connectBridgeNativePlatform struct{ connectBridgePlatform }
+type connectBridgeNativePlatform struct {
+	connectBridgePlatform
+	physical net.Interface
+}
 
 func (*connectBridgeNativePlatform) UsePlatformAutoDetectInterfaceControl() bool { return true }
 func (*connectBridgeNativePlatform) AutoDetectInterfaceControl(int32) error      { return nil }
-func (*connectBridgeNativePlatform) StartDefaultInterfaceMonitor(listener InterfaceUpdateListener) error {
-	listener.UpdateDefaultInterface("original-connect-physical", 31, false, false)
+func (p *connectBridgeNativePlatform) StartDefaultInterfaceMonitor(listener InterfaceUpdateListener) error {
+	if p == nil || !nodeChainNativeFixtureInterfaceValid(p.physical) {
+		return errors.New("native CONNECT fixture physical interface is invalid")
+	}
+	listener.UpdateDefaultInterface(p.physical.Name, int32(p.physical.Index), false, false)
 	return nil
 }
 func (*connectBridgeNativePlatform) CloseDefaultInterfaceMonitor(InterfaceUpdateListener) error {
 	return nil
 }
-func (*connectBridgeNativePlatform) GetInterfaces() (NetworkInterfaceIterator, error) {
-	return newIterator([]*NetworkInterface{{Index: 31, MTU: 1500, Name: "original-connect-physical",
+func (p *connectBridgeNativePlatform) GetInterfaces() (NetworkInterfaceIterator, error) {
+	if p == nil || !nodeChainNativeFixtureInterfaceValid(p.physical) {
+		return nil, errors.New("native CONNECT fixture physical interface is invalid")
+	}
+	return newIterator([]*NetworkInterface{{Index: int32(p.physical.Index), MTU: int32(p.physical.MTU), Name: p.physical.Name,
 		Flags: 1, Type: InterfaceTypeEthernet, Addresses: newIterator([]string{"192.0.2.2/24"}),
 		DNSServer: newIterator([]string{}), Gateway: newIterator([]string{})}}), nil
 }
@@ -239,7 +248,7 @@ func connectBridgeNativeSetup(t *testing.T) string {
 func connectBridgeNativeReserved(t *testing.T, owner *RouterNodeChainCONNECT) *connectBridgeNativeFixture {
 	t.Helper()
 	working := connectBridgeNativeSetup(t)
-	f := &connectBridgeNativeFixture{owner: owner, platform: &connectBridgeNativePlatform{}, workingPath: working}
+	f := &connectBridgeNativeFixture{owner: owner, platform: &connectBridgeNativePlatform{physical: nodeChainNativeFixtureInterface(t, "original-connect-physical")}, workingPath: working}
 	server, err := owner.NewCommandServer(&connectBridgeHandler{}, f.platform)
 	if err != nil || server == nil {
 		t.Fatal("actual typed server constructor", err)
