@@ -21,8 +21,10 @@ class Shipping(unittest.TestCase):
             for index,module in enumerate(PREPARE._execution_modules):
                 observed=stack.enter_context(mock.patch.object(module,'prepare'))
                 order.attach_mock(observed,'owner_'+str(index))
+            connect=stack.enter_context(mock.patch.object(PREPARE.CONNECT,'prepare'))
+            order.attach_mock(connect,'connect')
             yield
-            self.assertEqual(order.mock_calls,[getattr(mock.call,'owner_'+str(index))(root.resolve()) for index in range(4)])
+            self.assertEqual(order.mock_calls,[*[getattr(mock.call,'owner_'+str(index))(root.resolve()) for index in range(4)],mock.call.connect(root.resolve())])
 
     def test_missing_duplicate_or_reordered_execution_dispatch_is_rejected(self):
         original=inspect.getsource(PREPARE.prepare)
@@ -34,6 +36,21 @@ class Shipping(unittest.TestCase):
             namespace=dict(PREPARE.__dict__)
             exec(compile(original.replace(marker,replacement,1),'<causal-execution-dispatch>','exec'),namespace)
             with self.subTest(dispatch=replacement),mock.patch.object(PREPARE,'prepare',namespace['prepare']):
+                with self.assertRaises(AssertionError):
+                    self.assert_compiler_and_bridge_are_copied_byte_exactly()
+
+    def test_connect_dispatch_keeps_original_vendor_and_follows_execution_owners(self):
+        original=inspect.getsource(PREPARE.prepare)
+        marker='    CONNECT.prepare(vendor)\n'
+        self.assertEqual(original.count(marker),1)
+        variants=(original.replace(marker,''),
+                  original.replace(marker,marker+marker),
+                  original.replace(marker,'').replace('    for module in _execution_modules:\n',marker+'    for module in _execution_modules:\n'),
+                  original.replace(marker,'    CONNECT.prepare(vendor / "foreign")\n'))
+        for index,changed in enumerate(variants):
+            namespace=dict(PREPARE.__dict__)
+            exec(compile(changed,'<causal-connect-dispatch>','exec'),namespace)
+            with self.subTest(dispatch=index),mock.patch.object(PREPARE,'prepare',namespace['prepare']):
                 with self.assertRaises(AssertionError):
                     self.assert_compiler_and_bridge_are_copied_byte_exactly()
 

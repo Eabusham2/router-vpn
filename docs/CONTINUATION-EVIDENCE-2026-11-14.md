@@ -660,3 +660,22 @@ After composition with `36a166b2fd7c9f81b4a0b188f80fdf9c2c331490`, the 11,
 47 and eight Python suites passed again. All frozen source, failure-artifact
 and validation-log hashes were verified before application. Actual installed
 Darwin retirement acceptance remains pending.
+
+## SIP003 shipping fixture includes the CONNECT preparation boundary
+
+Exact-main Multihop run `43561669673`, job `132346593046`, failed at
+`TestNativeSIP003ShippingCompilerAndProof`. The sparse byte-copy fixture
+observed the four execution preparers but omitted the newly composed CONNECT
+preparer. That real preparer correctly rejected the fixture's temporary
+directory because it was not a pinned native Git checkout. All five errors
+were reproduced locally in the original eight-test suite.
+
+The fixture now observes the CONNECT boundary after the original four
+execution owners and requires the exact original vendor argument. A new
+causal family rejects missing, duplicated, prematurely ordered, and foreign-
+vendor CONNECT dispatch. All nine Python tests passed; the existing Go test
+invokes that same complete Python script. Actual production pin/source
+validation remains unchanged and is exercised separately by canonical native
+preparation. The successful direct log has SHA-256
+`9d70ce37b9dfd87389c5b2bda531af0fe001fa82c3e8f21be9984e208700003d`.
+This fixture result is not a successful full Multihop rerun or release.
