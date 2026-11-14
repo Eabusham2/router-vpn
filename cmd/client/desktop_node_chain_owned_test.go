@@ -72,6 +72,11 @@ func newDesktopNodeChainOwnedFixtureWith(t *testing.T, a *app, selection multiho
 				return nil, errors.New("chain substituted original typed command")
 			}
 			process, err := f.nativeStart(t)
+			if process == nil {
+				// A rejected model constructor created no child. Do not turn its
+				// nil pointer into a nonnil process interface during cleanup.
+				return nil, err
+			}
 			if err == nil && f.onStart != nil {
 				f.onStart(ctx, process)
 			}

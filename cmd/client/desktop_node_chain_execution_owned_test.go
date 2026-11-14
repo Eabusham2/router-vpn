@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,8 +18,9 @@ import (
 )
 
 type desktopExecutionOwnedModel struct {
-	winner string
-	ready  mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	winner   string
+	startErr error
+	ready    mobilemultihop.DesktopNodeChainExecutionReadyRecord
 }
 
 // This models authenticated child records and the Windows controller/kernel.
@@ -25,6 +28,9 @@ type desktopExecutionOwnedModel struct {
 // retirement execute; this is not encrypted or physical Windows acceptance.
 func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwnedFixture) (*desktopImportedOwnedProcess, error) {
 	t.Helper()
+	if m.startErr != nil {
+		return nil, m.startErr
+	}
 	launch, owned := f.launch, f.launch.ownedNode
 	raw, err := readDesktopRuntimeFile(launch, launch.chain.sourceName(), mobilemultihop.NodeChainInputLimit)
 	if err != nil {
@@ -46,7 +52,15 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, err
 	}
 	proofs := launch.chain.policy.OriginalChain().ProofInventory()
-	serverInput := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode, Nodes: local.Nodes[1:], IdentitySources: local.IdentitySources[1:]}
+	serverInput := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode}
+	for position := 1; position < len(local.Nodes); position++ {
+		input, identity, err := desktopExecutionServerNode(local.Nodes[position], local.IdentitySources[position], position)
+		if err != nil {
+			return nil, err
+		}
+		serverInput.Nodes = append(serverInput.Nodes, input)
+		serverInput.IdentitySources = append(serverInput.IdentitySources, identity)
+	}
 	encoded, _ := json.Marshal(serverInput)
 	server, err := mobilemultihop.NewNodeChainServerPolicy(string(encoded))
 	if err != nil {
@@ -86,6 +100,18 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, public)
 		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,
 			Username: fmt.Sprintf("%048x", 256+position*2), Password: fmt.Sprintf("%048x", 257+position*2)})
+	}
+	if err := request.Validate(descriptor); err != nil {
+		return nil, fmt.Errorf("independent modeled server request: %w", err)
+	}
+	if len(local.Nodes) > 2 {
+		// Restoring the original faulty fixture must still be rejected by the
+		// actual shared validator: server and local packet clients are distinct.
+		bad := request.Clone()
+		bad.LocalPacketPublicKeys[1] = descriptor.Members[0].ClientPublicKey
+		if bad.Validate(descriptor) == nil {
+			return nil, errors.New("modeled server failed its reused-local-client rejection")
+		}
 	}
 	source := mobilemultihop.NodeChainExecutionSource{Schema: 1, Execution: prep.Execution(), LocalSource: prep.LocalSource(), Server: descriptor, Request: request, FirstPort: 32000, LastPort: 32007}
 	encoded, _ = json.Marshal(source)
@@ -193,6 +219,64 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	return process, nil
 }
 
+// Derive a separate server packet client through the real profile compiler.
+// Keep node/server identity, DNS and Start Layers unchanged. These deterministic
+// keys belong only to the controller model and never to installed credentials.
+func desktopExecutionServerNode(input, identity string, position int) (string, string, error) {
+	var capture struct {
+		Mode         string `json:"mode"`
+		Files        string `json:"files"`
+		ProfileJSON  string `json:"profile_json"`
+		Start        string `json:"start"`
+		DNSBootstrap string `json:"dns_bootstrap"`
+	}
+	if err := json.Unmarshal([]byte(input), &capture); err != nil {
+		return "", "", err
+	}
+	if !mobilemultihop.NodeChainPrefixMode(capture.Mode) {
+		return input, identity, nil
+	}
+	node, err := mobilemultihop.ParseNodeLaunchInput(input)
+	if err != nil {
+		return "", "", err
+	}
+	var graph struct {
+		Endpoints []struct {
+			PrivateKey string `json:"private_key"`
+		} `json:"endpoints"`
+	}
+	if json.Unmarshal([]byte(node.Config()), &graph) != nil || len(graph.Endpoints) != 1 || graph.Endpoints[0].PrivateKey == "" {
+		return "", "", errors.New("model lacks original packet client")
+	}
+	var assets map[string]string
+	if err := json.Unmarshal([]byte(capture.Files), &assets); err != nil {
+		return "", "", err
+	}
+	name := "wg.conf"
+	if capture.Mode != "wg" {
+		name = "awg.conf"
+	}
+	raw, err := base64.StdEncoding.DecodeString(assets[name])
+	if err != nil || !strings.Contains(string(raw), graph.Endpoints[0].PrivateKey) {
+		return "", "", errors.New("model lacks original packet asset")
+	}
+	raw = []byte(strings.Replace(string(raw), graph.Endpoints[0].PrivateKey, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(221 + position)}, 32)), 1))
+	assets[name] = base64.StdEncoding.EncodeToString(raw)
+	files, err := json.Marshal(assets)
+	if err != nil {
+		return "", "", err
+	}
+	server, err := mobilemultihop.NewNodeProfile(capture.Mode, string(files), capture.ProfileJSON, capture.Start, capture.DNSBootstrap)
+	if err != nil {
+		return "", "", err
+	}
+	input, err = server.LaunchInput()
+	if capture.Mode == "wg" {
+		identity = string(files)
+	}
+	return input, identity, err
+}
+
 func TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement(t *testing.T) {
 	for _, winner := range []string{"local", "server"} {
 		t.Run(winner, func(t *testing.T) {
@@ -264,4 +348,17 @@ func TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement(t *testing.T) {
 			}
 		})
 	}
+	f, session := prepareDesktopExecutionSessionModel(t, "server")
+	cause := errors.New("modeled child rejected before process creation")
+	f.executionModel.startErr = cause
+	if err := session.startContext(f.operation); !errors.Is(err, cause) {
+		t.Fatal("failed start lost original constructor refusal", err)
+	}
+	if desktopOwnedNodeProcess(session.launch) != nil || f.starts != 0 || len(f.processes) != 0 {
+		t.Fatal("failed model constructor fabricated a process owner")
+	}
+	if err := session.Close(context.Background()); err != nil || !session.closed {
+		t.Fatal("failed constructor did not retain normal exact cleanup", err)
+	}
+
 }
