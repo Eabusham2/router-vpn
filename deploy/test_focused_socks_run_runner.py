@@ -299,6 +299,21 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
         for changed in (raw+raw,raw.replace(b"/udp",b"/foreign"),raw.replace(b"retained handshake deadline",b"unrelated"),raw+b"DATA RACE",raw+b"panic:",raw+b"--- SKIP: unrelated (0.00s)\n"):
             with self.assertRaises(ValueError):V.REFERENCE.control_events(changed,1)
 
+    def test_handshake_control_requires_labeled_deadline_set_failure(self):
+        root=V.REFERENCE.ROOT
+        witness="authenticated control retained handshake deadline"
+        raw=("".join("=== RUN   "+x+"\n" for x in V.REFERENCE.NAMES)+
+             "--- PASS: "+root+"/unauthenticated-bound (5.01s)\n"+
+             witness+" tcp 50 read: connection reset by peer\n"+
+             "--- FAIL: "+root+"/tcp (5.00s)\n"+
+             witness+" udp 50 set-deadline set udp: use of closed network connection\n"+
+             "--- FAIL: "+root+"/udp (5.00s)\n"+
+             "--- FAIL: "+root+" (15.01s)\nFAIL\n").encode()
+        self.assertTrue(V.REFERENCE.control_events(raw,1)["expected_failure"])
+        udp=(witness+" udp 50 set-deadline ").encode()
+        for changed in (raw.replace(udp,b"",1),raw.replace(udp,b"unrelated setup failure ",1)):
+            with self.assertRaises(ValueError):V.REFERENCE.control_events(changed,1)
+
     def test_idle_control_requires_actual_original_expiry(self):
         raw=("=== RUN   "+V.REFERENCE.IDLE_ROOT+"\nlive original control lost idle relay\n--- FAIL: "+V.REFERENCE.IDLE_ROOT+" (5.50s)\nFAIL\n").encode()
         self.assertTrue(V.REFERENCE.idle_control_events(raw,1)["expected_failure"])

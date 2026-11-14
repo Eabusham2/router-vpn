@@ -1475,7 +1475,7 @@ func TestRouterVPNImportedSOCKSHandshakeDeadlineRetirement(t *testing.T) {
    began:=time.Now();ticker:=time.NewTicker(100*time.Millisecond);defer ticker.Stop()
    count:=0
    for {
-    if err:=connection.SetDeadline(time.Now().Add(time.Second));err!=nil{t.Fatal(err)}
+    if err:=connection.SetDeadline(time.Now().Add(time.Second));err!=nil{t.Fatal("authenticated control retained handshake deadline",network,count,"set-deadline",err)}
     if _,err:=connection.Write([]byte{byte(count)});err!=nil{t.Fatal("authenticated control retained handshake deadline",network,count,err)}
     reply:=make([]byte,1)
     if _,err:=io.ReadFull(connection,reply);err!=nil||reply[0]!=byte(count){t.Fatal("authenticated control retained handshake deadline",network,count,err)}
