@@ -35,6 +35,7 @@ BOUNDARY=H.BOUNDARY.replace('let native:Native;let metadata=Metadata();let confi
 BOUNDARY=BOUNDARY.replace('let mtu=MTU();private let lock=NSLock();private var resets=0','let mtu=MTU();var includeAllNetworksRequested=false;private let lock=NSLock();private var resets=0')
 BOUNDARY+=r'''
 final class LegacyRetirement: @unchecked Sendable {func requireAvailable()throws{}}
+enum RouterVPNNodeChainCONNECTHost {static func requireAvailable()throws{}}
 enum RouterVPNNodeChainExecutionHost {static func requireAvailable()throws{}}
 enum RouterVPNNodeChainSOCKSHost {static func requireAvailable()throws{}}
 enum RouterVPNLibboxCompileProbe {static func verifyPinnedRuntime()throws{}}
