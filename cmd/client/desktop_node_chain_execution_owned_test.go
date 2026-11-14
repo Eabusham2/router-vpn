@@ -252,16 +252,25 @@ func desktopExecutionServerNode(input, identity string, position int) (string, s
 	if err := json.Unmarshal([]byte(capture.Files), &assets); err != nil {
 		return "", "", err
 	}
-	name := "wg.conf"
+	name, companion := "wg.conf", "wg-socks.conf"
 	if capture.Mode != "wg" {
-		name = "awg.conf"
+		name, companion = "awg.conf", "awg-socks.conf"
 	}
-	raw, err := base64.StdEncoding.DecodeString(assets[name])
-	if err != nil || !strings.Contains(string(raw), graph.Endpoints[0].PrivateKey) {
-		return "", "", errors.New("model lacks original packet asset")
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(221 + position)}, 32))
+	for _, asset := range []string{name, companion} {
+		encoded, exists := assets[asset]
+		if !exists && asset == companion {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || !strings.Contains(string(raw), graph.Endpoints[0].PrivateKey) {
+			return "", "", errors.New("model lacks original matching packet asset")
+		}
+		// The optional split-route file is the same peer with different routes.
+		// Preserve it and rotate its client identity with the full source.
+		raw = []byte(strings.Replace(string(raw), graph.Endpoints[0].PrivateKey, key, 1))
+		assets[asset] = base64.StdEncoding.EncodeToString(raw)
 	}
-	raw = []byte(strings.Replace(string(raw), graph.Endpoints[0].PrivateKey, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(221 + position)}, 32)), 1))
-	assets[name] = base64.StdEncoding.EncodeToString(raw)
 	files, err := json.Marshal(assets)
 	if err != nil {
 		return "", "", err
