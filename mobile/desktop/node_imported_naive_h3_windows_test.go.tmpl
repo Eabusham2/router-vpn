@@ -350,21 +350,61 @@ type desktopImportedH3WindowsFixture struct {
 	prepared    mobiletor.DesktopWindowsProtectionTarget
 	admitted    int
 	cancel      context.CancelFunc
-	closeOnce   sync.Once
-	closeErr    error
+	retirement  desktopImportedH3Retirement
+}
+
+// A pending captured-source join is retryable. Only entering Box.Close creates
+// a permanent close receipt, matching the shipping external native owner.
+type desktopImportedH3Retirement struct {
+	mu        sync.Mutex
+	boxClosed bool
+	boxErr    error
+}
+
+func (r *desktopImportedH3Retirement) close(ctx context.Context, cancel context.CancelFunc, source func(context.Context) error, closeBox func() error) error {
+	if ctx == nil || cancel == nil || source == nil || closeBox == nil {
+		return errors.New("imported H3 retirement lost its captured caller or callbacks")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &r.mu); err != nil {
+		return err
+	}
+	defer r.mu.Unlock()
+	if r.boxClosed {
+		return r.boxErr
+	}
+	cancel()
+	if err := source(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.boxErr = closeBox()
+	r.boxClosed = true
+	return r.boxErr
 }
 
 func (f *desktopImportedH3WindowsFixture) close() error {
-	f.closeOnce.Do(func() {
+	// The old raw Box.Close service used this same three-second source wait.
+	// One caller now covers the pre-Box join; no fresh deadline follows expiry.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return f.retirement.close(ctx, func() {
 		if f.owner != nil {
 			f.owner.Cancel()
 		}
-		if f.box != nil {
-			f.closeErr = f.box.Close()
-		}
 		f.cancel()
+	}, func(caller context.Context) error {
+		if f.preparation != nil {
+			return f.preparation.CloseSourceContext(caller)
+		}
+		return caller.Err()
+	}, func() error {
+		if f.box != nil {
+			return f.box.Close()
+		}
+		return nil
 	})
-	return f.closeErr
 }
 func desktopImportedH3WindowsBox(t *testing.T, p *desktopImportedH3Reference, previous *mobiletor.DesktopWindowsProtectionTarget) *desktopImportedH3WindowsFixture {
 	t.Helper()
@@ -1135,6 +1175,46 @@ func desktopImportedH3RequireBlocked(t *testing.T, p *desktopImportedH3Reference
 	}
 }
 func TestRouterVPNWindowsImportedNaiveH3Ownership(t *testing.T) {
+	// Lifecycle model only: exercise the same fixture barrier without claiming
+	// these callbacks are a Windows native source. Native assertions follow.
+	var retirement desktopImportedH3Retirement
+	pending := errors.New("original source join remains pending")
+	attempts, closes, cancels := 0, 0, 0
+	cancelOwner := func() { cancels++ }
+	closeBox := func() error { closes++; return nil }
+	expired, cancelExpired := context.WithCancel(context.Background())
+	cancelExpired()
+	if err := retirement.close(expired, cancelOwner, func(context.Context) error { attempts++; return nil }, closeBox); !errors.Is(err, context.Canceled) || attempts != 0 || closes != 0 || cancels != 0 {
+		t.Fatal("expired source caller entered irreversible fixture close", err)
+	}
+	var interrupted desktopImportedH3Retirement
+	interruptedCtx, interrupt := context.WithCancel(context.Background())
+	if err := interrupted.close(interruptedCtx, func() {}, func(caller context.Context) error { interrupt(); return nil }, closeBox); !errors.Is(err, context.Canceled) || interrupted.boxClosed || closes != 0 {
+		t.Fatal("source completion after caller cancellation entered Box close", err)
+	}
+	ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+	defer stop()
+	if err := retirement.close(ctx, cancelOwner, func(caller context.Context) error {
+		attempts++
+		if caller != ctx {
+			t.Error("source join replaced original cleanup context")
+		}
+		return pending
+	}, closeBox); !errors.Is(err, pending) || retirement.boxClosed || closes != 0 {
+		t.Fatal("pending source poisoned permanent Box receipt", err)
+	}
+	if err := retirement.close(ctx, cancelOwner, func(caller context.Context) error {
+		attempts++
+		if caller != ctx {
+			t.Error("source retry replaced original cleanup context")
+		}
+		return nil
+	}, closeBox); err != nil || !retirement.boxClosed || attempts != 2 || closes != 1 {
+		t.Fatal("original source retry did not precede exactly one Box close", err)
+	}
+	if err := retirement.close(ctx, cancelOwner, func(context.Context) error { t.Error("joined Box reentered source"); return pending }, closeBox); err != nil || closes != 1 {
+		t.Fatal("permanent Box result was not retained", err)
+	}
 	ca := desktopImportedH3WindowsTrust(t)
 	peer := desktopImportedH3WindowsReference(t, ca, "socks5", "off", "off", "")
 	var retained mobiletor.DesktopWindowsProtectionTarget
