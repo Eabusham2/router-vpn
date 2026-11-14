@@ -753,7 +753,16 @@ func TestDesktopOwnedNodeOldReleasePreservesReplacementSlot(t *testing.T) {
 		a.mu.Unlock()
 		return nil
 	}
-	if handled, err := a.releaseDesktopOwnedNodeProtection(); err != nil || !handled || a.nodeProtection != replacement || !a.retainedDesktopNodeProtection() {
-		t.Fatal("late old native release discarded a replacement application's slot", handled, err)
+	// Native retirement of the original slot may finish, but a replacement
+	// application association must never receive that completion acknowledgement.
+	if handled, err := a.releaseDesktopOwnedNodeProtection(); err == nil || !handled || a.nodeProtection != replacement || !a.retainedDesktopNodeProtection() {
+		t.Fatal("late old native release acknowledged or discarded a replacement application's slot", handled, err)
+	}
+	if !slot.provedEmpty() || kernel.target != nil || kernel.releases != 1 || kernel.closes != 1 || replacement.known || replacement.target != nil {
+		t.Fatal("changed-owner refusal did not preserve exact old retirement and untouched replacement")
+	}
+	reads, releases, closes := kernel.reads, kernel.releases, kernel.closes
+	if err := a.releaseCapturedDesktopNodeProtectionContext(context.Background(), slot); err == nil || a.nodeProtection != replacement || kernel.reads != reads || kernel.releases != releases || kernel.closes != closes {
+		t.Fatal("late captured retry entered native work or acknowledged the replacement", err)
 	}
 }
