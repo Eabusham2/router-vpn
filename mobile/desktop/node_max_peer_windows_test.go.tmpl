@@ -1291,6 +1291,7 @@ func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
 			nodePQWFPCleanup(t, &retained)
 			original := peer.original(t, "always")
 			first := nodeMAXWFPBox(t, original, nil, true)
+			first.independentSourceRetirement = true
 			first.start(t)
 			retained = first.prepared
 			nodeMAXWFPRequireTraffic(t, first, peer, [32]byte{}, false)
@@ -1304,6 +1305,7 @@ func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
 				retained = target
 				return errors.New("foreign MAX predecessor reached captured native admission")
 			})
+			candidate.independentSourceRetirement = true
 			if err := candidate.box.RouterVPNStrategyStart(); err == nil || candidate.admitted != 0 {
 				if candidate.admitted != 0 {
 					retained = candidate.prepared
@@ -1313,9 +1315,7 @@ func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
 			if err := candidate.close(); err != nil {
 				t.Fatal("rejected MAX successor did not join", err)
 			}
-			if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
-				t.Fatal("rejected MAX successor changed the original retained deny", err)
-			}
+			nodePQWFPRequireRejectedRetirement(t, candidate, retained)
 		})
 	}
 }

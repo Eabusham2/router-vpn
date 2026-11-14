@@ -646,6 +646,9 @@ type nodePQFixture struct {
 	closeMu sync.Mutex
 	boxClosed bool
 	preparation *box.RouterVPNDesktopNodePreparation
+	// Foreign-predecessor controls independently verify the retained baseline.
+	// They cannot require a deliberately invalid successor outcome to succeed.
+	independentSourceRetirement bool
 	cancel context.CancelFunc
 }
 
@@ -669,7 +672,12 @@ func (f *nodePQFixture) close() error {
 		f.cancel()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		started := time.Now()
-		err := f.preparation.CloseSourceContext(ctx)
+		var err error
+		if f.independentSourceRetirement {
+			err = f.network.CloseCapturedPhysicalSourceContext(ctx, f.policy)
+		} else {
+			err = f.preparation.CloseSourceContext(ctx)
+		}
 		cancel()
 		if err != nil { return nodePQRetirementFailure("source-close", started, err) }
 	}

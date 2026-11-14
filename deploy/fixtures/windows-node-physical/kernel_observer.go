@@ -201,6 +201,24 @@ func DesktopWindowsNodeCompositionVerifyRetained(ctx context.Context, target Des
 	return readDesktopWindowsRetainedProtection(ctx, target, scope)
 }
 
+// This rejection-only read does not demand an installed successor baseline.
+// It proves the exact attempted source joined without admitting any replacement
+// or retaining a native lock, tunnel or socket permit. It grants no WFP outcome.
+func DesktopWindowsNodeCompositionVerifyRejected(ctx context.Context, session, source string) error {
+	desktopWindowsNodeComposition.Lock()
+	p := desktopWindowsNodeComposition.owner
+	desktopWindowsNodeComposition.Unlock()
+	if p == nil { return errors.New("rejected Node composition lost its original source") }
+	_, err := desktopWindowsPolicyCall(p, ctx, true, func() (bool, error) {
+		if p.capture.SessionID != session || p.capture.SourceSHA256 != source || !p.closed || !p.baselineDone ||
+			p.installed || p.locked || len(p.permits) != 0 || len(p.bindings) != 0 || len(p.tunnel) != 0 {
+			return false, errors.New("rejected Node composition retained or replaced its captured native source")
+		}
+		return true, nil
+	})
+	return err
+}
+
 func DesktopWindowsNodeCompositionRetainedTarget(ctx context.Context) (DesktopWindowsProtectionTarget, error) {
 	desktopWindowsNodeComposition.Lock()
 	p := desktopWindowsNodeComposition.owner

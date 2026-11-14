@@ -1074,6 +1074,28 @@ func nodePQWFPDrain(t *testing.T, f *nodePQWFPFixture) mobiletor.DesktopWindowsP
 	}
 	return snapshot.Target
 }
+// A deliberately wrong predecessor cannot produce a successful retained
+// outcome. Join its exact physical source, then independently read the original
+// baseline; neither observation grants the rejected candidate release authority.
+func nodePQWFPRequireRejectedRetirement(t *testing.T, f *nodePQWFPFixture, retained mobiletor.DesktopWindowsProtectionTarget) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, returned, err := f.preparation.RetainedProtection(ctx); err == nil || !returned {
+		t.Fatal("rejected successor acquired a retained protection outcome", err)
+	}
+	meta := f.policy.Metadata()
+	if err := mobiletor.DesktopWindowsNodeCompositionVerifyRejected(ctx, meta.SessionID, meta.SourceSHA256); err != nil {
+		t.Fatal("rejected successor did not join its exact captured native source", err)
+	}
+	if f.network.SocketCurrent() || f.network.Current() || f.tun.ready.Load() || f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() {
+		t.Fatal("rejected successor retained native readiness after physical join")
+	}
+	if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(ctx, retained); err != nil {
+		t.Fatal("rejected successor changed the original retained deny", err)
+	}
+}
+
 func nodePQWFPRequireTraffic(t *testing.T, f *nodePQWFPFixture, p *nodePQWFPReference, rekey bool) {
 	t.Helper()
 	var previous [32]byte
@@ -1355,6 +1377,7 @@ func TestRouterVPNDesktopNodeWindowsPQForeignPredecessor(t *testing.T) {
 	nodePQWFPCleanup(t, &retained)
 	original := peer.original(t, "", "always")
 	first := nodePQWFPBox(t, original, nil, true)
+	first.independentSourceRetirement = true
 	first.start(t)
 	retained = first.prepared
 	nodePQWFPRequireTraffic(t, first, peer, false)
@@ -1362,6 +1385,7 @@ func TestRouterVPNDesktopNodeWindowsPQForeignPredecessor(t *testing.T) {
 	wrong := retained
 	wrong.Capture.SourceSHA256 = strings.Repeat("f", 64)
 	candidate := nodePQWFPBox(t, original, &wrong, true)
+	candidate.independentSourceRetirement = true
 	if err := candidate.box.RouterVPNStrategyStart(); err == nil || candidate.admitted != 0 {
 		if candidate.admitted != 0 {
 			retained = candidate.prepared
@@ -1371,9 +1395,7 @@ func TestRouterVPNDesktopNodeWindowsPQForeignPredecessor(t *testing.T) {
 	if err := candidate.close(); err != nil {
 		t.Fatal("rejected PQ successor did not join", err)
 	}
-	if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
-		t.Fatal("rejected PQ successor changed the original retained deny", err)
-	}
+	nodePQWFPRequireRejectedRetirement(t, candidate, retained)
 }
 
 func TestRouterVPNDesktopNodeWindowsPQCapabilityOpen(t *testing.T) {

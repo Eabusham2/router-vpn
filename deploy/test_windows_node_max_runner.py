@@ -357,7 +357,7 @@ type nativeTUN struct{ready notReady}
 type nativeNetwork struct{}
 func(*nativeNetwork)Current()bool{return false}
 func(*nativeNetwork)SocketCurrent()bool{return false}
-type nodePQWFPFixture struct{prepared DesktopWindowsProtectionTarget;admitted int;network *nativeNetwork;tun *nativeTUN;box *nativeBox;closed bool}
+type nodePQWFPFixture struct{prepared DesktopWindowsProtectionTarget;admitted int;network *nativeNetwork;tun *nativeTUN;box *nativeBox;closed bool;independentSourceRetirement bool}
 type nativeBox struct{fixture *nodePQWFPFixture;predecessor *DesktopWindowsProtectionTarget;admit func(context.Context,NodePhysicalPrepared)error}
 var nodeMAXWFPModes []string
 var rejectForeign bool
@@ -384,9 +384,10 @@ func(b *nativeBox)RouterVPNStrategyStart()error{
  return nil
 }
 func(f *nodePQWFPFixture)start(t *foreignTest){if err:=f.box.RouterVPNStrategyStart();err!=nil{t.Fatal(err)}}
-func(f *nodePQWFPFixture)close()error{if !f.closed{f.closed=true;if f.box.predecessor==nil{originalJoined++}else{candidateJoined++}};return nil}
+func(f *nodePQWFPFixture)close()error{if !f.independentSourceRetirement{return errors.New("foreign fixture requested a forged successor outcome")};if !f.closed{f.closed=true;if f.box.predecessor==nil{originalJoined++}else{candidateJoined++}};return nil}
 func nodeMAXWFPRequireTraffic(t *foreignTest,f *nodePQWFPFixture,_ *nativeReference,_ [32]byte,_ bool){if f.admitted!=1||f.prepared.Capture.SourceSHA256!="original"{t.Fatal("lost original full traffic proof")};fullOriginalProof++}
 func nodePQWFPDrain(t *foreignTest,f *nodePQWFPFixture)DesktopWindowsProtectionTarget{if err:=f.close();err!=nil{t.Fatal(err)};return f.prepared}
+func nodePQWFPRequireRejectedRetirement(t *foreignTest,f *nodePQWFPFixture,target DesktopWindowsProtectionTarget){if !f.closed||f.box.predecessor==nil{t.Fatal("rejected native source was not joined")};if err:=DesktopWindowsNodeCompositionVerifyRetained(context.Background(),target);err!=nil{t.Fatal(err)}}
 func invokeForeign(t *foreignTest){defer func(){if r:=recover();r!=nil&&r!=t{panic(r)}}();TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t)}
 func TestExactForeignAdmission(t *testing.T){
  for _,mode:=range []string{"max-tls-wg","max-quic-wg"}{for _,control:=range []string{"reject-before-admission","admission-guard-bypassed"}{t.Run(mode+"/"+control,func(t *testing.T){
@@ -402,6 +403,144 @@ func TestExactForeignAdmission(t *testing.T){
  })}}
 }
 '''
+
+
+
+REJECTED_SOURCE_HARNESS = r'''package nativefixture
+import("context";"errors";"fmt";"runtime";"sync";"testing";"time")
+var pending=errors.New("original source pending")
+type capturedPolicy struct{id string}
+type capturedNetwork struct{original *capturedPolicy;events *[]string;failure error;closed bool;baseline string}
+func(n *capturedNetwork)CloseCapturedPhysicalSourceContext(ctx context.Context,p *capturedPolicy)error{
+ if p!=n.original{return errors.New("changed original policy")};if _,ok:=ctx.Deadline();!ok{return errors.New("unbounded source")}
+ *n.events=append(*n.events,"source");if n.failure!=nil{return n.failure};n.closed=true;return nil
+}
+type preparation struct{network *capturedNetwork;policy *capturedPolicy;outcome error;reads int}
+func(p *preparation)CloseSourceContext(ctx context.Context)error{if err:=p.network.CloseCapturedPhysicalSourceContext(ctx,p.policy);err!=nil{return err};p.reads++;return p.outcome}
+type nativeBox struct{network *capturedNetwork;events *[]string;closes int;failure error}
+func(b *nativeBox)Close()error{if !b.network.closed{return errors.New("Box before original source join")};*b.events=append(*b.events,"box");b.closes++;return b.failure}
+type nodePQFixture struct{closeMu sync.Mutex;closeOnce sync.Once;boxClosed bool;preparation *preparation;independentSourceRetirement bool;network *capturedNetwork;policy *capturedPolicy;box *nativeBox;cancel context.CancelFunc;closeErr error}
+func fixture(independent bool)(*nodePQFixture,*[]string){
+ events:=[]string{};policy:=&capturedPolicy{"original"};network:=&capturedNetwork{original:policy,events:&events,baseline:"unchanged-predecessor"}
+ f:=&nodePQFixture{policy:policy,network:network,independentSourceRetirement:independent,cancel:func(){events=append(events,"cancel")}}
+ f.preparation=&preparation{network:network,policy:policy};f.box=&nativeBox{network:network,events:&events};return f,&events
+}
+func TestCapturedSourceRetirement(t *testing.T){
+ for _,name:=range []string{"ordinary-success","ordinary-invalid-outcome","rejected-physical-only","pending-original","changed-policy","native-failure","idempotent"}{t.Run(name,func(t *testing.T){
+  f,events:=fixture(name!="ordinary-success"&&name!="ordinary-invalid-outcome")
+  if name=="ordinary-invalid-outcome"||name=="rejected-physical-only"{f.preparation.outcome=pending}
+  if name=="pending-original"{f.network.failure=pending}
+  if name=="changed-policy"{f.policy=&capturedPolicy{"foreign"}}
+  if name=="native-failure"{f.box.failure=pending}
+  err:=f.close()
+  switch name{
+  case "ordinary-success":if err!=nil||f.preparation.reads!=1||f.box.closes!=1{t.Fatal("ordinary cleanup dropped strict outcome",err)}
+  case "ordinary-invalid-outcome":if !errors.Is(err,pending)||f.box.closes!=0{t.Fatal("invalid outcome authorized ordinary Box close",err)}
+  case "rejected-physical-only":if err!=nil||f.preparation.reads!=0||f.box.closes!=1{t.Fatal("rejected physical join requested a forged outcome",err)}
+  case "pending-original":if !errors.Is(err,pending)||f.box.closes!=0{t.Fatal("pending source authorized Box close",err)};f.network.failure=nil;if f.close()!=nil||f.box.closes!=1{t.Fatal("original retry lost source")}
+  case "changed-policy":if err==nil||f.network.closed||f.box.closes!=0{t.Fatal("changed policy retired original source")}
+  case "native-failure":if !errors.Is(err,pending)||!errors.Is(f.close(),pending)||f.box.closes!=1{t.Fatal("native failure was replaced or repeated",err)}
+  case "idempotent":if err!=nil||f.close()!=nil||f.box.closes!=1{t.Fatal("closed original repeated native teardown",err)}
+  }
+  if f.network.baseline!="unchanged-predecessor"{t.Fatal("physical cleanup mutated predecessor")}
+  if len(*events)==0||(*events)[0]!="cancel"{t.Fatal("lost original cancellation")}
+ })}
+}
+'''
+
+REJECTED_OBSERVER_HARNESS = r'''package nativefixture
+import("context";"errors";"reflect";"sync";"testing")
+type DesktopSocketCapture struct{SessionID,SourceSHA256 string}
+type DesktopWindowsSocketPolicy struct{capture DesktopSocketCapture;closed,baselineDone,installed,locked bool;permits,bindings,tunnel []int}
+var desktopWindowsNodeComposition struct{sync.Mutex;owner *DesktopWindowsSocketPolicy}
+func desktopWindowsPolicyCall(p *DesktopWindowsSocketPolicy,ctx context.Context,_ bool,f func()(bool,error))(bool,error){if ctx==nil||ctx.Err()!=nil{return false,errors.New("invalid original caller")};return f()}
+func TestRejectedSourceReadback(t *testing.T){
+ for _,fault:=range []string{"joined","missing","session","source","unjoined","baseline-pending","installed","locked","permit","binding","tunnel","cancelled"}{t.Run(fault,func(t *testing.T){
+  p:=&DesktopWindowsSocketPolicy{capture:DesktopSocketCapture{"original-session","original-source"},closed:true,baselineDone:true}
+  desktopWindowsNodeComposition.owner=p;ctx,cancel:=context.WithCancel(context.Background());defer cancel()
+  switch fault{case "missing":desktopWindowsNodeComposition.owner=nil;case "session":p.capture.SessionID="foreign";case "source":p.capture.SourceSHA256="foreign";case "unjoined":p.closed=false;case "baseline-pending":p.baselineDone=false;case "installed":p.installed=true;case "locked":p.locked=true;case "permit":p.permits=[]int{1};case "binding":p.bindings=[]int{1};case "tunnel":p.tunnel=[]int{1};case "cancelled":cancel()}
+  before:=*p
+  err:=DesktopWindowsNodeCompositionVerifyRejected(ctx,"original-session","original-source")
+  if (err==nil)!=(fault=="joined"){t.Fatal("rejected native readback lost exact join requirement",fault,err)}
+  if !reflect.DeepEqual(before,*p){t.Fatal("readback mutated original native source")}
+ })}
+}
+'''
+
+
+REJECTED_OUTCOME_HARNESS = r'''package nativefixture
+import("context";"errors";"fmt";"strings";"testing";"time")
+type rejectionTest struct{fatal string}
+func(t *rejectionTest)Helper(){}
+func(t *rejectionTest)Fatal(v ...any){t.fatal=fmt.Sprint(v...);panic(t)}
+type DesktopWindowsProtectionTarget struct{identity string}
+type metadata struct{SessionID,SourceSHA256 string}
+type policy struct{}
+func(*policy)Metadata()metadata{return metadata{"original-session","original-source"}}
+type preparation struct{outcome error;returned bool}
+func(p *preparation)RetainedProtection(context.Context)(*DesktopWindowsProtectionTarget,bool,error){return nil,p.returned,p.outcome}
+type network struct{sockets,ready bool}
+func(n *network)SocketCurrent()bool{return n.sockets}
+func(n *network)Current()bool{return n.ready}
+type flag bool
+func(f flag)Load()bool{return bool(f)}
+type tun struct{ready flag}
+type endpointOwner struct{ready,transport bool}
+func(o endpointOwner)Ready()bool{return o.ready}
+func(o endpointOwner)TransportReady()bool{return o.transport}
+type endpoint struct{owner endpointOwner}
+type nodePQWFPFixture struct{preparation *preparation;policy *policy;network *network;tun *tun;endpoint *endpoint}
+var nativeErr,baselineErr error
+var nativeReads,baselineReads int
+func DesktopWindowsNodeCompositionVerifyRejected(ctx context.Context,session,source string)error{
+ nativeReads++;if ctx.Err()!=nil||session!="original-session"||source!="original-source"{return errors.New("lost exact native capture")};return nativeErr
+}
+func DesktopWindowsNodeCompositionVerifyRetained(ctx context.Context,target DesktopWindowsProtectionTarget)error{
+ baselineReads++;if ctx.Err()!=nil||target.identity!="original-baseline"{return errors.New("foreign retained baseline")};return baselineErr
+}
+func invokeRejection(t *rejectionTest,f *nodePQWFPFixture){defer func(){if r:=recover();r!=nil&&r!=t{panic(r)}}();nodePQWFPRequireRejectedRetirement(t,f,DesktopWindowsProtectionTarget{"original-baseline"})}
+func TestRejectedOutcomeDoesNotBecomeAuthority(t *testing.T){
+ for _,fault:=range []string{"valid","outcome-success","missing-source","foreign-native","foreign-baseline","socket-ready","network-ready","tun-ready","endpoint-ready","transport-ready"}{t.Run(fault,func(t *testing.T){
+  nativeErr,baselineErr=nil,nil;nativeReads,baselineReads=0,0
+  f:=&nodePQWFPFixture{preparation:&preparation{errors.New("forged predecessor cannot attest outcome"),true},policy:&policy{},network:&network{},tun:&tun{},endpoint:&endpoint{}}
+  want:=""
+  switch fault{case "outcome-success":f.preparation.outcome=nil;want="acquired a retained protection outcome";case "missing-source":f.preparation.returned=false;want="acquired a retained protection outcome";case "foreign-native":nativeErr=errors.New("foreign source");want="exact captured native source";case "foreign-baseline":baselineErr=errors.New("foreign baseline");want="original retained deny";case "socket-ready":f.network.sockets=true;case "network-ready":f.network.ready=true;case "tun-ready":f.tun.ready=true;case "endpoint-ready":f.endpoint.owner.ready=true;case "transport-ready":f.endpoint.owner.transport=true}
+  if strings.HasSuffix(fault,"-ready"){want="native readiness after physical join"}
+  observed:=&rejectionTest{};invokeRejection(observed,f)
+  if want==""{if observed.fatal!=""||nativeReads!=1||baselineReads!=1{t.Fatal("valid rejection skipped independent native/baseline read",observed.fatal)}}else if !strings.Contains(observed.fatal,want){t.Fatal("rejection lost exact failure",fault,observed.fatal)}
+ })}
+}
+'''
+
+class RejectedSourceRetirement(unittest.TestCase):
+    def test_shipping_fixture_retains_original_physical_join_and_strict_normal_outcome(self):
+        source = (ROOT / 'mobile/desktop/node_pq_peer_test.go.tmpl').read_text()
+        helper = source[source.index('func nodePQRetirementFailure('):source.index('func newNodePQFixture(')]
+        self.run_extracted(REJECTED_SOURCE_HARNESS + '\n' + helper, 'TestCapturedSourceRetirement', 7)
+
+    def test_rejection_readback_requires_exact_joined_source_without_mutation(self):
+        source = (ROOT / 'deploy/fixtures/windows-node-physical/kernel_observer.go').read_text()
+        helper = source[source.index('func DesktopWindowsNodeCompositionVerifyRejected('):source.index('func DesktopWindowsNodeCompositionRetainedTarget(')]
+        self.run_extracted(REJECTED_OBSERVER_HARNESS + '\n' + helper, 'TestRejectedSourceReadback', 12)
+
+    def test_rejected_outcome_cannot_grant_retained_authority_or_hide_live_resources(self):
+        source = (ROOT / 'mobile/desktop/node_pq_peer_windows_test.go.tmpl').read_text()
+        helper = source[source.index('func nodePQWFPRequireRejectedRetirement('):source.index('func nodePQWFPRequireTraffic(')]
+        helper = helper.replace('t *testing.T', 't *rejectionTest').replace('mobiletor.', '')
+        self.run_extracted(REJECTED_OUTCOME_HARNESS + '\n' + helper, 'TestRejectedOutcomeDoesNotBecomeAuthority', 10)
+
+    def run_extracted(self, source, root, leaves):
+        go = shutil.which('go')
+        self.assertIsNotNone(go)
+        env = dict(os.environ, GOTOOLCHAIN='local')
+        with tempfile.TemporaryDirectory(prefix='rejected-original-source-') as temporary:
+            path = Path(temporary) / 'retirement_test.go'
+            path.write_text(source)
+            result = subprocess.run(captured_cleanup_test_command(go, path, env), env=env,
+                                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(result.stdout.count('--- PASS: ' + root + '/'), leaves, result.stdout)
+        self.assertNotIn('--- SKIP:', result.stdout)
 
 
 class CapturedNativeCleanup(unittest.TestCase):
