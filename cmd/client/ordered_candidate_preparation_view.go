@@ -135,7 +135,7 @@ func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app,
 		}
 	}
 	if len(ids) == 0 {
-		return nil, errors.New("no exact saved SS2022 candidate sources for this packet prefix")
+		return nil, errors.New("no exact saved supported TCP candidate sources for this packet prefix")
 	}
 	view.catalog, err = captureDesktopNodeChainCandidateSources(ctx, a, launch, position, ids)
 	if err != nil || view.catalog.revision != revision {
