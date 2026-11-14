@@ -343,3 +343,34 @@ notarization, off-LAN interoperability, or physical-device networking/visual/
 accessibility acceptance was performed in this continuation. Those requirements
 remain open until their actual target evidence exists. No all-product
 completion claim is made.
+
+## Installed Darwin fixture parser correction
+
+Exact `f8047686` installed-SOCKS run `43545823785`, AMD64 job
+`132296775259`, stopped before native execution in two of its eleven
+fixture tests. The fixture changed constants on the ordinary parser module,
+but Python had already bound that parser's ordinary case defaults. The
+fixture now invokes the actual shipping typed parser wrapper. All original
+37 cases and eight typed cases, malformed verdicts, missing measurements,
+source/image identities and owned-workspace cleanup checks remain enforced.
+No runtime, native gate or timeout changed. All eleven installed-fixture
+tests, the 24 ordinary parser tests and nine typed parser tests passed. The
+original failed local and hosted outputs remain recorded. These are parser
+and fixture results, not installed PF/utun acceptance; a new exact-SHA native
+run is required on both macOS architectures.
+
+## Independently verified Android host artifact
+
+The exact `fcc7fe042ba447366ca7d0ce0b545dd159323a95` focused Android host run
+`43549519198`, job `132308489493`, passed on actual Go 1.26.3 and JDK 17.0.21.
+Artifact `14094864858` was independently downloaded: 248,835 bytes, SHA-256
+`88706c32409341294c384b094652e3b21864b817fc15988278088ed760998a10`.
+Before/after source selection agrees on the same commit and tree. All six
+phase logs match their recorded hashes, completed with exit zero, joined
+and did not time out. The typed host phase passed 93 checks and six causal
+controls; the source, original Local/Server execution, restoration and MTU
+phases also passed with their original controls. Overlapping phase counts
+are not added into a product completion count. The receipt's own boundaries
+remain explicit: SDK and native-tunnel acceptance are both false. Its
+SHA-256 is
+`10199ece13893e2e53546674ea54147a5af9f7e0981aeb10f518e97b7108262d`.

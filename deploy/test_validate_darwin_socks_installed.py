@@ -16,17 +16,21 @@ import unittest
 sys.dont_write_bytecode=True
 spec=importlib.util.spec_from_file_location("installed_trusted",Path(__file__).with_name("validate-darwin-socks-installed.py"))
 V=importlib.util.module_from_spec(spec);spec.loader.exec_module(V)
-T=V.module("installed_typed_parser",V.ROOT/"deploy/test_macos_node_chain_host.py")
-T.TEST,T.CASES=V.TEST,V.TYPED
-T.MTU_CASES=()
-T.MEASUREMENT_CASES=(*V.TYPED[:3],V.TYPED[-1])
+# Use the shipping typed wrapper: changing module constants does not change
+# the original parser's already-bound keyword defaults.
+T=V.module("installed_typed_parser",V.ROOT/"deploy/test_macos_socks_node_chain_host.py")
+
+def joined_receipt(case):
+    if case not in (*V.ORIGINAL,*V.TYPED):
+        raise ValueError("Unknown original or typed fixture case")
+    return 'actual sealed Darwin ordered host verified '+case+': original native transaction and intended proof boundary, complete captured identities, stopped acknowledgment, PF and utun retirement, controller join'
 
 def completed(case):
     gate=T if case in V.TYPED else V.BASE
     lines=["=== RUN   "+gate.TEST,"=== RUN   "+gate.TEST+"/"+case]
-    if case in gate.MTU_CASES:lines.append("    desktop_node_chain_darwin_native_test.go:2: "+gate.MTU_RECEIPT)
-    if case in gate.MEASUREMENT_CASES:lines.append("    desktop_node_chain_darwin_native_test.go:3: "+gate.MEASUREMENT_RECEIPT)
-    lines+=["    desktop_node_chain_darwin_native_test.go:4: "+gate.receipt(case),
+    if case in V.BASE.MTU_CASES:lines.append("    desktop_node_chain_darwin_native_test.go:2: "+V.BASE.MTU_RECEIPT)
+    if case in gate.MEASUREMENT_CASES:lines.append("    desktop_node_chain_darwin_native_test.go:3: "+V.BASE.MEASUREMENT_RECEIPT)
+    lines+=["    desktop_node_chain_darwin_native_test.go:4: "+joined_receipt(case),
             "--- PASS: "+gate.TEST+" (0.2s)","    --- PASS: "+gate.TEST+"/"+case+" (0.1s)","PASS",""]
     return "\n".join(lines)
 
@@ -69,12 +73,12 @@ class InstalledBoundary(unittest.TestCase):
             for index,case in enumerate((*V.ORIGINAL,*V.TYPED)):
                 original=outputs[index]
                 parser=T if case in V.TYPED else V.BASE
-                faults=[original.replace(parser.receipt(case),"foreign joined receipt"),
+                faults=[original.replace(joined_receipt(case),"foreign joined receipt"),
                         original.replace("--- PASS:","--- SKIP:",1),
                         original.replace("--- PASS:","--- FAIL:",1),original+"PASS\n",
                         "WARNING: DATA RACE\n"+original,original+"unfinished\n"]
                 if case in parser.MEASUREMENT_CASES:
-                    faults.append(original.replace(parser.MEASUREMENT_RECEIPT,"missing original measured traffic"))
+                    faults.append(original.replace(V.BASE.MEASUREMENT_RECEIPT,"missing original measured traffic"))
                 for raw in faults:
                     changed=list(outputs);changed[index]=raw
                     with self.subTest(case=case),self.assertRaises(ValueError):checked(value,metadata,changed,gate)
