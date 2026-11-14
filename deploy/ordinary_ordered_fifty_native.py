@@ -36,6 +36,8 @@ def witness(case):
 
 def events(base, raw, status, case, control=None):
     name(case)
+    selected = dict(control, cases=(ROOT,)) if control else None
+    record = base.require_events(raw, status, base.LIBBOX, (ROOT,), selected)
     if control is None:
         rows = [json.loads(line) for line in raw.splitlines()]
         observed = [row.get('Output', '').strip() for row in rows
@@ -43,8 +45,7 @@ def events(base, raw, status, case, control=None):
         # Go test prepends the source filename/line to a t.Log witness.
         if len(observed) != 1 or observed[0].split('ORDINARY_FIFTY_NODE ', 1)[1] != witness(case).split('ORDINARY_FIFTY_NODE ', 1)[1]:
             raise ValueError('Original ordinary count/position/fifty witness changed')
-    selected = dict(control, cases=(ROOT,)) if control else None
-    return base.require_events(raw, status, base.LIBBOX, (ROOT,), selected)
+    return record
 
 def mutation(base, control, text):
     text = base.mutate(control, text)

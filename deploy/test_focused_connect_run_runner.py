@@ -385,6 +385,28 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
                 with self.assertRaises(ValueError):V.ORDINARY.events(V.BASE,raw,status,V.ORDINARY.CASES[0],control)
             for bad in (raw.replace(control["witness"].encode(),b"unrelated"),raw+b"panic: unrelated\n"):
                 with self.assertRaises(ValueError):V.ORDINARY.events(V.BASE,bad,1,V.ORDINARY.CASES[0],control)
+    def test_ordinary_native_failure_precedes_success_witness_validation(self):
+        case = V.ORDINARY.CASES[0]
+        rows = ordinary_rows(case)
+        for row in rows:
+            if row.get("Action") == "output":
+                row["Output"] = "actual ordinary encrypted proof context deadline exceeded\n"
+            elif row.get("Action") == "pass":
+                row["Action"] = "fail"
+        for status in (1, 0):
+            with self.subTest(status=status), self.assertRaisesRegex(ValueError, "Original native verdict refused"):
+                V.ORDINARY.events(V.BASE, encoded(rows), status, case)
+        with self.assertRaisesRegex(ValueError, "Native package did not join its exact inventory"):
+            V.ORDINARY.events(V.BASE, encoded(rows[:-1]), 1, case)
+        good = ordinary_rows(case)
+        missing = [row for row in good if row.get("Action") != "output"]
+        wrong = [dict(row, Output=row["Output"].replace("samples=50", "samples=49"))
+                 if row.get("Action") == "output" else row for row in good]
+        duplicate = good[:3] + [dict(good[2])] + good[3:]
+        for label, bad in (("missing", missing), ("wrong", wrong), ("duplicate", duplicate)):
+            with self.subTest(witness=label), self.assertRaisesRegex(ValueError, "Original ordinary count/position/fifty witness changed"):
+                V.ORDINARY.events(V.BASE, encoded(bad), 0, case)
+
     def test_exact_source_selection_precedes_preparation(self):
         for fault in ("wrong-suite","wrong-source","output-exists","missing-selection"):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:

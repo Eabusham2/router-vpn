@@ -292,13 +292,76 @@ func ordinaryFiftyNative(t *testing.T, p *ordinaryFiftyPeer) (*RouterNodeChain, 
 		t.Fatal("actual ordinary native start", err)
 	}
 	if err := owner.Run(server); err != nil {
-		t.Fatal("actual ordinary encrypted proof", err)
+		t.Error("actual ordinary encrypted proof", err)
+		ordinaryFiftyReportProofFailure(t, owner, p, lower)
+		t.FailNow()
 	}
 	if !owner.Healthy() || lower.calls.Load() == 0 {
 		t.Fatal("ordinary original proof or physical encryption absent")
 	}
 	return owner, server, lower
 }
+func ordinaryFiftyReportProofFailure(t *testing.T, owner *RouterNodeChain, p *ordinaryFiftyPeer, lower *socksRunPhysical) {
+	t.Helper()
+	// The caller has already recorded the original proof failure. A refused
+	// diagnostic cannot replace it or turn this attempt into an acceptance.
+	if owner != nil {
+		if state := owner.state.Load(); state != nil && state.chain != nil {
+			progress := state.chain.Progress()
+			t.Logf("ORDINARY_PROOF_FAILURE progress_prefixes=%d ready=%t complete=%t dns=%t public=%t revoked=%t",
+				len(progress.Prefixes), progress.Ready, progress.Complete, progress.DNSProven, progress.PublicProven, state.revoked.Load())
+		}
+	}
+	if lower != nil {
+		t.Logf("ORDINARY_PROOF_FAILURE physical_dials=%d", lower.calls.Load())
+	}
+	if p == nil {
+		t.Log("ORDINARY_PROOF_FAILURE peer_snapshot=unavailable")
+		return
+	}
+	input, ok := p.input.(*os.File)
+	if !ok || input.SetWriteDeadline(time.Now().Add(3*time.Second)) != nil {
+		t.Log("ORDINARY_PROOF_FAILURE peer_snapshot=request-unavailable")
+		return
+	}
+	_, writeErr := io.WriteString(input, "snapshot\n")
+	resetErr := input.SetWriteDeadline(time.Time{})
+	if writeErr != nil || resetErr != nil {
+		t.Log("ORDINARY_PROOF_FAILURE peer_snapshot=request-failed")
+		return
+	}
+	// Reuse the original three-second reply bound, exact peer identity checks,
+	// and cancel/Wait/read-worker joins. Never print the raw receipt or source.
+	reply := p.reply(t)
+	var snapshot struct {
+		Prefixes []struct {
+			RawUDP int64  `json:"raw_udp"`
+			TCP    int64  `json:"tcp"`
+			UDP    int64  `json:"udp"`
+			Proof  uint64 `json:"proof_queries"`
+			Denied uint64 `json:"auth_refusals"`
+		} `json:"prefixes"`
+		Final struct {
+			RawTCP uint64 `json:"final_raw_tcp"`
+			TCP    uint64 `json:"final_tcp"`
+			UDP    uint64 `json:"final_udp"`
+			Router uint64 `json:"router_queries"`
+			DNS    uint64 `json:"dns_queries"`
+			Public uint64 `json:"final_public_queries"`
+		} `json:"final"`
+	}
+	if json.Unmarshal(reply.Peer, &snapshot) != nil || len(snapshot.Prefixes) < 1 || len(snapshot.Prefixes) > 7 {
+		t.Log("ORDINARY_PROOF_FAILURE peer_snapshot=numeric-schema-refused")
+		return
+	}
+	for position, prefix := range snapshot.Prefixes {
+		t.Logf("ORDINARY_PROOF_FAILURE prefix=%d raw_udp=%d tcp=%d udp=%d proof=%d denied=%d",
+			position, prefix.RawUDP, prefix.TCP, prefix.UDP, prefix.Proof, prefix.Denied)
+	}
+	t.Logf("ORDINARY_PROOF_FAILURE final_raw_tcp=%d final_tcp=%d final_udp=%d router=%d dns=%d public=%d",
+		snapshot.Final.RawTCP, snapshot.Final.TCP, snapshot.Final.UDP, snapshot.Final.Router, snapshot.Final.DNS, snapshot.Final.Public)
+}
+
 func TestRouterNodeChainOrdinaryEncryptedOrderedFifty(t *testing.T) {
 	mode := os.Getenv("ROUTERVPN_ORDINARY_FIFTY_MODE")
 	if mode == "" {
