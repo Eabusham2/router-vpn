@@ -1052,6 +1052,7 @@ class MAXNativeBoundaries(unittest.TestCase):
         files = {
             GATE.PREDICATE: 'internal/mobilemultihop/desktop_node_admission.go',
             'routervpn/mobiletor/desktop_socket_windows_policy.go': 'internal/mobiletor/desktop_socket_windows_policy.go',
+            'routervpn/mobiletor/desktop_socket_windows_wfp.go': 'internal/mobiletor/desktop_socket_windows_wfp.go',
             'routervpn/mobiletor/desktop_socket_windows_transfer.go': 'internal/mobiletor/desktop_socket_windows_transfer.go',
             'routervpn/desktoppt/node_physical_windows.go': 'mobile/desktop/node_physical_windows.go.tmpl',
             'routervpn/desktoppt/node_physical.go': 'mobile/desktop/node_physical.go.tmpl',
@@ -1479,6 +1480,7 @@ class MAXNativeBoundaries(unittest.TestCase):
 
     def test_native_source_closure_binds_actual_acl_helper_and_acceptance(self):
         dependencies = ('client/Protect-RouterVPN-Windows-PrivateRoot.ps1',
+                        'deploy/fixtures/windows-node-physical/max_retirement_timing.go',
                         'client/test-windows-private-acl.ps1',
                         'deploy/build_pq_reference_fixture.py',
                         'deploy/test_pq_reference_preparation.py')
@@ -1491,8 +1493,7 @@ class MAXNativeBoundaries(unittest.TestCase):
             # A source receipt cannot attest an alias to a different owner's
             # helper even when its current bytes happen to be identical.
             shadow = self.directory('aliased-reference-source')
-            for relative in (GATE.PEER_TEMPLATE, 'deploy/test_windows_node_max.py',
-                             'deploy/test_windows_node_max_runner.py', *dependencies):
+            for relative in (key.removeprefix('windows-max/') for key in records):
                 target = shadow / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes((ROOT / relative).read_bytes())
@@ -2208,6 +2209,81 @@ class NativeWorkflowConcurrency(unittest.TestCase):
         self.assertEqual(job.count(command), 1)
         self.assertLess(job.index(command), job.index('Prepare exact-pinned native MTU source'))
         self.assertIn('name: native-mtu-evidence-${{ matrix.os }}-${{ github.sha }}', job)
+
+
+RETIREMENT_TIMING_HARNESS = r'''
+type desktopWFPEngine struct{}
+type DesktopWindowsSocketPolicy struct {
+ leaseEngine, baselineEngine *desktopWFPEngine
+ lockKey, sublayer [16]byte
+}
+func TestRetirementTiming(t *testing.T) {
+ t.Run("silent-success-exact-error",func(t *testing.T){
+  d:=desktopMAXRetirementTimingStart(); calls:=0; secret:=errors.New("private-token-profile-secret")
+  if d.call("identity-close",func()error{calls++;return nil})!=nil||calls!=1{t.Fatal("changed success")}
+  var out bytes.Buffer;d.reportTo(&out,nil);if out.Len()!=0{t.Fatal("successful close emitted diagnostics")}
+  if d.call("lease-close",func()error{calls++;return secret})!=secret||calls!=2{t.Fatal("changed original error or operation count")}
+  d.reportTo(&out,secret);if strings.Contains(out.String(),secret.Error())||strings.Contains(out.String(),"PASS")||strings.Contains(out.String(),"FAIL"){t.Fatal("diagnostics exposed error or verdict")}
+ })
+ t.Run("pending-native-owner-and-each-snapshot",func(t *testing.T){
+  d:=desktopMAXRetirementTimingStart();p:=&DesktopWindowsSocketPolicy{leaseEngine:&desktopWFPEngine{},baselineEngine:&desktopWFPEngine{},lockKey:[16]byte{1},sublayer:[16]byte{2}}
+  release:=make(chan struct{});entered:=make(chan struct{});joined:=make(chan struct{})
+  go func(){defer close(joined);defer desktopMAXRetirementRegister(d,p)();desktopMAXRetirementEnumeration(p.leaseEngine,p.lockKey)();desktopMAXRetirementEnumeration(p.leaseEngine,p.lockKey)();defer desktopMAXRetirementEnumeration(p.baselineEngine,p.sublayer)();close(entered);<-release}()
+  <-entered;var out bytes.Buffer;d.reportTo(&out,context.DeadlineExceeded)
+  if strings.Count(out.String(),"stage=lock-enumeration")!=2||!strings.Contains(out.String(),"stage=baseline-enumeration")||!strings.Contains(out.String(),"pending=true")||!strings.Contains(out.String(),"deadline=true"){t.Fatal("lost completed or pending native phases",out.String())}
+  desktopMAXRetirementEngines.Lock();owners:=len(desktopMAXRetirementEngines.owners);desktopMAXRetirementEngines.Unlock();if owners==0{t.Fatal("caller expiry detached native worker")}
+  close(release);<-joined;desktopMAXRetirementEngines.Lock();owners=len(desktopMAXRetirementEngines.owners);desktopMAXRetirementEngines.Unlock();if owners!=0{t.Fatal("joined worker leaked observer binding")}
+  out.Reset();d.reportTo(&out,context.Canceled);if strings.Contains(out.String(),"pending=true"){t.Fatal("completed native phase remained pending")}
+ })
+ t.Run("bounded-records",func(t *testing.T){
+  d:=desktopMAXRetirementTimingStart();for i:=0;i<140;i++{d.enter("identity-close")()};var out bytes.Buffer;d.reportTo(&out,context.Canceled)
+  if len(d.events)!=128||!strings.Contains(out.String(),"dropped=12")||!strings.Contains(out.String(),"cancelled=true"){t.Fatal("unbounded diagnostic")}
+ })
+}
+'''
+
+
+class MAXRetirementTiming(unittest.TestCase):
+    def test_overlay_changes_only_observation_and_keeps_original_native_operations(self):
+        policy = (ROOT / 'internal/mobiletor/desktop_socket_windows_policy.go').read_text()
+        native = (ROOT / 'internal/mobiletor/desktop_socket_windows_wfp.go').read_text()
+        timed, observed = GATE.retirement_timing_sources(policy, native)
+        restored = timed.replace('\n\ttiming := desktopMAXRetirementTimingStart()', '').replace(
+            '\n\t\tdefer desktopMAXRetirementRegister(timing, p)()', '').replace('\n\ttiming.report(err)', '')
+        restored = re.sub(r'timing\.call\("[a-z-]+", func\(\) error \{ return (p\.[a-zA-Z.]+\([^)]*\)) \}\)', r'\1', restored)
+        self.assertEqual(restored, policy)
+        self.assertEqual(observed.replace('\n\tdefer desktopMAXRetirementEnumeration(e, sublayer)()', ''), native)
+        self.assertEqual(timed.count('timing.call('), 5)
+        self.assertIn('context.WithTimeout(context.Background(), 3*time.Second)',
+                      (ROOT / 'mobile/desktop/node_pq_peer_test.go.tmpl').read_text())
+        baseline = (ROOT / 'internal/mobiletor/desktop_socket_windows_baseline.go').read_text()
+        self.assertIn('if err := p.baselineEngine.Abort(); err != nil {\n\t\treturn err\n\t}\n\tif err := p.assertBaselineLock(); err != nil {', baseline)
+        observer = (ROOT / 'deploy/fixtures/windows-node-physical/kernel_observer.go').read_text()
+        observed = GATE.retirement_observer_timing(observer)
+        restored = observed.replace(') (result error) {', ') error {').replace(
+            '\n\ttiming := desktopMAXRetirementTimingStart()\n\tdefer func() { timing.report(result) }()\n\tdefer timing.enter("independent-retirement")()', '').replace(
+            '\n\ttransactionJoined := timing.enter("independent-transaction")', '').replace('\n\ttransactionJoined()', '')
+        restored = re.sub(r'timing\.call\("[a-z-]+", func\(\) error \{ return ([a-zA-Z.]+\([^)]*\)) \}\)', r'\1', restored)
+        self.assertEqual(restored, observer)
+
+    def test_failure_only_timing_retains_pending_owner_and_exact_error(self):
+        helper = (ROOT / 'deploy/fixtures/windows-node-physical/max_retirement_timing.go').read_text()
+        # Compile the actual observer logic with inert native type declarations;
+        # this tests diagnostic synchronization, not Windows/WFP acceptance.
+        helper = helper.replace('//go:build windows && routervpn_windows_node_composition\n', '')
+        helper = helper.replace('\t"syscall"\n', '').replace('syscall.GUID', '[16]byte')
+        helper = helper.replace('"context"', '"context"\n"bytes"\n"strings"\n"testing"')
+        go = shutil.which('go')
+        self.assertIsNotNone(go)
+        env = dict(os.environ, GOTOOLCHAIN='local')
+        with tempfile.TemporaryDirectory(prefix='max-retirement-timing-') as directory:
+            path = Path(directory) / 'timing_test.go'
+            path.write_text(helper + RETIREMENT_TIMING_HARNESS)
+            result = subprocess.run(captured_cleanup_test_command(go, path, env), env=env,
+                                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(result.stdout.count('--- PASS: TestRetirementTiming/'), 3, result.stdout)
+        self.assertNotIn('--- SKIP:', result.stdout)
 
 
 if __name__ == '__main__':

@@ -82,6 +82,7 @@ def checked_sources(source):
     # any KEM material. Bind it and its executable acceptance/preparation
     # tests to the native evidence, not only the Python invocation wrapper.
     for relative in (PEER_TEMPLATE, 'deploy/test_windows_node_max.py', 'deploy/test_windows_node_max_runner.py',
+                     'deploy/fixtures/windows-node-physical/max_retirement_timing.go',
                      'deploy/fixtures/windows-max-control/udp_observation.go',
                      'deploy/fixtures/windows-max-control/udp_observation_test.go',
                      'client/Protect-RouterVPN-Windows-PrivateRoot.ps1', 'client/test-windows-private-acl.ps1',
@@ -614,6 +615,52 @@ def mutations(source):
     return tuple(result)
 
 
+def retirement_timing_sources(policy, native):
+    """Observe the unchanged native Close; only the test overlay sees helpers."""
+    signature = 'func (p *DesktopWindowsSocketPolicy) Close(ctx context.Context) error {'
+    start = policy.index(signature)
+    end = policy.find('\nfunc ', start + len(signature))
+    if end < 0:
+        end = len(policy)
+    body = policy[start:end]
+    replace = WFP.BOOT.IDENTITY.replace_once
+    body = replace(body, '\tp.Cancel()\n', '\tp.Cancel()\n\ttiming := desktopMAXRetirementTimingStart()\n')
+    boundary = '\t_, err := desktopWindowsPolicyCall(p, ctx, true, func() (struct{}, error) {\n'
+    body = replace(body, boundary, boundary + '\t\tdefer desktopMAXRetirementRegister(timing, p)()\n')
+    for stage, operation in (
+        ('tunnel-close', 'p.retireTunnel()'),
+        ('identity-close', 'p.identity.Close(ctx)'),
+        ('baseline-finish', 'p.finishBaseline(ctx)'),
+        ('lease-close', 'p.releaseBaselineLock()'),
+        ('baseline-engine-close', 'p.baselineEngine.Close()'),
+    ):
+        body = replace(body, 'if err := ' + operation + '; err != nil {',
+                       'if err := timing.call(' + json.dumps(stage) + ', func() error { return ' + operation + ' }); err != nil {')
+    body = replace(body, '\treturn err\n', '\ttiming.report(err)\n\treturn err\n')
+    signature = 'func (e *desktopWFPEngine) AssertComplete(sublayer syscall.GUID, expected []desktopWFPRule) (result error) {\n'
+    native = replace(native, signature, signature + '\tdefer desktopMAXRetirementEnumeration(e, sublayer)()\n')
+    return policy[:start] + body + policy[end:], native
+
+
+def retirement_observer_timing(observer):
+    signature = 'func DesktopWindowsNodeCompositionRetire(ctx context.Context, target DesktopWindowsProtectionTarget) error {'
+    start = observer.index(signature)
+    end = observer.index('\n// This native test capture', start)
+    body = observer[start:end]
+    replace = WFP.BOOT.IDENTITY.replace_once
+    body = replace(body, signature, signature.replace(') error {', ') (result error) {') +
+                   '\n\ttiming := desktopMAXRetirementTimingStart()\n\tdefer func() { timing.report(result) }()\n\tdefer timing.enter("independent-retirement")()')
+    for stage, operation in (
+        ('independent-retained-read', 'readDesktopWindowsRetainedProtection(ctx, target, scope)'),
+        ('independent-lease-close', 'request.Close(ctx)'),
+        ('independent-absence-read', 'DesktopWindowsNodeCompositionAbsent(ctx)'),
+    ):
+        body = replace(body, operation, 'timing.call(' + json.dumps(stage) + ', func() error { return ' + operation + ' })')
+    boundary = '\trequest, err := newDesktopWindowsProtectionTransactionTarget(ctx, scope, true, &target)\n'
+    body = replace(body, boundary, '\ttransactionJoined := timing.enter("independent-transaction")\n' + boundary + '\ttransactionJoined()\n')
+    return observer[:start] + body + observer[end:]
+
+
 def overlay(source, directory, *, prospective, mutation=None, closed=False):
     if closed and (prospective or mutation is not None):
         raise ValueError('Closed MAX admission control cannot alter native execution controls')
@@ -640,6 +687,22 @@ def overlay(source, directory, *, prospective, mutation=None, closed=False):
         sources = observed_control_sources(source, mutation)
         for index, (relative, raw) in enumerate(sorted(sources.items())):
             add(relative, raw, 'max-native-negative-' + str(index))
+    # Derive diagnostics from the already scoped/mutated postimages. No action,
+    # ownership check, native call, error or caller budget is replaced.
+    policy = 'routervpn/mobiletor/desktop_socket_windows_policy.go'
+    native = 'routervpn/mobiletor/desktop_socket_windows_wfp.go'
+    postimages = [Path(mapping.get(str(source / relative), source / relative)).read_text(encoding='utf-8')
+                  for relative in (policy, native)]
+    for relative, raw in zip((policy, native), retirement_timing_sources(*postimages)):
+        path = directory / ('timed-' + Path(relative).name)
+        path.write_text(raw, encoding='utf-8')
+        mapping[str(source / relative)] = str(path)
+    observer = 'routervpn/mobiletor/desktop_socket_windows_node_composition_overlay.go'
+    path = directory / 'timed-max-native-observer.go'
+    path.write_text(retirement_observer_timing(Path(mapping[str(source / observer)]).read_text(encoding='utf-8')), encoding='utf-8')
+    mapping[str(source / observer)] = str(path)
+    add('routervpn/mobiletor/desktop_socket_windows_max_retirement_timing_overlay.go',
+        (WFP.RESOURCES / 'max_retirement_timing.go').read_text(encoding='utf-8'), 'max-retirement-timing')
     result.write_text(json.dumps(value, sort_keys=True), encoding='utf-8')
     return result
 
