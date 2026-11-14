@@ -11,6 +11,10 @@ struct IOSNodeChainEditorView: View {
         model.iosNodeChainEditorProfiles(owner: owner)
     }
 
+    private var finalModes: [String] {
+        IOSNodeChainEditorVisible.finalModes(available.first(where: { $0.id == draft.controlID }), nodes: draft.nodes)
+    }
+
     var body: some View {
         Form {
             Section("Nodes in connection order") {
@@ -22,10 +26,18 @@ struct IOSNodeChainEditorView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                             Picker("Final transport", selection: Binding(
                                 get: { draft.nodes[position].mode },
-                                set: { mode in change { try draft.chooseFinalMode(mode) } }
+                                set: { mode in change {
+                                    try IOSNodeChainEditorVisible.requireFinalMode(mode,
+                                        profile: available.first(where: { $0.id == node.id }), nodes: draft.nodes)
+                                    try draft.chooseFinalMode(mode)
+                                } }
                             )) {
-                                ForEach(IOSMultihopNodeSelection.nativeFinalModes, id: \.self) { mode in
+                                ForEach(finalModes, id: \.self) { mode in
                                     Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
+                                }
+                                if !finalModes.contains(node.mode) {
+                                    Text("Unavailable: \(IOSMultihopNodeSelection.transportName(node.mode))")
+                                        .tag(node.mode).disabled(true)
                                 }
                             }
                         } else {

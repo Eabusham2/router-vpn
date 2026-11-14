@@ -299,6 +299,9 @@ TESTS = r'''
 
 
 def main(selected_mutations=None):
+    final_spec = importlib.util.spec_from_file_location('ordered_final_choices', ROOT / 'deploy/test_ios_node_chain_final_choices.py')
+    final = importlib.util.module_from_spec(final_spec); final_spec.loader.exec_module(final)
+    final.main()
     runtime = (APP / 'IOSRuntimeSelection.swift').read_text()
     body = BOUNDARIES.replace('// SHIPPING_SELECTION_TYPES', runtime[runtime.index('enum IOSRuntimeEngine'):runtime.index('enum IOSRuntimeSelectionError')])
     body = body.replace('// SHIPPING_SELECTED_PROFILE', S.member((APP / 'IOSDNSRuntimePolicy.swift').read_text(), '    static func selectedProfile('))

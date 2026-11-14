@@ -169,6 +169,21 @@ enum IOSNodeChainEditorVisible {
         if profile.normalizedNodeKind == "external" { return [profile.external?.protocolName ?? ""] }
         return IOSMultihopNodeSelection.nativePrefixModes
     }
+    static func finalModes(_ profile: RouterProfile?, nodes: [IOSMultihopNodeSelection]) -> [String] {
+        guard let profile, profile.normalizedNodeKind == "router-vpn", profile.external == nil,
+              nodes.last?.id == profile.id else { return [] }
+        var modes = ["shadowsocks"]
+        if [nil, "", "off"].contains(profile.startLayer) &&
+            nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) {
+            modes.append("hysteria2")
+        }
+        return modes
+    }
+    static func requireFinalMode(_ mode: String, profile: RouterProfile?, nodes: [IOSMultihopNodeSelection]) throws {
+        guard finalModes(profile, nodes: nodes).contains(mode) else {
+            throw IOSMultihopNodeSelection.issue("Choose a final transport compatible with its original node, Start Layer and preceding nodes.")
+        }
+    }
     static func candidates(_ profiles: [RouterProfile], nodes: [IOSMultihopNodeSelection], position: Int) -> [RouterProfile] {
         guard nodes.indices.contains(position), position < nodes.count - 1 else { return [] }
         return unique(profiles).filter { profile in
