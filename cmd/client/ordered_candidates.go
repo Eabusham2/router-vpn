@@ -141,7 +141,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(ids) == 0 || ctx.Err() != nil {
-		http.Error(w, "no current exact SS2022 candidate sources for this packet prefix", 409)
+		http.Error(w, "no current exact supported TCP candidate sources for this packet prefix", 409)
 		return
 	}
 	view.catalog, err = captureDesktopNodeChainCandidateSources(ctx, a, identity.Ordered.launch, position, ids)
@@ -172,11 +172,18 @@ func orderedCandidateProposal(members []desktopNodeChainMember, position int, ca
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
 	nodes := nodeChainSelectedReferences(members[:position+1])
-	nodes = append(nodes, common.MultihopNodeSelection{ID: candidate.ID, Mode: "shadowsocks"})
+	mode := "shadowsocks"
+	if candidate.External != nil {
+		switch candidate.External.Protocol {
+		case "socks5":
+			mode = candidate.External.Protocol
+		}
+	}
+	nodes = append(nodes, common.MultihopNodeSelection{ID: candidate.ID, Mode: mode})
 	control = cloneRouterProfile(candidate)
 	if candidate.External != nil || candidate.NodeKind == "external" {
 		if position != 0 || len(members) < 2 || members[len(members)-1].Profile.External != nil {
-			return control, nil, errors.New("custom SS2022 insertion currently requires the first packet prefix and original paired final")
+			return control, nil, errors.New("custom candidate insertion currently requires the first packet prefix and original paired final")
 		}
 		final := members[len(members)-1]
 		nodes = append(nodes, common.MultihopNodeSelection{ID: final.Profile.ID, Mode: final.Mode})

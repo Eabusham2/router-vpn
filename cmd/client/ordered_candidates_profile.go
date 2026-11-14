@@ -20,6 +20,20 @@ type orderedCandidateSaveRequest struct {
 	ProposedPath []common.MultihopNodeSelection `json:"proposed_path"`
 }
 
+// Both connected and prepared Save compile the complete next path through its
+// original source family. A TCP timing result supplies no runtime or credential
+// authority, and typed imported sources must never pass through generic capture.
+type orderedCandidateProposalCapture interface {
+	validate(context.Context, common.RouterProfile, []common.RouterProfile) error
+}
+
+func captureOrderedCandidateProposal(ctx context.Context, root string, control common.RouterProfile, profiles []common.RouterProfile, nodes []common.MultihopNodeSelection) (orderedCandidateProposalCapture, error) {
+	if desktopNodeChainHasSOCKS(nodes) {
+		return captureDesktopNodeChainSOCKS(ctx, root, control, profiles, nodes, "local", nil)
+	}
+	return captureDesktopNodeChain(ctx, root, control, profiles, nodes, "local", nil)
+}
+
 // This endpoint saves a complete draft for the next connection. It neither
 // replaces active profile records nor alters the retained native runtime.
 func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +105,7 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 			profiles[i] = control
 		}
 	}
-	compiled, err := captureDesktopNodeChain(ctx, job.catalog.launch.root, control, profiles, nodes, "local", nil)
+	compiled, err := captureOrderedCandidateProposal(ctx, job.catalog.launch.root, control, profiles, nodes)
 	if err != nil {
 		http.Error(w, "proposed full path failed original source compilation: "+err.Error(), 409)
 		return

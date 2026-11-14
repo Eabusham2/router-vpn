@@ -161,6 +161,11 @@ func TestOrderedCandidateNextProfileCapturesSourcesWithoutMutatingActive(t *test
 }
 func TestOrderedCandidateSaveHTTPRequiresFreshOriginalOwner(t *testing.T) {
 	f, catalog, id := desktopCandidateTestCatalog(t, "2022-blake3-aes-256-gcm")
+	testOrderedCandidateSaveHTTPRequiresFreshOriginalOwner(t, f, catalog, id)
+}
+
+func testOrderedCandidateSaveHTTPRequiresFreshOriginalOwner(t *testing.T, f *desktopNodeChainOwnedFixture, catalog *desktopNodeChainCandidateCatalog, id string) {
+	t.Helper()
 	owner := orderedCandidateTestOwner(t, catalog, id)
 	c := viaEntryControlFor(f.a)
 	_, token, _, captureErr := captureOrderedPerformanceContext(context.Background(), f.a)

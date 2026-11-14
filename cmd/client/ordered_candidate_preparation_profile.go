@@ -241,7 +241,7 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 			profiles[i] = profile
 		}
 	}
-	compiled, err := captureDesktopNodeChain(ctx, p.selection.Native.root, profile, profiles, nodes, "local", nil)
+	compiled, err := captureOrderedCandidateProposal(ctx, p.selection.Native.root, profile, profiles, nodes)
 	if err != nil {
 		http.Error(w, "proposed full saved path failed source compilation: "+err.Error(), 409)
 		return
