@@ -274,12 +274,20 @@ func TestNodeChainImportedExecutionPreservesMeanComparisonAndCaptureReplay(t *te
 			mu.Lock()
 			targets := append([]string(nil), finalTargets...)
 			mu.Unlock()
-			if len(targets) == 0 {
-				t.Fatal("missing actual external probes")
+			trials := 1
+			if execution == "auto" {
+				trials = 3 // Both candidates and the independently reopened winner.
 			}
-			for _, target := range targets {
-				if target != targets[0] {
-					t.Fatal("candidates used different external endpoints", targets)
+			if len(targets) != 2*trials || !nodeChainExecutionTarget(state.Comparison.Target) {
+				t.Fatal("missing actual admission/scoring probes or uncaptured target", targets, state.Comparison.Target)
+			}
+			admission := strings.Split(strings.TrimPrefix(Targets[0], "https://"), "/")[0] + ":443"
+			scoring := strings.Split(strings.TrimPrefix(state.Comparison.Target, "https://"), "/")[0] + ":443"
+			// Each trial first proves the fixed public admission endpoint, then
+			// measures the one captured target shared by both candidates/winner.
+			for index := 0; index < len(targets); index += 2 {
+				if targets[index] != admission || targets[index+1] != scoring {
+					t.Fatal("candidates changed their admission or scoring endpoints", targets, state.Comparison.Target)
 				}
 			}
 			last, err := f.runtime.CaptureLastContext(ctx)
