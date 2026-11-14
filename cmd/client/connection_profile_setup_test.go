@@ -15,7 +15,7 @@ import (
 
 func setupProfileTestApp(t *testing.T) *app {
 	t.Helper()
-	dir := t.TempDir()
+	dir := privateStoreTestRoot(t)
 	t.Setenv("HOMEVPN_ROOT", dir)
 	profilesFile := filepath.Join(dir, "routers.json")
 	a := &app{cfg: common.ClientConfig{ProfilesFile: profilesFile}, state: state{Mode: "off", Phase: "off"}}
