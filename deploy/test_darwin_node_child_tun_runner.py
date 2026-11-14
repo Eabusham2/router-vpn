@@ -597,29 +597,46 @@ class OriginalCaseDiagnostic(unittest.TestCase):
 
 
 class EncryptedPeerSourceClosure(unittest.TestCase):
+    def peer_sources(self):
+        return {
+            **{'mobile/desktop/'+name: target for name, target in G.NODE.PREP.DARWIN_NODE_CHAIN_PEERS.items()},
+            **G.NODE.PREP.DARWIN_NODE_CHAIN_CONNECT_PEERS,
+        }
+
     def test_darwin_projects_only_original_build_constraint(self):
         copies=G.NODE.PREP.darwin_node_chain_peer_copies()
-        self.assertEqual(set(copies),set(G.NODE.PREP.DARWIN_NODE_CHAIN_PEERS.values()))
+        sources=self.peer_sources()
+        self.assertEqual(len(set(sources.values())),len(sources))
+        self.assertEqual(set(copies),set(sources.values()))
         before=b'//go:build linux && !android\n\npackage routervpnamnezia\n'
         after=b'//go:build darwin && routervpn_darwin_node_chain && routervpn_darwin_external_host\n\npackage routervpnamnezia\n'
-        for name,target in G.NODE.PREP.DARWIN_NODE_CHAIN_PEERS.items():
-            source=(ROOT/'mobile/desktop'/name).read_bytes()
+        for name,target in sources.items():
+            source=(ROOT/name).read_bytes()
             self.assertTrue(source.startswith(before))
             self.assertEqual(copies[target],after+source[len(before):])
             self.assertTrue(target.endswith('_darwin_test.go'))
 
     def test_wrong_original_platform_or_symlink_cannot_be_projected(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary);source=root/'mobile/desktop';source.mkdir(parents=True)
-            for name in G.NODE.PREP.DARWIN_NODE_CHAIN_PEERS:
-                (source/name).write_bytes((ROOT/'mobile/desktop'/name).read_bytes())
+            root=Path(temporary);sources=self.peer_sources()
+            for name in sources:
+                source=root/name;source.parent.mkdir(parents=True,exist_ok=True)
+                source.write_bytes((ROOT/name).read_bytes())
             with patch.object(G.NODE.PREP,'ROOT',root):
-                G.NODE.PREP.darwin_node_chain_peer_copies()
-                target=source/next(iter(G.NODE.PREP.DARWIN_NODE_CHAIN_PEERS));raw=target.read_bytes()
-                target.write_bytes(raw.replace(b'linux && !android',b'windows',1))
-                with self.assertRaises(ValueError):G.NODE.PREP.darwin_node_chain_peer_copies()
-                target.unlink();other=source/'foreign';other.write_bytes(raw);target.symlink_to(other)
-                with self.assertRaises(ValueError):G.NODE.PREP.darwin_node_chain_peer_copies()
+                self.assertEqual(set(G.NODE.PREP.darwin_node_chain_peer_copies()),set(sources.values()))
+                for name in sources:
+                    target=root/name;raw=target.read_bytes()
+                    with self.subTest(source=name,fault='platform'):
+                        target.write_bytes(raw.replace(b'linux && !android',b'windows',1))
+                        with self.assertRaises(ValueError):G.NODE.PREP.darwin_node_chain_peer_copies()
+                    target.unlink();other=target.with_name(target.name+'.foreign');other.write_bytes(raw)
+                    with self.subTest(source=name,fault='symlink'):
+                        target.symlink_to(other)
+                        with self.assertRaises(ValueError):G.NODE.PREP.darwin_node_chain_peer_copies()
+                    target.unlink()
+                    with self.subTest(source=name,fault='missing'):
+                        with self.assertRaises(ValueError):G.NODE.PREP.darwin_node_chain_peer_copies()
+                    target.write_bytes(raw);other.unlink()
 
     def test_address_and_final_only_benchmark_scope_remain_explicit(self):
         raw=(ROOT/'mobile/desktop/node_chain_peer_linux_test.go.tmpl').read_text()
