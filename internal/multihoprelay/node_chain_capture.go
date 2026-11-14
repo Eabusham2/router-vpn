@@ -26,6 +26,13 @@ type NodeChainMember struct {
 	StartLayer      string `json:"start_layer"`
 	ClientPublicKey string `json:"client_public_key,omitempty"`
 	ServerPublicKey string `json:"server_public_key,omitempty"`
+	// Version 2 records the original imported SS member without manufacturing
+	// a Router identity or packet key. SourceSHA256 binds its private captured
+	// member input; it grants no authority outside the operator registry.
+	NodeKind         string `json:"node_kind,omitempty"`
+	ProofKind        string `json:"proof_kind,omitempty"`
+	SourceSHA256     string `json:"source_sha256,omitempty"`
+	ExpectedPublicIP string `json:"expected_public_ip,omitempty"`
 }
 
 type NodeChainDescriptor struct {
@@ -48,18 +55,21 @@ type NodeChainUser struct {
 // client graph is captured. No omitted proposal may allocate a different front.
 // All local packet keys are pinned, including the entry and each middle node.
 type NodeChainRequest struct {
-	Schema                int             `json:"schema"`
-	SessionID             string          `json:"session_id"`
-	EntryNodeID           string          `json:"entry_node_id"`
-	SourceSHA256          string          `json:"source_sha256"`
-	DescriptorSHA256      string          `json:"descriptor_sha256"`
-	DNSPolicySHA256       string          `json:"dns_policy_sha256"`
-	Epoch                 string          `json:"epoch"`
-	Peer                  string          `json:"peer"`
-	AcquireExpiresAt      int64           `json:"acquire_expires_at"`
-	LocalPacketPublicKeys []string        `json:"local_packet_public_keys"`
-	Port                  int             `json:"listen_port"`
-	Users                 []NodeChainUser `json:"users"`
+	Schema                int      `json:"schema"`
+	SessionID             string   `json:"session_id"`
+	EntryNodeID           string   `json:"entry_node_id"`
+	SourceSHA256          string   `json:"source_sha256"`
+	DescriptorSHA256      string   `json:"descriptor_sha256"`
+	DNSPolicySHA256       string   `json:"dns_policy_sha256"`
+	Epoch                 string   `json:"epoch"`
+	Peer                  string   `json:"peer"`
+	AcquireExpiresAt      int64    `json:"acquire_expires_at"`
+	LocalPacketPublicKeys []string `json:"local_packet_public_keys"`
+	// Version 1 implicitly has packet positions 0..len(Users)-1. Version 2
+	// names only actual packet positions; an SS hop has no placeholder key.
+	LocalPacketPositions []int           `json:"local_packet_positions,omitempty"`
+	Port                 int             `json:"listen_port"`
+	Users                []NodeChainUser `json:"users"`
 }
 
 // NodeChainCapture is delivered only to the separately owned native worker.
@@ -119,18 +129,37 @@ func nodeChainDigest(domain string, value any) (string, error) {
 }
 
 func (s NodeChainDescriptor) Validate() error {
-	if s.Schema != 1 || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
+	if (s.Schema != 1 && s.Schema != 2) || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
 		!proofID.MatchString(s.SourceSHA256) || !proofID.MatchString(s.DNSPolicySHA256) || len(s.Members) < 1 || len(s.Members) > NodeChainMaximumMembers {
+		return nodeChainCaptureError
+	}
+	// The imported family is deliberately explicit: paired packet entry,
+	// original unlayered SS2022 middle, paired SS final. Other imported types
+	// retain their separate typed source and execution admission boundaries.
+	if s.Schema == 2 && len(s.Members) != 2 {
 		return nodeChainCaptureError
 	}
 	ids, nodes := map[string]bool{s.EntryID: true}, map[string]bool{s.EntryNodeID: true}
 	keys := map[string]bool{}
 	for index, member := range s.Members {
-		if member.Position != index+1 || !ident.MatchString(member.ProfileID) || !proofID.MatchString(member.NodeID) || ids[member.ProfileID] || nodes[member.NodeID] ||
+		if member.Position != index+1 || !ident.MatchString(member.ProfileID) || ids[member.ProfileID] ||
 			(member.StartLayer != "off" && member.StartLayer != "aes-256-gcm" && member.StartLayer != "aes-256-gcm+xor-whitening") {
 			return nodeChainCaptureError
 		}
-		ids[member.ProfileID], nodes[member.NodeID] = true, true
+		ids[member.ProfileID] = true
+		if s.Schema == 2 && index == 0 {
+			if member.NodeKind != "external" || member.ProofKind != "public-path" || !proofID.MatchString(member.SourceSHA256) ||
+				!externalPublicIP(member.ExpectedPublicIP) || member.NodeID != "" || member.Mode != "shadowsocks" || member.StartLayer != "off" ||
+				member.ClientPublicKey != "" || member.ServerPublicKey != "" {
+				return nodeChainCaptureError
+			}
+			continue
+		}
+		if !proofID.MatchString(member.NodeID) || nodes[member.NodeID] || member.NodeKind != "" || member.ProofKind != "" ||
+			member.SourceSHA256 != "" || member.ExpectedPublicIP != "" {
+			return nodeChainCaptureError
+		}
+		nodes[member.NodeID] = true
 		if index == len(s.Members)-1 {
 			if member.Mode != "shadowsocks" || member.ClientPublicKey != "" || member.ServerPublicKey != "" {
 				return nodeChainCaptureError
@@ -159,14 +188,25 @@ func (s NodeChainDescriptor) Digest() (string, error) {
 	if err := s.Validate(); err != nil {
 		return "", err
 	}
-	return nodeChainDigest("routervpn-server-node-chain-descriptor-v1", s)
+	domain := "routervpn-server-node-chain-descriptor-v1"
+	if s.Schema == 2 {
+		domain = "routervpn-server-node-chain-descriptor-v2"
+	}
+	return nodeChainDigest(domain, s)
 }
 
 func (q NodeChainRequest) validateShape() error {
-	if q.Schema != 1 || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) || !proofID.MatchString(q.SourceSHA256) ||
+	if (q.Schema != 1 && q.Schema != 2) || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) || !proofID.MatchString(q.SourceSHA256) ||
 		!proofID.MatchString(q.DescriptorSHA256) || !proofID.MatchString(q.DNSPolicySHA256) || !proofID.MatchString(q.Epoch) ||
 		!nodeChainPrivateAddress(q.Peer) || q.AcquireExpiresAt <= 0 || q.Port < 1024 || q.Port > 65535 ||
-		len(q.Users) < 1 || len(q.Users) > NodeChainMaximumMembers || len(q.LocalPacketPublicKeys) != len(q.Users) {
+		len(q.Users) < 1 || len(q.Users) > NodeChainMaximumMembers {
+		return nodeChainCaptureError
+	}
+	if q.Schema == 1 {
+		if len(q.LocalPacketPublicKeys) != len(q.Users) || len(q.LocalPacketPositions) != 0 {
+			return nodeChainCaptureError
+		}
+	} else if len(q.Users) != 2 || len(q.LocalPacketPublicKeys) != 1 || len(q.LocalPacketPositions) != 1 || q.LocalPacketPositions[0] != 0 {
 		return nodeChainCaptureError
 	}
 	keys, secrets := map[string]bool{}, map[string]bool{}
@@ -192,7 +232,7 @@ func (q NodeChainRequest) validateShape() error {
 
 func (q NodeChainRequest) Validate(source NodeChainDescriptor) error {
 	digest, err := source.Digest()
-	if err != nil || q.validateShape() != nil || q.EntryNodeID != source.EntryNodeID || q.SourceSHA256 != source.SourceSHA256 ||
+	if err != nil || q.validateShape() != nil || q.Schema != source.Schema || q.EntryNodeID != source.EntryNodeID || q.SourceSHA256 != source.SourceSHA256 ||
 		q.DescriptorSHA256 != digest || q.DNSPolicySHA256 != source.DNSPolicySHA256 || len(q.Users) != len(source.Members) {
 		return nodeChainCaptureError
 	}
@@ -210,6 +250,7 @@ func (q NodeChainRequest) Validate(source NodeChainDescriptor) error {
 
 func (q NodeChainRequest) Clone() NodeChainRequest {
 	q.LocalPacketPublicKeys = append([]string(nil), q.LocalPacketPublicKeys...)
+	q.LocalPacketPositions = append([]int(nil), q.LocalPacketPositions...)
 	q.Users = append([]NodeChainUser(nil), q.Users...)
 	return q
 }
@@ -220,7 +261,11 @@ func (q NodeChainRequest) Digest() (string, error) {
 	if err := q.validateShape(); err != nil {
 		return "", err
 	}
-	return nodeChainDigest("routervpn-server-node-chain-request-v1", q)
+	domain := "routervpn-server-node-chain-request-v1"
+	if q.Schema == 2 {
+		domain = "routervpn-server-node-chain-request-v2"
+	}
+	return nodeChainDigest(domain, q)
 }
 
 func (c NodeChainCapture) Validate() error {

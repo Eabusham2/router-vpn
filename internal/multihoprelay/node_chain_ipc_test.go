@@ -128,7 +128,7 @@ func TestNodeChainIPCResponseReceiptCompleteness(t *testing.T) {
 	nonce := strings.Repeat("d", 64)
 	receipt := NodeChainReceipt{Schema: 1, SessionID: capture.Request.SessionID, OwnerID: capture.OwnerID, Peer: capture.Peer, SourceSHA256: capture.Source.SourceSHA256, RegistrySHA256: capture.RegistrySHA256, DNSPolicySHA256: capture.Source.DNSPolicySHA256, CaptureSHA256: digest, Nonce: nonce, Sequence: 1, HeartbeatAt: 1794484800000, Phase: NodeChainReady, FrontReady: true, TrafficAllowed: true, DNSProven: true, PublicProven: true, ProofAt: 1794484799000}
 	for _, member := range capture.Source.Members {
-		receipt.Prefixes = append(receipt.Prefixes, NodeChainPrefixReceipt{member.Position, member.ProfileID, member.NodeID, member.Mode, true, 1.25})
+		receipt.Prefixes = append(receipt.Prefixes, NodeChainPrefixReceipt{Position: member.Position, ProfileID: member.ProfileID, NodeID: member.NodeID, Mode: member.Mode, Proven: true, ResponseMS: 1.25})
 	}
 	response := NodeChainIPCResponse{1, "snapshot", nonce, digest, true, &receipt}
 	raw := string(ipcJSON(t, response))

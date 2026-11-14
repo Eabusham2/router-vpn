@@ -19,12 +19,15 @@ const (
 // ResponseMS is the routed authenticated HTTP proof, not ICMP, throughput,
 // or either fresh candidate probe required by Local/Server comparison.
 type NodeChainPrefixReceipt struct {
-	Position   int     `json:"position"`
-	ProfileID  string  `json:"profile_id"`
-	NodeID     string  `json:"node_id"`
-	Mode       string  `json:"mode"`
-	Proven     bool    `json:"proven"`
-	ResponseMS float64 `json:"response_ms"`
+	Position     int     `json:"position"`
+	ProfileID    string  `json:"profile_id"`
+	NodeID       string  `json:"node_id"`
+	Mode         string  `json:"mode"`
+	Proven       bool    `json:"proven"`
+	ResponseMS   float64 `json:"response_ms"`
+	NodeKind     string  `json:"node_kind,omitempty"`
+	ProofKind    string  `json:"proof_kind,omitempty"`
+	SourceSHA256 string  `json:"source_sha256,omitempty"`
 }
 
 // A receipt is meaningful only on the original authenticated worker channel.
@@ -85,6 +88,7 @@ func ValidateNodeChainReceipt(receipt NodeChainReceipt, capture NodeChainCapture
 		for i, row := range receipt.Prefixes {
 			member := capture.Source.Members[i]
 			if row.Position != member.Position || row.ProfileID != member.ProfileID || row.NodeID != member.NodeID || row.Mode != member.Mode ||
+				row.NodeKind != member.NodeKind || row.ProofKind != member.ProofKind || row.SourceSHA256 != member.SourceSHA256 ||
 				!row.Proven || math.IsNaN(row.ResponseMS) || math.IsInf(row.ResponseMS, 0) || row.ResponseMS <= 0 || row.ResponseMS > 120000 {
 				return bad
 			}
