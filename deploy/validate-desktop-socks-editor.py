@@ -31,7 +31,7 @@ SOURCE_PATHS = (
 )
 WINDOWS_CONTROLS = frozenset(("connect-protocol", "connect-mode", "socks-mode", "final-mode", "raw-mode", "add-mode",
     "change-mode", "row-label", "source-token", "summary-reset"))
-LINUX_CONTROLS = ("socks-mode", "final-mode", "source-token", "generation", "prefix-mode",
+LINUX_CONTROLS = ("connect-mode", "connect-protocol", "connect-final", "socks-mode", "final-mode", "source-token", "generation", "prefix-mode",
     "capability", "final-pin", "expected-inventory", "disk-receipt", "load-current-graph",
     "response-inventory")
 TARGETS = {

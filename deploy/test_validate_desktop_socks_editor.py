@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Refusal tests for native desktop editor observations."""
 from pathlib import Path
+import ast
 import importlib.util
 import sys
 import unittest
@@ -32,11 +33,21 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_complete_original_and_new_inventories(self):
         self.assertEqual(len(D.WINDOWS_CONTROLS), 10)
-        self.assertEqual(len(D.LINUX_CONTROLS), 11)
+        self.assertEqual(len(D.LINUX_CONTROLS), 14)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
-        self.assertEqual(D.LINUX_CONTROLS[0], "socks-mode")
+        self.assertEqual(D.LINUX_CONTROLS[:4], ("connect-mode", "connect-protocol", "connect-final", "socks-mode"))
         for target in D.TARGETS:
             self.assertTrue(D.verdict(complete(target), target, 0, False, True)["accepted"])
+
+    def test_linux_inventory_matches_the_actual_native_fixture(self):
+        source = (D.ROOT / "client/linux/test-ordered-nodes-v1.py").read_text(encoding="utf-8")
+        inventories = [node.value for node in ast.walk(ast.parse(source))
+                       if isinstance(node, ast.Assign) and isinstance(node.value, ast.List)
+                       and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                       and node.targets[0].id == "controls"]
+        self.assertEqual(len(inventories), 1)
+        actual = tuple(ast.literal_eval(row.elts[0]) for row in inventories[0].elts)
+        self.assertEqual(actual, D.LINUX_CONTROLS)
 
     def test_failed_exit_timeout_and_unjoined_never_pass(self):
         for target in D.TARGETS:
