@@ -23,24 +23,27 @@ func nodeChainProfile(count int) RouterProfile {
 func TestOrderedNodeProfileRoundTripPreservesEveryPosition(t *testing.T) {
 	for _, count := range []int{2, 3, 4, MultihopMaximumNodes} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
-			original := nodeChainProfile(count)
-			frozen := CloneRouterProfile(original)
-			encoded, err := json.Marshal(original)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var decoded RouterProfile
-			if err := json.Unmarshal(encoded, &decoded); err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(decoded.MultihopNodes, original.MultihopNodes) || decoded.MultihopExecution != "local" || !decoded.MultihopEnabled {
-				t.Fatal("selected path order, member mode, or explicit execution was lost")
-			}
-			if !reflect.DeepEqual(original, frozen) {
-				t.Fatal("encoding normalized the live selected-node source")
-			}
-			if decoded.MultihopEntryID != "" || decoded.MultihopExitID != "" || decoded.MultihopEntryMode != "" {
-				t.Fatal("ordered selection became a pair projection")
+			for _, execution := range []string{"local", "server", "auto"} {
+				original := nodeChainProfile(count)
+				original.MultihopExecution = execution
+				frozen := CloneRouterProfile(original)
+				encoded, err := json.Marshal(original)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var decoded RouterProfile
+				if err := json.Unmarshal(encoded, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(decoded.MultihopNodes, original.MultihopNodes) || decoded.MultihopExecution != execution || !decoded.MultihopEnabled {
+					t.Fatal("selected path order, member mode, or explicit execution was lost")
+				}
+				if !reflect.DeepEqual(original, frozen) {
+					t.Fatal("encoding normalized the live selected-node source")
+				}
+				if decoded.MultihopEntryID != "" || decoded.MultihopExitID != "" || decoded.MultihopEntryMode != "" {
+					t.Fatal("ordered selection became a pair projection")
+				}
 			}
 		})
 	}
@@ -59,8 +62,8 @@ func TestOrderedNodeProfileRejectsIncompleteOrAmbiguousSelection(t *testing.T) {
 		"noncanonical-mode":  func(p *RouterProfile) { p.MultihopNodes[1].Mode = "WG" },
 		"oversized-mode":     func(p *RouterProfile) { p.MultihopNodes[1].Mode = strings.Repeat("a", 65) },
 		"implicit-execution": func(p *RouterProfile) { p.MultihopExecution = "" },
-		"server":             func(p *RouterProfile) { p.MultihopExecution = "server" },
-		"auto":               func(p *RouterProfile) { p.MultihopExecution = "auto" },
+		"execution-case":     func(p *RouterProfile) { p.MultihopExecution = "Server" },
+		"execution-unknown":  func(p *RouterProfile) { p.MultihopExecution = "compare" },
 		"legacy-entry":       func(p *RouterProfile) { p.MultihopEntryID = p.MultihopNodes[0].ID },
 		"legacy-exit":        func(p *RouterProfile) { p.MultihopExitID = p.MultihopNodes[2].ID },
 		"legacy-mode":        func(p *RouterProfile) { p.MultihopEntryMode = "wg" },

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
@@ -37,8 +38,8 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, errors.New("modeled child received different preparation")
 	}
 	var local mobilemultihop.NodeChainSource
-	if json.Unmarshal([]byte(prep.LocalSource()), &local) != nil || len(local.Nodes) != 2 {
-		return nil, errors.New("modeled child requires exact two-member source")
+	if json.Unmarshal([]byte(prep.LocalSource()), &local) != nil || len(local.Nodes) < 2 || len(local.Nodes) > 8 {
+		return nil, errors.New("modeled child requires its exact bounded complete source")
 	}
 	entry, err := mobilemultihop.ParseNodeLaunchInput(local.Nodes[0])
 	if err != nil {
@@ -73,6 +74,19 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, err
 	}
 	request := multihoprelay.NodeChainRequest{Schema: 1, SessionID: strings.Repeat("7", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("8", 64), Peer: peer.Addr().String(), AcquireExpiresAt: time.Now().Add(10 * time.Second).Unix(), LocalPacketPublicKeys: []string{key}, Port: 32003, Users: []multihoprelay.NodeChainUser{{Position: 1, Username: strings.Repeat("9", 48), Password: strings.Repeat("a", 48)}}}
+	for position := 1; position+1 < len(local.Nodes); position++ {
+		node, err := mobilemultihop.ParseNodeLaunchInput(local.Nodes[position])
+		if err != nil {
+			return nil, err
+		}
+		public, err := node.PacketClientPublicKey()
+		if err != nil {
+			return nil, err
+		}
+		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, public)
+		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,
+			Username: fmt.Sprintf("%048x", 256+position*2), Password: fmt.Sprintf("%048x", 257+position*2)})
+	}
 	source := mobilemultihop.NodeChainExecutionSource{Schema: 1, Execution: prep.Execution(), LocalSource: prep.LocalSource(), Server: descriptor, Request: request, FirstPort: 32000, LastPort: 32007}
 	encoded, _ = json.Marshal(source)
 	policy, err := mobilemultihop.NewNodeChainExecutionPolicy(string(encoded))

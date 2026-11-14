@@ -15,11 +15,11 @@ func (q multihopConnectRequest) validateOrdered() error {
 	if !q.ordered() {
 		return nil
 	}
-	if q.Execution != "local" || q.EntryID != "" || q.ExitID != "" || q.Base != "" || q.EntryMode != "" || q.ExitMode != "" ||
+	if !validDesktopOrderedExecution(q.Execution) || q.EntryID != "" || q.ExitID != "" || q.Base != "" || q.EntryMode != "" || q.ExitMode != "" ||
 		q.ExpectedSelectedNodeID == nil || *q.ExpectedSelectedNodeID == "" || q.ExpectedProfileTokens == nil {
-		return errors.New("ordered Connect requires one explicit Local path and its complete original node revisions")
+		return errors.New("ordered Connect requires one explicit execution choice and its complete original node revisions")
 	}
-	if err := common.ValidateMultihopNodes(q.Nodes); err != nil {
+	if err := desktopOrderedExecutionSelection(q.Nodes, q.Execution); err != nil {
 		return err
 	}
 	if q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID {

@@ -599,7 +599,9 @@ function UnifiedConnect{
             $Supported=Get-RouterVPNOrderedValue $Capability 'ordered_nodes_supported' $false
             if($Supported-isnot[bool]-or-not$Supported){throw 'This controller has not enabled the ordered native host. The complete path is retained; update the app before connecting it.'}
             $Store=Api '/api/profiles' -Timeout 5
-            $Draft=[pscustomobject]@{control_id=[string]$P.id;nodes=$Ordered.multihop_nodes;profile_tokens=(Get-RouterVPNOrderedValue (Control 'UnifiedNodeChainButton').Tag 'profile_tokens')}
+            $RequestedExecution=[string]$Ordered.multihop_execution
+            if(@(Get-RouterVPNOrderedValue $Capability 'ordered_executions' @())-cnotcontains$RequestedExecution){throw 'This native controller has not enabled the selected ordered execution. Your complete path is retained.'}
+            $Draft=[pscustomobject]@{control_id=[string]$P.id;nodes=$Ordered.multihop_nodes;execution=$RequestedExecution;profile_tokens=(Get-RouterVPNOrderedValue (Control 'UnifiedNodeChainButton').Tag 'profile_tokens')}
             $Body=New-RouterVPNOrderedConnectPayload $Draft $Store
             $Path='/api/multihop/connect';$Timeout=380;$Label='Connecting ordered nodes…'
         }elseif((Control 'UnifiedMultihop').IsChecked){
@@ -833,11 +835,11 @@ function RefreshUnifiedOrderedControls {
     if($null-ne$mode){$mode.Visibility=if($enabled){'Collapsed'}else{'Visible'}}
     if($null-ne$description){$description.Visibility=if($enabled){'Visible'}else{'Collapsed'}}
     if(-not$enabled){return}
-    foreach($name in @('UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedExecution','UnifiedCandidatesButton')){
+    foreach($name in @('UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedCandidatesButton')){
         $widget=Control $name;if($null-ne$widget){$widget.IsEnabled=$false}
     }
     $presets=Control 'UnifiedPresetsButton';if($null-ne$presets){$presets.IsEnabled=$false}
-    $label=Control 'UnifiedComparisonText';if($null-ne$label){$label.Text='Local ordered path: every selected node must pass its own private-path proof.'}
+    $label=Control 'UnifiedComparisonText';if($null-ne$label){$label.Text='Ordered path: the native child proves every node. Compare selects and re-proves one execution.'}
 }
 function RefreshUnifiedOrderedSelection($Store) {
     $button=Control 'UnifiedNodeChainButton';$toggle=Control 'UnifiedOrdered';$label=Control 'UnifiedNodeChainSummary'
@@ -847,10 +849,11 @@ function RefreshUnifiedOrderedSelection($Store) {
     $selected=@($Store.profiles|Where-Object{[string]$_.id-ceq$id})
     if($selected.Count-ne1){$button.Tag=$null;$toggle.IsChecked=$false;$label.Text='Select a linked exit node first.';return}
     if($null-eq$button.Tag-or[string](Get-RouterVPNOrderedValue $button.Tag 'control_id')-cne$id){
-        $button.Tag=[pscustomobject]@{control_id=$id;nodes=@();profile_tokens=@{}};$toggle.IsChecked=$false
+        $button.Tag=[pscustomobject]@{control_id=$id;nodes=@();profile_tokens=@{};execution='local'};$toggle.IsChecked=$false
         $saved=Get-RouterVPNOrderedValue $selected[0] 'multihop_nodes'
         if($null-ne$saved-and@($saved).Count-gt0){
-            $button.Tag.nodes=$saved;$toggle.IsChecked=$true
+            $button.Tag.nodes=$saved;$button.Tag.execution=[string](Get-RouterVPNOrderedValue $selected[0] 'multihop_execution');$toggle.IsChecked=$true
+            foreach($item in (Control 'UnifiedExecution').Items){if([string]$item.Tag-ceq$button.Tag.execution){(Control 'UnifiedExecution').SelectedItem=$item;break}}
             (Control 'UnifiedMultihop').IsChecked=[bool](Get-RouterVPNOrderedValue $selected[0] 'multihop_enabled' $false)
             try{
                 $button.Tag.nodes=@(Copy-RouterVPNOrderedNodes $saved $id)
@@ -865,7 +868,7 @@ function RefreshUnifiedOrderedSelection($Store) {
         $name=if($match.Count-eq1){[string]$match[0].name}else{'Missing: '+[string]$node.id}
         $names+=$name+' ['+(Get-RouterVPNOrderedModeTitle $node.mode)+']'
     }
-    $label.Text=($names-join' → ')+' · Local'
+    $label.Text=($names-join' → ')+' · '+[string](Control 'UnifiedExecution').SelectedItem.Content
     $description=Control 'UnifiedOrderedModeSummary';if($null-ne$description){$description.Text=(@($button.Tag.nodes|ForEach-Object{Get-RouterVPNOrderedModeTitle $_.mode})-join' → ')}
 }
 function ShowUnifiedOrderedNodes {
@@ -886,7 +889,7 @@ function ShowUnifiedOrderedNodes {
         $available=$dialog.FindName('Available');$list=$dialog.FindName('Order');$status=$dialog.FindName('Status');$prefixMode=$dialog.FindName('PrefixMode');$finalMode=$dialog.FindName('FinalMode')
         $finalMode.Tag=if($initial.Count){$initial[-1].mode}else{'shadowsocks'}
         $prefixMode.ItemsSource=@('wg','awg2-fast','awg2-strong','shadowsocks','socks5','http-connect','https-connect'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}});$prefixMode.SelectedIndex=0
-        $dialog.FindName('Final').Text='Final exit: '+[string]$selected[0].name+' · Local'
+        $dialog.FindName('Final').Text='Final exit: '+[string]$selected[0].name+' · execution follows the main Local / Server / Compare choice'
         $refresh={
             $chosenFinal=[string]$finalMode.SelectedValue;if(-not$chosenFinal){$chosenFinal=[string]$finalMode.Tag};if(-not$chosenFinal){$chosenFinal='shadowsocks'}
             $finalSource=@($store.profiles|Where-Object{[string]$_.id-ceq$id})
@@ -913,7 +916,7 @@ function ShowUnifiedOrderedNodes {
             if([string]$RouterCombo.SelectedValue-cne$id){throw 'The selected exit changed while the editor was open.'}
             $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$id;mode=[string]$finalMode.SelectedValue})
             $tokens=@{};foreach($node in $nodes){$origin=@($store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id});if($origin.Count-ne1){throw 'The original editor catalog lost a node.'};$tokens[$node.id]=Get-RouterVPNOrderedValue $origin[0] 'profile_token'}
-            $captured=[pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens}
+            $captured=[pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens;execution=[string](Control 'UnifiedExecution').SelectedItem.Tag}
             $validated=New-RouterVPNOrderedConnectPayload $captured $current
             $captured.nodes=@($validated.nodes)
             (Control 'UnifiedNodeChainButton').Tag=$captured;(Control 'UnifiedOrdered').IsChecked=$true;(Control 'UnifiedMultihop').IsChecked=$true

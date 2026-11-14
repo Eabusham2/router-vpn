@@ -1,6 +1,6 @@
 ﻿param(
     [string]$Root = (Split-Path $PSScriptRoot -Parent),
-    [ValidateSet('shipping','capture-two-modes','load-fallback','connect-fallback','entry-capture-fallback','entry-load-fallback','entry-connect-fallback','startup-deadline','ordered-drop-middle','ordered-final-owner','ordered-capability','ordered-source','ordered-locked-source','setup-expectation','setup-current-receipt','setup-response-source','setup-response-order','setup-load-inventory','setup-refresh-retirement','setup-uncertain-owner')][string]$Mutation = 'shipping'
+    [ValidateSet('shipping','capture-two-modes','load-fallback','connect-fallback','entry-capture-fallback','entry-load-fallback','entry-connect-fallback','startup-deadline','ordered-drop-middle','ordered-execution-capture','ordered-execution-connect','ordered-final-owner','ordered-capability','ordered-source','ordered-locked-source','setup-expectation','setup-current-receipt','setup-response-source','setup-response-order','setup-load-inventory','setup-refresh-retirement','setup-uncertain-owner')][string]$Mutation = 'shipping'
 )
 $ErrorActionPreference='Stop'
 # The real launcher composes these sources before opening WPF. Exercise that
@@ -84,6 +84,8 @@ try{
         'entry-connect-fallback'{$Connect=ReplaceOnce $Connect 'entry_mode=(MultihopEntryModeChoice)' 'entry_mode="wg"'}
         'startup-deadline'{$Connect=ReplaceOnce $Connect '$Timeout=UnifiedMultihopStartupTimeout $Body' '$Timeout=200'}
         'ordered-drop-middle'{$Helpers=ReplaceOnce $Helpers 'return $copy.ToArray()' 'return @($copy[0],$copy[$copy.Count-1])'}
+        'ordered-execution-capture'{$Helpers=ReplaceOnce $Helpers 'multihop_execution=$execution;multihop_entry_id' 'multihop_execution="local";multihop_entry_id'}
+        'ordered-execution-connect'{$Helpers=ReplaceOnce $Helpers 'nodes=$nodes;execution=$execution;expected_selected_node_id' 'nodes=$nodes;execution="local";expected_selected_node_id'}
         'ordered-final-owner'{$Helpers=ReplaceOnce $Helpers '$copy[$copy.Count-1].id-cne$ControlID' '$false'}
         'ordered-capability'{$Connect=ReplaceOnce $Connect '$Supported-isnot[bool]-or-not$Supported' '$false'}
         'ordered-source'{$Helpers=ReplaceOnce $Helpers "-or[string](Get-RouterVPNOrderedValue `$matchingProfiles[0] 'profile_token')-cne`$token" '-or$false'}
@@ -311,7 +313,7 @@ public sealed class ProfileModeOwner {
     # Widget and HTTP boundaries are doubled; no private node source is copied.
     $Window=$Owner;$ordered=[pscustomobject]@{IsChecked=$true};$chainButton=[pscustomobject]@{Tag=$null}
     $Owner.Controls['UnifiedOrdered']=$ordered;$Owner.Controls['UnifiedNodeChainButton']=$chainButton;$Owner.Controls['UnifiedNodeCombo']=$RouterCombo
-    $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true}
+    $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true;ordered_executions=@('local','server','auto')}
     $orderedCases=@()
     foreach($importedMode in @('http-connect','https-connect')){foreach($prefixMode in @('wg','awg2-fast','awg2-strong')){
         $orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$false;count=3;imported=$importedMode;prefix=$prefixMode}
@@ -319,8 +321,11 @@ public sealed class ProfileModeOwner {
     foreach($finalMode in @('shadowsocks','hysteria2')){foreach($mixed in @($false,$true)){foreach($nodeCount in @(2,3,4,8)){
         $orderedCases+=[pscustomobject]@{final=$finalMode;mixed=$mixed;count=$nodeCount;imported='';prefix=''}
     }}}
+    foreach($executionChoice in @('server','auto')){foreach($nodeCount in @(2,3,8)){$orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$true;count=$nodeCount;imported='';prefix='';execution=$executionChoice}}}
     foreach($orderedCase in $orderedCases){
         $finalMode=$orderedCase.final;$mixed=$orderedCase.mixed;$nodeCount=$orderedCase.count
+        $requestedExecution=if($orderedCase.PSObject.Properties['execution']){$orderedCase.execution}else{'local'}
+        $execution.SelectedIndex=[Array]::IndexOf($ExpectedExecutions,$requestedExecution)
         $nodes=@();$profiles=@();$tokens=@{}
         for($i=0;$i-lt$nodeCount;$i++){
             $id='ordered-'+$i;$mode=if($i-eq$nodeCount-1){$finalMode}elseif($mixed){@('awg2-fast','wg','awg2-strong')[$i%3]}else{'wg'}
@@ -340,7 +345,7 @@ public sealed class ProfileModeOwner {
             $before=$script:Requests.Count;&$callback
             Check ($script:Requests.Count-eq$before+1) ('Ordered profile write failed: '+$profileStatus.Text)
             $body=$script:Requests[-1].Body
-            Check ($body.mode-ceq$finalMode-and@($body.custom_layers).Count-eq0-and$body.multihop_execution-ceq'local') 'Ordered profile borrowed an unrelated logical mode or execution'
+            Check ($body.mode-ceq$finalMode-and@($body.custom_layers).Count-eq0-and$body.multihop_execution-ceq$requestedExecution) 'Ordered profile borrowed an unrelated logical mode or execution'
             Check (@($body.multihop_nodes).Count-eq$nodeCount-and(@($body.multihop_nodes.id)-join',')-ceq(@($nodes.id)-join',')) 'Ordered profile truncated or reordered a middle node'
             Check ((@($body.multihop_nodes.mode)-join',')-ceq(@($nodes.mode)-join',')) 'Ordered profile changed per-position transports'
             foreach($field in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){Check ($null-eq$body.PSObject.Properties[$field]) 'Ordered profile mixed legacy pair fields'}
@@ -361,7 +366,7 @@ public sealed class ProfileModeOwner {
         Check ($null-ne$body-and(@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'execution,expected_profile_tokens,expected_selected_node_id,nodes') 'Ordered Connect sent legacy pair/private fields or omitted source owners'
         Check ($body.expected_selected_node_id-ceq$control-and@($body.expected_profile_tokens.PSObject.Properties).Count-eq$nodeCount) 'Ordered Connect lost original selected control or all-source hash preconditions'
         foreach($node in $nodes){Check ((Get-RouterVPNOrderedValue $body.expected_profile_tokens $node.id)-ceq$tokens[$node.id]) 'Ordered Connect changed a source token'}
-        Check ($body.execution-ceq'local'-and(@($body.nodes.id)-join',')-ceq(@($nodes.id)-join',')-and$body.nodes[-1].mode-ceq$finalMode) 'Ordered Connect changed its complete path'
+        Check ($body.execution-ceq$requestedExecution-and(@($body.nodes.id)-join',')-ceq(@($nodes.id)-join',')-and$body.nodes[-1].mode-ceq$finalMode) 'Ordered Connect changed its complete path'
         Check ((@($body.nodes.mode)-join',')-ceq(@($nodes.mode)-join',')) 'Ordered Connect changed exact captured WG/AWG modes'
         $copy=@(Copy-RouterVPNOrderedNodes $nodes $control);$copy[0].id='replacement'
         Check ($nodes[0].id-ceq'ordered-0') 'Ordered copy retained mutable member references'
@@ -369,7 +374,7 @@ public sealed class ProfileModeOwner {
             $script:OrderedCapability=$capability;$script:ConnectBody=$null;UnifiedConnect
             Check ($null-eq$script:ConnectBody) 'An older controller received ordered nodes as a legacy pair'
         }
-        $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true}
+        $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true;ordered_executions=@('local','server','auto')}
         foreach($fault in @('missing-middle','duplicate-middle','external-middle','changed-selected','relinked-middle')){
             $saved=$RouterCombo.Tag
             $changed=$saved|ConvertTo-Json -Depth 8|ConvertFrom-Json

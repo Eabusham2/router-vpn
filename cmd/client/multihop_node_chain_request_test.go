@@ -48,6 +48,13 @@ func TestNativeNodeChainPublicJSONCannotDowngradeMalformedCapture(t *testing.T) 
 	if q, err := decodeMultihopConnectRequest(strings.NewReader(good)); err != nil || !q.ordered() || len(q.Nodes) != 2 || q.Nodes[0].Mode != "awg2-fast" {
 		t.Fatal("complete public ordered request rejected", err)
 	}
+	for _, execution := range []string{"server", "auto"} {
+		raw := strings.Replace(good, `"local"`, `"`+execution+`"`, 1)
+		q, err := decodeMultihopConnectRequest(strings.NewReader(raw))
+		if err != nil || !q.ordered() || q.Execution != execution || len(q.Nodes) != 2 {
+			t.Fatal("lost explicit ordered execution", execution, err)
+		}
+	}
 	for name, raw := range map[string]string{
 		"null-nodes":        strings.Replace(good, `[{"id":"first","mode":"awg2-fast"},{"id":"last","mode":"shadowsocks"}]`, `null`, 1),
 		"empty-nodes":       strings.Replace(good, `[{"id":"first","mode":"awg2-fast"},{"id":"last","mode":"shadowsocks"}]`, `[]`, 1),
@@ -61,8 +68,8 @@ func TestNativeNodeChainPublicJSONCannotDowngradeMalformedCapture(t *testing.T) 
 		"duplicate-member":  strings.Replace(good, `"id":"first"`, `"id":"last"`, 1),
 		"bad-mode":          strings.Replace(good, `awg2-fast`, `AWG2-fast`, 1),
 		"missing-execution": strings.Replace(good, `"execution":"local",`, ``, 1),
-		"server":            strings.Replace(good, `"local"`, `"server"`, 1),
-		"compare":           strings.Replace(good, `"local"`, `"auto"`, 1),
+		"case-execution":    strings.Replace(good, `"local"`, `"Server"`, 1),
+		"unknown-execution": strings.Replace(good, `"local"`, `"compare"`, 1),
 		"mixed-pair":        strings.Replace(good, `"execution":"local"`, `"entry_id":"first","execution":"local"`, 1),
 		"mixed-empty-pair":  strings.Replace(good, `"execution":"local"`, `"base":"","execution":"local"`, 1),
 		"unknown":           strings.Replace(good, `"execution":"local"`, `"bypass":true,"execution":"local"`, 1),
@@ -282,8 +289,12 @@ func TestNativeNodeChainStatusStatesActualHostAndModeBounds(t *testing.T) {
 		Maximum    int      `json:"ordered_max_nodes"`
 		Connected  bool     `json:"connected"`
 	}
+	expectedExecutions := []string{"local"}
+	if (runtime.GOOS == "linux" || runtime.GOOS == "windows") && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") {
+		expectedExecutions = []string{"local", "server", "auto"}
+	}
 	if json.Unmarshal(response.Body.Bytes(), &value) != nil || value.Supported != (runtime.GOOS == "linux" || runtime.GOOS == "windows") || value.Connected || value.Maximum != 8 ||
-		!reflect.DeepEqual(value.Prefixes, []string{"wg", "awg2-fast", "awg2-strong"}) || !reflect.DeepEqual(value.Exits, []string{"shadowsocks", "hysteria2"}) || !reflect.DeepEqual(value.Executions, []string{"local"}) {
+		!reflect.DeepEqual(value.Prefixes, []string{"wg", "awg2-fast", "awg2-strong"}) || !reflect.DeepEqual(value.Exits, []string{"shadowsocks", "hysteria2"}) || !reflect.DeepEqual(value.Executions, expectedExecutions) {
 		t.Fatal("status invented host authority or lost exact admitted modes", response.Body.String())
 	}
 }

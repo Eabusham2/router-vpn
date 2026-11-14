@@ -92,6 +92,7 @@ try{
     }
     $rootControls=@{}
     foreach($name in @('UnifiedNodeChainButton','UnifiedOrdered','UnifiedMultihop','UnifiedNodeChainSummary','UnifiedComparisonText','UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedExecution','UnifiedCandidatesButton','UnifiedModeCombo','UnifiedOrderedModeSummary','UnifiedPresetsButton')){$rootControls[$name]=New-Widget}
+    $rootControls['UnifiedExecution'].ItemsSource=@([pscustomobject]@{id='local';Tag='local';Content='Local'},[pscustomobject]@{id='server';Tag='server';Content='Server'},[pscustomobject]@{id='auto';Tag='auto';Content='Compare'});$rootControls['UnifiedExecution'].SelectedIndex=0
     $RouterCombo=[pscustomobject]@{SelectedValue=$id};$rootControls['UnifiedNodeChainButton'].Tag=[pscustomobject]@{control_id=$id;nodes=@()}
     function Control($Name){return $rootControls[$Name]}
     function Api($Path,$Timeout){if($Path-cne'/api/profiles'){throw 'unexpected editor network operation'};return $script:CurrentStore}
@@ -138,7 +139,14 @@ try{
     Check ($saved.profile_tokens.Count-eq7-and$saved.profile_tokens['prefix-1']-ceq$store.profiles[1].profile_token) 'editor lost all-source public preconditions'
     Check ($rootControls['UnifiedNodeChainSummary'].Text.Contains('Prefix 3')-and$rootControls['UnifiedNodeChainSummary'].Text.Contains('Selected final')) 'summary omitted a middle or final node'
     Check ($rootControls['UnifiedNodeChainSummary'].Text.Contains('AmneziaWG Strong')-and$rootControls['UnifiedNodeChainSummary'].Text.Contains('AmneziaWG Fast')-and$rootControls['UnifiedOrderedModeSummary'].Text.Contains('AmneziaWG Strong')) 'summary concealed selected per-node AWG transports'
-    foreach($name in @('UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedExecution','UnifiedCandidatesButton')){Check (-not$rootControls[$name].IsEnabled) 'ordered path left contradictory pair controls enabled'}
+    foreach($name in @('UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedBaseCombo','UnifiedCandidatesButton')){Check (-not$rootControls[$name].IsEnabled) 'ordered path left contradictory pair controls enabled'}
+    Check $rootControls['UnifiedExecution'].IsEnabled 'ordered path disabled its explicit execution choice'
+    foreach($index in @(1,2,0)){
+        $rootControls['UnifiedExecution'].SelectedIndex=$index;&$apply
+        $choice=$rootControls['UnifiedNodeChainButton'].Tag
+        Check ($choice.execution-ceq$rootControls['UnifiedExecution'].SelectedItem.Tag) 'editor replaced explicit ordered execution'
+        Check (($choice.nodes.id-join',')-ceq($saved.nodes.id-join',')) 'execution choice dropped original ordered members'
+    }
     Check ($rootControls['UnifiedModeCombo'].Visibility-ceq'Collapsed'-and$rootControls['UnifiedOrderedModeSummary'].Visibility-ceq'Visible'-and-not$rootControls['UnifiedPresetsButton'].IsEnabled) 'ordered mode display claimed another direct transport'
     $rootControls['UnifiedMultihop'].IsChecked=$false;RefreshUnifiedOrderedControls
     Check ($rootControls['UnifiedModeCombo'].Visibility-ceq'Visible'-and$rootControls['UnifiedOrderedModeSummary'].Visibility-ceq'Collapsed') 'direct mode display remained hidden after disabling multihop'

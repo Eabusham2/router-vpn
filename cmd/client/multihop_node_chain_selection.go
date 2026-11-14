@@ -36,7 +36,12 @@ func nativeMultihopCapturedProfiles(selection multihopSelection) []common.Router
 
 func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []common.RouterProfile,
 	nodes []common.MultihopNodeSelection, execution string) (multihopSelection, error) {
-	members, err := resolveDesktopNodeChainMembers(control, profiles, nodes, execution)
+	if err := desktopOrderedExecutionSelection(nodes, execution); err != nil {
+		return multihopSelection{}, err
+	}
+	// The immutable graph describes the same full Local source. Execution is
+	// a separate child-owned derivation; never rewrite saved member preferences.
+	members, err := resolveDesktopNodeChainMembers(control, profiles, nodes, "local")
 	if desktopNodeChainHasSOCKS(nodes) {
 		members, err = resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, execution)
 	}
@@ -45,6 +50,13 @@ func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []c
 	}
 	if err != nil {
 		return multihopSelection{}, err
+	}
+	if execution != "local" {
+		for _, member := range members {
+			if member.Profile.NodeKind == "external" || member.Profile.External != nil {
+				return multihopSelection{}, errors.New("ordered Server or Compare requires admitted paired nodes")
+			}
+		}
 	}
 	// The concrete physical policy has one final authenticated control source.
 	// A third profile cannot supply credentials or a weaker protection policy.

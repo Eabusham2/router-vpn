@@ -132,10 +132,10 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if len(p.MultihopNodes) != 0 {
-		if !p.MultihopEnabled || p.MultihopExecution != "local" || p.MultihopEntryID != "" || p.MultihopExitID != "" || p.MultihopEntryMode != "" {
-			return errors.New("saved ordered path requires explicit Local execution and no legacy pair fields")
+		if !p.MultihopEnabled || !validDesktopOrderedExecution(p.MultihopExecution) || p.MultihopEntryID != "" || p.MultihopExitID != "" || p.MultihopEntryMode != "" {
+			return errors.New("saved ordered path requires explicit execution and no legacy pair fields")
 		}
-		return common.ValidateMultihopNodes(p.MultihopNodes)
+		return desktopOrderedExecutionSelection(p.MultihopNodes, p.MultihopExecution)
 	}
 	if p.MultihopExecution != "" {
 		return errors.New("saved ordered execution has no complete selected-node inventory")

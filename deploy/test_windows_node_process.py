@@ -373,8 +373,37 @@ ORDERED_CASES = {
         'server',
     ),
 }
+# Additive product/controller models. Keep the original ordered162 inventory
+# unchanged; these roots require actual Windows process execution separately.
+PRODUCT_CASES = {'TestDesktopOrderedExecutionProductPublishesChildAndStopsExactOwner': ('local', 'server'),
+ 'TestDesktopOrderedExecutionProductStopCannotBorrowReplacement': (),
+ 'TestDesktopOrderedExecutionProductRestoreRequiresRetainedIntent': ('retained-intent', 'ordinary-close'),
+ 'TestDesktopOrderedExecutionChoicesKeepProxyNativeAdmissionClosed': (),
+ 'TestDesktopOrderedExecutionPublicConnectUsesChildOnly': ('2-server-server',
+                                                           '2-auto-local',
+                                                           '2-auto-server',
+                                                           '3-server-server',
+                                                           '3-auto-local',
+                                                           '3-auto-server',
+                                                           '8-server-server',
+                                                           '8-auto-local',
+                                                           '8-auto-server'),
+ 'TestDesktopOrderedExecutionDisconnectRetainsExactReleaseAfterChildJoin': (),
+ 'TestDesktopOrderedExecutionNativeJoinCompletionRetry': (),
+ 'TestDesktopOrderedExecutionPreparationCleanupKeepsPriorOwner': (),
+ 'TestDesktopOrderedExecutionPreStartFailureKeepsOriginalChild': ('preflight', 'guard', 'stop', 'cancel'),
+ 'TestDesktopOrderedExecutionPendingPreparationKeepsStopCallerBudget': (),
+ 'TestDesktopOrderedExecutionRetirementKeepsCallerBudget': ('retire', 'restore-lookup'),
+ 'TestDesktopNodeCapturedReleaseKeepsCallerLockBounds': ('nil', 'cancelled', 'app-lock', 'slot-lock'),
+ 'TestDesktopNodeCapturedReleaseForwardsOriginalBackendCaller': ('release', 'close', 'absence-read'),
+ 'TestDesktopNodeCapturedReleaseRequiresExactAbsenceAndCurrentSlot': ('replaced-before',
+                                                                      'replaced-after-absence',
+                                                                      'cancel-after-absence',
+                                                                      'failed-absence'),
+ 'TestDesktopNodeCapturedReleasePreservesPolicyAndFailedOwner': ('on-connect', 'always'),
+ 'TestDesktopNodeCapturedReleasePendingOffKeepsOriginalCaller': ()}
 LEGACY_SHARED_TESTS = (*SHARED_TESTS, *IMPORTED_CASES, *PREFIX_CASES)
-SHARED_TESTS = (*LEGACY_SHARED_TESTS, *ORDERED_CASES)
+SHARED_TESTS = (*LEGACY_SHARED_TESTS, *ORDERED_CASES, *PRODUCT_CASES)
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
     "interpreter", "another-directory", "missing-source", "duplicate-source",
@@ -385,7 +414,7 @@ ARGUMENT_CASES = (
 PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2",
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
-EXPECTED = (*REQUIRED, *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
+EXPECTED = (*REQUIRED, *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
             *(root + "/" + case for root, cases in PREFIX_CASES.items() for case in cases),
             *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
             *("TestDesktopProtectionOffContextGuardsActualPublication/" + case for case in ("before-rename", "after-rename")),
@@ -442,6 +471,11 @@ EXPECTED = (*REQUIRED, *(root + "/" + case for root, cases in ORDERED_CASES.item
             *("TestPrivateStoreCheckedWriteRetainsOriginalTarget/" + case for case in
               ("unchanged", "same-content", "different-content", "appeared", "removed", "refused")))
 REQUIRED_SOURCES = (
+    "cmd/client/desktop_node_chain_execution_product.go",
+    "cmd/client/desktop_node_chain_execution_product_restore.go",
+    "cmd/client/desktop_node_chain_execution_product_test.go",
+    "cmd/client/desktop_node_captured_release_context_test.go",
+    "cmd/client/multihop_node_chain_request_test.go",
     'cmd/client/desktop_node_chain_execution_graph.go',
     'cmd/client/desktop_node_chain_execution_graph_test.go',
     'cmd/client/desktop_node_chain_execution_owned_test.go',
@@ -678,12 +712,14 @@ def baseline_groups():
     # Keep every original phase intact. Each new whole root gets the same
     # existing alarm independently; a larger inventory must not consume another
     # root's budget or silently drop its nested negative cases.
-    original = tuple(root for root in SHARED_TESTS if root not in ORDERED_CASES)
+    original = tuple(root for root in SHARED_TESTS if root not in ORDERED_CASES and root not in PRODUCT_CASES)
     for offset in range(0, len(original), 16):
         groups.append(("shared-ownership-" + str(offset // 16 + 1), original[offset:offset + 16]))
     for root in SHARED_TESTS:
         if root in ORDERED_CASES:
             groups.append(("ordered-" + root, (root,)))
+        elif root in PRODUCT_CASES:
+            groups.append(("product-" + root, (root,)))
     roots = tuple(root for _, selected in groups for root in selected)
     if (roots != REQUIRED or len(set(roots)) != len(roots) or len(set(EXPECTED)) != len(EXPECTED) or
             any(name.split("/", 1)[0] not in roots for name in EXPECTED)):

@@ -87,11 +87,15 @@ func (capture *desktopNodeChainPlatformCapture) prepareForPurposeAndExecution(ct
 	launch.chain.capture = owner
 	_, meta, physicalCapture, err := launch.chain.readPolicy()
 	if err != nil {
-		return launch, "", err
+		clear(launch.config)
+		clear(launch.metadata)
+		return nil, "", err // No platform, staging, workspace or native authority exists yet.
 	}
 	physical, err := captureDesktopLinuxRunningPath(physicalCapture.PhysicalRoots, physicalCapture.IPv6Mode)
 	if err != nil {
-		return launch, "", err
+		clear(launch.config)
+		clear(launch.metadata)
+		return nil, "", err // Partial native ownership begins only below.
 	}
 	h := &desktopLinuxNodeHost{gate: make(chan struct{}, 1), parent: capture.parent, operation: operation,
 		chain: launch.chain.policy, socksChain: launch.chain.socksPolicy, connectChain: launch.chain.connectPolicy, launch: launch, source: []byte(launch.chain.input), network: owner.network,

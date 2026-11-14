@@ -75,7 +75,7 @@ func startupOrderedReceipt(t *testing.T, capture *startupPolicyCapture) startupS
 		RouterID: selection.Control.ID, RuntimeMode: selection.ExitMode,
 		LogicalMode: "multihop", Base: selection.Base,
 		ProfileToken: startupExternalProfileToken(selection.Control),
-		UpdatedAt: time.Unix(1700000000, 0).UTC(), PathKind: startupNodeChainPathKind,
+		UpdatedAt:    time.Unix(1700000000, 0).UTC(), PathKind: startupNodeChainPathKind,
 		NodeChain: capture.nodeChain.receipt(),
 	}
 	if err := validateStartupNodeChainSelection(last); err != nil {
@@ -170,18 +170,26 @@ func TestStartupNodeChainCapturesAllOriginalModesAndPrivateSources(t *testing.T)
 func TestStartupNodeChainDelayRejectsEveryMemberAndSourceReplacement(t *testing.T) {
 	changes := map[string]func(*app, []common.MultihopNodeSelection){
 		"first-credential": func(a *app, _ []common.MultihopNodeSelection) { a.profiles.Profiles[0].APIToken += "-replacement" },
-		"middle-policy": func(a *app, _ []common.MultihopNodeSelection) { a.profiles.Profiles[1].HomeLANAccess = !a.profiles.Profiles[1].HomeLANAccess },
-		"final-policy": func(a *app, _ []common.MultihopNodeSelection) { a.profiles.Profiles[3].DNSPort = 5353 },
+		"middle-policy": func(a *app, _ []common.MultihopNodeSelection) {
+			a.profiles.Profiles[1].HomeLANAccess = !a.profiles.Profiles[1].HomeLANAccess
+		},
+		"final-policy":     func(a *app, _ []common.MultihopNodeSelection) { a.profiles.Profiles[3].DNSPort = 5353 },
 		"selected-control": func(a *app, nodes []common.MultihopNodeSelection) { a.profiles.SelectedID = nodes[0].ID },
 		"order": func(a *app, _ []common.MultihopNodeSelection) {
 			p := &a.profiles.Profiles[3]
 			p.MultihopNodes[0], p.MultihopNodes[1] = p.MultihopNodes[1], p.MultihopNodes[0]
 		},
-		"mode": func(a *app, _ []common.MultihopNodeSelection) { a.profiles.Profiles[3].MultihopNodes[1].Mode = "awg2-strong" },
-		"missing-middle": func(a *app, _ []common.MultihopNodeSelection) { a.profiles.Profiles = append(a.profiles.Profiles[:1], a.profiles.Profiles[2:]...) },
-		"duplicate-middle": func(a *app, _ []common.MultihopNodeSelection) { a.profiles.Profiles = append(a.profiles.Profiles, cloneRouterProfile(a.profiles.Profiles[1])) },
+		"mode": func(a *app, _ []common.MultihopNodeSelection) {
+			a.profiles.Profiles[3].MultihopNodes[1].Mode = "awg2-strong"
+		},
+		"missing-middle": func(a *app, _ []common.MultihopNodeSelection) {
+			a.profiles.Profiles = append(a.profiles.Profiles[:1], a.profiles.Profiles[2:]...)
+		},
+		"duplicate-middle": func(a *app, _ []common.MultihopNodeSelection) {
+			a.profiles.Profiles = append(a.profiles.Profiles, cloneRouterProfile(a.profiles.Profiles[1]))
+		},
 		"startup-policy": func(a *app, _ []common.MultihopNodeSelection) { a.profiles.Profiles[3].StartupMode = "manual" },
-		"auto-connect": func(a *app, _ []common.MultihopNodeSelection) { a.profiles.Profiles[3].AutoConnect = false },
+		"auto-connect":   func(a *app, _ []common.MultihopNodeSelection) { a.profiles.Profiles[3].AutoConnect = false },
 	}
 	for name, change := range changes {
 		t.Run(name, func(t *testing.T) {
@@ -304,40 +312,54 @@ func TestStartupNodeChainLastRejectsMalformedOrCrossFamilyReceipt(t *testing.T) 
 	chain := func(object map[string]any) map[string]any { return object["node_chain"].(map[string]any) }
 	members := func(object map[string]any) []any { return chain(object)["nodes"].([]any) }
 	cases := map[string][]byte{
-		"missing-tag": mutate(func(o map[string]any) { delete(o, "path_kind") }),
-		"missing-chain": mutate(func(o map[string]any) { delete(o, "node_chain") }),
-		"null-tag": mutate(func(o map[string]any) { o["path_kind"] = nil }),
-		"null-tag-no-chain": mutate(func(o map[string]any) { o["path_kind"] = nil; delete(o, "node_chain") }),
+		"missing-tag":        mutate(func(o map[string]any) { delete(o, "path_kind") }),
+		"missing-chain":      mutate(func(o map[string]any) { delete(o, "node_chain") }),
+		"null-tag":           mutate(func(o map[string]any) { o["path_kind"] = nil }),
+		"null-tag-no-chain":  mutate(func(o map[string]any) { o["path_kind"] = nil; delete(o, "node_chain") }),
 		"empty-tag-no-chain": mutate(func(o map[string]any) { o["path_kind"] = ""; delete(o, "node_chain") }),
-		"case-tag-no-chain": mutate(func(o map[string]any) { o["Path_Kind"] = o["path_kind"]; delete(o, "path_kind"); delete(o, "node_chain") }),
-		"empty-tag": mutate(func(o map[string]any) { o["path_kind"] = "" }),
-		"wrong-tag": mutate(func(o map[string]any) { o["path_kind"] = "pair-v1" }),
-		"number-tag": mutate(func(o map[string]any) { o["path_kind"] = 1 }),
-		"case-tag": mutate(func(o map[string]any) { o["Path_Kind"] = o["path_kind"]; delete(o, "path_kind") }),
-		"null-chain": mutate(func(o map[string]any) { o["node_chain"] = nil }),
-		"case-chain": mutate(func(o map[string]any) { o["Node_Chain"] = o["node_chain"]; delete(o, "node_chain") }),
-		"cross-family": mutate(func(o map[string]any) { o["external"] = map[string]any{"protocol": "socks5", "direct": true} }),
-		"null-external": mutate(func(o map[string]any) { o["external"] = nil }),
-		"unknown": mutate(func(o map[string]any) { o["fallback"] = true }),
-		"wrong-schema": mutate(func(o map[string]any) { chain(o)["schema"] = 2 }),
-		"server": mutate(func(o map[string]any) { chain(o)["execution"] = "server" }),
-		"compare": mutate(func(o map[string]any) { chain(o)["execution"] = "auto" }),
-		"bad-root": mutate(func(o map[string]any) { chain(o)["root_sha256"] = "not-a-digest" }),
-		"too-few-members": mutate(func(o map[string]any) { chain(o)["nodes"] = members(o)[:1] }),
-		"duplicate-member": mutate(func(o map[string]any) { n := members(o); n[1] = n[0] }),
-		"wrong-final": mutate(func(o map[string]any) { n := members(o); n[len(n)-1].(map[string]any)["mode"] = "wg" }),
-		"wrong-prefix": mutate(func(o map[string]any) { members(o)[0].(map[string]any)["mode"] = "shadowsocks" }),
-		"wrong-base": mutate(func(o map[string]any) { o["base"] = "awg" }),
-		"foreign-control": mutate(func(o map[string]any) { o["router_id"] = "other-control" }),
+		"case-tag-no-chain": mutate(func(o map[string]any) {
+			o["Path_Kind"] = o["path_kind"]
+			delete(o, "path_kind")
+			delete(o, "node_chain")
+		}),
+		"empty-tag":               mutate(func(o map[string]any) { o["path_kind"] = "" }),
+		"wrong-tag":               mutate(func(o map[string]any) { o["path_kind"] = "pair-v1" }),
+		"number-tag":              mutate(func(o map[string]any) { o["path_kind"] = 1 }),
+		"case-tag":                mutate(func(o map[string]any) { o["Path_Kind"] = o["path_kind"]; delete(o, "path_kind") }),
+		"null-chain":              mutate(func(o map[string]any) { o["node_chain"] = nil }),
+		"case-chain":              mutate(func(o map[string]any) { o["Node_Chain"] = o["node_chain"]; delete(o, "node_chain") }),
+		"cross-family":            mutate(func(o map[string]any) { o["external"] = map[string]any{"protocol": "socks5", "direct": true} }),
+		"null-external":           mutate(func(o map[string]any) { o["external"] = nil }),
+		"unknown":                 mutate(func(o map[string]any) { o["fallback"] = true }),
+		"wrong-schema":            mutate(func(o map[string]any) { chain(o)["schema"] = 2 }),
+		"server":                  mutate(func(o map[string]any) { chain(o)["execution"] = "server" }),
+		"compare":                 mutate(func(o map[string]any) { chain(o)["execution"] = "auto" }),
+		"bad-root":                mutate(func(o map[string]any) { chain(o)["root_sha256"] = "not-a-digest" }),
+		"too-few-members":         mutate(func(o map[string]any) { chain(o)["nodes"] = members(o)[:1] }),
+		"duplicate-member":        mutate(func(o map[string]any) { n := members(o); n[1] = n[0] }),
+		"wrong-final":             mutate(func(o map[string]any) { n := members(o); n[len(n)-1].(map[string]any)["mode"] = "wg" }),
+		"wrong-prefix":            mutate(func(o map[string]any) { members(o)[0].(map[string]any)["mode"] = "shadowsocks" }),
+		"wrong-base":              mutate(func(o map[string]any) { o["base"] = "awg" }),
+		"foreign-control":         mutate(func(o map[string]any) { o["router_id"] = "other-control" }),
 		"missing-identity-source": mutate(func(o map[string]any) { m := members(o)[1].(map[string]any); m["sources"] = m["sources"].([]any)[1:] }),
-		"bad-source-digest": mutate(func(o map[string]any) { m := members(o)[1].(map[string]any); m["sources"].([]any)[0].(map[string]any)["sha256"] = "bad" }),
+		"bad-source-digest": mutate(func(o map[string]any) {
+			m := members(o)[1].(map[string]any)
+			m["sources"].([]any)[0].(map[string]any)["sha256"] = "bad"
+		}),
 		"unknown-member": mutate(func(o map[string]any) { members(o)[1].(map[string]any)["password"] = "not-an-owned-source" }),
 		"case-member-id": mutate(func(o map[string]any) { m := members(o)[1].(map[string]any); m["ID"] = m["id"]; delete(m, "id") }),
-		"unknown-source": mutate(func(o map[string]any) { m := members(o)[1].(map[string]any); m["sources"].([]any)[0].(map[string]any)["source"] = "replacement" }),
-		"source-order": mutate(func(o map[string]any) { m := members(o)[1].(map[string]any); src := m["sources"].([]any); src[0], src[1] = src[1], src[0] }),
-		"duplicate-tag": append([]byte("{\"path_kind\":\"node-chain-v1\","), good[1:]...),
+		"unknown-source": mutate(func(o map[string]any) {
+			m := members(o)[1].(map[string]any)
+			m["sources"].([]any)[0].(map[string]any)["source"] = "replacement"
+		}),
+		"source-order": mutate(func(o map[string]any) {
+			m := members(o)[1].(map[string]any)
+			src := m["sources"].([]any)
+			src[0], src[1] = src[1], src[0]
+		}),
+		"duplicate-tag":   append([]byte("{\"path_kind\":\"node-chain-v1\","), good[1:]...),
 		"duplicate-chain": append([]byte("{\"node_chain\":null,"), good[1:]...),
-		"trailing-json": append(append([]byte(nil), good...), []byte(" {}")...),
+		"trailing-json":   append(append([]byte(nil), good...), []byte(" {}")...),
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -413,7 +435,7 @@ func TestStartupNodeChainPreservesHistoricalUntaggedPairAndExternalReceipts(t *t
 		last := startupSelection{RouterID: captured.profile.ID, RuntimeMode: "external-hysteria2",
 			LogicalMode: "external-node", ProfileToken: startupExternalProfileToken(captured.profile),
 			UpdatedAt: time.Unix(1700000000, 0).UTC(),
-			External: &startupExternalSelection{Protocol: "hysteria2", Direct: true, SourceToken: captured.sourceToken, Execution: "local"}}
+			External:  &startupExternalSelection{Protocol: "hysteria2", Direct: true, SourceToken: captured.sourceToken, Execution: "local"}}
 		if err := external.saveStartupSelection(last); err != nil {
 			t.Fatal(err)
 		}
@@ -427,13 +449,12 @@ func TestStartupNodeChainPreservesHistoricalUntaggedPairAndExternalReceipts(t *t
 	})
 }
 
-
 // These adapters retain real shared compilation and sealed launch projection.
 // Stage/proof are explicit boundaries and never start the unstarted command.
 type startupOrderedHarness struct {
-	driver nativeMultihopConnectRuntime
-	prepared *desktopNodeLaunch
-	captures, preflights, stages, proofs int
+	driver                                                              nativeMultihopConnectRuntime
+	prepared                                                            *desktopNodeLaunch
+	captures, preflights, stages, proofs                                int
 	beforeCapture, afterCapture, afterPreflight, afterStage, afterProof func()
 }
 
@@ -680,6 +701,21 @@ func TestStartupNodeChainCancelledIntentNeverEntersAnotherTransaction(t *testing
 			}
 			if _, err := os.Stat(a.startupStatePath()); !errors.Is(err, os.ErrNotExist) {
 				t.Fatal("retired intent persisted an unproved Last receipt", err)
+			}
+		})
+	}
+}
+
+func TestStartupNodeChainExecutionCannotFallThroughLocalAdapter(t *testing.T) {
+	for _, execution := range []string{"server", "auto"} {
+		t.Run(execution, func(t *testing.T) {
+			a, _ := startupOrderedTestApp(t, 3)
+			final := &a.profiles.Profiles[len(a.profiles.Profiles)-1]
+			final.MultihopExecution = execution
+			before := cloneRouterProfileStore(a.profiles)
+			capture, err := captureStartupNodeChain(a, *final, a.profiles.Profiles, nil)
+			if err == nil || capture != nil || a.cmd != nil || a.state.Connected || !reflect.DeepEqual(before, a.profiles) {
+				t.Fatal("saved execution was relabelled Local or mutated before typed replay admission")
 			}
 		})
 	}

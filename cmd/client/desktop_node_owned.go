@@ -921,31 +921,64 @@ func (a *app) releaseDesktopOwnedNodeProtection() (bool, error) {
 }
 
 func (a *app) releaseCapturedDesktopNodeProtection(slot *desktopNodeProtectionSlot) error {
-	a.mu.Lock()
-	current := slot != nil && a.nodeProtection == slot
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return a.releaseCapturedDesktopNodeProtectionContext(ctx, slot)
+}
+
+// The captured slot outlives its child. Cleanup keeps the original caller and
+// exact slot across native release; cancellation never authorizes rediscovery.
+func (a *app) releaseCapturedDesktopNodeProtectionContext(ctx context.Context, slot *desktopNodeProtectionSlot) error {
+	if ctx == nil || a == nil || slot == nil {
+		return errors.New("native protection release requires its captured caller and slot")
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	current := a.nodeProtection == slot
 	a.mu.Unlock()
 	if !current {
 		return errors.New("native protection release belongs to a replaced application slot")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if pending := slot.pendingOff(); pending != nil {
+	pending, err := slot.pendingOffContext(ctx)
+	if err != nil {
+		return err
+	}
+	if pending != nil {
+		// Preserve the existing explicit-Off transaction and its exact caller.
+		// Its committed terminal bookkeeping remains owned by that transaction.
 		_, err := a.resumeDesktopProtectionOff(ctx, slot, pending, true)
 		return err
 	}
-	if err := slot.release(ctx); err != nil {
+	if err := desktopnetwork.LockContext(ctx, &slot.mu); err != nil {
 		return err
 	}
-	if slot.provedEmpty() {
-		// After a proved on-connect release a later legacy session must retain
-		// its own cleanup dispatch; an empty old slot cannot swallow it.
-		a.mu.Lock()
-		if a.nodeProtection == slot {
-			a.nodeProtection = nil
-		}
-		a.mu.Unlock()
+	defer slot.mu.Unlock()
+	// The app may have changed while the old slot was waiting for its lock.
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
 	}
-	return nil
+	current = a.nodeProtection == slot
+	a.mu.Unlock()
+	if !current {
+		return errors.New("native protection release belongs to a replaced application slot")
+	}
+	if err := slot.releaseLocked(ctx); err != nil {
+		return err
+	}
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return err
+	}
+	defer a.mu.Unlock()
+	if a.nodeProtection != slot {
+		return errors.New("native protection release completed for a replaced application slot")
+	}
+	if slot.provedEmptyLocked() {
+		// Exact native absence and the same application association are proved
+		// under both locks. A replacement slot never supplies this evidence.
+		a.nodeProtection = nil
+	}
+	return ctx.Err()
 }
 
 func desktopOwnedNodeDescriptor(launch *desktopNodeLaunch, packageRoot string, environment []string) (*exec.Cmd, error) {

@@ -24,29 +24,31 @@ import (
 // reconnect. HTTP cancellation retires only the test child; explicit Disconnect
 // cancels intent as well and therefore must never reconnect the previous VPN.
 type speedLabTemporaryOwner struct {
-	intent        context.Context
-	cancelIntent  context.CancelFunc
-	test          context.Context
-	cancelTest    context.CancelFunc
-	current       context.Context // protected by app.mu
-	runtime       *exec.Cmd       // protected by app.mu
-	mutated       bool            // protected by app.mu
-	restored      bool            // protected by app.mu
-	network       string
-	cohortNetwork desktopExternalComparisonNetwork // app.mu; optional batch-only physical event owner
+	intent           context.Context
+	cancelIntent     context.CancelFunc
+	test             context.Context
+	cancelTest       context.CancelFunc
+	current          context.Context // protected by app.mu
+	runtime          *exec.Cmd       // protected by app.mu
+	mutated          bool            // protected by app.mu
+	restored         bool            // protected by app.mu
+	network          string
+	cohortNetwork    desktopExternalComparisonNetwork // app.mu; optional batch-only physical event owner
+	orderedExecution *desktopOrderedExecutionRestore  // immutable original pre-test capsule
 }
 
 var speedLabTemporaryOwners sync.Map // map[*app]*speedLabTemporaryOwner
 
 type speedLabRestorePlan struct {
-	standard speedLabStandardServiceRestore
-	profile  common.RouterProfile
-	request  speedLabRequest
-	native   *desktopNodeLaunch
-	linux    *desktopLinuxNodeRestore
-	external *speedLabExternalRestore
-	tor      *speedLabTorRestore
-	multihop *multihopSelection
+	standard         speedLabStandardServiceRestore
+	profile          common.RouterProfile
+	request          speedLabRequest
+	native           *desktopNodeLaunch
+	linux            *desktopLinuxNodeRestore
+	external         *speedLabExternalRestore
+	tor              *speedLabTorRestore
+	multihop         *multihopSelection
+	orderedExecution *desktopOrderedExecutionRestore
 }
 
 // Tor restoration retains the proved policy identity, not an old isolation
@@ -283,7 +285,7 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 	intent, cancelIntent := context.WithCancel(context.Background())
 	test, cancelTest := context.WithCancel(intent)
 	network, networkErr := physicalNetworkIdentityContext(ctx)
-	owner := &speedLabTemporaryOwner{intent: intent, cancelIntent: cancelIntent, test: test, cancelTest: cancelTest, current: test, runtime: snapshot.Runtime, network: network}
+	owner := &speedLabTemporaryOwner{intent: intent, cancelIntent: cancelIntent, test: test, cancelTest: cancelTest, current: test, runtime: snapshot.Runtime, network: network, orderedExecution: snapshot.Plan.orderedExecution}
 	if networkErr != nil || owner.network == "" {
 		cancelTest()
 		cancelIntent()
@@ -495,6 +497,9 @@ func (a *app) speedLabSuspendPrevious(snapshot speedLabTemporarySnapshot, system
 }
 
 func (a *app) speedLabSuspendPreviousWith(snapshot speedLabTemporarySnapshot, systemDirect bool, stop func(bool) error) error {
+	if systemDirect && snapshot.Plan.orderedExecution != nil {
+		return errors.New("system-direct Speed Lab requires an execution release-and-restore capability; the original ordered connection remains owned")
+	}
 	if stop == nil {
 		return errors.New("temporary Speed Lab has no captured runtime stop operation")
 	}
@@ -525,6 +530,9 @@ func (a *app) speedLabCaptureRestorePlanContext(ctx context.Context, snapshot sp
 	}
 	if snapshot.State.Phase != "connected" || snapshot.Runtime == nil {
 		return speedLabRestorePlan{}, errors.New("temporary Speed Lab requires a stable owned connection to restore")
+	}
+	if saved, err := a.captureSpeedLabOrderedExecutionRestore(ctx, snapshot); saved != nil || err != nil {
+		return speedLabRestorePlan{orderedExecution: saved}, err
 	}
 	identity, _, err := captureSpeedLabIdentityContext(ctx, a)
 	if err != nil {
@@ -881,6 +889,8 @@ func (a *app) speedLabRestartPlanWithTorRuntimeContext(ctx context.Context, plan
 	}
 	var err error
 	switch {
+	case plan.orderedExecution != nil:
+		err = a.restartSpeedLabOrderedExecution(ctx, plan.orderedExecution)
 	case plan.standard != nil:
 		err = plan.standard.restart(ctx, a)
 	case plan.linux != nil:

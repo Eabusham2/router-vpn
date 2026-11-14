@@ -24,6 +24,7 @@ SOURCE_PATHS = (
     "client/test-windows-connection-profile-modes.ps1",
     "client/test-windows-ordered-editor.ps1",
     "client/linux/routervpn-ordered-nodes-v1.inc",
+    "client/linux/routervpn-connection-profiles-v11.inc",
     "client/linux/test-ordered-nodes-v1.c",
     "client/linux/test-ordered-nodes-v1.py",
     "deploy/test_desktop_connection_profile_modes.py",
@@ -33,7 +34,7 @@ WINDOWS_CONTROLS = frozenset(("connect-protocol", "connect-mode", "socks-mode", 
     "change-mode", "row-label", "source-token", "summary-reset"))
 LINUX_CONTROLS = ("connect-mode", "connect-protocol", "connect-final", "socks-mode", "final-mode", "source-token", "generation", "prefix-mode",
     "capability", "final-pin", "expected-inventory", "disk-receipt", "load-current-graph",
-    "response-inventory")
+    "response-execution", "response-inventory")
 TARGETS = {
     "linux/amd64": ("Linux", ("x86_64", "AMD64")),
     "windows/amd64": ("Windows", ("AMD64", "x86_64")),
@@ -41,12 +42,12 @@ TARGETS = {
 }
 
 
-# One shipping profile case, its nineteen original mutations, and one native
+# One shipping profile case, its nineteen original and two execution-choice mutations, and one native
 # ordered-editor process each keep the fixture's existing ninety-second bound.
 WINDOWS_PROFILE_MUTATIONS = (
     "shipping", "capture-two-modes", "load-fallback", "connect-fallback",
     "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback",
-    "startup-deadline", "ordered-drop-middle", "ordered-final-owner",
+    "startup-deadline", "ordered-drop-middle", "ordered-execution-capture", "ordered-execution-connect", "ordered-final-owner",
     "ordered-capability", "ordered-source", "ordered-locked-source",
     "setup-expectation", "setup-current-receipt", "setup-response-source",
     "setup-response-order", "setup-load-inventory", "setup-refresh-retirement",
@@ -129,7 +130,7 @@ def verdict(raw, target, code, timed_out, joined):
         controls = re.findall(r"(?m)^Actual ordered editor causal control ([^\r\n]+): rejected$", text)
         result.update(profile_counts=profiles, editor_counts=editors, controls=controls,
                       original_control_counts=summaries)
-        complete = (len(profiles) == 1 and len(editors) == 1 and summaries == ["19"] and
+        complete = (len(profiles) == 1 and len(editors) == 1 and summaries == ["21"] and
                     len(controls) == len(WINDOWS_CONTROLS) and frozenset(controls) == WINDOWS_CONTROLS)
     else:
         raise ValueError("unknown desktop editor target")

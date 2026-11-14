@@ -191,7 +191,16 @@ def windows_profile_controls() -> None:
     ordered(settlement, "durable explicit Off settlement",
             "writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.intent, j.settlement)", "s.closeEmptyJournalLocked(ctx)")
     go_function("cmd/client/desktop_node_owned.go", "releaseCapturedDesktopNodeProtection",
-                "slot.pendingOff()", "a.resumeDesktopProtectionOff(ctx, slot, pending, true)")
+                "context.WithTimeout(context.Background(), 15*time.Second)",
+                "return a.releaseCapturedDesktopNodeProtectionContext(ctx, slot)")
+    release = go_function("cmd/client/desktop_node_owned.go", "releaseCapturedDesktopNodeProtectionContext",
+                          "ctx == nil || a == nil || slot == nil", "desktopnetwork.LockContext(ctx, &a.mu)",
+                          "current := a.nodeProtection == slot", "current = a.nodeProtection == slot",
+                          "if a.nodeProtection != slot", "desktopnetwork.LockContext(ctx, &slot.mu)",
+                          "if err := slot.releaseLocked(ctx); err != nil", "if slot.provedEmptyLocked()")
+    ordered(release, "captured protection release", "slot.pendingOffContext(ctx)",
+            "a.resumeDesktopProtectionOff(ctx, slot, pending, true)",
+            "slot.releaseLocked(ctx)", "slot.provedEmptyLocked()", "a.nodeProtection = nil")
     require("cmd/client/profile_protection_test.go", "TestProfileProtectionPreservesExternalPrivateGraphAndPolicies",
             "TestProfileProtectionRejectsStaleSourceAndBusyOrMissingOwner",
             "TestProfileProtectionRejectsMalformedInputAndRollsBackPersistenceFailure")

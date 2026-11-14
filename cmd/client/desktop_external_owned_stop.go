@@ -354,6 +354,22 @@ type desktopWindowsExternalStopCapture struct {
 }
 
 func (a *app) captureDesktopRetainedStop() (desktopRetainedStopCapture, error) {
+	ctx, cancel := desktopNodeChainRetirementContext()
+	defer cancel()
+	return a.captureDesktopRetainedStopContext(ctx)
+}
+
+func (a *app) captureDesktopRetainedStopContext(ctx context.Context) (desktopRetainedStopCapture, error) {
+	if err := a.retirePendingDesktopOrderedExecutionPreparation(ctx); err != nil {
+		return nil, err
+	}
+	if captured, err := a.captureDesktopOrderedExecutionStopContext(ctx); captured != nil || err != nil {
+		return captured, err
+	}
+	return a.captureDesktopRetainedStopWithoutExecution()
+}
+
+func (a *app) captureDesktopRetainedStopWithoutExecution() (desktopRetainedStopCapture, error) {
 	// Capture the original platform owner before the MTU hold. The typed
 	// parent also retains attempts that entered PF but did not bind a graph.
 	a.mu.Lock()

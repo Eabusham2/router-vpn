@@ -76,7 +76,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		return nil
 	}
 	if record.Prefs == nil || record.External != nil || len(record.Hops) != 0 || !record.Prefs.MultihopEnabled ||
-		record.Prefs.MultihopExecution != "local" || len(record.NodeChain) != len(record.Prefs.MultihopNodes) ||
+		!validDesktopOrderedExecution(record.Prefs.MultihopExecution) || len(record.NodeChain) != len(record.Prefs.MultihopNodes) ||
 		record.Prefs.MultihopEntryID != "" || record.Prefs.MultihopExitID != "" || record.Prefs.MultihopEntryMode != "" {
 		return errors.New("saved ordered path has conflicting or incomplete selection records")
 	}
@@ -89,6 +89,9 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			return errors.New("saved ordered member differs from its selected position or source identity")
 		}
 		if captured.NodeKind == "external" {
+			if record.Prefs.MultihopExecution != "local" {
+				return errors.New("saved imported ordered execution lacks native Server or Compare admission")
+			}
 			if len(record.NodeChain) != 3 || i != 1 || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" ||
 				(captured.Mode != "shadowsocks" && captured.Mode != "socks5" && captured.Mode != "http-connect" && captured.Mode != "https-connect") ||
 				captured.NodeProofID != "" || captured.Preferences != nil || captured.External == nil || captured.External.Protocol != captured.Mode || captured.External.validate() != nil || captured.External.StartLayer != "" && captured.External.StartLayer != "off" || len(captured.Sources) != 1 || captured.Sources[0].Mode != "external-"+captured.Mode || !savedNodeChainDigest(captured.Sources[0].SHA256) {
@@ -209,7 +212,7 @@ func (a *app) restoreConnectionNodeChainLocked(saved connectionProfileRecord, se
 	if err := validateSavedNodeChain(saved); err != nil {
 		return nil, err
 	}
-	if !reflect.DeepEqual(selected.MultihopNodes, saved.Prefs.MultihopNodes) || !selected.MultihopEnabled || selected.MultihopExecution != "local" {
+	if !reflect.DeepEqual(selected.MultihopNodes, saved.Prefs.MultihopNodes) || !selected.MultihopEnabled || selected.MultihopExecution != saved.Prefs.MultihopExecution {
 		return nil, errors.New("saved ordered path differs from the requested restoration")
 	}
 	updates := make(map[string]common.RouterProfile, len(saved.NodeChain))

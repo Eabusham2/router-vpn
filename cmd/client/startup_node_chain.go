@@ -240,6 +240,12 @@ func captureStartupNodeChain(a *app, profile common.RouterProfile, profiles []co
 	if desktopNodeChainHasSOCKS(refs) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(refs) && !nativeNodeChainCONNECTPlatformSupported() {
 		return nil, errors.New("typed ordered startup awaits installed native platform acceptance")
 	}
+	// Saved explicit execution must never enter the legacy Local startup
+	// adapter. Typed child Last replay is a separate capability from saving
+	// a requested execution choice.
+	if execution != "local" {
+		return nil, errors.New("ordered Server and Compare startup requires its typed execution replay adapter")
+	}
 	selection, err := resolveDesktopNodeChainSelection(profile, profiles, refs, execution)
 	if err != nil {
 		return nil, err

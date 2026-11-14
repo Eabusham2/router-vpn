@@ -280,3 +280,46 @@ func TestConnectionProfileOrderedRestoreRejectsMiddleReplacementWithoutMutation(
 		})
 	}
 }
+
+// Persisted execution is requested intent, never a fabricated selected winner.
+func TestConnectionProfileOrderedExecutionRoundTrip(t *testing.T) {
+	for _, execution := range []string{"server", "auto"} {
+		for _, count := range []int{2, 3, 8} {
+			t.Run(fmt.Sprintf("%s-%d", execution, count), func(t *testing.T) {
+				a, nodes := savedNodeChainFixture(t, count)
+				response := postSetup(t, a, "/api/connection-profile/setup/save", map[string]any{
+					"name": "Ordered execution", "mode": "shadowsocks", "multihop_enabled": true,
+					"multihop_execution": execution, "multihop_nodes": nodes,
+				})
+				if response.Code != http.StatusOK {
+					t.Fatalf("save: %d %s", response.Code, response.Body.String())
+				}
+				store, err := loadConnectionProfileStore(a)
+				if err != nil || len(store.Profiles) != 1 {
+					t.Fatal("missing exact saved graph", err)
+				}
+				saved := store.Profiles[0]
+				if saved.Prefs == nil || saved.Prefs.MultihopExecution != execution || len(saved.NodeChain) != count {
+					t.Fatal("saved execution or full inventory changed")
+				}
+				response = postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": saved.ID})
+				if response.Code != http.StatusOK {
+					t.Fatalf("load: %d %s", response.Code, response.Body.String())
+				}
+				var payload map[string]any
+				if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+					t.Fatal(err)
+				}
+				final, _ := profileByID(a.profiles.Profiles, a.profiles.SelectedID)
+				if payload["multihop_execution"] != execution || final.MultihopExecution != execution || !reflect.DeepEqual(final.MultihopNodes, nodes) || a.cmd != nil || a.state.Connected {
+					t.Fatal("Load relabelled execution, dropped nodes or claimed a native connection")
+				}
+				for i, p := range a.profiles.Profiles {
+					if p.DNSPort != 5300+i || p.ManualMTU != 1340+i || p.APIToken != fmt.Sprintf("private-api-%d", i) {
+						t.Fatal("saved execution changed an independent member policy")
+					}
+				}
+			})
+		}
+	}
+}

@@ -709,6 +709,21 @@ func (a *app) resolveSpeedLabTemporaryMultihop(q speedLabRequest, selected, entr
 }
 
 func (a *app) startSpeedLabMultihopSelection(sel multihopSelection, q speedLabRequest) (speedLabPath, error) {
+	if len(sel.Nodes) != 0 && q.Execution != "local" {
+		ctx := a.connectionOperationContextOrBackground()
+		s, err := a.connectDesktopOrderedExecution(ctx, sel, q.Execution, false)
+		if err != nil {
+			return speedLabPath{}, err
+		}
+		if !desktopMultihopPlatformLaunch(s.launch) {
+			a.monitorDesktopOwnedNodeRuntime(s.launch)
+		}
+		return speedLabPath{Scope: "temporary", Topology: "multihop", Temporary: true,
+			EntryID: sel.Entry.ID, EntryName: sel.Entry.Name, ExitID: sel.Exit.ID, ExitName: sel.Exit.Name,
+			RuntimeMode: sel.ExitMode, LogicalMode: "multihop", Base: sel.Base, EntryMode: s.graph.EntryMode,
+			ExitMode: sel.ExitMode, Execution: s.graph.Execution, StartedAt: s.graph.Started,
+			Description: "temporary original ordered child-selected execution; saved choice remains unchanged"}, nil
+	}
 	execution, err := routeExecution(multihopConnectRequest{Execution: q.Execution})
 	if err != nil {
 		return speedLabPath{}, err

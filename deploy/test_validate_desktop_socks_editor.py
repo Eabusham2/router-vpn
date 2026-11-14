@@ -17,7 +17,7 @@ def complete(target):
         return ("Shipping GTK ordered editor + Add/Load/Update/Connect: 123 checks PASS; real callbacks/persistence, doubled controller boundary.\n" +
                 "".join("GTK ordered causal control " + name + ": rejected\n" for name in D.LINUX_CONTROLS)).encode()
     return ("Actual WPF profile Add/Load/Update and main Connect callbacks: 123 checks PASS\n" +
-            "WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 19 rejected\n" +
+            "WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 21 rejected\n" +
             "".join("Actual ordered editor causal control " + name + ": rejected\n" for name in sorted(D.WINDOWS_CONTROLS)) +
             "Actual ordered node editor callbacks: 123 checks PASS; WPF=True\n").encode()
 
@@ -33,7 +33,7 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_complete_original_and_new_inventories(self):
         self.assertEqual(len(D.WINDOWS_CONTROLS), 10)
-        self.assertEqual(len(D.LINUX_CONTROLS), 14)
+        self.assertEqual(len(D.LINUX_CONTROLS), 15)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
         self.assertEqual(D.LINUX_CONTROLS[:4], ("connect-mode", "connect-protocol", "connect-final", "socks-mode"))
         for target in D.TARGETS:
@@ -67,7 +67,7 @@ class DesktopEditorVerdicts(unittest.TestCase):
             raw = complete(target)
             variants = [raw.replace(b"123 checks", b"0 checks", 1), raw + b"Traceback failure\n", raw + b"ERROR original child failed\n"]
             if target.startswith("windows"):
-                variants += [raw.replace(b"WPF=True", b"WPF=False"), raw.replace(b"19 rejected", b"18 rejected"),
+                variants += [raw.replace(b"WPF=True", b"WPF=False"), raw.replace(b"21 rejected", b"19 rejected"),
                              raw + b"Actual WPF profile Add/Load/Update and main Connect callbacks: 123 checks PASS\n"]
             else:
                 variants += [raw + b"Gtk-WARNING: original widget failed\n",
@@ -88,8 +88,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_windows_suite_budget_covers_each_original_bounded_command(self):
         source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
-        self.assertEqual(D.windows_suite_budget(source), 1890)
-        self.assertEqual(D.windows_suite_budget(source), (20 + 1) * 90)
+        self.assertEqual(D.windows_suite_budget(source), 2070)
+        self.assertEqual(D.windows_suite_budget(source), (22 + 1) * 90)
         self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
 
     def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):

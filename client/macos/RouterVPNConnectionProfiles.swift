@@ -69,7 +69,7 @@ enum RouterVPNOrderedNodes {
     }
     static func connectBody(_ selection: RouterVPNConnectionProfileSelection, current: [String: Any]) throws -> [String: Any] {
         let rows = try decode(selection.orderedNodes, control: selection.selectedNodeID)
-        guard selection.multihopEnabled, selection.execution == "local",
+        guard selection.multihopEnabled, ["local", "server", "auto"].contains(selection.execution),
               selection.entryID.isEmpty, selection.exitID.isEmpty, selection.entryMode == "", selection.exitMode.isEmpty,
               current["selected_id"] as? String == selection.selectedNodeID,
               let profiles = current["profiles"] as? [[String: Any]] else {
@@ -80,6 +80,7 @@ enum RouterVPNOrderedNodes {
             let matches = profiles.filter { $0["id"] as? String == id }
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
+            guard importedMode == nil || selection.execution == "local" else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
             guard importedMode != nil ? rows.count == 3 && position == 1 && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 requires StartLayer Off.") }
@@ -91,7 +92,7 @@ enum RouterVPNOrderedNodes {
             }
         }
         let tokens = Dictionary(uniqueKeysWithValues: rows.map { ($0["id"]!, selection.profileTokens[$0["id"]!]!) })
-        return ["nodes": rows, "execution": "local", "expected_selected_node_id": selection.selectedNodeID,
+        return ["nodes": rows, "execution": selection.execution, "expected_selected_node_id": selection.selectedNodeID,
                 "expected_profile_tokens": tokens]
     }
 }
@@ -120,12 +121,15 @@ struct RouterVPNOrderedNodeDraft {
     let importedIDs: Set<String>
     let importedModes: [String: String]
     let finalModes: [String]
+    let execution: String
     private(set) var finalMode: String
     private(set) var prefixes: [String]
     private(set) var modes: [String]
 
     init(selection: RouterVPNConnectionProfileSelection, generation: UUID, catalog: [[String: Any]]) throws {
         control = selection.selectedNodeID; self.generation = generation
+        execution = selection.orderedNodes.isEmpty && selection.execution.isEmpty ? "local" : selection.execution
+        guard ["local", "server", "auto"].contains(execution) else { throw RouterVPNOrderedNodes.issue("Choose Local, Server or Compare for the complete ordered path.") }
         var names: [String: String] = [:], tokens: [String: String] = [:]
         var importedIDs = Set<String>()
         var importedModes: [String: String] = [:]
@@ -196,11 +200,12 @@ struct RouterVPNOrderedNodeDraft {
     }
     func selection() throws -> RouterVPNConnectionProfileSelection {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
+        guard execution == "local" || !prefixes.contains(where: importedIDs.contains) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
             guard importedIDs.contains(id) ? ordered.count == 3 && index == 1 && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("An imported SS2022, SOCKS5 or HTTP(S) CONNECT member requires one middle position between a paired entry and final.") }
         }
         return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
-            execution: "local", profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
+            execution: execution, profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
     }
 }
 
@@ -287,8 +292,9 @@ extension ProductWindowController {
             try self.requireMutationIdle("starting the captured ordered path")
             let capabilities = try self.api.json("/api/multihop/status", timeout: 5) as? [String: Any] ?? [:]
             guard let enabled = capabilities["ordered_nodes_supported"] as? NSNumber,
-                  CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue else {
-                throw RouterVPNOrderedNodes.issue("This controller has not enabled ordered-node execution on this device.")
+                  CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
+                  let executions = capabilities["ordered_executions"] as? [String], executions.contains(selection.execution) else {
+                throw RouterVPNOrderedNodes.issue("This controller has not enabled the selected ordered execution on this device.")
             }
             let current = try self.api.json("/api/profiles", timeout: 5) as? [String: Any] ?? [:]
             let body = try RouterVPNOrderedNodes.connectBody(selection, current: current)
@@ -319,7 +325,9 @@ extension ProductWindowController {
             value.multihopEnabled = false
         }
         if !value.orderedNodes.isEmpty {
-            value.entryID = ""; value.exitID = ""; value.entryMode = ""; value.exitMode = ""; value.execution = "local"
+            value.entryID = ""; value.exitID = ""; value.entryMode = ""; value.exitMode = ""
+            let executionIndex = multihopExecutionPopup.indexOfSelectedItem
+            value.execution = (0..<3).contains(executionIndex) ? ["local", "server", "auto"][executionIndex] : ""
             let referenced = Set(value.orderedNodes.compactMap { $0["id"] } + [value.selectedNodeID])
             value.profileTokens = value.profileTokens.filter { referenced.contains($0.key) }
             return value
@@ -447,7 +455,7 @@ extension ProductWindowController {
         var referenced = Set([selection.selectedNodeID])
         if let raw = payload["multihop_nodes"], !(raw is NSNull) {
             selection.orderedNodes = try RouterVPNOrderedNodes.decode(raw, control: selection.selectedNodeID)
-            guard !external, selection.multihopEnabled, selection.execution == "local",
+            guard !external, selection.multihopEnabled, ["local", "server", "auto"].contains(selection.execution),
                   selection.entryID.isEmpty, selection.exitID.isEmpty, selection.entryMode == "", selection.exitMode.isEmpty,
                   fromCatalog || (stored?["mode"] as? String == selection.orderedNodes.last?["mode"] && payload["mode"] as? String == selection.orderedNodes.last?["mode"]) else {
                 throw RouterVPNOrderedNodes.issue("The loaded ordered path mixes an independent entry, exit or execution.")
@@ -642,7 +650,7 @@ extension ProductWindowController {
             throw RouterVPNOrderedNodes.issue("The saved profile response replaced an original selected node or source.")
         }
         let wanted = body["multihop_nodes"] as? [[String: String]] ?? []
-        guard finalized.orderedNodes == wanted else {
+        guard finalized.orderedNodes == wanted, wanted.isEmpty || finalized.execution == body["multihop_execution"] as? String else {
             throw RouterVPNOrderedNodes.issue("The saved profile response changed the original ordered path.")
         }
         let external = (response["profile"] as? [String: Any])?["external_policy"] is [String: Any]
@@ -737,7 +745,7 @@ extension ProductWindowController {
         let selectedPath = captureConnectionProfileSelection()
         if selectedPath.multihopEnabled && !selectedPath.orderedNodes.isEmpty {
             var body: [String: Any] = ["name": name, "mode": selectedPath.orderedNodes.last!["mode"]!, "custom_layers": [String](),
-                "multihop_enabled": true, "multihop_nodes": selectedPath.orderedNodes, "multihop_execution": "local"]
+                "multihop_enabled": true, "multihop_nodes": selectedPath.orderedNodes, "multihop_execution": selectedPath.execution]
             if let id { body["id"] = id }
             body.merge(try connectionProfileSetupExpectations(body, selection: selectedPath, loading: false)) { _, original in original }
             return body
@@ -783,7 +791,7 @@ extension ProductWindowController {
             }
             if original.multihopEnabled {
                 let ordered = body["multihop_nodes"] as? [[String: String]] ?? []
-                guard ordered == original.orderedNodes,
+                guard ordered == original.orderedNodes, body["multihop_execution"] as? String == original.execution,
                       !ordered.isEmpty || (body["multihop_entry_id"] as? String == original.entryID &&
                         body["multihop_exit_id"] as? String == original.exitID &&
                         body["multihop_entry_mode"] as? String == original.entryMode &&

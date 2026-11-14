@@ -1,7 +1,7 @@
 /* Public references for the native ordered path. Private sources remain in the
  * controller. This include is composed after the unified shell, before Profiles. */
 typedef struct {
-    char *control;
+    char *control, *execution;
     JsonArray *nodes;
     JsonObject *tokens;
 } LinuxOrderedSelectionV1;
@@ -66,7 +66,7 @@ static const char *linux_ordered_mode_name_v1(const char *mode) {
 
 static void linux_ordered_selection_free_v1(LinuxOrderedSelectionV1 *selection) {
     if (selection == NULL) return;
-    g_free(selection->control);
+    g_free(selection->control); g_free(selection->execution);
     json_array_unref(selection->nodes); json_object_unref(selection->tokens); g_free(selection);
 }
 
@@ -91,7 +91,7 @@ static gboolean linux_ordered_rows_v1(JsonArray *nodes, const char *control) {
 static LinuxOrderedSelectionV1 *linux_ordered_selection_v1(const char *control, JsonArray *nodes, JsonObject *tokens) {
     if (!linux_ordered_rows_v1(nodes, control) || tokens == NULL || json_object_get_size(tokens) != json_array_get_length(nodes)) return NULL;
     LinuxOrderedSelectionV1 *selection = g_new0(LinuxOrderedSelectionV1, 1);
-    selection->control = g_strdup(control); selection->nodes = json_array_new(); selection->tokens = json_object_new();
+    selection->control = g_strdup(control); selection->execution = g_strdup("local"); selection->nodes = json_array_new(); selection->tokens = json_object_new();
     for (guint i = 0; i < json_array_get_length(nodes); i++) {
         JsonObject *row = json_array_get_object_element(nodes, i);
         const char *id = linux_ordered_string_v1(row, "id"), *token = linux_ordered_string_v1(tokens, id);
@@ -104,10 +104,23 @@ static LinuxOrderedSelectionV1 *linux_ordered_selection_v1(const char *control, 
     return selection;
 }
 
+static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, const char *execution) {
+    if (selection == NULL || (g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
+    if (strcmp(execution, "local") != 0) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++)
+        if (!linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode"))) return FALSE;
+    char *copy = g_strdup(execution); g_free(selection->execution); selection->execution = copy; return TRUE;
+}
+
 static LinuxOrderedSelectionV1 *linux_ordered_decode_v1(JsonObject *object) {
-    if (object == NULL || json_object_get_size(object) != 3) return NULL;
-    return linux_ordered_selection_v1(linux_ordered_string_v1(object, "selected_node_id"),
+    if (object == NULL || (json_object_get_size(object) != 3 && json_object_get_size(object) != 4)) return NULL;
+    /* The original three-field record represented Local only. New records
+     * require the canonical explicit execution field; no unknown fallback. */
+    if (json_object_get_size(object) == 4 && !json_object_has_member(object, "execution")) return NULL;
+    LinuxOrderedSelectionV1 *selection = linux_ordered_selection_v1(linux_ordered_string_v1(object, "selected_node_id"),
         linux_ordered_array_v1(object, "nodes"), linux_ordered_object_v1(object, "profile_tokens"));
+    const char *execution = json_object_get_size(object) == 3 ? "local" : linux_ordered_string_v1(object, "execution");
+    if (!linux_ordered_execution_v1(selection, execution)) { linux_ordered_selection_free_v1(selection); return NULL; }
+    return selection;
 }
 
 static gboolean linux_ordered_router_v1(JsonObject *profile) {
@@ -145,6 +158,7 @@ static gboolean linux_ordered_imported_v1(JsonObject *profile) {
 static JsonObject *linux_ordered_value_v1(const LinuxOrderedSelectionV1 *selection) {
     JsonObject *value = json_object_new();
     json_object_set_string_member(value, "selected_node_id", selection->control);
+    json_object_set_string_member(value, "execution", selection->execution);
     json_object_set_array_member(value, "nodes", json_array_ref(selection->nodes));
     json_object_set_object_member(value, "profile_tokens", json_object_ref(selection->tokens));
     return value;
@@ -231,7 +245,7 @@ static gboolean linux_ordered_store_v1(LinuxOrderedStateV1 *owned, LinuxOrderedS
         g_key_file_set_boolean(key, "connection-profile-selection", "enabled", enabled);
         const char *fields[] = {"entry", "exit", "entry_mode", "exit_mode"};
         for (guint i = 0; i < G_N_ELEMENTS(fields); i++) g_key_file_set_string(key, "connection-profile-selection", fields[i], "");
-        g_key_file_set_string(key, "state", "multihop_execution", "local");
+        g_key_file_set_string(key, "state", "multihop_execution", selection->execution);
         g_free(raw); json_object_unref(value);
     } else g_key_file_remove_key(key, "connection-profile-selection", "ordered_selection", NULL);
     linux_unified_save_keyfile_v8(key); g_key_file_unref(key);
@@ -242,7 +256,7 @@ static gboolean linux_ordered_store_v1(LinuxOrderedStateV1 *owned, LinuxOrderedS
         char *execution = g_key_file_get_string(readback, "state", "multihop_execution", NULL);
         GError *error = NULL;
         gboolean on = g_key_file_get_boolean(readback, "connection-profile-selection", "enabled", &error);
-        persisted = persisted && error == NULL && on == enabled && g_strcmp0(execution, "local") == 0;
+        persisted = persisted && error == NULL && on == enabled && g_strcmp0(execution, selection->execution) == 0;
         if (error != NULL) g_error_free(error);
         g_free(execution);
         const char *fields[] = {"entry", "exit", "entry_mode", "exit_mode"};
@@ -264,7 +278,7 @@ static gboolean linux_ordered_owns_v1(LinuxOrderedStateV1 *owned, guint64 genera
 static char *linux_ordered_connect_body_v1(const LinuxOrderedSelectionV1 *selection) {
     JsonObject *body = json_object_new();
     json_object_set_array_member(body, "nodes", json_array_ref(selection->nodes));
-    json_object_set_string_member(body, "execution", "local");
+    json_object_set_string_member(body, "execution", selection->execution);
     json_object_set_string_member(body, "expected_selected_node_id", selection->control);
     json_object_set_object_member(body, "expected_profile_tokens", json_object_ref(selection->tokens));
     char *raw = linux_ordered_json_v1(body); json_object_unref(body); return raw;
@@ -283,7 +297,7 @@ static char *linux_ordered_setup_body_v1(LinuxUnifiedV8 *unified, const char *na
     json_object_set_string_member(body, "mode", linux_ordered_string_v1(json_array_get_object_element(selection->nodes, json_array_get_length(selection->nodes) - 1), "mode"));
     json_object_set_boolean_member(body, "multihop_enabled", TRUE);
     json_object_set_array_member(body, "multihop_nodes", json_array_ref(selection->nodes));
-    json_object_set_string_member(body, "multihop_execution", "local");
+    json_object_set_string_member(body, "multihop_execution", selection->execution);
     json_object_set_string_member(body, "expected_selected_node_id", selection->control);
     json_object_set_object_member(body, "expected_profile_tokens", json_object_ref(selection->tokens));
     char *raw = linux_ordered_json_v1(body); json_object_unref(body); return raw;
@@ -351,7 +365,6 @@ static LinuxOrderedSelectionV1 *linux_ordered_response_v1(JsonObject *payload) {
     JsonArray *nodes = linux_ordered_array_v1(payload, "multihop_nodes");
     const char *control = linux_ordered_string_v1(payload, "selected_node_id");
     if (!linux_ordered_rows_v1(nodes, control) || !linux_ordered_flag_v1(payload, "multihop_enabled") ||
-        strcmp(linux_ordered_string_v1(payload, "multihop_execution"), "local") != 0 ||
         strcmp(linux_ordered_string_v1(payload, "mode"), linux_ordered_string_v1(json_array_get_object_element(nodes, json_array_get_length(nodes) - 1), "mode")) != 0) return NULL;
     const char *pair[] = {"multihop_entry_id", "multihop_exit_id", "multihop_entry_mode", "multihop_exit_mode"};
     for (guint i = 0; i < G_N_ELEMENTS(pair); i++) if (linux_ordered_string_v1(payload, pair[i])[0]) return NULL;
@@ -363,6 +376,7 @@ static LinuxOrderedSelectionV1 *linux_ordered_response_v1(JsonObject *payload) {
         json_object_set_string_member(tokens, id, linux_ordered_string_v1(supplied, id));
     }
     LinuxOrderedSelectionV1 *selection = linux_ordered_selection_v1(control, nodes, tokens);
+    if (!linux_ordered_execution_v1(selection, linux_ordered_string_v1(payload, "multihop_execution"))) { linux_ordered_selection_free_v1(selection); selection = NULL; }
     json_object_unref(tokens); return selection;
 }
 
@@ -377,16 +391,38 @@ static char *linux_ordered_summary_v1(const LinuxOrderedSelectionV1 *selection) 
     return g_string_free(text, FALSE);
 }
 
+/* A Save/Update response must retain the requested complete path and choice. */
+static gboolean linux_ordered_same_path_v1(const LinuxOrderedSelectionV1 *committed, const LinuxOrderedSelectionV1 *original) {
+    if (committed == NULL || original == NULL || strcmp(committed->control, original->control) != 0 ||
+        strcmp(committed->execution, original->execution) != 0 ||
+        json_array_get_length(committed->nodes) != json_array_get_length(original->nodes)) return FALSE;
+    for (guint i = 0; i < json_array_get_length(committed->nodes); i++) {
+        JsonObject *a = json_array_get_object_element(committed->nodes, i), *b = json_array_get_object_element(original->nodes, i);
+        if (strcmp(linux_ordered_string_v1(a, "id"), linux_ordered_string_v1(b, "id")) != 0 ||
+            strcmp(linux_ordered_string_v1(a, "mode"), linux_ordered_string_v1(b, "mode")) != 0) return FALSE;
+    }
+    return TRUE;
+}
+
 static gboolean linux_ordered_connect_v1(LinuxUnifiedV8 *unified) {
     LinuxOrderedStateV1 *owned = linux_ordered_state_v1(unified);
     if (owned->selection == NULL && !owned->invalid) return FALSE;
     if (owned->invalid) { append_diag(unified->app, "The saved ordered path is invalid. Explicitly create a new path; no pair fallback was selected."); return TRUE; }
     LinuxOrderedSelectionV1 *selection = linux_ordered_selection_v1(owned->selection->control, owned->selection->nodes, owned->selection->tokens);
+    if (!linux_ordered_execution_v1(selection, owned->selection->execution)) { linux_ordered_selection_free_v1(selection); return TRUE; }
     guint64 generation = owned->generation;
     gboolean valid = routervpn_require_mutation_idle(unified->app, "starting the captured ordered path") &&
         linux_ordered_owns_v1(owned, generation, selection->control);
     JsonNode *capabilities = valid ? linux_ordered_read_v1("/api/multihop/status") : NULL;
     valid = valid && capabilities != NULL && linux_ordered_flag_v1(json_node_get_object(capabilities), "ordered_nodes_supported");
+    JsonArray *executions = valid ? linux_ordered_array_v1(json_node_get_object(capabilities), "ordered_executions") : NULL;
+    gboolean admitted = FALSE;
+    for (guint i = 0; executions != NULL && i < json_array_get_length(executions); i++) {
+        JsonNode *value = json_array_get_element(executions, i);
+        if (value != NULL && JSON_NODE_HOLDS_VALUE(value) && json_node_get_value_type(value) == G_TYPE_STRING &&
+            g_strcmp0(json_node_get_string(value), selection->execution) == 0) admitted = TRUE;
+    }
+    valid = valid && admitted;
     JsonNode *current = valid ? linux_ordered_read_v1("/api/profiles") : NULL;
     valid = valid && current != NULL && linux_ordered_current_v1(selection, json_node_get_object(current)) &&
         linux_ordered_owns_v1(owned, generation, selection->control) && routervpn_require_mutation_idle(unified->app, "dispatching the captured ordered path");
@@ -405,7 +441,7 @@ typedef struct {
     char *control, *final_mode;
     JsonNode *catalog;
     GPtrArray *ids, *modes;
-    GtkWidget *dialog, *list, *candidate, *transport, *status, *add, *remove, *up, *down;
+    GtkWidget *dialog, *list, *candidate, *transport, *execution, *status, *add, *remove, *up, *down;
     gboolean syncing, closed;
 } LinuxOrderedEditorV1;
 
@@ -531,6 +567,8 @@ static LinuxOrderedSelectionV1 *linux_ordered_editor_selection_v1(LinuxOrderedEd
         json_object_set_string_member(tokens, id, linux_ordered_string_v1(external_source_profile_v24(json_node_get_object(editor->catalog), id), "profile_token"));
     }
     LinuxOrderedSelectionV1 *selection = linux_ordered_selection_v1(editor->control, nodes, tokens);
+    const char *execution = editor->execution != NULL ? gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution)) : "local";
+    if (!linux_ordered_execution_v1(selection, execution)) { linux_ordered_selection_free_v1(selection); selection = NULL; }
     json_array_unref(nodes); json_object_unref(tokens); return selection;
 }
 
@@ -616,7 +654,13 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     GtkWidget *buttons[] = {editor.up, editor.down, editor.remove, editor.transport};
     for (guint i = 0; i < G_N_ELEMENTS(buttons); i++) gtk_box_pack_start(GTK_BOX(actions), buttons[i], FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), actions, FALSE, FALSE, 6);
-    editor.status = gtk_label_new("Local execution • final exit is pinned to the original selected node"); gtk_label_set_line_wrap(GTK_LABEL(editor.status), TRUE); gtk_box_pack_start(GTK_BOX(box), editor.status, FALSE, FALSE, 6);
+    editor.execution = gtk_combo_box_text_new(); gtk_widget_set_name(editor.execution, "ordered-execution");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor.execution), "local", "Local");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor.execution), "server", "Server");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor.execution), "auto", "Compare in the native child");
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(editor.execution), !fresh && owned->selection != NULL ? owned->selection->execution : "local");
+    gtk_box_pack_start(GTK_BOX(box), editor.execution, FALSE, FALSE, 6);
+    editor.status = gtk_label_new("Final exit is pinned to the original selected node; Server and Compare require paired native nodes"); gtk_label_set_line_wrap(GTK_LABEL(editor.status), TRUE); gtk_box_pack_start(GTK_BOX(box), editor.status, FALSE, FALSE, 6);
     g_signal_connect(editor.list, "row-selected", G_CALLBACK(linux_ordered_selected_v1), &editor);
     g_signal_connect(editor.transport, "changed", G_CALLBACK(linux_ordered_mode_v1), &editor);
     linux_ordered_render_v1(&editor, 0); gtk_widget_show_all(editor.dialog);

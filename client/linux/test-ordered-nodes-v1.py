@@ -57,9 +57,10 @@ def main():
         ('expected-inventory', 'json_object_set_object_member(body, "expected_profile_tokens", json_object_ref(selection->tokens));', 'json_object_set_object_member(body, "expected_profile_tokens", json_object_new());', 'original source inventory missing'),
         ('disk-receipt', 'if (!persisted) { linux_ordered_selection_free_v1(selection);', 'if (FALSE && !persisted) { linux_ordered_selection_free_v1(selection);', 'failed write acquired replacement receipt'),
         ('load-current-graph', 'if (linux_ordered_flag_v1(profile, "multihop_enabled")) {', 'if (FALSE) {', 'Load lost complete current graph'),
+        ('response-execution', 'strcmp(committed->execution, original->execution) != 0 ||', 'FALSE ||', 'committed receipt relabelled requested execution'),
         ('response-inventory', 'if (supplied == NULL || json_object_get_size(supplied) != json_array_get_length(nodes)) return NULL;', 'if (supplied == NULL) return NULL;', 'extra committed source receipt accepted'),
     ]
-    if args.model_only: controls = [c for c in controls if c[0] in {'connect-protocol', 'connect-final', 'final-mode', 'source-token', 'final-pin', 'expected-inventory', 'disk-receipt', 'load-current-graph', 'response-inventory'}]
+    if args.model_only: controls = [c for c in controls if c[0] in {'connect-protocol', 'connect-final', 'final-mode', 'source-token', 'final-pin', 'expected-inventory', 'disk-receipt', 'load-current-graph', 'response-execution', 'response-inventory'}]
     flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'gtk+-3.0', 'json-glib-1.0'], text=True).split()
     with tempfile.TemporaryDirectory(prefix='routervpn-gtk-ordered-') as temporary:
         root = Path(temporary)

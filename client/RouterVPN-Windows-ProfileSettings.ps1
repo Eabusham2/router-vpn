@@ -336,6 +336,8 @@ function global:New-RouterVPNOrderedConnectPayload {
     $control=[string](Get-RouterVPNOrderedValue $Draft 'control_id')
     if($control-cne[string](Get-RouterVPNOrderedValue $Store 'selected_id')){throw 'The selected exit changed. Reopen the ordered path editor.'}
     $nodes=@(Copy-RouterVPNOrderedNodes (Get-RouterVPNOrderedValue $Draft 'nodes') $control)
+    $execution=[string](Get-RouterVPNOrderedValue $Draft 'execution' 'local')
+    if($execution-cnotin@('local','server','auto')){throw 'Choose Local, Server or Compare for the complete ordered path.'}
     $profiles=@(Get-RouterVPNOrderedValue $Store 'profiles' @())
     $expected=Get-RouterVPNOrderedValue $Draft 'profile_tokens';$tokens=@{}
     for($position=0;$position-lt$nodes.Count;$position++){
@@ -343,6 +345,7 @@ function global:New-RouterVPNOrderedConnectPayload {
         $matchingProfiles=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$node.id})
         if($matchingProfiles.Count-ne1){throw 'An ordered node is missing.'}
         $imported=Test-RouterVPNOrderedImportedMiddle $matchingProfiles[0]
+        if($imported-and$execution-cne'local'){throw 'This imported ordered path has not enabled native Server or Compare execution.'}
         if($imported){if($nodes.Count-ne3-or$position-ne1-or$node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])){throw 'An imported node retains its exact Shadowsocks 2022, SOCKS5 or HTTP(S) CONNECT transport between the paired entry and final.'}}
         elseif([string](Get-RouterVPNOrderedValue $matchingProfiles[0] 'node_kind' '')-cnotin@('','router-vpn')-or($position-lt$nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode))){throw 'The ordered source kind or transport changed.'}
         if($position-eq$nodes.Count-1-and@(Get-RouterVPNOrderedFinalModes $matchingProfiles[0] @($nodes|Select-Object -SkipLast 1))-cnotcontains$node.mode){throw 'The selected final transport is incompatible with its captured Start Layer or imported middle.'}
@@ -352,7 +355,7 @@ function global:New-RouterVPNOrderedConnectPayload {
     }
     # Only references cross this UI boundary. Every private source is captured
     # independently by the original native controller before it owns a tunnel.
-    return @{nodes=$nodes;execution='local';expected_selected_node_id=$control;expected_profile_tokens=$tokens}
+    return @{nodes=$nodes;execution=$execution;expected_selected_node_id=$control;expected_profile_tokens=$tokens}
 }
 
 function global:Get-RouterVPNOrderedConnectionSnapshot {
@@ -364,7 +367,10 @@ function global:Get-RouterVPNOrderedConnectionSnapshot {
     if($null-eq$button-or$null-eq$button.Tag-or$null-eq$selected){throw 'Edit the complete ordered path before saving or connecting.'}
     if([string](Get-RouterVPNOrderedValue $button.Tag 'control_id')-cne[string]$selected.SelectedValue){throw 'The selected exit changed. Reopen the ordered path editor.'}
     $nodes=@(Copy-RouterVPNOrderedNodes (Get-RouterVPNOrderedValue $button.Tag 'nodes') ([string]$selected.SelectedValue))
-    return @{multihop_enabled=$true;multihop_nodes=$nodes;multihop_execution='local';multihop_entry_id='';multihop_exit_id='';multihop_entry_mode='';multihop_exit_mode=''}
+    $choice=$Owner.FindName('UnifiedExecution')
+    $execution=if($null-ne$choice-and$null-ne$choice.SelectedItem){[string]$choice.SelectedItem.Tag}else{[string](Get-RouterVPNOrderedValue $button.Tag 'execution' 'local')}
+    if($execution-cnotin@('local','server','auto')){throw 'The ordered execution choice is unavailable.'}
+    return @{multihop_enabled=$true;multihop_nodes=$nodes;multihop_execution=$execution;multihop_entry_id='';multihop_exit_id='';multihop_entry_mode='';multihop_exit_mode=''}
 }
 
 function global:Set-RouterVPNLoadedOrderedSnapshot {
@@ -375,12 +381,12 @@ function global:Set-RouterVPNLoadedOrderedSnapshot {
     if($hasNodes){
         $id=[string](Get-RouterVPNOrderedValue $Loaded 'selected_node_id')
         $nodes=@(Copy-RouterVPNOrderedNodes $raw $id)
-        if(-not[bool](Get-RouterVPNOrderedValue $Loaded 'multihop_enabled' $false)-or[string](Get-RouterVPNOrderedValue $Loaded 'multihop_execution')-cne'local'){throw 'The loaded ordered path has an invalid execution choice.'}
+        if(-not[bool](Get-RouterVPNOrderedValue $Loaded 'multihop_enabled' $false)-or[string](Get-RouterVPNOrderedValue $Loaded 'multihop_execution')-cnotin@('local','server','auto')){throw 'The loaded ordered path has an invalid execution choice.'}
         foreach($key in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){if([string](Get-RouterVPNOrderedValue $Loaded $key)){throw 'The loaded profile mixes an ordered path with another entry or exit.'}}
         if($null-eq$toggle-or$null-eq$button){throw 'This window cannot display the complete loaded ordered path.'}
         $rawTokens=Get-RouterVPNOrderedValue $Loaded 'profile_tokens';$tokens=@{}
         foreach($node in $nodes){$token=Get-RouterVPNOrderedValue $rawTokens $node.id;if($token-isnot[string]-or$token-cnotmatch'\A[0-9a-f]{64}\z'){throw 'The loaded ordered path is missing a captured node source.'};$tokens[$node.id]=$token}
-        $button.Tag=[pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens}
+        $button.Tag=[pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens;execution=[string]$Loaded.multihop_execution}
         $toggle.IsChecked=$true
     }else{
         if($null-ne$button){$button.Tag=$null};if($null-ne$toggle){$toggle.IsChecked=$false}
@@ -506,11 +512,12 @@ function global:Confirm-RouterVPNSetupResponse {
     if($null-ne$nodes-and@($nodes).Count-gt0){
         $nodes=@(Copy-RouterVPNOrderedNodes $nodes $resultID)
         $profile=Get-RouterVPNOrderedValue $Response 'profile'
-        if((Get-RouterVPNOrderedValue $Response 'multihop_enabled')-isnot[bool]-or-not$Response.multihop_enabled-or(Get-RouterVPNOrderedValue $Response 'multihop_execution')-cne'local'-or(Get-RouterVPNOrderedValue $profile 'mode')-cne$nodes[-1].mode){throw 'The profile response changed the ordered execution or final mode.'}
+        if((Get-RouterVPNOrderedValue $Response 'multihop_enabled')-isnot[bool]-or-not$Response.multihop_enabled-or(Get-RouterVPNOrderedValue $Response 'multihop_execution')-cnotin@('local','server','auto')-or(Get-RouterVPNOrderedValue $profile 'mode')-cne$nodes[-1].mode){throw 'The profile response changed the ordered execution or final mode.'}
         foreach($key in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){if([string](Get-RouterVPNOrderedValue $Response $key)){throw 'The profile response mixes ordered and pair selections.'}}
     }
     if(-not$Capture.Loading){
         $expectedNodes=Get-RouterVPNOrderedValue $Capture.Graph 'multihop_nodes'
+        if($null-ne$expectedNodes-and@($expectedNodes).Count-gt0-and(Get-RouterVPNOrderedValue $Response 'multihop_execution')-cne(Get-RouterVPNOrderedValue $Capture.Graph 'multihop_execution')){throw 'The saved profile response changed the requested ordered execution.'}
         if(($null-ne$nodes-and@($nodes).Count-gt0)-or($null-ne$expectedNodes-and@($expectedNodes).Count-gt0)){
             if($null-eq$nodes-or$null-eq$expectedNodes-or@($nodes).Count-ne@($expectedNodes).Count-or(@($nodes.id)-join',')-cne(@($expectedNodes.id)-join',')-or(@($nodes.mode)-join',')-cne(@($expectedNodes.mode)-join',')){throw 'The saved profile response changed the original ordered path.'}
         }

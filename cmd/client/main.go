@@ -1327,7 +1327,7 @@ func (a *app) stopModeWithDNSReceiptContext(caller context.Context, holdKillSwit
 	if err := retireLegacyStandardPreparations(a, ctx); err != nil {
 		return err
 	}
-	nativeStop, err := a.captureDesktopRetainedStop()
+	nativeStop, err := a.captureDesktopRetainedStopContext(ctx)
 	if err != nil {
 		return err
 	}

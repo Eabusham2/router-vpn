@@ -150,7 +150,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"ordered_nodes_supported":    nativeNodeChainPlatformSupported(),
 		"ordered_prefix_modes":       []string{"wg", "awg2-fast", "awg2-strong"},
 		"ordered_exit_modes":         []string{"shadowsocks", "hysteria2"},
-		"ordered_executions":         []string{"local"},
+		"ordered_executions":         desktopOrderedExecutionChoices(),
 		"ordered_max_nodes":          common.MultihopMaximumNodes,
 		"entry_id":                   entryID,
 		"exit_id":                    exitID,
@@ -220,6 +220,7 @@ func nativeMultihopPlatformCommand(a *app, sel multihopSelection) (*desktopNodeL
 // Tests may model installed-image and proof boundaries while retaining the
 // shipping selection, staging, process, graph and teardown transaction.
 type nativeMultihopConnectRuntime struct {
+	execution *desktopOrderedExecutionRuntime
 	capture   func(*app, multihopSelection, []string) (multihopSelection, error)
 	preflight func(*app, multihopSelection, *desktopExecutionDescriptor) (*desktopNodeLaunch, error)
 	stage     func(*app, multihopSelection, *desktopNodeLaunch) error
@@ -272,6 +273,10 @@ func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), 400)
 		return
 	} else if execution != "local" {
+		if q.ordered() {
+			a.runDesktopOrderedExecution(w, r, operation, sel, q.Execution, driver.execution)
+			return
+		}
 		a.runMultihopExecution(w, r, sel, q)
 		return
 	}

@@ -193,8 +193,8 @@ func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updati
 		return q, errors.New("new connection profiles must not provide id")
 	}
 	if len(q.MultihopNodes) != 0 {
-		if !q.MultihopEnabled || requestedExecution != "local" || q.MultihopEntryID != "" || q.MultihopExitID != "" || q.MultihopEntryMode != "" || q.MultihopExitMode != "" {
-			return q, errors.New("ordered setup requires explicit Local execution and no legacy pair fields")
+		if !q.MultihopEnabled || !validDesktopOrderedExecution(requestedExecution) || q.MultihopEntryID != "" || q.MultihopExitID != "" || q.MultihopEntryMode != "" || q.MultihopExitMode != "" {
+			return q, errors.New("ordered setup requires explicit execution and no legacy pair fields")
 		}
 		if err := common.ValidateMultihopNodes(q.MultihopNodes); err != nil {
 			return q, err
@@ -535,8 +535,8 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 				if saved.ID != strings.TrimSpace(ref.ID) || len(saved.NodeChain) == 0 {
 					continue
 				}
-				if item, found := meta.Entries[saved.ID]; found && (item.MultihopExecution != "local" || item.MultihopEntryMode != "" || item.MultihopExitMode != "") {
-					metaErr = errors.New("ordered setup metadata contradicts its saved Local path")
+				if item, found := meta.Entries[saved.ID]; found && ((saved.Prefs == nil || item.MultihopExecution != saved.Prefs.MultihopExecution) || item.MultihopEntryMode != "" || item.MultihopExitMode != "") {
+					metaErr = errors.New("ordered setup metadata contradicts its saved execution choice")
 				}
 			}
 		}
@@ -578,6 +578,14 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 	}
 	if prefs, ok := profileMap["preferences"].(map[string]any); ok {
 		payload["multihop_nodes"] = prefs["multihop_nodes"]
+		if nodes, ok := prefs["multihop_nodes"].([]any); ok && len(nodes) != 0 {
+			execution, ok := prefs["multihop_execution"].(string)
+			if !ok || !validDesktopOrderedExecution(execution) {
+				http.Error(w, "saved ordered profile lost its exact execution choice", http.StatusInternalServerError)
+				return
+			}
+			payload["multihop_execution"] = execution
+		}
 		payload["multihop_enabled"] = prefs["multihop_enabled"]
 		payload["multihop_entry_id"] = prefs["multihop_entry_id"]
 		payload["multihop_exit_id"] = prefs["multihop_exit_id"]

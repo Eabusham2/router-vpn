@@ -65,11 +65,60 @@ class NodeProcessRunner(unittest.TestCase):
             original.append(("shared-ownership-" + str(offset // 16 + 1),
                              GATE.LEGACY_SHARED_TESTS[offset:offset + 16]))
         self.assertEqual([(label, selected) for label, selected, _ in groups[:len(original)]], original)
-        self.assertEqual([selected for _, selected, _ in groups[len(original):]],
+        self.assertEqual([selected for _, selected, _ in groups[len(original):len(original) + len(GATE.ORDERED_CASES)]],
                          [(root,) for root in GATE.ORDERED_CASES])
-        for _, selected, expected in groups[len(original):]:
+        for _, selected, expected in groups[len(original):len(original) + len(GATE.ORDERED_CASES)]:
             root, = selected
             self.assertEqual(set(expected), {root, *(root + "/" + child for child in GATE.ORDERED_CASES[root])})
+
+    def test_product_and_captured_release_roots_are_additive_and_complete(self):
+        product = (
+            "ProductPublishesChildAndStopsExactOwner", "ProductStopCannotBorrowReplacement",
+            "ProductRestoreRequiresRetainedIntent", "ChoicesKeepProxyNativeAdmissionClosed",
+            "PublicConnectUsesChildOnly", "DisconnectRetainsExactReleaseAfterChildJoin",
+            "NativeJoinCompletionRetry", "PreparationCleanupKeepsPriorOwner",
+            "PreStartFailureKeepsOriginalChild", "PendingPreparationKeepsStopCallerBudget",
+            "RetirementKeepsCallerBudget",
+        )
+        release = ("KeepsCallerLockBounds", "ForwardsOriginalBackendCaller",
+                   "RequiresExactAbsenceAndCurrentSlot", "PreservesPolicyAndFailedOwner",
+                   "PendingOffKeepsOriginalCaller")
+        roots = tuple("TestDesktopOrderedExecution" + name for name in product) + tuple(
+            "TestDesktopNodeCapturedRelease" + name for name in release)
+        self.assertEqual(tuple(GATE.PRODUCT_CASES), roots)
+        self.assertEqual(sum(1 + len(cases) for cases in GATE.PRODUCT_CASES.values()), 48)
+        self.assertEqual(GATE.PRODUCT_CASES["TestDesktopOrderedExecutionPublicConnectUsesChildOnly"],
+                         tuple(str(count) + "-" + requested + "-" + winner for count in (2, 3, 8)
+                               for requested, winner in (("server", "server"), ("auto", "local"), ("auto", "server"))))
+        self.assertEqual(GATE.PRODUCT_CASES["TestDesktopOrderedExecutionPreStartFailureKeepsOriginalChild"],
+                         ("preflight", "guard", "stop", "cancel"))
+        self.assertEqual(GATE.PRODUCT_CASES["TestDesktopOrderedExecutionRetirementKeepsCallerBudget"],
+                         ("retire", "restore-lookup"))
+        groups = GATE.baseline_groups()
+        self.assertEqual([selected for _, selected, _ in groups[-len(roots):]], [(root,) for root in roots])
+        for _, selected, expected in groups[-len(roots):]:
+            root, = selected
+            self.assertEqual(set(expected), {root, *(root + "/" + child for child in GATE.PRODUCT_CASES[root])})
+        for path in ("cmd/client/desktop_node_chain_execution_product.go",
+                     "cmd/client/desktop_node_chain_execution_product_restore.go",
+                     "cmd/client/desktop_node_chain_execution_product_test.go",
+                     "cmd/client/desktop_node_captured_release_context_test.go",
+                     "cmd/client/multihop_node_chain_request_test.go"):
+            self.assertIn(path, GATE.REQUIRED_SOURCES)
+
+    def test_every_product_root_and_leaf_is_required_by_actual_verdict_parser(self):
+        groups = GATE.baseline_groups()[-len(GATE.PRODUCT_CASES):]
+        for _, _, expected in groups:
+            passing = ["--- PASS: " + name + " (0.01s)" for name in expected]
+            GATE.check_baseline(0, "\n".join(passing), expected)
+            for missing in expected:
+                with self.subTest(missing=missing), self.assertRaises(ValueError):
+                    GATE.check_baseline(0, "\n".join(line for line in passing if line != "--- PASS: " + missing + " (0.01s)"), expected)
+            for root in GATE.PRODUCT_CASES:
+                with self.subTest(omitted_selection=root), patch.object(
+                        GATE, "SHARED_TESTS", tuple(name for name in GATE.SHARED_TESTS if name != root)):
+                    with self.assertRaisesRegex(ValueError, "exact required case partition"):
+                        GATE.baseline_groups()
 
     def test_prefix_parent_retains_closed_scope_full_control_and_cleanup_inventory(self):
         self.assertEqual(len(GATE.PREFIX_CASES), 6)

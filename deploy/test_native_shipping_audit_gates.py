@@ -510,6 +510,203 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.replace(path, before, after)
                 self.assert_multihop_chain(False)
 
+    def replace_execution_function(self, path, declaration, before, after):
+        """Mutate one real production function, never another guard or fixture."""
+        original = self.body(path)
+        marker = declaration + " {"
+        self.assertEqual(original.count(marker), 1)
+        start = original.index(marker)
+        end = original.find("\nfunc ", start + len(marker))
+        if end == -1:
+            end = len(original)
+        body = original[start:end]
+        self.assertEqual(body.count(before), 1, before)
+        self.changes[path] = (original[:start] + body.replace(before, after, 1) + original[end:] +
+                              "\n// " + before.replace("\n", " ") + "\n")
+
+    def test_execution_admission_keeps_canonical_choice_and_own_platform(self):
+        path = "cmd/client/desktop_node_chain_execution_product.go"
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        for declaration, before, after in (
+            ("func validDesktopOrderedExecution(value string) bool", 'return value == "local" || value == "server" || value == "auto"', 'return true'),
+            ("func nativeDesktopOrderedExecutionPlatformSupported() bool", 'retainedNativeMultihopSelected()', 'true'),
+            ("func nativeDesktopOrderedExecutionPlatformSupported() bool", '(runtime.GOOS == "linux" || runtime.GOOS == "windows")', '(runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin")'),
+            ("func nativeDesktopOrderedExecutionPlatformSupported() bool", '(runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64")', 'true'),
+            ("func desktopOrderedExecutionChoices() []string", 'nativeDesktopOrderedExecutionPlatformSupported()', 'nativeNodeChainPlatformSupported()'),
+            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'common.ValidateMultihopNodes(nodes)', 'error(nil)'),
+            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks"', 'false'),
+            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes))', 'false'),
+        ):
+            with self.subTest(declaration=declaration, before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_execution_public_branch_cannot_reenter_legacy_compare(self):
+        path = "cmd/client/multihop_native_routes.go"
+        declaration = "func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime)"
+        call = "a.runDesktopOrderedExecution(w, r, operation, sel, q.Execution, driver.execution)"
+        for before, after in (
+            (call, "a.runMultihopExecution(w, r, sel, q)"),
+            (call, "a.runDesktopOrderedExecution(w, r, context.Background(), sel, q.Execution, driver.execution)"),
+            (call + "\n\t\t\treturn", call),
+            ("if q.ordered() {", "if false {"),
+        ):
+            with self.subTest(before=before, after=after):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_execution_prepare_guard_start_and_verify_keep_original_order(self):
+        path = "cmd/client/desktop_node_chain_execution_product.go"
+        declaration = "func (a *app) connectDesktopOrderedExecutionWithRuntime(ctx context.Context, selection multihopSelection, requested string, usage bool, modeled *desktopOrderedExecutionRuntime) (*desktopNodeChainExecutionSession, error)"
+        guard_stop = "if err == nil {\n\t\terr = a.guardDesktopOwnedNodeTransitionContext(ctx, s.launch)\n\t}\n\tif err == nil {\n\t\terr = a.stopModeWithIntent(true)\n\t}"
+        stop_guard = "if err == nil {\n\t\terr = a.stopModeWithIntent(true)\n\t}\n\tif err == nil {\n\t\terr = a.guardDesktopOwnedNodeTransitionContext(ctx, s.launch)\n\t}"
+        for before, after in (
+            ("capture: captureNativeMultihopForAppContext", "capture: unownedNativeCapture"),
+            ("prepare: prepareDesktopOrderedExecutionSession", "prepare: openAndStartDesktopOrderedExecutionSession"),
+            ("!nativeDesktopOrderedExecutionPlatformSupported()", "!nativeNodeChainPlatformSupported()"),
+            ('member.Profile.NodeKind == "external" || member.Profile.External != nil', "false"),
+            ("desktopOrderedExecutionPreparations.Load(a)", "desktopOrderedExecutionPreparations.Load(other)"),
+            ("driver.capture(ctx, a, selection, []string{selection.ExitMode})", "driver.capture(ctx, a, selection, []string{selection.EntryMode})"),
+            ("s.launch.command != nil || s.graph != nil || s.native != nil", "false"),
+            ("a.guardDesktopOwnedNodeTransitionContext(ctx, s.launch)", "a.guardDesktopOwnedNodeTransitionContext(ctx, nil)"),
+            (guard_stop, stop_guard),
+            ("err = a.checkCapturedConnectionOperation(ctx)", "err = nil"),
+            ("err = s.startContext(ctx)", "err = s.startContext(context.Background())"),
+            ("a.retainDesktopOrderedExecution(s)", "a.retainDesktopOrderedExecution(other)"),
+            ("err = s.Verify(ctx)", "err = nil"),
+            ("a.publishDesktopOrderedExecution(ctx, s, usage)", "a.publishDesktopOrderedExecution(ctx, other, usage)"),
+            ("err = errors.Join(err, a.retireDesktopOrderedExecutionPreparation(cleanup, s))", "err = errors.Join(err, a.retireDesktopOrderedExecutionPreparation(ctx, s))"),
+            ("closeErr := s.Close(cleanup)", "closeErr := s.Close(ctx)"),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+        self.changes.clear()
+        self.replace_execution_function(path,
+            "func prepareDesktopOrderedExecutionSession(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeChainExecutionSession, error)",
+            "preflightRetainedNativeMultihop(ctx, image, launch, runDesktopExternalPreflightCommand)",
+            "preflightRetainedNativeMultihop(context.Background(), image, launch, runDesktopExternalPreflightCommand)")
+        self.assert_multihop_chain(False)
+
+    def test_execution_publication_requires_child_winner_and_complete_usage(self):
+        path = "cmd/client/desktop_node_chain_execution_product.go"
+        declaration = "func (a *app) publishDesktopOrderedExecution(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool) error"
+        for before, after in (
+            ("s.Current(ctx)", "error(nil)"),
+            ("s.Result(ctx)", "other.Result(ctx)"),
+            ("string(result.Winner.Execution) != s.graph.Execution", "false"),
+            ("desktopnetwork.LockContext(ctx, &a.mu)", "desktopnetwork.LockContext(context.Background(), &a.mu)"),
+            ("owner.session != s || a.cmd != s.launch.command", "false"),
+            ("a.checkCapturedConnectionOperationLocked(ctx) != nil", "false"),
+            ("s.execution.publicationCurrentLocked(ctx, a, s.launch, s.selection) != nil", "false"),
+            ("for _, node := range s.selection.Nodes {", "for _, node := range s.selection.Nodes[:1] {"),
+            ("a.rollbackProfilesLocked(previous)", "a.rollbackProfilesLocked(a.profiles)"),
+            ("Execution: s.graph.Execution, Measurements: result.Measurements", 'Execution: "local", Measurements: result.Measurements'),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_execution_pending_preparation_keeps_exact_close_and_stop_caller(self):
+        path = "cmd/client/desktop_node_chain_execution_product.go"
+        retire = "func (a *app) retireDesktopOrderedExecutionPreparation(ctx context.Context, s *desktopNodeChainExecutionSession) error"
+        capture = "func (a *app) captureDesktopOrderedExecutionStopContext(ctx context.Context) (desktopRetainedStopCapture, error)"
+        for target, declaration, before, after in (
+            (path, retire, "s.launch.command != nil || s.graph != nil || s.native != nil", "false"),
+            (path, retire, "if prior, exists := desktopOrderedExecutionPreparations.LoadOrStore(a, s); exists && prior != s {", "desktopOrderedExecutionPreparations.Store(a, s)\n\tif prior, exists := desktopOrderedExecutionPreparations.LoadOrStore(a, s); exists && prior != s {"),
+            (path, retire, "if err := s.Close(ctx); err != nil {", "desktopOrderedExecutionPreparations.CompareAndDelete(a, s)\n\tif err := s.Close(ctx); err != nil {"),
+            (path, retire, "s.Close(ctx)", "s.Close(context.Background())"),
+            (path, retire, "desktopOrderedExecutionPreparations.CompareAndDelete(a, s)", "desktopOrderedExecutionOwners.CompareAndDelete(a, s)"),
+            (path, capture, "desktopnetwork.LockContext(ctx, &a.mu)", "desktopnetwork.LockContext(context.Background(), &a.mu)"),
+            (path, capture, "context.WithTimeout(ctx, 2*time.Second)", "context.WithTimeout(context.Background(), 2*time.Second)"),
+            (path, capture, "platform.captureExecutionProductStop(captureCtx, owner.session)", "platform.captureExecutionProductStop(captureCtx, other.session)"),
+            ("cmd/client/main.go", "func (a *app) stopModeWithDNSReceiptContext(caller context.Context, holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error)", "a.captureDesktopRetainedStopContext(ctx)", "a.captureDesktopRetainedStop()"),
+            ("cmd/client/desktop_external_owned_stop.go", "func (a *app) captureDesktopRetainedStopContext(ctx context.Context) (desktopRetainedStopCapture, error)", "a.retirePendingDesktopOrderedExecutionPreparation(ctx)", "a.retirePendingDesktopOrderedExecutionPreparation(context.Background())"),
+        ):
+            with self.subTest(path=target, before=before):
+                self.changes.clear()
+                self.replace_execution_function(target, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_execution_product_helpers_require_real_unique_functions(self):
+        self.assertFalse(_NATIVE.native_multihop_execution_product(None))
+        path = "cmd/client/desktop_node_chain_execution_product.go"
+        for declaration in (
+            "func validDesktopOrderedExecution(value string) bool",
+            "func nativeDesktopOrderedExecutionPlatformSupported() bool",
+            "func (a *app) retireDesktopOrderedExecutionPreparation(ctx context.Context, s *desktopNodeChainExecutionSession) error",
+            "func (a *app) publishDesktopOrderedExecution(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool) error",
+        ):
+            with self.subTest(declaration=declaration):
+                self.changes.clear()
+                self.changes[path] = self.body(path) + "\n" + declaration + " {}\n"
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+        self.changes.clear()
+        self.replace_execution_function(path, "func validDesktopOrderedExecution(value string) bool",
+            'value == "local" || value == "server" || value == "auto"',
+            'value == "local" || /* original server choice */ value == "server" ||\nvalue == "auto"')
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        self.assert_multihop_chain(True)
+
+    def test_execution_retirement_keeps_caller_and_propagates_restore_lookup_failure(self):
+        product = "cmd/client/desktop_node_chain_execution_product.go"
+        retire = "func (stop *desktopOrderedExecutionStop) Retire(ctx context.Context, command *exec.Cmd, disconnect bool) error"
+        restore = "cmd/client/desktop_node_chain_execution_product_restore.go"
+        lookup = "func (a *app) speedLabOrderedExecutionRestore(ctx context.Context, original *desktopOrderedExecutionOwner) (*desktopOrderedExecutionRestore, error)"
+        for path, declaration, before, after in (
+            (product, retire, "desktopnetwork.LockContext(ctx, &a.mu)", "desktopnetwork.LockContext(context.Background(), &a.mu)"),
+            (product, retire, "current == owner && a.connectionContext == stop.operation && a.cmd == stop.command && command == stop.command", "true"),
+            (product, retire, "a.speedLabOrderedExecutionRestore(ctx, owner)", "a.speedLabOrderedExecutionRestore(context.Background(), owner)"),
+            (product, retire, "saved, err := a.speedLabOrderedExecutionRestore(ctx, owner)\n\tif err != nil {\n\t\treturn err\n\t}", "saved, _ := a.speedLabOrderedExecutionRestore(ctx, owner)"),
+            (product, retire, "saved.retire(ctx)", "saved.retire(context.Background())"),
+            (product, retire, "desktopOrderedExecutionOwners.CompareAndDelete(a, owner)", "desktopOrderedExecutionOwners.Delete(a)"),
+            (restore, lookup, "desktopnetwork.LockContext(ctx, &a.mu)", "desktopnetwork.LockContext(context.Background(), &a.mu)"),
+            (restore, lookup, "if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {\n\t\treturn nil, err\n\t}", "if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {\n\t\treturn nil, nil\n\t}"),
+            (restore, lookup, "!a.speedLabOwnerCurrentLocked(owner) || owner.intent.Err() != nil || saved == nil || saved.owner != original", "saved == nil"),
+        ):
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_execution_retirement_keeps_original_protection_slot_and_caller(self):
+        product = "cmd/client/desktop_node_chain_execution_product.go"
+        retire = "func (stop *desktopOrderedExecutionStop) Retire(ctx context.Context, command *exec.Cmd, disconnect bool) error"
+        owned = "cmd/client/desktop_node_owned.go"
+        release = "func (a *app) releaseCapturedDesktopNodeProtectionContext(ctx context.Context, slot *desktopNodeProtectionSlot) error"
+        wrapper = "func (a *app) releaseCapturedDesktopNodeProtection(slot *desktopNodeProtectionSlot) error"
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        for path, declaration, before, after in (
+            (product, retire, "a.releaseCapturedDesktopNodeProtectionContext(ctx, owner.slot)", "a.releaseCapturedDesktopNodeProtection(owner.slot)"),
+            (product, retire, "a.releaseCapturedDesktopNodeProtectionContext(ctx, owner.slot)", "a.releaseCapturedDesktopNodeProtectionContext(ctx, a.nodeProtection)"),
+            (product, retire, "if err := a.releaseCapturedDesktopNodeProtectionContext(ctx, owner.slot); err != nil {\n\t\t\t\treturn err\n\t\t\t}", "_ = a.releaseCapturedDesktopNodeProtectionContext(ctx, owner.slot)"),
+            (owned, wrapper, "a.releaseCapturedDesktopNodeProtectionContext(ctx, slot)", "a.releaseCapturedDesktopNodeProtectionContext(context.Background(), slot)"),
+            (owned, release, "desktopnetwork.LockContext(ctx, &slot.mu)", "desktopnetwork.LockContext(context.Background(), &slot.mu)"),
+            (owned, release, "current := a.nodeProtection == slot", "current := true"),
+            (owned, release, "current = a.nodeProtection == slot", "current = true"),
+            (owned, release, "slot.pendingOffContext(ctx)", "slot.pendingOffContext(context.Background())"),
+            (owned, release, "a.resumeDesktopProtectionOff(ctx, slot, pending, true)", "a.resumeDesktopProtectionOff(context.Background(), slot, pending, true)"),
+            (owned, release, "slot.releaseLocked(ctx)", "slot.releaseLocked(context.Background())"),
+            (owned, release, "if a.nodeProtection != slot {", "if false {"),
+            (owned, release, "if slot.provedEmptyLocked() {", "if true {"),
+        ):
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
     def test_public_request_bridge_keeps_http_caller_decode_capability_and_lock(self):
         path = "cmd/client/multihop_native_routes.go"
         self.assert_multihop_chain(True)
@@ -534,9 +731,9 @@ class NativeShippingAuditTests(unittest.TestCase):
         strict_json = "cmd/client/external_profile_expectation.go"
         changes = (
             (request, 'return q.nodesPresent || q.Nodes != nil', 'return false'),
-            (request, 'q.Execution != "local"', 'false'),
+            (request, '!validDesktopOrderedExecution(q.Execution)', 'false'),
             (request, 'q.ExpectedSelectedNodeID == nil || *q.ExpectedSelectedNodeID == "" || q.ExpectedProfileTokens == nil', 'false'),
-            (request, 'common.ValidateMultihopNodes(q.Nodes)', 'error(nil)'),
+            ("cmd/client/desktop_node_chain_execution_product.go", 'common.ValidateMultihopNodes(nodes)', 'error(nil)'),
             (request, 'q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID', 'false'),
             (request, 'fields, err := externalConnectJSONObject(data)', 'fields, err := lenientConnectJSONObject(data)'),
             (request, 'capture, err := decodeDesktopProfileExpectations(fields)', 'capture, err := desktopProfileExpectations{}, error(nil)'),
@@ -1044,6 +1241,12 @@ class WindowsProfileControlsAuditTests(unittest.TestCase):
             ("cmd/client/desktop_node_journal_off.go", "s.backend.recoverWithBarrier(ctx, capture.target, j.barrier)", "s.backend.recover(ctx, capture.target)"),
             ("cmd/client/desktop_node_journal_off.go", "writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.intent, j.settlement)", "unflushedSettlement()"),
             ("cmd/client/desktop_node_owned.go", "a.resumeDesktopProtectionOff(ctx, slot, pending, true)", "a.resumeUnrelatedOff(ctx)"),
+            ("cmd/client/desktop_node_owned.go", "return a.releaseCapturedDesktopNodeProtectionContext(ctx, slot)", "return a.releaseCapturedDesktopNodeProtectionContext(context.Background(), slot)"),
+            ("cmd/client/desktop_node_owned.go", "slot.pendingOffContext(ctx)", "slot.pendingOffContext(context.Background())"),
+            ("cmd/client/desktop_node_owned.go", "current = a.nodeProtection == slot", "current = true"),
+            ("cmd/client/desktop_node_owned.go", "desktopnetwork.LockContext(ctx, &slot.mu)", "desktopnetwork.LockContext(context.Background(), &slot.mu)"),
+            ("cmd/client/desktop_node_owned.go", "slot.releaseLocked(ctx)", "slot.releaseLocked(context.Background())"),
+            ("cmd/client/desktop_node_owned.go", "if slot.provedEmptyLocked()", "if true"),
             ("cmd/client/operation_guard.go", "a.guardDesktopProtectionOffPending(r.Context())", "unrelatedGuard(r.Context())"),
             ("client/RouterVPN-Windows-ProfileSettings.ps1", "-Body ($body | ConvertTo-Json -Compress) -TimeoutSec 30", "-Body ($body | ConvertTo-Json -Compress) -TimeoutSec 8"),
             ("client/RouterVPN-Windows-UnifiedShell.ps1", "Get-RouterVPNProtectionPresentation -Captured $Protection", "Get-UnrelatedPresentation -Captured $Protection"),

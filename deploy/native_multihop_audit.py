@@ -7,13 +7,22 @@ handler, whose sole public wrapper installs the exact production adapters.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 _TOKEN = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|`[^`]*`|\'(?:\\.|[^\'\\])*\'|[A-Za-z_][A-Za-z_0-9]*|\d+|[^\s]', re.S)
 
 
+@lru_cache(maxsize=128)
+def _token_tuple(source: str) -> tuple[str, ...]:
+    # The complete source bytes are the key. Mutated fixtures cannot reuse a
+    # prior verdict, and callers receive fresh lists below rather than cache
+    # authority over any mutable source or parsed token collection.
+    return tuple(m.group() for m in _TOKEN.finditer(source)
+                 if not m.group().startswith(("//", "/*")))
+
+
 def _tokens(source: str) -> list[str]:
-    return [m.group() for m in _TOKEN.finditer(source)
-            if not m.group().startswith(("//", "/*"))]
+    return list(_token_tuple(source))
 
 
 def _positions(tokens: list[str], fragment: str) -> list[int]:
@@ -845,11 +854,11 @@ return q.nodesPresent || q.Nodes != nil
 if !q.ordered() {
 	return nil
 }
-if q.Execution != "local" || q.EntryID != "" || q.ExitID != "" || q.Base != "" || q.EntryMode != "" || q.ExitMode != "" ||
+if !validDesktopOrderedExecution(q.Execution) || q.EntryID != "" || q.ExitID != "" || q.Base != "" || q.EntryMode != "" || q.ExitMode != "" ||
 	q.ExpectedSelectedNodeID == nil || *q.ExpectedSelectedNodeID == "" || q.ExpectedProfileTokens == nil {
-	return errors.New("ordered Connect requires one explicit Local path and its complete original node revisions")
+	return errors.New("ordered Connect requires one explicit execution choice and its complete original node revisions")
 }
-if err := common.ValidateMultihopNodes(q.Nodes); err != nil {
+if err := desktopOrderedExecutionSelection(q.Nodes, q.Execution); err != nil {
 	return err
 }
 if q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID {
@@ -1066,8 +1075,324 @@ return fields, nil
     return True
 
 
+def native_multihop_execution_product(read) -> bool:
+    """Trace the distinct public execution transaction and captured Stop.
+
+    This guard does not establish native execution. It keeps the actual public
+    adapter, complete selection, pre-Stop preparation, child-selected proof and
+    original retirement owner connected while native tests supply that evidence.
+    Ordinary Darwin admission cannot grant this separate capability.
+    """
+    if not callable(read):
+        return False
+    product_path = "cmd/client/desktop_node_chain_execution_product.go"
+    product = _tokens(read(product_path))
+    expected = (
+        (product_path, "func nativeDesktopOrderedExecutionPlatformSupported() bool", '''
+return retainedNativeMultihopSelected() && (runtime.GOOS == "linux" || runtime.GOOS == "windows") &&
+    (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64")
+        '''),
+        (product_path, "func desktopOrderedExecutionChoices() []string", '''
+if nativeDesktopOrderedExecutionPlatformSupported() {
+    return []string{"local", "server", "auto"}
+}
+return []string{"local"}
+        '''),
+        (product_path, "func validDesktopOrderedExecution(value string) bool", '''
+return value == "local" || value == "server" || value == "auto"
+        '''),
+        (product_path, "func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", '''
+if !validDesktopOrderedExecution(requested) {
+    return errors.New("ordered execution requires an explicit Local, Server or Compare choice")
+}
+if err := common.ValidateMultihopNodes(nodes); err != nil { return err }
+if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" {
+    return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
+}
+if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes)) {
+    return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
+}
+return nil
+        '''),
+        (product_path, "func prepareDesktopOrderedExecutionSession(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeChainExecutionSession, error)", '''
+launch, image, err := prepareDesktopNodeChainExecutionHost(ctx, a, selection, requested)
+if launch == nil { return nil, err }
+s := &desktopNodeChainExecutionSession{app: a, launch: launch, execution: desktopNodeChainLaunchExecution(launch), selection: selection}
+if err == nil { err = preflightRetainedNativeMultihop(ctx, image, launch, runDesktopExternalPreflightCommand) }
+return s, err
+        '''),
+        (product_path, "func (a *app) retireDesktopOrderedExecutionPreparation(ctx context.Context, s *desktopNodeChainExecutionSession) error", '''
+if s == nil || s.app != a || s.launch == nil || s.execution == nil || s.launch.command != nil || s.graph != nil || s.native != nil {
+    return errors.New("ordered preparation retirement lost its unentered original session")
+}
+if prior, exists := desktopOrderedExecutionPreparations.LoadOrStore(a, s); exists && prior != s {
+    return errors.New("ordered preparation cannot replace an earlier cleanup owner")
+}
+if err := s.Close(ctx); err != nil { return err }
+if !desktopOrderedExecutionPreparations.CompareAndDelete(a, s) {
+    return errors.New("ordered preparation cleanup owner changed")
+}
+return ctx.Err()
+        '''),
+        (product_path, "func (a *app) retirePendingDesktopOrderedExecutionPreparation(ctx context.Context) error", '''
+if ctx == nil { return errors.New("ordered pending retirement requires its original caller") }
+if err := ctx.Err(); err != nil { return err }
+raw, exists := desktopOrderedExecutionPreparations.Load(a)
+if !exists { return nil }
+s, ok := raw.(*desktopNodeChainExecutionSession)
+if !ok || s == nil { return errors.New("ordered pending preparation lost its original cleanup owner") }
+return a.retireDesktopOrderedExecutionPreparation(ctx, s)
+        '''),
+        (product_path, "func (a *app) connectDesktopOrderedExecution(ctx context.Context, selection multihopSelection, requested string, usage bool) (*desktopNodeChainExecutionSession, error)", '''
+return a.connectDesktopOrderedExecutionWithRuntime(ctx, selection, requested, usage, nil)
+        '''),
+        ("cmd/client/desktop_external_owned_stop.go", "func (a *app) captureDesktopRetainedStopContext(ctx context.Context) (desktopRetainedStopCapture, error)", '''
+if err := a.retirePendingDesktopOrderedExecutionPreparation(ctx); err != nil { return nil, err }
+if captured, err := a.captureDesktopOrderedExecutionStopContext(ctx); captured != nil || err != nil { return captured, err }
+return a.captureDesktopRetainedStopWithoutExecution()
+        '''),
+        ("cmd/client/desktop_node_owned.go", "func (a *app) releaseCapturedDesktopNodeProtection(slot *desktopNodeProtectionSlot) error", '''
+ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+defer cancel()
+return a.releaseCapturedDesktopNodeProtectionContext(ctx, slot)
+        '''),
+        ("cmd/client/desktop_node_owned.go", "func (a *app) releaseCapturedDesktopNodeProtectionContext(ctx context.Context, slot *desktopNodeProtectionSlot) error", '''
+if ctx == nil || a == nil || slot == nil {
+    return errors.New("native protection release requires its captured caller and slot")
+}
+if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil { return err }
+current := a.nodeProtection == slot
+a.mu.Unlock()
+if !current { return errors.New("native protection release belongs to a replaced application slot") }
+pending, err := slot.pendingOffContext(ctx)
+if err != nil { return err }
+if pending != nil {
+    _, err := a.resumeDesktopProtectionOff(ctx, slot, pending, true)
+    return err
+}
+if err := desktopnetwork.LockContext(ctx, &slot.mu); err != nil { return err }
+defer slot.mu.Unlock()
+if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil { return err }
+current = a.nodeProtection == slot
+a.mu.Unlock()
+if !current { return errors.New("native protection release belongs to a replaced application slot") }
+if err := slot.releaseLocked(ctx); err != nil { return err }
+if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil { return err }
+defer a.mu.Unlock()
+if a.nodeProtection != slot {
+    return errors.New("native protection release completed for a replaced application slot")
+}
+if slot.provedEmptyLocked() { a.nodeProtection = nil }
+return ctx.Err()
+        '''),
+    )
+    for path, declaration, body in expected:
+        if _function(_tokens(read(path)), declaration) != _tokens(body):
+            return False
+
+    handler = _function(_tokens(read("cmd/client/multihop_native_routes.go")),
+        "func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime)")
+    if not _ordered_once(handler,
+        "sel, err := a.resolveNativeMultihopRequestLocked(q)",
+        '''if execution, err := routeExecution(q); err != nil {
+            http.Error(w, err.Error(), 400)
+            return
+        } else if execution != "local" {
+            if q.ordered() {
+                a.runDesktopOrderedExecution(w, r, operation, sel, q.Execution, driver.execution)
+                return
+            }
+            a.runMultihopExecution(w, r, sel, q)
+            return
+        }''',
+        "a.nativeMultihopConnectLocalOwned(w, r, operation, sel, driver)"):
+        return False
+    run = _function(product, "func (a *app) runDesktopOrderedExecution(w http.ResponseWriter, r *http.Request, operation context.Context, selection multihopSelection, requested string, driver *desktopOrderedExecutionRuntime)")
+    if not _ordered_once(run,
+        "s, err := a.connectDesktopOrderedExecutionWithRuntime(operation, selection, requested, true, driver)",
+        '''if err != nil { http.Error(w, err.Error(), http.StatusBadGateway)
+return }''',
+        "a.startRouterNodeAutomaticMTU()",
+        '"requested_execution": requested, "execution": s.graph.Execution, "nodes": nodeChainSelectedReferences(s.selection.Nodes)'):
+        return False
+    connect = _function(product, "func (a *app) connectDesktopOrderedExecutionWithRuntime(ctx context.Context, selection multihopSelection, requested string, usage bool, modeled *desktopOrderedExecutionRuntime) (*desktopNodeChainExecutionSession, error)")
+    if not _ordered_once(connect,
+        "driver := desktopOrderedExecutionRuntime{capture: captureNativeMultihopForAppContext, prepare: prepareDesktopOrderedExecutionSession}",
+        "if modeled != nil { driver = *modeled }",
+        "if driver.capture == nil || driver.prepare == nil { return nil, errors.New(\"ordered execution lost its concrete native adapter\") }",
+        '''if ctx == nil || a.checkCapturedConnectionOperation(ctx) != nil || !nativeDesktopOrderedExecutionPlatformSupported() || requested == "local" {
+            return nil, errors.New("ordered execution has no original admitted connection operation")
+        }''',
+        "if err := desktopOrderedExecutionSelection(nodeChainSelectedReferences(selection.Nodes), requested); err != nil { return nil, err }",
+        '''for _, member := range selection.Nodes {
+            if member.Profile.NodeKind == "external" || member.Profile.External != nil {
+                return nil, errors.New("ordered Server and Compare require admitted paired native nodes")
+            }
+        }''',
+        '''if _, pending := desktopOrderedExecutionPreparations.Load(a); pending {
+            return nil, errors.New("ordered preparation cleanup must finish before another connection")
+        }''',
+        '''if selection.Native == nil {
+            var err error
+            selection, err = driver.capture(ctx, a, selection, []string{selection.ExitMode})
+            if err != nil { return nil, err }
+        }''',
+        "s, err := driver.prepare(ctx, a, selection, requested)",
+        '''if err == nil && (s == nil || s.app != a || s.launch == nil || s.execution == nil || s.launch.command != nil || s.graph != nil || s.native != nil) {
+            err = errors.New("ordered preparation did not return its unused original session")
+        }''',
+        "if err == nil { err = a.guardDesktopOwnedNodeTransitionContext(ctx, s.launch) }",
+        "if err == nil { err = a.stopModeWithIntent(true) }",
+        "if err == nil { err = a.checkCapturedConnectionOperation(ctx) }",
+        '''if err != nil {
+            if s != nil {
+                cleanup, cancel := desktopNodeChainRetirementContext()
+                err = errors.Join(err, a.retireDesktopOrderedExecutionPreparation(cleanup, s))
+                cancel()
+            }
+            return s, err
+        }''',
+        'sessionTrackerFor(a).declareRequest("multihop", selection.Base)',
+        "err = s.startContext(ctx)",
+        "_, retainErr := a.retainDesktopOrderedExecution(s)",
+        "err = errors.Join(err, retainErr)",
+        "if s != nil && s.launch.command != nil && a.ownsConnectionRuntime(s.launch.command) { err = errors.Join(err, a.speedLabOwnRuntime(s.launch.command)) }",
+        "if err == nil { err = s.Verify(ctx) }",
+        "if err == nil { err = a.publishDesktopOrderedExecution(ctx, s, usage) }",
+        '''if err != nil {
+            if s != nil {
+                cleanup, cancel := desktopNodeChainRetirementContext()
+                closeErr := s.Close(cleanup)
+                cancel()
+                err = errors.Join(err, closeErr)
+            }
+            return s, err
+        }''',
+        "return s, nil"):
+        return False
+    if any(_positions(body, fragment) for body in (connect, run) for fragment in
+           ("routechoice.Compare(", "a.runMultihopExecution(", "runLocalServerComparison(")):
+        return False
+    retain = _function(product, "func (a *app) retainDesktopOrderedExecution(s *desktopNodeChainExecutionSession) (*desktopOrderedExecutionOwner, error)")
+    if not _ordered_once(retain,
+        "if s == nil || s.app != a || s.launch == nil || s.execution == nil { return nil, errors.New(\"ordered execution lost its actual startup owner\") }",
+        "owner := &desktopOrderedExecutionOwner{session: s}",
+        '''if s.launch.ownedNode != nil { s.launch.workspaceMu.Lock()
+owner.slot = s.launch.ownedNode.slot
+s.launch.workspaceMu.Unlock() }''',
+        '''if old, exists := desktopOrderedExecutionOwners.LoadOrStore(a, owner); exists {
+            if prior, ok := old.(*desktopOrderedExecutionOwner); ok && prior.session == s { return prior, nil }
+            return nil, errors.New("ordered execution cannot replace an unretired session")
+        }''',
+        "return owner, nil"):
+        return False
+    publish = _function(product, "func (a *app) publishDesktopOrderedExecution(ctx context.Context, s *desktopNodeChainExecutionSession, usage bool) error")
+    if not _ordered_once(publish,
+        "if s == nil || s.app != a { return errors.New(\"ordered publication lost its actual session\") }",
+        "if err := s.Current(ctx); err != nil { return err }",
+        "result, err := s.Result(ctx)",
+        '''if err != nil || result.Winner == nil || s.graph == nil || string(result.Winner.Execution) != s.graph.Execution {
+            return errors.Join(err, errors.New("ordered publication lost its child's selected proof"))
+        }''',
+        "if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil { return err }",
+        "defer a.mu.Unlock()",
+        "owner, ownerErr := a.desktopOrderedExecutionOwner()",
+        '''if ownerErr != nil || owner == nil || owner.session != s || a.cmd != s.launch.command ||
+            a.checkCapturedConnectionOperationLocked(ctx) != nil || s.execution.publicationCurrentLocked(ctx, a, s.launch, s.selection) != nil {
+            return errors.Join(ownerErr, errors.New("ordered publication changed its operation, source or native owner"))
+        }''',
+        "previous := cloneRouterProfileStore(a.profiles)",
+        "used := make(map[string]bool, len(s.selection.Nodes))",
+        "for _, node := range s.selection.Nodes { used[node.Profile.ID] = true }",
+        '''for i := range a.profiles.Profiles { if used[a.profiles.Profiles[i].ID] { a.profiles.Profiles[i].UseCount++
+a.profiles.Profiles[i].LastUsedAt = now } }''',
+        '''if err := a.persistProfilesLocked(); err != nil { a.rollbackProfilesLocked(previous)
+return err }''',
+        '''progress := &comparisonOwner{value: routeComparisonProgress{
+            ID: s.launch.chain.policy.Metadata().SessionID, Stage: "selected", Complete: true,
+            Execution: s.graph.Execution, Measurements: result.Measurements,
+        }}''',
+        "desktopComparisons.Store(a, progress)",
+        'a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""'):
+        return False
+    stop = _function(_tokens(read("cmd/client/main.go")),
+        "func (a *app) stopModeWithDNSReceiptContext(caller context.Context, holdKillSwitch bool, expected *sessionDNSStopReceipt) (failure error)")
+    if not _ordered_once(stop,
+        "if caller == nil { return errors.New(\"Stop requires its original cleanup caller\") }",
+        "ctx, cancel := context.WithTimeout(caller, 15*time.Second)",
+        "dnsStop, err := a.drainCapturedSessionDNSForStop(ctx, expected)",
+        "if err := retireLegacyStandardPreparations(a, ctx); err != nil { return err }",
+        "nativeStop, err := a.captureDesktopRetainedStopContext(ctx)",
+        "if err != nil { return err } releaseMTU, relayOwner, err := a.holdMTUForStop()",
+        "if nativeStop != nil { return nativeStop.Retire(ctx, relayOwner, !holdKillSwitch) }"):
+        return False
+    capture = _function(product, "func (a *app) captureDesktopOrderedExecutionStopContext(ctx context.Context) (desktopRetainedStopCapture, error)")
+    if not _ordered_once(capture,
+        "if ctx == nil { return nil, errors.New(\"ordered Stop capture requires its original caller\") }",
+        "owner, err := a.desktopOrderedExecutionOwner()",
+        "if err != nil || owner == nil { return nil, err }",
+        "if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil { return nil, err }",
+        "stop := &desktopOrderedExecutionStop{owner: owner, operation: a.connectionContext, command: a.cmd}",
+        "a.mu.Unlock()",
+        "if stop.command != nil && stop.command != owner.session.launch.command { return nil, errors.New(\"ordered Stop cannot adopt a replacement command\") }",
+        "if !owner.nativeRetired && owner.session.launch.chain.platform != nil {",
+        "if !supported { return nil, errors.New(\"ordered platform has no captured execution Stop capability\") }",
+        "captureCtx, cancel := context.WithTimeout(ctx, 2*time.Second)",
+        "owner.stop, err = platform.captureExecutionProductStop(captureCtx, owner.session)",
+        "cancel()",
+        "if err != nil { return nil, err }",
+        "if owner.stop == nil {",
+        "if !desktopOrderedExecutionOwners.CompareAndDelete(a, owner) { return nil, errors.New(\"unentered execution cleanup owner changed\") }",
+        "return a.captureDesktopRetainedStopWithoutExecution()",
+        "return stop, nil"):
+        return False
+    retire = _function(product, "func (stop *desktopOrderedExecutionStop) Retire(ctx context.Context, command *exec.Cmd, disconnect bool) error")
+    if not _ordered_once(retire,
+        "if ctx == nil || stop == nil || stop.owner == nil || stop.owner.session == nil { return errors.New(\"ordered Stop lost its captured session\") }",
+        "owner, s := stop.owner, stop.owner.session",
+        "a := s.app",
+        "if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil { return err }",
+        "current, ok := desktopOrderedExecutionOwners.Load(a)",
+        "matched := ok && current == owner && a.connectionContext == stop.operation && a.cmd == stop.command && command == stop.command",
+        "a.mu.Unlock()",
+        "if !matched { return errors.New(\"ordered Stop belongs to a replaced operation or child\") }",
+        "saved, err := a.speedLabOrderedExecutionRestore(ctx, owner)",
+        "if err != nil { return err } if saved != nil {",
+        "if disconnect { return errors.New(\"ordered temporary restore cannot release its retained native baseline\") }",
+        "if err := saved.retire(ctx); err != nil { return err }",
+        "if err := owner.stop.Retire(ctx, command, disconnect); err != nil { return err }",
+        "owner.nativeRetired = true",
+        "if err := desktopnetwork.LockContext(ctx, &s.mu); err != nil { return err }",
+        "s.captureDNSPublication()",
+        "err := s.finishRetirementLocked(ctx)",
+        "s.mu.Unlock()",
+        "if err := s.Close(ctx); err != nil { return err }",
+        "if disconnect && owner.slot != nil {",
+        "if err := a.releaseCapturedDesktopNodeProtectionContext(ctx, owner.slot); err != nil { return err }",
+        "desktopOrderedExecutionOwners.CompareAndDelete(a, owner)",
+        "return ctx.Err()"):
+        return False
+    restore = _function(_tokens(read("cmd/client/desktop_node_chain_execution_product_restore.go")),
+        "func (a *app) speedLabOrderedExecutionRestore(ctx context.Context, original *desktopOrderedExecutionOwner) (*desktopOrderedExecutionRestore, error)")
+    if restore != _tokens('''
+        if ctx == nil { return nil, errors.New("ordered restore lookup requires its original Stop caller") }
+        if err := ctx.Err(); err != nil { return nil, err }
+        raw, exists := speedLabTemporaryOwners.Load(a)
+        if !exists { return nil, nil }
+        owner, ok := raw.(*speedLabTemporaryOwner)
+        if !ok || owner == nil { return nil, nil }
+        if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil { return nil, err }
+        defer a.mu.Unlock()
+        saved := owner.orderedExecution
+        if !a.speedLabOwnerCurrentLocked(owner) || owner.intent.Err() != nil || saved == nil || saved.owner != original { return nil, nil }
+        return saved, nil
+    '''):
+        return False
+    return True
+
+
 def native_multihop_shipping_chain(source: str, read=None) -> bool:
-    if not native_multihop_request_admission(read):
+    if not native_multihop_request_admission(read) or not native_multihop_execution_product(read):
         return False
     # Ordinary Darwin admission is bounded independently from CONNECT and
     # Server/Compare. Preserve the existing Linux/Windows target behavior.

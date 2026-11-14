@@ -49,8 +49,8 @@ func validateRouterProfileNodeChain(p *RouterProfile) error {
 		if err := ValidateMultihopNodes(p.MultihopNodes); err != nil {
 			return err
 		}
-		if p.MultihopExecution != "local" {
-			return errors.New("ordered multihop requires explicit Local execution")
+		if p.MultihopExecution != "local" && p.MultihopExecution != "server" && p.MultihopExecution != "auto" {
+			return errors.New("ordered multihop requires explicit Local, Server or Compare execution")
 		}
 		if p.MultihopEntryID != "" || p.MultihopExitID != "" || p.MultihopEntryMode != "" {
 			return errors.New("ordered multihop cannot also contain legacy entry/exit selection fields")

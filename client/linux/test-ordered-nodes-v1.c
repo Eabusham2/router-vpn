@@ -42,7 +42,7 @@ static void post_and_log(App *app,const char *path,const char *body,long timeout
 
 static void change_choice(void) { gtk_combo_box_set_active_id(GTK_COMBO_BOX(unified->node),"n8");gtk_combo_box_set_active_id(GTK_COMBO_BOX(unified->node),"exit"); }
 static JsonObject *response_from(JsonObject *request) {
-    JsonObject *o=json_object_new();json_object_set_string_member(o,"selected_node_id",obj_string(request,"expected_selected_node_id"));json_object_set_string_member(o,"mode",obj_string(request,"mode"));json_object_set_boolean_member(o,"multihop_enabled",TRUE);json_object_set_string_member(o,"multihop_execution","local");
+    JsonObject *o=json_object_new();json_object_set_string_member(o,"selected_node_id",obj_string(request,"expected_selected_node_id"));json_object_set_string_member(o,"mode",obj_string(request,"mode"));json_object_set_boolean_member(o,"multihop_enabled",TRUE);json_object_set_string_member(o,"multihop_execution",obj_string(request,"multihop_execution"));
     JsonArray *rows=linux_ordered_array_v1(request,"multihop_nodes");JsonObject*tokens=linux_ordered_object_v1(request,"expected_profile_tokens");
     if(rows)json_object_set_array_member(o,"multihop_nodes",json_array_ref(rows));if(tokens)json_object_set_object_member(o,"profile_tokens",json_object_ref(tokens));
     return o;
@@ -51,7 +51,7 @@ static gboolean api_request(const char *path,const char *method,const char *body
     (void)method;(void)timeout;(void)error;char *raw=NULL;
     if(strcmp(path,"/api/status")==0)raw=g_strdup(active?"{\"connected\":true,\"phase\":\"connected\"}":"{\"connected\":false,\"phase\":\"off\"}");
     else if(strcmp(path,"/api/profiles")==0) { raw=json_to_string(catalog,FALSE);if(late_read){late_read=FALSE;change_choice();} }
-    else if(strcmp(path,"/api/multihop/status")==0)raw=g_strdup_printf("{\"ordered_nodes_supported\":%s,\"nodes\":[],\"supported_entry_modes\":[\"wg\",\"awg2-fast\",\"awg2-strong\"]}",capability?"true":"false");
+    else if(strcmp(path,"/api/multihop/status")==0)raw=g_strdup_printf("{\"ordered_nodes_supported\":%s,\"ordered_executions\":[\"local\",\"server\",\"auto\"],\"nodes\":[],\"supported_entry_modes\":[\"wg\",\"awg2-fast\",\"awg2-strong\"]}",capability?"true":"false");
     else if(strcmp(path,"/api/connection-profiles")==0)raw=g_strdup("{\"profiles\":[{\"id\":\"saved\",\"name\":\"Original\",\"mode\":\"shadowsocks\",\"node_id\":\"exit\"}]}");
     else if(strcmp(path,"/api/connection-profile/setup/save")==0||strcmp(path,"/api/connection-profile/setup/update")==0) {
         writes++;g_free(last_body);g_free(last_path);last_body=g_strdup(body);last_path=g_strdup(path);JsonNode *n=parse_json(body);JsonObject *q=json_node_get_object(n);
@@ -163,7 +163,7 @@ static gboolean drive_profiles(gpointer data) {
 static void profiles(int kind) { profile_case=kind;stage=ticks=0;g_timeout_add(1,drive_profiles,NULL);linux_profile_manager_v11(NULL,unified); }
 
 static int model_only(void) {
-    for (guint count=2;count<=8;count++) for (guint final_choice=0;final_choice<2;final_choice++) {
+    for (guint count=2;count<=8;count++) for (guint final_choice=0;final_choice<2;final_choice++) for (guint execution_choice=0;execution_choice<3;execution_choice++) {
         const char *final_mode=final_choice==0?"shadowsocks":"hysteria2";
         JsonArray *nodes=json_array_new(),*profiles=json_array_new();JsonObject*tokens=json_object_new(),*store=json_object_new();
         json_object_set_string_member(store,"selected_id","exit");
@@ -175,11 +175,11 @@ static int model_only(void) {
             json_object_set_string_member(tokens,id,token);g_free(id);g_free(token);
         }
         json_object_set_array_member(store,"profiles",profiles);
-        LinuxOrderedSelectionV1*selection=linux_ordered_selection_v1("exit",nodes,tokens);check(selection!=NULL,"exact bounded graph rejected");check(linux_ordered_current_v1(selection,store),"original source inventory rejected");
+        LinuxOrderedSelectionV1*selection=linux_ordered_selection_v1("exit",nodes,tokens);check(selection!=NULL,"exact bounded graph rejected");const char *executions[]={"local","server","auto"};check(linux_ordered_execution_v1(selection,executions[execution_choice]),"explicit paired execution rejected");check(!linux_ordered_execution_v1(selection,"compare")&&!linux_ordered_execution_v1(selection,"")&&!linux_ordered_execution_v1(selection,"SERVER"),"invalid execution normalized");check(linux_ordered_current_v1(selection,store),"original source inventory rejected");
         char*body=linux_ordered_connect_body_v1(selection);JsonNode*request=parse_json(body);JsonObject*q=json_node_get_object(request);
-        check(json_object_get_size(q)==4&&json_array_get_length(linux_ordered_array_v1(q,"nodes"))==count,"complete serialized graph changed");
+        check(json_object_get_size(q)==4&&json_array_get_length(linux_ordered_array_v1(q,"nodes"))==count,"complete serialized graph changed");check(strcmp(obj_string(q,"execution"),executions[execution_choice])==0,"Connect relabelled requested execution");
         check(json_object_get_size(linux_ordered_object_v1(q,"expected_profile_tokens"))==count,"original source inventory missing");
-        JsonObject*value=linux_ordered_value_v1(selection);char*raw=linux_ordered_json_v1(value);JsonNode*disk=parse_json(raw);LinuxOrderedSelectionV1*reopened=linux_ordered_decode_v1(json_node_get_object(disk));check(reopened&&linux_ordered_current_v1(reopened,store),"disk reopen lost source inventory");
+        JsonObject*value=linux_ordered_value_v1(selection);char*raw=linux_ordered_json_v1(value);JsonNode*disk=parse_json(raw);LinuxOrderedSelectionV1*reopened=linux_ordered_decode_v1(json_node_get_object(disk));check(reopened&&linux_ordered_current_v1(reopened,store),"disk reopen lost source inventory");check(strcmp(reopened->execution,executions[execution_choice])==0,"disk reopen relabelled requested execution");
         JsonObject*selected=json_array_get_object_element(profiles,count-1);
         if (final_choice==1) {
             for (guint layer=0;layer<2;layer++) {
@@ -202,8 +202,9 @@ static int model_only(void) {
         json_object_set_boolean_member(selected,"multihop_enabled",FALSE);json_object_set_array_member(selected,"multihop_nodes",json_array_ref(nodes));
         load=linux_ordered_load_capture_v1(store,"exit","direct-target");check(load!=NULL,"direct Load capture failed");load_node=parse_json(load);check(json_object_get_size(linux_ordered_object_v1(json_node_get_object(load_node),"expected_profile_tokens"))==1,"Off included remembered draft in Load expectation");g_free(load);json_node_free(load_node);
         json_object_set_boolean_member(selected,"multihop_enabled",TRUE);JsonObject*first_source=json_array_get_object_element(profiles,0);char*first_token=g_strdup(obj_string(first_source,"profile_token"));json_object_remove_member(first_source,"profile_token");check(linux_ordered_load_capture_v1(store,"exit","different-target")==NULL,"Load substituted missing current member source");json_object_set_string_member(first_source,"profile_token",first_token);g_free(first_token);json_object_set_boolean_member(selected,"multihop_enabled",FALSE);
-        JsonObject*reply=json_object_new();json_object_set_string_member(reply,"selected_node_id","exit");json_object_set_string_member(reply,"mode",final_mode);json_object_set_boolean_member(reply,"multihop_enabled",TRUE);json_object_set_string_member(reply,"multihop_execution","local");json_object_set_array_member(reply,"multihop_nodes",json_array_ref(nodes));json_object_set_object_member(reply,"profile_tokens",json_object_ref(tokens));
-        LinuxOrderedSelectionV1*accepted=linux_ordered_response_v1(reply);check(accepted!=NULL,"complete committed source receipt rejected");linux_ordered_selection_free_v1(accepted);
+        JsonObject*reply=json_object_new();json_object_set_string_member(reply,"selected_node_id","exit");json_object_set_string_member(reply,"mode",final_mode);json_object_set_boolean_member(reply,"multihop_enabled",TRUE);json_object_set_string_member(reply,"multihop_execution",executions[execution_choice]);json_object_set_array_member(reply,"multihop_nodes",json_array_ref(nodes));json_object_set_object_member(reply,"profile_tokens",json_object_ref(tokens));
+        LinuxOrderedSelectionV1*accepted=linux_ordered_response_v1(reply);check(accepted!=NULL,"complete committed source receipt rejected");check(linux_ordered_same_path_v1(accepted,selection),"original committed execution rejected");linux_ordered_selection_free_v1(accepted);
+        json_object_set_string_member(reply,"multihop_execution",executions[(execution_choice+1)%3]);accepted=linux_ordered_response_v1(reply);check(accepted!=NULL&&!linux_ordered_same_path_v1(accepted,selection),"committed receipt relabelled requested execution");linux_ordered_selection_free_v1(accepted);json_object_set_string_member(reply,"multihop_execution",executions[execution_choice]);
         json_object_set_string_member(reply,"mode",final_choice==0?"hysteria2":"shadowsocks");check(linux_ordered_response_v1(reply)==NULL,"different final mode borrowed committed receipt");json_object_set_string_member(reply,"mode",final_mode);
         json_object_set_string_member(tokens,"unlinked","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(linux_ordered_response_v1(reply)==NULL,"extra committed source receipt accepted");json_object_remove_member(tokens,"unlinked");
         char*response_token=g_strdup(obj_string(tokens,"n0"));json_object_remove_member(tokens,"n0");check(linux_ordered_response_v1(reply)==NULL,"missing committed source receipt accepted");json_object_set_string_member(tokens,"n0",response_token);g_free(response_token);json_object_unref(reply);

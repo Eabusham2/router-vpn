@@ -430,12 +430,7 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
                     JsonNode *reply = parse_json(out.data);
                     LinuxOrderedSelectionV1 *committed = reply != NULL && JSON_NODE_HOLDS_OBJECT(reply) ? linux_ordered_response_v1(json_node_get_object(reply)) : NULL;
                     if (reply != NULL) json_node_free(reply);
-                    gboolean same = committed != NULL && ordered->selection != NULL && strcmp(committed->control, ordered->selection->control) == 0 &&
-                        json_array_get_length(committed->nodes) == json_array_get_length(ordered->selection->nodes);
-                    for (guint i = 0; same && i < json_array_get_length(committed->nodes); i++) {
-                        JsonObject *a = json_array_get_object_element(committed->nodes, i), *b = json_array_get_object_element(ordered->selection->nodes, i);
-                        same = strcmp(linux_ordered_string_v1(a, "id"), linux_ordered_string_v1(b, "id")) == 0 && strcmp(linux_ordered_string_v1(a, "mode"), linux_ordered_string_v1(b, "mode")) == 0;
-                    }
+                    gboolean same = linux_ordered_same_path_v1(committed, ordered->selection);
                     if (!same) {
                         linux_ordered_selection_free_v1(committed); ordered->invalid = TRUE; ordered->generation++;
                         gtk_label_set_text(GTK_LABEL(status), "The committed ordered receipt was unavailable or changed. Load the exact saved profile before connecting.");

@@ -84,6 +84,8 @@ def windows(shell):
                str(ROOT / "client/test-windows-connection-profile-modes.ps1")]
     setup_witnesses = {
         "setup-expectation": "Setup action discarded its original source inventory",
+        "ordered-execution-capture": "Ordered profile borrowed an unrelated logical mode or execution",
+        "ordered-execution-connect": "Ordered Connect changed its complete path",
         "setup-current-receipt": "A changed setup owner was adopted: visible-off",
         "setup-response-source": "Malformed setup reply was adopted: changed-token",
         "setup-response-order": "Malformed setup reply was adopted: reordered-members",
@@ -91,10 +93,10 @@ def windows(shell):
         "setup-refresh-retirement": "Setup kept its pending catalog refresh",
         "setup-uncertain-owner": "Uncertain Load retained the old selected-node authority",
     }
-    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline", "ordered-drop-middle", "ordered-final-owner", "ordered-capability", "ordered-source", "ordered-locked-source", "setup-expectation", "setup-current-receipt", "setup-response-source", "setup-response-order", "setup-load-inventory", "setup-refresh-retirement", "setup-uncertain-owner"):
+    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline", "ordered-drop-middle", "ordered-execution-capture", "ordered-execution-connect", "ordered-final-owner", "ordered-capability", "ordered-source", "ordered-locked-source", "setup-expectation", "setup-current-receipt", "setup-response-source", "setup-response-order", "setup-load-inventory", "setup-refresh-retirement", "setup-uncertain-owner"):
         run(command + ["-Mutation", mutation], negative=mutation != "shipping",
             witness=setup_witnesses.get(mutation), observation="profile:" + mutation)
-    print("WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 19 rejected", flush=True)
+    print("WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 21 rejected", flush=True)
     editor = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
               str(ROOT / "client/test-windows-ordered-editor.ps1")]
     if os.name == "nt":
@@ -141,7 +143,7 @@ import CoreFoundation
     var afterSetup: ((String) -> Void)?
     var setupResponse: (([String: Any]) -> [String: Any])?
     var nodeReplies: [[String: Any]] = [], hopReplies: [[String: Any]] = []
-    var orderedCapabilities: [String: Any] = ["ordered_nodes_supported": true]
+    var orderedCapabilities: [String: Any] = ["ordered_nodes_supported": true, "ordered_executions": ["local", "server", "auto"]]
     var orderedCurrent: [String: Any] = [:]
     var afterOrderedSnapshot: (() -> Void)?
     func json(_ path: String, timeout: TimeInterval = 5) throws -> Any {
@@ -454,17 +456,17 @@ SWIFT_ORDERED = r'''
     owner.connectionProfileSelection = RouterVPNConnectionProfileSelection(selectedNodeID: ids.last!, multihopEnabled: true,
         entryMode: "", execution: "local", profileTokens: tokens, orderedNodes: rows)
     owner.api.orderedCurrent = ["selected_id": ids.last!, "profiles": owner.profiles]
-    owner.api.orderedCapabilities = ["ordered_nodes_supported": true]; owner.api.afterOrderedSnapshot = nil
+    owner.api.orderedCapabilities = ["ordered_nodes_supported": true, "ordered_executions": ["local", "server", "auto"]]; owner.api.afterOrderedSnapshot = nil
     fixtureDefaults.set(finalMode, forKey: macConnectionModeKey)
     return rows
 }
-@MainActor func verifyOrderedSnapshot(_ body: [String: Any], rows: [[String: String]], updating: Bool) {
+@MainActor func verifyOrderedSnapshot(_ body: [String: Any], rows: [[String: String]], updating: Bool, execution: String = "local") {
     var keys = Set(["expected_selected_node_id", "expected_profile_tokens", "name", "mode", "custom_layers", "multihop_enabled", "multihop_nodes", "multihop_execution"])
     if updating { keys.insert("id") }
     check(Set(body.keys) == keys, "ordered save mixed pair fields or private credentials")
     check(body["multihop_nodes"] as? [[String: String]] == rows, "ordered save dropped, substituted or reordered a member")
     check(body["mode"] as? String == rows.last?["mode"] && body["custom_layers"] as? [String] == [], "ordered save retained unrelated mode or layers")
-    check(body["multihop_enabled"] as? Bool == true && body["multihop_execution"] as? String == "local", "ordered save lost exact execution")
+    check(body["multihop_enabled"] as? Bool == true && body["multihop_execution"] as? String == execution, "ordered save lost exact execution")
 }
 for finalMode in ["shadowsocks", "hysteria2"] { for prefixMode in ["wg", "awg2-fast", "awg2-strong"] { for length in [2, 3, 4, 8] {
     let rows = chooseOrdered(length, finalMode: finalMode, prefixMode: prefixMode)
@@ -498,6 +500,29 @@ for finalMode in ["shadowsocks", "hysteria2"] { for prefixMode in ["wg", "awg2-f
     check(owner.stoppedProgress.last == capturedProgress, "ordered completion retired a replacement progress owner")
     DispatchQueue.clear()
 } } }
+for requested in ["server", "auto"] { for count in [2, 3, 8] {
+    let rows = chooseOrdered(count)
+    owner.multihopExecutionPopup.selectItem(at: requested == "server" ? 1 : 2)
+    let selection = owner.captureConnectionProfileSelection()
+    check(selection.execution == requested, "ordered snapshot relabelled explicit execution")
+    let draft = try owner.makeOrderedNodeDraft()
+    check(try draft.selection().execution == requested, "ordered editor relabelled explicit execution")
+    for updating in [false, true] {
+        let snapshot = try owner.connectionProfileSnapshot(name: "Selected ordered execution", id: updating ? "saved-profile" : nil)
+        verifyOrderedSnapshot(snapshot, rows: rows, updating: updating, execution: requested)
+        _ = try settings.write(path: updating ? "/api/connection-profile/setup/update" : "/api/connection-profile/setup/save", updating: updating)
+        verifyOrderedSnapshot(settings.api.calls.last!.body, rows: rows, updating: updating, execution: requested)
+        var payload = snapshot
+        payload["profile"] = ["name": "Loaded execution", "mode": "shadowsocks"]; payload["selected_node_id"] = selection.selectedNodeID; payload["profile_tokens"] = selection.profileTokens
+        try owner.applyLoadedConnectionProfile(payload)
+        check(owner.captureConnectionProfileSelection().execution == requested, "ordered Load relabelled execution")
+    }
+    DispatchQueue.clear()
+    let before = owner.api.calls.count
+    owner.connectMultihop(); DispatchQueue.background.run()
+    check(owner.api.calls.count == before + 1 && owner.api.calls.last!.body["execution"] as? String == requested && owner.api.calls.last!.body["nodes"] as? [[String:String]] == rows, "ordered callback relabelled execution or dropped members")
+    DispatchQueue.main.run(); DispatchQueue.clear()
+} }
 for invalid in [[String: Any](), ["ordered_nodes_supported": false], ["ordered_nodes_supported": "true"], ["ordered_nodes_supported": 1]] {
     _ = chooseOrdered(); owner.api.orderedCapabilities = invalid; let before = owner.api.calls.count
     owner.connectMultihop(); DispatchQueue.background.run()
@@ -611,9 +636,14 @@ for invalidMode in ["HYSTERIA2", "hysteria2 ", "wg", "reality-vision", ""] {
 }
 _ = chooseOrdered(3, finalMode: "hysteria2")
 let hysteriaOriginal = owner.captureConnectionProfileSelection()
-for execution in ["server", "auto", "LOCAL", ""] {
+for execution in ["LOCAL", "", "compare"] {
     var changed = hysteriaOriginal; changed.execution = execution
     rejects({ _ = try RouterVPNOrderedNodes.connectBody(changed, current: owner.api.orderedCurrent) }, "Hysteria2 ordered path acquired another execution")
+}
+for requested in ["server", "auto"] {
+    var chosen = hysteriaOriginal; chosen.execution = requested
+    let body = try RouterVPNOrderedNodes.connectBody(chosen, current: owner.api.orderedCurrent)
+    check(body["execution"] as? String == requested && body["nodes"] as? [[String:String]] == chosen.orderedNodes, "ordered Connect lost requested execution or full inventory")
 }
 for changedIndex in owner.profiles.indices {
     var changed = owner.profiles; changed[changedIndex]["profile_token"] = String(repeating: "e", count: 64)
@@ -623,13 +653,13 @@ let hysteriaDraft = try owner.makeOrderedNodeDraft()
 var changedFinal = owner.profiles; changedFinal[2]["start_layer"] = "xor"
 owner.api.orderedCurrent["profiles"] = changedFinal
 rejects({ try owner.applyOrderedNodeDraft(hysteriaDraft) }, "Hysteria2 Apply missed a changed final policy")
-for fault in ["stored-mode", "public-mode", "missing-public-mode", "server"] {
+for fault in ["stored-mode", "public-mode", "missing-public-mode", "noncanonical-execution"] {
     var payload: [String: Any] = ["profile": ["mode": "hysteria2"], "mode": "hysteria2", "multihop_nodes": hysteriaOriginal.orderedNodes,
         "multihop_enabled": true, "multihop_execution": "local", "selected_node_id": hysteriaOriginal.selectedNodeID, "profile_tokens": hysteriaOriginal.profileTokens]
     if fault == "stored-mode" { payload["profile"] = ["mode": "shadowsocks"] }
     if fault == "public-mode" { payload["mode"] = "shadowsocks" }
     if fault == "missing-public-mode" { payload.removeValue(forKey: "mode") }
-    if fault == "server" { payload["multihop_execution"] = "server" }
+    if fault == "noncanonical-execution" { payload["multihop_execution"] = "SERVER" }
     rejects({ _ = try owner.validatedLoadedConnectionProfileSelection(payload) }, "Hysteria2 Load accepted inconsistent final metadata: " + fault)
 }
 // The selected node's own saved defaults retain the same mode only after the
@@ -1232,8 +1262,18 @@ def macos(directory):
         "ordered-middle-source": replace_once(source, 'matches[0]["profile_token"] as? String == token', 'true'),
         "ordered-capability": replace_once(source, 'CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue', 'true, true'),
         "ordered-request-owner": replace_once(source, 'self.connectionProfileSelectionGeneration == generation &&', 'true &&'),
-        "ordered-locked-source-preconditions": replace_once(source, 'return ["nodes": rows, "execution": "local", "expected_selected_node_id": selection.selectedNodeID,\n                "expected_profile_tokens": tokens]', 'return ["nodes": rows, "execution": "local", "expected_selected_node_id": selection.selectedNodeID,\n                "expected_profile_tokens": [String: String]()]'),
+        "ordered-locked-source-preconditions": replace_once(source, 'return ["nodes": rows, "execution": selection.execution, "expected_selected_node_id": selection.selectedNodeID,\n                "expected_profile_tokens": tokens]', 'return ["nodes": rows, "execution": selection.execution, "expected_selected_node_id": selection.selectedNodeID,\n                "expected_profile_tokens": [String: String]()]'),
     }
+    execution_variants = {
+        "ordered-execution-capture": (
+            'value.entryID = ""; value.exitID = ""; value.entryMode = ""; value.exitMode = ""\n            let executionIndex = multihopExecutionPopup.indexOfSelectedItem\n            value.execution = (0..<3).contains(executionIndex) ? ["local", "server", "auto"][executionIndex] : ""',
+            'value.entryID = ""; value.exitID = ""; value.entryMode = ""; value.exitMode = ""\n            value.execution = "local"',
+            "ordered snapshot relabelled explicit execution"),
+        "ordered-execution-connect": ('"nodes": rows, "execution": selection.execution', '"nodes": rows, "execution": "local"',
+            "ordered callback relabelled execution or dropped members"),
+    }
+    for name, (old, new, _) in execution_variants.items():
+        variants[name] = replace_once(source, old, new)
     setup_variants = {
         "setup-source-preconditions": ('request.merge(expected) { _, original in original }', 'request.removeValue(forKey: "expected_profile_tokens")', "setup request lost its original source capture"),
         "setup-generation": ('connectionProfileSelectionGeneration == admittedGeneration,', 'true,', "late setup response accepted new-generation"),
@@ -1279,7 +1319,7 @@ def macos(directory):
         path, binary = directory / (name + ".swift"), directory / name
         path.write_text(program, encoding="utf-8")
         run(["swiftc", "-swift-version", "6", "-module-cache-path", str(directory / "swift-module-cache"), str(path), "-o", str(binary)])
-        run([str(binary)], negative=name != "shipping", witness=(setup_variants.get(name) or final_variants.get(name) or socks_variants.get(name) or connect_variants.get(name) or (None, None, None))[2])
+        run([str(binary)], negative=name != "shipping", witness=(execution_variants.get(name) or setup_variants.get(name) or final_variants.get(name) or socks_variants.get(name) or connect_variants.get(name) or (None, None, None))[2])
         if name != "shipping": print("PASS causal AppKit " + name, flush=True)
     print(f"AppKit capture, refresh ownership, relink and post-response idle negatives: {len(variants) - 1} rejected")
 
