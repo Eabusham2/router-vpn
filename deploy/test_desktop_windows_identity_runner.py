@@ -261,17 +261,20 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
              patch.object(prep, "prepare_network_startup"), \
              patch.object(prep.NODE_CHAIN, "prepare") as node_chain_prepare, \
              patch.object(prep, "prepare_node_capture"), \
+             patch.object(prep, "prepare_daemon_capture") as daemon_capture, \
              patch.object(prep.RELAY.OPENVPN_REMOTE, "prepare"), \
              contextlib.redirect_stdout(io.StringIO()):
             # This is the shared-source copy component, with all native
             # prerequisites explicit. The new ordered gate/owner preparers
-            # need the actual pinned core and are exercised by native gates;
+            # and daemon-capture preparers need the actual pinned core and
+            # are exercised separately by their preparation and native gates;
             # this directory deliberately contains only the copied sources.
             ordered_preparers = [execution_boundary.enter_context(
                 patch.object(module, "prepare")) for module in prep.NODE_EXECUTION]
             prep.prepare(vendor)
             naive_prepare.assert_called_once_with(vendor.resolve())
             node_chain_prepare.assert_called_once_with(vendor.resolve(), mobile=False)
+            daemon_capture.assert_called_once_with(vendor.resolve())
             self.assertEqual(len(ordered_preparers), 3)
             for prepare in ordered_preparers:
                 prepare.assert_called_once_with(vendor.resolve())
