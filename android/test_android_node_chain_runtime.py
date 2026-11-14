@@ -78,7 +78,7 @@ SOURCES['android/net/ConnectivityManager.java'] = SOURCES['android/net/Connectiv
 SOURCES[NATIVE + 'TunOptions.java'] = SOURCES[NATIVE + 'TunOptions.java'].replace('getAutoRoute(){return true;}', 'getAutoRoute(){return false;}').replace('RoutePrefixIterator getInet4Address(){return null;}', 'RoutePrefixIterator getInet4Address(){return empty();}').replace('RoutePrefixIterator getInet6Address(){return null;}', 'RoutePrefixIterator getInet6Address(){return empty();}')[:-1] + 'private RoutePrefixIterator empty(){return new RoutePrefixIterator(){public boolean hasNext(){return false;}public RoutePrefix next(){return null;}};}}'
 SOURCES[NATIVE + 'CommandServer.java'] = r'''package io.nekohasekai.libbox;public class CommandServer {
  public static int created;public final PlatformInterface platform;public boolean closed;public String startedConfig="";public int checkedCloses;public boolean failClose;
- public CommandServer(PlatformInterface p,CommandServerHandler h){platform=p;created++;}public void start(){}
+ public CommandServer(CommandServerHandler h,PlatformInterface p){platform=p;created++;}public void start(){}
  public void startOrReloadService(String config,OverrideOptions options)throws Exception{startedConfig=config;platform.autoDetectInterfaceControl(10);platform.openTun(new TunOptions());}
  public void closeService(){throw new AssertionError("Ordered graph used unchecked native shutdown");}public void close(){closed=true;}public void resetNetwork(){}
 }'''
@@ -487,6 +487,17 @@ def main():
         classes = work / 'classes'
         command = ['javac', '--release', '17', '-encoding', 'UTF-8', '-proc:none', '-cp', str(jar), '-d', str(classes), *map(str, src.rglob('*.java'))]
         subprocess.run(command, check=True, timeout=60)
+        # Match the pinned gomobile constructor, whose two interface parameters
+        # are distinct even though LayeredVpnService implements both of them.
+        session = app / 'AndroidNodeChainSession.java'
+        original_session = originals['AndroidNodeChainSession']
+        assert original_session.count('new CommandServer(handler,platform)') == 1
+        session.write_text(original_session.replace('new CommandServer(handler,platform)', 'new CommandServer(platform,handler)'))
+        reversed_api = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        assert reversed_api.returncode != 0 and 'AndroidNodeChainSession.java:' in reversed_api.stderr and 'PlatformInterface cannot be converted to CommandServerHandler' in reversed_api.stderr, 'reversed generated SDK constructor escaped type checking'
+        session.write_text(original_session)
+        subprocess.run(command, check=True, timeout=60)
+        print('Android pinned CommandServer constructor: reversed interfaces rejected by javac')
         run = ['java', '-cp', os.pathsep.join((str(classes), str(jar))), 'com.eabusham.routervpn.OrderedRuntimeTest']
         subprocess.run(run + (["measurement"] if measurement_only else []), check=True, timeout=120)
         controls = (

@@ -93,7 +93,7 @@ S['io/nekohasekai/libbox/TunOptions.java'] = r'''package io.nekohasekai.libbox;p
 S['io/nekohasekai/libbox/RouterMultihop.java'] = S['io/nekohasekai/libbox/RouterMultihop.java'].replace('public void close(){}', 'public void close(){}public void networkChanged(){}public boolean healthy(){return true;}public String progressJSON(){return "";}public void run(CommandServer c){}public RouterHopMeasurement newHopMeasurement(CommandServer c)throws Exception{throw new IllegalStateException("MAX boundary has no proved imported owner");}')
 S['io/nekohasekai/libbox/CommandServer.java'] = r'''package io.nekohasekai.libbox;public class CommandServer{
  public static int created;public static CommandServer last;public int closes,uncheckedCloses;private final PlatformInterface platform;
- public CommandServer(PlatformInterface p,CommandServerHandler h){platform=p;last=this;created++;}public void start(){}
+ public CommandServer(CommandServerHandler h,PlatformInterface p){platform=p;last=this;created++;}public void start(){}
  public void startOrReloadService(String c,OverrideOptions o)throws Exception{platform.autoDetectInterfaceControl(41);platform.openTun(new TunOptions());}
  public void closeService(){uncheckedCloses++;}public void close(){closes++;}public void resetNetwork(){}
 }'''

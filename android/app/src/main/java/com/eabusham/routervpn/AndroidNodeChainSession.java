@@ -173,7 +173,7 @@ final class AndroidNodeChainSession {
     CommandServer newCommandServer(CommandServerHandler handler,PlatformInterface platform) throws Exception {
         requireSource();
         if(!claimed||server!=null||owner!=null)throw new IllegalStateException("The ordered factory has no fresh claimed source.");
-        return capture.socks==null?new CommandServer(platform,handler):capture.socks.plan.newCommandServer(handler,platform);
+        return capture.socks==null?new CommandServer(handler,platform):capture.socks.plan.newCommandServer(handler,platform);
     }
 
     void bindNative(CommandServer original) throws Exception {

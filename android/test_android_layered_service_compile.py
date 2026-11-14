@@ -75,7 +75,7 @@ stub(PKG,'Libbox','''{public static final int InterfaceTypeOther=0,InterfaceType
  public static void routerTorSetStateDirectory(String path)throws Exception{}public static void routerStrategyCloseService(CommandServer server)throws Exception{}
  public static long routerStartPerformance(CommandServer s)throws Exception{return 0;}public static String routerPerformanceFailure(CommandServer s){return "";}public static void routerInvalidatePerformance(CommandServer s){}
  public static RouterMultihop newRouterMultihop(String c,String m)throws Exception{return null;}public static RouterHopMeasurement newRouterHopMeasurement(CommandServer c,String m)throws Exception{return null;} }''')
-stub(PKG,'CommandServer','{public CommandServer(PlatformInterface p,CommandServerHandler h)throws Exception{}public void start()throws Exception{}public void startOrReloadService(String c,OverrideOptions o)throws Exception{}public void closeService()throws Exception{}public void close(){}public void resetNetwork(){} }')
+stub(PKG,'CommandServer','{public CommandServer(CommandServerHandler h,PlatformInterface p)throws Exception{}public void start()throws Exception{}public void startOrReloadService(String c,OverrideOptions o)throws Exception{}public void closeService()throws Exception{}public void close(){}public void resetNetwork(){} }')
 stub(PKG,'CommandServerHandler','{void serviceStop();void serviceReload();SystemProxyStatus getSystemProxyStatus();void setSystemProxyEnabled(boolean b);void writeDebugMessage(String s);}','interface')
 # Explicit independent interface signatures: never derived from the class under test.
 stub(PKG,'PlatformInterface','''{
@@ -126,7 +126,7 @@ stub(APP,'AndroidNodeChainSession','''{static final String MODE="node-chain";fin
  final AndroidNodeCandidatePrefixCapture candidatePrefix=null;boolean prefixHealthy(){return false;}void prepareCandidates()throws Exception{throw new IllegalStateException("No prefix purpose in this boundary");}
  final AndroidNodeChainExecutionCapture execution=null;boolean retainsServerCleanup(io.nekohasekai.libbox.CommandServer server){return false;}
  interface Owner{boolean current(AndroidNodeChainSession source,io.nekohasekai.libbox.CommandServer server);String network();default AutoCloseable beginMTUCleanup(AndroidNodeChainSession source,io.nekohasekai.libbox.CommandServer server,io.nekohasekai.libbox.RouterMTUPlatform platform)throws Exception{throw new IllegalStateException("No execution cleanup in this boundary");}}
- io.nekohasekai.libbox.CommandServer newCommandServer(io.nekohasekai.libbox.CommandServerHandler handler,io.nekohasekai.libbox.PlatformInterface platform)throws Exception{return new io.nekohasekai.libbox.CommandServer(platform,handler);}
+ io.nekohasekai.libbox.CommandServer newCommandServer(io.nekohasekai.libbox.CommandServerHandler handler,io.nekohasekai.libbox.PlatformInterface platform)throws Exception{return new io.nekohasekai.libbox.CommandServer(handler,platform);}
  boolean typedNative(){return false;}
  interface Host{void stop(AndroidNodeChainSession source,Runnable complete);}void adoptHost(Host host){}boolean hasHost(){return false;}void requestStop(Runnable complete){throw new IllegalStateException("No ordered cleanup owner in this boundary");}
  static AndroidNodeChainSession pending(String id){return null;}
