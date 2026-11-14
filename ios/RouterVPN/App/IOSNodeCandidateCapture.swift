@@ -74,7 +74,10 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         let result: String?
         if profile["node_kind"] as? String == "external" {
             let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: profile))
-            if ["http-connect", "https-connect"].contains(typed.external?.protocolName ?? "") {
+            if typed.external?.protocolName == "socks5" {
+                let original = try IOSImportedSOCKSSource.capture(typed)
+                result = LibboxRouterNodeChainImportedSOCKSMemberInput(original.config, original.capture, &failure)
+            } else if ["http-connect", "https-connect"].contains(typed.external?.protocolName ?? "") {
                 let original = try IOSImportedCONNECTSource.capture(typed)
                 result = LibboxRouterNodeChainImportedCONNECTMemberInput(original.config, original.capture, &failure)
             } else {

@@ -28,7 +28,7 @@ import Foundation
         let candidateMode: String
         if candidate.profile["node_kind"] as? String == "external" {
             let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: candidate.profile))
-            guard let mode = typed.external?.protocolName, ["shadowsocks", "http-connect", "https-connect"].contains(mode) else { throw IOSNodeCandidateCapture.issue() }
+            guard let mode = typed.external?.protocolName, ["shadowsocks", "socks5", "http-connect", "https-connect"].contains(mode) else { throw IOSNodeCandidateCapture.issue() }
             candidateMode = mode
         } else { candidateMode = "shadowsocks" }
         var selected = original.members.prefix(position + 1).map { (id: $0.id, mode: $0.mode) }
@@ -66,7 +66,10 @@ import Foundation
         }
         let preview: (members: [IOSNodeChainCapture.Member], launchInput: String, close: () throws -> Void)
         do {
-            if ["http-connect", "https-connect"].contains(candidateMode) {
+            if candidateMode == "socks5" {
+                let captured = try IOSNodeChainSOCKSCapture.compile(bundles: bundles)
+                preview = (captured.members, captured.source, { try captured.plan.close() })
+            } else if ["http-connect", "https-connect"].contains(candidateMode) {
                 let captured = try IOSNodeChainCONNECTCapture.compile(bundles: bundles)
                 preview = (captured.members, captured.source, { try captured.plan.close() })
             } else {

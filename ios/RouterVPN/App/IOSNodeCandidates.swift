@@ -507,7 +507,7 @@ struct IOSNodeCandidatesCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Candidate TCP connection times", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
             Text(model.connected && !model.iosCandidateTesting ?
-                 "Compares original literal Shadowsocks 2022 endpoints through a retained WG/AWG prefix. Each score is the 10% trimmed mean of 50 successful TCP handshakes. This does not measure ICMP latency, authenticate the candidate proxy, or change your active route." :
+                 "Compares supported saved proxy endpoints through a retained WG/AWG prefix. Each score is the 10% trimmed mean of 50 successful TCP handshakes. This does not measure ICMP latency, authenticate the candidate proxy, or change your active route." :
                  "Choose a selected-prefix test or a complete saved Local path test. Each measures 50 TCP connections per supported candidate and returns to Disconnected before future-profile choices. Timings do not authenticate a candidate proxy or select a new connection.")
                 .font(.caption).foregroundStyle(.secondary)
             Picker("Retained prefix", selection: $probe.selectedPrefix) {

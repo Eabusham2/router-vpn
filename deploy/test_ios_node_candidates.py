@@ -24,8 +24,8 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
  static func reject(_ name:String,_ action:()throws->Void)throws{do{try action()}catch{checks+=1;return};throw NSError(domain:"CandidateCheck",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])}
  static func main(){defer{LibboxTestClose()};do{try run();print("Apple candidates: \(checks) shipping Swift/shared Go capture and receipt checks PASS")}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
- static func connectCandidates()throws {
-  for mode in ["wg","awg2-fast","awg2-strong"] {for kind in ["http-connect","https-connect"] {
+ static func streamProxyCandidates()throws {
+  for mode in ["wg","awg2-fast","awg2-strong"] {for kind in ["http-connect","https-connect","socks5"] {
    var fixture=try sources(3,"off",true).map{try editProfile($0){p in
     p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""
    }}
@@ -53,24 +53,34 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
     return try IOSNodeCandidateCapture.compile(records:values,stamp:stamp,prefixPosition:0,proofs:proofs)
    }
    let captured=try catalog(records),row=captured.rows.first{$0.id=="connect-candidate"}!
-   try check("CONNECT candidate uses authoritative typed input",!row.input.isEmpty && row.reason.isEmpty && LibboxRouterNodeChainCandidateInputSupported(row.input))
+   try check("Proxy candidate uses authoritative typed input",!row.input.isEmpty && row.reason.isEmpty && LibboxRouterNodeChainCandidateInputSupported(row.input))
    let member=try object(Data(row.input.utf8))
-   try check("CONNECT candidate keeps distinct member kind",member["kind"] as? String=="routervpn-node-chain-connect-member")
+   try check("Proxy candidate keeps distinct member kind",member["kind"] as? String==(kind=="socks5" ? "routervpn-node-chain-socks-member":"routervpn-node-chain-connect-member"))
    let proposal=try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:row.id,measuredInput:row.input)
    let launch=try object(Data(proposal.launchInput.utf8))
-   try check("CONNECT future proposal uses typed compiler",launch["schema"] as? Int==4 && proposal.profiles.map(\.id)==["chain-node-0","connect-candidate","chain-node-2"])
-   try check("CONNECT future proposal preserves protocol and selected DNS",proposal.profiles.last?.multihopNodes?.map(\.mode)==[mode,kind,"shadowsocks"] && proposal.profiles.last?.dnsProtocol=="tcp" && proposal.profiles.last?.dnsHost=="10.82.0.53" && proposal.profiles.last?.dnsPort==5353)
+   try check("Proxy future proposal uses typed compiler",launch["schema"] as? Int==(kind=="socks5" ? 3:4) && proposal.profiles.map(\.id)==["chain-node-0","connect-candidate","chain-node-2"])
+   try check("Proxy future proposal preserves protocol and selected DNS",proposal.profiles.last?.multihopNodes?.map(\.mode)==[mode,kind,"shadowsocks"] && proposal.profiles.last?.dnsProtocol=="tcp" && proposal.profiles.last?.dnsHost=="10.82.0.53" && proposal.profiles.last?.dnsPort==5353)
    let external=proposal.profiles[1].external!
-   let capturedCredentials=kind=="https-connect" ? external.httpsConnect : external.httpConnect
-   try check("CONNECT future proposal retains original credentials",external.protocolName==kind && capturedCredentials?.username=="captured-user" && capturedCredentials?.password=="captured:password" && (kind != "https-connect" || capturedCredentials?.tlsServerName=="Original.Proxy.Example"))
-   try check("CONNECT proposal leaves current path unchanged",original.launchInput==originalSource)
-   try reject("CONNECT candidate unsupported placement"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:1,candidateID:row.id,measuredInput:row.input)}
+   if kind=="socks5" {
+    try check("SOCKS future proposal retains original credentials",external.protocolName==kind && external.socks5?.username=="captured-user" && external.socks5?.password=="captured:password")
+    var anonymous=records
+    anonymous["connect"]=try editProfile(imported){p in var ext=p["external"] as! [String:Any],value=ext[key] as! [String:Any];value.removeValue(forKey:"username");value.removeValue(forKey:"password");ext[key]=value;p["external"]=ext}
+    let anonymousRow=try catalog(anonymous).rows.first{$0.id==row.id}!
+    let anonymousProposal=try IOSNodeCandidateProposal.compile(original:original,records:anonymous,position:0,candidateID:row.id,measuredInput:anonymousRow.input)
+    try check("SOCKS anonymous source stays anonymous",anonymousProposal.profiles[1].external?.socks5?.username==nil && anonymousProposal.profiles[1].external?.socks5?.password==nil)
+    try reject("SOCKS anonymous source cannot adopt authenticated receipt"){_ = try IOSNodeCandidateProposal.compile(original:original,records:anonymous,position:0,candidateID:row.id,measuredInput:row.input)}
+   } else {
+    let capturedCredentials=kind=="https-connect" ? external.httpsConnect : external.httpConnect
+    try check("Proxy future proposal retains original credentials",external.protocolName==kind && capturedCredentials?.username=="captured-user" && capturedCredentials?.password=="captured:password" && (kind != "https-connect" || capturedCredentials?.tlsServerName=="Original.Proxy.Example"))
+   }
+   try check("Proxy proposal leaves current path unchanged",original.launchInput==originalSource)
+   try reject("Proxy candidate unsupported placement"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:1,candidateID:row.id,measuredInput:row.input)}
    var changedFinal=records;changedFinal["final"]=try editProfile(fixture[2]){$0["dns_host"]="10.82.0.54"}
-   try reject("CONNECT proposal changed retained final policy"){_ = try IOSNodeCandidateProposal.compile(original:original,records:changedFinal,position:0,candidateID:row.id,measuredInput:row.input)}
+   try reject("Proxy proposal changed retained final policy"){_ = try IOSNodeCandidateProposal.compile(original:original,records:changedFinal,position:0,candidateID:row.id,measuredInput:row.input)}
    for field in kind=="https-connect" ? ["password","tls_server_name"]:["password"] {
     var changed=records
     changed["connect"]=try editProfile(imported){p in var ext=p["external"] as! [String:Any],value=ext[key] as! [String:Any];value[field]="replacement.example";ext[key]=value;p["external"]=ext}
-    try reject("CONNECT proposal changed measured "+field){_ = try IOSNodeCandidateProposal.compile(original:original,records:changed,position:0,candidateID:row.id,measuredInput:row.input)}
+    try reject("Proxy proposal changed measured "+field){_ = try IOSNodeCandidateProposal.compile(original:original,records:changed,position:0,candidateID:row.id,measuredInput:row.input)}
    }
    for fault in ["hostname","layer","credential","borrowed-token"] {
     var changed=records
@@ -80,7 +90,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
      else{var ext=p["external"] as! [String:Any],value=ext[key] as! [String:Any];if fault=="hostname"{value["host"]="proxy.example";p["endpoint"]="proxy.example"}else{value["password"]=""};ext[key]=value;p["external"]=ext}
     }
     let rejected=try catalog(changed)
-    try check("CONNECT invalid "+fault+" remains unscored",rejected.rows.first{$0.id==row.id}?.input.isEmpty==true && rejected.rows.contains{!$0.input.isEmpty})
+    try check("Proxy invalid "+fault+" remains unscored",rejected.rows.first{$0.id==row.id}?.input.isEmpty==true && rejected.rows.contains{!$0.input.isEmpty})
    }
   }}
  }
@@ -148,7 +158,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
    let lazy=IOSNodeCandidatePrefix(position:0,profile_id:prefix.profile_id,node_id:prefix.node_id,mode:"shadowsocks")
    try reject("lazy SS prefix"){_ = try compile(["candidate":data(paired)],[lazy,tail])}
   }
-  try connectCandidates()
+  try streamProxyCandidates()
   let hash=String(repeating:"c",count:64)
   let metadata=IOSNodeCandidateMetadata(schema:1,capture_sha256:hash,prefix_position:0,prefix_id:prefix.profile_id,source_sha256:hash,config_sha256:hash,targets:[.init(id:"target",source_sha256:hash)])
   try metadata.validate(prefix:prefix,source:hash,config:hash,ids:["target"])
