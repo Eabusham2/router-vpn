@@ -80,8 +80,17 @@ func TestDesktopNodeChainLaunchRejectsCrossFamilyAndSourceSubstitution(t *testin
 				launch.chain.selection.Nodes[1].Profile.APIToken = "replacement-middle-credential"
 			case "source":
 				originalPolicy := launch.chain.policy
-				copiedSource := *launch.chain.selection.Native.chain.chain
-				copiedPolicy, err := mobilemultihop.NewDesktopNodeChainPolicy(&copiedSource, launch.mtuSession, "windows", 0)
+				originalSource := launch.chain.selection.Native.chain.chain
+				input, err := originalSource.LaunchInput()
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Replay the same compiler capture with fresh runtime ownership.
+				copiedSource, err := mobilemultihop.ParseNodeChainLaunchInput(input)
+				if err != nil || copiedSource == originalSource || !reflect.DeepEqual(copiedSource, originalSource) {
+					t.Fatal("source substitution fixture changed its inert compiler capture", err)
+				}
+				copiedPolicy, err := mobilemultihop.NewDesktopNodeChainPolicy(copiedSource, launch.mtuSession, "windows", 0)
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -104,8 +104,18 @@ func TestProfileProtectionLinuxBodyCannotReplaceRetainedOwner(t *testing.T) {
 			body := &startupSettingsMutationReader{Reader: bytes.NewReader(ownedProtectionBody(t, value, "off")), mutate: func() {
 				switch change {
 				case "source":
-					copy := *transaction
-					session.predecessor = &copy
+					// This comparison-only fixture has no live native transaction.
+					// Recreate its populated fields without copying atomic ownership.
+					replacement := &desktopLinuxNodeTransaction{
+						parent: transaction.parent, journal: transaction.journal,
+						gate: transaction.gate, profileID: transaction.profileID,
+						selection: transaction.selection,
+					}
+					replacement.stopRequested.Store(transaction.stopRequested.Load())
+					if !reflect.DeepEqual(transaction, replacement) {
+						t.Fatal("source substitution fixture changed its inert transaction state")
+					}
+					session.predecessor = replacement
 				case "session":
 					copy := *session
 					session.parent.parent.session = &copy
