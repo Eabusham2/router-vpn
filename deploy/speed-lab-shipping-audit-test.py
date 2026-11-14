@@ -162,7 +162,9 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
                         "cmd/client/desktop_node_owned.go", "cmd/client/desktop_imported_linux_host.go",
                         "cmd/client/desktop_node_chain_dispatch.go", "cmd/client/desktop_node_chain_host.go",
                         "cmd/client/desktop_node_chain_policy_dispatch.go",
-                        "cmd/client/desktop_node_chain_linux.go")
+                        "cmd/client/desktop_node_chain_linux.go",
+                        "cmd/client/desktop_node_chain_execution_launch.go",
+                        "cmd/client/desktop_node_chain_execution_graph.go")
     sources = {path: (Path(__file__).resolve().parents[1]/path).read_text() for path in (
         "cmd/client/speed_lab_paths.go", "cmd/client/desktop_external_path.go",
         "cmd/client/speed_lab.go", "cmd/client/multihop_native_launch.go", *platform_sources)}
@@ -251,7 +253,7 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
     def test_original_observer_is_checked_before_retained_binding(self):
         path = "cmd/client/multihop_native_launch.go"
         observation = '\tactual, err := observe(ctx)\n'
-        binding = '\tnativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})\n'
+        binding = '\tnativeMultihopOwners.Store(a, &nativeMultihopRuntime{execution: execution, launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})\n'
         self.assertEqual(self.sources[path].count(observation), 1)
         self.assertEqual(self.sources[path].count(binding), 1)
         changed = self.sources[path].replace(observation, '').replace(binding, binding+observation)
