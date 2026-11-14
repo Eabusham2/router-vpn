@@ -698,3 +698,39 @@ values are `aeb3d54961256154c4783e5680bb619e08ebe509f776ec17065bb7d20b5cfaa7`
 and `56dfb256d11560f50ac2dd014863342f88a7690098e1469a85b25e989ea6b90d`,
 respectively. Production native preparation and its source guards are
 unchanged. These are focused fixture results, not a full release rerun.
+
+## HTTP CONNECT reference preserves reciprocal TCP shutdown
+
+Published-source CONNECT run `43561445376` at `36a166b2` passed the six
+HTTP/HTTPS WG/AWG happy paths, then failed the final-key rejection case when
+closing the original native Box/association. The downloaded artifact and
+failed log were retained; the failed log SHA-256 is
+`a2102ae239f814c475b1315e5b5d54f3aaf4e5557357af754a7485d441e4c910`.
+
+The plaintext CONNECT reference still used a generic copy helper that closed
+the original stream before reciprocal EOF. It now retains the captured TCP
+owner and shares the bounded reciprocal-copy implementation with the existing
+TLS reference. The original one-second watchdog, cancellation, both copy
+joins, TLS close-notify and final association checks remain enforced. No
+production close error is normalized into success. The generic helper and
+the production native lifetime protections are unchanged.
+
+The real TCP reference passed reciprocal, refused, held and cancelled cases
+(five verdicts including the root); reinstating the old helper failed with
+the exact premature-close witness. The original TLS four-verdict suite and
+its compiled control also passed. Fresh canonical owner/mobile preparation
+then passed all 73 original imported-peer records, all 14 actual CONNECT Run
+cases and all four original compiled controls. The previously failing
+final-key case passed first. All 28 executed process groups joined within
+their existing bounds. Source, projected native files and compiled images
+were unchanged throughout; each log hash and all 23 parsed verdict groups
+were independently rechecked before composition.
+
+The three-file patch SHA-256 is
+`c32c297a2df28ea6d4c9883275f7d69c8554e6ab2591d2b460861fa7fec91647`;
+the native receipt SHA-256 is
+`cd0d9cc681138fe00b7e6d1cd33f64f2e202e0db8e760c67b811dae54f9be777`.
+The eight focused-runner tests also pass. This is actual Linux native
+working-tree evidence based on `07c9b1ce` plus those three files. The published
+exact-SHA focused run, platform SDKs, installed devices and release remain
+separate acceptance gates.

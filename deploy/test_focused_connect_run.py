@@ -39,6 +39,13 @@ REFERENCE_CONTROL=dict(name="reference-reciprocal-tls-close", path=PEER_PROJECTI
     after="func (r *nodeCONNECTRunMiddleRouter) routeTLS(ctx context.Context, connection net.Conn, secured *tls.Conn, metadata adapter.InboundContext) error {\n\treturn r.server.plainConnection(ctx, connection, M.Metadata{Source: metadata.Source, Destination: metadata.Destination}) // causal original premature TLS reader interruption\n",
     cases=(REFERENCE_ROOT,REFERENCE_ROOT+"/reciprocal"),
     witness="reference closed original TLS before reciprocal close_notify")
+REFERENCE_TCP_ROOT="TestRouterVPNCONNECTReferenceTCPReciprocalClose"
+REFERENCE_TCP_CASES=(REFERENCE_TCP_ROOT,*(REFERENCE_TCP_ROOT+"/"+leaf for leaf in ("reciprocal","refused","held","cancelled")))
+REFERENCE_TCP_CONTROL=dict(name="reference-reciprocal-tcp-close",path=PEER_PROJECTION,
+    before="func (r *nodeCONNECTRunMiddleRouter) routeTCP(ctx context.Context, connection, raw net.Conn, metadata adapter.InboundContext) error {\n",
+    after="func (r *nodeCONNECTRunMiddleRouter) routeTCP(ctx context.Context, connection, raw net.Conn, metadata adapter.InboundContext) error {\n\treturn r.server.plainConnection(ctx, connection, M.Metadata{Source: metadata.Source, Destination: metadata.Destination}) // causal original premature TCP reader interruption\n",
+    cases=(REFERENCE_TCP_ROOT,REFERENCE_TCP_ROOT+"/reciprocal"),
+    witness="reference closed original TCP before reciprocal EOF")
 REFERENCE_VERDICT=module("connect_run_reference_strict_bridge",BASE_PATH)
 REFERENCE_VERDICT.BOX=REFERENCE_PACKAGE
 REFERENCE_VERDICT.BOX_CORE.PACKAGE=REFERENCE_PACKAGE
@@ -107,6 +114,11 @@ def native_events(raw,status,case,control=None):
 def reference_events(raw,status,control=False):
     selected=REFERENCE_CONTROL if control else None
     names=selected["cases"] if selected else REFERENCE_CASES
+    return REFERENCE_VERDICT.require_events(raw,status,REFERENCE_PACKAGE,names,selected)
+
+def reference_tcp_events(raw,status,control=False):
+    selected=REFERENCE_TCP_CONTROL if control else None
+    names=selected["cases"] if selected else REFERENCE_TCP_CASES
     return REFERENCE_VERDICT.require_events(raw,status,REFERENCE_PACKAGE,names,selected)
 
 def validate(source,source_sha,output,go="go"):
@@ -186,6 +198,16 @@ def validate(source,source_sha,output,go="go"):
             status,raw=run(REFERENCE_CONTROL["name"],[compiler,"test",*owner_flags,"-json","-overlay="+str(overlay),
                 "-run=^"+REFERENCE_ROOT+"$/^reciprocal$","-count=1","-timeout=15s","./protocol/routervpnamnezia"],owner,600)
             reference_negative=reference_events(raw,status,True)
+            status,raw=run("reference-tcp-close",[compiler,"tool","test2json","-t","-p",REFERENCE_PACKAGE,peer,
+                "-test.run=^"+REFERENCE_TCP_ROOT+"$","-test.count=1","-test.timeout=15s","-test.v"],owner,30)
+            reference_tcp_positive=reference_tcp_events(raw,status)
+            original=owner/REFERENCE_TCP_CONTROL["path"]
+            replacement,overlay=work/"reference-tcp-close.go",work/"reference-tcp-close.json"
+            replacement.write_text(BASE.mutate(REFERENCE_TCP_CONTROL,original.read_text()))
+            overlay.write_text(json.dumps({"Replace":{str(original):str(replacement)}}))
+            status,raw=run(REFERENCE_TCP_CONTROL["name"],[compiler,"test",*owner_flags,"-json","-overlay="+str(overlay),
+                "-run=^"+REFERENCE_TCP_ROOT+"$/^reciprocal$","-count=1","-timeout=15s","./protocol/routervpnamnezia"],owner,600)
+            reference_tcp_negative=reference_tcp_events(raw,status,True)
             records=[]
             for case in CASES:
                 selected=dict(env,ROUTERVPN_CONNECT_RUN_PEER=str(peer),ROUTERVPN_CONNECT_RUN_CASE=case,GODEBUG="x509usefallbackroots=1")
@@ -213,7 +235,9 @@ def validate(source,source_sha,output,go="go"):
             if BASE.COMMON.image_identity(peer)!=peer_identity or BASE.COMMON.image_identity(client)!=client_identity:
                 raise ValueError("Original compiled encrypted image changed")
             receipt.update(status="passed",cases=list(CASES),case_records=records,original_cases=list(ORIGINAL),controls=controls,
-                peer_image=list(peer_identity),client_image=list(client_identity),reference_tls_close=reference_positive,reference_tls_close_control=reference_negative,successful_run_accepted=True,ordered_measurement_accepted=True,native_mtu_constructor_accepted=False)
+                peer_image=list(peer_identity),client_image=list(client_identity),reference_tls_close=reference_positive,reference_tls_close_control=reference_negative,
+                reference_tcp_close=reference_tcp_positive,reference_tcp_close_control=reference_tcp_negative,
+                successful_run_accepted=True,ordered_measurement_accepted=True,native_mtu_constructor_accepted=False)
             (output/"receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
     except BaseException as error:
         receipt.update(status="failed",error=str(error));raise

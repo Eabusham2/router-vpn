@@ -78,8 +78,9 @@ func (r *nodeCONNECTRunMiddleRouter) RouteConnection(ctx context.Context, c net.
 		if secured, ok := buffered.Conn.(*tls.Conn); ok {
 			return r.routeTLS(ctx, c, secured, m)
 		}
+		return r.routeTCP(ctx, c, buffered.Conn, m)
 	}
-	return r.server.plainConnection(ctx, c, M.Metadata{Source: m.Source, Destination: m.Destination})
+	return errors.New("CONNECT reference lost its original buffered TCP owner")
 }
 
 // A completed response must not expire the reciprocal TLS reader. Doing so
@@ -87,9 +88,29 @@ func (r *nodeCONNECTRunMiddleRouter) RouteConnection(ctx context.Context, c net.
 // closed, causing a genuine TCP reset in the encrypted client. Keep both copy
 // directions until their actual EOF; error/cancellation remains a failed close.
 func (r *nodeCONNECTRunMiddleRouter) routeTLS(ctx context.Context, connection net.Conn, secured *tls.Conn, metadata adapter.InboundContext) error {
-	target, found := r.server.route("tcp", metadata.Destination.String())
-	if !found || secured == nil || !secured.ConnectionState().HandshakeComplete {
+	if secured == nil || !secured.ConnectionState().HandshakeComplete {
 		return errors.New("CONNECT TLS reference lost its authenticated target")
+	}
+	return r.routeStream(ctx, connection, secured.NetConn(), secured, metadata)
+}
+
+func (r *nodeCONNECTRunMiddleRouter) routeTCP(ctx context.Context, connection, raw net.Conn, metadata adapter.InboundContext) error {
+	half, ok := raw.(interface{ CloseWrite() error })
+	if !ok {
+		return errors.New("CONNECT TCP reference lost its original half-close owner")
+	}
+	return r.routeStream(ctx, connection, raw, half, metadata)
+}
+
+// HTTP and HTTPS preserve the same reciprocal TCP lifetime. A final peer's
+// clean rejection/EOF must not turn into a reset by closing its CONNECT
+// predecessor while the original upload is still unread. The independent
+// one-second watchdog still bounds held peers and cancellation joins both I/O
+// directions. TLS retains its own verified close_notify before raw TCP close.
+func (r *nodeCONNECTRunMiddleRouter) routeStream(ctx context.Context, connection, raw net.Conn, half interface{ CloseWrite() error }, metadata adapter.InboundContext) error {
+	target, found := r.server.route("tcp", metadata.Destination.String())
+	if !found || raw == nil || half == nil {
+		return errors.New("CONNECT reference lost its authenticated TCP target")
 	}
 	native, err := (&net.Dialer{}).DialContext(ctx, "tcp", target)
 	if err != nil {
@@ -104,7 +125,6 @@ func (r *nodeCONNECTRunMiddleRouter) routeTLS(ctx context.Context, connection ne
 	}
 	defer r.server.leave(peer)
 	r.server.plainTCP.Add(1)
-	raw := secured.NetConn()
 	drain := make(chan struct{})
 	finished := make(chan struct{})
 	watched := make(chan struct{})
@@ -179,7 +199,7 @@ func (r *nodeCONNECTRunMiddleRouter) routeTLS(ctx context.Context, connection ne
 	_, downloadFailure := io.Copy(connection, peer)
 	beginDrain()
 	if downloadFailure == nil {
-		downloadFailure = secured.CloseWrite()
+		downloadFailure = half.CloseWrite()
 	}
 	if downloadFailure != nil {
 		interrupt()
@@ -585,6 +605,171 @@ func (c *connectReferenceRawClose) Close() error {
 	err := c.Conn.Close()
 	c.once.Do(func() { close(c.closed) })
 	return err
+}
+
+func (c *connectReferenceRawClose) CloseWrite() error {
+	return c.Conn.(interface{ CloseWrite() error }).CloseWrite()
+}
+
+func TestRouterVPNCONNECTReferenceTCPReciprocalClose(t *testing.T) {
+	for _, phase := range []string{"reciprocal", "refused", "held", "cancelled"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			backend, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer backend.Close()
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: make(map[io.Closer]bool), routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "192.0.2.99:443", Physical: backend.Addr().String()}}}
+			backendDone := make(chan error, 1)
+			backendFinished := make(chan struct{})
+			go func() {
+				defer close(backendFinished)
+				accepted, failure := backend.Accept()
+				if failure != nil {
+					backendDone <- failure
+					return
+				}
+				defer accepted.Close()
+				stop := context.AfterFunc(ctx, func() { _ = accepted.Close() })
+				defer stop()
+				request := make([]byte, len("request"))
+				_, failure = io.ReadFull(accepted, request)
+				if failure != nil || string(request) != "request" {
+					backendDone <- errors.Join(failure, errors.New("original TCP reference request changed"))
+					return
+				}
+				if phase != "refused" {
+					_, failure = io.WriteString(accepted, "response")
+				}
+				if failure == nil {
+					failure = accepted.(*net.TCPConn).CloseWrite()
+				}
+				if failure == nil {
+					_, failure = io.Copy(io.Discard, accepted)
+				}
+				backendDone <- failure
+			}()
+			var readEOF atomic.Bool
+			eofSeen := make(chan struct{})
+			captured := make(chan *connectReferenceRawClose, 1)
+			routeDone := make(chan error, 1)
+			routeFinished := make(chan struct{})
+			go func() {
+				defer close(routeFinished)
+				raw, failure := listener.Accept()
+				if failure != nil {
+					routeDone <- failure
+					return
+				}
+				original := &connectReferenceRawClose{Conn: raw, tlsEOF: &readEOF, closed: make(chan struct{})}
+				captured <- original
+				connection := &desktopNodeLayerBufferedConn{Conn: original, reader: &connectReferenceTLSRead{Reader: original, eof: &readEOF, done: eofSeen}}
+				routeDone <- (&nodeCONNECTRunMiddleRouter{server: server}).RouteConnection(ctx, connection, adapter.InboundContext{Destination: M.ParseSocksaddr("192.0.2.99:443")})
+			}()
+			client, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			var original *connectReferenceRawClose
+			select {
+			case original = <-captured:
+			case <-ctx.Done():
+				t.Fatal("original TCP raw owner missing")
+			}
+			t.Cleanup(func() {
+				cancel()
+				_ = client.Close()
+				_ = original.Close()
+				for _, done := range []<-chan struct{}{routeFinished, backendFinished} {
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Error("original TCP regression worker did not join cleanup")
+					}
+				}
+			})
+			if _, err = io.WriteString(client, "request"); err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(client)
+			expected := "response"
+			if phase == "refused" {
+				expected = ""
+			}
+			if err != nil || string(body) != expected {
+				t.Fatal("original TCP response/EOF changed", err)
+			}
+			clean := phase == "reciprocal" || phase == "refused"
+			if clean {
+				held := time.NewTimer(25 * time.Millisecond)
+				select {
+				case <-original.closed:
+					held.Stop()
+					t.Fatal("reference closed original TCP before reciprocal EOF")
+				case <-held.C:
+				}
+				if readEOF.Load() {
+					t.Fatal("reference invented original TCP EOF while caller held it")
+				}
+				if err = client.(*net.TCPConn).CloseWrite(); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-eofSeen:
+				case <-ctx.Done():
+					t.Fatal("original reciprocal TCP FIN was not read")
+				}
+			} else if phase == "cancelled" {
+				cancel()
+			}
+			var failure error
+			select {
+			case failure = <-routeDone:
+			case <-time.After(1500 * time.Millisecond):
+				t.Fatal("original TCP close exceeded its one-second drain budget")
+			}
+			if clean {
+				if failure != nil || !readEOF.Load() || original.early.Load() {
+					t.Fatal("original reciprocal TCP close lost its joined receipt", failure)
+				}
+			} else if phase == "held" {
+				if !errors.Is(failure, context.DeadlineExceeded) || readEOF.Load() {
+					t.Fatal("held reciprocal TCP close escaped original one-second budget", failure)
+				}
+			} else if !errors.Is(failure, context.Canceled) {
+				t.Fatal("cancelled TCP forwarding lost original cause", failure)
+			}
+			select {
+			case err = <-backendDone:
+				if clean && err != nil {
+					t.Fatal("original TCP target half-close failed", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("original TCP target copy did not join")
+			}
+			joined := make(chan struct{})
+			go func() { server.workers.Wait(); close(joined) }()
+			select {
+			case <-joined:
+			case <-time.After(time.Second):
+				t.Fatal("original TCP reference worker did not join")
+			}
+			server.mu.Lock()
+			left := len(server.connections)
+			server.mu.Unlock()
+			if left != 0 {
+				t.Fatal("original TCP reference retained target association", left)
+			}
+		})
+	}
 }
 
 func TestRouterVPNCONNECTReferenceTLSReciprocalClose(t *testing.T) {
