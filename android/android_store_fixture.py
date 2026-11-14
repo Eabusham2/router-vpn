@@ -31,7 +31,7 @@ def sources():
     start = policy.index('    private static final Set<String> POLICY =')
     constants += '\n' + policy[start:policy.index(';', start) + 1]
     methods = '\n'.join(method(policy, signature) for signature in (
-        '    static void checkPolicy(', '    private static boolean bounded('))
+        '    static String protocol(', '    static void checkPolicy(', '    private static boolean bounded('))
     result['com/eabusham/routervpn/AndroidExternalPolicy.java'] = '''package com.eabusham.routervpn;
 import org.json.*;import java.util.*;import java.nio.charset.StandardCharsets;
 final class AndroidExternalPolicy {

@@ -330,9 +330,17 @@ func TestNodeChainSOCKSSourceCannotAcquireNativeAuthority(t *testing.T) {
 			t.Fatal("source-only result acquired ordinary execution authority", execution)
 		}
 	}
-	if _, err := ParseNodeChainLaunchInput(startJSON(t, source)); err == nil ||
-		NodeChainCandidateInputSupported(source.Nodes[1]) {
-		t.Fatal("source-only result acquired launch or measured-candidate authority")
+	if _, err := ParseNodeChainLaunchInput(startJSON(t, source)); err == nil {
+		t.Fatal("source-only result acquired launch authority")
+	}
+	// Socket-free candidate eligibility retains the original member compiler;
+	// it does not grant any of the native authorities rejected above.
+	if !NodeChainCandidateInputSupported(source.Nodes[1]) {
+		t.Fatal("valid typed SOCKS member lost candidate-only eligibility")
+	}
+	if NodeChainCandidateInputSupported(startJSON(t, source)) ||
+		NodeChainCandidateInputSupported(source.Nodes[1]+"\n{}") {
+		t.Fatal("candidate eligibility admitted a whole graph or malformed member")
 	}
 	record, _, _ := nodeChainSOCKSRecord(t, source.Nodes[1])
 	if _, err := NodeChainImportedMemberInput(record.Config, record.Capture); err == nil {
