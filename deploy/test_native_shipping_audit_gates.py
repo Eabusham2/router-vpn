@@ -772,12 +772,18 @@ class MacUnifiedCompilerAuditTests(unittest.TestCase):
         scope["macos_compiler_closure"]()
         self.assertEqual(errors, [])
         # Reordering an independent extension must not invalidate the map gate.
-        changed = body.replace('"$DNS_PANEL_SRC" "$GLOBE_SRC"', '"$GLOBE_SRC" "$DNS_PANEL_SRC"')
+        before_compiler, compiler = body.split("xcrun swiftc ", 1)
+        swapped, replacements = re.subn(
+            r'"\$(DNS_PANEL_SRC|GLOBE_SRC)"',
+            lambda match: '"$' + ("GLOBE_SRC" if match.group(1) == "DNS_PANEL_SRC" else "DNS_PANEL_SRC") + '"',
+            compiler, count=2,
+        )
+        self.assertEqual(replacements, 2)
+        changed = before_compiler + "xcrun swiftc " + swapped
         self.assertNotEqual(changed, body)
         changes["body"] = changed
         scope["macos_compiler_closure"]()
         self.assertEqual(errors, [])
-        before_compiler, compiler = body.split("xcrun swiftc ", 1)
         for name in ("HARDENED_UNIFIED_SRC", "TELEMETRY_SRC", "SPEED_LAB_SRC", "SPEED_LAB_TRANSPORT_SRC",
                      "MTU_TRANSPORT_SRC", "MTU_CONTROLLER_SRC", "MTU_PANEL_SRC",
                      "DNS_TRANSPORT_SRC", "DNS_CONTROLLER_SRC", "DNS_PANEL_SRC", "GLOBE_SRC",
