@@ -370,7 +370,17 @@ public sealed class ProfileModeOwner {
         Check ((@($body.nodes.mode)-join',')-ceq(@($nodes.mode)-join',')) 'Ordered Connect changed exact captured WG/AWG modes'
         $copy=@(Copy-RouterVPNOrderedNodes $nodes $control);$copy[0].id='replacement'
         Check ($nodes[0].id-ceq'ordered-0') 'Ordered copy retained mutable member references'
-        foreach($capability in @([pscustomobject]@{},[pscustomobject]@{ordered_nodes_supported=$false},[pscustomobject]@{ordered_nodes_supported='true'})){
+        # Retain malformed legacy replies and isolate node-support admission
+        # from the independent execution-advertisement check.
+        foreach($capability in @(
+            [pscustomobject]@{},
+            [pscustomobject]@{ordered_nodes_supported=$false},
+            [pscustomobject]@{ordered_nodes_supported='true'},
+            [pscustomobject]@{ordered_executions=@('local','server','auto')},
+            [pscustomobject]@{ordered_nodes_supported=$false;ordered_executions=@('local','server','auto')},
+            [pscustomobject]@{ordered_nodes_supported='true';ordered_executions=@('local','server','auto')},
+            [pscustomobject]@{ordered_nodes_supported=$true}
+        )){
             $script:OrderedCapability=$capability;$script:ConnectBody=$null;UnifiedConnect
             Check ($null-eq$script:ConnectBody) 'An older controller received ordered nodes as a legacy pair'
         }

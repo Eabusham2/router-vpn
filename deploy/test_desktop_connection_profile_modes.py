@@ -86,6 +86,7 @@ def windows(shell):
         "setup-expectation": "Setup action discarded its original source inventory",
         "ordered-execution-capture": "Ordered profile borrowed an unrelated logical mode or execution",
         "ordered-execution-connect": "Ordered Connect changed its complete path",
+        "ordered-capability": "An older controller received ordered nodes as a legacy pair",
         "setup-current-receipt": "A changed setup owner was adopted: visible-off",
         "setup-response-source": "Malformed setup reply was adopted: changed-token",
         "setup-response-order": "Malformed setup reply was adopted: reordered-members",
