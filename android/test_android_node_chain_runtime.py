@@ -521,7 +521,7 @@ def main():
         controls = (
             ('AndroidHomeStateStore', '.put("mode", source.modes.get(i))', '.put("mode", i==source.members.size()-1?"shadowsocks":source.modes.get(i))', 'hysteria-final', 'Home reordered original member choices'),
             ('LayeredVpnService', '                adoptHopMeasurement(capturedChain.newHopMeasurement(), ownedServer, generation);', '', 'measurement', 'proved ordered chain never adopted native measurement'),
-            ('LayeredVpnService', 'if(chain!=service.nodeChainSession || chain!=null&&!chain.healthy())', 'if(false)', 'measurement', 'changed intermediate source published ordered measurements'),
+            ('LayeredVpnService', 'if(chain!=service.nodeChainSession || chain!=null&&!(readback==null?chain.healthy():chain.healthyForHistory(readback)))', 'if(false)', 'measurement', 'changed intermediate source published ordered measurements'),
             ('AndroidNodeChainSession', '        value.requireFiles();', '', 'source', 'stale ordered source/proof reached Connected: launch'),
             ('AndroidNodeChainSession', '        capture.requireCurrent();', '', 'source', 'stale ordered source/proof reached Connected: middle'),
             ('AndroidNodeChainSession', '        if (!AndroidHomeStateStore.ownsNodeChain(context, home))', '        if (false)', 'proof', 'changed Home still authorized the original native source'),
