@@ -9,12 +9,33 @@ from pathlib import Path
 JAVA = Path(__file__).resolve().parent / 'app/src/main/java/com/eabusham/routervpn'
 
 
+def method(source, signature):
+    start = source.index(signature)
+    end = source.index('{', start) + 1
+    depth = 1
+    while depth:
+        depth += (source[end] == '{') - (source[end] == '}')
+        end += 1
+    return source[start:end]
+
+
 def sources():
     result = {f'com/eabusham/routervpn/{name}.java': (JAVA / f'{name}.java').read_text()
               for name in ('AndroidStandardExitStore', 'AndroidNumericAddress',
                            'AndroidExternalProtection', 'AndroidExternalAmnezia', 'AndroidOpenVPN')}
+    # Saved hostname policies enter the shipping validator even when native
+    # profile compilation is outside this fixture. Keep its pure dependency
+    # closure unchanged and retain the separate compiler refusal below.
+    policy = (JAVA / 'AndroidExternalPolicy.java').read_text()
+    constants = '\n'.join(line for line in policy.splitlines() if 'static final int MAX_CAPTURE =' in line)
+    start = policy.index('    private static final Set<String> POLICY =')
+    constants += '\n' + policy[start:policy.index(';', start) + 1]
+    methods = '\n'.join(method(policy, signature) for signature in (
+        '    static void checkPolicy(', '    private static boolean bounded('))
     result['com/eabusham/routervpn/AndroidExternalPolicy.java'] = '''package com.eabusham.routervpn;
+import org.json.*;import java.util.*;import java.nio.charset.StandardCharsets;
 final class AndroidExternalPolicy {
+''' + constants + methods + '''
  static org.json.JSONObject profile(AndroidStandardExitStore.Entry entry)throws Exception{
   throw new AssertionError("Imported ordered native capture belongs to the shipping shared-compiler composition gate.");
  }
