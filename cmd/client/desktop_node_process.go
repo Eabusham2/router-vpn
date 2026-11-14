@@ -239,6 +239,9 @@ func validateDesktopNodeChainProcessArguments(arguments []string, directory stri
 func validateDesktopNodeChainSOCKSProcessArguments(arguments []string, directory string) ([]string, error) {
 	return validateDesktopOrderedProcessArguments(arguments, directory, "routervpn-node-chain-socks")
 }
+func validateDesktopNodeChainCONNECTProcessArguments(arguments []string, directory string) ([]string, error) {
+	return validateDesktopOrderedProcessArguments(arguments, directory, "routervpn-node-chain-connect")
+}
 func validateDesktopOrderedProcessArguments(arguments []string, directory, command string) ([]string, error) {
 	if len(arguments) == 0 || arguments[0] != command {
 		return nil, errors.New("ordered native process requires its exact child command")

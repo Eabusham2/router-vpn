@@ -40,6 +40,9 @@ func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []c
 	if desktopNodeChainHasSOCKS(nodes) {
 		members, err = resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, execution)
 	}
+	if desktopNodeChainHasCONNECT(nodes) {
+		members, err = resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, execution)
+	}
 	if err != nil {
 		return multihopSelection{}, err
 	}
@@ -64,6 +67,9 @@ func nodeChainSelectedReferences(members []desktopNodeChainMember) []common.Mult
 
 func captureNativeNodeChainSelection(ctx context.Context, root string, selection multihopSelection,
 	modes []string, lookup applexray.Lookup) (multihopSelection, error) {
+	if desktopNodeChainHasCONNECT(nodeChainSelectedReferences(selection.Nodes)) {
+		return captureNativeCONNECTNodeChainSelection(ctx, root, selection, modes, lookup)
+	}
 	if desktopNodeChainHasSOCKS(nodeChainSelectedReferences(selection.Nodes)) {
 		return captureNativeSOCKSNodeChainSelection(ctx, root, selection, modes, lookup)
 	}
@@ -104,6 +110,9 @@ func captureNativeNodeChainSelection(ctx context.Context, root string, selection
 }
 
 func (capture *nativeMultihopCapture) validateNodeChainSelection(selection multihopSelection) error {
+	if capture != nil && capture.chain != nil && capture.chain.connect != nil {
+		return capture.validateCONNECTNodeChainSelection(selection)
+	}
 	if capture != nil && capture.chain != nil && capture.chain.socks != nil {
 		return capture.validateSOCKSNodeChainSelection(selection)
 	}

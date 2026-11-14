@@ -114,7 +114,7 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 		}
 		p := members[i].Profile
 		kind := "private-node"
-		imported := desktopNodeChainImported(p, members[i].Mode) || desktopNodeChainSOCKSMiddle(p, members[i].Mode)
+		imported := desktopNodeChainImported(p, members[i].Mode) || desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode)
 		if imported {
 			if len(members) != 3 || i != 1 {
 				return nil, bad
@@ -238,7 +238,7 @@ func exchangeDesktopNodeChainMeasurementOperation(parent context.Context, launch
 	deadline, _ := ctx.Deadline()
 	request := desktopNodeChainMeasurementRequest{Schema: 1, Request: nonce, Generation: chain.measurementGeneration + 1, Deadline: deadline.UnixMilli(), Bytes: 8 << 20, Path: live.Path, Capture: capture}
 	if target != nil {
-		if chain.socksPolicy == nil || chain.policy != nil || target.Position < 0 || target.Position >= len(chain.selection.Nodes) || chain.selection.Nodes[target.Position].Profile.ID != target.NodeID {
+		if !chain.hasPolicy() || chain.policy != nil || target.Position < 0 || target.Position >= len(chain.selection.Nodes) || chain.selection.Nodes[target.Position].Profile.ID != target.NodeID {
 			return empty, errors.New("ordered fifty requires its exact typed member")
 		}
 		request.Schema, request.Operation, request.Bytes = 2, "ordered-latency-50", 0

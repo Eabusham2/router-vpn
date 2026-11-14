@@ -57,7 +57,19 @@ def native_multihop_ordered_owner(read) -> bool:
         return False
     expected = (
         ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func (c *desktopNodeChainLaunch) hasPolicy() bool', r'''
-	return c != nil && (c.policy != nil) != (c.socksPolicy != nil)
+	if c == nil {
+		return false
+	}
+	return desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1
+        '''),
+        ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func desktopNodeChainConcretePolicyCount(chain *mobilemultihop.DesktopNodeChainPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSPolicy, connect *mobilemultihop.DesktopNodeChainCONNECTPolicy) int', r'''
+	count := 0
+	for _, present := range []bool{chain != nil, socks != nil, connect != nil} {
+		if present {
+			count++
+		}
+	}
+	return count
         '''),
         ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func (c *desktopNodeChainLaunch) readPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, mobilemultihop.DesktopPhysicalCapture, error)', r'''
 	if !c.hasPolicy() {
@@ -65,6 +77,10 @@ def native_multihop_ordered_owner(read) -> bool:
 	}
 	if c.socksPolicy != nil {
 		config, meta, capture, err := c.socksPolicy.ReadValidated()
+		return config, meta.DesktopNodeChainMetadata, capture, err
+	}
+	if c.connectPolicy != nil {
+		config, meta, capture, err := c.connectPolicy.ReadValidated()
 		return config, meta.DesktopNodeChainMetadata, capture, err
 	}
 	return c.policy.ReadValidated()
@@ -75,8 +91,18 @@ def native_multihop_ordered_owner(read) -> bool:
 		return "", mobilemultihop.DesktopNodeChainMetadata{}, "", bad
 	}
 	original := c.selection.Native.chain
+	if c.connectPolicy != nil {
+		if original.connect == nil || original.chain != nil || original.socks != nil {
+			return "", mobilemultihop.DesktopNodeChainMetadata{}, "", bad
+		}
+		capture, err := c.connectPolicy.ReadValidatedLaunch()
+		if err != nil || capture.Original != original.connect.source {
+			return "", mobilemultihop.DesktopNodeChainMetadata{}, "", errors.Join(err, bad)
+		}
+		return capture.Config, capture.Metadata.DesktopNodeChainMetadata, capture.Input, nil
+	}
 	if c.socksPolicy != nil {
-		if original.socks == nil || original.chain != nil {
+		if original.socks == nil || original.chain != nil || original.connect != nil {
 			return "", mobilemultihop.DesktopNodeChainMetadata{}, "", bad
 		}
 		capture, err := c.socksPolicy.ReadValidatedLaunch()
@@ -85,7 +111,7 @@ def native_multihop_ordered_owner(read) -> bool:
 		}
 		return capture.Config, capture.Metadata.DesktopNodeChainMetadata, capture.Input, nil
 	}
-	if original.socks != nil || original.chain == nil {
+	if original.socks != nil || original.connect != nil || original.chain == nil {
 		return "", mobilemultihop.DesktopNodeChainMetadata{}, "", bad
 	}
 	capture, err := c.policy.ReadValidatedLaunch()
@@ -222,8 +248,8 @@ if owner == nil || owner.host == nil {
         '''),
         ('cmd/client/desktop_node_chain_linux.go', 'func (h *desktopLinuxNodeHost) currentNodeChain(ctx context.Context) error', r'''
 if h == nil || ctx == nil || ctx.Err() != nil || h.closing || h.closed || h.operation == nil || h.parent == nil ||
-		(h.chain == nil && h.socksChain == nil) || h.policy != nil || h.imported != nil || h.external != nil || h.launch == nil || h.launch.chain == nil ||
-		!h.launch.chain.hasPolicy() || h.launch.chain.policy != h.chain || h.launch.chain.socksPolicy != h.socksChain || h.launch.chain.platform == nil || h.launch.ownedNode != nil {
+		(h.chain == nil && h.socksChain == nil && h.connectChain == nil) || h.policy != nil || h.imported != nil || h.external != nil || h.launch == nil || h.launch.chain == nil ||
+		!h.launch.chain.hasPolicy() || h.launch.chain.policy != h.chain || h.launch.chain.socksPolicy != h.socksChain || h.launch.chain.connectPolicy != h.connectChain || h.launch.chain.platform == nil || h.launch.ownedNode != nil {
 		return errors.New("Linux ordered host lost its unique concrete policy")
 	}
 	runtime := h.launch.chain.platform
@@ -909,6 +935,17 @@ def native_multihop_shipping_chain(source: str, read=None) -> bool:
         return false
     '''):
         return False
+    connect_support = _function(_tokens(read("cmd/client/desktop_node_chain_policy_dispatch.go")),
+                                "func nativeNodeChainCONNECTPlatformSupported() bool")
+    connect_detector = _function(_tokens(read("cmd/client/multihop_node_chain_connect_selection.go")),
+                                 "func desktopNodeChainHasCONNECT(nodes []common.MultihopNodeSelection) bool")
+    if connect_support != _tokens("return false") or connect_detector != _tokens('''
+        for _, node := range nodes {
+            if node.Mode == "http-connect" || node.Mode == "https-connect" { return true }
+        }
+        return false
+    '''):
+        return False
     tokens = _tokens(source)
     public = _function(tokens, "func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request)")
     expected = _tokens("""
@@ -931,7 +968,7 @@ def native_multihop_shipping_chain(source: str, read=None) -> bool:
             "q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))",
             '''if err != nil { http.Error(w, "bad json", http.StatusBadRequest)
                 return }''',
-            '''if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported()) {
+            '''if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(q.Nodes) && !nativeNodeChainCONNECTPlatformSupported()) {
                 http.Error(w, "this platform has not enabled its protected ordered native host", http.StatusNotImplemented)
                 return
             }''',

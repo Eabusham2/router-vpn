@@ -12,9 +12,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"time"
 	"testing"
-
+	"time"
 )
 
 // The parent/session, source policy, workspace, stop capture and retirement
@@ -42,7 +41,7 @@ func desktopMacOSNodeChainRetirementFixtureWith(t *testing.T, makeLaunch func(*t
 	parent := &desktopMacOSSessionCapture{app: a, controller: c, parent: p, session: s}
 	meta := launch.chain.policyMetadata()
 	runtime := &desktopNodeChainPlatformRuntime{registered: true}
-	h := &desktopMacOSNodeChainHost{parent: parent, runtime: runtime, launch: launch, policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy,
+	h := &desktopMacOSNodeChainHost{parent: parent, runtime: runtime, launch: launch, policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy, connectPolicy: launch.chain.connectPolicy,
 		operation: operation, gate: make(chan struct{}, 1), entered: true, published: true, staged: true, baselineEntered: true,
 		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
 			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
@@ -203,15 +202,25 @@ func TestDesktopMacOSNodeChainRetirementNeverClearsReplacement(t *testing.T) {
 			}
 			switch fault {
 			case "command":
-				if a.cmd != replacementCommand { t.Fatal("replacement command cleared") }
+				if a.cmd != replacementCommand {
+					t.Fatal("replacement command cleared")
+				}
 			case "controller":
-				if a.localController != replacementController { t.Fatal("replacement controller cleared") }
+				if a.localController != replacementController {
+					t.Fatal("replacement controller cleared")
+				}
 			case "session-slot":
-				if h.parent.session.nodeChain != replacementSlot { t.Fatal("replacement session cleared") }
+				if h.parent.session.nodeChain != replacementSlot {
+					t.Fatal("replacement session cleared")
+				}
 			case "graph-owner":
-				if raw, _ := nativeMultihopOwners.Load(a); raw != replacementOwner { t.Fatal("replacement graph owner cleared") }
+				if raw, _ := nativeMultihopOwners.Load(a); raw != replacementOwner {
+					t.Fatal("replacement graph owner cleared")
+				}
 			case "graph-value":
-				if graph, _ := getActiveMultihopGraph(a); graph != replacementGraph { t.Fatal("replacement graph cleared") }
+				if graph, _ := getActiveMultihopGraph(a); graph != replacementGraph {
+					t.Fatal("replacement graph cleared")
+				}
 			}
 			a.cmd, a.localController, h.parent.session.nodeChain = originalCommand, originalController, h.runtime
 			nativeMultihopOwners.Store(a, originalOwner)
@@ -247,7 +256,9 @@ func TestDesktopMacOSNodeChainStopCaptureRejectsReplacementAfterHold(t *testing.
 			h, actions := desktopMacOSNodeChainRetirementFixture(t)
 			a := h.parent.app
 			stop, err := a.captureDesktopRetainedStop()
-			if err != nil || stop == nil { t.Fatal(err) }
+			if err != nil || stop == nil {
+				t.Fatal(err)
+			}
 			originalCommand, originalOperation := a.cmd, a.connectionContext
 			switch fault {
 			case "command":
@@ -334,7 +345,9 @@ func TestDesktopMacOSNodeChainKernelReaderRequiresOriginalUTUNRetirement(t *test
 			case "non-utun":
 				record.Interface, actual.Name = "en9", "en9"
 			case "nil":
-				if validateDesktopMacOSNodeChainInterface(record, nil) == nil { t.Fatal("missing native interface accepted") }
+				if validateDesktopMacOSNodeChainInterface(record, nil) == nil {
+					t.Fatal("missing native interface accepted")
+				}
 				return
 			}
 			if fault == "old-retained" || fault == "new-missing" || fault == "same-reader" {
@@ -364,8 +377,12 @@ func TestDesktopMacOSNodeChainMTUStopUsesOnlyPreHeldOriginalOwner(t *testing.T) 
 			mtuLiveOwners.Store(a, outer)
 			if fault != "missing-stopped" {
 				raw, err := json.Marshal(desktopExternalStop{Schema: 1, SessionID: h.launch.mtuSession, SourceSHA256: h.launch.configSHA256, Closed: true})
-				if err != nil { t.Fatal(err) }
-				if err := writeDesktopRuntimeFile(h.launch, "stopped.json", raw, false); err != nil { t.Fatal(err) }
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := writeDesktopRuntimeFile(h.launch, "stopped.json", raw, false); err != nil {
+					t.Fatal(err)
+				}
 			}
 			holdErr := errors.New("original MTU cleanup is pending")
 			originalOperation := a.connectionContext
@@ -391,7 +408,9 @@ func TestDesktopMacOSNodeChainMTUStopUsesOnlyPreHeldOriginalOwner(t *testing.T) 
 				holdErr = context.DeadlineExceeded
 			}
 			handled, err := prepareDesktopPlatformMTUStop(context.Background(), a, command, originalOperation, outer, false, holdErr)
-			if unlock != nil { unlock() }
+			if unlock != nil {
+				unlock()
+			}
 			if !handled || fault == "acknowledged" && err != nil || fault != "acknowledged" && err == nil {
 				t.Fatal("explicit MTU Stop changed its exact original authority", handled, err)
 			}
@@ -405,7 +424,9 @@ func TestDesktopMacOSNodeChainMTUStopUsesOnlyPreHeldOriginalOwner(t *testing.T) 
 			a.cmd, a.connectionContext, outer.stopped = command, originalOperation, true
 			mtuLiveOwners.Store(a, outer)
 			child.nativeAcknowledged, child.nativeStopped = true, true
-			if err := h.Close(context.Background()); err != nil { t.Fatal(err) }
+			if err := h.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -426,7 +447,9 @@ func TestDesktopMacOSNodeChainStopRetriesEnteredBaselineWithoutReply(t *testing.
 	nativeMultihopOwners.Delete(h.parent.app)
 	activeMultihopGraphs.Delete(h.parent.app)
 	captured, err := h.parent.app.captureDesktopRetainedStop()
-	if err != nil || captured == nil { t.Fatal(err) }
+	if err != nil || captured == nil {
+		t.Fatal(err)
+	}
 	if err := captured.Retire(context.Background(), nil, true); err != nil {
 		t.Fatal("entered original baseline could not recover its own missing reply", err)
 	}
@@ -451,7 +474,9 @@ func TestDesktopMacOSNodeChainGraphCleanupPrecedesFailedNativeBind(t *testing.T)
 			if err := bindNativeMultihopRuntimeContext(context.Background(), a, h.launch, selection, "original-physical"); err == nil || observed != 1 {
 				t.Fatal("fixture did not reach the original pre-adoption network refusal", err, observed)
 			}
-			if _, found := nativeMultihopOwners.Load(a); found { t.Fatal("failed native bind adopted an owner") }
+			if _, found := nativeMultihopOwners.Load(a); found {
+				t.Fatal("failed native bind adopted an owner")
+			}
 			replacement := original
 			if fault == "replacement-same-source-new-start" {
 				replacement.Started = replacement.Started.Add(time.Nanosecond)
@@ -462,16 +487,24 @@ func TestDesktopMacOSNodeChainGraphCleanupPrecedesFailedNativeBind(t *testing.T)
 			}
 			err := h.Close(context.Background())
 			if fault == "network-before-bind" {
-				if err != nil || !h.closed { t.Fatal("exact pre-bind graph could not retire", err) }
-				if _, found := getActiveMultihopGraph(a); found { t.Fatal("original unbound graph was stranded") }
+				if err != nil || !h.closed {
+					t.Fatal("exact pre-bind graph could not retire", err)
+				}
+				if _, found := getActiveMultihopGraph(a); found {
+					t.Fatal("original unbound graph was stranded")
+				}
 				return
 			}
-			if err == nil || h.closed || !h.workspaceRetired { t.Fatal("replacement graph was adopted for old cleanup", err) }
+			if err == nil || h.closed || !h.workspaceRetired {
+				t.Fatal("replacement graph was adopted for old cleanup", err)
+			}
 			if actual, found := getActiveMultihopGraph(a); !found || actual != replacement {
 				t.Fatal("old cleanup erased the replacement graph")
 			}
 			activeMultihopGraphs.Store(a, original)
-			if err := h.Close(context.Background()); err != nil { t.Fatal("exact original graph could not finish retry", err) }
+			if err := h.Close(context.Background()); err != nil {
+				t.Fatal("exact original graph could not finish retry", err)
+			}
 		})
 	}
 }
@@ -516,7 +549,9 @@ func TestDesktopMacOSNodeChainGraphPublicationRejectsReplacementBeforeStore(t *t
 				t.Fatal("ordered publication changed original authority before atomically retaining its receipt", err)
 			}
 			if actual, found := getActiveMultihopGraph(a); fault == "existing-graph" {
-				if !found || actual != original { t.Fatal("refused publication erased an existing graph") }
+				if !found || actual != original {
+					t.Fatal("refused publication erased an existing graph")
+				}
 			} else if found {
 				t.Fatal("refused publication stranded a new unowned graph")
 			}
@@ -528,7 +563,9 @@ func TestDesktopMacOSNodeChainGraphPublicationRejectsReplacementBeforeStore(t *t
 			if err != nil || h.graph == nil || *h.graph != graph {
 				t.Fatal("exact original publication could not retain its own receipt", err)
 			}
-			if err := h.Close(context.Background()); err != nil { t.Fatal(err) }
+			if err := h.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -542,7 +579,9 @@ func TestDesktopMacOSNodeChainGraphPublicationRetainsCleanupAfterCancellation(t 
 	// The exact graph was produced and retained by the actual atomic helper.
 	// Cancel its original admission before any outer bind can adopt a runtime.
 	a.connectionCancel()
-	if h.operation.Err() == nil { t.Fatal("fixture did not revoke the original operation") }
+	if h.operation.Err() == nil {
+		t.Fatal("fixture did not revoke the original operation")
+	}
 	if err := h.Close(context.Background()); err != nil || !h.closed {
 		t.Fatal("cancellation after publication stranded its original unbound graph", err)
 	}
@@ -556,17 +595,25 @@ func TestDesktopMacOSNodeChainWorkspaceRetryKeepsCreationWitness(t *testing.T) {
 		t.Run(fault, func(t *testing.T) {
 			h, _ := desktopMacOSNodeChainRetirementFixture(t)
 			originalInfo, originalPath := h.stageInfo, h.stageDirectory
-			if err := h.launch.directoryRoot.Close(); err != nil { t.Fatal(err) }
+			if err := h.launch.directoryRoot.Close(); err != nil {
+				t.Fatal(err)
+			}
 			if fault != "closed-handle" {
 				h.launch.directory, h.launch.directoryInfo, h.launch.directoryRoot = "", nil, nil
 			}
 			backup := originalPath + "-original"
 			if fault == "replacement" || fault == "missing" || fault == "symlink" {
-				if err := os.Rename(originalPath, backup); err != nil { t.Fatal(err) }
+				if err := os.Rename(originalPath, backup); err != nil {
+					t.Fatal(err)
+				}
 				if fault == "replacement" {
-					if err := os.Mkdir(originalPath, 0700); err != nil { t.Fatal(err) }
+					if err := os.Mkdir(originalPath, 0700); err != nil {
+						t.Fatal(err)
+					}
 				} else if fault == "symlink" {
-					if err := os.Symlink(backup, originalPath); err != nil { t.Fatal(err) }
+					if err := os.Symlink(backup, originalPath); err != nil {
+						t.Fatal(err)
+					}
 				}
 			} else if fault == "lost-witness" {
 				h.stageInfo = nil
@@ -582,11 +629,17 @@ func TestDesktopMacOSNodeChainWorkspaceRetryKeepsCreationWitness(t *testing.T) {
 				t.Fatal("missing or replacement path manufactured joined workspace cleanup", err)
 			}
 			if fault == "replacement" || fault == "symlink" {
-				if _, err := os.Lstat(originalPath); err != nil { t.Fatal("replacement was removed", err) }
-				if err := os.Remove(originalPath); err != nil { t.Fatal(err) }
+				if _, err := os.Lstat(originalPath); err != nil {
+					t.Fatal("replacement was removed", err)
+				}
+				if err := os.Remove(originalPath); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if fault == "replacement" || fault == "missing" || fault == "symlink" {
-				if err := os.Rename(backup, originalPath); err != nil { t.Fatal(err) }
+				if err := os.Rename(backup, originalPath); err != nil {
+					t.Fatal(err)
+				}
 			}
 			h.stageInfo = originalInfo
 			if err := h.Close(context.Background()); err != nil || !h.closed {
@@ -598,9 +651,9 @@ func TestDesktopMacOSNodeChainWorkspaceRetryKeepsCreationWitness(t *testing.T) {
 
 type desktopMacOSNodeChainTestMTUBridge struct {
 	native *desktopNodeMTUOwner
-	host *desktopMacOSNodeChainHost
-	fail bool
-	calls int
+	host   *desktopMacOSNodeChainHost
+	fail   bool
+	calls  int
 }
 
 func (b *desktopMacOSNodeChainTestMTUBridge) nativeOwner() *desktopNodeMTUOwner { return b.native }
@@ -609,7 +662,9 @@ func (b *desktopMacOSNodeChainTestMTUBridge) closeRetiredLocked(ctx context.Cont
 	if !b.host.nativeRetired || b.host.baselineRetired || b.host.workspaceRetired {
 		return errors.New("MTU bridge lost native-before-PF/workspace retirement order")
 	}
-	if b.fail { return errors.New("original MTU close still pending") }
+	if b.fail {
+		return errors.New("original MTU close still pending")
+	}
 	return b.native.CloseContext(ctx)
 }
 
@@ -619,14 +674,20 @@ func TestDesktopMacOSNodeChainRetirementJoinsRetainedMTUBeforeWorkspace(t *testi
 	bridge := &desktopMacOSNodeChainTestMTUBridge{native: native, host: h, fail: true}
 	h.mtu = bridge
 	raw, err := json.Marshal(desktopExternalStop{Schema: 1, SessionID: h.launch.mtuSession, SourceSHA256: h.launch.configSHA256, Closed: true})
-	if err != nil { t.Fatal(err) }
-	if err := writeDesktopRuntimeFile(h.launch, "stopped.json", raw, false); err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDesktopRuntimeFile(h.launch, "stopped.json", raw, false); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.Close(context.Background()); err == nil || !h.nativeRetired || h.baselineRetired || h.workspaceRetired ||
 		h.closed || h.mtu != bridge || bridge.calls != 1 || len(*actions) != 0 {
 		t.Fatal("pending retained MTU owner was discarded or PF/workspace was released first", err)
 	}
 	bridge.fail = false
-	if err := h.Close(context.Background()); err != nil { t.Fatal("original MTU owner could not join retry", err) }
+	if err := h.Close(context.Background()); err != nil {
+		t.Fatal("original MTU owner could not join retry", err)
+	}
 	if bridge.calls != 2 || !native.closed || !native.runtimeRetired || !h.closed || !reflect.DeepEqual(*actions, []string{"release"}) {
 		t.Fatal("exact stopped receipt did not settle the original retained MTU lease", bridge.calls, *actions)
 	}

@@ -89,7 +89,7 @@ func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Co
 		return launch, "", err
 	}
 	h := &desktopLinuxNodeHost{gate: make(chan struct{}, 1), parent: capture.parent, operation: operation,
-		chain: launch.chain.policy, socksChain: launch.chain.socksPolicy, launch: launch, source: []byte(launch.chain.input), network: owner.network,
+		chain: launch.chain.policy, socksChain: launch.chain.socksPolicy, connectChain: launch.chain.connectPolicy, launch: launch, source: []byte(launch.chain.input), network: owner.network,
 		revision: desktopOwnedNodeProfileToken(selection.Control), options: owner.sources.options, savedOptions: owner.sources.options,
 		physical: physical, monitor: &atomic.Pointer[desktopLinuxNodeMonitor]{},
 		selection: linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
@@ -128,8 +128,8 @@ func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Co
 
 func (h *desktopLinuxNodeHost) currentNodeChain(ctx context.Context) error {
 	if h == nil || ctx == nil || ctx.Err() != nil || h.closing || h.closed || h.operation == nil || h.parent == nil ||
-		(h.chain == nil && h.socksChain == nil) || h.policy != nil || h.imported != nil || h.external != nil || h.launch == nil || h.launch.chain == nil ||
-		!h.launch.chain.hasPolicy() || h.launch.chain.policy != h.chain || h.launch.chain.socksPolicy != h.socksChain || h.launch.chain.platform == nil || h.launch.ownedNode != nil {
+		(h.chain == nil && h.socksChain == nil && h.connectChain == nil) || h.policy != nil || h.imported != nil || h.external != nil || h.launch == nil || h.launch.chain == nil ||
+		!h.launch.chain.hasPolicy() || h.launch.chain.policy != h.chain || h.launch.chain.socksPolicy != h.socksChain || h.launch.chain.connectPolicy != h.connectChain || h.launch.chain.platform == nil || h.launch.ownedNode != nil {
 		return errors.New("Linux ordered host lost its unique concrete policy")
 	}
 	runtime := h.launch.chain.platform
@@ -175,7 +175,7 @@ func (h *desktopLinuxNodeHost) currentNodeChain(ctx context.Context) error {
 
 func newDesktopLinuxNodeChainTransaction(ctx context.Context, h *desktopLinuxNodeHost, journal *desktopLinuxNodeJournal,
 	predecessor *desktopLinuxNodeTransaction) (*desktopLinuxNodeTransaction, error) {
-	if h == nil || (h.chain == nil && h.socksChain == nil) || h.launch == nil || h.launch.chain == nil || h.launch.chain.platform == nil ||
+	if h == nil || (h.chain == nil && h.socksChain == nil && h.connectChain == nil) || h.launch == nil || h.launch.chain == nil || h.launch.chain.platform == nil ||
 		h.process == nil || !h.process.Started() || journal == nil || !sameDesktopLinuxParentCapture(h.parent, journal.parent) ||
 		!sameDesktopLinuxParentCapture(h.parent, h.process.parent) {
 		return nil, errors.New("Linux ordered transaction lost its original process and journal")
@@ -184,7 +184,7 @@ func newDesktopLinuxNodeChainTransaction(ctx context.Context, h *desktopLinuxNod
 		return nil, err
 	}
 	t := &desktopLinuxNodeTransaction{gate: make(chan struct{}, 1), parent: h.parent, journal: journal, process: h.process,
-		chain: h.chain, socksChain: h.socksChain, chainSources: h.launch.chain.platform.capture.sources, mode: h.launch.mode, operation: h.operation,
+		chain: h.chain, socksChain: h.socksChain, connectChain: h.connectChain, chainSources: h.launch.chain.platform.capture.sources, mode: h.launch.mode, operation: h.operation,
 		startup: ctx, selection: h.selection, profileID: h.launch.profileID, revision: h.revision, network: h.network,
 		options: h.options, savedOptions: h.savedOptions, predecessor: predecessor}
 	return finishDesktopLinuxNodeTransaction(t)

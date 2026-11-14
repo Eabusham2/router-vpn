@@ -131,7 +131,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 		release()
 		return nil, errors.New("temporary candidates require the selected complete saved Local graph")
 	}
-	if desktopNodeChainHasSOCKS(control.MultihopNodes) && !nativeNodeChainSOCKSPlatformSupported() {
+	if desktopNodeChainHasSOCKS(control.MultihopNodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(control.MultihopNodes) && !nativeNodeChainCONNECTPlatformSupported() {
 		release()
 		return nil, errors.New("typed ordered candidate preparation awaits installed native platform acceptance")
 	}

@@ -18,6 +18,7 @@ type desktopNodeChainLaunch struct {
 	preparation           *orderedCandidatePreparation // bound once before staging; nil for ordinary connections
 	policy                *mobilemultihop.DesktopNodeChainPolicy
 	socksPolicy           *mobilemultihop.DesktopNodeChainSOCKSPolicy
+	connectPolicy         *mobilemultihop.DesktopNodeChainCONNECTPolicy
 	selection             multihopSelection
 	input                 string
 	platform              *desktopNodeChainPlatformRuntime
@@ -36,6 +37,9 @@ type desktopNodeChainLaunch struct {
 }
 
 func newDesktopNodeChainLaunch(selection multihopSelection, session, target string) (*desktopNodeLaunch, error) {
+	if selection.Native != nil && selection.Native.chain != nil && selection.Native.chain.connect != nil {
+		return newDesktopCONNECTNodeChainLaunch(selection, session, target)
+	}
 	if selection.Native != nil && selection.Native.chain != nil && selection.Native.chain.socks != nil {
 		return newDesktopSOCKSNodeChainLaunch(selection, session, target)
 	}

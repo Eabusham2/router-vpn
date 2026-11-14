@@ -26,7 +26,7 @@ func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
 	if h.candidatePrefix != nil {
 		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {"node-candidate-prefix-source.json", h.source}}
 	}
-	if h.chain != nil || h.socksChain != nil {
+	if h.chain != nil || h.socksChain != nil || h.connectChain != nil {
 		return []desktopLinuxPrivateInput{{"sing-box.json", h.launch.config}, {h.launch.chain.sourceName(), h.source}}
 	}
 	if h.imported != nil {
@@ -47,6 +47,9 @@ func validateDesktopLinuxProtectedArguments(arguments []string, directory string
 	}
 	if len(arguments) > 0 && arguments[0] == "routervpn-node-chain-socks" {
 		return validateDesktopNodeChainSOCKSProcessArguments(arguments, directory)
+	}
+	if len(arguments) > 0 && arguments[0] == "routervpn-node-chain-connect" {
+		return validateDesktopNodeChainCONNECTProcessArguments(arguments, directory)
 	}
 	if len(arguments) > 0 && arguments[0] == "routervpn-node-chain" {
 		return validateDesktopNodeChainProcessArguments(arguments, directory)
@@ -397,7 +400,7 @@ func newDesktopLinuxExternalTransactionWithStartup(startup context.Context, h *d
 
 func (t *desktopLinuxNodeTransaction) validatePolicy() error {
 	if t.candidatePrefix != nil {
-		if (t.chain != nil || t.socksChain != nil) || t.policy != nil || t.imported != nil || t.external != nil || t.prefixSources == nil || t.candidatePrefix.Validate() != nil {
+		if (t.chain != nil || t.socksChain != nil || t.connectChain != nil) || t.policy != nil || t.imported != nil || t.external != nil || t.prefixSources == nil || t.candidatePrefix.Validate() != nil {
 			return errors.New("Linux candidate prefix mixed its concrete native policy")
 		}
 		meta := t.candidatePrefix.Metadata()
@@ -411,11 +414,11 @@ func (t *desktopLinuxNodeTransaction) validatePolicy() error {
 		}
 		return nil
 	}
-	if t.chain != nil || t.socksChain != nil {
+	if t.chain != nil || t.socksChain != nil || t.connectChain != nil {
 		if t.policy != nil || t.imported != nil || t.external != nil || t.chainSources == nil {
 			return errors.New("Linux ordered transaction mixed its concrete policy family")
 		}
-		original := &desktopNodeChainLaunch{policy: t.chain, socksPolicy: t.socksChain, selection: t.chainSources.selection}
+		original := &desktopNodeChainLaunch{policy: t.chain, socksPolicy: t.socksChain, connectPolicy: t.connectChain, selection: t.chainSources.selection}
 		_, meta, _, err := original.readPolicy()
 		if err != nil || !original.originalPolicyCurrent() {
 			return errors.Join(err, errors.New("Linux ordered transaction lost its original concrete source"))

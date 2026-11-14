@@ -140,6 +140,16 @@ func (f *desktopNodeChainOwnedFixture) nativeStart(t *testing.T) (*desktopImport
 		if parseErr != nil || originalErr != nil || parsedConfig != originalConfig || !reflect.DeepEqual(parsedMeta, originalMeta) || !reflect.DeepEqual(parsedCapture, originalCapture) || len(parsedMeta.Prefixes) != len(f.selection.Nodes) {
 			return nil, errors.Join(parseErr, originalErr, errors.New("child replay changed original typed ordered graph"))
 		}
+	} else if launch.chain.connectPolicy != nil {
+		policy, parseErr := mobilemultihop.ParseDesktopNodeChainCONNECTLaunchInput(string(raw))
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		parsedConfig, parsedMeta, parsedCapture, parseErr := policy.ReadValidated()
+		originalConfig, originalMeta, originalCapture, originalErr := launch.chain.connectPolicy.ReadValidated()
+		if parseErr != nil || originalErr != nil || parsedConfig != originalConfig || !reflect.DeepEqual(parsedMeta, originalMeta) || !reflect.DeepEqual(parsedCapture, originalCapture) || len(parsedMeta.Prefixes) != len(f.selection.Nodes) {
+			return nil, errors.Join(parseErr, originalErr, errors.New("child replay changed original typed ordered graph"))
+		}
 	} else {
 		policy, parseErr := mobilemultihop.ParseDesktopNodeChainLaunchInput(string(raw))
 		if parseErr != nil || policy.Config() != launch.chain.policy.Config() || !reflect.DeepEqual(policy.Metadata(), launch.chain.policy.Metadata()) || len(policy.NodeChain().ProofInventory()) != len(f.selection.Nodes) {

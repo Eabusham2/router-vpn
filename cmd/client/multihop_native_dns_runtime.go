@@ -17,6 +17,12 @@ func nativeMultihopRuntimeDirFromCommand(cmd *exec.Cmd) (string, error) {
 		}
 		return cmd.Dir, nil
 	}
+	if cmd.Args[1] == "routervpn-node-chain-connect" {
+		if _, err := validateDesktopNodeChainCONNECTProcessArguments(cmd.Args[1:], cmd.Dir); err != nil {
+			return "", err
+		}
+		return cmd.Dir, nil
+	}
 	if cmd.Args[1] == "routervpn-node-chain" {
 		if _, err := validateDesktopNodeChainProcessArguments(cmd.Args[1:], cmd.Dir); err != nil {
 			return "", err

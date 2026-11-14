@@ -16,6 +16,8 @@ func desktopMacOSProcessArguments(scope macosprocess.Scope) ([]string, error) {
 		command = "routervpn-external"
 	case macosprocess.NodeChainSOCKSFamily:
 		command = "routervpn-node-chain-socks"
+	case macosprocess.NodeChainCONNECTFamily:
+		command = "routervpn-node-chain-connect"
 	case macosprocess.NodeChainFamily:
 		command = "routervpn-node-chain"
 	case macosprocess.CandidatePrefixFamily:

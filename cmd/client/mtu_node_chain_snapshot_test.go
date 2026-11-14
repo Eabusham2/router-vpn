@@ -257,7 +257,7 @@ func assertMTUNodeChainProvedCapture(t *testing.T, f *desktopNodeChainOwnedFixtu
 	}
 	if snapshot.Multihop == nil || snapshot.Multihop.Chain == nil ||
 		snapshot.Multihop.Native.launch != f.launch || snapshot.Multihop.Chain.Native != f.selection.Native ||
-		snapshot.Multihop.Chain.Policy != f.launch.chain.policy || snapshot.Multihop.Chain.SOCKSPolicy != f.launch.chain.socksPolicy || snapshot.Profile.ID != f.selection.Exit.ID ||
+		snapshot.Multihop.Chain.Policy != f.launch.chain.policy || snapshot.Multihop.Chain.SOCKSPolicy != f.launch.chain.socksPolicy || snapshot.Multihop.Chain.CONNECTPolicy != f.launch.chain.connectPolicy || snapshot.Profile.ID != f.selection.Exit.ID ||
 		snapshot.SelectedID != f.selection.Control.ID || observations.Load() == 0 {
 		t.Fatal("public MTU snapshot did not retain its original complete proof owner")
 	}
@@ -293,6 +293,23 @@ func assertMTUNodeChainProvedCapture(t *testing.T, f *desktopNodeChainOwnedFixtu
 		a.mu.Unlock()
 		if err == nil {
 			t.Fatal("typed MTU restore adopted changed original SOCKS credential")
+		}
+		if err := validateMTURetestSnapshot(a, snapshot); err != nil {
+			t.Fatal("original typed MTU source could not be restored", err)
+		}
+		return
+	}
+	if f.launch.chain.connectPolicy != nil {
+		a.mu.Lock()
+		original := common.CloneRouterProfile(a.profiles.Profiles[1])
+		a.profiles.Profiles[1].External.HTTPSConnect.Password += "-foreign-restoration"
+		a.mu.Unlock()
+		err := validateMTURetestSnapshot(a, snapshot)
+		a.mu.Lock()
+		a.profiles.Profiles[1] = original
+		a.mu.Unlock()
+		if err == nil {
+			t.Fatal("typed MTU restore adopted changed original CONNECT credential")
 		}
 		if err := validateMTURetestSnapshot(a, snapshot); err != nil {
 			t.Fatal("original typed MTU source could not be restored", err)

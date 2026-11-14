@@ -45,6 +45,7 @@ type desktopMacOSNodeChainHost struct {
 	launch                                                             *desktopNodeLaunch
 	policy                                                             *mobilemultihop.DesktopNodeChainPolicy
 	socksPolicy                                                        *mobilemultihop.DesktopNodeChainSOCKSPolicy
+	connectPolicy                                                      *mobilemultihop.DesktopNodeChainCONNECTPolicy
 	selection                                                          desktopMacOSNodeChainSelection
 	operation                                                          context.Context
 	gate                                                               chan struct{}
@@ -123,7 +124,7 @@ func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Co
 	launch.chain.capture = owner
 	meta := launch.chain.policyMetadata()
 	runtime := &desktopNodeChainPlatformRuntime{capture: owner}
-	h := &desktopMacOSNodeChainHost{parent: capture.parent, runtime: runtime, launch: launch, policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy,
+	h := &desktopMacOSNodeChainHost{parent: capture.parent, runtime: runtime, launch: launch, policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy, connectPolicy: launch.chain.connectPolicy,
 		operation: operation, gate: make(chan struct{}, 1), baselineRun: runDesktopMacOSNodeChainBaseline,
 		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
 			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
@@ -166,7 +167,7 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 	if h == nil || h.parent == nil || h.parent.session == nil || h.runtime == nil || h.runtime.host != h ||
 		h.runtime.capture == nil || h.runtime.capture.platform == nil || h.runtime.capture.platform.parent != h.parent ||
 		h.launch == nil || h.launch.chain == nil || h.launch.chain.platform != h.runtime ||
-		h.launch.chain.capture != h.runtime.capture || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy ||
+		h.launch.chain.capture != h.runtime.capture || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy || h.launch.chain.connectPolicy != h.connectPolicy ||
 		h.launch.ownedNode != nil || h.operation == nil || h.baselineRun == nil || h.retiring || h.closed ||
 		h.launch.root != macOSOwnedControllerRoot {
 		return errors.New("macOS ordered host lost its unique original policy and parent")
@@ -815,7 +816,7 @@ func (h *desktopMacOSNodeChainHost) closeCaptured(ctx context.Context, hold bool
 		return nil
 	}
 	if h.parent == nil || h.parent.session == nil || h.runtime == nil || h.runtime.host != h || h.launch == nil ||
-		h.launch.chain == nil || h.launch.chain.platform != h.runtime || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy ||
+		h.launch.chain == nil || h.launch.chain.platform != h.runtime || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy || h.launch.chain.connectPolicy != h.connectPolicy ||
 		h.baselineRun == nil {
 		return errors.New("macOS ordered retirement lost its original typed host")
 	}

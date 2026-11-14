@@ -135,6 +135,9 @@ func desktopNodeChainReadyFixture(t *testing.T, launch *desktopNodeLaunch) (mobi
 	if launch.chain.socksPolicy != nil {
 		record.Kind = "routervpn-node-chain-socks-ready-v1"
 	}
+	if launch.chain.connectPolicy != nil {
+		record.Kind = "routervpn-node-chain-connect-ready-v1"
+	}
 	if meta.RestoredMTU != 0 {
 		record.MTU = meta.RestoredMTU
 	}

@@ -80,7 +80,7 @@ func (h *desktopLinuxNodeHost) startWithVerifier(ctx context.Context, journal *d
 	}
 	if h.candidatePrefix != nil {
 		h.transaction, err = newDesktopLinuxCandidatePrefixTransaction(ctx, h, journal, predecessor)
-	} else if h.chain != nil || h.socksChain != nil {
+	} else if h.chain != nil || h.socksChain != nil || h.connectChain != nil {
 		h.transaction, err = newDesktopLinuxNodeChainTransaction(ctx, h, journal, predecessor)
 	} else if h.imported != nil {
 		h.transaction, err = newDesktopLinuxImportedTransaction(ctx, h, journal, predecessor)
@@ -154,7 +154,7 @@ func (h *desktopLinuxNodeHost) publishStarting(ctx context.Context) error {
 			return err
 		}
 	}
-	if h.chain != nil || h.socksChain != nil {
+	if h.chain != nil || h.socksChain != nil || h.connectChain != nil {
 		if err := h.launch.chain.platform.capture.sources.currentLocked(a); err != nil {
 			return err
 		}
@@ -173,7 +173,7 @@ func (h *desktopLinuxNodeHost) publishStarting(ctx context.Context) error {
 	a.state.Mode, a.state.RuntimeMode, a.state.RouterID = h.launch.mode, h.launch.mode, desktopExternalPathProfileID(h.launch)
 	a.state.LogicalMode, a.state.Base = "", ""
 	a.state.DAITA, a.state.Jumbo, a.state.Socks = h.options[0], h.options[1], h.options[2]
-	if h.chain != nil || h.socksChain != nil {
+	if h.chain != nil || h.socksChain != nil || h.connectChain != nil {
 		a.state.Mode, a.state.LogicalMode, a.state.Base = "multihop", "multihop", h.launch.chain.selection.Base
 	}
 	if h.candidatePrefix != nil {
@@ -201,7 +201,7 @@ func (h *desktopLinuxNodeHost) runningLocked(ctx context.Context) error {
 		return err
 	}
 	defer func() { t.gate <- struct{}{} }()
-	if t.process != h.process || t.policy != h.policy || t.external != h.external || t.imported != h.imported || t.chain != h.chain || t.socksChain != h.socksChain || t.candidatePrefix != h.candidatePrefix || t.selection != h.selection || !t.complete || !t.served || !t.admitted ||
+	if t.process != h.process || t.policy != h.policy || t.external != h.external || t.imported != h.imported || t.chain != h.chain || t.socksChain != h.socksChain || t.connectChain != h.connectChain || t.candidatePrefix != h.candidatePrefix || t.selection != h.selection || !t.complete || !t.served || !t.admitted ||
 		!t.nativeCommitted || t.stopRequested.Load() || t.retiring || t.retirement != nil || t.closed || t.retired || t.pending != nil {
 		return errors.New("Linux Node lost its original admitted source and durable transaction")
 	}

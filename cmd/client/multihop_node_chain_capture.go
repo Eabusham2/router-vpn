@@ -31,6 +31,7 @@ type desktopNodeChainCapture struct {
 	input                              string
 	chain                              *mobilemultihop.NodeChain
 	socks                              *desktopNodeChainSOCKSCapture
+	connect                            *desktopNodeChainCONNECTCapture
 	host                               *desktopNodeChainHostCapture
 }
 
@@ -302,6 +303,12 @@ func (capture *desktopNodeChainCapture) profilesCurrent(control common.RouterPro
 }
 
 func (capture *desktopNodeChainCapture) validate(ctx context.Context, control common.RouterProfile, profiles []common.RouterProfile) error {
+	if capture != nil && capture.connect != nil {
+		if capture.chain != nil || capture.socks != nil || capture.connect.original == nil || capture == capture.connect.original || capture.digest() != capture.connect.original.digest() || capture.seal != capture.connect.original.seal {
+			return errors.New("typed CONNECT host inventory changed its original capture")
+		}
+		return capture.connect.validate(ctx, control, profiles)
+	}
 	if capture != nil && capture.socks != nil {
 		if capture.chain != nil || capture.socks.original == nil || capture == capture.socks.original || capture.digest() != capture.socks.original.digest() || capture.seal != capture.socks.original.seal {
 			return errors.New("typed SOCKS host inventory changed its original capture")

@@ -34,6 +34,7 @@ type desktopLinuxNodeHost struct {
 	imported                  *mobilemultihop.DesktopImportedPolicy
 	chain                     *mobilemultihop.DesktopNodeChainPolicy
 	socksChain                *mobilemultihop.DesktopNodeChainSOCKSPolicy
+	connectChain              *mobilemultihop.DesktopNodeChainCONNECTPolicy
 	candidatePrefix           *mobilemultihop.DesktopNodeCandidatePreparationPolicy
 	importedMTU               *desktopImportedMTUOwner
 	importedProjected         bool
@@ -235,7 +236,7 @@ func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
 	if h != nil && h.candidatePrefix != nil {
 		return h.currentCandidatePrefix(ctx)
 	}
-	if h != nil && (h.chain != nil || h.socksChain != nil) {
+	if h != nil && (h.chain != nil || h.socksChain != nil || h.connectChain != nil) {
 		return h.currentNodeChain(ctx)
 	}
 	if h != nil && h.imported != nil {
@@ -356,7 +357,7 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 	if h.candidatePrefix != nil {
 		command = "routervpn-node-candidate-prefix"
 	}
-	if h.chain != nil || h.socksChain != nil {
+	if h.chain != nil || h.socksChain != nil || h.connectChain != nil {
 		command = h.launch.chain.commandName()
 	}
 	if h.external != nil {
@@ -373,7 +374,7 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 	if h.imported != nil && h.imported.Metadata().RestoredMTU != 0 {
 		arguments = append(arguments, "--physical-mtu", strconv.Itoa(h.imported.Metadata().RestoredMTU))
 	}
-	if (h.chain != nil || h.socksChain != nil) && h.launch.chain.policyMetadata().RestoredMTU != 0 {
+	if (h.chain != nil || h.socksChain != nil || h.connectChain != nil) && h.launch.chain.policyMetadata().RestoredMTU != 0 {
 		arguments = append(arguments, "--physical-mtu", strconv.Itoa(h.launch.chain.policyMetadata().RestoredMTU))
 	}
 	if h.candidatePrefix != nil {
@@ -423,7 +424,7 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 			}
 			retireNativeMultihopGraph(h.parent.app, h.launch)
 		}
-		if h.chain != nil || h.socksChain != nil {
+		if h.chain != nil || h.socksChain != nil || h.connectChain != nil {
 			retireNativeMultihopGraph(h.parent.app, h.launch)
 		}
 		if h.external != nil && h.launch != nil {
@@ -438,7 +439,7 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 			clear(h.launch.metadata)
 			h.launch.config, h.launch.metadata = nil, nil
 		}
-		h.source, h.policy, h.external, h.imported, h.chain, h.socksChain, h.candidatePrefix = nil, nil, nil, nil, nil, nil, nil
+		h.source, h.policy, h.external, h.imported, h.chain, h.socksChain, h.connectChain, h.candidatePrefix = nil, nil, nil, nil, nil, nil, nil, nil
 		h.closed = true
 	}
 	if !h.released {

@@ -66,7 +66,7 @@ func startDesktopProtectedJournalProcess(ctx context.Context, a *app, launch *de
 		owned.mu.Unlock()
 		revision, captureName = owned.profileToken, "external-journal-capture.json"
 		current = func(required bool) bool { return owned.current(required) == nil }
-		if attempt == nil || attempt.external != owned.policy || attempt.policy != nil || attempt.imported != nil || attempt.chain != nil || attempt.socksChain != nil || attempt.candidatePrefix != nil {
+		if attempt == nil || attempt.external != owned.policy || attempt.policy != nil || attempt.imported != nil || attempt.chain != nil || attempt.socksChain != nil || attempt.connectChain != nil || attempt.candidatePrefix != nil {
 			return nil, errors.New("native external journal lost its exact policy selection")
 		}
 	} else {

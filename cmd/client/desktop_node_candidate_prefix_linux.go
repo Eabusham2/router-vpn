@@ -103,7 +103,7 @@ func (capture *desktopNodeChainPlatformCapture) prepareCandidatePrefixForPurpose
 
 func (h *desktopLinuxNodeHost) currentCandidatePrefix(ctx context.Context) error {
 	if h == nil || ctx == nil || ctx.Err() != nil || h.closing || h.closed || h.operation == nil || h.parent == nil ||
-		h.candidatePrefix == nil || (h.chain != nil || h.socksChain != nil) || h.policy != nil || h.imported != nil || h.external != nil || h.launch == nil || h.launch.candidatePrefix == nil ||
+		h.candidatePrefix == nil || (h.chain != nil || h.socksChain != nil || h.connectChain != nil) || h.policy != nil || h.imported != nil || h.external != nil || h.launch == nil || h.launch.candidatePrefix == nil ||
 		h.launch.candidatePrefix.policy != h.candidatePrefix || h.launch.candidatePrefix.platform == nil || h.launch.ownedNode != nil {
 		return errors.New("Linux ordered host lost its unique concrete policy")
 	}

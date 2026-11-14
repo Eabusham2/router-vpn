@@ -296,25 +296,36 @@ class NativeShippingAuditTests(unittest.TestCase):
                     self.assert_backend_proof_admission(False)
                     self.assert_speedlab_imported_platform(False)
 
-    def test_typed_policy_sum_retains_both_exact_owners_and_validated_dispatch(self):
+    def test_typed_policy_sum_retains_three_exclusive_owners_and_validated_dispatch(self):
         linux = "cmd/client/desktop_node_chain_linux.go"
         policy = "cmd/client/desktop_node_chain_policy_dispatch.go"
         changes = (
-            (linux, "(h.chain == nil && h.socksChain == nil)", "false"),
+            (linux, "(h.chain == nil && h.socksChain == nil && h.connectChain == nil)", "false"),
             (linux, "!h.launch.chain.hasPolicy()", "false"),
             (linux, "h.launch.chain.policy != h.chain", "false"),
             (linux, "h.launch.chain.socksPolicy != h.socksChain", "false"),
+            (linux, "h.launch.chain.connectPolicy != h.connectChain", "false"),
             (linux, "meta := h.launch.chain.policyMetadata()", "meta := h.chain.Metadata()"),
-            (policy, "return c != nil && (c.policy != nil) != (c.socksPolicy != nil)",
-             "return c != nil && (c.policy != nil || c.socksPolicy != nil)"),
+            (policy, "desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1",
+             "desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) > 0"),
+            (policy, "desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1",
+             "desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, nil) == 1"),
+            (policy, "[]bool{chain != nil, socks != nil, connect != nil}", "[]bool{chain != nil, socks != nil}"),
+            (policy, "if present {", "if true {"),
+            (policy, "return count", "return 1"),
             (policy, "if !c.hasPolicy() {", "if false {"),
             (policy, "config, meta, capture, err := c.socksPolicy.ReadValidated()", "config, meta, capture, err := other.ReadValidated()"),
+            (policy, "config, meta, capture, err := c.connectPolicy.ReadValidated()", "config, meta, capture, err := other.ReadValidated()"),
             (policy, "return c.policy.ReadValidated()", "return other.ReadValidated()"),
             (policy, "_, meta, _, _ := c.readPolicy()", "_, meta, _, _ := other.readPolicy()"),
-            (policy, "original.socks == nil || original.chain != nil", "original.socks == nil"),
+            (policy, "original.socks == nil || original.chain != nil || original.connect != nil", "original.socks == nil || original.chain != nil"),
+            (policy, "original.connect == nil || original.chain != nil || original.socks != nil", "original.connect == nil"),
+            (policy, "original.socks != nil || original.connect != nil || original.chain == nil", "original.socks != nil || original.chain == nil"),
             (policy, "capture.Original != original.socks.source", "false"),
+            (policy, "capture.Original != original.connect.source", "false"),
             (policy, "capture.Original != original.chain", "false"),
             (policy, "capture, err := c.socksPolicy.ReadValidatedLaunch()", "capture, err := other.ReadValidatedLaunch()"),
+            (policy, "capture, err := c.connectPolicy.ReadValidatedLaunch()", "capture, err := other.ReadValidatedLaunch()"),
             (policy, "capture, err := c.policy.ReadValidatedLaunch()", "capture, err := other.ReadValidatedLaunch()"),
         )
         self.assert_backend_proof_admission(True)
@@ -328,8 +339,8 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.assert_backend_proof_admission(False)
                 self.assert_multihop_scores(False)
         self.changes.clear()
-        self.replace(policy, "return c != nil && (c.policy != nil) != (c.socksPolicy != nil)",
-                     "return c != nil && /* exclusive family */ (c.policy != nil) !=\n(c.socksPolicy != nil)")
+        self.replace(policy, "return desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1",
+                     "return desktopNodeChainConcretePolicyCount(c.policy, /* exclusive family */ c.socksPolicy,\nc.connectPolicy) == 1")
         self.assert_backend_proof_admission(True)
         self.assert_multihop_scores(True)
         self.changes.clear()
@@ -341,6 +352,7 @@ class NativeShippingAuditTests(unittest.TestCase):
         route = "cmd/client/multihop_native_routes.go"
         policy = "cmd/client/desktop_node_chain_policy_dispatch.go"
         detector = "cmd/client/multihop_node_chain_socks_selection.go"
+        connect_detector = "cmd/client/multihop_node_chain_connect_selection.go"
         self.assert_multihop_chain(True)
         changes = (
             (route, "|| desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported()", ""),
@@ -349,9 +361,18 @@ class NativeShippingAuditTests(unittest.TestCase):
             (route, "!nativeNodeChainSOCKSPlatformSupported()", "false"),
             (policy, "func nativeNodeChainSOCKSPlatformSupported() bool { return false }",
              "func nativeNodeChainSOCKSPlatformSupported() bool { return true }"),
+            (route, "|| desktopNodeChainHasCONNECT(q.Nodes) && !nativeNodeChainCONNECTPlatformSupported()", ""),
+            (route, "desktopNodeChainHasCONNECT(q.Nodes)", "desktopNodeChainHasCONNECT(other.Nodes)"),
+            (route, "!nativeNodeChainCONNECTPlatformSupported()", "false"),
+            (policy, "func nativeNodeChainCONNECTPlatformSupported() bool { return false }",
+             "func nativeNodeChainCONNECTPlatformSupported() bool { return true }"),
             (detector, "for _, node := range nodes {", "for _, node := range nodes[:1] {"),
             (detector, 'node.Mode == "socks5"', 'node.Mode == "other"'),
             (detector, 'if node.Mode == "socks5" {\n\t\t\treturn true', 'if node.Mode == "socks5" {\n\t\t\treturn false'),
+            (connect_detector, "for _, node := range nodes {", "for _, node := range nodes[:1] {"),
+            (connect_detector, 'node.Mode == "http-connect" || node.Mode == "https-connect"', 'node.Mode == "http-connect"'),
+            (connect_detector, 'node.Mode == "http-connect" || node.Mode == "https-connect"', 'node.Mode == "https-connect"'),
+            (connect_detector, 'if node.Mode == "http-connect" || node.Mode == "https-connect" {\n\t\t\treturn true', 'if node.Mode == "http-connect" || node.Mode == "https-connect" {\n\t\t\treturn false'),
         )
         for path, before, after in changes:
             with self.subTest(path=path, before=before):
@@ -361,7 +382,9 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.assert_multihop_chain(False)
         for path, declaration in (
             (policy, "func nativeNodeChainSOCKSPlatformSupported() bool { return false }"),
+            (policy, "func nativeNodeChainCONNECTPlatformSupported() bool { return false }"),
             (detector, "func desktopNodeChainHasSOCKS(nodes []common.MultihopNodeSelection) bool { return false }"),
+            (connect_detector, "func desktopNodeChainHasCONNECT(nodes []common.MultihopNodeSelection) bool { return false }"),
         ):
             with self.subTest(duplicate=path):
                 self.changes.clear()
@@ -388,7 +411,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("a.beginConnectionOperationContext(r.Context())", "a.beginConnectionOperationContext(context.Background())"),
             ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "decodeMultihopConnectRequest(r.Body)"),
             ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "decodeUncapturedRequest(http.MaxBytesReader(w, r.Body, 16<<10))"),
-            ("if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported()) {", "if false {"),
+            ("if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(q.Nodes) && !nativeNodeChainCONNECTPlatformSupported()) {", "if false {"),
             ("a.mu.Lock()\n\tsel, err := a.resolveNativeMultihopRequestLocked(q)\n\ta.mu.Unlock()", "sel, err := a.resolveNativeMultihopRequestLocked(q)"),
             ("a.resolveNativeMultihopRequestLocked(q)", "a.resolveNativeMultihopRequestLocked(other)"),
             ("errors.Is(err, errDesktopProfileSelectionChanged)", "false"),

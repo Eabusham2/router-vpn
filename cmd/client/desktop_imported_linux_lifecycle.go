@@ -251,16 +251,16 @@ func (owner *desktopLinuxImportedConnection) Restore(ctx context.Context) error 
 
 func (h *desktopLinuxNodeHost) readyPolicy() (mobilemultihop.DesktopPhysicalPolicy, error) {
 	if h != nil && h.candidatePrefix != nil {
-		if (h.chain != nil || h.socksChain != nil) || h.policy != nil || h.imported != nil || h.external != nil {
+		if (h.chain != nil || h.socksChain != nil || h.connectChain != nil) || h.policy != nil || h.imported != nil || h.external != nil {
 			return nil, errors.New("Linux prefix readback mixed native policy families")
 		}
 		return h.candidatePrefix, h.candidatePrefix.Validate()
 	}
-	if h != nil && (h.chain != nil || h.socksChain != nil) {
+	if h != nil && (h.chain != nil || h.socksChain != nil || h.connectChain != nil) {
 		if h.policy != nil || h.imported != nil || h.external != nil {
 			return nil, errors.New("Linux ordered readiness mixed native policy families")
 		}
-		if h.launch == nil || h.launch.chain == nil || h.launch.chain.policy != h.chain || h.launch.chain.socksPolicy != h.socksChain {
+		if h.launch == nil || h.launch.chain == nil || h.launch.chain.policy != h.chain || h.launch.chain.socksPolicy != h.socksChain || h.launch.chain.connectPolicy != h.connectChain {
 			return nil, errors.New("Linux ordered readiness replaced its original concrete policy")
 		}
 		return h.launch.chain.physicalPolicy()

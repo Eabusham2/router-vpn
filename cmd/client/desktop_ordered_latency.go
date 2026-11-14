@@ -84,13 +84,13 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 		return identity, view, errors.New("ordered fifty requires the selected retained typed connection")
 	}
 	chain := identity.Ordered.launch.chain
-	if chain.socksPolicy == nil || chain.policy != nil || !chain.originalPolicyCurrent() || len(chain.selection.Nodes) != 3 {
-		return identity, view, errors.New("ordered fifty requires the original SOCKS middle source")
+	if !chain.hasPolicy() || chain.policy != nil || !chain.originalPolicyCurrent() || len(chain.selection.Nodes) != 3 {
+		return identity, view, errors.New("ordered fifty requires the original typed proxy middle source")
 	}
 	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		return identity, view, err
 	}
-	_, meta, _, err := chain.socksPolicy.ReadValidated()
+	_, meta, _, err := chain.readPolicy()
 	if err != nil {
 		return identity, view, err
 	}

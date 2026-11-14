@@ -61,7 +61,7 @@ func captureNativeSOCKSNodeChainSelection(ctx context.Context, root string, sele
 
 func (capture *nativeMultihopCapture) validateSOCKSNodeChainSelection(selection multihopSelection) error {
 	bad := errors.New("typed SOCKS parent lost its original source or complete selection")
-	if capture == nil || capture.chain == nil || capture.chain.socks == nil || capture.chain.chain != nil ||
+	if capture == nil || capture.chain == nil || capture.chain.socks == nil || capture.chain.chain != nil || capture.chain.connect != nil ||
 		capture.imported || capture.importedHost != nil || capture.importedPlatform != nil || capture.openVPN != nil ||
 		capture.importedInput != "" || capture.importedOriginalSource != "" || selection.Native != capture || len(selection.Nodes) != 3 ||
 		selection.Control.ID != selection.Exit.ID || selection.serverPacketPublic != "" || selection.serverPQIdentity != "" {

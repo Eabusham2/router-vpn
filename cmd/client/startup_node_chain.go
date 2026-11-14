@@ -140,7 +140,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		}
 		return nil
 	}
-	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2 && capture.Schema != 3) || capture.Execution != "local" || selection.External != nil ||
+	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4) || capture.Execution != "local" || selection.External != nil ||
 		!desktopNodeChainFinalSupported(selection.RuntimeMode, "off") || capture.Schema >= 2 && selection.RuntimeMode != "shadowsocks" || selection.LogicalMode != "multihop" || selection.UpdatedAt.IsZero() ||
 		!savedNodeChainDigest(capture.RootSHA256) || len(capture.Nodes) < 2 || len(capture.Nodes) > common.MultihopMaximumNodes {
 		return bad
@@ -150,7 +150,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	for i, member := range capture.Nodes {
 		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
 		if member.NodeKind == "external" {
-			if (capture.Schema != 2 && capture.Schema != 3) || len(capture.Nodes) != 3 || i != 1 || (capture.Schema == 2 && member.Mode != "shadowsocks" || capture.Schema == 3 && member.Mode != "socks5") || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-"+member.Mode || !savedNodeChainDigest(member.Sources[0].SHA256) {
+			if (capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4) || len(capture.Nodes) != 3 || i != 1 || (capture.Schema == 2 && member.Mode != "shadowsocks" || capture.Schema == 3 && member.Mode != "socks5" || capture.Schema == 4 && member.Mode != "http-connect" && member.Mode != "https-connect") || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-"+member.Mode || !savedNodeChainDigest(member.Sources[0].SHA256) {
 				return bad
 			}
 			continue
@@ -237,7 +237,7 @@ func captureStartupNodeChain(a *app, profile common.RouterProfile, profiles []co
 		}
 		execution = last.NodeChain.Execution
 	}
-	if desktopNodeChainHasSOCKS(refs) && !nativeNodeChainSOCKSPlatformSupported() {
+	if desktopNodeChainHasSOCKS(refs) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(refs) && !nativeNodeChainCONNECTPlatformSupported() {
 		return nil, errors.New("typed ordered startup awaits installed native platform acceptance")
 	}
 	selection, err := resolveDesktopNodeChainSelection(profile, profiles, refs, execution)
@@ -275,6 +275,9 @@ func (capture *startupNodeChainCapture) receipt() *startupNodeChainSelection {
 			result.Schema = 2
 			if member.Mode == "socks5" {
 				result.Schema = 3
+			}
+			if member.Mode == "http-connect" || member.Mode == "https-connect" {
+				result.Schema = 4
 			}
 		}
 		for _, source := range capture.assets {
@@ -386,7 +389,7 @@ func (a *app) nodeChainStartupDriver(ctx context.Context, capture *startupPolicy
 		return empty, errors.New("ordered startup has no supported original policy or proved Last receipt")
 	}
 	selection := capture.nodeChain.selection
-	if desktopNodeChainSelectionHasSOCKS(selection) && !nativeNodeChainSOCKSPlatformSupported() {
+	if desktopNodeChainSelectionHasSOCKS(selection) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainSelectionHasCONNECT(selection) && !nativeNodeChainCONNECTPlatformSupported() {
 		return empty, errors.New("typed ordered startup awaits installed native platform acceptance")
 	}
 	if err := capture.nodeChainSelectionCurrent(ctx, a, selection); err != nil {
@@ -504,7 +507,7 @@ func (a *app) saveNodeChainStartupSelection(ctx context.Context, launch *desktop
 		return err
 	}
 	capture := &startupNodeChainCapture{root: selection.Native.root, selection: selection, assets: selection.Native.chain.assets}
-	if selection.Native.chain.socks != nil {
+	if selection.Native.chain.socks != nil || selection.Native.chain.connect != nil {
 		// The typed capture's assets contain only original paired files. Last
 		// also retains the original imported credential digest, never secrets.
 		capture.assets = append([]viaEntryAsset(nil), capture.assets...)

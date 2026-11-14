@@ -160,7 +160,7 @@ func (h *desktopLinuxNodeHost) observeLocked(ctx context.Context) error {
 
 func (active *desktopLinuxNodeActivation) matchesExternal(h *desktopLinuxNodeHost) error {
 	if active == nil || h == nil || active.host != h || h.activation != active || active.parent == nil || active.parent != h.parent ||
-		active.operation == nil || active.operation != h.operation || active.policy != nil || h.policy != nil || (active.chain != nil || active.socksChain != nil) || (h.chain != nil || h.socksChain != nil) ||
+		active.operation == nil || active.operation != h.operation || active.policy != nil || h.policy != nil || (active.chain != nil || active.socksChain != nil || active.connectChain != nil) || (h.chain != nil || h.socksChain != nil || h.connectChain != nil) ||
 		active.external == nil || active.external != h.external || active.external.Validate() != nil ||
 		active.externalProof == nil || active.externalProof != h.externalProof || h.proof != nil || h.ready != nil ||
 		active.process == nil || active.process != h.process || active.transaction == nil || active.transaction != h.transaction ||
@@ -173,7 +173,7 @@ func (active *desktopLinuxNodeActivation) matchesExternal(h *desktopLinuxNodeHos
 		return errors.New("Linux external session lost its original proved activation")
 	}
 	t, p := active.transaction, active.process
-	if t.policy != nil || (t.chain != nil || t.socksChain != nil) || t.external != active.external || t.process != p || !sameDesktopLinuxParentCapture(t.parent, active.parent) ||
+	if t.policy != nil || (t.chain != nil || t.socksChain != nil || t.connectChain != nil) || t.external != active.external || t.process != p || !sameDesktopLinuxParentCapture(t.parent, active.parent) ||
 		!sameDesktopLinuxParentCapture(p.parent, active.parent) || t.selection != active.selection || t.operation != active.operation ||
 		t.profileID != desktopExternalPathProfileID(active.launch) || t.revision != active.revision || t.network != active.network || t.options != active.options ||
 		t.savedOptions != active.savedOptions || p.ctx == nil || p.ctx.Err() != nil || !p.Started() || p.retiring.Load() || p.joined == nil ||

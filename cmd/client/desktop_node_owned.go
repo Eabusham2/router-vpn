@@ -301,6 +301,8 @@ func stageDesktopOwnedNodeInputsContext(ctx context.Context, a *app, launch *des
 	} else if owned.chain != nil {
 		if owned.chain.socksPolicy != nil {
 			attempt, err = slot.beginNodeChainSOCKS(ctx, launch, owned.chain.socksPolicy)
+		} else if owned.chain.connectPolicy != nil {
+			attempt, err = slot.beginNodeChainCONNECT(ctx, launch, owned.chain.connectPolicy)
 		} else {
 			attempt, err = slot.beginNodeChain(ctx, launch, owned.chain.policy)
 		}
@@ -348,6 +350,9 @@ func desktopOwnedNodeArguments(launch *desktopNodeLaunch) ([]string, error) {
 		args[0] = owned.chain.commandName()
 		if owned.chain.socksPolicy != nil {
 			return validateDesktopNodeChainSOCKSProcessArguments(args, launch.directory)
+		}
+		if owned.chain.connectPolicy != nil {
+			return validateDesktopNodeChainCONNECTProcessArguments(args, launch.directory)
 		}
 		return validateDesktopNodeChainProcessArguments(args, launch.directory)
 	}
