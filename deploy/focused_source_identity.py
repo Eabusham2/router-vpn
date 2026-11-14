@@ -25,7 +25,7 @@ REPOSITORY = "Eabusham2/router-vpn"
 WORKFLOW_REF = "refs/heads/main"
 # Encrypted CONNECT acceptance runs only from the already-published validator
 # commit. It does not expand any existing single-parent candidate allowlist.
-PUBLISHED_ONLY_SUITES = frozenset({"connect-run", "connect-native-mtu"})
+PUBLISHED_ONLY_SUITES = frozenset({"connect-run", "connect-native-mtu", "desktop-connect-child"})
 HEX40 = re.compile(r"[0-9a-f]{40}")
 ALLOWLISTS = {
     "socks-preclose": frozenset({

@@ -1,0 +1,108 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/signal"
+	"runtime"
+	"syscall"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/spf13/cobra"
+)
+
+func routerVPNNodeChainCONNECTTransfer(record *mobiletor.DesktopProtectionTransferRecord) (string, error) {
+	if record == nil {
+		return "", routerVPNExternalFailure
+	}
+	return mobiletor.DesktopProtectionTransferRecordSHA256(*record)
+}
+
+func init() { mainCommand.AddCommand(routerVPNNewNodeChainCONNECTCommand()) }
+
+func routerVPNNewNodeChainCONNECTCommand() *cobra.Command {
+	return routerVPNNewNodeChainCONNECTCommandWithRun(routerVPNRunNodeChainCONNECTWithControl)
+}
+
+type routerVPNNodeChainCONNECTCommandRun func(context.Context, string, string, string, string, string, int,
+	routerVPNNodeJournalOptions, routerVPNNodeLinuxParentOptions, string) error
+
+func routerVPNNewNodeChainCONNECTCommandWithRun(run routerVPNNodeChainCONNECTCommandRun) *cobra.Command {
+	var directory, session, config, source, transfer, darwin string
+	var mtu int
+	var journal routerVPNNodeJournalOptions
+	var linuxParent routerVPNNodeLinuxParentOptions
+	command := &cobra.Command{Use: "routervpn-node-chain-connect", Short: "Run one complete captured ordered CONNECT path", Args: cobra.NoArgs, SilenceUsage: true,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if run == nil {
+				return routerVPNExternalFailure
+			}
+			if command.Flags().Changed("darwin-control") && darwin != "inherited-v1" {
+				return routerVPNExternalFailure
+			}
+			if darwin != "" {
+				for _, name := range []string{"physical-transfer-sha256", "physical-mtu", "journal-parent-handle", "journal-parent-image", "journal-pipe", "journal-capture-sha256", "linux-parent-channel", "linux-parent-directory", "linux-parent-capture"} {
+					if command.Flags().Changed(name) {
+						return routerVPNExternalFailure
+					}
+				}
+			}
+			ctx, cancel := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			return run(ctx, directory, session, config, source, transfer, mtu, journal, linuxParent, darwin)
+		}}
+	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private runtime directory")
+	command.Flags().StringVar(&session, "session", "", "captured runtime identity")
+	command.Flags().StringVar(&config, "config-sha256", "", "captured complete configuration digest")
+	command.Flags().StringVar(&source, "physical-source-sha256", "", "captured ordered physical owner identity")
+	command.Flags().StringVar(&transfer, "physical-transfer-sha256", "", "captured private protection predecessor record")
+	command.Flags().IntVar(&mtu, "physical-mtu", 0, "captured live TUN value for sealed restoration")
+	command.Flags().StringVar(&darwin, "darwin-control", "", "original inherited Darwin controller")
+	command.Flags().Uint64Var(&journal.ParentHandle, "journal-parent-handle", 0, "inherited native controller capability")
+	command.Flags().StringVar(&journal.ParentImage, "journal-parent-image", "", "retained native controller image")
+	command.Flags().StringVar(&journal.Pipe, "journal-pipe", "", "native durable transaction rendezvous")
+	command.Flags().StringVar(&journal.CaptureSHA256, "journal-capture-sha256", "", "captured journal comparison digest")
+	command.Flags().IntVar(&linuxParent.ChannelFD, "linux-parent-channel", 0, "inherited original Linux parent channel")
+	command.Flags().IntVar(&linuxParent.DirectoryFD, "linux-parent-directory", 0, "inherited original Linux parent task directory")
+	command.Flags().StringVar(&linuxParent.CaptureSHA256, "linux-parent-capture", "", "captured Linux command identity")
+	return command
+}
+
+// The typed inherited Darwin family has no Windows/Linux predecessor or MTU
+// override. Its original manifest supplies the complete restoration policy.
+func routerVPNRunNodeChainCONNECTWithControl(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, windows routerVPNNodeJournalOptions, linux routerVPNNodeLinuxParentOptions, darwin string) error {
+	if darwin != "" {
+		if darwin != "inherited-v1" || runtime.GOOS != "darwin" || transfer != "" || mtu != 0 ||
+			windows != (routerVPNNodeJournalOptions{}) || linux != (routerVPNNodeLinuxParentOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunDarwinNodeChainCONNECTControlled(parent, directory, session, source, config)
+	}
+	return routerVPNRunNodeChainCONNECTWithParents(parent, directory, session, config, source, transfer, mtu, windows, linux)
+}
+
+// Dispatch does not open private input until the original platform parent has
+// authenticated. Missing or mixed parents never fall back to a node or pair.
+func routerVPNRunNodeChainCONNECTWithParents(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, windows routerVPNNodeJournalOptions, linux routerVPNNodeLinuxParentOptions) (failure error) {
+	if parent == nil || !routerVPNExternalSource.MatchString(source) {
+		return routerVPNExternalFailure
+	}
+	if linux != (routerVPNNodeLinuxParentOptions{}) {
+		if windows != (routerVPNNodeJournalOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunLinuxNodeChainCONNECTControlled(parent, directory, session, config, source, transfer, mtu, linux)
+	}
+	if runtime.GOOS != "windows" {
+		return routerVPNExternalFailure
+	}
+	journal, err := routerVPNNewNodeJournal(parent, source, windows)
+	if err != nil || journal == nil {
+		return routerVPNExternalFailure
+	}
+	defer func() { failure = errors.Join(failure, journal.close()) }()
+	return routerVPNRunNodeMTUTypedFamiliesCaptured(parent, directory, session, config, "", "", "", "", "", "", "", source, transfer, mtu, journal)
+}

@@ -216,6 +216,8 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 	mux.HandleFunc("/api/multihop/connect", func(w http.ResponseWriter, r *http.Request) { macOSNodeChainNativeConnect(a, w, r, driver) })
 	mux.HandleFunc("/api/multihop/status", a.multihopStatus)
 	mux.HandleFunc("/api/multihop/speed-test", a.multihopSpeedTest)
+	mux.HandleFunc("/api/speed-lab/ordered-latency", a.desktopOrderedLatencyMeasurement)
+	mux.HandleFunc("/api/speed-lab/ordered-latency/cancel", a.cancelDesktopOrderedLatencyMeasurement)
 	mux.HandleFunc("/api/disconnect", a.disconnect)
 	mux.HandleFunc("/api/mtu/retest", a.retestMTU)
 	mux.HandleFunc("/api/mtu/status", a.desktopMTUStatus)
@@ -227,7 +229,11 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 		}
 		a.mu.Lock()
 		middle := &a.profiles.Profiles[1]
-		if middle.NodeKind == "external" && middle.External != nil && middle.External.SOCKS5 != nil {
+		if middle.NodeKind == "external" && middle.External != nil && middle.External.HTTPConnect != nil {
+			middle.External.HTTPConnect.Password += "-replaced-after-original-proof"
+		} else if middle.NodeKind == "external" && middle.External != nil && middle.External.HTTPSConnect != nil {
+			middle.External.HTTPSConnect.Password += "-replaced-after-original-proof"
+		} else if middle.NodeKind == "external" && middle.External != nil && middle.External.SOCKS5 != nil {
 			middle.External.SOCKS5.Password += "-replaced-after-original-proof"
 		} else if middle.NodeKind == "external" && middle.External != nil && middle.External.Shadowsocks != nil {
 			middle.External.Shadowsocks.Password = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32)))
@@ -274,7 +280,7 @@ func macOSNodeChainNativeObservation(ctx context.Context, h *desktopMacOSNodeCha
 		return result, err
 	}
 	defer func() { h.gate <- struct{}{} }()
-	if h.launch == nil || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy || h.runtime == nil || h.runtime.host != h || h.process == nil {
+	if h.launch == nil || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy || h.launch.chain.connectPolicy != h.connectPolicy || h.runtime == nil || h.runtime.host != h || h.process == nil {
 		return result, errors.New("native ordered observation lost exact owner")
 	}
 	_, meta, capture, err := h.launch.chain.readPolicy()
@@ -389,6 +395,9 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 	macOSExternalNativeBundle(t)
 	peer := startMacOSNodeChainPeerFinal(t, modes, strings.HasPrefix(scenario, "node-chain-hy2-"))
 	macOSExternalNativeTrust(t, &macOSExternalNativePeer{ca: peer.reply.PublicCA})
+	if peer.middleCONNECT == "https-connect" && action != "tls-trust" {
+		macOSExternalNativeTrust(t, &macOSExternalNativePeer{ca: peer.reply.CONNECTCA})
+	}
 	store := installMacOSNodeChainProfiles(t, peer, action)
 	if err := os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "fixture-node-chain-case"), []byte(scenario+"\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -445,7 +454,7 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		t.Fatal("native request lost original complete inventory", status, err, string(body))
 	}
 	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/connect", string(body))
-	negative := action == "wrong-middle-key" || action == "wrong-middle-public" || action == "wrong-awg-parameters" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure" || action == "final-password" || action == "final-trust" || action == "final-mask"
+	negative := action == "wrong-middle-user" || action == "tls-name" || action == "tls-trust" || action == "wrong-middle-key" || action == "wrong-middle-public" || action == "wrong-awg-parameters" || action == "wrong-middle-proof" || action == "final-dns-failure" || action == "final-node-failure" || action == "final-password" || action == "final-trust" || action == "final-mask"
 	if err != nil || negative && status == http.StatusOK || !negative && status != http.StatusOK {
 		t.Fatal("ordered native Connect reached wrong verdict", status, err, string(raw))
 	}
@@ -455,6 +464,9 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		macOSNodeChainNativeAwaitAuto(t, ctx, client, peer)
 	}
 	live = macOSNodeChainNativeRead(t, ctx, client)
+	if peer.middleCONNECT != "" && (action == "tls-name" || action == "tls-trust") {
+		peer.observe(t, "tls-refused")
+	}
 	stats := peer.observe(t, "stats")
 	macOSNodeChainHysteriaCounters(t, peer, stats, action)
 	if negative {
@@ -467,7 +479,9 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		if peer.middlePassword == "" && (action == "wrong-middle-key" || action == "wrong-awg-parameters") && (stats.Prefixes[1].RawUDP == 0 || stats.Prefixes[1].ProofQueries != 0 || stats.Final.RouterQueries != 0) {
 			t.Fatal("wrong middle cipher bypassed encrypted boundary", stats)
 		}
-		if peer.middlePassword != "" {
+		if peer.middleCONNECT != "" {
+			macOSNodeChainCONNECTNegativeCounters(t, stats, action)
+		} else if peer.middlePassword != "" {
 			macOSNodeChainImportedNegativeCounters(t, stats, action)
 		}
 	} else {
@@ -493,7 +507,7 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 			live = macOSNodeChainNativeRead(t, ctx, client)
 		}
 		performanceCapture = macOSNodeChainNativeMeasurement(t, ctx, client, peer, request, live)
-		if peer.middleSOCKS {
+		if peer.middleSOCKS || peer.middleCONNECT != "" {
 			beforeFifty := peer.observe(t, "stats")
 			receipts, err := desktopOrderedLatencyNativeRoundTrip(ctx, func(call context.Context, method, path string, body []byte) (int, []byte, error) {
 				return macOSExternalNativeHTTP(call, client, method, path, string(body))
@@ -504,6 +518,9 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 			afterFifty := peer.observe(t, "stats")
 			if len(beforeFifty.Prefixes) != 1 || len(afterFifty.Prefixes) != 1 || beforeFifty.Middle == nil || afterFifty.Middle == nil || afterFifty.Prefixes[0].ProofQueries < beforeFifty.Prefixes[0].ProofQueries+50 || afterFifty.Middle.PublicQueries < beforeFifty.Middle.PublicQueries+50 || afterFifty.Final.RouterQueries < beforeFifty.Final.RouterQueries+50 || afterFifty.Final.DirectQueries != 0 {
 				t.Fatal("ordered fifty omitted original encrypted prefix responses", beforeFifty, afterFifty)
+			}
+			if peer.middleCONNECT != "" {
+				t.Log(macOSNodeChainCONNECTFiftyReceipt)
 			}
 		}
 
@@ -577,6 +594,13 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		if stats.Associations == nil || *stats.Associations != 0 {
 			t.Fatal("installed typed child left a remote SOCKS association after joined retirement", stats.Associations)
 		}
+	}
+	if peer.middleCONNECT != "" {
+		macOSControllerNativeAwait(t, func() bool {
+			stats := peer.observe(t, "stats")
+			return stats.OpenCONNECTStreams != nil && *stats.OpenCONNECTStreams == 0
+		}, "installed CONNECT child left an authenticated stream after joined retirement")
+		t.Log(macOSNodeChainCONNECTStreamsReceipt)
 	}
 	if err := connection.CloseWrite(); err != nil {
 		t.Fatal(err)
@@ -675,7 +699,11 @@ func macOSNodeChainNativeMeasurement(t *testing.T, ctx context.Context, client *
 		}
 	}
 	if peer.middlePassword != "" {
-		macOSNodeChainImportedPositiveCounters(t, after)
+		if peer.middleCONNECT != "" {
+			macOSNodeChainCONNECTPositiveCounters(t, after, true)
+		} else {
+			macOSNodeChainImportedPositiveCounters(t, after)
+		}
 		if before.Middle == nil || after.Middle.Method != before.Middle.Method ||
 			after.Middle.DownloadBytes < before.Middle.DownloadBytes+(8<<20) || after.Middle.UploadBytes < before.Middle.UploadBytes+(8<<20) ||
 			after.Middle.PublicQueries < before.Middle.PublicQueries+6 {
@@ -706,6 +734,9 @@ func macOSNodeChainNativeProved(t *testing.T, peer *macOSNodeChainPeer, request 
 	if peer.middleSOCKS && (value.Ready.Kind != "routervpn-node-chain-socks-ready-v1" || value.Baseline.Capture.Family != macosprocess.NodeChainSOCKSFamily) {
 		t.Fatal("typed installed host borrowed ordinary readiness or PF family")
 	}
+	if peer.middleCONNECT != "" && (value.Ready.Kind != "routervpn-node-chain-connect-ready-v1" || value.Baseline.Capture.Family != macosprocess.NodeChainCONNECTFamily) {
+		t.Fatal("installed CONNECT host borrowed ordinary readiness or PF family")
+	}
 	link, err := net.InterfaceByIndex(value.MTU.Index)
 	if err != nil || link.Name != value.MTU.Interface || link.MTU != value.MTU.MTU || link.Flags&net.FlagUp == 0 {
 		t.Fatal("original actual utun readback failed", err, link)
@@ -713,13 +744,17 @@ func macOSNodeChainNativeProved(t *testing.T, peer *macOSNodeChainPeer, request 
 	stats := peer.observe(t, "stats")
 	macOSNodeChainHysteriaCounters(t, peer, stats, "connect")
 	for i, prefix := range stats.Prefixes {
-		if prefix.Mode != request.Nodes[i].Mode || prefix.RawUDP == 0 || prefix.TCP == 0 || prefix.UDP == 0 || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 {
+		if prefix.Mode != request.Nodes[i].Mode || prefix.RawUDP == 0 || prefix.TCP == 0 || (peer.middleCONNECT == "" && prefix.UDP == 0) || (peer.middleCONNECT != "" && prefix.UDP != 0) || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 {
 			t.Fatal("ordered path omitted actual independent authenticated prefix", i, prefix)
 		}
 	}
 	if peer.middlePassword != "" && (len(request.Nodes) != 3 || request.Nodes[1].Mode != peer.observedMiddleProtocol() || stats.Middle == nil ||
-		stats.Middle.Method != peer.observedMiddleMethod() || stats.Middle.RawTCP == 0 || stats.Middle.RawUDP == 0 || stats.Middle.TCP == 0 || stats.Middle.UDP == 0 || stats.Middle.PublicQueries == 0) {
+		stats.Middle.Method != peer.observedMiddleMethod() || stats.Middle.RawTCP == 0 || stats.Middle.TCP == 0 || stats.Middle.PublicQueries == 0 ||
+		(peer.middleCONNECT == "" && (stats.Middle.RawUDP == 0 || stats.Middle.UDP == 0))) {
 		t.Fatal("ordered path omitted actual independent imported cipher or public-path proof", stats.Middle)
+	}
+	if peer.middleCONNECT != "" {
+		macOSNodeChainCONNECTPositiveCounters(t, stats, false)
 	}
 	if stats.Final.RouterQueries == 0 || stats.Final.DNSQueries == 0 || stats.Final.FinalPublicQueries == 0 || peer.hysteriaPassword == "" && (stats.Final.FinalTCP == 0 || stats.Final.FinalUDP == 0) || stats.Final.DirectQueries != 0 {
 		t.Fatal("ordered final did not carry selected DNS/private/public proof", stats)

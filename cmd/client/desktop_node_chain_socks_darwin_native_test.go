@@ -31,12 +31,18 @@ func macOSNodeChainSOCKSCipherCases() []macOSNodeChainCipherCase {
 	}
 }
 func (peer *macOSNodeChainPeer) observedMiddleMethod() string {
+	if peer.middleCONNECT != "" {
+		return peer.middleCONNECT
+	}
 	if peer.middleSOCKS {
 		return "socks5"
 	}
 	return peer.middleMethod
 }
 func (peer *macOSNodeChainPeer) observedMiddleProtocol() string {
+	if peer.middleCONNECT != "" {
+		return peer.middleCONNECT
+	}
 	if peer.middleSOCKS {
 		return "socks5"
 	}

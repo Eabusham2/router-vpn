@@ -22,6 +22,8 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 SUITE = "desktop-socks-child"
+SOURCE_PROJECTION_SCRIPT = "deploy/test_desktop_socks_child_sources.py"
+SOURCE_PROJECTION_CLASS = "DesktopSOCKSChildProjection"
 PACKAGE = {"cmd": "github.com/sagernet/sing-box/cmd/sing-box",
            "box": "github.com/sagernet/sing-box"}
 TARGET = {"cmd": "./cmd/sing-box", "box": "."}
@@ -606,7 +608,7 @@ def require_projection(text, status):
     lines = [line.strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").splitlines() if line.strip()]
     names = []
     for line in lines:
-        match = re.fullmatch(r"(test_[A-Za-z0-9_]+) \((?:__main__\.)?DesktopSOCKSChildProjection\.[A-Za-z0-9_]+\) \.\.\. ok", line)
+        match = re.fullmatch(r"(test_[A-Za-z0-9_]+) \((?:__main__\.)?"+re.escape(SOURCE_PROJECTION_CLASS)+r"\.[A-Za-z0-9_]+\) \.\.\. ok", line)
         if match:
             names.append(match[1])
     summaries = [line for line in lines if re.fullmatch(r"Ran 4 tests in [0-9]+(?:\.[0-9]+)?s", line)]
@@ -739,6 +741,13 @@ class OwnedWorkspace:
         return dict(result, removed=True)
 
 
+def child_command_suites():
+    """Keep the original SOCKS command inventory in its original invocation."""
+    return [dict(name="typed-child", package="cmd",
+                 selector="^("+"|".join(CHILD["command_roots"])+")$",
+                 cases=CHILD["command_cases"], process_seconds=100)]
+
+
 def validate(source, source_sha, output, go="go"):
     if platform.system() != "Linux" or platform.machine() not in ("x86_64", "aarch64", "arm64"):
         raise ValueError("Native Linux child validation host is required")
@@ -783,7 +792,7 @@ def validate(source, source_sha, output, go="go"):
     status, text = run("pinned-go", [go, "env", "GOVERSION"], source, env, 30)
     if status or text.strip() != "go1.26.3":
         raise ValueError("Child validation requires the original pinned compiler")
-    status, text = run("source-projection", [sys.executable, source/"deploy/test_desktop_socks_child_sources.py", "-v"], source, env, 60)
+    status, text = run("source-projection", [sys.executable, source/SOURCE_PROJECTION_SCRIPT, "-v"], source, env, 60)
     require_projection(text, status)
     status, text = run("original-heartbeat", [sys.executable, source/"deploy/test_node_heartbeat_context.py"], source, env, 600)
     require_heartbeat(text, status)
@@ -815,7 +824,7 @@ def validate(source, source_sha, output, go="go"):
                 raise ValueError("Actual original child image failed to compile: "+family)
             images[family], identities[family] = image, image_identity(image)
         suites = [
-            dict(name="typed-child", package="cmd", selector="^("+"|".join(CHILD["command_roots"])+")$", cases=CHILD["command_cases"], process_seconds=100),
+            *child_command_suites(),
             dict(name="typed-box", package="box", selector="^("+"|".join(CHILD["box_roots"])+")$", cases=CHILD["box_cases"], process_seconds=100),
             *REGRESSIONS,
         ]

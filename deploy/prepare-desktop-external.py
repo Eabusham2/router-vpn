@@ -70,7 +70,7 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'node_imported_socks.go.tmpl', 'node_imported_socks_test.go.tmpl', 'node_imported_physical_other.go.tmpl',
                 'node_chain_physical_linux.go.tmpl', 'node_chain_physical_windows.go.tmpl', 'node_chain_physical_other.go.tmpl',
                 'node_chain_physical_darwin.go.tmpl', 'node_chain_physical_darwin_test.go.tmpl',
-                'node_chain_socks_physical_linux.go.tmpl', 'node_chain_socks_physical_windows.go.tmpl', 'node_chain_socks_physical_darwin.go.tmpl', 'node_chain_socks_physical_other.go.tmpl',
+                'node_chain_socks_physical_linux.go.tmpl', 'node_chain_connect_physical_linux.go.tmpl', 'node_chain_socks_physical_windows.go.tmpl', 'node_chain_connect_physical_windows.go.tmpl', 'node_chain_socks_physical_darwin.go.tmpl', 'node_chain_connect_physical_darwin.go.tmpl', 'node_chain_socks_physical_other.go.tmpl', 'node_chain_connect_physical_other.go.tmpl',
                 'node_candidate_prefix_physical_linux.go.tmpl', 'node_candidate_prefix_physical_windows.go.tmpl', 'node_candidate_prefix_physical_other.go.tmpl',
                 'node_candidate_prefix_physical_darwin.go.tmpl', 'node_candidate_prefix_physical_darwin_test.go.tmpl',
                 'node_physical_linux.go.tmpl', 'node_physical_darwin.go.tmpl',
@@ -88,9 +88,13 @@ BOX_TEMPLATES = {
     'node_box_imported.go.tmpl': 'routervpn_desktop_node_box_imported.go',
     'node_chain_box_physical.go.tmpl': 'routervpn_desktop_node_chain_box_physical.go',
     'node_chain_socks_box_physical.go.tmpl': 'routervpn_desktop_node_chain_socks_box_physical.go',
+    'node_chain_connect_box_physical.go.tmpl': 'routervpn_desktop_node_chain_connect_box_physical.go',
     'node_chain_socks_box_physical_test.go.tmpl': 'routervpn_desktop_node_chain_socks_box_physical_test.go',
+    'node_chain_connect_box_physical_test.go.tmpl': 'routervpn_desktop_node_chain_connect_box_physical_test.go',
     'node_chain_socks_box_linux.go.tmpl': 'routervpn_desktop_node_chain_socks_box_linux.go',
+    'node_chain_connect_box_linux.go.tmpl': 'routervpn_desktop_node_chain_connect_box_linux.go',
     'node_chain_socks_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_socks_box_darwin.go',
+    'node_chain_connect_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_connect_box_darwin.go',
     'node_candidate_prefix_box_physical.go.tmpl': 'routervpn_desktop_node_candidate_prefix_box_physical.go',
     'node_candidate_prefix_box_linux.go.tmpl': 'routervpn_desktop_node_candidate_prefix_box_linux.go',
     'node_candidate_prefix_box_darwin.go.tmpl': 'routervpn_desktop_node_candidate_prefix_box_darwin.go',
@@ -188,6 +192,7 @@ PEER_TEMPLATES = {
     'node_chain_socks_middle_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_middle_test.go',
     'node_chain_socks_process_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_process_test.go',
     'node_chain_socks_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_peer_test.go',
+    'node_chain_connect_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_connect_peer_test.go',
     'node_chain_imported_hostname_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_hostname_test.go',
     'node_chain_hysteria_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_hysteria_final_test.go',
     'node_awg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_awg_peer_test.go',
@@ -285,7 +290,13 @@ DARWIN_NODE_CHAIN_PEERS = {
     'node_chain_hysteria_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_hysteria_final_darwin_test.go',
     'node_chain_imported_hostname_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_hostname_darwin_test.go',
     'node_chain_socks_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_socks_peer_darwin_test.go',
+    'node_chain_connect_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_connect_peer_darwin_test.go',
     'node_chain_socks_process_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_socks_process_darwin_test.go',
+}
+
+
+DARWIN_NODE_CHAIN_CONNECT_PEERS = {
+    'mobile/chain/connect_reference_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_connect_reference_darwin_test.go',
 }
 
 
@@ -294,8 +305,9 @@ def darwin_node_chain_peer_copies():
     result = {}
     before = b'//go:build linux && !android\n\npackage routervpnamnezia\n'
     after = b'//go:build darwin && routervpn_darwin_node_chain && routervpn_darwin_external_host\n\npackage routervpnamnezia\n'
-    for name, target in DARWIN_NODE_CHAIN_PEERS.items():
-        source = ROOT/'mobile/desktop'/name
+    sources = [(ROOT/'mobile/desktop'/name, target) for name, target in DARWIN_NODE_CHAIN_PEERS.items()]
+    sources += [(ROOT/name, target) for name, target in DARWIN_NODE_CHAIN_CONNECT_PEERS.items()]
+    for source, target in sources:
         if source.is_symlink() or not source.is_file():
             raise ValueError('Darwin ordered peer lost its original encrypted source')
         raw = source.read_bytes()
@@ -403,9 +415,13 @@ def pt_copies():
                    'node_chain_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n',
                    'node_chain_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
                    'node_chain_socks_physical_linux.go.tmpl': b'//go:build linux\n\n',
+                   'node_chain_connect_physical_linux.go.tmpl': b'//go:build linux\n\n',
                    'node_chain_socks_physical_windows.go.tmpl': b'//go:build windows\n\n',
+                   'node_chain_connect_physical_windows.go.tmpl': b'//go:build windows\n\n',
                    'node_chain_socks_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
+                   'node_chain_connect_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
                    'node_chain_socks_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n',
+                   'node_chain_connect_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n',
                    'node_chain_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
                    'node_candidate_prefix_physical_linux.go.tmpl': b'//go:build linux\n\n',
                    'node_candidate_prefix_physical_windows.go.tmpl': b'//go:build windows\n\n',
@@ -435,7 +451,9 @@ def pt_copies():
                   'node_candidate_prefix_box_darwin.go.tmpl': b'//go:build darwin\n\n',
                   'node_chain_box_darwin.go.tmpl': b'//go:build darwin\n\n',
                   'node_chain_socks_box_linux.go.tmpl': b'//go:build linux\n\n',
+                  'node_chain_connect_box_linux.go.tmpl': b'//go:build linux\n\n',
                   'node_chain_socks_box_darwin.go.tmpl': b'//go:build darwin\n\n',
+                  'node_chain_connect_box_darwin.go.tmpl': b'//go:build darwin\n\n',
                   'node_box_tunnel_control_darwin_test.go.tmpl': b'//go:build darwin\n\n',
                   'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
                   'node_imported_naive_h3_windows_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition && with_purego\n\n',
@@ -908,7 +926,7 @@ def copy_encrypted_peer_templates(vendor):
             prefix = b'//go:build linux && !android && routervpn_openvpn_remote_test\n\n' + prefix
         elif name in ('node_external_hysteria_layer_installed_test.go.tmpl', 'node_external_wireguard_installed_test.go.tmpl', 'node_external_amnezia_installed_test.go.tmpl', 'node_external_openvpn_installed_test.go.tmpl'):
             prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)\n\n' + prefix
-        elif name in ('node_wg_peer_test.go.tmpl', 'node_imported_peer_linux_test.go.tmpl', 'node_chain_peer_linux_test.go.tmpl', 'node_chain_imported_test.go.tmpl', 'node_chain_socks_middle_test.go.tmpl', 'node_chain_socks_peer_test.go.tmpl', 'node_chain_socks_process_test.go.tmpl', 'node_chain_imported_hostname_test.go.tmpl', 'node_chain_hysteria_final_test.go.tmpl', 'node_chain_imported_mtu_test.go.tmpl', 'node_chain_candidates_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_external_ss_entry_linux_test.go.tmpl', 'node_imported_packet_test.go.tmpl', 'node_imported_packet_final_test.go.tmpl', 'node_imported_nested_packet_test.go.tmpl', 'node_imported_socks_packet_test.go.tmpl'):
+        elif name in ('node_wg_peer_test.go.tmpl', 'node_imported_peer_linux_test.go.tmpl', 'node_chain_peer_linux_test.go.tmpl', 'node_chain_imported_test.go.tmpl', 'node_chain_socks_middle_test.go.tmpl', 'node_chain_socks_peer_test.go.tmpl', 'node_chain_connect_peer_test.go.tmpl', 'node_chain_socks_process_test.go.tmpl', 'node_chain_imported_hostname_test.go.tmpl', 'node_chain_hysteria_final_test.go.tmpl', 'node_chain_imported_mtu_test.go.tmpl', 'node_chain_candidates_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_external_ss_entry_linux_test.go.tmpl', 'node_imported_packet_test.go.tmpl', 'node_imported_packet_final_test.go.tmpl', 'node_imported_nested_packet_test.go.tmpl', 'node_imported_socks_packet_test.go.tmpl'):
             prefix = b'//go:build linux && !android\n\n' + prefix
         if path.is_symlink():
             raise ValueError('Desktop encrypted peer test is a symlink: ' + name)

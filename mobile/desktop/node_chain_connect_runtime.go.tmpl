@@ -1,0 +1,357 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type routerVPNDesktopCONNECTProof interface {
+	Run(context.Context, mobilemultihop.NodeChainCONNECTEngine) error
+	HealthyContext(context.Context) error
+	CloseContext(context.Context) error
+	Progress() mobilemultihop.NodeChainProgress
+}
+type routerVPNDesktopCONNECTFactory func(context.Context, *mobilemultihop.NodeChainCONNECTSource, func(context.Context) error) (routerVPNDesktopCONNECTProof, mobilemultihop.NodeChainCONNECTEngine, error)
+
+type routerVPNDesktopCONNECTState struct {
+	lifetime   context.Context
+	cancel     context.CancelFunc
+	done       chan struct{}
+	proof      routerVPNDesktopCONNECTProof
+	engine     mobilemultihop.NodeChainCONNECTEngine
+	identity   mobilemultihop.NodeChainIdentity
+	generation uint64
+	revoked    atomic.Bool
+	ready      atomic.Bool
+	joinMu     sync.Mutex
+	joined     bool
+}
+type routerVPNDesktopCONNECTRuntime struct {
+	ctx                   context.Context
+	files                 *routerVPNExternalFiles
+	construction          *routerVPNDesktopCONNECTConstruction
+	source                *mobilemultihop.NodeChainCONNECTSource
+	transfer              string
+	input                 string
+	meta                  mobilemultihop.DesktopNodeChainCONNECTMetadata
+	ceiling               int
+	instance              *box.Box
+	physical              *box.RouterVPNDesktopNodePhysical
+	factory               routerVPNDesktopCONNECTFactory
+	sourceCurrent         func(context.Context) error
+	state                 atomic.Pointer[routerVPNDesktopCONNECTState]
+	identity              atomic.Pointer[mobilemultihop.NodeChainIdentity]
+	generation            atomic.Uint64
+	retired               atomic.Bool
+	closed                atomic.Bool
+	activity              atomic.Pointer[routerVPNDesktopCONNECTActivity]
+	mtu                   atomic.Pointer[routerVPNDesktopCONNECTMTU]
+	measurement           *routerVPNDesktopCONNECTMeasurement
+	measurementGeneration uint64
+	measurementLast       string
+	measurementHold       atomic.Bool
+}
+
+func routerVPNNewDesktopCONNECTRuntime(ctx context.Context, files *routerVPNExternalFiles,
+	construction *routerVPNDesktopCONNECTConstruction, transfer string, instance *box.Box,
+	physical *box.RouterVPNDesktopNodePhysical, current func(context.Context) error) (*routerVPNDesktopCONNECTRuntime, error) {
+	if instance == nil || physical == nil || current == nil || construction == nil {
+		return nil, routerVPNExternalFailure
+	}
+	source := construction.source
+	guard := func(call context.Context) error {
+		if err := current(call); err != nil {
+			return err
+		}
+		return physical.NodeChainCONNECTSourceCurrentContext(call, source)
+	}
+	owner, err := routerVPNNewDesktopCONNECTRuntimeFactory(ctx, files, construction, transfer,
+		func(call context.Context, original *mobilemultihop.NodeChainCONNECTSource, observe func(context.Context) error) (routerVPNDesktopCONNECTProof, mobilemultihop.NodeChainCONNECTEngine, error) {
+			proof, err := mobilemultihop.NewNodeChainCONNECTRuntime(original)
+			if err != nil {
+				return nil, nil, err
+			}
+			engine, err := instance.RouterVPNNewNodeChainCONNECTEngine(call, original, construction.metadata.SessionID, observe)
+			return proof, engine, err
+		}, guard)
+	if owner != nil {
+		owner.instance, owner.physical = instance, physical
+	}
+	return owner, err
+}
+
+// Private component seam only. Production always supplies the original Box,
+// source-bound physical owner and existing authenticated parent observation.
+func routerVPNNewDesktopCONNECTRuntimeFactory(ctx context.Context, files *routerVPNExternalFiles,
+	construction *routerVPNDesktopCONNECTConstruction, transfer string,
+	factory routerVPNDesktopCONNECTFactory, current func(context.Context) error) (*routerVPNDesktopCONNECTRuntime, error) {
+	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || construction == nil || factory == nil || current == nil ||
+		!routerVPNExternalSource.MatchString(transfer) {
+		return nil, routerVPNExternalFailure
+	}
+	if err := construction.current(ctx); err != nil {
+		return nil, err
+	}
+	_, meta, err := construction.source.ReadValidated()
+	if err != nil {
+		return nil, err
+	}
+	input, err := construction.policy.LaunchInput()
+	if err != nil {
+		return nil, err
+	}
+	return &routerVPNDesktopCONNECTRuntime{ctx: ctx, files: files, construction: construction, source: construction.source,
+		transfer: transfer, input: input, meta: construction.metadata, ceiling: meta.MTU.Ceiling, factory: factory, sourceCurrent: current}, nil
+}
+
+func (owner *routerVPNDesktopCONNECTRuntime) sourceIdentity(ctx context.Context) error {
+	if ctx == nil {
+		return routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if owner == nil || owner.ctx == nil || owner.ctx.Err() != nil || owner.construction == nil ||
+		owner.source != owner.construction.source || owner.sourceCurrent == nil {
+		return routerVPNExternalFailure
+	}
+	if err := owner.construction.current(ctx); err != nil {
+		return err
+	}
+	config, meta, err := owner.source.ReadValidated()
+	if err != nil || config != owner.construction.config || meta.SourceSHA256 != owner.meta.OriginalSourceSHA256 ||
+		meta.ConfigSHA256 != owner.meta.ConfigSHA256 {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	return errors.Join(owner.sourceCurrent(ctx), ctx.Err())
+}
+func (owner *routerVPNDesktopCONNECTRuntime) stateCurrent(ctx context.Context, state *routerVPNDesktopCONNECTState) error {
+	if owner == nil || state == nil || owner.retired.Load() || state.revoked.Load() || owner.state.Load() != state ||
+		state.lifetime == nil || state.lifetime.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	return owner.sourceIdentity(ctx)
+}
+func (owner *routerVPNDesktopCONNECTRuntime) newState() *routerVPNDesktopCONNECTState {
+	lifetime, cancel := context.WithCancel(owner.ctx)
+	return &routerVPNDesktopCONNECTState{lifetime: lifetime, cancel: cancel, done: make(chan struct{}), generation: owner.generation.Load() + 1}
+}
+func (owner *routerVPNDesktopCONNECTRuntime) finishProof(ctx context.Context, state *routerVPNDesktopCONNECTState) error {
+	if state.proof == nil || state.engine == nil {
+		return routerVPNExternalFailure
+	}
+	identity, err := state.engine.ObserveChainContext(ctx)
+	original := owner.identity.Load()
+	if err != nil || identity.SessionID != owner.meta.SessionID || identity.SourceSHA256 != owner.meta.OriginalSourceSHA256 ||
+		identity.ConfigSHA256 != owner.meta.ConfigSHA256 || original != nil && identity != *original {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	if err := state.proof.HealthyContext(ctx); err != nil {
+		return err
+	}
+	if err := owner.stateCurrent(ctx, state); err != nil {
+		return err
+	}
+	if state.generation == 0 {
+		return routerVPNExternalFailure
+	}
+	state.identity = identity
+	owner.identity.CompareAndSwap(nil, &identity)
+	owner.generation.Store(state.generation)
+	state.ready.Store(true)
+	return nil
+}
+func (owner *routerVPNDesktopCONNECTRuntime) run(ctx context.Context) (failure error) {
+	if owner == nil || ctx == nil || ctx.Err() != nil || owner.retired.Load() || owner.sourceIdentity(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	state := owner.newState()
+	if !owner.state.CompareAndSwap(nil, state) {
+		state.cancel()
+		return routerVPNExternalFailure
+	}
+	defer close(state.done)
+	defer func() {
+		if failure != nil {
+			state.revoked.Store(true)
+			state.cancel()
+		}
+	}()
+	stopped := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { state.cancel(); close(stopped) })
+	var stopOnce sync.Once
+	stopStartup := func() {
+		stopOnce.Do(func() {
+			if !stop() {
+				<-stopped
+			}
+		})
+	}
+	defer stopStartup()
+	state.proof, state.engine, failure = owner.factory(ctx, owner.source, func(call context.Context) error { return owner.stateCurrent(call, state) })
+	if failure != nil {
+		return failure
+	}
+	if state.proof == nil || state.engine == nil {
+		return routerVPNExternalFailure
+	}
+	if err := state.proof.Run(state.lifetime, state.engine); err != nil {
+		return err
+	}
+	stopStartup()
+	if ctx.Err() != nil {
+		return errors.Join(ctx.Err(), routerVPNExternalFailure)
+	}
+	return owner.finishProof(ctx, state)
+}
+func (owner *routerVPNDesktopCONNECTRuntime) current(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	state := owner.state.Load()
+	if state == nil || !state.ready.Load() || state.generation != owner.generation.Load() ||
+		owner.stateCurrent(ctx, state) != nil {
+		return routerVPNExternalFailure
+	}
+	if err := state.proof.HealthyContext(ctx); err != nil {
+		return err
+	}
+	identity, err := state.engine.ObserveChainContext(ctx)
+	if err != nil || identity != state.identity {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	if owner.physical != nil {
+		if err := owner.physical.CurrentContext(ctx); err != nil {
+			return err
+		}
+	}
+	if owner.state.Load() != state || !state.ready.Load() {
+		return routerVPNExternalFailure
+	}
+	return owner.stateCurrent(ctx, state)
+}
+func (owner *routerVPNDesktopCONNECTRuntime) joinState(ctx context.Context, state *routerVPNDesktopCONNECTState) error {
+	if state == nil {
+		return nil
+	}
+	state.revoked.Store(true)
+	state.ready.Store(false)
+	state.cancel()
+	if ctx == nil {
+		return routerVPNExternalFailure
+	}
+	select {
+	case <-state.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &state.joinMu); err != nil {
+		return err
+	}
+	defer state.joinMu.Unlock()
+	if state.joined {
+		return ctx.Err()
+	}
+	if state.proof != nil {
+		if err := state.proof.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	state.joined = true
+	return ctx.Err()
+}
+func (owner *routerVPNDesktopCONNECTRuntime) close(ctx context.Context) error {
+	if owner == nil {
+		return nil
+	}
+	if ctx == nil {
+		return routerVPNExternalFailure
+	}
+	owner.retired.Store(true)
+	if state := owner.state.Load(); state != nil {
+		state.revoked.Store(true)
+		state.ready.Store(false)
+		state.cancel()
+	}
+	if measurement := owner.measurement; measurement != nil {
+		measurement.cancel()
+		if measurement.latency != nil {
+			if err := measurement.latency.CloseContext(ctx); err != nil {
+				return err
+			}
+		}
+		if err := measurement.service.CloseContext(ctx); err != nil {
+			return err
+		}
+		owner.measurement = nil
+	}
+	if activity := owner.activity.Load(); activity != nil {
+		select {
+		case <-activity.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if mtu := owner.mtu.Load(); mtu != nil {
+		if err := mtu.closeContext(ctx); err != nil {
+			return err
+		}
+	}
+	removed := owner.files.remove("node-chain-connect-ready.json")
+	if err := owner.joinState(ctx, owner.state.Load()); err != nil {
+		return errors.Join(removed, err)
+	}
+	if removed != nil {
+		return removed
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	owner.closed.Store(true)
+	return nil
+}
+func (owner *routerVPNDesktopCONNECTRuntime) loopCurrent(ctx context.Context) error {
+	return owner.current(ctx)
+}
+func (owner *routerVPNDesktopCONNECTRuntime) heartbeat(ctx context.Context, record routerVPNNodeMTURecord) error {
+	if owner == nil {
+		return nil
+	}
+	if err := owner.current(ctx); err != nil {
+		return err
+	}
+	state, mtu := owner.state.Load(), owner.mtu.Load()
+	if state == nil || mtu == nil || mtu.raw == nil || !sameDesktopExecutionMTURecord(record, mtu.raw.record) ||
+		record.MTU < 1280 || record.MTU > owner.ceiling {
+		return routerVPNExternalFailure
+	}
+	if err := mtu.matchesReadback(ctx, state, record); err != nil {
+		return err
+	}
+	_, _, capture, err := owner.construction.policy.ReadValidated()
+	if err != nil {
+		return err
+	}
+	ready := mobilemultihop.DesktopNodeChainCONNECTReadyRecord{Schema: 1, Kind: "routervpn-node-chain-connect-ready-v1",
+		SourceSHA256: owner.meta.SourceSHA256, TransferSHA256: owner.transfer, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256,
+		Identity: state.identity, Generation: state.generation, Reader: record.Reader, InterfaceName: record.Interface,
+		InterfaceIndex: uint32(record.Index), MTU: record.MTU, ObservedAt: time.Now().UnixMilli()}
+	if record.Index < 1 || uint64(record.Index) > uint64(^uint32(0)) || ready.Validate(owner.construction.policy, owner.transfer) != nil ||
+		owner.current(ctx) != nil || owner.state.Load() != state {
+		return routerVPNExternalFailure
+	}
+	if err := owner.files.publish("node-chain-connect-ready.json", ready); err != nil {
+		return err
+	}
+	if owner.current(ctx) != nil || owner.state.Load() != state {
+		return errors.Join(routerVPNExternalFailure, owner.files.remove("node-chain-connect-ready.json"))
+	}
+	return nil
+}

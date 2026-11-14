@@ -1,0 +1,224 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	UOT "github.com/sagernet/sing-box/common/uot"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-tun"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+type nodeCONNECTInstalledRequest struct {
+	desktopNodeChainImportedRequest
+	Protocol string `json:"protocol"`
+}
+
+// Every field describes the original provider. PublicCA belongs to the
+// independent HTTPS public proof; ConnectCA belongs only to the CONNECT proxy.
+// In particular, this TCP-only middle never issues a SOCKS UDP association.
+type nodeCONNECTInstalledReply struct {
+	desktopNodeChainImportedReply
+	ConnectProtocol       string `json:"connect_protocol"`
+	ConnectCA             string `json:"connect_ca"`
+	ConnectServerName     string `json:"connect_server_name"`
+	ConnectAuthRefusals   int64  `json:"connect_auth_refusals"`
+	ConnectTargetRefusals int64  `json:"connect_target_refusals"`
+	ConnectTLSRefusals    int64  `json:"connect_tls_refusals"`
+	OpenConnectStreams    int64  `json:"open_connect_streams"`
+	FinalUoTVersion       int    `json:"final_uot_version"`
+}
+
+type nodeCONNECTInstalledMiddleRouter struct {
+	*nodeCONNECTRunMiddleRouter
+	streams atomic.Int64
+}
+
+func (r *nodeCONNECTInstalledMiddleRouter) RouteConnection(ctx context.Context, c net.Conn, m adapter.InboundContext) error {
+	r.streams.Add(1)
+	defer r.streams.Add(-1)
+	return r.nodeCONNECTRunMiddleRouter.RouteConnection(ctx, c, m)
+}
+
+func (r *nodeCONNECTInstalledMiddleRouter) RouteConnectionEx(ctx context.Context, c net.Conn, m adapter.InboundContext, done N.CloseHandlerFunc) {
+	err := r.RouteConnection(ctx, c, m)
+	if done != nil {
+		done(err)
+	}
+}
+
+// Retain reciprocal EOF ownership for both exact authorized TCP targets.
+// This does not admit another destination or give the imported proxy a UDP
+// owner; all route authorization remains in the original encrypted prefix.
+type nodeCONNECTInstalledPrefix struct {
+	*nodeCONNECTRunPacketHandler
+	first M.Socksaddr
+}
+
+func (h *nodeCONNECTInstalledPrefix) NewConnectionEx(ctx context.Context, c net.Conn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if destination != h.first {
+		h.nodeCONNECTRunPacketHandler.NewConnectionEx(ctx, c, source, destination, done)
+		return
+	}
+	if _, ok := h.rule("tcp", destination); ok {
+		h.tcp.Add(1)
+	}
+	h.desktopReferenceHandler.newReciprocalConnectionEx(ctx, c, source, destination, done)
+}
+
+func nodeCONNECTInstalledPhysical(address, client string) (netip.Addr, netip.Addr, error) {
+	bad := errors.New("installed CONNECT peer lost its exact native physical purpose")
+	if os.Getenv("ROUTERVPN_CONNECT_INSTALLED_REFERENCE") != "1" || os.Getenv("ROUTERVPN_CONNECT_RUN_REFERENCE") != "" || os.Getenv("ROUTERVPN_SOCKS_INSTALLED_REFERENCE") != "" {
+		return netip.Addr{}, netip.Addr{}, bad
+	}
+	if !desktopNodeChainReferenceAddressPair(address, client) {
+		return netip.Addr{}, netip.Addr{}, bad
+	}
+	physical, err := netip.ParseAddr(address)
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, errors.Join(bad, err)
+	}
+	remote, err := netip.ParseAddr(client)
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, errors.Join(bad, err)
+	}
+	return physical, remote, nil
+}
+
+// The installed fixture keeps the caller's complete WG/AWG first member and
+// independent paired final. Only the middle provider is HTTP(S) CONNECT; its
+// Basic credentials, TLS trust and public identity are separately captured.
+func TestRouterVPNDesktopNodeChainCONNECTInstalledReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_CONNECT_INSTALLED_REFERENCE") == "" {
+		t.Skip("isolated inherited installed CONNECT peer only")
+	}
+	if os.Getenv("ROUTERVPN_CONNECT_INSTALLED_REFERENCE") != "1" {
+		t.Fatal("uncaptured installed CONNECT reference")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, (32<<10)+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 32<<10 {
+		t.Fatal("bounded original installed CONNECT request required")
+	}
+	var request nodeCONNECTInstalledRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || desktopNodeChainImportedRequestValid(request.desktopNodeChainImportedRequest) != nil || request.Paired.BenchmarkPort != 45998 ||
+		(request.Protocol != "http-connect" && request.Protocol != "https-connect") {
+		t.Fatal("installed CONNECT reference source changed")
+	}
+	physical, client, err := nodeCONNECTInstalledPhysical(request.Paired.Address, request.Paired.ClientAddress)
+	if err != nil {
+		t.Fatal("installed CONNECT reference lost original physical tuple", err)
+	}
+	t.Cleanup(func() {
+		if !t.Failed() {
+			fmt.Fprintln(os.Stdout, "CONNECT_INSTALLED_PEER_JOINED")
+		}
+	})
+	const control = "10.79.0.1:1080"
+	certificate, proxyCA := desktopNodeChainImportedCertificate(t)
+	serverName := "speed.cloudflare.com"
+	if request.Protocol == "http-connect" {
+		proxyCA, serverName = "", ""
+	}
+	var provider *desktopImportedCONNECTPeer
+	var router *nodeCONNECTInstalledMiddleRouter
+	hooks := &desktopNodeChainImportedPeerHooks{
+		decorate: func(original *desktopNodeWGHandler) tun.Handler {
+			return &nodeCONNECTInstalledPrefix{nodeCONNECTRunPacketHandler: &nodeCONNECTRunPacketHandler{desktopNodeWGHandler: original, control: M.ParseSocksaddr(control)}, first: M.ParseSocksaddr("10.78.0.1:8787")}
+		},
+		middle: func(middle *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			// The original route list is narrowed before any provider starts.
+			// All final packet carriage is inside authenticated SS UoT-v2 TCP.
+			var tcpRoutes []desktopNodeLayerRoute
+			for _, route := range middle.routes {
+				if route.Network == "tcp" {
+					tcpRoutes = append(tcpRoutes, route)
+				}
+			}
+			middle.routes = tcpRoutes
+			router = &nodeCONNECTInstalledMiddleRouter{nodeCONNECTRunMiddleRouter: &nodeCONNECTRunMiddleRouter{server: middle}}
+			middle.streamRouter = router
+			var secured *tls.Certificate
+			if request.Protocol == "https-connect" {
+				secured = &certificate
+			}
+			provider = desktopStartImportedCONNECTPeer(t, middle, "captured-native-user", request.MiddlePassword, secured, func() { t.Error("unowned installed CONNECT cancellation") }, "")
+			return desktopExternalInstalledSSPeer{address: provider.address, close: provider.close}
+		},
+	}
+	peer := desktopNodeChainImportedPeerStartWithHooks(t, request.desktopNodeChainImportedRequest, physical, client, nil, hooks)
+	peer.paired.final.streamRouter = UOT.NewRouter(&desktopImportedCONNECTRouter{server: peer.paired.final}, log.NewNOPFactory().Logger())
+	delete(peer.paired.entry.rules, "tcp/10.79.0.1:8388")
+	delete(peer.paired.entry.rules, "udp/10.79.0.1:8388")
+	peer.paired.entry.rules["tcp/"+control] = desktopReferenceRule{Network: "tcp", Address: "10.79.0.1", Port: 1080, Target: provider.address}
+	t.Cleanup(func() {
+		provider.close()
+		if remaining := router.streams.Load(); remaining != 0 {
+			t.Error("installed CONNECT streams did not join their original provider", remaining)
+		}
+	})
+	respond := func() {
+		original := peer.snapshot()
+		original.Middle.Method = request.Protocol
+		if original.Middle.RawUDP != 0 || original.Middle.UDP != 0 || original.Final.FinalRawUDP != 0 {
+			t.Fatal("installed CONNECT peer acquired unowned raw UDP carriage")
+		}
+		reply := nodeCONNECTInstalledReply{desktopNodeChainImportedReply: original, ConnectProtocol: request.Protocol,
+			ConnectCA: proxyCA, ConnectServerName: serverName, ConnectAuthRefusals: provider.auth.Load(), ConnectTargetRefusals: provider.denied.Load(),
+			ConnectTLSRefusals: provider.tlsRefused.Load(), OpenConnectStreams: router.streams.Load(), FinalUoTVersion: 2}
+		if reply.OpenConnectStreams < 0 || json.NewEncoder(os.Stdout).Encode(reply) != nil {
+			t.Fatal("original installed CONNECT reply pipe failed")
+		}
+	}
+	respond()
+	for {
+		line, err = reader.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > 64 {
+			t.Fatal("original installed CONNECT control pipe failed")
+		}
+		command := strings.TrimSuffix(string(line), "\n")
+		if command == "quit" {
+			return
+		}
+		if command == "tls-refused" {
+			if request.Protocol != "https-connect" {
+				t.Fatal("HTTP installed peer has no TLS refusal authority")
+			}
+			ctx, cancel := context.WithTimeout(peer.middle.ctx, 5*time.Second)
+			err := provider.awaitCertificateRefusal(ctx)
+			cancel()
+			if err != nil {
+				t.Fatal("installed HTTPS peer did not observe the original certificate refusal", err)
+			}
+			respond()
+			continue
+		}
+		if peer.control(command) != nil {
+			t.Fatal("uncaptured installed CONNECT control")
+		}
+		respond()
+	}
+}

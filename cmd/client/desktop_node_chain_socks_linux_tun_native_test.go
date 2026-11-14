@@ -32,12 +32,18 @@ func linuxNodeChainSOCKSCipherCases() []linuxNodeChainCipherCase {
 	}
 }
 func (peer *linuxNodeChainPeer) observedMiddleMethod() string {
+	if peer.middleCONNECT != "" {
+		return peer.middleCONNECT
+	}
 	if peer.middleSOCKS {
 		return "socks5"
 	}
 	return peer.middleMethod
 }
 func (peer *linuxNodeChainPeer) observedMiddleProtocol() string {
+	if peer.middleCONNECT != "" {
+		return peer.middleCONNECT
+	}
 	if peer.middleSOCKS {
 		return "socks5"
 	}
@@ -132,7 +138,11 @@ func TestDesktopLinuxInstalledSOCKSNodeChainFixtureKeepsOriginalSources(t *testi
 // Installed-only admission bridge. All source, operation, staging, proof,
 // publication and retirement remain the shipping retained-host path.
 func linuxNodeChainNativeConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime) {
-	if nativeNodeChainSOCKSPlatformSupported() {
+	linuxNodeChainInstalledConnect(a, w, r, driver, nativeNodeChainSOCKSPlatformSupported())
+}
+
+func linuxNodeChainInstalledConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime, public bool) {
+	if public {
 		a.nativeMultihopConnectOwned(w, r, driver)
 		return
 	}

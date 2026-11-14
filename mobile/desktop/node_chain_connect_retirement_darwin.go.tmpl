@@ -1,0 +1,52 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+)
+
+// The typed family uses the original component/source/TUN join object. Only
+// its final receipt binding differs; no opaque Close is promoted to native DOWN.
+func (control *routerVPNDarwinNodeChainCONNECTControl) finish(ctx context.Context, files *routerVPNExternalFiles) error {
+	if control == nil || control.native == nil || ctx == nil || ctx.Err() != nil ||
+		control.scope.Family != macosprocess.NodeChainCONNECTFamily || !routerVPNExternalSession.MatchString(control.scope.Session) ||
+		!routerVPNExternalSource.MatchString(control.scope.Source) || !routerVPNExternalSource.MatchString(control.scope.Config) {
+		return routerVPNExternalFailure
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return routerVPNExternalFailure
+	}
+	workspaceErr := control.workspace(files)
+	if control.retired.Load() {
+		return workspaceErr
+	}
+	control.retiring.Store(true)
+	var removeErr error
+	if workspaceErr == nil {
+		removeErr = errors.Join(files.remove("node-ready.json"), files.remove("node-chain-connect-ready.json"))
+	}
+	// A refused receipt writer must not suppress retirement of resources
+	// already held by this original native owner.
+	joinErr := control.native.close(ctx)
+	if workspaceErr != nil || removeErr != nil || joinErr != nil {
+		return errors.Join(workspaceErr, removeErr, joinErr)
+	}
+	if ctx.Err() != nil || !control.native.joined {
+		return routerVPNExternalFailure
+	}
+	closed := struct {
+		routerVPNExternalStop
+		Closed bool `json:"closed"`
+	}{routerVPNExternalStop{Schema: 1, Session: control.scope.Session, SourceSHA256: control.scope.Config}, true}
+	if err := files.publish("stopped.json", closed); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	control.retired.Store(true)
+	return nil
+}

@@ -1,0 +1,9 @@
+//go:build windows
+
+package routervpndesktoppt
+
+import "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+
+func (n *NodeNetworkOwner) PrepareNodeChainCONNECTPhysicalPolicy(policy *mobilemultihop.DesktopNodeChainCONNECTPolicy) error {
+	return n.preparePhysicalPolicyWindows(policy)
+}

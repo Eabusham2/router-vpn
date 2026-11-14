@@ -113,11 +113,19 @@ type macOSNodeChainPeerReply struct {
 		ProofQueries     uint64 `json:"proof_queries"`
 		AuthRefusals     uint64 `json:"auth_refusals"`
 	} `json:"prefixes"`
-	Associations *int                               `json:"associations,omitempty"`
-	Middle       *macOSNodeChainImportedCounters    `json:"middle,omitempty"`
-	Final        macOSNodeChainFinalReply           `json:"final"`
-	Benchmark    *macOSNodeChainBenchmarkReply      `json:"benchmark,omitempty"`
-	Hysteria     *macOSNodeChainHysteriaObservation `json:"hysteria,omitempty"`
+	CONNECTProtocol       string                             `json:"connect_protocol,omitempty"`
+	CONNECTCA             string                             `json:"connect_ca,omitempty"`
+	CONNECTServerName     string                             `json:"connect_server_name,omitempty"`
+	CONNECTAuthRefusals   int64                              `json:"connect_auth_refusals,omitempty"`
+	CONNECTTargetRefusals int64                              `json:"connect_target_refusals,omitempty"`
+	CONNECTTLSRefusals    int64                              `json:"connect_tls_refusals,omitempty"`
+	OpenCONNECTStreams    *int64                             `json:"open_connect_streams,omitempty"`
+	FinalUoTVersion       *int                               `json:"final_uot_version,omitempty"`
+	Associations          *int                               `json:"associations,omitempty"`
+	Middle                *macOSNodeChainImportedCounters    `json:"middle,omitempty"`
+	Final                 macOSNodeChainFinalReply           `json:"final"`
+	Benchmark             *macOSNodeChainBenchmarkReply      `json:"benchmark,omitempty"`
+	Hysteria              *macOSNodeChainHysteriaObservation `json:"hysteria,omitempty"`
 }
 
 type macOSNodeChainPeer struct {
@@ -135,6 +143,7 @@ type macOSNodeChainPeer struct {
 	middlePassword   string
 	middleMethod     string
 	middleSOCKS      bool
+	middleCONNECT    string
 	hysteriaPassword string
 	hysteriaMask     string
 	reply            macOSNodeChainPeerReply
@@ -163,7 +172,7 @@ func macOSNodeChainCipherCases() []macOSNodeChainCipherCase {
 }
 func macOSNodeChainScenario(scenario string) ([]string, string, error) {
 	found := false
-	for _, name := range append(append([]string(nil), macOSNodeChainHostCases...), macOSNodeChainSOCKSHostCases...) {
+	for _, name := range append(append(append([]string(nil), macOSNodeChainHostCases...), macOSNodeChainSOCKSHostCases...), macOSNodeChainCONNECTHostCases...) {
 		if scenario == name {
 			found = true
 			break
@@ -175,6 +184,7 @@ func macOSNodeChainScenario(scenario string) ([]string, string, error) {
 	cases := append(macOSNodeChainCipherCases(), macOSNodeChainImportedCipherCases()...)
 	cases = append(cases, macOSNodeChainHysteriaCipherCases()...)
 	cases = append(cases, macOSNodeChainSOCKSCipherCases()...)
+	cases = append(cases, macOSNodeChainCONNECTCipherCases()...)
 	// Longest captured prefixes must win over the original WG-only names.
 	for i := len(cases) - 1; i >= 0; i-- {
 		if action, ok := strings.CutPrefix(scenario, cases[i].prefix); ok {
@@ -282,6 +292,7 @@ func (peer *macOSNodeChainPeer) read(t *testing.T) macOSNodeChainPeerReply {
 		}
 	}
 	macOSNodeChainHysteriaReadback(t, peer, reply)
+	macOSNodeChainCONNECTReadback(t, peer, reply)
 	peer.reply = reply
 	return reply
 }
@@ -362,6 +373,9 @@ func macOSNodeChainInstalledSources(t *testing.T, peer *macOSNodeChainPeer, faul
 		if peer.middleSOCKS {
 			middle = macOSNodeChainSOCKSProfile(t, peer, fault)
 		}
+		if peer.middleCONNECT != "" {
+			middle = macOSNodeChainCONNECTProfile(t, peer, fault)
+		}
 		profiles = append(profiles, middle)
 		nodes = append(nodes, common.MultihopNodeSelection{ID: middle.ID, Mode: middle.External.Protocol})
 	}
@@ -389,6 +403,9 @@ func macOSNodeChainInstalledSources(t *testing.T, peer *macOSNodeChainPeer, faul
 	assets[final.ID] = map[string]map[string][]byte{
 		"wg":          {"wg.conf": []byte(fmt.Sprintf("[Interface]\nAddress=10.79.0.2/32,fd79:79::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", base64.StdEncoding.EncodeToString(peer.finalClient.Bytes()), base64.StdEncoding.EncodeToString(peer.finalServer.PublicKey().Bytes())))},
 		"shadowsocks": {"sing-box.json": graph},
+	}
+	if peer.middleCONNECT != "" {
+		macOSNodeChainCONNECTFinalAssets(t, peer, final, assets[final.ID]["shadowsocks"])
 	}
 	if peer.hysteriaPassword != "" {
 		assets[final.ID] = map[string]map[string][]byte{"wg": assets[final.ID]["wg"], "hysteria2": macOSNodeChainHysteriaAssets(t, peer, fault)}
@@ -420,6 +437,9 @@ func startMacOSNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *
 	}
 	if peer.middleSOCKS {
 		root, child = "TestRouterVPNDesktopNodeChainSOCKSInstalledReferenceProcess", "ROUTERVPN_SOCKS_INSTALLED_REFERENCE=1"
+	}
+	if peer.middleCONNECT != "" {
+		root, child = "TestRouterVPNDesktopNodeChainCONNECTInstalledReferenceProcess", "ROUTERVPN_CONNECT_INSTALLED_REFERENCE=1"
 	}
 	if hysteria {
 		root, child = "TestRouterVPNDesktopNodeChainHysteriaReferenceProcess", "ROUTERVPN_NODE_CHAIN_HYSTERIA_REFERENCE_CHILD=1"
@@ -466,6 +486,12 @@ func startMacOSNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *
 			_ = peer.command.Process.Kill()
 			<-peer.done
 		}
+		if peer.middleCONNECT != "" && peer.failure == nil {
+			remaining, err := io.ReadAll(io.LimitReader(peer.output, 4097))
+			if err != nil || len(remaining) > 4096 || string(remaining) != "CONNECT_INSTALLED_PEER_JOINED\nPASS\n" {
+				t.Error("installed CONNECT peer omitted original joined cleanup receipt", err, string(remaining))
+			}
+		}
 		peer.output.Close()
 	})
 	request := map[string]any{"schema": 1, "address": peer.physical.String(), "client_address": peer.physical.String(), "prefixes": peer.requests,
@@ -474,6 +500,9 @@ func startMacOSNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *
 	var wire any = request
 	if peer.middlePassword != "" {
 		wire = map[string]any{"schema": 1, "paired": request, "middle_method": peer.middleMethod, "middle_password": peer.middlePassword}
+	}
+	if peer.middleCONNECT != "" {
+		wire = map[string]any{"schema": 1, "paired": request, "middle_method": peer.middleMethod, "middle_password": peer.middlePassword, "protocol": peer.middleCONNECT}
 	}
 	if hysteria {
 		wire = map[string]any{"schema": 1, "paired": request, "password": peer.hysteriaPassword, "salamander": peer.hysteriaMask}

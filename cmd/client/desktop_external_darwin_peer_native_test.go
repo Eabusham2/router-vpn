@@ -655,7 +655,7 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 	fingerprint := strings.ToUpper(hex.EncodeToString(digest[:]))
 	// Apple SecurityTool security.c documents -Z as SHA-256 (or SHA-1).
 	// Select only the freshly generated certificate SHA-256, never its name.
-	file := filepath.Join(macOSOwnedControllerRoot, "fixture-external-root.pem")
+	file := filepath.Join(macOSOwnedControllerRoot, "fixture-external-root-"+fingerprint+".pem")
 	if err = os.WriteFile(file, []byte(p.ca), 0600); err != nil {
 		t.Fatal(err)
 	}

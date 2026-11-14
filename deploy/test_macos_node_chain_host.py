@@ -165,6 +165,7 @@ def source_identity(core):
         'routervpn_node_chain_imported_middle_darwin_test.go', 'routervpn_node_chain_hysteria_final_darwin_test.go',
         'routervpn_node_chain_imported_hostname_darwin_test.go',
         'routervpn_node_chain_socks_peer_darwin_test.go', 'routervpn_node_chain_socks_process_darwin_test.go',
+        'routervpn_node_chain_connect_peer_darwin_test.go', 'routervpn_node_chain_connect_reference_darwin_test.go',
     }
     if set(copies) != {'protocol/routervpnamnezia/'+name for name in expected}:
         raise ValueError('Native ordered peer lost an original or typed complete projection')

@@ -60,10 +60,10 @@ WINDOWS_SYSTEM_DLLS = frozenset((
     'userenv.dll', 'winhttp.dll', 'winmm.dll', 'ws2_32.dll',
 ))
 MAX_BUILD_DIAGNOSTIC = 64*1024
-# One composed invocation preserves the original six prefix cases (3000s)
-# and adds the eight full-path cases, their three builds and readbacks (4200s).
+# One composed invocation preserves prefix6 (3000s) and SOCKS8 (4200s),
+# then adds the distinct HTTP/HTTPS CONNECT14 stage (4200s, including builds).
 # The inner compiler, native case, proof and retirement deadlines are unchanged.
-WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT = 3000 + 4200
+WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT = 3000 + 4200 + 4200
 
 
 def run(command, *, cwd=None, env=None, timeout=1800):
@@ -159,6 +159,13 @@ def inputs():
                              ROOT/'deploy/test_windows_socks_node_chain_host.py',
                              ROOT/'deploy/test_windows_socks_node_chain_host_runner.py',
                              ROOT/'deploy/test_windows_socks_release_receipt.py',
+                             ROOT/'deploy/test_windows_connect_node_chain_host.py',
+                             ROOT/'deploy/test_windows_connect_node_chain_host_runner.py',
+                             ROOT/'deploy/test_windows_connect_release_receipt.py',
+                             ROOT/'deploy/windows_connect_node_chain_overlay.py',
+                             ROOT/'deploy/test_desktop_connect_parent.py',
+                             ROOT/'deploy/test_desktop_connect_parent_runner.py',
+                             *sorted((ROOT/'deploy/fixtures/windows-connect-node-chain').glob('*.go')),
                              ROOT/'deploy/windows_socks_node_chain_overlay.py',
                              *sorted((ROOT/'deploy/fixtures/windows-socks-node-chain').glob('*.go')),
                              ROOT/'deploy/windows_candidate_prefix_overlay.py',
@@ -1152,10 +1159,13 @@ def verify_installed_windows_prefix(source, bundle, target, env):
     run([sys.executable, ROOT/'deploy/test_windows_candidate_prefix_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_windows_socks_node_chain_host_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_windows_socks_release_receipt.py'], cwd=ROOT, env=env, timeout=60)
-    # The full-path gate executes the original six closed-prefix cases exactly
-    # once before the eight typed Connect cases. Both native receipts remain
-    # mandatory on fresh and reused bundles before publication.
-    output = run([sys.executable, ROOT/'deploy/test_windows_socks_node_chain_host.py', source, '--bundle', bundle],
+    run([sys.executable, ROOT/'deploy/test_desktop_connect_parent_runner.py'], cwd=ROOT, env=env, timeout=60)
+    run([sys.executable, ROOT/'deploy/test_windows_connect_node_chain_host_runner.py'], cwd=ROOT, env=env, timeout=60)
+    run([sys.executable, ROOT/'deploy/test_windows_connect_release_receipt.py'], cwd=ROOT, env=env, timeout=60)
+    # The composed gate executes original prefix6 and SOCKS8 exactly once,
+    # then proves the distinct authenticated HTTP/HTTPS CONNECT14 carrier.
+    # All three receipts are mandatory for fresh and reused publication.
+    output = run([sys.executable, ROOT/'deploy/test_windows_connect_node_chain_host.py', source, '--bundle', bundle],
                  cwd=ROOT, env=env, timeout=WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT)
     prefix = 'Native Windows selected-prefix acceptance: '
     rows = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
@@ -1178,7 +1188,8 @@ def verify_installed_windows_prefix(source, bundle, target, env):
             receipt.get('original_final_unreachable') is not True or receipt.get('native_down_before_review') is not True or
             set(receipt['scope_sources']) != scope_names or set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
         raise ValueError('Installed Windows prefix lost actual closed purpose, native DOWN or exact image provenance')
-    verify_installed_windows_socks_receipt(output, target, original, digest_before, receipt)
+    socks_receipt = verify_installed_windows_socks_receipt(output, target, original, digest_before, receipt)
+    verify_installed_windows_connect_receipt(output, target, original, digest_before, socks_receipt)
     if reuse(bundle, target, env=env) != original:
         raise ValueError('Installed Windows prefix changed the original completed shipping bundle')
 
@@ -1223,6 +1234,55 @@ def verify_installed_windows_socks_receipt(output, target, original, digest_befo
             parent.get('cases') != parent_cases or not isinstance(parent.get('output_sha256'), str) or
             not re.fullmatch('[0-9a-f]{64}', parent['output_sha256'])):
         raise ValueError('Installed Windows SOCKS lost its distinct complete compiled parent controls')
+    return receipt
+
+
+
+def verify_installed_windows_connect_receipt(output, target, original, digest_before, socks_receipt):
+    prefix = 'Native Windows typed CONNECT full-path acceptance: '
+    rows = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
+    if len(rows) != 1:
+        raise ValueError('Installed Windows CONNECT omitted its unique full-path native receipt')
+    receipt = json.loads(rows[0], object_pairs_hook=unique_object)
+    if not isinstance(receipt, dict):
+        raise ValueError('Installed Windows CONNECT receipt is not an object')
+    mappings = [receipt.get(name) for name in ('sources', 'scope_sources', 'images')]
+    if not all(isinstance(values, dict) and values and all(isinstance(name, str) and name and
+               isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest) for name, digest in values.items()) for values in mappings):
+        raise ValueError('Installed Windows CONNECT omitted its exact source/image hash maps')
+    cases = ['http-wg-connect', 'http-awg-fast-connect', 'http-awg-strong-connect',
+             'https-wg-connect', 'https-awg-fast-connect', 'https-awg-strong-connect',
+             'https-wg-wrong-middle-key', 'http-wg-wrong-middle-public', 'https-wg-tls-name', 'https-wg-tls-trust',
+             'http-wg-final-dns-failure', 'https-wg-final-node-failure', 'https-wg-final-key', 'https-wg-middle-source']
+    if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or
+            receipt.get('target') != target or receipt.get('source_sha256') != original['policy_sha256'] or
+            receipt.get('bundle_sha256') != digest_before or receipt.get('cases') != cases or
+            receipt.get('unmodified_shipping_image') is not False or receipt.get('test_scope') != 'captured-native-child-app-id' or
+            receipt.get('typed_full_path') is not True or receipt.get('positive_application_and_selected_dns_proved') is not True or
+            type(receipt.get('measurement_bytes_per_direction_per_hop')) is not int or receipt.get('measurement_bytes_per_direction_per_hop') != 8 << 20 or
+            type(receipt.get('measurement_hops')) is not int or receipt.get('measurement_hops') != 3 or
+            type(receipt.get('ordered_latency_samples_per_hop')) is not int or receipt.get('ordered_latency_samples_per_hop') != 50 or
+            receipt.get('native_joined') is not True or receipt.get('command_job_joined') is not True or
+            receipt.get('tun_absent_all_outcomes') is not True or type(receipt.get('remote_connect_streams_after_retirement')) is not int or
+            receipt.get('remote_connect_streams_after_retirement') != 0 or receipt.get('public_admission') != 'closed' or
+            receipt.get('final_udp_transport') != 'SS-UoT-v2' or receipt.get('connect_middle_tcp_only') is not True or
+            receipt.get('connect_protocols') != ['http-connect', 'https-connect'] or
+            receipt.get('original_socks_acceptance') != socks_receipt or
+            set(receipt['scope_sources']) != set(socks_receipt['scope_sources']) or
+            set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
+        raise ValueError('Installed Windows CONNECT lost its actual carrier, joined retirement or original prefix/SOCKS evidence')
+    roots = {
+        'TestDesktopCONNECTOwnedParentRetainsStartProofAndJoinedRetirement': ('wg', 'awg2-fast', 'awg2-strong'),
+        'TestDesktopCONNECTProtectionRejectsForeignAndMixedOwners': ('foreign-policy', 'equal-policy', 'ordinary-policy', 'socks-policy', 'all-policies', 'foreign-source', 'foreign-attempt', 'equal-attempt', 'foreign-launch', 'wrong-command'),
+        'TestDesktopCONNECTPhysicalPolicyKeepsConcreteFamily': ('linux', 'windows', 'darwin'),
+    }
+    parent_cases = [name for root, leaves in roots.items() for name in (root, *(root + '/' + leaf for leaf in leaves))]
+    parent = receipt.get('typed_connect_parent_controls')
+    if (not isinstance(parent, dict) or parent.get('scope') != 'compiled-parent-model-and-source-controls' or
+            parent.get('native_kernel_acceptance') is not False or parent.get('target') != 'windows' or
+            parent.get('cases') != parent_cases or not isinstance(parent.get('output_sha256'), str) or
+            not re.fullmatch('[0-9a-f]{64}', parent['output_sha256'])):
+        raise ValueError('Installed Windows CONNECT lost its distinct complete compiled parent controls')
     return receipt
 
 

@@ -38,12 +38,15 @@ func linuxNodeChainImportedCipherCases() []linuxNodeChainCipherCase {
 func linuxNodeChainPeerForModes(t *testing.T, modes []string) *linuxNodeChainPeer {
 	t.Helper()
 	peer := linuxNodeChainPeerKeys(t, len(modes)+1)
-	if len(modes) == 2 && (modes[1] == "shadowsocks" || modes[1] == "socks5") {
+	if len(modes) == 2 && (modes[1] == "shadowsocks" || modes[1] == "socks5" || modes[1] == "http-connect" || modes[1] == "https-connect") {
 		// Keep the original paired first and final keys. The custom middle receives
 		// only its own independent SS2022 PSK, never a synthetic WG/API identity.
 		peer.middlePassword = peer.requests[1].PreSharedKey
 		peer.middleMethod = mobilemultihop.NativeStartLayerMethod
 		peer.middleSOCKS = modes[1] == "socks5"
+		if modes[1] == "http-connect" || modes[1] == "https-connect" {
+			peer.middleCONNECT = modes[1]
+		}
 		peer.requests = peer.requests[:1]
 		peer.clients = peer.clients[:1]
 		linuxNodeChainSetModes(t, peer, modes[:1])

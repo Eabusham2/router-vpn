@@ -14,7 +14,8 @@ jobs:
   host:
     name: Actual installed ordered host, PF, utun and public MTU on ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
-    # Twenty independent 240-second native cases retain their own deadlines.
+    # All67 independent native cases retain their original240-second deadlines.
+    # The original37 and SOCKS8 precede22 actual HTTP(S) CONNECT cases.
     # Preparation, two bounded compiler calls, extraction and joined cleanup
     # have separate budget; no component-only result can satisfy this job.
     timeout-minutes: 120
@@ -40,6 +41,10 @@ jobs:
       - uses: ./.github/actions/go-windows-sockets
       - name: Verify exhaustive cases, native verdicts and exact artifact consumer
         run: python3 deploy/test_macos_node_chain_host_runner.py
+      - name: Preserve original SOCKS ownership and verdict controls
+        run: python3 deploy/test_macos_socks_node_chain_host_runner.py
+      - name: Verify actual CONNECT inventory, trust and stream retirement controls
+        run: python3 deploy/test_macos_connect_node_chain_host_runner.py
       - uses: actions/download-artifact@v4
         with:
           # No run-id, repository, token or wildcard: only this caller run's
@@ -52,11 +57,13 @@ jobs:
         timeout-minutes: 110
         env:
           ROUTERVPN_DARWIN_NODE_CHAIN_HOST_ACCEPTANCE: '1'
+          ROUTERVPN_DARWIN_SOCKS_NODE_CHAIN_HOST_ACCEPTANCE: '1'
+          ROUTERVPN_DARWIN_CONNECT_NODE_CHAIN_HOST_ACCEPTANCE: '1'
           ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
           ROUTERVPN_HOST_RECEIPT: ${{ runner.temp }}/darwin-node-host-${{ matrix.arch }}.json
           CGO_ENABLED: '1'
         run: |
-          python3 deploy/test_macos_node_chain_host.py --bundle "$RUNNER_TEMP/ordered-host-verified" --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_HOST_RECEIPT"
+          python3 deploy/test_macos_connect_node_chain_host.py --bundle "$RUNNER_TEMP/ordered-host-verified" --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_HOST_RECEIPT"
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Darwin-ordered-host-${{ matrix.arch }}-${{ github.sha }}

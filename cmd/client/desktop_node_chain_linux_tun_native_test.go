@@ -75,10 +75,18 @@ type linuxNodeChainPeerReply struct {
 		ProofQueries     uint64 `json:"proof_queries"`
 		AuthRefusals     uint64 `json:"auth_refusals"`
 	} `json:"prefixes"`
-	Final        linuxImportedPeerReply             `json:"final"`
-	Middle       *linuxNodeChainImportedCounters    `json:"middle,omitempty"`
-	Hysteria     *linuxNodeChainHysteriaObservation `json:"hysteria,omitempty"`
-	Associations *int                               `json:"associations,omitempty"`
+	Final                 linuxImportedPeerReply             `json:"final"`
+	Middle                *linuxNodeChainImportedCounters    `json:"middle,omitempty"`
+	Hysteria              *linuxNodeChainHysteriaObservation `json:"hysteria,omitempty"`
+	Associations          *int                               `json:"associations,omitempty"`
+	CONNECTProtocol       string                             `json:"connect_protocol,omitempty"`
+	CONNECTCA             string                             `json:"connect_ca,omitempty"`
+	CONNECTServerName     string                             `json:"connect_server_name,omitempty"`
+	CONNECTAuthRefusals   int64                              `json:"connect_auth_refusals,omitempty"`
+	CONNECTTargetRefusals int64                              `json:"connect_target_refusals,omitempty"`
+	CONNECTTLSRefusals    int64                              `json:"connect_tls_refusals,omitempty"`
+	OpenCONNECTStreams    *int                               `json:"open_connect_streams,omitempty"`
+	FinalUOTVersion       int                                `json:"final_uot_version,omitempty"`
 }
 
 type linuxNodeChainPeer struct {
@@ -86,6 +94,7 @@ type linuxNodeChainPeer struct {
 	reader           *bufio.Reader
 	command          *exec.Cmd
 	done             chan struct{}
+	waitErr          error
 	diagnostic       linuxHostTUNOutput
 	clients          []*ecdh.PrivateKey
 	requests         []linuxNodeChainPrefixRequest
@@ -95,6 +104,7 @@ type linuxNodeChainPeer struct {
 	middlePassword   string
 	middleMethod     string
 	middleSOCKS      bool
+	middleCONNECT    string
 	hysteriaPassword string
 	hysteriaMask     string
 	reply            linuxNodeChainPeerReply
@@ -123,7 +133,7 @@ func linuxNodeChainCipherCases() []linuxNodeChainCipherCase {
 }
 func linuxNodeChainScenario(scenario string) ([]string, string, error) {
 	found := false
-	for _, name := range append(append([]string(nil), linuxNodeChainHostCases...), linuxNodeChainSOCKSHostCases...) {
+	for _, name := range append(append(append([]string(nil), linuxNodeChainHostCases...), linuxNodeChainSOCKSHostCases...), linuxNodeChainCONNECTHostCases...) {
 		if scenario == name {
 			found = true
 			break
@@ -134,6 +144,11 @@ func linuxNodeChainScenario(scenario string) ([]string, string, error) {
 	}
 	if modes, action, ok := linuxNodeChainHysteriaScenario(scenario); ok {
 		return modes, action, nil
+	}
+	for _, item := range linuxNodeChainCONNECTCipherCases() {
+		if action, ok := strings.CutPrefix(scenario, item.prefix); ok {
+			return append([]string(nil), item.modes...), action, nil
+		}
 	}
 	for _, item := range linuxNodeChainSOCKSCipherCases() {
 		if action, ok := strings.CutPrefix(scenario, item.prefix); ok {
@@ -247,6 +262,7 @@ func (peer *linuxNodeChainPeer) read(t *testing.T) linuxNodeChainPeerReply {
 	} else if reply.Middle != nil {
 		t.Fatal("paired peer unexpectedly supplied imported middle authority")
 	}
+	linuxNodeChainCONNECTReadback(t, peer, reply)
 	linuxNodeChainHysteriaReadback(t, peer, reply)
 	peer.reply = reply
 	return reply
@@ -286,6 +302,9 @@ func startLinuxNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *
 	if peer.middleSOCKS {
 		root, child = "TestRouterVPNDesktopNodeChainSOCKSInstalledReferenceProcess", "ROUTERVPN_SOCKS_INSTALLED_REFERENCE=1"
 	}
+	if peer.middleCONNECT != "" {
+		root, child = "TestRouterVPNDesktopNodeChainCONNECTInstalledReferenceProcess", "ROUTERVPN_CONNECT_INSTALLED_REFERENCE=1"
+	}
 	if hysteria {
 		root, child = "TestRouterVPNDesktopNodeChainHysteriaReferenceProcess", "ROUTERVPN_NODE_CHAIN_HYSTERIA_REFERENCE_CHILD=1"
 	}
@@ -306,13 +325,19 @@ func startLinuxNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *
 	}
 	inputRead.Close()
 	outputWrite.Close()
-	go func() { _ = peer.command.Wait(); close(peer.done) }()
+	go func() { peer.waitErr = peer.command.Wait(); close(peer.done) }()
 	t.Cleanup(func() { inputWrite.Close(); cancel(); <-peer.done; outputRead.Close() })
 	request := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": peer.requests,
 		"final_password": peer.password, "final_node_proof_id": linuxNodeChainProofID(peer.finalServer), "final_api_token": "installed-ordered-final-token"}
+	if peer.middleCONNECT != "" {
+		request["benchmark_port"] = 45998
+	}
 	var wire any = request
 	if peer.middlePassword != "" {
 		wire = map[string]any{"schema": 1, "paired": request, "middle_method": peer.middleMethod, "middle_password": peer.middlePassword}
+	}
+	if peer.middleCONNECT != "" {
+		wire = map[string]any{"schema": 1, "paired": request, "middle_method": peer.middleMethod, "middle_password": peer.middlePassword, "protocol": peer.middleCONNECT}
 	}
 	if hysteria {
 		wire = map[string]any{"schema": 1, "paired": request, "password": peer.hysteriaPassword, "salamander": peer.hysteriaMask}
@@ -396,6 +421,9 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, faul
 		if peer.middleSOCKS {
 			middle = linuxNodeChainSOCKSProfile(t, peer, fault)
 		}
+		if peer.middleCONNECT != "" {
+			middle = linuxNodeChainCONNECTProfile(t, peer, fault)
+		}
 		profiles = append(profiles, middle)
 		nodes = append(nodes, common.MultihopNodeSelection{ID: middle.ID, Mode: peer.observedMiddleProtocol()})
 	}
@@ -420,6 +448,9 @@ func linuxNodeChainInstalledSources(t *testing.T, peer *linuxNodeChainPeer, faul
 		"wg":          {"wg.conf": []byte(fmt.Sprintf("[Interface]\nAddress=10.79.0.2/32,fd79:79::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", base64.StdEncoding.EncodeToString(peer.finalClient.Bytes()), base64.StdEncoding.EncodeToString(peer.finalServer.PublicKey().Bytes())))},
 		"shadowsocks": {"sing-box.json": graph},
 	}
+	if peer.middleCONNECT != "" {
+		linuxNodeChainCONNECTFinalAssets(t, peer, final, assets[final.ID]["shadowsocks"])
+	}
 	if peer.hysteriaPassword != "" {
 		assets[final.ID] = map[string]map[string][]byte{"wg": assets[final.ID]["wg"], "hysteria2": linuxNodeChainHysteriaAssets(t, peer, fault)}
 	}
@@ -436,7 +467,11 @@ func installLinuxNodeChainProfiles(t *testing.T, peer *linuxNodeChainPeer, fault
 	if err != nil || os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), raw, 0600) != nil {
 		t.Fatal("ordered saved source unavailable", err)
 	}
-	if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "node-chain-peer-ca.pem"), []byte(peer.reply.PublicCA), 0600); err != nil {
+	trust := peer.reply.PublicCA
+	if peer.middleCONNECT == "https-connect" && fault != "wrong-middle-trust" {
+		trust += "\n" + peer.reply.CONNECTCA
+	}
+	if err := os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "node-chain-peer-ca.pem"), []byte(trust), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for id, modes := range assets {
@@ -492,7 +527,7 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 		linuxHostTUNPreparedCandidateParent(t, installed, scenario, action, modes, peer)
 		return
 	}
-	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure" || action == "final-password" || action == "final-trust" || action == "final-mask"
+	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure" || action == "final-password" || action == "final-trust" || action == "final-mask" || linuxNodeChainCONNECTNegative(action)
 	switch action {
 	case "wrong-middle-public":
 		peer.observe(t, "wrong-middle-public")
@@ -508,6 +543,9 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 		t.Fatal(err)
 	}
 	result := process.readNodeChain(t, scenario)
+	if peer.middleCONNECT == "https-connect" && (action == "wrong-middle-sni" || action == "wrong-middle-trust") {
+		peer.observe(t, "tls-refused")
+	}
 	before := peer.observe(t, "stats")
 	linuxNodeChainHysteriaCounters(t, peer, before, action)
 	if negative {
@@ -520,7 +558,9 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 		if peer.middlePassword == "" && (action == "wrong-middle-key" || action == "wrong-awg-parameters") && (before.Prefixes[1].RawUDP == 0 || before.Prefixes[1].ProofQueries != 0 || before.Final.RouterQueries != 0) {
 			t.Fatal("wrong middle key bypassed its actual encrypted boundary", before)
 		}
-		if peer.middlePassword != "" {
+		if peer.middleCONNECT != "" {
+			linuxNodeChainCONNECTNegativeCounters(t, before, action)
+		} else if peer.middlePassword != "" {
 			linuxNodeChainImportedNegativeCounters(t, before, action)
 		}
 	} else {
@@ -532,14 +572,16 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 			if result.Nodes[i].Mode != modes[i] || prefix.Mode != modes[i] {
 				t.Fatal("installed ordered runtime substituted captured cipher", i)
 			}
-			if prefix.RawUDP == 0 || prefix.TCP == 0 || prefix.UDP == 0 || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 {
+			if prefix.RawUDP == 0 || prefix.TCP == 0 || (peer.middleCONNECT == "" && prefix.UDP == 0) || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 {
 				t.Fatal("ordered path omitted independently encrypted authenticated prefix", i, prefix)
 			}
 		}
-		if peer.middlePassword != "" {
+		if peer.middleCONNECT != "" {
+			linuxNodeChainCONNECTPositiveCounters(t, before)
+		} else if peer.middlePassword != "" {
 			linuxNodeChainImportedPositiveCounters(t, before)
 		}
-		if peer.middleSOCKS {
+		if peer.middleSOCKS || peer.middleCONNECT != "" {
 			if len(result.FiftyReceipts) != 3 || before.Prefixes[0].ProofQueries < 50 || before.Middle == nil || before.Middle.PublicQueries < 50 || before.Final.RouterQueries < 50 || before.Final.DirectQueries != 0 {
 				t.Fatal("installed typed fifty omitted independently routed complete receipts", result, before)
 			}
@@ -579,6 +621,14 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 			t.Fatal("typed installed retirement retained original SOCKS association", after.Associations)
 		}
 		t.Log("verified installed host typed SOCKS association joined:", scenario)
+	}
+	if peer.middleCONNECT != "" {
+		after := peer.observe(t, "stats")
+		if after.OpenCONNECTStreams == nil || *after.OpenCONNECTStreams != 0 {
+			t.Fatal("typed installed retirement retained an original CONNECT stream", after.OpenCONNECTStreams)
+		}
+		linuxNodeChainCONNECTClose(t, peer)
+		t.Log("verified installed host typed CONNECT UoT2 streams joined:", scenario)
 	}
 	t.Log("verified installed host native lifecycle:", scenario)
 	t.Log("verified installed host ordered independent prefixes and final:", scenario)
@@ -655,6 +705,8 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 	request := httptest.NewRequest(http.MethodPost, "/api/multihop/connect", bytes.NewReader(body)).WithContext(ctx)
 	if strings.HasPrefix(scenario, "node-chain-socks-") {
 		linuxNodeChainNativeConnect(a, response, request, driver)
+	} else if strings.HasPrefix(scenario, "node-chain-connect-") {
+		linuxNodeChainInstalledConnect(a, response, request, driver, nativeNodeChainCONNECTPlatformSupported())
 	} else {
 		a.nativeMultihopConnectOwned(response, request, driver)
 	}
@@ -669,14 +721,14 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			failure = errors.Join(failure, session.Retire(cleanup, session.active, false))
 		}
 	}()
-	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure" || action == "final-password" || action == "final-trust" || action == "final-mask"
+	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure" || action == "final-password" || action == "final-trust" || action == "final-mask" || linuxNodeChainCONNECTNegative(action)
 	result := linuxNodeChainHostResult{linuxImportedHostResult: linuxImportedHostResult{Scenario: scenario}}
 	if negative {
 		if response.Code == http.StatusOK || a.state.Connected || a.cmd != nil || constructed == nil || constructed.chain == nil || constructed.chain.platform == nil {
 			return fmt.Errorf("ordered native negative admitted, retained a command or failed before construction: %d %s", response.Code, response.Body.String())
 		}
 		h := constructed.chain.platform.host
-		if h == nil || h.process == nil || h.process.command.ProcessState == nil || !h.closed || !h.released || h.chain != nil || h.socksChain != nil || len(h.source) != 0 {
+		if h == nil || h.process == nil || h.process.command.ProcessState == nil || !h.closed || !h.released || h.chain != nil || h.socksChain != nil || h.connectChain != nil || len(h.source) != 0 {
 			return errors.New("ordered negative did not join its actual original process/source")
 		}
 		select {
@@ -690,7 +742,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			return fmt.Errorf("installed ordered native Connect failed: %d %s", response.Code, response.Body.String())
 		}
 		h := session.active
-		if h == nil || (h.chain == nil) == (h.socksChain == nil) || h.activation == nil || h.ready == nil || h.monitor == nil || h.monitor.Load() == nil || h.Current(ctx) != nil || !a.state.Connected {
+		if h == nil || desktopNodeChainConcretePolicyCount(h.chain, h.socksChain, h.connectChain) != 1 || h.activation == nil || h.ready == nil || h.monitor == nil || h.monitor.Load() == nil || h.Current(ctx) != nil || !a.state.Connected {
 			return errors.New("ordered native Connect lost original activation, proof or monitor")
 		}
 		if _, duplicate := desktopNodeOwners.Load(a); duplicate {
@@ -715,7 +767,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		if err != nil || len(rows) != count {
 			return errors.Join(err, errors.New("installed ordered measurement omitted a captured prefix"))
 		}
-		if h.socksChain != nil {
+		if h.socksChain != nil || h.connectChain != nil {
 			// This is the real shipping observer, not a fabricated tracker snapshot.
 			sessionTrackerFor(a).snapshot(0)
 			mux := http.NewServeMux()
@@ -762,6 +814,10 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			if a.profiles.Profiles[1].NodeKind == "external" {
 				if a.profiles.Profiles[1].External.SOCKS5 != nil {
 					a.profiles.Profiles[1].External.SOCKS5.Password += "-replaced-after-admission"
+				} else if a.profiles.Profiles[1].External.HTTPConnect != nil {
+					a.profiles.Profiles[1].External.HTTPConnect.Password += "-replaced-after-admission"
+				} else if a.profiles.Profiles[1].External.HTTPSConnect != nil {
+					a.profiles.Profiles[1].External.HTTPSConnect.Password += "-replaced-after-admission"
 				} else {
 					a.profiles.Profiles[1].External.Shadowsocks.Password = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32)))
 				}

@@ -1,0 +1,129 @@
+package main
+
+import (
+	"context"
+	"errors"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	ownedCONNECT "github.com/sagernet/sing-box/protocol/routervpnnodeconnect"
+	"github.com/sagernet/sing/service"
+)
+
+// One parsed private policy, original typed source and caller-local registry
+// bind the child before any actual Box components are constructed. The normal
+// include registry and every other child family remain unchanged.
+type routerVPNDesktopCONNECTConstruction struct {
+	policy   *mobilemultihop.DesktopNodeChainCONNECTPolicy
+	source   *mobilemultihop.NodeChainCONNECTSource
+	capture  *ownedCONNECT.Capture
+	registry *outbound.Registry
+	ctx      context.Context
+	config   string
+	metadata mobilemultihop.DesktopNodeChainCONNECTMetadata
+}
+
+func routerVPNNewDesktopCONNECTConstruction(ctx context.Context, policy *mobilemultihop.DesktopNodeChainCONNECTPolicy) (*routerVPNDesktopCONNECTConstruction, error) {
+	if ctx == nil || ctx.Err() != nil || policy == nil {
+		return nil, routerVPNExternalFailure
+	}
+	config, metadata, _, err := policy.ReadValidated()
+	if err != nil {
+		return nil, err
+	}
+	source, err := policy.NativeSource()
+	if err != nil {
+		return nil, err
+	}
+	// ContextWith mutates its Registry. Clone before any override so another
+	// family/Box cannot inherit this private per-position constructor.
+	local := service.ContextWithDefaultRegistry(service.ExtendContext(ctx))
+	capture, err := ownedCONNECT.NewCapture(local, source)
+	if err != nil {
+		return nil, err
+	}
+	registry := include.OutboundRegistry()
+	if err := capture.Register(registry); err != nil {
+		return nil, err
+	}
+	local = capture.Context()
+	local = service.ContextWith[option.OutboundOptionsRegistry](local, registry)
+	local = service.ContextWith[adapter.OutboundRegistry](local, registry)
+	local, err = box.RouterVPNNodeCONNECTContext(local, source, capture)
+	if err != nil {
+		return nil, err
+	}
+	result := &routerVPNDesktopCONNECTConstruction{policy: policy, source: source, capture: capture,
+		registry: registry, ctx: local, config: config, metadata: metadata}
+	if err := result.current(ctx); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *routerVPNDesktopCONNECTConstruction) current(ctx context.Context) error {
+	if ctx == nil {
+		return routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c == nil || c.ctx == nil || c.ctx.Err() != nil || c.policy == nil || c.source == nil || c.capture == nil || c.registry == nil ||
+		service.FromContext[adapter.OutboundRegistry](c.ctx) != c.registry ||
+		service.FromContext[option.OutboundOptionsRegistry](c.ctx) != c.registry {
+		return routerVPNExternalFailure
+	}
+	source, err := c.policy.NativeSource()
+	if err != nil || source != c.source {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	config, metadata, _, err := c.policy.ReadValidated()
+	if err != nil || config != c.config || metadata.SourceSHA256 != c.metadata.SourceSHA256 || metadata.ConfigSHA256 != c.metadata.ConfigSHA256 ||
+		metadata.SessionID != c.metadata.SessionID || metadata.TargetOS != c.metadata.TargetOS {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	if err := c.capture.RequireOriginalContext(c.ctx, c.source); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+// This replay is reached only after the platform's original inherited parent
+// authenticated. It keeps schema-4 files distinct from ordinary chain input.
+func routerVPNDesktopCONNECTPhysicalCapture(ctx context.Context, files *routerVPNExternalFiles, session, config, source, target string, restored int) (*mobilemultihop.DesktopNodeChainCONNECTPolicy, error) {
+	return routerVPNDesktopCONNECTPhysicalManifest(ctx, files, session, config, source, target, &restored)
+}
+
+// Darwin obtains restoration only from the original inherited manifest;
+// Windows/Linux additionally compare the authenticated parent's exact value.
+func routerVPNDesktopCONNECTPhysicalManifest(ctx context.Context, files *routerVPNExternalFiles, session, config, source, target string, restored *int) (*mobilemultihop.DesktopNodeChainCONNECTPolicy, error) {
+	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil ||
+		!routerVPNExternalSession.MatchString(session) || !routerVPNExternalSource.MatchString(config) || !routerVPNExternalSource.MatchString(source) ||
+		(target != "linux" && target != "windows" && target != "darwin") || restored == nil && target != "darwin" {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err := files.read("node-chain-connect-source.json", mobilemultihop.NodeChainInputLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(raw)
+	policy, err := mobilemultihop.ParseDesktopNodeChainCONNECTLaunchInput(string(raw))
+	if err != nil {
+		return nil, err
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(staged)
+	actual, meta, _, err := policy.ReadValidated()
+	if err != nil || string(staged) != actual || meta.SessionID != session || meta.ConfigSHA256 != config || meta.SourceSHA256 != source ||
+		meta.TargetOS != target || restored != nil && meta.RestoredMTU != *restored || ctx.Err() != nil {
+		return nil, errors.Join(err, ctx.Err(), routerVPNExternalFailure)
+	}
+	return policy, nil
+}

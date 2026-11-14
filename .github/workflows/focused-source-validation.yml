@@ -53,6 +53,7 @@ on:
           - desktop-socks-parent
           - desktop-socks-editor
           - desktop-socks-child
+          - desktop-connect-child
           - android-policy-fixtures
           - darwin-socks-child
           - darwin-socks-installed
@@ -92,7 +93,7 @@ jobs:
           for name in ("SOURCE_SHA", "VALIDATOR_SHA"):
               if not re.fullmatch(r"[0-9a-f]{40}", os.environ.get(name, "")):
                   raise SystemExit(name + " must be a complete lowercase Git commit.")
-          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "connect-source", "connect-runtime", "connect-run", "connect-native-mtu", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "socks-preclose", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent", "desktop-socks-editor", "desktop-socks-child", "android-policy-fixtures"):
+          if os.environ.get("SUITE") not in ("ordered-clock", "legacy-clock", "android-tor", "android-prefix-owner", "linux-hy2", "socks-source", "connect-source", "connect-runtime", "connect-run", "connect-native-mtu", "macos-profiles", "socks-runtime", "socks-owner", "socks-mtu", "darwin-hy2", "socks-bridge", "android-socks-host", "socks-run", "ios-socks-host", "socks-native-mtu", "socks-preclose", "android-sdk", "ios-sdk", "windows-source-retirement", "desktop-socks-capture", "desktop-socks-policy", "desktop-socks-parent", "desktop-socks-editor", "desktop-socks-child", "desktop-connect-child", "android-policy-fixtures"):
               raise SystemExit("Unknown focused validation suite.")
           PY
       - name: Check out the trusted validator
@@ -134,6 +135,14 @@ jobs:
           if [[ "$SUITE" == "desktop-socks-child" ]]; then
             python3 validator/deploy/test_validate_desktop_socks_child.py
           fi
+          if [[ "$SUITE" == "desktop-connect-child" ]]; then
+            python3 validator/deploy/test_validate_desktop_socks_child.py
+            python3 validator/deploy/test_validate_desktop_connect_child.py
+            python3 validator/deploy/test_desktop_connect_parent_runner.py
+            python3 validator/deploy/test_macos_connect_node_chain_host_runner.py
+            python3 validator/deploy/test_windows_connect_node_chain_host_runner.py
+            python3 validator/deploy/test_windows_connect_release_receipt.py
+          fi
           if [[ "$SUITE" == "desktop-socks-parent" ]]; then
             python3 validator/deploy/test_focused_desktop_socks_parent_runner.py
           fi
@@ -167,6 +176,8 @@ jobs:
           if [[ "$SUITE" == "connect-run" ]]; then
             python3 validator/deploy/test_focused_socks_bridge_runner.py
             python3 validator/deploy/test_focused_connect_run_runner.py
+            python3 validator/deploy/test_connect_ordered_fifty_native.py
+            python3 validator/deploy/test_connect_reference_lifetime.py
           fi
           if [[ "$SUITE" == "android-socks-host" ]]; then
             python3 validator/deploy/validate-android-socks-host.py --self-test
@@ -231,7 +242,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libandroid-json-java
       - name: Install the Linux encrypted-reference compiler dependencies
-        if: inputs.suite == 'linux-hy2' || inputs.suite == 'socks-owner' || inputs.suite == 'socks-bridge' || inputs.suite == 'socks-run' || inputs.suite == 'connect-run' || inputs.suite == 'socks-native-mtu' || inputs.suite == 'desktop-socks-child'
+        if: inputs.suite == 'linux-hy2' || inputs.suite == 'socks-owner' || inputs.suite == 'socks-bridge' || inputs.suite == 'socks-run' || inputs.suite == 'connect-run' || inputs.suite == 'socks-native-mtu' || inputs.suite == 'desktop-socks-child' || inputs.suite == 'desktop-connect-child'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config
@@ -409,6 +420,13 @@ jobs:
         shell: bash
         run: |
           python3 validator/deploy/validate-desktop-socks-child.py \
+            --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
+            --output "$GITHUB_WORKSPACE/validation-output/tests" --go "$(command -v go)"
+      - name: Compile and exercise typed CONNECT desktop child with original UoT ownership
+        if: inputs.suite == 'desktop-connect-child'
+        shell: bash
+        run: |
+          python3 validator/deploy/validate-desktop-connect-child.py \
             --source "$GITHUB_WORKSPACE/candidate" --source-sha "$SOURCE_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/tests" --go "$(command -v go)"
       - name: Verify typed desktop parent and original ownership

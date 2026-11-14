@@ -40,6 +40,7 @@ func init() {
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxImportedHostCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxNodeChainHostCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxNodeChainSOCKSHostCases...)
+	linuxHostTUNCases = append(linuxHostTUNCases, linuxNodeChainCONNECTHostCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNWireGuardCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNHysteria2Cases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNAmneziaCases...)

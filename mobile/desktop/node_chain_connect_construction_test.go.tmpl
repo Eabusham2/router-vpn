@@ -1,0 +1,291 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+)
+
+func desktopCONNECTCommandPolicy(t *testing.T, target string, restored int) *mobilemultihop.DesktopNodeChainCONNECTPolicy {
+	t.Helper()
+	paired := desktopNodeChainCommandPolicyWithIdentity(t, 3, target, 0, true).OriginalChain()
+	raw, err := paired.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fixture producer only: retain the original constructor fields from the
+	// actual paired helper. The shipping child never strips a supplied receipt.
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(raw), &source) != nil {
+		t.Fatal("original paired source fixture")
+	}
+	var capture map[string]any
+	if json.Unmarshal([]byte(desktopExternalCapture), &capture) != nil {
+		t.Fatal("original imported source fixture")
+	}
+	capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
+	capture["protocol"] = "https-connect"
+	profile := capture["profile"].(map[string]any)
+	external := profile["external"].(map[string]any)
+	proxy := external["socks5"].(map[string]any)
+	delete(external, "socks5")
+	proxy["tls_server_name"] = "original-proxy.example"
+	external["https_connect"], external["protocol"] = proxy, "https-connect"
+	var graph map[string]any
+	if json.Unmarshal([]byte(desktopExternalSource), &graph) != nil {
+		t.Fatal("original transport source fixture")
+	}
+	out := graph["outbounds"].([]any)[0].(map[string]any)
+	delete(out, "version")
+	out["type"] = "http"
+	out["tls"] = map[string]any{"enabled": true, "server_name": "original-proxy.example"}
+	graphBytes, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	selected, err := json.Marshal(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := mobilemultihop.NodeChainImportedCONNECTMemberInput(string(graphBytes), string(selected))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Schema, source.Nodes[1], source.IdentitySources[1] = 4, member, ""
+	var final struct {
+		Mode         string `json:"mode"`
+		Files        string `json:"files"`
+		ProfileJSON  string `json:"profile_json"`
+		Start        string `json:"start"`
+		DNSBootstrap string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[2]), &final) != nil {
+		t.Fatal("original paired final fixture is missing")
+	}
+	var assets map[string]string
+	if json.Unmarshal([]byte(final.Files), &assets) != nil {
+		t.Fatal("original paired final assets are missing")
+	}
+	finalRaw, err := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finalGraph, finalProfile map[string]any
+	if json.Unmarshal(finalRaw, &finalGraph) != nil || json.Unmarshal([]byte(final.ProfileJSON), &finalProfile) != nil {
+		t.Fatal("original paired final source is invalid")
+	}
+	finalOut := finalGraph["outbounds"].([]any)[0].(map[string]any)
+	configHash, keyHash := sha256.Sum256(finalRaw), sha256.Sum256([]byte(finalOut["password"].(string)))
+	declaration, err := json.Marshal(map[string]any{"schema": 1, "node_id": finalProfile["node_proof_id"],
+		"configured_image": nativecomposite.SSServiceImage, "uot_version": 2,
+		"endpoint": finalOut["server"], "port": finalOut["server_port"], "method": finalOut["method"],
+		"source_sha256": hex.EncodeToString(configHash[:]), "key_sha256": hex.EncodeToString(keyHash[:])})
+	if err != nil || nativecomposite.ValidateSSServiceCompanion(finalRaw, declaration, finalProfile["node_proof_id"].(string)) != nil {
+		t.Fatal("original paired final lost its separate UoT-v2 declaration", err)
+	}
+	assets[nativecomposite.SSServiceAsset] = base64.StdEncoding.EncodeToString(declaration)
+	files, err := json.Marshal(assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalNode, err := mobilemultihop.NewNodeProfile(final.Mode, string(files), final.ProfileJSON, final.Start, final.DNSBootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Nodes[2], err = finalNode.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := json.Marshal(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed, err := mobilemultihop.NewNodeChainCONNECTSource(string(canonical))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodeChainCONNECTPolicy(typed, desktopExternalSession, target, restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func TestRouterVPNDesktopCONNECTCommandExactSourceReplay(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		t.Run(target, func(t *testing.T) {
+			policy := desktopCONNECTCommandPolicy(t, target, 1400)
+			input, err := policy.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, meta, physical, err := policy.ReadValidated()
+			if err != nil {
+				t.Fatal(err)
+			}
+			files := desktopImportedCommandFiles(t, map[string]string{"node-chain-connect-source.json": input, "sing-box.json": config})
+			actual, err := routerVPNDesktopCONNECTPhysicalCapture(context.Background(), files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, target, 1400)
+			if err != nil || actual == nil || actual == policy {
+				t.Fatal("typed child did not independently replay original source", err)
+			}
+			again, receipt, captured, err := actual.ReadValidated()
+			if err != nil || again != config || !reflect.DeepEqual(meta, receipt) || !reflect.DeepEqual(physical, captured) {
+				t.Fatal("typed child changed original graph, credentials or physical source", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopCONNECTCommandRefusesChangedCapture(t *testing.T) {
+	for _, fault := range []string{"missing", "ordinary", "raw-source", "unknown", "session", "source", "config", "target", "restore", "graph", "graph-rehash", "cancelled", "nil-caller"} {
+		t.Run(fault, func(t *testing.T) {
+			policy := desktopCONNECTCommandPolicy(t, "linux", 1400)
+			input, err := policy.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			graph, meta, _, err := policy.ReadValidated()
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, config, source, target, restore := meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, "linux", 1400
+			ctx := context.Background()
+			switch fault {
+			case "ordinary":
+				input, _ = desktopNodeChainCommandPolicy(t, 3, "linux", 1400).NodeChain().LaunchInput()
+			case "raw-source":
+				original, _ := policy.OriginalSource()
+				input, _ = original.Source()
+			case "unknown":
+				input = strings.TrimSuffix(input, "}") + `,"foreign":true}`
+			case "session":
+				session = strings.Repeat("b", 32)
+			case "source":
+				source = meta.OriginalSourceSHA256
+			case "config":
+				config = strings.Repeat("a", 64)
+			case "target":
+				target = "windows"
+			case "restore":
+				restore = 0
+			case "graph", "graph-rehash":
+				graph += "\n"
+				if fault == "graph-rehash" {
+					sum := sha256.Sum256([]byte(graph))
+					config = hex.EncodeToString(sum[:])
+				}
+			case "cancelled":
+				cancelled, stop := context.WithCancel(ctx)
+				stop()
+				ctx = cancelled
+			case "nil-caller":
+				ctx = nil
+			}
+			inputs := map[string]string{"node-chain-connect-source.json": input, "sing-box.json": graph}
+			if fault == "missing" {
+				delete(inputs, "node-chain-connect-source.json")
+			}
+			files := desktopImportedCommandFiles(t, inputs)
+			if actual, err := routerVPNDesktopCONNECTPhysicalCapture(ctx, files, session, config, source, target, restore); err == nil || actual != nil {
+				t.Fatal("typed child adopted foreign source, caller or staged graph")
+			}
+		})
+	}
+}
+
+// Match the original command's complete include context. The typed constructor
+// replaces only its private outbound registries; DNS and other option parsers
+// must still come from the original captured command context.
+func desktopCONNECTCommandContext(parent context.Context) context.Context {
+	return box.Context(parent, include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+}
+
+func TestRouterVPNDesktopCONNECTConstructionKeepsLocalRegistry(t *testing.T) {
+	parent := desktopCONNECTCommandContext(context.Background())
+	registry := include.OutboundRegistry()
+	parent = service.ContextWith[adapter.OutboundRegistry](parent, registry)
+	parent = service.ContextWith[option.OutboundOptionsRegistry](parent, registry)
+	policy := desktopCONNECTCommandPolicy(t, "linux", 0)
+	first, err := routerVPNNewDesktopCONNECTConstruction(parent, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := routerVPNNewDesktopCONNECTConstruction(parent, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.registry == registry || first.registry == second.registry || first.capture == second.capture || first.ctx == second.ctx ||
+		service.FromContext[adapter.OutboundRegistry](parent) != registry || service.FromContext[option.OutboundOptionsRegistry](parent) != registry {
+		t.Fatal("typed child constructor changed original parent registry")
+	}
+	for _, captured := range []*routerVPNDesktopCONNECTConstruction{first, second} {
+		if err := captured.current(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := captured.capture.RequireOriginalContext(captured.ctx, captured.source); err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := SJ.UnmarshalExtendedContext[option.Options](captured.ctx, []byte(captured.config))
+		if err != nil || len(parsed.Inbounds) != 1 || parsed.Route == nil || parsed.Route.Final != mobilemultihop.SelectorTag {
+			t.Fatal("typed child lost actual options registry", err)
+		}
+	}
+}
+
+func TestRouterVPNDesktopCONNECTConstructionRejectsReplacement(t *testing.T) {
+	for _, fault := range []string{"source", "policy", "context", "capture", "registry", "config", "receipt", "cancelled", "nil-caller"} {
+		t.Run(fault, func(t *testing.T) {
+			lifetime, cancel := context.WithCancel(desktopCONNECTCommandContext(context.Background()))
+			defer cancel()
+			policy := desktopCONNECTCommandPolicy(t, "linux", 0)
+			owner, err := routerVPNNewDesktopCONNECTConstruction(lifetime, policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := context.Background()
+			switch fault {
+			case "source":
+				other := desktopCONNECTCommandPolicy(t, "linux", 0)
+				owner.source, _ = other.NativeSource()
+			case "policy":
+				owner.policy = desktopCONNECTCommandPolicy(t, "linux", 0)
+			case "context":
+				owner.ctx = lifetime
+			case "capture":
+				other, err := routerVPNNewDesktopCONNECTConstruction(lifetime, policy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				owner.capture = other.capture
+			case "registry":
+				owner.registry = include.OutboundRegistry()
+			case "config":
+				owner.config += "\n"
+			case "receipt":
+				owner.metadata.SourceSHA256 = strings.Repeat("a", 64)
+			case "cancelled":
+				cancel()
+			case "nil-caller":
+				call = nil
+			}
+			if owner.current(call) == nil {
+				t.Fatal("typed child replaced its original private construction")
+			}
+		})
+	}
+}

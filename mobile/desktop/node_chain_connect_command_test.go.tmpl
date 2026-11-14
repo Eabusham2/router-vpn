@@ -1,0 +1,137 @@
+package main
+
+import (
+	"context"
+	"io"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestRouterVPNDesktopNodeChainCONNECTCommandKeepsCapturedArguments(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		t.Run(target, func(t *testing.T) {
+			type callerKey struct{}
+			ctx := context.WithValue(t.Context(), callerKey{}, "original-typed-caller")
+			config, source, transfer := strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)
+			windows, linux := routerVPNNodeJournalOptions{}, routerVPNNodeLinuxParentOptions{}
+			darwin, mtu := "", 1400
+			args := []string{"--runtime-dir=/original-private-workspace", "--session=" + desktopExternalSession, "--config-sha256=" + config, "--physical-source-sha256=" + source}
+			switch target {
+			case "linux":
+				linux = routerVPNNodeLinuxParentOptions{ChannelFD: 3, DirectoryFD: 4, CaptureSHA256: strings.Repeat("e", 64)}
+				args = append(args, "--physical-transfer-sha256="+transfer, "--physical-mtu=1400", "--linux-parent-channel=3", "--linux-parent-directory=4", "--linux-parent-capture="+linux.CaptureSHA256)
+			case "windows":
+				windows = routerVPNNodeJournalOptions{ParentHandle: 9, ParentImage: "original-image", Pipe: "original-pipe", CaptureSHA256: strings.Repeat("e", 64)}
+				args = append(args, "--physical-transfer-sha256="+transfer, "--physical-mtu=1400", "--journal-parent-handle=9", "--journal-parent-image=original-image", "--journal-pipe=original-pipe", "--journal-capture-sha256="+windows.CaptureSHA256)
+			case "darwin":
+				transfer, mtu, darwin = "", 0, "inherited-v1"
+				args = append(args, "--darwin-control=inherited-v1")
+			}
+			calls := 0
+			command := routerVPNNewNodeChainCONNECTCommandWithRun(func(call context.Context, directory, session, gotConfig, gotSource, gotTransfer string, gotMTU int, gotWindows routerVPNNodeJournalOptions, gotLinux routerVPNNodeLinuxParentOptions, gotDarwin string) error {
+				calls++
+				if call.Value(callerKey{}) != "original-typed-caller" || directory != "/original-private-workspace" || session != desktopExternalSession ||
+					gotConfig != config || gotSource != source || gotTransfer != transfer || gotMTU != mtu || gotWindows != windows || gotLinux != linux || gotDarwin != darwin {
+					t.Fatal("typed CLI changed original caller, source or platform capture")
+				}
+				return nil
+			})
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			command.SetArgs(args)
+			if command.Use != "routervpn-node-chain-connect" {
+				t.Fatal("typed CLI borrowed ordinary command family")
+			}
+			if err := command.ExecuteContext(ctx); err != nil || calls != 1 {
+				t.Fatal("captured typed CLI did not dispatch exactly once", err, calls)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTCommandRefusesMixedDarwinFlags(t *testing.T) {
+	for _, flag := range []string{"physical-transfer-sha256", "physical-mtu", "journal-parent-handle", "journal-parent-image", "journal-pipe", "journal-capture-sha256", "linux-parent-channel", "linux-parent-directory", "linux-parent-capture"} {
+		t.Run(flag, func(t *testing.T) {
+			calls := 0
+			command := routerVPNNewNodeChainCONNECTCommandWithRun(func(context.Context, string, string, string, string, string, int, routerVPNNodeJournalOptions, routerVPNNodeLinuxParentOptions, string) error {
+				calls++
+				return nil
+			})
+			value := ""
+			if flag == "physical-mtu" || flag == "journal-parent-handle" || flag == "linux-parent-channel" || flag == "linux-parent-directory" {
+				value = "0"
+			}
+			command.SetArgs([]string{"--darwin-control=inherited-v1", "--" + flag + "=" + value})
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if command.Execute() == nil || calls != 0 {
+				t.Fatal("typed inherited Darwin dispatch accepted explicit foreign platform flag")
+			}
+		})
+	}
+	for _, value := range []string{"", "foreign"} {
+		t.Run("family-"+value, func(t *testing.T) {
+			calls := 0
+			command := routerVPNNewNodeChainCONNECTCommandWithRun(func(context.Context, string, string, string, string, string, int, routerVPNNodeJournalOptions, routerVPNNodeLinuxParentOptions, string) error {
+				calls++
+				return nil
+			})
+			command.SetArgs([]string{"--darwin-control=" + value})
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if command.Execute() == nil || calls != 0 {
+				t.Fatal("typed Darwin dispatch accepted another protocol family")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTCommandRequiresOriginalParent(t *testing.T) {
+	linux := routerVPNNodeLinuxParentOptions{ChannelFD: 3, DirectoryFD: 4, CaptureSHA256: strings.Repeat("a", 64)}
+	for _, windows := range []routerVPNNodeJournalOptions{{ParentHandle: 1}, {ParentImage: "foreign-image"}, {Pipe: "foreign-pipe"}, {CaptureSHA256: strings.Repeat("b", 64)}} {
+		if routerVPNRunNodeChainCONNECTWithParents(context.Background(), "/unopened-private-connect", desktopExternalSession, strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64), 0, windows, linux) == nil {
+			t.Fatal("typed dispatch mixed original parent capabilities")
+		}
+	}
+	for _, source := range []string{"", "foreign", strings.Repeat("c", 64)} {
+		if routerVPNRunNodeChainCONNECTWithParents(context.Background(), "/unopened-private-connect", desktopExternalSession, strings.Repeat("b", 64), source, strings.Repeat("d", 64), 0, routerVPNNodeJournalOptions{}, routerVPNNodeLinuxParentOptions{}) == nil {
+			t.Fatal("typed dispatch opened input without original parent authority")
+		}
+	}
+	if routerVPNRunNodeChainCONNECTWithParents(nil, "/unopened-private-connect", desktopExternalSession, strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64), 0, routerVPNNodeJournalOptions{}, routerVPNNodeLinuxParentOptions{}) == nil {
+		t.Fatal("typed dispatch accepted no original caller")
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTCommandDarwinOriginalManifest(t *testing.T) {
+	for _, restore := range []int{0, 1400} {
+		name := "configured"
+		if restore != 0 {
+			name = "restored"
+		}
+		t.Run(name, func(t *testing.T) {
+			policy := desktopCONNECTCommandPolicy(t, "darwin", restore)
+			input, err := policy.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, meta, physical, err := policy.ReadValidated()
+			if err != nil {
+				t.Fatal(err)
+			}
+			files := desktopImportedCommandFiles(t, map[string]string{"node-chain-connect-source.json": input, "sing-box.json": config})
+			reopened, err := routerVPNDesktopCONNECTPhysicalManifest(context.Background(), files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, "darwin", nil)
+			if err != nil || reopened == nil || reopened == policy {
+				t.Fatal("typed Darwin did not independently replay inherited source", err)
+			}
+			actual, receipt, capture, err := reopened.ReadValidated()
+			if err != nil || actual != config || !reflect.DeepEqual(receipt, meta) || !reflect.DeepEqual(capture, physical) || receipt.RestoredMTU != restore {
+				t.Fatal("typed Darwin changed original restoration or source capture", err)
+			}
+			if _, err := routerVPNDesktopCONNECTPhysicalManifest(context.Background(), files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, "linux", nil); err == nil {
+				t.Fatal("unbound restoration escaped the inherited Darwin family")
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ import inspect
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -236,7 +237,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
     'node-chain-custom-wg-middle-source', 'node-chain-custom-wg-prefix-lost')
         self.assertEqual(G.NODE_CHAIN_HOST_CASES, expected + G.SAVED_CANDIDATE_HOST_CASES + G.SAVED_PREFIX_HOST_CASES + G.NODE_CHAIN_HYSTERIA_HOST_CASES)
         expected += G.SAVED_CANDIDATE_HOST_CASES
-        self.assertEqual(G.CASES[-len(G.NODE_CHAIN_HOST_CASES)-len(G.NODE_CHAIN_SOCKS_HOST_CASES):-len(G.NODE_CHAIN_SOCKS_HOST_CASES)], expected + G.SAVED_PREFIX_HOST_CASES + G.NODE_CHAIN_HYSTERIA_HOST_CASES)
+        self.assertEqual(G.CASES[-len(G.NODE_CHAIN_HOST_CASES)-(len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES)):-(len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES))], expected + G.SAVED_PREFIX_HOST_CASES + G.NODE_CHAIN_HYSTERIA_HOST_CASES)
         self.assertEqual(len(set(G.CASES)), len(G.CASES))
         fixture = InstalledLinuxHostVerdict()
         for case in expected:
@@ -261,7 +262,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
             'node-chain-socks-wg-wrong-middle-key', 'node-chain-socks-wg-wrong-middle-public',
             'node-chain-socks-wg-final-dns-failure', 'node-chain-socks-wg-final-node-failure', 'node-chain-socks-wg-middle-source')
         self.assertEqual(G.NODE_CHAIN_SOCKS_HOST_CASES, expected)
-        self.assertEqual(G.CASES[-len(expected):], expected)
+        self.assertEqual(G.CASES[-len(expected)-len(G.NODE_CHAIN_CONNECT_HOST_CASES):-len(G.NODE_CHAIN_CONNECT_HOST_CASES)], expected)
         self.assertFalse(set(expected) & set(G.NODE_CHAIN_HOST_CASES))
         for case in expected:
             good = InstalledLinuxHostVerdict().completed((case,))
@@ -271,6 +272,38 @@ class InstalledNodeChainHostGate(unittest.TestCase):
                             good.replace(receipt, receipt.replace(case, case + '-foreign'))):
                 with self.subTest(case=case), self.assertRaises(ValueError):
                     G.check_verdict(changed, case)
+
+    def test_typed_connect_requires_both_protocols_original_ciphers_and_joined_streams(self):
+        expected = tuple('node-chain-connect-' + protocol + '-' + mode + '-connect'
+                         for protocol in ('http', 'https') for mode in ('wg', 'awg-fast', 'awg-strong'))
+        expected += tuple('node-chain-connect-' + protocol + '-wg-' + action
+                          for protocol in ('http', 'https') for action in (
+                              'wrong-middle-key', 'wrong-middle-user', 'wrong-middle-public',
+                              'final-dns-failure', 'final-node-failure', 'middle-source', 'prefix-lost'))
+        expected += ('node-chain-connect-https-wg-wrong-middle-sni', 'node-chain-connect-https-wg-wrong-middle-trust')
+        self.assertEqual(G.NODE_CHAIN_CONNECT_HOST_CASES, expected)
+        self.assertEqual(len(expected), 22)
+        self.assertEqual(G.CASES[-len(expected):], expected)
+        self.assertFalse(set(expected) & set(G.NODE_CHAIN_HOST_CASES + G.NODE_CHAIN_SOCKS_HOST_CASES))
+        source = (G.ROOT / 'cmd/client/desktop_node_chain_connect_linux_tun_native_test.go').read_text()
+        declared = source.split('var linuxNodeChainCONNECTHostCases = []string{', 1)[1].split('}', 1)[0]
+        self.assertEqual(tuple(re.findall(r'"([^"]+)"', declared)), expected)
+        for case in expected:
+            good = InstalledLinuxHostVerdict().completed((case,))
+            G.check_verdict(good, case)
+            for label in ('typed CONNECT UoT2 streams joined:', 'ordered independent prefixes and final:'):
+                receipt = next(line for line in good.splitlines(True) if label in line)
+                for changed in (good.replace(receipt, '', 1), good + receipt,
+                                good.replace(receipt, receipt.replace(case, case + '-foreign')),
+                                good.replace(receipt, receipt.replace('CONNECT UoT2 streams', 'SOCKS association'))):
+                    if changed == good:
+                        continue
+                    with self.subTest(case=case, label=label), self.assertRaises(ValueError):
+                        G.check_verdict(changed, case)
+        body = inspect.getsource(G.execute)
+        self.assertIn("CONNECT_PARENT.execute(binary, 'linux', NODE.run, ROOT, captured)", body)
+        self.assertIn("'typed_connect_installed_cases': list(NODE_CHAIN_CONNECT_HOST_CASES)", body)
+        self.assertIn('routervpn_desktop_node_chain_connect_peer_test.go', inspect.getsource(G.checked_sources))
 
     def test_ordered_hysteria_requires_every_native_final_and_no_ss_receipt_substitute(self):
         expected = ('node-chain-hy2-wg-wg-connect', 'node-chain-hy2-awg-fast-awg-strong-connect',
@@ -340,6 +373,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
                 'awg-strong-awg-fast-3-nodes', 'wg-awg-fast-awg-strong-4-nodes',
                 'awg-fast-awg-strong-wg-4-nodes', 'awg-strong-wg-awg-fast-4-nodes')),
             G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT, *(G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg2-fast', 'awg2-strong')),
+            G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT, *(G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT + '/' + protocol + '/' + mode for protocol in ('http', 'https') for mode in ('wg', 'awg2-fast', 'awg2-strong')),
             G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT,
             *(G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '/' + name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong')),
             G.PREFIX_HOST_AUTHORITY_ROOT, *(G.PREFIX_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg-fast', 'awg-strong')),
@@ -354,7 +388,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
         with patch.object(G.NODE, 'run', return_value=(0, good)) as run, redirect_stdout(io.StringIO()):
             self.assertEqual(G.execute_node_chain_host_authority(binary, captured), good)
         run.assert_called_once_with([str(binary), '-test.v', '-test.timeout=30s',
-            '-test.run=^(' + G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '|' + G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '|' + G.PREFIX_HOST_AUTHORITY_ROOT + '|' + G.HYSTERIA_HOST_AUTHORITY_ROOT + ')$'], cwd=G.ROOT, env=captured, timeout=40)
+            '-test.run=^(' + G.NODE_CHAIN_HOST_AUTHORITY_ROOT + '|' + G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '|' + G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT + '|' + G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '|' + G.PREFIX_HOST_AUTHORITY_ROOT + '|' + G.HYSTERIA_HOST_AUTHORITY_ROOT + ')$'], cwd=G.ROOT, env=captured, timeout=40)
         for status, output in ((1, good), (0, 'PASS\n'), (0, '')):
             with patch.object(G.NODE, 'run', return_value=(status, output)), self.assertRaises(ValueError):
                 G.execute_node_chain_host_authority(binary, captured)
@@ -376,7 +410,7 @@ class InstalledReverseServiceVerdict(unittest.TestCase):
         G.check_reverse_verdict(self.completed())
         self.assertEqual(G.REVERSE_CASES[:3], ('node-standard-original', 'node-standard-lost-commit-reply', 'node-standard-lost-prepare-reply'))
         self.assertEqual(G.REVERSE_CASES[3:], ('node-standard-lost-start-reply', 'node-standard-cancel-before-remove', 'node-standard-longer-deadline', 'node-standard-post-removal-failure', 'node-standard-always-lost-prepare', 'node-standard-always-cancel-before-remove'))
-        self.assertEqual(len(G.CASES), 458 + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES) + len(G.EXTERNAL_SS_HYSTERIA_CASES) + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + len(G.NODE_CHAIN_SOCKS_HOST_CASES))
+        self.assertEqual(len(G.CASES), 458 + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES) + len(G.EXTERNAL_SS_HYSTERIA_CASES) + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + (len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES)))
         self.assertEqual(len(G.REVERSE_CASES), 9)
 
 
@@ -393,7 +427,7 @@ class InstalledReverseServiceVerdict(unittest.TestCase):
 class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_resolved_composition_requires_original_helper_receipt(self):
         self.assertEqual(G.CASES[524:524+len(G.RESOLVED_CASES)], G.RESOLVED_CASES)
-        self.assertEqual(G.CASES[524+len(G.RESOLVED_CASES):], G.EXTERNAL_SS_LAYER_CASES + G.EXTERNAL_SS_HYSTERIA_LAYER_CASES + G.IMPORTED_CASES + G.NODE_CHAIN_HOST_CASES + G.NODE_CHAIN_SOCKS_HOST_CASES)
+        self.assertEqual(G.CASES[524+len(G.RESOLVED_CASES):], G.EXTERNAL_SS_LAYER_CASES + G.EXTERNAL_SS_HYSTERIA_LAYER_CASES + G.IMPORTED_CASES + G.NODE_CHAIN_HOST_CASES + G.NODE_CHAIN_SOCKS_HOST_CASES + G.NODE_CHAIN_CONNECT_HOST_CASES)
         self.assertEqual(G.RESOLVED_CASES, ('service-boot-resolved-udp','service-boot-resolved-tcp','service-boot-resolved-local', 'service-boot-resolved-parallel', 'service-boot-resolved-opportunistic-tls', 'service-boot-resolved-opportunistic-fallback', 'service-boot-resolved-dnssec-nta', 'service-boot-resolved-dnssec-cname', 'service-boot-resolved-dnssec-dname','service-boot-resolved-dnssec-private-tld','service-boot-resolved-dnssec-private-tld-unrelated-nta','service-boot-resolved-dnssec-private-tld-negative-nxdomain-a','service-boot-resolved-dnssec-private-tld-negative-nxdomain-aaaa','service-boot-resolved-dnssec-private-tld-negative-nodata-a','service-boot-resolved-dnssec-private-tld-negative-nodata-aaaa') + G.PRIVATE_DS_CASES)
         for case in G.RESOLVED_CASES:
             self.assertIn(case, G.HOSTNAME_CASES)
@@ -572,9 +606,10 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:22: verified installed host original service transfer: ' + case for case in cases if case in G.TRANSFER_CASES),
                           *('    native_test.go:18: verified installed host retained external succession: ' + case for case in cases if case in G.EXTERNAL_CASES),
                           *('    native_test.go:33: verified installed host imported independent WG entry and paired SS final: ' + case for case in cases if case in G.IMPORTED_CASES),
-                          *('    native_test.go:34: verified installed host ordered independent prefixes and final: ' + case for case in cases if case in (*G.NODE_CHAIN_HOST_CASES, *G.NODE_CHAIN_SOCKS_HOST_CASES) and case not in G.SAVED_PREFIX_HOST_CASES),
+                          *('    native_test.go:34: verified installed host ordered independent prefixes and final: ' + case for case in cases if case in (*G.NODE_CHAIN_HOST_CASES, *G.NODE_CHAIN_SOCKS_HOST_CASES, *G.NODE_CHAIN_CONNECT_HOST_CASES) and case not in G.SAVED_PREFIX_HOST_CASES),
                           *('    native_test.go:36: verified installed host closed selected prefix fifty samples final unopened native DOWN and explicit decision: ' + case for case in cases if case in G.SAVED_PREFIX_HOST_CASES),
                           *('    native_test.go:38: verified installed host typed SOCKS association joined: ' + case for case in cases if case in G.NODE_CHAIN_SOCKS_HOST_CASES),
+                          *('    native_test.go:39: verified installed host typed CONNECT UoT2 streams joined: ' + case for case in cases if case in G.NODE_CHAIN_CONNECT_HOST_CASES),
                           *('    native_test.go:37: verified installed host ordered Hysteria2 native final and joined retirement: ' + case for case in cases if case in G.NODE_CHAIN_HYSTERIA_HOST_CASES),
                           *('    native_test.go:35: verified installed host saved candidate API fifty samples native DOWN and explicit decision: ' + case for case in cases if case in G.SAVED_CANDIDATE_HOST_CASES),
                           *('    native_test.go:21: verified installed host independent WireGuard entry and CONNECT final: ' + case for case in cases if case in G.EXTERNAL_WG_CONNECT_CASES),
@@ -585,7 +620,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         expected = ('imported-wg-ss-public', 'imported-wg-ss-wrong-public', 'imported-wg-ss-wrong-node',
                     'imported-wg-ss-dns-failure', 'imported-wg-ss-mtu-cancel', 'imported-wg-ss-restore', 'imported-wg-ss-cover-lost', 'imported-wg-ss-temporary', 'imported-wg-ss-mtu-retire-undrained')
         self.assertEqual(G.IMPORTED_CASES, expected)
-        self.assertEqual(G.CASES[-len(expected)-len(G.NODE_CHAIN_HOST_CASES)-len(G.NODE_CHAIN_SOCKS_HOST_CASES):-len(G.NODE_CHAIN_HOST_CASES)-len(G.NODE_CHAIN_SOCKS_HOST_CASES)], expected)
+        self.assertEqual(G.CASES[-len(expected)-len(G.NODE_CHAIN_HOST_CASES)-(len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES)):-len(G.NODE_CHAIN_HOST_CASES)-(len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES))], expected)
         for case in expected:
             good = self.completed((case,))
             G.check_verdict(good, case)
@@ -620,7 +655,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         self.assertEqual(G.EXTERNAL_WG_HYSTERIA_CASES, expected)
         self.assertEqual(G.CASES[417:420], G.TRANSFER_CASES)
         self.assertEqual(G.CASES[420:429], expected)
-        self.assertEqual(len(G.CASES), 458 + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES) + len(G.EXTERNAL_SS_HYSTERIA_CASES) + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + len(G.NODE_CHAIN_SOCKS_HOST_CASES))
+        self.assertEqual(len(G.CASES), 458 + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES) + len(G.EXTERNAL_SS_HYSTERIA_CASES) + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + (len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES)))
         good = self.completed()
         G.check_verdict(good)
         for case in expected:
@@ -652,7 +687,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         self.assertEqual(G.CASES[:481][-23:], G.EXTERNAL_SS_ENTRY_CASES)
         self.assertEqual(G.CASES[481:484], G.BOOT_RESOLVER_CASES)
         self.assertEqual(G.BOOT_RESOLVER_CASES, ('service-boot-hosts', 'service-boot-hostname-tcp', 'service-boot-hostname-truncated'))
-        self.assertEqual(len(G.CASES), 484 + len(G.EXTERNAL_SS_CONNECT_CASES) + len(G.EXTERNAL_SS_HYSTERIA_CASES) + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + len(G.NODE_CHAIN_SOCKS_HOST_CASES))
+        self.assertEqual(len(G.CASES), 484 + len(G.EXTERNAL_SS_CONNECT_CASES) + len(G.EXTERNAL_SS_HYSTERIA_CASES) + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + (len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES)))
         good = self.completed()
         G.check_verdict(good)
         for case in G.HOSTNAME_CASES:
@@ -809,7 +844,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         self.assertEqual(len(G.ORIGINAL_CASES), 299)
         self.assertEqual(len(G.EXTERNAL_PROXY_CASES), 11)
         self.assertEqual(len(G.EXTERNAL_CASES), 152 + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES) + len(G.EXTERNAL_SS_HYSTERIA_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES))
-        self.assertEqual(len(G.CASES), 417 + len(G.TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_CASES) + len(G.BOOT_TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_LAYER_CASES) + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES) + len(G.EXTERNAL_SS_HYSTERIA_CASES) + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + len(G.NODE_CHAIN_SOCKS_HOST_CASES))
+        self.assertEqual(len(G.CASES), 417 + len(G.TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_CASES) + len(G.BOOT_TRANSFER_CASES) + len(G.EXTERNAL_WG_HYSTERIA_LAYER_CASES) + len(G.EXTERNAL_SS_ENTRY_CASES) + len(G.BOOT_RESOLVER_CASES) + len(G.EXTERNAL_SS_CONNECT_CASES) + len(G.EXTERNAL_SS_HYSTERIA_CASES) + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + (len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES)))
         self.assertEqual(G.CASES[:299], G.ORIGINAL_CASES)
         self.assertEqual(G.CASES[299:310], G.EXTERNAL_PROXY_CASES)
         self.assertEqual(G.CASES[299:417] + G.CASES[417+len(G.TRANSFER_CASES):429] + G.CASES[433:458] + G.EXTERNAL_SS_ENTRY_CASES + G.EXTERNAL_SS_CONNECT_CASES + G.EXTERNAL_SS_HYSTERIA_CASES + G.EXTERNAL_SS_LAYER_CASES + G.EXTERNAL_SS_HYSTERIA_LAYER_CASES, G.EXTERNAL_CASES)
@@ -1247,7 +1282,7 @@ class SSCONNECTVerdicts(unittest.TestCase):
         self.assertEqual(len(G.EXTERNAL_SS_CONNECT_CASES), 23)
         self.assertEqual(len(set(G.EXTERNAL_SS_CONNECT_CASES)), 23)
         self.assertEqual(G.CASES[484:507], G.EXTERNAL_SS_CONNECT_CASES)
-        self.assertEqual(len(G.CASES), 524 + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + len(G.NODE_CHAIN_SOCKS_HOST_CASES))
+        self.assertEqual(len(G.CASES), 524 + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + (len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES)))
         self.assertEqual(len(G.REVERSE_CASES), 9)
         names = G.SS_CONNECT_AUTHORITY_CASES
         self.assertEqual(len(names), 7)
@@ -1278,7 +1313,7 @@ class SSHysteriaVerdicts(unittest.TestCase):
         self.assertEqual(len(G.EXTERNAL_SS_HYSTERIA_CASES), 17)
         self.assertEqual(len(set(G.EXTERNAL_SS_HYSTERIA_CASES)), 17)
         self.assertEqual(G.CASES[507:524], G.EXTERNAL_SS_HYSTERIA_CASES)
-        self.assertEqual(len(G.CASES), 524 + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + len(G.NODE_CHAIN_SOCKS_HOST_CASES))
+        self.assertEqual(len(G.CASES), 524 + len(G.RESOLVED_CASES) + len(G.EXTERNAL_SS_LAYER_CASES) + len(G.EXTERNAL_SS_HYSTERIA_LAYER_CASES) + len(G.IMPORTED_CASES) + len(G.NODE_CHAIN_HOST_CASES) + (len(G.NODE_CHAIN_SOCKS_HOST_CASES) + len(G.NODE_CHAIN_CONNECT_HOST_CASES)))
         self.assertEqual(len(G.REVERSE_CASES), 9)
         names = G.SS_HYSTERIA_AUTHORITY_CASES
         self.assertEqual(len(names), 13)

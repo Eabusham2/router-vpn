@@ -1,0 +1,388 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing/service"
+)
+
+// These are explicit proof/engine component boundaries. The shipping child
+// owner, actual source compiler, caller-local registry, file authority and join
+// code execute unchanged; encrypted/privileged traffic has separate gates.
+type desktopCONNECTProofFixture struct {
+	lifetime context.Context
+	ready    atomic.Bool
+	closed   atomic.Int32
+	onRun    func(context.Context) error
+	onClose  func(context.Context) error
+}
+
+func (p *desktopCONNECTProofFixture) Run(ctx context.Context, engine mobilemultihop.NodeChainCONNECTEngine) error {
+	p.lifetime = ctx
+	if _, err := engine.ObserveChainContext(ctx); err != nil {
+		return err
+	}
+	if p.onRun != nil {
+		if err := p.onRun(ctx); err != nil {
+			return err
+		}
+	}
+	p.ready.Store(true)
+	return ctx.Err()
+}
+func (p *desktopCONNECTProofFixture) HealthyContext(ctx context.Context) error {
+	if ctx.Err() != nil || p.lifetime == nil || p.lifetime.Err() != nil || !p.ready.Load() {
+		return routerVPNExternalFailure
+	}
+	return nil
+}
+func (p *desktopCONNECTProofFixture) CloseContext(ctx context.Context) error {
+	p.closed.Add(1)
+	p.ready.Store(false)
+	if p.lifetime != nil && p.lifetime.Err() == nil {
+		return errors.New("original proof was not canceled before join")
+	}
+	if p.onClose != nil {
+		return p.onClose(ctx)
+	}
+	return ctx.Err()
+}
+func (*desktopCONNECTProofFixture) Progress() mobilemultihop.NodeChainProgress {
+	return mobilemultihop.NodeChainProgress{}
+}
+
+type desktopCONNECTEngineFixture struct {
+	identity mobilemultihop.NodeChainIdentity
+	source   *mobilemultihop.NodeChainCONNECTSource
+	current  func(context.Context) error
+}
+
+func (e *desktopCONNECTEngineFixture) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	return e.identity, e.current(ctx)
+}
+func (e *desktopCONNECTEngineFixture) ObserveCONNECTMiddleContext(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSource) error {
+	if source != e.source {
+		return routerVPNExternalFailure
+	}
+	return e.current(ctx)
+}
+func (*desktopCONNECTEngineFixture) Dial(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New("component fixture cannot prove encrypted traffic")
+}
+func (e *desktopCONNECTEngineFixture) SelectContext(ctx context.Context, _ string) error {
+	return e.current(ctx)
+}
+func (e *desktopCONNECTEngineFixture) SelectedContext(ctx context.Context) (string, error) {
+	return "", e.current(ctx)
+}
+func (*desktopCONNECTEngineFixture) DNSProofContext(context.Context, mobilemultihop.NodeChainDNSCapture) error {
+	return errors.New("component fixture cannot prove selected DNS")
+}
+
+type desktopCONNECTRuntimeFixture struct {
+	owner        *routerVPNDesktopCONNECTRuntime
+	construction *routerVPNDesktopCONNECTConstruction
+	proof        *desktopCONNECTProofFixture
+	engine       *desktopCONNECTEngineFixture
+	valid        atomic.Bool
+}
+
+func newDesktopCONNECTRuntimeFixture(t *testing.T) *desktopCONNECTRuntimeFixture {
+	t.Helper()
+	policy := desktopCONNECTCommandPolicy(t, "linux", 1420)
+	input, err := policy.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := desktopImportedCommandFiles(t, map[string]string{"node-chain-connect-source.json": input, "sing-box.json": policy.Config()})
+	construction, err := routerVPNNewDesktopCONNECTConstruction(desktopCONNECTCommandContext(context.Background()), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &desktopCONNECTRuntimeFixture{construction: construction, proof: &desktopCONNECTProofFixture{}}
+	f.valid.Store(true)
+	f.engine = &desktopCONNECTEngineFixture{source: construction.source, identity: mobilemultihop.NodeChainIdentity{
+		EngineID: "original-box", NetworkID: "original-network", SessionID: construction.metadata.SessionID,
+		SourceSHA256: construction.metadata.OriginalSourceSHA256, ConfigSHA256: construction.metadata.ConfigSHA256}}
+	f.owner, err = routerVPNNewDesktopCONNECTRuntimeFactory(context.Background(), files, construction, strings.Repeat("d", 64),
+		func(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSource, current func(context.Context) error) (routerVPNDesktopCONNECTProof, mobilemultihop.NodeChainCONNECTEngine, error) {
+			if source != construction.source {
+				return nil, nil, errors.New("native factory changed original typed source")
+			}
+			f.engine.current = current
+			return f.proof, f.engine, ctx.Err()
+		}, func(ctx context.Context) error {
+			if !f.valid.Load() {
+				return routerVPNExternalFailure
+			}
+			return ctx.Err()
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		f.proof.onClose = nil
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := f.owner.close(ctx); err != nil {
+			t.Error("original fixture owner did not join", err)
+		}
+	})
+	return f
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTRuntimeOriginalGeneration(t *testing.T) {
+	f := newDesktopCONNECTRuntimeFixture(t)
+	startup, cancel := context.WithCancel(context.Background())
+	if err := f.owner.run(startup); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	state := f.owner.state.Load()
+	if state == nil || state.proof != f.proof || state.engine != f.engine || state.generation != 1 || f.owner.generation.Load() != 1 ||
+		f.owner.current(context.Background()) != nil || f.proof.lifetime.Err() != nil {
+		t.Fatal("startup context or factory replacement changed the original runtime")
+	}
+	if f.owner.run(context.Background()) == nil {
+		t.Fatal("second native construction was admitted")
+	}
+	if _, err := f.owner.files.root.Lstat("node-chain-connect-ready.json"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("proof component published native readiness without actual TUN readback", err)
+	}
+	ctx, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	if err := f.owner.close(ctx); err != nil || !f.owner.closed.Load() || f.proof.closed.Load() != 1 {
+		t.Fatal("original proof did not join", err)
+	}
+	if _, err := f.engine.ObserveChainContext(context.Background()); err == nil {
+		t.Fatal("retired proof retained current authority")
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTRuntimeLateFactoryJoin(t *testing.T) {
+	f := newDesktopCONNECTRuntimeFixture(t)
+	original := f.owner.factory
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	f.owner.factory = func(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSource, current func(context.Context) error) (routerVPNDesktopCONNECTProof, mobilemultihop.NodeChainCONNECTEngine, error) {
+		close(entered)
+		<-release
+		proof, engine, _ := original(context.Background(), source, current)
+		return proof, engine, errors.New("late original factory failure")
+	}
+	result := make(chan error, 1)
+	go func() { result <- f.owner.run(context.Background()) }()
+	joined := false
+	defer func() {
+		once.Do(func() { close(release) })
+		if !joined {
+			select {
+			case <-result:
+			case <-time.After(time.Second):
+				t.Error("original late factory did not return")
+			}
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("factory never entered")
+	}
+	cleanup, stop := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err := f.owner.close(cleanup)
+	stop()
+	if err == nil || f.owner.closed.Load() {
+		t.Fatal("original entered factory was abandoned")
+	}
+	once.Do(func() { close(release) })
+	select {
+	case err := <-result:
+		joined = true
+		if err == nil {
+			t.Fatal("late partial factory succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("late factory did not join")
+	}
+	state := f.owner.state.Load()
+	if state == nil || state.engine != f.engine || state.proof != f.proof {
+		t.Fatal("partial original factory owner was discarded")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := f.owner.close(ctx); err != nil || f.proof.closed.Load() != 1 {
+		t.Fatal("partial original proof did not retire", err)
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTRuntimeEnteredProofJoin(t *testing.T) {
+	f := newDesktopCONNECTRuntimeFixture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	f.proof.onRun = func(ctx context.Context) error { close(entered); <-release; return ctx.Err() }
+	result := make(chan error, 1)
+	go func() { result <- f.owner.run(context.Background()) }()
+	joined := false
+	defer func() {
+		once.Do(func() { close(release) })
+		if !joined {
+			select {
+			case <-result:
+			case <-time.After(time.Second):
+				t.Error("original proof did not return")
+			}
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("proof never entered")
+	}
+	cleanup, stop := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err := f.owner.close(cleanup)
+	stop()
+	if err == nil || f.owner.closed.Load() || f.proof.closed.Load() != 0 {
+		t.Fatal("original entered proof was abandoned")
+	}
+	once.Do(func() { close(release) })
+	select {
+	case err := <-result:
+		joined = true
+		if err == nil {
+			t.Fatal("cancelled original proof succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("original proof did not join")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := f.owner.close(ctx); err != nil || f.proof.closed.Load() != 1 {
+		t.Fatal("joined original proof cleanup failed", err)
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTRuntimeRetainsFailedJoin(t *testing.T) {
+	f := newDesktopCONNECTRuntimeFixture(t)
+	if err := f.owner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	original := f.owner.state.Load()
+	f.proof.onClose = func(context.Context) error { return errors.New("original proof join pending") }
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if f.owner.close(ctx) == nil || f.owner.closed.Load() || original.joined {
+		t.Fatal("failed original proof join was erased")
+	}
+	if f.owner.run(ctx) == nil || f.owner.state.Load() != original {
+		t.Fatal("failed original owner was replaced")
+	}
+	f.proof.onClose = nil
+	if err := f.owner.close(ctx); err != nil || !f.owner.closed.Load() || f.proof.closed.Load() != 2 {
+		t.Fatal("same original proof could not retry join", err)
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTRuntimeRejectsForeignIdentity(t *testing.T) {
+	for _, fault := range []string{"session", "source", "config", "network", "engine", "host", "source-object", "registry"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopCONNECTRuntimeFixture(t)
+			if err := f.owner.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "session":
+				f.engine.identity.SessionID = strings.Repeat("f", 32)
+			case "source":
+				f.engine.identity.SourceSHA256 = strings.Repeat("f", 64)
+			case "config":
+				f.engine.identity.ConfigSHA256 = strings.Repeat("f", 64)
+			case "network":
+				f.engine.identity.NetworkID = "foreign-network"
+			case "engine":
+				f.engine.identity.EngineID = "foreign-box"
+			case "host":
+				f.valid.Store(false)
+			case "source-object":
+				other := desktopCONNECTCommandPolicy(t, "linux", 1420)
+				f.owner.source, _ = other.NativeSource()
+			case "registry":
+				f.owner.construction.ctx = service.ContextWith[adapter.OutboundRegistry](service.ExtendContext(f.construction.ctx), nil)
+			}
+			if f.owner.current(context.Background()) == nil {
+				t.Fatal("foreign typed child owner remained current")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTRuntimeActivityJoin(t *testing.T) {
+	f := newDesktopCONNECTRuntimeFixture(t)
+	if err := f.owner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	activity, err := f.owner.claimActivity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer activity.release()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	err = f.owner.close(ctx)
+	cancel()
+	if err == nil || f.owner.closed.Load() || f.proof.closed.Load() != 0 {
+		t.Fatal("original native activity was abandoned before join")
+	}
+	activity.release()
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := f.owner.close(ctx); err != nil || f.proof.closed.Load() != 1 {
+		t.Fatal("original activity retirement did not resume proof join", err)
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTRuntimeMeasurementExcludesMTU(t *testing.T) {
+	f := newDesktopCONNECTRuntimeFixture(t)
+	if err := f.owner.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.owner.measurementHold.Store(true)
+	captured, claimErr := f.owner.claimActivity(context.Background())
+	if captured != nil {
+		captured.release()
+	}
+	if claimErr == nil || captured != nil {
+		t.Fatal("MTU acquired while original measurement owned the graph")
+	}
+	f.owner.measurementHold.Store(false)
+	activity, err := f.owner.claimActivity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer activity.release()
+	if other, err := f.owner.claimActivity(context.Background()); err == nil || other != nil {
+		t.Fatal("second activity replaced original owner")
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTRuntimeRejectsCandidateAuthority(t *testing.T) {
+	for _, name := range []string{"node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json"} {
+		t.Run(name, func(t *testing.T) {
+			f := newDesktopCONNECTRuntimeFixture(t)
+			if err := f.owner.files.publish(name, map[string]int{"schema": 1}); err != nil {
+				t.Fatal(err)
+			}
+			if f.owner.pollMeasurement(context.Background()) == nil {
+				t.Fatal("candidate request borrowed typed CONNECT authority")
+			}
+		})
+	}
+}

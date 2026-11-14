@@ -40,6 +40,13 @@ jobs:
       source_sha: ${{ github.sha }}
       suite: connect-native-mtu
 
+  desktop-connect-child:
+    name: Typed CONNECT desktop child and original Box ownership
+    uses: ./.github/workflows/focused-source-validation.yml
+    with:
+      source_sha: ${{ github.sha }}
+      suite: desktop-connect-child
+
   macos-owned-controller:
     name: Native macOS controller ownership on both architectures
     uses: ./.github/workflows/macos-native-installer-contract.yml
@@ -715,7 +722,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, darwin-prefix-host, server-ordered-encrypted, typed-socks-native, typed-connect-runtime, typed-connect-native, typed-connect-native-mtu]
+    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, darwin-prefix-host, server-ordered-encrypted, typed-socks-native, typed-connect-runtime, typed-connect-native, typed-connect-native-mtu, desktop-connect-child]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

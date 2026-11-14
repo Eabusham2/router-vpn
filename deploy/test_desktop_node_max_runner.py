@@ -138,7 +138,7 @@ class MAXOutcomeChecks(unittest.TestCase):
         self.assertEqual(len(actual), 1)
         self.assertEqual({item.arg: ast.literal_eval(item.value) for item in actual[0].keywords if item.arg == 'timeout'}, {'timeout': 5400})
         workflow = (ROOT / '.github/workflows/desktop-native-runtime.yml').read_text()
-        self.assertEqual(workflow.count("timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || startsWith(matrix.target, 'linux/') && 200 || 150 }}"), 1)
+        self.assertEqual(workflow.count("timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || startsWith(matrix.target, 'linux/') && 200 || 220 }}"), 1)
         linux = (ROOT / '.github/workflows/linux-native-app.yml').read_text()
         for path in ('deploy/test_desktop_node_max.py', 'deploy/test_desktop_node_max_runner.py', 'mobile/desktop/node_max*.go.tmpl'):
             self.assertEqual(linux.count("      - '" + path + "'"), 2)

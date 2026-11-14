@@ -54,8 +54,12 @@ def workflow_inventory(consumer, wrapper):
         '          name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-${{ github.sha }}',
         '          path: ${{ runner.temp }}/ordered-host-bundle',
         '        run: python3 deploy/test_macos_node_chain_host_runner.py',
+        '        run: python3 deploy/test_macos_socks_node_chain_host_runner.py',
+        '        run: python3 deploy/test_macos_connect_node_chain_host_runner.py',
         '        run: python3 deploy/native-runtime-bundle.py extract \'darwin/${{ matrix.arch }}\' "$RUNNER_TEMP/ordered-host-bundle/native-darwin-${{ matrix.arch }}.tar.gz" "$RUNNER_TEMP/ordered-host-verified"',
         '        timeout-minutes: 110', "          ROUTERVPN_DARWIN_NODE_CHAIN_HOST_ACCEPTANCE: '1'",
+        "          ROUTERVPN_DARWIN_SOCKS_NODE_CHAIN_HOST_ACCEPTANCE: '1'",
+        "          ROUTERVPN_DARWIN_CONNECT_NODE_CHAIN_HOST_ACCEPTANCE: '1'",
         '          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}',
         '          ROUTERVPN_HOST_RECEIPT: ${{ runner.temp }}/darwin-node-host-${{ matrix.arch }}.json',
         "          CGO_ENABLED: '1'", '          if-no-files-found: error',
@@ -66,7 +70,7 @@ def workflow_inventory(consumer, wrapper):
         raise ValueError('Ordered host consumer lost an exact architecture, source or artifact boundary')
     if re.search(r'^\s*(?:run-id|repository|github-token|pattern|merge-multiple):', consumer, re.M):
         raise ValueError('Ordered host consumer borrowed another run or ambiguous bundle')
-    command = 'python3 deploy/test_macos_node_chain_host.py --bundle "$RUNNER_TEMP/ordered-host-verified" --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_HOST_RECEIPT"'
+    command = 'python3 deploy/test_macos_connect_node_chain_host.py --bundle "$RUNNER_TEMP/ordered-host-verified" --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_HOST_RECEIPT"'
     commands = re.findall(r'^        run: \|\n((?:          [^\n]*\n)+)', consumer, re.M)
     if len(commands) != 1 or [line.strip() for line in commands[0].splitlines()] != [command]:
         raise ValueError('Ordered host consumer weakened its actual native invocation')
@@ -234,7 +238,7 @@ class OrderedNativeVerdicts(unittest.TestCase):
             for name in files:
                 (root/name).write_text('captured '+name)
             copies = G.BUILD.EXTERNAL.darwin_node_chain_peer_copies()
-            self.assertEqual(len(copies), 9)
+            self.assertEqual(len(copies), 11)
             for name, raw in copies.items():
                 (root/name).parent.mkdir(parents=True, exist_ok=True)
                 (root/name).write_bytes(raw)
@@ -242,7 +246,7 @@ class OrderedNativeVerdicts(unittest.TestCase):
                  patch.object(G.EXTERNAL, 'source_identity', side_effect=lambda core: {'application':{},'peer':{}}), \
                  patch.object(G.BUILD, 'EXTERNAL', SimpleNamespace(darwin_node_chain_peer_copies=lambda:copies)):
                 original = G.source_identity(root)
-                self.assertEqual(len(original['peer']), 9)
+                self.assertEqual(len(original['peer']), 11)
                 self.assertEqual(set(original['application']), set(files))
                 for name in copies:
                     (root/name).write_bytes(b'replaced')
@@ -525,6 +529,10 @@ class OrderedNativeWorkflows(unittest.TestCase):
             (' --receipt "$ROUTERVPN_HOST_RECEIPT"', ''),
             (' --receipt "$ROUTERVPN_HOST_RECEIPT"', ' --receipt "$ROUTERVPN_HOST_RECEIPT" || true'),
             ('          if-no-files-found: error', '          if-no-files-found: warn'),
+            ("          ROUTERVPN_DARWIN_SOCKS_NODE_CHAIN_HOST_ACCEPTANCE: '1'\n", ''),
+            ("          ROUTERVPN_DARWIN_CONNECT_NODE_CHAIN_HOST_ACCEPTANCE: '1'\n", ''),
+            ('python3 deploy/test_macos_connect_node_chain_host.py --bundle', 'python3 deploy/test_macos_socks_node_chain_host.py --bundle'),
+            ('        run: python3 deploy/test_macos_connect_node_chain_host_runner.py', '        run: true'),
         )
         for before, after in changes:
             self.assertEqual(self.consumer.count(before), 1)

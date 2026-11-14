@@ -127,18 +127,25 @@ class WindowsSOCKSReleaseReceipt(unittest.TestCase):
                 with patch.object(BUILD.platform, "system", return_value="Windows"), \
                      patch.object(BUILD, "native_host_target", return_value="windows/amd64"), \
                      patch.object(BUILD, "reuse", return_value={"policy_sha256": "a" * 64}) as reuse, \
-                     patch.object(BUILD, "run", side_effect=["", "", "", output]) as run:
+                     patch.object(BUILD, "run", side_effect=["", "", "", "", "", "", output]) as run, \
+                     patch.object(BUILD, "verify_installed_windows_connect_receipt") as connect:
                     if accepted:
                         BUILD.verify_installed_windows_prefix(ROOT, bundle, "windows/amd64", {})
                         self.assertEqual(reuse.call_count, 2)
+                        # This unit keeps every original prefix/SOCKS check;
+                        # the separate CONNECT receipt suite exercises all three.
+                        connect.assert_called_once_with(output, "windows/amd64", {"policy_sha256": "a" * 64}, digest, typed)
                     else:
                         with self.assertRaises(ValueError):
                             BUILD.verify_installed_windows_prefix(ROOT, bundle, "windows/amd64", {})
                         self.assertEqual(reuse.call_count, 1)
+                        connect.assert_not_called()
                     self.assertEqual([Path(call.args[0][1]).name for call in run.call_args_list], [
                         "test_windows_candidate_prefix_runner.py", "test_windows_socks_node_chain_host_runner.py",
-                        "test_windows_socks_release_receipt.py", "test_windows_socks_node_chain_host.py"])
-                    self.assertEqual(run.call_args_list[-1].kwargs["timeout"], 3000 + 4200)
+                        "test_windows_socks_release_receipt.py", "test_desktop_connect_parent_runner.py",
+                        "test_windows_connect_node_chain_host_runner.py", "test_windows_connect_release_receipt.py",
+                        "test_windows_connect_node_chain_host.py"])
+                    self.assertEqual(run.call_args_list[-1].kwargs["timeout"], 3000 + 4200 + 4200)
 
     def test_native_process_failure_cannot_reach_receipt_or_reuse(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -148,7 +155,7 @@ class WindowsSOCKSReleaseReceipt(unittest.TestCase):
             with patch.object(BUILD.platform, "system", return_value="Windows"), \
                  patch.object(BUILD, "native_host_target", return_value="windows/amd64"), \
                  patch.object(BUILD, "reuse", return_value={"policy_sha256": "a" * 64}) as reuse, \
-                 patch.object(BUILD, "run", side_effect=["", "", "", failure]), \
+                 patch.object(BUILD, "run", side_effect=["", "", "", "", "", "", failure]), \
                  patch.object(BUILD, "verify_installed_windows_socks_receipt") as verify:
                 with self.assertRaises(subprocess.CalledProcessError) as caught:
                     BUILD.verify_installed_windows_prefix(ROOT, bundle, "windows/amd64", {})

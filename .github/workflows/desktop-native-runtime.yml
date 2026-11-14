@@ -122,9 +122,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
-    # Linux adds only the separate 50-minute SOCKS/REALITY reference allowance.
-    # Existing native process deadlines and other platform budgets stay intact.
-    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || startsWith(matrix.target, 'linux/') && 200 || 150 }}
+    # Linux retains its separate SOCKS/REALITY allowance. Windows adds the
+    # bounded CONNECT14 stage after original prefix6/SOCKS8; inner limits remain.
+    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || startsWith(matrix.target, 'linux/') && 200 || 220 }}
     steps:
       - uses: actions/checkout@v4
         with:

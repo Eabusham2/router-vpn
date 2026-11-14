@@ -111,6 +111,11 @@ func windowsPrefixController() error {
 		return err
 	}
 	defer releaseSOCKS()
+	releaseCONNECT, err := windowsCONNECTRegisterRoutes(mux, a, original)
+	if err != nil {
+		return err
+	}
+	defer releaseCONNECT()
 	mux.HandleFunc("/api/native-prefix-capture", func(w http.ResponseWriter, r *http.Request) {
 		result, err := windowsPrefixInspect(r.Context(), a, original)
 		if err != nil {
