@@ -65,6 +65,15 @@ jobs:
           if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Pinned Windows identity C compiler is missing' }
           "CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Complete profiles preserve every exit transport and execution choice
+        shell: pwsh
+        run: |
+          python deploy/test_desktop_connection_profile_modes_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows profile diagnostic verdict regressions failed' }
+          python deploy/test_desktop_connection_profile_modes.py --platform windows --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 connection profile mode regressions failed' }
+          python deploy/test_desktop_connection_profile_modes.py --platform windows --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 connection profile mode regressions failed' }
       - name: Private ACL readback in Windows PowerShell 5.1 and 7
         if: ${{ success() || failure() }}
         timeout-minutes: 6
@@ -330,15 +339,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 protection settings regressions failed' }
           python deploy/test_desktop_protection_settings.py --platform windows --shell powershell.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 protection settings regressions failed' }
-      - name: Complete profiles preserve every exit transport and execution choice
-        shell: pwsh
-        run: |
-          python deploy/test_desktop_connection_profile_modes_runner.py
-          if ($LASTEXITCODE -ne 0) { throw 'Windows profile diagnostic verdict regressions failed' }
-          python deploy/test_desktop_connection_profile_modes.py --platform windows --shell pwsh
-          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 connection profile mode regressions failed' }
-          python deploy/test_desktop_connection_profile_modes.py --platform windows --shell powershell.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 connection profile mode regressions failed' }
       - name: DNS editors preserve the captured node and selected transport
         shell: pwsh
         run: |
