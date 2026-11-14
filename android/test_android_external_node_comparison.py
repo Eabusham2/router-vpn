@@ -241,7 +241,15 @@ public final class ExternalComparisonTest {
    if(!adopt){completed.getButton(AlertDialog.BUTTON_POSITIVE).performClick();AlertDialog retry=AlertDialog.last;check(AndroidExternalNodeComparison.hasActiveOperation(),"Retest did not start fresh captured round");retry.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();until=System.nanoTime()+8_000_000_000L;while(AndroidExternalNodeComparison.hasActiveOperation()&&System.nanoTime()<until)f.tick();check(!AndroidExternalNodeComparison.hasActiveOperation()&&!AndroidHomeStateStore.snapshot(f.activity).connected&&f.uses(f.fast.id)==0,"daily Cancel revived/used a trial");}
   }
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);String mode=System.getProperty("fixture.case","all");if(mode.equals("all")||mode.equals("positive"))positive(root);if(mode.equals("all")||mode.equals("network"))networkCases(root);if(mode.equals("all")||mode.equals("failed"))failedCandidates(root);if(mode.equals("all")||mode.equals("drift"))driftAndDrain(root);if(mode.equals("all")||mode.equals("commit"))finalCommit(root);if(mode.equals("all")||mode.equals("cleanup"))cleanup(root);if(mode.equals("all")||mode.equals("returned"))staleReturnedOwner(root);if(mode.equals("all")||mode.equals("permission"))permissionAndOriginal(root);if(mode.equals("all")||mode.equals("ui"))dailyUI(root);if(mode.equals("all")||mode.equals("durable"))durableCohort(root);if(mode.equals("all")||mode.equals("restore-permission"))restorationPermission(root);System.out.println("Android external comparison: "+checks+" shipping lifecycle/store/usage checks PASS (native proof/traffic boundary controlled)");}
+ static void orderedCompilerRefusal()throws Exception{
+  for(String execution:new String[]{"server","auto"}){
+   boolean refused=false;
+   try{AndroidNodeChainCapture.validateExecutionSources(null,null,execution);}
+   catch(AssertionError failure){refused="Ordered execution requires the actual shared-compiler composition gate".equals(failure.getMessage());}
+   check(refused,"ordinary comparison invented an ordered native execution source: "+execution);
+  }
+ }
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);orderedCompilerRefusal();String mode=System.getProperty("fixture.case","all");if(mode.equals("all")||mode.equals("positive"))positive(root);if(mode.equals("all")||mode.equals("network"))networkCases(root);if(mode.equals("all")||mode.equals("failed"))failedCandidates(root);if(mode.equals("all")||mode.equals("drift"))driftAndDrain(root);if(mode.equals("all")||mode.equals("commit"))finalCommit(root);if(mode.equals("all")||mode.equals("cleanup"))cleanup(root);if(mode.equals("all")||mode.equals("returned"))staleReturnedOwner(root);if(mode.equals("all")||mode.equals("permission"))permissionAndOriginal(root);if(mode.equals("all")||mode.equals("ui"))dailyUI(root);if(mode.equals("all")||mode.equals("durable"))durableCohort(root);if(mode.equals("all")||mode.equals("restore-permission"))restorationPermission(root);System.out.println("Android external comparison: "+checks+" shipping lifecycle/store/usage checks PASS (native proof/traffic boundary controlled)");}
 }
 '''
 
@@ -258,6 +266,13 @@ def sources():
     ui['android/content/MemoryPreferences.java']=ui['android/content/MemoryPreferences.java'].replace('public final Map<String,Object> values=', 'public boolean failNext;public Runnable afterCommit;public final Map<String,Object> values=').replace('public boolean commit(){synchronized(MemoryPreferences.this){', 'public boolean commit(){synchronized(MemoryPreferences.this){if(failNext){failNext=false;return false;}').replace('values.putAll(next);return true;', 'values.putAll(next);Runnable hook=afterCommit;afterCommit=null;if(hook!=null)hook.run();return true;')
     boundaries=U.S.replace_class(boundaries,'AndroidConnectionProfileStore','')
     boundaries=U.S.replace_class(boundaries,'AndroidExternalNodeComparison','')
+    # Ordinary/pair comparison never compiles an ordered Server/Compare graph.
+    # Keep the real profile store, but refuse this out-of-scope native boundary.
+    boundaries+='''final class AndroidNodeChainCapture {
+ static void validateExecutionSources(java.util.List<AndroidNodeStore.ChainSource> members,java.util.List<String> modes,String execution)throws Exception{
+  throw new AssertionError("Ordered execution requires the actual shared-compiler composition gate");
+ }
+}'''
     boundaries=boundaries.replace('return busy;','return busy||AndroidHomeStateStore.snapshot(NativeUsageBoundary.context).connected||AndroidHomeStateStore.snapshot(NativeUsageBoundary.context).phase.equals("connecting");')
     boundaries=boundaries.replace('static Runnable pending,last,beforeFinish;','static volatile Runnable pending,last,beforeFinish;')
     boundaries=boundaries.replace('AndroidHomeStateStore.disconnected(NativeUsageBoundary.context);cb.finished(true,"","stopped");','cb.finished(ComparisonNative.stop(session),"","stopped");')
