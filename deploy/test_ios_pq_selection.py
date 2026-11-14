@@ -8,6 +8,7 @@ mandatory gates; this test does not claim physical-device traffic or signing.
 from pathlib import Path
 import importlib.util
 import platform
+import re
 import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
@@ -321,6 +322,47 @@ func outer()throws->[String:Any]{["profiles":["shadowsocks":["sing-box.json":try
  }
 }
 '''
+def verify_pq_factory_registration(engine):
+    """Every independent native constructor must install PQ before creation."""
+    starts = list(re.finditer(r'^    (?:private )?func ', engine, re.MULTILINE))
+    bodies = [engine[start.start():starts[i + 1].start() if i + 1 < len(starts) else len(engine)]
+              for i, start in enumerate(starts)]
+    constructors = ('func start(candidatePrefix ', 'func startOrderedExecution(',
+                    'func start(files: [String: Data], strict: Bool, multihopMetadata:')
+    install, create = 'try RouterVPNPQFactory.install()', 'LibboxNewCommandServer('
+    for signature in constructors:
+        matches = [body for body in bodies if signature in body.split('\n', 1)[0]]
+        assert len(matches) == 1, signature + ': missing or duplicate constructor'
+        body = matches[0]
+        assert body.count(install) == 1, signature + ': must install exactly once'
+        assert body.count(create) == 1, signature + ': must create exactly once'
+        assert body.index(install) < body.index(create), signature + ': install must precede creation'
+    assert engine.count(install) == len(constructors), 'PQ installation outside covered constructors'
+    assert engine.count(create) == len(constructors), 'Uncovered native constructor'
+    return constructors
+
+
+def test_pq_factory_registration(engine):
+    constructors = verify_pq_factory_registration(engine)
+    install, create = 'try RouterVPNPQFactory.install()', 'LibboxNewCommandServer('
+    for signature in constructors:
+        begin = engine.index(signature)
+        position = engine.index(install, begin)
+        missing = engine[:position] + engine[position:].replace(install, '', 1)
+        creation = missing.index(create, begin)
+        line_end = missing.index('\n', creation)
+        late = missing[:line_end] + '\n        ' + install + missing[line_end:]
+        duplicate = engine[:position] + engine[position:].replace(install, install + '\n        ' + install, 1)
+        for fault, changed in (('missing', missing), ('late', late), ('duplicate', duplicate)):
+            try:
+                verify_pq_factory_registration(changed)
+            except AssertionError as failure:
+                assert signature in str(failure), (signature, fault, str(failure))
+            else:
+                raise AssertionError(signature + ': accepted ' + fault + ' PQ factory installation')
+    print('Apple PQ factory registration: PASS (3 constructors, 9 defect controls)')
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix='.ios-pq-compiler-',dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-pq-policy-') as temp:
         go_dir,temp=Path(go_dir),Path(temp)
@@ -349,7 +391,6 @@ def main():
         assert required in multi, required
     assert multi.index('IOSNativePQProfile.entryEndpoint(') < multi.index('RouterVPNMultihopGraph.build(') < multi.index('engine.start(')
     engine=(TUN/'RouterVPNLibboxEngine.swift').read_text()
-    assert engine.count('try RouterVPNPQFactory.install()')==1
-    assert engine.index('try RouterVPNPQFactory.install()')<engine.index('LibboxNewCommandServer(')
+    test_pq_factory_registration(engine)
     assert 'App/IOSNativePQProfile.swift' in (ROOT/'ios/RouterVPN/project.yml').read_text()
 if __name__=='__main__':main()
