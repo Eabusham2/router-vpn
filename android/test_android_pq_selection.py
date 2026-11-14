@@ -271,7 +271,19 @@ def run():
         native = temp/'policy'
         subprocess.run(['go','build','-o',str(native),str(go_dir/'main.go')],cwd=ROOT,check=True,timeout=60)
         src=temp/'src'
+        # The full-service harness also supplies the ordered-session types.
+        # Compose those type-only doubles into this one NodeStore boundary;
+        # its identity and bundle validation below remain shipping methods.
+        node_store_path = 'com/eabusham/routervpn/AndroidNodeStore.java'
+        node_store_types = ''
+        if node_store_path in M.STUBS:
+            standalone = M.STUBS[node_store_path]
+            declaration = 'public class AndroidNodeStore {'
+            assert standalone.count(declaration) == 1 and standalone.rstrip().endswith('}')
+            node_store_types = standalone.split(declaration, 1)[1].rstrip()[:-1]
         for path, text in M.STUBS.items():
+            if path == node_store_path:
+                continue
             if path.endswith('/Boundaries.java'):
                 # Compile the exact shipping identity/validation methods rather
                 # than the generic graph harness's identity shortcut.
@@ -286,7 +298,7 @@ def run():
                 constants = '\n'.join(line for line in node_source.splitlines() if 'private static final String NODE_PROOF_DOMAIN =' in line or 'static final int MAX_PROFILE_SCHEMA =' in line or 'static final int MAX_BUNDLE =' in line)
                 start = text.index('final class AndroidNodeStore {')
                 end = text.index('final class AndroidKillSwitchPolicy {')
-                text = text[:start] + 'final class AndroidNodeStore {\n' + constants + '\n' + methods + '\n}\n' + text[end:]
+                text = text[:start] + 'final class AndroidNodeStore {\n' + constants + '\n' + node_store_types + '\n' + methods + '\n}\n' + text[end:]
                 text = text.replace('import org.json.JSONObject;', 'import org.json.JSONObject; import org.json.JSONArray; import java.security.MessageDigest; import java.nio.charset.StandardCharsets; import java.util.HashSet; import java.util.Set; import android.util.Base64;')
             if path.endswith('/Libbox.java'):
                 begin=text.index(' private static String call(')
