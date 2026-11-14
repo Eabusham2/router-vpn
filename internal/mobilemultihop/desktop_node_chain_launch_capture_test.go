@@ -21,7 +21,26 @@ func TestDesktopNodeChainValidatedLaunchKeepsCanonicalSource(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(again.Metadata, metadata) || !reflect.DeepEqual(again.Physical, physical) {
 		t.Fatal("returned launch fields alias retained policy", err)
 	}
-	copied := *original
+	// Copy only the inert compiler capture; the fresh runtime owns its own mutex.
+	copied := NodeChain{
+		sourceJSON:        original.sourceJSON,
+		sourceSHA:         original.sourceSHA,
+		config:            original.config,
+		metadata:          original.metadata,
+		seal:              original.seal,
+		nodes:             original.nodes,
+		importedMiddle:    original.importedMiddle,
+		socksSource:       original.socksSource,
+		connectSource:     original.connectSource,
+		proofs:            original.proofs,
+		dns:               original.dns,
+		physical:          original.physical,
+		originalConfigSHA: original.originalConfigSHA,
+		projection:        original.projection,
+	}
+	if !reflect.DeepEqual(original, &copied) {
+		t.Fatal("launch identity fixture must preserve every inert compiler field")
+	}
 	copiedPolicy, err := NewDesktopNodeChainPolicy(&copied, desktopNodeTestSession, "windows", 0)
 	if err != nil {
 		t.Fatal(err)

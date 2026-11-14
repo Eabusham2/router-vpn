@@ -52,7 +52,25 @@ func TestNodeChainCONNECTIntegrityRejectsChangedInputs(t *testing.T) {
 		{"proof", func(p *NodeChainCONNECTSource) { p.metadata.Proofs[1].Tag = "foreign" }},
 		{"mtu", func(p *NodeChainCONNECTSource) { p.metadata.MTU.Prefixes[0].Ceiling++ }},
 		{"device", func(p *NodeChainCONNECTSource) { p.metadata.Devices[1].HomeLANAccess = true }},
-		{"pair", func(p *NodeChainCONNECTSource) { copy := *p.pair; p.pair = &copy }},
+		{"pair", func(p *NodeChainCONNECTSource) {
+			// Preserve the compiler capture, without copying runtime mutex ownership.
+			p.pair = &NodeChain{
+				sourceJSON:        p.pair.sourceJSON,
+				sourceSHA:         p.pair.sourceSHA,
+				config:            p.pair.config,
+				metadata:          p.pair.metadata,
+				seal:              p.pair.seal,
+				nodes:             p.pair.nodes,
+				importedMiddle:    p.pair.importedMiddle,
+				socksSource:       p.pair.socksSource,
+				connectSource:     p.pair.connectSource,
+				proofs:            p.pair.proofs,
+				dns:               p.pair.dns,
+				physical:          p.pair.physical,
+				originalConfigSHA: p.pair.originalConfigSHA,
+				projection:        p.pair.projection,
+			}
+		}},
 		{"pair-source", func(p *NodeChainCONNECTSource) { p.pair.sourceJSON += " " }},
 		{"pair-config", func(p *NodeChainCONNECTSource) { p.pair.config += " " }},
 		{"pair-metadata", func(p *NodeChainCONNECTSource) { p.pair.metadata += " " }},
@@ -101,7 +119,11 @@ func TestNodeChainCONNECTIntegrityRejectsChangedInputs(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			source := connectIntegrityFixture(t)
+			originalPair := source.pair
 			test.change(source)
+			if test.name == "pair" && (source.pair == originalPair || !reflect.DeepEqual(source.pair, originalPair)) {
+				t.Fatal("pair identity fixture must change only the inert compiler pointer")
+			}
 			if config, _, err := source.ReadValidated(); err == nil || config != "" {
 				t.Fatal("changed captured input retained integrity authority")
 			}
