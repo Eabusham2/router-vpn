@@ -41,6 +41,12 @@ public final class LibboxRouterNodeChainSOCKS:NSObject {
  public func healthy()->Bool{valid}
  public func mtuProfile()->String{"{\"mtu_policy\":\"auto\"}"}
 }
+// This suite does not model a proved CONNECT native owner. Keep the generated
+// type distinct and its unused constructor refusing, never aliasing SOCKS.
+public final class LibboxRouterNodeChainCONNECT:NSObject {
+ public func healthy()->Bool{false}
+ public func mtuProfile()->String{""}
+}
 public final class LibboxRouterExternalProofRequest:NSObject { public var valid=true }
 public final class LibboxRouterTorProofRequest:NSObject { public var valid=true;public var entryJumbo=false;public var entryFixedMTU:Int32=0 }
 public enum FakeOS {
@@ -121,6 +127,10 @@ public func LibboxRouterNodeChainSOCKSNewMTU(_ plan:LibboxRouterNodeChainSOCKS?,
  guard let plan,plan.healthy() else{error?.pointee=NSError(domain:"ExecutionMTUFixture",code:1);return nil}
  let core=LibboxNewRouterMTU(server,platform,"captured actual execution graph",plan.mtuProfile(),error)
  core?.automatic=plan.automatic;return core
+}
+public func LibboxRouterNodeChainCONNECTNewMTU(_ plan:LibboxRouterNodeChainCONNECT?,_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
+ error?.pointee=NSError(domain:"UnprovedCONNECTMTUFixture",code:1)
+ return nil
 }
 public func LibboxNewRouterTorMTU(_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ proof:LibboxRouterTorProofRequest?,_ config:String?,_ profile:String?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
  FakeOS.torArguments=[config ?? "",profile ?? ""];FakeOS.torProof=proof
@@ -597,6 +607,18 @@ rejects("ordered factory admitted generation change during attachment"){
  _ = try measured.observeNodeChainExecutionMeasurement(observation){try measured.beginMTUChange(originalState)}
 }
 try measured.endMTUChange();try measured.stopChecked()
+// Declaration coverage is not CONNECT native acceptance. Both production
+// admission and direct use of the unused generated fixture must fail closed.
+let unprovedCONNECT=ready(),unprovedCONNECTPlan=LibboxRouterNodeChainCONNECT()
+let previousCONNECTCore=FakeOS.current,previousCONNECTStarts=FakeOS.startCalls
+rejects("unproved CONNECT fixture activated MTU"){
+ try unprovedCONNECT.activateNodeChainCONNECT(server:LibboxCommandServer(),plan:unprovedCONNECTPlan){_ in}
+}
+var unprovedCONNECTError:NSError?
+let unprovedCONNECTCore=LibboxRouterNodeChainCONNECTNewMTU(unprovedCONNECTPlan,LibboxCommandServer(),unprovedCONNECT,&unprovedCONNECTError)
+check(unprovedCONNECTCore==nil && unprovedCONNECTError?.domain=="UnprovedCONNECTMTUFixture","unused CONNECT fixture manufactured a native optimizer")
+check(FakeOS.current === previousCONNECTCore && FakeOS.startCalls==previousCONNECTStarts,"refused CONNECT fixture replaced or started an optimizer")
+try unprovedCONNECT.stopChecked()
 print("Production Swift MTU owner: PASS (\(checks) checks; Libbox/OS boundary doubled)")
 """
 GATE=r"""
