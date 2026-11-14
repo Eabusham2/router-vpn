@@ -44,6 +44,9 @@ def main():
     assert 'linux_profile_choose_hops_v11' in block(profiles, 'static void linux_install_connection_profiles_v11(')
     original = (HERE/'routervpn-ordered-nodes-v1.inc').read_text()
     controls = [
+        ('connect-mode', 'g_strdup(linux_ordered_imported_v1(profile) ? linux_ordered_imported_mode_v1(profile) : "wg")', 'g_strdup(linux_ordered_imported_v1(profile) ? (strcmp(linux_ordered_imported_mode_v1(profile), "https-connect") == 0 ? "http-connect" : linux_ordered_imported_mode_v1(profile)) : "wg")', 'CONNECT Add substituted its exact saved transport'),
+        ('connect-protocol', 'strcmp(mode, linux_ordered_imported_mode_v1(profile)) == 0', '(strcmp(mode, linux_ordered_imported_mode_v1(profile)) == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0)', 'CONNECT selection borrowed a different saved protocol'),
+        ('connect-final', ' || g_strcmp0(g_ptr_array_index(editor->modes, i), "http-connect") == 0 || g_strcmp0(g_ptr_array_index(editor->modes, i), "https-connect") == 0', '', 'CONNECT final chooser admitted Hysteria2'),
         ('socks-mode', 'g_strdup(linux_ordered_imported_v1(profile) ? linux_ordered_imported_mode_v1(profile) : "wg")', 'g_strdup(linux_ordered_imported_v1(profile) ? "shadowsocks" : "wg")', 'SOCKS Add substituted its saved transport'),
         ('final-mode', 'strcmp(linux_ordered_string_v1(payload, "mode"), linux_ordered_string_v1(json_array_get_object_element(nodes, json_array_get_length(nodes) - 1), "mode")) != 0', 'FALSE', 'different final mode borrowed committed receipt'),
         ('source-token', 'strcmp(linux_ordered_string_v1(profile, "profile_token"), linux_ordered_string_v1(selection->tokens, id)) != 0', 'FALSE', 'replaced middle source connected'),
@@ -56,7 +59,7 @@ def main():
         ('load-current-graph', 'if (linux_ordered_flag_v1(profile, "multihop_enabled")) {', 'if (FALSE) {', 'Load lost complete current graph'),
         ('response-inventory', 'if (supplied == NULL || json_object_get_size(supplied) != json_array_get_length(nodes)) return NULL;', 'if (supplied == NULL) return NULL;', 'extra committed source receipt accepted'),
     ]
-    if args.model_only: controls = [c for c in controls if c[0] in {'final-mode', 'source-token', 'final-pin', 'expected-inventory', 'disk-receipt', 'load-current-graph', 'response-inventory'}]
+    if args.model_only: controls = [c for c in controls if c[0] in {'connect-protocol', 'connect-final', 'final-mode', 'source-token', 'final-pin', 'expected-inventory', 'disk-receipt', 'load-current-graph', 'response-inventory'}]
     flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'gtk+-3.0', 'json-glib-1.0'], text=True).split()
     with tempfile.TemporaryDirectory(prefix='routervpn-gtk-ordered-') as temporary:
         root = Path(temporary)
