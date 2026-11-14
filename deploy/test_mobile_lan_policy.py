@@ -76,10 +76,15 @@ class Tests(unittest.TestCase):
         preflights=re.findall(r'guard (\(provider\["engine"\].+?) else \{ throw tunnelError\(5,',provider,re.S)
         self.assertEqual(len(preflights),1,'one owned Apple early LAN preflight must be present')
         preflight=preflights[0]
+        prefix=(ROOT/'ios/RouterVPN/App/IOSNodeCandidatePrefixProviderCapture.swift').read_text()
+        prefixEngines=re.findall(r'(?m)^    (static let engine = "[^"]+")$',prefix)
+        self.assertEqual(len(prefixEngines),1,'one shipping temporary-prefix engine identity must be present')
+        prefixEngine=prefixEngines[0]
         capturedEntryCondition=' && (provider["tor_entry_bundle"] != nil || provider["external_entry_bundle"] != nil)'
         self.assertIn(capturedEntryCondition,preflight)
         external_lan_boundary(provider)
         source='''import Foundation
+enum IOSNodeCandidatePrefixProviderCapture { PREFIX_ENGINE }
 struct TunnelProtocol { var excludeLocalNetworks: Bool }
 func preflight(_ engine: String, _ allowLAN: Bool, _ exclusion: Bool, _ capturedEntry: String?) -> Bool {
     var provider: [String: Any] = ["engine":engine]
@@ -89,7 +94,7 @@ func preflight(_ engine: String, _ allowLAN: Bool, _ exclusion: Bool, _ captured
 }
 
 struct Profile {var homeLANAccess: Bool?}
-func regular(_ strict: Bool, _ homeLANAccess: Bool, _ entryAllowsLAN: Bool) -> Bool {
+func regular(_ strict: Bool, _ homeLANAccess: Bool, _ entryAllowsLAN: Bool, _ nodeChainSource: String?) -> Bool {
     var proto = TunnelProtocol(excludeLocalNetworks:false)
     APP
     return proto.excludeLocalNetworks
@@ -97,8 +102,12 @@ func regular(_ strict: Bool, _ homeLANAccess: Bool, _ entryAllowsLAN: Bool) -> B
 func external(_ strict: Bool, _ profile: Profile, _ capturedEntryProfile: Profile?) -> Bool { EXTERNAL }
 var checks=0
 for strict in [false,true] { for home in [false,true] { for entry in [false,true] {
-    precondition(regular(strict,home,entry) == (strict && home && entry)); checks += 1
-    if !home || !entry { precondition(!regular(strict,home,entry));checks += 1 }
+    for chain: String? in [nil,"captured ordered source"] {
+        // An ordered graph already captured the intersection in entryAllowsLAN;
+        // ordinary paths additionally intersect the selected home policy.
+        precondition(regular(strict,home,entry,chain) == (strict && entry && (chain != nil || home))); checks += 1
+        if !entry || (chain == nil && !home) { precondition(!regular(strict,home,entry,chain));checks += 1 }
+    }
 } } }
 for strict in [false,true] {for home: Bool? in [nil,false,true] {
     for entry: Profile? in [nil,Profile(homeLANAccess:nil),Profile(homeLANAccess:false),Profile(homeLANAccess:true)] {
@@ -106,9 +115,9 @@ for strict in [false,true] {for home: Bool? in [nil,false,true] {
     }
 }}
 for home in [false,true] { for exclusion in [false,true] {
-    for engine in ["multihop-libbox","libbox","wireguard","multihop","external-libbox","unknown"] {
+    for engine in ["multihop-libbox","candidate-prefix-libbox","libbox","wireguard","multihop","external-libbox","unknown"] {
         for capturedEntry: String? in [nil,"tor_entry_bundle","external_entry_bundle"] {
-            let deferred = engine == "multihop-libbox" || (engine == "external-libbox" && capturedEntry != nil)
+            let deferred = engine == "multihop-libbox" || engine == "candidate-prefix-libbox" || (engine == "external-libbox" && capturedEntry != nil)
             precondition(preflight(engine,home,exclusion,capturedEntry) == (deferred || home == exclusion));checks += 1
         }
     }
@@ -124,16 +133,18 @@ print("Shipping Apple LAN exclusion: PASS (\\(checks) checks)")
                      ('missing-ordinary-entry-capture',preflight.replace(' || provider["external_entry_bundle"] != nil','',1),appRule,externalExpr,False),
                      ('entry-policy-bypass',preflight,appRule,externalExpr.replace(' && (capturedEntryProfile?.homeLANAccess ?? true)',''),False),
                      ('captured-entry-policy-bypass',preflight,appRule.replace(' && entryAllowsLAN',''),externalExpr,False),
-                     ('captured-exclusion-inversion',preflight,appRule.replace('proto.excludeLocalNetworks = capturedLANExclusion','proto.excludeLocalNetworks = !capturedLANExclusion'),externalExpr,False)]
+                     ('captured-exclusion-inversion',preflight,appRule.replace('proto.excludeLocalNetworks = capturedLANExclusion','proto.excludeLocalNetworks = !capturedLANExclusion'),externalExpr,False),
+                     ('ordered-capture-lost',preflight,appRule.replace('nodeChainSource != nil || ',''),externalExpr,False),
+                     ('temporary-prefix-policy-not-deferred',preflight.replace(' || (provider["engine"] as? String) == IOSNodeCandidatePrefixProviderCapture.engine',''),appRule,externalExpr,False)]
             for name,guard,regularRule,externalRule,accepted in changes:
                 if not accepted:self.assertNotEqual((guard,regularRule,externalRule),(preflight,appRule,externalExpr),name+' mutation must change the shipping expression')
                 file=tmp/(name+'.swift');binary=tmp/name
-                file.write_text(source.replace('APP',regularRule).replace('EXTERNAL',externalRule).replace('PREFLIGHT',guard))
+                file.write_text(source.replace('APP',regularRule).replace('EXTERNAL',externalRule).replace('PREFLIGHT',guard).replace('PREFIX_ENGINE',prefixEngine))
                 subprocess.run([swift,'-swift-version','6',str(file),'-o',str(binary)],check=True,timeout=60)
                 result=subprocess.run([str(binary)],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
                 if accepted:
                     self.assertEqual(result.returncode,0,result.stderr);print(result.stdout.strip())
                 else:self.assertNotEqual(result.returncode,0,name+' bypass must fail the executed policy matrix')
-            print('Seven compiled Apple LAN-policy negative controls rejected')
+            print('Nine compiled Apple LAN-policy negative controls rejected (all seven original controls retained)')
         self.assertNotIn('excludeLocalNetworks == !allowLAN',(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text())
 if __name__=='__main__':unittest.main()
