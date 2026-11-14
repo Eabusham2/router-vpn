@@ -141,10 +141,13 @@ def android(bundle,work):
  boundaries+=block(P.BOUNDARIES,'final class AndroidPrivateFileStore')+block(P.BOUNDARIES,'final class AndroidVpnMutationGuard')
  boundaries+=block(P.BOUNDARIES,'final class AndroidHomeStateStore')+block(P.BOUNDARIES,'final class AndroidRuntimeRegistry')
  # Retain the shipping saved-policy validator with its complete pure closure;
- # only this fixture's explicit imported capture boundary is supplied below.
+ # protocol() is already part of that closure; append only this fixture's
+ # explicit imported capture boundary below.
  policy=block(store_sources['com/eabusham/routervpn/AndroidExternalPolicy.java'],'final class AndroidExternalPolicy')
+ assert policy.count(block((JAVA/'AndroidExternalPolicy.java').read_text(),'    static String protocol('))==1,'saved-policy fixture must retain the exact shipping protocol helper once'
  boundaries+=policy[:-1]+'''static final class Captured{String source="{}",capture="{}";}static Captured captureImportedEntry(AndroidStandardExitStore.Entry e){return new Captured();}
-'''+block((JAVA/'AndroidExternalPolicy.java').read_text(),'    static String protocol(')+'}\n'
+}
+'''
  layer=(JAVA/'AndroidStartLayer.java').read_text()
  boundaries+='final class AndroidStartLayer {'+'\n'.join(line for line in layer.splitlines() if any('static final String '+name+' =' in line for name in ('OFF','AES','AES_XOR')))
  boundaries+='\n'.join(block(layer,signature) for signature in ('    static String selectedMode(','    private static JSONObject selectedRouterProfile(','    private static JSONObject requireHome(','    private static String normalize('))+'}\n'
