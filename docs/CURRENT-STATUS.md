@@ -6,6 +6,62 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 14: actual native editor results and public SOCKS connections
+
+At source checkpoint `4c073833f5d9f97da565a17cb2bb71fa05cbc739`, the
+following newer evidence supersedes the earlier local-only editor observations.
+[Hosted run 43583025476](https://github.com/Eabusham2/router-vpn/actions/runs/43583025476)
+completed successfully on exact source
+`a05984e38be2fecb322f910392923474d6e24320`:
+
+| Native editor target | Actual hosted result |
+| --- | --- |
+| GTK, Linux AMD64 | 1,266 checks and fourteen causal controls passed using the actual GTK widgets and shipping callbacks. |
+| WPF, Windows AMD64 | PowerShell 5.1 and 7 each passed 3,971 full-profile checks, 248 ordered-editor checks, nineteen original controls and ten ordered-editor controls. |
+| WPF, Windows ARM64 | The same complete inventories passed separately under PowerShell 5.1 and 7. |
+
+Downloaded archive digests, source-selection manifests and individual log
+hashes were verified. Each recorded command joined without timeout, and the
+unchanged shipping verdict parser rejected omitted controls. These are native
+widget/callback results with the fixtures' documented network and HTTP doubles;
+they do not establish physical visual inspection or tunnel acceptance. Later
+ordinary fifty-response UI changes at `f51e5d4a` require their own current-source
+verification and are not included in this older editor result.
+
+The following coherent source changes are also committed and remote-main
+verified:
+
+| Change | Published source and focused verification |
+| --- | --- |
+| Public SOCKS connection route | [0e8a703c](https://github.com/Eabusham2/router-vpn/commit/0e8a703cbf662794db1b04583859f0896ff54ac5) connects supported retained Linux and Windows SOCKS paths through the application's public native Connect handler. Eleven Go roots produced 58 passing verdicts, 95 runner/audit checks passed, and two compiled controls rejected the old closed gate and an incorrectly widened target. Installed fixtures now require the public route; Windows receipts require the enabled schema-2 admission. |
+| Cached DNS retry fixture | [e37114a5](https://github.com/Eabusham2/router-vpn/commit/e37114a5cc1d6d375d00462a51c49824faf8c7c7) exercises the already implemented single cached-read retry, fresh retry failure and original-context cancellation. Twenty race repetitions and two compiled controls passed. Production retry limits, ownership and deadlines are unchanged. |
+| Linux teardown fixture | [62b34c66](https://github.com/Eabusham2/router-vpn/commit/62b34c66f73bea879f0bc75240ffc6e59b1043dd) supplies the missing CONNECT owner to the extracted shipping cleanup fixture. Eighteen Python checks, seven Go roots with 22 subcases and seven compiled controls passed. Production cleanup remains unchanged. |
+| Apple native interface fixture | [4c073833](https://github.com/Eabusham2/router-vpn/commit/4c073833f5d9f97da565a17cb2bb71fa05cbc739) supplies the real enumerated Apple host interface identity expected by the pinned native network finder. All eighteen existing native test bodies remain unchanged. Fifteen focused checks, three extracted Go roots with eight subcases and six exact causal controls passed. The fixture's explicit DNS/TUN/packet boundaries remain component boundaries. |
+
+Fresh complete-native [Linux run 43587538855](https://github.com/Eabusham2/router-vpn/actions/runs/43587538855)
+and [Windows run 43587538878](https://github.com/Eabusham2/router-vpn/actions/runs/43587538878)
+are pinned to `0e8a703cbf662794db1b04583859f0896ff54ac5`, with both
+AMD64 and ARM64 required. Their new public-route evidence is still pending at
+this document's cutoff. The older `26ce754b` manual runs cannot establish this
+new admission. [Apple SDK run 43588024844](https://github.com/Eabusham2/router-vpn/actions/runs/43588024844)
+selects exact `4c073833f5d9f97da565a17cb2bb71fa05cbc739`; its required
+native Libbox, generated bindings, app/PacketTunnel and package checks are
+also pending. A dispatch or queue entry is not an accepted native result.
+
+The complete [MAX native workflow 43578585353](https://github.com/Eabusham2/router-vpn/actions/runs/43578585353)
+passed at `10cdf735e3edfb69ee7d7421edc5f16adc6e1648`. The complete
+[Naive HTTP/3 workflow 43575883865](https://github.com/Eabusham2/router-vpn/actions/runs/43575883865)
+also passed at `dc98e753e9c1ad97818e68b8049d7a289af170b9`, including
+its previously pending Apple graph job. These exact-source component results
+do not substitute for a converged current application/image/compose release.
+
+Darwin public admission, captured typed Performance status, broader ordered
+execution and operator provisioning remain active source/integration work at
+this cutoff. The original all-device and graph requirements, current native
+release, physical/off-LAN tests and authorized private deployment remain
+separate obligations; no completion percentage or full-delivery claim follows
+from the results above.
+
 ## November 14: complete CONNECT profiles and native editor corrections
 
 Desktop CONNECT candidate Save/Load is published in `658414f3`, preserving
@@ -16,11 +72,12 @@ macOS (`d7ec85ee`), Windows (`3e3a554b`) and GTK (`3e0b8035`) editor adoption.
 Apple's compatible final picker and explicit unavailable saved row are
 published in `c8d731ca`, with 248 source checks and six compiled controls.
 
-The GTK source/model passed 683 checks and nine controls; its actual widget
-gate remains required because local AF_UNIX socket permission prevented Xvfb.
-The Windows local result uses PowerShell 7 with WPF disabled, and the Apple
-source fixture excludes SwiftUI rendering. None enables an unproved native
-capability. The ledger separately records `72dcb481`'s Darwin execution child
+The earlier GTK source/model passed 683 checks and nine controls; local
+AF_UNIX socket permission prevented Xvfb, and the Windows local result used
+PowerShell 7 with WPF disabled. The later hosted GTK and WPF results above
+supply actual widget evidence at their exact source SHA. The Apple source
+fixture still excludes SwiftUI rendering. None establishes physical-device
+tunnel acceptance. The ledger separately records `72dcb481`'s Darwin execution child
 and cross-build, `0211bb5b`'s CONNECT PF dispatcher correction and `cee86ee2`'s
 two current CI fixture repairs. Parent execution integration, the complete
 current release, private deployment and physical acceptance are not closed by
@@ -85,9 +142,10 @@ control. The GitHub Windows aggregation job also passed.
 This establishes the protected imported Naive HTTP/3 component on those two
 Windows runner architectures. Its receipt explicitly records `race=false`,
 `cgo=0` and `physical_device_acceptance=false`. The workflow's Apple graph job
-was still queued at this observation. Newer source also changes the prepared
-closure, so this result cannot substitute for the current complete exact-SHA
-release, native application packages or physical acceptance.
+subsequently passed, and the complete workflow finished successfully on
+November 14 at 10:05:10 UTC. Newer source also changes the prepared closure,
+so this result cannot substitute for the current complete exact-SHA release,
+native application packages or physical acceptance.
 
 ## Continuation from 35ff28a7: release convergence and retained scope
 
