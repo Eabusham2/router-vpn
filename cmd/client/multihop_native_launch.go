@@ -176,6 +176,9 @@ func preflightRetainedNativeMultihop(ctx context.Context, binary string, launch 
 	}
 	if launch.chain != nil {
 		command = "routervpn-node-chain"
+		if desktopNodeChainLaunchExecution(launch) != nil {
+			command = "routervpn-node-chain-execution"
+		}
 	}
 	if launch.importedPlatform != nil {
 		command = "routervpn-imported"
