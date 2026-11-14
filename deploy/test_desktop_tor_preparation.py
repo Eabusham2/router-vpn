@@ -280,6 +280,7 @@ class DesktopPTPreparation(unittest.TestCase):
              patch.object(PREP.MTU, 'prepare'), patch.object(PREP.DESKTOP_MTU, 'prepare'), \
              patch.object(PREP.STRATEGY, 'prepare'), patch.object(PREP.EXTERNAL, 'prepare'), \
              patch.object(PREP.NODE_CHAIN, 'prepare') as chain, \
+             patch.object(PREP.CONNECT, 'prepare') as connect, \
              patch.object(PREP, 'prepare_network_startup') as startup, \
              patch.object(PREP, 'prepare_node_capture') as node_capture, \
              patch.object(PREP, 'prepare_daemon_capture') as daemon_capture, \
@@ -299,6 +300,7 @@ class DesktopPTPreparation(unittest.TestCase):
             node_capture.assert_called_once_with(self.vendor.resolve())
             daemon_capture.assert_called_once_with(self.vendor.resolve())
             chain.assert_called_once_with(self.vendor.resolve(), mobile=False)
+            connect.assert_called_once_with(self.vendor.resolve(), mobile=False)
             self.assertEqual(execution_calls, [
                 ('desktop_prepare_node_chain_execution_gate', self.vendor.resolve()),
                 ('desktop_prepare_node_chain_execution', self.vendor.resolve()),
@@ -866,7 +868,7 @@ if __name__ == '__main__':
     ORIGINALS = {name: subprocess.check_output(['git', '-C', str(vendor), 'show', head+':'+name])
                  for name in ('include/registry.go', 'route/network.go', 'dns/transport_adapter.go', 'go.mod', 'go.sum', 'box.go',
                               'adapter/inbound/manager.go', 'adapter/outbound/manager.go', 'adapter/endpoint/manager.go',
-                              'adapter/service/manager.go', 'dns/transport_manager.go',
+                              'adapter/service/manager.go', 'dns/transport_manager.go', 'dns/transport/udp.go',
                               'protocol/group/selector.go', 'common/interrupt/group.go', 'common/urltest/urltest.go')}
     suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
                                for case in (DesktopPTManifestPreflight, DesktopDaemonCapturePreparation, DesktopPTPreparation))

@@ -209,11 +209,14 @@ def checked_sources(source,core,xray):
     packet.verify(core)
     if "routervpnnodesocks" in (core/"include/registry.go").read_text():
         raise ValueError("Typed SOCKS owner acquired global registration")
-    for relative in ("dns/transport/conn_pool.go","dns/transport/multiplexer.go","dns/transport/udp.go","protocol/socks/outbound.go"):
+    strategy=module("socks_bridge_candidate_udp",source/"deploy/prepare-mobile-strategy.py")
+    udp=strategy.verify_udp(core)
+    for relative in ("dns/transport/conn_pool.go","dns/transport/multiplexer.go","protocol/socks/outbound.go"):
         original=subprocess.check_output(["git","show",PIN+":"+relative],cwd=core,timeout=20)
         if (core/relative).is_symlink() or (core/relative).read_bytes()!=original:
             raise ValueError("Original pinned caller changed: "+relative)
-    return {"core":native_snapshot(core),"xray":native_snapshot(xray)}
+    return {"core":native_snapshot(core),"xray":native_snapshot(xray),
+            "udp":{"original_sha256":strategy.UDP_ORIGINAL_SHA256,"prepared":udp}}
 
 def checked_owner_sources(source,core,xray):
     gate=OWNER.load_gate(source)

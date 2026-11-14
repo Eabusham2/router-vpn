@@ -32,6 +32,10 @@ def fifty_events(mode,control=None):
     return rows
 def encoded(rows):return ("\n".join(json.dumps(x) for x in rows)+"\n").encode()
 def plain(names):return "".join("=== RUN   "+x+"\n--- PASS: "+x+" (0.01s)\n" for x in names)+"PASS\n"
+def udp_control_rows(control):
+    root=V.UDP_REUSE.ROOT;leaf=root+"/"+control["case"]
+    return ("=== RUN   "+root+"\n=== RUN   "+leaf+"\n"+control["witness"]+
+            "\n--- FAIL: "+leaf+" (0.01s)\n--- FAIL: "+root+" (0.01s)\nFAIL\n").encode()
 
 class Composition:
     def __init__(self,work,fault=None):
@@ -69,6 +73,10 @@ class Composition:
             if name=="prepare-owner":
                 original=core/V.REFERENCE.PROJECTION
                 original.parent.mkdir(parents=True);original.write_text('bindHost: "127.0.0.1", handshakeDeadline: true, controlOwnedUDP: true}')
+                by_path={}
+                for control in V.UDP_REUSE.CONTROLS:by_path.setdefault(control["path"],[]).append(control["before"])
+                for path,anchors in by_path.items():
+                    target=core/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text("\n".join(anchors))
             if name=="prepare-mobile":
                 diagnostic=core/V.DIAGNOSTIC.PROJECTION;diagnostic.parent.mkdir(parents=True,exist_ok=True)
                 diagnostic.write_text((ROOT/"internal/hopmeasure/measure.go").read_text())
@@ -90,6 +98,20 @@ class Composition:
             else:assert not overlays
         elif name=="original-imported-middle":
             assert cwd==self.roles["owner"][0];raw=plain(V.ORIGINAL).encode()
+        elif name=="udp-dns-reuse-positive":
+            assert cwd==self.roles["owner"][0] and command[-1]=="./dns/transport"
+            assert "-run=^"+V.UDP_REUSE.ROOT+"$" in command
+            raw=plain(V.UDP_REUSE.NAMES).encode()
+        elif name in {control["name"] for control in V.UDP_REUSE.CONTROLS}:
+            assert cwd==self.roles["owner"][0] and command[-1]=="./dns/transport"
+            control=next(value for value in V.UDP_REUSE.CONTROLS if value["name"]==name)
+            assert "-run=^"+V.UDP_REUSE.ROOT+"$/"+control["case"]+"$" in command
+            original=cwd/control["path"]
+            overlay=Path(next(x.split("=",1)[1] for x in command if x.startswith("-overlay=")))
+            replacements=json.loads(overlay.read_text())["Replace"]
+            assert list(replacements)==[str(original)]
+            assert Path(replacements[str(original)]).read_text()==V.BASE.mutate(control,original.read_text())
+            raw=udp_control_rows(control);status=1
         elif name=="socks-handshake-reference":
             assert cwd==self.roles["owner"][0];raw=plain(V.REFERENCE.NAMES).encode()
         elif name=="socks-handshake-old-deadline":
@@ -146,6 +168,12 @@ class Composition:
         if self.fault=="mobile-prepare" and name=="prepare-mobile":status=1
         if self.fault=="build" and name=="client-build":status=1
         if self.fault=="original-missing" and name=="original-imported-middle":raw=plain(V.ORIGINAL[:-1]).encode()
+        if self.fault=="udp-positive-failed" and name=="udp-dns-reuse-positive":status=1
+        if self.fault=="udp-positive-missing" and name=="udp-dns-reuse-positive":raw=plain(V.UDP_REUSE.NAMES[:-1]).encode()
+        if self.fault=="udp-empty:"+name:raw=b""
+        if name==V.UDP_REUSE.CONTROLS[0]["name"]:
+            if self.fault=="udp-control-pass":status=0
+            if self.fault=="udp-control-witness":raw=raw.replace(V.UDP_REUSE.CONTROLS[0]["witness"].encode(),b"unrelated")
         if self.fault=="handshake-missing" and name=="socks-handshake-reference":raw=plain(V.REFERENCE.NAMES[:-1]).encode()
         if self.fault=="handshake-control-pass" and name=="socks-handshake-old-deadline":status=0
         if self.fault=="handshake-control-witness" and name=="socks-handshake-old-deadline":raw=raw.replace(b"authenticated control retained handshake deadline",b"unrelated")
@@ -166,7 +194,9 @@ class Composition:
             if self.fault=="selection-changed":self.selection.write_text(json.dumps(dict(self.metadata,source_tree="1"*40)))
             if self.fault=="diagnostic-changed":(self.output/"private-diagnostic/measure.go").write_text("changed")
         log.write_bytes(raw)
-        return status,self.fault=="timeout" and name=="run-wg",not(self.fault=="unjoined" and name=="run-wg")
+        timed_out=(self.fault=="timeout" and name=="run-wg") or (self.fault=="udp-timeout" and name=="udp-dns-reuse-positive")
+        unjoined=(self.fault=="unjoined" and name=="run-wg") or (self.fault=="udp-unjoined" and name==V.UDP_REUSE.CONTROLS[0]["name"])
+        return status,timed_out,not unjoined
     def run(self):
         with patch.object(V.BASE.COMMON,"git",side_effect=self.git),patch.object(V.BASE.CORE,"snapshot",side_effect=self.snapshot),\
              patch.object(V.BASE.CORE,"execute",side_effect=self.execute),patch.object(V,"sources",side_effect=self.sources),\
@@ -186,9 +216,10 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
         self.assertEqual(len(V.CONTROLS),4)
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
-            self.assertEqual(len(c.calls),30)
-            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,40,600,30,600,*([190]*8),*([600]*4),*([190]*3),*([600]*5)])
-            self.assertEqual(c.original,[V.ORIGINAL,V.REFERENCE.NAMES,(V.REFERENCE.IDLE_ROOT,)])
+            self.assertEqual(len(c.calls),35)
+            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,*([600]*5),40,600,30,600,*([190]*8),*([600]*4),*([190]*3),*([600]*5)])
+            self.assertEqual([x[0] for x in c.calls[6:11]],["udp-dns-reuse-positive",*(control["name"] for control in V.UDP_REUSE.CONTROLS)])
+            self.assertEqual(c.original,[V.ORIGINAL,V.UDP_REUSE.NAMES,V.REFERENCE.NAMES,(V.REFERENCE.IDLE_ROOT,)])
             self.assertEqual([x["case"] for x in receipt["case_records"]],list(V.CASES))
             self.assertEqual(len(receipt["controls"]),4)
             self.assertEqual(receipt["socks_reference_handoff_records"],list(V.REFERENCE.NAMES))
@@ -198,6 +229,12 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
             self.assertEqual(len(receipt["ordered_fifty_records"]),3)
             self.assertEqual(len(receipt["ordered_fifty_controls"]),5)
             self.assertFalse(receipt["ordered_fifty_host_persistence_accepted"])
+            self.assertEqual(receipt["udp_dns_reuse_records"],list(V.UDP_REUSE.NAMES))
+            self.assertEqual([item["name"] for item in receipt["udp_dns_reuse_controls"]],[item["name"] for item in V.UDP_REUSE.CONTROLS])
+            self.assertTrue(all(item["expected_failure"] for item in receipt["udp_dns_reuse_controls"]))
+            self.assertTrue(receipt["udp_dns_reuse_idle_timeout_unchanged"])
+            self.assertFalse(receipt["udp_dns_reuse_device_accepted"])
+            self.assertEqual(receipt["trusted_udp_dns_reuse_sha256"],hashlib.sha256(V.UDP_REUSE_PATH.read_bytes()).hexdigest())
             self.assertFalse(receipt["failure_only_diagnostic"]["acceptance_changed"])
             self.assertTrue(receipt["failure_only_diagnostic"]["original_deadlines_preserved"])
             self.assertTrue(receipt["successful_run_accepted"]);self.assertTrue(receipt["ordered_measurement_accepted"])
@@ -214,6 +251,30 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
                 if name=="socks-handshake-reference":self.assertIn("-test.timeout=30s",command)
                 if name=="socks-handshake-old-deadline":
                     self.assertIn("-race",command);self.assertIn("-p=1",command);self.assertIn("-timeout=30s",command)
+                if name.startswith("udp-dns-reuse-"):
+                    self.assertIn("-race",command);self.assertIn("-p=1",command);self.assertIn("-timeout=30s",command)
+    def test_udp_controls_require_original_case_witness_and_exact_anchor(self):
+        self.assertEqual(len(V.UDP_REUSE.NAMES),11);self.assertEqual(len(V.UDP_REUSE.CONTROLS),4)
+        for control in V.UDP_REUSE.CONTROLS:
+            raw=udp_control_rows(control)
+            self.assertTrue(V.UDP_REUSE.control_events(raw,1,control)["expected_failure"])
+            for status in (0,-9,124):
+                with self.assertRaises(ValueError):V.UDP_REUSE.control_events(raw,status,control)
+            for changed in (raw+raw,raw.replace(control["witness"].encode(),b"unrelated"),
+                            raw.replace((V.UDP_REUSE.ROOT+"/"+control["case"]).encode(),b"foreign"),
+                            raw+b"DATA RACE",raw+b"panic:",raw+b"--- SKIP: unrelated (0.00s)\n"):
+                with self.assertRaises(ValueError):V.UDP_REUSE.control_events(changed,1,control)
+            original="before\n"+control["before"]+"\nafter"
+            self.assertNotEqual(V.BASE.mutate(control,original),original)
+            for changed in ("foreign",original+original):
+                with self.assertRaises(ValueError):V.BASE.mutate(control,changed)
+    def test_each_udp_phase_requires_its_complete_result(self):
+        for name in ("udp-dns-reuse-positive",*(control["name"] for control in V.UDP_REUSE.CONTROLS)):
+            with self.subTest(phase=name),tempfile.TemporaryDirectory() as directory:
+                c=Composition(Path(directory),"udp-empty:"+name)
+                with self.assertRaises(ValueError):c.run()
+                self.assertFalse((c.output/"receipt.json").exists())
+                self.assertEqual(json.loads((c.output/"progress.json").read_text())["status"],"failed")
     def test_handshake_control_requires_both_actual_transport_failures(self):
         root=V.REFERENCE.ROOT
         raw=("".join("=== RUN   "+x+"\n" for x in V.REFERENCE.NAMES)+
@@ -256,6 +317,7 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
 
     def test_no_failed_missing_or_unjoined_phase_can_publish_acceptance(self):
         for fault in ("preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
+                      "udp-positive-failed","udp-positive-missing","udp-control-pass","udp-control-witness","udp-timeout","udp-unjoined",
                       "handshake-missing","handshake-control-pass","handshake-control-witness","idle-missing","idle-control-pass","idle-control-witness",
                       "control-pass","control-signal","control-panic","control-witness","candidate-changed","owner-changed",
                       "mobile-changed","image-changed","selection-changed","diagnostic-changed","timeout","unjoined"):

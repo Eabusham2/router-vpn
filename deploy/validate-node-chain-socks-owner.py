@@ -125,8 +125,13 @@ def checked_sources(gate, source, core):
                 or native.read_bytes() != template.read_bytes():
             raise ValueError('SOCKS owner original daemon capture projection changed')
         records['owner-daemon/'+relative] = hashlib.sha256(native.read_bytes()).hexdigest()
+    strategy = module('socks_owner_udp_capture', source/'deploy/prepare-mobile-strategy.py')
+    udp = strategy.verify_udp(core)
+    records['owner-udp-original/'+strategy.UDP_PATH] = strategy.UDP_ORIGINAL_SHA256
+    for relative, digest in udp.items():
+        records['owner-udp-prepared/'+relative] = digest
     for relative in ('dns/transport/conn_pool.go', 'dns/transport/multiplexer.go',
-                     'dns/transport/udp.go', 'protocol/socks/outbound.go'):
+                     'protocol/socks/outbound.go'):
         native = core/relative
         original = COMMON.subprocess.check_output(
             ['git', 'show', gate.BUILD.PIN+':'+relative], cwd=core, timeout=20)

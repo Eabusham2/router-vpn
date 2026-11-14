@@ -1,0 +1,349 @@
+package transport
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	C "github.com/sagernet/sing-box/constant"
+	boxDNS "github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing/common/auth"
+	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/logger"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
+)
+
+type routerVPNUDPReuseOwnerKey struct{}
+
+// The lower dialer admits only this real loopback SOCKS control and the UDP
+// relays allocated by that control's listener. DNS never uses a direct socket.
+type routerVPNUDPReusePeer struct {
+	testing   *testing.T
+	ctx       context.Context
+	cancel    context.CancelFunc
+	listener  net.Listener
+	phase     string
+	mu        sync.Mutex
+	controls  map[net.Conn]bool
+	packets   map[string]net.PacketConn
+	workers   sync.WaitGroup
+	accepted  atomic.Int32
+	requests  atomic.Int32
+	retired   atomic.Bool
+	onFailure func()
+}
+
+func (p *routerVPNUDPReusePeer) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	p.mu.Lock()
+	allowed := network == N.NetworkTCP && address.String() == p.listener.Addr().String() || network == N.NetworkUDP && p.packets[address.String()] != nil
+	p.mu.Unlock()
+	if !allowed || ctx.Err() != nil {
+		return nil, errors.Join(ctx.Err(), errors.New("DNS escaped its captured SOCKS lower route"))
+	}
+	return (&net.Dialer{}).DialContext(ctx, network, address.String())
+}
+
+func (*routerVPNUDPReusePeer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("DNS attempted an uncaptured lower packet listener")
+}
+
+type routerVPNUDPReusePacket struct {
+	net.PacketConn
+	peer *routerVPNUDPReusePeer
+	once sync.Once
+}
+
+func (p *routerVPNUDPReusePacket) Close() error {
+	var failure error
+	p.once.Do(func() {
+		failure = p.PacketConn.Close()
+		p.peer.mu.Lock()
+		delete(p.peer.packets, p.LocalAddr().String())
+		p.peer.mu.Unlock()
+	})
+	return failure
+}
+
+type routerVPNUDPReuseHandler struct {
+	peer     *routerVPNUDPReusePeer
+	control  net.Conn
+	sequence int32
+}
+
+func (h *routerVPNUDPReuseHandler) ListenPacket(config net.ListenConfig, ctx context.Context, network, address string) (net.PacketConn, error) {
+	if network != "udp" || address != "127.0.0.1:0" {
+		return nil, errors.New("SOCKS relay changed its captured listener")
+	}
+	packet, err := config.ListenPacket(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	wrapped := &routerVPNUDPReusePacket{PacketConn: packet, peer: h.peer}
+	h.peer.mu.Lock()
+	h.peer.packets[packet.LocalAddr().String()] = wrapped
+	h.peer.mu.Unlock()
+	return wrapped, nil
+}
+func (*routerVPNUDPReuseHandler) NewConnectionEx(_ context.Context, connection net.Conn, _, _ M.Socksaddr, done N.CloseHandlerFunc) {
+	_ = connection.Close()
+	if done != nil {
+		done(errors.New("DNS changed its original UDP protocol"))
+	}
+}
+func (h *routerVPNUDPReuseHandler) NewPacketConnectionEx(_ context.Context, connection N.PacketConn, _, _ M.Socksaddr, done N.CloseHandlerFunc) {
+	defer connection.Close()
+	var result error
+	defer func() {
+		if done != nil {
+			done(result)
+		}
+	}()
+	for count := 0; ; count++ {
+		packet := buf.NewPacket()
+		destination, err := connection.ReadPacket(packet)
+		if err != nil {
+			packet.Release()
+			result = err
+			return
+		}
+		var query mDNS.Msg
+		err = query.Unpack(packet.Bytes())
+		packet.Release()
+		if err != nil || destination.String() != "192.168.50.133:53" || len(query.Question) != 1 {
+			result = errors.New("SOCKS DNS request escaped its original resolver")
+			return
+		}
+		h.peer.requests.Add(1)
+		first := h.sequence == 1
+		if h.peer.phase == "fresh-eof" || first && count == 1 || !first && h.peer.phase == "second-eof" {
+			if first && count == 1 {
+				h.peer.mu.Lock()
+				onFailure := h.peer.onFailure
+				h.peer.mu.Unlock()
+				if onFailure != nil {
+					onFailure()
+				}
+			}
+			// This is the actual control owner. Its termination produces the
+			// pinned SOCKS client's real UDP read failure; no EOF is fabricated.
+			result = h.control.Close()
+			return
+		}
+		response := new(mDNS.Msg).SetReply(&query)
+		response.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 0}, A: net.IPv4(93, 184, 216, 34)}}
+		write := func(raw []byte) error {
+			buffer := buf.NewSize(2048 + len(raw))
+			buffer.Resize(2048, 0)
+			_, _ = buffer.Write(raw)
+			return connection.WritePacket(buffer, destination)
+		}
+		if !first && h.peer.phase == "malformed-then-valid" {
+			if result = write([]byte{1, 2, 3}); result != nil {
+				return
+			}
+		}
+		if !first && h.peer.phase == "wrong-id-then-valid" {
+			wrong := response.Copy()
+			wrong.Id++
+			raw, _ := wrong.Pack()
+			if result = write(raw); result != nil {
+				return
+			}
+		}
+		raw, err := response.Pack()
+		if err != nil {
+			result = err
+			return
+		}
+		if result = write(raw); result != nil {
+			return
+		}
+	}
+}
+
+func routerVPNNewUDPReusePeer(t *testing.T, phase string) *routerVPNUDPReusePeer {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	p := &routerVPNUDPReusePeer{testing: t, ctx: ctx, cancel: cancel, listener: listener, phase: phase, controls: make(map[net.Conn]bool), packets: make(map[string]net.PacketConn)}
+	p.workers.Add(1)
+	go func() {
+		defer p.workers.Done()
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			sequence := p.accepted.Add(1)
+			p.mu.Lock()
+			p.controls[connection] = true
+			p.mu.Unlock()
+			p.workers.Add(1)
+			go func() {
+				defer p.workers.Done()
+				defer connection.Close()
+				defer func() { p.mu.Lock(); delete(p.controls, connection); p.mu.Unlock() }()
+				handler := &routerVPNUDPReuseHandler{peer: p, control: connection, sequence: sequence}
+				_ = socks.HandleConnectionEx(ctx, connection, bufio.NewReader(connection), auth.NewAuthenticator([]auth.User{{Username: "captured-user", Password: "captured-password"}}), handler, handler, 5*time.Second, M.SocksaddrFromNet(connection.RemoteAddr()), nil)
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		_ = listener.Close()
+		p.mu.Lock()
+		all := make([]io.Closer, 0, len(p.controls)+len(p.packets))
+		for c := range p.controls {
+			all = append(all, c)
+		}
+		for _, c := range p.packets {
+			all = append(all, c)
+		}
+		p.mu.Unlock()
+		for _, c := range all {
+			_ = c.Close()
+		}
+		joined := make(chan struct{})
+		go func() { p.workers.Wait(); close(joined) }()
+		select {
+		case <-joined:
+		case <-time.After(time.Second):
+			t.Error("original SOCKS DNS workers did not join")
+		}
+		p.mu.Lock()
+		left := len(p.controls) + len(p.packets)
+		p.mu.Unlock()
+		if left != 0 {
+			t.Error("original SOCKS DNS resources retained", left)
+		}
+	})
+	return p
+}
+
+type routerVPNUDPReuseDialer struct {
+	client   *socks.Client
+	peer     *routerVPNUDPReusePeer
+	owner    any
+	calls    atomic.Int32
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+func (d *routerVPNUDPReuseDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if d.peer.retired.Load() {
+		return nil, errors.New("original DNS owner was replaced")
+	}
+	if network != N.NetworkUDP || destination.String() != "192.168.50.133:53" || ctx.Value(routerVPNUDPReuseOwnerKey{}) != d.owner {
+		return nil, errors.New("DNS retry changed its captured owner or resolver")
+	}
+	d.mu.Lock()
+	deadline := d.deadline
+	d.mu.Unlock()
+	if !deadline.IsZero() {
+		actual, ok := ctx.Deadline()
+		if !ok || !actual.Equal(deadline) {
+			return nil, errors.New("DNS retry replaced its original deadline")
+		}
+	}
+	d.calls.Add(1)
+	return d.client.DialContext(ctx, network, destination)
+}
+func (*routerVPNUDPReuseDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("DNS retry changed its original dial method")
+}
+
+func TestRouterVPNUDPReusedSOCKSAssociation(t *testing.T) {
+	for _, phase := range []string{"reused", "fresh-eof", "second-eof", "cancelled", "deadline", "owner-replaced", "transport-closed", "transport-reset", "malformed-then-valid", "wrong-id-then-valid"} {
+		t.Run(phase, func(t *testing.T) {
+			peer := routerVPNNewUDPReusePeer(t, phase)
+			owner := new(int)
+			parent := context.WithValue(t.Context(), routerVPNUDPReuseOwnerKey{}, owner)
+			selected := M.ParseSocksaddr("192.168.50.133:53")
+			lower := &routerVPNUDPReuseDialer{peer: peer, owner: owner, client: socks.NewClient(peer, M.SocksaddrFromNet(peer.listener.Addr()), socks.Version5, "captured-user", "captured-password")}
+			transport := NewUDPRaw(logger.NOP(), boxDNS.NewTransportAdapter(C.DNSTypeUDP, "captured-home", nil), lower, selected)
+			t.Cleanup(func() {
+				if err := transport.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			question := func(name string) *mDNS.Msg { q := new(mDNS.Msg); q.SetQuestion(name, mDNS.TypeA); return q }
+			if phase != "fresh-eof" {
+				ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+				response, err := transport.Exchange(ctx, question("warm.example."))
+				cancel()
+				if err != nil || response == nil || len(response.Answer) != 1 {
+					t.Fatal("original captured UDP warm query failed", err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(parent, time.Second)
+			defer cancel()
+			deadline, _ := ctx.Deadline()
+			lower.mu.Lock()
+			lower.deadline = deadline
+			lower.mu.Unlock()
+			peer.mu.Lock()
+			peer.onFailure = func() {
+				switch phase {
+				case "cancelled":
+					cancel()
+				case "deadline":
+					<-ctx.Done()
+				case "owner-replaced":
+					peer.retired.Store(true)
+				case "transport-closed":
+					_ = transport.Close()
+				case "transport-reset":
+					transport.Reset()
+				}
+			}
+			peer.mu.Unlock()
+			query := question("proof.example.")
+			response, err := transport.Exchange(ctx, query)
+			success := phase == "reused" || phase == "malformed-then-valid" || phase == "wrong-id-then-valid"
+			if success {
+				if err != nil || response == nil || response.Id != query.Id || len(response.Question) != 1 || response.Question[0] != query.Question[0] || len(response.Answer) != 1 {
+					t.Fatal("stale SOCKS UDP association was not renewed", err)
+				}
+				if lower.calls.Load() != 2 || peer.accepted.Load() != 2 || peer.requests.Load() != 3 {
+					t.Fatal("UDP reuse did not perform one captured authenticated reopen", lower.calls.Load(), peer.accepted.Load(), peer.requests.Load())
+				}
+			} else {
+				if err == nil || response != nil {
+					t.Fatal("failed original UDP observation was reported successful")
+				}
+				want := int32(1)
+				if phase == "second-eof" {
+					want = 2
+				}
+				if lower.calls.Load() != want || peer.accepted.Load() != want {
+					t.Fatal("fresh or retired UDP association failure was retried", lower.calls.Load(), peer.accepted.Load(), want)
+				}
+				if phase == "cancelled" && !errors.Is(err, context.Canceled) {
+					t.Fatal("UDP reuse lost original cancellation", err)
+				}
+				if phase == "deadline" && !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("UDP reuse lost original deadline", err)
+				}
+			}
+			if err := transport.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

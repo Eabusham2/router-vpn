@@ -306,7 +306,9 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
     def test_actual_source_capture_requires_native_projection_and_pinned_callers(self):
         for fault in (None, 'missing-projection', 'changed-projection', 'linked-projection',
                       'changed-pinned', 'ordinary-registration', 'changed-sing',
-                      'missing-daemon', 'changed-daemon', 'linked-daemon', 'missing-daemon-hook'):
+                      'missing-daemon', 'changed-daemon', 'linked-daemon', 'missing-daemon-hook',
+                      'changed-multiplexer', 'changed-outbound', 'udp-missing', 'udp-changed', 'udp-linked',
+                      'udp-test-missing', 'udp-test-changed', 'udp-test-linked', 'udp-checker'):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
                 work = Path(directory)
                 source, core = work/'candidate', work/'native'
@@ -349,6 +351,32 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
                 for relative in pinned:
                     path = core/relative; path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(('pinned '+relative).encode())
+                udp_contents = {'dns/transport/udp.go': b'declared UDP read-retry source',
+                                'dns/transport/routervpn_udp_reuse_test.go': b'original native UDP reuse controls'}
+                for relative, content in udp_contents.items():
+                    (core/relative).write_bytes(content)
+                udp_verified = []
+                def verify_udp(path):
+                    self.assertEqual(path, core); udp_verified.append(path)
+                    if fault == 'udp-checker':
+                        raise ValueError('declared UDP checker refused')
+                    for relative, content in udp_contents.items():
+                        native = path/relative
+                        if native.is_symlink() or not native.is_file() or native.read_bytes() != content:
+                            raise ValueError('declared UDP projection changed')
+                    return {relative: hashlib.sha256(content).hexdigest() for relative, content in udp_contents.items()}
+                strategy = types.SimpleNamespace(UDP_PATH='dns/transport/udp.go',
+                    UDP_ORIGINAL_SHA256='c'*64, verify_udp=verify_udp)
+                if fault and fault.startswith('udp-') and fault != 'udp-checker':
+                    relative = 'dns/transport/routervpn_udp_reuse_test.go' if fault.startswith('udp-test-') else 'dns/transport/udp.go'
+                    native = core/relative
+                    if fault.endswith('missing'):
+                        native.unlink()
+                    elif fault.endswith('changed'):
+                        native.write_bytes(b'foreign UDP projection')
+                    else:
+                        target = source/'linked-udp.go'; target.write_bytes(udp_contents[relative])
+                        native.unlink(); native.symlink_to(target)
                 registry = core/'include/registry.go'; registry.parent.mkdir()
                 registry.write_text('original ordinary registry\n')
                 sing = core/'patched-sing'; sing.mkdir()
@@ -369,6 +397,10 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
                     owner.unlink(); owner.symlink_to(source/V.OWNER)
                 elif fault == 'changed-pinned':
                     (core/pinned[0]).write_text('changed pool')
+                elif fault == 'changed-multiplexer':
+                    (core/'dns/transport/multiplexer.go').write_text('changed multiplexer')
+                elif fault == 'changed-outbound':
+                    (core/'protocol/socks/outbound.go').write_text('changed SOCKS outbound')
                 elif fault == 'ordinary-registration':
                     registry.write_text('routervpnnodesocks.Register(registry)')
                 gate = types.SimpleNamespace(NODE=types.SimpleNamespace(
@@ -377,7 +409,7 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
                 def pinned_read(command, cwd, timeout):
                     relative = command[2].split(':', 1)[1]
                     return ('pinned '+relative).encode()
-                with patch.object(V, 'module', side_effect=lambda name, path: desktop if path.name == 'prepare-desktop-external.py' else packet), \
+                with patch.object(V, 'module', side_effect=lambda name, path: strategy if path.name == 'prepare-mobile-strategy.py' else desktop if path.name == 'prepare-desktop-external.py' else packet), \
                         patch.object(V.COMMON.subprocess, 'check_output', side_effect=pinned_read):
                     if fault:
                         with self.assertRaises(ValueError):
@@ -385,9 +417,13 @@ class NativeSOCKSOwnerValidator(unittest.TestCase):
                     else:
                         records = V.checked_sources(gate, source, core)
                         self.assertEqual(verified, [core])
-                        self.assertEqual(len(records), 15)
+                        self.assertEqual(udp_verified, [core])
+                        self.assertEqual(len(records), 17)
                         self.assertEqual(records['original-full-closure'], 'a'*64)
                         self.assertIn('owner-sing/association.go', records)
+                        self.assertEqual(records['owner-udp-original/dns/transport/udp.go'], 'c'*64)
+                        for relative, content in udp_contents.items():
+                            self.assertEqual(records['owner-udp-prepared/'+relative], hashlib.sha256(content).hexdigest())
 
 
 

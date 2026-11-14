@@ -7,6 +7,54 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
+UDP_PATH = 'dns/transport/udp.go'
+UDP_TEST_PROJECTION = 'dns/transport/routervpn_udp_reuse_test.go'
+UDP_ORIGINAL_SHA256 = '392d06470c8304e2af28a4361056b5433a6019d259310bc0e7c7b7074b4338d2'
+UDP_PREPARED_SHA256 = '827b2e9468ec0bfa80843e925b3b43ab0bc4793dc5f99aae589086947e8d9fef'
+
+def udp_source(original):
+    """One declared option on the exact pin; the multiplexer stays unchanged."""
+    if hashlib.sha256(original).hexdigest() != UDP_ORIGINAL_SHA256:
+        raise ValueError('pinned UDP DNS source changed')
+    before = b'\t\twrite:    t.writeQuery,\n\t\treadNext: t.readResponse,\n'
+    after = b'\t\twrite:          t.writeQuery,\n\t\treadNext:       t.readResponse,\n\t\tretryReadError: true,\n'
+    if original.count(before) != 1:
+        raise ValueError('pinned UDP DNS multiplexer boundary changed')
+    result = original.replace(before, after, 1)
+    if hashlib.sha256(result).hexdigest() != UDP_PREPARED_SHA256:
+        raise ValueError('declared UDP DNS recovery source changed')
+    return result
+
+def udp_original(vendor):
+    if subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True).strip() != PIN:
+        raise ValueError('UDP DNS recovery requires the exact pinned native core')
+    return subprocess.check_output(['git', '-C', str(vendor), 'show', PIN + ':' + UDP_PATH])
+
+def verify_udp(vendor):
+    expected = udp_source(udp_original(vendor))
+    template = ROOT / 'mobile/strategy/udp_reuse_test.go.tmpl'
+    records = {}
+    for relative, content in ((UDP_PATH, expected), (UDP_TEST_PROJECTION, template.read_bytes())):
+        path = vendor / relative
+        if template.is_symlink() or path.is_symlink() or not path.is_file() or path.read_bytes() != content:
+            raise ValueError('declared UDP DNS projection changed: ' + relative)
+        records[relative] = hashlib.sha256(content).hexdigest()
+    return records
+
+def prepare_udp(vendor):
+    original = udp_original(vendor)
+    expected = udp_source(original)
+    path = vendor / UDP_PATH
+    projection = vendor / UDP_TEST_PROJECTION
+    template = ROOT / 'mobile/strategy/udp_reuse_test.go.tmpl'
+    if path.is_symlink() or projection.is_symlink() or template.is_symlink() or path.read_bytes() not in (original, expected):
+        raise ValueError('foreign UDP DNS preparation input')
+    # The existing multiplexer retries a read failure only on a reused socket,
+    # once, through the original dialer and caller context. A new socket's
+    # failure, cancellation, Reset and Close retain their original outcomes.
+    path.write_bytes(expected)
+    projection.write_bytes(template.read_bytes())
+    verify_udp(vendor)
 
 def inputs():
     return [Path(__file__).resolve()] + sorted((ROOT / 'mobile/strategy').glob('*.tmpl'))
@@ -21,6 +69,7 @@ def prepare(vendor, *, mobile=True):
     vendor = vendor.resolve()
     if subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True).strip() != PIN:
         raise ValueError('provider strategy requires the exact pinned native core')
+    prepare_udp(vendor)
     # The pinned managers already accumulate every close error but discard the
     # result. Preserve their close order, locking and retained-TUN changes; only
     # return the existing error so a strategy can quarantine failed teardown.

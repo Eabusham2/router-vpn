@@ -325,7 +325,9 @@ class TypedSOCKSBridgeValidator(unittest.TestCase):
                 with self.assertRaises(ValueError):V.checked_owner_sources(source,core,xray)
 
     def test_actual_mobile_projection_and_hook_verifier_excludes_desktop_namespace(self):
-        faults=(None,"missing","changed","linked","map","box-hook","command-hook","packet","global","pinned")
+        faults=(None,"missing","changed","linked","map","box-hook","command-hook","packet","global","pinned",
+                "pinned-pool","pinned-multiplexer","udp-missing","udp-changed","udp-linked",
+                "udp-test-missing","udp-test-changed","udp-test-linked","udp-checker")
         for fault in faults:
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
                 work=Path(directory);source,core,xray=work/"candidate",work/"core",work/"xray"
@@ -337,6 +339,26 @@ class TypedSOCKSBridgeValidator(unittest.TestCase):
                 for relative in ("box.go","experimental/libbox/command_server.go","include/registry.go",
                     "dns/transport/conn_pool.go","dns/transport/multiplexer.go","dns/transport/udp.go","protocol/socks/outbound.go"):
                     path=core/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text("original "+relative)
+                udp_contents={"dns/transport/udp.go":b"declared UDP read-retry source",
+                              "dns/transport/routervpn_udp_reuse_test.go":b"original native UDP reuse controls"}
+                for relative,content in udp_contents.items():(core/relative).write_bytes(content)
+                udp_verified=[]
+                def verify_udp(root):
+                    self.assertEqual(root,core);udp_verified.append(root)
+                    if fault=="udp-checker":raise ValueError("declared UDP checker refused")
+                    for relative,content in udp_contents.items():
+                        path=root/relative
+                        if path.is_symlink() or not path.is_file() or path.read_bytes()!=content:
+                            raise ValueError("declared UDP projection changed")
+                    return {relative:hashlib.sha256(content).hexdigest() for relative,content in udp_contents.items()}
+                strategy=types.SimpleNamespace(UDP_PATH="dns/transport/udp.go",UDP_ORIGINAL_SHA256="c"*64,verify_udp=verify_udp)
+                if fault and fault.startswith("udp-") and fault!="udp-checker":
+                    relative="dns/transport/routervpn_udp_reuse_test.go" if fault.startswith("udp-test-") else "dns/transport/udp.go"
+                    path=core/relative
+                    if fault.endswith("missing"):path.unlink()
+                    elif fault.endswith("changed"):path.write_bytes(b"foreign UDP projection")
+                    else:
+                        target=source/"linked-udp.go";target.write_bytes(udp_contents[relative]);path.unlink();path.symlink_to(target)
                 prep=types.SimpleNamespace(TEMPLATES=dict(V.PROJECTIONS),
                     box_source=lambda text:(text+(" changed" if fault=="box-hook" else "")).encode(),
                     command_source=lambda root,text:(text+(" changed" if fault=="command-hook" else "")).encode())
@@ -358,9 +380,11 @@ class TypedSOCKSBridgeValidator(unittest.TestCase):
                 elif fault=="map":prep.TEMPLATES["socks_server.go.tmpl"]="foreign.go"
                 elif fault=="global":(core/"include/registry.go").write_text("routervpnnodesocks.Register(registry)")
                 elif fault=="pinned":(core/"protocol/socks/outbound.go").write_text("foreign caller")
+                elif fault=="pinned-pool":(core/"dns/transport/conn_pool.go").write_text("foreign pool")
+                elif fault=="pinned-multiplexer":(core/"dns/transport/multiplexer.go").write_text("foreign multiplexer")
                 def pinned(command,cwd,timeout):
                     return ("original "+command[2].split(":",1)[1]).encode()
-                with patch.object(V,"module",side_effect=lambda name,path:packet if path.name=="prepare-sing-packet-concurrency.py" else prep),\
+                with patch.object(V,"module",side_effect=lambda name,path:strategy if path.name=="prepare-mobile-strategy.py" else packet if path.name=="prepare-sing-packet-concurrency.py" else prep),\
                      patch.object(V.subprocess,"check_output",side_effect=pinned),\
                      patch.object(V.OWNER,"load_gate",return_value=gate),patch.object(V.OWNER,"checked_sources",side_effect=owner_checked):
                     if fault:
@@ -370,6 +394,9 @@ class TypedSOCKSBridgeValidator(unittest.TestCase):
                         self.assertNotIn("owner",result)
                         self.assertEqual(owner_calls,[])
                         self.assertEqual(result["xray"],V.native_snapshot(xray))
+                        self.assertEqual(udp_verified,[core])
+                        self.assertEqual(result["udp"],{"original_sha256":"c"*64,"prepared":{
+                            relative:hashlib.sha256(content).hexdigest() for relative,content in udp_contents.items()}})
 
 
     def test_failed_source_closure_preserves_exact_changed_paths(self):
