@@ -297,6 +297,26 @@ The joined log has SHA-256
 Native Darwin PF and the complete macOS controller workflow remain separate
 hosted checks.
 
+## Accompanying Darwin generated-owner fixture correction
+
+The exact `f8047686bde510447a332c5fbb650bb2c990de9b` generated Darwin
+ARM64 job `132296756235` stopped in two source/fixture checks before native
+execution. Both checks still expected the ordinary owner's old inline
+implementation. The current source delegates to `startCaptured` and to
+exclusive ordinary/SOCKS metadata, transfer-digest and readiness helpers.
+
+The corrected fixture follows those actual helpers and still checks the
+ordinary branches, exact source ownership and the single monotonic native
+start attempt. Its executable prestart model now includes the unchanged
+metadata helper, both valid families and missing/mixed/invalid-family
+rejections. All original 51 tests, three compiled mutation controls and eleven
+ownership refusal cases passed. The two previously failing tests also passed
+independently after composing the reviewed file onto current main. No runtime
+code or native acceptance condition was changed. The complete result log has
+SHA-256 `1f33e2eae130dd8071ee0f824fc71867efac3f4465ef2ddc3f8b23b7797c5988`.
+Actual generated-child and installed-host checks on both Darwin architectures
+remain required.
+
 ## Active source work and acceptance still required
 
 Windows/Linux typed retained-parent adapters and full native-host acceptance

@@ -179,12 +179,35 @@ class NativeVerdict(unittest.TestCase):
         for name in (G.NATIVE, G.HARNESS):
             self.assertIn('func '+name+'(', raw)
         for required in ('macosprocess.OpenCapture(', 'macosprocess.BindCreated(', 'o.bootstrap.Stop(ctx)',
-                         'NodeChainTransferSHA256(o.capture.Selection())', 'mobiletor.RunDesktopDarwinPFBaseline(',
-                         'ParseDesktopNodeChainReadyRecord(', 'net.InterfaceByName(mtu.Interface)',
+                         'o.transfer, e = o.transferDigest()', 'transfer, e := o.transferDigest()',
+                         'proof, e = o.parseReady(raw)', 'mobiletor.RunDesktopDarwinPFBaseline(',
+                         'net.InterfaceByName(mtu.Interface)',
                          'status.Reader != old.Reader+1', 'device.Index == old.Index',
                          'stats.Final.DirectQueries != 0', 'stats.Final.EntryPublicQueries != 0'):
             self.assertIn(required, raw)
+        # The family helper retains the ordinary transfer and parser branches;
+        # the common native owner must call it at acquisition and readback.
+        family = (ROOT/'mobile/desktop/node_chain_socks_command_darwin_native_test.go.tmpl').read_text()
+        def member(name):
+            signature = 'func(o *darwinChildOwner) '+name+'('
+            self.assertEqual(family.count(signature), 1)
+            begin = family.index(signature)
+            return family[begin:family.index('\n}', begin)+2]
+        metadata = member('metadata')
+        self.assertIn('o==nil||(o.policy==nil)==(o.socksPolicy==nil)', metadata)
+        self.assertIn('_,meta,_,err:=o.policy.ReadValidated();return meta,err', metadata)
+        for name in ('transferDigest', 'parseReady'):
+            helper = member(name)
+            self.assertIn('if _,err:=o.metadata();err!=nil', helper)
+            if name == 'transferDigest':
+                self.assertIn('if o.capture==nil', helper)
+                self.assertIn('if o.socksPolicy!=nil{return macosprocess.NodeChainSOCKSTransferSHA256(o.capture.Selection())}', helper)
+                self.assertIn('return macosprocess.NodeChainTransferSHA256(o.capture.Selection())', helper)
+            else:
+                self.assertIn('mobilemultihop.ParseDesktopNodeChainSOCKSReadyRecord(raw,o.socksPolicy,o.transfer)', helper)
+                self.assertIn('return mobilemultihop.ParseDesktopNodeChainReadyRecord(raw,o.policy,o.transfer)', helper)
         self.assertNotIn('t.Skip(', raw)
+        self.assertNotIn('t.Skip(', family)
 
 
 class ActualHostSelection(unittest.TestCase):
@@ -1156,13 +1179,24 @@ class UnstartedFixtureRetirement(unittest.TestCase):
             return source[begin:source.index('\n}', begin)+2]
         install = member('func (o *darwinChildOwner) installBaseline(ctx context.Context) error {')
         retire = member('func (o *darwinChildOwner) stopUnstarted(ctx context.Context, failed bool) error {')
-        start = member('func (o *darwinChildOwner) start(')
+        wrapper = member('func (o *darwinChildOwner) start(')
+        self.assertIn('o.policy = policy', wrapper)
+        self.assertEqual(wrapper.count('o.startCaptured(t, ctx, a)'), 1)
+        self.assertLess(wrapper.index('o.policy = policy'), wrapper.index('o.startCaptured(t, ctx, a)'))
+        self.assertNotIn('o.command.Start()', wrapper)
+        start = member('func (o *darwinChildOwner) startCaptured(')
         self.assertEqual(start.count('o.childStartAttempted = true'), 1)
         self.assertLess(start.index('o.childStartAttempted = true'), start.index('o.command.Start()'))
         self.assertEqual(source.count('o.childStartAttempted = true'), 1)
         self.assertNotIn('o.childStartAttempted = false', source)
         self.assertIn('if owner.childStartAttempted {\n\t\t\t\t\te = owner.stop(cleanup)\n\t\t\t\t} else {\n\t\t\t\t\te = owner.stopUnstarted(cleanup, t.Failed())', source)
-        # Only the PF/syscall and retained-descriptor boundaries are replaced.
+        family = (ROOT/'mobile/desktop/node_chain_socks_command_darwin_native_test.go.tmpl').read_text()
+        signature = 'func(o *darwinChildOwner) metadata()'
+        self.assertEqual(family.count(signature), 1)
+        begin = family.index(signature)
+        metadata_helper = family[begin:family.index('\n}', begin)+2]
+        # Only policy validation, PF/syscall and retained-descriptor boundaries
+        # are modeled. The exclusive-family helper is actual fixture source.
         # Both complete fixture methods above execute with their actual guards.
         fixture = r"""package main
 import("context";"errors";"fmt";"os";"os/exec";"time")
@@ -1170,14 +1204,18 @@ type DesktopDarwinPFBaselineProof struct {Present bool;RulesSHA256 string}
 type DesktopDarwinPFBaselineRequest struct {Schema int;Action,SessionID,SourceSHA256 string;Expected []DesktopDarwinPFBaselineProof}
 type DesktopDarwinPFBaselineResult struct {Schema int;Applied bool;Previous,Target DesktopDarwinPFBaselineProof}
 type metadata struct{SessionID,SourceSHA256 string}
-type policy struct{}
-func(*policy)Metadata()metadata{return metadata{"original-session","original-source"}}
+type DesktopNodeChainMetadata = metadata
+type policy struct{invalid bool}
+func(p *policy)ReadValidated()(string,metadata,struct{},error){if p.invalid{return "",metadata{},struct{}{},errors.New("invalid original policy")};return "",metadata{"original-session","original-source"},struct{}{},nil}
+type socksMetadata struct{DesktopNodeChainMetadata metadata}
+type socksPolicy struct{}
+func(*socksPolicy)ReadValidated()(string,socksMetadata,struct{},error){return "",socksMetadata{metadata{"original-session","original-source"}},struct{}{},nil}
 type retained struct{failure bool;closes int}
 func(r *retained)Current(ctx context.Context)error{if r.failure{return errors.New("changed retained source")};return ctx.Err()}
 func(r *retained)Close()error{r.closes++;return nil}
 type files struct{root *retained}
 type darwinChildOwner struct{
- policy *policy;baseline *DesktopDarwinPFBaselineResult;childStartAttempted bool
+ policy *policy;socksPolicy *socksPolicy;baseline *DesktopDarwinPFBaselineResult;childStartAttempted bool
  command *exec.Cmd;bootstrap *int;done chan struct{};observed map[int]string
  closed bool;capture,channel *retained;files *files
 }
@@ -1200,13 +1238,21 @@ func fresh()*darwinChildOwner{actual=absent;lateFailure=false;children=false;wri
 func check(ok bool,text string){if !ok{panic(text)}}
 func main(){
  ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second);defer cancel()
+ for _,typed:=range []bool{false,true}{
  for _,committed:=range []bool{false,true}{
-  owner:=fresh();lateFailure=committed;err:=owner.installBaseline(ctx)
+  owner:=fresh();if typed{owner.policy=nil;owner.socksPolicy=&socksPolicy{}};lateFailure=committed;err:=owner.installBaseline(ctx)
   check((err!=nil)==committed,"baseline boundary did not exercise late apply failure")
   check(owner.baseline!=nil && owner.baseline.Previous==absent && owner.baseline.Target==target,"lost original PF plan after partial apply")
   if !committed{actual=absent} // An apply that made no change is also an allowed exact prior.
   check(owner.stopUnstarted(ctx,true)==nil && owner.closed && actual==absent,"never-started failed fixture did not retire its exact PF plan")
   check(owner.capture.closes==1 && owner.channel.closes==1 && owner.files.root.closes==1,"never-started cleanup lost original descriptor joins")
+ }
+ }
+ for _,fault:=range []string{"missing-policy","mixed-policy","invalid-policy"}{
+  owner:=fresh()
+  switch fault{case "missing-policy":owner.policy=nil;case "mixed-policy":owner.socksPolicy=&socksPolicy{};case "invalid-policy":owner.policy.invalid=true}
+  err:=owner.installBaseline(ctx)
+  check(err!=nil && owner.baseline==nil && writes==0,"invalid family acquired PF plan: "+fault)
  }
  for _,fault:=range []string{"attempted","process","bootstrap","joined-channel","utun","capture","missing-capture","foreign-baseline","child-rules","not-failed","deadline"}{
   owner:=fresh();check(owner.installBaseline(ctx)==nil,"original baseline install");before:=writes;failed:=true;call:=ctx
@@ -1231,7 +1277,7 @@ func main(){
 """
         with tempfile.TemporaryDirectory(prefix='darwin-child-prestart-') as temporary:
             work = Path(temporary); code = work/'main.go'; image = work/'prestart'
-            original = install+'\n'+retire
+            original = metadata_helper.replace('mobilemultihop.', '')+'\n'+install+'\n'+retire
             controls = (
                 ('baseline plan', 'o.baseline = &plan', '', 'lost original PF plan after partial apply'),
                 ('attempted start', '|| o.childStartAttempted ||', '||', 'unproved pre-start cleanup erased PF: attempted'),
