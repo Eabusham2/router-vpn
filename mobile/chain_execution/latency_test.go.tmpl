@@ -1,0 +1,143 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Actual libbox Instance/Box identity guards execute here. The selected-route
+// HTTP fifty and original activity-release tests live in shared mobilemultihop;
+// these component doubles never stand in for encrypted/native-device proof.
+func executionLatencyBridgeFixture(t *testing.T) (*RouterNodeChainExecution, *routerNodeChainExecutionMeasurement, *RouterHopMeasurement) {
+	t.Helper()
+	m, state, controller := executionMeasurementFixture(t)
+	retained := &routerNodeChainExecutionMeasurement{owner: m, state: state, controller: controller, service: &executionMeasurementBoundary{}}
+	m.activities.measurement.Store(retained)
+	return m, retained, &RouterHopMeasurement{service: retained}
+}
+
+func TestRouterNodeChainExecutionBridgeLatencyRequiresOriginalAssociation(t *testing.T) {
+	for _, fault := range []string{"original", "server", "measurement", "copied-owner", "copied-measurement", "state", "controller", "closed"} {
+		t.Run(fault, func(t *testing.T) {
+			m, retained, measurement := executionLatencyBridgeFixture(t)
+			server := retained.state.server
+			switch fault {
+			case "server":
+				server = &CommandServer{}
+			case "measurement":
+				measurement = &RouterHopMeasurement{service: &executionMeasurementBoundary{}}
+			case "copied-owner":
+				copy := &RouterNodeChainExecution{}
+				copy.state.Store(retained.state)
+				copy.activities.measurement.Store(retained)
+				m = copy
+			case "copied-measurement":
+				measurement = &RouterHopMeasurement{service: &routerNodeChainExecutionMeasurement{owner: m, state: retained.state, controller: retained.controller, service: retained.service}}
+			case "state":
+				m.state.Store(&routerNodeChainExecutionState{})
+			case "controller":
+				retained.state.controller.Store(&routerNodeChainExecutionControllerRef{retained.controller.value})
+			case "closed":
+				retained.closed.Store(true)
+			}
+			actual, err := m.executionLatencyOwnerContext(context.Background(), server, measurement)
+			if (err == nil) != (fault == "original") || err == nil && actual != retained {
+				t.Fatal("latency borrowed another original native association", err)
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeLatencyRejectsUncapturedSharedService(t *testing.T) {
+	for _, fault := range []string{"component-double", "unconstructed-shared", "typed-nil"} {
+		t.Run(fault, func(t *testing.T) {
+			m, retained, measurement := executionLatencyBridgeFixture(t)
+			switch fault {
+			case "unconstructed-shared":
+				retained.service = &mobilemultihop.NodeChainExecutionMeasurement{}
+			case "typed-nil":
+				retained.service = (*mobilemultihop.NodeChainExecutionMeasurement)(nil)
+			}
+			value, err := RouterNodeChainExecutionNewLatencyBenchmark(m, retained.state.server, measurement)
+			if err == nil || value != nil || m.activities.measurement.Load() != retained || retained.closed.Load() {
+				t.Fatal("failed facade constructor lost original measurement or admitted a double", err)
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainExecutionBridgeLatencyCallerBounds(t *testing.T) {
+	if value, err := RouterNodeChainExecutionNewLatencyBenchmark(nil, nil, nil); err == nil || value != nil {
+		t.Fatal("missing original owner admitted")
+	}
+	m, retained, measurement := executionLatencyBridgeFixture(t)
+	if value, err := m.newExecutionLatencyContext(nil, retained.state.server, measurement); err == nil || value != nil {
+		t.Fatal("missing original caller admitted")
+	}
+	m.activities.admission.Lock()
+	defer m.activities.admission.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer cancel()
+	if value, err := m.newExecutionLatencyContext(ctx, retained.state.server, measurement); !errors.Is(err, context.DeadlineExceeded) || value != nil {
+		t.Fatal("latency waited beyond original caller for native admission", err)
+	}
+	if retained.state.lifetime.Err() != nil || m.activities.measurement.Load() != retained {
+		t.Fatal("caller expiration retired the original native owner")
+	}
+}
+
+type executionLatencyDispatchBoundary struct {
+	starts, cancels, drains, closes, invalidations, captures int
+	failure                                                  error
+}
+
+func (b *executionLatencyDispatchBoundary) Start(string, string) error { b.starts++; return b.failure }
+func (b *executionLatencyDispatchBoundary) Cancel(string)              { b.cancels++ }
+func (b *executionLatencyDispatchBoundary) Drain(string) error         { b.drains++; return b.failure }
+func (b *executionLatencyDispatchBoundary) StatusJSON() string {
+	return `{"component":"original-status"}`
+}
+func (b *executionLatencyDispatchBoundary) SavedJSON(string) string {
+	return `{"component":"previous-history"}`
+}
+func (b *executionLatencyDispatchBoundary) CaptureJSON() string {
+	b.captures++
+	return `{"component":"projected-capture"}`
+}
+func (b *executionLatencyDispatchBoundary) Close() error { b.closes++; return b.failure }
+func (b *executionLatencyDispatchBoundary) Invalidate()  { b.invalidations++ }
+
+func TestRouterNodeChainExecutionBridgeLatencyPublicHandlePreservesBorrowedCleanup(t *testing.T) {
+	m, retained, _ := executionLatencyBridgeFixture(t)
+	boundary := &executionLatencyDispatchBoundary{}
+	public := &RouterOrderedLatency{service: boundary}
+	if err := public.Start("original-request", "original-node"); err != nil || boundary.starts != 1 {
+		t.Fatal("public binding lost original Start", err)
+	}
+	public.Cancel("original-request")
+	boundary.failure = errors.New("original activity release still pending")
+	if err := public.Drain("original-request"); err != boundary.failure || boundary.drains != 1 {
+		t.Fatal("public binding hid stronger original drain", err)
+	}
+	if err := public.Close(); err != boundary.failure || boundary.closes != 1 {
+		t.Fatal("public binding hid failed original close", err)
+	}
+	if public.StatusJSON() != boundary.StatusJSON() || public.SavedJSON("original-node") != boundary.SavedJSON("original-node") || public.CaptureJSON() != `{"component":"projected-capture"}` || boundary.captures != 1 {
+		t.Fatal("public binding fabricated a status, receipt or capture")
+	}
+	public.NetworkChanged()
+	boundary.failure = nil
+	if err := public.Close(); err != nil || boundary.closes != 2 || boundary.invalidations != 1 || boundary.cancels != 1 {
+		t.Fatal("public binding lost retained retry", err)
+	}
+	if m.activities.measurement.Load() != retained || retained.closed.Load() || retained.service.(*executionMeasurementBoundary).closes.Load() != 0 {
+		t.Fatal("borrowed latency close retired original throughput service")
+	}
+	if (*RouterOrderedLatency)(nil).CaptureJSON() != "" || (&RouterOrderedLatency{}).CaptureJSON() != "" {
+		t.Fatal("absent original execution fabricated a capture")
+	}
+}

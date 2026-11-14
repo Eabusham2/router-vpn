@@ -70,6 +70,34 @@ class Preparation(unittest.TestCase):
                 self.prepare(vendor, '0'*40)
             self.assertFalse((vendor/P.OWNER).exists())
 
+    def test_latency_upgrade_requires_both_owned_templates_and_original_bridge(self):
+        latency = {'experimental/libbox/routervpn_node_chain_execution_latency.go',
+                   'experimental/libbox/routervpn_node_chain_execution_latency_test.go'}
+        self.assertTrue(latency.issubset(P.TEMPLATES.values()))
+        self.assertEqual(P.PREREQUISITES['experimental/libbox/routervpn_ordered_latency.go'],
+                         'mobile/chain/ordered_latency_bridge.go.tmpl')
+        last = {'experimental/libbox/routervpn_node_chain_execution_last.go',
+                'experimental/libbox/routervpn_node_chain_execution_last_test.go'}
+        restore = {'experimental/libbox/routervpn_node_chain_execution_restore_test.go'}
+        for removed in (latency, latency|last, latency|restore, latency|last|restore,
+                        {sorted(latency)[0]}, {sorted(latency)[1]}):
+            with self.subTest(removed=removed), tempfile.TemporaryDirectory() as parent:
+                vendor = self.fixture(parent)
+                self.prepare(vendor)
+                record = json.loads((vendor/P.OWNER).read_bytes())
+                for relative in removed:
+                    del record['files'][relative]
+                    (vendor/relative).unlink()
+                (vendor/P.OWNER).write_text(json.dumps(record))
+                if latency.issubset(removed):
+                    self.prepare(vendor)
+                    self.assertEqual(set(json.loads((vendor/P.OWNER).read_bytes())['files']), set(P.TEMPLATES.values()))
+                else:
+                    before = {str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
+                    with self.assertRaisesRegex(ValueError, 'ownership inventory'):
+                        self.prepare(vendor)
+                    self.assertEqual(before, {str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
+
     def test_published_restore_test_upgrade_keeps_exact_previous_files(self):
         restore = {'experimental/libbox/routervpn_node_chain_execution_restore_test.go'}
         last = {'experimental/libbox/routervpn_node_chain_execution_last.go', 'experimental/libbox/routervpn_node_chain_execution_last_test.go'}

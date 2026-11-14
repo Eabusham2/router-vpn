@@ -11,8 +11,32 @@ import (
 // Close cancels and joins only this facade's exact borrowed request; the original
 // plan owns throughput service retirement. UI dismissal must retain this handle
 // through a failed drain and may not close RouterHopMeasurement.
+type routerOrderedLatencyService interface {
+	Start(string, string) error
+	Cancel(string)
+	Drain(string) error
+	StatusJSON() string
+	SavedJSON(string) string
+	Close() error
+	Invalidate()
+}
+
+var _ routerOrderedLatencyService = (*hopmeasure.OrderedLatencyService)(nil)
+
 type RouterOrderedLatency struct {
-	service *hopmeasure.OrderedLatencyService
+	service routerOrderedLatencyService
+}
+
+// CaptureJSON is supplied only by an original typed execution facade. Ordinary
+// Local factories retain their existing host capture and return no substitute.
+func (m *RouterOrderedLatency) CaptureJSON() string {
+	if m == nil || m.service == nil {
+		return ""
+	}
+	if captured, ok := m.service.(interface{ CaptureJSON() string }); ok {
+		return captured.CaptureJSON()
+	}
+	return ""
 }
 
 func (m *RouterOrderedLatency) Start(request, nodeID string) error {

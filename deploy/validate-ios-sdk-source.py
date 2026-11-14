@@ -54,6 +54,7 @@ PLAN_METHODS = (
 )
 LATENCY_DECL = "@interface LibboxRouterOrderedLatency : NSObject <goSeqRefInterface> {"
 LATENCY_METHODS = (
+    "- (NSString* _Nonnull)captureJSON;",
     "- (BOOL)start:(NSString* _Nullable)request nodeID:(NSString* _Nullable)nodeID error:(NSError* _Nullable* _Nullable)error;",
     "- (void)cancel:(NSString* _Nullable)request;",
     "- (BOOL)drain:(NSString* _Nullable)request error:(NSError* _Nullable* _Nullable)error;",
@@ -63,6 +64,7 @@ LATENCY_METHODS = (
     "- (void)networkChanged;",
 )
 C_FUNCTIONS = (
+    ("LibboxRouterNodeChainExecutionNewLatencyBenchmark", "LibboxRouterOrderedLatency* _Nullable", ("LibboxRouterNodeChainExecution* _Nullable", "LibboxCommandServer* _Nullable", "LibboxRouterHopMeasurement* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxNewRouterNodeChainSOCKS", "LibboxRouterNodeChainSOCKS* _Nullable", ("NSString* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainSOCKSNewCommandServer", "LibboxCommandServer* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "id<LibboxCommandServerHandler> _Nullable", "id<LibboxPlatformInterface> _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainImportedSOCKSMemberInput", "NSString* _Nonnull", ("NSString* _Nullable", "NSString* _Nullable", "NSError* _Nullable* _Nullable")),
@@ -489,6 +491,15 @@ def self_test():
                     ("LibboxRouterNodeChainSOCKS* _Nullable p0, LibboxCommandServer*","LibboxRouterNodeChainExecution* _Nullable p0, LibboxCommandServer*")):
                 with self.subTest(old=old):
                     with self.assertRaises(ValueError):require_headers(valid.replace(old.encode(),new.encode()))
+        def test_execution_fifty_factory_retains_exact_execution_and_measurement_owners(self):
+            valid=header()
+            name,result,args=next(row for row in C_FUNCTIONS if row[0]=="LibboxRouterNodeChainExecutionNewLatencyBenchmark")
+            declaration="FOUNDATION_EXPORT "+result+" "+name+"("+", ".join(a+" p"+str(i) for i,a in enumerate(args))+");"
+            for owner in ("LibboxRouterNodeChain", "LibboxRouterNodeChainSOCKS", "LibboxRouterNodeChainCONNECT"):
+                changed=declaration.replace("LibboxRouterNodeChainExecution*",owner+"*")
+                with self.subTest(owner=owner),self.assertRaises(ValueError):require_headers(valid.replace(declaration.encode(),changed.encode()))
+            changed=declaration.replace("LibboxRouterHopMeasurement* _Nullable p2, ","")
+            with self.assertRaises(ValueError):require_headers(valid.replace(declaration.encode(),changed.encode()))
         def test_every_platform_slice_and_architecture_is_required(self):
             with tempfile.TemporaryDirectory() as temporary:
                 root=Path(temporary);libs=framework(root)

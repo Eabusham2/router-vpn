@@ -19,6 +19,8 @@ TEMPLATES = {
     'activities.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_activities.go',
     'measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_measurement.go',
     'measurement_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_measurement_test.go',
+    'latency.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_latency.go',
+    'latency_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_latency_test.go',
     'mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_mtu.go',
     'mtu_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_mtu_test.go',
     'bridge_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_test.go',
@@ -34,6 +36,7 @@ PREREQUISITES = {
     'experimental/libbox/routervpn_node_chain.go': 'mobile/chain/bridge.go.tmpl',
     'experimental/libbox/routervpn_mtu_bridge.go': 'mobile/mtu/bridge.go.tmpl',
     'experimental/libbox/routervpn_hop_measurement.go': 'mobile/routervpn_hop_measurement.go.tmpl',
+    'experimental/libbox/routervpn_ordered_latency.go': 'mobile/chain/ordered_latency_bridge.go.tmpl',
 }
 CLOSE_BEFORE = '''func (i *Instance) Close() error {
 	i.cancel()
@@ -132,7 +135,11 @@ def prepare(vendor):
         current = set(TEMPLATES.values())
         last = {'experimental/libbox/routervpn_node_chain_execution_last.go', 'experimental/libbox/routervpn_node_chain_execution_last_test.go'}
         restore_test = {'experimental/libbox/routervpn_node_chain_execution_restore_test.go'}
-        inventories = (current, current-last, current-restore_test, current-last-restore_test)
+        latency = {'experimental/libbox/routervpn_node_chain_execution_latency.go', 'experimental/libbox/routervpn_node_chain_execution_latency_test.go'}
+        inventories = tuple(current-previous_last-previous_restore-previous_latency
+                            for previous_last in (set(), last)
+                            for previous_restore in (set(), restore_test)
+                            for previous_latency in (set(), latency))
         if not isinstance(record, dict) or set(record) != {'schema', 'core', 'files'} or record['schema'] != 1 or record['core'] != PIN or not isinstance(record['files'], dict) or set(record['files']) not in inventories:
             raise ValueError('invalid mobile execution ownership inventory')
         previous = record['files']

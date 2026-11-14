@@ -1,0 +1,66 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+var _ routerOrderedLatencyService = (*mobilemultihop.NodeChainExecutionLatency)(nil)
+
+// This factory borrows the actual retained execution measurement, including its
+// selected trial and stronger activity-release join. It never extracts a raw
+// hop service or supplies caller-selected source/config hashes.
+func RouterNodeChainExecutionNewLatencyBenchmark(m *RouterNodeChainExecution, server *CommandServer, measurement *RouterHopMeasurement) (*RouterOrderedLatency, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	return m.newExecutionLatencyContext(ctx, server, measurement)
+}
+
+func (m *RouterNodeChainExecution) executionLatencyOwnerContext(ctx context.Context, server *CommandServer, measurement *RouterHopMeasurement) (*routerNodeChainExecutionMeasurement, error) {
+	if m == nil || ctx == nil || ctx.Err() != nil || server == nil || measurement == nil || measurement.service == nil {
+		return nil, errRouterNodeChainExecution
+	}
+	retained, ok := measurement.service.(*routerNodeChainExecutionMeasurement)
+	if !ok || retained == nil || retained.owner != m || retained.state == nil || retained.controller == nil ||
+		retained.state.server != server || m.state.Load() != retained.state ||
+		m.activities.measurement.Load() != retained || retained.current(ctx) != nil {
+		return nil, errRouterNodeChainExecution
+	}
+	return retained, nil
+}
+
+func (m *RouterNodeChainExecution) newExecutionLatencyContext(ctx context.Context, server *CommandServer, measurement *RouterHopMeasurement) (*RouterOrderedLatency, error) {
+	if m == nil || ctx == nil {
+		return nil, errRouterNodeChainExecution
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.activities.admission); err != nil {
+		return nil, err
+	}
+	defer m.activities.admission.Unlock()
+	retained, err := m.executionLatencyOwnerContext(ctx, server, measurement)
+	if err != nil {
+		return nil, err
+	}
+	shared, ok := retained.service.(*mobilemultihop.NodeChainExecutionMeasurement)
+	if !ok || shared == nil {
+		return nil, errors.New("execution latency requires its concrete original typed measurement")
+	}
+	latency, err := shared.NewLatencyBenchmarkContext(ctx, func(call context.Context) error {
+		current, err := m.executionLatencyOwnerContext(call, server, measurement)
+		if err != nil || current != retained || retained.service != shared {
+			return errors.Join(err, errRouterNodeChainExecution)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// The shared constructor validates before attaching its facade. Never turn
+	// a nonnil acquired owner into nil+error after this point: gomobile discards
+	// such results and could otherwise lose the exact cleanup handle.
+	return &RouterOrderedLatency{service: latency}, nil
+}

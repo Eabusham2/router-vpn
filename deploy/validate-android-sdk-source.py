@@ -88,6 +88,7 @@ CONNECT_STATIC_SIGNATURES = (
 )
 # These factories borrow the exact already retained measurement service.
 ORDERED_LATENCY_SIGNATURES = (
+    "java.lang.String captureJSON();",
     "void start(java.lang.String, java.lang.String) throws java.lang.Exception;",
     "void cancel(java.lang.String);",
     "void drain(java.lang.String) throws java.lang.Exception;",
@@ -97,6 +98,7 @@ ORDERED_LATENCY_SIGNATURES = (
     "void networkChanged();",
 )
 ORDERED_LATENCY_STATIC_SIGNATURES = (
+    PACKAGE+"RouterOrderedLatency routerNodeChainExecutionNewLatencyBenchmark("+PACKAGE+"RouterNodeChainExecution, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
     PACKAGE+"RouterOrderedLatency routerNodeChainNewLatencyBenchmark("+PACKAGE+"RouterNodeChain, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
     PACKAGE+"RouterOrderedLatency routerNodeChainSOCKSNewLatencyBenchmark("+PACKAGE+"RouterNodeChainSOCKS, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
     PACKAGE+"RouterOrderedLatency routerNodeChainCONNECTNewLatencyBenchmark("+PACKAGE+"RouterNodeChainCONNECT, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
@@ -107,6 +109,7 @@ GENERATED_API_INVENTORIES = (("RouterNodeChainSOCKS", PLAN_SIGNATURES),
                            ("Libbox", (*STATIC_SIGNATURES, *CONNECT_STATIC_SIGNATURES, *ORDERED_LATENCY_STATIC_SIGNATURES)))
 GENERATED_CLASSES = ("go/Seq.class", "io/nekohasekai/libbox/Libbox.class",
                      "io/nekohasekai/libbox/RouterNodeChainSOCKS.class", "io/nekohasekai/libbox/RouterNodeChainCONNECT.class",
+                     "io/nekohasekai/libbox/RouterNodeChainExecution.class",
                      "io/nekohasekai/libbox/RouterOrderedLatency.class")
 
 PRODUCTION_INPUTS = ("KEYSTORE_BASE64", "KEYSTORE", "STORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD", "CERT_SHA256", "REQUIRE_PRODUCTION", "VERSION_CODE", "VERSION_SHA")
@@ -602,7 +605,7 @@ def self_test():
         def test_exact_signature_inventory(self):
             self.assertEqual(len(PLAN_SIGNATURES),15);self.assertEqual(len(STATIC_SIGNATURES),4)
             self.assertEqual(len(CONNECT_PLAN_SIGNATURES),15);self.assertEqual(len(CONNECT_STATIC_SIGNATURES),5)
-            self.assertEqual(len(ORDERED_LATENCY_SIGNATURES),7);self.assertEqual(len(ORDERED_LATENCY_STATIC_SIGNATURES),3)
+            self.assertEqual(len(ORDERED_LATENCY_SIGNATURES),8);self.assertEqual(len(ORDERED_LATENCY_STATIC_SIGNATURES),4)
             for owner,signatures in GENERATED_API_INVENTORIES:
                 raw=transcript(owner,signatures);self.assertEqual(len(require_signatures(raw,signatures,owner)["required_signatures"]),len(signatures))
         def test_every_missing_duplicate_and_changed_method_refused(self):
@@ -653,6 +656,10 @@ def self_test():
             signature=next(s for s in ORDERED_LATENCY_STATIC_SIGNATURES if "CONNECTNewLatencyBenchmark" in s)
             wrong=signature.replace(PACKAGE+"RouterNodeChainCONNECT,",PACKAGE+"RouterNodeChainSOCKS,")
             with self.assertRaises(ValueError):require_signatures(raw.replace(signature.encode(),wrong.encode()),ORDERED_LATENCY_STATIC_SIGNATURES,"Libbox")
+            signature=next(s for s in ORDERED_LATENCY_STATIC_SIGNATURES if "ExecutionNewLatencyBenchmark" in s)
+            for owner in ("RouterNodeChain", "RouterNodeChainSOCKS", "RouterNodeChainCONNECT"):
+                wrong=signature.replace(PACKAGE+"RouterNodeChainExecution,",PACKAGE+owner+",")
+                with self.subTest(owner=owner),self.assertRaises(ValueError):require_signatures(raw.replace(signature.encode(),wrong.encode()),ORDERED_LATENCY_STATIC_SIGNATURES,"Libbox")
         def test_every_required_generated_class_must_exist_in_actual_archive(self):
             with tempfile.TemporaryDirectory() as directory:
                 root=Path(directory);aar,apk=fixture(root)

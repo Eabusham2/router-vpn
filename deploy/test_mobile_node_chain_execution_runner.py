@@ -31,6 +31,16 @@ class Runner(unittest.TestCase):
     def test_complete_exact_two_packages(self):
         self.assertEqual(len(self.check(self.events())),2*sum(map(len,G.inventory().values())))
 
+    def test_execution_latency_bridge_roots_cannot_be_omitted(self):
+        roots = {'TestRouterNodeChainExecutionBridgeLatency'+name for name in (
+            'RequiresOriginalAssociation', 'RejectsUncapturedSharedService', 'CallerBounds',
+            'PublicHandlePreservesBorrowedCleanup')}
+        self.assertTrue(roots.issubset(G.inventory()['experimental/libbox']))
+        for root in roots:
+            events = [event for event in self.events() if not event.get('Test', '').startswith(root)]
+            with self.subTest(root=root), self.assertRaises(ValueError):
+                self.check(events)
+
     def build_output(self, package='experimental/libbox', output=None):
         # Exact Go 1.26 record emitted by the hosted Darwin linker, before
         # the original libbox/daemon package start events.
