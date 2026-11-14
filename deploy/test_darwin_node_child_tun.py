@@ -16,6 +16,7 @@ import os
 import platform
 import re
 import selectors
+import shutil
 import signal
 import stat
 import subprocess
@@ -51,16 +52,50 @@ def load(name, file):
 NODE = load('darwin_child_native_sources', 'test_desktop_node_physical.py')
 UID = load('darwin_child_native_uid', 'test_desktop_socket_uid.py')
 BUILD = load('darwin_child_native_build', 'build-native-runtime.py')
+NATIVE_STAGE_STARTED = time.monotonic()
+
+
+def native_stage_metrics():
+    # Observe only this reporter and already-reaped children. These counters
+    # are not live descendant totals and cannot diagnose a lost runner alone.
+    metrics = dict(scope='diagnostic-only', native_accepted=False,
+                   utc=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                   elapsed_seconds=round(max(0, time.monotonic()-NATIVE_STAGE_STARTED), 3))
+    readers = dict(pid=os.getpid, pgid=lambda: os.getpgid(0),
+                   load_average=lambda: [round(value, 3) for value in os.getloadavg()],
+                   workspace_free_bytes=lambda: shutil.disk_usage(ROOT).free)
+    try:
+        import resource
+        def usage(who):
+            value = resource.getrusage(who)
+            return dict(user_cpu_seconds=round(value.ru_utime, 3),
+                        system_cpu_seconds=round(value.ru_stime, 3),
+                        maxrss=value.ru_maxrss,
+                        maxrss_unit='bytes' if sys.platform == 'darwin' else 'KiB' if sys.platform.startswith('linux') else 'platform-native')
+        readers['reporter_usage'] = lambda: usage(resource.RUSAGE_SELF)
+        readers['reaped_children_usage'] = lambda: usage(resource.RUSAGE_CHILDREN)
+    except ImportError:
+        metrics['resource_usage'] = 'unavailable'
+    for name, read in readers.items():
+        try:
+            metrics[name] = read()
+        except Exception:
+            # A failed observation cannot hide a later native error or expose
+            # an exception containing a path, command or other private input.
+            metrics[name] = 'unavailable'
+    return metrics
 
 
 def native_stage(stage):
     # Diagnostics cannot satisfy a verdict or receipt. Emit each bounded,
-    # constant stage before the next native operation; GitHub can retain the
-    # notice even when a lost runner never uploads its aggregate command log.
+    # constant stage before the next native operation. A disconnected runner
+    # may lose notices as well as logs; their remote retention is not assured.
+    message = stage[:256] + '; diagnostics=' + json.dumps(native_stage_metrics(), sort_keys=True, separators=(',', ':'))
+    message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
     if os.environ.get('GITHUB_ACTIONS') == 'true':
-        print('::notice title=Darwin ordered child stage::' + stage, flush=True)
+        print('::notice title=Darwin ordered child stage::' + message, flush=True)
     else:
-        print('Darwin ordered child stage: ' + stage, flush=True)
+        print('Darwin ordered child stage: ' + message, flush=True)
 
 
 def digest(path):

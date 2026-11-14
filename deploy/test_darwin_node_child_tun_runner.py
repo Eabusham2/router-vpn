@@ -96,6 +96,72 @@ def workflow_inventory(raw):
         raise ValueError('handshake preflight replaced or followed mandatory native acceptance')
 
 
+class StageDiagnostics(unittest.TestCase):
+    def capture(self, stage):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), patch.dict(os.environ, GITHUB_ACTIONS='true'):
+            G.native_stage(stage)
+        return output.getvalue()
+
+    def test_actual_resources_are_bounded_nonsecret_diagnostics(self):
+        import resource
+        stage = 'starting actual inherited child, PF, utun and encrypted peer cases'
+        with patch.dict(os.environ, PRIVATE_STAGE_SENTINEL='do-not-print-this-private-value'):
+            output = self.capture(stage)
+        self.assertEqual(len(output.splitlines()), 1)
+        self.assertLess(len(output.encode()), 2048)
+        self.assertTrue(output.startswith('::notice title=Darwin ordered child stage::'+stage+'; diagnostics='))
+        value = json.loads(output.partition('; diagnostics=')[2])
+        self.assertEqual(value['scope'], 'diagnostic-only')
+        self.assertIs(value['native_accepted'], False)
+        self.assertEqual(value['pid'], os.getpid())
+        self.assertEqual(value['pgid'], os.getpgid(0))
+        self.assertGreaterEqual(value['elapsed_seconds'], 0)
+        self.assertRegex(value['utc'], r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+        self.assertEqual(len(value['load_average']), 3)
+        self.assertGreater(value['workspace_free_bytes'], 0)
+        self.assertLessEqual(value['reporter_usage']['maxrss'], resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        self.assertEqual(value['reaped_children_usage']['maxrss_unit'], 'bytes' if sys.platform == 'darwin' else 'KiB')
+        self.assertNotIn('do-not-print-this-private-value', output)
+
+    def test_failed_observations_preserve_stage_and_original_native_failure(self):
+        import resource
+        failure = subprocess.CalledProcessError(7, ['original-native'], output=b'original failure')
+        output = io.StringIO()
+        child, peer = Path('/captured/child'), Path('/captured/peer')
+        identities = {child: (1, 2, 3, 'a'*64), peer: (1, 2, 3, 'b'*64)}
+        with patch.object(G.os, 'getloadavg', side_effect=OSError('private-load-path')), \
+             patch.object(G.shutil, 'disk_usage', side_effect=OSError('private-disk-path')), \
+             patch.object(resource, 'getrusage', side_effect=OSError('private-resource-path')), \
+             patch.object(G, 'native_output', side_effect=failure) as native, \
+             contextlib.redirect_stdout(output), patch.dict(os.environ, GITHUB_ACTIONS='true'):
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                G.execute_native_images(Path('/captured/source'), {}, {}, None, 'arm64', 501, child, peer, identities)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(native.call_count, 1)
+        self.assertEqual(native.call_args.kwargs['timeout'], 960)
+        self.assertIn('-test.timeout=930s', native.call_args.args[0])
+        output = output.getvalue()
+        value = json.loads(output.partition('; diagnostics=')[2])
+        for name in ('load_average', 'workspace_free_bytes', 'reporter_usage', 'reaped_children_usage'):
+            self.assertEqual(value[name], 'unavailable')
+        self.assertNotIn('private-', output)
+        self.assertIn('starting actual inherited child, PF, utun and encrypted peer cases', output)
+        self.assertNotIn('native process returned zero', output)
+
+    def test_escaped_stage_cannot_inject_a_workflow_command_or_native_verdict(self):
+        output = self.capture('phase%\r\n::error::injected\n'+'x'*4096)
+        self.assertEqual(len(output.splitlines()), 1)
+        self.assertIn('phase%25%0D%0A::error::injected%0A', output)
+        self.assertLess(len(output.encode()), 2048)
+        with self.assertRaises(ValueError):
+            G.check_verdict(output)
+        for missing in G.EXPECTED:
+            incomplete = transcript().replace('--- PASS: '+missing+' (', '--- OMITTED: '+missing+' (')
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                G.check_verdict(incomplete + output)
+
+
 class NativeVerdict(unittest.TestCase):
     def test_complete_exact_native_transcript(self):
         G.check_verdict(transcript())
