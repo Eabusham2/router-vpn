@@ -296,6 +296,78 @@ class NativeShippingAuditTests(unittest.TestCase):
                     self.assert_backend_proof_admission(False)
                     self.assert_speedlab_imported_platform(False)
 
+    def test_typed_policy_sum_retains_both_exact_owners_and_validated_dispatch(self):
+        linux = "cmd/client/desktop_node_chain_linux.go"
+        policy = "cmd/client/desktop_node_chain_policy_dispatch.go"
+        changes = (
+            (linux, "(h.chain == nil && h.socksChain == nil)", "false"),
+            (linux, "!h.launch.chain.hasPolicy()", "false"),
+            (linux, "h.launch.chain.policy != h.chain", "false"),
+            (linux, "h.launch.chain.socksPolicy != h.socksChain", "false"),
+            (linux, "meta := h.launch.chain.policyMetadata()", "meta := h.chain.Metadata()"),
+            (policy, "return c != nil && (c.policy != nil) != (c.socksPolicy != nil)",
+             "return c != nil && (c.policy != nil || c.socksPolicy != nil)"),
+            (policy, "if !c.hasPolicy() {", "if false {"),
+            (policy, "config, meta, capture, err := c.socksPolicy.ReadValidated()", "config, meta, capture, err := other.ReadValidated()"),
+            (policy, "return c.policy.ReadValidated()", "return other.ReadValidated()"),
+            (policy, "_, meta, _, _ := c.readPolicy()", "_, meta, _, _ := other.readPolicy()"),
+            (policy, "original.socks == nil || original.chain != nil", "original.socks == nil"),
+            (policy, "capture.Original != original.socks.source", "false"),
+            (policy, "capture.Original != original.chain", "false"),
+            (policy, "capture, err := c.socksPolicy.ReadValidatedLaunch()", "capture, err := other.ReadValidatedLaunch()"),
+            (policy, "capture, err := c.policy.ReadValidatedLaunch()", "capture, err := other.ReadValidatedLaunch()"),
+        )
+        self.assert_backend_proof_admission(True)
+        self.assert_multihop_scores(True)
+        for path, before, after in changes:
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\nvar auditDecoy = `" + before + "`\n"
+                self.assertFalse(_NATIVE.native_multihop_ordered_owner(self.body))
+                self.assert_backend_proof_admission(False)
+                self.assert_multihop_scores(False)
+        self.changes.clear()
+        self.replace(policy, "return c != nil && (c.policy != nil) != (c.socksPolicy != nil)",
+                     "return c != nil && /* exclusive family */ (c.policy != nil) !=\n(c.socksPolicy != nil)")
+        self.assert_backend_proof_admission(True)
+        self.assert_multihop_scores(True)
+        self.changes.clear()
+        self.changes[policy] = self.body(policy) + "\nfunc (c *desktopNodeChainLaunch) hasPolicy() bool { return true }\n"
+        self.assert_backend_proof_admission(False)
+        self.assert_multihop_scores(False)
+
+    def test_typed_public_admission_stays_closed_and_checks_every_requested_node(self):
+        route = "cmd/client/multihop_native_routes.go"
+        policy = "cmd/client/desktop_node_chain_policy_dispatch.go"
+        detector = "cmd/client/multihop_node_chain_socks_selection.go"
+        self.assert_multihop_chain(True)
+        changes = (
+            (route, "|| desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported()", ""),
+            (route, "!nativeNodeChainPlatformSupported() ||", "false ||"),
+            (route, "desktopNodeChainHasSOCKS(q.Nodes)", "desktopNodeChainHasSOCKS(other.Nodes)"),
+            (route, "!nativeNodeChainSOCKSPlatformSupported()", "false"),
+            (policy, "func nativeNodeChainSOCKSPlatformSupported() bool { return false }",
+             "func nativeNodeChainSOCKSPlatformSupported() bool { return true }"),
+            (detector, "for _, node := range nodes {", "for _, node := range nodes[:1] {"),
+            (detector, 'node.Mode == "socks5"', 'node.Mode == "other"'),
+            (detector, 'if node.Mode == "socks5" {\n\t\t\treturn true', 'if node.Mode == "socks5" {\n\t\t\treturn false'),
+        )
+        for path, before, after in changes:
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\nvar auditDecoy = `" + before + "`\n"
+                self.assert_multihop_chain(False)
+        for path, declaration in (
+            (policy, "func nativeNodeChainSOCKSPlatformSupported() bool { return false }"),
+            (detector, "func desktopNodeChainHasSOCKS(nodes []common.MultihopNodeSelection) bool { return false }"),
+        ):
+            with self.subTest(duplicate=path):
+                self.changes.clear()
+                self.changes[path] = self.body(path) + "\n" + declaration + "\n"
+                self.assert_multihop_chain(False)
+
     def test_local_transaction_keeps_public_resolver_and_original_operation(self):
         path = "cmd/client/multihop_native_routes.go"
         for before, after in (
@@ -316,7 +388,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("a.beginConnectionOperationContext(r.Context())", "a.beginConnectionOperationContext(context.Background())"),
             ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "decodeMultihopConnectRequest(r.Body)"),
             ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "decodeUncapturedRequest(http.MaxBytesReader(w, r.Body, 16<<10))"),
-            ("if q.ordered() && !nativeNodeChainPlatformSupported() {", "if false {"),
+            ("if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported()) {", "if false {"),
             ("a.mu.Lock()\n\tsel, err := a.resolveNativeMultihopRequestLocked(q)\n\ta.mu.Unlock()", "sel, err := a.resolveNativeMultihopRequestLocked(q)"),
             ("a.resolveNativeMultihopRequestLocked(q)", "a.resolveNativeMultihopRequestLocked(other)"),
             ("errors.Is(err, errDesktopProfileSelectionChanged)", "false"),

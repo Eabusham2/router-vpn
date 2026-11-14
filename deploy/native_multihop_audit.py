@@ -56,6 +56,48 @@ def native_multihop_ordered_owner(read) -> bool:
     if not callable(read):
         return False
     expected = (
+        ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func (c *desktopNodeChainLaunch) hasPolicy() bool', r'''
+	return c != nil && (c.policy != nil) != (c.socksPolicy != nil)
+        '''),
+        ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func (c *desktopNodeChainLaunch) readPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, mobilemultihop.DesktopPhysicalCapture, error)', r'''
+	if !c.hasPolicy() {
+		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, errors.New("ordered parent lost its exclusive concrete policy")
+	}
+	if c.socksPolicy != nil {
+		config, meta, capture, err := c.socksPolicy.ReadValidated()
+		return config, meta.DesktopNodeChainMetadata, capture, err
+	}
+	return c.policy.ReadValidated()
+        '''),
+        ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func (c *desktopNodeChainLaunch) readLaunchPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, string, error)', r'''
+	bad := errors.New("ordered launch lost its exact concrete original source")
+	if !c.hasPolicy() || c.selection.Native == nil || c.selection.Native.chain == nil {
+		return "", mobilemultihop.DesktopNodeChainMetadata{}, "", bad
+	}
+	original := c.selection.Native.chain
+	if c.socksPolicy != nil {
+		if original.socks == nil || original.chain != nil {
+			return "", mobilemultihop.DesktopNodeChainMetadata{}, "", bad
+		}
+		capture, err := c.socksPolicy.ReadValidatedLaunch()
+		if err != nil || capture.Original != original.socks.source {
+			return "", mobilemultihop.DesktopNodeChainMetadata{}, "", errors.Join(err, bad)
+		}
+		return capture.Config, capture.Metadata.DesktopNodeChainMetadata, capture.Input, nil
+	}
+	if original.socks != nil || original.chain == nil {
+		return "", mobilemultihop.DesktopNodeChainMetadata{}, "", bad
+	}
+	capture, err := c.policy.ReadValidatedLaunch()
+	if err != nil || capture.Original != original.chain {
+		return "", mobilemultihop.DesktopNodeChainMetadata{}, "", errors.Join(err, bad)
+	}
+	return capture.Config, capture.Metadata, capture.Input, nil
+        '''),
+        ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func (c *desktopNodeChainLaunch) policyMetadata() mobilemultihop.DesktopNodeChainMetadata', r'''
+	_, meta, _, _ := c.readPolicy()
+	return meta
+        '''),
         ('cmd/client/desktop_node_chain_dispatch.go', 'func proveDesktopNodeChainContext(ctx context.Context, a *app, selection multihopSelection, command *exec.Cmd) error', r'''
 graph, found := getActiveMultihopGraph(a)
 	owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
@@ -180,8 +222,8 @@ if owner == nil || owner.host == nil {
         '''),
         ('cmd/client/desktop_node_chain_linux.go', 'func (h *desktopLinuxNodeHost) currentNodeChain(ctx context.Context) error', r'''
 if h == nil || ctx == nil || ctx.Err() != nil || h.closing || h.closed || h.operation == nil || h.parent == nil ||
-		h.chain == nil || h.policy != nil || h.imported != nil || h.external != nil || h.launch == nil || h.launch.chain == nil ||
-		h.launch.chain.policy != h.chain || h.launch.chain.platform == nil || h.launch.ownedNode != nil {
+		(h.chain == nil && h.socksChain == nil) || h.policy != nil || h.imported != nil || h.external != nil || h.launch == nil || h.launch.chain == nil ||
+		!h.launch.chain.hasPolicy() || h.launch.chain.policy != h.chain || h.launch.chain.socksPolicy != h.socksChain || h.launch.chain.platform == nil || h.launch.ownedNode != nil {
 		return errors.New("Linux ordered host lost its unique concrete policy")
 	}
 	runtime := h.launch.chain.platform
@@ -197,7 +239,7 @@ if h == nil || ctx == nil || ctx.Err() != nil || h.closing || h.closed || h.oper
 	if err := validateDesktopNodeChainLaunch(ctx, h.launch); err != nil {
 		return err
 	}
-	meta := h.chain.Metadata()
+	meta := h.launch.chain.policyMetadata()
 	wanted := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
 		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
 	if meta.TargetOS != "linux" || h.selection != wanted || string(h.source) != h.launch.chain.input || h.network != runtime.capture.network {
@@ -854,6 +896,19 @@ return fields, nil
 def native_multihop_shipping_chain(source: str, read=None) -> bool:
     if not native_multihop_request_admission(read):
         return False
+    # Typed source retention is not public native acceptance. Require the
+    # actual closed shipping gate and complete-node detector, not decoy text.
+    support = _function(_tokens(read("cmd/client/desktop_node_chain_policy_dispatch.go")),
+                        "func nativeNodeChainSOCKSPlatformSupported() bool")
+    detector = _function(_tokens(read("cmd/client/multihop_node_chain_socks_selection.go")),
+                         "func desktopNodeChainHasSOCKS(nodes []common.MultihopNodeSelection) bool")
+    if support != _tokens("return false") or detector != _tokens('''
+        for _, node := range nodes {
+            if node.Mode == "socks5" { return true }
+        }
+        return false
+    '''):
+        return False
     tokens = _tokens(source)
     public = _function(tokens, "func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request)")
     expected = _tokens("""
@@ -876,7 +931,7 @@ def native_multihop_shipping_chain(source: str, read=None) -> bool:
             "q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))",
             '''if err != nil { http.Error(w, "bad json", http.StatusBadRequest)
                 return }''',
-            '''if q.ordered() && !nativeNodeChainPlatformSupported() {
+            '''if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported()) {
                 http.Error(w, "this platform has not enabled its protected ordered native host", http.StatusNotImplemented)
                 return
             }''',

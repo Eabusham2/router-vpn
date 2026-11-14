@@ -503,3 +503,38 @@ candidate checkouts. The bridge gate contains 36 bridge and 15 native Box
 verdicts; those 51 actual native verdicts and generated-header/Xcode results
 are pending for this increment. CONNECT, 50-sample host adoption, signing,
 physical iPhone/iPad networking and deployment remain separate requirements.
+
+
+## Native shipping audits follow retained typed policy ownership
+
+Exact `5c48b14b89bbbf7c96c5329a7d9446897cda44ad` release-blocker run
+`43555707701` and weighted-audit run `43555707559` exposed obsolete structural
+expectations. The Linux host now retains an exclusive ordinary/SOCKS policy
+sum, while the public route also requires the typed platform gate. The audit
+still expected only the previous ordinary pointer and platform condition.
+
+The two audit files now follow the actual typed ownership and validated
+metadata/launch helpers. They require both exact policy pointers, exclusive
+family selection, the original source pointers, complete-node SOCKS detection,
+and the currently closed public typed-admission gate. All previous source,
+session, network, context and cleanup checks remain. No production guard or
+release threshold changed.
+
+The original 44-test audit suite reproduced 11 failures before the repair.
+All 46 tests passed afterward, including two new suites rejecting copied or
+mixed policy references, substituted helpers, duplicate declarations,
+incomplete node detection, weakened guards and unverified public admission.
+Comment/string decoys remain ineffective, and formatting-only changes remain
+accepted. The reviewed diff SHA-256 is
+`e147d11571554d842c2496b1569fd7d7cfd4ee155d15dce5a1c8a03f373e659e`.
+
+After composition with the published iOS source, the weighted, recovered and
+backend-session audits passed again. With the available Java, Go and Swift
+toolchains explicitly selected, the complete release-orchestration command
+passed in 93.73 seconds; its log SHA-256 is
+`ca2c58da87e5dc8df9aa3e45aaf010af43fc98f6fa67f97a3717a8e451e9642f`.
+Earlier missing-Java and missing-Swift command attempts remain recorded as
+failed environment attempts. The existing scorer's 88 source / 12 live split
+is unchanged and is not a completion percentage for the full original product
+requirements. Exact-SHA native builds, release publication and live acceptance
+remain separate evidence.
