@@ -408,12 +408,130 @@ class OwnedDarwinPF(unittest.TestCase):
         self.assertFalse(retired['baseline']['present'])
         self.assertEqual(self.references, {'999'})
 
+    def test_execution_node_chain_uses_exact_family_through_native_retirement(self):
+        for policy in ('on-connect', 'always'):
+            with self.subTest(policy=policy):
+                capture = self.node_chain_capture(policy, 'ordered-node-chain-execution-v1')
+                active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                self.assertEqual(active['capture'], capture)
+                state = self.saved()
+                self.assertEqual(state['native_socket_family'], capture['family'])
+                self.assertEqual(state['native_node_chain_capture'], capture)
+                self.assertEqual(state['endpoint_ips'], [])
+                self.assertNotIn('native_external_capture', state)
+                self.assertNotIn('native_candidate_prefix_capture', state)
+                self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+                self.assertEqual(D.darwin_node_chain('current', dict(capture=capture, expected=active)), active)
+                held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+                self.assertEqual(held['capture'], capture)
+                self.assertTrue(held['baseline']['present'])
+                self.assertEqual(held['pf_token'], active['pf_token'])
+                self.assertEqual(self.saved()['native_socket_family'], capture['family'])
+                retired = D.darwin_node_chain('release', dict(capture=capture, expected=held))
+                self.assertEqual(retired['capture'], capture)
+                self.assertEqual(retired['baseline']['present'], policy == 'always')
+                self.assertEqual(D.darwin_node_chain('release', dict(capture=capture, expected=retired)), retired)
+        self.watcher.assert_not_called()
+        self.resolver.assert_not_called()
+
+    def test_execution_node_chain_cross_family_receipts_never_adopt_original_owner(self):
+        for family, other in (('ordered-node-chain-v1', 'ordered-node-chain-execution-v1'),
+                              ('ordered-node-chain-execution-v1', 'ordered-node-chain-v1'),
+                              ('ordered-node-chain-socks-v1', 'ordered-node-chain-execution-v1'),
+                              ('ordered-node-chain-execution-v1', 'ordered-node-chain-socks-v1'),
+                              ('ordered-node-chain-connect-v1', 'ordered-node-chain-execution-v1'),
+                              ('ordered-node-chain-execution-v1', 'ordered-node-chain-connect-v1')):
+            with self.subTest(family=family):
+                capture = self.node_chain_capture('on-connect', family)
+                active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                foreign = dict(capture, family=other)
+                before, commands = self.saved(), list(self.commands)
+                for action in ('apply', 'current', 'retire', 'release'):
+                    with self.subTest(action=action), self.assertRaises(RuntimeError):
+                        D.darwin_node_chain(action, dict(capture=foreign, expected=active))
+                    self.assertEqual(self.saved(), before)
+                    self.assertEqual(self.commands, commands)
+                for action in ('current', 'retire', 'release'):
+                    with self.subTest(action=action), self.assertRaises(RuntimeError):
+                        D.darwin_node_chain(action, dict(capture=foreign, expected=None))
+                    self.assertEqual(self.saved(), before)
+                    self.assertEqual(self.commands, commands)
+                D.darwin_node_chain('release', dict(capture=capture, expected=active))
+
+    def test_execution_node_chain_journal_family_drift_refuses_reassert_and_cleanup(self):
+        capture = self.node_chain_capture('always', 'ordered-node-chain-execution-v1')
+        active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        state, commands = self.saved(), list(self.commands)
+        for changed in (dict(state, native_socket_family='ordered-node-chain-v1'),
+                        dict(state, native_node_chain_capture=dict(capture, family='ordered-node-chain-v1')),
+                        dict(state, native_candidate_prefix_capture=capture)):
+            self.private_json(self.root/'run/kill-switch.json', changed)
+            for action in ('current', 'retire', 'release'):
+                with self.subTest(action=action), self.assertRaises(RuntimeError):
+                    D.darwin_node_chain(action, dict(capture=capture, expected=active))
+                self.assertEqual(self.saved(), changed)
+                self.assertEqual(self.commands, commands)
+            with self.assertRaises(RuntimeError):
+                D.darwin_reassert()
+            self.assertEqual(self.saved(), changed)
+            self.assertEqual(self.commands, commands)
+        self.private_json(self.root/'run/kill-switch.json', state)
+        self.assertEqual(D.darwin_reassert(), 0)
+        self.assertEqual(self.saved()['native_socket_family'], capture['family'])
+        self.assertEqual(self.saved()['native_node_chain_capture'], capture)
+        self.assertEqual(self.saved()[P._baseline.STATE_KEY]['request']['session_id'], '')
+
+    def test_execution_node_chain_failed_apply_retains_exact_family_cleanup(self):
+        capture = self.node_chain_capture('on-connect', 'ordered-node-chain-execution-v1')
+        self.fail_after_load = True
+        with self.assertRaisesRegex(RuntimeError, 'ambiguous applied'):
+            D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        state = self.saved()
+        self.assertEqual(state['native_socket_family'], capture['family'])
+        self.assertEqual(state['native_node_chain_capture'], capture)
+        self.assertTrue(state['darwin_transition_pending'])
+        self.assertFalse(state[P._baseline.STATE_KEY]['complete'])
+        self.assertNotIn(['-X', '417'], self.commands)
+        self.fail_after_load = False
+        with self.assertRaises(RuntimeError):
+            D.darwin_node_chain('release', dict(capture=dict(capture, family='ordered-node-chain-v1'), expected=None))
+        retired = D.darwin_node_chain('release', dict(capture=capture, expected=None))
+        self.assertFalse(retired['baseline']['present'])
+        self.assertEqual(self.references, {'999'})
+
+    def test_execution_node_chain_held_baseline_passes_only_to_fresh_capture(self):
+        original = self.node_chain_capture('on-connect', 'ordered-node-chain-execution-v1')
+        active = D.darwin_node_chain('apply', dict(capture=original, expected=None))
+        transition_start = len(self.native_calls)
+        held = D.darwin_node_chain('retire', dict(capture=original, expected=active))
+        self.assertTrue(held['baseline']['present'])
+        self.assertNotIn(['-X', held['pf_token']], self.commands)
+        successor = dict(original, session_id='d'*32, config_sha256='e'*64)
+        fresh = D.darwin_node_chain('apply', dict(capture=successor, expected=None))
+        self.assertEqual(fresh['capture'], successor)
+        self.assertEqual(D.darwin_node_chain('current', dict(capture=successor, expected=fresh)), fresh)
+        self.assertTrue(fresh['baseline']['present'])
+        transitions = self.native_calls[transition_start:]
+        self.assertTrue(transitions)
+        self.assertTrue(all(request['action'] == 'replace' for _, request in transitions))
+        self.assertNotIn(['-a', P.OWNED_PF_ANCHOR, '-F', 'rules'], self.commands)
+        self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+        before, commands = self.saved(), list(self.commands)
+        for action in ('current', 'retire', 'release'):
+            with self.subTest(action=action), self.assertRaises(RuntimeError):
+                D.darwin_node_chain(action, dict(capture=original, expected=held))
+            self.assertEqual(self.saved(), before)
+            self.assertEqual(self.commands, commands)
+        retired = D.darwin_node_chain('release', dict(capture=successor, expected=fresh))
+        self.assertFalse(retired['baseline']['present'])
+        self.assertEqual(self.references, {'999'})
+
     def test_connect_node_chain_aliases_refuse_before_native_mutation(self):
         capture = self.node_chain_capture('on-connect', 'ordered-node-chain-connect-v1')
         for family in ('ordered-node-chain-connect', 'ordered-node-chain-connect-v2',
                        'Ordered-node-chain-connect-v1', ' ordered-node-chain-connect-v1',
                        'ordered-node-chain-connect-v1 ', 'ordered-node-chain-connect-v1\0',
-                       'node-candidate-prefix-v1', 'ordered-node-chain-execution-v1', ''):
+                       'node-candidate-prefix-v1', 'ordered-node-chain-execution-v2', ''):
             with self.subTest(family=family), self.assertRaises(RuntimeError):
                 D.darwin_node_chain('apply', dict(capture=dict(capture, family=family), expected=None))
             self.assertEqual(self.commands, [])

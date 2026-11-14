@@ -758,7 +758,7 @@ def darwin_external(action, value):
 
 
 _NODE_CHAIN_FAMILIES = ('ordered-node-chain-v1', 'ordered-node-chain-socks-v1',
-                        'ordered-node-chain-connect-v1')
+                        'ordered-node-chain-connect-v1', 'ordered-node-chain-execution-v1')
 
 _NODE_CHAIN_CAPTURE_FIELDS = ('schema', 'family', 'profile_id', 'session_id', 'source_sha256',
                              'config_sha256', 'home_lan_access', 'policy')
