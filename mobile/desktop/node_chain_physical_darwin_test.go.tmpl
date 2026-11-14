@@ -61,7 +61,7 @@ func nodeDarwinOrderedPolicy(t *testing.T, modes []string) *mobilemultihop.Deskt
 		files := map[string]string{}
 		if position < len(modes) {
 			mode = modes[position]
-			config := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0\nPersistentKeepalive=25\n",
+			config := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77:77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=%s:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n",
 				base64.StdEncoding.EncodeToString(client.Bytes()), public, address)
 			name := "wg.conf"
 			if mode != "wg" {
