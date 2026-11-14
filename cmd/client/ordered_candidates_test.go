@@ -37,7 +37,11 @@ type orderedCandidateSaveWriter struct {
 }
 
 func (w *orderedCandidateSaveWriter) Write(body []byte) (int, error) {
-	w.beforeWrite()
+	// An error response is not profile publication. Preserve its status and
+	// diagnostic body before testing the hold on a successful publication.
+	if w.Code == http.StatusOK {
+		w.beforeWrite()
+	}
 	return w.ResponseRecorder.Write(body)
 }
 
@@ -299,11 +303,11 @@ func testOrderedCandidateSaveHTTPRequiresFreshOriginalOwner(t *testing.T, f *des
 	}}
 	body, _ := json.Marshal(q)
 	f.a.saveOrderedCandidateProfile(writer, httptest.NewRequest(http.MethodPost, "/api/multihop/prefix-candidates/save-profile", bytes.NewReader(body)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("save original current receipt: HTTP %d: %.2048s", w.Code, w.Body.String())
+	}
 	if !observedHold || mtuSuspended(f.a) {
 		t.Fatal("save did not retain then release its exact publication hold")
-	}
-	if w.Code != 200 {
-		t.Fatal("save original current receipt", w.Code, w.Body.String())
 	}
 	store, err := loadConnectionProfileStore(f.a)
 	if err != nil || len(store.Profiles) != 1 {
