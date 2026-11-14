@@ -5,6 +5,7 @@ struct IOSSpeedLabView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var runner = IOSSpeedLabRunner()
     @StateObject private var hopProbe = IOSHopMeasurements()
+    @StateObject private var orderedProbe = IOSOrderedLatency()
     @StateObject private var candidateProbe = IOSNodeCandidates()
 
     @State private var scope = IOSSpeedLabRunRequest.Scope.current
@@ -29,8 +30,9 @@ struct IOSSpeedLabView: View {
                     hero
                     pathCard
                     durationCard
-                    IOSHopMeasurementsCard(probe: hopProbe, otherTestRunning: runner.running || candidateProbe.running)
-                    IOSNodeCandidatesCard(probe: candidateProbe, otherTestRunning: runner.running || hopProbe.running)
+                    IOSOrderedLatencyCard(probe: orderedProbe, otherTestRunning: runner.running || hopProbe.running || candidateProbe.running)
+                    IOSHopMeasurementsCard(probe: hopProbe, otherTestRunning: runner.running || candidateProbe.running || orderedProbe.running)
+                    IOSNodeCandidatesCard(probe: candidateProbe, otherTestRunning: runner.running || hopProbe.running || orderedProbe.running)
                     if let result = runner.lastResult { resultCards(result) }
                     if !runner.lastError.isEmpty { errorCard }
                     runCard
@@ -46,7 +48,7 @@ struct IOSSpeedLabView: View {
         .onChange(of: nodeID) { _ in loadAutoRequirementsFromNode() }
         .onChange(of: minSeconds) { value in if maxSeconds < value { maxSeconds = value } }
         .onChange(of: maxSeconds) { value in if minSeconds > value { minSeconds = value } }
-        .onDisappear { runner.cancel(); hopProbe.cancel(); candidateProbe.cancel() }
+        .onDisappear { runner.cancel(); hopProbe.cancel(); candidateProbe.cancel(); orderedProbe.cancel() }
     }
 
     private var hero: some View {
@@ -243,7 +245,7 @@ struct IOSSpeedLabView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(runDisabled || hopProbe.running || candidateProbe.running)
+            .disabled(runDisabled || hopProbe.running || candidateProbe.running || orderedProbe.running)
             if runner.running {
                 Button("Cancel and restore", role: .cancel) { runner.cancel() }
                     .buttonStyle(.bordered)

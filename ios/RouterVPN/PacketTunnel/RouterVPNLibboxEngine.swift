@@ -1489,6 +1489,43 @@ final class RouterVPNLibboxEngine {
         try host.activateMTU()
     }
 
+    func orderedLatencyRequest(_ request: RouterVPNOrderedLatencyRequest, completion: @escaping (Data?) -> Void) {
+        let worker = OrderedLatencyIPC(engine: self, request: request, completion: completion)
+        DispatchQueue.global(qos: .userInitiated).async { worker.run() }
+    }
+    private final class OrderedLatencyIPC: @unchecked Sendable {
+        let engine: RouterVPNLibboxEngine, request: RouterVPNOrderedLatencyRequest
+        let completion: (Data?) -> Void
+        init(engine: RouterVPNLibboxEngine, request: RouterVPNOrderedLatencyRequest, completion: @escaping (Data?) -> Void) {
+            self.engine = engine; self.request = request; self.completion = completion
+        }
+        func run() {
+            engine.ownershipLock.lock()
+            let host = engine.nodeChainSOCKS, generation = engine.ownershipGeneration
+            let available = !engine.starting && !engine.permanentlyStopped && engine.server != nil
+            engine.ownershipLock.unlock()
+            guard available, let host, request.operation == "ordered-latency-info" || request.session == engine.settingsEpoch else { completion(nil); return }
+            func current() -> Bool {
+                engine.ownershipLock.lock(); defer { engine.ownershipLock.unlock() }
+                return engine.nodeChainSOCKS === host && engine.ownershipGeneration == generation && !engine.permanentlyStopped
+            }
+            var result: Data?
+            do {
+                guard current() else { throw CancellationError() }
+                if request.operation == "ordered-latency-info" { result = try host.latencyInfo(request, session: engine.settingsEpoch) }
+                else if request.operation == "ordered-latency-open" {
+                    _ = try host.latencyOpen(request)
+                    result = request.reply(["opened": true, "closed": false])
+                } else {
+                    guard let owner = RouterVPNOrderedLatencyRegistry.shared.find(request) else { throw CancellationError() }
+                    result = try owner.response(start: request.operation == "ordered-latency-start")
+                }
+                guard current() else { throw CancellationError() }
+            } catch { result = nil }
+            completion(result)
+        }
+    }
+
     func completeNodeChainSOCKS(_ completion: @escaping (Error?) -> Void) {
         ownershipLock.lock()
         let host = nodeChainSOCKS, generation = ownershipGeneration

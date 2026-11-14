@@ -113,6 +113,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             completionHandler(libboxEngine?.candidatePrefixRequest(operation: operation, request: request,
                 session: session, owner: owner, prefix: prefix, candidate: candidate)); return
         }
+        if let request = RouterVPNOrderedLatencyRequest.parse(messageData) {
+            if ["ordered-latency-cancel", "ordered-latency-close"].contains(request.operation) {
+                // Cleanup addresses the retained original session, even after
+                // this provider has installed a replacement engine.
+                let cleanup = OrderedLatencyCleanup(request: request, completion: completionHandler)
+                DispatchQueue.global(qos: .userInitiated).async { cleanup.run() }
+                return
+            }
+            guard let engine = libboxEngine, let proof = currentPathProofGuard() else { completionHandler(nil); return }
+            maxStartOwnerLock.lock(); let generation = maxStartGeneration; maxStartOwnerLock.unlock()
+            engine.orderedLatencyRequest(request) { [weak self] reply in
+                guard let self, self.libboxEngine === engine, self.currentMAXGeneration(generation),
+                      self.currentPathProofGuard() === proof else { completionHandler(nil); return }
+                completionHandler(reply)
+            }
+            return
+        }
         if let request = RouterVPNNodeChainExecutionRegistry.Request.parse(messageData) {
             if request.operation == "ordered-execution-release" {
                 completionHandler(RouterVPNNodeChainExecutionRegistry.shared.release(request)); return
@@ -169,6 +186,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             completionHandler(libboxEngine?.mtuRequest(operation: operation, request: id, session: session)); return
         }
         forwardingChannel?.handle(messageData, completion: completionHandler)
+    }
+
+    private final class OrderedLatencyCleanup: @unchecked Sendable {
+        let request: RouterVPNOrderedLatencyRequest, completion: (Data?) -> Void
+        init(request: RouterVPNOrderedLatencyRequest, completion: @escaping (Data?) -> Void) { self.request = request; self.completion = completion }
+        func run() { completion(RouterVPNOrderedLatencyRegistry.shared.cleanup(request)) }
     }
 
     private func currentProviderStrategy() -> RouterVPNProviderStrategy? {

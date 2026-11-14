@@ -51,6 +51,7 @@ CONNECT_PHASES += [
      "terminals":[r"Swift 6 typed CONNECT engine: PASS \((11) shipping startup/stop/activity checks; native handles doubled\)"]},
 ]
 PHASES += CONNECT_PHASES
+PHASES += [{'name': 'ordered-fifty-components', 'args': ['deploy/test_ios_ordered_latency.py'], 'prefix': 'Rejected ordered fifty causal control: ', 'controls': ['exact-fifty', 'closed-label', 'source-rollback', 'factory-retain', 'failed-close', 'request-tombstone', 'failed-close-history', 'post-close-current'], 'samples': ['iOS ordered fifty history + transaction + retained IPC: PASS (50 executable checks; native/file boundaries doubled)'], 'terminals': ['iOS ordered fifty history \\+ transaction \\+ retained IPC: PASS \\(([1-9][0-9]*) executable checks; native/file boundaries doubled\\)']}, {'name': 'ordered-fifty-callbacks', 'args': ['deploy/test_ios_ordered_latency_callbacks.py'], 'prefix': 'Rejected ordered fifty callback control: ', 'controls': ['complete-source', 'close-before-history'], 'samples': ['iOS ordered fifty actual app callbacks: PASS (59 executable checks; native/OS/private-file boundaries doubled)'], 'terminals': ['iOS ordered fifty actual app callbacks: PASS \\(([1-9][0-9]*) executable checks; native/OS/private-file boundaries doubled\\)']}, {'name': 'ordered-fifty-host', 'args': ['deploy/test_ios_ordered_latency_host.py'], 'prefix': 'Rejected ordered fifty typed-host control: ', 'controls': ['quiesce-before-factory', 'exact-lease', 'borrowed-service', 'retain-before-observation', 'facade-before-throughput'], 'samples': ['iOS ordered fifty typed host: PASS (21 ownership checks; native/MTU boundaries doubled)'], 'terminals': ['iOS ordered fifty typed host: PASS \\(([1-9][0-9]*) ownership checks; native/MTU boundaries doubled\\)']}]
 OUTER_SECONDS = 1200
 HEX40 = re.compile(r"[0-9a-f]{40}")
 
@@ -154,13 +155,15 @@ def self_test():
         lines.extend(phase.get("trailers",[]))
         return ("\n".join(lines)+"\n").encode()
     class Gate(unittest.TestCase):
-        def test_exact_ten_phases_and_all_original_controls(self):
+        def test_original_ten_phases_connect_and_ordered_fifty_controls(self):
             self.assertEqual([p["name"] for p in PHASES[:10]],["typed-source","typed-host","launch","editor","identity","startup","profiles","external-profiles","tor-profiles","legacy-startup"])
             self.assertEqual([len(p["controls"]) for p in PHASES[:10]],[3,9,5,10,3,3,3,1,5,12])
             self.assertEqual(sum(len(p["controls"]) for p in PHASES[:10]),54)
-            self.assertEqual([p["name"] for p in PHASES[10:]],["connect-source","connect-host","connect-editor","connect-startup","connect-profiles","connect-provider","connect-engine"])
-            self.assertEqual([len(p["controls"]) for p in PHASES[10:]],[3,9,10,3,3,3,0])
-            self.assertEqual(sum(len(p["controls"]) for p in PHASES),85)
+            self.assertEqual([p["name"] for p in PHASES[10:17]],["connect-source","connect-host","connect-editor","connect-startup","connect-profiles","connect-provider","connect-engine"])
+            self.assertEqual([len(p["controls"]) for p in PHASES[10:17]],[3,9,10,3,3,3,0])
+            self.assertEqual([p["name"] for p in PHASES[17:]],["ordered-fifty-components","ordered-fifty-callbacks","ordered-fifty-host"])
+            self.assertEqual([len(p["controls"]) for p in PHASES[17:]],[8,2,5])
+            self.assertEqual(sum(len(p["controls"]) for p in PHASES),100)
             self.assertEqual(OUTER_SECONDS,1200)
             for phase in PHASES:self.assertTrue(verdict(valid(phase),0,False,True,phase)["accepted"])
         def test_exact_visible_editor_count_and_all_ten_controls(self):

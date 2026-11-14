@@ -52,11 +52,22 @@ PLAN_METHODS = (
     "- (BOOL)retainsServerCleanup:(LibboxCommandServer* _Nullable)server;",
     "- (NSString* _Nonnull)mtuProfile;",
 )
+LATENCY_DECL = "@interface LibboxRouterOrderedLatency : NSObject <goSeqRefInterface> {"
+LATENCY_METHODS = (
+    "- (BOOL)start:(NSString* _Nullable)request nodeID:(NSString* _Nullable)nodeID error:(NSError* _Nullable* _Nullable)error;",
+    "- (void)cancel:(NSString* _Nullable)request;",
+    "- (BOOL)drain:(NSString* _Nullable)request error:(NSError* _Nullable* _Nullable)error;",
+    "- (NSString* _Nonnull)statusJSON;",
+    "- (NSString* _Nonnull)savedJSON:(NSString* _Nullable)nodeID;",
+    "- (BOOL)close:(NSError* _Nullable* _Nullable)error;",
+    "- (void)networkChanged;",
+)
 C_FUNCTIONS = (
     ("LibboxNewRouterNodeChainSOCKS", "LibboxRouterNodeChainSOCKS* _Nullable", ("NSString* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainSOCKSNewCommandServer", "LibboxCommandServer* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "id<LibboxCommandServerHandler> _Nullable", "id<LibboxPlatformInterface> _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainImportedSOCKSMemberInput", "NSString* _Nonnull", ("NSString* _Nullable", "NSString* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainSOCKSNewHopMeasurement", "LibboxRouterHopMeasurement* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "LibboxCommandServer* _Nullable", "NSError* _Nullable* _Nullable")),
+    ("LibboxRouterNodeChainSOCKSNewLatencyBenchmark", "LibboxRouterOrderedLatency* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "LibboxCommandServer* _Nullable", "LibboxRouterHopMeasurement* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainSOCKSNewMTU", "LibboxRouterMTU* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "LibboxCommandServer* _Nullable", "id<LibboxRouterMTUPlatform> _Nullable", "NSError* _Nullable* _Nullable")),
 )
 # CONNECT has its own published API inventory. Do not inherit future SOCKS
@@ -123,6 +134,13 @@ def require_headers(raw):
             selector=method.split(")",1)[1].split(":",1)[0].rstrip(";")
             matching=[line for line in lines if re.match(r"^- \([^)]*\)"+re.escape(selector)+r"(?=:|;)",line)]
             if matching!=[method]:raise ValueError("Generated typed "+kind+" owner selector differs: "+selector)
+    latency=re.findall(r"^"+re.escape(LATENCY_DECL)+r"\n(.*?)^@end",text,re.M|re.S)
+    if len(latency)!=1:raise ValueError("Generated ordered latency facade is absent or ambiguous")
+    latency_lines=[line.strip() for line in latency[0].splitlines()]
+    for method in LATENCY_METHODS:
+        selector=method.split(")",1)[1].split(":",1)[0].rstrip(";")
+        matching=[line for line in latency_lines if re.match(r"^- \([^)]*\)"+re.escape(selector)+r"(?=:|;)",line)]
+        if matching!=[method]:raise ValueError("Generated latency facade selector differs: "+selector)
     declarations=[]
     for name,result,arguments in C_FUNCTIONS:
         matches=re.findall(r"^FOUNDATION_EXPORT (.+?) "+re.escape(name)+r"\((.*?)\);$",text,re.M)
@@ -138,7 +156,7 @@ def require_headers(raw):
             actual.append(value.rsplit(" ",1)[0])
         if tuple(actual)!=arguments:raise ValueError("Generated typed C factory arguments changed: "+name)
         declarations.append("FOUNDATION_EXPORT "+matches[0][0]+" "+name+"("+matches[0][1]+");")
-    return {"owners":[{"owner":PLAN_DECL.replace("SOCKS",kind),"methods":list(PLAN_METHODS)} for kind in ("SOCKS","CONNECT")],"owner":PLAN_DECL,"methods":list(PLAN_METHODS),"factories":declarations,"header_sha256":hashlib.sha256(raw).hexdigest()}
+    return {"owners":[{"owner":PLAN_DECL.replace("SOCKS",kind),"methods":list(PLAN_METHODS)} for kind in ("SOCKS","CONNECT")],"owner":PLAN_DECL,"methods":list(PLAN_METHODS),"latency_methods":list(LATENCY_METHODS),"factories":declarations,"header_sha256":hashlib.sha256(raw).hexdigest()}
 
 def framework_slices(root):
     root=Path(root)
@@ -408,7 +426,7 @@ def validate(source,sha,output):
 def self_test():
     def header():
         declarations=["FOUNDATION_EXPORT "+result+" "+name+"("+", ".join(arg+" p"+str(i) for i,arg in enumerate(args))+");" for name,result,args in C_FUNCTIONS]
-        return ("".join(PLAN_DECL.replace("SOCKS",kind)+"\n"+"\n".join(PLAN_METHODS)+"\n@end\n" for kind in ("SOCKS","CONNECT"))+"\n".join(declarations)+"\n").encode()
+        return ("".join(PLAN_DECL.replace("SOCKS",kind)+"\n"+"\n".join(PLAN_METHODS)+"\n@end\n" for kind in ("SOCKS","CONNECT"))+LATENCY_DECL+"\n"+"\n".join(LATENCY_METHODS)+"\n@end\n"+"\n".join(declarations)+"\n").encode()
     def framework(root):
         libs=[]
         for identity,variant,arches in (("ios-arm64","",["arm64"]),("ios-arm64_x86_64-simulator","simulator",["arm64","x86_64"])):
@@ -447,12 +465,15 @@ def self_test():
     class Gate(unittest.TestCase):
         def test_actual_header_parser_requires_every_original_selector_and_factory(self):
             valid=header();self.assertEqual(len(require_headers(valid)["methods"]),15)
-            for method in PLAN_METHODS:
-                connect=PLAN_DECL.replace("SOCKS","CONNECT")+"\n"+"\n".join(PLAN_METHODS)+"\n@end\n"
-                with self.assertRaises(ValueError):require_headers(valid.replace(connect.encode(),connect.replace(method+"\n", "",1).encode()))
-                with self.subTest(method=method):
-                    with self.assertRaises(ValueError):require_headers(valid.replace((method+"\n").encode(),b"",1))
-                    with self.assertRaises(ValueError):require_headers(valid.replace(method.encode(),(method+"\n"+method).encode(),1))
+            for declaration,methods in ((PLAN_DECL,PLAN_METHODS),(PLAN_DECL.replace("SOCKS","CONNECT"),PLAN_METHODS),(LATENCY_DECL,LATENCY_METHODS)):
+                before,marker,tail=valid.partition(declaration.encode())
+                body,ending=tail.split(b"\n@end\n",1)
+                for method in methods:
+                    with self.subTest(owner=declaration,method=method):
+                        removed=body.replace(method.encode(),b"",1)
+                        duplicated=body.replace(method.encode(),(method+"\n"+method).encode(),1)
+                        with self.assertRaises(ValueError):require_headers(before+marker+removed+b"\n@end\n"+ending)
+                        with self.assertRaises(ValueError):require_headers(before+marker+duplicated+b"\n@end\n"+ending)
             for name,result,args in C_FUNCTIONS:
                 declaration="FOUNDATION_EXPORT "+result+" "+name+"("+", ".join(a+" p"+str(i) for i,a in enumerate(args))+");"
                 with self.subTest(factory=name):
