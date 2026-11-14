@@ -115,7 +115,13 @@ func TestDesktopOrderedLatencySavedReceiptBindsOriginalMailboxAndGeneration(t *t
 func TestDesktopOrderedLatencyHistoryAtomicReadbackAndExactRollback(t *testing.T) {
 	for _, fault := range []string{"success", "cancel-before-write", "cancel-after-rename", "newer-writer", "same-inode-newer-bytes", "invalid-history"} {
 		t.Run(fault, func(t *testing.T) {
-			a := &app{cfg: common.ClientConfig{StateFile: filepath.Join(t.TempDir(), "state.json")}}
+			root := privateStoreTestRoot(t)
+			// Establish the same private parent boundary used by the native store.
+			// Windows child privacy comes from its inherited DACL, not Unix mode bits.
+			if err := ensurePrivateRuntimeDirectory(root); err != nil {
+				t.Fatal(err)
+			}
+			a := &app{cfg: common.ClientConfig{StateFile: filepath.Join(root, "state.json")}}
 			first := desktopOrderedReceiptFixture(0)
 			if err := saveDesktopOrderedHistory(a, first, func() error { return nil }); err != nil {
 				t.Fatal(err)
@@ -164,9 +170,14 @@ func TestDesktopOrderedLatencyHistoryAtomicReadbackAndExactRollback(t *testing.T
 				if err != nil || len(history.Receipts) != 2 || !reflect.DeepEqual(history.Receipts[0], first) || !reflect.DeepEqual(history.Receipts[1], next) {
 					t.Fatal("durable receipt changed", err)
 				}
-				info, _ := os.Stat(path)
-				if info.Mode().Perm()&0077 != 0 {
-					t.Fatal("history is not private")
+				info, err := os.Lstat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Inspect the published object without repairing it: Unix keeps the
+				// private-mode check; Windows requires its real owner and private DACL.
+				if err := validatePrivateRuntimePathPermissions(path, info); err != nil {
+					t.Fatal("history is not private", err)
 				}
 				return
 			}
