@@ -32,6 +32,43 @@ Local/Server comparison formula. History remains bound to its complete original
 path and does not grant current proof, readiness or permission to adopt an old
 result after a replacement connection.
 
+## November 14: supported proxy candidates and complete saved paths
+
+The [candidate and profile evidence](CONTINUATION-EVIDENCE-2026-11-14-CANDIDATE-PROFILES.md)
+ties the original August 19 through-prefix timing and common-proxy request to
+the now-published shared, Android, Apple and desktop source paths. The shared
+native witness retains SS2022 and adds HTTP/HTTPS CONNECT and SOCKS5, with 114
+required encrypted-prefix records and four compiled causal controls. These are
+fifty TCP connection timings through the original proved packet prefix; they
+are not candidate authentication, ICMP or a replacement for connection proof.
+
+Desktop `1fdaeea0` now saves and loads complete SOCKS5 candidate profiles through
+the correct source compiler in both connected and prepared Save. Nine
+source/Load roots and 36 subcases, both complete HTTP Save workflows, and two
+compiled old-behavior controls passed. Existing private-node references,
+selected policy, original session, atomic append and rollback remain intact.
+The actual CONNECT desktop runtime is separately published in `d0b99255`; its
+candidate Save addition and the wider graph/platform obligations remain
+separate work. The ledger identifies the bounded imported-middle shape and
+does not count refused combinations as completed requirements.
+
+## November 14: exact-source Windows Naive HTTP/3 native evidence
+
+The Windows AMD64 and ARM64 native jobs in
+[run 43575883865](https://github.com/Eabusham2/router-vpn/actions/runs/43575883865)
+passed at `dc98e753e9c1ad97818e68b8049d7a289af170b9`. Both downloaded artifact
+digests matched GitHub, and the unchanged shipping paired-receipt validator
+passed for that repository, commit, run and attempt. Each architecture retains
+six compiled roots, 88 required verdicts and the `ordinary-udp-deny` causal
+control. The GitHub Windows aggregation job also passed.
+
+This establishes the protected imported Naive HTTP/3 component on those two
+Windows runner architectures. Its receipt explicitly records `race=false`,
+`cgo=0` and `physical_device_acceptance=false`. The workflow's Apple graph job
+was still queued at this observation. Newer source also changes the prepared
+closure, so this result cannot substitute for the current complete exact-SHA
+release, native application packages or physical acceptance.
+
 ## Continuation from 35ff28a7: release convergence and retained scope
 
 The [release-convergence evidence](CONTINUATION-EVIDENCE-2026-11-12-RELEASE-CONVERGENCE.md)
