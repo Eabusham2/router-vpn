@@ -1033,7 +1033,21 @@ enum IOSImportedShadowsocksSource {
         return false
     }
     private static func literal(_ host: String) -> Bool {
-        guard !host.utf8.contains(0) else { return false }
+        guard !host.utf8.contains(0), !host.contains("%"), !host.contains("["), !host.contains("]") else { return false }
+        // Darwin accepts zero-prefixed IPv4 octets that the shared Go parser
+        // rejects. Check decimal spelling before libc, including IPv4 tails in
+        // IPv6, while retaining valid noncanonical IPv6 source spelling.
+        if !host.contains(":") || host.contains(".") {
+            let dotted = host.split(separator: ":", omittingEmptySubsequences: false).last ?? ""
+            let octets = dotted.split(separator: ".", omittingEmptySubsequences: false)
+            guard octets.count == 4, octets.allSatisfy({ octet in
+                let bytes = Array(octet.utf8)
+                return !bytes.isEmpty && bytes.count <= 3 &&
+                    (bytes.count == 1 || bytes.first != 48) &&
+                    bytes.allSatisfy { (48...57).contains($0) } &&
+                    (Int(octet) ?? 256) <= 255
+            }) else { return false }
+        }
         var v4 = in_addr(), v6 = in6_addr()
         return inet_pton(AF_INET, host, &v4) == 1 || inet_pton(AF_INET6, host, &v6) == 1
     }

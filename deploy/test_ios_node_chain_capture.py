@@ -204,12 +204,17 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
    var changed=typed;changed.external?.shadowsocks?.password=password
    try check("noncanonical or wrong-length PSK excluded \(method)",!IOSImportedShadowsocksSource.eligible(changed))
   }
-  for host in [":","2001:db8:::1","2001:db8::1::2","[2001:db8::1]","192.168.001.1","198.51.100.76\u{0}other"] {
+  for host in [":","2001:db8:::1","2001:db8::1::2","[2001:db8::1]","fe80::1%en0","192.168.001.1","01.2.3.4","1.2.3.00","+1.2.3.4","-1.2.3.4","256.2.3.4","1.2.3","1.2.3.4.5","1..3.4","1.2.3.4 ","::ffff:192.168.001.1","198.51.100.76\u{0}other"] {
    var changed=typed;changed.external?.shadowsocks?.server=host
    try check("malformed literal excluded \(host)",!IOSImportedShadowsocksSource.eligible(changed))
+   changed.endpoint=host;changed.dnsMode="custom";changed.dnsProtocol="tcp";changed.dnsHost="10.81.0.53";changed.dnsPort=5353
+   try check("malformed literal cannot borrow selected hostname resolver \(host)",!IOSImportedShadowsocksSource.eligible(changed))
   }
-  var v6=typed;v6.external?.shadowsocks?.server="2001:db8::76"
-  try check("strict IPv6 source offered",IOSImportedShadowsocksSource.eligible(v6))
+  for host in ["0.0.0.0","255.255.255.255","192.168.1.1","2001:db8::76","2001:0DB8:0000:0000:0000:0000:0000:0076","::ffff:192.168.1.1"] {
+   var changed=typed;changed.external?.shadowsocks?.server=host
+   try check("valid literal source offered \(host)",IOSImportedShadowsocksSource.eligible(changed))
+   try check("valid literal cannot become hostname transport \(host)",!IOSImportedShadowsocksSource.hasHostnameTransport(changed))
+  }
   }
   for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    let bundles=try sources(4,layer,true),capture=try IOSNodeChainCapture.compile(bundles:bundles)
