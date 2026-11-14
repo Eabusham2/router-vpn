@@ -31,7 +31,7 @@ class DesktopEditorVerdicts(unittest.TestCase):
                     D.require_host(target, *wrong)
 
     def test_complete_original_and_new_inventories(self):
-        self.assertEqual(len(D.WINDOWS_CONTROLS), 8)
+        self.assertEqual(len(D.WINDOWS_CONTROLS), 10)
         self.assertEqual(len(D.LINUX_CONTROLS), 11)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
         self.assertEqual(D.LINUX_CONTROLS[0], "socks-mode")

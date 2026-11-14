@@ -307,6 +307,7 @@ ALLOWLISTS = {
     "desktop-socks-editor": frozenset({
         "client/RouterVPN-Windows-ProfileSettings.ps1",
         "client/RouterVPN-Windows-UnifiedShell.ps1",
+        "client/test-windows-connection-profile-modes.ps1",
         "client/linux/routervpn-ordered-nodes-v1.inc",
         "client/linux/test-ordered-nodes-v1.c",
         "client/linux/test-ordered-nodes-v1.py",

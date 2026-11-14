@@ -21,6 +21,7 @@ SUITE = "desktop-socks-editor"
 SOURCE_PATHS = (
     "client/RouterVPN-Windows-ProfileSettings.ps1",
     "client/RouterVPN-Windows-UnifiedShell.ps1",
+    "client/test-windows-connection-profile-modes.ps1",
     "client/test-windows-ordered-editor.ps1",
     "client/linux/routervpn-ordered-nodes-v1.inc",
     "client/linux/test-ordered-nodes-v1.c",
@@ -28,7 +29,7 @@ SOURCE_PATHS = (
     "deploy/test_desktop_connection_profile_modes.py",
     "deploy/test_desktop_connection_profile_modes_runner.py",
 )
-WINDOWS_CONTROLS = frozenset(("socks-mode", "final-mode", "raw-mode", "add-mode",
+WINDOWS_CONTROLS = frozenset(("connect-protocol", "connect-mode", "socks-mode", "final-mode", "raw-mode", "add-mode",
     "change-mode", "row-label", "source-token", "summary-reset"))
 LINUX_CONTROLS = ("socks-mode", "final-mode", "source-token", "generation", "prefix-mode",
     "capability", "final-pin", "expected-inventory", "disk-receipt", "load-current-graph",

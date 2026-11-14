@@ -280,13 +280,26 @@ public sealed class ProfileModeOwner {
     $Window=$Owner;$ordered=[pscustomobject]@{IsChecked=$true};$chainButton=[pscustomobject]@{Tag=$null}
     $Owner.Controls['UnifiedOrdered']=$ordered;$Owner.Controls['UnifiedNodeChainButton']=$chainButton;$Owner.Controls['UnifiedNodeCombo']=$RouterCombo
     $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true}
+    $orderedCases=@()
+    foreach($importedMode in @('http-connect','https-connect')){foreach($prefixMode in @('wg','awg2-fast','awg2-strong')){
+        $orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$false;count=3;imported=$importedMode;prefix=$prefixMode}
+    }}
     foreach($finalMode in @('shadowsocks','hysteria2')){foreach($mixed in @($false,$true)){foreach($nodeCount in @(2,3,4,8)){
+        $orderedCases+=[pscustomobject]@{final=$finalMode;mixed=$mixed;count=$nodeCount;imported='';prefix=''}
+    }}}
+    foreach($orderedCase in $orderedCases){
+        $finalMode=$orderedCase.final;$mixed=$orderedCase.mixed;$nodeCount=$orderedCase.count
         $nodes=@();$profiles=@();$tokens=@{}
         for($i=0;$i-lt$nodeCount;$i++){
             $id='ordered-'+$i;$mode=if($i-eq$nodeCount-1){$finalMode}elseif($mixed){@('awg2-fast','wg','awg2-strong')[$i%3]}else{'wg'}
+            if($orderedCase.imported){if($i-eq0){$mode=$orderedCase.prefix}elseif($i-eq1){$mode=$orderedCase.imported}}
             $nodes+=[pscustomobject]@{id=$id;mode=$mode;private_key='never-copy-member-secret'}
             $tokens[$id]=('{0:x64}' -f ($i+1))
             $profiles+=[pscustomobject]@{id=$id;name=('Node '+$i);node_kind='router-vpn';api_token='never-copy-token';profile_token=$tokens[$id]}
+            if($orderedCase.imported-and$i-eq1){
+                $profiles[-1].node_kind='external'
+                $profiles[-1]|Add-Member -NotePropertyName external -NotePropertyValue ([pscustomobject]@{protocol=$orderedCase.imported;ordered_middle_supported=$true})
+            }
         }
         $control=$nodes[-1].id;$RouterCombo.SelectedValue=$control;$RouterCombo.Tag=[pscustomobject]@{selected_id=$control;profiles=$profiles}
         $toggle.IsChecked=$true;$ordered.IsChecked=$true;$chainButton.Tag=[pscustomobject]@{control_id=$control;nodes=$nodes;profile_tokens=$tokens}
@@ -339,7 +352,7 @@ public sealed class ProfileModeOwner {
             Check ($null-eq$script:ConnectBody) ('Changed ordered selection reached Connect: '+$fault)
             $RouterCombo.Tag=$saved
         }
-    }}}
+    }
     # Actual callbacks retain their original public owner and complete source
     # map across the request. No network, private source, or WPF is simulated.
     $originalStore=$RouterCombo.Tag|ConvertTo-Json -Depth 32|ConvertFrom-Json
