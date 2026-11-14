@@ -17,6 +17,7 @@ import (
 )
 
 type RouterNodeChainCONNECT struct {
+	self        *RouterNodeChainCONNECT // exact factory-owned plan; never transferred by value
 	source      *mobilemultihop.NodeChainCONNECTSource
 	mu          sync.Mutex
 	native      atomic.Pointer[routerNodeChainCONNECTNative]

@@ -15,6 +15,8 @@ PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-connect-source.json'
 DESKTOP_ONLY = {"connect_reference_test.go.tmpl"}
 TEMPLATES = {
+    "connect_latency_native_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_latency_native_test.go",
+ "connect_latency.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_latency.go",
  "connect_mtu.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_mtu.go",
  "connect_mtu_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_mtu_test.go",
  "connect_mtu_box.go.tmpl": "routervpn_node_chain_connect_mtu.go",

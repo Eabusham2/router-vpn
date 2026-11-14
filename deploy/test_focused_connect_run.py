@@ -24,6 +24,8 @@ BASE=module("connect_run_trusted_bridge",BASE_PATH)
 # Only the fixed source-selection suite label differs. The trusted process,
 # snapshot, native source and strict event parsers are reused unchanged.
 BASE.SUITE=SUITE
+FIFTY=module("connect_run_ordered_fifty",ROOT/"deploy/connect_ordered_fifty_native.py")
+LIFETIME=module("connect_run_reference_lifetime",ROOT/"deploy/connect_reference_lifetime.py")
 CASE_ROOT="TestRouterNodeChainCONNECTEncryptedRun"
 CASES=("http-wg","http-awg2-fast","http-awg2-strong","https-wg","https-awg2-fast","https-awg2-strong","middle-password","final-key","final-token","selected-dns","middle-public","hold-prefix","tls-trust","tls-name")
 PEER_ROOT="TestRouterVPNDesktopNodeChainCONNECTRunReference"
@@ -110,6 +112,8 @@ def sources(source,mobile,mobile_xray,owner,owner_xray):
     native=owner/"protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go"
     if native.is_symlink() or native.read_bytes()!=original:
         raise ValueError("Original complete imported peer helper changed")
+    shared=BASE.module("connect_run_shared_latency_projection",source/"deploy/prepare-mobile-node-chain.py")
+    FIFTY.checked_projection(source,mobile,connect.TEMPLATES,shared.TEMPLATES)
     return captured
 def native_events(raw,status,case,control=None):
     names=case_names(case)
@@ -223,6 +227,7 @@ def validate(source,source_sha,output,go="go"):
             status,raw=run(REFERENCE_PACKET_CONTROL["name"],[compiler,"test",*owner_flags,"-json","-overlay="+str(overlay),
                 "-run=^"+REFERENCE_TCP_ROOT+"$/^packet-reciprocal$","-count=1","-timeout=15s","./protocol/routervpnamnezia"],owner,600)
             reference_packet_negative=reference_packet_events(raw,status)
+            lifetime=LIFETIME.validate(BASE,gate,run,compiler,owner,peer,work,owner_flags)
             records=[]
             for case in CASES:
                 selected=dict(env,ROUTERVPN_CONNECT_RUN_PEER=str(peer),ROUTERVPN_CONNECT_RUN_CASE=case,GODEBUG="x509usefallbackroots=1")
@@ -241,6 +246,7 @@ def validate(source,source_sha,output,go="go"):
                 controls.append(dict(name=control["name"],original_sha256=hashlib.sha256(original.read_bytes()).hexdigest(),
                     mutation_sha256=hashlib.sha256(changed.encode()).hexdigest(),
                     **native_events(raw,status,control["case"],control)))
+            fifty=FIFTY.validate_compiled(BASE,run,compiler,mobile,peer,client,work,flags,env)
             if sources(source,mobile,mobile_xray,owner,owner_xray)!=native_before or BASE.CORE.snapshot(source)!=before:
                 raise ValueError("Original encrypted native/candidate source changed")
             if BASE.COMMON.git(source,"status","--porcelain","--untracked-files=all"):
@@ -253,7 +259,7 @@ def validate(source,source_sha,output,go="go"):
                 peer_image=list(peer_identity),client_image=list(client_identity),reference_tls_close=reference_positive,reference_tls_close_control=reference_negative,
                 reference_tcp_close=reference_tcp_positive,reference_tcp_close_control=reference_tcp_negative,
                 reference_packet_close_control=reference_packet_negative,
-                successful_run_accepted=True,ordered_measurement_accepted=True,native_mtu_constructor_accepted=False)
+                successful_run_accepted=True,ordered_measurement_accepted=True,native_mtu_constructor_accepted=False,**fifty,**lifetime)
             (output/"receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
     except BaseException as error:
         receipt.update(status="failed",error=str(error));raise

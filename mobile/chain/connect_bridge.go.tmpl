@@ -23,7 +23,9 @@ func NewRouterNodeChainCONNECT(input string) (*RouterNodeChainCONNECT, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &RouterNodeChainCONNECT{source: source}, nil
+	plan := &RouterNodeChainCONNECT{source: source}
+	plan.self = plan
+	return plan, nil
 }
 
 // NewCommandServer installs only the source-bound local CONNECT registry. The

@@ -1,0 +1,306 @@
+//go:build linux && !android
+
+package libbox
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+)
+
+// Uses the original separately compiled encrypted peer and actual proved Box.
+// The existing physical tuple/TUN/monitor/TLS-root fixture boundaries remain.
+// The MTU reservation subcase tests admission only, not physical MTU execution.
+func TestRouterNodeChainCONNECTEncryptedOrderedFifty(t *testing.T) {
+	chosen := os.Getenv("ROUTERVPN_CONNECT_FIFTY_CASE")
+	if chosen == "" {
+		t.Skip("original separate encrypted peer case required")
+	}
+	mode, protocol := strings.TrimPrefix(chosen, "http-"), "http-connect"
+	if strings.HasPrefix(chosen, "https-") {
+		mode, protocol = strings.TrimPrefix(chosen, "https-"), "https-connect"
+	}
+	if (mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong") || (chosen != "http-"+mode && chosen != "https-"+mode) {
+		t.Fatal("uncaptured ordered fifty case")
+	}
+	t.Run(chosen, func(t *testing.T) {
+		check := func(name string, work func(*testing.T)) { t.Helper(); t.Log("CONNECT_FIFTY_CHECK " + name); work(t) }
+		peer := connectRunStartPeer(t, mode, protocol, "")
+		f, physical := connectRunNative(t, peer)
+		before := connectRunRequireProofs(t, peer, f, physical)
+		measurement, err := RouterNodeChainCONNECTNewHopMeasurement(f.owner, f.server)
+		if err != nil || measurement == nil {
+			t.Fatal("original fifty throughput owner missing", err)
+		}
+		original := f.owner.measurement.Load()
+		// Independently capture the actual native engine identity; a nonempty
+		// generation string alone cannot bind the original host session.
+		observe, finishObserve := context.WithTimeout(t.Context(), hopmeasure.ObservationTimeout)
+		identity, observeErr := f.owner.state.Load().engine.Load().ObserveChainContext(observe)
+		finishObserve()
+		if observeErr != nil {
+			t.Fatal("original CONNECT fifty identity unavailable", observeErr)
+		}
+		identityJSON, encodeErr := json.Marshal(identity)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		identityDigest := sha256.Sum256(identityJSON)
+		generation := hex.EncodeToString(identityDigest[:])
+		_, meta, err := f.owner.source.ReadValidated()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reject := func(name string, plan *RouterNodeChainCONNECT, server *CommandServer, value *RouterHopMeasurement) {
+			t.Helper()
+			check(name, func(t *testing.T) {
+				candidate, err := RouterNodeChainCONNECTNewLatencyBenchmark(plan, server, value)
+				if candidate != nil || err == nil {
+					if candidate != nil {
+						_ = candidate.Close()
+					}
+					t.Fatal("foreign ordered factory borrowed original service", name)
+				}
+				if f.owner.measurement.Load() != original || !f.owner.Healthy() {
+					t.Fatal("rejected factory replaced original throughput")
+				}
+			})
+		}
+		reject("nil-plan", nil, f.server, measurement)
+		reject("foreign-plan", &RouterNodeChainCONNECT{}, f.server, measurement)
+		check("copied-plan", func(t *testing.T) {
+			copied := &RouterNodeChainCONNECT{self: f.owner.self, source: f.owner.source}
+			copied.native.Store(f.owner.native.Load())
+			copied.state.Store(f.owner.state.Load())
+			copied.measurement.Store(f.owner.measurement.Load())
+			candidate, err := RouterNodeChainCONNECTNewLatencyBenchmark(copied, f.server, measurement)
+			if candidate != nil || err == nil {
+				if candidate != nil {
+					_ = candidate.Close()
+				}
+				t.Fatal("copied typed plan borrowed original service")
+			}
+		})
+		reject("nil-server", f.owner, nil, measurement)
+		reject("foreign-server", f.owner, &CommandServer{}, measurement)
+		reject("nil-service", f.owner, f.server, nil)
+		reject("foreign-service", f.owner, f.server, &RouterHopMeasurement{service: new(hopmeasure.Service)})
+		check("caller-deadline", func(t *testing.T) {
+			ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			defer cancel()
+			candidate, err := f.owner.newCONNECTOrderedLatencyContext(ctx, f.server, measurement)
+			if candidate != nil || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("expired ordered factory acquired original service", err)
+			}
+		})
+		optimizer, _, _ := connectFiftyAdoptMTU(t, f)
+		check("original-mtu-reservation", func(t *testing.T) {
+			// Reserve the exact retained optimizer's original slot under its owner lock.
+			// No proof state, native readback, health or worker result is manufactured.
+			claim := f.owner.mtu.Load()
+			state := f.owner.state.Load()
+			reserved := &routerNodeChainCONNECTMTURun{owner: claim, native: state.native}
+			reserved.state.Store(state)
+			f.owner.mu.Lock()
+			ok := claim.run.CompareAndSwap(nil, reserved)
+			f.owner.mu.Unlock()
+			if !ok {
+				t.Fatal("original optimizer reservation unavailable")
+			}
+			defer claim.run.CompareAndSwap(reserved, nil)
+			if !f.owner.Healthy() {
+				t.Fatal("reservation changed original proof")
+			}
+			candidate, err := RouterNodeChainCONNECTNewLatencyBenchmark(f.owner, f.server, measurement)
+			if candidate != nil || err == nil {
+				if candidate != nil {
+					_ = candidate.Close()
+				}
+				t.Fatal("ordered factory bypassed original MTU reservation")
+			}
+		})
+		if err = optimizer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		latency, err := RouterNodeChainCONNECTNewLatencyBenchmark(f.owner, f.server, measurement)
+		if err != nil || latency == nil {
+			t.Fatal("actual proved factory did not borrow original service", err)
+		}
+		t.Cleanup(func() {
+			if err := latency.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		check("duplicate-owner", func(t *testing.T) {
+			if duplicate, err := RouterNodeChainCONNECTNewHopMeasurement(f.owner, f.server); duplicate != nil || err == nil {
+				t.Fatal("duplicate throughput owner replaced original")
+			}
+			if duplicate, err := RouterNodeChainCONNECTNewLatencyBenchmark(f.owner, f.server, measurement); duplicate != nil || err == nil {
+				t.Fatal("duplicate facade replaced original")
+			}
+		})
+		run := func(position, sequence int) string {
+			t.Helper()
+			request := fmt.Sprintf("%032x", sequence)
+			if err := latency.Start(request, meta.Proofs[position].ProfileID); err != nil {
+				t.Fatal("original native fifty admission", err)
+			}
+			deadline := time.Now().Add(hopmeasure.RequestTimeout + hopmeasure.ObservationTimeout)
+			var status hopmeasure.Status
+			for time.Now().Before(deadline) {
+				if json.Unmarshal([]byte(latency.StatusJSON()), &status) != nil {
+					t.Fatal("original native fifty status missing")
+				}
+				if status.Complete {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if err := latency.Drain(request); err != nil {
+				t.Fatal("original native fifty drain", err)
+			}
+			if json.Unmarshal([]byte(latency.StatusJSON()), &status) != nil || status.Request != request || !status.Complete || !status.Drained || status.Stage != "complete" || status.Failure != "" || len(status.Results) != 1 || !status.Results[0].Ready {
+				t.Fatal("actual native fifty incomplete", position, status.Stage, status.Failure)
+			}
+			raw := latency.SavedJSON(meta.Proofs[position].ProfileID)
+			var saved hopmeasure.OrderedLatencyReceipt
+			if json.Unmarshal([]byte(raw), &saved) != nil || saved.Schema != 1 || saved.SourceSHA256 != meta.SourceSHA256 || saved.ConfigSHA256 != meta.ConfigSHA256 || saved.Position != position || saved.NodeID != meta.Proofs[position].ProfileID || saved.Request != request || saved.GenerationSHA256 != generation || saved.MeasuredAt <= 0 {
+				t.Fatal("native fifty historical identity changed")
+			}
+			result := saved.Result
+			b := result.Benchmark
+			meaning, endpoint, kind := "routed-private-response-including-connection", "", "private-node"
+			if position == 1 {
+				meaning, kind = "routed-https-response-after-tls", "public-path"
+				endpoint = "https://" + hopmeasure.PublicHost + "/__down?bytes=1"
+			}
+			if !result.Ready || result.ID != saved.NodeID || result.Kind != kind || result.Failure != "" || b == nil || b.Attempts != 50 || b.Failed != 0 || b.Distribution == nil || b.Distribution.Samples != 50 || b.Measurement != meaning || b.Endpoint != endpoint || result.Idle != nil || result.Download != nil || result.Upload != nil {
+				t.Fatal("native fifty metric escaped original ordered domain")
+			}
+			return raw
+		}
+		for position := range meta.Proofs {
+			check(fmt.Sprintf("hop-%d-fifty", position), func(t *testing.T) { run(position, position+1) })
+		}
+		after := peer.observe(t)
+		if after.PublicDNS <= before.PublicDNS || after.DNS < before.DNS {
+			t.Fatal("native CONNECT fifty bypassed original selected DNS")
+		}
+		a, b := connectRunCounters(t, before), connectRunCounters(t, after)
+		ap := a["prefixes"].([]any)[0].(map[string]any)
+		bp := b["prefixes"].([]any)[0].(map[string]any)
+		for _, pair := range []struct {
+			first, last map[string]any
+			key         string
+		}{{ap, bp, "proof_queries"}, {a["final"].(map[string]any), b["final"].(map[string]any), "router_queries"}} {
+			if connectRunCounter(t, pair.last, pair.key)-connectRunCounter(t, pair.first, pair.key) < 50 {
+				t.Fatal("native fifty omitted original encrypted responses", pair.key)
+			}
+		}
+		// The original /__down?bytes=1 handler counts actual bytes;
+		// public_queries belongs to /cdn-cgi/trace path proof, not this metric.
+		if connectRunCounter(t, b["middle"].(map[string]any), "download_bytes")-connectRunCounter(t, a["middle"].(map[string]any), "download_bytes") != 50 {
+			t.Fatal("native fifty omitted original encrypted one-byte responses")
+		}
+		check("cancel-close-throughput", func(t *testing.T) {
+			saved := latency.SavedJSON(meta.Proofs[0].ProfileID)
+			request := strings.Repeat("c", 32)
+			if err := latency.Start(request, meta.Proofs[0].ProfileID); err != nil {
+				t.Fatal(err)
+			}
+			latency.Cancel(request)
+			if err := latency.Drain(request); err != nil {
+				t.Fatal(err)
+			}
+			if err := latency.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if f.owner.measurement.Load() != original || latency.SavedJSON(meta.Proofs[0].ProfileID) != saved {
+				t.Fatal("facade cancellation replaced owner or saved history")
+			}
+			request = strings.Repeat("d", 32)
+			if err := measurement.Start(request, 65536); err != nil {
+				t.Fatal("facade close retired original throughput", err)
+			}
+			measurement.Cancel(request)
+			if err := measurement.Drain(request); err != nil {
+				t.Fatal(err)
+			}
+			latency, err = RouterNodeChainCONNECTNewLatencyBenchmark(f.owner, f.server, measurement)
+			if err != nil || latency == nil {
+				t.Fatal("closed facade blocked original retry", err)
+			}
+			run(0, 5)
+		})
+		if err = latency.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if f.owner.measurement.Load() != original || !f.owner.Healthy() {
+			t.Fatal("fifty facade retired native host")
+		}
+		connectRunCloseNative(t, f)
+		observed := peer.observe(t)
+		deadline := time.Now().Add(hopmeasure.ObservationTimeout)
+		for observed.Associations != 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+			observed = peer.observe(t)
+		}
+		if observed.Associations != 0 || observed.FinalAuth != 0 || observed.MiddleAuth != 0 || observed.TLSRefused != 0 {
+			t.Fatal("fifty original native owner failed joined close")
+		}
+		if err := peer.close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// This platform checks constructor ownership only; it cannot probe or replace a
+// TUN. The separate CONNECT MTU gate owns physical execution and restoration.
+type connectFiftyMTUPlatform struct{ routerMTUContextPlatform }
+
+func (p *connectFiftyMTUPlatform) BeginMTUChange(*RouterMTUState) error {
+	p.begins++
+	return errors.New("constructor-only CONNECT fixture cannot replace original TUN")
+}
+func (p *connectFiftyMTUPlatform) BindMTUSocket(*RouterMTUState, int64) error {
+	return errors.New("constructor-only CONNECT fixture cannot open MTU probe")
+}
+func connectFiftyAdoptMTU(t *testing.T, f *connectBridgeNativeFixture) (*RouterMTU, *connectFiftyMTUPlatform, string) {
+	t.Helper()
+	state := f.owner.state.Load()
+	if state == nil || !f.owner.Healthy() {
+		t.Fatal("CONNECT MTU adoption requires actual encrypted proof")
+	}
+	profile := f.owner.MTUProfile()
+	if profile == "" || !json.Valid([]byte(profile)) || profile != state.runtime.MTUProfile() {
+		t.Fatal("CONNECT MTU profile lost original source")
+	}
+	platform := &connectFiftyMTUPlatform{routerMTUContextPlatform: routerMTUContextPlatform{state: RouterMTUState{
+		Session: state.session, Path: "original-connect-run-physical", Interface: f.tun.name, MTU: f.tun.mtu.Load(),
+	}}}
+	optimizer, err := RouterNodeChainCONNECTNewMTU(f.owner, f.server, platform)
+	if err != nil || optimizer == nil {
+		t.Fatal("proved CONNECT graph did not adopt original MTU", err)
+	}
+	t.Cleanup(func() {
+		if err := optimizer.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	claim := f.owner.mtu.Load()
+	if claim == nil || claim.native != optimizer.owner || claim.controller.Load() != optimizer.controller ||
+		optimizer.owner.server != f.server || optimizer.owner.instance != f.instance || optimizer.owner.inbound != f.tun ||
+		platform.reads < 2 || platform.begins != 0 || platform.ends != 0 || platform.aborts != 0 || !f.owner.Healthy() || f.owner.NativeClosed() {
+		t.Fatal("CONNECT MTU adoption changed original ownership")
+	}
+	return optimizer, platform, profile
+}
