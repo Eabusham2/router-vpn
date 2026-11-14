@@ -285,6 +285,7 @@ class MacOSNativeVerdicts(unittest.TestCase):
         names = ['TestMacOSOwnedControllerNative'+name for name in self.gate.CASES]
         names += ['TestDesktopMacOS'+name for name in self.gate.PARENT_CASES]
         names += ['TestDesktopMacOS'+name for name in self.gate.EXECUTION_PARENT_CASES]
+        names += ['TestDesktopMacOS'+name for name in self.gate.EXECUTION_PRODUCT_CASES]
         self.lines = ['--- PASS: '+name+' (0.01s)' for name in names]
         self.output = '\n'.join(self.lines+['PASS', ''])
 
@@ -359,6 +360,30 @@ class MacOSNativeVerdicts(unittest.TestCase):
                     and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
                     and node.value.func.id == 'native_test_arguments']
         self.assertEqual(len(selected), 1, 'actual native invocation omitted the required execution roots')
+
+    def test_execution_product_stop_requires_all_seven_exact_native_roots(self):
+        expected = ('ExecutionProductStopKeepsOriginalOwnerAndIntent',
+                    'ExecutionProductStopRejectsForeignOwners',
+                    'ExecutionProductStopCancellationKeepsCallerBudget',
+                    'ExecutionProductStopRetainsFailedJoinAndReplacement',
+                    'ExecutionProductStopProvesJoinedCleanupBeforeAbsence',
+                    'ExecutionProductStopRetainsTerminalProtectionUntilDisconnect',
+                    'ExecutionProductStopRejectsFalseTerminalAbsence')
+        self.assertEqual(self.gate.EXECUTION_PRODUCT_CASES, expected)
+        self.assertEqual(len(self.gate.CASES)+len(self.gate.PARENT_CASES)+len(self.gate.EXECUTION_PARENT_CASES), 31)
+        pattern = self.gate.native_test_arguments()[0].removeprefix('-test.run=')
+        for suffix in expected:
+            name = 'TestDesktopMacOS'+suffix
+            self.assertIsNotNone(re.search(pattern, name))
+            self.assertIsNone(re.search(pattern, name+'Unrelated'))
+            line = '--- PASS: '+name+' (0.01s)'
+            self.assertIn(line, self.lines)
+            for changed in ('', line+'\n'+line, 'diagnostic '+line,
+                            line.replace(' (', '/subcase ('),
+                            line.replace('--- PASS:', '--- SKIP:'),
+                            line.replace('--- PASS:', '--- FAIL:')):
+                with self.subTest(case=suffix, verdict=changed), self.assertRaises(RuntimeError):
+                    self.gate.require_native_verdicts(self.output.replace(line, changed, 1))
 
 
 class DarwinMutationOverlays(unittest.TestCase):

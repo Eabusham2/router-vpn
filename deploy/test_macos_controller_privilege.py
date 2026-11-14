@@ -44,11 +44,18 @@ EXECUTION_PARENT_CASES = ('ExecutionReaderKeepsPreparationAndAdoptionDistinct',
                           'ExecutionReaderRequiresPhysicalRetirement',
                           'ExecutionReplacementJoinsBeforeHoldingOriginalProtection',
                           'ExecutionReplacementRefusesForeignPreparation')
+EXECUTION_PRODUCT_CASES = ('ExecutionProductStopKeepsOriginalOwnerAndIntent',
+                           'ExecutionProductStopRejectsForeignOwners',
+                           'ExecutionProductStopCancellationKeepsCallerBudget',
+                           'ExecutionProductStopRetainsFailedJoinAndReplacement',
+                           'ExecutionProductStopProvesJoinedCleanupBeforeAbsence',
+                           'ExecutionProductStopRetainsTerminalProtectionUntilDisconnect',
+                           'ExecutionProductStopRejectsFalseTerminalAbsence')
 
 
 def native_test_arguments():
     original = '^Test(MacOSOwnedControllerNative|DesktopMacOS(Parent|Session|External))'
-    execution = '|'.join('TestDesktopMacOS'+name for name in EXECUTION_PARENT_CASES)
+    execution = '|'.join('TestDesktopMacOS'+name for name in EXECUTION_PARENT_CASES+EXECUTION_PRODUCT_CASES)
     return ['-test.run='+original+'|^('+execution+')$', '-test.v', '-test.timeout=180s']
 
 
@@ -61,6 +68,7 @@ def require_native_verdicts(output):
     names = ['TestMacOSOwnedControllerNative'+name for name in CASES]
     names += ['TestDesktopMacOS'+name for name in PARENT_CASES]
     names += ['TestDesktopMacOS'+name for name in EXECUTION_PARENT_CASES]
+    names += ['TestDesktopMacOS'+name for name in EXECUTION_PRODUCT_CASES]
     for name in names:
         pattern = r'^--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$'
         if len(re.findall(pattern, output, flags=re.MULTILINE)) != 1:

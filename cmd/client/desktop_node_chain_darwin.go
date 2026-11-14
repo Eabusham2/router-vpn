@@ -1172,7 +1172,13 @@ type desktopMacOSNodeChainStopCapture struct {
 func (p *desktopMacOSParent) CaptureNodeChainStop(a *app) (desktopRetainedStopCapture, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if p == nil || a == nil {
+	return p.captureNodeChainStopContext(ctx, a)
+}
+
+// Product retirement supplies its own shorter caller budget. Keep the public
+// standalone Stop wrapper's existing budget without replacing this context.
+func (p *desktopMacOSParent) captureNodeChainStopContext(ctx context.Context, a *app) (desktopRetainedStopCapture, error) {
+	if ctx == nil || p == nil || a == nil {
 		return nil, errors.New("macOS ordered Stop lost its original parent")
 	}
 	if err := p.enter(ctx); err != nil {
