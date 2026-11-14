@@ -82,6 +82,16 @@ final class RouterVPNNodeChainExecutionHost {
  func retainForRetirement(){};func releaseRetirement(){}
  func progress()->Data?{nil}
 }
+// This ordinary external fixture cannot construct an ordered SOCKS owner.
+// Its shared cleanup fields must compile, while the real owner is exercised by
+// test_ios_node_chain_socks_host.py and the whole-engine delivery gate.
+final class RouterVPNNodeChainSOCKSHost {
+ private init(){}
+ func close()throws{throw FixtureFailure.error}
+ func retainForRetirement(){fatalError("unexpected SOCKS retirement in external fixture")}
+ func releaseRetirement(){fatalError("unexpected SOCKS release in external fixture")}
+ func progress()->Data?{nil}
+}
 // The ordinary external fixture cannot acquire a prefix host. Its actual
 // implementation is compiled/executed by the whole-engine and prefix gates.
 final class RouterVPNNodeCandidatePrefixHost {
