@@ -660,6 +660,111 @@ try customDraft.move(1, by: -1)
 rejects({ _ = try customDraft.selection() }, "custom source became physical entry")
 customCatalog[1]["profile_token"] = String(repeating: "f", count: 64)
 rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["selected_id": customBase.selectedNodeID, "profiles": customCatalog]) }, "relinked custom middle retained permission")
+
+// Typed imported-middle protocols remain distinct across editor and public
+// save/load receipts; the native schema and all credentials stay in the controller.
+for middleMode in ["shadowsocks", "socks5"] { for prefixMode in ["wg", "awg2-fast", "awg2-strong"] {
+    _ = chooseOrdered(3, prefixMode: prefixMode)
+    let paired = owner.captureConnectionProfileSelection()
+    var catalog = owner.profiles
+    catalog[1]["node_kind"] = "external"
+    catalog[1]["external"] = ["protocol": middleMode, "ordered_middle_supported": true]
+    var captured = paired
+    captured.orderedNodes[1]["mode"] = middleMode
+    owner.profiles = catalog
+    owner.api.orderedCurrent = ["selected_id": captured.selectedNodeID, "profiles": catalog]
+    owner.connectionProfileSelection = captured
+    let draft = try owner.makeOrderedNodeDraft()
+    check(draft.allowedModes(at: 1) == [middleMode] && draft.nodes == captured.orderedNodes,
+          "typed imported editor substituted the saved middle protocol")
+    check(draft.allowedModes(at: 2) == ["shadowsocks"],
+          "SOCKS imported middle editor offered a Hysteria2 final")
+    let staged = try draft.selection()
+    let body = try RouterVPNOrderedNodes.connectBody(staged, current: owner.api.orderedCurrent)
+    check(body["nodes"] as? [[String: String]] == captured.orderedNodes &&
+          body["expected_profile_tokens"] as? [String: String] == captured.profileTokens &&
+          Set(body.keys) == Set(["nodes", "execution", "expected_selected_node_id", "expected_profile_tokens"]),
+          "typed imported request lost references or copied private source fields")
+    let snapshot = try owner.connectionProfileSnapshot(name: "Typed middle", id: nil)
+    verifyOrderedSnapshot(snapshot, rows: captured.orderedNodes, updating: false)
+    var payload = snapshot
+    payload["profile"] = ["name": "Typed middle", "mode": "shadowsocks"]
+    payload["selected_node_id"] = captured.selectedNodeID
+    payload["profile_tokens"] = captured.profileTokens
+    let restored = try owner.validatedLoadedConnectionProfileSelection(payload)
+    check(restored.orderedNodes == captured.orderedNodes && restored.profileTokens == captured.profileTokens,
+          "typed middle Load changed a public source or transport")
+    var prepared = snapshot
+    prepared["expected_profile_tokens"] = captured.profileTokens
+    let confirmed = try owner.confirmedConnectionProfileSave(payload, body: prepared, original: captured)
+    check(confirmed == captured, "typed middle Save adopted another captured selection")
+    var changedReply = payload
+    var changedRows = captured.orderedNodes
+    changedRows[1]["mode"] = middleMode == "socks5" ? "shadowsocks" : "socks5"
+    changedReply["multihop_nodes"] = changedRows
+    rejects({ _ = try owner.confirmedConnectionProfileSave(changedReply, body: prepared, original: captured) },
+            "typed middle response borrowed another compiler family")
+    var changedCatalog = catalog
+    changedCatalog[1]["external"] = ["protocol": middleMode == "socks5" ? "shadowsocks" : "socks5", "ordered_middle_supported": true]
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(captured, current: ["selected_id": captured.selectedNodeID, "profiles": changedCatalog]) },
+            "SOCKS Connect borrowed another imported protocol")
+    rejects({ _ = try RouterVPNOrderedNodeDraft(selection: captured, generation: UUID(), catalog: changedCatalog) },
+            "SOCKS draft reopened against another imported protocol")
+    changedCatalog = catalog
+    changedCatalog[1]["profile_token"] = String(repeating: "f", count: 64)
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(captured, current: ["selected_id": captured.selectedNodeID, "profiles": changedCatalog]) },
+            "typed imported middle reused changed credential identity")
+    var noMiddle = paired
+    noMiddle.orderedNodes.remove(at: 1)
+    noMiddle.profileTokens.removeValue(forKey: "ordered-1")
+    var added = try RouterVPNOrderedNodeDraft(selection: noMiddle, generation: UUID(), catalog: catalog)
+    try added.add("ordered-1")
+    check(added.modes == [prefixMode, middleMode], "SOCKS editor Add replaced the captured middle mode")
+    check(try added.selection().orderedNodes == captured.orderedNodes, "typed editor Add lost the complete order")
+    try added.move(1, by: -1)
+    rejects({ _ = try added.selection() }, "typed imported member acquired the physical prefix")
+    var otherExecution = captured
+    otherExecution.execution = "server"
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(otherExecution, current: owner.api.orderedCurrent) },
+            "typed imported middle acquired Server execution")
+    otherExecution.execution = "auto"
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(otherExecution, current: owner.api.orderedCurrent) },
+            "typed imported middle acquired Compare execution")
+    let calls = owner.api.calls.count
+    owner.api.orderedCapabilities = ["ordered_nodes_supported": false]
+    owner.connectMultihop()
+    DispatchQueue.background.run()
+    check(owner.api.calls.count == calls, "closed Darwin capability dispatched a typed imported path")
+} }
+_ = chooseOrdered(3)
+var socksCatalog = owner.profiles
+socksCatalog[1]["node_kind"] = "external"
+socksCatalog[1]["external"] = ["protocol": "socks5", "ordered_middle_supported": true]
+let socksOriginal = owner.captureConnectionProfileSelection()
+for unsupported in ["SOCKS5", "socks", "http-connect", "", "shadowsocks2022"] {
+    var profile = socksCatalog[1]
+    profile["external"] = ["protocol": unsupported, "ordered_middle_supported": true]
+    check(RouterVPNOrderedNodes.importedMiddleMode(profile) == nil, "SOCKS catalog normalized an unsupported protocol")
+}
+let invalidSOCKSCapabilities: [Any] = [1, "true", false, NSNull()]
+for capability in invalidSOCKSCapabilities {
+    var profile = socksCatalog[1]
+    profile["external"] = ["protocol": "socks5", "ordered_middle_supported": capability]
+    check(RouterVPNOrderedNodes.importedMiddleMode(profile) == nil, "SOCKS imported capability accepted non-boolean authority")
+}
+for invalidRows in [
+    [["id":"ordered-0","mode":"socks5"],["id":"ordered-2","mode":"shadowsocks"]],
+    [["id":"ordered-0","mode":"wg"],["id":"ordered-2","mode":"socks5"]],
+    [["id":"ordered-0","mode":"wg"],["id":"ordered-1","mode":"socks5"],["id":"ordered-2","mode":"hysteria2"]],
+    [["id":"ordered-0","mode":"wg"],["id":"ordered-1","mode":"socks5"],["id":"extra","mode":"awg2-fast"],["id":"ordered-2","mode":"shadowsocks"]]
+] {
+    rejects({ _ = try RouterVPNOrderedNodes.decode(invalidRows, control: "ordered-2") }, "SOCKS reference escaped its three-node Local middle position")
+}
+var pairedSocks = socksOriginal
+pairedSocks.orderedNodes[1]["mode"] = "socks5"
+rejects({ _ = try RouterVPNOrderedNodes.connectBody(pairedSocks, current: owner.api.orderedCurrent) },
+        "paired node acquired imported SOCKS authority")
+
 _ = chooseOrdered(); let staleDraft = try owner.makeOrderedNodeDraft()
 var staleCatalog = owner.profiles; staleCatalog[1]["profile_token"] = String(repeating: "e", count: 64); owner.api.orderedCurrent["profiles"] = staleCatalog
 rejects({ try owner.applyOrderedNodeDraft(staleDraft) }, "editor Apply accepted a relinked middle node")
@@ -1116,7 +1221,9 @@ def macos(directory):
         "setup-mode": ('guard connectionProfileSelectionGeneration == admittedGeneration, captureConnectionProfileSelection() == original,\n              UserDefaults.standard.string(forKey: macConnectionModeKey) == mode,', 'guard connectionProfileSelectionGeneration == admittedGeneration, captureConnectionProfileSelection() == original,\n              true,', "late setup response accepted mode-change"),
         "setup-live-source": ('originals.allSatisfy({ current[$0.key] == $0.value })', 'true', "late setup response accepted source-relinked"),
         "setup-response-source": ('response["profile_tokens"] as? [String: String] == body["expected_profile_tokens"] as? [String: String]', 'true', "setup response accepted changed-token"),
-        "setup-response-order": ('finalized.orderedNodes == wanted', 'true', "setup response accepted reordered-members"),
+        # Omit only order; keep each exact id/mode row so the newer typed-middle
+        # protocol refusal cannot preempt the original reordered-member witness.
+        "setup-response-order": ('finalized.orderedNodes == wanted', 'finalized.orderedNodes.sorted(by: { ($0["id"] ?? "") < ($1["id"] ?? "") }) == wanted.sorted(by: { ($0["id"] ?? "") < ($1["id"] ?? "") })', "setup response accepted reordered-members"),
         "setup-load-inventory": ('let graph = loading || external ? matches[0] : body', 'let graph = external ? matches[0] : body', "setup request lost complete original inventory"),
         "setup-response-inventory": ('Set(tokens.keys) == referenced,', 'true,', "Load accepted unrelated response source receipts"),
         "setup-stale-body": ('if writing && !(profiles.first(where:', 'if false && !(profiles.first(where:', "old setup body overrode a newer Off choice before dispatch"),
@@ -1127,19 +1234,27 @@ def macos(directory):
         "ordered-final-apply": ('let mode = selection.orderedNodes.last!["mode"]!\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', 'let mode = "shadowsocks"\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', "ordered Apply displayed a different final transport"),
         "ordered-final-widget": ('transport.isEnabled = !modes.isEmpty', 'transport.isEnabled = draft.prefixes.indices.contains(index)', "ordered editor did not expose the supported final transport"),
         "ordered-final-layer": ('return layer.isEmpty || layer == "off"', 'return true', "Hysteria2 accepted a non-Off final source"),
-        "ordered-imported-final": ('mode == "shadowsocks" && rows.last?["mode"] == "shadowsocks")', 'mode == "shadowsocks")', "imported middle references acquired a Hysteria2 final"),
-        "ordered-imported-choice": ('return finalModes.filter { $0 == "shadowsocks" || !modes.contains("shadowsocks") }', 'return finalModes', "imported middle editor offered a Hysteria2 final"),
+        "ordered-imported-final": ('["shadowsocks", "socks5"].contains(mode) && rows.last?["mode"] == "shadowsocks")', '["shadowsocks", "socks5"].contains(mode))', "imported middle references acquired a Hysteria2 final"),
+        "ordered-imported-choice": ('return finalModes.filter { $0 == "shadowsocks" || importedIDs.isDisjoint(with: prefixes) }', 'return finalModes', "imported middle editor offered a Hysteria2 final"),
         "ordered-loaded-final": ('fromCatalog || (stored?["mode"] as? String == selection.orderedNodes.last?["mode"] && payload["mode"] as? String == selection.orderedNodes.last?["mode"])', 'true', "Hysteria2 Load accepted inconsistent final metadata: stored-mode"),
     }
     for name, (old, new, _) in final_variants.items():
         variants[name] = replace_once(source, old.replace("\\n", "\n"), new.replace("\\n", "\n"))
     for name, (old, new, _) in setup_variants.items():
         variants[name] = replace_once(source, old.replace("UserDefaults.standard", "fixtureDefaults"), new)
+    socks_variants = {
+        "ordered-socks-protocol": ('row["mode"] == importedMode', '["shadowsocks", "socks5"].contains(row["mode"]!)', "SOCKS Connect borrowed another imported protocol"),
+        "ordered-socks-draft-mode": ('modes.append(importedModes[id] ?? "wg")', 'modes.append(importedIDs.contains(id) ? "shadowsocks" : "wg")', "SOCKS editor Add replaced the captured middle mode"),
+        "ordered-socks-capability": ('CFGetTypeID(value) == CFBooleanGetTypeID(), value.boolValue,', 'value.boolValue,', "SOCKS imported capability accepted non-boolean authority"),
+        "ordered-socks-final": ('return finalModes.filter { $0 == "shadowsocks" || importedIDs.isDisjoint(with: prefixes) }', 'return finalModes.filter { $0 == "shadowsocks" || !modes.contains("shadowsocks") }', "SOCKS imported middle editor offered a Hysteria2 final"),
+    }
+    for name, (old, new, _) in socks_variants.items():
+        variants[name] = replace_once(source, old, new)
     for name, program in variants.items():
         path, binary = directory / (name + ".swift"), directory / name
         path.write_text(program, encoding="utf-8")
         run(["swiftc", "-swift-version", "6", "-module-cache-path", str(directory / "swift-module-cache"), str(path), "-o", str(binary)])
-        run([str(binary)], negative=name != "shipping", witness=(setup_variants.get(name) or final_variants.get(name) or (None, None, None))[2])
+        run([str(binary)], negative=name != "shipping", witness=(setup_variants.get(name) or final_variants.get(name) or socks_variants.get(name) or (None, None, None))[2])
         if name != "shipping": print("PASS causal AppKit " + name, flush=True)
     print(f"AppKit capture, refresh ownership, relink and post-response idle negatives: {len(variants) - 1} rejected")
 

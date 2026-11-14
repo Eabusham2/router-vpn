@@ -9,7 +9,7 @@ private let macConnectionMultihopEnabledKey = "routervpn.unified.multihop-enable
 enum RouterVPNOrderedNodes {
     static let prefixModes = ["wg", "awg2-fast", "awg2-strong"]
     static let finalModes = ["shadowsocks", "hysteria2"]
-    static let editorModes = prefixModes + finalModes
+    static let editorModes = prefixModes + finalModes + ["socks5"]
     static func finalProfile(_ profile: [String: Any], mode: String) -> Bool {
         guard finalModes.contains(mode), profile["external"] == nil else { return false }
         if let kind = profile["node_kind"] {
@@ -20,9 +20,17 @@ enum RouterVPNOrderedNodes {
         guard let layer = raw as? String else { return false }
         return layer.isEmpty || layer == "off"
     }
+    static func importedMiddleMode(_ profile: [String: Any]) -> String? {
+        guard profile["node_kind"] as? String == "external",
+              let external = profile["external"] as? [String: Any],
+              let value = external["ordered_middle_supported"] as? NSNumber,
+              CFGetTypeID(value) == CFBooleanGetTypeID(), value.boolValue,
+              let mode = external["protocol"] as? String,
+              ["shadowsocks", "socks5"].contains(mode) else { return nil }
+        return mode
+    }
     static func importedMiddle(_ profile: [String: Any]) -> Bool {
-        guard profile["node_kind"] as? String == "external", let value = (profile["external"] as? [String: Any])?["ordered_middle_supported"] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return false }
-        return value.boolValue
+        importedMiddleMode(profile) != nil
     }
     static func modeName(_ mode: String) -> String {
         switch mode {
@@ -30,6 +38,7 @@ enum RouterVPNOrderedNodes {
         case "awg2-fast": return "AWG2 Fast"
         case "awg2-strong": return "AWG2 Strong"
         case "shadowsocks": return "Shadowsocks 2022"
+        case "socks5": return "SOCKS5"
         case "hysteria2": return "Hysteria2"
         default: return "Unknown saved transport"
         }
@@ -47,8 +56,8 @@ enum RouterVPNOrderedNodes {
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
                   seen.insert(id).inserted,
                   let mode = row["mode"],
-                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || (rows.count == 3 && position == 1 && mode == "shadowsocks" && rows.last?["mode"] == "shadowsocks") else {
-                throw issue("Choose paired WireGuard or AWG2 prefixes and a paired Shadowsocks 2022 or unlayered Hysteria2 exit. An imported SS2022 middle requires a three-node path ending in Shadowsocks 2022.")
+                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || (rows.count == 3 && position == 1 && ["shadowsocks", "socks5"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
+                throw issue("Choose paired WireGuard or AWG2 prefixes and a paired Shadowsocks 2022 or unlayered Hysteria2 exit. An imported SS2022 or SOCKS5 middle requires a three-node path ending in Shadowsocks 2022.")
             }
         }
         guard !control.isEmpty, rows.last?["id"] == control else {
@@ -68,8 +77,8 @@ enum RouterVPNOrderedNodes {
             let id = row["id"]!
             let matches = profiles.filter { $0["id"] as? String == id }
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
-            let imported = importedMiddle(matches[0])
-            guard imported ? rows.count == 3 && position == 1 && row["mode"] == "shadowsocks" && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
+            let importedMode = importedMiddleMode(matches[0])
+            guard importedMode != nil ? rows.count == 3 && position == 1 && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 requires StartLayer Off.") }
             }
@@ -107,6 +116,7 @@ struct RouterVPNOrderedNodeDraft {
     let tokens: [String: String]
     let candidates: [String]
     let importedIDs: Set<String>
+    let importedModes: [String: String]
     let finalModes: [String]
     private(set) var finalMode: String
     private(set) var prefixes: [String]
@@ -116,6 +126,7 @@ struct RouterVPNOrderedNodeDraft {
         control = selection.selectedNodeID; self.generation = generation
         var names: [String: String] = [:], tokens: [String: String] = [:]
         var importedIDs = Set<String>()
+        var importedModes: [String: String] = [:]
         for row in catalog {
             guard let id = row["id"] as? String, names[id] == nil,
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
@@ -123,9 +134,9 @@ struct RouterVPNOrderedNodeDraft {
                   token.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil else {
                 throw RouterVPNOrderedNodes.issue("Refresh the node catalog before opening the ordered editor.")
             }
-            let imported = RouterVPNOrderedNodes.importedMiddle(row)
-            guard imported || ["", "router-vpn"].contains(row["node_kind"] as? String ?? "router-vpn") else { continue }
-            if imported { importedIDs.insert(id) }
+            let importedMode = RouterVPNOrderedNodes.importedMiddleMode(row)
+            guard importedMode != nil || ["", "router-vpn"].contains(row["node_kind"] as? String ?? "router-vpn") else { continue }
+            if let importedMode { importedIDs.insert(id); importedModes[id] = importedMode }
             names[id] = row["name"] as? String ?? id; tokens[id] = token
         }
         guard let selectedToken = selection.profileTokens[control], tokens[control] == selectedToken, !importedIDs.contains(control) else {
@@ -133,7 +144,7 @@ struct RouterVPNOrderedNodeDraft {
         }
         guard let finalProfile = catalog.first(where: { $0["id"] as? String == selection.selectedNodeID }) else { throw RouterVPNOrderedNodes.issue("The selected final source is missing.") }
         finalModes = RouterVPNOrderedNodes.finalModes.filter { RouterVPNOrderedNodes.finalProfile(finalProfile, mode: $0) }
-        self.names = names; self.tokens = tokens; self.importedIDs = importedIDs
+        self.names = names; self.tokens = tokens; self.importedIDs = importedIDs; self.importedModes = importedModes
         candidates = names.keys.filter { $0 != selection.selectedNodeID }.sorted()
         if selection.orderedNodes.isEmpty { prefixes = []; modes = []; finalMode = "shadowsocks" }
         else {
@@ -146,11 +157,12 @@ struct RouterVPNOrderedNodeDraft {
             finalMode = nodes.last!["mode"]!
         }
         guard finalModes.contains(finalMode) else { throw RouterVPNOrderedNodes.issue("The saved final transport no longer matches its paired source settings.") }
+        if !selection.orderedNodes.isEmpty { _ = try self.selection() }
     }
     var nodes: [[String: String]] { prefixes.enumerated().map { ["id": $0.element, "mode": modes[$0.offset]] } + [["id": control, "mode": finalMode]] }
     func allowedModes(at index: Int) -> [String] {
-        if prefixes.indices.contains(index) { return importedIDs.contains(prefixes[index]) ? ["shadowsocks"] : RouterVPNOrderedNodes.prefixModes }
-        if index == prefixes.count { return finalModes.filter { $0 == "shadowsocks" || !modes.contains("shadowsocks") } }
+        if prefixes.indices.contains(index) { return importedModes[prefixes[index]].map { [$0] } ?? RouterVPNOrderedNodes.prefixModes }
+        if index == prefixes.count { return finalModes.filter { $0 == "shadowsocks" || importedIDs.isDisjoint(with: prefixes) } }
         return []
     }
     mutating func add(_ id: String) throws {
@@ -159,7 +171,7 @@ struct RouterVPNOrderedNodeDraft {
             throw RouterVPNOrderedNodes.issue("Choose a different entry or hop. The path supports up to eight nodes.")
         }
         prefixes.append(id)
-        modes.append(importedIDs.contains(id) ? "shadowsocks" : "wg")
+        modes.append(importedModes[id] ?? "wg")
     }
     mutating func chooseMode(_ mode: String, at index: Int) throws {
         guard allowedModes(at: index).contains(mode) else {
@@ -183,7 +195,7 @@ struct RouterVPNOrderedNodeDraft {
     func selection() throws -> RouterVPNConnectionProfileSelection {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
         for (index, id) in prefixes.enumerated() {
-            guard importedIDs.contains(id) ? ordered.count == 3 && index == 1 && modes[index] == "shadowsocks" && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("An imported SS2022 member requires one middle position between a paired entry and final.") }
+            guard importedIDs.contains(id) ? ordered.count == 3 && index == 1 && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("An imported SS2022 or SOCKS5 member requires one middle position between a paired entry and final.") }
         }
         return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
             execution: "local", profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
@@ -864,7 +876,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 requires StartLayer Off. An imported SS2022 middle requires a Shadowsocks 2022 final. Each node keeps its own linked credentials and settings.")
+        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 requires StartLayer Off. An imported SS2022 or SOCKS5 middle requires a Shadowsocks 2022 final. Each node keeps its own linked credentials and settings.")
         root.addArrangedSubview(note)
         path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
         transport.setAccessibilityLabel("Selected node transport")
