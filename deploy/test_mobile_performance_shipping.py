@@ -3,6 +3,7 @@
 from pathlib import Path
 from contextlib import ExitStack
 import importlib.util
+import inspect
 import tempfile
 import re
 import shlex
@@ -24,9 +25,18 @@ class Shipping(unittest.TestCase):
                 # dependencies, and require every actual integration call.
                 execution_calls = [execution_preparation.enter_context(mock.patch.object(module, 'prepare'))
                                    for module in PREPARE._execution_modules]
+                connect_prepare = execution_preparation.enter_context(mock.patch.object(PREPARE.CONNECT, 'prepare'))
+                order = mock.Mock()
+                for index, prepare in enumerate(execution_calls):
+                    order.attach_mock(prepare, 'execution_' + str(index))
+                order.attach_mock(connect_prepare, 'connect')
+                order.attach_mock(composite_prepare, 'composite')
                 PREPARE.prepare(vendor)
                 for prepare in execution_calls:
                     prepare.assert_called_once_with(vendor.resolve())
+                self.assertEqual(order.mock_calls, [
+                    *(getattr(mock.call, 'execution_' + str(index))(vendor.resolve()) for index in range(len(execution_calls))),
+                    mock.call.connect(vendor.resolve()), mock.call.composite(vendor.resolve())])
                 naive_prepare.assert_called_once_with(vendor.resolve())
                 hy2_prepare.assert_called_once_with(vendor.resolve())
                 mtu_prepare.assert_called_once_with(vendor.resolve())
@@ -46,6 +56,15 @@ class Shipping(unittest.TestCase):
                 self.assertEqual(expected,(vendor/'experimental/libbox/routervpn/mobileperf'/source.name).read_text())
         expected=[ROOT/'deploy/prepare-mobile-performance.py',*sorted((ROOT/'mobile/performance').glob('*.tmpl'))]
         for path in expected:self.assertIn(path,PREPARE.inputs())
+    def test_missing_connect_native_dependency_is_rejected(self):
+        original=inspect.getsource(PREPARE.prepare)
+        marker='    CONNECT.prepare(vendor)\n'
+        self.assertEqual(original.count(marker),1)
+        namespace=dict(PREPARE.__dict__)
+        exec(compile(original.replace(marker,''),'<missing-connect-preparation>','exec'),namespace)
+        with mock.patch.object(PREPARE,'prepare',namespace['prepare']):
+            with self.assertRaises(AssertionError):
+                self.test_shared_policy_is_built_byte_exactly()
     def test_mobile_sdk_builds_run_real_worker_and_graph_tests(self):
         for path,capital in [('android/build-sing-box-libbox.sh','router'),('ios/RouterVPN/prepare-libbox.sh','LibboxRouter')]:
             text=(ROOT/path).read_text()

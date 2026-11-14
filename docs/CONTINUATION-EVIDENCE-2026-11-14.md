@@ -679,3 +679,22 @@ validation remains unchanged and is exercised separately by canonical native
 preparation. The successful direct log has SHA-256
 `9d70ce37b9dfd87389c5b2bda531af0fe001fa82c3e8f21be9984e208700003d`.
 This fixture result is not a successful full Multihop rerun or release.
+
+## Sibling performance and policy fixtures observe CONNECT preparation
+
+The same native preparation dependency exposed one error in the original
+four-test mobile-performance suite and two errors in the original eight-test
+native-policy suite. Both sparse fixtures omitted the real CONNECT boundary;
+the resulting production pin check correctly rejected their temporary trees.
+The fixtures now observe that boundary with the exact captured vendor and
+preserve its order after the four execution owners and before composite
+preparation. The performance suite also executes the real preparer with its
+CONNECT call removed and requires rejection. Policy rejection tests verify
+that execution failure prevents CONNECT and that CONNECT failure prevents all
+later composite, WireGuard and OpenVPN preparation.
+
+All five performance and nine policy tests passed. Their direct log SHA-256
+values are `aeb3d54961256154c4783e5680bb619e08ebe509f776ec17065bb7d20b5cfaa7`
+and `56dfb256d11560f50ac2dd014863342f88a7690098e1469a85b25e989ea6b90d`,
+respectively. Production native preparation and its source guards are
+unchanged. These are focused fixture results, not a full release rerun.

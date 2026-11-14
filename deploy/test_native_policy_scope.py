@@ -18,7 +18,7 @@ def load(name):
     return module
 
 class NativePolicyScope(unittest.TestCase):
-    def copied(self,name,stale=None,windows_text=False,rejected_execution=None):
+    def copied(self,name,stale=None,windows_text=False,rejected_execution=None,rejected_connect=False):
         module=load(name)
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as mocks:
             vendor=Path(tmp);(vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
@@ -35,7 +35,7 @@ class NativePolicyScope(unittest.TestCase):
             # Every native patcher has its own exact-source/executable tests.
             prepared = {}
             preparation_order = mock.Mock()
-            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','OPENVPN_CLOSE','OPENVPN_REMOTE','EXTERNAL_POLICY','PQ','STRATEGY','COMPOSITE','HY2_DEADLINES','NAIVE','NODE_CHAIN'):
+            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','OPENVPN_CLOSE','OPENVPN_REMOTE','EXTERNAL_POLICY','PQ','STRATEGY','COMPOSITE','HY2_DEADLINES','NAIVE','NODE_CHAIN','CONNECT'):
                 if hasattr(module,hook):
                     prepared[hook]=mocks.enter_context(mock.patch.object(getattr(module,hook),'prepare'))
                     preparation_order.attach_mock(prepared[hook], hook)
@@ -74,6 +74,15 @@ class NativePolicyScope(unittest.TestCase):
                 for index, boundary in enumerate(execution):
                     if index <= rejected_execution: boundary.assert_called_once_with(vendor.resolve())
                     else: boundary.assert_not_called()
+                for hook in ('CONNECT', 'COMPOSITE', 'WIREGUARD_BIND', 'OPENVPN_CLOSE', 'OPENVPN_REMOTE'):
+                    prepared[hook].assert_not_called()
+                return
+            if rejected_connect:
+                prepared['CONNECT'].side_effect = ValueError('captured CONNECT native source rejected')
+                with self.assertRaisesRegex(ValueError, 'captured CONNECT native source rejected'):
+                    module.prepare(vendor)
+                for boundary in execution: boundary.assert_called_once_with(vendor.resolve())
+                prepared['CONNECT'].assert_called_once_with(vendor.resolve())
                 for hook in ('COMPOSITE', 'WIREGUARD_BIND', 'OPENVPN_CLOSE', 'OPENVPN_REMOTE'):
                     prepared[hook].assert_not_called()
                 return
@@ -82,8 +91,10 @@ class NativePolicyScope(unittest.TestCase):
                 prepared['NODE_CHAIN'].assert_called_once_with(vendor.resolve())
             if name=='prepare-mobile-multihop.py':
                 for boundary in execution: boundary.assert_called_once_with(vendor.resolve())
+                prepared['CONNECT'].assert_called_once_with(vendor.resolve())
                 ordered = [mock.call.NODE_CHAIN(vendor.resolve()), mock.call.EXTERNAL_POLICY(vendor.resolve()),
                            *(getattr(mock.call, 'execution_' + str(index))(vendor.resolve()) for index in range(len(execution))),
+                           mock.call.CONNECT(vendor.resolve()),
                            mock.call.COMPOSITE(vendor.resolve())]
                 positions = [preparation_order.mock_calls.index(call) for call in ordered]
                 self.assertEqual(positions, sorted(positions))
@@ -221,6 +232,7 @@ class NativePolicyScope(unittest.TestCase):
             with self.subTest(preparer=name):
                 self.copied('prepare-mobile-multihop.py', rejected_execution=index)
     def test_mobile_copy_does_not_export_parent_build_audits(self):self.copied('prepare-mobile-multihop.py')
+    def test_rejected_connect_stops_later_native_preparation(self):self.copied('prepare-mobile-multihop.py',rejected_connect=True)
     def test_relay_copy_does_not_export_parent_build_audits(self):self.copied('prepare-relay-core.py')
     def test_relay_copy_preserves_exact_source_bytes_on_windows(self):self.copied('prepare-relay-core.py',windows_text=True)
     def test_owned_stale_parent_tests_are_removed(self):
