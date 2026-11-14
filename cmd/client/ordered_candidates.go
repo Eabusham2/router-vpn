@@ -175,7 +175,7 @@ func orderedCandidateProposal(members []desktopNodeChainMember, position int, ca
 	mode := "shadowsocks"
 	if candidate.External != nil {
 		switch candidate.External.Protocol {
-		case "socks5":
+		case "socks5", "http-connect", "https-connect":
 			mode = candidate.External.Protocol
 		}
 	}

@@ -28,6 +28,9 @@ type orderedCandidateProposalCapture interface {
 }
 
 func captureOrderedCandidateProposal(ctx context.Context, root string, control common.RouterProfile, profiles []common.RouterProfile, nodes []common.MultihopNodeSelection) (orderedCandidateProposalCapture, error) {
+	if desktopNodeChainHasCONNECT(nodes) {
+		return captureDesktopNodeChainCONNECT(ctx, root, control, profiles, nodes, "local", nil)
+	}
 	if desktopNodeChainHasSOCKS(nodes) {
 		return captureDesktopNodeChainSOCKS(ctx, root, control, profiles, nodes, "local", nil)
 	}
