@@ -2341,6 +2341,7 @@ type desktopExternalInstalledSOCKSPeer struct {
 	rejected     atomic.Uint32
 	joinFailed   atomic.Bool
 	bindHost     string
+	handshakeDeadline bool
 	entryRelay   func(net.Conn, net.PacketConn) (net.Addr, func(), error)
 }
 
@@ -2369,7 +2370,14 @@ func (c *desktopExternalInstalledSOCKSControl) Write(body []byte) (int, error) {
 			c.peer.authFailures.Add(1)
 		}
 	}
-	return c.Conn.Write(body)
+	n, err := c.Conn.Write(body)
+	// Only this authenticated UDP ASSOCIATE's successful pinned reply hands
+	// off the accepted socket. Keep its handshake bound through the write.
+	if err == nil && n == len(body) && c.peer.handshakeDeadline && c.associated.Load() &&
+		len(body) >= 4 && body[0] == socks5.Version && body[1] == socks5.ReplyCodeSuccess && body[2] == 0 {
+		err = c.Conn.SetDeadline(time.Time{})
+	}
+	return n, err
 }
 
 type desktopExternalInstalledSOCKSListener struct {
@@ -2463,7 +2471,12 @@ func (p *desktopExternalInstalledSOCKSPeer) NewConnectionEx(ctx context.Context,
 	if _, owned := p.server.route("tcp", destination.String()); !owned {
 		err = errors.New("installed SOCKS peer refused an unowned TCP destination")
 	} else if err = N.ReportConnHandshakeSuccess(connection, connection); err == nil {
-		err = p.server.NewConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+		if p.handshakeDeadline {
+			err = connection.SetDeadline(time.Time{})
+		}
+		if err == nil {
+			err = p.server.NewConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+		}
 	}
 	if onClose != nil {
 		onClose(err)

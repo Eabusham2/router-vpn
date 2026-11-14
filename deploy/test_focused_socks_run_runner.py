@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Strict source/process/receipt tests for the encrypted typed SOCKS Run gate."""
 from pathlib import Path
+import ast
 import hashlib
 import importlib.util
 import json
@@ -57,6 +58,9 @@ class Composition:
             core,xray=Path(command[command.index("--core")+1]),Path(command[command.index("--xray")+1])
             core.mkdir();xray.mkdir();(xray/"original.go").write_text("original xray")
             (core/"original.go").write_text("original "+name);self.roles[name.removeprefix("prepare-")]=(core,xray)
+            if name=="prepare-owner":
+                original=core/V.REFERENCE.PROJECTION
+                original.parent.mkdir(parents=True);original.write_text('bindHost: "127.0.0.1", handshakeDeadline: true}')
             if name=="prepare-mobile":
                 diagnostic=core/V.DIAGNOSTIC.PROJECTION;diagnostic.parent.mkdir(parents=True,exist_ok=True)
                 diagnostic.write_text((ROOT/"internal/hopmeasure/measure.go").read_text())
@@ -77,6 +81,20 @@ class Composition:
             else:assert not overlays
         elif name=="original-imported-middle":
             assert cwd==self.roles["owner"][0];raw=plain(V.ORIGINAL).encode()
+        elif name=="socks-handshake-reference":
+            assert cwd==self.roles["owner"][0];raw=plain(V.REFERENCE.NAMES).encode()
+        elif name=="socks-handshake-old-deadline":
+            assert cwd==self.roles["owner"][0]
+            original=cwd/V.REFERENCE.PROJECTION
+            overlay=Path(next(x.split("=",1)[1] for x in command if x.startswith("-overlay=")))
+            replacements=json.loads(overlay.read_text())["Replace"]
+            assert list(replacements)==[str(original)]
+            assert Path(replacements[str(original)]).read_text()==original.read_text().replace('handshakeDeadline: true}', 'handshakeDeadline: false}')
+            root=V.REFERENCE.ROOT
+            raw=("".join("=== RUN   "+x+"\n" for x in V.REFERENCE.NAMES)+
+                 "--- PASS: "+root+"/unauthenticated-bound (5.00s)\n"+
+                 "".join("authenticated control retained handshake deadline\n--- FAIL: "+root+"/"+x+" (5.00s)\n" for x in ("tcp","udp"))+
+                 "--- FAIL: "+root+" (15.00s)\nFAIL\n").encode();status=1
         else:
             case=env["ROUTERVPN_SOCKS_RUN_CASE"];assert case in V.CASES
             assert env["GODEBUG"]=="x509usefallbackroots=1"
@@ -99,6 +117,9 @@ class Composition:
         if self.fault=="mobile-prepare" and name=="prepare-mobile":status=1
         if self.fault=="build" and name=="client-build":status=1
         if self.fault=="original-missing" and name=="original-imported-middle":raw=plain(V.ORIGINAL[:-1]).encode()
+        if self.fault=="handshake-missing" and name=="socks-handshake-reference":raw=plain(V.REFERENCE.NAMES[:-1]).encode()
+        if self.fault=="handshake-control-pass" and name=="socks-handshake-old-deadline":status=0
+        if self.fault=="handshake-control-witness" and name=="socks-handshake-old-deadline":raw=raw.replace(b"authenticated control retained handshake deadline",b"unrelated")
         if self.fault=="case-missing" and name=="run-wg":raw=encoded(events("wg")[:-1])
         if self.fault=="case-failed" and name=="run-wg":status=1
         if self.fault=="control-pass" and name==V.CONTROLS[0]["name"]:status=0
@@ -122,17 +143,24 @@ class Composition:
             return V.validate(self.source,self.metadata["source_sha"],self.output,"/captured/go")
 
 class EncryptedSOCKSRunValidator(unittest.TestCase):
+    def test_reference_control_targets_actual_peer_projection(self):
+        tree=ast.parse((ROOT/"deploy/prepare-desktop-external.py").read_text())
+        table=next(ast.literal_eval(node.value) for node in tree.body if isinstance(node,ast.Assign)
+                   and any(isinstance(target,ast.Name) and target.id=="PEER_TEMPLATES" for target in node.targets))
+        self.assertEqual(V.REFERENCE.PROJECTION,table["node_imported_socks_entry_test.go.tmpl"])
     def test_all_actual_cases_original_cipher_inventory_and_bounds_are_required(self):
         self.assertEqual(len(V.CASES),8);self.assertEqual(len(set(V.CASES)),8)
         self.assertEqual(len(V.ORIGINAL),73);self.assertEqual(len(set(V.ORIGINAL)),73)
         self.assertEqual(len(V.CONTROLS),4)
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
-            self.assertEqual(len(c.calls),18)
-            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,*([190]*8),*([600]*4)])
-            self.assertEqual(c.original,[V.ORIGINAL])
+            self.assertEqual(len(c.calls),20)
+            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,40,600,*([190]*8),*([600]*4)])
+            self.assertEqual(c.original,[V.ORIGINAL,V.REFERENCE.NAMES])
             self.assertEqual([x["case"] for x in receipt["case_records"]],list(V.CASES))
             self.assertEqual(len(receipt["controls"]),4)
+            self.assertEqual(receipt["socks_reference_handoff_records"],list(V.REFERENCE.NAMES))
+            self.assertTrue(receipt["socks_reference_handoff_control"]["expected_failure"])
             self.assertFalse(receipt["failure_only_diagnostic"]["acceptance_changed"])
             self.assertTrue(receipt["failure_only_diagnostic"]["original_deadlines_preserved"])
             self.assertTrue(receipt["successful_run_accepted"]);self.assertTrue(receipt["ordered_measurement_accepted"])
@@ -146,8 +174,23 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
                 if name.startswith("run-"):self.assertIn("-test.timeout=180s",command)
                 if name in {v["name"] for v in V.CONTROLS}:self.assertIn("-timeout=180s",command)
                 if name=="original-imported-middle":self.assertIn("-test.timeout=90s",command)
+                if name=="socks-handshake-reference":self.assertIn("-test.timeout=30s",command)
+                if name=="socks-handshake-old-deadline":
+                    self.assertIn("-race",command);self.assertIn("-p=1",command);self.assertIn("-timeout=30s",command)
+    def test_handshake_control_requires_both_actual_transport_failures(self):
+        root=V.REFERENCE.ROOT
+        raw=("".join("=== RUN   "+x+"\n" for x in V.REFERENCE.NAMES)+
+             "--- PASS: "+root+"/unauthenticated-bound (5s)\n"+
+             "".join("authenticated control retained handshake deadline\n--- FAIL: "+root+"/"+x+" (5s)\n" for x in ("tcp","udp"))+
+             "--- FAIL: "+root+" (15s)\nFAIL\n").encode()
+        self.assertTrue(V.REFERENCE.control_events(raw,1)["expected_failure"])
+        for status in (0,-9,124):
+            with self.assertRaises(ValueError):V.REFERENCE.control_events(raw,status)
+        for changed in (raw+raw,raw.replace(b"/udp",b"/foreign"),raw.replace(b"retained handshake deadline",b"unrelated"),raw+b"DATA RACE",raw+b"panic:",raw+b"--- SKIP: unrelated (0.00s)\n"):
+            with self.assertRaises(ValueError):V.REFERENCE.control_events(changed,1)
     def test_no_failed_missing_or_unjoined_phase_can_publish_acceptance(self):
         for fault in ("preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
+                      "handshake-missing","handshake-control-pass","handshake-control-witness",
                       "control-pass","control-signal","control-panic","control-witness","candidate-changed","owner-changed",
                       "mobile-changed","image-changed","selection-changed","diagnostic-changed","timeout","unjoined"):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:

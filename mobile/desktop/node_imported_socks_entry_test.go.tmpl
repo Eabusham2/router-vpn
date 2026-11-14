@@ -31,6 +31,7 @@ import (
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	SOCKS "github.com/sagernet/sing-box/protocol/socks"
 	M "github.com/sagernet/sing/common/metadata"
+	singSOCKS "github.com/sagernet/sing/protocol/socks"
 	"github.com/sagernet/sing/service"
 )
 
@@ -418,7 +419,7 @@ func desktopStartImportedSOCKSProvider(t *testing.T, s *desktopNodeLayerServer, 
 	}
 	s.tcp = listener
 	var authFailures atomic.Uint32
-	p := &desktopExternalInstalledSOCKSPeer{server: s, request: desktopExternalInstalledPeerRequest{Password: password, SOCKSFault: fault}, authFailures: &authFailures, bindHost: "127.0.0.1"}
+	p := &desktopExternalInstalledSOCKSPeer{server: s, request: desktopExternalInstalledPeerRequest{Password: password, SOCKSFault: fault}, authFailures: &authFailures, bindHost: "127.0.0.1", handshakeDeadline: true}
 	var once sync.Once
 	closePeer := func() {
 		once.Do(func() {
@@ -1439,4 +1440,52 @@ func TestRouterVPNImportedSOCKSBothLayersProxyNativeTraffic(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Keep authenticated traffic active past the original five-second accept
+// deadline. UDP's independent five-second idle bound stays in force.
+func TestRouterVPNImportedSOCKSHandshakeDeadlineRetirement(t *testing.T) {
+ t.Run("unauthenticated-bound",func(t *testing.T){
+  ctx,cancel:=context.WithTimeout(context.Background(),8*time.Second);defer cancel()
+  server:=&desktopNodeLayerServer{ctx:ctx,cancel:cancel,connections:map[io.Closer]bool{}}
+  peer,_:=desktopStartImportedSOCKSProvider(t,server,"deadline-owner-secret","");defer peer.close()
+  c,err:=(&net.Dialer{}).DialContext(ctx,"tcp",peer.address);if err!=nil{t.Fatal(err)};defer c.Close()
+  if err:=c.SetReadDeadline(time.Now().Add(7*time.Second));err!=nil{t.Fatal(err)}
+  began:=time.Now();_,err=c.Read(make([]byte,1));elapsed:=time.Since(began)
+  if err!=io.EOF||elapsed<4500*time.Millisecond||elapsed>6500*time.Millisecond{t.Fatal("original five-second handshake bound changed",elapsed,err)}
+ })
+ for _, network := range []string{"tcp", "udp"} {
+  t.Run(network, func(t *testing.T) {
+   ctx,cancel:=context.WithTimeout(context.Background(),9*time.Second);defer cancel()
+   server:=&desktopNodeLayerServer{ctx:ctx,cancel:cancel,connections:map[io.Closer]bool{}}
+   if network=="tcp" {
+    listener,err:=net.Listen("tcp4","127.0.0.1:0");if err!=nil{t.Fatal(err)}
+    joined:=make(chan struct{})
+    go func(){defer close(joined);c,err:=listener.Accept();if err!=nil{return};defer c.Close();stop:=context.AfterFunc(ctx,func(){_ = c.Close()});defer stop();_,_=io.Copy(c,c)}()
+    t.Cleanup(func(){cancel();_ = listener.Close();select{case<-joined:case<-time.After(time.Second):t.Error("original echo owner did not join")}})
+    server.routes=[]desktopNodeLayerRoute{{Network:"tcp",Destination:"192.0.2.99:9999",Physical:listener.Addr().String()}}
+   }
+   peer,owner:=desktopStartImportedSOCKSProvider(t,server,"deadline-owner-secret","")
+   defer peer.close()
+   lower:=&desktopImportedSOCKSLower{desktopSSReferenceLower:desktopSSReferenceLower{virtual:peer.address,original:peer.address},peer:owner}
+   client:=singSOCKS.NewClient(lower,M.ParseSocksaddr(peer.address),singSOCKS.Version5,"captured-native-user","deadline-owner-secret")
+   connection,err:=client.DialContext(ctx,network,M.ParseSocksaddr("192.0.2.99:9999"))
+   if err!=nil{t.Fatal("original authenticated handoff",err)}
+   defer connection.Close()
+   began:=time.Now();ticker:=time.NewTicker(100*time.Millisecond);defer ticker.Stop()
+   count:=0
+   for {
+    if err:=connection.SetDeadline(time.Now().Add(time.Second));err!=nil{t.Fatal(err)}
+    if _,err:=connection.Write([]byte{byte(count)});err!=nil{t.Fatal("authenticated control retained handshake deadline",network,count,err)}
+    reply:=make([]byte,1)
+    if _,err:=io.ReadFull(connection,reply);err!=nil||reply[0]!=byte(count){t.Fatal("authenticated control retained handshake deadline",network,count,err)}
+    count++
+    if time.Since(began)>5500*time.Millisecond{break}
+    select{case<-ticker.C:case<-ctx.Done():t.Fatal("original handoff regression bound",ctx.Err())}
+   }
+   if count<2{t.Fatal("no active original exchange after handoff")}
+   if err:=connection.Close();err!=nil{t.Fatal("original authenticated close",err)}
+   t.Log("SOCKS_HANDSHAKE_RETIRED",network)
+  })
+ }
 }

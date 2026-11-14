@@ -23,6 +23,8 @@ BASE_PATH=ROOT/"deploy/test_focused_socks_bridge.py"
 BASE=module("socks_run_trusted_bridge",BASE_PATH)
 DIAGNOSTIC_PATH=ROOT/"deploy/socks_private_measurement_diagnostic.py"
 DIAGNOSTIC=module("socks_run_private_diagnostic",DIAGNOSTIC_PATH)
+REFERENCE_PATH=ROOT/"deploy/socks_reference_lifecycle.py"
+REFERENCE=module("socks_reference_lifecycle",REFERENCE_PATH)
 # Only the fixed source-selection suite label differs. The trusted process,
 # snapshot, native source and strict event parsers are reused unchanged.
 BASE.SUITE=SUITE
@@ -131,6 +133,7 @@ def validate(source,source_sha,output,go="go"):
         original_external_final_fifty_scope_unchanged=True,go_version=version,compiler=compiler,
         resource_limits=dict(parallel_packages=1,GOMAXPROCS=2,GOGC=100,GOMEMLIMIT="2GiB"),
         trusted_bridge_sha256=hashlib.sha256(BASE_PATH.read_bytes()).hexdigest(),
+        trusted_reference_sha256=hashlib.sha256(REFERENCE_PATH.read_bytes()).hexdigest(),
         trusted_executor_sha256=hashlib.sha256(BASE.CORE_PATH.read_bytes()).hexdigest())
     diagnostic=None
     def save():(output/"progress.json").write_text(json.dumps(receipt,indent=2)+"\n")
@@ -183,6 +186,7 @@ def validate(source,source_sha,output,go="go"):
             status,raw=run("original-imported-middle",[peer,"-test.run=^"+ORIGINAL_ROOT+"$","-test.count=1","-test.timeout=90s","-test.v"],owner,100)
             if status:raise ValueError("Original complete imported peer baseline failed")
             gate.NODE.require_native_verdicts(raw.decode(),ORIGINAL,"unchanged original imported peer")
+            receipt.update(REFERENCE.validate(BASE,gate,run,compiler,owner,peer,work,owner_flags))
             records=[]
             for case in CASES:
                 selected=dict(env,ROUTERVPN_SOCKS_RUN_PEER=str(peer),ROUTERVPN_SOCKS_RUN_CASE=case,GODEBUG="x509usefallbackroots=1")
