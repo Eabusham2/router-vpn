@@ -86,11 +86,27 @@ CONNECT_STATIC_SIGNATURES = (
     PACKAGE+"RouterHopMeasurement routerNodeChainCONNECTNewHopMeasurement("+PACKAGE+"RouterNodeChainCONNECT, "+PACKAGE+"CommandServer) throws java.lang.Exception;",
     PACKAGE+"RouterMTU routerNodeChainCONNECTNewMTU("+PACKAGE+"RouterNodeChainCONNECT, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterMTUPlatform) throws java.lang.Exception;",
 )
+# These factories borrow the exact already retained measurement service.
+ORDERED_LATENCY_SIGNATURES = (
+    "void start(java.lang.String, java.lang.String) throws java.lang.Exception;",
+    "void cancel(java.lang.String);",
+    "void drain(java.lang.String) throws java.lang.Exception;",
+    "java.lang.String statusJSON();",
+    "java.lang.String savedJSON(java.lang.String);",
+    "void close() throws java.lang.Exception;",
+    "void networkChanged();",
+)
+ORDERED_LATENCY_STATIC_SIGNATURES = (
+    PACKAGE+"RouterOrderedLatency routerNodeChainSOCKSNewLatencyBenchmark("+PACKAGE+"RouterNodeChainSOCKS, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
+    PACKAGE+"RouterOrderedLatency routerNodeChainCONNECTNewLatencyBenchmark("+PACKAGE+"RouterNodeChainCONNECT, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
+)
 GENERATED_API_INVENTORIES = (("RouterNodeChainSOCKS", PLAN_SIGNATURES),
                            ("RouterNodeChainCONNECT", CONNECT_PLAN_SIGNATURES),
-                           ("Libbox", (*STATIC_SIGNATURES, *CONNECT_STATIC_SIGNATURES)))
+                           ("RouterOrderedLatency", ORDERED_LATENCY_SIGNATURES),
+                           ("Libbox", (*STATIC_SIGNATURES, *CONNECT_STATIC_SIGNATURES, *ORDERED_LATENCY_STATIC_SIGNATURES)))
 GENERATED_CLASSES = ("go/Seq.class", "io/nekohasekai/libbox/Libbox.class",
-                     "io/nekohasekai/libbox/RouterNodeChainSOCKS.class", "io/nekohasekai/libbox/RouterNodeChainCONNECT.class")
+                     "io/nekohasekai/libbox/RouterNodeChainSOCKS.class", "io/nekohasekai/libbox/RouterNodeChainCONNECT.class",
+                     "io/nekohasekai/libbox/RouterOrderedLatency.class")
 
 PRODUCTION_INPUTS = ("KEYSTORE_BASE64", "KEYSTORE", "STORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD", "CERT_SHA256", "REQUIRE_PRODUCTION", "VERSION_CODE", "VERSION_SHA")
 
@@ -511,6 +527,7 @@ def self_test():
         def test_exact_signature_inventory(self):
             self.assertEqual(len(PLAN_SIGNATURES),15);self.assertEqual(len(STATIC_SIGNATURES),4)
             self.assertEqual(len(CONNECT_PLAN_SIGNATURES),15);self.assertEqual(len(CONNECT_STATIC_SIGNATURES),5)
+            self.assertEqual(len(ORDERED_LATENCY_SIGNATURES),7);self.assertEqual(len(ORDERED_LATENCY_STATIC_SIGNATURES),2)
             for owner,signatures in GENERATED_API_INVENTORIES:
                 raw=transcript(owner,signatures);self.assertEqual(len(require_signatures(raw,signatures,owner)["required_signatures"]),len(signatures))
         def test_every_missing_duplicate_and_changed_method_refused(self):
@@ -536,21 +553,31 @@ def self_test():
                 with self.assertRaises(ValueError):require_signatures(wrong,CONNECT_STATIC_SIGNATURES,"Libbox")
             wrong=transcript("Libbox",CONNECT_STATIC_SIGNATURES).replace((PACKAGE+"CommandServerHandler, "+PACKAGE+"PlatformInterface").encode(),(PACKAGE+"PlatformInterface, "+PACKAGE+"CommandServerHandler").encode())
             with self.assertRaises(ValueError):require_signatures(wrong,CONNECT_STATIC_SIGNATURES,"Libbox")
-        def test_actual_inspection_requires_all_three_classes_from_same_captured_jar(self):
+        def test_actual_inspection_requires_all_four_classes_from_same_captured_jar(self):
             calls=[];jar=Path("captured-classes.jar")
             def run(name,command,bound):
                 calls.append((name,command,bound));owner=command[-1].removeprefix(PACKAGE)
                 return transcript(owner,dict(GENERATED_API_INVENTORIES)[owner])
             rows=inspect_generated_apis(run,jar)
             self.assertEqual([row["class"] for row in rows],[PACKAGE+owner for owner,_ in GENERATED_API_INVENTORIES])
-            self.assertEqual(len(calls),3)
+            self.assertEqual(len(calls),4)
             for (_,command,bound),(owner,_) in zip(calls,GENERATED_API_INVENTORIES):
                 self.assertEqual(command,["javap","-classpath",str(jar),PACKAGE+owner]);self.assertEqual(bound,60)
-            for absent in ("RouterNodeChainCONNECT","Libbox"):
+            for absent in ("RouterNodeChainCONNECT","RouterOrderedLatency","Libbox"):
                 def missing(name,command,bound):
                     owner=command[-1].removeprefix(PACKAGE)
                     return b"Error: missing generated class" if owner==absent else transcript(owner,dict(GENERATED_API_INVENTORIES)[owner])
                 with self.assertRaises(ValueError):inspect_generated_apis(missing,jar)
+        def test_fifty_factory_requires_the_exact_retained_service_and_typed_owner(self):
+            raw=transcript("Libbox",ORDERED_LATENCY_STATIC_SIGNATURES)
+            for signature in ORDERED_LATENCY_STATIC_SIGNATURES:
+                for bad in (signature.replace(", "+PACKAGE+"RouterHopMeasurement", ""),
+                            signature.replace(PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement", PACKAGE+"RouterHopMeasurement, "+PACKAGE+"CommandServer"),
+                            signature.replace(PACKAGE+"RouterOrderedLatency ",PACKAGE+"RouterHopMeasurement ")):
+                    with self.subTest(signature=signature),self.assertRaises(ValueError):require_signatures(raw.replace(signature.encode(),bad.encode()),ORDERED_LATENCY_STATIC_SIGNATURES,"Libbox")
+            signature=ORDERED_LATENCY_STATIC_SIGNATURES[1]
+            wrong=signature.replace(PACKAGE+"RouterNodeChainCONNECT,",PACKAGE+"RouterNodeChainSOCKS,")
+            with self.assertRaises(ValueError):require_signatures(raw.replace(signature.encode(),wrong.encode()),ORDERED_LATENCY_STATIC_SIGNATURES,"Libbox")
         def test_every_required_generated_class_must_exist_in_actual_archive(self):
             with tempfile.TemporaryDirectory() as directory:
                 root=Path(directory);aar,apk=fixture(root)

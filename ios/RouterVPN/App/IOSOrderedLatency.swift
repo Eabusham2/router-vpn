@@ -14,12 +14,19 @@ import Combine
     }
     init(_ model: RouterVPNModel) throws {
         guard model.connected, let identity = model.activeSessionIdentity,
-              let active = identity.nodeChainSource, let path = IOSNodeChainPresentation.active(identity), path.count == 3, path[1].mode == "socks5" else { throw CancellationError() }
+              let active = identity.nodeChainSource, let path = IOSNodeChainPresentation.active(identity), path.count == 3, ["socks5", "http-connect", "https-connect"].contains(path[1].mode) else { throw CancellationError() }
         let captured = try model.captureIOSOrderedRoute(model.bundle)
         defer { try? captured.close() }
-        guard case .socks(let socks) = captured, Data(socks.source.utf8) == active else { throw CancellationError() }
+        switch captured {
+        case .socks(let original):
+            guard path[1].mode == "socks5", Data(original.source.utf8) == active else { throw CancellationError() }
+            source = original.plan.sourceSHA256(); config = original.plan.configSHA256(); ids = original.members.map(\.id)
+        case .connect(let original):
+            guard ["http-connect", "https-connect"].contains(path[1].mode), Data(original.source.utf8) == active else { throw CancellationError() }
+            source = original.plan.sourceSHA256(); config = original.plan.configSHA256(); ids = original.members.map(\.id)
+        default: throw CancellationError()
+        }
         self.identity = identity; selection = model.iosConnectGeneration
-        source = socks.plan.sourceSHA256(); config = socks.plan.configSHA256(); ids = socks.members.map(\.id)
         snapshot = try Self.bytes(model); profile = RouterVPNModel.iosStrategyDigest(snapshot)
         mode = model.selectedMode; logicalMode = model.selectedLogicalMode; automatic = model.auto
     }
@@ -119,7 +126,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
     private var cancelled = false
     static func supported(_ model: RouterVPNModel) -> Bool {
         guard model.connected, let path = IOSNodeChainPresentation.active(model.activeSessionIdentity) else { return false }
-        return path.count == 3 && path[1].mode == "socks5"
+        return path.count == 3 && ["socks5", "http-connect", "https-connect"].contains(path[1].mode)
     }
     func load(_ model: RouterVPNModel) {
         guard !running else { return }
@@ -130,7 +137,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
                 saved[id] = try IOSOrderedLatencyHistory.load(profile: capture.profile, source: capture.source, config: capture.config, position: position, node: id)?.detail
             }
             displayed = capture; ids = capture.ids; history = saved; text = "Select one node on this captured route."
-        } catch { displayed = nil; ids = []; history = [:]; text = "Connect the selected saved SOCKS route to measure its captured nodes." }
+        } catch { displayed = nil; ids = []; history = [:]; text = "Connect the selected saved SOCKS or CONNECT route to measure its captured nodes." }
     }
     private func send(_ connection: NETunnelProviderSession, operation: String, request: String, session: String,
                       owner: String, lease: String, source: String, config: String, node: String) async throws -> [String: Any] {

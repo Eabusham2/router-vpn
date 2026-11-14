@@ -9,18 +9,20 @@ protocol ObservableObject:AnyObject{}
 @propertyWrapper struct Published<T>{var wrappedValue:T;init(wrappedValue:T){self.wrappedValue=wrappedValue}}
 struct ClientBundle:Codable,Equatable {var secret="original-private-source"}
 struct IOSSessionIdentity:Equatable {let nodeChainSource:Data?;let connectedAt:Date}
+let boundaryTransport="socks5"
 struct PathPoint{let mode:String}
-enum IOSNodeChainPresentation {static func active(_ identity:IOSSessionIdentity?)->[PathPoint]?{identity==nil ? nil:[PathPoint(mode:"wg"),PathPoint(mode:"socks5"),PathPoint(mode:"shadowsocks")]}}
+enum IOSNodeChainPresentation {static func active(_ identity:IOSSessionIdentity?)->[PathPoint]?{identity==nil ? nil:[PathPoint(mode:"wg"),PathPoint(mode:boundaryTransport),PathPoint(mode:"shadowsocks")]}}
 struct NativePlan{func sourceSHA256()->String{String(repeating:"1",count:64)};func configSHA256()->String{String(repeating:"2",count:64)}}
 struct Member{let id:String}
 struct SOCKSCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
-enum IOSOrderedRouteCapture{case socks(SOCKSCapture);func close()throws{}}
+struct CONNECTCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
+enum IOSOrderedRouteCapture{case socks(SOCKSCapture),connect(CONNECTCapture),ordinary;func close()throws{}}
 struct Ownership{var active=false}
 @MainActor final class RouterVPNModel:ObservableObject{
  var connected=true,activeSessionIdentity:IOSSessionIdentity?=IOSSessionIdentity(nodeChainSource:Data("captured-source".utf8),connectedAt:Date(timeIntervalSince1970:1))
  var iosConnectGeneration=UUID(),bundle=ClientBundle(),selectedMode="wg",selectedLogicalMode="multihop",auto=false,iosSpeedLabOwnership=Ownership()
  func iosNodeChainBundles(for bundle:ClientBundle)throws->[ClientBundle]{[bundle]}
- func captureIOSOrderedRoute(_ bundle:ClientBundle)throws->IOSOrderedRouteCapture{.socks(SOCKSCapture())}
+ func captureIOSOrderedRoute(_ bundle:ClientBundle)throws->IOSOrderedRouteCapture{boundaryTransport == "socks5" ? .socks(SOCKSCapture()):.connect(CONNECTCapture())}
  nonisolated static func iosStrategyDigest(_ data:Data)->String{let h=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",h),count:4)}
 }
 @MainActor enum Fixture{
@@ -124,7 +126,7 @@ def sources():
     app=(ROOT/'ios/RouterVPN/App/IOSOrderedLatency.swift').read_text().replace('import Combine\n','').replace('@preconcurrency import NetworkExtension\n','')
     return history+gate+app
 
-def main():
+def main(extra_controls=()):
     source=sources()
     with tempfile.TemporaryDirectory(prefix='ios-ordered-callbacks-') as tmp:
         p=Path(tmp);swift=p/'Fixture.swift';binary=p/'fixture'
@@ -136,7 +138,7 @@ def main():
         for name,before,after,witness in [
             ('complete-source','try Self.bytes(model) == snapshot','!snapshot.isEmpty','full source change refuses commit'),
             ('close-before-history','        let cleanClose = await cleanup.value','        let cleanClose = true; _ = cleanup','commit after original close'),
-        ]:
+        ] + list(extra_controls):
             assert source.count(before)==1,name
             result=run(source.replace(before,after,1));assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,result.stdout+result.stderr)
             print('Rejected ordered fifty callback control: '+name,flush=True)

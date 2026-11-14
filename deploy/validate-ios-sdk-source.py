@@ -77,6 +77,7 @@ CONNECT_C_FUNCTIONS = (
     ("LibboxRouterNodeChainCONNECTNewCommandServer", "LibboxCommandServer* _Nullable", ("LibboxRouterNodeChainCONNECT* _Nullable", "id<LibboxCommandServerHandler> _Nullable", "id<LibboxPlatformInterface> _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainImportedCONNECTMemberInput", "NSString* _Nonnull", ("NSString* _Nullable", "NSString* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainCONNECTNewHopMeasurement", "LibboxRouterHopMeasurement* _Nullable", ("LibboxRouterNodeChainCONNECT* _Nullable", "LibboxCommandServer* _Nullable", "NSError* _Nullable* _Nullable")),
+    ("LibboxRouterNodeChainCONNECTNewLatencyBenchmark", "LibboxRouterOrderedLatency* _Nullable", ("LibboxRouterNodeChainCONNECT* _Nullable", "LibboxCommandServer* _Nullable", "LibboxRouterHopMeasurement* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainCONNECTNewMTU", "LibboxRouterMTU* _Nullable", ("LibboxRouterNodeChainCONNECT* _Nullable", "LibboxCommandServer* _Nullable", "id<LibboxRouterMTUPlatform> _Nullable", "NSError* _Nullable* _Nullable")),
 )
 C_FUNCTIONS += CONNECT_C_FUNCTIONS

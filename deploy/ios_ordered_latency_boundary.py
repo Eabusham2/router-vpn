@@ -16,3 +16,9 @@ public func LibboxRouterValidatePrivateNodeJSON(_ raw:String,_ failure:UnsafeMut
  do{_ = try JSONSerialization.jsonObject(with:Data(raw.utf8));return true}catch{return false}
 }
 '''
+
+CONNECT_FACTORY=r'''
+public func LibboxRouterNodeChainCONNECTNewLatencyBenchmark(_ plan:LibboxRouterNodeChainCONNECT,_ server:LibboxCommandServer,_ measurement:LibboxRouterHopMeasurement,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterOrderedLatency?{
+ guard plan.healthy() else{error?.pointee=NSError(domain:"OrderedLatencyBoundary",code:1);return nil};return LibboxRouterOrderedLatency()
+}
+'''

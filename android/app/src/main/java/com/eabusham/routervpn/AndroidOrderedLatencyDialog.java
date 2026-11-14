@@ -24,7 +24,7 @@ final class AndroidOrderedLatencyDialog {
                     .setNegativeButton("Close",(d,w)->close()).create();
             dialog.setOnCancelListener(d->close());dialog.show();
         }catch(Exception error){dialog=new AlertDialog.Builder(activity).setTitle("Ordered fifty-response benchmark")
-                .setMessage("Connect an ordered SOCKS path and wait for connection checks or MTU adjustments to finish, then try again.\n\nNo test was started.")
+                .setMessage("Connect an ordered SOCKS or HTTP(S) CONNECT path and wait for connection checks or MTU adjustments to finish, then try again.\n\nNo test was started.")
                 .setNegativeButton("Close",(d,w)->close()).create();dialog.setOnDismissListener(d->close());dialog.show();}
     }
     private void showTarget(){

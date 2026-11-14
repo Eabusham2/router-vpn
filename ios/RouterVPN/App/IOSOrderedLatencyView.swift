@@ -7,7 +7,7 @@ struct IOSOrderedLatencyCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("50 responses per captured node", systemImage: "waveform.path.ecg").font(.headline)
-            Text("Test the cumulative route through one node of the connected SOCKS path. Private HTTP timing includes connection establishment; the custom middle uses HTTPS timing after TLS. Saved history is not live readiness, ICMP ping, or a link speed.")
+            Text("Test the cumulative route through one node of the connected SOCKS or CONNECT path. Private HTTP timing includes connection establishment; the custom middle uses HTTPS timing after TLS. Saved history is not live readiness, ICMP ping, or a link speed.")
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(Array(probe.ids.enumerated()), id: \.element) { position, id in
                 VStack(alignment: .leading, spacing: 6) {

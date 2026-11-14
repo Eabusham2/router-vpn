@@ -1501,20 +1501,24 @@ final class RouterVPNLibboxEngine {
         }
         func run() {
             engine.ownershipLock.lock()
-            let host = engine.nodeChainSOCKS, generation = engine.ownershipGeneration
+            let socks = engine.nodeChainSOCKS, connect = engine.nodeChainCONNECT, generation = engine.ownershipGeneration
             let available = !engine.starting && !engine.permanentlyStopped && engine.server != nil
             engine.ownershipLock.unlock()
-            guard available, let host, request.operation == "ordered-latency-info" || request.session == engine.settingsEpoch else { completion(nil); return }
+            guard available, (socks != nil) != (connect != nil), request.operation == "ordered-latency-info" || request.session == engine.settingsEpoch else { completion(nil); return }
             func current() -> Bool {
                 engine.ownershipLock.lock(); defer { engine.ownershipLock.unlock() }
-                return engine.nodeChainSOCKS === host && engine.ownershipGeneration == generation && !engine.permanentlyStopped
+                return engine.nodeChainSOCKS === socks && engine.nodeChainCONNECT === connect && engine.ownershipGeneration == generation && !engine.permanentlyStopped
             }
             var result: Data?
             do {
                 guard current() else { throw CancellationError() }
-                if request.operation == "ordered-latency-info" { result = try host.latencyInfo(request, session: engine.settingsEpoch) }
+                if request.operation == "ordered-latency-info" {
+                    if let connect { result = try connect.latencyInfo(request, session: engine.settingsEpoch) }
+                    else if let socks { result = try socks.latencyInfo(request, session: engine.settingsEpoch) }
+                }
                 else if request.operation == "ordered-latency-open" {
-                    _ = try host.latencyOpen(request)
+                    if let connect { _ = try connect.latencyOpen(request) }
+                    else if let socks { _ = try socks.latencyOpen(request) }
                     result = request.reply(["opened": true, "closed": false])
                 } else {
                     guard let owner = RouterVPNOrderedLatencyRegistry.shared.find(request) else { throw CancellationError() }

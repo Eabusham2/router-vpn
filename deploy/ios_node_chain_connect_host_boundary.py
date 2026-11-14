@@ -46,6 +46,8 @@ public final class LibboxRouterNodeChainCONNECT {
  public func close()throws{networkChanged();lock.lock();defer{lock.unlock()};server?.torCleanup(closeFailures==0);if closeFailures>0{closeFailures-=1;throw NSError(domain:"ExecutionRemotePending",code:1)};closed=true}
  public func nativeClosed()->Bool{lock.lock();defer{lock.unlock()};guard closed,let server else{return false};return !server.strategyCalls().contains("start") || server.instanceJoined()}
  public func retainsServerCleanup(_ original:LibboxCommandServer)->Bool{lock.lock();defer{lock.unlock()};return server===original && !closed}
+ public func sourceSHA256()->String{String(repeating:"1",count:64)}
+ public func configSHA256()->String{String(repeating:"2",count:64)}
  public func progressJSON()->String{"{\"stage\":\"selected\",\"execution\":\"server\"}"}
  public func holdLast(){lock.lock();lastGate=DispatchSemaphore(value:0);lock.unlock()}
  public func releaseLast(){lock.lock();let gate=lastGate;lock.unlock();gate?.signal()}
@@ -62,6 +64,8 @@ public func LibboxRouterNodeChainCONNECTNewCommandServer(_ plan:LibboxRouterNode
 '''
 SOURCE=r'''
 final class IOSNodeChainCONNECTCapture: @unchecked Sendable {
+ struct Member{let id:String}
+ let members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]
  let plan=LibboxRouterNodeChainCONNECT(),strict=true
  let config="{\"inbounds\":[{\"type\":\"tun\",\"tag\":\"tun-in\"}],\"route\":{\"final\":\"routervpn-chain-application\"}}"
 }
