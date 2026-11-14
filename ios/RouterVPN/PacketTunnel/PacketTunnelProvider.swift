@@ -131,15 +131,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         if let request = RouterVPNNodeChainExecutionRegistry.Request.parse(messageData) {
+            if request.operation == "ordered-execution-capture-release" {
+                completionHandler(RouterVPNNodeChainExecutionRegistry.shared.releaseCapture(request)); return
+            }
             if request.operation == "ordered-execution-release" {
                 completionHandler(RouterVPNNodeChainExecutionRegistry.shared.release(request)); return
             }
             guard let engine = libboxEngine, let proof = currentPathProofGuard() else { completionHandler(nil); return }
             maxStartOwnerLock.lock(); let generation = maxStartGeneration; maxStartOwnerLock.unlock()
-            engine.orderedExecutionRequest(request) { [weak self] reply in
+            let registry = RouterVPNNodeChainExecutionRegistry.shared
+            let registryEpoch = registry.epoch()
+            let workerRequest = request.operation == "ordered-execution-owner" ? request.lastObservation() : request
+            engine.orderedExecutionRequest(workerRequest) { [weak self] reply in
                 guard let self, self.libboxEngine === engine, self.currentMAXGeneration(generation),
                       self.currentPathProofGuard() === proof else { completionHandler(nil); return }
-                completionHandler(reply)
+                completionHandler(request.operation == "ordered-execution-owner" ? registry.observe(reply, request: request, epoch: registryEpoch) : reply)
             }
             return
         }

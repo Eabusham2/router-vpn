@@ -20,6 +20,7 @@ BOUNDARY=BOUNDARY.replace('let plan=LibboxRouterNodeChainExecution(),config="exa
  var finalProfile:[String:Any]=["id":"original-final"]
  let sourceSHA256=String(repeating:"a",count:64),configSHA256=String(repeating:"b",count:64)
  var restoration:Restoration?
+ var captureGate:DispatchSemaphore?,captureEntered=DispatchSemaphore(value:0)
  final class Restoration {
   let original:IOSNodeChainExecutionCapture,selected="server";var claimed=false
   var gate:DispatchSemaphore?,entered=DispatchSemaphore(value:0),replacement:IOSNodeChainExecutionCapture?
@@ -30,7 +31,7 @@ BOUNDARY=BOUNDARY.replace('let plan=LibboxRouterNodeChainExecution(),config="exa
    let next=IOSNodeChainExecutionCapture();replacement=next;return next
   }
  }
- func captureRestoration()throws->Restoration{guard healthy()else{throw failure("unproved restore")};let next=Restoration(self);restoration=next;return next}
+ func captureRestoration()throws->Restoration{guard healthy()else{throw failure("unproved restore")};captureEntered.signal();if let captureGate{guard captureGate.wait(timeout:.now()+4) == .success else{throw failure("held native capture did not join")}};let next=Restoration(self);restoration=next;return next}
  func captureLastRecord()throws->String{guard healthy()else{throw failure("unproved Last")};return "{\"execution\":\"server\"}"}
 ''')
 BOUNDARY=BOUNDARY.replace('var proofObservationToken:UUID?=UUID(),isChanging=false,optimizerRunning=false','var runAutomatic=true\n var proofObservationToken:UUID?=UUID(),isChanging=false,optimizerRunning=false')
@@ -48,8 +49,8 @@ assert end is not None
 PROVIDER_BLOCK=provider[start:end]
 IPC=r'''
 final class RouterVPNLibboxEngine {
- var calls=0,callback:((Data?)->Void)?
- func orderedExecutionRequest(_ request:RouterVPNNodeChainExecutionRegistry.Request,completion:@escaping(Data?)->Void){calls+=1;callback=completion}
+ var calls=0,operation="",callback:((Data?)->Void)?
+ func orderedExecutionRequest(_ request:RouterVPNNodeChainExecutionRegistry.Request,completion:@escaping(Data?)->Void){calls+=1;operation=request.operation;callback=completion}
 }
 final class Proof {}
 final class PacketTunnelProvider {
@@ -70,8 +71,18 @@ final class Observation:@unchecked Sendable{var rejected=false;let done=Dispatch
  static var checks:Int { get{Counter.shared.value} set{Counter.shared.value=newValue} }
  static func check(_ ok:Bool,_ name:String){if !ok{FileHandle.standardError.write(Data(("FAIL "+name+"\n").utf8));exit(1)};checks+=1}
  static func reject(_ name:String,_ action:()throws->Void){do{try action();check(false,"ACCEPTED "+name)}catch{checks+=1}}
- static func request(_ operation:String,_ session:String,_ owner:String,_ token:String="") -> RouterVPNNodeChainExecutionRegistry.Request {
-  let body=["operation":operation,"request_id":String(repeating:"c",count:32),"session_id":session,"owner_id":owner,"token":token]
+ static func request(_ operation:String,_ session:String,_ owner:String,_ token:String="",nonce:String=String(repeating:"c",count:32)) -> RouterVPNNodeChainExecutionRegistry.Request {
+  let body=["operation":operation,"request_id":nonce,"session_id":session,"owner_id":owner,"token":token]
+  return RouterVPNNodeChainExecutionRegistry.Request.parse(try! JSONSerialization.data(withJSONObject:body))!
+ }
+ static func observation(_ registry:RouterVPNNodeChainExecutionRegistry)->[String:Any]{
+  let ask=request("ordered-execution-owner",sessionForObservation,""),last:[String:Any]=["schema":1,"kind":"routervpn-ordered-execution-last","request_id":ask.request,"session_id":sessionForObservation,"source_sha256":String(repeating:"a",count:64),"preparation_config_sha256":String(repeating:"b",count:64),"last":"{}"]
+  return try! decode(registry.observe(JSONSerialization.data(withJSONObject:last,options:[.sortedKeys]),request:ask,epoch:registry.epoch())!)
+ }
+ static let sessionForObservation=UUID().uuidString
+ static func retirement(_ registry:RouterVPNNodeChainExecutionRegistry,_ session:String,_ owner:String,_ capture:String,nonce:String=String(repeating:"e",count:32))->RouterVPNNodeChainExecutionRegistry.Request{
+  let scope=observation(registry)
+  let body=["operation":"ordered-execution-capture-release","request_id":nonce,"session_id":session,"owner_id":owner,"capture_request_id":capture,"process_id":scope["process_id"] as! String,"registry_generation":scope["registry_generation"] as! String]
   return RouterVPNNodeChainExecutionRegistry.Request.parse(try! JSONSerialization.data(withJSONObject:body))!
  }
  static func request(_ owner:String)->RouterVPNNodeChainExecutionRegistry.Request{request("ordered-execution-capture","",owner)}
@@ -94,6 +105,18 @@ final class Observation:@unchecked Sendable{var rejected=false;let done=Dispatch
    if fault=="generation"{provider.maxStartGeneration=UUID()}
    engine.callback?(payload)
    check(values.count==1 && values[0]==(fault=="none" ? payload:nil),"provider stale "+fault+" IPC published")
+  }
+  for changed in [false,true]{
+   let provider=PacketTunnelProvider(),engine=provider.libboxEngine!,nonce=String(repeating:"6",count:32)
+   let input=try JSONSerialization.data(withJSONObject:["operation":"ordered-execution-owner","request_id":nonce,"session_id":"","owner_id":"","token":""])
+   var values:[Data?]=[];provider.dispatch(input){values.append($0)}
+   check(engine.calls==1 && engine.operation=="ordered-execution-last" && values.isEmpty,"owner observation bypassed existing proved Last worker")
+   if changed{_ = try RouterVPNNodeChainExecutionRegistry.shared.beginStart(temporaryOwner:nil,restoreToken:nil,restoreOwner:nil)}
+   let last:[String:Any]=["schema":1,"kind":"routervpn-ordered-execution-last","request_id":nonce,"session_id":session,"source_sha256":String(repeating:"a",count:64),"preparation_config_sha256":String(repeating:"b",count:64),"last":"{}"]
+   engine.callback?(try JSONSerialization.data(withJSONObject:last,options:[.sortedKeys]))
+   check(values.count==1,"owner observation callback was lost or duplicated")
+   if changed{check(values[0]==nil,"provider owner stamp outlived original registry generation")}
+   else{let reply=try decode(values[0]!);check(reply.count==9 && reply["kind"] as? String=="routervpn-ordered-execution-owner" && reply["source_sha256"] as? String==last["source_sha256"] as? String,"provider owner stamp replaced original proved source")}
   }
   let good=["operation":"ordered-execution-capture","request_id":String(repeating:"c",count:32),"session_id":"","owner_id":owner,"token":""]
   check(RouterVPNNodeChainExecutionRegistry.Request.parse(try JSONSerialization.data(withJSONObject:good)) != nil,"valid opaque request refused")
@@ -170,14 +193,107 @@ final class Observation:@unchecked Sendable{var rejected=false;let done=Dispatch
   do {
    let registry=RouterVPNNodeChainExecutionRegistry(),(host,_,_)=try start()
    let value=try decode(registry.capture(host:host,session:session,request:request(owner),epoch:registry.epoch())),token=value["token"] as! String
+   let cleanup=retirement(registry,session,owner,String(repeating:"c",count:32))
    try host.close();let admission=try registry.beginStart(temporaryOwner:nil,restoreToken:token,restoreOwner:owner)
    let capsule=host.capture.restoration!,gate=DispatchSemaphore(value:0);capsule.gate=gate
    let observation=Observation()
    DispatchQueue.global().async{do{_ = try registry.consume(admission,original:host.capture)}catch{observation.rejected=true};observation.done.signal()}
    check(capsule.entered.wait(timeout:.now()+3) == .success,"restore factory did not enter")
+   check(registry.releaseCapture(cleanup)==nil,"cleanup retired an actively claiming native capsule")
    _ = try registry.beginStart(temporaryOwner:nil,restoreToken:nil,restoreOwner:nil);gate.signal()
    check(observation.done.wait(timeout:.now()+3) == .success && observation.rejected,"late replacement bypassed new start")
    check((try? capsule.replacement?.requireCurrent())==nil,"late unadopted source owner was dropped")
+  }
+  // Exact request retirement preserves a marker even before the original
+  // native capture worker reaches publication. No time-based eviction occurs.
+  let firstNonce=String(repeating:"1",count:32),nextNonce=String(repeating:"2",count:32)
+  do {
+   let scope=observation(.shared)
+   let good=["operation":"ordered-execution-capture-release","request_id":firstNonce,"session_id":session,"owner_id":owner,"capture_request_id":nextNonce,"process_id":scope["process_id"] as! String,"registry_generation":scope["registry_generation"] as! String]
+   let parsed=RouterVPNNodeChainExecutionRegistry.Request.parse(try JSONSerialization.data(withJSONObject:good))
+   check(parsed?.captureRequest==nextNonce && parsed?.token=="","capture nonce was confused with opaque native token")
+   for key in ["operation","request_id","session_id","owner_id","capture_request_id","process_id","registry_generation","token","extra"]{
+    var bad=good;bad[key]="bad";check(RouterVPNNodeChainExecutionRegistry.Request.parse(try JSONSerialization.data(withJSONObject:bad))==nil,"malformed capture retirement "+key)
+   }
+   let provider=PacketTunnelProvider(),engine=provider.libboxEngine!;provider.libboxEngine=nil;provider.proof=nil
+   var values:[Data?]=[];provider.dispatch(try JSONSerialization.data(withJSONObject:good)){values.append($0)}
+   check(values.count==1 && values[0] != nil && engine.calls==0,"original cleanup borrowed a new live engine")
+  }
+  do {
+   let registry=RouterVPNNodeChainExecutionRegistry(),(host,_,_)=try start()
+   let capture=request("ordered-execution-capture",session,owner,nonce:firstNonce)
+   let cleanup=retirement(registry,session,owner,firstNonce)
+   check(registry.releaseCapture(cleanup) != nil,"unpublished original request could not retire")
+   reject("retired capture request published"){_ = try registry.capture(host:host,session:session,request:capture,epoch:registry.epoch())}
+   try host.close()
+  }
+  do {
+   let registry=RouterVPNNodeChainExecutionRegistry(),(host,_,_)=try start(),epoch=registry.epoch()
+   let gate=DispatchSemaphore(value:0),observation=Observation();host.capture.captureGate=gate
+   let capture=request("ordered-execution-capture",session,owner,nonce:firstNonce)
+   DispatchQueue.global().async{do{_ = try registry.capture(host:host,session:session,request:capture,epoch:epoch)}catch{observation.rejected=true};observation.done.signal()}
+   check(host.capture.captureEntered.wait(timeout:.now()+3) == .success,"first native capture did not enter")
+   let cleanup=retirement(registry,session,owner,firstNonce),second=retirement(registry,session,owner,firstNonce,nonce:nextNonce)
+   let ack=try decode(registry.releaseCapture(cleanup)!),repeated=try decode(registry.releaseCapture(second)!)
+   check(ack.count==9 && ack["capture_request_id"] as? String==firstNonce && ack["released"] as? Bool==true && repeated["request_id"] as? String==nextNonce,"idempotent retirement changed original request identity")
+   gate.signal();check(observation.done.wait(timeout:.now()+3) == .success && observation.rejected,"retired in-flight capture published after ACK")
+   host.capture.captureGate=nil
+   let newOwner=UUID().uuidString,reply=try decode(registry.capture(host:host,session:session,request:request("ordered-execution-capture",session,newOwner,nonce:nextNonce),epoch:registry.epoch()))
+   check(registry.releaseCapture(cleanup) != nil,"old duplicate cleanup failed idempotent ACK")
+   do{_ = try registry.verify(host:host,session:session,request:request("ordered-execution-verify",session,newOwner,reply["token"] as! String))}catch{check(false,"old retirement deleted replacement capsule")}
+   try host.close()
+  }
+  do {
+   let registry=RouterVPNNodeChainExecutionRegistry(),(host,_,_)=try start()
+   let original=try decode(registry.capture(host:host,session:session,request:request("ordered-execution-capture",session,owner,nonce:firstNonce),epoch:registry.epoch()))
+   let next=try decode(registry.capture(host:host,session:session,request:request("ordered-execution-capture",session,owner,nonce:nextNonce),epoch:registry.epoch()))
+   check(registry.releaseCapture(retirement(registry,session,owner,firstNonce)) != nil,"displaced original capture retirement failed")
+   do{_ = try registry.verify(host:host,session:session,request:request("ordered-execution-verify",session,owner,next["token"] as! String))}catch{check(false,"old retirement deleted replacement capsule")}
+   check(original["token"] as? String != next["token"] as? String,"different capture requests reused native token")
+   check(registry.releaseCapture(retirement(registry,session,owner,nextNonce)) != nil,"current original capture retirement failed")
+   reject("retired exact capsule remained live"){_ = try registry.verify(host:host,session:session,request:request("ordered-execution-verify",session,owner,next["token"] as! String))}
+   try host.close()
+  }
+  do {
+   let registry=RouterVPNNodeChainExecutionRegistry(),(host,_,_)=try start(),epoch=registry.epoch()
+   for index in 0..<64{check(registry.releaseCapture(retirement(registry,session,owner,String(format:"%032x",index))) != nil,"retirement capacity refused original bounded inventory")}
+   check(registry.releaseCapture(retirement(registry,session,owner,String(repeating:"f",count:32)))==nil,"retirement overflow evicted an in-flight marker")
+   reject("earliest retired request was evicted"){_ = try registry.capture(host:host,session:session,request:request("ordered-execution-capture",session,owner,nonce:String(repeating:"0",count:32)),epoch:epoch)}
+   _ = try registry.beginStart(temporaryOwner:nil,restoreToken:nil,restoreOwner:nil)
+   reject("old generation crossed retirement reset"){_ = try registry.capture(host:host,session:session,request:request("ordered-execution-capture",session,owner,nonce:firstNonce),epoch:epoch)}
+   _ = try registry.capture(host:host,session:session,request:request("ordered-execution-capture",session,owner,nonce:String(repeating:"0",count:32)),epoch:registry.epoch())
+   try host.close()
+  }
+  do {
+   let registry=RouterVPNNodeChainExecutionRegistry(),other=RouterVPNNodeChainExecutionRegistry(),(host,_,_)=try start()
+   let scope=observation(registry),foreign=observation(other),oldEpoch=registry.epoch()
+   check(scope["process_id"] as? String != foreign["process_id"] as? String,"separate registry reused process identity")
+   let scoped:[String:String]=["operation":"ordered-execution-capture","request_id":firstNonce,"session_id":session,"owner_id":owner,"token":"","process_id":scope["process_id"] as! String,"registry_generation":scope["registry_generation"] as! String]
+   let capture=RouterVPNNodeChainExecutionRegistry.Request.parse(try JSONSerialization.data(withJSONObject:scoped))!
+   let value=try decode(registry.capture(host:host,session:session,request:capture,epoch:oldEpoch))
+   let exact=retirement(registry,session,owner,firstNonce)
+   check(other.releaseCapture(exact)==nil,"foreign process acknowledged original capsule absence")
+   var future=scoped;future["registry_generation"]="1"
+   let futureCapture=RouterVPNNodeChainExecutionRegistry.Request.parse(try JSONSerialization.data(withJSONObject:future))!
+   reject("future capture generation"){_ = try registry.capture(host:host,session:session,request:futureCapture,epoch:oldEpoch)}
+   var cleanup=["operation":"ordered-execution-capture-release","request_id":nextNonce,"session_id":session,"owner_id":owner,"capture_request_id":firstNonce,"process_id":scope["process_id"] as! String,"registry_generation":"1"]
+   check(registry.releaseCapture(RouterVPNNodeChainExecutionRegistry.Request.parse(try JSONSerialization.data(withJSONObject:cleanup))!)==nil,"future generation retirement was acknowledged")
+   cleanup["registry_generation"]="00"
+   check(RouterVPNNodeChainExecutionRegistry.Request.parse(try JSONSerialization.data(withJSONObject:cleanup))==nil,"noncanonical generation was accepted")
+   _ = try registry.beginStart(temporaryOwner:owner,restoreToken:nil,restoreOwner:nil)
+   let next=observation(registry)
+   check(next["process_id"] as? String==scope["process_id"] as? String && next["registry_generation"] as? String=="1","start failed exact process generation increment")
+   let reply:[String:Any]=["schema":1,"kind":"routervpn-ordered-execution-last","request_id":String(repeating:"c",count:32),"session_id":session,"source_sha256":String(repeating:"a",count:64),"preparation_config_sha256":String(repeating:"b",count:64),"last":"{}"]
+   check(registry.observe(try JSONSerialization.data(withJSONObject:reply),request:request("ordered-execution-owner",session,""),epoch:oldEpoch)==nil,"stale owner observation survived beginStart")
+   check(registry.releaseCapture(exact) != nil,"same process failed old generation exact retirement")
+   reject("same process old-generation capsule remained live"){_ = try registry.verify(host:host,session:session,request:request("ordered-execution-verify",session,owner,value["token"] as! String))}
+   var current=scoped;current["registry_generation"]="1"
+   let currentRequest=RouterVPNNodeChainExecutionRegistry.Request.parse(try JSONSerialization.data(withJSONObject:current))!
+   let replacement=try decode(registry.capture(host:host,session:session,request:currentRequest,epoch:registry.epoch()))
+   check(registry.releaseCapture(exact) != nil,"old generation idempotent retirement failed")
+   do{_ = try registry.verify(host:host,session:session,request:request("ordered-execution-verify",session,owner,replacement["token"] as! String))}catch{check(false,"old generation retired a reused current request nonce")}
+   reject("old scoped capture reused new registry generation"){_ = try registry.capture(host:host,session:session,request:capture,epoch:registry.epoch())}
+   try host.close()
   }
   print("PASS Apple ordered registry: \(checks) checks")
  }
@@ -203,12 +319,37 @@ def main():
             ('host-pointer','original.host === host, original.session == session','true, original.session == session','ACCEPTED replacement host borrowed original capsule'),
             ('late-consume','let current = generation == admission.epoch && entry === captured;','let current = true;','late replacement bypassed new start'),
         ):
-            assert text.count(before)==(3 if name=='capture-epoch' else 1),name
-            mutant=work/(name+'.swift');mutant.write_text(text.replace(before,after));binary=work/name
+            if name == 'capture-epoch':
+                start = text.index('    func capture(host:')
+                end = text.index('    func verify(host:', start)
+                original = text[start:end]
+                assert original.count(before) == 3, name
+                changed = text[:start] + original.replace(before, after) + text[end:]
+            else:
+                assert text.count(before) == 1, name
+                changed = text.replace(before, after)
+            mutant=work/(name+'.swift');mutant.write_text(changed);binary=work/name
             subprocess.run(command+[str(mutant),str(tests),'-o',str(binary)],check=True,timeout=90)
             result=subprocess.run([str(binary)],capture_output=True,text=True,timeout=30)
             assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,(result.stdout+result.stderr)[-2000:])
             print('Rejected ordered registry control:',name,flush=True)
+        for name,before,after,witness,count in (
+            ('retired-request', '!retiredCaptures.contains(key)', 'true', 'ACCEPTED retired capture request published', 2),
+            ('retired-publication', 'guard generation == epoch, !retiredCaptures.contains(key),', 'guard generation == epoch,', 'retired in-flight capture published after ACK', 1),
+            ('original-entry-only', 'if matches { entry = nil }', 'entry = nil', 'old retirement deleted replacement capsule', 1),
+            ('claiming-owner', 'guard !matches || entry?.claiming == false,', 'guard true,', 'cleanup retired an actively claiming native capsule', 1),
+            ('capture-registry-generation', 'let scoped = request.process == nil || request.process == process && request.registryGeneration == generationNumber', 'let scoped = true', 'ACCEPTED future capture generation', 1),
+            ('owner-observation-epoch', 'guard generation == epoch else { return nil }', 'guard true else { return nil }', 'provider owner stamp outlived original registry generation', 1),
+            ('registry-process', 'guard request.process == process, let requestedGeneration = request.registryGeneration,', 'guard true, let requestedGeneration = request.registryGeneration,', 'foreign process acknowledged original capsule absence', 1),
+            ('registry-future', 'requestedGeneration <= generationNumber else { return nil }', 'true else { return nil }', 'future generation retirement was acknowledged', 1),
+            ('registry-entry-generation', 'entry?.registryGeneration == requestedGeneration', 'true', 'old generation retired a reused current request nonce', 1),
+        ):
+            assert text.count(before)==count,name
+            mutant=work/(name+'.swift');mutant.write_text(text.replace(before,after));binary=work/name
+            subprocess.run(command+[str(mutant),str(tests),'-o',str(binary)],check=True,timeout=90)
+            result=subprocess.run([str(binary)],capture_output=True,text=True,timeout=30)
+            assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,(result.stdout+result.stderr)[-2000:])
+            print('Rejected ordered capture retirement control:',name,flush=True)
         for name,before,after,witness in (
             ('provider-engine','self.libboxEngine === engine,','true,','provider stale engine IPC published'),
             ('provider-generation','self.currentMAXGeneration(generation),','true,','provider stale generation IPC published'),

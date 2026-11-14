@@ -10,23 +10,48 @@ final class RouterVPNNodeChainExecutionRegistry: @unchecked Sendable {
     static let temporaryOwnerKey = "routervpn_speed_lab_owner"
 
     struct Request: Sendable {
-        let operation: String, request: String, session: String, owner: String, token: String
+        let operation: String, request: String, session: String, owner: String, token: String, captureRequest: String
+        let process: String?, registryGeneration: UInt64?
         static func parse(_ data: Data) -> Request? {
             guard !data.isEmpty, data.count <= 1024,
                   let body = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-                  Set(body.keys) == Set(["operation", "request_id", "session_id", "owner_id", "token"]),
-                  let operation = body["operation"], ["ordered-execution-capture", "ordered-execution-verify", "ordered-execution-release", "ordered-execution-last"].contains(operation),
+                  let operation = body["operation"], ["ordered-execution-capture", "ordered-execution-verify", "ordered-execution-release", "ordered-execution-capture-release", "ordered-execution-last", "ordered-execution-owner"].contains(operation),
                   let request = body["request_id"], validToken(request),
                   let session = body["session_id"], session.isEmpty || UUID(uuidString: session)?.uuidString == session,
-                  let owner = body["owner_id"], let token = body["token"] else { return nil }
-            if operation == "ordered-execution-last" {
+                  let owner = body["owner_id"] else { return nil }
+            if operation == "ordered-execution-capture-release" {
+                guard Set(body.keys) == Set(["operation", "request_id", "session_id", "owner_id", "capture_request_id", "process_id", "registry_generation"]),
+                      !session.isEmpty, UUID(uuidString: owner)?.uuidString == owner,
+                      let capture = body["capture_request_id"], validToken(capture),
+                      let process = body["process_id"], UUID(uuidString: process)?.uuidString == process,
+                      let raw = body["registry_generation"], let generation = UInt64(raw), String(generation) == raw else { return nil }
+                return Request(operation: operation, request: request, session: session, owner: owner, token: "", captureRequest: capture,
+                    process: process, registryGeneration: generation)
+            }
+            let scoped = operation == "ordered-execution-capture" && body["process_id"] != nil
+            let fields: Set<String> = scoped ? ["operation", "request_id", "session_id", "owner_id", "token", "process_id", "registry_generation"] :
+                ["operation", "request_id", "session_id", "owner_id", "token"]
+            guard Set(body.keys) == fields,
+                  let token = body["token"] else { return nil }
+            var process: String?, generation: UInt64?
+            if scoped {
+                guard let value = body["process_id"], UUID(uuidString: value)?.uuidString == value,
+                      let raw = body["registry_generation"], let number = UInt64(raw), String(number) == raw else { return nil }
+                process = value; generation = number
+            }
+            if operation == "ordered-execution-last" || operation == "ordered-execution-owner" {
                 guard owner.isEmpty, token.isEmpty else { return nil }
             } else {
                 guard UUID(uuidString: owner)?.uuidString == owner else { return nil }
                 if operation == "ordered-execution-capture" { guard token.isEmpty else { return nil } }
                 else { guard !session.isEmpty, validToken(token) else { return nil } }
             }
-            return Request(operation: operation, request: request, session: session, owner: owner, token: token)
+            return Request(operation: operation, request: request, session: session, owner: owner, token: token, captureRequest: "",
+                process: process, registryGeneration: generation)
+        }
+        func lastObservation() -> Request {
+            Request(operation: "ordered-execution-last", request: request, session: session, owner: "", token: "", captureRequest: "",
+                process: nil, registryGeneration: nil)
         }
     }
 
@@ -55,12 +80,14 @@ final class RouterVPNNodeChainExecutionRegistry: @unchecked Sendable {
         let capsule: IOSNodeChainExecutionCapture.Restoration
         let observation: UUID
         let session: String, owner: String, token: String, execution: String, request: String
+        let registryGeneration: UInt64
         let source: String, configuration: String
         var claiming = false
         init(host: RouterVPNNodeChainExecutionHost, capsule: IOSNodeChainExecutionCapture.Restoration,
-             observation: UUID, session: String, owner: String, request: String) {
+             observation: UUID, session: String, owner: String, request: String, registryGeneration: UInt64) {
             self.host = host; self.capsule = capsule; self.observation = observation
             self.session = session; self.owner = owner; self.request = request
+            self.registryGeneration = registryGeneration
             token = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
             execution = capsule.selected; source = host.capture.sourceSHA256; configuration = host.capture.configSHA256
         }
@@ -72,10 +99,35 @@ final class RouterVPNNodeChainExecutionRegistry: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    private let process = UUID().uuidString
     private var generation = UUID()
+    private var generationNumber: UInt64 = 0
     private var entry: Entry?
+    private struct CaptureRequest: Hashable {
+        let session: String, owner: String, request: String
+    }
+    // A timeout may precede the original worker's publication. Keep each
+    // retired nonce for this whole generation; never evict a live fence to
+    // admit another cleanup. A new start already fences every older worker.
+    private var retiredCaptures = Set<CaptureRequest>()
+    private static let maximumRetiredCaptures = 64
 
     func epoch() -> UUID { lock.lock(); defer { lock.unlock() }; return generation }
+
+    /// Add registry identity only to an actual proved Last response retained
+    /// by the provider's original engine/proof callback. A different process
+    /// cannot acknowledge the absence of an older process's native capsule.
+    func observe(_ data: Data?, request: Request, epoch: UUID) -> Data? {
+        guard request.operation == "ordered-execution-owner", let data, data.count <= 20 * 1024,
+              var fields = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(fields.keys) == Set(["schema", "kind", "request_id", "session_id", "source_sha256", "preparation_config_sha256", "last"]),
+              fields["kind"] as? String == "routervpn-ordered-execution-last", fields["request_id"] as? String == request.request else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        guard generation == epoch else { return nil }
+        fields["kind"] = "routervpn-ordered-execution-owner"
+        fields["process_id"] = process; fields["registry_generation"] = String(generationNumber)
+        return encode(fields)
+    }
 
     struct Start {
         let admission: Admission
@@ -104,7 +156,10 @@ final class RouterVPNNodeChainExecutionRegistry: @unchecked Sendable {
     func beginStart(temporaryOwner: String?, restoreToken: String?, restoreOwner: String?) throws -> Admission {
         if let temporaryOwner, UUID(uuidString: temporaryOwner)?.uuidString != temporaryOwner { throw issue() }
         lock.lock(); defer { lock.unlock() }
+        guard generationNumber < UInt64.max else { throw issue() }
+        generationNumber += 1
         generation = UUID()
+        retiredCaptures.removeAll(keepingCapacity: true)
         if restoreToken != nil || restoreOwner != nil {
             guard let restoreToken, validToken(restoreToken), let restoreOwner,
                   UUID(uuidString: restoreOwner)?.uuidString == restoreOwner,
@@ -120,10 +175,18 @@ final class RouterVPNNodeChainExecutionRegistry: @unchecked Sendable {
 
     func capture(host: RouterVPNNodeChainExecutionHost, session: String, request: Request, epoch: UUID) throws -> Data {
         guard request.operation == "ordered-execution-capture", request.session.isEmpty || request.session == session else { throw issue() }
-        let (capsule, observation) = try host.captureRestoration()
-        let next = Entry(host: host, capsule: capsule, observation: observation, session: session, owner: request.owner, request: request.request)
+        let key = CaptureRequest(session: session, owner: request.owner, request: request.request)
         lock.lock()
-        guard generation == epoch, entry == nil || entry?.owner == request.owner && entry?.host === host else { lock.unlock(); throw issue() }
+        let scoped = request.process == nil || request.process == process && request.registryGeneration == generationNumber
+        let capturedGeneration = generationNumber
+        let available = generation == epoch && scoped && !retiredCaptures.contains(key)
+        lock.unlock()
+        guard available else { throw issue() }
+        let (capsule, observation) = try host.captureRestoration()
+        let next = Entry(host: host, capsule: capsule, observation: observation, session: session, owner: request.owner, request: request.request,
+            registryGeneration: capturedGeneration)
+        lock.lock()
+        guard generation == epoch, !retiredCaptures.contains(key), entry == nil || entry?.owner == request.owner && entry?.host === host else { lock.unlock(); throw issue() }
         entry = next
         lock.unlock()
         do { try host.validateRestoration(observation, execution: capsule.selected) }
@@ -148,6 +211,28 @@ final class RouterVPNNodeChainExecutionRegistry: @unchecked Sendable {
         self.entry = nil
         return encode(["schema": 1, "kind": "routervpn-ordered-execution-release", "request_id": request.request,
                        "session_id": request.session, "owner_id": request.owner, "token": request.token, "released": true])
+    }
+
+    /// Retire exactly one capture request, even when its original reply was
+    /// lost or its worker has not published yet. This is independent of the
+    /// opaque native restoration token, and never stops or consumes a host.
+    func releaseCapture(_ request: Request) -> Data? {
+        guard request.operation == "ordered-execution-capture-release" else { return nil }
+        let key = CaptureRequest(session: request.session, owner: request.owner, request: request.captureRequest)
+        lock.lock(); defer { lock.unlock() }
+        guard request.process == process, let requestedGeneration = request.registryGeneration,
+              requestedGeneration <= generationNumber else { return nil }
+        let matches = entry?.session == request.session && entry?.owner == request.owner && entry?.request == request.captureRequest &&
+            entry?.registryGeneration == requestedGeneration
+        guard !matches || entry?.claiming == false,
+              requestedGeneration < generationNumber || retiredCaptures.contains(key) || retiredCaptures.count < Self.maximumRetiredCaptures else { return nil }
+        // Every older worker has already been fenced by beginStart. Only a
+        // current-generation retirement needs a non-evictable pending marker.
+        if requestedGeneration == generationNumber { retiredCaptures.insert(key) }
+        if matches { entry = nil }
+        return encode(["schema": 1, "kind": "routervpn-ordered-execution-capture-release", "request_id": request.request,
+            "session_id": request.session, "owner_id": request.owner, "capture_request_id": request.captureRequest, "released": true,
+            "process_id": process, "registry_generation": String(requestedGeneration)])
     }
 
     func consume(_ admission: Admission, original: IOSNodeChainExecutionCapture) throws -> Restored {
