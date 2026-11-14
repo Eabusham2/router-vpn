@@ -74,8 +74,13 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         let result: String?
         if profile["node_kind"] as? String == "external" {
             let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: profile))
-            let original = try IOSImportedShadowsocksSource.capture(typed)
-            result = LibboxRouterNodeChainImportedMemberInput(original.config, original.capture, &failure)
+            if ["http-connect", "https-connect"].contains(typed.external?.protocolName ?? "") {
+                let original = try IOSImportedCONNECTSource.capture(typed)
+                result = LibboxRouterNodeChainImportedCONNECTMemberInput(original.config, original.capture, &failure)
+            } else {
+                let original = try IOSImportedShadowsocksSource.capture(typed)
+                result = LibboxRouterNodeChainImportedMemberInput(original.config, original.capture, &failure)
+            }
         } else {
             guard profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
                   let original = files["shadowsocks"], !original.isEmpty else { throw issue() }

@@ -25,8 +25,14 @@ import Foundation
         }
         let candidate = try source(candidateID)
         guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
+        let candidateMode: String
+        if candidate.profile["node_kind"] as? String == "external" {
+            let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: candidate.profile))
+            guard let mode = typed.external?.protocolName, ["shadowsocks", "http-connect", "https-connect"].contains(mode) else { throw IOSNodeCandidateCapture.issue() }
+            candidateMode = mode
+        } else { candidateMode = "shadowsocks" }
         var selected = original.members.prefix(position + 1).map { (id: $0.id, mode: $0.mode) }
-        selected.append((candidateID, "shadowsocks"))
+        selected.append((candidateID, candidateMode))
         if candidate.profile["node_kind"] as? String == "external" {
             guard position == 0, let final = original.members.last, final.profile["node_kind"] as? String == "router-vpn" else { throw IOSNodeCandidateCapture.issue() }
             let retained = try source(final.id)
@@ -58,8 +64,16 @@ import Foundation
             captured.root["selectedRouterID"] = member.id
             bundles.append(try JSONSerialization.data(withJSONObject: captured.root, options: [.sortedKeys]))
         }
-        let preview: IOSNodeChainCapture
-        do { preview = try IOSNodeChainCapture.compile(bundles: bundles) }
+        let preview: (members: [IOSNodeChainCapture.Member], launchInput: String, close: () throws -> Void)
+        do {
+            if ["http-connect", "https-connect"].contains(candidateMode) {
+                let captured = try IOSNodeChainCONNECTCapture.compile(bundles: bundles)
+                preview = (captured.members, captured.source, { try captured.plan.close() })
+            } else {
+                let captured = try IOSNodeChainCapture.compile(bundles: bundles)
+                preview = (captured.members, captured.launchInput, { try captured.plan.close() })
+            }
+        }
         catch {
             if candidate.profile["node_kind"] as? String == "router-vpn",
                let encoded = candidate.files["shadowsocks"]?["sing-box.json"], let data = Data(base64Encoded: encoded),
@@ -73,7 +87,7 @@ import Foundation
             }
             throw error
         }
-        defer { try? preview.plan.close() }
+        defer { try? preview.close() }
         guard let prior = try JSONSerialization.jsonObject(with: Data(original.launchInput.utf8)) as? [String: Any],
               let after = try JSONSerialization.jsonObject(with: Data(preview.launchInput.utf8)) as? [String: Any],
               let priorNodes = prior["nodes"] as? [String], let afterNodes = after["nodes"] as? [String],

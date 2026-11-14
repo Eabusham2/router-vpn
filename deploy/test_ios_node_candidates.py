@@ -24,6 +24,66 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
  static func reject(_ name:String,_ action:()throws->Void)throws{do{try action()}catch{checks+=1;return};throw NSError(domain:"CandidateCheck",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])}
  static func main(){defer{LibboxTestClose()};do{try run();print("Apple candidates: \(checks) shipping Swift/shared Go capture and receipt checks PASS")}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
+ static func connectCandidates()throws {
+  for mode in ["wg","awg2-fast","awg2-strong"] {for kind in ["http-connect","https-connect"] {
+   var fixture=try sources(3,"off",true).map{try editProfile($0){p in
+    p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""
+   }}
+   fixture[2]=try editProfile(fixture[2]){p in
+    var nodes=p["multihop_nodes"] as! [[String:Any]];nodes[0]["mode"]=mode;p["multihop_nodes"]=nodes
+    p["dns_mode"]="custom";p["dns_protocol"]="tcp";p["dns_host"]="10.82.0.53";p["dns_port"]=5353
+   }
+   var finalRoot=try object(fixture[2]),assets=finalRoot["profiles"] as! [String:[String:String]]
+   var finalGraph=try object(Data(base64Encoded:assets["shadowsocks"]!["sing-box.json"]!)!)
+   finalGraph["dns"]=["servers":[["type":"tcp","tag":"home-dns","server":"10.82.0.53","server_port":5353,"detour":"proxy"]],"final":"home-dns"]
+   assets["shadowsocks"]!["sing-box.json"]=try data(finalGraph).base64EncodedString();finalRoot["profiles"]=assets
+   fixture[2]=Data(try LibboxTestCONNECTService(String(decoding:try data(finalRoot),as:UTF8.self)).utf8)
+   let original=try IOSNodeChainCapture.compile(bundles:fixture);defer{try? original.plan.close()}
+   let originalSource=original.launchInput,key=kind.replacingOccurrences(of:"-",with:"_")
+   var custom=try profile(fixture[1]);custom["id"]="connect-candidate";custom["name"]="Saved CONNECT";custom["node_kind"]="external";custom.removeValue(forKey:"node_proof_id")
+   custom["router_api"]="";custom["api_token"]="";custom["endpoint"]="203.0.113.20";custom["start_layer"]="off"
+   var credentials:[String:Any]=["host":"203.0.113.20","port":8443,"username":"captured-user","password":"captured:password"]
+   if kind=="https-connect"{credentials["tls_server_name"]="Original.Proxy.Example"}
+   custom["external"]=["protocol":kind,"expected_public_ip":"203.0.113.76",key:credentials]
+   let imported=try data(["selectedRouterID":"connect-candidate","routerProfiles":[custom],"profiles":[String:[String:String]]()])
+   let records=["entry":fixture[0],"middle":fixture[1],"final":fixture[2],"connect":imported]
+   let proofs=original.members.enumerated().map{IOSNodeCandidatePrefix(position:$0.offset,profile_id:$0.element.id,node_id:$0.element.profile["node_proof_id"] as! String,mode:$0.element.mode)}
+   func catalog(_ values:[String:Data])throws->(inventory:Data,rows:[IOSNodeCandidateCapture.Row]){
+    let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(values))
+    return try IOSNodeCandidateCapture.compile(records:values,stamp:stamp,prefixPosition:0,proofs:proofs)
+   }
+   let captured=try catalog(records),row=captured.rows.first{$0.id=="connect-candidate"}!
+   try check("CONNECT candidate uses authoritative typed input",!row.input.isEmpty && row.reason.isEmpty && LibboxRouterNodeChainCandidateInputSupported(row.input))
+   let member=try object(Data(row.input.utf8))
+   try check("CONNECT candidate keeps distinct member kind",member["kind"] as? String=="routervpn-node-chain-connect-member")
+   let proposal=try IOSNodeCandidateProposal.compile(original:original,records:records,position:0,candidateID:row.id,measuredInput:row.input)
+   let launch=try object(Data(proposal.launchInput.utf8))
+   try check("CONNECT future proposal uses typed compiler",launch["schema"] as? Int==4 && proposal.profiles.map(\.id)==["chain-node-0","connect-candidate","chain-node-2"])
+   try check("CONNECT future proposal preserves protocol and selected DNS",proposal.profiles.last?.multihopNodes?.map(\.mode)==[mode,kind,"shadowsocks"] && proposal.profiles.last?.dnsProtocol=="tcp" && proposal.profiles.last?.dnsHost=="10.82.0.53" && proposal.profiles.last?.dnsPort==5353)
+   let external=proposal.profiles[1].external!
+   let capturedCredentials=kind=="https-connect" ? external.httpsConnect : external.httpConnect
+   try check("CONNECT future proposal retains original credentials",external.protocolName==kind && capturedCredentials?.username=="captured-user" && capturedCredentials?.password=="captured:password" && (kind != "https-connect" || capturedCredentials?.tlsServerName=="Original.Proxy.Example"))
+   try check("CONNECT proposal leaves current path unchanged",original.launchInput==originalSource)
+   try reject("CONNECT candidate unsupported placement"){_ = try IOSNodeCandidateProposal.compile(original:original,records:records,position:1,candidateID:row.id,measuredInput:row.input)}
+   var changedFinal=records;changedFinal["final"]=try editProfile(fixture[2]){$0["dns_host"]="10.82.0.54"}
+   try reject("CONNECT proposal changed retained final policy"){_ = try IOSNodeCandidateProposal.compile(original:original,records:changedFinal,position:0,candidateID:row.id,measuredInput:row.input)}
+   for field in kind=="https-connect" ? ["password","tls_server_name"]:["password"] {
+    var changed=records
+    changed["connect"]=try editProfile(imported){p in var ext=p["external"] as! [String:Any],value=ext[key] as! [String:Any];value[field]="replacement.example";ext[key]=value;p["external"]=ext}
+    try reject("CONNECT proposal changed measured "+field){_ = try IOSNodeCandidateProposal.compile(original:original,records:changed,position:0,candidateID:row.id,measuredInput:row.input)}
+   }
+   for fault in ["hostname","layer","credential","borrowed-token"] {
+    var changed=records
+    changed["connect"]=try editProfile(imported){p in
+     if fault=="layer"{p["start_layer"]="aes-256-gcm"}
+     else if fault=="borrowed-token"{p["api_token"]="not-an-external-authority"}
+     else{var ext=p["external"] as! [String:Any],value=ext[key] as! [String:Any];if fault=="hostname"{value["host"]="proxy.example";p["endpoint"]="proxy.example"}else{value["password"]=""};ext[key]=value;p["external"]=ext}
+    }
+    let rejected=try catalog(changed)
+    try check("CONNECT invalid "+fault+" remains unscored",rejected.rows.first{$0.id==row.id}?.input.isEmpty==true && rejected.rows.contains{!$0.input.isEmpty})
+   }
+  }}
+ }
  static func run()throws {
   let prefix=IOSNodeCandidatePrefix(position:0,profile_id:"chain-node-0",node_id:String(repeating:"a",count:64),mode:"wg")
   let tail=IOSNodeCandidatePrefix(position:1,profile_id:"other-final",node_id:String(repeating:"b",count:64),mode:"shadowsocks")
@@ -88,6 +148,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
    let lazy=IOSNodeCandidatePrefix(position:0,profile_id:prefix.profile_id,node_id:prefix.node_id,mode:"shadowsocks")
    try reject("lazy SS prefix"){_ = try compile(["candidate":data(paired)],[lazy,tail])}
   }
+  try connectCandidates()
   let hash=String(repeating:"c",count:64)
   let metadata=IOSNodeCandidateMetadata(schema:1,capture_sha256:hash,prefix_position:0,prefix_id:prefix.profile_id,source_sha256:hash,config_sha256:hash,targets:[.init(id:"target",source_sha256:hash)])
   try metadata.validate(prefix:prefix,source:hash,config:hash,ids:["target"])
@@ -126,7 +187,7 @@ def main():
             subprocess.run(options+['-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/'libCryptoKit.so')],check=True,timeout=90)
             options+=['-lCryptoKit']
         command=options+['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
-        files=['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidateResult.swift','IOSNodeCandidateProposal.swift']
+        files=['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidateResult.swift','IOSNodeCandidateProposal.swift']
         binary=work/'test'
         subprocess.run(command+[str(APP/name) for name in files]+[str(test),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary),str(compiler)],check=True,timeout=180)
@@ -134,11 +195,12 @@ def main():
             ('IOSNodeCandidateCapture.swift', 'guard LibboxRouterNodeChainCandidateInputSupported(input) else', 'guard true else', 'paired legacy stays unscored'),
             ('IOSNodeCandidateResult.swift', 'expires_at - measured_at == 120000,', 'true,', 'ACCEPTED receipt foreign expires_at'),
             ('IOSNodeCandidateProposal.swift', 'Array(priorNodes.prefix(position + 1)) == Array(afterNodes.prefix(position + 1)),', 'true,', 'ACCEPTED future proposal changed original prefix'),
+            ('IOSNodeCandidateProposal.swift', 'guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else', 'guard true else', 'ACCEPTED future proposal changed measured source'),
         ]:
             code=(APP/filename).read_text();assert code.count(before)==1
             mutant=work/filename;mutant.write_text(code.replace(before,after))
             subprocess.run(command+[str(mutant if name==filename else APP/name) for name in files]+[str(test),'-o',str(binary)],check=True,timeout=90)
             result=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
             if result.returncode==0 or marker not in result.stdout+result.stderr:raise AssertionError('candidate causal control failed: '+filename+' '+result.stderr[-1500:])
-        print('Apple candidate capture/receipt/proposal: three causal controls rejected')
+        print('Apple candidate capture/receipt/proposal: four causal controls rejected')
 if __name__=='__main__':main()
