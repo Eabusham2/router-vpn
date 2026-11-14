@@ -402,6 +402,7 @@ func executionFiftyHeldReleaseAndHistory(t *testing.T, action string) {
 	f, owner, measurement := executionFiftyMeasurementFixture(t, "server")
 	node, _ := executionFiftyHTTP(t, f)
 	facade := executionFiftyFacade(t, measurement)
+	capture := facade.CaptureJSON()
 	if err := facade.Start(strings.Repeat("a", 32), node.ProfileID); err != nil {
 		t.Fatal(err)
 	}
@@ -434,6 +435,9 @@ func executionFiftyHeldReleaseAndHistory(t *testing.T, action string) {
 	} else {
 		facade.Invalidate()
 	}
+	if facade.ValidateClosedCapture(id, capture) == nil {
+		t.Fatal("failed close or invalidation granted closed capture before release joined")
+	}
 	var state hopmeasure.Status
 	if json.Unmarshal([]byte(facade.StatusJSON()), &state) != nil || state.Request != id || state.Complete || state.Drained || len(state.Results) != 0 || !owner.active.Load() || owner.releases.Load() != 1 {
 		t.Fatal("closed facade acknowledged worker-only retirement", state, owner.releases.Load())
@@ -447,6 +451,12 @@ func executionFiftyHeldReleaseAndHistory(t *testing.T, action string) {
 	unblock()
 	if err := facade.Close(); err != nil {
 		t.Fatal("same original close retry", err)
+	}
+	if facade.ValidateClosedCapture(strings.Repeat("a", 32), capture) == nil {
+		t.Fatal("old request authorized replacement history")
+	}
+	if action == "invalidate" && facade.ValidateClosedCapture(id, capture) == nil {
+		t.Fatal("successful cleanup revived invalidated capture")
 	}
 	if owner.active.Load() || owner.releases.Load() != 2 || facade.SavedJSON(node.ProfileID) != previous {
 		t.Fatal("release retry changed history or original activity")
@@ -495,7 +505,7 @@ func TestNodeChainExecutionLatencyRejectsRequestReuseAndPreservesThroughputSucce
 		t.Fatal(err)
 	}
 	executionFiftyReady(t, executionFiftyFinish(t, facade, id), node, "server")
-	previous, oldScope := facade.SavedJSON(node.ProfileID), facade.scope
+	previous, oldScope, capture := facade.SavedJSON(node.ProfileID), facade.scope, facade.CaptureJSON()
 	if err := facade.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -527,6 +537,12 @@ func TestNodeChainExecutionLatencyRejectsRequestReuseAndPreservesThroughputSucce
 	cancel()
 	if err != nil {
 		t.Fatal("old captured close waited for successor", err)
+	}
+	ctx, cancel = context.WithTimeout(t.Context(), hopmeasure.ObservationTimeout)
+	err = facade.ValidateClosedCaptureContext(ctx, id, capture)
+	cancel()
+	if err != nil {
+		t.Fatal("closed capture validation waited for or retired throughput successor", err)
 	}
 	select {
 	case <-cancelled:
@@ -610,5 +626,281 @@ func TestNodeChainExecutionLatencyRequiresFreshServerReceiptAfterRelease(t *test
 	}
 	if owner.active.Load() || owner.releases.Load() != 2 {
 		t.Fatal("remote receipt refusal lost joined local activity")
+	}
+}
+
+// Closed-capture validation is publication authority over an already completed
+// request. It must neither start another measurement nor reconstruct a native
+// owner. The HTTP responses below are real; the native runtime remains the
+// explicitly documented ownership model used by the other shared tests.
+func TestNodeChainExecutionLatencyClosedCaptureRequiresOriginalRequestAndCaller(t *testing.T) {
+	f, owner, measurement := executionFiftyMeasurementFixture(t, "auto")
+	node, samples := executionFiftyHTTP(t, f)
+	unused := executionFiftyFacade(t, measurement)
+	unusedCapture := unused.CaptureJSON()
+	if err := unused.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if unused.ValidateClosedCapture(strings.Repeat("f", 32), unusedCapture) == nil {
+		t.Fatal("closed unused facade authorized another request")
+	}
+	var reject, block atomic.Bool
+	associationErr := errors.New("original native measurement association revoked")
+	facade, err := measurement.NewLatencyBenchmarkContext(t.Context(), func(ctx context.Context) error {
+		if block.Load() {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		if reject.Load() {
+			return associationErr
+		}
+		return ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		reject.Store(false)
+		block.Store(false)
+		if err := facade.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	capture, id := facade.CaptureJSON(), strings.Repeat("d", 32)
+	if capture == "" || facade.ValidateClosedCapture(id, capture) == nil {
+		t.Fatal("unused facade authorized history")
+	}
+	if err := facade.Start(id, node.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	executionFiftyReady(t, executionFiftyFinish(t, facade, id), node, "local")
+	previous, originalService, trial := facade.SavedJSON(node.ProfileID), measurement.service, measurement.engine.trial
+	if previous == "" || facade.ValidateClosedCapture(id, capture) == nil {
+		t.Fatal("open facade authorized closed history")
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := facade.CloseContext(cancelled); err == nil || facade.ValidateClosedCapture(id, capture) == nil {
+		t.Fatal("cancelled close granted publication", err)
+	}
+	if err := facade.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.engine.mu.Lock()
+	selections := append([]string(nil), f.engine.selections...)
+	f.engine.mu.Unlock()
+	comparison := f.runtime.Progress().Comparison
+	if err := facade.ValidateClosedCapture(id, capture); err != nil {
+		t.Fatal("joined original capture rejected", err)
+	}
+	for _, bad := range []struct{ request, capture string }{{"", capture}, {strings.Repeat("e", 32), capture}, {id, ""}, {id, capture + " "}} {
+		if facade.ValidateClosedCapture(bad.request, bad.capture) == nil {
+			t.Fatal("wrong request/capture authorized original history", bad)
+		}
+	}
+	copied := &NodeChainExecutionLatency{self: facade, measurement: measurement, service: facade.service, capture: capture, identity: facade.identity, validate: facade.validate, closed: true, closeJoined: true, request: id, scope: facade.scope}
+	if copied.ValidateClosedCapture(id, capture) == nil {
+		t.Fatal("copied facade authorized history")
+	}
+	retainedScope := facade.scope
+	for _, badScope := range []*nodeChainExecutionMeasurementScope{nil, {id: strings.Repeat("e", 32), joined: retainedScope.joined}, {id: id, joined: make(chan struct{})}} {
+		facade.scope = badScope
+		scopeErr := facade.ValidateClosedCapture(id, capture)
+		facade.scope = retainedScope
+		if scopeErr == nil {
+			t.Fatal("missing, wrong-request or unjoined scope authorized closed history")
+		}
+	}
+	retainedMeasurement := facade.measurement
+	facade.measurement = &NodeChainExecutionMeasurement{self: measurement, service: measurement.service, engine: measurement.engine}
+	copyErr := facade.ValidateClosedCapture(id, capture)
+	facade.measurement = retainedMeasurement
+	if copyErr == nil {
+		t.Fatal("copied original measurement authorized closed history")
+	}
+	facade.mu.Lock()
+	ctx, stop := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	err = facade.ValidateClosedCaptureContext(ctx, id, capture)
+	stop()
+	facade.mu.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("closed capture lost original caller lock bound", err)
+	}
+	if facade.ValidateClosedCaptureContext(nil, id, capture) == nil || facade.ValidateClosedCaptureContext(cancelled, id, capture) == nil {
+		t.Fatal("missing/expired caller authorized history")
+	}
+	reject.Store(true)
+	if !errors.Is(facade.ValidateClosedCapture(id, capture), associationErr) {
+		t.Fatal("native association error was hidden")
+	}
+	reject.Store(false)
+	block.Store(true)
+	ctx, stop = context.WithTimeout(t.Context(), 20*time.Millisecond)
+	err = facade.ValidateClosedCaptureContext(ctx, id, capture)
+	stop()
+	block.Store(false)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("host validation lost original caller deadline", err)
+	}
+	if err := facade.ValidateClosedCapture(id, capture); err != nil {
+		t.Fatal("caller timeout retired original capture", err)
+	}
+	f.engine.mu.Lock()
+	sameSelection := reflect.DeepEqual(selections, f.engine.selections)
+	f.engine.mu.Unlock()
+	if samples.Load() != 50 || owner.active.Load() || owner.releases.Load() != 1 || facade.SavedJSON(node.ProfileID) != previous || measurement.service != originalService || measurement.engine.trial != trial || !sameSelection || !reflect.DeepEqual(comparison, f.runtime.Progress().Comparison) {
+		t.Fatal("validation changed history, measurement, original activity or Compare", samples.Load())
+	}
+}
+
+func executionFiftyClosedAuthorityLoss(t *testing.T, faults []string) {
+	t.Helper()
+	for _, fault := range faults {
+		t.Run(fault, func(t *testing.T) {
+			f, owner, measurement := executionFiftyMeasurementFixture(t, "server")
+			node, _ := executionFiftyHTTP(t, f)
+			facade := executionFiftyFacade(t, measurement)
+			capture, id := facade.CaptureJSON(), strings.Repeat("d", 32)
+			if err := facade.Start(id, node.ProfileID); err != nil {
+				t.Fatal(err)
+			}
+			executionFiftyReady(t, executionFiftyFinish(t, facade, id), node, "server")
+			previous := facade.SavedJSON(node.ProfileID)
+			if err := facade.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := facade.ValidateClosedCapture(id, capture); err != nil {
+				t.Fatal("original joined capture", err)
+			}
+			switch fault {
+			case "owner":
+				owner.mu.Lock()
+				owner.runtime = nil
+				owner.mu.Unlock()
+				t.Cleanup(func() { owner.mu.Lock(); owner.runtime = f.runtime; owner.mu.Unlock() })
+			case "native":
+				// Restore only the test transport for original teardown. The
+				// failed observation must permanently retire runtime authority.
+				t.Cleanup(func() { f.engine.mu.Lock(); f.engine.alive = true; f.engine.mu.Unlock() })
+				f.engine.mu.Lock()
+				f.engine.alive = false
+				f.engine.mu.Unlock()
+			case "selected-epoch":
+				f.engine.mu.Lock()
+				f.engine.epoch += 2
+				f.engine.mu.Unlock()
+			case "measurement-closed":
+				if err := measurement.Close(); err != nil {
+					t.Fatal(err)
+				}
+			case "invalidated":
+				facade.Invalidate()
+			default:
+				t.Fatal("unknown authority fault", fault)
+			}
+			if err := facade.ValidateClosedCapture(id, capture); err == nil {
+				t.Fatal("closed history survived lost original authority", fault)
+			}
+			if fault == "native" {
+				f.engine.mu.Lock()
+				f.engine.alive = true
+				f.engine.mu.Unlock()
+				if facade.ValidateClosedCapture(id, capture) == nil {
+					t.Fatal("restoring simulated transport revived retired capture authority")
+				}
+			}
+			if facade.SavedJSON(node.ProfileID) != previous || owner.active.Load() || owner.releases.Load() != 1 {
+				t.Fatal("refusal replaced history or acquired activity", fault)
+			}
+		})
+	}
+}
+
+func TestNodeChainExecutionLatencyClosedCaptureRejectsChangedOwnerAndEpoch(t *testing.T) {
+	executionFiftyClosedAuthorityLoss(t, []string{"owner", "native", "selected-epoch"})
+}
+
+func TestNodeChainExecutionLatencyClosedCaptureRejectsRetiredMeasurement(t *testing.T) {
+	executionFiftyClosedAuthorityLoss(t, []string{"measurement-closed", "invalidated"})
+}
+
+func TestNodeChainExecutionLatencyClosedCaptureRequiresFreshServerProof(t *testing.T) {
+	var reject, revokeDuringStatus, associationRevoked atomic.Bool
+	f, owner, measurement := executionFiftyMeasurementFixture(t, "server", func(f *nodeChainExecutionRuntimeFixture) {
+		f.mutateStatus = func(status *multihoprelay.NodeChainLeaseStatus) {
+			if revokeDuringStatus.Load() {
+				associationRevoked.Store(true)
+			}
+			if reject.Load() {
+				status.Receipt.Nonce = strings.Repeat("b", 64)
+			}
+		}
+	})
+	t.Cleanup(func() { reject.Store(false) })
+	node, samples := executionFiftyHTTP(t, f)
+	associationErr := errors.New("original association revoked while proving server receipt")
+	facade, err := measurement.NewLatencyBenchmarkContext(t.Context(), func(ctx context.Context) error {
+		if associationRevoked.Load() {
+			return associationErr
+		}
+		return ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		revokeDuringStatus.Store(false)
+		associationRevoked.Store(false)
+		if err := facade.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	capture, id := facade.CaptureJSON(), strings.Repeat("d", 32)
+	if err := facade.Start(id, node.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	executionFiftyReady(t, executionFiftyFinish(t, facade, id), node, "server")
+	previous := facade.SavedJSON(node.ProfileID)
+	if err := facade.Close(); err != nil {
+		t.Fatal(err)
+	}
+	trial := measurement.engine.trial
+	trial.mu.Lock()
+	attempt := trial.attempt
+	trial.mu.Unlock()
+	f.mu.Lock()
+	before := len(f.requests)
+	f.mu.Unlock()
+	if err := facade.ValidateClosedCapture(id, capture); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	requests := append([]struct{ method, session string }(nil), f.requests[before:]...)
+	f.mu.Unlock()
+	attempt.mu.Lock()
+	session := attempt.request.SessionID
+	attempt.mu.Unlock()
+	fresh := false
+	for _, request := range requests {
+		if request.session != session || request.method != "POST" && request.method != "PUT" {
+			t.Fatal("closed validation created another lease", request)
+		}
+		fresh = fresh || request.method == "POST"
+	}
+	if !fresh {
+		t.Fatal("closed validation used cached server readiness")
+	}
+	revokeDuringStatus.Store(true)
+	if !errors.Is(facade.ValidateClosedCapture(id, capture), associationErr) {
+		t.Fatal("native association revoked during fresh proof escaped final validation")
+	}
+	revokeDuringStatus.Store(false)
+	associationRevoked.Store(false)
+	reject.Store(true)
+	if facade.ValidateClosedCapture(id, capture) == nil {
+		t.Fatal("closed validation accepted stale original server nonce")
+	}
+	if samples.Load() != 50 || facade.SavedJSON(node.ProfileID) != previous || owner.active.Load() || owner.releases.Load() != 1 {
+		t.Fatal("fresh-proof refusal changed actual history or activity")
 	}
 }

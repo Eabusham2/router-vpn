@@ -11,6 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = './internal/mobilemultihop'
 NAME = re.compile(r'(?:Test|Example|Fuzz)\w*')
 EXECUTION_FIFTY_REQUIRED = frozenset((
+    'TestNodeChainExecutionLatencyClosedCaptureRequiresFreshServerProof',
+    'TestNodeChainExecutionLatencyClosedCaptureRejectsRetiredMeasurement',
+    'TestNodeChainExecutionLatencyClosedCaptureRejectsChangedOwnerAndEpoch',
+    'TestNodeChainExecutionLatencyClosedCaptureRequiresOriginalRequestAndCaller',
     'TestNodeChainExecutionLatencyRetainsSelectedProjectionAndFiftyResponses',
     'TestNodeChainExecutionLatencyShortCloseRetainsHeldReleaseAndHistory',
     'TestNodeChainExecutionLatencyInvalidateRetainsHeldReleaseAndHistory',
@@ -24,7 +28,11 @@ PHASES = (
     ('execution fifty held close', r'^TestNodeChainExecutionLatencyShortCloseRetainsHeldReleaseAndHistory$'),
     ('execution fifty held invalidation', r'^TestNodeChainExecutionLatencyInvalidateRetainsHeldReleaseAndHistory$'),
     ('execution fifty fresh server receipt', r'^TestNodeChainExecutionLatencyRequiresFreshServerReceiptAfterRelease$'),
-    ('execution fifty original ownership', r'^TestNodeChainExecutionLatency(?!(?:RetainsSelectedProjectionAndFiftyResponses|ShortCloseRetainsHeldReleaseAndHistory|InvalidateRetainsHeldReleaseAndHistory|RequiresFreshServerReceiptAfterRelease)$)'),
+    ('execution fifty original ownership', r'^TestNodeChainExecutionLatency(?!(?:RetainsSelectedProjectionAndFiftyResponses|ShortCloseRetainsHeldReleaseAndHistory|InvalidateRetainsHeldReleaseAndHistory|RequiresFreshServerReceiptAfterRelease|ClosedCaptureRequiresOriginalRequestAndCaller|ClosedCaptureRejectsChangedOwnerAndEpoch|ClosedCaptureRejectsRetiredMeasurement|ClosedCaptureRequiresFreshServerProof)$)'),
+    ('execution fifty closed capture identity', r'^TestNodeChainExecutionLatencyClosedCaptureRequiresOriginalRequestAndCaller$'),
+    ('execution fifty closed capture ownership', r'^TestNodeChainExecutionLatencyClosedCaptureRejectsChangedOwnerAndEpoch$'),
+    ('execution fifty closed capture retirement', r'^TestNodeChainExecutionLatencyClosedCaptureRejectsRetiredMeasurement$'),
+    ('execution fifty closed capture server proof', r'^TestNodeChainExecutionLatencyClosedCaptureRequiresFreshServerProof$'),
     # The complete ordered matrix exceeded one 180s phase. Partition by
     # authority boundary; future roots still enter one explicit fallback.
     ('ordered execution discovery and Last', r'^TestNodeChainExecution(?:Discovery|Last)'),
@@ -65,6 +73,12 @@ CI_GROUPS = {
         'execution fifty held invalidation',
         'execution fifty fresh server receipt',
         'execution fifty original ownership',
+    ),
+    'fifty_closed': (
+        'execution fifty closed capture identity',
+        'execution fifty closed capture ownership',
+        'execution fifty closed capture retirement',
+        'execution fifty closed capture server proof',
     ),
     'core': (
         'ordered execution discovery and Last', 'ordered execution runtime and Stop',
@@ -272,10 +286,21 @@ class PartitionTests(unittest.TestCase):
 
     def test_execution_fifty_roots_have_disjoint_bounded_ci_phases(self):
         groups = partition(self.names)
-        selected = select_ci_group(groups, 'fifty')
-        self.assertEqual(len(selected), 5)
-        actual = {name for _, names in selected for name in names}
-        self.assertEqual(actual, EXECUTION_FIFTY_REQUIRED | {'TestNodeChainExecutionLatencyFuture'})
+        original = select_ci_group(groups, 'fifty')
+        closed = select_ci_group(groups, 'fifty_closed')
+        self.assertEqual(len(original), 5)
+        self.assertEqual(len(closed), 4)
+        closed_roots = {name for name in EXECUTION_FIFTY_REQUIRED
+                        if name.startswith('TestNodeChainExecutionLatencyClosedCapture')}
+        self.assertEqual(len(closed_roots), 4)
+        original_roots = {name for _, names in original for name in names}
+        actual_closed = {name for _, names in closed for name in names}
+        self.assertEqual(actual_closed, closed_roots)
+        self.assertEqual(original_roots, (EXECUTION_FIFTY_REQUIRED - closed_roots)
+                         | {'TestNodeChainExecutionLatencyFuture'})
+        self.assertFalse(original_roots.intersection(actual_closed))
+        selected = original + closed
+        actual = original_roots | actual_closed
         for label, names in selected:
             self.assertIn('-timeout=180s', command(names))
             if label != 'execution fifty original ownership':
@@ -285,15 +310,36 @@ class PartitionTests(unittest.TestCase):
         for omitted in EXECUTION_FIFTY_REQUIRED:
             with self.subTest(omitted=omitted), self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
                 inventory('\n'.join(name for name in self.names if name != omitted))
-        for omitted in CI_GROUPS['fifty']:
-            assignment = {key: tuple(label for label in labels if label != omitted)
-                          for key, labels in CI_GROUPS.items()}
-            with self.subTest(phase=omitted), self.assertRaises(ValueError):
-                select_ci_group(groups, 'fifty', assignment)
+        for group in ('fifty', 'fifty_closed'):
+            for omitted in CI_GROUPS[group]:
+                assignment = {key: tuple(label for label in labels if label != omitted)
+                              for key, labels in CI_GROUPS.items()}
+                with self.subTest(group=group, phase=omitted), self.assertRaises(ValueError):
+                    select_ci_group(groups, group, assignment)
         for label, names in selected:
             duplicate = groups + [(label + ' duplicate', names)]
             with self.subTest(duplicate=label), self.assertRaises(ValueError):
                 validate_partition(self.names, duplicate)
+
+    def test_closed_capture_job_cannot_lose_duplicate_or_steal_a_phase(self):
+        names = self.names + ['TestNodeChainExecutionLatencyClosedCaptureFuture']
+        groups = partition(names)
+        # Future tests retain the original mandatory fallback; exactly the four
+        # current closed-capture phases get the new bounded job.
+        original = {name for _, found in select_ci_group(groups, 'fifty') for name in found}
+        self.assertIn('TestNodeChainExecutionLatencyClosedCaptureFuture', original)
+        for fault in ('missing-job', 'duplicate-phase', 'omitted-phase', 'foreign-phase'):
+            assignment = {key: list(value) for key, value in CI_GROUPS.items()}
+            if fault == 'missing-job':
+                del assignment['fifty_closed']
+            elif fault == 'duplicate-phase':
+                assignment['fifty'].append(assignment['fifty_closed'][0])
+            elif fault == 'omitted-phase':
+                assignment['fifty_closed'].pop()
+            else:
+                assignment['fifty_closed'].append('unowned closed capture phase')
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                select_ci_group(groups, 'fifty', assignment)
 
     def test_ordered_semantic_boundaries_keep_future_roots(self):
         groups = dict(partition(self.names))

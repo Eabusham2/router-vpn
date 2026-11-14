@@ -89,6 +89,7 @@ CONNECT_STATIC_SIGNATURES = (
 # These factories borrow the exact already retained measurement service.
 ORDERED_LATENCY_SIGNATURES = (
     "java.lang.String captureJSON();",
+    "void validateClosedCapture(java.lang.String, java.lang.String) throws java.lang.Exception;",
     "void start(java.lang.String, java.lang.String) throws java.lang.Exception;",
     "void cancel(java.lang.String);",
     "void drain(java.lang.String) throws java.lang.Exception;",
@@ -617,7 +618,7 @@ def self_test():
         def test_exact_signature_inventory(self):
             self.assertEqual(len(PLAN_SIGNATURES),15);self.assertEqual(len(STATIC_SIGNATURES),4)
             self.assertEqual(len(CONNECT_PLAN_SIGNATURES),15);self.assertEqual(len(CONNECT_STATIC_SIGNATURES),5)
-            self.assertEqual(len(ORDERED_LATENCY_SIGNATURES),8);self.assertEqual(len(ORDERED_LATENCY_STATIC_SIGNATURES),4)
+            self.assertEqual(len(ORDERED_LATENCY_SIGNATURES),9);self.assertEqual(len(ORDERED_LATENCY_STATIC_SIGNATURES),4)
             self.assertEqual(len(EXECUTION_PLAN_SIGNATURES),5);self.assertEqual(len(EXECUTION_STATIC_SIGNATURES),2)
             for owner,signatures in GENERATED_API_INVENTORIES:
                 raw=transcript(owner,signatures);self.assertEqual(len(require_signatures(raw,signatures,owner)["required_signatures"]),len(signatures))

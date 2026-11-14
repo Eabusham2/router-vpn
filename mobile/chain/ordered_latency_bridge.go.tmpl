@@ -39,6 +39,20 @@ func (m *RouterOrderedLatency) CaptureJSON() string {
 	return ""
 }
 
+// ValidateClosedCapture checks the exact original execution measurement after
+// borrowed-facade Close and before the host saves history. Ordinary Local paths
+// retain their existing host capture; this method cannot manufacture one.
+func (m *RouterOrderedLatency) ValidateClosedCapture(request, capture string) error {
+	if m == nil || m.service == nil {
+		return errors.New("ordered latency owner is missing")
+	}
+	validator, ok := m.service.(interface{ ValidateClosedCapture(string, string) error })
+	if !ok {
+		return errors.New("ordered latency has no original execution capture validator")
+	}
+	return validator.ValidateClosedCapture(request, capture)
+}
+
 func (m *RouterOrderedLatency) Start(request, nodeID string) error {
 	if m == nil || m.service == nil {
 		return errors.New("ordered latency owner is missing")

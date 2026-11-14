@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
@@ -139,5 +140,42 @@ func TestRouterNodeChainExecutionBridgeLatencyPublicHandlePreservesBorrowedClean
 	}
 	if (*RouterOrderedLatency)(nil).CaptureJSON() != "" || (&RouterOrderedLatency{}).CaptureJSON() != "" {
 		t.Fatal("absent original execution fabricated a capture")
+	}
+}
+
+// The boundary double records ABI dispatch only. Real shared closure, request,
+// selected-owner and server-proof semantics execute in mobilemultihop tests.
+type executionClosedCaptureDispatchBoundary struct {
+	executionLatencyDispatchBoundary
+	requests, captures []string
+}
+
+func (b *executionClosedCaptureDispatchBoundary) ValidateClosedCapture(request, capture string) error {
+	b.requests = append(b.requests, request)
+	b.captures = append(b.captures, capture)
+	return b.failure
+}
+func TestRouterNodeChainExecutionBridgeLatencyClosedCaptureTypedDispatch(t *testing.T) {
+	for _, public := range []*RouterOrderedLatency{nil, {}, {service: &hopmeasure.OrderedLatencyService{}}, {service: &executionLatencyDispatchBoundary{}}, {service: (*mobilemultihop.NodeChainExecutionLatency)(nil)}} {
+		if public.ValidateClosedCapture("original-request", "original-capture") == nil {
+			t.Fatal("absent/ordinary facade fabricated closed execution authority")
+		}
+	}
+	boundary := &executionClosedCaptureDispatchBoundary{}
+	public := &RouterOrderedLatency{service: boundary}
+	for _, failure := range []error{nil, errors.New("original typed closed-capture refusal")} {
+		boundary.failure = failure
+		for _, pair := range [][2]string{{"original-request", "original-capture"}, {"", ""}, {"different-request", "changed-capture"}} {
+			if err := public.ValidateClosedCapture(pair[0], pair[1]); err != failure {
+				t.Fatal("public wrapper hid exact typed validation error", err)
+			}
+			n := len(boundary.requests) - 1
+			if boundary.requests[n] != pair[0] || boundary.captures[n] != pair[1] {
+				t.Fatal("public wrapper substituted request/capture")
+			}
+		}
+	}
+	if len(boundary.requests) != 6 || boundary.starts != 0 || boundary.cancels != 0 || boundary.drains != 0 || boundary.closes != 0 || boundary.invalidations != 0 || boundary.executionLatencyDispatchBoundary.captures != 0 {
+		t.Fatal("closed validation dispatched measurement or cleanup")
 	}
 }

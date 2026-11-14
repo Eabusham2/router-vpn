@@ -22,6 +22,7 @@ EXPECTED = {
     'shared_core': ('python3 deploy/test_mobile_multihop_groups.py --group core',),
     'shared_runtime': ('python3 deploy/test_mobile_multihop_groups.py --group runtime',),
     'shared_fifty': ('python3 deploy/test_mobile_multihop_groups.py --group fifty',),
+    'shared_fifty_closed': ('python3 deploy/test_mobile_multihop_groups.py --group fifty_closed',),
     'relay': ('go test -race -count=1 -timeout=5m ./internal/multihoprelay ./internal/awgpolicy',),
 }
 
@@ -77,7 +78,7 @@ def validate(source):
         assert Counter(commands) == Counter(expected), 'Missing/duplicate/changed command in ' + name
     contract = jobs['contract']
     assert '    if: ${{ always() }}\n' in contract, 'Aggregate skips failed dependencies'
-    assert '    needs: [android, shared_core, shared_runtime, shared_fifty, relay]\n' in contract, 'Aggregate dependency missing'
+    assert '    needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, relay]\n' in contract, 'Aggregate dependency missing'
     assert 'continue-on-error:' not in contract, 'Aggregate failure ignored'
     for name in EXPECTED:
         assert f'          {name.upper()}_RESULT: ${{{{ needs.{name}.result }}}}\n' in contract, 'Result binding changed'
@@ -276,7 +277,7 @@ class WorkflowContract(unittest.TestCase):
             ('--group fifty', '--group core'),
             ('  shared_fifty:\n', '  shared_fifty:\n    if: ${{ false }}\n'),
             ('SHARED_FIFTY_RESULT: ${{ needs.shared_fifty.result }}', 'SHARED_FIFTY_RESULT: success'),
-            ('needs: [android, shared_core, shared_runtime, shared_fifty, relay]', 'needs: [android, shared_core, relay]'),
+            ('needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, relay]', 'needs: [android, shared_core, relay]'),
             ('if: ${{ always() }}', 'if: ${{ success() }}'),
             ('  shared_core:\n', '  shared_core:\n    if: ${{ false }}\n'),
             ('SHARED_RUNTIME_RESULT: ${{ needs.shared_runtime.result }}', 'SHARED_RUNTIME_RESULT: success'),
@@ -288,7 +289,7 @@ class WorkflowContract(unittest.TestCase):
                     validate(self.source.replace(old, new, 1))
 
     def test_execution_fifty_dependency_and_result_cannot_be_omitted(self):
-        original = 'needs: [android, shared_core, shared_runtime, shared_fifty, relay]'
+        original = 'needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, relay]'
         with self.assertRaises(AssertionError):
             validate(self.source.replace(original, 'needs: [android, shared_core, shared_runtime, relay]'))
         script = validate(self.source)
@@ -299,9 +300,38 @@ class WorkflowContract(unittest.TestCase):
         self.assertNotEqual(script, bypass)
         self.assertEqual(subprocess.run(['bash', '-e', '-c', bypass], env=env, timeout=5).returncode, 0)
 
+    def test_closed_fifty_job_cannot_be_missing_duplicated_or_skipped(self):
+        begin = self.source.index('  shared_fifty_closed:\n')
+        end = self.source.index('\n  relay:', begin)
+        block = self.source[begin:end]
+        for replacement in ('', block + '\n' + block,
+                            block.replace('  shared_fifty_closed:\n', '  shared_fifty_closed:\n    if: ${{ false }}\n'),
+                            block.replace('  shared_fifty_closed:\n', '  shared_fifty_closed:\n    continue-on-error: true\n'),
+                            block.replace('--group fifty_closed', '--group fifty')):
+            with self.subTest(replacement=replacement), self.assertRaises(AssertionError):
+                validate(self.source[:begin] + replacement + self.source[end:])
+
+    def test_closed_fifty_dependency_and_terminal_result_are_mandatory(self):
+        original = 'needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, relay]'
+        with self.assertRaises(AssertionError):
+            validate(self.source.replace(original, original.replace(', shared_fifty_closed', '')))
+        binding = 'SHARED_FIFTY_CLOSED_RESULT: ${{ needs.shared_fifty_closed.result }}'
+        with self.assertRaises(AssertionError):
+            validate(self.source.replace(binding, 'SHARED_FIFTY_CLOSED_RESULT: success'))
+        script = validate(self.source)
+        for result in ('failure', 'cancelled', 'skipped', ''):
+            env = dict(os.environ, **{name.upper() + '_RESULT': 'success' for name in EXPECTED})
+            env['SHARED_FIFTY_CLOSED_RESULT'] = result
+            with self.subTest(result=result):
+                self.assertNotEqual(subprocess.run(['bash', '-e', '-c', script], env=env, timeout=5).returncode, 0)
+        # The exhaustive actual-shell matrix above must catch this bypass too.
+        bypass = script.replace('test "$SHARED_FIFTY_CLOSED_RESULT" = success', 'true')
+        self.assertNotEqual(script, bypass)
+        self.assertEqual(subprocess.run(['bash', '-e', '-c', bypass], env=env, timeout=5).returncode, 0)
+
     def test_aggregate_bypass_control(self):
         script = validate(self.source).replace('test "$SHARED_RUNTIME_RESULT" = success', 'true')
-        env = dict(os.environ, ANDROID_RESULT='success', SHARED_CORE_RESULT='success', SHARED_RUNTIME_RESULT='failure', SHARED_FIFTY_RESULT='success', RELAY_RESULT='success')
+        env = dict(os.environ, ANDROID_RESULT='success', SHARED_CORE_RESULT='success', SHARED_RUNTIME_RESULT='failure', SHARED_FIFTY_RESULT='success', SHARED_FIFTY_CLOSED_RESULT='success', RELAY_RESULT='success')
         # Proves the negative result matrix above would detect a silently omitted check.
         self.assertEqual(subprocess.run(['bash', '-e', '-c', script], env=env, timeout=5).returncode, 0)
 

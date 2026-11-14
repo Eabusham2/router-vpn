@@ -41,6 +41,14 @@ class Runner(unittest.TestCase):
             with self.subTest(root=root), self.assertRaises(ValueError):
                 self.check(events)
 
+    def test_closed_capture_typed_dispatch_root_cannot_be_omitted(self):
+        root = 'TestRouterNodeChainExecutionBridgeLatencyClosedCaptureTypedDispatch'
+        self.assertIn(root, G.inventory()['experimental/libbox'])
+        events = [event for event in self.events()
+                  if event.get('Test', '').split('/')[0] != root]
+        with self.assertRaises(ValueError):
+            self.check(events)
+
     def build_output(self, package='experimental/libbox', output=None):
         # Exact Go 1.26 record emitted by the hosted Darwin linker, before
         # the original libbox/daemon package start events.

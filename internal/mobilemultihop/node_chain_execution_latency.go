@@ -20,8 +20,12 @@ type NodeChainExecutionLatency struct {
 	measurement *NodeChainExecutionMeasurement
 	service     *hopmeasure.OrderedLatencyService
 	capture     string
+	identity    string
+	validate    func(context.Context) error
 	mu          sync.Mutex
 	closed      bool
+	closeJoined bool
+	invalidated bool
 	request     string
 	scope       *nodeChainExecutionMeasurementScope
 }
@@ -87,7 +91,7 @@ func (s *NodeChainExecutionMeasurement) NewLatencyBenchmarkContext(ctx context.C
 	if err != nil {
 		return nil, err
 	}
-	value := &NodeChainExecutionLatency{measurement: s, service: service, capture: string(capture)}
+	value := &NodeChainExecutionLatency{measurement: s, service: service, capture: string(capture), identity: identity, validate: validate}
 	value.self = value
 	return value, nil
 }
@@ -110,6 +114,44 @@ func (s *NodeChainExecutionLatency) CaptureJSON() string {
 		return ""
 	}
 	return s.capture
+}
+
+// ValidateClosedCapture permits the host to validate history after joining this
+// borrowed facade, while its original measurement is still retained. It grants
+// no new measurement or connection authority and never reconstructs a facade.
+// The host must also retain its own operation/profile/MTU publication guards.
+func (s *NodeChainExecutionLatency) ValidateClosedCapture(request, capture string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	return s.ValidateClosedCaptureContext(ctx, request, capture)
+}
+
+func (s *NodeChainExecutionLatency) ValidateClosedCaptureContext(ctx context.Context, request, capture string) error {
+	if !s.original() || ctx == nil || s.measurement.engine == nil || s.validate == nil {
+		return nodeChainExecutionError
+	}
+	if err := externalObservationLock(ctx, &s.mu); err != nil {
+		return err
+	}
+	defer s.mu.Unlock()
+	if !s.closed || !s.closeJoined || s.invalidated || capture == "" || capture != s.capture ||
+		s.identity == "" || request == "" || request != s.request || s.scope == nil || s.scope.id != request ||
+		!executionLatencyScopeJoined(s.scope) {
+		return errors.New("execution history lost its original joined latency capture")
+	}
+	if err := s.validate(ctx); err != nil {
+		return err
+	}
+	identity, err := s.measurement.engine.IdentityContext(ctx)
+	if err != nil || identity != s.identity {
+		return errors.Join(err, nodeChainExecutionError)
+	}
+	if err := s.measurement.engine.VerifyMeasurement(ctx); err != nil {
+		return err
+	}
+	// The native association may be revoked while the selected-path proof runs.
+	// Recheck it before allowing the host's own atomic history publication.
+	return errors.Join(s.validate(ctx), ctx.Err())
 }
 
 func (s *NodeChainExecutionLatency) Start(request, nodeID string) error {
@@ -244,6 +286,7 @@ func (s *NodeChainExecutionLatency) Invalidate() {
 	}
 	s.mu.Lock()
 	s.closed = true
+	s.invalidated = true
 	s.service.Invalidate()
 	s.mu.Unlock()
 }
@@ -268,5 +311,12 @@ func (s *NodeChainExecutionLatency) CloseContext(ctx context.Context) error {
 	}
 	// The service is borrowed. Close joins only this facade's retained scope;
 	// a later throughput worker may already have acquired the host service.
-	return s.measurement.engine.drainCapturedScope(ctx, s.scope)
+	if err := s.measurement.engine.drainCapturedScope(ctx, s.scope); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.closeJoined = true
+	return nil
 }

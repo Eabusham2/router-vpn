@@ -55,6 +55,7 @@ PLAN_METHODS = (
 LATENCY_DECL = "@interface LibboxRouterOrderedLatency : NSObject <goSeqRefInterface> {"
 LATENCY_METHODS = (
     "- (NSString* _Nonnull)captureJSON;",
+    "- (BOOL)validateClosedCapture:(NSString* _Nullable)request capture:(NSString* _Nullable)capture error:(NSError* _Nullable* _Nullable)error;",
     "- (BOOL)start:(NSString* _Nullable)request nodeID:(NSString* _Nullable)nodeID error:(NSError* _Nullable* _Nullable)error;",
     "- (void)cancel:(NSString* _Nullable)request;",
     "- (BOOL)drain:(NSString* _Nullable)request error:(NSError* _Nullable* _Nullable)error;",
