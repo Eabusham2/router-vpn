@@ -410,7 +410,7 @@ import (
 var routerVPNExternalFailure = errors.New("original admission refused")
 var cause = errors.New("original native operation refused")
 var preceding = errors.New("original operation failed before Stop")
-type trace struct { fault string; ctx context.Context; started time.Time; socks, prefix, execution, proof, native, source, receipt, exchange, protection, removed, published int }
+type trace struct { fault string; ctx context.Context; started time.Time; connect, socks, prefix, execution, proof, native, source, receipt, exchange, protection, removed, published int }
 func (s *trace) called(ctx context.Context, phase string) error {
  if s.ctx == nil { s.ctx=ctx } else if s.ctx!=ctx {panic("cleanup substituted original request")}
  deadline,ok:=ctx.Deadline();if !ok||deadline.Sub(s.started)!=15*time.Second{panic("cleanup extended or replaced original bound")}
@@ -419,6 +419,8 @@ func (s *trace) called(ctx context.Context, phase string) error {
 }
 type phaseNative struct { s *trace }
 func(n *phaseNative)CloseContext(ctx context.Context)error{n.s.native++;if n.s.fault=="retry"&&n.s.native<3{return cause};return n.s.called(ctx,"Box close")}
+type phaseCONNECT struct { s *trace }
+func(p *phaseCONNECT)close(ctx context.Context)error{if p==nil{return nil};if p.s.socks!=0||p.s.prefix!=0||p.s.execution!=0||p.s.proof!=0||p.s.native!=0||p.s.source!=0||p.s.exchange!=0||p.s.protection!=0{panic("native retirement preceded original CONNECT join")};p.s.connect++;return p.s.called(ctx,"CONNECT join")}
 type phaseSOCKS struct { s *trace }
 func(p *phaseSOCKS)close(ctx context.Context)error{if p==nil{return nil};if p.s.prefix!=0||p.s.execution!=0||p.s.proof!=0||p.s.native!=0||p.s.source!=0||p.s.exchange!=0||p.s.protection!=0{panic("native retirement preceded original SOCKS join")};p.s.socks++;return p.s.called(ctx,"SOCKS join")}
 type phaseExecution struct { s *trace }
@@ -440,7 +442,7 @@ func(f *phaseFiles)remove(name string)error{if name!="node-ready.json"{panic("di
 func(f *phaseFiles)publish(name string,_ any)error{if name!="stopped.json"{panic("different stopped owner")};f.s.published++;return nil}
 """
         fixture += '\n'.join(methods)
-        fixture += '\nfunc originalCleanup(control *routerVPNLinuxNodeControl, files *phaseFiles, incoming error, chain *phaseChain, execution *phaseExecution, socksRuntime *phaseSOCKS, prefixes ...*phasePrefix)(failure error){\n failure=incoming\n var prefix *phasePrefix\n if len(prefixes)==1{prefix=prefixes[0]}\n var stopped atomic.Bool\n session,config:="original-session","original-source"\n' + cleanup + '\n return failure\n}\n'
+        fixture += '\nfunc originalCleanup(control *routerVPNLinuxNodeControl, files *phaseFiles, incoming error, chain *phaseChain, execution *phaseExecution, socksRuntime *phaseSOCKS, connectRuntime *phaseCONNECT, prefixes ...*phasePrefix)(failure error){\n failure=incoming\n var prefix *phasePrefix\n if len(prefixes)==1{prefix=prefixes[0]}\n var stopped atomic.Bool\n session,config:="original-session","original-source"\n' + cleanup + '\n return failure\n}\n'
         fixture += r"""
 func TestEmptySourceRetirementRequiresOriginalJoin(t *testing.T){
  synctest.Test(t,func(t *testing.T){
@@ -456,7 +458,7 @@ func TestOriginalCleanupPhase(t *testing.T){
  for _,phase:=range []string{"Box close","source close","joined-source receipt","retirement exchange","retained protection close","retry","current"}{t.Run(phase,func(t *testing.T){synctest.Test(t,func(t *testing.T){
   s:=&trace{fault:phase,started:time.Now()}
   owner:=&routerVPNLinuxNodeControl{native:&phaseNative{s},preparation:&phasePreparation{s},control:&phaseControl{s}}
-  failure:=originalCleanup(owner,&phaseFiles{s},preceding,nil,nil,nil)
+  failure:=originalCleanup(owner,&phaseFiles{s},preceding,nil,nil,nil,nil)
   if !errors.Is(failure,preceding){t.Fatal("prior failure identity was discarded",failure)}
   if s.removed!=1||owner.closed{t.Fatal("diagnostics changed original ready/descriptor ownership")}
   if phase=="retry"||phase=="current"{
@@ -477,7 +479,7 @@ func TestOrderedProofJoinsBeforeOriginalNativeCleanup(t *testing.T){
  for _,phase:=range []string{"proof join","retry","current"}{t.Run(phase,func(t *testing.T){synctest.Test(t,func(t *testing.T){
   s:=&trace{fault:phase,started:time.Now()}
   owner:=&routerVPNLinuxNodeControl{native:&phaseNative{s},preparation:&phasePreparation{s},control:&phaseControl{s}}
-  failure:=originalCleanup(owner,&phaseFiles{s},preceding,&phaseChain{s},nil,nil)
+  failure:=originalCleanup(owner,&phaseFiles{s},preceding,&phaseChain{s},nil,nil,nil)
   if !errors.Is(failure,preceding)||s.proof!=1||s.removed!=1||owner.closed{t.Fatal("ordered proof changed original cleanup identity",failure,s)}
   if phase=="proof join"{
    if !errors.Is(failure,cause)||s.native!=0||s.source!=0||s.exchange!=0||s.protection!=0||s.published!=0||owner.retired{t.Fatal("unjoined ordered proof entered native retirement",failure,s)}
@@ -492,7 +494,7 @@ func TestExecutionJoinsBeforeOriginalNativeCleanup(t *testing.T){
  for _,phase:=range []string{"execution join","retry","current"}{t.Run(phase,func(t *testing.T){synctest.Test(t,func(t *testing.T){
   s:=&trace{fault:phase,started:time.Now()}
   owner:=&routerVPNLinuxNodeControl{native:&phaseNative{s},preparation:&phasePreparation{s},control:&phaseControl{s}}
-  failure:=originalCleanup(owner,&phaseFiles{s},preceding,nil,&phaseExecution{s},nil)
+  failure:=originalCleanup(owner,&phaseFiles{s},preceding,nil,&phaseExecution{s},nil,nil)
   if !errors.Is(failure,preceding)||s.execution!=1||s.proof!=0||s.removed!=1||owner.closed{t.Fatal("execution changed original cleanup identity",failure,s)}
   if phase=="execution join"{
    if !errors.Is(failure,cause)||s.native!=0||s.source!=0||s.exchange!=0||s.protection!=0||s.published!=0||owner.joined||owner.acknowledged||owner.retired{t.Fatal("unjoined execution entered native retirement",failure,s)}
@@ -507,7 +509,7 @@ func TestSOCKSProofJoinsBeforeOriginalNativeCleanup(t *testing.T){
  for _,phase:=range []string{"SOCKS join","retry","current"}{t.Run(phase,func(t *testing.T){synctest.Test(t,func(t *testing.T){
   s:=&trace{fault:phase,started:time.Now()}
   owner:=&routerVPNLinuxNodeControl{native:&phaseNative{s},preparation:&phasePreparation{s},control:&phaseControl{s}}
-  failure:=originalCleanup(owner,&phaseFiles{s},preceding,nil,nil,&phaseSOCKS{s})
+  failure:=originalCleanup(owner,&phaseFiles{s},preceding,nil,nil,&phaseSOCKS{s},nil)
   if !errors.Is(failure,preceding)||s.socks!=1||s.prefix!=0||s.execution!=0||s.proof!=0||s.removed!=1||owner.closed{t.Fatal("SOCKS proof changed original cleanup identity",failure,s)}
   if phase=="SOCKS join"{
    if !errors.Is(failure,cause)||s.native!=0||s.source!=0||s.receipt!=0||s.exchange!=0||s.protection!=0||s.published!=0||owner.joined||owner.acknowledged||owner.retired{t.Fatal("unjoined SOCKS proof entered native retirement",failure,s)}
@@ -518,11 +520,26 @@ func TestSOCKSProofJoinsBeforeOriginalNativeCleanup(t *testing.T){
   if phase=="retry"&&time.Since(s.started)!=100*time.Millisecond{t.Fatal("SOCKS proof changed original retry cadence")}
  })})}
 }
+func TestCONNECTProofJoinsBeforeOriginalNativeCleanup(t *testing.T){
+ for _,phase:=range []string{"CONNECT join","retry","current"}{t.Run(phase,func(t *testing.T){synctest.Test(t,func(t *testing.T){
+  s:=&trace{fault:phase,started:time.Now()}
+  owner:=&routerVPNLinuxNodeControl{native:&phaseNative{s},preparation:&phasePreparation{s},control:&phaseControl{s}}
+  failure:=originalCleanup(owner,&phaseFiles{s},preceding,&phaseChain{s},&phaseExecution{s},&phaseSOCKS{s},&phaseCONNECT{s},&phasePrefix{s})
+  if !errors.Is(failure,preceding)||s.connect!=1||s.removed!=1||owner.closed{t.Fatal("CONNECT proof changed original cleanup identity",failure,s)}
+  if phase=="CONNECT join"{
+   if !errors.Is(failure,cause)||s.socks!=0||s.prefix!=0||s.execution!=0||s.proof!=0||s.native!=0||s.source!=0||s.receipt!=0||s.exchange!=0||s.protection!=0||s.published!=0||owner.joined||owner.acknowledged||owner.retired{t.Fatal("unjoined CONNECT proof entered native retirement",failure,s)}
+   return
+  }
+  if errors.Is(failure,cause)||!owner.joined||!owner.acknowledged||!owner.retired||s.published!=1||s.socks!=1||s.prefix!=1||s.execution!=1||s.proof!=1||s.source!=1||s.receipt!=1||s.exchange!=1||s.protection!=1{t.Fatal("CONNECT proof changed original native completion",failure,s)}
+  want:=1;if phase=="retry"{want=3};if s.native!=want{t.Fatal("CONNECT proof changed original join retry",s)}
+  if phase=="retry"&&time.Since(s.started)!=100*time.Millisecond{t.Fatal("CONNECT proof changed original retry cadence")}
+ })})}
+}
 func TestPrefixJoinsBeforeOriginalNativeCleanup(t *testing.T){
  for _,phase:=range []string{"prefix join","retry","current"}{t.Run(phase,func(t *testing.T){synctest.Test(t,func(t *testing.T){
   s:=&trace{fault:phase,started:time.Now()}
   owner:=&routerVPNLinuxNodeControl{native:&phaseNative{s},preparation:&phasePreparation{s},control:&phaseControl{s}}
-  failure:=originalCleanup(owner,&phaseFiles{s},preceding,nil,nil,nil,&phasePrefix{s})
+  failure:=originalCleanup(owner,&phaseFiles{s},preceding,nil,nil,nil,nil,&phasePrefix{s})
   if !errors.Is(failure,preceding)||s.prefix!=1||s.execution!=0||s.proof!=0||s.removed!=1||owner.closed{t.Fatal("prefix changed original cleanup identity",failure,s)}
   if phase=="prefix join"{
    if !errors.Is(failure,cause)||s.native!=0||s.source!=0||s.exchange!=0||s.protection!=0||s.published!=0||owner.joined||owner.acknowledged||owner.retired{t.Fatal("unjoined prefix entered native retirement",failure,s)}
@@ -555,6 +572,8 @@ func TestPrefixJoinsBeforeOriginalNativeCleanup(t *testing.T){
                 self.assertEqual(result.stdout.count('--- PASS: TestPrefixJoinsBeforeOriginalNativeCleanup/'+phase+' '), 1, result.stdout)
             for phase in ('SOCKS_join', 'retry', 'current'):
                 self.assertEqual(result.stdout.count('--- PASS: TestSOCKSProofJoinsBeforeOriginalNativeCleanup/'+phase+' '), 1, result.stdout)
+            for phase in ('CONNECT_join', 'retry', 'current'):
+                self.assertEqual(result.stdout.count('--- PASS: TestCONNECTProofJoinsBeforeOriginalNativeCleanup/'+phase+' '), 1, result.stdout)
             mutant = fixture.replace('owner.control == nil || !owner.joined ||', 'owner.control == nil || false ||', 1)
             self.assertNotEqual(mutant, fixture)
             (root/'phase_test.go').write_text(mutant)
@@ -585,7 +604,7 @@ func TestPrefixJoinsBeforeOriginalNativeCleanup(t *testing.T){
             self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
             self.assertIn('--- FAIL: TestPrefixJoinsBeforeOriginalNativeCleanup', rejected.stdout)
             self.assertIn('unjoined prefix entered native retirement', rejected.stdout)
-            mutant = fixture.replace('if err:=socksRuntime.close(cleanup);err!=nil{', 'if err:=socksRuntime.close(cleanup);false&&err!=nil{', 1)
+            mutant = fixture.replace('if err := socksRuntime.close(cleanup); err != nil {', 'if err := socksRuntime.close(cleanup); false && err != nil {', 1)
             self.assertNotEqual(mutant, fixture)
             (root/'phase_test.go').write_text(mutant)
             rejected = subprocess.run(['go', 'test', '-race', '-count=1', '-run=^TestSOCKSProofJoinsBeforeOriginalNativeCleanup/SOCKS_join$', '.'],
@@ -593,6 +612,22 @@ func TestPrefixJoinsBeforeOriginalNativeCleanup(t *testing.T){
             self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
             self.assertIn('--- FAIL: TestSOCKSProofJoinsBeforeOriginalNativeCleanup', rejected.stdout)
             self.assertIn('unjoined SOCKS proof entered native retirement', rejected.stdout)
+            mutant = fixture.replace('if err := connectRuntime.close(cleanup); err != nil {', 'if err := connectRuntime.close(cleanup); false && err != nil {', 1)
+            self.assertNotEqual(mutant, fixture)
+            (root/'phase_test.go').write_text(mutant)
+            rejected = subprocess.run(['go', 'test', '-race', '-count=1', '-run=^TestCONNECTProofJoinsBeforeOriginalNativeCleanup/CONNECT_join$', '.'],
+                                      cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn('--- FAIL: TestCONNECTProofJoinsBeforeOriginalNativeCleanup', rejected.stdout)
+            self.assertIn('unjoined CONNECT proof entered native retirement', rejected.stdout)
+            mutant = fixture.replace('if err := connectRuntime.close(cleanup); err != nil {', 'if err := error(nil); err != nil {', 1)
+            self.assertNotEqual(mutant, fixture)
+            (root/'phase_test.go').write_text(mutant)
+            rejected = subprocess.run(['go', 'test', '-race', '-count=1', '-run=^TestCONNECTProofJoinsBeforeOriginalNativeCleanup/current$', '.'],
+                                      cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+            self.assertIn('--- FAIL: TestCONNECTProofJoinsBeforeOriginalNativeCleanup', rejected.stdout)
+            self.assertIn('CONNECT proof changed original cleanup identity', rejected.stdout)
 
 
 if __name__ == '__main__':
