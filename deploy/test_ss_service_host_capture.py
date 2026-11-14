@@ -131,7 +131,8 @@ def android(bundle,work):
   path=work/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text)
  app=work/'com/eabusham/routervpn';app.mkdir(parents=True)
  store_dependencies=load('ss_shipping_store_dependencies',ROOT/'android/android_store_fixture.py')
- for name,text in store_dependencies.sources().items():
+ store_sources=store_dependencies.sources()
+ for name,text in store_sources.items():
   if name.endswith('/AndroidExternalPolicy.java'):continue
   path=work/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text)
  for name in ('AndroidNodeStore','AndroidProfileSelection'):
@@ -139,7 +140,10 @@ def android(bundle,work):
  boundaries='package com.eabusham.routervpn; import org.json.*;import java.util.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;\n'
  boundaries+=block(P.BOUNDARIES,'final class AndroidPrivateFileStore')+block(P.BOUNDARIES,'final class AndroidVpnMutationGuard')
  boundaries+=block(P.BOUNDARIES,'final class AndroidHomeStateStore')+block(P.BOUNDARIES,'final class AndroidRuntimeRegistry')
- boundaries+='''final class AndroidExternalPolicy {static JSONObject profile(AndroidStandardExitStore.Entry entry){throw new AssertionError("Unentered imported ordered profile capture");}static final class Captured{String source="{}",capture="{}";}static Captured captureImportedEntry(AndroidStandardExitStore.Entry e){return new Captured();}
+ # Retain the shipping saved-policy validator with its complete pure closure;
+ # only this fixture's explicit imported capture boundary is supplied below.
+ policy=block(store_sources['com/eabusham/routervpn/AndroidExternalPolicy.java'],'final class AndroidExternalPolicy')
+ boundaries+=policy[:-1]+'''static final class Captured{String source="{}",capture="{}";}static Captured captureImportedEntry(AndroidStandardExitStore.Entry e){return new Captured();}
 '''+block((JAVA/'AndroidExternalPolicy.java').read_text(),'    static String protocol(')+'}\n'
  layer=(JAVA/'AndroidStartLayer.java').read_text()
  boundaries+='final class AndroidStartLayer {'+'\n'.join(line for line in layer.splitlines() if any('static final String '+name+' =' in line for name in ('OFF','AES','AES_XOR')))
