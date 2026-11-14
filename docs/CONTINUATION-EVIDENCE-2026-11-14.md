@@ -193,6 +193,31 @@ not installed Darwin/Windows/Linux or physical-device acceptance. Exact-main
 `desktop-socks-child`, `darwin-socks-child`, and `darwin-socks-installed` runs
 remain required after publication; both Darwin architectures must be checked.
 
+## Fresh encrypted-peer compilation correction after f8047686
+
+The exact `f8047686bde510447a332c5fbb650bb2c990de9b` authoritative ARM64
+Server job `132296628583` compiled the shipping Server CLI, then rejected an
+unused `network` import in the new SOCKS middle test template. The accompanying
+correction removes only that unused import; the original encrypted fixtures,
+cases, controls and runtime code remain intact.
+
+A fresh canonical source preparation with Go 1.26.3 compiled the actual Linux
+AMD64 shipping CLI, full encrypted-peer test package and native acceptance
+driver. The original source-inventory root and all fourteen leaves passed.
+The generated sources remained unchanged, and the owned compilation workspace
+retired. This was the gate's explicit `compile_only` mode: it did not run the
+fourteen namespace/network acceptance cases and cannot issue native acceptance.
+The full compile/source result has SHA-256
+`41769a2b4cec09229252ac082ba9c1a05dc357c892105d2e30e9f1b4513635e8`;
+the original ARM64 compiler failure remains preserved separately. The new
+published SHA still requires hosted ARM64 and complete release verification.
+
+Two retained hosted results advanced separately: the exact `3dff2d60`
+encrypted SOCKS Run job `132292458535` completed successfully, and all ten
+jobs of the exact `c3b8100e` Windows MAX run `43541580151` completed
+successfully. Their older source identities are retained; neither is relabeled
+as acceptance of a later main commit or the whole product.
+
 ## Active source work and acceptance still required
 
 Windows/Linux typed retained-parent adapters and full native-host acceptance
