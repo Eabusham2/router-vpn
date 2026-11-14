@@ -366,14 +366,18 @@ function global:Assert-RouterVPNOrderedCapture {
     }
 }
 function global:Assert-RouterVPNOrderedNode {
-    param($Node,[int]$Position)
-    if(-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'node_id'))-or-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'label') 256)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or[string](Get-RouterVPNOrderedValue $Node 'role')-cne@('entry','intermediate','exit')[$Position]){throw 'A measured hop changed its identity or position.'}
-    $Kind=if($Position-eq1){'public-path'}else{'private-node'};$Method=if($Position-eq1){'routed-https-response-after-tls'}else{'routed-private-response-including-connection'}
-    if([string](Get-RouterVPNOrderedValue $Node 'kind')-cne$Kind-or[string](Get-RouterVPNOrderedValue $Node 'measurement')-cne$Method){throw 'A measured hop changed its timing method.'}
+    param($Node,[int]$Position,[int]$Count=3)
+    $Role=if($Position-eq0){'entry'}elseif($Position-eq($Count-1)){'exit'}else{'intermediate'}
+    if($Count-lt2-or$Count-gt8-or$Position-lt0-or$Position-ge$Count-or-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'node_id'))-or-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'label') 256)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or[string](Get-RouterVPNOrderedValue $Node 'role')-cne$Role){throw 'A measured hop changed its identity or position.'}
+    $Kind=[string](Get-RouterVPNOrderedValue $Node 'kind');$Public=$Kind-ceq'public-path'
+    $Method=if($Public){'routed-https-response-after-tls'}else{'routed-private-response-including-connection'}
+    if(($Kind-cne'private-node'-and-not($Public-and$Count-eq3-and$Position-eq1))-or[string](Get-RouterVPNOrderedValue $Node 'measurement')-cne$Method){throw 'A measured hop changed its timing method.'}
 }
 function global:Assert-RouterVPNOrderedReceipt {
-    param($Receipt,$Capture,$Node,[switch]$Current)
+    param($Receipt,$Capture,$Node,[switch]$Current,[int]$Count=3)
     $Position=Get-RouterVPNOrderedValue $Node 'position';$ID=[string](Get-RouterVPNOrderedValue $Node 'node_id')
+    Assert-RouterVPNOrderedNode $Node $Position $Count
+    $Public=[string](Get-RouterVPNOrderedValue $Node 'kind')-ceq'public-path'
     foreach($Key in @('source_sha256','config_sha256')){if([string](Get-RouterVPNOrderedValue $Receipt $Key)-cne[string](Get-RouterVPNOrderedValue $Capture $Key)){throw 'Saved response times belong to another route.'}}
     $Generation=Get-RouterVPNOrderedValue $Receipt 'generation_sha256';$Request=Get-RouterVPNOrderedValue $Receipt 'request_id'
     if($Generation-isnot[string]-or$Generation-cnotmatch'^[0-9a-f]{64}$'-or($Current-and$Generation-cne[string](Get-RouterVPNOrderedValue $Capture 'generation_sha256'))-or$Request-isnot[string]-or$Request-cnotmatch'^[0-9a-f]{32}$'-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Receipt 'schema') 1 1 -Integer)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Receipt 'position') $Position $Position -Integer)-or[string](Get-RouterVPNOrderedValue $Receipt 'node_id')-cne$ID){throw 'The response receipt lost its original owner.'}
@@ -381,12 +385,12 @@ function global:Assert-RouterVPNOrderedReceipt {
     if(-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Receipt 'measured_at') 1 ($Now+1000) -Integer)){throw 'Saved response times have an invalid measurement date.'}
     $Result=Get-RouterVPNOrderedValue $Receipt 'result';$Benchmark=Get-RouterVPNOrderedValue $Result 'benchmark';$Distribution=Get-RouterVPNOrderedValue $Benchmark 'distribution';$Ready=Get-RouterVPNOrderedValue $Result 'ready'
     foreach($Key in @('node_id','role','kind')){if([string](Get-RouterVPNOrderedValue $Result $Key)-cne[string](Get-RouterVPNOrderedValue $Node $Key)){throw 'The result describes another measured hop.'}}
-    $Label=if($Position-eq1){'Cumulative path through custom node 2 of 3 '+[char]0x2192+' Cloudflare edge'}else{'Cumulative path through node '+($Position+1)+' of 3'}
+    $Label=if($Public){'Cumulative path through custom node 2 of 3 '+[char]0x2192+' Cloudflare edge'}else{'Cumulative path through node '+($Position+1)+' of '+$Count}
     if([string](Get-RouterVPNOrderedValue $Result 'label')-cne$Label){throw 'The receipt changed its measurement label.'}
     foreach($Key in @('idle','download','upload','response')){if($null-ne(Get-RouterVPNOrderedValue $Result $Key)){throw 'A response-time receipt contains a different measurement.'}}
     if($Ready-isnot[bool]-or-not$Ready-or[string](Get-RouterVPNOrderedValue $Result 'failure' '')-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Benchmark 'schema') 1 1 -Integer)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Benchmark 'attempts') 50 50 -Integer)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Benchmark 'failed') 0 0 -Integer)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Distribution 'samples') 50 50 -Integer)-or[string](Get-RouterVPNOrderedValue $Benchmark 'measurement')-cne[string](Get-RouterVPNOrderedValue $Node 'measurement')){throw 'The result does not contain 50 valid responses from this hop.'}
-    $Endpoint=[string](Get-RouterVPNOrderedValue $Benchmark 'endpoint' '');$Expected=if($Position-eq1){'https://speed.cloudflare.com/__down?bytes=1'}else{''};if($Endpoint-cne$Expected){throw 'The response timing used another endpoint.'}
-    $Maximum=if($Position-eq1){5000}else{2000}
+    $Endpoint=[string](Get-RouterVPNOrderedValue $Benchmark 'endpoint' '');$Expected=if($Public){'https://speed.cloudflare.com/__down?bytes=1'}else{''};if($Endpoint-cne$Expected){throw 'The response timing used another endpoint.'}
+    $Maximum=if($Public){5000}else{2000}
     foreach($Key in @('min_ms','median_ms','average_ms','p90_ms','max_ms')){if(-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Distribution $Key) ([double]::Epsilon) $Maximum)){throw 'The response distribution is invalid.'}}
     $Min=[double](Get-RouterVPNOrderedValue $Distribution 'min_ms');$Median=[double](Get-RouterVPNOrderedValue $Distribution 'median_ms');$P90=[double](Get-RouterVPNOrderedValue $Distribution 'p90_ms');$Max=[double](Get-RouterVPNOrderedValue $Distribution 'max_ms')
     if($Min-gt$Median-or$Median-gt$P90-or$P90-gt$Max-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Distribution 'average_ms') $Min $Max)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Benchmark 'trimmed_mean_ms') $Min $Max)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Distribution 'jitter_ms') 0 ($Max-$Min+1e-9))){throw 'The response distribution is not coherent.'}
@@ -451,10 +455,10 @@ function global:Receive-RouterVPNOrderedStatus {
     if($Initial){
         if($State.Invalid){throw 'The selected profile changed. Reopen hop measurements.'}
         $Rows=Get-RouterVPNOrderedValue $Value 'nodes';$History=Get-RouterVPNOrderedValue $Value 'history' @()
-        if($null-ne$State.Capture-or[string](Get-RouterVPNOrderedValue $Capture 'profile_id')-cne$State.Displayed-or$Request-or$Stage-cne'idle'-or-not$Complete-or-not$Drained-or$Rows-isnot[array]-or$Rows.Count-ne3-or$History-isnot[array]-or$History.Count-gt128){throw 'Connect the selected ordered route, then reopen hop measurements.'}
+        if($null-ne$State.Capture-or[string](Get-RouterVPNOrderedValue $Capture 'profile_id')-cne$State.Displayed-or$Request-or$Stage-cne'idle'-or-not$Complete-or-not$Drained-or$Rows-isnot[array]-or$Rows.Count-lt2-or$Rows.Count-gt8-or$History-isnot[array]-or$History.Count-gt128){throw 'Connect the selected ordered route, then reopen hop measurements.'}
         $IDs=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-        for($Index=0;$Index-lt3;$Index++){Assert-RouterVPNOrderedNode $Rows[$Index] $Index;if(-not$IDs.Add([string](Get-RouterVPNOrderedValue $Rows[$Index] 'node_id'))){throw 'Duplicate measured hop.'}}
-        foreach($Record in $History){$Position=Get-RouterVPNOrderedValue $Record 'position';if(-not(Test-RouterVPNOrderedNumber $Position 0 2 -Integer)){throw 'Invalid saved hop.'};Assert-RouterVPNOrderedReceipt $Record $Capture $Rows[[int]$Position]}
+        for($Index=0;$Index-lt$Rows.Count;$Index++){Assert-RouterVPNOrderedNode $Rows[$Index] $Index $Rows.Count;if(-not$IDs.Add([string](Get-RouterVPNOrderedValue $Rows[$Index] 'node_id'))){throw 'Duplicate measured hop.'}}
+        foreach($Record in $History){$Position=Get-RouterVPNOrderedValue $Record 'position';if(-not(Test-RouterVPNOrderedNumber $Position 0 ($Rows.Count-1) -Integer)){throw 'Invalid saved hop.'};Assert-RouterVPNOrderedReceipt $Record $Capture $Rows[[int]$Position] -Count $Rows.Count}
         $State.Capture=$Capture;$State.Nodes=$Rows;$State.History=$History;$State.Status='Choose a hop. Saved results show when that route was measured.';return
     }
     foreach($Key in @('session_id','profile_id','profile_token','source_sha256','config_sha256','generation_sha256')){if([string](Get-RouterVPNOrderedValue $Capture $Key)-cne[string](Get-RouterVPNOrderedValue $State.Capture $Key)){throw 'The response belongs to another captured route.'}}
@@ -463,7 +467,7 @@ function global:Receive-RouterVPNOrderedStatus {
     $Finished=$Complete-and$Drained;$Record=Get-RouterVPNOrderedValue $Value 'receipt'
     if($null-ne$Record){
         if(-not$Finished-or$Stage-cne'complete'-or$Failure-or[string](Get-RouterVPNOrderedValue $Record 'request_id')-cne$State.Request){throw 'An unfinished test cannot replace saved history.'}
-        Assert-RouterVPNOrderedReceipt $Record $State.Capture $State.Node -Current
+        Assert-RouterVPNOrderedReceipt $Record $State.Capture $State.Node -Current -Count $State.Nodes.Count
         if($State.Invalid){$State.Status='The original test finished and saved its result for the previous profile. Reopen hop measurements for the selected profile.'}
         else{
             $State.History=@($State.History|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'node_id')-cne[string](Get-RouterVPNOrderedValue $State.Node 'node_id')})+@($Record)

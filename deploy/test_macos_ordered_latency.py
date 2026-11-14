@@ -68,6 +68,53 @@ final class Driver {
     func stop() { for task in jobs { task.completion(.failure(NSError(domain:"closed test",code:1))) };pump();if controller.closeReady { controller.stop() } }
 }
 
+
+// Paired paths retain every real position; the middle of a private three-node
+// path is not the special imported HTTPS endpoint.
+func pairedNodes(_ count: Int) -> [[String: Any]] {
+    (0..<count).map { position in
+        ["node_id":"node-\(position)", "position":position, "role":position == 0 ? "entry" : position == count-1 ? "exit" : "intermediate",
+         "label":"Private hop \(position+1)", "kind":"private-node", "measurement":"routed-private-response-including-connection"]
+    }
+}
+func pairedReceipt(_ count: Int, _ position: Int, _ request: String) -> [String: Any] {
+    var saved=receipt(request), result=saved["result"] as! [String:Any]
+    let node=pairedNodes(count)[position]
+    saved["position"]=position;saved["node_id"]=node["node_id"]!
+    result["node_id"]=node["node_id"]!;result["role"]=node["role"]!;result["kind"]="private-node"
+    result["label"]="Cumulative path through node \(position+1) of \(count)";saved["result"]=result
+    return saved
+}
+for count in 2...8 {
+    let rows=pairedNodes(count), owner=Driver();owner.controller.open()
+    var info=response();info["nodes"]=rows;info["history"]=[pairedReceipt(count,0,String(repeating:"e",count:32))]
+    try owner.jobs[0].reply(info);owner.pump()
+    check(owner.controller.canRetest && owner.controller.nodes.count == count,"whole private inventory \(count)")
+    let captured=try decoded(info).capture
+    for position in 0..<count {
+        let node=try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(rows[position]))
+        let valid=try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(pairedReceipt(count,position,String(repeating:"f",count:32))))
+        try node.validate(count:count);try valid.validate(capture:captured,node:node,count:count,current:true,now:fixedNow);checks += 2
+        var wrong=pairedReceipt(count,position,String(repeating:"f",count:32)), result=wrong["result"] as! [String:Any]
+        var benchmark=result["benchmark"] as! [String:Any], distribution=benchmark["distribution"] as! [String:Any]
+        distribution["max_ms"]=2001.0;benchmark["distribution"]=distribution;result["benchmark"]=benchmark;wrong["result"]=result
+        rejected("private budget including middle \(count)/\(position)") {try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(wrong)).validate(capture:captured,node:node,count:count,current:true,now:fixedNow)}
+        result["benchmark"]=(pairedReceipt(count,position,String(repeating:"f",count:32))["result"] as! [String:Any])["benchmark"]!
+        result["label"]="Cumulative path through node \(position+1) of \(count == 8 ? 7 : 8)";wrong["result"]=result
+        rejected("foreign path length \(count)/\(position)") {try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(wrong)).validate(capture:captured,node:node,count:count,current:true,now:fixedNow)}
+    }
+    owner.controller.retest(position:count-1);let request=owner.controller.requestID
+    let terminal=response(request,position:count-1,stage:"complete",saved:pairedReceipt(count,count-1,request))
+    try owner.jobs.last!.reply(terminal);owner.pump()
+    check(owner.controller.drained && owner.controller.history.contains(where:{$0.position == count-1 && $0.request_id == request}),"last private hop saved through shipping callback \(count)")
+    check(owner.controller.requestClose(),"whole private path joined \(count)");owner.controller.stop()
+}
+for count in [1,9] {
+    let owner=Driver();owner.controller.open();var info=response();info["nodes"]=pairedNodes(count);info["history"]=[]
+    try owner.jobs[0].reply(info);owner.pump();check(owner.controller.invalid && !owner.controller.canRetest,"unbounded inventory refused")
+    check(owner.controller.requestClose(),"refused inventory joined");owner.controller.stop()
+}
+
 // Receipt meanings remain separate, exact-fifty and tied to their original path.
 let cap = try decoded(response()).capture
 check(RouterVPNOrderedCapture.session(cap.session_id),"tracker session remains its real opaque format")
@@ -189,6 +236,8 @@ print("PASS \(checks) shipping ordered-fifty checks")
 '''
 
 CONTROLS = {
+    "three_only": ("(2...8).contains(rows.count)", "rows.count == 3"),
+    "private_middle_budget": ("maximum = node.kind == \"public-path\" ? 5000.0 : 2000.0", "maximum = node.position == 1 ? 5000.0 : 2000.0"),
     "foreign_capture": ("reply.capture == capture", "true"),
     "premature_drain": ("let finished = reply.status.complete && reply.status.drained", "let finished = reply.status.complete"),
     "partial_fifty": ("b.attempts == 50, b.failed == 0, d.samples == 50", "b.attempts >= 0, b.failed >= 0, d.samples >= 0"),

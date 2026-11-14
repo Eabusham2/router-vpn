@@ -48,8 +48,56 @@ def info():
                 status=dict(request_id="", stage="idle", complete=True, drained=True, results=[]))
 
 
+def ordinary_fixture(count):
+    nodes = [dict(node_id=f"node-{i}", position=i, label=f"Private hop {i+1}",
+                  role="entry" if i == 0 else "exit" if i == count-1 else "intermediate",
+                  kind="private-node", measurement="routed-private-response-including-connection") for i in range(count)]
+    receipts = []
+    for position, node in enumerate(nodes):
+        saved = receipt(0)
+        saved.update(node_id=node["node_id"], position=position)
+        saved["result"].update(node_id=node["node_id"], role=node["role"], kind=node["kind"],
+                               label=f"Cumulative path through node {position+1} of {count}")
+        receipts.append(saved)
+    return dict(info=dict(schema=1, capture=copy.deepcopy(CAPTURE), nodes=nodes, history=[copy.deepcopy(receipts[0])],
+                          status=dict(request_id="", stage="idle", complete=True, drained=True, results=[])), receipts=receipts)
+
+
+def fixture_data():
+    return {'info': info(), **{f'receipt{i}': receipt(i) for i in range(3)},
+            'ordinary': [ordinary_fixture(count) for count in range(2, 9)]}
+
+
+def receipt_model(directory, data):
+    # The slice is byte-for-byte production helpers, with no GTK/process mocks
+    # inside receipt validation. Native widgets and owned HTTP remain below.
+    source = SOURCE.read_text()
+    first = 'static const char *linux_ol_string_v1('
+    last = 'static void linux_ol_message_v1('
+    assert source.count(first) == source.count(last) == 1
+    block = source[source.index(first):source.index(last)]
+    flags = shlex.split(subprocess.check_output(['pkg-config', '--cflags', '--libs', 'json-glib-1.0'], text=True))
+    fixture = ROOT/'client/linux/test-ordered-latency-receipts-v1.c'
+    controls = {
+        'private-budget': ('double maximum = public_path ? 5000 : 2000;', 'double maximum = position == 1 ? 5000 : 2000;'),
+        'path-length': ('g_snprintf(label, sizeof(label), "Cumulative path through node %d of %d", position+1, count);', 'g_snprintf(label, sizeof(label), "Cumulative path through node %d of %d", position+1, 3);'),
+    }
+    for name, change in [('shipping', None), *controls.items()]:
+        text = block
+        if change:
+            before, after = change
+            assert text.count(before) == 1, name
+            text = text.replace(before, after, 1)
+        include = directory/(name+'-validators.inc'); include.write_text(text)
+        binary = directory/(name+'-receipt-model')
+        run(['cc', '-O1', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
+             '-DROUTERVPN_ORDERED_VALIDATORS="'+str(include)+'"', fixture, '-o', binary, *flags, '-lm'])
+        run([binary, data], broken=change is not None)
+        if change: print('Rejected changed shipping C receipt validator: '+name, flush=True)
+
+
 def sources():
-    paths = [SOURCE, FIXTURE, Path(__file__), ROOT/"client/linux/routervpn-http-job-v16.h",
+    paths = [SOURCE, FIXTURE, ROOT/"client/linux/test-ordered-latency-receipts-v1.c", Path(__file__), ROOT/"client/linux/routervpn-http-job-v16.h",
              ROOT/"client/linux/routervpn-controller-auth-v1.h", ROOT/"client/linux/routervpn-performance-v17.inc",
              ROOT/"client/linux/routervpn-telemetry-v9.inc", ROOT/"client/linux/build-native-app.sh",
              ROOT/".github/workflows/linux-native-app.yml"]
@@ -73,7 +121,7 @@ def check_sources():
     assert 'python3 deploy/test_linux_ordered_latency.py --self-test' in workflow
     assert workflow.count("'deploy/test_linux_ordered_latency.py'") == 2
     for required in ('s->job_generation[kind] == s->generation', '!(s->complete && s->drained)',
-                     'linux_ol_same_capture_v1(capture,', 'linux_ol_receipt_v1(json_node_get_object(record), capture, node, TRUE)',
+                     'linux_ol_same_capture_v1(capture,', 'linux_ol_receipt_v1(json_node_get_object(record), capture, node, (int)json_array_get_length(json_node_get_array(s->nodes)), TRUE)',
                      's->jobs[i] != NULL', 'gtk_window_close(GTK_WINDOW(parent))',
                      'if (s->complete && s->drained) return TRUE;', 'rv_http_free_v16(s->jobs[i])',
                      'g_date_time_format(date, "%Y-%m-%d %H:%M:%S %Z")'):
@@ -168,15 +216,22 @@ def controller(scenario):
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--source-only',action='store_true');parser.add_argument('--self-test',action='store_true');args=parser.parse_args()
-    if args.source_only and args.self_test:parser.error("source-only cannot claim native self-test")
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--source-only',action='store_true');parser.add_argument('--self-test',action='store_true');parser.add_argument('--receipt-model',action='store_true');args=parser.parse_args()
+    if args.source_only and (args.self_test or args.receipt_model):parser.error("source-only cannot claim native self-test")
+    if args.self_test and args.receipt_model:parser.error("receipt-model cannot replace the full GTK self-test")
     before=check_sources()
     if args.source_only:return
+    with tempfile.TemporaryDirectory(prefix='routervpn-c-ordered-receipts-') as temporary:
+        directory=Path(temporary);data=directory/'fixture.json';data.write_text(json.dumps(fixture_data()))
+        receipt_model(directory,data)
+    if args.receipt_model:
+        assert sources()==before,'original C receipt source changed during validation'
+        return
     missing=[name for name in ('pkg-config','cc','xvfb-run') if not shutil.which(name)]
     if missing:raise RuntimeError("Actual GTK validation unavailable; missing "+', '.join(missing))
     flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','libcurl','json-glib-1.0'],text=True))
     with tempfile.TemporaryDirectory(prefix='routervpn-gtk-ordered-') as temporary:
-        directory=Path(temporary);data=directory/'fixture.json';data.write_text(json.dumps({'info':info(),**{f'receipt{i}':receipt(i) for i in range(3)}}))
+        directory=Path(temporary);data=directory/'fixture.json';data.write_text(json.dumps(fixture_data()))
         def compile_to(name,text=None,live=False):
             command=['cc','-O1','-Wall','-Wextra','-Werror','-Wno-unused-function','-I'+str(SOURCE.parent)]
             if text is not None:

@@ -100,6 +100,8 @@ def controller(scenario):
     finally: server.shutdown();server.server_close();thread.join()
 
 CONTROLS = {
+    "three_only": ("$Rows.Count-lt2-or$Rows.Count-gt8", "$Rows.Count-ne3"),
+    "private_middle_budget": ("$Maximum=if($Public){5000}else{2000}", "$Maximum=if($Position-eq1){5000}else{2000}"),
     "foreign_capture": ("if([string](Get-RouterVPNOrderedValue $Capture $Key)-cne[string](Get-RouterVPNOrderedValue $State.Capture $Key))", "if($false)"),
     "premature_drain": ("$Finished=$Complete-and$Drained", "$Finished=$Complete"),
     "partial_fifty": ("(Get-RouterVPNOrderedValue $Distribution 'samples') 50 50 -Integer", "(Get-RouterVPNOrderedValue $Distribution 'samples') 0 50 -Integer"),

@@ -96,14 +96,14 @@ static void validation(App *app) {
     LinuxOrderedLatencyV1 *s = ready(app); JsonObject *capture = json_node_get_object(s->capture);
     for (int position = 0; position < 3; position++) {
         char key[24]; g_snprintf(key, sizeof key, "receipt%d", position); JsonNode *n = field_copy(key); JsonObject *r = json_node_get_object(n), *node = json_array_get_object_element(json_node_get_array(s->nodes), (guint)position);
-        check(linux_ol_receipt_v1(r, capture, node, TRUE), "fifty actual responses accepted for each timing method");
+        check(linux_ol_receipt_v1(r, capture, node, 3, TRUE), "fifty actual responses accepted for each timing method");
         const char *fields[] = {"source_sha256", "config_sha256", "generation_sha256", "request_id", "node_id"};
-        for (guint i = 0; i < G_N_ELEMENTS(fields); i++) { JsonNode *bad = json_node_copy(n); json_object_set_string_member(json_node_get_object(bad), fields[i], "foreign"); check(!linux_ol_receipt_v1(json_node_get_object(bad), capture, node, TRUE), "foreign receipt owner refused"); json_node_free(bad); }
+        for (guint i = 0; i < G_N_ELEMENTS(fields); i++) { JsonNode *bad = json_node_copy(n); json_object_set_string_member(json_node_get_object(bad), fields[i], "foreign"); check(!linux_ol_receipt_v1(json_node_get_object(bad), capture, node, 3, TRUE), "foreign receipt owner refused"); json_node_free(bad); }
         const char *faults[] = {"samples", "attempts", "failed", "endpoint", "measurement", "median_ms", "jitter_ms", "trimmed_mean_ms", "date", "position", "ready", "probe-budget", "jitter-range", "unrelated", "label"};
         for (guint i = 0; i < G_N_ELEMENTS(faults); i++) {
             JsonNode *bad = json_node_copy(n); JsonObject *o = json_node_get_object(bad), *result = linux_ol_object_v1(o, "result"), *b = linux_ol_object_v1(result, "benchmark"), *d = linux_ol_object_v1(b, "distribution");
             switch(i) { case 0:json_object_set_int_member(d,"samples",49);break;case 1:json_object_set_int_member(b,"attempts",49);break;case 2:json_object_set_int_member(b,"failed",1);break;case 3:json_object_set_string_member(b,"endpoint","https://foreign.invalid/");break;case 4:json_object_set_string_member(b,"measurement","direct");break;case 5:json_object_set_double_member(d,"median_ms",0);break;case 6:json_object_set_double_member(d,"jitter_ms",-1);break;case 7:json_object_set_double_member(b,"trimmed_mean_ms",99999);break;case 8:json_object_set_int_member(o,"measured_at",g_get_real_time()/1000+60000);break;case 9:json_object_set_int_member(o,"position",(position+1)%3);break;case 10:json_object_set_boolean_member(result,"ready",FALSE);break;case 11:json_object_set_double_member(d,"max_ms",5001);break;case 12:json_object_set_double_member(d,"jitter_ms",5);break;case 13:json_object_set_object_member(result,"download",json_object_new());break;case 14:json_object_set_string_member(result,"label","foreign label");break; }
-            check(!linux_ol_receipt_v1(o, capture, node, TRUE), faults[i]); json_node_free(bad);
+            check(!linux_ol_receipt_v1(o, capture, node, 3, TRUE), faults[i]); json_node_free(bad);
         }
         json_node_free(n);
     }
@@ -117,6 +117,27 @@ static void validation(App *app) {
     linux_ol_cancel_v1(s); n = status(s,"complete",TRUE,TRUE,TRUE); check(linux_ol_receive_v1(s,json_node_get_object(n),FALSE),"commit before Cancel honestly remains saved");json_node_free(n);
     check(strstr(s->message,"finished before cancellation") != NULL && json_array_get_length(json_node_get_array(s->history)) == 2,"saved commit is visible with date/history");
     check(!linux_ol_settled_v1(s), "native drain still waits original HTTP jobs"); finish_jobs(s); dispose(s);
+}
+static void ordinary_validation(App *app) {
+    JsonArray *cases = json_object_get_array_member(json_node_get_object(fixture), "ordinary");
+    check(json_array_get_length(cases) == 7, "all bounded private path lengths");
+    for (guint index = 0; index < json_array_get_length(cases); index++) {
+        JsonObject *item = json_array_get_object_element(cases, index);
+        JsonArray *receipts = json_object_get_array_member(item, "receipts");
+        int count = (int)json_array_get_length(receipts);
+        LinuxOrderedLatencyV1 *s = panel(app); freeze(s);
+        reply(s->jobs[OL_INFO_V1], 200, json_node_copy(json_object_get_member(item, "info"))); linux_ol_tick_v1(s);
+        check(s->capture != NULL && !s->invalid && (int)json_array_get_length(json_node_get_array(s->nodes)) == count, "whole private inventory admitted by shipping GTK callback");
+        GtkTreeModel *model = gtk_combo_box_get_model(GTK_COMBO_BOX(s->hops));
+        check(gtk_tree_model_iter_n_children(model, NULL) == count, "all private hops appear in actual GTK chooser");
+        start(s, count-1);
+        JsonNode *terminal = status(s, "complete", TRUE, TRUE, FALSE), *saved = json_node_copy(json_array_get_element(receipts, count-1));
+        json_object_set_string_member(json_node_get_object(saved), "request_id", s->request);
+        json_object_set_member(json_node_get_object(terminal), "receipt", saved);
+        check(linux_ol_receive_v1(s, json_node_get_object(terminal), FALSE), "last private hop durable receipt accepted");
+        check(s->complete && s->drained && json_array_get_length(json_node_get_array(s->history)) == 2, "last private hop history changes only after native drain");
+        json_node_free(terminal);finish_jobs(s);dispose(s);
+    }
 }
 static void cancellation(App *app) {
     LinuxOrderedLatencyV1 *s = ready(app); start(s, 0); RVHttpJobV16 *original = s->jobs[OL_START_V1]; char *request = g_strdup(s->request);
@@ -160,7 +181,7 @@ int main(int argc,char **argv) {
     gtk_init(&argc,&argv);curl_global_init(CURL_GLOBAL_DEFAULT);App app={gtk_window_new(GTK_WINDOW_TOPLEVEL),"exit-a"};gtk_widget_show_all(app.window);
 #ifndef ROUTERVPN_ORDERED_LIVE
     check(argc==2,"fixture JSON supplied");char *text=NULL;check(g_file_get_contents(argv[1],&text,NULL,NULL),"read fixture");fixture=parse_json(text);g_free(text);check(fixture!=NULL,"fixture JSON valid");records=g_ptr_array_new();
-    validation(&app);cancellation(&app);checked_parent_shutdown=TRUE;gtk_widget_destroy(app.window);pump();
+    validation(&app);ordinary_validation(&app);cancellation(&app);checked_parent_shutdown=TRUE;gtk_widget_destroy(app.window);pump();
     for(guint i=0;i<records->len;i++){Record*r=g_ptr_array_index(records,i);check(r->freed,"every original HTTP worker released");g_free(r->path);g_free(r->body);g_free(r);}g_ptr_array_free(records,TRUE);json_node_free(fixture);
 #else
     check(argc==2,"live scenario supplied");live(&app,argv[1]);gtk_widget_destroy(app.window);pump();

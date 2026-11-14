@@ -134,4 +134,34 @@ Check ($S.Drained-and$S.Jobs.Count-eq0) 'exact committed original drains invalid
 Check ($S.History.Count-eq1-and$S.History[0].request_id-cne$ID) 'replacement cannot adopt original committed history'
 Check (-not(Start-RouterVPNOrderedLatency $S 0)-and(Request-RouterVPNOrderedClose $S)) 'invalidated view closes without retesting old capture'
 [void](Close-RouterVPNOrderedView $S)
+
+function PairedNodes([int]$Count) {return @(0..($Count-1)|ForEach-Object{@{node_id=('node-'+$_);position=$_;role=$(if($_-eq0){'entry'}elseif($_-eq($Count-1)){'exit'}else{'intermediate'});label=('Private hop '+($_+1));kind='private-node';measurement='routed-private-response-including-connection'}})}
+function PairedReceipt([int]$Count,[int]$Position,[string]$Request=('e'*32)) {
+    $R=Receipt $Request 0;$N=(PairedNodes $Count)[$Position];$R.position=$Position;$R.node_id=$N.node_id
+    $R.result.node_id=$N.node_id;$R.result.role=$N.role;$R.result.kind='private-node';$R.result.label='Cumulative path through node '+($Position+1)+' of '+$Count
+    return $R
+}
+foreach($Count in 2..8){
+    $Rows=PairedNodes $Count;$S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient
+    $V=Status;$V.nodes=$Rows;$V.history=@((PairedReceipt $Count 0));try{Receive-RouterVPNOrderedStatus $S $V -Initial}catch{Check $false ("whole private inventory $Count was rejected: "+$_.Exception.Message)}
+    Check ($S.Nodes.Count-eq$Count-and-not$S.Invalid) "whole private inventory $Count"
+    foreach($Position in 0..($Count-1)){
+        $N=$Rows[$Position];Assert-RouterVPNOrderedNode $N $Position $Count
+        $R=PairedReceipt $Count $Position;Assert-RouterVPNOrderedReceipt $R (Capture) $N -Current -Count $Count;$script:Checks+=2
+        $R.result.benchmark.distribution.max_ms=2001
+        Reject {Assert-RouterVPNOrderedReceipt $R (Capture) $N -Current -Count $Count} "private budget including middle $Count/$Position"
+        $R=PairedReceipt $Count $Position;$R.result.label='Cumulative path through node '+($Position+1)+' of '+$(if($Count-eq8){7}else{8})
+        Reject {Assert-RouterVPNOrderedReceipt $R (Capture) $N -Current -Count $Count} "foreign path length $Count/$Position"
+    }
+    $Position=$Count-1;Check (Start-RouterVPNOrderedLatency $S $Position) "last private hop starts $Count"
+    $Start=Pending $S '';$ID=$S.Request;$V=Status $ID $Position 'complete';$V.receipt=PairedReceipt $Count $Position $ID
+    Reply $Start 200 $V;Update-RouterVPNOrderedView $S
+    Check ($S.Drained-and@($S.History|Where-Object{$_.request_id-ceq$ID-and$_.position-eq$Position}).Count-eq1) "last private hop saved through shipping callback $Count"
+    Check (Request-RouterVPNOrderedClose $S) "whole private path joined $Count";[void](Close-RouterVPNOrderedView $S)
+}
+foreach($Count in @(1,9)){
+    $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$V=Status;$V.nodes=PairedNodes $Count;$V.history=@()
+    Reject {Receive-RouterVPNOrderedStatus $S $V -Initial} 'unbounded inventory refused'
+}
+
 Write-Output "PASS $script:Checks ordered hop shipping model checks"
