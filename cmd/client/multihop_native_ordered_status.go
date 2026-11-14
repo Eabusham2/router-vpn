@@ -58,10 +58,7 @@ func nativeOrderedExecutionStatusContext(ctx context.Context, a *app, command *e
 	}
 	// These existing locked guards never invoke a native observer. The proof
 	// uses TryLock, so a concurrent observation cannot block while app.mu is held.
-	if err := proof.currentLocked(launch, graph); err != nil {
-		return false, err
-	}
-	if err := execution.publicationCurrentLocked(ctx, a, launch, owner.selection); err != nil {
+	if err := execution.retainedCurrentLocked(ctx, a, owner, graph); err != nil {
 		return false, err
 	}
 	return true, ctx.Err()
