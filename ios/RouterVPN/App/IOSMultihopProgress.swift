@@ -31,10 +31,13 @@ extension RouterVPNModel {
             return
         }
         let connectedAt = session.connectedDate
-        guard configuration["nodeChainSource"] == nil || configuration["nodeChainSOCKSSource"] == nil else {
-            multihopProgressInFlight = nil; return
+        let chainKeys = ["nodeChainSource", "nodeChainSOCKSSource", "nodeChainCONNECTSource"]
+        let selectedKeys = chainKeys.filter { configuration[$0] != nil }
+        guard selectedKeys.count <= 1 else {
+            if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }
+            return
         }
-        let chainKey = configuration["nodeChainSOCKSSource"] == nil ? "nodeChainSource" : "nodeChainSOCKSSource"
+        let chainKey = selectedKeys.first ?? "nodeChainSource"
         let chainSource = configuration[chainKey] as? String
         if let identity {
             guard identity.connectedAt == connectedAt, identity.bundleData == bundleData,
@@ -58,7 +61,7 @@ extension RouterVPNModel {
                       session.connectedDate == connectedAt, [.connecting, .connected, .reasserting].contains(session.status),
                       let current = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
                       current["bundle"] as? Data == bundleData, current[chainKey] as? String == chainSource,
-                      current[chainKey == "nodeChainSource" ? "nodeChainSOCKSSource" : "nodeChainSource"] == nil,
+                      chainKeys.filter({ $0 != chainKey }).allSatisfy({ current[$0] == nil }),
                       self.selectedNodeProfile?.id == nodeID, self.connected || self.tunnelTransitioning,
                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
                 if let orderedNodes {

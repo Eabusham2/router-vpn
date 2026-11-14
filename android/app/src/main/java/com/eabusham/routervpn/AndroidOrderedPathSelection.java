@@ -69,6 +69,8 @@ final class AndroidOrderedPathSelection {
         switch(mode) {
             case "shadowsocks":return "Custom Shadowsocks 2022";
             case "socks5":return "Custom SOCKS5";
+            case "http-connect":return "Custom HTTP CONNECT";
+            case "https-connect":return "Custom HTTPS CONNECT";
             case "wg":return "WireGuard";
             case "awg2-fast":return "AmneziaWG Fast";
             case "awg2-strong":return "AmneziaWG Strong";
@@ -175,7 +177,10 @@ final class AndroidOrderedPathSelection {
         }
         String source=new JSONObject().put("schema",AndroidNodeChainCapture.sourceSchema(sources)).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString();
         if(source.getBytes(StandardCharsets.UTF_8).length>AndroidNodeChainCapture.MAX_INPUT)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
-        if(AndroidNodeChainCapture.sourceSchema(sources)==3) {
+        if(AndroidNodeChainCapture.sourceSchema(sources)==4) {
+            AndroidNodeChainCONNECTCapture preview=AndroidNodeChainCONNECTCapture.compile(source,jsonStrings(inputs),jsonStrings(identities));
+            try { requireCurrent(); } finally { preview.close(); }
+        } else if(AndroidNodeChainCapture.sourceSchema(sources)==3) {
             AndroidNodeChainSOCKSCapture preview=AndroidNodeChainSOCKSCapture.compile(source,jsonStrings(inputs),jsonStrings(identities));
             try { requireCurrent(); } finally { preview.close(); }
         } else {

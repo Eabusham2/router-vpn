@@ -5,13 +5,14 @@ import Foundation
 enum IOSOrderedRouteCapture {
     case ordinary(IOSNodeChainCapture)
     case socks(IOSNodeChainSOCKSCapture)
-    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let value): return value.members; case .socks(let value): return value.members } }
-    var launchInput: String { switch self { case .ordinary(let value): return value.launchInput; case .socks(let value): return value.source } }
-    var strict: Bool { switch self { case .ordinary(let value): return value.strict; case .socks(let value): return value.strict } }
-    var homeLANAccess: Bool { switch self { case .ordinary(let value): return value.homeLANAccess; case .socks(let value): return value.homeLANAccess } }
-    var startupTimeout: TimeInterval { switch self { case .ordinary(let value): return value.startupTimeout; case .socks(let value): return value.startupTimeout } }
-    var providerKey: String { switch self { case .ordinary: return IOSNodeChainProviderCapture.key; case .socks: return IOSNodeChainSOCKSCapture.providerKey } }
-    func close() throws { switch self { case .ordinary(let value): try value.plan.close(); case .socks(let value): try value.plan.close() } }
+    case connect(IOSNodeChainCONNECTCapture)
+    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let value): return value.members; case .socks(let value): return value.members; case .connect(let value): return value.members } }
+    var launchInput: String { switch self { case .ordinary(let value): return value.launchInput; case .socks(let value): return value.source; case .connect(let value): return value.source } }
+    var strict: Bool { switch self { case .ordinary(let value): return value.strict; case .socks(let value): return value.strict; case .connect(let value): return value.strict } }
+    var homeLANAccess: Bool { switch self { case .ordinary(let value): return value.homeLANAccess; case .socks(let value): return value.homeLANAccess; case .connect(let value): return value.homeLANAccess } }
+    var startupTimeout: TimeInterval { switch self { case .ordinary(let value): return value.startupTimeout; case .socks(let value): return value.startupTimeout; case .connect(let value): return value.startupTimeout } }
+    var providerKey: String { switch self { case .ordinary: return IOSNodeChainProviderCapture.key; case .socks: return IOSNodeChainSOCKSCapture.providerKey; case .connect: return IOSNodeChainCONNECTCapture.providerKey } }
+    func close() throws { switch self { case .ordinary(let value): try value.plan.close(); case .socks(let value): try value.plan.close(); case .connect(let value): try value.plan.close() } }
 }
 
 @MainActor
@@ -20,6 +21,9 @@ extension RouterVPNModel {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let sources = try iosNodeChainBundles(for: selected).map { try encoder.encode($0) }
         let control = selected.routerProfiles.first(where: { $0.id == selected.selectedRouterID })
+        if control?.multihopNodes?.contains(where: { ["http-connect", "https-connect"].contains($0.mode) }) == true {
+            return .connect(try IOSNodeChainCONNECTCapture.compile(bundles: sources))
+        }
         if control?.multihopNodes?.contains(where: { $0.mode == "socks5" }) == true {
             return .socks(try IOSNodeChainSOCKSCapture.compile(bundles: sources))
         }
@@ -47,6 +51,9 @@ extension IOSRuntimeSelector {
         switch capture {
         case .ordinary(let original): return try selectNodeChain(original)
         case .socks(let original):
+            return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: original.members[2].mode,
+                                       files: [:], nodeChainInput: original.source)
+        case .connect(let original):
             return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: original.members[2].mode,
                                        files: [:], nodeChainInput: original.source)
         }

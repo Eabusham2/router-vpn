@@ -5,7 +5,7 @@ extension IOSNodeChainProviderCapture {
     /// A separate preparation source and launch discriminator prevent a
     /// Server/Compare graph from borrowing Local or legacy pair receipts.
     static func reopenExecution(_ configuration: [String: Any], lastRecord: String? = nil) throws -> IOSNodeChainExecutionCapture {
-        guard configuration["nodeChainSOCKSSource"] == nil, configuration[key] == nil,
+        guard configuration["nodeChainCONNECTSource"] == nil, configuration["nodeChainSOCKSSource"] == nil, configuration[key] == nil,
               configuration["engine"] as? String == "multihop-libbox",
               ["entryBundle", "external_entry_bundle", "external_entry_mode", "tor_entry_bundle", "tor_entry_mode",
                "strategy", "strategy_catalog", "max_source_sha256"].allSatisfy({ configuration[$0] == nil }),

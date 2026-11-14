@@ -631,6 +631,8 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         case "awg2-strong": return "AWG2 Strong"
         case "shadowsocks": return "Shadowsocks 2022"
         case "socks5": return "SOCKS5"
+        case "http-connect": return "HTTP CONNECT"
+        case "https-connect": return "HTTPS CONNECT"
         case "hysteria2": return "Hysteria2"
         default: return "Saved transport: \(mode)"
         }
@@ -1096,6 +1098,46 @@ enum IOSImportedSOCKSSource {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let frozen = try JSONSerialization.jsonObject(with: encoder.encode(profile))
         let selected: [String: Any] = ["schema": 1, "exit_id": profile.id, "protocol": "socks5", "expected_public_ip": external.expectedPublicIP, "profile": frozen]
+        return (String(decoding: try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]), as: UTF8.self),
+                String(decoding: try JSONSerialization.data(withJSONObject: selected, options: [.sortedKeys]), as: UTF8.self))
+    }
+}
+
+/// Exact literal HTTP/HTTPS CONNECT intermediate; shared compilation remains authoritative.
+enum IOSImportedCONNECTSource {
+    static func eligible(_ profile: RouterProfile) -> Bool {
+        guard profile.normalizedNodeKind == "external", let external = profile.external,
+              ["http-connect", "https-connect"].contains(external.protocolName),
+              let socks = external.protocolName == "https-connect" ? external.httpsConnect : external.httpConnect,
+              external.startLayer == nil, [nil, "", "off"].contains(profile.startLayer),
+              [nil, ""].contains(profile.nodeProofID), profile.routerAPI.isEmpty, profile.apiToken.isEmpty,
+              profile.endpoint == socks.host, (1...65535).contains(socks.port),
+              (socks.username ?? "").isEmpty == (socks.password ?? "").isEmpty,
+              (socks.username ?? "").utf8.count <= 4096, (socks.password ?? "").utf8.count <= 4096,
+              external.protocolName != "https-connect" || (!(socks.tlsServerName ?? "").isEmpty && (socks.tlsServerName ?? "").utf8.count <= 253 && !(socks.tlsServerName ?? "").contains("\0")),
+              IOSImportedShadowsocksSource.literal(socks.host) else { return false }
+        var v4 = in_addr(), v6 = in6_addr()
+        if inet_pton(AF_INET, socks.host, &v4) == 1 {
+            let bytes = withUnsafeBytes(of: &v4) { Array($0) }
+            return bytes.contains(where: { $0 != 0 }) && !(224...239).contains(bytes[0])
+        }
+        guard inet_pton(AF_INET6, socks.host, &v6) == 1 else { return false }
+        let bytes = withUnsafeBytes(of: &v6) { Array($0) }
+        return bytes.contains(where: { $0 != 0 }) && bytes[0] != 255 &&
+            !(bytes.prefix(10).allSatisfy({ $0 == 0 }) && bytes[10] == 255 && bytes[11] == 255)
+    }
+
+    static func capture(_ profile: RouterProfile) throws -> (config: String, capture: String) {
+        guard eligible(profile), let external = profile.external, let socks = external.protocolName == "https-connect" ? external.httpsConnect : external.httpConnect else {
+            throw IOSMultihopNodeSelection.issue("The original literal HTTP/HTTPS CONNECT intermediate is unavailable.")
+        }
+        var outbound: [String: Any] = ["tag": "custom-exit", "type": "http", "server": socks.host, "server_port": socks.port]
+        if let username = socks.username, !username.isEmpty { outbound["username"] = username; outbound["password"] = socks.password! }
+        if external.protocolName == "https-connect" { outbound["tls"] = ["enabled": true, "server_name": socks.tlsServerName!] }
+        let config: [String: Any] = ["inbounds": [["type": "tun", "tag": "tun-in", "address": ["172.29.94.1/30", "fd29:94::1/126"], "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"]], "endpoints": [], "outbounds": [outbound], "route": ["final": "custom-exit", "auto_detect_interface": true]]
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let frozen = try JSONSerialization.jsonObject(with: encoder.encode(profile))
+        let selected: [String: Any] = ["schema": 1, "exit_id": profile.id, "protocol": external.protocolName, "expected_public_ip": external.expectedPublicIP, "profile": frozen]
         return (String(decoding: try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]), as: UTF8.self),
                 String(decoding: try JSONSerialization.data(withJSONObject: selected, options: [.sortedKeys]), as: UTF8.self))
     }

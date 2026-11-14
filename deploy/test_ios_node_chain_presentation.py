@@ -123,6 +123,15 @@ TESTS = r'''
    var changed=nodes.last!;changed.routerProfiles[0].apiToken="relinked-final"
    try check("typed SOCKS map rejects replaced final source",IOSNodeChainPresentation.captured(source:source,bundleData:bundleData(changed))==nil)
   }
+  do {
+   let nodes=try sources(3,false,"",false,true),capture=try IOSNodeChainCONNECTCapture.compile(bundles:nodes.map{try bundleData($0)})
+   defer{try? capture.plan.close()}
+   let final=try bundleData(nodes.last!),source=Data(capture.source.utf8)
+   let identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:final,configuration:["nodeChainCONNECTSource":capture.source])
+   try check("typed CONNECT active map keeps exact source and protocol",IOSNodeChainPresentation.active(identity)?.map(\.mode)==["wg","https-connect","shadowsocks"])
+   var changed=nodes.last!;changed.routerProfiles[0].apiToken="relinked-final"
+   try check("typed CONNECT map rejects replaced final source",IOSNodeChainPresentation.captured(source:source,bundleData:bundleData(changed))==nil)
+  }
   try await runOriginal()
   for mode in ["wg","awg2-fast","awg2-strong"] {
    let (model,_,nodes)=try setup(3,false,mode)
@@ -303,7 +312,8 @@ def main(selected_mutations=None):
     body = body.replace('// SHIPPING_PROGRESS', progress).replace('// SHIPPING_ANNOTATION', annotation)
     body = body.replace('// SHIPPING_MAP_UPDATE', S.member(ui, '    func updateUIView('))
     body = body.replace('// SHIPPING_ENSURE_PACKET', S.member(ui, '        func ensurePacket('))
-    tests = TESTS.replace('// ORIGINAL_COMPILER_SOURCES', S.member(L.TESTS, ' static func sources('))
+    source_fixture = S.member(L.TESTS, ' static func sources(').replace('_ socks:Bool=false)', '_ socks:Bool=false,_ connect:Bool=false)').replace('let raw=try socks ? LibboxTestSOCKSFixture()', 'let raw=try connect ? LibboxTestCONNECTFixture() : socks ? LibboxTestSOCKSFixture()')
+    tests = TESTS.replace('// ORIGINAL_COMPILER_SOURCES', source_fixture)
     presentation = (APP / 'IOSNodeChainPresentation.swift').read_text()
     with tempfile.TemporaryDirectory(prefix='.ios-chain-presentation-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-presentation-') as directory:
         go_dir, work = Path(go_dir), Path(directory)
@@ -316,7 +326,7 @@ def main(selected_mutations=None):
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(lib), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        command += [str(APP / name) for name in ('Models.swift', 'IOSSessionIdentity.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift')]
+        command += [str(APP / name) for name in ('Models.swift', 'IOSSessionIdentity.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift')]
         binary = work / 'tests'; command += [str(source), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)

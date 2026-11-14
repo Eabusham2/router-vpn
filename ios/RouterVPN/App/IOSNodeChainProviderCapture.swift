@@ -12,7 +12,7 @@ enum IOSNodeChainProviderCapture {
     }
 
     static func reopen(_ configuration: [String: Any]) throws -> IOSNodeChainCapture {
-        guard configuration["nodeChainSOCKSSource"] == nil, configuration[executionKey] == nil,
+        guard configuration["nodeChainCONNECTSource"] == nil, configuration["nodeChainSOCKSSource"] == nil, configuration[executionKey] == nil,
               configuration["engine"] as? String == "multihop-libbox",
               ["entryBundle", "external_entry_bundle", "external_entry_mode", "tor_entry_bundle", "tor_entry_mode",
                "strategy", "strategy_catalog", "max_source_sha256"].allSatisfy({ configuration[$0] == nil }),

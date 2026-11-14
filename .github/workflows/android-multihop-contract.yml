@@ -6,6 +6,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCONNECTCapture.java'
       - 'android/test_android_node_chain_capture.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java'
       - 'android/test_android_node_chain_execution_capture.py'
@@ -36,6 +37,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java'
       - 'android/test_android_node_chain_runtime.py'
       - 'android/test_android_node_chain_socks_runtime.py'
+      - 'android/test_android_node_chain_connect_runtime.py'
       - 'android/test_android_node_candidate_preparation.py'
       - 'android/test_android_node_candidate_preparation_owner.py'
       - 'android/test_android_node_candidate_preparation_ui.py'
@@ -77,6 +79,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCONNECTCapture.java'
       - 'android/test_android_node_chain_capture.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java'
       - 'android/test_android_node_chain_execution_capture.py'
@@ -107,6 +110,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java'
       - 'android/test_android_node_chain_runtime.py'
       - 'android/test_android_node_chain_socks_runtime.py'
+      - 'android/test_android_node_chain_connect_runtime.py'
       - 'android/test_android_node_candidate_preparation.py'
       - 'android/test_android_node_candidate_preparation_owner.py'
       - 'android/test_android_node_candidate_preparation_ui.py'
@@ -181,6 +185,7 @@ jobs:
           python3 android/test_android_ordered_presentation.py
           python3 android/test_android_node_chain_runtime.py
           python3 android/test_android_node_chain_socks_runtime.py
+          python3 android/test_android_node_chain_connect_runtime.py
           python3 android/test_android_node_candidate_preparation.py
           python3 android/test_android_node_candidate_preparation_owner.py
           python3 android/test_android_node_candidate_preparation_ui.py

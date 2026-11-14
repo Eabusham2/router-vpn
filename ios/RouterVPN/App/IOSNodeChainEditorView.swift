@@ -51,7 +51,7 @@ struct IOSNodeChainEditorView: View {
                             ForEach(IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id})), id: \.self) { mode in
                                 Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
                             }
-                            if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && !["shadowsocks", "socks5"].contains(node.mode) {
+                            if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && !["shadowsocks", "socks5", "http-connect", "https-connect"].contains(node.mode) {
                                 Text(IOSMultihopNodeSelection.transportName(node.mode)).tag(node.mode)
                             }
                         }
@@ -69,7 +69,7 @@ struct IOSNodeChainEditorView: View {
                 Button("Add preceding node") { change { try draft.append() } }.disabled(draft.nodes.count >= IOSMultihopNodeSelection.maximumNodes)
             }
             Section("Local execution") {
-                Text("Traffic follows this order through one VPN connection. Paired preceding nodes use WireGuard or AWG2. The selected final Router node can use Shadowsocks 2022 or Hysteria2; Hysteria2 requires Start Layer Off on that final node. A three-node route supports one saved SOCKS5 or Shadowsocks 2022 custom middle with Start Layer Off and a Shadowsocks 2022 final node. SOCKS5 retains its original literal server address and credentials.")
+                Text("Traffic follows this order through one VPN connection. Paired preceding nodes use WireGuard or AWG2. The selected final Router node can use Shadowsocks 2022 or Hysteria2; Hysteria2 requires Start Layer Off on that final node. A three-node route supports one saved SOCKS5, HTTP/HTTPS CONNECT or Shadowsocks 2022 custom middle with Start Layer Off and a Shadowsocks 2022 final node. SOCKS5 and CONNECT retain their original literal server address and credentials; HTTPS CONNECT also retains verified TLS and SNI. CONNECT requires the paired final node’s captured SS UoT-v2 service declaration and preserves its selected DNS.")
                 Text("Each node keeps its own saved credentials, Start Layer and protection settings. DNS uses the final node. Every node must pass verification before Connected.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Save ordered route") {

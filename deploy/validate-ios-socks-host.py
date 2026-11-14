@@ -23,6 +23,34 @@ CORE = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = CORE
 spec.loader.exec_module(CORE)
 PHASES = json.loads(r'''[{"name":"typed-source","args":["deploy/test_ios_node_chain_socks_capture.py"],"prefix":"Rejected typed SOCKS capture mutation: ","controls":["final-source","provider-assets","provider-purpose"],"samples":["iOS typed SOCKS source: PASS 150 actual shared-parser and provider checks"],"terminals":["iOS typed SOCKS source: PASS ([1-9][0-9]*) actual shared-parser and provider checks"]},{"name":"typed-host","args":["deploy/test_ios_node_chain_socks_host.py"],"prefix":"Rejected typed SOCKS host causal control: ","controls":["shared-before-box","native-receipt","construction-join","observation-join","proof-join","mtu-probe-rotation","late-measurement","retain-before-bind","failed-bind-retry"],"samples":["PASS Apple typed SOCKS host: 21 ownership scenarios; native/OS boundaries doubled"],"terminals":["PASS Apple typed SOCKS host: (21) ownership scenarios; native/OS boundaries doubled"]},{"name":"launch","args":["deploy/test_ios_node_chain_launch.py"],"prefix":"Rejected ordered app launch defect mutation: ","controls":["temporary-purpose-admission","initial-manager-source","middle-source-revalidation","preference-readback","hysteria-final-raw-mode"],"samples":["Apple ordered app launch: PASS (100 shipping Swift/shared Go checks; NetworkExtension doubled)"],"terminals":["Apple ordered app launch: PASS \\(([1-9][0-9]*) shipping Swift/shared Go checks; NetworkExtension doubled\\)"]},{"name":"editor","args":["deploy/test_ios_node_chain_editor.py"],"prefix":"Rejected ordered editor defect mutation: ","controls":["hysteria-final-scope","pinned-final","original-fingerprints","late-source-owner","compile-before-save","visible-socks-eligibility","visible-socks-mode","visible-middle-position","visible-source-admission","visible-unique-source"],"samples":["Apple ordered editor: PASS (274 shipping Swift/shared Go checks; persistence boundary)"],"terminals":["Apple ordered editor: PASS \\((274) shipping Swift/shared Go checks; persistence boundary\\)"]},{"name":"identity","args":["deploy/test_ios_node_chain_identity.py"],"prefix":"Rejected ordered identity defect mutation: ","controls":["required-native-inventory","post-await-identity","original-WG-proof"],"samples":["Apple ordered identity capture: PASS (100 shipping Swift/shared Go checks; NetworkExtension doubled)"],"terminals":["Apple ordered identity capture: PASS \\(([1-9][0-9]*) shipping Swift/shared Go checks; NetworkExtension doubled\\)"]},{"name":"startup","args":["deploy/test_ios_node_chain_startup.py"],"prefix":"Rejected ordered startup defect mutation: ","controls":["changed ordered startup refuses middle-token","ordered startup never selects a raw member","changed typed startup refuses credential"],"samples":["Apple ordered startup: PASS (100 shipping Swift/shared Go checks; native launch boundary)"],"terminals":["Apple ordered startup: PASS \\(([1-9][0-9]*) shipping Swift/shared Go checks; native launch boundary\\)"]},{"name":"profiles","args":["deploy/test_ios_node_chain_socks_profiles.py"],"prefix":"Apple ordered profile source control rejected: ","controls":["candidate-final-source-guard","old-two-record-limit","lost-ordered-selection"],"samples":["Apple ordered profile persistence: PASS (100 shipping Swift checks)"],"terminals":["Apple ordered profile persistence: PASS \\(([1-9][0-9]*) shipping Swift checks\\)"],"trailers":["Apple typed SOCKS profile composition: original persistence and controls completed"]},{"name":"external-profiles","args":["deploy/test_ios_external_connection_profiles.py"],"prefix":"Apple paired-final profile original entry guard causal rejected","controls":[""],"samples":["Apple external whole connection profiles: PASS (100 shipping store/model checks; storage and app boundaries substituted)"],"terminals":["Apple external whole connection profiles: PASS \\(([1-9][0-9]*) shipping store/model checks; storage and app boundaries substituted\\)"]},{"name":"tor-profiles","args":["deploy/test_ios_tor_connection_profiles.py"],"prefix":"Rejected Tor connection-profile defect mutation: ","controls":["snapshot-native-validation","restore-native-validation","protocol-identity","import-rollback","active-restore"],"samples":["Apple whole Tor connection profiles: PASS (100 shipping callbacks/store/import/native validation checks)"],"terminals":["Apple whole Tor connection profiles: PASS \\(([1-9][0-9]*) shipping callbacks/store/import/native validation checks\\)"]},{"name":"legacy-startup","args":["deploy/test_ios_startup_policy.py"],"prefix":"Rejected iOS startup defect mutation: ","controls":["router-only","stale-source","ignore-off","foreign-vpn","ignore-admission","hidden-reset","repeat-launch","ignore-generation","late-vpn","router-readmission","last-choice-lost","startup-mtu-owner"],"samples":["iOS cold-launch startup and external Settings: 100 executable checks PASS"],"terminals":["iOS cold-launch startup and external Settings: ([1-9][0-9]*) executable checks PASS"],"trailers":["iOS startup boundary gate PASS; physical VPN permission and networking remain native/device acceptance"]}]''')
+# Preserve every original phase and causal control. CONNECT receives separate
+# source, ownership, provider and complete-profile executions at the same SHA.
+import copy
+CONNECT_PHASES = []
+for original, name, script in (
+    ("typed-source", "connect-source", "test_ios_node_chain_connect_capture.py"),
+    ("typed-host", "connect-host", "test_ios_node_chain_connect_host.py"),
+    ("editor", "connect-editor", "test_ios_node_chain_connect_editor.py"),
+    ("startup", "connect-startup", "test_ios_node_chain_connect_startup.py"),
+    ("profiles", "connect-profiles", "test_ios_node_chain_connect_profiles.py"),
+):
+    phase=copy.deepcopy(next(value for value in PHASES if value["name"]==original))
+    phase["name"]=name;phase["args"]=["deploy/"+script]
+    for key in ("prefix",):phase[key]=phase[key].replace("SOCKS","CONNECT")
+    for key in ("controls","samples","terminals","trailers"):
+        if key in phase:phase[key]=[value.replace("SOCKS","CONNECT").replace("visible-socks-","visible-connect-") for value in phase[key]]
+    CONNECT_PHASES.append(phase)
+CONNECT_PHASES += [
+    {"name":"connect-provider","args":["deploy/test_ios_node_chain_connect_provider.py"],
+     "prefix":"Rejected CONNECT provider control: ","controls":["route-policy","proof-result","transferred-owner"],
+     "samples":["Apple typed CONNECT provider: PASS (15 actual callback scenarios; engine and NetworkExtension doubled)"],
+     "terminals":[r"Apple typed CONNECT provider: PASS \((15) actual callback scenarios; engine and NetworkExtension doubled\)"]},
+    {"name":"connect-engine","args":["deploy/test_ios_libbox_delivery.py","--connect-only"],
+     "prefix":"Rejected CONNECT engine control: ","controls":[],
+     "samples":["Swift 6 typed CONNECT engine: PASS (11 shipping startup/stop/activity checks; native handles doubled)"],
+     "terminals":[r"Swift 6 typed CONNECT engine: PASS \((11) shipping startup/stop/activity checks; native handles doubled\)"]},
+]
+PHASES += CONNECT_PHASES
 OUTER_SECONDS = 1200
 HEX40 = re.compile(r"[0-9a-f]{40}")
 
@@ -127,9 +155,12 @@ def self_test():
         return ("\n".join(lines)+"\n").encode()
     class Gate(unittest.TestCase):
         def test_exact_ten_phases_and_all_original_controls(self):
-            self.assertEqual([p["name"] for p in PHASES],["typed-source","typed-host","launch","editor","identity","startup","profiles","external-profiles","tor-profiles","legacy-startup"])
-            self.assertEqual([len(p["controls"]) for p in PHASES],[3,9,5,10,3,3,3,1,5,12])
-            self.assertEqual(sum(len(p["controls"]) for p in PHASES),54)
+            self.assertEqual([p["name"] for p in PHASES[:10]],["typed-source","typed-host","launch","editor","identity","startup","profiles","external-profiles","tor-profiles","legacy-startup"])
+            self.assertEqual([len(p["controls"]) for p in PHASES[:10]],[3,9,5,10,3,3,3,1,5,12])
+            self.assertEqual(sum(len(p["controls"]) for p in PHASES[:10]),54)
+            self.assertEqual([p["name"] for p in PHASES[10:]],["connect-source","connect-host","connect-editor","connect-startup","connect-profiles","connect-provider","connect-engine"])
+            self.assertEqual([len(p["controls"]) for p in PHASES[10:]],[3,9,10,3,3,3,0])
+            self.assertEqual(sum(len(p["controls"]) for p in PHASES),85)
             self.assertEqual(OUTER_SECONDS,1200)
             for phase in PHASES:self.assertTrue(verdict(valid(phase),0,False,True,phase)["accepted"])
         def test_exact_visible_editor_count_and_all_ten_controls(self):

@@ -15,7 +15,7 @@ struct IOSNodeChainDraft {
         (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) &&
             nodes.allSatisfy({ $0.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil }) &&
             Set(nodes.map(\.id)).count == nodes.count && nodes.last?.id == controlID &&
-            nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || nodes.count == 3 && position == 1 && ["shadowsocks", "socks5"].contains(node.mode) && nodes.last?.mode == "shadowsocks" }) &&
+            nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || nodes.count == 3 && position == 1 && ["shadowsocks", "socks5", "http-connect", "https-connect"].contains(node.mode) && nodes.last?.mode == "shadowsocks" }) &&
             IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "")
     }
 
@@ -29,7 +29,7 @@ struct IOSNodeChainDraft {
 
     mutating func chooseMode(_ mode: String, at position: Int) throws {
         guard nodes.indices.contains(position), position < nodes.count - 1,
-              (IOSMultihopNodeSelection.supportsNativePrefix(mode) || nodes.count == 3 && position == 1 && ["shadowsocks", "socks5"].contains(mode)) else {
+              (IOSMultihopNodeSelection.supportsNativePrefix(mode) || nodes.count == 3 && position == 1 && ["shadowsocks", "socks5", "http-connect", "https-connect"].contains(mode)) else {
             throw IOSMultihopNodeSelection.issue("Choose WireGuard, AWG2 Fast or AWG2 Strong for a preceding node.")
         }
         nodes[position].mode = mode
@@ -83,7 +83,7 @@ extension RouterVPNModel {
         let source = try JSONDecoder().decode(ClientBundle.self, from: data)
         guard source.routerProfiles.filter({ $0.id == id }).count == 1,
               let profile = source.routerProfiles.first(where: { $0.id == id }),
-              (profile.normalizedNodeKind == "router-vpn" && profile.external == nil || (IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile))) else {
+              (profile.normalizedNodeKind == "router-vpn" && profile.external == nil || (IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile) || IOSImportedCONNECTSource.eligible(profile))) else {
             throw IOSMultihopNodeSelection.issue("Choose independently linked Router nodes or the supported original custom intermediate.")
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -96,7 +96,7 @@ extension RouterVPNModel {
             throw IOSMultihopNodeSelection.issue("Choose the final Router VPN node while the VPN and temporary tests are idle.")
         }
         var fingerprints: [String: String] = [:]
-        for profile in allNodeProfiles where profile.normalizedNodeKind == "router-vpn" && profile.external == nil || (IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile)) {
+        for profile in allNodeProfiles where profile.normalizedNodeKind == "router-vpn" && profile.external == nil || (IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile) || IOSImportedCONNECTSource.eligible(profile)) {
             fingerprints[profile.id] = try? iosNodeChainEditorFingerprint(profile.id)
         }
         guard fingerprints[selected.id] != nil else {
@@ -159,7 +159,7 @@ extension RouterVPNModel {
 enum IOSNodeChainEditorVisible {
     static func eligible(_ profile: RouterProfile) -> Bool {
         profile.normalizedNodeKind == "router-vpn" && profile.external == nil ||
-            IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile)
+            IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile) || IOSImportedCONNECTSource.eligible(profile)
     }
     static func unique(_ profiles: [RouterProfile]) -> [RouterProfile] {
         profiles.filter { profile in profiles.filter({ $0.id == profile.id }).count == 1 }

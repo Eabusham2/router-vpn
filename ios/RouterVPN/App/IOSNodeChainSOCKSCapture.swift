@@ -134,7 +134,7 @@ final class IOSNodeChainSOCKSCapture {
 
     static func reopenProvider(_ configuration: [String: Any]) throws -> IOSNodeChainSOCKSCapture {
         guard configuration["engine"] as? String == "multihop-libbox",
-              [IOSNodeChainProviderCapture.key, IOSNodeChainProviderCapture.executionKey, "entryBundle", "external_entry_bundle", "external_entry_mode", "tor_entry_bundle", "tor_entry_mode", "strategy", "strategy_catalog", "max_source_sha256"].allSatisfy({ configuration[$0] == nil }),
+              ["nodeChainCONNECTSource", IOSNodeChainProviderCapture.key, IOSNodeChainProviderCapture.executionKey, "entryBundle", "external_entry_bundle", "external_entry_mode", "tor_entry_bundle", "tor_entry_mode", "strategy", "strategy_catalog", "max_source_sha256"].allSatisfy({ configuration[$0] == nil }),
               let source = configuration[providerKey] as? String,
               let data = configuration["bundle"] as? Data else { throw issue() }
         let root = try object(data, maximum: 32 * 1024 * 1024)

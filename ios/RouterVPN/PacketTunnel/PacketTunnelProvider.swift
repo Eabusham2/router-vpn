@@ -551,6 +551,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
             multihopExecutionSource = nil; restoredMultihopExecution = nil; restoredMultihopIdentityPins = nil
+            if provider[IOSNodeChainCONNECTCapture.providerKey] != nil {
+                guard options?[IOSMultihopExecution.launchKey] == nil,
+                      options?[IOSMultihopExecution.startupLaunchKey] == nil,
+                      !orderedStart.restoring, orderedStart.lastRecord == nil,
+                      currentMAXGeneration(generation) else { throw IOSNodeChainCONNECTCapture.issue() }
+                let capture = try IOSNodeChainCONNECTCapture.reopenProvider(provider)
+                try startNodeChainCONNECT(capture, generation: generation, completionHandler: completionHandler)
+                return
+            }
             if provider[IOSNodeChainSOCKSCapture.providerKey] != nil {
                 guard options?[IOSMultihopExecution.launchKey] == nil,
                       options?[IOSMultihopExecution.startupLaunchKey] == nil,
@@ -1133,6 +1142,54 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     throw IOSNodeChainCapture.issue("The ordered path changed before MTU adoption.")
                 }
                 try engine.activateNodeChainSOCKSMTU()
+            }
+            catch { engine.stop(); completionHandler(error); return }
+            guard self.libboxEngine === engine, self.currentMAXGeneration(generation), self.currentPathProofGuard() === chainGuard else {
+                engine.stop(); completionHandler(IOSNodeChainCapture.issue("The ordered path changed during native activation.")); return
+            }
+            self.enableForwarding(profileData: profileData, proofID: proofID, captured: chainGuard)
+            guard self.libboxEngine === engine, self.currentMAXGeneration(generation), self.currentPathProofGuard() === chainGuard else {
+                engine.stop(); completionHandler(IOSNodeChainCapture.issue("The ordered path changed before delivery.")); return
+            }
+            completionHandler(nil)
+        }
+    }
+
+    private func startNodeChainCONNECT(_ capture: IOSNodeChainCONNECTCapture, generation: UUID,
+                                completionHandler: @escaping (Error?) -> Void) throws {
+        var adopted = false
+        defer { if !adopted { try? capture.plan.close() } }
+        guard currentMAXGeneration(generation),
+              let proto = protocolConfiguration as? NETunnelProviderProtocol,
+              proto.includeAllNetworks == capture.strict, proto.enforceRoutes == capture.strict,
+              proto.excludeLocalNetworks == (capture.strict && capture.homeLANAccess),
+              let proofID = capture.finalProfile["node_proof_id"] as? String else {
+            throw IOSNodeChainCapture.issue("The ordered native owner lost its captured route policy.")
+        }
+        let profileData = try JSONSerialization.data(withJSONObject: capture.finalProfile, options: [.sortedKeys])
+        let engine = RouterVPNLibboxEngine(tunnel: self)
+        try engine.prepareMTUHold(initialMTUHold)
+        libboxEngine = engine
+        do { try engine.start(nodeChainCONNECT: capture); adopted = true }
+        catch {
+            engine.stop(); adopted = engine.ownsNodeChain
+            if !adopted, libboxEngine === engine { libboxEngine = nil }; throw error
+        }
+        let chainGuard = self.armNetworkProofGuard()
+        engine.completeNodeChainCONNECT { [weak self] failure in
+            guard let self, self.libboxEngine === engine, self.currentMAXGeneration(generation) else {
+                engine.stop(); completionHandler(IOSNodeChainCapture.issue("The ordered proof belongs to a retired provider.")); return
+            }
+            if let failure { engine.stop(); completionHandler(failure); return }
+            guard self.currentPathProofGuard() === chainGuard else {
+                engine.stop(); completionHandler(IOSNodeChainCapture.issue("The ordered path changed while proving its nodes.")); return
+            }
+            do {
+                try engine.activatePerformance()
+                guard self.libboxEngine === engine, self.currentMAXGeneration(generation), self.currentPathProofGuard() === chainGuard else {
+                    throw IOSNodeChainCapture.issue("The ordered path changed before MTU adoption.")
+                }
+                try engine.activateNodeChainCONNECTMTU()
             }
             catch { engine.stop(); completionHandler(error); return }
             guard self.libboxEngine === engine, self.currentMAXGeneration(generation), self.currentPathProofGuard() === chainGuard else {

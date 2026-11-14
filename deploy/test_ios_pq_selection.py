@@ -331,6 +331,7 @@ def verify_pq_factory_registration(engine):
         'func start(candidatePrefix ', 'func startOrderedExecution(',
         'func start(files: [String: Data], strict: Bool, multihopMetadata:')}
     constructors['func start(nodeChainSOCKS '] = 'LibboxRouterNodeChainSOCKSNewCommandServer('
+    constructors['func start(nodeChainCONNECT '] = 'LibboxRouterNodeChainCONNECTNewCommandServer('
     install = 'try RouterVPNPQFactory.install()'
     for signature, create in constructors.items():
         matches = [body for body in bodies if signature in body.split('\n', 1)[0]]
@@ -363,7 +364,7 @@ def test_pq_factory_registration(engine):
                 assert signature in str(failure), (signature, fault, str(failure))
             else:
                 raise AssertionError(signature + ': accepted ' + fault + ' PQ factory installation')
-    print('Apple PQ factory registration: PASS (4 constructors, 12 defect controls)')
+    print(f'Apple PQ factory registration: PASS ({len(constructors)} constructors, {3 * len(constructors)} defect controls)')
 
 
 def main():

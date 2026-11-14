@@ -38,7 +38,7 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
     }
 
     private static void requireSource(AndroidNodeChainCapture original,int prefix,String inventory)throws Exception {
-        if(original==null||original.socks!=null||!"local".equals(original.selectionExecution)||prefix<0||prefix>=original.memberInputs.size()-1)throw invalid();
+        if(original==null||original.socks!=null||original.connect!=null||!"local".equals(original.selectionExecution)||prefix<0||prefix>=original.memberInputs.size()-1)throw invalid();
         original.requireCurrent();bounded(inventory,AndroidNodeChainCapture.MAX_INPUT);
         for(int i=0;i<=prefix;i++)if(!packetMode(new JSONObject(original.memberInputs.get(i)).getString("mode")))throw invalid();
     }

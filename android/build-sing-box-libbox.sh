@@ -120,6 +120,15 @@ verify_aar() {
       echo 'combined libbox AAR prefix preparation has the wrong retained-owner API' >&2; return 1
     }
   done
+  # CONNECT is a separate schema-four owner; an ordinary graph API cannot
+  # satisfy its generated Java construction, MTU or close-receipt contract.
+  for signature in 'io.nekohasekai.libbox.RouterNodeChainCONNECT newRouterNodeChainCONNECT(java.lang.String) throws java.lang.Exception;' 'java.lang.String routerNodeChainImportedCONNECTMemberInput(java.lang.String, java.lang.String) throws java.lang.Exception;' 'io.nekohasekai.libbox.CommandServer routerNodeChainCONNECTNewCommandServer(io.nekohasekai.libbox.RouterNodeChainCONNECT, io.nekohasekai.libbox.CommandServerHandler, io.nekohasekai.libbox.PlatformInterface) throws java.lang.Exception;' 'io.nekohasekai.libbox.RouterHopMeasurement routerNodeChainCONNECTNewHopMeasurement(io.nekohasekai.libbox.RouterNodeChainCONNECT, io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'io.nekohasekai.libbox.RouterMTU routerNodeChainCONNECTNewMTU(io.nekohasekai.libbox.RouterNodeChainCONNECT, io.nekohasekai.libbox.CommandServer, io.nekohasekai.libbox.RouterMTUPlatform) throws java.lang.Exception;'; do
+    grep -Fq "$signature" "$api_list" || { echo "combined libbox AAR is missing typed CONNECT API: $signature" >&2; return 1; }
+  done
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainCONNECT >"$tmp/router-node-chain-connect.javap"
+  for signature in 'io.nekohasekai.libbox.CommandServer newCommandServer(io.nekohasekai.libbox.CommandServerHandler, io.nekohasekai.libbox.PlatformInterface) throws java.lang.Exception;' 'java.lang.String source() throws java.lang.Exception;' 'java.lang.String config() throws java.lang.Exception;' 'java.lang.String sourceSHA256();' 'java.lang.String configSHA256();' 'java.lang.String metadata();' 'java.lang.String mtuProfile();' 'java.lang.String progressJSON();' 'void bindNative(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'void run(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'boolean healthy();' 'boolean nativeClosed();' 'boolean retainsServerCleanup(io.nekohasekai.libbox.CommandServer);' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
+    grep -Fq "$signature" "$tmp/router-node-chain-connect.javap" || { echo "combined libbox AAR is missing captured CONNECT owner API: $signature" >&2; return 1; }
+  done
   for symbol in newRouterNodeChainExecution routerNodeChainExecutionFromLaunch newRouterNodeChainExecutionLaunch newRouterNodeChainExecutionRestore; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing ordered execution API $symbol" >&2; return 1; }
   done

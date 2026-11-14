@@ -89,10 +89,10 @@ final class AndroidNodeStore {
             if(importedGeneration!=AndroidStandardExitStore.publicationGeneration())throw new IllegalStateException("The imported node changed during capture.");
         }
         static void requireImported(AndroidStandardExitStore.Entry entry) throws Exception {
-            if(entry==null||!java.util.Arrays.asList("shadowsocks","socks5").contains(entry.protocol)
-                    ||entry.startLayer!=null||entry.policy!=null&&!"off".equals(entry.policy.optString("start_layer","off")))throw new IllegalStateException("This ordered custom position requires an original Shadowsocks 2022 or SOCKS5 node with Start Layer Off.");
+            if(entry==null||!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect").contains(AndroidExternalPolicy.protocol(entry.protocol))
+                    ||entry.startLayer!=null||entry.policy!=null&&!"off".equals(entry.policy.optString("start_layer","off")))throw new IllegalStateException("This ordered custom position requires an original Shadowsocks 2022, SOCKS5 or CONNECT node with Start Layer Off.");
             AndroidStandardExitStore.validate(entry);
-            if("socks5".equals(entry.protocol))return;
+            if(!"shadowsocks".equals(entry.protocol))return;
             int expected;
             switch(entry.method) {
                 case "2022-blake3-aes-128-gcm":expected=16;break;

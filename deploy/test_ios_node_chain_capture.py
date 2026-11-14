@@ -17,12 +17,14 @@ APP = ROOT / 'ios/RouterVPN/App'
 spec = importlib.util.spec_from_file_location('chain_policy_boundary', ROOT / 'deploy/test_ios_pq_selection.py')
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
 
-GO = P.GO.replace('"crypto/sha256"', '"crypto/sha256";"crypto/ecdh";"crypto/ed25519";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"strconv";"time"', 1)
+GO = P.GO.replace('"crypto/sha256"', '"crypto/sha256";"crypto/ecdh";"crypto/ed25519";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"strconv";"time";"router-vpn/internal/nativecomposite"', 1)
 anchor = ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)'
 assert GO.count(anchor) == 1
 GO = GO.replace(anchor, r'''
  case "chain-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixture(count,r.Policy)}
  case "chain-socks-fixture":value,err=chainSOCKSFixture()
+ case "chain-connect-fixture":value,err=chainCONNECTFixture(r.Mode)
+ case "chain-connect-service":value,err=chainCONNECTService(r.Source)
  case "chain-awg-fixture":var count int;count,err=strconv.Atoi(r.Mode);if err==nil{value,err=chainFixtureModes(count,r.Policy,true)}
  case "chain-hysteria-fixture":var count int;count,err=strconv.Atoi(r.Node);if err==nil{value,err=chainHysteriaFixture(count,r.Mode,r.Policy)}
  case "chain-execution":_,err=mobilemultihop.NewNodeChainExecutionPreparation(r.Source,r.Mode)
@@ -32,6 +34,10 @@ GO = GO.replace(anchor, r'''
  case "chain-socks-new":
   var source *mobilemultihop.NodeChainSOCKSSource;source,err=mobilemultihop.NewNodeChainSOCKSSource(r.Source)
   if err==nil{var config,input string;var meta mobilemultihop.NodeChainSOCKSSourceMetadata;config,meta,err=source.ReadValidated();if err==nil{input,err=source.Source()};if err==nil{var metadata,encoded []byte;metadata,err=json.Marshal(meta);if err==nil{encoded,err=json.Marshal(map[string]string{"source":input,"config":config,"metadata":string(metadata),"source_sha":meta.SourceSHA256,"config_sha":meta.ConfigSHA256});value=string(encoded)}}}
+ case "chain-connect-imported":value,err=mobilemultihop.NodeChainImportedCONNECTMemberInput(r.Source,r.Policy)
+ case "chain-connect-new":
+  var source *mobilemultihop.NodeChainCONNECTSource;source,err=mobilemultihop.NewNodeChainCONNECTSource(r.Source)
+  if err==nil{var config,input string;var meta mobilemultihop.NodeChainCONNECTSourceMetadata;config,meta,err=source.ReadValidated();if err==nil{input,err=source.Source()};if err==nil{var metadata,encoded []byte;metadata,err=json.Marshal(meta);if err==nil{encoded,err=json.Marshal(map[string]string{"source":input,"config":config,"metadata":string(metadata),"source_sha":meta.SourceSHA256,"config_sha":meta.ConfigSHA256});value=string(encoded)}}}
  case "chain-ordinary":value,err=mobilemultihop.CompileExternalPolicy(r.Source,r.Policy)
  case "chain-member":
   var node *mobilemultihop.NodeProfile;node,err=mobilemultihop.NewNodeProfile(r.Mode,r.Files,r.Policy,r.Source,r.Node)
@@ -47,6 +53,33 @@ GO = GO.replace(anchor, r'''
 ''' + anchor, 1)
 GO += r'''
 func chainFixture(count int,layer string)(string,error){return chainFixtureModes(count,layer,false)}
+// Source fixtures construct their own paired service declaration, exactly as
+// the shared source tests do. This is no native service or readiness receipt.
+func chainCONNECTService(raw string)(string,error){
+ var bundle map[string]any;if err:=json.Unmarshal([]byte(raw),&bundle);err!=nil{return "",err}
+ profile:=bundle["routerProfiles"].([]any)[0].(map[string]any)
+ assets:=bundle["profiles"].(map[string]any)["shadowsocks"].(map[string]any)
+ data,err:=base64.StdEncoding.DecodeString(assets["sing-box.json"].(string));if err!=nil{return "",err}
+ var graph map[string]any;if err=json.Unmarshal(data,&graph);err!=nil{return "",err}
+ out:=graph["outbounds"].([]any)[0].(map[string]any)
+ sourceHash,keyHash:=sha256.Sum256(data),sha256.Sum256([]byte(out["password"].(string)))
+ claim:=map[string]any{"schema":1,"node_id":profile["node_proof_id"],"configured_image":nativecomposite.SSServiceImage,"uot_version":2,"endpoint":out["server"],"port":out["server_port"],"method":out["method"],"source_sha256":hex.EncodeToString(sourceHash[:]),"key_sha256":hex.EncodeToString(keyHash[:])}
+ encoded,err:=json.Marshal(claim);if err!=nil{return "",err};assets[nativecomposite.SSServiceAsset]=base64.StdEncoding.EncodeToString(encoded)
+ result,err:=json.Marshal(bundle);return string(result),err
+}
+func chainCONNECTFixture(protocol string)(string,error){
+ raw,err:=chainSOCKSFixture();if err!=nil{return "",err};var bundles []map[string]any
+ if err=json.Unmarshal([]byte(raw),&bundles);err!=nil{return "",err}
+ middle:=bundles[1]["routerProfiles"].([]any)[0].(map[string]any)
+ external:=middle["external"].(map[string]any);credentials:=external["socks5"].(map[string]any);delete(external,"socks5")
+ if protocol!="http-connect"&&protocol!="https-connect"{return "",fmt.Errorf("invalid CONNECT fixture protocol")}
+ external["protocol"]=protocol;external[strings.ReplaceAll(protocol,"-","_")]=credentials
+ if protocol=="https-connect"{credentials["tls_server_name"]="Original.Proxy.Example"}
+ final:=bundles[2]["routerProfiles"].([]any)[0].(map[string]any);final["multihop_nodes"].([]any)[1].(map[string]any)["mode"]=protocol
+ data,err:=json.Marshal(bundles[2]);if err!=nil{return "",err};source,err:=chainCONNECTService(string(data));if err!=nil{return "",err}
+ if err=json.Unmarshal([]byte(source),&bundles[2]);err!=nil{return "",err}
+ data,err=json.Marshal(bundles);return string(data),err
+}
 func chainSOCKSFixture()(string,error){
  raw,err:=chainFixture(3,"off");if err!=nil{return "",err};var bundles []map[string]any
  if err=json.Unmarshal([]byte(raw),&bundles);err!=nil{return "",err}
@@ -150,6 +183,22 @@ public func LibboxRouterNodeChainImportedSOCKSMemberInput(_ config:String,_ capt
 public func LibboxNewRouterNodeChainSOCKS(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainSOCKS?{
  api(error){let raw=try bridge(["Op":"chain-socks-new","Source":source]);return LibboxRouterNodeChainSOCKS(try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:String])}
 }
+public final class LibboxRouterNodeChainCONNECT {
+ private let receipt:[String:String]
+ init(_ receipt:[String:String]){self.receipt=receipt}
+ public func source(_ error:UnsafeMutablePointer<NSError?>?)->String{receipt["source"]!}
+ public func config(_ error:UnsafeMutablePointer<NSError?>?)->String{receipt["config"]!}
+ public func sourceSHA256()->String{receipt["source_sha"]!}
+ public func configSHA256()->String{receipt["config_sha"]!}
+ public func metadata()->String{receipt["metadata"]!}
+ public func close()throws{}
+}
+public func LibboxRouterNodeChainImportedCONNECTMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
+ api(error){try bridge(["Op":"chain-connect-imported","Source":config,"Policy":capture])}
+}
+public func LibboxNewRouterNodeChainCONNECT(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainCONNECT?{
+ api(error){let raw=try bridge(["Op":"chain-connect-new","Source":source]);return LibboxRouterNodeChainCONNECT(try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:String])}
+}
 public func LibboxRouterNodeChainMemberInput(_ mode:String,_ files:String,_ profile:String,_ start:String,_ bootstrap:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
  api(error){try bridge(["Op":"chain-member","Mode":mode,"Files":files,"Policy":profile,"Source":start,"Node":bootstrap])}
 }
@@ -162,6 +211,8 @@ public func LibboxNewRouterNodeChain(_ source:String,_ error:UnsafeMutablePointe
 public func LibboxRouterNodeChainLaunch(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChain?{api(error){try make("chain-open",source)}}
 public func LibboxTestFixture(_ count:Int,_ layer:String)throws->String{try bridge(["Op":"chain-fixture","Mode":String(count),"Policy":layer])}
 public func LibboxTestSOCKSFixture()throws->String{try bridge(["Op":"chain-socks-fixture"])}
+public func LibboxTestCONNECTFixture()throws->String{try bridge(["Op":"chain-connect-fixture","Mode":"https-connect"])}
+public func LibboxTestCONNECTService(_ source:String)throws->String{try bridge(["Op":"chain-connect-service","Source":source])}
 public func LibboxTestAWGFixture(_ count:Int,_ layer:String)throws->String{try bridge(["Op":"chain-awg-fixture","Mode":String(count),"Policy":layer])}
 public func LibboxTestHysteriaFixture(_ count:Int,_ first:String,_ layer:String="off")throws->String{try bridge(["Op":"chain-hysteria-fixture","Node":String(count),"Mode":first,"Policy":layer])}
 public func LibboxTestChainExecution(_ source:String,_ mode:String)throws{_ = try bridge(["Op":"chain-execution","Source":source,"Mode":mode])}

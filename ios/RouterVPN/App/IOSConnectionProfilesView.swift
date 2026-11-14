@@ -468,7 +468,7 @@ private enum IOSConnectionProfileStore {
                   let profile = source.routerProfiles.first(where: { $0.id == capture.nodeID }),
                   profile.normalizedNodeKind == capture.nodeKind, profile.nodeProofID == capture.nodeProofID,
                   (profile.external == nil && capture.externalProtocol == nil && capture.externalPublicIP == nil ||
-                   nodes.count == 3 && position == 1 && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile)) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
+                   nodes.count == 3 && position == 1 && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || nodes[position].mode == profile.external?.protocolName && IOSImportedCONNECTSource.eligible(profile)) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
                 throw issue("A saved chain member is missing or its original paired/external identity changed. Update the saved connection profile.")
             }
             if capture.nodeID == saved.nodeID {
@@ -621,7 +621,7 @@ private enum IOSConnectionProfileStore {
                 for position in captures.indices {
                     var capture = captures[position]
                     if capture.nodeKind == "external" {
-                        guard nodes.count == 3, position == 1, ["shadowsocks", "socks5"].contains(nodes[position].mode), capture.nodeID == nodes[position].id,
+                        guard nodes.count == 3, position == 1, ["shadowsocks", "socks5", "http-connect", "https-connect"].contains(nodes[position].mode), capture.nodeID == nodes[position].id,
                               capture.nodeProofID == nil || capture.nodeProofID == "", capture.externalProtocol == nodes[position].mode, capture.externalPublicIP?.isEmpty == false,
                               capture.preferences.startLayer == "off" else { throw issue("The saved imported middle lost its original external identity.") }
                         capture.preferences = try validatePreferences(capture.preferences, external:true)

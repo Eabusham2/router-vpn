@@ -60,6 +60,38 @@ STATIC_SIGNATURES = (
     PACKAGE+"RouterHopMeasurement routerNodeChainSOCKSNewHopMeasurement("+PACKAGE+"RouterNodeChainSOCKS, "+PACKAGE+"CommandServer) throws java.lang.Exception;",
     PACKAGE+"RouterMTU routerNodeChainSOCKSNewMTU("+PACKAGE+"RouterNodeChainSOCKS, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterMTUPlatform) throws java.lang.Exception;",
 )
+# Distinct schema-four bindings are verified from the newly built classes.jar.
+# Similar instance method shapes do not permit substituting the SOCKS class.
+CONNECT_PLAN_SIGNATURES = (
+    "java.lang.String source() throws java.lang.Exception;",
+    "java.lang.String config() throws java.lang.Exception;",
+    "java.lang.String sourceSHA256();",
+    "java.lang.String configSHA256();",
+    "java.lang.String metadata();",
+    PACKAGE+"CommandServer newCommandServer("+PACKAGE+"CommandServerHandler, "+PACKAGE+"PlatformInterface) throws java.lang.Exception;",
+    "void bindNative("+PACKAGE+"CommandServer) throws java.lang.Exception;",
+    "void run("+PACKAGE+"CommandServer) throws java.lang.Exception;",
+    "boolean healthy();",
+    "java.lang.String progressJSON();",
+    "void networkChanged();",
+    "void close() throws java.lang.Exception;",
+    "boolean nativeClosed();",
+    "boolean retainsServerCleanup("+PACKAGE+"CommandServer);",
+    "java.lang.String mtuProfile();",
+)
+CONNECT_STATIC_SIGNATURES = (
+    PACKAGE+"RouterNodeChainCONNECT newRouterNodeChainCONNECT(java.lang.String) throws java.lang.Exception;",
+    "java.lang.String routerNodeChainImportedCONNECTMemberInput(java.lang.String, java.lang.String) throws java.lang.Exception;",
+    PACKAGE+"CommandServer routerNodeChainCONNECTNewCommandServer("+PACKAGE+"RouterNodeChainCONNECT, "+PACKAGE+"CommandServerHandler, "+PACKAGE+"PlatformInterface) throws java.lang.Exception;",
+    PACKAGE+"RouterHopMeasurement routerNodeChainCONNECTNewHopMeasurement("+PACKAGE+"RouterNodeChainCONNECT, "+PACKAGE+"CommandServer) throws java.lang.Exception;",
+    PACKAGE+"RouterMTU routerNodeChainCONNECTNewMTU("+PACKAGE+"RouterNodeChainCONNECT, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterMTUPlatform) throws java.lang.Exception;",
+)
+GENERATED_API_INVENTORIES = (("RouterNodeChainSOCKS", PLAN_SIGNATURES),
+                           ("RouterNodeChainCONNECT", CONNECT_PLAN_SIGNATURES),
+                           ("Libbox", (*STATIC_SIGNATURES, *CONNECT_STATIC_SIGNATURES)))
+GENERATED_CLASSES = ("go/Seq.class", "io/nekohasekai/libbox/Libbox.class",
+                     "io/nekohasekai/libbox/RouterNodeChainSOCKS.class", "io/nekohasekai/libbox/RouterNodeChainCONNECT.class")
+
 PRODUCTION_INPUTS = ("KEYSTORE_BASE64", "KEYSTORE", "STORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD", "CERT_SHA256", "REQUIRE_PRODUCTION", "VERSION_CODE", "VERSION_SHA")
 
 def sha_file(path):
@@ -97,9 +129,16 @@ def require_signatures(raw, signatures, owner):
     for signature in signatures:
         method=signature.split("(",1)[0].rsplit(" ",1)[-1]
         candidates=[line for line in lines if re.search(r"\b"+re.escape(method)+r"\(",line)]
-        if len(candidates)!=1 or not candidates[0].endswith(" "+signature):
+        if len(candidates)!=1 or not candidates[0].endswith(" "+signature) or (owner=="Libbox" and not candidates[0].startswith("public static ")):
             raise ValueError("Generated typed SDK method mismatch: "+method)
     return {"class":PACKAGE+owner,"required_signatures":list(signatures),"javap_sha256":hashlib.sha256(raw).hexdigest()}
+
+def inspect_generated_apis(run, classes_path):
+    records=[]
+    for owner,signatures in GENERATED_API_INVENTORIES:
+        raw=run("generated-"+owner+"-api",["javap","-classpath",str(classes_path),PACKAGE+owner],60)
+        records.append(require_signatures(raw,signatures,owner))
+    return records
 
 def zip_index(archive):
     entries=archive.infolist()
@@ -136,7 +175,7 @@ def archive_shape(aar,apk):
         classes=library.read("classes.jar")
         with zipfile.ZipFile(io.BytesIO(classes)) as jar:
             c=zip_index(jar)
-            for name in ("go/Seq.class","io/nekohasekai/libbox/Libbox.class","io/nekohasekai/libbox/RouterNodeChainSOCKS.class"):
+            for name in GENERATED_CLASSES:
                 if name not in c:raise ValueError("Required generated class is absent: "+name)
         for abi in ABIS:
             records.append(elf_member(library,"jni/"+abi+"/libbox.so",abi))
@@ -295,9 +334,7 @@ def validate(source,sha,output,gradle,sdk):
         if (work/"android/app/libs/libxray.aar").exists():raise ValueError("Standalone second Go runtime remains")
         libraries,classes=archive_shape(aar,apk)
         classes_path=output/"captured-classes.jar";classes_path.write_bytes(classes);classes_sha=sha_file(classes_path)
-        plan=run("generated-socks-api",["javap","-classpath",str(classes_path),PACKAGE+"RouterNodeChainSOCKS"],60)
-        api=run("generated-libbox-api",["javap","-classpath",str(classes_path),PACKAGE+"Libbox"],60)
-        receipt["generated_api"]=[require_signatures(plan,PLAN_SIGNATURES,"RouterNodeChainSOCKS"),require_signatures(api,STATIC_SIGNATURES,"Libbox")]
+        receipt["generated_api"]=inspect_generated_apis(run,classes_path)
         if sha_file(classes_path)!=classes_sha:raise ValueError("Captured generated classes changed")
         raw=run("original-package-signature",[sys.executable,str(ROOT/"android/verify-delivery.py"),"--apk",str(apk),"--sdk",str(sdk),"--sha",sha,"--variant","debug","--version-code",str(version)],180)
         delivered=json.loads(raw)
@@ -338,13 +375,13 @@ def validate(source,sha,output,gradle,sdk):
 
 def self_test():
     def transcript(owner,signatures):
-        return ("Compiled from \""+owner+".java\"\npublic final class "+PACKAGE+owner+" implements go.Seq$Proxy {\n"+"\n".join("  public "+s for s in signatures)+"\n}\n").encode()
+        return ("Compiled from \""+owner+".java\"\npublic final class "+PACKAGE+owner+" implements go.Seq$Proxy {\n"+"\n".join("  public "+("static " if owner=="Libbox" else "")+s for s in signatures)+"\n}\n").encode()
     def elf(abi):
         cls,machine=ABIS[abi];data=bytearray(64);data[:6]=b"\x7fELF"+bytes([cls,1]);struct.pack_into("<H",data,18,machine);return bytes(data)
     def fixture(root):
         jar=io.BytesIO()
         with zipfile.ZipFile(jar,"w") as z:
-            for name in ("go/Seq.class","io/nekohasekai/libbox/Libbox.class","io/nekohasekai/libbox/RouterNodeChainSOCKS.class"):z.writestr(name,b"fixture class")
+            for name in GENERATED_CLASSES:z.writestr(name,b"fixture class")
         aar=root/"libbox.aar";apk=root/"app.apk"
         with zipfile.ZipFile(aar,"w") as z:
             z.writestr("classes.jar",jar.getvalue())
@@ -473,13 +510,14 @@ def self_test():
 
         def test_exact_signature_inventory(self):
             self.assertEqual(len(PLAN_SIGNATURES),15);self.assertEqual(len(STATIC_SIGNATURES),4)
-            for owner,signatures in (("RouterNodeChainSOCKS",PLAN_SIGNATURES),("Libbox",STATIC_SIGNATURES)):
+            self.assertEqual(len(CONNECT_PLAN_SIGNATURES),15);self.assertEqual(len(CONNECT_STATIC_SIGNATURES),5)
+            for owner,signatures in GENERATED_API_INVENTORIES:
                 raw=transcript(owner,signatures);self.assertEqual(len(require_signatures(raw,signatures,owner)["required_signatures"]),len(signatures))
         def test_every_missing_duplicate_and_changed_method_refused(self):
-            for owner,signatures in (("RouterNodeChainSOCKS",PLAN_SIGNATURES),("Libbox",STATIC_SIGNATURES)):
+            for owner,signatures in GENERATED_API_INVENTORIES:
                 raw=transcript(owner,signatures)
                 for signature in signatures:
-                    line=("  public "+signature+"\n").encode()
+                    line=("  public "+("static " if owner=="Libbox" else "")+signature+"\n").encode()
                     for wrong in (raw.replace(line,b""),raw+line,raw.replace(signature.encode(),signature.replace("(","(int, ",1).encode())):
                         with self.subTest(signature=signature):
                             with self.assertRaises(ValueError):require_signatures(wrong,signatures,owner)
@@ -489,6 +527,43 @@ def self_test():
             with self.assertRaises(ValueError):require_signatures(wrong,PLAN_SIGNATURES,"RouterNodeChainSOCKS")
             raw=transcript("Libbox",STATIC_SIGNATURES).replace((PACKAGE+"RouterNodeChainSOCKS, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterMTUPlatform").encode(),(PACKAGE+"CommandServer, "+PACKAGE+"RouterMTUPlatform").encode())
             with self.assertRaises(ValueError):require_signatures(raw,STATIC_SIGNATURES,"Libbox")
+        def test_connect_owner_and_factory_cannot_substitute_socks_or_ordinary_owner(self):
+            raw=transcript("RouterNodeChainCONNECT",CONNECT_PLAN_SIGNATURES)
+            with self.assertRaises(ValueError):require_signatures(raw.replace(b"class "+(PACKAGE+"RouterNodeChainCONNECT").encode(),b"class "+(PACKAGE+"RouterNodeChainSOCKS").encode()),CONNECT_PLAN_SIGNATURES,"RouterNodeChainCONNECT")
+            with self.assertRaises(ValueError):require_signatures(transcript("Libbox",CONNECT_STATIC_SIGNATURES).replace(b"public static ",b"public "),CONNECT_STATIC_SIGNATURES,"Libbox")
+            for owner in ("RouterNodeChainSOCKS","RouterNodeChain"):
+                wrong=transcript("Libbox",CONNECT_STATIC_SIGNATURES).replace((PACKAGE+"RouterNodeChainCONNECT").encode(),(PACKAGE+owner).encode())
+                with self.assertRaises(ValueError):require_signatures(wrong,CONNECT_STATIC_SIGNATURES,"Libbox")
+            wrong=transcript("Libbox",CONNECT_STATIC_SIGNATURES).replace((PACKAGE+"CommandServerHandler, "+PACKAGE+"PlatformInterface").encode(),(PACKAGE+"PlatformInterface, "+PACKAGE+"CommandServerHandler").encode())
+            with self.assertRaises(ValueError):require_signatures(wrong,CONNECT_STATIC_SIGNATURES,"Libbox")
+        def test_actual_inspection_requires_all_three_classes_from_same_captured_jar(self):
+            calls=[];jar=Path("captured-classes.jar")
+            def run(name,command,bound):
+                calls.append((name,command,bound));owner=command[-1].removeprefix(PACKAGE)
+                return transcript(owner,dict(GENERATED_API_INVENTORIES)[owner])
+            rows=inspect_generated_apis(run,jar)
+            self.assertEqual([row["class"] for row in rows],[PACKAGE+owner for owner,_ in GENERATED_API_INVENTORIES])
+            self.assertEqual(len(calls),3)
+            for (_,command,bound),(owner,_) in zip(calls,GENERATED_API_INVENTORIES):
+                self.assertEqual(command,["javap","-classpath",str(jar),PACKAGE+owner]);self.assertEqual(bound,60)
+            for absent in ("RouterNodeChainCONNECT","Libbox"):
+                def missing(name,command,bound):
+                    owner=command[-1].removeprefix(PACKAGE)
+                    return b"Error: missing generated class" if owner==absent else transcript(owner,dict(GENERATED_API_INVENTORIES)[owner])
+                with self.assertRaises(ValueError):inspect_generated_apis(missing,jar)
+        def test_every_required_generated_class_must_exist_in_actual_archive(self):
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);aar,apk=fixture(root)
+                with zipfile.ZipFile(aar) as archive:original={name:archive.read(name) for name in archive.namelist()}
+                for omitted in GENERATED_CLASSES:
+                    jar=io.BytesIO()
+                    with zipfile.ZipFile(jar,"w") as archive:
+                        for name in GENERATED_CLASSES:
+                            if name!=omitted:archive.writestr(name,b"fixture class")
+                    bad=root/"missing-class.aar"
+                    with zipfile.ZipFile(bad,"w") as archive:
+                        for name,data in original.items():archive.writestr(name,jar.getvalue() if name=="classes.jar" else data)
+                    with self.subTest(omitted=omitted),self.assertRaises(ValueError):archive_shape(bad,apk)
         def test_candidate_environment_never_reuses_validator_sha_or_production_key(self):
             original={"GITHUB_SHA":"b"*40,"ROUTERVPN_ANDROID_KEYSTORE":"private","ROUTERVPN_ANDROID_STORE_PASSWORD":"private","PATH":"/original","GOTOOLCHAIN":"local"}
             env=child_environment(original,"a"*40)

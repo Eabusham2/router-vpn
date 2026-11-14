@@ -78,6 +78,13 @@ reject("typed source cannot use ordinary provider discriminator"){_ = try captur
 reject("ordinary source cannot use typed provider discriminator"){_ = try captured(["nodeChainSOCKSSource":chain],"multihop-libbox","shadowsocks")}
 reject("typed source cannot mix ordinary owner"){_ = try captured(["nodeChainSOCKSSource":socks,"nodeChainSource":chain],"multihop-libbox","shadowsocks")}
 reject("typed source cannot borrow legacy pair"){_ = try captured(["nodeChainSOCKSSource":socks,"entryBundle":Data("legacy".utf8)],"multihop-libbox","shadowsocks")}
+let connect=String(decoding:try JSONSerialization.data(withJSONObject:["schema":4,"execution":"local","nodes":["first","connect-middle","final"],"identity_sources":["first-identity","","final-identity"]]),as:UTF8.self)
+let connected=try captured(["nodeChainCONNECTSource":connect],"multihop-libbox","shadowsocks")
+try check("CONNECT session retains original complete source",connected.nodeChainSource==Data(connect.utf8) && connected != typed && connected != ordered)
+for extra in [["nodeChainSource":connect],["nodeChainSOCKSSource":connect],["nodeChainCONNECTSource":socks],["nodeChainCONNECTSource":chain],["nodeChainCONNECTSource":connect,"nodeChainSOCKSSource":socks],["nodeChainCONNECTSource":connect,"nodeChainSource":chain]] {
+ reject("CONNECT source discriminator cannot borrow another owner"){_ = try captured(extra,"multihop-libbox","shadowsocks")}
+}
+reject("CONNECT source cannot borrow legacy pair"){_ = try captured(["nodeChainCONNECTSource":connect,"entryBundle":Data("legacy".utf8)],"multihop-libbox","shadowsocks")}
 for sources in [["original-first-source","changed-middle-source","original-final-source"],
                 ["original-middle-source","original-first-source","original-final-source"],
                 ["original-first-source","original-final-source"]] {

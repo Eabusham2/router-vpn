@@ -173,25 +173,26 @@ final class AndroidNodeChainSession {
     CommandServer newCommandServer(CommandServerHandler handler,PlatformInterface platform) throws Exception {
         requireSource();
         if(!claimed||server!=null||owner!=null)throw new IllegalStateException("The ordered factory has no fresh claimed source.");
+        if(capture.connect!=null)return capture.connect.plan.newCommandServer(handler,platform);
         return capture.socks==null?new CommandServer(handler,platform):capture.socks.plan.newCommandServer(handler,platform);
     }
 
     void bindNative(CommandServer original) throws Exception {
-        if (execution == null && candidatePrefix == null && capture.socks == null) return;
+        if (execution == null && candidatePrefix == null && capture.socks == null && capture.connect == null) return;
         if (original == null || server != null || owner != null || !claimed)
             throw new IllegalStateException("The ordered execution cannot bind another native construction.");
         // Retain the exact newly created server before native binding. Even a
         // failed bind/start must finish that original construction's cleanup.
         server = original;
-        if(candidatePrefix!=null)candidatePrefix.plan.bindNative(original);else if(capture.socks!=null)capture.socks.plan.bindNative(original);else execution.bindNative(original);
+        if(candidatePrefix!=null)candidatePrefix.plan.bindNative(original);else if(capture.connect!=null)capture.connect.plan.bindNative(original);else if(capture.socks!=null)capture.socks.plan.bindNative(original);else execution.bindNative(original);
         nativeBound = true;
         requireSource();
     }
 
     void attach(CommandServer server, Owner owner, String expectedNetwork) throws Exception {
         if (server == null || owner == null || this.owner != null || !claimed
-                || (execution == null && candidatePrefix == null && capture.socks == null ? this.server != null : this.server != server)
-                ||(candidatePrefix!=null||capture.socks!=null)&&!nativeBound)
+                || (execution == null && candidatePrefix == null && capture.socks == null && capture.connect == null ? this.server != null : this.server != server)
+                ||(candidatePrefix!=null||capture.socks!=null||capture.connect!=null)&&!nativeBound)
             throw new IllegalStateException("The ordered graph cannot adopt another native server.");
         this.server = server; this.owner = owner; network = expectedNetwork;
         if (network.isEmpty() || "[]".equals(network)) throw new IllegalStateException("The original physical network is unavailable.");
@@ -201,7 +202,7 @@ final class AndroidNodeChainSession {
     void prove() throws Exception {
         if(candidatePrefix!=null)throw new IllegalStateException("A candidate prefix cannot become a complete connection proof.");
         requireCurrent();
-        if(capture.socks!=null)capture.socks.plan.run(server);else if (execution == null) capture.plan.run(server); else execution.run(server);
+        if(capture.connect!=null)capture.connect.plan.run(server);else if(capture.socks!=null)capture.socks.plan.run(server);else if (execution == null) capture.plan.run(server); else execution.run(server);
         requireCurrent();
         if (!nativeHealthy()) throw new IllegalStateException("The complete ordered native path did not prove every node and selected DNS.");
         requireCurrent();
@@ -224,7 +225,7 @@ final class AndroidNodeChainSession {
     RouterHopMeasurement newHopMeasurement() throws Exception {
         requireCurrent();
         if (!nativeHealthy()) throw new IllegalStateException("The ordered measurement lost its complete path proof.");
-        return capture.socks!=null?Libbox.routerNodeChainSOCKSNewHopMeasurement(capture.socks.plan,server):execution == null ? Libbox.routerNodeChainNewHopMeasurement(capture.plan, server) : execution.newHopMeasurement(server);
+        return capture.connect!=null?Libbox.routerNodeChainCONNECTNewHopMeasurement(capture.connect.plan,server):capture.socks!=null?Libbox.routerNodeChainSOCKSNewHopMeasurement(capture.socks.plan,server):execution == null ? Libbox.routerNodeChainNewHopMeasurement(capture.plan, server) : execution.newHopMeasurement(server);
     }
 
     void requireSource() throws Exception {
@@ -255,18 +256,19 @@ final class AndroidNodeChainSession {
         catch (Exception retired) { return false; }
     }
 
-    private boolean nativeHealthy() { return candidatePrefix==null&&(capture.socks!=null?capture.socks.plan.healthy():execution == null ? capture.plan.healthy() : execution.healthy()); }
+    private boolean nativeHealthy() { return candidatePrefix==null&&(capture.connect!=null?capture.connect.plan.healthy():capture.socks!=null?capture.socks.plan.healthy():execution == null ? capture.plan.healthy() : execution.healthy()); }
     String provedExecution() throws Exception {
         requireCurrent();
         if (!nativeHealthy()) throw new IllegalStateException("The ordered execution has no current proof.");
         String selected = execution == null ? "local" : execution.execution();
         requireCurrent(); return selected;
     }
-    String progressJSON() throws Exception { requireCurrent(); String result = candidatePrefix!=null?candidatePrefix.plan.progressJSON():capture.socks!=null?capture.socks.plan.progressJSON():execution == null ? capture.plan.progressJSON() : execution.progressJSON(); requireCurrent(); return result; }
+    String progressJSON() throws Exception { requireCurrent(); String result = candidatePrefix!=null?candidatePrefix.plan.progressJSON():capture.connect!=null?capture.connect.plan.progressJSON():capture.socks!=null?capture.socks.plan.progressJSON():execution == null ? capture.plan.progressJSON() : execution.progressJSON(); requireCurrent(); return result; }
     RouterMTU newMTU(RouterMTUPlatform platform) throws Exception {
         requireCurrent();
         if (!nativeHealthy()) throw new IllegalStateException("MTU requires the original complete ordered proof.");
-        RouterMTU result = capture.socks!=null?Libbox.routerNodeChainSOCKSNewMTU(capture.socks.plan,server,new AndroidNodeChainMTUPlatform(this,server,owner,platform))
+        RouterMTU result = capture.connect!=null?Libbox.routerNodeChainCONNECTNewMTU(capture.connect.plan,server,new AndroidNodeChainMTUPlatform(this,server,owner,platform))
+                :capture.socks!=null?Libbox.routerNodeChainSOCKSNewMTU(capture.socks.plan,server,new AndroidNodeChainMTUPlatform(this,server,owner,platform))
                 :execution == null ? Libbox.routerNodeChainNewMTU(capture.plan, server, platform)
                 : execution.newMTU(server, new AndroidNodeChainMTUPlatform(this, server, owner, platform));
         if (result == null) throw new IllegalStateException("The ordered graph returned no native MTU owner.");
@@ -284,7 +286,7 @@ final class AndroidNodeChainSession {
         TemporaryDrain retained=temporaryDrain;
         if(retained!=null&&!retained.drain())throw new IllegalStateException("The original temporary candidate work has not joined.");
     }
-    void cancel() { cancelled = true; if(candidatePrefix!=null)candidatePrefix.plan.networkChanged();else if(capture.socks!=null)capture.socks.plan.networkChanged();else if (execution == null) capture.plan.networkChanged(); else execution.networkChanged(); }
+    void cancel() { cancelled = true; if(candidatePrefix!=null)candidatePrefix.plan.networkChanged();else if(capture.connect!=null)capture.connect.plan.networkChanged();else if(capture.socks!=null)capture.socks.plan.networkChanged();else if (execution == null) capture.plan.networkChanged(); else execution.networkChanged(); }
     void closePlan() throws Exception {
         requireTemporaryDrain();
         cancel();
@@ -302,11 +304,15 @@ final class AndroidNodeChainSession {
             }
             execution.close();
         }
+        if(capture.connect!=null&&!nativeBound&&server!=null)
+            try{capture.connect.plan.bindNative(server);}catch(Exception admissionRefused){ /* Retain the exact original CONNECT cleanup reservation. */ }
         if(capture.socks!=null&&!nativeBound&&server!=null)
             try{capture.socks.plan.bindNative(server);}catch(Exception admissionRefused){ /* The original close receipt is still required. */ }
         capture.close(); proofClosed = true;
     }
     void requireNativeBindingDrain() {
+        if(capture.connect!=null&&server!=null&&!nativeBound&&!capture.connect.plan.nativeClosed())
+            throw new IllegalStateException("The original typed CONNECT construction has not acknowledged cleanup.");
         if(capture.socks!=null&&server!=null&&!nativeBound&&!capture.socks.plan.nativeClosed())
             throw new IllegalStateException("The original typed SOCKS construction has not acknowledged cleanup.");
         if(candidatePrefix!=null&&server!=null&&!nativeBound&&!candidatePrefix.plan.nativeClosed())
@@ -316,9 +322,11 @@ final class AndroidNodeChainSession {
     }
     boolean retainsServerCleanup(CommandServer original) {
         return !released && !nativeClosed && server == original
-                && (capture.socks!=null?capture.socks.plan.retainsServerCleanup(original):execution != null&&execution.retainsServerCleanup(original));
+                && (capture.connect!=null?capture.connect.plan.retainsServerCleanup(original):capture.socks!=null?capture.socks.plan.retainsServerCleanup(original):execution != null&&execution.retainsServerCleanup(original));
     }
     void nativeServiceClosed() {
+        if(capture.connect!=null&&(server==null?owner!=null||!proofClosed:!capture.connect.plan.nativeClosed()))
+            throw new IllegalStateException("The original typed CONNECT Box has no successful native close receipt.");
         if(capture.socks!=null&&(server==null?owner!=null||!proofClosed:!capture.socks.plan.nativeClosed()))
             throw new IllegalStateException("The original typed SOCKS Box has no successful native close receipt.");
         if(candidatePrefix!=null&&(server==null?owner!=null||!proofClosed:!candidatePrefix.plan.nativeClosed()))
@@ -330,7 +338,7 @@ final class AndroidNodeChainSession {
             throw new IllegalStateException("The original ordered execution Box has no successful native close receipt.");
         nativeClosed = true;
     }
-    boolean typedNative() { return capture.socks != null; }
+    boolean typedNative() { return capture.socks != null || capture.connect != null; }
     boolean released() { return released; }
     boolean claimed() { return claimed; }
     void adoptHost(Host value) {

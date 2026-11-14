@@ -63,7 +63,7 @@ CAPTURE = r'''package com.eabusham.routervpn;
 import org.json.*;import io.nekohasekai.libbox.*;
 final class AndroidNodeChainCapture {
  static final int MAX_INPUT=40*1024*1024;static final String SESSION_FILE="routervpn-node-chain.json";
- final AndroidNodeStore.ChainCapture source;final RouterNodeChain plan;final AndroidNodeChainSOCKSCapture socks=null;final String config="{\"original\":\"local-pure-graph\"}",launchInput,sourceSHA256,configSHA256;final boolean strict;
+ final AndroidNodeStore.ChainCapture source;final RouterNodeChain plan;final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;final String config="{\"original\":\"local-pure-graph\"}",launchInput,sourceSHA256,configSHA256;final boolean strict;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source)throws Exception{
   this.source=source;strict=source.strict;plan=new RouterNodeChain(source.members.size());sourceSHA256="a".repeat(64);configSHA256=RouterNodeChainExecution.digest(config);
   JSONArray nodes=new JSONArray(),identities=new JSONArray();for(int i=0;i<source.members.size();i++){nodes.put("original-node-"+source.members.get(i).id);identities.put("original-identity-"+source.members.get(i).id);}
