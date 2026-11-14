@@ -73,7 +73,21 @@ final class LibboxRouterNodeChain {
  func run(_ server:LibboxCommandServer)throws{throw FixtureFailure.error}
  func healthy()->Bool{false};func progressJSON()->String{"{}"}
  func networkChanged(){};func close()throws{}
+ func sourceSHA256()->String{""};func configSHA256()->String{""}
 }
+// The actual shared latency owner below must typecheck with NodeChainDelivery.
+// This external-only fixture cannot construct a latency facade or supply an
+// ordered MTU/source proof. Native ordered lifecycle has its own executable gate.
+final class LibboxRouterOrderedLatency {
+ private init(){}
+ func cancel(_ request:String){}
+ func start(_ request:String,nodeID:String)throws{throw FixtureFailure.error}
+ func statusJSON()->String{""};func savedJSON(_ node:String)->String{""}
+ func drain(_ request:String)throws{throw FixtureFailure.error}
+ func close()throws{throw FixtureFailure.error}
+}
+func LibboxRouterValidatePrivateNodeJSON(_ raw:String,_ error:inout NSError?)->Bool{error=FixtureFailure.error;return false}
+func LibboxRouterNodeChainNewLatencyBenchmark(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ probe:LibboxRouterHopMeasurement,_ error:inout NSError?)->LibboxRouterOrderedLatency?{error=FixtureFailure.error;return nil}
 // This ordinary external fixture cannot construct an ordered execution host.
 final class RouterVPNNodeCandidateSession {func invalidate(){};func close()throws{throw FixtureFailure.error}}
 func LibboxRouterNodeChainNewHopMeasurement(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ failure:inout NSError?)->LibboxRouterHopMeasurement?{failure=FixtureFailure.error;return nil}
@@ -136,6 +150,7 @@ struct RouterVPNExternalPolicy: Sendable {
 final class MTUBoundary {
  var hasOwner=false
  var proofObservationToken:UUID?{nil}
+ func request(operation:String,request:String,session:String)->Data?{nil}
  func stopChecked()throws{Trace.shared.add("mtu-close");hasOwner=false}
  func invalidate(){Trace.shared.add("mtu-invalidate")}
  func drainForTorCleanup()throws{try stopChecked()}
@@ -292,7 +307,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ios-external-owner-') as directory:
         work = Path(directory); code = work / 'Owner.swift'
         dns_session = (ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNDNSMeasurementSession.swift').read_text().replace('import Libbox\n', '')
-        code.write_text(BOUNDARIES + DNS.NATIVE + DNS.STORAGE + dns_session + (APP / 'IOSMultihopExecution.swift').read_text() + shipping())
+        latency_owner = (ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNOrderedLatency.swift').read_text().replace('import Libbox\n', '')
+        code.write_text(BOUNDARIES + DNS.NATIVE + DNS.STORAGE + dns_session + latency_owner + (APP / 'IOSMultihopExecution.swift').read_text() + shipping())
         binary = work / 'test'
         subprocess.run(['swiftc', '-swift-version', '6', '-parse-as-library', '-module-cache-path', str(work / 'module-cache'), str(APP / 'IOSMultihopStartLayer.swift'), str(code), '-o', str(binary)], check=True, timeout=90)
         subprocess.run([str(binary)], check=True, timeout=30)
