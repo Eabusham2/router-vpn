@@ -242,7 +242,8 @@ final class AndroidNodeChainSession {
             throw new IllegalStateException("The original ordered benchmark owner is unavailable or still draining.");
         // The third argument is the service retained by LayeredVpnService.
         // The native factory refuses any second or foreign measurement owner.
-        orderedLatency=capture.connect!=null?Libbox.routerNodeChainCONNECTNewLatencyBenchmark(capture.connect.plan,server,measurement)
+        orderedLatency=execution!=null?Libbox.routerNodeChainExecutionNewLatencyBenchmark(execution.plan,server,measurement)
+                :capture.connect!=null?Libbox.routerNodeChainCONNECTNewLatencyBenchmark(capture.connect.plan,server,measurement)
                 :capture.socks!=null?Libbox.routerNodeChainSOCKSNewLatencyBenchmark(capture.socks.plan,server,measurement)
                 :Libbox.routerNodeChainNewLatencyBenchmark(capture.plan,server,measurement);
         if(orderedLatency==null)throw new IllegalStateException("The native ordered benchmark returned no facade.");
@@ -261,6 +262,16 @@ final class AndroidNodeChainSession {
     void requireSource() throws Exception {
         if (cancelled || released || proofClosed) throw new IllegalStateException("The original ordered source has been retired.");
         capture.requireCurrent();
+        requireSourceSelection();
+    }
+
+    private void requireHistorySource(AndroidNodeStore.HistoryReadback readback) throws Exception {
+        if (cancelled || released || proofClosed) throw new IllegalStateException("The original ordered source has been retired.");
+        capture.requireHistoryCurrent(readback);
+        requireSourceSelection();
+    }
+
+    private void requireSourceSelection() throws Exception {
         requireSelection(context,source,selectionDigest);
         if (!AndroidHomeStateStore.ownsNodeChain(context, home)) throw new IllegalStateException("The original ordered Home owner changed.");
     }
@@ -276,6 +287,15 @@ final class AndroidNodeChainSession {
 
     void requireCurrent() throws Exception {
         requireSource();
+        requireServiceOwner();
+    }
+
+    void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback) throws Exception {
+        requireHistorySource(readback);
+        requireServiceOwner();
+    }
+
+    private void requireServiceOwner() throws Exception {
         Owner current = owner; CommandServer nativeServer = server;
         if (current == null || nativeServer == null || !current.current(this, nativeServer)
                 || !network.equals(current.network())) throw new IllegalStateException("The ordered proof belongs to another service or physical network.");
@@ -287,6 +307,21 @@ final class AndroidNodeChainSession {
     }
 
     private boolean nativeHealthy() { return candidatePrefix==null&&(capture.connect!=null?capture.connect.plan.healthy():capture.socks!=null?capture.socks.plan.healthy():execution == null ? capture.plan.healthy() : execution.healthy()); }
+    private boolean nativeHistoryHealthy(AndroidNodeStore.HistoryReadback readback) {
+        return candidatePrefix == null && (capture.connect != null ? capture.connect.plan.healthy()
+                : capture.socks != null ? capture.socks.plan.healthy()
+                : execution == null ? capture.plan.healthy() : execution.healthyForHistory(readback));
+    }
+    boolean healthyForHistory(AndroidNodeStore.HistoryReadback readback) {
+        try { requireHistoryCurrent(readback); boolean proved = nativeHistoryHealthy(readback); requireHistoryCurrent(readback); return proved; }
+        catch (Exception retired) { return false; }
+    }
+    String provedExecutionForHistory(AndroidNodeStore.HistoryReadback readback) throws Exception {
+        requireHistoryCurrent(readback);
+        if (!nativeHistoryHealthy(readback)) throw new IllegalStateException("The original ordered execution has no current history proof.");
+        String selected = execution == null ? "local" : execution.executionForHistory(readback);
+        requireHistoryCurrent(readback); return selected;
+    }
     String provedExecution() throws Exception {
         requireCurrent();
         if (!nativeHealthy()) throw new IllegalStateException("The ordered execution has no current proof.");
@@ -375,7 +410,12 @@ final class AndroidNodeChainSession {
             throw new IllegalStateException("The original ordered execution Box has no successful native close receipt.");
         nativeClosed = true;
     }
-    boolean orderedLatencyEligible() { return execution == null && candidatePrefix == null && "local".equals(source.execution) && (typedNative() || capture.plan != null); }
+    boolean orderedLatencyEligible() {
+        return candidatePrefix == null && (execution != null
+                ? execution.local == capture && execution.requested.equals(source.execution)
+                    && ("server".equals(source.execution) || "auto".equals(source.execution))
+                : "local".equals(source.execution) && (typedNative() || capture.plan != null));
+    }
 
     boolean typedNative() { return capture.socks != null || capture.connect != null; }
     boolean released() { return released; }

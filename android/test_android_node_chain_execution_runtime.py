@@ -76,7 +76,7 @@ final class AndroidNodeChainCapture {
  }
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source)throws Exception{source.requireCurrent();return new AndroidNodeChainCapture(source);}
  boolean ownsSource(AndroidNodeStore.ChainCapture original){return source==original;}
- void requireCurrent(){source.requireCurrent();}void close()throws Exception{plan.close();}
+ void requireCurrent(){source.requireCurrent();}void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback)throws Exception{if(readback==null)throw new IllegalStateException("No original history source readback");readback.require(source);}void close()throws Exception{plan.close();}
 }
 '''
 

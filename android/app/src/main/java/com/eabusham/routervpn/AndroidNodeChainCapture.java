@@ -230,6 +230,10 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     JSONObject finalProfile() throws Exception { return original.members.get(original.members.size() - 1).profile(); }
     boolean ownsSource(AndroidNodeStore.ChainCapture source) { return original == source; }
     void requireCurrent() throws Exception { original.requireCurrent(); }
+    void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback) throws Exception {
+        if (readback == null) throw new IllegalStateException("The original history source readback is missing.");
+        readback.require(original);
+    }
     @Override public void close() throws Exception { if(connect!=null)connect.close();else if(socks!=null)socks.close();else plan.close(); }
 
     private static String bounded(String value, int limit) {

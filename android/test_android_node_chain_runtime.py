@@ -114,6 +114,19 @@ SOURCES[APP + 'AndroidNodeStore.java'] = r'''package com.eabusham.routervpn;fina
   ChainCapture(int count){this(count,"wg","shadowsocks");}
   ChainCapture(int count,String prefixMode,String finalMode){java.util.List<ChainSource> list=new java.util.ArrayList<>();java.util.List<String> selected=new java.util.ArrayList<>();for(int i=0;i<count;i++){list.add(new ChainSource(String.format("%032x",i+1)));selected.add(i==count-1?finalMode:prefixMode);}members=java.util.List.copyOf(list);modes=java.util.List.copyOf(selected);control=members.get(count-1);}
   void requireCurrent(){Runnable hook=beforeCurrent;if(hook!=null&&Thread.currentThread()==hookThread){beforeCurrent=null;hook.run();}if(!valid)throw new IllegalStateException("original middle source replaced");}
+  HistoryReadback historyReadback()throws Exception{return new HistoryReadback(this);}
+ }
+ // Controlled source boundary only. Actual store locking is exercised by the
+ // separate fixture that compiles AndroidNodeStore itself.
+ static final class HistoryReadback {
+  private final ChainCapture captured;private final Thread thread=Thread.currentThread();private boolean closed;
+  private HistoryReadback(ChainCapture captured)throws Exception{this.captured=captured;require(captured);}
+  void require(ChainCapture expected)throws Exception{
+   if(closed||thread!=Thread.currentThread()||captured==null||captured!=expected||!captured.valid
+      ||!Thread.holdsLock(AndroidHomeStateStore.class)||!Thread.holdsLock(AndroidPrivateFileStore.class))
+    throw new IllegalStateException("original history source readback is outside its live private transaction");
+  }
+  void close(){if(thread!=Thread.currentThread())throw new IllegalStateException("foreign history readback retirement");closed=true;}
  }
 }'''
 SOURCES[APP + 'AndroidNodeChainCapture.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeChainCapture {
@@ -122,7 +135,7 @@ SOURCES[APP + 'AndroidNodeChainCapture.java'] = r'''package com.eabusham.routerv
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source){this.source=source;strict=source.strict;plan=new io.nekohasekai.libbox.RouterNodeChain(source.members.size());config="{\"original\":\"one-complete-TUN\",\"modes\":"+new org.json.JSONArray(source.modes).toString()+"}";launchInput="ordered:"+source.members.size()+":"+String.join(",",source.modes);}
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source){source.requireCurrent();return new AndroidNodeChainCapture(source);}
  boolean ownsSource(AndroidNodeStore.ChainCapture value){return source==value;}
- void requireCurrent(){source.requireCurrent();}void close()throws Exception{plan.close();}
+ void requireCurrent(){source.requireCurrent();}void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback)throws Exception{if(readback==null)throw new IllegalStateException("No original history source readback");readback.require(source);}void close()throws Exception{plan.close();}
 }'''
 SOURCES[APP + 'AndroidNodeChainSOCKSCapture.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeChainSOCKSCapture {final io.nekohasekai.libbox.RouterNodeChainSOCKS plan=new io.nekohasekai.libbox.RouterNodeChainSOCKS();}'''
 SOURCES[NATIVE + 'RouterNodeChainSOCKS.java'] = r'''package io.nekohasekai.libbox;public class RouterNodeChainSOCKS {

@@ -1,0 +1,80 @@
+package com.eabusham.routervpn;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+/** Exact metadata returned by one typed execution facade. This parsed value is
+ * not a forwarding capability: the service retains and checks the original
+ * native execution, facade, measurement, session and MTU owner separately.
+ * History can parse the same bytes without acquiring any of those owners. */
+final class AndroidOrderedExecutionLatencyCapture {
+    static final int MAX_BYTES=8192;
+    final String raw,source,config,generation,selected;
+    final List<Node> nodes;
+    static final class Node {
+        final String id,role,kind;
+        final int position;
+        Node(String id,int position,String role,String kind){this.id=id;this.position=position;this.role=role;this.kind=kind;}
+    }
+
+    AndroidOrderedExecutionLatencyCapture(String raw)throws Exception {
+        if(raw==null||raw.isEmpty()||raw.getBytes(StandardCharsets.UTF_8).length>MAX_BYTES)throw invalid();
+        io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);
+        JSONObject value=new JSONObject(raw);
+        keys(value,"schema","source_sha256","config_sha256","generation_sha256","selected_execution","nodes");
+        source=text(value,"source_sha256");config=text(value,"config_sha256");generation=text(value,"generation_sha256");selected=text(value,"selected_execution");
+        if(integer(value,"schema")!=1||!sha(source)||!sha(config)||!sha(generation)||!Arrays.asList("local","server").contains(selected))throw invalid();
+        JSONArray members=value.getJSONArray("nodes");
+        if(members.length()<2||members.length()>8)throw invalid();
+        List<Node> parsed=new ArrayList<>();Set<String> identities=new HashSet<>();
+        for(int i=0;i<members.length();i++){
+            JSONObject member=members.getJSONObject(i);keys(member,"node_id","position","role","kind");
+            String id=text(member,"node_id"),role=text(member,"role"),kind=text(member,"kind");
+            String expectedRole=i==0?"entry":i==members.length()-1?"exit":"intermediate";
+            if(integer(member,"position")!=i||!id.matches("[A-Za-z0-9_-]{1,64}")||!identities.add(id)||!expectedRole.equals(role)
+                    ||!Arrays.asList("private-node","public-path").contains(kind)
+                    ||"public-path".equals(kind)&&(members.length()!=3||i!=1))throw invalid();
+            parsed.add(new Node(id,i,role,kind));
+        }
+        nodes=Collections.unmodifiableList(parsed);this.raw=raw;
+    }
+
+    void requireSelection(String requested,String selected)throws Exception {
+        if(!Arrays.asList("server","auto").contains(requested)||!this.selected.equals(selected)
+                ||"server".equals(requested)&&!"server".equals(selected))throw invalid();
+    }
+    void requireNode(int position,String id,String role,String kind,int count)throws Exception {
+        if(count!=nodes.size()||position<0||position>=nodes.size())throw invalid();
+        Node node=nodes.get(position);
+        if(!node.id.equals(id)||!node.role.equals(role)||!node.kind.equals(kind))throw invalid();
+    }
+    String label(int position)throws Exception {
+        if(position<0||position>=nodes.size())throw invalid();
+        return "Cumulative "+selected+" path through "+("public-path".equals(nodes.get(position).kind)
+                ?"custom node 2 of 3 → Cloudflare edge":"node "+(position+1)+" of "+nodes.size());
+    }
+    void requireRecord(AndroidOrderedLatencyStore.Record record)throws Exception {
+        if(record==null||!source.equals(record.source)||!config.equals(record.config)||!generation.equals(record.generation)
+                ||!selected.equals(record.selectedExecution))throw invalid();
+        requireNode(record.position,record.node,record.role,record.kind,record.count);
+        if(!label(record.position).equals(record.label))throw invalid();
+    }
+    static boolean sha(String value){return value!=null&&value.matches("[0-9a-f]{64}");}
+    static String text(JSONObject value,String key)throws Exception {Object v=value.get(key);if(!(v instanceof String))throw invalid();return(String)v;}
+    static long integer(JSONObject value,String key)throws Exception {
+        Object v=value.get(key);if(!(v instanceof Number)||!Double.isFinite(((Number)v).doubleValue()))throw invalid();
+        long result=((Number)v).longValue();if(((Number)v).doubleValue()!=result)throw invalid();return result;
+    }
+    static void keys(JSONObject value,String...expected){
+        Set<String> actual=new HashSet<>();for(java.util.Iterator<String> it=value.keys();it.hasNext();)actual.add(it.next());
+        if(!actual.equals(new HashSet<>(Arrays.asList(expected))))throw invalid();
+    }
+    private static IllegalArgumentException invalid(){return new IllegalArgumentException("The ordered benchmark lost its exact selected execution capture.");}
+}

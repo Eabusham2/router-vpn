@@ -159,6 +159,32 @@ final class AndroidNodeStore {
             this.execution = control.profile().getString("multihop_execution");
         }
         void requireCurrent() throws Exception { owner.requireChainCapture(this); }
+        HistoryReadback historyReadback() throws Exception { return new HistoryReadback(this); }
+    }
+
+    /** One callback's immutable source readback, never mutation permission.
+     * History already owns Home and private I/O; entering a store mutation
+     * monitor there would invert ordinary reader/writer admission. */
+    static final class HistoryReadback {
+        private final ChainCapture captured;
+        private final Thread thread = Thread.currentThread();
+        private boolean closed;
+        private HistoryReadback(ChainCapture captured) throws Exception {
+            this.captured = captured;
+            require(captured);
+        }
+        void require(ChainCapture expected) throws Exception {
+            if (closed || thread != Thread.currentThread() || captured == null || captured != expected
+                    || !Thread.holdsLock(AndroidHomeStateStore.class)
+                    || !Thread.holdsLock(AndroidPrivateFileStore.class)) {
+                throw new IllegalStateException("The original history source readback is outside its private transaction.");
+            }
+            captured.owner.requireHistorySource(captured);
+        }
+        void close() {
+            if (thread != Thread.currentThread()) throw new IllegalStateException("Another thread cannot retire this history readback.");
+            closed = true;
+        }
     }
 
     /** The editor retains the original complete catalog and selection epoch.
@@ -456,6 +482,31 @@ final class AndroidNodeStore {
             }
         }
     } }
+
+    /** Called only by the exact live HistoryReadback while private I/O is held.
+     * Epochs can advance before a blocked writer reaches private I/O, so check
+     * them again after every original byte string has been observed. Imported
+     * readback intentionally uses capturedEntry, never its mutation lock. */
+    private void requireHistorySource(ChainCapture captured) throws Exception {
+        if (captured == null || captured.owner != this || captured.generation != selectionGeneration
+                || !captured.control.id.equals(activeId())
+                || !java.util.Arrays.equals(captured.control.original, snapshotOptional(activeBundleFile()))) {
+            throw new IllegalStateException("The original history selection or publication generation changed.");
+        }
+        for (ChainSource source : captured.members) {
+            if (!java.util.Arrays.equals(source.original, chainSourceBytes(source))) {
+                throw new IllegalStateException("An original history member changed or disappeared.");
+            }
+        }
+        if (captured.generation != selectionGeneration || !captured.control.id.equals(activeId())) {
+            throw new IllegalStateException("The original history selection changed during source readback.");
+        }
+        for (ChainSource source : captured.members) {
+            if (source.imported && source.importedGeneration != AndroidStandardExitStore.publicationGeneration()) {
+                throw new IllegalStateException("The imported history publication changed during source readback.");
+            }
+        }
+    }
 
     /** Validate references without resolving or inventing a transport owner. */
     static JSONArray orderedSelection(JSONObject profile) throws Exception {

@@ -22,11 +22,16 @@ final class AndroidOrderedLatencyStore {
     static final int MAX_RECEIPT=8192,MAX_STORE=1024*1024,MAX_RECORDS=128;
     interface Guard {void require()throws Exception;}
     static final class Record {
-        final String raw,source,config,generation,node,request,kind,role,measurement;
+        final String raw,source,config,generation,node,request,kind,role,label,measurement,selectedExecution;
         final int position,count;
         final long measuredAt;
         final double min,median,average,trimmed,p90,max,jitter;
-        Record(String raw)throws Exception {
+        Record(String raw)throws Exception { this(raw, ""); }
+        /** Parsing a selected execution receipt grants no live authority. The
+         * original execution owner separately binds its full native capture. */
+        Record(String raw,String selectedExecution)throws Exception {
+            if(selectedExecution==null||!Arrays.asList("","local","server").contains(selectedExecution))throw invalid();
+            this.selectedExecution=selectedExecution;
             if(raw==null||raw.isEmpty()||raw.getBytes(StandardCharsets.UTF_8).length>MAX_RECEIPT)throw invalid();
             io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);
             JSONObject value=new JSONObject(raw);
@@ -40,12 +45,13 @@ final class AndroidOrderedLatencyStore {
             if(!node.equals(text(result,"node_id"))||!bool(result,"ready")||!Arrays.asList("entry","intermediate","exit").contains(role)||!("private-node".equals(kind)||"public-path".equals(kind)))throw invalid();
             // Native ordered labels contain only positions, never a user name,
             // address or credential. Reject a label outside that closed form.
-            String label=text(result,"label");
+            label=text(result,"label");
+            String prefix="Cumulative "+(selectedExecution.isEmpty()?"":selectedExecution+" ")+"path through ";
             if("public-path".equals(kind)) {
-                if(position!=1||!"intermediate".equals(role)||!"Cumulative path through custom node 2 of 3 → Cloudflare edge".equals(label))throw invalid();
+                if(position!=1||!"intermediate".equals(role)||!(prefix+"custom node 2 of 3 → Cloudflare edge").equals(label))throw invalid();
                 count=3;
             } else {
-                if(!label.matches("Cumulative path through node [1-8] of [2-8]")||!label.startsWith("Cumulative path through node "+(position+1)+" of "))throw invalid();
+                if(!label.matches(java.util.regex.Pattern.quote(prefix)+"node [1-8] of [2-8]")||!label.startsWith(prefix+"node "+(position+1)+" of "))throw invalid();
                 count=label.charAt(label.length()-1)-'0';
                 if(position>=count||!role.equals(position==0?"entry":position==count-1?"exit":"intermediate"))throw invalid();
             }
@@ -65,14 +71,17 @@ final class AndroidOrderedLatencyStore {
         void require(String source,String config,int position,String node,String kind,String request)throws Exception {
             if(!this.source.equals(source)||!this.config.equals(config)||this.position!=position||!this.node.equals(node)||!this.kind.equals(kind)||!this.request.equals(request))throw invalid();
         }
-        String detail(){return String.format(Locale.US,"Historical ordered-node benchmark • %d / %s\n50 successful responses • 0 failed\nMedian %.1f ms • min %.1f • average %.1f\n10%% trimmed mean %.1f • p90 %.1f • max %.1f • jitter %.1f\nMeasured %s\n\n%s\n\nThis is a saved result for the path through this node. It does not show current connection health, ICMP ping or the speed between individual servers. Compare it only with results for the same path and response type.",position+1,node,median,min,average,trimmed,p90,max,jitter,new java.util.Date(measuredAt).toString(),"public-path".equals(kind)?"Public HTTPS response through the custom middle; timing starts after DNS, TCP and TLS preparation.":"Private authenticated Router response through the ordered prefix; timing includes connection establishment.");}
+        String detail(){return String.format(Locale.US,"Historical ordered-node benchmark • %d / %s%s\n50 successful responses • 0 failed\nMedian %.1f ms • min %.1f • average %.1f\n10%% trimmed mean %.1f • p90 %.1f • max %.1f • jitter %.1f\nMeasured %s\n\n%s\n\nThis is a saved result for the path through this node. It does not show current connection health, ICMP ping or the speed between individual servers. Compare it only with results for the same path and response type.",position+1,node,selectedExecution.isEmpty()?"":"\nSelected execution: "+("server".equals(selectedExecution)?"Server":"Local"),median,min,average,trimmed,p90,max,jitter,new java.util.Date(measuredAt).toString(),"public-path".equals(kind)?"Public HTTPS response through the custom middle; timing starts after DNS, TCP and TLS preparation.":"Private authenticated Router response through the ordered prefix; timing includes connection establishment.");}
     }
 
     static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind)throws Exception {
+        return completed(status,saved,request,source,config,position,node,kind,"");
+    }
+    static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution)throws Exception {
         JSONObject value=status(status,request);
         if(!bool(value,"complete")||!bool(value,"drained")||!"complete".equals(text(value,"stage"))||!value.optString("failure","").isEmpty())throw invalid();
         JSONArray results=value.getJSONArray("results");if(results.length()!=1)throw invalid();
-        Record record=new Record(saved);record.require(source,config,position,node,kind,request);
+        Record record=new Record(saved,selectedExecution);record.require(source,config,position,node,kind,request);
         if(!same(results.getJSONObject(0),new JSONObject(record.raw).getJSONObject("result")))throw invalid();
         return record;
     }

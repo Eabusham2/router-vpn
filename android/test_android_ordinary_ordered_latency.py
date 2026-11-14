@@ -32,7 +32,7 @@ def main():
   d=Path(d);src=d/'src';out=d/'classes'
   for name,value in SOURCES.items():
    p=src/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(value)
-  names=('AndroidHomeStateStore','AndroidConnectionSelection','AndroidNodeChainSession','AndroidNodeChainMTUPlatform','AndroidNodeChainRuntime','LayeredVpnService','AndroidOrderedLatencyStore','AndroidOrderedLatencyBenchmark','AndroidMTUMeasurementGate')
+  names=('AndroidHomeStateStore','AndroidConnectionSelection','AndroidNodeChainSession','AndroidNodeChainMTUPlatform','AndroidNodeChainRuntime','LayeredVpnService','AndroidOrderedLatencyStore','AndroidOrderedExecutionLatencyCapture','AndroidOrderedExecutionLatencyStore','AndroidOrderedLatencySourceTransaction','AndroidOrderedLatencyBenchmark','AndroidMTUMeasurementGate')
   for name in names:(src/APP/(name+'.java')).write_text((JAVA/(name+'.java')).read_text())
   (src/APP/'OrdinaryFiftyTest.java').write_text(HARNESS)
   subprocess.run(['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(out),*map(str,src.rglob('*.java'))],check=True,timeout=60)

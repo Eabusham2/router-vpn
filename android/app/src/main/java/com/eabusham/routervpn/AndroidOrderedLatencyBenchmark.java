@@ -37,7 +37,13 @@ final class AndroidOrderedLatencyBenchmark {
             new Thread(()->measure(job,error),"routervpn-ordered-fifty").start();
         });
     }
-    void cancel(){final Job job;synchronized(this){job=active;if(job==null)return;job.cancelled=true;}LayeredVpnService.OrderedLatencyOwner owner=job.owner;if(owner!=null)owner.cancel();}
+    void cancel(){
+        // History commit may still be joining the original native proof. Do
+        // not wait for its benchmark monitor or reread a replacement job.
+        final Job job=active;if(job==null)return;job.cancelled=true;
+        final LayeredVpnService.OrderedLatencyOwner owner=job.owner;
+        if(owner!=null)owner.cancel();
+    }
     private void require(Job job){if(job.cancelled||!AndroidMTUMeasurementGate.owns(job.lease))throw new IllegalStateException("The ordered benchmark was cancelled.");}
     private void progress(Job job,String stage){job.callback.progress(job.owner,stage);}
     private void pause(Job job){try{Thread.sleep(250L);}catch(InterruptedException interrupted){Thread.interrupted();job.cancelled=true;}}
@@ -73,8 +79,7 @@ final class AndroidOrderedLatencyBenchmark {
                 pause(job);
             }}
             if(failure==null&&!job.cancelled)try{
-                String status=job.owner.status(),saved=job.owner.saved();
-                result=AndroidOrderedLatencyStore.completed(status,saved,job.id,job.target.source,job.target.config,job.target.position,job.target.node,job.target.kind);
+                result=job.owner.completed();
             }catch(Throwable error){failure=error;}
         }
         if(job.owner!=null)for(;;){try{job.owner.close();break;}catch(Throwable pending){

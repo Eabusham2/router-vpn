@@ -29,7 +29,7 @@ SOURCES[APP+'AndroidNodeChainCapture.java']=r'''package com.eabusham.routervpn;f
   connect=AndroidNodeChainCONNECTCapture.compile(input,nodes,ids);config=connect.config;sourceSHA256=connect.sourceSHA256;configSHA256=connect.configSHA256;launchInput=connect.source;
  }
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source)throws Exception{source.requireCurrent();return new AndroidNodeChainCapture(source);}
- boolean ownsSource(AndroidNodeStore.ChainCapture source){return this.source==source;}void requireCurrent(){source.requireCurrent();}void close()throws Exception{connect.close();}
+ boolean ownsSource(AndroidNodeStore.ChainCapture source){return this.source==source;}void requireCurrent(){source.requireCurrent();}void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback)throws Exception{if(readback==null)throw new IllegalStateException("No original history source readback");readback.require(source);}void close()throws Exception{connect.close();}
 }'''
 SOURCES[NATIVE+'RouterNodeChainCONNECT.java']=r'''package io.nekohasekai.libbox;public class RouterNodeChainCONNECT {
  public static String transport="http-connect";public static java.util.function.Consumer<RouterNodeChainCONNECT> configured;public static RouterNodeChainCONNECT latest;

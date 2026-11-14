@@ -146,6 +146,11 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         local.requireCurrent();
     }
 
+    private void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback) throws Exception {
+        if (closed) throw new IllegalStateException("The original ordered execution capture has retired.");
+        local.requireHistoryCurrent(readback);
+    }
+
     // Binding also retains deny-only cleanup when cancellation won before the
     // fresh native construction. The Session validates source after this call,
     // before Start; Run and every proof still require a current source.
@@ -158,10 +163,23 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     String execution() throws Exception {
         requireCurrent();
         String result = plan.execution();
+        requireSelectedExecution(result);
+        requireCurrent(); return result;
+    }
+    private void requireSelectedExecution(String result) {
         if (!("local".equals(result) || "server".equals(result)) || !"auto".equals(requested) && !requested.equals(result)
                 || expectedExecution != null && !expectedExecution.equals(result))
             throw new IllegalStateException("The original ordered execution has no proved selected result.");
-        requireCurrent(); return result;
+    }
+    boolean healthyForHistory(AndroidNodeStore.HistoryReadback readback) {
+        try { requireHistoryCurrent(readback); boolean result = plan.healthy(); requireHistoryCurrent(readback); return result; }
+        catch (Exception retired) { return false; }
+    }
+    String executionForHistory(AndroidNodeStore.HistoryReadback readback) throws Exception {
+        requireHistoryCurrent(readback);
+        String result = plan.execution();
+        requireSelectedExecution(result);
+        requireHistoryCurrent(readback); return result;
     }
     String progressJSON() throws Exception { requireCurrent(); String result = plan.progressJSON(); requireCurrent(); return result; }
     void networkChanged() { plan.networkChanged(); }

@@ -59,7 +59,7 @@ def main():
         work=Path(directory);src=work/'src';classes=work/'classes'
         for name,text in SOURCES.items():
             target=src/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(text)
-        names=('AndroidHomeStateStore','AndroidConnectionSelection','AndroidNodeChainCONNECTCapture','AndroidNodeChainSession','AndroidNodeChainMTUPlatform','AndroidNodeChainRuntime','LayeredVpnService','AndroidOrderedLatencyStore','AndroidOrderedLatencyBenchmark','AndroidOrderedLatencyDialog','AndroidMTUMeasurementGate')
+        names=('AndroidHomeStateStore','AndroidConnectionSelection','AndroidNodeChainCONNECTCapture','AndroidNodeChainSession','AndroidNodeChainMTUPlatform','AndroidNodeChainRuntime','LayeredVpnService','AndroidOrderedLatencyStore','AndroidOrderedExecutionLatencyCapture','AndroidOrderedExecutionLatencyStore','AndroidOrderedLatencySourceTransaction','AndroidOrderedLatencyBenchmark','AndroidOrderedLatencyDialog','AndroidMTUMeasurementGate')
         originals={name:(JAVA/(name+'.java')).read_text() for name in names}
         for name,text in originals.items():(src/APP/(name+'.java')).write_text(text)
         (src/APP/'CONNECTFiftyTest.java').write_text(HARNESS)

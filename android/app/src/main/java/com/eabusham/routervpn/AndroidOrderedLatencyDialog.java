@@ -42,7 +42,13 @@ final class AndroidOrderedLatencyDialog {
             :"50 authenticated private Router HTTP responses through this ordered prefix. Timing includes connection establishment.";}
     private void history(){
         if(closed||benchmark.isRunning())return;
-        try{AndroidOrderedLatencyStore.Record record=AndroidOrderedLatencyStore.load(activity,target.source,target.config,target.position,target.node,target.kind);
+        try{AndroidOrderedLatencyStore.Record record;
+            if(target.execution==null)record=AndroidOrderedLatencyStore.load(activity,target.source,target.config,target.position,target.node,target.kind);
+            else{
+                AndroidOrderedExecutionLatencyStore.Entry saved=AndroidOrderedExecutionLatencyStore.load(activity,target.namespaceSource,target.namespaceConfig,
+                        target.requested,target.selected,target.position,target.node,target.kind);
+                record=saved==null?null:saved.record;
+            }
             if(record!=null&&(record.count!=target.count||!record.role.equals(target.role)))throw new IllegalStateException("Historical inventory differs from this captured path.");
             output.setText(target.label+"\n\n"+meaning()+"\n\n"+(record==null?"No saved result for this node on this path. Press Fifty / Retest to measure.":record.detail()));
         }catch(Exception invalid){output.setText("The saved result could not be read. Press Fifty / Retest for a new measurement.");}

@@ -632,10 +632,12 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             this.exitID=exitID;this.nativeSession=nativeSession;this.home=home;config=service.activeConfig;sessionFile=service.activeSession;tor=service.torSession;external=service.externalSession;mtu=service.mtuSession;chain=service.nodeChainSession;
             physical=tor!=null?service.torPhysicalNetwork:service.externalPhysicalNetwork;
         }
-        private void requireCurrent(){
+        private void requireCurrent(){requireCurrent(null);}
+        private void requireCurrent(AndroidNodeStore.HistoryReadback readback){
+            if(readback!=null&&chain==null)throw new IllegalStateException("No original ordered history source owner.");
             if(probe==null||server==null||service.hopMeasurement!=probe||service.commandServer!=server||service.mtuSession!=mtu||generation!=service.lifecycle.get()
                     ||service.explicitStop||!"UP".equals(service.state)||!network.equals(service.executionNetworkIdentity()))throw new IllegalStateException("The captured path measurement session changed.");
-            if(chain!=service.nodeChainSession || chain!=null&&!chain.healthy())throw new IllegalStateException("The ordered measurement lost its captured nodes or native proof.");
+            if(chain!=service.nodeChainSession || chain!=null&&!(readback==null?chain.healthy():chain.healthyForHistory(readback)))throw new IllegalStateException("The ordered measurement lost its captured nodes or native proof.");
             if(!exitID.isEmpty()){
                 AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(service),proofHome=tor!=null?service.torHomeOwner:service.externalHomeOwner;
                 if(currentService.get()!=service||network.isEmpty()||"[]".equals(network)||!service.executionProved
@@ -707,16 +709,21 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     static final class OrderedLatencyTarget {
         final AndroidNodeChainSession chain;
         final AndroidHomeStateStore.Snapshot home;
-        final String source,config,node,kind,role,label;
+        final String source,config,node,kind,role,label,namespaceSource,namespaceConfig,requested,selected;
+        final AndroidNodeChainExecutionCapture execution;
         final int position,count;
         OrderedLatencyTarget(AndroidNodeChainSession chain,AndroidHomeStateStore.Snapshot home,int position)throws Exception {
             this.chain=chain;this.home=home;this.position=position;this.count=chain.source.members.size();
             AndroidNodeStore.ChainSource member=chain.source.members.get(position);
             source=chain.capture.sourceSHA256;config=chain.capture.configSHA256;node=member.profileId;
+            execution=chain.execution;requested=chain.source.execution;selected=chain.provedExecution();
+            namespaceSource=execution==null?source:execution.sourceSHA256;
+            namespaceConfig=execution==null?config:execution.configSHA256;
             kind=member.imported?"public-path":"private-node";
             role=position==0?"entry":position==chain.source.members.size()-1?"exit":"intermediate";
             String name=member.profile().optString("name",node).trim();if(name.isEmpty())name=node;if(name.length()>100)name=name.substring(0,100);
-            label=(position+1)+". "+name+" ["+node+"] • "+chain.source.modes.get(position)+(member.imported?" • public HTTPS response":" • private Router response");
+            label=(position+1)+". "+name+" ["+node+"] • "+chain.source.modes.get(position)+(member.imported?" • public HTTPS response":" • private Router response")
+                    +(execution==null?"":" • "+("auto".equals(requested)?"Compare both; selected ":"Selected ")+("server".equals(selected)?"Server":"Local"));
         }
     }
     static java.util.List<OrderedLatencyTarget> orderedLatencyTargets() throws Exception {
@@ -738,18 +745,25 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         private final String request;
         private volatile boolean attempted,started,ended;
         private Long mtuObservation;
+        private AndroidOrderedExecutionLatencyCapture executionCapture;
+        private AndroidOrderedLatencyStore.Record completedRecord;
         private OrderedLatencyOwner(LayeredVpnService service,OrderedLatencyTarget target,String request)throws Exception {
             this.service=service;this.target=target;this.request=request;original=new HopMeasurementOwner(service,request);
             requireCurrent();
             facade=target.chain.newOrderedLatency(original.probe);
         }
-        private void requireCurrent()throws Exception {
-            original.requireCurrent();
+        private void requireCurrent()throws Exception {requireCurrent(null);}
+        private void requireCurrent(AndroidNodeStore.HistoryReadback readback)throws Exception {
+            original.requireCurrent(readback);
             AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(service);
             if(currentService.get()!=service||target.chain!=service.nodeChainSession||target.chain!=original.chain
                     ||target.chain.sessionId==null||original.sessionFile!=service.activeSession||original.sessionFile==null
                     ||!target.chain.sessionId.equals(original.sessionFile.getName())||!original.config.equals(service.activeConfig)
                     ||!target.source.equals(target.chain.capture.sourceSHA256)||!target.config.equals(target.chain.capture.configSHA256)
+                    ||target.execution!=target.chain.execution||!target.requested.equals(target.chain.source.execution)
+                    ||!target.selected.equals(readback==null?target.chain.provedExecution():target.chain.provedExecutionForHistory(readback))
+                    ||!target.namespaceSource.equals(target.execution==null?target.chain.capture.sourceSHA256:target.execution.sourceSHA256)
+                    ||!target.namespaceConfig.equals(target.execution==null?target.chain.capture.configSHA256:target.execution.configSHA256)
                     ||!target.home.sessionId.equals(home.sessionId)||target.home.pathGeneration!=home.pathGeneration
                     ||!home.connected||!"node-chain".equals(home.logicalMode)||!"connected".equals(home.phase)||!"passed".equals(home.pathProof)
                     ||AndroidHomeStateStore.emergencyDisconnectPending(service)
@@ -757,28 +771,88 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 throw new IllegalStateException("The ordered fifty request lost its exact source, path or Home generation.");
             if(mtuObservation!=null&&!mtuObservation.equals(original.mtu==null?Long.valueOf(0L):original.mtu.proofObservationToken()))
                 throw new IllegalStateException("The ordered benchmark MTU proof generation changed.");
-            target.chain.requireCurrent();
+            if(readback==null)target.chain.requireCurrent();else target.chain.requireHistoryCurrent(readback);
+            // The UI/source namespace remains the preparation identity. The
+            // actual receipt identity comes only from this original facade's
+            // discovered projection, selected trial and generation.
+            if(executionCapture!=null&&!ended&&!executionCapture.raw.equals(facade.captureJSON()))
+                throw new IllegalStateException("The original execution benchmark capture changed.");
+        }
+        private void captureExecution()throws Exception {
+            if(target.execution==null)return;
+            AndroidOrderedExecutionLatencyCapture captured=new AndroidOrderedExecutionLatencyCapture(facade.captureJSON());
+            captured.requireSelection(target.requested,target.selected);
+            for(int i=0;i<target.chain.source.members.size();i++){
+                AndroidNodeStore.ChainSource member=target.chain.source.members.get(i);
+                captured.requireNode(i,member.profileId,i==0?"entry":i==target.count-1?"exit":"intermediate",
+                        member.imported?"public-path":"private-node",target.count);
+            }
+            executionCapture=captured;requireCurrent();
         }
         void start()throws Exception{synchronized(service.lock){
             requireCurrent();if(ended||attempted||service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("The captured MTU or benchmark worker has not joined.");
             mtuObservation=original.mtu==null?Long.valueOf(0L):original.mtu.proofObservationToken();
             if(mtuObservation==null)throw new IllegalStateException("The original ordered MTU proof is changing.");
-            attempted=true;facade.start(request,target.node);started=true;requireCurrent();
+            // The owner has already been returned to the retained worker. A
+            // failed/changed capture therefore still leaves its exact facade
+            // reachable for cancellation and joined cleanup.
+            attempted=true;captureExecution();facade.start(request,target.node);started=true;requireCurrent();
         }}
         boolean started(){return started;}
         String status()throws Exception{synchronized(service.lock){requireCurrent();String result=facade.statusJSON();requireCurrent();return result;}}
         String saved()throws Exception{synchronized(service.lock){requireCurrent();String result=facade.savedJSON(target.node);requireCurrent();return result;}}
+        AndroidOrderedLatencyStore.Record completed()throws Exception{synchronized(service.lock){
+            requireCurrent();
+            if(ended||!started)throw new IllegalStateException("The original benchmark has no active completed receipt.");
+            String status=status(),saved=saved();
+            AndroidOrderedLatencyStore.Record record=executionCapture==null
+                    ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind)
+                    :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected);
+            if(target.execution!=null&&executionCapture==null)throw new IllegalStateException("The actual execution capture is missing.");
+            if(executionCapture!=null)executionCapture.requireRecord(record);
+            if(!record.role.equals(target.role)||record.count!=target.count)throw new IllegalStateException("The receipt names another ordered inventory.");
+            requireCurrent();completedRecord=record;return record;
+        }}
         void cancel(){facade.cancel(request);}
         void drain()throws Exception{if(started)facade.drain(request);}
         void close()throws Exception{synchronized(service.lock){if(!ended){target.chain.closeOrderedLatency(facade);ended=true;}}}
         void requireDelivery()throws Exception{synchronized(service.lock){requireCurrent();}}
+        /** Called on the retained benchmark worker, never for a UI-only
+         * history lookup. A successful Close is cleanup, not current proof.
+         * This read-only native check observes the same borrowed measurement
+         * after close; it cannot construct a new facade or rerun Compare. */
+        private void requireHistoryAuthority()throws Exception {
+            requireCurrent();
+            if(target.execution!=null){
+                if(!ended||executionCapture==null||completedRecord==null)throw new IllegalStateException("The original execution receipt has not joined.");
+                facade.validateClosedCapture(request,executionCapture.raw);
+                requireCurrent();
+            }
+        }
         void commit(AndroidOrderedLatencyStore.Record record,AndroidOrderedLatencyStore.Guard cancellation)throws Exception {
-            synchronized(service.lock){synchronized(AndroidHomeStateStore.class){
-                requireCurrent();if(!ended||!started)throw new IllegalStateException("The original ordered benchmark facade has not joined.");
-                record.require(target.source,target.config,target.position,target.node,target.kind,request);
+            synchronized(service.lock){
+                // Fresh native proof may protect a socket through the Java
+                // source/Home callbacks. Join it before taking either Home or
+                // private-file monitors, so those callbacks can make progress.
+                // The original service and MTU lease remain owned throughout.
+                cancellation.require();requireHistoryAuthority();
+                AndroidOrderedLatencySourceTransaction.run(target.chain.source,readback->{
+                requireCurrent(readback);if(!ended||!started)throw new IllegalStateException("The original ordered benchmark facade has not joined.");
+                if(record==null||record!=completedRecord)throw new IllegalStateException("The result is not this original worker's completed receipt.");
+                record.require(executionCapture==null?target.source:executionCapture.source,executionCapture==null?target.config:executionCapture.config,target.position,target.node,target.kind,request);
                 if(!record.role.equals(target.role)||record.count!=target.chain.source.members.size())throw new IllegalStateException("The receipt names another ordered inventory.");
-                AndroidOrderedLatencyStore.save(service,record,()->{cancellation.require();requireCurrent();});
-            }}
+                if(executionCapture==null){
+                    if(target.execution!=null)throw new IllegalStateException("The selected execution lost its native capture.");
+                    AndroidOrderedLatencyStore.save(service,record,()->{cancellation.require();requireCurrent(readback);});
+                }else{
+                    executionCapture.requireRecord(record);
+                    AndroidOrderedExecutionLatencyStore.Entry entry=new AndroidOrderedExecutionLatencyStore.Entry(
+                            target.namespaceSource,target.namespaceConfig,target.requested,executionCapture,record);
+                    AndroidOrderedExecutionLatencyStore.save(service,entry,()->{cancellation.require();requireCurrent(readback);});
+                }
+                return null;
+                });
+            }
         }
         String requestID(){return request;}
     }

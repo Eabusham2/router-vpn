@@ -34,6 +34,7 @@ public class RouterOrderedLatency {
  public void cancel(String request){cancels++;}
  public void drain(String request)throws Exception{drains++;drainEntered.countDown();if(holdDrain)throw new IllegalStateException("original drain pending");drained=true;Runnable hook=afterDrain;afterDrain=null;if(hook!=null)hook.run();}
  public void close()throws Exception{closes++;closeEntered.countDown();if(holdClose)throw new IllegalStateException("original facade pending");closed=true;}
+ public String captureJSON(){return "";}public void validateClosedCapture(String request,String capture)throws Exception{throw new IllegalStateException("Ordinary facade cannot supply execution proof");}
  public JSONObject receipt()throws Exception{
   int position=Integer.parseInt(node.substring(node.length()-1))-1;boolean pub=position==1;
   JSONObject distribution=new JSONObject().put("samples",fault.equals("49")?49:50).put("min_ms",1).put("median_ms",2).put("average_ms",2.1).put("p90_ms",3).put("max_ms",4).put("jitter_ms",0.2);
@@ -161,7 +162,7 @@ def main():
         work=Path(directory);src=work/'src';classes=work/'classes'
         for name,text in SOURCES.items():
             target=src/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(text)
-        names=('AndroidHomeStateStore','AndroidConnectionSelection','AndroidNodeChainSOCKSCapture','AndroidNodeChainSession','AndroidNodeChainMTUPlatform','AndroidNodeChainRuntime','LayeredVpnService','AndroidOrderedLatencyStore','AndroidOrderedLatencyBenchmark','AndroidOrderedLatencyDialog','AndroidMTUMeasurementGate')
+        names=('AndroidHomeStateStore','AndroidConnectionSelection','AndroidNodeChainSOCKSCapture','AndroidNodeChainSession','AndroidNodeChainMTUPlatform','AndroidNodeChainRuntime','LayeredVpnService','AndroidOrderedLatencyStore','AndroidOrderedExecutionLatencyCapture','AndroidOrderedExecutionLatencyStore','AndroidOrderedLatencySourceTransaction','AndroidOrderedLatencyBenchmark','AndroidOrderedLatencyDialog','AndroidMTUMeasurementGate')
         originals={name:(JAVA/(name+'.java')).read_text() for name in names}
         for name,text in originals.items():(src/APP/(name+'.java')).write_text(text)
         (src/APP/'OrderedFiftyTest.java').write_text(HARNESS)
