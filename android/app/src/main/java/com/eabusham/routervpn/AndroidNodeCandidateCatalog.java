@@ -67,7 +67,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 if(!layer.isEmpty()&&!"off".equals(layer))throw new IllegalStateException("Layered candidate is unsupported");
                 input=AndroidNodeChainCapture.memberInput(candidate,candidateMode(candidate),profile);
                 if(!Libbox.routerNodeChainCandidateInputSupported(input))throw new IllegalStateException("Unsupported original candidate source");
-                // The shared constructor admits the exact literal SS2022 or
+                // The shared constructor admits the exact literal SS2022, SOCKS5 or
                 // HTTP(S) CONNECT source. A TCP score is no authentication proof.
                 if(!identities.add(id))throw new IllegalStateException("Duplicate candidate identity");
                 reason="";
@@ -75,7 +75,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
             if(!input.isEmpty())inputs.put(input);
             captured.add(new Row(node.id,id,node.name,input,reason));
         }
-        if(inputs.length()==0||inputs.length()>64)throw new IllegalStateException("No bounded eligible literal Shadowsocks 2022 or HTTP(S) CONNECT candidate inventory is available.");
+        if(inputs.length()==0||inputs.length()>64)throw new IllegalStateException("No bounded eligible literal Shadowsocks 2022, SOCKS5 or HTTP(S) CONNECT candidate inventory is available.");
         rows=java.util.Collections.unmodifiableList(captured);
         inventory=new JSONObject().put("schema",1).put("revision",signature).put("inputs",inputs).toString();
         inventorySHA=digest(inventory);
@@ -84,7 +84,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     static String candidateMode(AndroidNodeStore.ChainSource source)throws Exception {
         if(!source.imported)return "shadowsocks";
         String mode=AndroidExternalPolicy.protocol(source.external().protocol);
-        if(!java.util.Arrays.asList("shadowsocks","http-connect","https-connect").contains(mode))
+        if(!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect").contains(mode))
             throw new IllegalStateException("This saved transport has no supported candidate TCP score.");
         return mode;
     }

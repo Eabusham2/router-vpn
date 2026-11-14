@@ -31,7 +31,7 @@ public final class NodeConnectCandidateHarness {
   Captured(Path root,String key,String wire,int prefix,String fault)throws Exception{
    fixture=new NodeChainCaptureHarness.Fixture(root,key);entry=entry(wire);var exits=new AndroidStandardExitStore(fixture.context);exits.save(entry);
    var hostname=AndroidStandardExitStore.copy(entry);hostname.id="unsupported-connect-host";hostname.server="unscored.proxy.example";reject(()->exits.save(hostname),"CONNECT hostname acquired an unowned resolver path");
-   var unsupported=AndroidStandardExitStore.copy(entry);unsupported.id="unsupported-socks";unsupported.protocol="socks5";unsupported.tlsServerName="";exits.save(unsupported);
+   var unsupported=AndroidStandardExitStore.copy(entry);unsupported.id="unsupported-socks";unsupported.protocol="socks5";unsupported.tlsServerName="";unsupported.username="u".repeat(256);unsupported.password="bounded-password";exits.save(unsupported);
    session=new AndroidNodeChainSession(fixture.profiles.currentOrderedPath());catalog=new AndroidNodeCandidateCatalog(fixture.context,session,prefix);
    var row=catalog.rows.stream().filter(v->v.localID.equals(entry.id)).findFirst().orElseThrow();
    check(!row.input.isEmpty()&&row.reason.isEmpty(),"original CONNECT candidate was omitted from eligible catalog");
@@ -130,7 +130,7 @@ def run(root,work,app,classes,jar,env,imported_only=False):
         ('AndroidNodeCandidateCatalog','if(!source.imported)return "shadowsocks";','if(source.imported||!source.imported)return "shadowsocks";','original CONNECT candidate was omitted'),
         ('AndroidNodeCandidateProfile','sources.add(candidate);modes.add(candidateMode);','sources.add(candidate);modes.add("shadowsocks");','CONNECT proposal failed its original shared capture'),
         ('AndroidNodeCandidateProfile','if(schema==4){','if(schema==3){','CONNECT proposal failed its original shared capture'),
-        ('AndroidNodeCandidateProfile','                requireCurrent();\n            }','            }','CONNECT proposal ignored cancellation during typed compile'),
+        ('AndroidNodeCandidateProfile','if(schema==4){\n            try(AndroidNodeChainCONNECTCapture compiled=AndroidNodeChainCONNECTCapture.compile(input,capturedInputs,capturedIdentities)){\n                requireCurrent();','if(schema==4){\n            try(AndroidNodeChainCONNECTCapture compiled=AndroidNodeChainCONNECTCapture.compile(input,capturedInputs,capturedIdentities)){' ,'CONNECT proposal ignored cancellation during typed compile'),
         ('AndroidNodeCandidateProfile','try(AndroidNodeChainCONNECTCapture compiled=AndroidNodeChainCONNECTCapture.compile(input,capturedInputs,capturedIdentities)){','{AndroidNodeChainCONNECTCapture compiled=AndroidNodeChainCONNECTCapture.compile(input,capturedInputs,capturedIdentities);','CONNECT typed compiler handle escaped exact cleanup'),
     )
     for index,(name,old,new,witness) in enumerate(controls):

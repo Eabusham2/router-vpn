@@ -12,7 +12,7 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/android-multihop-contract.yml'
 RUNTIME = WORKFLOW.parents[2] / 'android/test_android_runtime_contract.py'
 ANDROID = tuple('python3 android/test_android_' + name + '.py' for name in (
-    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'node_candidates', 'node_connect_candidates', 'node_candidate_profile', 'node_candidate_prefix_capture', 'node_candidate_prefix_host', 'node_candidate_prefix_owner', 'ordered_presentation',
+    'multihop_contract', 'node_chain_capture', 'node_chain_execution_capture', 'node_candidates', 'node_connect_candidates', 'node_socks_candidates', 'node_candidate_profile', 'node_candidate_prefix_capture', 'node_candidate_prefix_host', 'node_candidate_prefix_owner', 'ordered_presentation',
     'node_chain_runtime', 'node_chain_socks_runtime', 'node_chain_connect_runtime', 'ordered_latency', 'node_candidate_preparation', 'node_candidate_preparation_owner', 'node_candidate_preparation_ui', 'node_chain_execution_runtime', 'node_chain_execution_restore', 'node_chain_mtu', 'multihop_modes', 'home_dns',
     'router_dns_retest', 'multihop_graph', 'pq_selection', 'max_selection',
     'naive_multihop',
@@ -39,6 +39,7 @@ def validate_runtime(source):
     assert values.count('test_android_node_candidate_preparation.py') == 1, 'Runtime temporary preparation gate missing/duplicate'
     assert values.count('test_android_node_candidate_profile.py') == 1, 'Runtime detached candidate profile gate missing/duplicate'
     assert values.count('test_android_node_connect_candidates.py') == 1, 'Runtime CONNECT candidate gate missing/duplicate'
+    assert values.count('test_android_node_socks_candidates.py') == 1, 'Runtime SOCKS candidate gate missing/duplicate'
     assert values.count('test_android_node_candidate_prefix_capture.py') == 1, 'Runtime independent prefix capture gate missing/duplicate'
     assert values.count('test_android_node_candidate_prefix_host.py') == 1, 'Runtime actual prefix host gate missing/duplicate'
     assert values.count('test_android_node_candidate_prefix_owner.py') == 1, 'Runtime actual prefix supervisor gate missing/duplicate'
@@ -58,7 +59,7 @@ def validate(source):
             for i, m in enumerate(matches)}
     assert len(matches) == 5 and set(jobs) == {*EXPECTED, 'contract'}, 'Missing/duplicate job'
     assert source.count("- 'deploy/test_android_multihop_workflow.py'") == 2, 'Audit trigger missing'
-    for path in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCONNECTCapture.java', 'android/test_android_node_chain_connect_runtime.py', 'android/test_android_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyBenchmark.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyStore.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyDialog.java', 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java', 'android/test_android_node_chain_socks_runtime.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_node_candidate_preparation.py', 'android/test_android_node_candidate_preparation_owner.py', 'android/test_android_node_candidate_preparation_ui.py', 'android/test_android_node_candidate_profile.py', 'android/test_android_node_connect_candidates.py', 'android/test_android_node_candidate_prefix_capture.py', 'android/test_android_node_candidate_prefix_host.py', 'android/test_android_node_candidate_prefix_owner.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java', 'android/test_android_runtime_contract.py'):
+    for path in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCONNECTCapture.java', 'android/test_android_node_chain_connect_runtime.py', 'android/test_android_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyBenchmark.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyStore.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyDialog.java', 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java', 'android/test_android_node_chain_socks_runtime.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_node_candidate_preparation.py', 'android/test_android_node_candidate_preparation_owner.py', 'android/test_android_node_candidate_preparation_ui.py', 'android/test_android_node_candidate_profile.py', 'android/test_android_node_connect_candidates.py', 'android/test_android_node_socks_candidates.py', 'android/test_android_node_candidate_prefix_capture.py', 'android/test_android_node_candidate_prefix_host.py', 'android/test_android_node_candidate_prefix_owner.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java', 'android/test_android_runtime_contract.py'):
         assert source.count("- '" + path + "'") == 2, 'Execution capture source/test trigger missing'
     for name, expected in EXPECTED.items():
         body = jobs[name]
@@ -139,6 +140,15 @@ class WorkflowContract(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     validate_runtime(source.replace(gate, replacement))
 
+    def test_runtime_socks_candidate_controls(self):
+        source = RUNTIME.read_text()
+        gate = '"test_android_node_socks_candidates.py",'
+        self.assertEqual(source.count(gate), 1)
+        for replacement in ('', gate + gate):
+            with self.subTest(replacement=replacement):
+                with self.assertRaises(AssertionError):
+                    validate_runtime(source.replace(gate, replacement))
+
     def test_runtime_prefix_capture_controls(self):
         source = RUNTIME.read_text()
         gate = '"test_android_node_candidate_prefix_capture.py",'
@@ -206,6 +216,9 @@ class WorkflowContract(unittest.TestCase):
             ("- 'android/test_android_node_candidate_preparation_owner.py'", "- 'android/omitted-candidate-owner.py'"),
             ('python3 android/test_android_node_candidate_profile.py', '# omitted detached candidate profile'),
             ('python3 android/test_android_node_connect_candidates.py', '# omitted CONNECT candidate'),
+            ('python3 android/test_android_node_socks_candidates.py', '# omitted SOCKS candidate'),
+            ('python3 android/test_android_node_socks_candidates.py', 'python3 android/test_android_node_candidates.py'),
+            ("- 'android/test_android_node_socks_candidates.py'", "- 'android/omitted-socks-candidate.py'"),
             ('python3 android/test_android_node_connect_candidates.py', 'python3 android/test_android_node_candidates.py'),
             ("- 'android/test_android_node_connect_candidates.py'", "- 'android/omitted-connect-candidate.py'"),
             ('python3 android/test_android_node_candidate_prefix_capture.py', '# omitted independent prefix capture'),

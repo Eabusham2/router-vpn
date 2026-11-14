@@ -90,7 +90,7 @@ func NodeChainCandidateInputSupported(input string) bool {
 	return err == nil
 }
 
-// Original literal SS2022 and HTTP/HTTPS CONNECT sources supply a candidate
+// Original literal SS2022, SOCKS5 and HTTP/HTTPS CONNECT sources supply a candidate
 // TCP endpoint. This measures connection establishment, not the candidate's
 // authentication or TLS. UDP-only transports never gain a guessed TCP port.
 func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string, error) {
@@ -100,6 +100,21 @@ func nodeChainCandidateTarget(input string) (hopmeasure.CandidateTarget, string,
 	}
 	if json.Unmarshal([]byte(input), &header) != nil {
 		return hopmeasure.CandidateTarget{}, "", bad
+	}
+	if header.Kind == "routervpn-node-chain-socks-member" {
+		// The existing typed SOCKS compiler owns version, credentials, literal
+		// transport and Off-layer admission. A TCP score never grants a UDP
+		// association or proves SOCKS authentication.
+		middle, err := parseNodeChainSOCKSMember(input)
+		if err != nil {
+			return hopmeasure.CandidateTarget{}, "", err
+		}
+		closure, err := middle.closure()
+		if err != nil {
+			return hopmeasure.CandidateTarget{}, "", err
+		}
+		target, err := nodeChainCandidateLiteralTarget(middle.selection.ExitID, middle.source, closure.final)
+		return target, "", err
 	}
 	if header.Kind == "routervpn-node-chain-connect-member" {
 		// Keep CONNECT's complete source compiler authoritative for protocol,

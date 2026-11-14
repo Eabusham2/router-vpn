@@ -78,7 +78,7 @@ public final class NodeCandidateHarness {
  }
  static void sources(Path root)throws Exception{
   for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305")){
-   var f=new NodeChainCaptureHarness.Fixture(root,method.contains("aes-128")?"2/":method.contains("aes-256")?"2/awg-fast":"3/awg-strong");var exits=new AndroidStandardExitStore(f.context);var entry=custom(method);exits.save(entry);var unsupported=new AndroidStandardExitStore.Entry();unsupported.id="unsupported-socks";unsupported.name="Unscored SOCKS";unsupported.protocol="socks5";unsupported.server="192.0.2.90";unsupported.serverPort=1080;unsupported.expectedPublicIp="203.0.113.90";exits.save(unsupported);
+   var f=new NodeChainCaptureHarness.Fixture(root,method.contains("aes-128")?"2/":method.contains("aes-256")?"2/awg-fast":"3/awg-strong");var exits=new AndroidStandardExitStore(f.context);var entry=custom(method);exits.save(entry);var unsupported=new AndroidStandardExitStore.Entry();unsupported.id="unsupported-socks";unsupported.name="Unscored SOCKS";unsupported.protocol="socks5";unsupported.server="192.0.2.90";unsupported.serverPort=1080;unsupported.expectedPublicIp="203.0.113.90";unsupported.username="u".repeat(256);unsupported.password="bounded-password";exits.save(unsupported);
    var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
    check(catalog.rows.stream().anyMatch(row->row.id.equals(entry.id)&&!row.input.isEmpty()),"original three-cipher custom source was omitted");
    JSONObject inventory=new JSONObject(catalog.inventory);check(inventory.getJSONArray("inputs").length()==2,"complete paired/custom candidate inventory lost a source");

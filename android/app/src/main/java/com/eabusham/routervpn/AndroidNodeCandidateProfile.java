@@ -68,6 +68,10 @@ final class AndroidNodeCandidateProfile {
             try(AndroidNodeChainCONNECTCapture compiled=AndroidNodeChainCONNECTCapture.compile(input,capturedInputs,capturedIdentities)){
                 requireCurrent();
             }
+        }else if(schema==3){
+            try(AndroidNodeChainSOCKSCapture compiled=AndroidNodeChainSOCKSCapture.compile(input,capturedInputs,capturedIdentities)){
+                requireCurrent();
+            }
         }else{
         RouterNodeChain compiled=Libbox.newRouterNodeChain(input);
         if(compiled==null)throw new IllegalStateException("The compiler returned no proposed path.");
