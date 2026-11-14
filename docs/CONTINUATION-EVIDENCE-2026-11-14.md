@@ -617,3 +617,46 @@ The iOS host artifact includes all ten original phases and 54 controls.
 All recorded process groups joined. These close the recorded focused gates
 for that commit; they do not establish Apple SDK binding, PacketTunnel package
 build, signing, installed host or physical-device acceptance.
+
+## Darwin native-gate fixture corrections and retained route refusal
+
+The returned Darwin jobs exposed three independently identified fixture
+defects. Run `43552656760`'s arm64 installed test mocked an amd64 compiler while
+inheriting `GOARCH=arm64`; the fixture now supplies the environment matching its
+mock, while production still rejects foreign targets. Run `43550437793`'s
+full-report-pipe assertion charged interpreter/import startup to its native
+deadline window. The test now observes the original helper's first monotonic
+deadline read through a private readiness pipe. The 0.10-second native timeout,
+1.5-second held-pipe window, flag restoration and original child/group joins
+remain unchanged. A deliberate 1.6-second startup delay and the original
+blocking-write control verify the distinction without changing clock values.
+
+The installed retirement fixture also expected two routes although the pinned
+Darwin constructor adds the configured address subnet alongside the two host
+routes. It now checks all three exact destinations, interface and gateway.
+Partial failure still stops after the second deletion, proves the third has
+not been attempted, and requires both remaining deletions on retry. None of
+the four native scenarios or five existing fault controls was removed.
+
+The same native artifact rejected an additional route without recording its
+shape. That failure remains unresolved. The ownership predicate is unchanged;
+the error now adds bounded numeric flags/family/prefix length and address-match
+booleans. It prints no addresses, gateways or interface names and grants no
+additional route ownership. The next actual Darwin run must identify the
+discrepancy before that requirement can be closed.
+
+The reviewed five-file patch SHA-256 is
+`da6974f5e77165e618e6cd7b6f61422b6956deb383d75e03e4b7a4ee0d5a8631`.
+The installed-runner suite passed all 11 tests under each ambient architecture;
+47 child-runner Python tests and eight retirement-parser tests passed. Restoring
+the old environment and timing fixtures caused their original failures.
+Two standalone source-function checks and two causal controls also passed;
+the route-builder projection selected Darwin branches and is not a native
+kernel receipt. The original dependency was unavailable offline, so that
+source experiment used a separately documented cached exceptions dependency.
+The unchanged four Go-backed child checks remain required in native CI.
+
+After composition with `36a166b2fd7c9f81b4a0b188f80fdf9c2c331490`, the 11,
+47 and eight Python suites passed again. All frozen source, failure-artifact
+and validation-log hashes were verified before application. Actual installed
+Darwin retirement acceptance remains pending.

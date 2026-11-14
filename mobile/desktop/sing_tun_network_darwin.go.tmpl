@@ -5,6 +5,7 @@ package tun
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"syscall"
@@ -76,11 +77,27 @@ func (t *NativeTun) routervpnNetworkObjects(receipt DesktopNetworkReceipt) ([]De
 			continue
 		}
 		if object.Flags&syscall.RTF_STATIC != 0 || !routervpnNetworkAddressRoute(receipt, object) {
-			return nil, errors.New("native Darwin TUN has an unrelated route")
+			return nil, routervpnDarwinUnrelatedRouteError(receipt, object)
 		}
 		objects = append(objects, object)
 	}
 	return objects, nil
+}
+
+// Failure-only numeric shape: retain the original refusal and disclose no
+// address, gateway, interface name, arbitrary native error, or receipt text.
+func routervpnDarwinUnrelatedRouteError(receipt DesktopNetworkReceipt, object DesktopNetworkObject) error {
+	prefix, _ := netip.ParsePrefix(object.Destination)
+	destinationIsAddress, gatewayIsAddress := false, false
+	for _, value := range receipt.Addresses {
+		address, err := netip.ParsePrefix(value)
+		if err == nil {
+			destinationIsAddress = destinationIsAddress || prefix.IsValid() && prefix.Bits() == address.Addr().BitLen() && prefix.Addr() == address.Addr()
+			gatewayIsAddress = gatewayIsAddress || object.Gateway == address.Addr().String()
+		}
+	}
+	return fmt.Errorf("native Darwin TUN has an unrelated route: family=%d flags=%#x prefix_bits=%d gateway_present=%t destination_is_address=%t gateway_is_address=%t address_route=%t",
+		object.Family, object.Flags, prefix.Bits(), object.Gateway != "", destinationIsAddress, gatewayIsAddress, routervpnNetworkAddressRoute(receipt, object))
 }
 
 func (t *NativeTun) routervpnNetworkAddresses(current *net.Interface) ([]net.Addr, error) {

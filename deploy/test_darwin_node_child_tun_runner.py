@@ -790,8 +790,12 @@ print("original command completed",flush=True)
         # The parent owns and fills the report pipe, then withholds all reads.
         # Both implementations run the real imported function in one original
         # process. The old blocking behavior is released and joined afterward.
-        script = r"""import fcntl,importlib.util,json,os,pathlib,subprocess,sys
-source,receipt,mode=sys.argv[1:]
+        script = r"""import fcntl,importlib.util,json,os,pathlib,subprocess,sys,types
+source,receipt,mode,ready=sys.argv[1:]
+# A real delayed startup exceeds the original reporting window. It must not
+# consume the native deadline, and cannot rescue the blocking causal control.
+import time
+time.sleep(1.6)
 spec=importlib.util.spec_from_file_location('actual_native_gate',source);g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
 if mode=='blocking':
  text=pathlib.Path(source).read_text();begin=text.index('def native_output(');end=text.index('\ndef execute_preflight_images(',begin)
@@ -802,6 +806,16 @@ children=[];original=subprocess.Popen
 def capture(*args,**kwargs):
  p=original(*args,**kwargs);children.append(p);return p
 subprocess.Popen=capture
+# Signal only when the original helper starts its native deadline, after
+# imports, child creation and selector setup. Never replace its clock values.
+clock=g.time.monotonic
+ready_fd=int(ready)
+def deadline_clock():
+ global ready_fd
+ if ready_fd is not None:
+  os.write(ready_fd,b'1');os.close(ready_fd);ready_fd=None
+ return clock()
+g.time=types.SimpleNamespace(monotonic=deadline_clock)
 flags=fcntl.fcntl(1,fcntl.F_GETFL)
 result={}
 try:g.native_output([sys.executable,'-c','import time;print("captured native output",flush=True);time.sleep(30)'],timeout=0.10)
@@ -825,11 +839,18 @@ pathlib.Path(receipt).write_text(json.dumps(result))
                 except BlockingIOError:
                     pass
                 fcntl.fcntl(write, fcntl.F_SETFL, flags)
-                process = subprocess.Popen([sys.executable, '-c', script, str(ROOT/'deploy/test_darwin_node_child_tun.py'), str(receipt), mode],
-                    stdout=write, stderr=subprocess.PIPE, start_new_session=True)
+                ready_read, ready_write = os.pipe()
+                process = subprocess.Popen([sys.executable, '-c', script, str(ROOT/'deploy/test_darwin_node_child_tun.py'), str(receipt), mode, str(ready_write)],
+                    stdout=write, stderr=subprocess.PIPE, start_new_session=True, pass_fds=(ready_write,))
                 os.close(write)
+                os.close(ready_write)
                 completed_while_held = False
                 try:
+                    # Setup has its own finite watchdog. The unchanged 1.5s
+                    # assertion measures the actual native deadline, not the
+                    # interpreter/module startup on a loaded hosted runner.
+                    self.assertTrue(select.select([ready_read], [], [], 5)[0], 'native reporter did not start its original deadline')
+                    self.assertEqual(os.read(ready_read, 1), b'1')
                     try:
                         process.wait(timeout=1.5)
                         completed_while_held = True
@@ -853,6 +874,7 @@ pathlib.Path(receipt).write_text(json.dumps(result))
                     self.assertTrue(result['flags_restored'])
                     self.assertEqual(result['children'], [{'joined': True, 'group_absent': True}])
                 finally:
+                    os.close(ready_read)
                     os.close(read)
                     if process.poll() is None:
                         os.killpg(process.pid, signal.SIGKILL); process.communicate(timeout=2)

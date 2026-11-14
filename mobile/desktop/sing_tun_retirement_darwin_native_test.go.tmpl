@@ -23,7 +23,7 @@ func TestRouterVPNDarwinNodeChainNativeRetirement(t *testing.T) {
 	for _, scenario := range []string{"clean", "partial-route", "cancelled-delete", "foreign-descriptor"} {
 		t.Run(scenario, func(t *testing.T) {
 			options := Options{Name: CalculateInterfaceName(""), MTU: 1280, AutoRoute: true,
-				Inet4Address: []netip.Prefix{netip.MustParsePrefix("10.254.241.1/30")},
+				Inet4Address:      []netip.Prefix{netip.MustParsePrefix("10.254.241.1/30")},
 				Inet4RouteAddress: []netip.Prefix{netip.MustParsePrefix("192.0.2.231/32"), netip.MustParsePrefix("198.51.100.231/32")}}
 			created, err := New(options)
 			if err != nil {
@@ -58,10 +58,29 @@ func TestRouterVPNDarwinNodeChainNativeRetirement(t *testing.T) {
 			if err := owner.setRoutes(); err != nil {
 				t.Fatal("install required original native host routes", err)
 			}
+			// The pinned Darwin constructor appends the configured address's
+			// masked subnet to the two explicit host routes. Require all three
+			// exact successful additions, including that original subnet route.
+			wantRoutes := map[string]bool{"192.0.2.231/32": true, "198.51.100.231/32": true, "10.254.241.0/30": true}
+			built, err := options.BuildAutoRouteRanges(false)
+			if err != nil || len(built) != 3 {
+				t.Fatal("native constructor changed its three original route ranges", err)
+			}
+			for _, route := range built {
+				if !wantRoutes[route.String()] {
+					t.Fatal("native constructor substituted an original route range")
+				}
+			}
 			owner.routervpnNetwork.mu.Lock()
 			routeCount, historyErr := len(owner.routervpnNetwork.objects), owner.routervpnNetwork.failure
+			for _, route := range owner.routervpnNetwork.objects {
+				if !wantRoutes[route.Destination] || route.Index != uint32(originalIndex) || route.Gateway != options.Inet4GatewayAddr().String() {
+					historyErr = errors.Join(historyErr, errors.New("native successful-call history substituted an original route"))
+				}
+				delete(wantRoutes, route.Destination)
+			}
 			owner.routervpnNetwork.mu.Unlock()
-			if historyErr != nil || routeCount != 2 {
+			if historyErr != nil || routeCount != 3 || len(wantRoutes) != 0 {
 				t.Fatal("native successful-call inventory is incomplete", routeCount, historyErr)
 			}
 			ctx := routervpnDarwinRetirementTestContext(t)
@@ -87,7 +106,7 @@ func TestRouterVPNDarwinNodeChainNativeRetirement(t *testing.T) {
 			first := owner.routervpnDarwinNodeChainCloseContext(work, routervpnDarwinNetworkObjects, remove)
 			state := &owner.routervpnDarwinRetirement
 			if scenario == "clean" {
-				if first != nil || calls != 2 || !state.descriptor.done {
+				if first != nil || calls != 3 || !state.descriptor.done {
 					t.Fatal("actual complete native retirement failed", first, calls)
 				}
 			} else {
@@ -98,7 +117,7 @@ func TestRouterVPNDarwinNodeChainNativeRetirement(t *testing.T) {
 					t.Fatal("partial route cleanup lost its original utun descriptor", err)
 				}
 				if scenario == "partial-route" || scenario == "foreign-descriptor" {
-					if !errors.Is(first, failed) || calls != 2 || len(state.routes) != 2 || !state.routes[0].done || state.routes[1].done {
+					if !errors.Is(first, failed) || calls != 2 || len(state.routes) != 3 || !state.routes[0].done || state.routes[1].done || state.routes[2].done || state.routes[2].attempted {
 						t.Fatal("failed second route lost original successful first-route progress", first, calls)
 					}
 				} else if !errors.Is(first, context.Canceled) || calls != 1 || state.routes[0].done || !state.routes[0].attempted {
@@ -127,7 +146,7 @@ func TestRouterVPNDarwinNodeChainNativeRetirement(t *testing.T) {
 						remainingCalls++
 						return routervpnDarwinRemoveOriginalRoute(original)
 					})
-				if err != nil || remainingCalls != 1 {
+				if err != nil || remainingCalls != 2 {
 					t.Fatal("native retry repeated a joined route or lost its remaining original", err, remainingCalls)
 				}
 			}
@@ -164,7 +183,7 @@ func TestRouterVPNDarwinNodeChainNativeRetirement(t *testing.T) {
 				t.Fatal(err)
 			}
 			retained = nil
-			until := time.Now().Add(3*time.Second)
+			until := time.Now().Add(3 * time.Second)
 			for {
 				current, err := net.InterfaceByName(options.Name)
 				if err != nil || current.Index != originalIndex {
@@ -175,7 +194,7 @@ func TestRouterVPNDarwinNodeChainNativeRetirement(t *testing.T) {
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			t.Log("actual original utun, two host-route deletions, retained descriptor and native component joins proved")
+			t.Log("actual original utun, two host-route and one address-subnet deletions, retained descriptor and native component joins proved")
 		})
 	}
 }

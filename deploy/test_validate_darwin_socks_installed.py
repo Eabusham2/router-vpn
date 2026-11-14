@@ -250,7 +250,7 @@ class InstalledBoundary(unittest.TestCase):
                     return original_module(name,path)
                 with patch.object(V,"native_target",return_value="darwin/amd64"),patch.object(V,"selection",return_value=(metadata,b"selection")), \
                      patch.object(V.CORE,"execute",side_effect=owned_execute),patch.object(V,"module",side_effect=load), \
-                     patch.object(V.shutil,"which",return_value="/captured/go"),patch.dict(os.environ,{"RUNNER_TEMP":str(root)}):
+                     patch.object(V.shutil,"which",return_value="/captured/go"),patch.dict(os.environ,{"RUNNER_TEMP":str(root),"GOOS":"darwin","GOARCH":"amd64"}):
                     if fault:
                         with self.assertRaises((ValueError,RuntimeError)):V.validate(source,sha,output)
                     else:self.assertTrue(V.validate(source,sha,output)["accepted"])

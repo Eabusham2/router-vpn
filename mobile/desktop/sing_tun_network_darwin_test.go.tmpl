@@ -190,6 +190,20 @@ func TestRouterVPNDarwinRouteDump2RefusesUnprovedCache(t *testing.T) {
 }
 
 func TestRouterVPNDarwinRouteDump2ReadBoundary(t *testing.T) {
+	// The diagnostic never grants ownership. A self-address gateway remains
+	// refused by the existing address-route predicate until native evidence
+	// proves its creator; the log exposes only its bounded numeric shape.
+	receipt := DesktopNetworkReceipt{Index: 7, Addresses: []string{"10.254.241.1/30"}}
+	peer := DesktopNetworkObject{Kind: "route", Family: 4, Index: 7, Destination: "10.254.241.1/32", Gateway: "10.254.241.1", Flags: 4}
+	want := "native Darwin TUN has an unrelated route: family=4 flags=0x4 prefix_bits=32 gateway_present=true destination_is_address=true gateway_is_address=true address_route=false"
+	if routervpnNetworkAddressRoute(receipt, peer) || routervpnDarwinUnrelatedRouteError(receipt, peer).Error() != want {
+		t.Fatal("unrelated route diagnostics changed refusal or exposed nonnumeric identity")
+	}
+	peer.Destination, peer.Gateway = "198.51.100.231/32", "192.0.2.231"
+	want = "native Darwin TUN has an unrelated route: family=4 flags=0x4 prefix_bits=32 gateway_present=true destination_is_address=false gateway_is_address=false address_route=false"
+	if routervpnDarwinUnrelatedRouteError(receipt, peer).Error() != want {
+		t.Fatal("foreign route diagnostics borrowed a configured address identity")
+	}
 	if result, err := routervpnDarwinNetworkObjectsFrom(nil); err == nil || result != nil {
 		t.Fatal("native TUN admitted an absent route reader")
 	}
