@@ -46,7 +46,8 @@ def check_release_aggregate_gates(source: str) -> None:
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
-                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "server-ordered-encrypted"}
+                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "server-ordered-encrypted",
+                "typed-socks-native", "typed-connect-runtime", "typed-connect-native", "typed-connect-native-mtu"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
     pq = job("imported-pq-reality")
@@ -82,13 +83,84 @@ def check_release_aggregate_gates(source: str) -> None:
     runtimes = job("native-runtimes")
     assert "    uses: ./.github/workflows/desktop-native-runtime.yml" in runtimes and "      platform: all" in runtimes, (
         "native ordered Darwin host lost its complete current-run runtime producer")
+    focused = []
+    for name, suite in (("typed-socks-native", "socks-run"),
+                        ("typed-connect-runtime", "connect-runtime"),
+                        ("typed-connect-native", "connect-run"),
+                        ("typed-connect-native-mtu", "connect-native-mtu")):
+        lines = job(name)
+        focused.append((name, lines))
+        assert [line for line in lines if line.startswith("    uses:")] == [
+            "    uses: ./.github/workflows/focused-source-validation.yml"], (
+            f"native release {name} lost its actual trusted focused workflow")
+        assert [line for line in lines if line.startswith("      ")] == [
+            "      source_sha: ${{ github.sha }}", "      suite: " + suite], (
+            f"native release {name} lost its exact-SHA fixed native suite")
+        assert lines.count("    with:") == 1, f"native release {name} lost its required native inputs"
     for name, lines in (("aggregate", aggregate), ("imported-pq-reality", pq),
                         ("imported-xhttp", xhttp), ("imported-naive-h2", naive_h2), ("imported-naive-h3", naive_h3),
                         ("darwin-ordered-child", darwin_child), ("darwin-ordered-host", darwin_host),
                         ("darwin-prefix-host", darwin_prefix),
-                        ("native-runtimes", runtimes), ("server-ordered-encrypted", server_encrypted)):
+                        ("native-runtimes", runtimes), ("server-ordered-encrypted", server_encrypted), *focused):
         assert not any(line.startswith(("    if:", "    continue-on-error:")) for line in lines), (
             f"native release {name} gate became conditional or nonblocking")
+
+
+def check_focused_native_release_workflow(source: str) -> None:
+    """The reusable release path executes the same guarded native suites as dispatch."""
+    lines = source.splitlines()
+    validate = [i for i, line in enumerate(lines) if line == "  validate:"]
+    assert len(validate) == 1, "required focused native validate job is missing or duplicated"
+    validate_end = next((i for i in range(validate[0] + 1, len(lines))
+                         if lines[i].strip() and len(lines[i]) - len(lines[i].lstrip()) <= 2), len(lines))
+    job = lines[validate[0]:validate_end]
+    assert [line for line in job if line.startswith("    if:")] == [
+        "    if: inputs.suite != 'darwin-socks-child' && inputs.suite != 'darwin-socks-installed'"], (
+        "required focused native validate job can skip a release suite")
+    assert not any(line.lstrip().startswith("continue-on-error:") for line in job), (
+        "required focused native validate job became nonblocking")
+    start = [i for i, line in enumerate(lines) if line == "  workflow_call:"]
+    assert len(start) == 1, "required focused native workflow is not uniquely reusable"
+    end = next((i for i in range(start[0] + 1, len(lines))
+                if lines[i].strip() and len(lines[i]) - len(lines[i].lstrip()) <= 2), len(lines))
+    assert lines[start[0]:end] == [
+        "  workflow_call:", "    inputs:", "      source_sha:",
+        "        description: Exact 40-character source commit to validate",
+        "        required: true", "        type: string", "      suite:",
+        "        description: Fixed validation suite", "        required: true", "        type: string"], (
+        "required focused native workflow lost its mandatory source and suite inputs")
+    for marker in (
+        "  workflow_dispatch:",
+        "  group: focused-source-${{ inputs.source_sha }}-${{ inputs.suite }}",
+        "  cancel-in-progress: false",
+        "      SOURCE_SHA: ${{ inputs.source_sha }}",
+        "      VALIDATOR_SHA: ${{ github.sha }}",
+        '          if os.environ.get("GITHUB_REPOSITORY") != "Eabusham2/router-vpn" or os.environ.get("GITHUB_REF") != "refs/heads/main":',
+        '          for name in ("SOURCE_SHA", "VALIDATOR_SHA"):',
+        "          ref: ${{ github.sha }}",
+        "          ref: ${{ inputs.source_sha }}",
+        '            --source-sha "$SOURCE_SHA" --base-sha "$VALIDATOR_SHA" \\',
+        '            --output "$GITHUB_WORKSPACE/validation-output/selection-after.json"',
+    ):
+        scope = lines if marker.startswith(("  workflow_dispatch:", "  group:", "  cancel-in-progress:")) else job
+        assert marker in scope, "required focused native workflow lost source identity: " + marker
+    for suite, driver in (("socks-run", "test_focused_socks_run.py"),
+                          ("connect-runtime", "test_focused_connect_runtime.py"),
+                          ("connect-run", "test_focused_connect_run.py"),
+                          ("connect-native-mtu", "test_focused_connect_native_mtu.py")):
+        marker = "        if: inputs.suite == '" + suite + "'"
+        starts = [i for i, line in enumerate(lines) if line == marker]
+        assert len(starts) == 1, "required focused native suite is missing or duplicated: " + suite
+        first = starts[0]
+        last = next((i for i in range(first + 1, len(lines))
+                     if lines[i].startswith("      - ")), len(lines))
+        step = lines[first:last]
+        expected = [marker, "        shell: bash", "        run: |",
+                    "          python3 validator/deploy/" + driver + " \\",
+                    '            --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \\',
+                    '            --source-sha "$SOURCE_SHA" \\',
+                    '            --output "$GITHUB_WORKSPACE/validation-output/tests"']
+        assert step == expected, "required focused native suite became skipped, changed or nonblocking: " + suite
 
 
 def check_server_encrypted_workflow(source: str) -> None:
@@ -476,6 +548,7 @@ for request, spec in policy.DIRECT_ARTIFACTS.items():
 
 # Keep the one-SHA aggregate exhaustive rather than silently dropping a platform.
 check_release_aggregate_gates(rc)
+check_focused_native_release_workflow(read(".github/workflows/focused-source-validation.yml"))
 check_server_encrypted_workflow(read(".github/workflows/server-node-chain-encrypted.yml"))
 require(rc, rc_rel,
         "windows-complete-max:",

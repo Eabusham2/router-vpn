@@ -2,10 +2,12 @@
 """Exercise the shipping release aggregate guard against removed or bypassed gates."""
 import ast
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "deploy/native-artifact-workflow-parity-audit.py"
+TYPED_NATIVE = ("typed-socks-native", "typed-connect-runtime", "typed-connect-native", "typed-connect-native-mtu")
 
 
 def shipping_check(name="check_release_aggregate_gates"):
@@ -55,7 +57,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(without + decoy)
 
     def test_duplicate_aggregate_or_imported_family_job_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", *TYPED_NATIVE):
             with self.subTest(job=job), self.assertRaisesRegex(AssertionError, "missing or duplicate"):
                 self.check(self.source + "\n  " + job + ":\n    runs-on: ubuntu-24.04\n")
 
@@ -67,11 +69,68 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_condition_or_nonblocking_gate_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted"):
-            for bypass in ("    if: ${{ false }}\n", "    continue-on-error: true\n"):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", *TYPED_NATIVE):
+            for bypass in ("    if: ${{ false }}\n", "    if: ${{ always() }}\n", "    continue-on-error: true\n"):
                 with self.subTest(job=job, bypass=bypass):
                     with self.assertRaisesRegex(AssertionError, "conditional or nonblocking"):
                         self.check(self.source.replace("  " + job + ":\n", "  " + job + ":\n" + bypass, 1))
+
+    def test_each_required_typed_native_job_rejects_foreign_source_suite_or_workflow(self):
+        for job in TYPED_NATIVE:
+            start = self.source.index("  " + job + ":\n")
+            end = start + 3 + re.search(r"\n  \S", self.source[start + 3:]).start()
+            original = self.source[start:end]
+            changes = (
+                ("source_sha: ${{ github.sha }}", "source_sha: " + "a" * 40),
+                ("source_sha: ${{ github.sha }}", "source_sha: ${{ inputs.source_sha }}"),
+                ("suite: " + {"typed-socks-native": "socks-run", "typed-connect-runtime": "connect-runtime",
+                             "typed-connect-native": "connect-run", "typed-connect-native-mtu": "connect-native-mtu"}[job],
+                 "suite: socks-source"),
+                ("    uses: ./.github/workflows/focused-source-validation.yml",
+                 "    uses: ./.github/workflows/desktop-native-smoke.yml"),
+            )
+            for before, after in changes:
+                with self.subTest(job=job, before=before):
+                    self.assertEqual(original.count(before), 1)
+                    changed = self.source[:start] + original.replace(before, after, 1) + self.source[end:]
+                    with self.assertRaises(AssertionError):
+                        self.check(changed + "\n# " + before + "\n")
+
+    def test_reusable_native_suites_retain_actual_execution_and_source_guards(self):
+        check = shipping_check("check_focused_native_release_workflow")
+        source = (ROOT / ".github/workflows/focused-source-validation.yml").read_text()
+        check(source)
+        changes = [
+            ("  workflow_call:\n", ""),
+            ("  workflow_call:\n", "  workflow_call:\n  workflow_call:\n"),
+            ("        required: true", "        required: false"),
+            ("  validate:\n", "  validate:\n    continue-on-error: true\n"),
+            ("    if: inputs.suite != 'darwin-socks-child' && inputs.suite != 'darwin-socks-installed'", "    if: false"),
+            ('            --output "$GITHUB_WORKSPACE/validation-output/selection-after.json"', "            --output unchecked.json"),
+            ("          ref: ${{ inputs.source_sha }}", "          ref: main"),
+            ("          ref: ${{ github.sha }}", "          ref: main"),
+            ("  cancel-in-progress: false", "  cancel-in-progress: true"),
+        ]
+        for suite, driver in (("socks-run", "test_focused_socks_run.py"),
+                              ("connect-runtime", "test_focused_connect_runtime.py"),
+                              ("connect-run", "test_focused_connect_run.py"),
+                              ("connect-native-mtu", "test_focused_connect_native_mtu.py")):
+            condition = "        if: inputs.suite == '" + suite + "'"
+            command = "          python3 validator/deploy/" + driver + " \\\n"
+            changes.extend([
+                (condition, "        if: false"),
+                (condition, condition + "\n        continue-on-error: true"),
+                (command, "          true # " + driver + "\n"),
+                (command, command.replace("python3 ", "echo ")),
+            ])
+        for before, after in changes:
+            with self.subTest(before=before, after=after), self.assertRaises(AssertionError):
+                check(source.replace(before, after, 1) + "\n# " + before + "\n")
+        tree = ast.parse(AUDIT.read_text())
+        calls = [node for node in tree.body if isinstance(node, ast.Expr)
+                 and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                 and node.value.func.id == "check_focused_native_release_workflow"]
+        self.assertEqual(len(calls), 1, "shipping release audit must execute the reusable native guard")
 
     def test_removed_or_changed_xhttp_workflow_fails(self):
         marker = "    uses: ./.github/workflows/imported-xhttp-native.yml"

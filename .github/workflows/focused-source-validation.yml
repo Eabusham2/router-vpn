@@ -3,6 +3,16 @@ name: Focused source validation
 run-name: Focused ${{ inputs.suite }} at ${{ inputs.source_sha }}
 
 on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact 40-character source commit to validate
+        required: true
+        type: string
+      suite:
+        description: Fixed validation suite
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       source_sha:

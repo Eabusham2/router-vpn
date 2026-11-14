@@ -12,6 +12,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  typed-socks-native:
+    name: Original typed SOCKS Run and retained fifty-sample native ownership
+    uses: ./.github/workflows/focused-source-validation.yml
+    with:
+      source_sha: ${{ github.sha }}
+      suite: socks-run
+
+  typed-connect-runtime:
+    name: Original typed CONNECT and SOCKS runtime contracts
+    uses: ./.github/workflows/focused-source-validation.yml
+    with:
+      source_sha: ${{ github.sha }}
+      suite: connect-runtime
+
+  typed-connect-native:
+    name: Original typed CONNECT HTTP and HTTPS encrypted Run
+    uses: ./.github/workflows/focused-source-validation.yml
+    with:
+      source_sha: ${{ github.sha }}
+      suite: connect-run
+
+  typed-connect-native-mtu:
+    name: Original typed CONNECT and SOCKS native MTU ownership
+    uses: ./.github/workflows/focused-source-validation.yml
+    with:
+      source_sha: ${{ github.sha }}
+      suite: connect-native-mtu
+
   macos-owned-controller:
     name: Native macOS controller ownership on both architectures
     uses: ./.github/workflows/macos-native-installer-contract.yml
@@ -678,7 +706,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, darwin-prefix-host, server-ordered-encrypted]
+    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, darwin-prefix-host, server-ordered-encrypted, typed-socks-native, typed-connect-runtime, typed-connect-native, typed-connect-native-mtu]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
