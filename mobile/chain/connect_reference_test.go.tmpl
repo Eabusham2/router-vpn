@@ -70,6 +70,27 @@ type nodeCONNECTRunReply struct {
 // original Run/measurement deadlines retain the authenticated stream lifetime.
 type nodeCONNECTRunMiddleRouter struct{ server *desktopNodeLayerServer }
 
+// The first encrypted packet hop must preserve the same reciprocal stream
+// lifetime as the CONNECT peer. Closing its gVisor connection at the first
+// downstream EOF resets a still-open client upload, even when the middle has
+// correctly retained that upload. Only the original CONNECT control target
+// takes this path; all other packet destinations retain their original owner.
+type nodeCONNECTRunPacketHandler struct {
+	*desktopNodeWGHandler
+	control M.Socksaddr
+}
+
+func (h *nodeCONNECTRunPacketHandler) NewConnectionEx(ctx context.Context, c net.Conn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if destination != h.control {
+		h.desktopNodeWGHandler.NewConnectionEx(ctx, c, source, destination, done)
+		return
+	}
+	if _, ok := h.rule("tcp", destination); ok {
+		h.tcp.Add(1)
+	}
+	h.desktopReferenceHandler.newReciprocalConnectionEx(ctx, c, source, destination, done)
+}
+
 func (r *nodeCONNECTRunMiddleRouter) RouteConnection(ctx context.Context, c net.Conn, m adapter.InboundContext) error {
 	if err := c.SetDeadline(time.Time{}); err != nil {
 		return err
@@ -125,89 +146,7 @@ func (r *nodeCONNECTRunMiddleRouter) routeStream(ctx context.Context, connection
 	}
 	defer r.server.leave(peer)
 	r.server.plainTCP.Add(1)
-	drain := make(chan struct{})
-	finished := make(chan struct{})
-	watched := make(chan struct{})
-	var drainOnce, interruptOnce sync.Once
-	var limit time.Time
-	var forced, interruptFailure error
-	interrupt := func() {
-		interruptOnce.Do(func() { interruptFailure = errors.Join(raw.Close(), peer.Close()) })
-	}
-	beginDrain := func() {
-		drainOnce.Do(func() { limit = time.Now().Add(time.Second); close(drain) })
-	}
-	// tls.CloseWrite installs its own five-second write deadline. The original
-	// raw TCP watchdog, armed before either half-close, enforces one second
-	// independently and keeps any forced close error distinct from success.
-	go func() {
-		defer close(watched)
-		select {
-		case <-finished:
-			return
-		default:
-		}
-		select {
-		case <-ctx.Done():
-			select {
-			case <-finished:
-				return
-			default:
-			}
-			forced = ctx.Err()
-			interrupt()
-			return
-		case <-finished:
-			return
-		case <-drain:
-		}
-		timer := time.NewTimer(time.Until(limit))
-		defer timer.Stop()
-		select {
-		case <-finished:
-			return
-		case <-ctx.Done():
-			select {
-			case <-finished:
-				return
-			default:
-			}
-			forced = ctx.Err()
-			interrupt()
-		case <-timer.C:
-			select {
-			case <-finished:
-				return
-			default:
-			}
-			forced = context.DeadlineExceeded
-			interrupt()
-		}
-	}()
-	uploaded := make(chan error, 1)
-	go func() {
-		_, failure := io.Copy(peer, connection)
-		beginDrain()
-		if failure == nil {
-			failure = peer.CloseWrite()
-		}
-		if failure != nil {
-			interrupt()
-		}
-		uploaded <- failure
-	}()
-	_, downloadFailure := io.Copy(connection, peer)
-	beginDrain()
-	if downloadFailure == nil {
-		downloadFailure = half.CloseWrite()
-	}
-	if downloadFailure != nil {
-		interrupt()
-	}
-	uploadFailure := <-uploaded
-	close(finished)
-	<-watched
-	return errors.Join(downloadFailure, uploadFailure, forced, interruptFailure, connection.Close())
+	return desktopReferenceCopyStream(ctx, connection, raw, half, peer)
 }
 
 func (r *nodeCONNECTRunMiddleRouter) RouteConnectionEx(ctx context.Context, c net.Conn, m adapter.InboundContext, done N.CloseHandlerFunc) {
@@ -278,7 +217,9 @@ func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
 	certificate, proxyCA := desktopNodeChainImportedCertificate(t)
 	var provider *desktopImportedCONNECTPeer
 	hooks := &desktopNodeChainImportedPeerHooks{
-		decorate: func(original *desktopNodeWGHandler) tun.Handler { return original },
+		decorate: func(original *desktopNodeWGHandler) tun.Handler {
+			return &nodeCONNECTRunPacketHandler{desktopNodeWGHandler: original, control: M.ParseSocksaddr(control)}
+		},
 		middle: func(middle *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
 			middle.streamRouter = &nodeCONNECTRunMiddleRouter{server: middle}
 			var secured *tls.Certificate
@@ -611,9 +552,18 @@ func (c *connectReferenceRawClose) CloseWrite() error {
 	return c.Conn.(interface{ CloseWrite() error }).CloseWrite()
 }
 
+type connectReferencePacketRead struct {
+	*connectReferenceRawClose
+	reader io.Reader
+}
+
+func (c *connectReferencePacketRead) Read(p []byte) (int, error) { return c.reader.Read(p) }
+
 func TestRouterVPNCONNECTReferenceTCPReciprocalClose(t *testing.T) {
-	for _, phase := range []string{"reciprocal", "refused", "held", "cancelled"} {
+	for _, phase := range []string{"reciprocal", "refused", "held", "cancelled", "packet-reciprocal", "packet-refused", "packet-held", "packet-cancelled"} {
 		t.Run(phase, func(t *testing.T) {
+			packet := strings.HasPrefix(phase, "packet-")
+			phase := strings.TrimPrefix(phase, "packet-")
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			backend, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -627,6 +577,9 @@ func TestRouterVPNCONNECTReferenceTCPReciprocalClose(t *testing.T) {
 			}
 			defer listener.Close()
 			server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: make(map[io.Closer]bool), routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "192.0.2.99:443", Physical: backend.Addr().String()}}}
+			packetOwner := &desktopReferenceHandler{ctx: ctx, cancel: cancel, owned: make(map[io.Closer]bool), rules: map[string]desktopReferenceRule{
+				"tcp/192.0.2.99:443": {Network: "tcp", Address: "192.0.2.99", Port: 443, Target: backend.Addr().String()},
+			}}
 			backendDone := make(chan error, 1)
 			backendFinished := make(chan struct{})
 			go func() {
@@ -670,8 +623,15 @@ func TestRouterVPNCONNECTReferenceTCPReciprocalClose(t *testing.T) {
 				}
 				original := &connectReferenceRawClose{Conn: raw, tlsEOF: &readEOF, closed: make(chan struct{})}
 				captured <- original
-				connection := &desktopNodeLayerBufferedConn{Conn: original, reader: &connectReferenceTLSRead{Reader: original, eof: &readEOF, done: eofSeen}}
-				routeDone <- (&nodeCONNECTRunMiddleRouter{server: server}).RouteConnection(ctx, connection, adapter.InboundContext{Destination: M.ParseSocksaddr("192.0.2.99:443")})
+				reader := &connectReferenceTLSRead{Reader: original, eof: &readEOF, done: eofSeen}
+				if packet {
+					handler := &nodeCONNECTRunPacketHandler{desktopNodeWGHandler: &desktopNodeWGHandler{desktopReferenceHandler: packetOwner}, control: M.ParseSocksaddr("192.0.2.99:443")}
+					handler.NewConnectionEx(ctx, &connectReferencePacketRead{connectReferenceRawClose: original, reader: reader}, M.Socksaddr{}, handler.control, func(err error) { routeDone <- err })
+					packetOwner.workers.Wait()
+				} else {
+					connection := &desktopNodeLayerBufferedConn{Conn: original, reader: reader}
+					routeDone <- (&nodeCONNECTRunMiddleRouter{server: server}).RouteConnection(ctx, connection, adapter.InboundContext{Destination: M.ParseSocksaddr("192.0.2.99:443")})
+				}
 			}()
 			client, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
 			if err != nil {
@@ -756,7 +716,7 @@ func TestRouterVPNCONNECTReferenceTCPReciprocalClose(t *testing.T) {
 				t.Fatal("original TCP target copy did not join")
 			}
 			joined := make(chan struct{})
-			go func() { server.workers.Wait(); close(joined) }()
+			go func() { server.workers.Wait(); packetOwner.workers.Wait(); close(joined) }()
 			select {
 			case <-joined:
 			case <-time.After(time.Second):
@@ -765,6 +725,9 @@ func TestRouterVPNCONNECTReferenceTCPReciprocalClose(t *testing.T) {
 			server.mu.Lock()
 			left := len(server.connections)
 			server.mu.Unlock()
+			packetOwner.mu.Lock()
+			left += len(packetOwner.owned)
+			packetOwner.mu.Unlock()
 			if left != 0 {
 				t.Fatal("original TCP reference retained target association", left)
 			}

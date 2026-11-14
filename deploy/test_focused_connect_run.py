@@ -40,11 +40,16 @@ REFERENCE_CONTROL=dict(name="reference-reciprocal-tls-close", path=PEER_PROJECTI
     cases=(REFERENCE_ROOT,REFERENCE_ROOT+"/reciprocal"),
     witness="reference closed original TLS before reciprocal close_notify")
 REFERENCE_TCP_ROOT="TestRouterVPNCONNECTReferenceTCPReciprocalClose"
-REFERENCE_TCP_CASES=(REFERENCE_TCP_ROOT,*(REFERENCE_TCP_ROOT+"/"+leaf for leaf in ("reciprocal","refused","held","cancelled")))
+REFERENCE_TCP_CASES=(REFERENCE_TCP_ROOT,*(REFERENCE_TCP_ROOT+"/"+leaf for leaf in ("reciprocal","refused","held","cancelled","packet-reciprocal","packet-refused","packet-held","packet-cancelled")))
 REFERENCE_TCP_CONTROL=dict(name="reference-reciprocal-tcp-close",path=PEER_PROJECTION,
     before="func (r *nodeCONNECTRunMiddleRouter) routeTCP(ctx context.Context, connection, raw net.Conn, metadata adapter.InboundContext) error {\n",
     after="func (r *nodeCONNECTRunMiddleRouter) routeTCP(ctx context.Context, connection, raw net.Conn, metadata adapter.InboundContext) error {\n\treturn r.server.plainConnection(ctx, connection, M.Metadata{Source: metadata.Source, Destination: metadata.Destination}) // causal original premature TCP reader interruption\n",
     cases=(REFERENCE_TCP_ROOT,REFERENCE_TCP_ROOT+"/reciprocal"),
+    witness="reference closed original TCP before reciprocal EOF")
+REFERENCE_PACKET_CONTROL=dict(name="reference-packet-reciprocal-close",path=PEER_PROJECTION,
+    before="func (h *nodeCONNECTRunPacketHandler) NewConnectionEx(ctx context.Context, c net.Conn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {\n",
+    after="func (h *nodeCONNECTRunPacketHandler) NewConnectionEx(ctx context.Context, c net.Conn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {\n\th.desktopNodeWGHandler.NewConnectionEx(ctx, c, source, destination, done); return // causal original first-packet premature TCP close\n",
+    cases=(REFERENCE_TCP_ROOT,REFERENCE_TCP_ROOT+"/packet-reciprocal"),
     witness="reference closed original TCP before reciprocal EOF")
 REFERENCE_VERDICT=module("connect_run_reference_strict_bridge",BASE_PATH)
 REFERENCE_VERDICT.BOX=REFERENCE_PACKAGE
@@ -120,6 +125,9 @@ def reference_tcp_events(raw,status,control=False):
     selected=REFERENCE_TCP_CONTROL if control else None
     names=selected["cases"] if selected else REFERENCE_TCP_CASES
     return REFERENCE_VERDICT.require_events(raw,status,REFERENCE_PACKAGE,names,selected)
+
+def reference_packet_events(raw,status):
+    return REFERENCE_VERDICT.require_events(raw,status,REFERENCE_PACKAGE,REFERENCE_PACKET_CONTROL["cases"],REFERENCE_PACKET_CONTROL)
 
 def validate(source,source_sha,output,go="go"):
     source=Path(source).resolve(strict=True);output=Path(output).absolute()
@@ -208,6 +216,13 @@ def validate(source,source_sha,output,go="go"):
             status,raw=run(REFERENCE_TCP_CONTROL["name"],[compiler,"test",*owner_flags,"-json","-overlay="+str(overlay),
                 "-run=^"+REFERENCE_TCP_ROOT+"$/^reciprocal$","-count=1","-timeout=15s","./protocol/routervpnamnezia"],owner,600)
             reference_tcp_negative=reference_tcp_events(raw,status,True)
+            original=owner/REFERENCE_PACKET_CONTROL["path"]
+            replacement,overlay=work/"reference-packet-close.go",work/"reference-packet-close.json"
+            replacement.write_text(BASE.mutate(REFERENCE_PACKET_CONTROL,original.read_text()))
+            overlay.write_text(json.dumps({"Replace":{str(original):str(replacement)}}))
+            status,raw=run(REFERENCE_PACKET_CONTROL["name"],[compiler,"test",*owner_flags,"-json","-overlay="+str(overlay),
+                "-run=^"+REFERENCE_TCP_ROOT+"$/^packet-reciprocal$","-count=1","-timeout=15s","./protocol/routervpnamnezia"],owner,600)
+            reference_packet_negative=reference_packet_events(raw,status)
             records=[]
             for case in CASES:
                 selected=dict(env,ROUTERVPN_CONNECT_RUN_PEER=str(peer),ROUTERVPN_CONNECT_RUN_CASE=case,GODEBUG="x509usefallbackroots=1")
@@ -237,6 +252,7 @@ def validate(source,source_sha,output,go="go"):
             receipt.update(status="passed",cases=list(CASES),case_records=records,original_cases=list(ORIGINAL),controls=controls,
                 peer_image=list(peer_identity),client_image=list(client_identity),reference_tls_close=reference_positive,reference_tls_close_control=reference_negative,
                 reference_tcp_close=reference_tcp_positive,reference_tcp_close_control=reference_tcp_negative,
+                reference_packet_close_control=reference_packet_negative,
                 successful_run_accepted=True,ordered_measurement_accepted=True,native_mtu_constructor_accepted=False)
             (output/"receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
     except BaseException as error:

@@ -21,8 +21,8 @@ def events(case,control=None):
     rows.extend(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX,Test=x) for x in (leaf,root))
     rows.append(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX))
     return rows
-def reference_rows(control=False,tcp=False):
-    selected=V.REFERENCE_TCP_CONTROL if tcp else V.REFERENCE_CONTROL
+def reference_rows(control=False,tcp=False,packet=False):
+    selected=V.REFERENCE_PACKET_CONTROL if packet else V.REFERENCE_TCP_CONTROL if tcp else V.REFERENCE_CONTROL
     positive=V.REFERENCE_TCP_CASES if tcp else V.REFERENCE_CASES
     package=V.REFERENCE_PACKAGE;names=selected["cases"] if control else positive
     rows=[dict(Action="start",Package=package),dict(Action="run",Package=package,Test=names[0])]
@@ -70,7 +70,7 @@ class Composition:
             core.mkdir();xray.mkdir();(xray/"original.go").write_text("original xray")
             (core/"original.go").write_text("original "+name);self.roles[name.removeprefix("prepare-")]=(core,xray)
             if name=="prepare-owner":
-                target=core/V.REFERENCE_CONTROL["path"];target.parent.mkdir(parents=True,exist_ok=True);target.write_text(V.REFERENCE_CONTROL["before"]+V.REFERENCE_TCP_CONTROL["before"])
+                target=core/V.REFERENCE_CONTROL["path"];target.parent.mkdir(parents=True,exist_ok=True);target.write_text(V.REFERENCE_CONTROL["before"]+V.REFERENCE_TCP_CONTROL["before"]+V.REFERENCE_PACKET_CONTROL["before"])
             if name=="prepare-mobile":
                 by_path={}
                 for control in V.CONTROLS:by_path.setdefault(control["path"],[]).append(control["before"])
@@ -82,17 +82,18 @@ class Composition:
             assert not any(x.startswith("-overlay=") for x in command)
         elif name=="original-imported-middle":
             assert cwd==self.roles["owner"][0];raw=plain(V.ORIGINAL).encode()
-        elif name in ("reference-tls-close",V.REFERENCE_CONTROL["name"],"reference-tcp-close",V.REFERENCE_TCP_CONTROL["name"]):
+        elif name in ("reference-tls-close",V.REFERENCE_CONTROL["name"],"reference-tcp-close",V.REFERENCE_TCP_CONTROL["name"],V.REFERENCE_PACKET_CONTROL["name"]):
             assert cwd==self.roles["owner"][0]
             tcp=name in ("reference-tcp-close",V.REFERENCE_TCP_CONTROL["name"])
-            selected=V.REFERENCE_TCP_CONTROL if tcp else V.REFERENCE_CONTROL
+            packet=name==V.REFERENCE_PACKET_CONTROL["name"]
+            selected=V.REFERENCE_PACKET_CONTROL if packet else V.REFERENCE_TCP_CONTROL if tcp else V.REFERENCE_CONTROL
             negative=name==selected["name"]
             if negative:
                 overlay=Path(next(x.split("=",1)[1] for x in command if x.startswith("-overlay=")))
                 replacements=json.loads(overlay.read_text())["Replace"];original=str(cwd/selected["path"])
                 assert list(replacements)==[original]
                 assert Path(replacements[original]).read_text()==V.BASE.mutate(selected,Path(original).read_text())
-            raw=encoded(reference_rows(negative,tcp));status=int(negative)
+            raw=encoded(reference_rows(negative,tcp,packet));status=int(negative)
         else:
             case=env["ROUTERVPN_CONNECT_RUN_CASE"];assert case in V.CASES
             assert env["GODEBUG"]=="x509usefallbackroots=1"
@@ -120,6 +121,8 @@ class Composition:
         if self.fault=="tcp-reference-missing" and name=="reference-tcp-close":raw=encoded(reference_rows(tcp=True)[:-1])
         if self.fault=="tcp-reference-control-pass" and name==V.REFERENCE_TCP_CONTROL["name"]:status=0
         if self.fault=="tcp-reference-control-witness" and name==V.REFERENCE_TCP_CONTROL["name"]:raw=raw.replace(V.REFERENCE_TCP_CONTROL["witness"].encode(),b"unrelated")
+        if self.fault=="packet-reference-control-pass" and name==V.REFERENCE_PACKET_CONTROL["name"]:status=0
+        if self.fault=="packet-reference-control-witness" and name==V.REFERENCE_PACKET_CONTROL["name"]:raw=raw.replace(V.REFERENCE_PACKET_CONTROL["witness"].encode(),b"unrelated")
         if self.fault=="case-missing" and name=="run-http-wg":raw=encoded(events("http-wg")[:-1])
         if self.fault=="case-failed" and name=="run-http-wg":status=1
         if self.fault=="control-pass" and name==V.CONTROLS[0]["name"]:status=0
@@ -133,7 +136,7 @@ class Composition:
             if self.fault=="image-changed":self.images[0].write_bytes(b"changed")
             if self.fault=="selection-changed":self.selection.write_text(json.dumps(dict(self.metadata,source_tree="1"*40)))
         log.write_bytes(raw)
-        return status,self.fault=="timeout" and name=="run-http-wg",not((self.fault=="unjoined" and name=="run-http-wg") or (self.fault=="reference-unjoined" and name=="reference-tls-close") or (self.fault=="tcp-reference-unjoined" and name=="reference-tcp-close"))
+        return status,self.fault=="timeout" and name=="run-http-wg",not((self.fault=="unjoined" and name=="run-http-wg") or (self.fault=="reference-unjoined" and name=="reference-tls-close") or (self.fault=="tcp-reference-unjoined" and name=="reference-tcp-close") or (self.fault=="packet-reference-unjoined" and name==V.REFERENCE_PACKET_CONTROL["name"]))
     def run(self):
         with patch.object(V.BASE.COMMON,"git",side_effect=self.git),patch.object(V.BASE.CORE,"snapshot",side_effect=self.snapshot),\
              patch.object(V.BASE.CORE,"execute",side_effect=self.execute),patch.object(V,"sources",side_effect=self.sources),\
@@ -148,8 +151,8 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
         self.assertEqual(len(V.CONTROLS),4)
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
-            self.assertEqual(len(c.calls),28)
-            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,30,600,30,600,*([190]*14),*([600]*4)])
+            self.assertEqual(len(c.calls),29)
+            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,30,600,30,600,600,*([190]*14),*([600]*4)])
             self.assertEqual(c.original,[V.ORIGINAL])
             self.assertEqual([x["case"] for x in receipt["case_records"]],list(V.CASES))
             self.assertEqual(len(receipt["controls"]),4)
@@ -157,6 +160,7 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
             self.assertTrue(receipt["reference_tls_close_control"]["accepted"])
             self.assertTrue(receipt["reference_tcp_close"]["accepted"])
             self.assertTrue(receipt["reference_tcp_close_control"]["accepted"])
+            self.assertTrue(receipt["reference_packet_close_control"]["accepted"])
             self.assertTrue(receipt["successful_run_accepted"]);self.assertTrue(receipt["ordered_measurement_accepted"])
             self.assertFalse(receipt["public_native_admission"]);self.assertFalse(receipt["installed_native_accepted"])
             self.assertFalse(receipt["native_mtu_continuation_accepted"])
@@ -173,6 +177,7 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
         for fault in ("preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
                       "reference-missing","reference-control-pass","reference-control-witness","reference-unjoined",
                       "tcp-reference-missing","tcp-reference-control-pass","tcp-reference-control-witness","tcp-reference-unjoined",
+                      "packet-reference-control-pass","packet-reference-control-witness","packet-reference-unjoined",
                       "control-pass","control-signal","control-panic","control-witness","candidate-changed","owner-changed",
                       "mobile-changed","image-changed","selection-changed","timeout","unjoined"):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
@@ -216,7 +221,7 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
         bad=encoded(reference_rows(True)).replace(V.REFERENCE_CONTROL["witness"].encode(),b"unrelated failure")
         with self.assertRaises(ValueError):V.reference_events(bad,1,True)
     def test_each_control_requires_one_exact_original_anchor(self):
-        for control in (*V.CONTROLS,V.REFERENCE_CONTROL,V.REFERENCE_TCP_CONTROL):
+        for control in (*V.CONTROLS,V.REFERENCE_CONTROL,V.REFERENCE_TCP_CONTROL,V.REFERENCE_PACKET_CONTROL):
             original="before\n"+control["before"]+"\nafter"
             self.assertNotEqual(V.BASE.mutate(control,original),original)
             for text in ("foreign",original+original):
@@ -225,13 +230,13 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
         sources={"routervpn_node_chain_connect.go":"mobile/chain/connect_box.go.tmpl",
                  "experimental/libbox/routervpn_node_chain_connect_lifecycle.go":"mobile/chain/connect_lifecycle.go.tmpl",
                  "experimental/libbox/routervpn/mobilemultihop/node_chain_runtime.go":"internal/mobilemultihop/node_chain_runtime.go",V.PEER_PROJECTION:V.PEER_TEMPLATE}
-        for control in (*V.CONTROLS,V.REFERENCE_CONTROL,V.REFERENCE_TCP_CONTROL):
+        for control in (*V.CONTROLS,V.REFERENCE_CONTROL,V.REFERENCE_TCP_CONTROL,V.REFERENCE_PACKET_CONTROL):
             with self.subTest(control=control["name"]):
                 original=(ROOT/sources[control["path"]]).read_text()
                 self.assertEqual(original.count(control["before"]),1)
                 self.assertNotEqual(V.BASE.mutate(control,original),original)
     def test_reference_tcp_close_requires_original_half_close_and_failure_inventory(self):
-        self.assertEqual(len(V.REFERENCE_TCP_CASES),5)
+        self.assertEqual(len(V.REFERENCE_TCP_CASES),9)
         self.assertTrue(V.reference_tcp_events(encoded(reference_rows(tcp=True)),0)["accepted"])
         self.assertTrue(V.reference_tcp_events(encoded(reference_rows(True,True)),1,True)["accepted"])
         for control in (False,True):
@@ -241,4 +246,13 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
         with self.assertRaises(ValueError):V.reference_tcp_events(encoded(reference_rows(True,True)),0,True)
         bad=encoded(reference_rows(True,True)).replace(V.REFERENCE_TCP_CONTROL["witness"].encode(),b"unrelated failure")
         with self.assertRaises(ValueError):V.reference_tcp_events(bad,1,True)
+    def test_packet_reference_close_requires_original_failure_witness(self):
+        rows=reference_rows(True,packet=True)
+        self.assertTrue(V.reference_packet_events(encoded(rows),1)["accepted"])
+        for raw in (encoded(rows[:-1]),encoded(rows+rows),encoded(list(reversed(rows))),encoded(rows)+b"panic: unrelated\n"):
+            with self.assertRaises(ValueError):V.reference_packet_events(raw,1)
+        for status in (0,-9,124):
+            with self.assertRaises(ValueError):V.reference_packet_events(encoded(rows),status)
+        bad=encoded(rows).replace(V.REFERENCE_PACKET_CONTROL["witness"].encode(),b"unrelated failure")
+        with self.assertRaises(ValueError):V.reference_packet_events(bad,1)
 if __name__=="__main__":unittest.main(verbosity=2)

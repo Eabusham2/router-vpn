@@ -338,6 +338,134 @@ func (h *desktopReferenceHandler) NewConnectionEx(_ context.Context, c net.Conn,
 		}
 	}()
 }
+
+// Only explicitly scoped reference callers opt in to reciprocal TCP forwarding.
+// The original target rule, connection registry and worker owner remain authoritative.
+func (h *desktopReferenceHandler) newReciprocalConnectionEx(ctx context.Context, c net.Conn, _, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	rule, ok := h.rule("tcp", destination)
+	if !ok || rule.Target == "" || !h.adopt(c, true) {
+		_ = c.Close()
+		if done != nil {
+			done(errors.New("reciprocal packet reference lost its original TCP target"))
+		}
+		return
+	}
+	go func() {
+		defer h.workers.Done()
+		defer h.forget(c)
+		var result error
+		native, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(h.ctx, "tcp", rule.Target)
+		if err != nil {
+			result = err
+		} else {
+			peer, valid := native.(*net.TCPConn)
+			half, canHalfClose := c.(interface{ CloseWrite() error })
+			if !valid || !canHalfClose {
+				result = errors.Join(errors.New("reciprocal packet reference lost its original half-close owner"), native.Close())
+			} else if !h.adopt(peer, false) {
+				result = net.ErrClosed
+			} else {
+				defer h.forget(peer)
+				// gLazyConn.SetDeadline completes the TCP handshake. The actual
+				// downstream target has accepted before this original boundary.
+				result = errors.Join(c.SetDeadline(time.Now().Add(30*time.Second)), peer.SetDeadline(time.Now().Add(30*time.Second)))
+				if result == nil {
+					result = desktopReferenceCopyStream(h.ctx, c, c, half, peer)
+				}
+			}
+		}
+		if done != nil {
+			done(result)
+		}
+	}()
+}
+
+func desktopReferenceCopyStream(ctx context.Context, connection, raw net.Conn, half interface{ CloseWrite() error }, peer *net.TCPConn) error {
+	drain := make(chan struct{})
+	finished := make(chan struct{})
+	watched := make(chan struct{})
+	var drainOnce, interruptOnce sync.Once
+	var limit time.Time
+	var forced, interruptFailure error
+	interrupt := func() {
+		interruptOnce.Do(func() { interruptFailure = errors.Join(raw.Close(), peer.Close()) })
+	}
+	beginDrain := func() {
+		drainOnce.Do(func() { limit = time.Now().Add(time.Second); close(drain) })
+	}
+	// tls.CloseWrite installs its own five-second write deadline. The original
+	// raw TCP watchdog, armed before either half-close, enforces one second
+	// independently and keeps any forced close error distinct from success.
+	go func() {
+		defer close(watched)
+		select {
+		case <-finished:
+			return
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			select {
+			case <-finished:
+				return
+			default:
+			}
+			forced = ctx.Err()
+			interrupt()
+			return
+		case <-finished:
+			return
+		case <-drain:
+		}
+		timer := time.NewTimer(time.Until(limit))
+		defer timer.Stop()
+		select {
+		case <-finished:
+			return
+		case <-ctx.Done():
+			select {
+			case <-finished:
+				return
+			default:
+			}
+			forced = ctx.Err()
+			interrupt()
+		case <-timer.C:
+			select {
+			case <-finished:
+				return
+			default:
+			}
+			forced = context.DeadlineExceeded
+			interrupt()
+		}
+	}()
+	uploaded := make(chan error, 1)
+	go func() {
+		_, failure := io.Copy(peer, connection)
+		beginDrain()
+		if failure == nil {
+			failure = peer.CloseWrite()
+		}
+		if failure != nil {
+			interrupt()
+		}
+		uploaded <- failure
+	}()
+	_, downloadFailure := io.Copy(connection, peer)
+	beginDrain()
+	if downloadFailure == nil {
+		downloadFailure = half.CloseWrite()
+	}
+	if downloadFailure != nil {
+		interrupt()
+	}
+	uploadFailure := <-uploaded
+	close(finished)
+	<-watched
+	return errors.Join(downloadFailure, uploadFailure, forced, interruptFailure, connection.Close())
+}
+
 func (h *desktopReferenceHandler) NewPacketConnectionEx(_ context.Context, c N.PacketConn, _, destination M.Socksaddr, done N.CloseHandlerFunc) {
 	rule, ok := h.rule("udp", destination)
 	if !ok || !h.adopt(c, true) {
