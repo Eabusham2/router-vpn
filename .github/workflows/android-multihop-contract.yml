@@ -249,6 +249,20 @@ jobs:
         # Complete disjoint phases retain their 180-second race deadlines.
         run: python3 deploy/test_mobile_multihop_groups.py --group runtime
 
+  shared_fifty:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Verify typed execution fifty and retained ownership
+        # Complete disjoint phases retain their 180-second race deadlines.
+        run: python3 deploy/test_mobile_multihop_groups.py --group fifty
+
   relay:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -261,7 +275,7 @@ jobs:
 
   contract:
     if: ${{ always() }}
-    needs: [android, shared_core, shared_runtime, relay]
+    needs: [android, shared_core, shared_runtime, shared_fifty, relay]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -270,9 +284,11 @@ jobs:
           ANDROID_RESULT: ${{ needs.android.result }}
           SHARED_CORE_RESULT: ${{ needs.shared_core.result }}
           SHARED_RUNTIME_RESULT: ${{ needs.shared_runtime.result }}
+          SHARED_FIFTY_RESULT: ${{ needs.shared_fifty.result }}
           RELAY_RESULT: ${{ needs.relay.result }}
         run: |
           test "$ANDROID_RESULT" = success
           test "$SHARED_CORE_RESULT" = success
           test "$SHARED_RUNTIME_RESULT" = success
+          test "$SHARED_FIFTY_RESULT" = success
           test "$RELAY_RESULT" = success

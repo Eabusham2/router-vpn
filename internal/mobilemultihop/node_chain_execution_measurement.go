@@ -84,7 +84,9 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	return &NodeChainExecutionMeasurement{service: service, engine: e}, nil
+	measurement := &NodeChainExecutionMeasurement{service: service, engine: e}
+	measurement.self = measurement
+	return measurement, nil
 }
 
 type nodeChainExecutionMeasurementEngine struct {

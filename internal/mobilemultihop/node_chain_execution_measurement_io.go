@@ -56,7 +56,7 @@ func (e *nodeChainExecutionMeasurementEngine) BeginMeasurementContext(ctx contex
 		scope.work.Do(func() { close(scope.done) })
 		cleanup, cancel := context.WithTimeout(context.Background(), hopmeasure.DrainTimeout)
 		defer cancel()
-		_ = e.drainScope(cleanup, id)
+		_ = e.drainCapturedScope(cleanup, scope)
 	}
 	if err := e.current(ctx); err != nil {
 		return finish, err
@@ -101,6 +101,18 @@ func (e *nodeChainExecutionMeasurementEngine) drainScope(ctx context.Context, id
 	scope := e.scope
 	e.mu.Unlock()
 	if scope == nil || id != "" && scope.id != id {
+		return ctx.Err()
+	}
+	return e.drainCapturedScope(ctx, scope)
+}
+
+// A borrowed operation keeps its actual scope, not only a caller-chosen ID.
+// A delayed completion must never close a later operation reusing that ID.
+func (e *nodeChainExecutionMeasurementEngine) drainCapturedScope(ctx context.Context, scope *nodeChainExecutionMeasurementScope) error {
+	if ctx == nil {
+		return nodeChainExecutionError
+	}
+	if scope == nil {
 		return ctx.Err()
 	}
 	select {

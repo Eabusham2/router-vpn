@@ -10,14 +10,28 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = './internal/mobilemultihop'
 NAME = re.compile(r'(?:Test|Example|Fuzz)\w*')
+EXECUTION_FIFTY_REQUIRED = frozenset((
+    'TestNodeChainExecutionLatencyRetainsSelectedProjectionAndFiftyResponses',
+    'TestNodeChainExecutionLatencyShortCloseRetainsHeldReleaseAndHistory',
+    'TestNodeChainExecutionLatencyInvalidateRetainsHeldReleaseAndHistory',
+    'TestNodeChainExecutionLatencyRequiresFreshServerReceiptAfterRelease',
+    'TestNodeChainExecutionLatencyRejectsUncapturedFactoryAndFacade',
+    'TestNodeChainExecutionLatencyRejectsRequestReuseAndPreservesThroughputSuccessor',
+))
 PHASES = (
+    # Fifty and held-release Retest have independent original 180s budgets.
+    ('execution fifty selected projection', r'^TestNodeChainExecutionLatencyRetainsSelectedProjectionAndFiftyResponses$'),
+    ('execution fifty held close', r'^TestNodeChainExecutionLatencyShortCloseRetainsHeldReleaseAndHistory$'),
+    ('execution fifty held invalidation', r'^TestNodeChainExecutionLatencyInvalidateRetainsHeldReleaseAndHistory$'),
+    ('execution fifty fresh server receipt', r'^TestNodeChainExecutionLatencyRequiresFreshServerReceiptAfterRelease$'),
+    ('execution fifty original ownership', r'^TestNodeChainExecutionLatency(?!(?:RetainsSelectedProjectionAndFiftyResponses|ShortCloseRetainsHeldReleaseAndHistory|InvalidateRetainsHeldReleaseAndHistory|RequiresFreshServerReceiptAfterRelease)$)'),
     # The complete ordered matrix exceeded one 180s phase. Partition by
     # authority boundary; future roots still enter one explicit fallback.
     ('ordered execution discovery and Last', r'^TestNodeChainExecution(?:Discovery|Last)'),
     ('ordered execution runtime and Stop', r'^TestNodeChainExecution(?:Runtime|Healthy|Stop)'),
     ('ordered execution MTU', r'^TestNodeChainExecutionMTU'),
     ('ordered execution measurements', r'^TestNodeChainExecutionMeasurement'),
-    ('ordered execution capture and projection', r'^TestNodeChainExecution(?!(?:Discovery|Last|Runtime|Healthy|Stop|MTU|Measurement))'),
+    ('ordered execution capture and projection', r'^TestNodeChainExecution(?!(?:Discovery|Last|Runtime|Healthy|Stop|MTU|Measurement|Latency))'),
     ('ordered Server carrier and proof', r'^TestNodeChainServer'),
     ('ordered imported middle', r'^TestNodeChainImported'),
     ('ordered candidates and prefix measurements', r'^TestNodeChain(?:Candidate|Measurement)'),
@@ -45,6 +59,13 @@ PHASES = (
 # Explicit complete ownership keeps CI groups bounded without silently losing a
 # newly introduced phase. The default invocation still runs every group.
 CI_GROUPS = {
+    'fifty': (
+        'execution fifty selected projection',
+        'execution fifty held close',
+        'execution fifty held invalidation',
+        'execution fifty fresh server receipt',
+        'execution fifty original ownership',
+    ),
     'core': (
         'ordered execution discovery and Last', 'ordered execution runtime and Stop',
         'ordered execution MTU', 'ordered execution measurements',
@@ -97,7 +118,7 @@ REQUIRED = frozenset((
     'TestDesktopNodeChainPolicyRejectsChangedOriginalAndPhysicalGraph',
     'TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor',
     'TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity',
-))
+)) | EXECUTION_FIFTY_REQUIRED
 
 
 def inventory(output):
@@ -172,7 +193,7 @@ class PartitionTests(unittest.TestCase):
             'TestNodeChainExecutionLastFuture', 'TestNodeChainExecutionRuntimeFuture',
             'TestNodeChainExecutionHealthyFuture', 'TestNodeChainExecutionStopFuture',
             'TestNodeChainExecutionMTUFuture', 'TestNodeChainExecutionMeasurementFuture',
-            'TestNodeChainExecutionFuture', 'TestNodeChainServerFuture',
+            'TestNodeChainExecutionFuture', 'TestNodeChainExecutionLatencyFuture', 'TestNodeChainServerFuture',
             'TestNodeChainImportedFuture', 'TestNodeChainCandidateFuture',
             'TestNodeChainMeasurementFuture', 'TestNodeChainFuture',
             'TestDesktopNodeChainExecutionKeepsActualPhysicalGraph',
@@ -240,7 +261,7 @@ class PartitionTests(unittest.TestCase):
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix)}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]
@@ -248,6 +269,31 @@ class PartitionTests(unittest.TestCase):
             for omitted in required:
                 with self.subTest(omitted=omitted), self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
                     inventory('\n'.join(name for name in self.names if name != omitted))
+
+    def test_execution_fifty_roots_have_disjoint_bounded_ci_phases(self):
+        groups = partition(self.names)
+        selected = select_ci_group(groups, 'fifty')
+        self.assertEqual(len(selected), 5)
+        actual = {name for _, names in selected for name in names}
+        self.assertEqual(actual, EXECUTION_FIFTY_REQUIRED | {'TestNodeChainExecutionLatencyFuture'})
+        for label, names in selected:
+            self.assertIn('-timeout=180s', command(names))
+            if label != 'execution fifty original ownership':
+                self.assertEqual(len(names), 1)
+        for group in ('core', 'runtime'):
+            self.assertFalse(actual.intersection(name for _, names in select_ci_group(groups, group) for name in names))
+        for omitted in EXECUTION_FIFTY_REQUIRED:
+            with self.subTest(omitted=omitted), self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
+                inventory('\n'.join(name for name in self.names if name != omitted))
+        for omitted in CI_GROUPS['fifty']:
+            assignment = {key: tuple(label for label in labels if label != omitted)
+                          for key, labels in CI_GROUPS.items()}
+            with self.subTest(phase=omitted), self.assertRaises(ValueError):
+                select_ci_group(groups, 'fifty', assignment)
+        for label, names in selected:
+            duplicate = groups + [(label + ' duplicate', names)]
+            with self.subTest(duplicate=label), self.assertRaises(ValueError):
+                validate_partition(self.names, duplicate)
 
     def test_ordered_semantic_boundaries_keep_future_roots(self):
         groups = dict(partition(self.names))

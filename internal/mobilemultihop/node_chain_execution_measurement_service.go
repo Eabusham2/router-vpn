@@ -12,6 +12,7 @@ import (
 // original close beyond the underlying measurement worker. Its cleanup/readback
 // methods must be used together; a raw service is deliberately not exposed.
 type NodeChainExecutionMeasurement struct {
+	self    *NodeChainExecutionMeasurement
 	service *hopmeasure.Service
 	engine  *nodeChainExecutionMeasurementEngine
 }
