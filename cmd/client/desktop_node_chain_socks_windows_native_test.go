@@ -222,6 +222,20 @@ func TestWindowsSOCKSLauncher(t *testing.T) {
 			t.Fatal("typed actual proof/measurement", response.Status, string(response.Body))
 		}
 	}
+	if !negative {
+		beforeFifty := observe("stats")
+		receipts, err := desktopOrderedLatencyNativeRoundTrip(ctx, func(callCtx context.Context, method, path string, body []byte) (int, []byte, error) {
+			response, err := client.Request(callCtx, method, path, body, 1<<20)
+			return response.Status, response.Body, err
+		})
+		if err != nil || len(receipts) != 3 {
+			t.Fatal("installed Windows ordered fifty", err)
+		}
+		afterFifty := observe("stats")
+		if len(beforeFifty.Prefixes) != 1 || len(afterFifty.Prefixes) != 1 || afterFifty.Prefixes[0].ProofQueries < beforeFifty.Prefixes[0].ProofQueries+50 || afterFifty.Middle.PublicQueries < beforeFifty.Middle.PublicQueries+50 || afterFifty.Final.RouterQueries < beforeFifty.Final.RouterQueries+50 || afterFifty.Final.DirectQueries != 0 {
+			t.Fatal("ordered fifty omitted independently routed original prefix responses", beforeFifty, afterFifty)
+		}
+	}
 	before := observe("stats")
 	if len(before.Prefixes) != 1 || before.Prefixes[0].Mode != mode || before.Prefixes[0].RawUDP == 0 || before.Prefixes[0].ProofQueries == 0 || before.Middle.Method != "socks5" {
 		t.Fatal("typed path did not reach original independently encrypted first", before)

@@ -24,6 +24,7 @@ on:
       - 'client/test-windows-speed-lab-paths.ps1'
       - 'client/macos/RouterVPNMacSpeedLab*.swift'
       - 'client/macos/RouterVPNMacTelemetry.swift'
+      - 'client/macos/RouterVPNMacOrderedLatency.swift'
       - 'client/linux/routervpn-speed-lab-*.inc'
       - 'client/test-windows-external-amnezia.ps1'
       - 'client/macos/RouterVPNMacExternalNode.swift'
@@ -67,6 +68,7 @@ on:
       - 'internal/desktopnetwork/**'
       - 'deploy/test_macos_speed_lab_transport.py'
       - 'deploy/test_macos_performance_measurement.py'
+      - 'deploy/test_macos_ordered_latency.py'
       - '.github/workflows/desktop-amnezia-runtime.yml'
 permissions:
   contents: read
@@ -127,6 +129,7 @@ jobs:
           set -o pipefail
           python3 deploy/test_macos_speed_lab_transport.py 2>&1 | tee "$RUNNER_TEMP/macos-speed-lab-transport.log"
           python3 deploy/test_macos_performance_measurement.py 2>&1 | tee "$RUNNER_TEMP/macos-performance-measurement.log"
+          python3 deploy/test_macos_ordered_latency.py --self-test 2>&1 | tee "$RUNNER_TEMP/macos-ordered-latency.log"
       - name: Verify the packaged native AWG process
         shell: bash
         run: |

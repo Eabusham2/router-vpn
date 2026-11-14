@@ -13,6 +13,8 @@ import (
 )
 
 func registerSpeedLabRoutes(h *http.ServeMux, a *app) {
+	h.HandleFunc("/api/speed-lab/ordered-latency", a.desktopOrderedLatencyMeasurement)
+	h.HandleFunc("/api/speed-lab/ordered-latency/cancel", a.cancelDesktopOrderedLatencyMeasurement)
 	h.HandleFunc("/api/speed-lab/external-latency", a.desktopLatencyMeasurement)
 	h.HandleFunc("/api/speed-lab/external-latency/cancel", a.cancelDesktopLatencyMeasurement)
 	h.HandleFunc("/api/speed-lab/external-comparison", a.desktopExternalComparison)

@@ -69,7 +69,7 @@ def raw(events):
 
 class ChildVerdictTests(unittest.TestCase):
     def test_exact_every_baseline_and_control_inventory(self):
-        self.assertEqual(len(G.CHILD["command_cases"]), 68)
+        self.assertEqual(len(G.CHILD["command_cases"]), 83)
         self.assertEqual(len(G.CHILD["box_cases"]), 14)
         self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [16, 28, 52, 27, 11])
         for family, key in (("cmd", "command_cases"), ("box", "box_cases")):
@@ -396,7 +396,7 @@ class ChildIdentityAndExecutionTests(unittest.TestCase):
         self.assertIn('installed_native_accepted=False',source)
         self.assertIn('windows_native_accepted=False',source)
         self.assertIn('darwin_native_accepted=False',source)
-        self.assertEqual(len(G.PROJECTIONS),26)
+        self.assertEqual(len(G.PROJECTIONS),27)
 
 
 if __name__ == "__main__":

@@ -47,12 +47,12 @@ function ShowUnifiedSpeedLab{
    <TextBlock Grid.Column="3" Grid.RowSpan="2" Text="Auto runs at least 4 s and up to 12 s per direction, stopping early only after throughput stabilizes. Custom allows 1–60 s." Width="260" TextWrapping="Wrap" Foreground="#8FA3C2" Margin="14,0,0,0"/>
   </Grid></Border>
   <TextBox Name="Detail" Grid.Row="4" Margin="0,10,0,0" Background="#091321" Foreground="#C9D6EA" BorderBrush="#243B59" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Padding="10" Text="Ready. Current path uses the path that is actually connected. Temporary tests capture and restore the complete connected path and its proved execution choice."/>
-  <Grid Grid.Row="5" Margin="0,12,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Name="Status" VerticalAlignment="Center" Foreground="#8FA3C2" Text="Cloudflare Speed Test edge • no Mbps derived from RTT"/><Button Name="Advanced" Grid.Column="1" Content="Advanced node tests" Padding="11,7" Margin="5,0"/><Button Name="Run" Grid.Column="2" Content="Run Speed Lab" Padding="16,7" Margin="5,0" IsDefault="True"/><Button Name="Close" Grid.Column="3" Content="Close" Padding="11,7" Margin="5,0"/></Grid>
+  <Grid Grid.Row="5" Margin="0,12,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Name="Status" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="#8FA3C2" Text="Cloudflare Speed Test edge • no Mbps derived from RTT"/><Button Name="Advanced" Grid.Column="1" Content="Advanced node tests" Padding="11,7" Margin="5,0"/><Button Name="Ordered" Grid.Column="2" Content="50 responses per hop" Padding="11,7" Margin="5,0"/><Button Name="Run" Grid.Column="3" Content="Run Speed Lab" Padding="16,7" Margin="5,0" IsDefault="True"/><Button Name="Close" Grid.Column="4" Content="Close" Padding="11,7" Margin="5,0"/></Grid>
  </Grid>
 </Window>
 "@
  $Reader=New-Object System.Xml.XmlNodeReader $SX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
- $Scope=$D.FindName('Scope');$Topology=$D.FindName('Topology');$Mode=$D.FindName('Mode');$Node=$D.FindName('Node');$Entry=$D.FindName('Entry');$Exit=$D.FindName('Exit');$Base=$D.FindName('Base');$ExitMode=$D.FindName('ExitMode');$EntryMode=$D.FindName('EntryMode');$Execution=$D.FindName('Execution');$Layers=$D.FindName('Layers');$DurationMode=$D.FindName('DurationMode');$MinTime=$D.FindName('MinTime');$MaxTime=$D.FindName('MaxTime');$MinLabel=$D.FindName('MinLabel');$MaxLabel=$D.FindName('MaxLabel');$Run=$D.FindName('Run');$Advanced=$D.FindName('Advanced');$Status=$D.FindName('Status');$Detail=$D.FindName('Detail');$D.Tag='initial'
+ $Scope=$D.FindName('Scope');$Topology=$D.FindName('Topology');$Mode=$D.FindName('Mode');$Node=$D.FindName('Node');$Entry=$D.FindName('Entry');$Exit=$D.FindName('Exit');$Base=$D.FindName('Base');$ExitMode=$D.FindName('ExitMode');$EntryMode=$D.FindName('EntryMode');$Execution=$D.FindName('Execution');$Layers=$D.FindName('Layers');$DurationMode=$D.FindName('DurationMode');$MinTime=$D.FindName('MinTime');$MaxTime=$D.FindName('MaxTime');$MinLabel=$D.FindName('MinLabel');$MaxLabel=$D.FindName('MaxLabel');$Run=$D.FindName('Run');$Advanced=$D.FindName('Advanced');$Ordered=$D.FindName('Ordered');$Status=$D.FindName('Status');$Detail=$D.FindName('Detail');$D.Tag='initial'
  function SelectedTag($Combo){if($null-eq$Combo.SelectedItem){return''};return [string]$Combo.SelectedItem.Tag}
  $SpeedLabOptions=@{nodes=@();captured_profile_tokens=$null;router_vpn_entry_modes=@();supported_entry_modes=@();supported_exit_modes=@();current=$null;execution_choices=@();updating=$false}
  function SpeedLabValue($Item,[string]$Name,$Default=''){
@@ -288,13 +288,14 @@ function ShowUnifiedSpeedLab{
  $MaxTime.Add_ValueChanged({if($MaxTime.Value-lt$MinTime.Value){$MinTime.Value=$MaxTime.Value};$MaxLabel.Text=('Max {0:N0} s'-f$MaxTime.Value)})
  RefreshSpeedLabControls
  $Advanced.Add_Click({ShowUnifiedAdvancedPerformance})
+ $Ordered.Add_Click({try{if(-not(UnifiedAsyncBusy)){$CapturedOrderedID=[string]$RouterCombo.SelectedValue;$CurrentOrderedSelection={return [string]$RouterCombo.SelectedValue-ceq$CapturedOrderedID}.GetNewClosure();Show-RouterVPNOrderedLatency -BaseUrl $BaseUrl -Owner $D -DisplayedProfileID $CapturedOrderedID -SelectionCurrent $CurrentOrderedSelection}}catch{$Detail.Text=$_.Exception.Message;$Status.Text='Hop measurements unavailable.'}})
  $D.FindName('Close').Add_Click({if(([string]$D.Tag).StartsWith('owned')-and(UnifiedAsyncBusy)){[void](CancelUnifiedApiAsync $false)};$D.Close()})
  $D.Add_Closed({$owned=([string]$D.Tag).StartsWith('owned');$D.Tag='closed';if($owned-and(UnifiedAsyncBusy)){[void](CancelUnifiedApiAsync $false)}})
  $Run.Add_Click({
   if([string]$D.Tag-ne'ready'){return}
   try{
    if(UnifiedAsyncBusy){throw 'Another Router VPN action is still running.'}
-   $Run.IsEnabled=$false;$Advanced.IsEnabled=$false;$D.Tag='owned-run';$Status.Text='Building/proving path and running download + upload…';$Detail.Text='Speed Lab running. Temporary paths are transactional and will be torn down/restored when the test completes or is cancelled.'
+   $Run.IsEnabled=$false;$Advanced.IsEnabled=$false;$Ordered.IsEnabled=$false;$D.Tag='owned-run';$Status.Text='Building/proving path and running download + upload…';$Detail.Text='Speed Lab running. Temporary paths are transactional and will be torn down/restored when the test completes or is cancelled.'
    $payload=NewSpeedLabRequest;$duration=SelectedTag $DurationMode
    $timeout=SpeedLabRequestTimeout $payload
    if(SpeedLabTorCompareRequest $payload){$Status.Text='Comparing Local and Server Tor paths…';$Detail.Text='Each candidate measures Tor last-relay HTTP and the same external-server HTTP response. The lowest valid average is rechecked before throughput testing; the captured connection is restored afterward.'}
@@ -324,9 +325,9 @@ function ShowUnifiedSpeedLab{
     $hopSuffix=if($HopLines.Count){' • '+$HopLines.Count+' hop measurements'}else{''};$Status.Text=('Finished • {0} / {1} • {2}{3}'-f[string]$R.path.scope,[string]$R.path.topology,[string]$M.provider,$hopSuffix)
    }.GetNewClosure()
    $Failure={param($E)if([string]$D.Tag-cne'owned-run'){return};$Detail.Text=$E;$Status.Text='Speed Lab failed closed; see details.'}.GetNewClosure()
-   $Finally={if([string]$D.Tag-cne'owned-run'){return};$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready';RefreshProduct;RefreshUnifiedTelemetry}.GetNewClosure()
-   if(-not(StartUnifiedApiAsync 'Running Speed Lab…' '/api/speed-lab/run' 'POST' $payload $timeout $Success $Failure $Finally $Comparison)){$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready'}
-  }catch{$Detail.Text=$_.Exception.Message;$Status.Text='Speed Lab failed closed; see details.';$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready'}
+   $Finally={if([string]$D.Tag-cne'owned-run'){return};$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$Ordered.IsEnabled=$true;$D.Tag='ready';RefreshProduct;RefreshUnifiedTelemetry}.GetNewClosure()
+   if(-not(StartUnifiedApiAsync 'Running Speed Lab…' '/api/speed-lab/run' 'POST' $payload $timeout $Success $Failure $Finally $Comparison)){$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$Ordered.IsEnabled=$true;$D.Tag='ready'}
+  }catch{$Detail.Text=$_.Exception.Message;$Status.Text='Speed Lab failed closed; see details.';$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$Ordered.IsEnabled=$true;$D.Tag='ready'}
  })
  [void]$D.ShowDialog()
 }
@@ -336,4 +337,225 @@ function ShowUnifiedSpeedLab{
     $ProductSource=$ProductSource.Substring(0,$Performance.StartOffset)+$replacement+$ProductSource.Substring($Performance.EndOffset)
     $ProductSource+="`n# Windows Speed Lab: /api/speed-lab/options + /api/speed-lab/run, real idle/download-loaded/upload-loaded latency, real HTTPS Mbps, exact multihop hop RTT/Mbps, bufferbloat/jitter, current or temporary direct/multihop/external graphs, Auto or custom min/max timing.`n"
     return $ProductSource
+}
+
+# A separate owned view measures the captured ordered route. These receipts
+# never replace direct-node ranking fields or the ordinary six-sample speed test.
+function global:Get-RouterVPNOrderedValue {
+    param($Value,[string]$Name,$Default=$null)
+    if($null-eq$Value){return ,$Default}
+    if($Value-is[Collections.IDictionary]){if($Value.Contains($Name)){return ,$Value[$Name]};return ,$Default}
+    $Property=$Value.PSObject.Properties[$Name];if($null-eq$Property){return ,$Default};return ,$Property.Value
+}
+function global:Test-RouterVPNOrderedText {
+    param($Value,[int]$Maximum=128)
+    return $Value-is[string]-and$Value.Length-gt0-and[Text.Encoding]::UTF8.GetByteCount($Value)-le$Maximum-and$Value-cnotmatch'[\x00-\x1f\x7f]'
+}
+function global:Test-RouterVPNOrderedNumber {
+    param($Value,[double]$Minimum=0,[double]$Maximum=90000,[switch]$Integer)
+    if($Value-isnot[ValueType]-or$Value-is[bool]){return $false}
+    $Number=[double]$Value
+    return -not[double]::IsNaN($Number)-and-not[double]::IsInfinity($Number)-and$Number-ge$Minimum-and$Number-le$Maximum-and(-not$Integer-or[Math]::Floor($Number)-eq$Number)
+}
+function global:Assert-RouterVPNOrderedCapture {
+    param($Capture)
+    $Session=Get-RouterVPNOrderedValue $Capture 'session_id'
+    if(-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Capture 'profile_id'))-or$Session-isnot[string]-or$Session.Length-gt64-or$Session-cnotmatch'^session-[0-9]+-[0-9]+$'){throw 'The connected route has no complete measurement identity.'}
+    foreach($Key in @('profile_token','source_sha256','config_sha256','generation_sha256')){
+        $Value=Get-RouterVPNOrderedValue $Capture $Key;if($Value-isnot[string]-or$Value-cnotmatch'^[0-9a-f]{64}$'){throw 'The connected route lost its source identity.'}
+    }
+}
+function global:Assert-RouterVPNOrderedNode {
+    param($Node,[int]$Position)
+    if(-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'node_id'))-or-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'label') 256)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or[string](Get-RouterVPNOrderedValue $Node 'role')-cne@('entry','intermediate','exit')[$Position]){throw 'A measured hop changed its identity or position.'}
+    $Kind=if($Position-eq1){'public-path'}else{'private-node'};$Method=if($Position-eq1){'routed-https-response-after-tls'}else{'routed-private-response-including-connection'}
+    if([string](Get-RouterVPNOrderedValue $Node 'kind')-cne$Kind-or[string](Get-RouterVPNOrderedValue $Node 'measurement')-cne$Method){throw 'A measured hop changed its timing method.'}
+}
+function global:Assert-RouterVPNOrderedReceipt {
+    param($Receipt,$Capture,$Node,[switch]$Current)
+    $Position=Get-RouterVPNOrderedValue $Node 'position';$ID=[string](Get-RouterVPNOrderedValue $Node 'node_id')
+    foreach($Key in @('source_sha256','config_sha256')){if([string](Get-RouterVPNOrderedValue $Receipt $Key)-cne[string](Get-RouterVPNOrderedValue $Capture $Key)){throw 'Saved response times belong to another route.'}}
+    $Generation=Get-RouterVPNOrderedValue $Receipt 'generation_sha256';$Request=Get-RouterVPNOrderedValue $Receipt 'request_id'
+    if($Generation-isnot[string]-or$Generation-cnotmatch'^[0-9a-f]{64}$'-or($Current-and$Generation-cne[string](Get-RouterVPNOrderedValue $Capture 'generation_sha256'))-or$Request-isnot[string]-or$Request-cnotmatch'^[0-9a-f]{32}$'-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Receipt 'schema') 1 1 -Integer)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Receipt 'position') $Position $Position -Integer)-or[string](Get-RouterVPNOrderedValue $Receipt 'node_id')-cne$ID){throw 'The response receipt lost its original owner.'}
+    $Now=([DateTime]::UtcNow-[DateTime]::SpecifyKind([DateTime]'1970-01-01',[DateTimeKind]::Utc)).TotalMilliseconds
+    if(-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Receipt 'measured_at') 1 ($Now+1000) -Integer)){throw 'Saved response times have an invalid measurement date.'}
+    $Result=Get-RouterVPNOrderedValue $Receipt 'result';$Benchmark=Get-RouterVPNOrderedValue $Result 'benchmark';$Distribution=Get-RouterVPNOrderedValue $Benchmark 'distribution';$Ready=Get-RouterVPNOrderedValue $Result 'ready'
+    foreach($Key in @('node_id','role','kind')){if([string](Get-RouterVPNOrderedValue $Result $Key)-cne[string](Get-RouterVPNOrderedValue $Node $Key)){throw 'The result describes another measured hop.'}}
+    $Label=if($Position-eq1){'Cumulative path through custom node 2 of 3 '+[char]0x2192+' Cloudflare edge'}else{'Cumulative path through node '+($Position+1)+' of 3'}
+    if([string](Get-RouterVPNOrderedValue $Result 'label')-cne$Label){throw 'The receipt changed its measurement label.'}
+    foreach($Key in @('idle','download','upload','response')){if($null-ne(Get-RouterVPNOrderedValue $Result $Key)){throw 'A response-time receipt contains a different measurement.'}}
+    if($Ready-isnot[bool]-or-not$Ready-or[string](Get-RouterVPNOrderedValue $Result 'failure' '')-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Benchmark 'schema') 1 1 -Integer)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Benchmark 'attempts') 50 50 -Integer)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Benchmark 'failed') 0 0 -Integer)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Distribution 'samples') 50 50 -Integer)-or[string](Get-RouterVPNOrderedValue $Benchmark 'measurement')-cne[string](Get-RouterVPNOrderedValue $Node 'measurement')){throw 'The result does not contain 50 valid responses from this hop.'}
+    $Endpoint=[string](Get-RouterVPNOrderedValue $Benchmark 'endpoint' '');$Expected=if($Position-eq1){'https://speed.cloudflare.com/__down?bytes=1'}else{''};if($Endpoint-cne$Expected){throw 'The response timing used another endpoint.'}
+    $Maximum=if($Position-eq1){5000}else{2000}
+    foreach($Key in @('min_ms','median_ms','average_ms','p90_ms','max_ms')){if(-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Distribution $Key) ([double]::Epsilon) $Maximum)){throw 'The response distribution is invalid.'}}
+    $Min=[double](Get-RouterVPNOrderedValue $Distribution 'min_ms');$Median=[double](Get-RouterVPNOrderedValue $Distribution 'median_ms');$P90=[double](Get-RouterVPNOrderedValue $Distribution 'p90_ms');$Max=[double](Get-RouterVPNOrderedValue $Distribution 'max_ms')
+    if($Min-gt$Median-or$Median-gt$P90-or$P90-gt$Max-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Distribution 'average_ms') $Min $Max)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Benchmark 'trimmed_mean_ms') $Min $Max)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Distribution 'jitter_ms') 0 ($Max-$Min+1e-9))){throw 'The response distribution is not coherent.'}
+}
+function global:New-RouterVPNOrderedState {
+    param([string]$BaseUrl,[string]$DisplayedProfileID)
+    Assert-RouterVPNControllerBaseUrl $BaseUrl
+    if(-not(Test-RouterVPNOrderedText $DisplayedProfileID)){throw 'Select the connected ordered route first.'}
+    return @{BaseUrl=$BaseUrl.TrimEnd('/');Displayed=$DisplayedProfileID;Capture=$null;Nodes=@();History=@();Node=$null;Request='';Generation=[long]0;
+        Drained=$true;Cancelled=$false;Closing=$false;Closed=$false;Invalid=$false;AllowClose=$false;Client=$null;Window=$null;Timer=$null;
+        Owner=$null;OwnerClosing=$null;CloseOwner=$false;Jobs=[Collections.Generic.List[object]]::new();NextPoll=[DateTime]::MinValue;NextCancel=[DateTime]::MinValue;Deadline=[DateTime]::MaxValue;
+        Status='Reading the connected ordered route...';Populated=$false}
+}
+function global:New-RouterVPNOrderedBody {
+    param($State)
+    Assert-RouterVPNOrderedCapture $State.Capture
+    if($State.Request-cnotmatch'^[0-9a-f]{32}$'-or$null-eq$State.Node){throw 'The request has no captured hop.'}
+    $Capture=@{};foreach($Key in @('session_id','profile_id','profile_token','source_sha256','config_sha256','generation_sha256')){$Capture[$Key]=[string](Get-RouterVPNOrderedValue $State.Capture $Key)}
+    return @{capture=$Capture;node_id=[string](Get-RouterVPNOrderedValue $State.Node 'node_id');position=[int](Get-RouterVPNOrderedValue $State.Node 'position');request_id=$State.Request}
+}
+function global:Test-RouterVPNOrderedJob {
+    param($State,[string]$Kind)
+    foreach($Job in $State.Jobs){if($Job.Kind-ceq$Kind){return $true}};return $false
+}
+function global:New-RouterVPNOrderedRequest {
+    param($State,[ValidateSet('info','start','poll','cancel')][string]$Kind)
+    if($State.Closed-or$null-eq$State.Client){throw 'The hop measurement view is closed.'}
+    $Path='/api/speed-lab/ordered-latency';$Body=$null
+    if($Kind-ceq'poll'){if($State.Request-cnotmatch'^[0-9a-f]{32}$'){throw 'Missing captured request.'};$Path+='?request_id='+$State.Request}
+    if($Kind-cin@('start','cancel')){$Body=New-RouterVPNOrderedBody $State;if($Kind-ceq'cancel'){$Path+='/cancel'}}
+    $Method=if($null-eq$Body){[Net.Http.HttpMethod]::Get}else{[Net.Http.HttpMethod]::Post}
+    $Request=[Net.Http.HttpRequestMessage]::new($Method,$State.BaseUrl+$Path);$Cts=[Threading.CancellationTokenSource]::new();$Cts.CancelAfter([TimeSpan]::FromSeconds(6))
+    try{
+        if($null-ne$Body){$Request.Content=[Net.Http.StringContent]::new(($Body|ConvertTo-Json -Depth 10 -Compress),[Text.Encoding]::UTF8,'application/json')}
+        $Task=$State.Client.SendAsync($Request,$Cts.Token)
+        $Job=@{Kind=$Kind;Generation=$State.Generation;Captured=$State.Request;Request=$Request;Cts=$Cts;Task=$Task};[void]$State.Jobs.Add($Job)
+    }catch{$Request.Dispose();$Cts.Dispose();throw}
+}
+function global:Complete-RouterVPNOrderedRequest {
+    param($Job)
+    $Response=$null
+    try{
+        $Response=$Job.Task.GetAwaiter().GetResult();$Text=$Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if([Text.Encoding]::UTF8.GetByteCount($Text)-gt1048576){throw 'Measurement response exceeded its size limit.'}
+        if(-not$Response.IsSuccessStatusCode){throw 'The local measurement request was not confirmed.'}
+        return @{Value=($Text|ConvertFrom-Json);Error=''}
+    }catch{return @{Value=$null;Error=$_.Exception.Message}}
+    finally{if($null-ne$Response){$Response.Dispose()};$Job.Request.Dispose();$Job.Cts.Dispose()}
+}
+function global:Test-RouterVPNOrderedSelection {
+    param($State)
+    if($State.Invalid-or-not$State.ContainsKey('SelectionCurrent')-or$null-eq$State.SelectionCurrent){return}
+    try{$Current=&$State.SelectionCurrent;if($Current-isnot[bool]-or-not$Current){throw 'The selected profile changed.'}}
+    catch{$State.Invalid=$true;if(-not$State.Drained){$State.Cancelled=$true};$State.Status='The selected profile changed. Waiting for the original test to finish.'}
+}
+function global:Receive-RouterVPNOrderedStatus {
+    param($State,$Value,[switch]$Initial)
+    Test-RouterVPNOrderedSelection $State
+    $Capture=Get-RouterVPNOrderedValue $Value 'capture';Assert-RouterVPNOrderedCapture $Capture
+    $Status=Get-RouterVPNOrderedValue $Value 'status';$Complete=Get-RouterVPNOrderedValue $Status 'complete';$Drained=Get-RouterVPNOrderedValue $Status 'drained';$Stage=Get-RouterVPNOrderedValue $Status 'stage';$Request=Get-RouterVPNOrderedValue $Value 'request_id' ''; $Failure=Get-RouterVPNOrderedValue $Status 'failure' ''
+    if(-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Value 'schema') 1 1 -Integer)-or$Complete-isnot[bool]-or$Drained-isnot[bool]-or($Drained-and-not$Complete)-or-not(Test-RouterVPNOrderedText $Stage 128)-or$Failure-isnot[string]-or$Failure.Length-gt512-or$Request-isnot[string]-or[string](Get-RouterVPNOrderedValue $Status 'request_id')-cne$Request){throw 'Invalid captured measurement status.'}
+    if($Initial){
+        if($State.Invalid){throw 'The selected profile changed. Reopen hop measurements.'}
+        $Rows=Get-RouterVPNOrderedValue $Value 'nodes';$History=Get-RouterVPNOrderedValue $Value 'history' @()
+        if($null-ne$State.Capture-or[string](Get-RouterVPNOrderedValue $Capture 'profile_id')-cne$State.Displayed-or$Request-or$Stage-cne'idle'-or-not$Complete-or-not$Drained-or$Rows-isnot[array]-or$Rows.Count-ne3-or$History-isnot[array]-or$History.Count-gt128){throw 'Connect the selected ordered route, then reopen hop measurements.'}
+        $IDs=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        for($Index=0;$Index-lt3;$Index++){Assert-RouterVPNOrderedNode $Rows[$Index] $Index;if(-not$IDs.Add([string](Get-RouterVPNOrderedValue $Rows[$Index] 'node_id'))){throw 'Duplicate measured hop.'}}
+        foreach($Record in $History){$Position=Get-RouterVPNOrderedValue $Record 'position';if(-not(Test-RouterVPNOrderedNumber $Position 0 2 -Integer)){throw 'Invalid saved hop.'};Assert-RouterVPNOrderedReceipt $Record $Capture $Rows[[int]$Position]}
+        $State.Capture=$Capture;$State.Nodes=$Rows;$State.History=$History;$State.Status='Choose a hop. Saved results show when that route was measured.';return
+    }
+    foreach($Key in @('session_id','profile_id','profile_token','source_sha256','config_sha256','generation_sha256')){if([string](Get-RouterVPNOrderedValue $Capture $Key)-cne[string](Get-RouterVPNOrderedValue $State.Capture $Key)){throw 'The response belongs to another captured route.'}}
+    if(-not$State.Request-or$Request-cne$State.Request-or[string](Get-RouterVPNOrderedValue $Value 'node_id')-cne[string](Get-RouterVPNOrderedValue $State.Node 'node_id')-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Value 'position') (Get-RouterVPNOrderedValue $State.Node 'position') (Get-RouterVPNOrderedValue $State.Node 'position') -Integer)){throw 'The response belongs to another measurement.'}
+    if($State.Drained){return}
+    $Finished=$Complete-and$Drained;$Record=Get-RouterVPNOrderedValue $Value 'receipt'
+    if($null-ne$Record){
+        if(-not$Finished-or$Stage-cne'complete'-or$Failure-or[string](Get-RouterVPNOrderedValue $Record 'request_id')-cne$State.Request){throw 'An unfinished test cannot replace saved history.'}
+        Assert-RouterVPNOrderedReceipt $Record $State.Capture $State.Node -Current
+        if($State.Invalid){$State.Status='The original test finished and saved its result for the previous profile. Reopen hop measurements for the selected profile.'}
+        else{
+            $State.History=@($State.History|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'node_id')-cne[string](Get-RouterVPNOrderedValue $State.Node 'node_id')})+@($Record)
+            $State.Status=if($State.Cancelled){'The test finished before cancellation; its 50 responses were saved.'}else{'Saved 50 responses for the selected hop.'}
+        }
+    }elseif($Finished){
+        if($Stage-ceq'complete'-and-not$Failure){throw 'The completed measurement did not confirm its saved result.'}
+        $State.Status=if($State.Cancelled-or$State.Closing){'Test cancelled. Previous saved results remain available.'}elseif($Failure){$Failure}else{'Measurement failed. Previous saved results remain available.'}
+    }elseif(-not$State.Cancelled-and-not$State.Closing){$State.Status='Measuring 50 responses through the selected hop...'}
+    if($Finished){$State.Drained=$true;if($Stage-cin@('invalidated','retired')){$State.Invalid=$true}}
+}
+function global:Start-RouterVPNOrderedLatency {
+    param($State,[int]$Position)
+    Test-RouterVPNOrderedSelection $State
+    if($State.Closed-or$State.Closing-or$State.Invalid-or$null-eq$State.Capture-or-not$State.Drained-or$State.Jobs.Count-ne0-or$Position-lt0-or$Position-ge$State.Nodes.Count){return $false}
+    $State.Generation++;$State.Node=$State.Nodes[$Position];$State.Request=[Guid]::NewGuid().ToString('N');$State.Drained=$false;$State.Cancelled=$false;$State.NextPoll=[DateTime]::MinValue;$State.NextCancel=[DateTime]::MinValue;$State.Deadline=[DateTime]::UtcNow.AddSeconds(100);$State.Status='Measuring 50 responses through the selected hop...'
+    try{New-RouterVPNOrderedRequest $State 'start';return $true}catch{Cancel-RouterVPNOrderedLatency $State;$State.Status='Start was not confirmed. Cancelling this test and waiting for completion.';return $false}
+}
+function global:Cancel-RouterVPNOrderedLatency {
+    param($State)
+    if($State.Closed-or$State.Drained-or-not$State.Request){return}
+    $State.Cancelled=$true;$State.Status='Cancelling the test. Waiting for it to finish...'
+    if(-not(Test-RouterVPNOrderedJob $State 'cancel')-and[DateTime]::UtcNow-ge$State.NextCancel){$State.NextCancel=[DateTime]::UtcNow.AddSeconds(1);try{New-RouterVPNOrderedRequest $State 'cancel'}catch{}}
+}
+function global:Request-RouterVPNOrderedClose {
+    param($State)
+    if($State.Closed-or$State.AllowClose){return $true};$State.Closing=$true
+    if(-not$State.Drained){Cancel-RouterVPNOrderedLatency $State}else{foreach($Job in $State.Jobs){$Job.Cts.Cancel()}}
+    return $State.Drained-and$State.Jobs.Count-eq0
+}
+function global:Close-RouterVPNOrderedView {
+    param($State)
+    if($State.Closed){return $true};if(-not$State.Drained-or$State.Jobs.Count-ne0){return $false}
+    $State.Closed=$true;if($null-ne$State.Timer){$State.Timer.Stop();$State.Timer=$null};if($null-ne$State.Client){$State.Client.Dispose();$State.Client=$null}
+    $Owner=$State.Owner;$Closing=$State.OwnerClosing;$State.Owner=$null;$State.OwnerClosing=$null
+    if($null-ne$Owner-and$null-ne$Closing){$Owner.Remove_Closing($Closing)}
+    if($State.CloseOwner-and$null-ne$Owner){$State.CloseOwner=$false;$Owner.Close()};return $true
+}
+function global:Update-RouterVPNOrderedView {
+    param($State)
+    if($State.Closed){return}
+    Test-RouterVPNOrderedSelection $State
+    foreach($Job in @($State.Jobs.ToArray())){
+        if(-not$Job.Task.IsCompleted){continue};[void]$State.Jobs.Remove($Job);$Reply=Complete-RouterVPNOrderedRequest $Job
+        if($Job.Generation-ne$State.Generation-or$Job.Captured-cne$State.Request){continue}
+        try{if($Reply.Error){throw $Reply.Error};Receive-RouterVPNOrderedStatus $State $Reply.Value -Initial:($Job.Kind-ceq'info')}
+        catch{if($Job.Kind-ceq'info'){$State.Invalid=$true;$State.Status=$_.Exception.Message}else{$State.Cancelled=$true;$State.Status='The result was not confirmed. Cancelling this test and waiting for completion.'}}
+    }
+    if(-not$State.Drained){
+        if([DateTime]::UtcNow-ge$State.Deadline){$State.Cancelled=$true}
+        if($State.Cancelled-or$State.Closing-or$State.Invalid){Cancel-RouterVPNOrderedLatency $State}
+        if(-not(Test-RouterVPNOrderedJob $State 'poll')-and[DateTime]::UtcNow-ge$State.NextPoll){$State.NextPoll=[DateTime]::UtcNow.AddMilliseconds(700);try{New-RouterVPNOrderedRequest $State 'poll'}catch{}}
+    }
+    if($null-ne$State.Window){
+        $W=$State.Window;$W.FindName('Progress').Text=$State.Status;$Combo=$W.FindName('Hop')
+        if(-not$State.Populated-and$State.Nodes.Count-eq3){$Rows=@();foreach($Node in $State.Nodes){$Rows+=@([pscustomobject]@{position=[int](Get-RouterVPNOrderedValue $Node 'position');display=('{0}. {1} - {2}'-f((Get-RouterVPNOrderedValue $Node 'position')+1),(Get-RouterVPNOrderedValue $Node 'label'),(Get-RouterVPNOrderedValue $Node 'role'))})};$State.Populated=$true;$Combo.ItemsSource=$Rows;$Combo.SelectedIndex=0}
+        $Idle=$State.Drained-and$State.Jobs.Count-eq0-and-not$State.Closing-and-not$State.Closed-and-not$State.Invalid-and$null-ne$State.Capture
+        $Combo.IsEnabled=[bool]$Idle;$W.FindName('Retest').IsEnabled=[bool]$Idle;$W.FindName('CancelTest').IsEnabled=[bool](-not$State.Drained-and-not$State.Cancelled)
+        if($Combo.SelectedIndex-ge0-and$Combo.SelectedIndex-lt$State.Nodes.Count){
+            $Node=$State.Nodes[$Combo.SelectedIndex];$Timing=if($Combo.SelectedIndex-eq1){'HTTPS response after TLS'}else{'HTTP response including connection'}
+            $Records=@($State.History|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'node_id')-ceq[string](Get-RouterVPNOrderedValue $Node 'node_id')}|Sort-Object {Get-RouterVPNOrderedValue $_ 'measured_at'} -Descending)
+            $Detail=$Timing+"`r`n`r`nNo saved result for this route and hop."
+            if($Records.Count){$R=$Records[0];$B=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $R 'result') 'benchmark';$D=Get-RouterVPNOrderedValue $B 'distribution';$Date=([DateTime]::SpecifyKind([DateTime]'1970-01-01',[DateTimeKind]::Utc)).AddMilliseconds([double](Get-RouterVPNOrderedValue $R 'measured_at')).ToLocalTime();$Detail=$Timing+"`r`n`r`nSaved "+$Date.ToString('g')+"`r`n"+('50 responses - median {0:N2} ms - trimmed mean {1:N2} ms'-f(Get-RouterVPNOrderedValue $D 'median_ms'),(Get-RouterVPNOrderedValue $B 'trimmed_mean_ms'))+"`r`n"+('Min {0:N2} - average {1:N2} - p90 {2:N2} - max {3:N2} - jitter {4:N2} ms'-f(Get-RouterVPNOrderedValue $D 'min_ms'),(Get-RouterVPNOrderedValue $D 'average_ms'),(Get-RouterVPNOrderedValue $D 'p90_ms'),(Get-RouterVPNOrderedValue $D 'max_ms'),(Get-RouterVPNOrderedValue $D 'jitter_ms'))}
+            $W.FindName('Detail').Text=$Detail
+        }
+    }
+    if($State.Closing-and$State.Drained-and$State.Jobs.Count-eq0){$State.AllowClose=$true;if($null-ne$State.Window){$State.Window.Close()}else{[void](Close-RouterVPNOrderedView $State)}}
+}
+function global:Show-RouterVPNOrderedLatency {
+    param([string]$BaseUrl,$Owner,[string]$DisplayedProfileID,[scriptblock]$SelectionCurrent)
+    if($null-ne(Get-Variable RouterVPNOrderedView -Scope Global -ErrorAction SilentlyContinue)){$Old=$global:RouterVPNOrderedView;if($null-ne$Old-and-not$Old.Closed){if($null-ne$Old.Window){[void]$Old.Window.Activate()};return}}
+    if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop}
+    $State=New-RouterVPNOrderedState $BaseUrl $DisplayedProfileID;$State.Client=New-RouterVPNControllerClient -TimeoutMilliseconds 6000 -ResponseLimit 1048576;$State.Owner=$Owner;$State.SelectionCurrent=$SelectionCurrent
+    [xml]$Xaml=@'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN hop response times" Width="800" Height="460" MinWidth="600" MinHeight="400" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF">
+<Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+<TextBlock Text="50 responses through each hop" FontSize="23" FontWeight="Bold"/>
+<TextBlock Grid.Row="1" TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,10,0,12" Text="Select a hop on the connected route. Private-node HTTP timing includes connection setup; the public middle is timed after TLS. Saved results are historical and keep their measurement date."/>
+<ComboBox Name="Hop" Grid.Row="2" DisplayMemberPath="display" SelectedValuePath="position" AutomationProperties.Name="Measured hop"/>
+<TextBlock Name="Progress" Grid.Row="3" TextWrapping="Wrap" Margin="0,12" AutomationProperties.Name="Measurement progress"/>
+<TextBox Name="Detail" Grid.Row="4" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Background="#101A2B" Foreground="#E8ECF8" Padding="10"/>
+<WrapPanel Grid.Row="5" HorizontalAlignment="Right" Margin="0,12,0,0"><Button Name="Retest" Content="Retest 50 responses" Padding="12,7" Margin="4"/><Button Name="CancelTest" Content="Cancel test" Padding="12,7" Margin="4"/><Button Name="Close" Content="Close" Padding="12,7" Margin="4"/></WrapPanel>
+</Grid></Window>
+'@
+    $Reader=[Xml.XmlNodeReader]::new($Xaml);$W=[Windows.Markup.XamlReader]::Load($Reader);$Reader.Dispose();$State.Window=$W;if($null-ne$Owner){$W.Owner=$Owner}
+    $State.Timer=[Windows.Threading.DispatcherTimer]::new();$State.Timer.Interval=[TimeSpan]::FromMilliseconds(50);$State.Timer.Add_Tick({Update-RouterVPNOrderedView $State}.GetNewClosure())
+    $W.FindName('Retest').Add_Click({try{[void](Start-RouterVPNOrderedLatency $State $State.Window.FindName('Hop').SelectedIndex)}catch{$State.Status=$_.Exception.Message};Update-RouterVPNOrderedView $State}.GetNewClosure())
+    $W.FindName('CancelTest').Add_Click({Cancel-RouterVPNOrderedLatency $State;Update-RouterVPNOrderedView $State}.GetNewClosure())
+    $W.FindName('Hop').Add_SelectionChanged({Update-RouterVPNOrderedView $State}.GetNewClosure())
+    $W.FindName('Close').Add_Click({$State.Window.Close()}.GetNewClosure())
+    $W.Add_Closing({param($Sender,$Event)if(-not(Request-RouterVPNOrderedClose $State)){$Event.Cancel=$true}}.GetNewClosure())
+    $W.Add_Closed({$State.Window=$null;[void](Close-RouterVPNOrderedView $State)}.GetNewClosure())
+    if($null-ne$Owner){$State.OwnerClosing=[ComponentModel.CancelEventHandler]({param($Sender,$Event)if(-not$State.Closed){if(-not(Request-RouterVPNOrderedClose $State)){$State.CloseOwner=$true;$Event.Cancel=$true}else{$State.CloseOwner=$false;$State.AllowClose=$true}}}.GetNewClosure());$Owner.Add_Closing($State.OwnerClosing)}
+    $global:RouterVPNOrderedView=$State;New-RouterVPNOrderedRequest $State 'info';$State.Timer.Start();$W.Show();Update-RouterVPNOrderedView $State
 }

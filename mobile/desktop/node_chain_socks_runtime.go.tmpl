@@ -177,6 +177,7 @@ func (owner *routerVPNDesktopSOCKSRuntime) close(ctx context.Context)error{
  if state:=owner.state.Load();state!=nil{state.revoked.Store(true);state.ready.Store(false);state.cancel()}
  if measurement:=owner.measurement;measurement!=nil{
   measurement.cancel()
+  if measurement.latency!=nil { if err:=measurement.latency.CloseContext(ctx);err!=nil{return err} }
   if err:=measurement.service.CloseContext(ctx);err!=nil{return err}
   owner.measurement=nil
  }

@@ -367,6 +367,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 native DNS ownership regressions failed' }
           python deploy/test_windows_dns_measurement.py --shell powershell.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 native DNS ownership regressions failed' }
+      - name: Native ordered fifty responses and durable history
+        # The same shipping panel executes in both PowerShell runtimes below.
+        # Native tunnel acceptance is owned by the separate installed gates.
+        shell: pwsh
+        run: |
+          python deploy/test_windows_ordered_latency.py --shell pwsh --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 ordered response ownership regressions failed' }
+          python deploy/test_windows_ordered_latency.py --shell powershell.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 ordered response ownership regressions failed' }
       - name: Tor helper test cleanup regressions
         shell: pwsh
         run: |

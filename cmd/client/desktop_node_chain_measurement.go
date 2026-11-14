@@ -15,6 +15,9 @@ import (
 )
 
 type desktopNodeChainMeasurementRequest struct {
+	Operation  string                                     `json:"operation,omitempty"`
+	NodeID     string                                     `json:"node_id,omitempty"`
+	Position   int                                        `json:"position,omitempty"`
 	Schema     int                                        `json:"schema"`
 	Request    string                                     `json:"request_id"`
 	Generation uint64                                     `json:"generation"`
@@ -25,8 +28,9 @@ type desktopNodeChainMeasurementRequest struct {
 }
 type desktopNodeChainMeasurementResult struct {
 	desktopNodeChainMeasurementRequest
-	CompletedAt int64             `json:"completed_at"`
-	Status      hopmeasure.Status `json:"status"`
+	Saved       *hopmeasure.OrderedLatencyReceipt `json:"saved,omitempty"`
+	CompletedAt int64                             `json:"completed_at"`
+	Status      hopmeasure.Status                 `json:"status"`
 }
 
 var errDesktopNodeChainMeasurementPending = errors.New("ordered native measurement drain remains owned")
@@ -142,7 +146,18 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 // Only the captured child dials the private APIs. This exchange never creates a
 // proxy, adopts another process, or reconstructs a member from mutable selection.
 func exchangeDesktopNodeChainMeasurement(parent context.Context, launch *desktopNodeLaunch, current func(context.Context) error) (hopmeasure.Status, error) {
-	var empty hopmeasure.Status
+	result, err := exchangeDesktopNodeChainMeasurementOperation(parent, launch, current, nil)
+	return result.Status, err
+}
+
+type desktopOrderedLatencyTarget struct {
+	NodeID   string
+	Position int
+	Request  string
+}
+
+func exchangeDesktopNodeChainMeasurementOperation(parent context.Context, launch *desktopNodeLaunch, current func(context.Context) error, target *desktopOrderedLatencyTarget) (desktopNodeChainMeasurementResult, error) {
+	var empty desktopNodeChainMeasurementResult
 	if parent == nil || parent.Err() != nil || launch == nil || launch.chain == nil || current == nil {
 		return empty, errors.New("ordered measurement requires its original caller and launch")
 	}
@@ -222,6 +237,18 @@ func exchangeDesktopNodeChainMeasurement(parent context.Context, launch *desktop
 	}
 	deadline, _ := ctx.Deadline()
 	request := desktopNodeChainMeasurementRequest{Schema: 1, Request: nonce, Generation: chain.measurementGeneration + 1, Deadline: deadline.UnixMilli(), Bytes: 8 << 20, Path: live.Path, Capture: capture}
+	if target != nil {
+		if chain.socksPolicy == nil || chain.policy != nil || target.Position < 0 || target.Position >= len(chain.selection.Nodes) || chain.selection.Nodes[target.Position].Profile.ID != target.NodeID {
+			return empty, errors.New("ordered fifty requires its exact typed member")
+		}
+		request.Schema, request.Operation, request.Bytes = 2, "ordered-latency-50", 0
+		request.NodeID, request.Position = target.NodeID, target.Position
+		if !desktopMTURequestPattern.MatchString(target.Request) {
+			return empty, errors.New("ordered fifty requires a fresh request identity")
+		}
+		request.Request = target.Request
+	}
+	empty.desktopNodeChainMeasurementRequest = request
 	raw, _ := json.Marshal(request)
 	started := time.Now().UnixMilli()
 	if err := check(ctx); err != nil {
@@ -242,7 +269,7 @@ func exchangeDesktopNodeChainMeasurement(parent context.Context, launch *desktop
 			return nil, err
 		}
 		var result desktopNodeChainMeasurementResult
-		if decodeRelayControlJSON(raw, &result) != nil {
+		if decodeRelayControlJSON(raw, &result) != nil || target == nil && !desktopNodeChainOrdinaryResultShape(raw) {
 			return nil, errors.New("ordered measurement malformed result")
 		}
 		if result.Request != request.Request {
@@ -262,7 +289,7 @@ func exchangeDesktopNodeChainMeasurement(parent context.Context, launch *desktop
 		}
 		return &result, nil
 	}
-	drain := func(cause error) (hopmeasure.Status, error) {
+	drain := func(cause error) (desktopNodeChainMeasurementResult, error) {
 		joined, stop := context.WithTimeout(context.Background(), 7*time.Second)
 		defer stop()
 		if result, err := read(joined); err == nil && result != nil {
@@ -303,7 +330,7 @@ func exchangeDesktopNodeChainMeasurement(parent context.Context, launch *desktop
 			if err := check(ctx); err != nil {
 				return empty, err
 			}
-			return result.Status, nil
+			return *result, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -406,4 +433,17 @@ func retireDesktopNodeChainMeasurementCancel(ctx context.Context, launch *deskto
 		return errors.New("ordered measurement cancellation file changed before drain")
 	}
 	return launch.directoryRoot.Remove("node-chain-measure-cancel.json")
+}
+
+func desktopNodeChainOrdinaryResultShape(raw []byte) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+	for _, name := range []string{"operation", "node_id", "position", "saved"} {
+		if _, exists := fields[name]; exists {
+			return false
+		}
+	}
+	return true
 }

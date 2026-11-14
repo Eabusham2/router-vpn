@@ -44,6 +44,7 @@ def verify(text):
         EXTERNAL,
         ROOT / "client/macos/RouterVPNMacSpeedLab.swift",
         ROOT / "client/macos/RouterVPNMacSpeedLabTransport.swift",
+        ROOT / "client/macos/RouterVPNMacOrderedLatency.swift",
         ROOT / "client/macos/RouterVPNMacViaEntryCandidates.swift",
         ROOT / "client/macos/RouterVPNMacViaEntryPolicy.swift",
         ROOT / "client/macos/RouterVPNMacDeviceSettings.swift",
@@ -68,7 +69,8 @@ class NativeSourceClosure(unittest.TestCase):
     def test_a_declared_but_uncompiled_extension_is_rejected(self):
         source = BUILDER.read_text()
         invocation = compiler_invocation(source)
-        for variable, filename in (("EXTERNAL_NODE_SRC", "RouterVPNMacExternalNode.swift"),
+        for variable, filename in (("ORDERED_LATENCY_SRC", "RouterVPNMacOrderedLatency.swift"),
+                                   ("EXTERNAL_NODE_SRC", "RouterVPNMacExternalNode.swift"),
                                    ("DEVICE_SETTINGS_SRC", "RouterVPNMacDeviceSettings.swift"),
                                    ("CONTROLLER_AUTH_SRC", "RouterVPNMacControllerAuth.swift"),
                                    ("CONTROLLER_LAUNCH_SRC", "RouterVPNMacControllerLaunch.swift")):

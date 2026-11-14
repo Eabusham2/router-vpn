@@ -42,28 +42,29 @@ type state struct {
 }
 
 type app struct {
-	cfg                    common.ClientConfig
-	localController        *linuxOwnedController
-	modes                  []common.Mode
-	profiles               common.RouterProfileStore
-	profileCatalogEpoch    uint64 // protected by mu; advances on source changes, including change-away/back
-	profileCatalogDigest   string // protected by mu; excludes historical measurement readback
-	mu                     sync.Mutex
-	operationMu            sync.Mutex
-	closing                bool // protected by mu; terminal controller shutdown admission
-	connectionContext      context.Context
-	connectionCancel       context.CancelFunc
-	connectionCancelIntent context.Context              // protected by mu; exact operation requested to cancel
-	candidatePreparation   *orderedCandidatePreparation // protected by mu; exact temporary candidate purpose, never a connected session
-	state                  state
-	cmd                    *exec.Cmd
-	daitaCancel            context.CancelFunc
-	dnsMeasurements        *desktopDNSSlot                // protected by mu; bounded current native DNS operation
-	latencyMeasurements    *desktopLatencySlot            // protected by mu; exact current external 50-response operation
-	externalComparisons    *desktopExternalComparisonSlot // protected by mu; one owned external-path comparison batch
-	nodeProtection         *desktopNodeProtectionSlot     // protected by mu; exact successor outlives its runtime workspace
-	nodeRecovery           *desktopNodeRecoveryOperation  // protected by mu; cancellable pre-admission recovery, separate from a connection
-	nodeConnectionHost     *desktopNodeConnectionHost     // immutable after initialization; native controller/process boundary
+	cfg                        common.ClientConfig
+	localController            *linuxOwnedController
+	modes                      []common.Mode
+	profiles                   common.RouterProfileStore
+	profileCatalogEpoch        uint64 // protected by mu; advances on source changes, including change-away/back
+	profileCatalogDigest       string // protected by mu; excludes historical measurement readback
+	mu                         sync.Mutex
+	operationMu                sync.Mutex
+	closing                    bool // protected by mu; terminal controller shutdown admission
+	connectionContext          context.Context
+	connectionCancel           context.CancelFunc
+	connectionCancelIntent     context.Context              // protected by mu; exact operation requested to cancel
+	candidatePreparation       *orderedCandidatePreparation // protected by mu; exact temporary candidate purpose, never a connected session
+	state                      state
+	cmd                        *exec.Cmd
+	daitaCancel                context.CancelFunc
+	dnsMeasurements            *desktopDNSSlot                // protected by mu; bounded current native DNS operation
+	orderedLatencyMeasurements *desktopOrderedLatencySlot     // protected by mu; distinct captured ordered fifty operation
+	latencyMeasurements        *desktopLatencySlot            // protected by mu; exact current external 50-response operation
+	externalComparisons        *desktopExternalComparisonSlot // protected by mu; one owned external-path comparison batch
+	nodeProtection             *desktopNodeProtectionSlot     // protected by mu; exact successor outlives its runtime workspace
+	nodeRecovery               *desktopNodeRecoveryOperation  // protected by mu; cancellable pre-admission recovery, separate from a connection
+	nodeConnectionHost         *desktopNodeConnectionHost     // immutable after initialization; native controller/process boundary
 }
 
 func main() {

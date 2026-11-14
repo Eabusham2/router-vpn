@@ -16,32 +16,38 @@ import (
 const routerVPNDesktopSOCKSMeasurementLimit = 128 << 10
 
 type routerVPNDesktopSOCKSMeasurementRequest struct {
-	Schema     int                                        `json:"schema"`
-	Request    string                                     `json:"request_id"`
-	Generation uint64                                     `json:"generation"`
-	Deadline   int64                                      `json:"deadline_at"`
-	Bytes      int                                        `json:"bytes"`
-	Path       string                                     `json:"path_id"`
+	Operation  string                                          `json:"operation,omitempty"`
+	NodeID     string                                          `json:"node_id,omitempty"`
+	Position   int                                             `json:"position,omitempty"`
+	Schema     int                                             `json:"schema"`
+	Request    string                                          `json:"request_id"`
+	Generation uint64                                          `json:"generation"`
+	Deadline   int64                                           `json:"deadline_at"`
+	Bytes      int                                             `json:"bytes"`
+	Path       string                                          `json:"path_id"`
 	Capture    mobilemultihop.DesktopNodeChainSOCKSReadyRecord `json:"capture"`
 }
 
 type routerVPNDesktopSOCKSMeasurementResult struct {
 	routerVPNDesktopSOCKSMeasurementRequest
-	CompletedAt int64             `json:"completed_at"`
-	Status      hopmeasure.Status `json:"status"`
+	Saved       *hopmeasure.OrderedLatencyReceipt `json:"saved,omitempty"`
+	CompletedAt int64                             `json:"completed_at"`
+	Status      hopmeasure.Status                 `json:"status"`
 }
 
 type routerVPNDesktopSOCKSMeasurement struct {
-	request    routerVPNDesktopSOCKSMeasurementRequest
-	raw        []byte
-	info       os.FileInfo
-	sourceInfo os.FileInfo
-	configInfo os.FileInfo
-	cancelInfo os.FileInfo
-	service    *hopmeasure.Service
-	cancel     context.CancelFunc
-	state      *routerVPNDesktopSOCKSState
-	started    bool
+	retirementFailure error
+	request           routerVPNDesktopSOCKSMeasurementRequest
+	raw               []byte
+	info              os.FileInfo
+	sourceInfo        os.FileInfo
+	configInfo        os.FileInfo
+	cancelInfo        os.FileInfo
+	latency           *hopmeasure.OrderedLatencyService
+	service           *hopmeasure.Service
+	cancel            context.CancelFunc
+	state             *routerVPNDesktopSOCKSState
+	started           bool
 }
 
 // The worker observes its immutable proved reader. The command loop retains
@@ -66,26 +72,32 @@ func (m *routerVPNDesktopSOCKSMeasurementOwner) BeginMeasurementContext(ctx cont
 	if _, err := m.MeasurementSOCKSContext(ctx); err != nil {
 		return nil, err
 	}
-	if m.owner.activity.Load()!=nil || !m.owner.measurementHold.CompareAndSwap(false, true) {
+	if m.owner.activity.Load() != nil || !m.owner.measurementHold.CompareAndSwap(false, true) {
 		return nil, routerVPNExternalFailure
 	}
 	var once sync.Once
 	release := func() { once.Do(func() { m.owner.measurementHold.Store(false) }) }
-	if _, err := m.MeasurementSOCKSContext(ctx); err != nil || m.owner.activity.Load()!=nil {
-		return release, errors.Join(err,routerVPNExternalFailure)
+	if _, err := m.MeasurementSOCKSContext(ctx); err != nil || m.owner.activity.Load() != nil {
+		return release, errors.Join(err, routerVPNExternalFailure)
 	}
 	return release, nil
 }
 
 func (owner *routerVPNDesktopSOCKSRuntime) measurementRequestCurrent(ctx context.Context, request routerVPNDesktopSOCKSMeasurementRequest) error {
- if owner==nil||owner.current(ctx)!=nil||request.Capture.Validate(owner.construction.policy,owner.transfer)!=nil{return routerVPNExternalFailure}
- mtu:=owner.mtu.Load()
- if mtu==nil||mtu.raw==nil||mtu.pending.Load()!=nil||mtu.raw.record.Active||mtu.raw.record.Failure!=""{return routerVPNExternalFailure}
- state,record:=owner.state.Load(),mtu.raw.record
- if state==nil||request.Capture.Identity!=state.identity||request.Capture.Generation!=state.generation||
-  request.Path!=record.Path||request.Capture.Reader!=record.Reader||request.Capture.InterfaceName!=record.Interface||
-  request.Capture.InterfaceIndex!=uint32(record.Index)||request.Capture.MTU!=record.MTU{return routerVPNExternalFailure}
- return mtu.matchesReadback(ctx,state,record)
+	if owner == nil || owner.current(ctx) != nil || request.Capture.Validate(owner.construction.policy, owner.transfer) != nil {
+		return routerVPNExternalFailure
+	}
+	mtu := owner.mtu.Load()
+	if mtu == nil || mtu.raw == nil || mtu.pending.Load() != nil || mtu.raw.record.Active || mtu.raw.record.Failure != "" {
+		return routerVPNExternalFailure
+	}
+	state, record := owner.state.Load(), mtu.raw.record
+	if state == nil || request.Capture.Identity != state.identity || request.Capture.Generation != state.generation ||
+		request.Path != record.Path || request.Capture.Reader != record.Reader || request.Capture.InterfaceName != record.Interface ||
+		request.Capture.InterfaceIndex != uint32(record.Index) || request.Capture.MTU != record.MTU {
+		return routerVPNExternalFailure
+	}
+	return mtu.matchesReadback(ctx, state, record)
 }
 
 func (owner *routerVPNDesktopSOCKSRuntime) measurementInputCurrent(ctx context.Context, op *routerVPNDesktopSOCKSMeasurement) error {
@@ -114,11 +126,13 @@ func (owner *routerVPNDesktopSOCKSRuntime) pollMeasurement(ctx context.Context) 
 	if owner == nil {
 		return nil
 	}
- // Candidate authority remains closed for this typed schema. A request
- // from another graph family cannot borrow this owner's original proof.
- for _,name:=range []string{"node-chain-candidate-request.json","node-chain-candidate-source.json","node-chain-candidate-live.json"}{
-  if _,err:=owner.files.root.Lstat(name);!errors.Is(err,os.ErrNotExist){return routerVPNExternalFailure}
- }
+	// Candidate authority remains closed for this typed schema. A request
+	// from another graph family cannot borrow this owner's original proof.
+	for _, name := range []string{"node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json"} {
+		if _, err := owner.files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return routerVPNExternalFailure
+		}
+	}
 	if owner.measurement == nil {
 		info, err := owner.files.root.Lstat("node-chain-measure-request.json")
 		if errors.Is(err, os.ErrNotExist) {
@@ -127,10 +141,10 @@ func (owner *routerVPNDesktopSOCKSRuntime) pollMeasurement(ctx context.Context) 
 		raw, readErr := owner.files.read("node-chain-measure-request.json", 16384)
 		var request routerVPNDesktopSOCKSMeasurementRequest
 		now := time.Now()
-		if err != nil || readErr != nil || !routerVPNMTUStrict(raw, &request) || request.Schema != 1 ||
+		if err != nil || readErr != nil || !routerVPNMTUStrict(raw, &request) || !request.validOperation() || !request.validOperationJSON(raw) ||
 			!routerVPNExternalSession.MatchString(request.Request) || request.Request == owner.measurementLast ||
 			owner.measurementGeneration == ^uint64(0) || request.Generation != owner.measurementGeneration+1 ||
-			request.Bytes < 64<<10 || request.Bytes > hopmeasure.MaxBytes || request.Deadline <= now.UnixMilli() ||
+			request.Deadline <= now.UnixMilli() ||
 			request.Deadline > now.Add(hopmeasure.RequestTimeout).UnixMilli() ||
 			request.Capture.ObservedAt > now.UnixMilli() || now.UnixMilli()-request.Capture.ObservedAt > 2500 ||
 			owner.measurementRequestCurrent(ctx, request) != nil {
@@ -155,6 +169,18 @@ func (owner *routerVPNDesktopSOCKSRuntime) pollMeasurement(ctx context.Context) 
 		}
 		op := &routerVPNDesktopSOCKSMeasurement{request: request, raw: raw, info: info, configInfo: configInfo, sourceInfo: sourceInfo, service: service, cancel: cancel, state: state}
 		owner.measurement = op // Retain every returned service before admission/cleanup.
+		if request.Schema == 2 {
+			_, meta, _, err := owner.construction.policy.ReadValidated()
+			if err != nil || request.Position < 0 || request.Position >= len(meta.Prefixes) || meta.Prefixes[request.Position].ProfileID != request.NodeID {
+				cancel()
+				return routerVPNExternalFailure
+			}
+			op.latency, err = hopmeasure.NewOrderedLatencyValidatedContext(work, service, meta.OriginalSourceSHA256, meta.ConfigSHA256, func(call context.Context) error { return owner.measurementInputCurrent(call, op) })
+			if err != nil {
+				cancel()
+				return err
+			}
+		}
 		if err := owner.measurementInputCurrent(ctx, op); err != nil {
 			cancel()
 			return err
@@ -168,7 +194,7 @@ func (owner *routerVPNDesktopSOCKSRuntime) pollMeasurement(ctx context.Context) 
 			op.cancelInfo = info
 			cancel()
 		} else {
-			if err := service.StartContext(work, request.Request, request.Bytes); err != nil {
+			if err := op.start(work); err != nil {
 				cancel()
 				return err
 			}
@@ -177,29 +203,29 @@ func (owner *routerVPNDesktopSOCKSRuntime) pollMeasurement(ctx context.Context) 
 	}
 	op := owner.measurement
 	if err := owner.measurementInputCurrent(ctx, op); err != nil {
-		op.service.Cancel(op.request.Request)
+		op.cancelWorker()
 		return err
 	}
 	if info, err := owner.files.root.Lstat("node-chain-measure-cancel.json"); !errors.Is(err, os.ErrNotExist) {
 		raw, readErr := owner.files.read("node-chain-measure-cancel.json", 16384)
 		if err != nil || readErr != nil || !bytes.Equal(raw, op.raw) || op.cancelInfo != nil && !os.SameFile(info, op.cancelInfo) {
-			op.service.Cancel(op.request.Request)
+			op.cancelWorker()
 			return routerVPNExternalFailure
 		}
 		op.cancelInfo = info
-		op.service.Cancel(op.request.Request)
+		op.cancelWorker()
 	}
 	var status hopmeasure.Status
 	if !op.started {
 		status = hopmeasure.Status{Request: op.request.Request, Stage: "cancelled", Complete: true, Drained: true, Failure: "Ordered measurement cancelled", Results: []hopmeasure.Result{}}
-	} else if json.Unmarshal([]byte(op.service.StatusContextJSON(ctx)), &status) != nil || status.Request != op.request.Request {
+	} else if json.Unmarshal([]byte(op.statusJSON(ctx)), &status) != nil || status.Request != op.request.Request {
 		return routerVPNExternalFailure
 	}
 	if !status.Complete || !status.Drained {
 		return nil
 	}
 	if op.started {
-		if err := op.service.Drain(op.request.Request); err != nil {
+		if err := op.drain(); err != nil {
 			return err
 		}
 	}
@@ -207,7 +233,23 @@ func (owner *routerVPNDesktopSOCKSRuntime) pollMeasurement(ctx context.Context) 
 		return routerVPNExternalFailure
 	}
 	result := routerVPNDesktopSOCKSMeasurementResult{routerVPNDesktopSOCKSMeasurementRequest: op.request, CompletedAt: time.Now().UnixMilli(), Status: status}
+	if op.latency != nil && status.Stage == "complete" && status.Failure == "" && len(status.Results) == 1 && status.Results[0].Ready {
+		var saved hopmeasure.OrderedLatencyReceipt
+		raw := op.latency.SavedJSON(op.request.NodeID)
+		if !routerVPNMTUStrict([]byte(raw), &saved) || saved.Request != op.request.Request || saved.NodeID != op.request.NodeID || saved.Position != op.request.Position {
+			return routerVPNExternalFailure
+		}
+		result.Saved = &saved
+	}
+	if op.latency != nil {
+		if err := op.closeLatencyContext(ctx); err != nil {
+			return err
+		}
+	}
+	result.CompletedAt = time.Now().UnixMilli()
+
 	if result.CompletedAt > op.request.Deadline || op.cancelInfo != nil {
+		result.Saved = nil
 		result.Status = hopmeasure.Status{Request: op.request.Request, Stage: "cancelled", Complete: true, Drained: true, Failure: "Ordered measurement cancelled", Results: []hopmeasure.Result{}}
 	}
 	if err := owner.files.publish("node-chain-measure-result.json", result); err != nil {
@@ -226,10 +268,78 @@ func (owner *routerVPNDesktopSOCKSRuntime) pollMeasurement(ctx context.Context) 
 	if err != nil || !os.SameFile(info, op.info) || owner.files.root.Remove("node-chain-measure-request.json") != nil {
 		return routerVPNExternalFailure
 	}
-	if err := op.service.CloseContext(ctx); err != nil {
-		return err
+	if op.latency == nil {
+		if err := op.service.CloseContext(ctx); err != nil {
+			return err
+		}
 	}
 	op.cancel()
 	owner.measurementGeneration, owner.measurementLast, owner.measurement = op.request.Generation, op.request.Request, nil
+	return nil
+}
+
+func (r routerVPNDesktopSOCKSMeasurementRequest) validOperation() bool {
+	if r.Schema == 1 {
+		return r.Operation == "" && r.NodeID == "" && r.Position == 0 && r.Bytes >= 64<<10 && r.Bytes <= hopmeasure.MaxBytes
+	}
+	return r.Schema == 2 && r.Operation == "ordered-latency-50" && r.NodeID != "" && r.Position >= 0 && r.Position < 3 && r.Bytes == 0
+}
+func (op *routerVPNDesktopSOCKSMeasurement) start(ctx context.Context) error {
+	if op.latency != nil {
+		return op.latency.StartContext(ctx, op.request.Request, op.request.NodeID)
+	}
+	return op.service.StartContext(ctx, op.request.Request, op.request.Bytes)
+}
+func (op *routerVPNDesktopSOCKSMeasurement) cancelWorker() {
+	op.cancel()
+	if op.latency != nil {
+		op.latency.Cancel(op.request.Request)
+	} else {
+		op.service.Cancel(op.request.Request)
+	}
+}
+func (op *routerVPNDesktopSOCKSMeasurement) drain() error {
+	if op.latency != nil {
+		return op.latency.Drain(op.request.Request)
+	}
+	return op.service.Drain(op.request.Request)
+}
+func (op *routerVPNDesktopSOCKSMeasurement) statusJSON(ctx context.Context) string {
+	if op.latency != nil {
+		return op.latency.StatusJSON()
+	}
+	return op.service.StatusContextJSON(ctx)
+}
+
+func (r routerVPNDesktopSOCKSMeasurementRequest) validOperationJSON(raw []byte) bool {
+	if r.Schema != 1 {
+		return true
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+	for _, name := range []string{"operation", "node_id", "position"} {
+		if _, exists := fields[name]; exists {
+			return false
+		}
+	}
+	return true
+}
+
+// Retirement may retry handles after failure, but this attempt can never
+// publish a successful receipt after its first failed close acknowledgment.
+func (op *routerVPNDesktopSOCKSMeasurement) closeLatencyContext(ctx context.Context) error {
+	if op.retirementFailure != nil {
+		return op.retirementFailure
+	}
+	if err := op.latency.CloseContext(ctx); err != nil {
+		op.retirementFailure = err
+		return err
+	}
+	if err := op.service.CloseContext(ctx); err != nil {
+		op.retirementFailure = err
+		return err
+	}
 	return nil
 }

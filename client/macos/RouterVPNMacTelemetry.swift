@@ -71,7 +71,7 @@ extension ProductWindowController {
         let performance = objc_getAssociatedObject(self,&telemetryPerformanceControllerKey) as? RouterVPNMacPerformanceController
         let comparison = objc_getAssociatedObject(self,&telemetryExternalComparisonControllerKey) as? RouterVPNMacExternalComparisonController
         let candidates = objc_getAssociatedObject(self,&telemetryOrderedCandidatesKey) as? RouterVPNMacOrderedCandidates
-        return !liveTelemetryDelivery.mutations.isEmpty || window?.attachedSheet != nil || performance?.window?.isVisible == true || comparison?.window?.isVisible == true || candidates?.window?.isVisible == true || unifiedSpeedLabPresented()
+        return !liveTelemetryDelivery.mutations.isEmpty || window?.attachedSheet != nil || performance?.window?.isVisible == true || comparison?.window?.isVisible == true || candidates?.window?.isVisible == true || unifiedSpeedLabPresented() || orderedLatencyPresented()
     }
     // The shipping transform calls these on the main queue at mutation entry
     // and after its background work completes. Same-profile reconnects do not
@@ -549,6 +549,8 @@ private final class RouterVPNMacPerformanceController: NSWindowController, NSWin
         candidates.bezelStyle = .rounded; actions.append(candidates); stack.addArrangedSubview(candidates)
         let savedCandidates = NSButton(title: "Test saved Local path", target: self, action: #selector(savedPathCandidates))
         savedCandidates.bezelStyle = .rounded; actions.append(savedCandidates); stack.addArrangedSubview(savedCandidates)
+        let orderedLatency = NSButton(title: "50 responses per hop", target: self, action: #selector(measureOrderedLatency))
+        orderedLatency.bezelStyle = .rounded; actions.append(orderedLatency); stack.addArrangedSubview(orderedLatency)
         cancelButton.target = self; cancelButton.action = #selector(cancelMeasurement); cancelButton.bezelStyle = .rounded
         cancelButton.isEnabled = false; stack.addArrangedSubview(cancelButton)
         measurement.changed = { [weak self] text in self?.render(text) }
@@ -569,6 +571,7 @@ private final class RouterVPNMacPerformanceController: NSWindowController, NSWin
     }
     @objc private func prefixCandidates() { if !closed, !measurement.running {product?.showOrderedPrefixCandidates()} }
     @objc private func savedPathCandidates() { if !closed, !measurement.running {product?.showOrderedPrefixCandidates(savedPath: true)} }
+    @objc private func measureOrderedLatency() { if !closed, !measurement.running { product?.showOrderedLatency() } }
     @objc private func compareExternal() { if !closed, !measurement.running { product?.showPerformanceExternalComparison() } }
     @objc private func cancelMeasurement() { measurement.cancel() }
     private func render(_ text: String) {

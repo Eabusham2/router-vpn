@@ -64,7 +64,7 @@ class DesktopSOCKSChildProjection(unittest.TestCase):
             "node_chain_socks_command_darwin_native_test.go.tmpl",
             "node_chain_socks_construction.go.tmpl", "node_chain_socks_construction_test.go.tmpl",
             "node_chain_socks_runtime.go.tmpl", "node_chain_socks_runtime_test.go.tmpl",
-            "node_chain_socks_mtu.go.tmpl", "node_chain_socks_measurement.go.tmpl",
+            "node_chain_socks_mtu.go.tmpl", "node_chain_socks_measurement.go.tmpl", "node_chain_socks_measurement_test.go.tmpl",
             "node_chain_socks_control_linux.go.tmpl", "node_chain_socks_control_darwin.go.tmpl",
             "node_chain_socks_control_other.go.tmpl", "node_chain_socks_retirement_darwin.go.tmpl",
             "node_chain_socks_run_darwin.go.tmpl", "node_chain_socks_run_nonlinux.go.tmpl",

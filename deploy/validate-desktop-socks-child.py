@@ -459,6 +459,15 @@ FORBIDDEN = ("WARNING: DATA RACE", "panic:", "fatal error:", "[build failed]",
              "signal:", "test timed out", "runtime: out of memory")
 
 
+# Additive fifty-response component coverage; every original child/Box case
+# and causal control remains mandatory with unchanged execution bounds.
+_fifty_roots = ["TestRouterVPNDesktopSOCKSFiftyOperationSchema", "TestRouterVPNDesktopSOCKSFiftyBorrowedOperationHTTP"]
+_fifty_cases = [_fifty_roots[0]] + [_fifty_roots[0]+"/"+x for x in ("old-operation", "old-node", "old-position", "old-bytes", "schema", "operation", "node", "negative-position", "foreign-position", "throughput-bytes")] + [_fifty_roots[1], _fifty_roots[1]+"/complete", _fifty_roots[1]+"/failed-fiftieth", _fifty_roots[1]+"/failed-first-close"]
+INVENTORY["child"]["command_roots"].extend(_fifty_roots)
+INVENTORY["child"]["command_cases"].extend(_fifty_cases)
+INVENTORY["child"]["source_files"].extend(["mobile/desktop/node_chain_socks_measurement_test.go.tmpl", "internal/hopmeasure/ordered_latency.go", "internal/hopmeasure/measure.go"])
+INVENTORY["projections"]["mobile/desktop/node_chain_socks_measurement_test.go.tmpl"] = "cmd/sing-box/routervpn_node_chain_socks_measurement_test.go"
+
 def module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     result = importlib.util.module_from_spec(spec)

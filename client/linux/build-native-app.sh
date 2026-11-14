@@ -12,6 +12,7 @@ AUTO_REQ_INC="$ROOT/client/linux/routervpn-auto-requirements-v11.inc"
 UNIFIED_INC="$ROOT/client/linux/routervpn-unified-shell-v8.inc"
 MTU_INC="$ROOT/client/linux/routervpn-mtu-v20.inc"
 DNS_INC="$ROOT/client/linux/routervpn-dns-measurement-v1.inc"
+ORDERED_LATENCY_INC="$ROOT/client/linux/routervpn-ordered-latency-v1.inc"
 DEVICE_INC="$ROOT/client/linux/routervpn-device-settings-v1.inc"
 SHUTDOWN_INC="$ROOT/client/linux/routervpn-controller-shutdown-v1.inc"
 CONTROLLER_AUTH_HEADER="$ROOT/client/linux/routervpn-controller-auth-v1.h"
@@ -29,7 +30,7 @@ V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"
 START_LAYER_SETTINGS="$ROOT/client/linux/apply-start-layer-settings.py"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$ORDERED_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
+SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$ORDERED_LATENCY_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$ORDERED_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v10.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
 BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v10-shipping.c"
@@ -44,7 +45,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
 done
-for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC"; do
+for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$ORDERED_LATENCY_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC"; do
   [[ -s "$source" ]] || { echo "Missing Linux shipping include: $source" >&2; exit 2; }
 done
 [[ -s "$ORDERED_INC" ]] || { echo "Missing Linux ordered-path shipping include: $ORDERED_INC" >&2; exit 2; }
@@ -201,7 +202,7 @@ self_test_marker = 'static int self_test_v5(void) {'
 if text.count(self_test_marker) != 1: raise SystemExit('Linux unified shell could not find v5 self-test seam')
 text = text.replace(self_test_marker, '#include "routervpn-unified-shell-v8.inc"\n#include "routervpn-telemetry-v9.inc"\n#include "routervpn-speed-lab-v12.inc"\n#include "routervpn-globe-v10.inc"\n#include "routervpn-responsive-v15.inc"\n\n' + self_test_marker, 1)
 install_old = '    build_ui_v5(&app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
-install_new = '    build_ui_v5(&app);\n    linux_install_telemetry_v9(&app);\n    linux_install_speed_lab_v12(&app);\n    linux_install_globe_v10(&app);\n    linux_install_responsive_v15(&app);\n    g_signal_connect(app.window, "delete-event", G_CALLBACK(linux_dns_parent_delete_v1), &app);\n    g_signal_connect(app.window, "delete-event", G_CALLBACK(on_delete), &app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
+install_new = '    build_ui_v5(&app);\n    linux_install_telemetry_v9(&app);\n    linux_install_speed_lab_v12(&app);\n    linux_install_globe_v10(&app);\n    linux_install_responsive_v15(&app);\n    g_signal_connect(app.window, "delete-event", G_CALLBACK(linux_dns_parent_delete_v1), &app);\n    g_signal_connect(app.window, "delete-event", G_CALLBACK(linux_ordered_latency_parent_delete_v1), &app);\n    g_signal_connect(app.window, "delete-event", G_CALLBACK(on_delete), &app);\n    g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);'
 if text.count(install_old) != 1: raise SystemExit('Linux telemetry/globe installer seam drifted')
 text = text.replace(install_old, install_new, 1)
 # Exercise the shipping Speed Lab dialog against an isolated loopback fixture

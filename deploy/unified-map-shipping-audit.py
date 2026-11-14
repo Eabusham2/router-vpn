@@ -50,7 +50,7 @@ def macos_compiler_closure() -> None:
     for name in (
         "HARDENED_UNIFIED_SRC", "TELEMETRY_SRC", "SPEED_LAB_SRC", "SPEED_LAB_TRANSPORT_SRC",
         "MTU_TRANSPORT_SRC", "MTU_CONTROLLER_SRC", "MTU_PANEL_SRC",
-        "DNS_TRANSPORT_SRC", "DNS_CONTROLLER_SRC", "DNS_PANEL_SRC", "GLOBE_SRC",
+        "DNS_TRANSPORT_SRC", "DNS_CONTROLLER_SRC", "DNS_PANEL_SRC", "ORDERED_LATENCY_SRC", "GLOBE_SRC",
         "PROFILE_SRC", "PROFILE_CHROME_SRC", "ONBOARDING_SRC", "HOME_SRC", "SETTINGS_SRC",
     ):
         if inputs.count("$" + name) != 1:
@@ -240,6 +240,7 @@ need(
     "RouterVPNMacDNSTransport.swift",
     "RouterVPNMacDNSController.swift",
     "RouterVPNMacDNSPanel.swift",
+    "RouterVPNMacOrderedLatency.swift",
     "buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedSpeedLabUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome()",
 )
 need(

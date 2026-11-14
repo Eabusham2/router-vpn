@@ -493,6 +493,20 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 			live = macOSNodeChainNativeRead(t, ctx, client)
 		}
 		performanceCapture = macOSNodeChainNativeMeasurement(t, ctx, client, peer, request, live)
+		if peer.middleSOCKS {
+			beforeFifty := peer.observe(t, "stats")
+			receipts, err := desktopOrderedLatencyNativeRoundTrip(ctx, func(call context.Context, method, path string, body []byte) (int, []byte, error) {
+				return macOSExternalNativeHTTP(call, client, method, path, string(body))
+			})
+			if err != nil || len(receipts) != 3 {
+				t.Fatal("installed Darwin ordered fifty", err)
+			}
+			afterFifty := peer.observe(t, "stats")
+			if len(beforeFifty.Prefixes) != 1 || len(afterFifty.Prefixes) != 1 || beforeFifty.Middle == nil || afterFifty.Middle == nil || afterFifty.Prefixes[0].ProofQueries < beforeFifty.Prefixes[0].ProofQueries+50 || afterFifty.Middle.PublicQueries < beforeFifty.Middle.PublicQueries+50 || afterFifty.Final.RouterQueries < beforeFifty.Final.RouterQueries+50 || afterFifty.Final.DirectQueries != 0 {
+				t.Fatal("ordered fifty omitted original encrypted prefix responses", beforeFifty, afterFifty)
+			}
+		}
+
 		if action == "prefix-lost" {
 			if peer.middlePassword != "" {
 				peer.observe(t, "stop-middle")

@@ -26,6 +26,7 @@ on:
       - 'deploy/test_desktop_quick_dns.py'
       - 'deploy/test_desktop_stop_retry.py'
       - 'deploy/test_linux_dns_measurement.py'
+      - 'deploy/test_linux_ordered_latency.py'
       - 'deploy/test_linux_controller_privilege.py'
       - 'deploy/linux_standard_service_gate.py'
       - 'deploy/test_linux_standard_service_runner.py'
@@ -93,6 +94,7 @@ on:
       - 'deploy/test_desktop_quick_dns.py'
       - 'deploy/test_desktop_stop_retry.py'
       - 'deploy/test_linux_dns_measurement.py'
+      - 'deploy/test_linux_ordered_latency.py'
       - 'deploy/test_linux_controller_privilege.py'
       - 'deploy/linux_standard_service_gate.py'
       - 'deploy/test_linux_standard_service_runner.py'
@@ -198,6 +200,8 @@ jobs:
         run: python3 deploy/test_desktop_stop_retry.py --platform linux
       - name: GTK measured DNS selection, cancellation drain and expiring drafts
         run: python3 deploy/test_linux_dns_measurement.py
+      - name: Native ordered fifty responses and original cleanup
+        run: python3 deploy/test_linux_ordered_latency.py --self-test
       - name: GTK captured device policy and atomic startup settings
         run: python3 deploy/test_linux_device_settings.py
       - name: GTK ordered nodes retain every original source and transport

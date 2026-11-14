@@ -1,0 +1,198 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+)
+
+func TestRouterVPNDesktopSOCKSFiftyOperationSchema(t *testing.T) {
+	ordinary := routerVPNDesktopSOCKSMeasurementRequest{Schema: 1, Bytes: 65536}
+	typed := routerVPNDesktopSOCKSMeasurementRequest{Schema: 2, Operation: "ordered-latency-50", NodeID: "entry", Position: 0}
+	for _, raw := range []string{`{"schema":1,"bytes":65536,"operation":""}`, `{"schema":1,"bytes":65536,"node_id":""}`, `{"schema":1,"bytes":65536,"position":0}`} {
+		if ordinary.validOperationJSON([]byte(raw)) {
+			t.Fatal("schema1 accepted a new operation field")
+		}
+	}
+	if !ordinary.validOperation() || !typed.validOperation() {
+		t.Fatal("original throughput or distinct fifty schema rejected")
+	}
+	for _, fault := range []string{"old-operation", "old-node", "old-position", "old-bytes", "schema", "operation", "node", "negative-position", "foreign-position", "throughput-bytes"} {
+		t.Run(fault, func(t *testing.T) {
+			request := typed
+			switch fault {
+			case "old-operation":
+				request = ordinary
+				request.Operation = typed.Operation
+			case "old-node":
+				request = ordinary
+				request.NodeID = "entry"
+			case "old-position":
+				request = ordinary
+				request.Position = 1
+			case "old-bytes":
+				request = ordinary
+				request.Bytes = 1
+			case "schema":
+				request.Schema = 3
+			case "operation":
+				request.Operation = "throughput"
+			case "node":
+				request.NodeID = ""
+			case "negative-position":
+				request.Position = -1
+			case "foreign-position":
+				request.Position = 3
+			case "throughput-bytes":
+				request.Bytes = 65536
+			}
+			if request.validOperation() {
+				t.Fatal("mixed throughput/fifty operation admitted")
+			}
+		})
+	}
+}
+
+type desktopSOCKSFiftyHTTPModel struct {
+	address, tag, identity string
+	held                   atomic.Bool
+}
+
+func (e *desktopSOCKSFiftyHTTPModel) Identity() string { return e.identity }
+func (e *desktopSOCKSFiftyHTTPModel) IdentityContext(ctx context.Context) (string, error) {
+	return e.identity, ctx.Err()
+}
+func (e *desktopSOCKSFiftyHTTPModel) VerifyMeasurement(ctx context.Context) error { return ctx.Err() }
+func (e *desktopSOCKSFiftyHTTPModel) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if ctx.Err() != nil || !e.held.CompareAndSwap(false, true) {
+		return nil, errors.New("original activity unavailable")
+	}
+	return func() { e.held.Store(false) }, nil
+}
+func (e *desktopSOCKSFiftyHTTPModel) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if tag != e.tag || address != "10.77.0.1:8787" {
+		return nil, errors.New("component dial changed original node/tag")
+	}
+	return (&net.Dialer{}).DialContext(ctx, "tcp", e.address)
+}
+
+// This executes the child operation's real borrowed service and fifty HTTP
+// responses. The explicit dial model does not claim encrypted/TUN acceptance;
+// installed native gates exercise the same operation through actual prefixes.
+func TestRouterVPNDesktopSOCKSFiftyBorrowedOperationHTTP(t *testing.T) {
+	for _, fault := range []string{"complete", "failed-fiftieth", "failed-first-close"} {
+		t.Run(fault, func(t *testing.T) {
+			var requests atomic.Int32
+			proof := strings.Repeat("a", 64)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/health" || r.Header.Get("Authorization") != "Bearer original-token" {
+					http.Error(w, "foreign", 403)
+					return
+				}
+				count := requests.Add(1)
+				if fault == "failed-fiftieth" && count == 50 {
+					http.Error(w, "failure", 503)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": proof, "proof": "router-vpn-private-agent-v1"})
+			}))
+			defer server.Close()
+			hops := []hopmeasure.Hop{}
+			for i := 0; i < 3; i++ {
+				role := "intermediate"
+				if i == 0 {
+					role = "entry"
+				}
+				if i == 2 {
+					role = "exit"
+				}
+				hops = append(hops, hopmeasure.Hop{ID: fmt.Sprintf("node-%d", i), Role: role, Tag: fmt.Sprintf("routervpn-chain-%d-aaaaaaaaaaaa-node-bbbbbbbbbbbb", i), API: "http://10.77.0.1:8787", Token: "original-token", Proof: fmt.Sprintf("%064x", i+1)})
+			}
+			hops[0].Proof = proof
+			engine := &desktopSOCKSFiftyHTTPModel{address: server.Listener.Addr().String(), tag: hops[0].Tag, identity: "original-native-generation"}
+			base, err := hopmeasure.NewOrderedContext(context.Background(), engine, hops)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer base.Close()
+			latency, err := hopmeasure.NewOrderedLatencyValidatedContext(context.Background(), base, strings.Repeat("b", 64), strings.Repeat("c", 64), engine.VerifyMeasurement)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer latency.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			op := &routerVPNDesktopSOCKSMeasurement{request: routerVPNDesktopSOCKSMeasurementRequest{Schema: 2, Operation: "ordered-latency-50", NodeID: hops[0].ID, Request: strings.Repeat("d", 32)}, service: base, latency: latency, cancel: cancel}
+			if err := op.start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var status hopmeasure.Status
+			for {
+				if json.Unmarshal([]byte(op.statusJSON(ctx)), &status) != nil {
+					t.Fatal("invalid original status")
+				}
+				if status.Complete && status.Drained {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					t.Fatal("original fifty worker failed to join", ctx.Err())
+				case <-time.After(time.Millisecond):
+				}
+			}
+			if err := op.drain(); err != nil {
+				t.Fatal(err)
+			}
+			saved := latency.SavedJSON(hops[0].ID)
+			if requests.Load() != 50 || engine.held.Load() {
+				t.Fatal("child changed fifty sample count or released before join", requests.Load())
+			}
+			if fault != "failed-fiftieth" {
+				var receipt hopmeasure.OrderedLatencyReceipt
+				if json.Unmarshal([]byte(saved), &receipt) != nil || receipt.Request != op.request.Request || receipt.NodeID != op.request.NodeID || receipt.Position != 0 || receipt.Result.Benchmark == nil || receipt.Result.Benchmark.Attempts != 50 || receipt.Result.Benchmark.Distribution.Samples != 50 {
+					t.Fatal("original saved fifty receipt missing", saved)
+				}
+			} else if saved != "" {
+				t.Fatal("failed fiftieth committed partial receipt")
+			}
+			if fault == "failed-first-close" {
+				failed, cancelFailure := context.WithCancel(context.Background())
+				cancelFailure()
+				first := op.closeLatencyContext(failed)
+				if !errors.Is(first, context.Canceled) {
+					t.Fatal("first failed close was not retained", first)
+				}
+				if err := latency.CloseContext(ctx); err != nil {
+					t.Fatal("original facade retirement did not join", err)
+				}
+				if err := base.CloseContext(ctx); err != nil {
+					t.Fatal("original request service retirement did not join", err)
+				}
+				if err := op.closeLatencyContext(ctx); !errors.Is(err, first) {
+					t.Fatal("failed-first close became a successful benchmark after retirement", err)
+				}
+				return
+			}
+			if err := latency.CloseContext(ctx); err != nil {
+				t.Fatal(err)
+			}
+			replacement, err := hopmeasure.NewOrderedLatencyValidatedContext(ctx, base, strings.Repeat("b", 64), strings.Repeat("c", 64), engine.VerifyMeasurement)
+			if err != nil {
+				t.Fatal("facade closed host throughput service", err)
+			}
+			if err := replacement.CloseContext(ctx); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

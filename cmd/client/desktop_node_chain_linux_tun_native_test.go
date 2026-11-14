@@ -29,6 +29,7 @@ import (
 
 	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/common"
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/linuxprocess"
 	"router-vpn/internal/mobilemultihop"
 )
@@ -454,6 +455,7 @@ func installLinuxNodeChainProfiles(t *testing.T, peer *linuxNodeChainPeer, fault
 }
 
 type linuxNodeChainHostResult struct {
+	FiftyReceipts []hopmeasure.OrderedLatencyReceipt `json:"fifty_receipts,omitempty"`
 	linuxImportedHostResult
 	Proof       *mobilemultihop.DesktopNodeChainReadyRecord                `json:"proof,omitempty"`
 	Nodes       []common.MultihopNodeSelection                             `json:"nodes,omitempty"`
@@ -537,6 +539,17 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 		if peer.middlePassword != "" {
 			linuxNodeChainImportedPositiveCounters(t, before)
 		}
+		if peer.middleSOCKS {
+			if len(result.FiftyReceipts) != 3 || before.Prefixes[0].ProofQueries < 50 || before.Middle == nil || before.Middle.PublicQueries < 50 || before.Final.RouterQueries < 50 || before.Final.DirectQueries != 0 {
+				t.Fatal("installed typed fifty omitted independently routed complete receipts", result, before)
+			}
+			for position, saved := range result.FiftyReceipts {
+				if saved.Position != position || validateDesktopOrderedReceipt(saved, time.Now()) != nil {
+					t.Fatal("installed typed fifty returned invalid saved prefix", position)
+				}
+			}
+		}
+
 		if action == "prefix-lost" {
 			if peer.middlePassword != "" {
 				peer.observe(t, "stop-middle")
@@ -701,6 +714,21 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		rows, err := desktopNodeChainMeasurementRows(status, runtime.selection.Nodes, 8<<20)
 		if err != nil || len(rows) != count {
 			return errors.Join(err, errors.New("installed ordered measurement omitted a captured prefix"))
+		}
+		if h.socksChain != nil {
+			// This is the real shipping observer, not a fabricated tracker snapshot.
+			sessionTrackerFor(a).snapshot(0)
+			mux := http.NewServeMux()
+			registerSpeedLabRoutes(mux, a)
+			result.FiftyReceipts, err = desktopOrderedLatencyNativeRoundTrip(ctx, func(call context.Context, method, path string, body []byte) (int, []byte, error) {
+				response := httptest.NewRecorder()
+				request := httptest.NewRequest(method, path, bytes.NewReader(body)).WithContext(call)
+				mux.ServeHTTP(response, request)
+				return response.Code, response.Body.Bytes(), call.Err()
+			})
+			if err != nil || len(result.FiftyReceipts) != 3 {
+				return errors.Join(err, errors.New("installed Linux ordered fifty failed original API/history"))
+			}
 		}
 		h.launch.chain.mu.Lock()
 		proof := h.launch.chain.ready

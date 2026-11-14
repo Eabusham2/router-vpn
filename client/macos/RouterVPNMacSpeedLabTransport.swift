@@ -23,11 +23,14 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
         let prefixCatalog = candidateBase == savedBase && url.query?.range(of: "^prefix_position=[0-7]&scope=saved-prefix-local$", options: .regularExpression) != nil
         let candidateCatalog = url.path == candidateBase + "/catalog" && (prefixCatalog || url.query?.range(of: "^prefix_position=[0-7]$", options: .regularExpression) != nil)
         let candidateStatus = url.path == candidateBase && url.query?.range(of: "^request_id=[a-f0-9]{32}$", options: .regularExpression) != nil
+        let orderedBase = "/api/speed-lab/ordered-latency"
+        let orderedStatus = url.path == orderedBase && url.query?.range(of: "^request_id=[a-f0-9]{32}$", options: .regularExpression) != nil
         guard url.scheme == "http", url.host == "127.0.0.1", url.user == nil, url.password == nil,
               ["/api/speed-lab/options", "/api/speed-lab/run", "/api/profile/fastest",
                "/api/profiles", "/api/multihop/status", "/api/connection/live-latency",
                "/api/connection/speed-test", "/api/profile/latency", "/api/multihop/speed-test",
-               candidateBase, candidateBase + "/catalog", candidateBase + "/cancel", candidateBase + "/save-profile"].contains(url.path), (url.query == nil || candidateCatalog || candidateStatus), url.fragment == nil else {
+               candidateBase, candidateBase + "/catalog", candidateBase + "/cancel", candidateBase + "/save-profile",
+               orderedBase, orderedBase + "/cancel"].contains(url.path), (url.query == nil || candidateCatalog || candidateStatus || orderedStatus), url.fragment == nil else {
             throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid local Speed Lab endpoint."])
         }
         if url.path == "/api/profile/fastest" {
@@ -52,6 +55,28 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
         }
         let performanceValid: Bool
         switch url.path {
+        case orderedBase, orderedBase + "/cancel":
+            if body == nil {
+                performanceValid = url.path == orderedBase && (url.query == nil || orderedStatus) && bounded(6)
+            } else {
+                let capture = body?["capture"] as? [String: Any] ?? [:]
+                let text: (Any?, Int) -> Bool = { value, limit in
+                    guard let value = value as? String else { return false }
+                    return !value.isEmpty && value.utf8.count <= limit && !value.unicodeScalars.contains { $0.value < 32 || $0.value == 127 }
+                }
+                let hex: (Any?, Int) -> Bool = { value, count in
+                    guard let value = value as? String else { return false }
+                    return value.utf8.count == count && value.range(of: "^[a-f0-9]+$", options: .regularExpression) != nil
+                }
+                let session = capture["session_id"] as? String ?? ""
+                let position = body?["position"] as? NSNumber
+                performanceValid = url.query == nil && bounded(6) && Set(body!.keys) == Set(["capture", "node_id", "position", "request_id"]) &&
+                    Set(capture.keys) == Set(["session_id", "profile_id", "profile_token", "source_sha256", "config_sha256", "generation_sha256"]) &&
+                    session.utf8.count <= 64 && session.range(of: "^session-[0-9]+-[0-9]+$", options: .regularExpression) != nil &&
+                    text(capture["profile_id"], 128) && ["profile_token", "source_sha256", "config_sha256", "generation_sha256"].allSatisfy({ hex(capture[$0], 64) }) &&
+                    text(body?["node_id"], 128) && hex(body?["request_id"], 32) && position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() &&
+                    position!.doubleValue.rounded() == position!.doubleValue && (0...2).contains(position!.intValue)
+            }
         case candidateBase + "/catalog": performanceValid = candidateCatalog && body == nil && bounded(25)
         case candidateBase, candidateBase + "/cancel", candidateBase + "/save-profile":
             func token(_ key: String, _ count: Int) -> Bool { guard let id = identifier(key) else {return false};return id.utf8.count == count && id.range(of:"^[a-f0-9]+$",options:.regularExpression) != nil }
