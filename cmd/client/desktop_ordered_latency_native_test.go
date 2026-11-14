@@ -18,7 +18,7 @@ import (
 func desktopOrderedLatencyNativeRoundTrip(ctx context.Context, call func(context.Context, string, string, []byte) (int, []byte, error)) ([]hopmeasure.OrderedLatencyReceipt, error) {
 	status, raw, err := call(ctx, http.MethodGet, "/api/speed-lab/ordered-latency", nil)
 	var info desktopOrderedLatencyView
-	if err != nil || status != 200 || decodeRelayControlJSON(raw, &info) != nil || info.Schema != 1 || len(info.Nodes) != 3 {
+	if err != nil || status != 200 || decodeRelayControlJSON(raw, &info) != nil || info.Schema != 1 || len(info.Nodes) < 2 || len(info.Nodes) > 8 {
 		return nil, errors.Join(err, errors.New("installed ordered fifty lacks its actual captured API"))
 	}
 	receipts := []hopmeasure.OrderedLatencyReceipt{}
@@ -34,7 +34,7 @@ func desktopOrderedLatencyNativeRoundTrip(ctx context.Context, call func(context
 		// An apparently valid request with a substituted member cannot reach the
 		// native mailbox or reuse another row's evidence.
 		foreign := request
-		foreign.NodeID = info.Nodes[(position+1)%3].NodeID
+		foreign.NodeID = info.Nodes[(position+1)%len(info.Nodes)].NodeID
 		body, _ := json.Marshal(foreign)
 		code, _, err := call(ctx, http.MethodPost, "/api/speed-lab/ordered-latency", body)
 		if err != nil || code != 409 {
@@ -68,7 +68,7 @@ func desktopOrderedLatencyNativeRoundTrip(ctx context.Context, call func(context
 			return nil, errors.New("installed fifty did not durably adopt its exact joined native receipt")
 		}
 		saved := *view.Receipt
-		if validateDesktopOrderedReceipt(saved, time.Now()) != nil || saved.Request != nonce || saved.NodeID != node.NodeID || saved.Position != position || saved.SourceSHA256 != info.Capture.SourceSHA256 || saved.ConfigSHA256 != info.Capture.ConfigSHA256 || saved.GenerationSHA256 != info.Capture.GenerationSHA256 {
+		if validateDesktopOrderedReceipt(saved, time.Now()) != nil || !desktopOrderedReceiptMatchesNode(saved, node) || saved.Request != nonce || saved.NodeID != node.NodeID || saved.Position != position || saved.SourceSHA256 != info.Capture.SourceSHA256 || saved.ConfigSHA256 != info.Capture.ConfigSHA256 || saved.GenerationSHA256 != info.Capture.GenerationSHA256 {
 			return nil, errors.New("installed fifty saved a foreign/partial result")
 		}
 		receipts = append(receipts, saved)

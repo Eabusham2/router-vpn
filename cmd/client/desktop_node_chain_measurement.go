@@ -164,6 +164,9 @@ func exchangeDesktopNodeChainMeasurementOperation(parent context.Context, launch
 	ctx, cancel := context.WithTimeout(parent, hopmeasure.RequestTimeout)
 	defer cancel()
 	chain := launch.chain
+	if target != nil && (chain.preparation != nil || chain.execution != nil) {
+		return empty, errors.New("ordered fifty cannot borrow an execution or candidate owner")
+	}
 	if err := mobilemtu.LockContext(ctx, &chain.measurementMu); err != nil {
 		return empty, err
 	}
@@ -238,8 +241,8 @@ func exchangeDesktopNodeChainMeasurementOperation(parent context.Context, launch
 	deadline, _ := ctx.Deadline()
 	request := desktopNodeChainMeasurementRequest{Schema: 1, Request: nonce, Generation: chain.measurementGeneration + 1, Deadline: deadline.UnixMilli(), Bytes: 8 << 20, Path: live.Path, Capture: capture}
 	if target != nil {
-		if !chain.hasPolicy() || chain.policy != nil || target.Position < 0 || target.Position >= len(chain.selection.Nodes) || chain.selection.Nodes[target.Position].Profile.ID != target.NodeID {
-			return empty, errors.New("ordered fifty requires its exact typed member")
+		if !chain.hasPolicy() || chain.preparation != nil || chain.execution != nil || !chain.originalPolicyCurrent() || target.Position < 0 || target.Position >= len(chain.selection.Nodes) || chain.selection.Nodes[target.Position].Profile.ID != target.NodeID {
+			return empty, errors.New("ordered fifty requires its exact retained Local member")
 		}
 		request.Schema, request.Operation, request.Bytes = 2, "ordered-latency-50", 0
 		request.NodeID, request.Position = target.NodeID, target.Position

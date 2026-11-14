@@ -36,11 +36,15 @@ func desktopOrderedReceiptKey(r hopmeasure.OrderedLatencyReceipt) string {
 // string from being laundered into the private history or native UI.
 func validateDesktopOrderedReceipt(r hopmeasure.OrderedLatencyReceipt, now time.Time) error {
 	bad := errors.New("ordered history requires an exact complete fifty-response receipt")
-	if r.Schema != 1 || !desktopOrderedDigest.MatchString(r.SourceSHA256) || !desktopOrderedDigest.MatchString(r.ConfigSHA256) || !desktopOrderedDigest.MatchString(r.GenerationSHA256) || !desktopMTURequestPattern.MatchString(r.Request) || r.Position < 0 || r.Position > 2 || !validProfileID(r.NodeID) || r.MeasuredAt <= 0 || r.MeasuredAt > now.Add(time.Second).UnixMilli() {
+	if r.Schema != 1 || !desktopOrderedDigest.MatchString(r.SourceSHA256) || !desktopOrderedDigest.MatchString(r.ConfigSHA256) || !desktopOrderedDigest.MatchString(r.GenerationSHA256) || !desktopMTURequestPattern.MatchString(r.Request) || r.Position < 0 || r.Position > 7 || !validProfileID(r.NodeID) || r.MeasuredAt <= 0 || r.MeasuredAt > now.Add(time.Second).UnixMilli() {
 		return bad
 	}
 	result := r.Result
-	role, kind, label, metric, endpoint := desktopOrderedLatencyMeaning(r.Position)
+	count := desktopOrderedReceiptCount(r)
+	role, kind, label, metric, endpoint := desktopOrderedLatencyMeaning(r.Position, count, result.Kind)
+	if count == 0 || kind == "" {
+		return bad
+	}
 	if result.ID != r.NodeID || result.Role != role || result.Kind != kind || result.Label != label || !result.Ready || result.Failure != "" || result.Idle != nil || result.Download != nil || result.Upload != nil || result.Response != nil || result.Benchmark == nil {
 		return bad
 	}
@@ -50,7 +54,7 @@ func validateDesktopOrderedReceipt(r hopmeasure.OrderedLatencyReceipt, now time.
 	}
 	d := b.Distribution
 	maximum := float64(2000)
-	if r.Position == 1 {
+	if kind == "public-path" {
 		maximum = 5000
 	} // Original private/public probe budgets, in milliseconds.
 	if d.Max > maximum || d.Jitter > d.Max-d.Min+1e-9 {
@@ -66,24 +70,47 @@ func validateDesktopOrderedReceipt(r hopmeasure.OrderedLatencyReceipt, now time.
 	}
 	return nil
 }
-func desktopOrderedLatencyMeaning(position int) (role, kind, label, metric, endpoint string) {
+func desktopOrderedLatencyMeaning(position, count int, capturedKind string) (role, kind, label, metric, endpoint string) {
+	if count < 2 || count > 8 || position < 0 || position >= count ||
+		capturedKind != "private-node" && capturedKind != "public-path" ||
+		capturedKind == "public-path" && (count != 3 || position != 1) {
+		return
+	}
 	role = "intermediate"
 	if position == 0 {
 		role = "entry"
 	}
-	if position == 2 {
+	if position == count-1 {
 		role = "exit"
 	}
-	kind = "private-node"
-	label = fmt.Sprintf("Cumulative path through node %d of 3", position+1)
+	kind = capturedKind
+	label = fmt.Sprintf("Cumulative path through node %d of %d", position+1, count)
 	metric = "routed-private-response-including-connection"
-	if position == 1 {
-		kind = "public-path"
+	if kind == "public-path" {
 		label = "Cumulative path through custom node 2 of 3 → Cloudflare edge"
 		metric = "routed-https-response-after-tls"
 		endpoint = "https://" + hopmeasure.PublicHost + "/__down?bytes=1"
 	}
 	return
+}
+
+// The historical schema already carries the count in its canonical, secret-free
+// label. It is accepted only as a bounded historical meaning; adoption also
+// matches the independently captured live node inventory below.
+func desktopOrderedReceiptCount(r hopmeasure.OrderedLatencyReceipt) int {
+	for count := 2; count <= 8; count++ {
+		_, kind, label, _, _ := desktopOrderedLatencyMeaning(r.Position, count, r.Result.Kind)
+		if kind != "" && r.Result.Label == label {
+			return count
+		}
+	}
+	return 0
+}
+
+func desktopOrderedReceiptMatchesNode(r hopmeasure.OrderedLatencyReceipt, node desktopOrderedLatencyNode) bool {
+	return r.NodeID == node.NodeID && r.Position == node.Position && r.Result.ID == node.NodeID &&
+		r.Result.Kind == node.Kind && r.Result.Role == node.Role && r.Result.Label == node.Label &&
+		r.Result.Benchmark != nil && r.Result.Benchmark.Measurement == node.Measurement
 }
 func decodeDesktopOrderedHistory(raw []byte) (desktopOrderedLatencyHistory, error) {
 	var h desktopOrderedLatencyHistory

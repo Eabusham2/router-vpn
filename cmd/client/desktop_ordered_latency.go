@@ -15,6 +15,7 @@ import (
 
 	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemtu"
+	"router-vpn/internal/mobilemultihop"
 )
 
 type desktopOrderedLatencyCapture struct {
@@ -58,6 +59,7 @@ type desktopOrderedLatencySlot struct {
 type desktopOrderedLatencyOperation struct {
 	mu       sync.Mutex
 	request  desktopOrderedLatencyRequest
+	node     desktopOrderedLatencyNode
 	identity speedLabPathIdentity
 	status   hopmeasure.Status
 	receipt  *hopmeasure.OrderedLatencyReceipt
@@ -84,13 +86,17 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 		return identity, view, errors.New("ordered fifty requires the selected retained typed connection")
 	}
 	chain := identity.Ordered.launch.chain
-	if !chain.hasPolicy() || chain.policy != nil || !chain.originalPolicyCurrent() || len(chain.selection.Nodes) != 3 {
-		return identity, view, errors.New("ordered fifty requires the original typed proxy middle source")
+	if !chain.hasPolicy() || chain.preparation != nil || chain.execution != nil || !chain.originalPolicyCurrent() || !identity.GraphOK || identity.Graph.Execution != "local" || len(chain.selection.Nodes) < 2 || len(chain.selection.Nodes) > 8 {
+		return identity, view, errors.New("ordered fifty requires the original retained Local source")
 	}
 	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		return identity, view, err
 	}
 	_, meta, _, err := chain.readPolicy()
+	if err != nil {
+		return identity, view, err
+	}
+	nodes, err := desktopOrderedLatencyInventory(chain.selection, meta)
 	if err != nil {
 		return identity, view, err
 	}
@@ -109,11 +115,37 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 	}
 	hash := sha256.Sum256(raw)
 	view = desktopOrderedLatencyView{Schema: 1, desktopOrderedLatencyRequest: desktopOrderedLatencyRequest{Capture: desktopOrderedLatencyCapture{SessionID: identity.SessionID, ProfileID: identity.RouterID, ProfileToken: identity.ProfileToken, SourceSHA256: meta.OriginalSourceSHA256, ConfigSHA256: meta.ConfigSHA256, GenerationSHA256: hex.EncodeToString(hash[:])}}, Status: hopmeasure.Status{Stage: "idle", Complete: true, Drained: true, Results: []hopmeasure.Result{}}}
-	for i, member := range chain.selection.Nodes {
-		role, kind, label, metric, _ := desktopOrderedLatencyMeaning(i)
-		view.Nodes = append(view.Nodes, desktopOrderedLatencyNode{NodeID: member.Profile.ID, Position: i, Kind: kind, Role: role, Label: label, Measurement: metric})
-	}
+	view.Nodes = nodes
 	return identity, view, nil
+}
+
+// Only the validated, sealed policy decides whether a prefix is a private node
+// or the supported imported public middle. A position or mutable UI label does
+// not grant a different endpoint, timing budget or measurement meaning.
+func desktopOrderedLatencyInventory(selection multihopSelection, meta mobilemultihop.DesktopNodeChainMetadata) ([]desktopOrderedLatencyNode, error) {
+	count := len(selection.Nodes)
+	if count < 2 || count > 8 || len(meta.Prefixes) != count {
+		return nil, errors.New("ordered fifty lost its complete captured inventory")
+	}
+	nodes := make([]desktopOrderedLatencyNode, 0, count)
+	seen := map[string]bool{}
+	for position, proof := range meta.Prefixes {
+		id := selection.Nodes[position].Profile.ID
+		if proof.Position != position || proof.ProfileID != id || !validProfileID(id) || seen[id] {
+			return nil, errors.New("ordered fifty changed its captured node or position")
+		}
+		seen[id] = true
+		capturedKind := proof.Kind
+		if capturedKind == "" {
+			capturedKind = "private-node"
+		}
+		role, kind, label, metric, _ := desktopOrderedLatencyMeaning(position, count, capturedKind)
+		if kind == "" {
+			return nil, errors.New("ordered fifty changed its captured node kind")
+		}
+		nodes = append(nodes, desktopOrderedLatencyNode{NodeID: id, Position: position, Kind: kind, Role: role, Label: label, Measurement: metric})
+	}
+	return nodes, nil
 }
 func (o *desktopOrderedLatencyOperation) current(ctx context.Context, a *app) error {
 	if ctx.Err() != nil {
@@ -123,7 +155,7 @@ func (o *desktopOrderedLatencyOperation) current(ctx context.Context, a *app) er
 		return err
 	}
 	_, view, err := captureDesktopOrderedLatency(ctx, a)
-	if err != nil || view.Capture != o.request.Capture || o.request.Position < 0 || o.request.Position >= len(view.Nodes) || view.Nodes[o.request.Position].NodeID != o.request.NodeID {
+	if err != nil || view.Capture != o.request.Capture || o.request.Position < 0 || o.request.Position >= len(view.Nodes) || view.Nodes[o.request.Position] != o.node || o.node.NodeID != o.request.NodeID {
 		return errors.Join(err, errors.New("ordered benchmark captured source or generation changed"))
 	}
 	return nil
@@ -131,7 +163,7 @@ func (o *desktopOrderedLatencyOperation) current(ctx context.Context, a *app) er
 func readDesktopOrderedLatencyRequest(w http.ResponseWriter, r *http.Request) (desktopOrderedLatencyRequest, error) {
 	var request desktopOrderedLatencyRequest
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
-	if err != nil || decodeRelayControlJSON(raw, &request) != nil || !desktopMTURequestPattern.MatchString(request.Request) || request.Position < 0 || request.Position > 2 || !validProfileID(request.NodeID) || !desktopOrderedSessionID.MatchString(request.Capture.SessionID) || !validProfileID(request.Capture.ProfileID) || request.Capture.ProfileToken == "" || !desktopOrderedDigest.MatchString(request.Capture.SourceSHA256) || !desktopOrderedDigest.MatchString(request.Capture.ConfigSHA256) || !desktopOrderedDigest.MatchString(request.Capture.GenerationSHA256) {
+	if err != nil || decodeRelayControlJSON(raw, &request) != nil || !desktopMTURequestPattern.MatchString(request.Request) || request.Position < 0 || request.Position > 7 || !validProfileID(request.NodeID) || !desktopOrderedSessionID.MatchString(request.Capture.SessionID) || !validProfileID(request.Capture.ProfileID) || request.Capture.ProfileToken == "" || !desktopOrderedDigest.MatchString(request.Capture.SourceSHA256) || !desktopOrderedDigest.MatchString(request.Capture.ConfigSHA256) || !desktopOrderedDigest.MatchString(request.Capture.GenerationSHA256) {
 		return request, errors.New("exact ordered capture, node, position and fresh request_id are required")
 	}
 	return request, nil
@@ -189,7 +221,7 @@ func (a *app) desktopOrderedLatencyMeasurement(w http.ResponseWriter, r *http.Re
 			return
 		}
 		for _, saved := range history.Receipts {
-			if saved.SourceSHA256 == view.Capture.SourceSHA256 && saved.ConfigSHA256 == view.Capture.ConfigSHA256 && saved.Position >= 0 && saved.Position < len(view.Nodes) && saved.NodeID == view.Nodes[saved.Position].NodeID {
+			if saved.SourceSHA256 == view.Capture.SourceSHA256 && saved.ConfigSHA256 == view.Capture.ConfigSHA256 && saved.Position >= 0 && saved.Position < len(view.Nodes) && desktopOrderedReceiptMatchesNode(saved, view.Nodes[saved.Position]) {
 				view.History = append(view.History, saved)
 			}
 		}
@@ -269,7 +301,7 @@ func (a *app) desktopOrderedLatencyMeasurement(w http.ResponseWriter, r *http.Re
 		return
 	}
 	work, cancel := context.WithTimeout(context.Background(), hopmeasure.RequestTimeout)
-	op := &desktopOrderedLatencyOperation{request: request, identity: identity, cancel: cancel, done: make(chan struct{}), status: hopmeasure.Status{Request: request.Request, Stage: "preparing", Results: []hopmeasure.Result{}}}
+	op := &desktopOrderedLatencyOperation{request: request, node: view.Nodes[request.Position], identity: identity, cancel: cancel, done: make(chan struct{}), status: hopmeasure.Status{Request: request.Request, Stage: "preparing", Results: []hopmeasure.Result{}}}
 	slot.used[request.Request], slot.current = true, op
 	slot.mu.Unlock()
 	transferred = true
@@ -397,7 +429,7 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 		waitDesktopOrderedLatencyDrain(launch, result.desktopNodeChainMeasurementRequest)
 	}
 	if err == nil {
-		err = validateDesktopOrderedLatencyResult(op.request, result, time.Now())
+		err = validateDesktopOrderedLatencyResult(op.request, op.node, result, time.Now())
 	}
 	if err == nil {
 		err = op.current(ctx, a)
@@ -437,7 +469,7 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 	}
 	op.status = hopmeasure.Status{Request: op.request.Request, Stage: stage, Complete: true, Drained: true, Failure: "Ordered benchmark or durable adoption failed; no committed receipt is available", Results: []hopmeasure.Result{}}
 }
-func validateDesktopOrderedLatencyResult(request desktopOrderedLatencyRequest, result desktopNodeChainMeasurementResult, now time.Time) error {
+func validateDesktopOrderedLatencyResult(request desktopOrderedLatencyRequest, node desktopOrderedLatencyNode, result desktopNodeChainMeasurementResult, now time.Time) error {
 	bad := errors.New("ordered native saved receipt differs from its original request")
 	if result.Schema != 2 || result.Operation != "ordered-latency-50" || result.Bytes != 0 || result.NodeID != request.NodeID || result.Position != request.Position || result.Request != request.Request || result.Saved == nil {
 		return bad
@@ -445,6 +477,9 @@ func validateDesktopOrderedLatencyResult(request desktopOrderedLatencyRequest, r
 	saved := *result.Saved
 	if err := validateDesktopOrderedReceipt(saved, now); err != nil {
 		return err
+	}
+	if !desktopOrderedReceiptMatchesNode(saved, node) {
+		return bad
 	}
 	c := request.Capture
 	if saved.SourceSHA256 != c.SourceSHA256 || saved.ConfigSHA256 != c.ConfigSHA256 || saved.GenerationSHA256 != c.GenerationSHA256 || saved.NodeID != request.NodeID || saved.Position != request.Position || saved.Request != request.Request || saved.MeasuredAt > result.CompletedAt || saved.MeasuredAt > result.Deadline {
