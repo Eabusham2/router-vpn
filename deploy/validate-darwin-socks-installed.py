@@ -40,6 +40,8 @@ IDENTITY=module("installed_socks_identity",ROOT/"deploy/focused_source_identity.
 SDK=module("installed_socks_build_owner",ROOT/"deploy/validate-android-sdk-source.py")
 BASE=module("installed_socks_original",ROOT/"deploy/test_macos_node_chain_host.py")
 ORIGINAL=tuple(BASE.CASES)
+TRUSTED_TYPED=module("installed_socks_public_parent",ROOT/"deploy/test_macos_socks_node_chain_host.py")
+PARENT_CASES=tuple(name for root,leaves in TRUSTED_TYPED.PARENT_TESTS.items() for name in (root,*(root+'/'+leaf for leaf in leaves)))
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
@@ -149,11 +151,14 @@ def capture_cases(gate,output,outputs,observations):
         gate.BUILD.reuse=original_reuse
 
 def require_receipt(value,target,metadata,policy,bundle_hash,signed_hash,outputs,gate):
-    exact={"schema":1,"gate":"installed-darwin-ordered-socks-host","scope":"installed-controller-typed-socks-and-original-preservation",
-           "target":target,"public_darwin_admission":"closed","native":True}
+    exact={"schema":2,"gate":"installed-darwin-ordered-socks-host","scope":"installed-controller-public-socks-and-original-preservation",
+           "target":target,"public_darwin_admission":"enabled","native":True,
+           "public_entrypoint":"nativeMultihopConnectOwned","public_status_entrypoint":"nativeMultihopStatus"}
     for key,wanted in exact.items():
         if type(value.get(key)) is not type(wanted) or value[key]!=wanted:
             raise ValueError("Installed native receipt changed scope")
+    if value.get("public_cases") != list((*ORIGINAL,*TYPED)):
+        raise ValueError("Installed native receipt omitted its actual public route inventory")
     if value.get("repository")!={"repository":"Eabusham2/router-vpn","commit":metadata["source_sha"],"tree":metadata["source_tree"]}:
         raise ValueError("Installed native receipt borrowed a different source")
     if value.get("source_sha256")!=policy or value.get("bundle_sha256")!=bundle_hash or value.get("sealed_bundle_sha256")!=signed_hash:
@@ -164,7 +169,9 @@ def require_receipt(value,target,metadata,policy,bundle_hash,signed_hash,outputs
         wanted={"authority_cases":BASE.AUTHORITY_CASES,"hysteria_authority_cases":BASE.HYSTERIA_AUTHORITY_CASES,"typed_authority_cases":AUTHORITY_CASES}[key]
         if value.get(key)!=list(wanted) or len(wanted)!=4:
             raise ValueError("Installed native receipt omitted original source authority")
-    for key in ("authority_output_sha256","hysteria_authority_output_sha256","typed_authority_output_sha256","output_sha256"):
+    if value.get("parent_cases") != list(PARENT_CASES):
+        raise ValueError("Installed native receipt omitted its original parent or public capability cases")
+    for key in ("authority_output_sha256","hysteria_authority_output_sha256","typed_authority_output_sha256","parent_output_sha256","output_sha256"):
         if not isinstance(value.get(key),str) or not HEX64.fullmatch(value[key]):
             raise ValueError("Installed native receipt lost its original output")
     for key,cases,witness in (("hysteria_source_control",BASE.HYSTERIA_AUTHORITY_CASES,BASE.HYSTERIA_CONTROL_WITNESS),
@@ -200,11 +207,11 @@ def validate(source,source_sha,output,go="go"):
     compiler=shutil.which(go)
     if compiler is None:raise ValueError("Pinned original Go compiler is missing")
     env["PATH"]=os.pathsep.join([str(Path(compiler).parent),env.get("PATH","")])
-    receipt=dict(schema=1,suite=SUITE,selection=selected,target=target,accepted=False,phases=[],
-                 public_darwin_admission="closed",source_files=len(before),swift_editor_accepted=False,
+    receipt=dict(schema=2,suite=SUITE,selection=selected,target=target,accepted=False,phases=[],
+                 public_darwin_admission="enabled",source_files=len(before),swift_editor_accepted=False,
                  generated_fifty_and_mtu_rollback_accepted=False,
-                 entrypoint="tagged root-owned admission bridge; shipping decode/capture/preflight/stage/proof/measurement/disconnect",
-                 required_later_activation="public Darwin handler and UI remain closed until all native gates pass")
+                 entrypoint="shipping public nativeMultihopConnectOwned and nativeMultihopStatus; original source/native/measurement/retirement gates",
+                 required_native_acceptance="all37 original plus8 typed cases must prove exact public routes and original installed native ownership")
     workspace=None;work=source;joined=True;complete=False
     def save():
         (output/"manifest.json").write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")

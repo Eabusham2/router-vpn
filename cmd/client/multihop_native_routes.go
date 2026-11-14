@@ -33,7 +33,7 @@ func nativeMultihopPlatformSupported() bool {
 }
 
 func nativeNodeChainPlatformSupported() bool {
-	return retainedNativeMultihopSelected() && (runtime.GOOS == "windows" || runtime.GOOS == "linux")
+	return nativeNodeChainHostSupported()
 }
 
 func desktopMultihopExitModes() []string {

@@ -23,7 +23,7 @@ func TestDesktopSOCKSPublicAdmissionTargetBounds(t *testing.T) {
 	for _, target := range []string{"linux", "windows", "darwin", "android", "freebsd"} {
 		for _, arch := range []string{"amd64", "arm64", "386", "arm", "riscv64", ""} {
 			for _, retained := range []bool{false, true} {
-				want := retained && (target == "linux" || target == "windows") && (arch == "amd64" || arch == "arm64")
+				want := retained && (target == "linux" || target == "windows" || target == "darwin") && (arch == "amd64" || arch == "arm64")
 				if got := desktopNodeChainSOCKSAdmissionSupported(target, arch, retained); got != want {
 					t.Fatalf("public SOCKS target %s/%s retained=%v: %v", target, arch, retained, got)
 				}

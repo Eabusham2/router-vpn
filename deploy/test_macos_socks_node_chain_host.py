@@ -30,6 +30,8 @@ CASES = (
 )
 MEASUREMENT_CASES = (*CASES[:3], CASES[-1])
 SOURCES = (
+    'cmd/client/desktop_node_chain_public_admission.go', 'cmd/client/desktop_node_chain_public_admission_test.go',
+    'cmd/client/desktop_node_chain_socks_admission.go', 'cmd/client/desktop_node_chain_socks_admission_test.go',
     'deploy/test_macos_socks_node_chain_host.py', 'deploy/test_macos_socks_node_chain_host_runner.py',
     'cmd/client/connection_profile_node_chain.go', 'cmd/client/desktop_macos_process_arguments.go',
     'cmd/client/desktop_macos_process_arguments_test.go', 'cmd/client/desktop_native_workspace.go',
@@ -47,6 +49,9 @@ SOURCES = (
     'cmd/client/startup_node_chain.go', 'mobile/desktop/node_chain_socks_peer_test.go.tmpl',
 )
 PARENT_TESTS = {
+    'TestDesktopNodeChainPublicAdmissionPreservesPlatformBounds': (),
+    'TestDesktopSOCKSPublicAdmissionTargetBounds': (),
+    'TestDesktopSOCKSPublicCapabilityRetainsStrictSourceAndSecrets': ('original', 'anonymous', 'hostname', 'wrong-endpoint', 'layer', 'paired-token', 'paired-proof', 'paired-api', 'missing-source', 'partial-auth', 'oversized-auth', 'bad-port', 'http-connect', 'https-connect'),
     'TestDesktopSOCKSParentRetainsExactTypedAuthority': ('wg', 'awg2-fast', 'awg2-strong'),
     'TestDesktopSOCKSParentRejectsSubstitution': ('missing-source', 'foreign-source', 'ordinary-policy', 'changed-member', 'changed-source', 'changed-scope', 'changed-input', 'changed-config'),
     'TestDesktopSOCKSParentReadyUsesTypedParser': ('ordinary-kind', 'foreign-transfer', 'foreign-source', 'foreign-dns'),
@@ -85,7 +90,7 @@ def source_identity(core):
 
 
 def check_verdict(output, case):
-    BASE.check_verdict(output, case, test=TEST, cases=CASES, mtu_cases=(), measurement_cases=MEASUREMENT_CASES)
+    BASE.check_verdict(output, case, test=TEST, cases=CASES, mtu_cases=(), measurement_cases=MEASUREMENT_CASES, public_cases=CASES)
 
 
 def check_authority_verdict(output):
@@ -227,7 +232,8 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
             raise ValueError('Native ordered acceptance changed its captured signed copy')
         if repository_identity(required_commit) != repository:
             raise ValueError('Native ordered acceptance changed its exact source commit or tree')
-        receipt_value = dict(schema=1, gate='installed-darwin-ordered-socks-host', scope='installed-controller-typed-socks-and-original-preservation', public_darwin_admission='closed',
+        receipt_value = dict(schema=2, gate='installed-darwin-ordered-socks-host', scope='installed-controller-public-socks-and-original-preservation', public_darwin_admission='enabled',
+                             public_entrypoint='nativeMultihopConnectOwned', public_status_entrypoint='nativeMultihopStatus', public_cases=list(completed),
                              target=target, validation_toolchain=CONTROLLER.UID.RACE.TOOLCHAIN, repository=repository, source_sha256=policy, bundle_sha256=original_hash,
                              sealed_bundle_sha256=signed_hash, images=identities, cases=list(CASES), original_cases=list(BASE.CASES), completed=list(completed),
                              sources=before, authority_cases=list(BASE.AUTHORITY_CASES),

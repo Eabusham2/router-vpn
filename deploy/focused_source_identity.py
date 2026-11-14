@@ -62,6 +62,10 @@ ALLOWLISTS = {
         'internal/mobilemultihop/node_chain_socks_runtime.go',
     }),
     "darwin-socks-installed": frozenset({
+        'cmd/client/desktop_node_chain_public_admission.go',
+        'cmd/client/desktop_node_chain_public_admission_test.go',
+        'cmd/client/desktop_node_chain_socks_admission.go',
+        'cmd/client/desktop_node_chain_socks_admission_test.go',
         'client/macos/RouterVPNConnectionProfiles.swift',
         'cmd/client/connection_profile_node_chain.go',
         'cmd/client/connection_profile_setup.go',

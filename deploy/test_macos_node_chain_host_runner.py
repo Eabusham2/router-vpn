@@ -88,6 +88,9 @@ def workflow_inventory(consumer, wrapper):
 class OrderedNativeVerdicts(unittest.TestCase):
     def completed(self, case):
         lines = ['=== RUN   '+G.TEST, '=== RUN   '+G.TEST+'/'+case]
+        lines.append('    desktop_node_chain_darwin_native_test.go:700: '+G.public_route_receipt(case))
+        if case in G.MEASUREMENT_CASES:
+            lines.append('    desktop_node_chain_darwin_native_test.go:700: '+G.public_status_receipt(case))
         if case in G.MTU_CASES:
             lines += ['    desktop_node_chain_darwin_native_test.go:701: '+G.MTU_RECEIPT]
         if case in G.MEASUREMENT_CASES:
@@ -96,6 +99,39 @@ class OrderedNativeVerdicts(unittest.TestCase):
                   '--- PASS: '+G.TEST+' (1.0s)',
                   '    --- PASS: '+G.TEST+'/'+case+' (1.0s)', 'PASS']
         return '\n'.join(lines)+'\n'
+
+    def test_public_route_receipts_reject_omission_duplication_borrowing_and_old_private_logs(self):
+        for case in G.CASES:
+            valid = self.completed(case)
+            markers = [G.public_route_receipt(case)]
+            if case in G.MEASUREMENT_CASES:
+                markers.append(G.public_status_receipt(case))
+            for marker in markers:
+                line = next(line for line in valid.splitlines() if line.endswith(marker))
+                for broken in (valid.replace(line, ''), valid.replace(line, line+'\n'+line), valid.replace(marker, marker.replace(case, 'other-case'))):
+                    with self.subTest(case=case, marker=marker), self.assertRaises(ValueError):
+                        G.check_verdict(broken, case)
+            if case not in G.MEASUREMENT_CASES:
+                broken = valid.replace('--- PASS:', '    desktop_node_chain_darwin_native_test.go:700: '+G.public_status_receipt(case)+'\n--- PASS:', 1)
+                with self.assertRaises(ValueError):
+                    G.check_verdict(broken, case)
+
+    def test_native_source_uses_actual_public_callbacks_and_preserves_private_CONNECT(self):
+        source = (ROOT/'cmd/client/desktop_node_chain_darwin_native_test.go').read_text()
+        self.assertTrue(G.require_public_entrypoints(source))
+        fragments = ('if !privateCONNECT {', 'a.nativeMultihopConnectOwned(w, r, driver)',
+                     'if nativeNodeChainCONNECTPlatformSupported() {', 'len(q.Nodes) != 3',
+                     'q.Nodes[1].Mode != "http-connect" && q.Nodes[1].Mode != "https-connect"',
+                     'macOSNodeChainNativeConnect(a, w, r, driver, privateCONNECT, &publicConnect)',
+                     'a.nativeMultihopStatus(w, r)', 'publicConnect.Load(), publicStatus.Load()',
+                     'public := publicProfileFor(middle)', 'public.External == nil || !public.External.OrderedMiddle',
+                     '!live.PublicConnect || !retired.PublicConnect || !negative && !retired.PublicStatus',
+                     'else if live.PublicConnect || retired.PublicConnect {')
+        for fragment in fragments:
+            self.assertEqual(source.count(fragment), 1)
+            changed = source.replace(fragment, 'removedActualBoundary', 1)+'\n// '+fragment+'\nvar publicRouteDecoy = `'+fragment+'`\n'
+            with self.subTest(fragment=fragment), self.assertRaises(ValueError):
+                G.require_public_entrypoints(changed)
 
     def test_exact_source_inventory_preserves_original_paths_and_adds_nine_hysteria_cases(self):
         self.assertEqual(G.case_inventory(), G.CASES)

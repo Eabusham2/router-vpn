@@ -434,7 +434,15 @@ class NativeShippingAuditTests(unittest.TestCase):
         detector = "cmd/client/multihop_node_chain_socks_selection.go"
         connect_detector = "cmd/client/multihop_node_chain_connect_selection.go"
         self.assert_multihop_chain(True)
+        ordinary = "cmd/client/desktop_node_chain_public_admission.go"
         changes = (
+            (route, "return nativeNodeChainHostSupported()", "return true"),
+            (ordinary, "return retained &&", "return true &&"),
+            (ordinary, 'targetOS == "darwin"', 'targetOS == "freebsd"'),
+            (ordinary, 'targetArch == "amd64" || targetArch == "arm64"', 'targetArch != ""'),
+            (ordinary, 'runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected()', '"darwin", runtime.GOARCH, retainedNativeMultihopSelected()'),
+            (ordinary, 'runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected()', 'runtime.GOOS, "amd64", retainedNativeMultihopSelected()'),
+            (ordinary, 'runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected()', 'runtime.GOOS, runtime.GOARCH, true'),
             (route, "|| desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported()", ""),
             (route, "!nativeNodeChainPlatformSupported() ||", "false ||"),
             (route, "desktopNodeChainHasSOCKS(q.Nodes)", "desktopNodeChainHasSOCKS(other.Nodes)"),
@@ -442,7 +450,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             (policy, "func nativeNodeChainSOCKSPlatformSupported() bool { return nativeNodeChainSOCKSHostSupported() }",
              "func nativeNodeChainSOCKSPlatformSupported() bool { return true }"),
             (admission, 'return retained &&', 'return true &&'),
-            (admission, 'targetOS == "windows"', 'targetOS == "windows" || targetOS == "darwin"'),
+            (admission, 'targetOS == "windows"', 'targetOS == "windows" || targetOS == "freebsd"'),
             (admission, 'targetArch == "amd64" || targetArch == "arm64"', 'targetArch != ""'),
             (admission, 'runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected()', '"linux", runtime.GOARCH, retainedNativeMultihopSelected()'),
             (admission, 'runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected()', 'runtime.GOOS, "amd64", retainedNativeMultihopSelected()'),
@@ -472,6 +480,9 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.changes[path] += "\n// " + before + "\nvar auditDecoy = `" + before + "`\n"
                 self.assert_multihop_chain(False)
         for path, declaration in (
+            (route, "func nativeNodeChainPlatformSupported() bool { return true }"),
+            (ordinary, "func nativeNodeChainHostSupported() bool { return true }"),
+            (ordinary, "func desktopNodeChainPublicAdmissionSupported(targetOS, targetArch string, retained bool) bool { return true }"),
             (policy, "func nativeNodeChainSOCKSPlatformSupported() bool { return nativeNodeChainSOCKSHostSupported() }"),
             (admission, "func nativeNodeChainSOCKSHostSupported() bool { return true }"),
             (admission, "func desktopNodeChainSOCKSAdmissionSupported(targetOS, targetArch string, retained bool) bool { return true }"),

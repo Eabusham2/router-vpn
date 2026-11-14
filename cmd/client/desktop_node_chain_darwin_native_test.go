@@ -30,14 +30,21 @@ import (
 
 const macOSNodeChainNativeMarker = "fixture-node-chain-host"
 
-// This entry exists only in the explicitly installed, root-owned test image.
-// It consumes the production decoder, source capture, preflight, stage, proof,
-// publication and cleanup. The ordinary Darwin public capability stays closed
-// until the native acceptance gate has passed; once opened, this role must use
-// the production public handler without its temporary admission bridge.
-func macOSNodeChainNativeConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime) {
-	if nativeNodeChainPlatformSupported() {
+// Ordinary and SOCKS cases use the shipping public handler. Only the separately
+// closed CONNECT fixture retains its explicit private bridge; its source and
+// installed receipt must transition together in the CONNECT owner's unit.
+func macOSNodeChainNativeConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime, privateCONNECT bool, public *atomic.Bool) {
+	if public == nil {
+		http.Error(w, "native fixture lost its public-route observation", http.StatusConflict)
+		return
+	}
+	if !privateCONNECT {
+		public.Store(true)
 		a.nativeMultihopConnectOwned(w, r, driver)
+		return
+	}
+	if nativeNodeChainCONNECTPlatformSupported() {
+		http.Error(w, "CONNECT fixture requires its own public-route receipt transition", http.StatusConflict)
 		return
 	}
 	operation, finish, err := a.beginConnectionOperationContext(r.Context())
@@ -51,8 +58,9 @@ func macOSNodeChainNativeConnect(a *app, w http.ResponseWriter, r *http.Request,
 		return
 	}
 	q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))
-	if err != nil || !q.ordered() {
-		http.Error(w, "original ordered request required", http.StatusBadRequest)
+	if err != nil || !q.ordered() || len(q.Nodes) != 3 ||
+		(q.Nodes[1].Mode != "http-connect" && q.Nodes[1].Mode != "https-connect") {
+		http.Error(w, "original private CONNECT request required", http.StatusBadRequest)
 		return
 	}
 	if execution, err := routeExecution(q); err != nil || execution != "local" {
@@ -112,6 +120,13 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 22 {
 		return true, errors.New("ordered native test lost actual mode catalog")
 	}
+	if len(modes) == 2 && modes[1] == "socks5" {
+		middle, found := a.profileByIDLocked(control.MultihopNodes[1].ID)
+		public := publicProfileFor(middle)
+		if !found || public.External == nil || !public.External.OrderedMiddle {
+			return true, errors.New("installed SOCKS source lacks its shipping public middle capability")
+		}
+	}
 	captured, err := captureDesktopMacOSSession(context.Background(), a)
 	if err != nil {
 		return true, err
@@ -135,7 +150,7 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 	defer listener.Close()
 	var originalMu sync.Mutex
 	var original *desktopMacOSNodeChainHost
-	var stopped atomic.Bool
+	var stopped, publicConnect, publicStatus atomic.Bool
 	var initialReady *mobilemultihop.DesktopNodeChainReadyRecord
 	driver := nativeMultihopConnectRuntime{capture: captureNativeMultihopForApp, stage: stageOwnedNativeMultihopCommand,
 		preflight: func(owner *app, selection multihopSelection, descriptor *desktopExecutionDescriptor) (*desktopNodeLaunch, error) {
@@ -213,8 +228,14 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 		_ = json.NewEncoder(w).Encode(multihopConnectRequest{Nodes: append([]common.MultihopNodeSelection(nil), control.MultihopNodes...), Execution: "local",
 			desktopProfileExpectations: desktopProfileExpectations{ExpectedSelectedNodeID: &selected, ExpectedProfileTokens: tokens}})
 	})
-	mux.HandleFunc("/api/multihop/connect", func(w http.ResponseWriter, r *http.Request) { macOSNodeChainNativeConnect(a, w, r, driver) })
-	mux.HandleFunc("/api/multihop/status", a.multihopStatus)
+	privateCONNECT := len(modes) == 2 && (modes[1] == "http-connect" || modes[1] == "https-connect")
+	mux.HandleFunc("/api/multihop/connect", func(w http.ResponseWriter, r *http.Request) {
+		macOSNodeChainNativeConnect(a, w, r, driver, privateCONNECT, &publicConnect)
+	})
+	mux.HandleFunc("/api/multihop/status", func(w http.ResponseWriter, r *http.Request) {
+		publicStatus.Store(true)
+		a.nativeMultihopStatus(w, r)
+	})
 	mux.HandleFunc("/api/multihop/speed-test", a.multihopSpeedTest)
 	mux.HandleFunc("/api/speed-lab/ordered-latency", a.desktopOrderedLatencyMeasurement)
 	mux.HandleFunc("/api/speed-lab/ordered-latency/cancel", a.cancelDesktopOrderedLatencyMeasurement)
@@ -252,6 +273,7 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 			return
 		}
 		value, err := macOSNodeChainNativeObservation(r.Context(), h, initial, stopped.Load())
+		value.PublicConnect, value.PublicStatus = publicConnect.Load(), publicStatus.Load()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -262,6 +284,7 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 }
 
 type macOSNodeChainNativeResult struct {
+	PublicConnect, PublicStatus                                                    bool
 	Session, Source, Config, Transfer, ViewSession, Profile, PhysicalAddress       string
 	ProcessID                                                                      int
 	Connected, Closed, NativeJoined, Stopped, WorkspaceRetired, Monitor, MTUActive bool
@@ -609,6 +632,17 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 	joined = true
 	if receipt.ExitCode != 0 {
 		t.Fatal("original ordered controller did not join", receipt.ExitCode)
+	}
+	if peer.middleCONNECT == "" {
+		if !live.PublicConnect || !retired.PublicConnect || !negative && !retired.PublicStatus {
+			t.Fatal("installed ordinary/SOCKS case bypassed its actual public Connect or status handler")
+		}
+		t.Logf("actual sealed Darwin public ordered route verified %s: shipping Connect and original joined retirement", scenario)
+		if !negative {
+			t.Logf("actual sealed Darwin public ordered status verified %s: shipping capture and retired-capture refusal", scenario)
+		}
+	} else if live.PublicConnect || retired.PublicConnect {
+		t.Fatal("private CONNECT case borrowed ordinary/SOCKS public-route acceptance")
 	}
 	t.Logf("actual sealed Darwin ordered host verified %s: original native transaction and intended proof boundary, complete captured identities, stopped acknowledgment, PF and utun retirement, controller join", scenario)
 }

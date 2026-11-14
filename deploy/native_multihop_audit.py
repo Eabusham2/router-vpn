@@ -1069,6 +1069,13 @@ return fields, nil
 def native_multihop_shipping_chain(source: str, read=None) -> bool:
     if not native_multihop_request_admission(read):
         return False
+    # Ordinary Darwin admission is bounded independently from CONNECT and
+    # Server/Compare. Preserve the existing Linux/Windows target behavior.
+    ordinary = _tokens(read("cmd/client/desktop_node_chain_public_admission.go"))
+    if (_function(_tokens(source), "func nativeNodeChainPlatformSupported() bool") != _tokens("return nativeNodeChainHostSupported()") or
+            _function(ordinary, "func nativeNodeChainHostSupported() bool") != _tokens("return desktopNodeChainPublicAdmissionSupported(runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected())") or
+            _function(ordinary, "func desktopNodeChainPublicAdmissionSupported(targetOS, targetArch string, retained bool) bool") != _tokens('return retained && (targetOS == "linux" || targetOS == "windows" || targetOS == "darwin" && (targetArch == "amd64" || targetArch == "arm64"))')):
+        return False
     # Typed source retention is not public native acceptance. Require the
     # exact installed-target gate and complete-node detector, not decoy text.
     support = _function(_tokens(read("cmd/client/desktop_node_chain_policy_dispatch.go")),
@@ -1080,7 +1087,7 @@ def native_multihop_shipping_chain(source: str, read=None) -> bool:
     target = _function(admission, "func desktopNodeChainSOCKSAdmissionSupported(targetOS, targetArch string, retained bool) bool")
     if (support != _tokens("return nativeNodeChainSOCKSHostSupported()") or
             host != _tokens("return desktopNodeChainSOCKSAdmissionSupported(runtime.GOOS, runtime.GOARCH, retainedNativeMultihopSelected())") or
-            target != _tokens('return retained && (targetOS == "linux" || targetOS == "windows") && (targetArch == "amd64" || targetArch == "arm64")')):
+            target != _tokens('return retained && (targetOS == "linux" || targetOS == "windows" || targetOS == "darwin") && (targetArch == "amd64" || targetArch == "arm64")')):
         return False
     if detector != _tokens('''
         for _, node := range nodes {

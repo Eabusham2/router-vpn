@@ -28,6 +28,8 @@ def joined_receipt(case):
 def completed(case):
     gate=T if case in V.TYPED else V.BASE
     lines=["=== RUN   "+gate.TEST,"=== RUN   "+gate.TEST+"/"+case]
+    lines.append("    desktop_node_chain_darwin_native_test.go:1: "+V.BASE.public_route_receipt(case))
+    if case in gate.MEASUREMENT_CASES:lines.append("    desktop_node_chain_darwin_native_test.go:1: "+V.BASE.public_status_receipt(case))
     if case in V.BASE.MTU_CASES:lines.append("    desktop_node_chain_darwin_native_test.go:2: "+V.BASE.MTU_RECEIPT)
     if case in gate.MEASUREMENT_CASES:lines.append("    desktop_node_chain_darwin_native_test.go:3: "+V.BASE.MEASUREMENT_RECEIPT)
     lines+=["    desktop_node_chain_darwin_native_test.go:4: "+joined_receipt(case),
@@ -38,15 +40,17 @@ def envelope(root):
     (root/"original.go").write_text("original")
     gate=SimpleNamespace(ROOT=root,SOURCES=("original.go",),check_verdict=T.check_verdict)
     metadata={"source_sha":"1"*40,"source_tree":"2"*40}
-    value=dict(schema=1,gate="installed-darwin-ordered-socks-host",scope="installed-controller-typed-socks-and-original-preservation",
-               target="darwin/amd64",public_darwin_admission="closed",native=True,
+    value=dict(schema=2,gate="installed-darwin-ordered-socks-host",scope="installed-controller-public-socks-and-original-preservation",
+               target="darwin/amd64",public_darwin_admission="enabled",native=True,
+               public_entrypoint="nativeMultihopConnectOwned",public_status_entrypoint="nativeMultihopStatus",
+               public_cases=list((*V.ORIGINAL,*V.TYPED)),parent_cases=list(V.PARENT_CASES),
                repository={"repository":"Eabusham2/router-vpn","commit":metadata["source_sha"],"tree":metadata["source_tree"]},
                source_sha256="3"*64,bundle_sha256="4"*64,sealed_bundle_sha256="5"*64,
                cases=list(V.TYPED),original_cases=list(V.ORIGINAL),completed=list((*V.ORIGINAL,*V.TYPED)),
                authority_cases=list(V.BASE.AUTHORITY_CASES),hysteria_authority_cases=list(V.BASE.HYSTERIA_AUTHORITY_CASES),
                typed_authority_cases=list(V.AUTHORITY_CASES),
                images={"controller":"6"*64,"peer":"7"*64},sources={"application":{"original.go":V.sha(root/"original.go")}})
-    for key in ("authority_output_sha256","hysteria_authority_output_sha256","typed_authority_output_sha256","output_sha256"):
+    for key in ("authority_output_sha256","hysteria_authority_output_sha256","typed_authority_output_sha256","parent_output_sha256","output_sha256"):
         value[key]="8"*64
     for key,cases,witness in (("hysteria_source_control",V.BASE.HYSTERIA_AUTHORITY_CASES,V.BASE.HYSTERIA_CONTROL_WITNESS),
                               ("typed_source_control",V.AUTHORITY_CASES,V.SOURCE_CONTROL)):
@@ -73,12 +77,15 @@ class InstalledBoundary(unittest.TestCase):
             for index,case in enumerate((*V.ORIGINAL,*V.TYPED)):
                 original=outputs[index]
                 parser=T if case in V.TYPED else V.BASE
-                faults=[original.replace(joined_receipt(case),"foreign joined receipt"),
+                faults=[original.replace(V.BASE.public_route_receipt(case),"missing public route"),
+                        original.replace(V.BASE.public_route_receipt(case),V.BASE.public_route_receipt("foreign-case")),
+                        original.replace(joined_receipt(case),"foreign joined receipt"),
                         original.replace("--- PASS:","--- SKIP:",1),
                         original.replace("--- PASS:","--- FAIL:",1),original+"PASS\n",
                         "WARNING: DATA RACE\n"+original,original+"unfinished\n"]
                 if case in parser.MEASUREMENT_CASES:
                     faults.append(original.replace(V.BASE.MEASUREMENT_RECEIPT,"missing original measured traffic"))
+                    faults.append(original.replace(V.BASE.public_status_receipt(case),"missing public status"))
                 for raw in faults:
                     changed=list(outputs);changed[index]=raw
                     with self.subTest(case=case),self.assertRaises(ValueError):checked(value,metadata,changed,gate)
@@ -87,9 +94,18 @@ class InstalledBoundary(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             value,metadata,outputs,gate=envelope(Path(directory))
             for fault in ("source","target","bundle","signed","policy","native","schema","scope","admission","images",
-                          "cases","originals","completed","authority","control-witness","control-cases","hash","source-file"):
+                          "cases","originals","completed","authority","control-witness","control-cases","hash","source-file",
+                          "old-schema","old-private","public-cases","public-entrypoint","public-status","parent-cases","parent-hash"):
                 changed=copy.deepcopy(value)
-                if fault=="source":changed["repository"]["commit"]="f"*40
+                if fault=="old-schema":changed["schema"]=1
+                elif fault=="old-private":
+                    changed.update(schema=1,public_darwin_admission="closed",scope="installed-controller-typed-socks-and-original-preservation")
+                elif fault=="public-cases":changed["public_cases"].pop()
+                elif fault=="public-entrypoint":changed["public_entrypoint"]="private-admission-bridge"
+                elif fault=="public-status":changed["public_status_entrypoint"]="multihopStatus"
+                elif fault=="parent-cases":changed["parent_cases"].pop()
+                elif fault=="parent-hash":changed["parent_output_sha256"]="missing"
+                elif fault=="source":changed["repository"]["commit"]="f"*40
                 elif fault=="target":changed["target"]="darwin/arm64"
                 elif fault=="bundle":changed["bundle_sha256"]="f"*64
                 elif fault=="signed":changed["sealed_bundle_sha256"]="f"*64
@@ -283,21 +299,23 @@ class InstalledBoundary(unittest.TestCase):
         self.assertIn("inputs.suite != 'darwin-socks-child' && inputs.suite != 'darwin-socks-installed'",text)
         self.assertIn("  darwin-socks-child:",text)
 
-    def test_allowlist_is_exact129_and_public_activation_remains_separate(self):
+    def test_allowlist_is_exact133_and_native_acceptance_remains_separate(self):
         paths=V.IDENTITY.ALLOWLISTS["darwin-socks-installed"]
         expected=(V.IDENTITY.ALLOWLISTS["desktop-socks-parent"]|V.IDENTITY.ALLOWLISTS["darwin-socks-child"]|{
             "cmd/client/desktop_node_chain_darwin_native_test.go","cmd/client/desktop_node_chain_darwin_peer_native_test.go",
             "cmd/client/desktop_node_chain_socks_darwin_native_test.go","deploy/test_macos_node_chain_host.py",
             "deploy/test_macos_node_chain_host_runner.py","deploy/test_macos_socks_node_chain_host.py",
             "deploy/test_macos_socks_node_chain_host_runner.py","client/macos/RouterVPNConnectionProfiles.swift",
-            "deploy/test_desktop_connection_profile_modes.py"})
-        self.assertEqual(paths,expected);self.assertEqual(len(paths),129)
+            "deploy/test_desktop_connection_profile_modes.py",
+            "cmd/client/desktop_node_chain_public_admission.go","cmd/client/desktop_node_chain_public_admission_test.go",
+            "cmd/client/desktop_node_chain_socks_admission.go","cmd/client/desktop_node_chain_socks_admission_test.go"})
+        self.assertEqual(paths,expected);self.assertEqual(len(paths),133)
         self.assertNotIn(".github/workflows/focused-source-validation.yml",paths)
         self.assertNotIn("deploy/validate-darwin-socks-installed.py",paths)
         source=(V.ROOT/"deploy/validate-darwin-socks-installed.py").read_text()
         self.assertIn("swift_editor_accepted=False",source)
         self.assertIn("generated_fifty_and_mtu_rollback_accepted=False",source)
-        self.assertIn('public_darwin_admission="closed"',source)
+        self.assertIn('public_darwin_admission="enabled"',source)
 
 if __name__=="__main__":
     unittest.main(verbosity=2)

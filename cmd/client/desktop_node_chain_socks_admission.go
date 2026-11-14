@@ -3,10 +3,10 @@ package main
 import "runtime"
 
 // SOCKS public admission is limited to the installed retained-controller targets
-// covered by the complete TUN/WFP path and joined-retirement acceptance gates.
-// Source compilation and internal Darwin adapters do not grant admission.
+// with complete TUN/WFP/PF path and joined-retirement acceptance gates.
+// Source admission does not replace the actual installed native proofs.
 func desktopNodeChainSOCKSAdmissionSupported(targetOS, targetArch string, retained bool) bool {
-	return retained && (targetOS == "linux" || targetOS == "windows") &&
+	return retained && (targetOS == "linux" || targetOS == "windows" || targetOS == "darwin") &&
 		(targetArch == "amd64" || targetArch == "arm64")
 }
 

@@ -78,8 +78,9 @@ class TypedInstalledGate(unittest.TestCase):
             with self.assertRaises(ValueError):G.check_authority_verdict(changed)
 
     def test_public_admission_and_bounds_remain_original(self):
-        source=(ROOT/'cmd/client/multihop_native_routes.go').read_text()
-        self.assertIn('return retainedNativeMultihopSelected() && (runtime.GOOS == "windows" || runtime.GOOS == "linux")',source)
+        source=(ROOT/'cmd/client/desktop_node_chain_connect_admission.go').read_text()
+        self.assertIn('targetOS == "linux" || targetOS == "windows"',source)
+        self.assertNotIn('targetOS == "darwin"',source)
         gate=(ROOT/'deploy/test_macos_connect_node_chain_host.py').read_text()
         self.assertIn("'-test.timeout=240s'",gate)
         self.assertIn('timeout=270, sudo=sudo',gate)

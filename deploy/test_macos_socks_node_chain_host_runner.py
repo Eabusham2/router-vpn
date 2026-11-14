@@ -13,6 +13,9 @@ spec.loader.exec_module(G)
 class TypedInstalledGate(unittest.TestCase):
     def completed(self, case):
         lines = ['=== RUN   '+G.TEST, '=== RUN   '+G.TEST+'/'+case]
+        lines.append('    desktop_node_chain_darwin_native_test.go:656: '+G.BASE.public_route_receipt(case))
+        if case in G.MEASUREMENT_CASES:
+            lines.append('    desktop_node_chain_darwin_native_test.go:656: '+G.BASE.public_status_receipt(case))
         if case in G.MEASUREMENT_CASES:
             lines.append('    desktop_node_chain_darwin_native_test.go:657: '+G.BASE.MEASUREMENT_RECEIPT)
         lines += ['    desktop_node_chain_darwin_native_test.go:570: actual sealed Darwin ordered host verified '+case+': original native transaction and intended proof boundary, complete captured identities, stopped acknowledgment, PF and utun retirement, controller join',
@@ -60,6 +63,15 @@ class TypedInstalledGate(unittest.TestCase):
         text=self.completed(case).replace('--- PASS:', '    desktop_node_chain_darwin_native_test.go:657: '+G.BASE.MEASUREMENT_RECEIPT+'\n--- PASS:',1)
         with self.assertRaises(ValueError):G.check_verdict(text,case)
 
+    def test_typed_public_receipts_cannot_be_omitted_borrowed_or_repeated(self):
+        for case in G.CASES:
+            valid=self.completed(case)
+            markers=[G.BASE.public_route_receipt(case)]+([G.BASE.public_status_receipt(case)] if case in G.MEASUREMENT_CASES else [])
+            for marker in markers:
+                line=next(line for line in valid.splitlines() if line.endswith(marker))
+                for broken in (valid.replace(line,''),valid.replace(line,line+'\n'+line),valid.replace(marker,marker.replace(case,'foreign-case'))):
+                    with self.subTest(case=case,marker=marker),self.assertRaises(ValueError):G.check_verdict(broken,case)
+
     def test_complete_original_source_authority(self):
         G.check_authority_verdict(self.authority())
         G.check_source_control(self.authority(True),1)
@@ -76,12 +88,16 @@ class TypedInstalledGate(unittest.TestCase):
 
     def test_public_admission_and_bounds_remain_original(self):
         source=(ROOT/'cmd/client/multihop_native_routes.go').read_text()
-        self.assertIn('return retainedNativeMultihopSelected() && (runtime.GOOS == "windows" || runtime.GOOS == "linux")',source)
+        self.assertIn('return nativeNodeChainHostSupported()',source)
         gate=(ROOT/'deploy/test_macos_socks_node_chain_host.py').read_text()
         self.assertIn("'-test.timeout=240s'",gate)
         self.assertIn('timeout=270, sudo=sudo',gate)
         self.assertIn('(*BASE.case_inventory(), *case_inventory())',gate)
-        self.assertIn("public_darwin_admission='closed'",gate)
+        self.assertIn("public_darwin_admission='enabled'",gate)
+        self.assertIn("schema=2, gate='installed-darwin-ordered-socks-host'",gate)
+        self.assertIn("'TestDesktopNodeChainPublicAdmissionPreservesPlatformBounds': ()",gate)
+        self.assertIn("'TestDesktopSOCKSPublicAdmissionTargetBounds': ()",gate)
+        self.assertIn("'TestDesktopSOCKSPublicCapabilityRetainsStrictSourceAndSecrets'",gate)
         self.assertIn('BASE.execute_hysteria_control(race_compiler, work, race_environment)',gate)
         native=(ROOT/G.AUTHORITY_SOURCE).read_text()
         self.assertEqual(native.count('Password: password'),1)
