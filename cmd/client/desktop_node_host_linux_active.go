@@ -27,6 +27,7 @@ type desktopLinuxNodeActivation struct {
 	chain         *mobilemultihop.DesktopNodeChainPolicy
 	socksChain    *mobilemultihop.DesktopNodeChainSOCKSPolicy
 	connectChain  *mobilemultihop.DesktopNodeChainCONNECTPolicy
+	execution     *desktopNodeChainExecutionLaunch
 	preparation   *orderedCandidatePreparation
 	externalProof *desktopLinuxExternalProof
 	launch        *desktopNodeLaunch
@@ -80,6 +81,7 @@ func (active *desktopLinuxNodeActivation) matches(h *desktopLinuxNodeHost) error
 	t, p := active.transaction, active.process
 	if !sameDesktopLinuxParentCapture(t.parent, active.parent) || !sameDesktopLinuxParentCapture(p.parent, active.parent) ||
 		t.process != p || t.policy != active.policy || t.imported != active.imported || t.chain != active.chain || t.socksChain != active.socksChain || t.connectChain != active.connectChain || t.selection != active.selection || t.operation != active.operation ||
+		t.execution != active.execution || active.execution != desktopNodeChainLaunchExecution(h.launch) ||
 		t.profileID != active.launch.profileID || t.revision != active.revision || t.network != active.network || t.options != active.options || t.savedOptions != active.savedOptions ||
 		p.ctx == nil || p.ctx.Err() != nil || !p.Started() || p.retiring.Load() || p.joined == nil || p.command == nil || p.command != active.launch.command {
 		return errors.New("Linux Node activation substituted an original transaction or process")
@@ -206,7 +208,7 @@ func (h *desktopLinuxNodeHost) Activate(parent context.Context) (failure error) 
 		return errors.New("Linux Node activation lost its original controller lifetime")
 	}
 	h.activation = &desktopLinuxNodeActivation{host: h, parent: h.parent, operation: h.operation, process: h.process,
-		transaction: t, policy: h.policy, imported: h.imported, chain: h.chain, socksChain: h.socksChain, connectChain: h.connectChain, launch: h.launch, selection: h.selection, network: h.network, revision: h.revision,
+		transaction: t, policy: h.policy, imported: h.imported, chain: h.chain, socksChain: h.socksChain, connectChain: h.connectChain, execution: desktopNodeChainLaunchExecution(h.launch), launch: h.launch, selection: h.selection, network: h.network, revision: h.revision,
 		options: h.options, savedOptions: h.savedOptions, proof: *h.proof, activatedAt: now, lifetime: lifetime, cancel: stopLifetime, preparation: preparation}
 	if preparation != nil {
 		a.state.Connected, a.state.Phase, a.state.LastError = false, "candidate:testing", ""

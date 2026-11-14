@@ -42,6 +42,9 @@ func (h *desktopLinuxNodeHost) privateInputs() []desktopLinuxPrivateInput {
 // The external command has the same inherited parent layout and bounded
 // public digests, but remains a different CLI and sealed policy family.
 func validateDesktopLinuxProtectedArguments(arguments []string, directory string) ([]string, error) {
+	if len(arguments) > 0 && arguments[0] == "routervpn-node-chain-execution" {
+		return validateDesktopNodeChainExecutionProcessArguments(arguments, directory)
+	}
 	if len(arguments) > 0 && arguments[0] == "routervpn-node-candidate-prefix" {
 		return validateDesktopNodeCandidatePrefixProcessArguments(arguments, directory)
 	}
@@ -399,6 +402,9 @@ func newDesktopLinuxExternalTransactionWithStartup(startup context.Context, h *d
 }
 
 func (t *desktopLinuxNodeTransaction) validatePolicy() error {
+	if t.execution != nil && (t.chain == nil || t.socksChain != nil || t.connectChain != nil || t.candidatePrefix != nil || t.policy != nil || t.imported != nil || t.external != nil) {
+		return errors.New("Linux execution transaction mixed its original concrete source")
+	}
 	if t.candidatePrefix != nil {
 		if (t.chain != nil || t.socksChain != nil || t.connectChain != nil) || t.policy != nil || t.imported != nil || t.external != nil || t.prefixSources == nil || t.candidatePrefix.Validate() != nil {
 			return errors.New("Linux candidate prefix mixed its concrete native policy")
@@ -419,6 +425,14 @@ func (t *desktopLinuxNodeTransaction) validatePolicy() error {
 			return errors.New("Linux ordered transaction mixed its concrete policy family")
 		}
 		original := &desktopNodeChainLaunch{policy: t.chain, socksPolicy: t.socksChain, connectPolicy: t.connectChain, selection: t.chainSources.selection}
+		if t.execution != nil {
+			original = t.execution.original
+			if original == nil || original.platform == nil || original.platform.host == nil || original.capture == nil ||
+				original.capture.sources != t.chainSources || original.policy != t.chain || original.platform.host.process != t.process ||
+				t.execution.bound(original.platform.host.launch) != nil {
+				return errors.New("Linux execution transaction replaced its retained launch, process or source")
+			}
+		}
 		_, meta, _, err := original.readPolicy()
 		if err != nil || !original.originalPolicyCurrent() {
 			return errors.Join(err, errors.New("Linux ordered transaction lost its original concrete source"))

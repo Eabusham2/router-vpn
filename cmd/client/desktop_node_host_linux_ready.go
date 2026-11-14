@@ -206,7 +206,7 @@ func (h *desktopLinuxNodeHost) readReadyLocked(ctx context.Context, fresh bool) 
 		return empty, noLive, err
 	}
 	if h.chain != nil || h.socksChain != nil || h.connectChain != nil {
-		if _, err := readDesktopNodeChainReadyContext(ctx, h.launch, digest, h.started, fresh, live); err != nil {
+		if err := readDesktopNodeChainNativeReadyContext(ctx, h.launch, digest, h.started, fresh, live); err != nil {
 			return empty, noLive, err
 		}
 		if err := h.runningPolicyLocked(ctx); err != nil {

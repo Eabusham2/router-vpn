@@ -146,13 +146,23 @@ func prepareDesktopNodeChainHostForPurpose(ctx context.Context, a *app, selectio
 	if err != nil {
 		return nil, "", err
 	}
+	return prepareDesktopNodeChainCapturedHost(ctx, capture, selection, purpose, nil)
+}
+
+func prepareDesktopNodeChainCapturedHost(ctx context.Context, capture *desktopNodeChainHostCapture, selection multihopSelection, purpose *orderedCandidatePreparation, execution *desktopNodeChainExecutionRequest) (*desktopNodeLaunch, string, error) {
+	if capture == nil || capture.current(ctx) != nil || execution != nil && (purpose != nil || execution.capture != capture || execution.native != selection.Native) {
+		return nil, "", errors.New("ordered native preparation lost its retained source and host")
+	}
 	if capture.windows != nil {
 		binary, err := verifiedDesktopImportedPackage(ctx, capture.windows)
 		if err != nil {
 			return nil, "", err
 		}
-		launch, err := prepareDesktopOwnedNodeChainLaunchForPurpose(ctx, capture, selection, purpose)
+		launch, err := prepareDesktopOwnedNodeChainLaunchForPurposeAndExecution(ctx, capture, selection, purpose, execution)
 		return launch, binary, err
+	}
+	if execution != nil {
+		return prepareDesktopNodeChainExecutionPlatform(ctx, capture, selection, execution)
 	}
 	return capture.platform.prepareForPurpose(ctx, capture, selection, purpose)
 }

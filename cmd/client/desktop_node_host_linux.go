@@ -377,6 +377,12 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 	if (h.chain != nil || h.socksChain != nil || h.connectChain != nil) && h.launch.chain.policyMetadata().RestoredMTU != 0 {
 		arguments = append(arguments, "--physical-mtu", strconv.Itoa(h.launch.chain.policyMetadata().RestoredMTU))
 	}
+	if h.launch.chain != nil && h.launch.chain.execution != nil {
+		arguments, err = h.launch.chain.execution.processArguments(h.launch, arguments)
+		if err != nil {
+			return nil, "", err
+		}
+	}
 	if h.candidatePrefix != nil {
 		meta := h.candidatePrefix.Metadata()
 		arguments = append(arguments, "--prefix-capture-sha256", meta.CaptureSHA256)

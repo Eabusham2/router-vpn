@@ -160,7 +160,7 @@ func (a *app) readDesktopOwnedNodeReadyContext(ctx context.Context, launch *desk
 		return empty, err
 	}
 	if owned.chain != nil {
-		if _, err := readDesktopNodeChainReadyContext(ctx, launch, owned.attempt.digest, started, fresh, live); err != nil {
+		if err := readDesktopNodeChainNativeReadyContext(ctx, launch, owned.attempt.digest, started, fresh, live); err != nil {
 			return empty, err
 		}
 		if err := a.desktopOwnedNodeCurrentContext(ctx, launch, true); err != nil {

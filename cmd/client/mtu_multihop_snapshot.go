@@ -68,11 +68,11 @@ func captureMTUMultihopSnapshot(a *app, selected common.RouterProfile, st state,
 	path := &mtuMultihopSnapshot{Graph: graph, Control: common.CloneRouterProfile(selected), Entry: entry,
 		ControlToken: mtuProfileSnapshotToken(selected), EntryToken: mtuProfileSnapshotToken(entry),
 		PhysicalEntry: owner.launch.endpoint, Native: owner, Command: command}
-	path.Chain, err = captureMTUNodeChainSnapshot(owner)
+	path.Chain, err = captureMTUNodeChainSnapshotContext(observe, owner)
 	if err != nil {
 		return mtuRetestSnapshot{}, err
 	}
-	if graph.Execution == "server" {
+	if graph.Execution == "server" && path.Chain == nil {
 		raw, found := desktopRelays.Load(a)
 		path.Relay, _ = raw.(*desktopRelayOwner)
 		if !found || path.Relay == nil || path.Relay.command != command || path.Relay.request.ExitID != graph.ExitID ||

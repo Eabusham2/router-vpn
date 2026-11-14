@@ -33,6 +33,7 @@ type desktopNodeProtectionAttempt struct {
 	chain           *mobilemultihop.DesktopNodeChainPolicy
 	socksChain      *mobilemultihop.DesktopNodeChainSOCKSPolicy
 	connectChain    *mobilemultihop.DesktopNodeChainCONNECTPolicy
+	execution       *desktopNodeChainExecutionLaunch
 	candidatePrefix *mobilemultihop.DesktopNodeCandidatePreparationPolicy
 	transfer        mobiletor.DesktopProtectionTransferRecord
 	digest          string
@@ -164,6 +165,14 @@ func (s *desktopNodeProtectionSlot) beginConcretePurposesCapturedWithCONNECT(ctx
 		return nil, errors.New("CONNECT protection transfer replaced its original launch policy")
 	}
 	selection, err := desktopProtectionSelectionForConcretePurposesWithCONNECT(node, external, imported, chain, socksChain, connectChain, prefix)
+	var execution *desktopNodeChainExecutionLaunch
+	if launch != nil && launch.chain != nil && launch.chain.execution != nil {
+		execution = launch.chain.execution
+		if chain == nil || chain != launch.chain.policy || node != nil || external != nil || imported != nil || socksChain != nil || connectChain != nil || prefix != nil || execution.bound(launch) != nil {
+			return nil, errors.New("execution protection lost its exclusive original source and preparation")
+		}
+		selection, err = desktopNodeChainExecutionProtectionSelection(execution)
+	}
 	if s == nil || ctx == nil || ctx.Err() != nil || launch == nil || err != nil || (chain != nil || socksChain != nil || connectChain != nil) != (launch.chain != nil) ||
 		(prefix != nil) != (launch.candidatePrefix != nil) {
 		return nil, errors.Join(err, errors.New("native protection transfer has no captured launch"))
@@ -186,7 +195,7 @@ func (s *desktopNodeProtectionSlot) beginConcretePurposesCapturedWithCONNECT(ctx
 	if err != nil {
 		return nil, err
 	}
-	attempt := &desktopNodeProtectionAttempt{launch: launch, policy: node, external: external, imported: imported, chain: chain, socksChain: socksChain, connectChain: connectChain, candidatePrefix: prefix, transfer: transfer, digest: digest, profileRevision: revision}
+	attempt := &desktopNodeProtectionAttempt{launch: launch, policy: node, external: external, imported: imported, chain: chain, socksChain: socksChain, connectChain: connectChain, execution: execution, candidatePrefix: prefix, transfer: transfer, digest: digest, profileRevision: revision}
 	if external != nil && s.journal != nil {
 		selection, err := s.journal.Snapshot(ctx)
 		head := selection.Record

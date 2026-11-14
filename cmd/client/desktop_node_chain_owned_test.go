@@ -20,6 +20,7 @@ import (
 // are explicit models; encrypted and native OS acceptance remain separate.
 type desktopNodeChainOwnedFixture struct {
 	*desktopImportedOwnedFixture
+	executionModel        *desktopExecutionOwnedModel
 	capture               *desktopNodeChainHostCapture
 	ready                 mobilemultihop.DesktopNodeChainReadyRecord
 	live                  desktopNodeMTURecord
@@ -121,6 +122,9 @@ func newDesktopNodeChainOwnedFixtureWith(t *testing.T, a *app, selection multiho
 
 func (f *desktopNodeChainOwnedFixture) nativeStart(t *testing.T) (*desktopImportedOwnedProcess, error) {
 	t.Helper()
+	if f.executionModel != nil {
+		return f.executionModel.start(t, f)
+	}
 	launch, owned := f.launch, f.launch.ownedNode
 	raw, err := readDesktopRuntimeFile(launch, launch.chain.sourceName(), mobilemultihop.NodeChainInputLimit)
 	if err != nil {

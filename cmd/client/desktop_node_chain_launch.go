@@ -15,7 +15,8 @@ import (
 // This adjunct seals source and proof observations inside the existing launch.
 // It owns no native process, protection, TUN, journal or independent registry.
 type desktopNodeChainLaunch struct {
-	preparation           *orderedCandidatePreparation // bound once before staging; nil for ordinary connections
+	execution             *desktopNodeChainExecutionLaunch // exact derivative of the retained paired source
+	preparation           *orderedCandidatePreparation     // bound once before staging; nil for ordinary connections
 	policy                *mobilemultihop.DesktopNodeChainPolicy
 	socksPolicy           *mobilemultihop.DesktopNodeChainSOCKSPolicy
 	connectPolicy         *mobilemultihop.DesktopNodeChainCONNECTPolicy

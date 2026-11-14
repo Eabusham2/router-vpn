@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -49,6 +50,31 @@ func publishDesktopMultihopPlatformGraph(ctx context.Context, a *app, launch *de
 		}); ok {
 			return owner.PublishGraph(ctx, a, launch, selection, execution)
 		}
+	}
+	if executionOwner := desktopNodeChainLaunchExecution(launch); executionOwner != nil {
+		if err := desktopNodeChainCurrent(ctx, a, launch); err != nil {
+			return activeMultihopGraph{}, err
+		}
+		graph, err := desktopNodeChainExecutionGraph(ctx, launch, selection)
+		if err != nil || execution != graph.Execution {
+			return activeMultihopGraph{}, errors.Join(err, errors.New("ordered graph publication changed its selected execution"))
+		}
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return activeMultihopGraph{}, err
+		}
+		defer a.mu.Unlock()
+		if err := executionOwner.publicationCurrentLocked(ctx, a, launch, selection); err != nil {
+			return activeMultihopGraph{}, err
+		}
+		if _, found := getActiveMultihopGraph(a); found {
+			return activeMultihopGraph{}, errors.New("ordered execution cannot replace an existing graph publication")
+		}
+		if _, found := nativeMultihopOwners.Load(a); found {
+			return activeMultihopGraph{}, errors.New("ordered execution cannot replace a retained native owner")
+		}
+		activeMultihopGraphs.Store(a, graph)
+		homeExitProofs.Delete(a)
+		return graph, nil
 	}
 	graph := setActiveMultihopGraph(a, selection)
 	if execution != graph.Execution {
@@ -96,8 +122,11 @@ func proveDesktopNodeChainContext(ctx context.Context, a *app, selection multiho
 	graph, found := getActiveMultihopGraph(a)
 	owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
 	if err != nil || !found || owner == nil || owner.launch.chain == nil || owner.selection.Native != selection.Native ||
-		owner.launch.chain.selection.Native != selection.Native || graph.ChainNodes != len(selection.Nodes) || graph.Execution != "local" {
+		owner.launch.chain.selection.Native != selection.Native || graph.ChainNodes != len(selection.Nodes) {
 		return errors.Join(err, errors.New("ordered native proof lost its full original runtime"))
+	}
+	if err := owner.execution.currentContext(ctx, owner.launch, graph); err != nil {
+		return err
 	}
 	if owner.launch.chain.platform != nil {
 		return owner.launch.chain.platform.prove(ctx)

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemtu"
 	"router-vpn/internal/mobilemultihop"
 )
@@ -22,6 +23,7 @@ import (
 // The retained node launch owns the full-device TUN for both Local and Server.
 // Entry transport MTU and exit-path system-TUN MTU remain distinct quantities.
 type nativeMultihopRuntime struct {
+	execution *desktopNodeChainExecutionProof
 	launch    *desktopNodeLaunch
 	selection multihopSelection
 	graph     activeMultihopGraph
@@ -368,7 +370,30 @@ func bindNativeMultihopRuntimeContext(ctx context.Context, a *app, launch *deskt
 	if launch.profileID != sel.Exit.ID || launch.policyProfileID != sel.Control.ID {
 		return errors.New("native multihop TUN belongs to another node owner")
 	}
-	nativeMultihopOwners.Store(a, &nativeMultihopRuntime{launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})
+	execution, err := captureDesktopNodeChainExecutionProofContext(ctx, launch)
+	if err != nil {
+		return err
+	}
+	if err := execution.currentContext(ctx, launch, graph); err != nil {
+		return err
+	}
+	if execution != nil {
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return err
+		}
+		defer a.mu.Unlock()
+		if err := execution.execution.publicationCurrentLocked(ctx, a, launch, sel); err != nil {
+			return err
+		}
+		current, found := getActiveMultihopGraph(a)
+		if !found || !sameMTUMultihopGraph(current, graph) {
+			return errors.New("ordered execution graph changed before native adoption")
+		}
+		if _, found := nativeMultihopOwners.Load(a); found {
+			return errors.New("ordered execution native adoption cannot replace an existing owner")
+		}
+	}
+	nativeMultihopOwners.Store(a, &nativeMultihopRuntime{execution: execution, launch: launch, selection: sel, graph: graph, network: network, networkIdentityContext: observe})
 	return nil
 }
 
@@ -478,6 +503,9 @@ func capturedNativeMultihopRuntimeContext(ctx context.Context, a *app, command *
 	}
 	if owner.network == "" || network != owner.network || owner.selection.Native == nil || owner.selection.Native.validate(owner.selection) != nil {
 		return nil, errors.New("multihop source or physical network changed")
+	}
+	if err := owner.execution.currentContext(ctx, owner.launch, graph); err != nil {
+		return nil, err
 	}
 	if err := desktopExternalDirectoryCurrent(owner.launch); err != nil {
 		return nil, err

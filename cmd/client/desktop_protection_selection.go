@@ -139,10 +139,23 @@ func (attempt *desktopNodeProtectionAttempt) selection() (desktopProtectionSelec
 	if attempt == nil {
 		return desktopProtectionSelection{}, errors.New("native protection lost its original selection")
 	}
+	if attempt.execution != nil {
+		e := attempt.execution
+		if e.bound(attempt.launch) != nil || attempt.chain != e.original.policy || attempt.policy != nil || attempt.external != nil || attempt.imported != nil || attempt.socksChain != nil || attempt.connectChain != nil || attempt.candidatePrefix != nil {
+			return desktopProtectionSelection{}, errors.New("execution protection attempt replaced its captured native preparation")
+		}
+		return desktopNodeChainExecutionProtectionSelection(e)
+	}
+	if attempt.launch != nil && attempt.launch.chain != nil && attempt.launch.chain.execution != nil {
+		return desktopProtectionSelection{}, errors.New("execution protection attempt omitted its original preparation")
+	}
 	return desktopProtectionSelectionForConcretePurposesWithCONNECT(attempt.policy, attempt.external, attempt.imported, attempt.chain, attempt.socksChain, attempt.connectChain, attempt.candidatePrefix)
 }
 
 func (attempt *desktopNodeProtectionAttempt) matchesOwned(owned *desktopOwnedNodeRuntime) bool {
+	if attempt != nil && (owned == nil || owned.chain == nil) && attempt.execution != nil {
+		return false
+	}
 	if owned != nil && owned.candidatePrefix != nil {
 		return attempt != nil && attempt.external == nil && attempt.policy == nil && attempt.imported == nil && attempt.chain == nil && attempt.socksChain == nil && attempt.connectChain == nil &&
 			owned.policy == nil && owned.imported == nil && owned.chain == nil && owned.candidatePrefix.policy != nil &&
@@ -153,7 +166,7 @@ func (attempt *desktopNodeProtectionAttempt) matchesOwned(owned *desktopOwnedNod
 	}
 	if owned != nil && owned.chain != nil {
 		return attempt != nil && attempt.external == nil && attempt.policy == nil && attempt.imported == nil && owned.policy == nil && owned.imported == nil &&
-			owned.chain.hasPolicy() && owned.chain.originalPolicyCurrent() && attempt.chain == owned.chain.policy && attempt.socksChain == owned.chain.socksPolicy && attempt.connectChain == owned.chain.connectPolicy && attempt.launch != nil && attempt.launch.chain == owned.chain
+			owned.chain.hasPolicy() && owned.chain.originalPolicyCurrent() && attempt.chain == owned.chain.policy && attempt.socksChain == owned.chain.socksPolicy && attempt.connectChain == owned.chain.connectPolicy && attempt.execution == owned.chain.execution && attempt.launch != nil && attempt.launch.chain == owned.chain
 	}
 	if attempt != nil && (attempt.chain != nil || attempt.socksChain != nil || attempt.connectChain != nil) {
 		return false

@@ -14,7 +14,8 @@ func (c *desktopNodeChainLaunch) hasPolicy() bool {
 	if c == nil {
 		return false
 	}
-	return desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1
+	return desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1 &&
+		(c.execution == nil || c.policy != nil && c.execution.original == c && c.preparation == nil)
 }
 
 func desktopNodeChainConcretePolicyCount(chain *mobilemultihop.DesktopNodeChainPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSPolicy, connect *mobilemultihop.DesktopNodeChainCONNECTPolicy) int {
@@ -27,6 +28,9 @@ func desktopNodeChainConcretePolicyCount(chain *mobilemultihop.DesktopNodeChainP
 	return count
 }
 func (c *desktopNodeChainLaunch) readPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, mobilemultihop.DesktopPhysicalCapture, error) {
+	if c != nil && c.execution != nil {
+		return c.execution.readPolicy()
+	}
 	if !c.hasPolicy() {
 		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, errors.New("ordered parent lost its exclusive concrete policy")
 	}
@@ -44,6 +48,13 @@ func (c *desktopNodeChainLaunch) readPolicy() (string, mobilemultihop.DesktopNod
 // Read all immutable launch fields from one full canonical validation. Keep
 // the exact original source comparison here; equal bytes are not an owner.
 func (c *desktopNodeChainLaunch) readLaunchPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, string, error) {
+	if c != nil && c.execution != nil {
+		config, meta, _, err := c.execution.readPolicy()
+		if err != nil {
+			return "", meta, "", err
+		}
+		return config, meta, c.execution.preparation.Source(), nil
+	}
 	bad := errors.New("ordered launch lost its exact concrete original source")
 	if !c.hasPolicy() || c.selection.Native == nil || c.selection.Native.chain == nil {
 		return "", mobilemultihop.DesktopNodeChainMetadata{}, "", bad
@@ -88,6 +99,12 @@ func (c *desktopNodeChainLaunch) policyConfig() string {
 	return config
 }
 func (c *desktopNodeChainLaunch) launchInput() (string, error) {
+	if c != nil && c.execution != nil {
+		if err := c.execution.validateSource(); err != nil {
+			return "", err
+		}
+		return c.execution.preparation.Source(), nil
+	}
 	if !c.hasPolicy() {
 		return "", errors.New("ordered input lost its exclusive concrete policy")
 	}
@@ -106,6 +123,9 @@ func (c *desktopNodeChainLaunch) launchInput() (string, error) {
 	return chain.LaunchInput()
 }
 func (c *desktopNodeChainLaunch) originalPolicyCurrent() bool {
+	if c != nil && c.execution != nil {
+		return c.execution.validateSource() == nil
+	}
 	if !c.hasPolicy() || c.selection.Native == nil || c.selection.Native.chain == nil {
 		return false
 	}
@@ -127,6 +147,9 @@ func (c *desktopNodeChainLaunch) originalPolicyCurrent() bool {
 	return original.socks == nil && original.connect == nil && original.chain != nil && c.policy.OriginalChain() == original.chain
 }
 func (c *desktopNodeChainLaunch) sourceName() string {
+	if c != nil && c.execution != nil {
+		return "node-chain-execution-source.json"
+	}
 	if !c.hasPolicy() {
 		return ""
 	}
@@ -139,6 +162,9 @@ func (c *desktopNodeChainLaunch) sourceName() string {
 	return "node-chain-source.json"
 }
 func (c *desktopNodeChainLaunch) readyName() string {
+	if c != nil && c.execution != nil {
+		return "node-chain-execution-ready.json"
+	}
 	if !c.hasPolicy() {
 		return ""
 	}
@@ -151,6 +177,9 @@ func (c *desktopNodeChainLaunch) readyName() string {
 	return "node-chain-ready.json"
 }
 func (c *desktopNodeChainLaunch) macOSFamily() macosprocess.Family {
+	if c != nil && c.execution != nil {
+		return macosprocess.NodeChainExecutionFamily
+	}
 	if !c.hasPolicy() {
 		return ""
 	}
@@ -163,6 +192,12 @@ func (c *desktopNodeChainLaunch) macOSFamily() macosprocess.Family {
 	return macosprocess.NodeChainFamily
 }
 func (c *desktopNodeChainLaunch) macOSTransfer(selection macosprocess.Selection) (string, error) {
+	if c != nil && c.execution != nil {
+		if err := c.execution.validateSource(); err != nil {
+			return "", err
+		}
+		return macosprocess.NodeChainExecutionTransferSHA256(selection)
+	}
 	if !c.hasPolicy() {
 		return "", errors.New("ordered transfer has no original policy")
 	}
@@ -175,6 +210,9 @@ func (c *desktopNodeChainLaunch) macOSTransfer(selection macosprocess.Selection)
 	return macosprocess.NodeChainTransferSHA256(selection)
 }
 func (c *desktopNodeChainLaunch) parseReady(raw []byte, transfer string) (mobilemultihop.DesktopNodeChainReadyRecord, error) {
+	if c != nil && c.execution != nil {
+		return mobilemultihop.DesktopNodeChainReadyRecord{}, errors.New("execution readiness requires its original typed adoption observer")
+	}
 	if !c.hasPolicy() {
 		return mobilemultihop.DesktopNodeChainReadyRecord{}, errors.New("ordered readiness has no original policy")
 	}
@@ -249,6 +287,12 @@ func newDesktopCONNECTNodeChainLaunch(selection multihopSelection, session, targ
 
 // The physical-policy boundary accepts only the original sealed concrete family.
 func (c *desktopNodeChainLaunch) physicalPolicy() (mobilemultihop.DesktopPhysicalPolicy, error) {
+	if c != nil && c.execution != nil {
+		if err := c.execution.validateSource(); err != nil {
+			return nil, err
+		}
+		return c.execution.physical, nil
+	}
 	if !c.hasPolicy() || !c.originalPolicyCurrent() {
 		return nil, errors.New("ordered physical policy lost its original concrete source")
 	}
@@ -264,6 +308,9 @@ func (c *desktopNodeChainLaunch) physicalPolicy() (mobilemultihop.DesktopPhysica
 	return c.policy, nil
 }
 func (c *desktopNodeChainLaunch) commandName() string {
+	if c != nil && c.execution != nil {
+		return "routervpn-node-chain-execution"
+	}
 	if !c.hasPolicy() {
 		return ""
 	}

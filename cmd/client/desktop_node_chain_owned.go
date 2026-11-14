@@ -14,6 +14,11 @@ func prepareDesktopOwnedNodeChainLaunch(ctx context.Context, capture *desktopNod
 
 func prepareDesktopOwnedNodeChainLaunchForPurpose(ctx context.Context, capture *desktopNodeChainHostCapture,
 	selection multihopSelection, purpose *orderedCandidatePreparation) (*desktopNodeLaunch, error) {
+	return prepareDesktopOwnedNodeChainLaunchForPurposeAndExecution(ctx, capture, selection, purpose, nil)
+}
+
+func prepareDesktopOwnedNodeChainLaunchForPurposeAndExecution(ctx context.Context, capture *desktopNodeChainHostCapture,
+	selection multihopSelection, purpose *orderedCandidatePreparation, execution *desktopNodeChainExecutionRequest) (*desktopNodeLaunch, error) {
 	if capture == nil || capture.windows == nil || capture.platform != nil || capture.app == nil || capture.sources == nil ||
 		selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.host != capture || capture.sources.selection.Native != selection.Native {
 		return nil, errors.New("ordered Windows launch lost its original full source and controller")
@@ -35,7 +40,7 @@ func prepareDesktopOwnedNodeChainLaunchForPurpose(ctx context.Context, capture *
 	if err != nil {
 		return nil, err
 	}
-	launch, err := newDesktopNodeChainLaunchForPurpose(ctx, selection, session, "windows", purpose)
+	launch, err := newDesktopNodeChainLaunchForExecution(ctx, capture, selection, session, "windows", purpose, execution)
 	if err != nil {
 		return nil, err
 	}

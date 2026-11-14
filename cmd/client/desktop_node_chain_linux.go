@@ -49,6 +49,11 @@ func (capture *desktopNodeChainPlatformCapture) prepare(ctx context.Context, own
 
 func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Context, owner *desktopNodeChainHostCapture,
 	selection multihopSelection, purpose *orderedCandidatePreparation) (launch *desktopNodeLaunch, image string, failure error) {
+	return capture.prepareForPurposeAndExecution(ctx, owner, selection, purpose, nil)
+}
+
+func (capture *desktopNodeChainPlatformCapture) prepareForPurposeAndExecution(ctx context.Context, owner *desktopNodeChainHostCapture,
+	selection multihopSelection, purpose *orderedCandidatePreparation, execution *desktopNodeChainExecutionRequest) (launch *desktopNodeLaunch, image string, failure error) {
 	if owner == nil || owner.platform != capture || owner.windows != nil || owner.sources == nil ||
 		selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.host != owner ||
 		owner.sources.selection.Native != selection.Native || owner.app != capture.parent.app {
@@ -75,7 +80,7 @@ func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Co
 	if err != nil {
 		return nil, "", err
 	}
-	launch, err = newDesktopNodeChainLaunchForPurpose(ctx, selection, sessionID, "linux", purpose)
+	launch, err = newDesktopNodeChainLaunchForExecution(ctx, owner, selection, sessionID, "linux", purpose, execution)
 	if err != nil {
 		return nil, "", err
 	}
@@ -184,7 +189,7 @@ func newDesktopLinuxNodeChainTransaction(ctx context.Context, h *desktopLinuxNod
 		return nil, err
 	}
 	t := &desktopLinuxNodeTransaction{gate: make(chan struct{}, 1), parent: h.parent, journal: journal, process: h.process,
-		chain: h.chain, socksChain: h.socksChain, connectChain: h.connectChain, chainSources: h.launch.chain.platform.capture.sources, mode: h.launch.mode, operation: h.operation,
+		chain: h.chain, socksChain: h.socksChain, connectChain: h.connectChain, execution: h.launch.chain.execution, chainSources: h.launch.chain.platform.capture.sources, mode: h.launch.mode, operation: h.operation,
 		startup: ctx, selection: h.selection, profileID: h.launch.profileID, revision: h.revision, network: h.network,
 		options: h.options, savedOptions: h.savedOptions, predecessor: predecessor}
 	return finishDesktopLinuxNodeTransaction(t)

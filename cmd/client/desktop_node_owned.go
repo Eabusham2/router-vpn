@@ -348,6 +348,9 @@ func desktopOwnedNodeArguments(launch *desktopNodeLaunch) ([]string, error) {
 	}
 	if owned.chain != nil {
 		args[0] = owned.chain.commandName()
+		if owned.chain.execution != nil {
+			return owned.chain.execution.processArguments(launch, args)
+		}
 		if owned.chain.socksPolicy != nil {
 			return validateDesktopNodeChainSOCKSProcessArguments(args, launch.directory)
 		}

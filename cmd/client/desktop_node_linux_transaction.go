@@ -38,6 +38,7 @@ type desktopLinuxNodeTransaction struct {
 	chain           *mobilemultihop.DesktopNodeChainPolicy
 	socksChain      *mobilemultihop.DesktopNodeChainSOCKSPolicy
 	connectChain    *mobilemultihop.DesktopNodeChainCONNECTPolicy
+	execution       *desktopNodeChainExecutionLaunch
 	candidatePrefix *mobilemultihop.DesktopNodeCandidatePreparationPolicy
 	prefixSources   *desktopNodeChainSources
 	chainSources    *desktopNodeChainSources
