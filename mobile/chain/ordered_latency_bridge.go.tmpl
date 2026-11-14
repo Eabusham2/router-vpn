@@ -1,0 +1,57 @@
+package libbox
+
+import (
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+)
+
+// RouterOrderedLatency is separate from the external-final and candidate APIs.
+// Only a typed original native owner supplies it. SavedJSON is a historical
+// complete receipt for host persistence, never live readiness or path adoption.
+// Close cancels and joins only this facade's exact borrowed request; the original
+// plan owns throughput service retirement. UI dismissal must retain this handle
+// through a failed drain and may not close RouterHopMeasurement.
+type RouterOrderedLatency struct {
+	service *hopmeasure.OrderedLatencyService
+}
+
+func (m *RouterOrderedLatency) Start(request, nodeID string) error {
+	if m == nil || m.service == nil {
+		return errors.New("ordered latency owner is missing")
+	}
+	return m.service.Start(request, nodeID)
+}
+func (m *RouterOrderedLatency) Cancel(request string) {
+	if m != nil && m.service != nil {
+		m.service.Cancel(request)
+	}
+}
+func (m *RouterOrderedLatency) Drain(request string) error {
+	if m == nil || m.service == nil {
+		return errors.New("ordered latency owner is missing")
+	}
+	return m.service.Drain(request)
+}
+func (m *RouterOrderedLatency) StatusJSON() string {
+	if m == nil || m.service == nil {
+		return "{}"
+	}
+	return m.service.StatusJSON()
+}
+func (m *RouterOrderedLatency) SavedJSON(nodeID string) string {
+	if m == nil || m.service == nil {
+		return ""
+	}
+	return m.service.SavedJSON(nodeID)
+}
+func (m *RouterOrderedLatency) Close() error {
+	if m == nil || m.service == nil {
+		return nil
+	}
+	return m.service.Close()
+}
+func (m *RouterOrderedLatency) NetworkChanged() {
+	if m != nil && m.service != nil {
+		m.service.Invalidate()
+	}
+}

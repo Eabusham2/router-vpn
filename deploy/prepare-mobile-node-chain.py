@@ -15,6 +15,8 @@ _binding_spec.loader.exec_module(CONNECT_BINDING)
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-node-chain-source.json'
 TEMPLATES = {
+    "ordered_latency_bridge.go.tmpl": "experimental/libbox/routervpn_ordered_latency.go",
+    "socks_latency.go.tmpl": "experimental/libbox/routervpn_node_chain_socks_latency.go",
     'socks_owner.go.tmpl': 'protocol/routervpnnodesocks/socks_owner.go',
     'socks_owner_close_test.go.tmpl': 'protocol/routervpnnodesocks/socks_owner_close_test.go',
     'socks_scope.go.tmpl': 'protocol/routervpnnodesocks/socks_scope.go',
@@ -33,6 +35,7 @@ TEMPLATES = {
     'socks_native_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_native_test.go',
     'socks_close_native_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_close_test.go',
     'socks_run_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_run_test.go',
+    'socks_latency_native_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_latency_native_test.go',
     'candidate_preparation.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation.go',
     'candidate_preparation_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation_test.go',
     'box.go.tmpl': 'routervpn_node_chain.go',

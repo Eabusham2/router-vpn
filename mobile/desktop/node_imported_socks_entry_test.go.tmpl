@@ -419,7 +419,7 @@ func desktopStartImportedSOCKSProvider(t *testing.T, s *desktopNodeLayerServer, 
 	}
 	s.tcp = listener
 	var authFailures atomic.Uint32
-	p := &desktopExternalInstalledSOCKSPeer{server: s, request: desktopExternalInstalledPeerRequest{Password: password, SOCKSFault: fault}, authFailures: &authFailures, bindHost: "127.0.0.1", handshakeDeadline: true}
+	p := &desktopExternalInstalledSOCKSPeer{server: s, request: desktopExternalInstalledPeerRequest{Password: password, SOCKSFault: fault}, authFailures: &authFailures, bindHost: "127.0.0.1", handshakeDeadline: true, controlOwnedUDP: true}
 	var once sync.Once
 	closePeer := func() {
 		once.Do(func() {
@@ -1443,7 +1443,7 @@ func TestRouterVPNImportedSOCKSBothLayersProxyNativeTraffic(t *testing.T) {
 }
 
 // Keep authenticated traffic active past the original five-second accept
-// deadline. UDP's independent five-second idle bound stays in force.
+// deadline. The authenticated TCP control retains its UDP relay through idle.
 func TestRouterVPNImportedSOCKSHandshakeDeadlineRetirement(t *testing.T) {
  t.Run("unauthenticated-bound",func(t *testing.T){
   ctx,cancel:=context.WithTimeout(context.Background(),8*time.Second);defer cancel()
@@ -1488,4 +1488,38 @@ func TestRouterVPNImportedSOCKSHandshakeDeadlineRetirement(t *testing.T) {
    t.Log("SOCKS_HANDSHAKE_RETIRED",network)
   })
  }
+}
+
+// A live authenticated control owns its relay across an idle proof interval.
+// Closing that exact control revokes only its relay; server close joins both.
+func TestRouterVPNImportedSOCKSIdleAssociationOwner(t *testing.T) {
+ ctx,cancel:=context.WithTimeout(context.Background(),12*time.Second);defer cancel()
+ server:=&desktopNodeLayerServer{ctx:ctx,cancel:cancel,connections:map[io.Closer]bool{}}
+ peer,owner:=desktopStartImportedSOCKSProvider(t,server,"idle-owner-secret","")
+ defer peer.close()
+ lower:=&desktopImportedSOCKSLower{desktopSSReferenceLower:desktopSSReferenceLower{virtual:peer.address,original:peer.address},peer:owner}
+ client:=singSOCKS.NewClient(lower,M.ParseSocksaddr(peer.address),singSOCKS.Version5,"captured-native-user","idle-owner-secret")
+ dial:=func()net.Conn{
+  c,err:=client.DialContext(ctx,"udp",M.ParseSocksaddr("192.0.2.99:9999"));if err!=nil{t.Fatal("original authenticated association",err)}
+  t.Cleanup(func(){_=c.Close()});return c
+ }
+ exchange:=func(c net.Conn,value byte){
+  if err:=c.SetDeadline(time.Now().Add(time.Second));err!=nil{t.Fatal("live original control lost idle relay",err)}
+  if _,err:=c.Write([]byte{value});err!=nil{t.Fatal("live original control lost idle relay",err)}
+  reply:=make([]byte,1)
+  if _,err:=io.ReadFull(c,reply);err!=nil||reply[0]!=value{t.Fatal("live original control lost idle relay",err)}
+ }
+ original:=dial();exchange(original,41)
+ timer:=time.NewTimer(5500*time.Millisecond);defer timer.Stop()
+ select{case<-timer.C:case<-ctx.Done():t.Fatal("idle owner regression exceeded caller",ctx.Err())}
+ exchange(original,42)
+ replacement:=dial();exchange(replacement,43)
+ if err:=original.Close();err!=nil{t.Fatal("original control did not close",err)}
+ exchange(replacement,44)
+ peer.close()
+ if err:=replacement.SetReadDeadline(time.Now().Add(time.Second));err!=nil&&!errors.Is(err,net.ErrClosed){t.Fatal(err)}
+ if _,err:=replacement.Read(make([]byte,1));err==nil{t.Fatal("retired server left replacement relay usable")}
+ server.mu.Lock();remaining:=len(server.connections);server.mu.Unlock()
+ if remaining!=0{t.Fatal("original server retained authenticated sockets",remaining)}
+ t.Log("SOCKS_IDLE_CONTROL_OWNED_AND_REPLACEMENT_JOINED")
 }

@@ -2342,6 +2342,7 @@ type desktopExternalInstalledSOCKSPeer struct {
 	joinFailed   atomic.Bool
 	bindHost     string
 	handshakeDeadline bool
+	controlOwnedUDP bool
 	entryRelay   func(net.Conn, net.PacketConn) (net.Addr, func(), error)
 }
 
@@ -2510,8 +2511,15 @@ func (p *desktopExternalInstalledSOCKSPeer) serve(connection net.Conn) error {
 		return p.refuse(control)
 	}
 	authenticator := auth.NewAuthenticator([]auth.User{{Username: "captured-native-user", Password: p.request.Password}})
+	// The scoped imported peer retains authenticated UDP associations until
+	// their original TCP control or server owner closes. A five-second UDP
+	// idle timer races the ordered observer's five-second proof cadence.
+	udpIdle := 5 * time.Second
+	if p.controlOwnedUDP {
+		udpIdle = 0
+	}
 	return socks.HandleConnectionEx(p.server.ctx, control, STD.NewReader(control), authenticator, p, listener,
-		5*time.Second, M.SocksaddrFromNet(connection.RemoteAddr()), nil)
+		udpIdle, M.SocksaddrFromNet(connection.RemoteAddr()), nil)
 }
 
 func (p *desktopExternalInstalledSOCKSPeer) refuse(connection net.Conn) error {

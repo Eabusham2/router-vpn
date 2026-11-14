@@ -25,6 +25,7 @@ DIAGNOSTIC_PATH=ROOT/"deploy/socks_private_measurement_diagnostic.py"
 DIAGNOSTIC=module("socks_run_private_diagnostic",DIAGNOSTIC_PATH)
 REFERENCE_PATH=ROOT/"deploy/socks_reference_lifecycle.py"
 REFERENCE=module("socks_reference_lifecycle",REFERENCE_PATH)
+FIFTY=module("socks_ordered_fifty_native",ROOT/"deploy/socks_ordered_fifty_native.py")
 # Only the fixed source-selection suite label differs. The trusted process,
 # snapshot, native source and strict event parsers are reused unchanged.
 BASE.SUITE=SUITE
@@ -74,6 +75,7 @@ def sources(source,mobile,mobile_xray,owner,owner_xray):
               "owner":BASE.checked_owner_sources(source,owner,owner_xray)}
     mobile_prep=BASE.module("socks_run_candidate_mobile",source/"deploy/prepare-mobile-node-chain.py")
     desktop=BASE.module("socks_run_candidate_desktop",source/"deploy/prepare-desktop-external.py")
+    FIFTY.checked_projection(source,mobile,mobile_prep.TEMPLATES)
     for original,projected,root,table in (
         (RUN_TEMPLATE,RUN_PROJECTION,mobile,mobile_prep.TEMPLATES),
         (PEER_TEMPLATE,PEER_PROJECTION,owner,desktop.PEER_TEMPLATES),
@@ -134,6 +136,7 @@ def validate(source,source_sha,output,go="go"):
         resource_limits=dict(parallel_packages=1,GOMAXPROCS=2,GOGC=100,GOMEMLIMIT="2GiB"),
         trusted_bridge_sha256=hashlib.sha256(BASE_PATH.read_bytes()).hexdigest(),
         trusted_reference_sha256=hashlib.sha256(REFERENCE_PATH.read_bytes()).hexdigest(),
+        trusted_ordered_fifty_sha256=hashlib.sha256((ROOT/"deploy/socks_ordered_fifty_native.py").read_bytes()).hexdigest(),
         trusted_executor_sha256=hashlib.sha256(BASE.CORE_PATH.read_bytes()).hexdigest())
     diagnostic=None
     def save():(output/"progress.json").write_text(json.dumps(receipt,indent=2)+"\n")
@@ -205,6 +208,7 @@ def validate(source,source_sha,output,go="go"):
                 controls.append(dict(name=control["name"],original_sha256=hashlib.sha256(original.read_bytes()).hexdigest(),
                     mutation_sha256=hashlib.sha256(changed.encode()).hexdigest(),
                     **native_events(raw,status,control["case"],control)))
+            receipt.update(FIFTY.validate_compiled(BASE,run,compiler,mobile,peer,client,work,flags,env,diagnostic,private_control_overlay))
             if sources(source,mobile,mobile_xray,owner,owner_xray)!=native_before or BASE.CORE.snapshot(source)!=before:
                 raise ValueError("Original encrypted native/candidate source changed")
             if BASE.COMMON.git(source,"status","--porcelain","--untracked-files=all"):

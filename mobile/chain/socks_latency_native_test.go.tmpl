@@ -1,0 +1,241 @@
+//go:build linux && !android
+
+package libbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+)
+
+// Uses the original separately compiled encrypted peer and actual proved Box.
+// The existing physical tuple/TUN/monitor/TLS-root fixture boundaries remain.
+// The MTU reservation subcase tests admission only, not physical MTU execution.
+func TestRouterNodeChainSOCKSEncryptedOrderedFifty(t *testing.T) {
+	mode := os.Getenv("ROUTERVPN_SOCKS_FIFTY_CASE")
+	if mode == "" {
+		t.Skip("original separate encrypted peer case required")
+	}
+	if mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong" {
+		t.Fatal("uncaptured ordered fifty case")
+	}
+	t.Run(mode, func(t *testing.T) {
+		check := func(name string, work func(*testing.T)) { t.Helper(); t.Log("SOCKS_FIFTY_CHECK " + name); work(t) }
+		peer := socksRunStartPeer(t, mode, "")
+		f, physical := socksRunNative(t, peer)
+		before := socksRunRequireProofs(t, peer, f, physical)
+		measurement, err := RouterNodeChainSOCKSNewHopMeasurement(f.owner, f.server)
+		if err != nil || measurement == nil {
+			t.Fatal("original fifty throughput owner missing", err)
+		}
+		original := f.owner.measurement.Load()
+		_, meta, err := f.owner.source.ReadValidated()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reject := func(name string, plan *RouterNodeChainSOCKS, server *CommandServer, value *RouterHopMeasurement) {
+			t.Helper()
+			check(name, func(t *testing.T) {
+				candidate, err := RouterNodeChainSOCKSNewLatencyBenchmark(plan, server, value)
+				if candidate != nil || err == nil {
+					if candidate != nil {
+						_ = candidate.Close()
+					}
+					t.Fatal("foreign ordered factory borrowed original service", name)
+				}
+				if f.owner.measurement.Load() != original || !f.owner.Healthy() {
+					t.Fatal("rejected factory replaced original throughput")
+				}
+			})
+		}
+		reject("nil-plan", nil, f.server, measurement)
+		reject("foreign-plan", &RouterNodeChainSOCKS{}, f.server, measurement)
+		check("copied-plan", func(t *testing.T) {
+			copied := &RouterNodeChainSOCKS{self: f.owner.self, source: f.owner.source}
+			copied.native.Store(f.owner.native.Load())
+			copied.state.Store(f.owner.state.Load())
+			copied.measurement.Store(f.owner.measurement.Load())
+			candidate, err := RouterNodeChainSOCKSNewLatencyBenchmark(copied, f.server, measurement)
+			if candidate != nil || err == nil {
+				if candidate != nil {
+					_ = candidate.Close()
+				}
+				t.Fatal("copied typed plan borrowed original service")
+			}
+		})
+		reject("nil-server", f.owner, nil, measurement)
+		reject("foreign-server", f.owner, &CommandServer{}, measurement)
+		reject("nil-service", f.owner, f.server, nil)
+		reject("foreign-service", f.owner, f.server, &RouterHopMeasurement{service: new(hopmeasure.Service)})
+		check("caller-deadline", func(t *testing.T) {
+			ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			defer cancel()
+			candidate, err := f.owner.newSOCKSOrderedLatencyContext(ctx, f.server, measurement)
+			if candidate != nil || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("expired ordered factory acquired original service", err)
+			}
+		})
+		optimizer, _, _ := socksRunAdoptMTU(t, f)
+		check("original-mtu-reservation", func(t *testing.T) {
+			// Reserve the exact retained optimizer's original slot under its owner lock.
+			// No proof state, native readback, health or worker result is manufactured.
+			claim := f.owner.mtu.Load()
+			state := f.owner.state.Load()
+			reserved := &routerNodeChainSOCKSMTURun{owner: claim, native: state.native}
+			reserved.state.Store(state)
+			f.owner.mu.Lock()
+			ok := claim.run.CompareAndSwap(nil, reserved)
+			f.owner.mu.Unlock()
+			if !ok {
+				t.Fatal("original optimizer reservation unavailable")
+			}
+			defer claim.run.CompareAndSwap(reserved, nil)
+			if !f.owner.Healthy() {
+				t.Fatal("reservation changed original proof")
+			}
+			candidate, err := RouterNodeChainSOCKSNewLatencyBenchmark(f.owner, f.server, measurement)
+			if candidate != nil || err == nil {
+				if candidate != nil {
+					_ = candidate.Close()
+				}
+				t.Fatal("ordered factory bypassed original MTU reservation")
+			}
+		})
+		if err = optimizer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		latency, err := RouterNodeChainSOCKSNewLatencyBenchmark(f.owner, f.server, measurement)
+		if err != nil || latency == nil {
+			t.Fatal("actual proved factory did not borrow original service", err)
+		}
+		t.Cleanup(func() {
+			if err := latency.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		check("duplicate-owner", func(t *testing.T) {
+			if duplicate, err := RouterNodeChainSOCKSNewHopMeasurement(f.owner, f.server); duplicate != nil || err == nil {
+				t.Fatal("duplicate throughput owner replaced original")
+			}
+			if duplicate, err := RouterNodeChainSOCKSNewLatencyBenchmark(f.owner, f.server, measurement); duplicate != nil || err == nil {
+				t.Fatal("duplicate facade replaced original")
+			}
+		})
+		run := func(position, sequence int) string {
+			t.Helper()
+			request := fmt.Sprintf("%032x", sequence)
+			if err := latency.Start(request, meta.Proofs[position].ProfileID); err != nil {
+				t.Fatal("original native fifty admission", err)
+			}
+			deadline := time.Now().Add(hopmeasure.RequestTimeout + hopmeasure.ObservationTimeout)
+			var status hopmeasure.Status
+			for time.Now().Before(deadline) {
+				if json.Unmarshal([]byte(latency.StatusJSON()), &status) != nil {
+					t.Fatal("original native fifty status missing")
+				}
+				if status.Complete {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if err := latency.Drain(request); err != nil {
+				t.Fatal("original native fifty drain", err)
+			}
+			if json.Unmarshal([]byte(latency.StatusJSON()), &status) != nil || status.Request != request || !status.Complete || !status.Drained || status.Stage != "complete" || status.Failure != "" || len(status.Results) != 1 || !status.Results[0].Ready {
+				t.Fatal("actual native fifty incomplete", position, status.Stage, status.Failure)
+			}
+			raw := latency.SavedJSON(meta.Proofs[position].ProfileID)
+			var saved hopmeasure.OrderedLatencyReceipt
+			if json.Unmarshal([]byte(raw), &saved) != nil || saved.Schema != 1 || saved.SourceSHA256 != meta.SourceSHA256 || saved.ConfigSHA256 != meta.ConfigSHA256 || saved.Position != position || saved.NodeID != meta.Proofs[position].ProfileID || saved.Request != request || saved.GenerationSHA256 == "" || saved.MeasuredAt <= 0 {
+				t.Fatal("native fifty historical identity changed")
+			}
+			result := saved.Result
+			b := result.Benchmark
+			meaning, endpoint := "routed-private-response-including-connection", ""
+			if position == 1 {
+				meaning = "routed-https-response-after-tls"
+				endpoint = "https://" + hopmeasure.PublicHost + "/__down?bytes=1"
+			}
+			if !result.Ready || result.ID != saved.NodeID || b == nil || b.Attempts != 50 || b.Failed != 0 || b.Distribution == nil || b.Distribution.Samples != 50 || b.Measurement != meaning || b.Endpoint != endpoint || result.Idle != nil || result.Download != nil || result.Upload != nil {
+				t.Fatal("native fifty metric escaped original ordered domain")
+			}
+			return raw
+		}
+		for position := range meta.Proofs {
+			check(fmt.Sprintf("hop-%d-fifty", position), func(t *testing.T) { run(position, position+1) })
+		}
+		after := peer.observe(t)
+		a, b := socksRunCounters(t, before), socksRunCounters(t, after)
+		ap := a["prefixes"].([]any)[0].(map[string]any)
+		bp := b["prefixes"].([]any)[0].(map[string]any)
+		for _, pair := range []struct {
+			first, last map[string]any
+			key         string
+		}{{ap, bp, "proof_queries"}, {a["final"].(map[string]any), b["final"].(map[string]any), "router_queries"}} {
+			if socksRunCounter(t, pair.last, pair.key)-socksRunCounter(t, pair.first, pair.key) < 50 {
+				t.Fatal("native fifty omitted original encrypted responses", pair.key)
+			}
+		}
+		// The original /__down?bytes=1 handler counts actual bytes;
+		// public_queries belongs to /cdn-cgi/trace path proof, not this metric.
+		if socksRunCounter(t, b["middle"].(map[string]any), "download_bytes")-socksRunCounter(t, a["middle"].(map[string]any), "download_bytes") != 50 {
+			t.Fatal("native fifty omitted original encrypted one-byte responses")
+		}
+		check("cancel-close-throughput", func(t *testing.T) {
+			saved := latency.SavedJSON(meta.Proofs[0].ProfileID)
+			request := strings.Repeat("c", 32)
+			if err := latency.Start(request, meta.Proofs[0].ProfileID); err != nil {
+				t.Fatal(err)
+			}
+			latency.Cancel(request)
+			if err := latency.Drain(request); err != nil {
+				t.Fatal(err)
+			}
+			if err := latency.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if f.owner.measurement.Load() != original || latency.SavedJSON(meta.Proofs[0].ProfileID) != saved {
+				t.Fatal("facade cancellation replaced owner or saved history")
+			}
+			request = strings.Repeat("d", 32)
+			if err := measurement.Start(request, 65536); err != nil {
+				t.Fatal("facade close retired original throughput", err)
+			}
+			measurement.Cancel(request)
+			if err := measurement.Drain(request); err != nil {
+				t.Fatal(err)
+			}
+			latency, err = RouterNodeChainSOCKSNewLatencyBenchmark(f.owner, f.server, measurement)
+			if err != nil || latency == nil {
+				t.Fatal("closed facade blocked original retry", err)
+			}
+			run(0, 5)
+		})
+		if err = latency.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if f.owner.measurement.Load() != original || !f.owner.Healthy() {
+			t.Fatal("fifty facade retired native host")
+		}
+		socksRunCloseNative(t, f)
+		observed := peer.observe(t)
+		deadline := time.Now().Add(hopmeasure.ObservationTimeout)
+		for observed.Associations != 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+			observed = peer.observe(t)
+		}
+		if observed.Associations != 0 || observed.FinalAuth != 0 {
+			t.Fatal("fifty original native owner failed joined close")
+		}
+		if err := peer.close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

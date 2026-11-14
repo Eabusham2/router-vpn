@@ -17,6 +17,7 @@ import (
 )
 
 type RouterNodeChainSOCKS struct {
+	self        *RouterNodeChainSOCKS // immutable original constructor identity
 	source      *mobilemultihop.NodeChainSOCKSSource
 	mu          sync.Mutex
 	native      atomic.Pointer[routerNodeChainSOCKSNative]

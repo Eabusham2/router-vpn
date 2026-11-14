@@ -23,7 +23,9 @@ func NewRouterNodeChainSOCKS(input string) (*RouterNodeChainSOCKS, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &RouterNodeChainSOCKS{source: source}, nil
+	owner := &RouterNodeChainSOCKS{source: source}
+	owner.self = owner
+	return owner, nil
 }
 
 // The C-function export leaves NSError explicit in Swift. An instance method

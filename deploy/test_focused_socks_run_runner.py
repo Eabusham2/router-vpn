@@ -22,6 +22,14 @@ def events(case,control=None):
     rows.extend(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX,Test=x) for x in (leaf,root))
     rows.append(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX))
     return rows
+def fifty_events(mode,control=None):
+    names=V.FIFTY.names(mode);rows=[dict(Action="start",Package=V.BASE.LIBBOX)]
+    rows.extend(dict(Action="run",Package=V.BASE.LIBBOX,Test=x) for x in names)
+    if not control:rows.extend(dict(Action="output",Package=V.BASE.LIBBOX,Test=names[-1],Output="SOCKS_FIFTY_CHECK "+leaf+"\n") for leaf in V.FIFTY.LEAVES)
+    if control:rows.append(dict(Action="output",Package=V.BASE.LIBBOX,Test=names[-1],Output=control["witness"]+"\n"))
+    rows.extend(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX,Test=x) for x in reversed(names))
+    rows.append(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX))
+    return rows
 def encoded(rows):return ("\n".join(json.dumps(x) for x in rows)+"\n").encode()
 def plain(names):return "".join("=== RUN   "+x+"\n--- PASS: "+x+" (0.01s)\n" for x in names)+"PASS\n"
 
@@ -60,12 +68,13 @@ class Composition:
             (core/"original.go").write_text("original "+name);self.roles[name.removeprefix("prepare-")]=(core,xray)
             if name=="prepare-owner":
                 original=core/V.REFERENCE.PROJECTION
-                original.parent.mkdir(parents=True);original.write_text('bindHost: "127.0.0.1", handshakeDeadline: true}')
+                original.parent.mkdir(parents=True);original.write_text('bindHost: "127.0.0.1", handshakeDeadline: true, controlOwnedUDP: true}')
             if name=="prepare-mobile":
                 diagnostic=core/V.DIAGNOSTIC.PROJECTION;diagnostic.parent.mkdir(parents=True,exist_ok=True)
                 diagnostic.write_text((ROOT/"internal/hopmeasure/measure.go").read_text())
                 by_path={}
                 for control in V.CONTROLS:by_path.setdefault(control["path"],[]).append(control["before"])
+                for control in V.FIFTY.CONTROLS:by_path.setdefault(control["path"],[]).extend(x[0] for x in control["changes"])
                 for path,anchors in by_path.items():
                     target=core/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text("\n".join(anchors))
         elif name.endswith("-build"):
@@ -89,12 +98,32 @@ class Composition:
             overlay=Path(next(x.split("=",1)[1] for x in command if x.startswith("-overlay=")))
             replacements=json.loads(overlay.read_text())["Replace"]
             assert list(replacements)==[str(original)]
-            assert Path(replacements[str(original)]).read_text()==original.read_text().replace('handshakeDeadline: true}', 'handshakeDeadline: false}')
+            assert Path(replacements[str(original)]).read_text()==original.read_text().replace('handshakeDeadline: true,', 'handshakeDeadline: false,')
             root=V.REFERENCE.ROOT
             raw=("".join("=== RUN   "+x+"\n" for x in V.REFERENCE.NAMES)+
                  "--- PASS: "+root+"/unauthenticated-bound (5.00s)\n"+
                  "".join("authenticated control retained handshake deadline\n--- FAIL: "+root+"/"+x+" (5.00s)\n" for x in ("tcp","udp"))+
                  "--- FAIL: "+root+" (15.00s)\nFAIL\n").encode();status=1
+        elif name=="socks-idle-reference":raw=plain((V.REFERENCE.IDLE_ROOT,)).encode()
+        elif name=="socks-idle-old-expiry":
+            assert cwd==self.roles["owner"][0]
+            original=cwd/V.REFERENCE.PROJECTION
+            overlay=Path(next(x.split("=",1)[1] for x in command if x.startswith("-overlay=")))
+            replacements=json.loads(overlay.read_text())["Replace"]
+            assert list(replacements)==[str(original)]
+            assert Path(replacements[str(original)]).read_text()==original.read_text().replace('controlOwnedUDP: true}', 'controlOwnedUDP: false}')
+            raw=("=== RUN   "+V.REFERENCE.IDLE_ROOT+"\nlive original control lost idle relay\n--- FAIL: "+V.REFERENCE.IDLE_ROOT+" (5.50s)\nFAIL\n").encode();status=1
+        elif name.startswith("fifty-"):
+            mode=env["ROUTERVPN_SOCKS_FIFTY_CASE"];assert mode in V.FIFTY.MODES
+            assert cwd==self.roles["mobile"][0] and Path(env["ROUTERVPN_SOCKS_RUN_PEER"])==self.images[0]
+            if name in {"fifty-"+x for x in V.FIFTY.MODES}:raw=encoded(fifty_events(mode))
+            else:
+                control=next(c for c in V.FIFTY.CONTROLS if c["name"]==name)
+                overlay=Path(next(x.split("=",1)[1] for x in command if x.startswith("-overlay=")))
+                replacements=json.loads(overlay.read_text())["Replace"]
+                self_path=str(cwd/control["path"])
+                assert Path(replacements[self_path]).read_text()==V.FIFTY.mutation(V.BASE,control,Path(self_path).read_text())
+                raw=encoded(fifty_events(mode,control));status=1
         else:
             case=env["ROUTERVPN_SOCKS_RUN_CASE"];assert case in V.CASES
             assert env["GODEBUG"]=="x509usefallbackroots=1"
@@ -120,6 +149,9 @@ class Composition:
         if self.fault=="handshake-missing" and name=="socks-handshake-reference":raw=plain(V.REFERENCE.NAMES[:-1]).encode()
         if self.fault=="handshake-control-pass" and name=="socks-handshake-old-deadline":status=0
         if self.fault=="handshake-control-witness" and name=="socks-handshake-old-deadline":raw=raw.replace(b"authenticated control retained handshake deadline",b"unrelated")
+        if self.fault=="idle-missing" and name=="socks-idle-reference":raw=b"PASS\n"
+        if self.fault=="idle-control-pass" and name=="socks-idle-old-expiry":status=0
+        if self.fault=="idle-control-witness" and name=="socks-idle-old-expiry":raw=raw.replace(b"live original control lost idle relay",b"unrelated")
         if self.fault=="case-missing" and name=="run-wg":raw=encoded(events("wg")[:-1])
         if self.fault=="case-failed" and name=="run-wg":status=1
         if self.fault=="control-pass" and name==V.CONTROLS[0]["name"]:status=0
@@ -154,13 +186,18 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
         self.assertEqual(len(V.CONTROLS),4)
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
-            self.assertEqual(len(c.calls),20)
-            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,40,600,*([190]*8),*([600]*4)])
-            self.assertEqual(c.original,[V.ORIGINAL,V.REFERENCE.NAMES])
+            self.assertEqual(len(c.calls),30)
+            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,40,600,30,600,*([190]*8),*([600]*4),*([190]*3),*([600]*5)])
+            self.assertEqual(c.original,[V.ORIGINAL,V.REFERENCE.NAMES,(V.REFERENCE.IDLE_ROOT,)])
             self.assertEqual([x["case"] for x in receipt["case_records"]],list(V.CASES))
             self.assertEqual(len(receipt["controls"]),4)
             self.assertEqual(receipt["socks_reference_handoff_records"],list(V.REFERENCE.NAMES))
             self.assertTrue(receipt["socks_reference_handoff_control"]["expected_failure"])
+            self.assertEqual(receipt["socks_reference_idle_records"],[V.REFERENCE.IDLE_ROOT])
+            self.assertTrue(receipt["socks_reference_idle_control"]["expected_failure"])
+            self.assertEqual(len(receipt["ordered_fifty_records"]),3)
+            self.assertEqual(len(receipt["ordered_fifty_controls"]),5)
+            self.assertFalse(receipt["ordered_fifty_host_persistence_accepted"])
             self.assertFalse(receipt["failure_only_diagnostic"]["acceptance_changed"])
             self.assertTrue(receipt["failure_only_diagnostic"]["original_deadlines_preserved"])
             self.assertTrue(receipt["successful_run_accepted"]);self.assertTrue(receipt["ordered_measurement_accepted"])
@@ -188,9 +225,38 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
             with self.assertRaises(ValueError):V.REFERENCE.control_events(raw,status)
         for changed in (raw+raw,raw.replace(b"/udp",b"/foreign"),raw.replace(b"retained handshake deadline",b"unrelated"),raw+b"DATA RACE",raw+b"panic:",raw+b"--- SKIP: unrelated (0.00s)\n"):
             with self.assertRaises(ValueError):V.REFERENCE.control_events(changed,1)
+
+    def test_idle_control_requires_actual_original_expiry(self):
+        raw=("=== RUN   "+V.REFERENCE.IDLE_ROOT+"\nlive original control lost idle relay\n--- FAIL: "+V.REFERENCE.IDLE_ROOT+" (5.50s)\nFAIL\n").encode()
+        self.assertTrue(V.REFERENCE.idle_control_events(raw,1)["expected_failure"])
+        for status in (0,-9,124):
+            with self.assertRaises(ValueError):V.REFERENCE.idle_control_events(raw,status)
+        for changed in (raw+raw,raw.replace(b"live original control lost idle relay",b"unrelated"),raw+b"DATA RACE",raw+b"panic:",raw+b"--- SKIP: unrelated (0.00s)\n"):
+            with self.assertRaises(ValueError):V.REFERENCE.idle_control_events(changed,1)
+
+    def test_ordered_fifty_original_checks_witnesses_and_mutation_anchors(self):
+        self.assertEqual(len(V.FIFTY.MODES),3);self.assertEqual(len(V.FIFTY.LEAVES),14)
+        for mode in V.FIFTY.MODES:
+            rows=fifty_events(mode);self.assertTrue(V.FIFTY.events(V.BASE,encoded(rows),0,mode)["accepted"])
+            missing=[row for row in rows if "SOCKS_FIFTY_CHECK foreign-service" not in row.get("Output", "")]
+            for altered in (missing,rows[:-1],rows+rows):
+                with self.assertRaises(ValueError):V.FIFTY.events(V.BASE,encoded(altered),0,mode)
+        projections={v:k for k,v in V.FIFTY.PROJECTIONS}
+        projections["experimental/libbox/routervpn/hopmeasure/ordered_latency.go"]="ordered_latency.go"
+        for control in V.FIFTY.CONTROLS:
+            source=ROOT/("internal/hopmeasure/ordered_latency.go" if control["path"].endswith("hopmeasure/ordered_latency.go") else "mobile/chain/"+projections[control["path"]])
+            original=source.read_text();self.assertNotEqual(V.FIFTY.mutation(V.BASE,control,original),original)
+            for before,_ in control["changes"]:
+                with self.assertRaises(ValueError):V.FIFTY.mutation(V.BASE,control,original.replace(before,"missing"))
+            raw=encoded(fifty_events("wg",control));self.assertTrue(V.FIFTY.events(V.BASE,raw,1,"wg",control)["accepted"])
+            for status in (0,-9,124):
+                with self.assertRaises(ValueError):V.FIFTY.events(V.BASE,raw,status,"wg",control)
+            for malformed in (raw.replace(control["witness"].encode(),b"unrelated"),raw+b"panic: unrelated\n",raw+b"WARNING: DATA RACE\n"):
+                with self.assertRaises(ValueError):V.FIFTY.events(V.BASE,malformed,1,"wg",control)
+
     def test_no_failed_missing_or_unjoined_phase_can_publish_acceptance(self):
         for fault in ("preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
-                      "handshake-missing","handshake-control-pass","handshake-control-witness",
+                      "handshake-missing","handshake-control-pass","handshake-control-witness","idle-missing","idle-control-pass","idle-control-witness",
                       "control-pass","control-signal","control-panic","control-witness","candidate-changed","owner-changed",
                       "mobile-changed","image-changed","selection-changed","diagnostic-changed","timeout","unjoined"):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
@@ -249,11 +315,13 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
                 for p in (source,mobile,owner,mx,ox):p.mkdir()
                 for template,projection,root in ((V.RUN_TEMPLATE,V.RUN_PROJECTION,mobile),(V.PEER_TEMPLATE,V.PEER_PROJECTION,owner),
                     ("mobile/desktop/node_chain_imported_test.go.tmpl","protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go",owner),
-                    *((original,projected,mobile) for original,projected in V.MTU_PROJECTIONS)):
+                    *((original,projected,mobile) for original,projected in V.MTU_PROJECTIONS),
+                    *(("mobile/chain/"+original,projected,mobile) for original,projected in V.FIFTY.PROJECTIONS)):
                     a,b=source/template,root/projection;a.parent.mkdir(parents=True,exist_ok=True);b.parent.mkdir(parents=True,exist_ok=True)
                     a.write_text("original "+template);b.write_bytes(a.read_bytes())
                 mp=types.SimpleNamespace(TEMPLATES={Path(V.RUN_TEMPLATE).name:V.RUN_PROJECTION,
-                    **{Path(original).name:projected for original,projected in V.MTU_PROJECTIONS}})
+                    **{Path(original).name:projected for original,projected in V.MTU_PROJECTIONS},
+                    **dict(V.FIFTY.PROJECTIONS)})
                 dp=types.SimpleNamespace(PEER_TEMPLATES={Path(V.PEER_TEMPLATE).name:V.PEER_PROJECTION})
                 if fault=="mobile-map":mp.TEMPLATES.clear()
                 elif fault=="peer-map":dp.PEER_TEMPLATES.clear()
