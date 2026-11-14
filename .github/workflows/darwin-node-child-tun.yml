@@ -33,8 +33,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: darwin-node-child-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}
-  cancel-in-progress: true
+  # Coalesce only direct main pushes; preserve active native and exact caller runs.
+  group: darwin-node-child-tun-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Darwin generated ordered child utun acceptance' && github.ref || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   child:

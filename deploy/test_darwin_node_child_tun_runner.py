@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Causal source/runner boundary tests; these never claim native Darwin acceptance."""
 from pathlib import Path
+import ast
 import contextlib
 import importlib.util
 import io
@@ -63,8 +64,8 @@ def workflow_inventory(raw):
         raise ValueError('native workflow added an alternate result authority')
     required = (
         '  workflow_call:\n  push:',
-        '  group: darwin-node-child-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}',
-        '  cancel-in-progress: true',
+        "  group: darwin-node-child-tun-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Darwin generated ordered child utun acceptance' && github.ref || github.run_id }}",
+        '  cancel-in-progress: false',
         'jobs:\n  child:',
         '    runs-on: ${{ matrix.runner }}',
         '    timeout-minutes: 60',
@@ -1388,6 +1389,46 @@ func main(){
                     self.assertIn('and11 ownership refusals PASS',result.stdout)
 
 
+def workflow_concurrency_cases(raw):
+    """Evaluate the actual small expression; reusable calls retain caller context."""
+    blocks = re.findall(r'^concurrency:\n((?:[ \t]+[^\n]*\n|\n)+)', raw, re.M)
+    if len(blocks) != 1 or blocks[0].count('  cancel-in-progress: false\n') != 1:
+        raise ValueError('An active native run must finish before the next automatic push')
+    groups = re.findall(r'^  group: (.+)$', blocks[0], re.M)
+    if len(groups) != 1:
+        raise ValueError('Native concurrency must have one exact group')
+    own = 'Darwin generated ordered child utun acceptance'
+    cases = (
+        ('old-main', own, 'push', 'refs/heads/main', '100', 'a'*40, 'refs/heads/main'),
+        ('new-main', own, 'push', 'refs/heads/main', '101', 'b'*40, 'refs/heads/main'),
+        ('manual-same-sha', own, 'workflow_dispatch', 'refs/heads/main', '102', 'b'*40, '102'),
+        ('second-manual-same-sha', own, 'workflow_dispatch', 'refs/heads/main', '103', 'b'*40, '103'),
+        ('manual-other-sha', own, 'workflow_dispatch', 'refs/heads/main', '104', 'c'*40, '104'),
+        ('manual-tag', own, 'workflow_dispatch', 'refs/tags/v1', '105', 'b'*40, '105'),
+        ('pull-request', own, 'pull_request', 'refs/pull/1/merge', '106', 'b'*40, '106'),
+        ('other-branch', own, 'push', 'refs/heads/feature', '107', 'b'*40, '107'),
+        ('called-push', 'Build all Router VPN release gates', 'push', 'refs/heads/main', '108', 'b'*40, '108'),
+        ('second-called-push', 'Build all Router VPN release gates', 'push', 'refs/heads/main', '109', 'b'*40, '109'),
+        ('called-release-manual', 'Router VPN release candidate', 'workflow_dispatch', 'refs/heads/main', '110', 'b'*40, '110'),
+        ('called-build-manual', 'Build all Router VPN release gates', 'workflow_dispatch', 'refs/heads/main', '111', 'b'*40, '111'),
+    )
+    for label, workflow_name, event, ref, run, sha, lane in cases:
+        context = dict(workflow=workflow_name, event_name=event, ref=ref, run_id=run, sha=sha)
+        def expression(match):
+            code = re.sub(r'github\.(workflow|event_name|ref|run_id|sha)\b',
+                          lambda item: repr(context[item.group(1)]), match.group(1))
+            tree = ast.parse(code.replace('&&', ' and ').replace('||', ' or ').strip(), mode='eval')
+            if any(not isinstance(node, (ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.Compare, ast.Eq, ast.Constant))
+                   for node in ast.walk(tree)):
+                raise ValueError('Unexpected native concurrency expression')
+            return str(eval(compile(tree, '<captured native concurrency>', 'eval'), {'__builtins__': {}}))
+        actual = re.sub(r'\$\{\{\s*(.*?)\s*\}\}', expression, groups[0])
+        expected = 'darwin-node-child-tun-' + workflow_name + '-' + lane
+        if actual != expected:
+            raise ValueError('Native concurrency lost original context isolation: '+label)
+    return len(cases)
+
+
 class RequiredWorkflowInventory(unittest.TestCase):
     def test_both_actual_native_architectures_and_exact_caller_receipts(self):
         raw = (ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text()
@@ -1402,7 +1443,7 @@ class RequiredWorkflowInventory(unittest.TestCase):
             ('conditional-job', '  child:\n', '  child:\n    if: false\n'),
             ('nonblocking-job', '  child:\n', '  child:\n    continue-on-error: true\n'),
             ('caller-input', '  workflow_call:\n', '  workflow_call:\n    inputs:\n'),
-            ('cross-caller-cancel', '-${{ github.sha }}-${{ github.run_id }}', ''),
+            ('cross-caller-cancel', ' || github.run_id }}', ' || github.ref }}'),
             ('no-standalone', ' --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE"', ' --require-commit "$ROUTERVPN_EXPECTED_SOURCE"'),
             ('no-handshake-boundary', ' --standalone --preflight-only --require-commit "$GITHUB_SHA"', ' --standalone --require-commit "$GITHUB_SHA"'),
             ('compile-only-replaces-handshake', ' --preflight-only', ' --compile-only'),
@@ -1417,6 +1458,28 @@ class RequiredWorkflowInventory(unittest.TestCase):
             self.assertEqual(raw.count(before), 1, name)
             with self.subTest(change=name), self.assertRaises(ValueError):
                 workflow_inventory(raw.replace(before, after, 1))
+
+
+    def test_direct_push_coalesces_without_cancelling_native_or_exact_callers(self):
+        raw = (ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text()
+        self.assertEqual(workflow_concurrency_cases(raw), 12)
+
+    def test_removed_concurrency_boundaries_cannot_pass(self):
+        raw = (ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text()
+        changes = (
+            ('active-native-cancel', 'cancel-in-progress: false', 'cancel-in-progress: true'),
+            ('missing-event-boundary', "github.event_name == 'push' && ", ''),
+            ('missing-main-boundary', "github.ref == 'refs/heads/main' && ", ''),
+            ('missing-caller-boundary', "github.workflow == 'Darwin generated ordered child utun acceptance' && ", ''),
+            ('shared-manual-lane', ' || github.run_id }}', ' || github.ref }}'),
+            ('commit-per-push-lane', '&& github.ref ||', '&& github.sha ||'),
+            ('run-per-push-lane', '&& github.ref ||', '&& github.run_id ||'),
+            ('shared-leaf-prefix', '  group: darwin-node-child-tun-', '  group: native-shared-'),
+        )
+        for name, before, after in changes:
+            self.assertEqual(raw.count(before), 1, name)
+            with self.subTest(change=name), self.assertRaises(ValueError):
+                workflow_concurrency_cases(raw.replace(before, after, 1))
 
 
 if __name__=='__main__':

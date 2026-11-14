@@ -6,8 +6,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED = {
     ".github/workflows/source-snapshot.yml": "  group: source-snapshot-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/release-candidate.yml": "  group: release-candidate-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
-    ".github/workflows/darwin-node-child-tun.yml": "  group: darwin-node-child-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
-    ".github/workflows/server-node-chain-encrypted.yml": "  group: server-node-chain-encrypted-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
+    ".github/workflows/darwin-node-child-tun.yml": "  group: darwin-node-child-tun-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Darwin generated ordered child utun acceptance' && github.ref || github.run_id }}",
+    ".github/workflows/server-node-chain-encrypted.yml": "  group: server-node-chain-encrypted-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Ordered Server encrypted suffix acceptance' && github.ref || github.run_id }}",
     ".github/workflows/arm64-portainer-preflight.yml": "  group: arm64-portainer-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/publish-arm64-images.yml": "  group: publish-arm64-portainer-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
     ".github/workflows/production-release-compose.yml": "  group: production-release-compose-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}",
@@ -37,8 +37,12 @@ for filename, expected in {**EXPECTED, **CALL_ONLY, **STANDALONE}.items():
             f"{filename} must consume its successful caller's current-run artifacts")
     else:
         assert "  workflow_dispatch:" in lines, f"{filename} lost workflow_dispatch"
-    assert lines.count("  cancel-in-progress: true") == 1, (
-        f"{filename} lost duplicate-run cancellation within one caller"
+    # Only direct automatic leaf pushes share a pending lane; active native work finishes.
+    pending_only = filename in (".github/workflows/darwin-node-child-tun.yml",
+                                ".github/workflows/server-node-chain-encrypted.yml")
+    cancellation = "false" if pending_only else "true"
+    assert lines.count(f"  cancel-in-progress: {cancellation}") == 1, (
+        f"{filename} lost its original active-run or pending-only cancellation policy"
     )
 
 print("Reusable release workflow concurrency audit: PASS")
