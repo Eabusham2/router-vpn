@@ -44,6 +44,13 @@ TESTS=r'''
  @MainActor static func rejects(_ name:String,_ operation:()throws->Void){do{try operation();fatalError(name)}catch{checks+=1}}
  @MainActor static func records()throws {
   for p in 0..<3 {let r=try IOSOrderedLatencyRecord(json(receipt(p)));check("exact50 captured node",r.position==p && r.median==2 && r.trimmed==2.25)}
+  for count in 2...8 { for position in 0..<count {
+   var value=receipt(0);value["position"]=position;value["node_id"]="ordinary-\(position)"
+   var row=value["result"] as! [String:Any];row["node_id"]=value["node_id"]!;row["role"]=position==0 ? "entry":position==count-1 ? "exit":"intermediate";row["kind"]="private-node";row["label"]="Cumulative path through node \(position+1) of \(count)";value["result"]=row
+   let record=try IOSOrderedLatencyRecord(json(value));check("ordinary count/kind semantics",record.count==count && record.position==position && record.kind=="private-node" && record.detail.contains("including connection establishment"))
+   row["role"]=position==0 ? "exit":"entry";value["result"]=row
+   rejects("ordinary role bound to captured count"){_ = try IOSOrderedLatencyRecord(json(value))}
+  }}
   var mutations:[(String,([String:Any])->[String:Any])]=[]
   for (key,value) in [("schema",2 as Any),("position",8),("source_sha256","bad"),("generation_sha256","bad"),("request_id","bad"),("measured_at",-1),("extra","secret")] {mutations.append((key,{v in var v=v;v[key]=value;return v}))}
   for (key,value) in [("attempts",49 as Any),("failed",1),("endpoint","https://secret.invalid"),("measurement","icmp")] {mutations.append((key,{v in var v=v;var r=v["result"] as! [String:Any];var b=r["benchmark"] as! [String:Any];b[key]=value;r["benchmark"]=b;v["result"]=r;return v}))}

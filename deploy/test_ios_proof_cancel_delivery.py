@@ -41,6 +41,7 @@ final class Delivery: @unchecked Sendable {
  private let lock=NSLock()
  private var callback:((Error?)->Void)?
  private var cancelled=false,proved=false
+ private let latencyOwner:NativeCancel?=nil // This callback fixture has no optional measurement facade.
  let request=NativeCancel()
  var plan:NativeCancel{request}
  init(_ result:Result){callback=result.finish}

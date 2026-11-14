@@ -31,6 +31,14 @@ def fifty_rows(mode,control=None):
     rows.extend(dict(Action=action,Package=V.BASE.LIBBOX,Test=x) for x in (leaf,root))
     rows.append(dict(Action=action,Package=V.BASE.LIBBOX))
     return rows
+def ordinary_rows(case,control=None):
+    root=V.ORDINARY.ROOT
+    rows=[dict(Action="start",Package=V.BASE.LIBBOX),dict(Action="run",Package=V.BASE.LIBBOX,Test=root)]
+    output=control["witness"] if control else V.ORDINARY.witness(case)
+    rows.append(dict(Action="output",Package=V.BASE.LIBBOX,Test=root,Output=output+"\n"))
+    action="fail" if control else "pass"
+    rows.extend((dict(Action=action,Package=V.BASE.LIBBOX,Test=root),dict(Action=action,Package=V.BASE.LIBBOX)))
+    return rows
 def reference_rows(control=False,tcp=False,packet=False):
     selected=V.REFERENCE_PACKET_CONTROL if packet else V.REFERENCE_TCP_CONTROL if tcp else V.REFERENCE_CONTROL
     positive=V.REFERENCE_TCP_CASES if tcp else V.REFERENCE_CASES
@@ -86,6 +94,7 @@ class Composition:
                 # Both the original Run controls and the additive fifty controls
                 # mutate their real source text through the unchanged evaluator.
                 sources={
+                    "experimental/libbox/routervpn_node_chain_latency.go":"mobile/chain/latency.go.tmpl",
                     "routervpn_node_chain_connect.go":"mobile/chain/connect_box.go.tmpl",
                     "experimental/libbox/routervpn_node_chain_connect_lifecycle.go":"mobile/chain/connect_lifecycle.go.tmpl",
                     "experimental/libbox/routervpn/mobilemultihop/node_chain_runtime.go":"internal/mobilemultihop/node_chain_runtime.go",
@@ -93,7 +102,7 @@ class Composition:
                     "experimental/libbox/routervpn/hopmeasure/ordered_latency.go":"internal/hopmeasure/ordered_latency.go",
                     "experimental/libbox/routervpn_ordered_latency.go":"mobile/chain/ordered_latency_bridge.go.tmpl",
                 }
-                for control in (*V.CONTROLS,*V.FIFTY.CONTROLS):
+                for control in (*V.CONTROLS,*V.FIFTY.CONTROLS,*V.ORDINARY.CONTROLS):
                     target=core/control["path"];target.parent.mkdir(parents=True,exist_ok=True)
                     target.write_bytes((ROOT/sources[control["path"]]).read_bytes())
         elif name.endswith("-build"):
@@ -125,6 +134,23 @@ class Composition:
             assert Path(replacements[original]).read_text()==V.BASE.mutate(V.LIFETIME.CONTROL,Path(original).read_text())
             root=V.LIFETIME.ROOT
             raw=(f"=== RUN   {root}\n=== RUN   {root}/retained\n"+V.LIFETIME.CONTROL["witness"]+f"\n--- FAIL: {root} (31.00s)\n    --- FAIL: {root}/retained (31.00s)\nFAIL\n").encode();status=1
+        elif name.startswith("ordinary-fifty-"):
+            case=(env["ROUTERVPN_ORDINARY_FIFTY_MODE"],int(env["ROUTERVPN_ORDINARY_FIFTY_COUNT"]),int(env["ROUTERVPN_ORDINARY_FIFTY_POSITION"]))
+            assert case in V.ORDINARY.CASES
+            assert "ROUTERVPN_CONNECT_FIFTY_CASE" not in env and "ROUTERVPN_CONNECT_RUN_CASE" not in env
+            assert env["GODEBUG"]=="x509usefallbackroots=1"
+            assert Path(env["ROUTERVPN_ORDINARY_FIFTY_PEER"])==self.images[0]
+            assert cwd==self.roles["mobile"][0]
+            if name in {V.ORDINARY.name(c) for c in V.ORDINARY.CASES}:
+                assert name==V.ORDINARY.name(case);raw=encoded(ordinary_rows(case))
+            else:
+                control=next(c for c in V.ORDINARY.CONTROLS if c["name"]==name)
+                assert case==V.ORDINARY.CASES[0]
+                overlay=Path(next(x.split("=",1)[1] for x in command if x.startswith("-overlay=")))
+                replacements=json.loads(overlay.read_text())["Replace"];original=str(cwd/control["path"])
+                assert list(replacements)==[original]
+                assert Path(replacements[original]).read_text()==V.ORDINARY.mutation(V.BASE,control,Path(original).read_text())
+                raw=encoded(ordinary_rows(case,control));status=1
         elif name.startswith("fifty-"):
             mode=env["ROUTERVPN_CONNECT_FIFTY_CASE"];assert mode in V.FIFTY.MODES
             assert "ROUTERVPN_CONNECT_RUN_CASE" not in env
@@ -199,6 +225,16 @@ class Composition:
             if self.fault=="fifty-mobile-changed":(self.roles["mobile"][0]/"original.go").write_text("changed")
             if self.fault=="fifty-image-changed":self.images[0].write_bytes(b"changed")
             if self.fault=="fifty-selection-changed":self.selection.write_text(json.dumps(dict(self.metadata,source_tree="1"*40)))
+        if self.fault==("ordinary-terminal",name):raw=encoded([json.loads(row) for row in raw.splitlines()][:-1])
+        if name==V.ORDINARY.name(V.ORDINARY.CASES[0]):
+            if self.fault=="ordinary-wrong-position":raw=raw.replace(b"position=1",b"position=0")
+            if self.fault=="ordinary-missing-fifty":raw=raw.replace(b"samples=50",b"samples=49")
+        if name==V.ORDINARY.CONTROLS[0]["name"]:
+            if self.fault=="ordinary-control-pass":status=0
+            if self.fault=="ordinary-control-witness":raw=raw.replace(V.ORDINARY.CONTROLS[0]["witness"].encode(),b"unrelated")
+        if name==V.ORDINARY.CONTROLS[-1]["name"]:
+            if self.fault=="ordinary-image-changed":self.images[0].write_bytes(b"changed")
+            if self.fault=="ordinary-source-changed":(self.source/"original.go").write_text("changed")
         log.write_bytes(raw)
         timed_out=(self.fault=="timeout" and name=="run-http-wg") or (self.fault=="fifty-timeout" and name=="fifty-http-wg") or (self.fault=="fifty-control-timeout" and name==V.FIFTY.CONTROLS[0]["name"])
         timed_out=timed_out or (self.fault=="lifetime-positive-timeout" and name=="reference-established-positive") or (self.fault=="lifetime-negative-timeout" and name==V.LIFETIME.CONTROL["name"])
@@ -220,10 +256,11 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
         self.assertEqual(len(V.FIFTY.MODES),6);self.assertEqual(len(V.FIFTY.LEAVES),14);self.assertEqual(len(V.FIFTY.CONTROLS),7)
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
-            self.assertEqual(len(c.calls),44)
-            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,30,600,30,600,600,60,600,*([190]*14),*([600]*4),*([190]*6),*([600]*7)])
+            self.assertEqual(len(c.calls),60)
+            self.assertEqual([x[0] for x in c.calls[44:]],[V.ORDINARY.name(c) for c in V.ORDINARY.CASES]+[c["name"] for c in V.ORDINARY.CONTROLS])
+            self.assertEqual([x[4] for x in c.calls[:44]],[60,600,600,600,600,100,30,600,30,600,600,60,600,*([190]*14),*([600]*4),*([190]*6),*([600]*7)])
             self.assertEqual([x[0] for x in c.calls[11:13]],["reference-established-positive",V.LIFETIME.CONTROL["name"]])
-            self.assertEqual([x[0] for x in c.calls[-13:]],["fifty-"+value for value in V.FIFTY.MODES]+[value["name"] for value in V.FIFTY.CONTROLS])
+            self.assertEqual([x[0] for x in c.calls[31:44]],["fifty-"+value for value in V.FIFTY.MODES]+[value["name"] for value in V.FIFTY.CONTROLS])
             self.assertEqual(c.original,[V.ORIGINAL,V.LIFETIME.NAMES])
             self.assertEqual(receipt["reference_established_records"],list(V.LIFETIME.NAMES))
             self.assertTrue(receipt["reference_established_control"]["expected_failure"])
@@ -243,17 +280,21 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
             self.assertEqual([row["mode"] for row in receipt["ordered_fifty_records"]],list(V.FIFTY.MODES))
             self.assertEqual([row["name"] for row in receipt["ordered_fifty_controls"]],[value["name"] for value in V.FIFTY.CONTROLS])
             self.assertFalse(receipt["ordered_fifty_host_persistence_accepted"])
+            self.assertTrue(receipt["ordinary_ordered_fifty_native_borrow_accepted"])
+            self.assertEqual([(r["mode"],r["count"],r["position"]) for r in receipt["ordinary_ordered_fifty_records"]],list(V.ORDINARY.CASES))
+            self.assertEqual([r["name"] for r in receipt["ordinary_ordered_fifty_controls"]],[c["name"] for c in V.ORDINARY.CONTROLS])
+            self.assertEqual([x[4] for x in c.calls[44:]],[190]*11+[600]*5)
             self.assertEqual(json.loads((c.output/"receipt.json").read_text()),receipt)
             for name,command,_,_,_ in c.calls:
-                if name.endswith("-build") or name in {v["name"] for v in (*V.CONTROLS,*V.FIFTY.CONTROLS,V.LIFETIME.CONTROL)}:
+                if name.endswith("-build") or name in {v["name"] for v in (*V.CONTROLS,*V.FIFTY.CONTROLS,*V.ORDINARY.CONTROLS,V.LIFETIME.CONTROL)}:
                     self.assertIn("-race",command);self.assertIn("-p=1",command)
-                if name.startswith("run-") or name in {"fifty-"+value for value in V.FIFTY.MODES}:self.assertIn("-test.timeout=180s",command)
-                if name in {v["name"] for v in (*V.CONTROLS,*V.FIFTY.CONTROLS)}:self.assertIn("-timeout=180s",command)
+                if name.startswith("run-") or name in {"fifty-"+value for value in V.FIFTY.MODES} or name in {V.ORDINARY.name(c) for c in V.ORDINARY.CASES}:self.assertIn("-test.timeout=180s",command)
+                if name in {v["name"] for v in (*V.CONTROLS,*V.FIFTY.CONTROLS,*V.ORDINARY.CONTROLS)}:self.assertIn("-timeout=180s",command)
                 if name=="original-imported-middle":self.assertIn("-test.timeout=90s",command)
                 if name=="reference-established-positive":self.assertIn("-test.timeout=45s",command)
                 if name==V.LIFETIME.CONTROL["name"]:self.assertIn("-timeout=45s",command)
     def test_no_failed_missing_or_unjoined_phase_can_publish_acceptance(self):
-        for fault in ("preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
+        for fault in ("ordinary-wrong-position","ordinary-missing-fifty","ordinary-control-pass","ordinary-control-witness","ordinary-image-changed","ordinary-source-changed",*( ("ordinary-terminal",name) for name in [V.ORDINARY.name(c) for c in V.ORDINARY.CASES]+[c["name"] for c in V.ORDINARY.CONTROLS]),"preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
                       "reference-missing","reference-control-pass","reference-control-witness","reference-unjoined",
                       "tcp-reference-missing","tcp-reference-control-pass","tcp-reference-control-witness","tcp-reference-unjoined",
                       "packet-reference-control-pass","packet-reference-control-witness","packet-reference-unjoined",
@@ -276,6 +317,30 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
                 with self.assertRaises(ValueError):c.run()
                 self.assertFalse((c.output/"receipt.json").exists())
                 self.assertEqual(json.loads((c.output/"progress.json").read_text())["status"],"failed")
+    def test_ordinary_exact_inventory_and_causal_witness_are_mandatory(self):
+        self.assertEqual({p for mode,count,p in V.ORDINARY.CASES if mode=="wg" and count==8},set(range(8)))
+        self.assertEqual(len(V.ORDINARY.CASES),11)
+        self.assertEqual(len(set(V.ORDINARY.CASES)),11)
+        for case in V.ORDINARY.CASES:
+            rows=ordinary_rows(case)
+            self.assertTrue(V.ORDINARY.events(V.BASE,encoded(rows),0,case)["accepted"])
+            for bad in (rows[:-1],rows+rows,list(reversed(rows))):
+                with self.assertRaises(ValueError):V.ORDINARY.events(V.BASE,encoded(bad),0,case)
+        sources={V.ORDINARY.PROJECTIONS[0][1]:"mobile/chain/latency.go.tmpl",
+                 "experimental/libbox/routervpn_ordered_latency.go":"mobile/chain/ordered_latency_bridge.go.tmpl",
+                 "experimental/libbox/routervpn/hopmeasure/ordered_latency.go":"internal/hopmeasure/ordered_latency.go"}
+        for control in V.ORDINARY.CONTROLS:
+            original=(ROOT/sources[control["path"]]).read_text()
+            self.assertEqual(original.count(control["before"]),1)
+            self.assertNotEqual(V.ORDINARY.mutation(V.BASE,control,original),original)
+            for bad in ("missing",original+original):
+                with self.assertRaises(ValueError):V.ORDINARY.mutation(V.BASE,control,bad)
+            raw=encoded(ordinary_rows(V.ORDINARY.CASES[0],control))
+            self.assertTrue(V.ORDINARY.events(V.BASE,raw,1,V.ORDINARY.CASES[0],control)["accepted"])
+            for status in (0,-9,124):
+                with self.assertRaises(ValueError):V.ORDINARY.events(V.BASE,raw,status,V.ORDINARY.CASES[0],control)
+            for bad in (raw.replace(control["witness"].encode(),b"unrelated"),raw+b"panic: unrelated\n"):
+                with self.assertRaises(ValueError):V.ORDINARY.events(V.BASE,bad,1,V.ORDINARY.CASES[0],control)
     def test_exact_source_selection_precedes_preparation(self):
         for fault in ("wrong-suite","wrong-source","output-exists","missing-selection"):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:

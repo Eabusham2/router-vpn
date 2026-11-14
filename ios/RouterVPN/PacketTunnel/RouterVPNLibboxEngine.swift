@@ -819,6 +819,7 @@ final class RouterVPNLibboxEngine {
             lock.lock(); defer { lock.unlock() }
             if complete { return }
             delivery?.cancel()
+            try delivery?.closeLatency()
             plan.networkChanged(); platform.mtu.invalidate()
             measurement?.networkChanged(); dns?.networkChanged(); candidate?.invalidate()
             // Cancel all original I/O before closing the Box. A failed first
@@ -1501,13 +1502,13 @@ final class RouterVPNLibboxEngine {
         }
         func run() {
             engine.ownershipLock.lock()
-            let socks = engine.nodeChainSOCKS, connect = engine.nodeChainCONNECT, generation = engine.ownershipGeneration
+            let socks = engine.nodeChainSOCKS, connect = engine.nodeChainCONNECT, ordinary = engine.nodeChainDelivery, generation = engine.ownershipGeneration
             let available = !engine.starting && !engine.permanentlyStopped && engine.server != nil
             engine.ownershipLock.unlock()
-            guard available, (socks != nil) != (connect != nil), request.operation == "ordered-latency-info" || request.session == engine.settingsEpoch else { completion(nil); return }
+            guard available, [socks != nil, connect != nil, ordinary != nil].filter({ $0 }).count == 1, request.operation == "ordered-latency-info" || request.session == engine.settingsEpoch else { completion(nil); return }
             func current() -> Bool {
                 engine.ownershipLock.lock(); defer { engine.ownershipLock.unlock() }
-                return engine.nodeChainSOCKS === socks && engine.nodeChainCONNECT === connect && engine.ownershipGeneration == generation && !engine.permanentlyStopped
+                return engine.nodeChainSOCKS === socks && engine.nodeChainCONNECT === connect && engine.nodeChainDelivery === ordinary && engine.nodeChainExecution == nil && engine.nodeCandidatePrefix == nil && engine.ownershipGeneration == generation && !engine.permanentlyStopped
             }
             var result: Data?
             do {
@@ -1515,10 +1516,12 @@ final class RouterVPNLibboxEngine {
                 if request.operation == "ordered-latency-info" {
                     if let connect { result = try connect.latencyInfo(request, session: engine.settingsEpoch) }
                     else if let socks { result = try socks.latencyInfo(request, session: engine.settingsEpoch) }
+                    else if let ordinary { result = try ordinary.latencyInfo(request, session: engine.settingsEpoch) }
                 }
                 else if request.operation == "ordered-latency-open" {
                     if let connect { _ = try connect.latencyOpen(request) }
                     else if let socks { _ = try socks.latencyOpen(request) }
+                    else if let ordinary { _ = try ordinary.latencyOpen(request) }
                     result = request.reply(["opened": true, "closed": false])
                 } else {
                     guard let owner = RouterVPNOrderedLatencyRegistry.shared.find(request) else { throw CancellationError() }
@@ -1736,6 +1739,7 @@ final class RouterVPNLibboxEngine {
         private let lock = NSLock()
         private var callback: ((Error?) -> Void)?
         private var started = false, cancelled = false
+        private var latencyOwner: RouterVPNOrderedLatencyOwner?
         init(owner: RouterVPNLibboxEngine, plan: LibboxRouterNodeChain, server: LibboxCommandServer,
              generation: UUID, completion: @escaping (Error?) -> Void) {
             self.owner = owner; self.plan = plan; self.server = server; self.generation = generation; callback = completion
@@ -1751,7 +1755,8 @@ final class RouterVPNLibboxEngine {
             lock.unlock(); completion?(delivered)
         }
         func cancel() {
-            lock.lock(); cancelled = true; lock.unlock()
+            lock.lock(); cancelled = true; let latency = latencyOwner; lock.unlock()
+            latency?.cancel()
             plan.networkChanged(); finish(retired())
         }
         func run() {
@@ -1785,6 +1790,68 @@ final class RouterVPNLibboxEngine {
                 guard valid else { timer.setEventHandler {}; timer.resume(); timer.cancel(); throw retired() }
                 finish(nil)
             } catch { finish(error) }
+        }
+        private func latencyNodes() throws -> [[String: Any]] {
+            guard let owner, current(owner), plan.healthy(), let data = progress(),
+                  let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  body["ready"] as? Bool == true, body["complete"] as? Bool == true,
+                  body["execution"] as? String == "local", let prefixes = body["prefixes"] as? [[String: Any]],
+                  (2...8).contains(prefixes.count) else { throw retired() }
+            let nodes = try prefixes.enumerated().map { position, prefix -> [String: Any] in
+                let kind = prefix["kind"] as? String ?? "private-node"
+                guard prefix["position"] as? Int == position, prefix["proven"] as? Bool == true,
+                      let id = prefix["profile_id"] as? String, !id.isEmpty,
+                      kind == "private-node" || (kind == "public-path" && prefixes.count == 3 && position == 1) else { throw retired() }
+                return ["position": position, "node_id": id, "kind": kind]
+            }
+            guard current(owner) else { throw retired() }; return nodes
+        }
+        func latencyInfo(_ request: RouterVPNOrderedLatencyRequest, session: String) throws -> Data? {
+            let nodes = try latencyNodes()
+            guard let owner, current(owner), let status = owner.platform.mtu.request(operation: "mtu-status", request: request.request, session: ""),
+                  let mtu = try JSONSerialization.jsonObject(with: status) as? [String: Any], let mtuSession = mtu["session_id"] as? String else { throw retired() }
+            guard current(owner) else { throw retired() }
+            return request.reply(["provider_session": session, "mtu_session_id": mtuSession,
+                "source_sha256": plan.sourceSHA256(), "config_sha256": plan.configSHA256(), "nodes": nodes])
+        }
+        private func requireLatency(_ request: RouterVPNOrderedLatencyRequest) throws {
+            lock.lock(); let stopped = cancelled; lock.unlock()
+            guard !stopped, let owner, current(owner), plan.sourceSHA256() == request.source, plan.configSHA256() == request.config,
+                  try latencyNodes().contains(where: { $0["node_id"] as? String == request.node }),
+                  let status = owner.platform.mtu.request(operation: "mtu-status", request: request.lease, session: ""),
+                  let mtu = try JSONSerialization.jsonObject(with: status) as? [String: Any],
+                  mtu["measurement_lease"] as? String == request.lease, mtu["measurement_hold"] as? Bool == true,
+                  mtu["measurement_ready"] as? Bool == true, current(owner) else { throw retired() }
+        }
+        func latencyOpen(_ request: RouterVPNOrderedLatencyRequest) throws -> RouterVPNOrderedLatencyOwner {
+            try requireLatency(request)
+            lock.lock()
+            if let old = latencyOwner, !old.isClosed() {
+                lock.unlock(); guard old.request.matches(request) else { throw retired() }; return old
+            }
+            let retained = RouterVPNOrderedLatencyOwner(request) { [weak self] in
+                guard let self else { throw CancellationError() }; try self.requireLatency(request)
+            }
+            guard !cancelled, RouterVPNOrderedLatencyRegistry.shared.retain(retained) else { lock.unlock(); throw retired() }
+            latencyOwner = retained; lock.unlock()
+            try retained.open { [self] retain in
+                try requireLatency(request)
+                guard let owner, current(owner) else { throw retired() }
+                owner.ownershipLock.lock(); let probe = owner.hopMeasurement; owner.ownershipLock.unlock()
+                guard let probe else { throw retired() }
+                var failure: NSError?
+                let returned = LibboxRouterNodeChainNewLatencyBenchmark(plan, server, probe, &failure)
+                if let returned { retain(returned) }
+                guard returned != nil, failure == nil else { throw failure ?? retired() }
+                try requireLatency(request)
+                owner.ownershipLock.lock(); let sameProbe = owner.hopMeasurement === probe; owner.ownershipLock.unlock()
+                guard sameProbe else { throw retired() }
+            }
+            return retained
+        }
+        func closeLatency() throws {
+            lock.lock(); let original = latencyOwner; lock.unlock()
+            try original?.close()
         }
         func progress() -> Data? {
             guard let owner, current(owner) else { return nil }

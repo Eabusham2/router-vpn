@@ -231,12 +231,13 @@ final class AndroidNodeChainSession {
 
     synchronized io.nekohasekai.libbox.RouterOrderedLatency newOrderedLatency(io.nekohasekai.libbox.RouterHopMeasurement measurement) throws Exception {
         requireCurrent();
-        if(!nativeHealthy()||!typedNative()||measurement==null||orderedLatency!=null)
-            throw new IllegalStateException("The original typed ordered benchmark owner is unavailable or still draining.");
+        if(!nativeHealthy()||!orderedLatencyEligible()||measurement==null||orderedLatency!=null)
+            throw new IllegalStateException("The original ordered benchmark owner is unavailable or still draining.");
         // The third argument is the service retained by LayeredVpnService.
         // The native factory refuses any second or foreign measurement owner.
         orderedLatency=capture.connect!=null?Libbox.routerNodeChainCONNECTNewLatencyBenchmark(capture.connect.plan,server,measurement)
-                :Libbox.routerNodeChainSOCKSNewLatencyBenchmark(capture.socks.plan,server,measurement);
+                :capture.socks!=null?Libbox.routerNodeChainSOCKSNewLatencyBenchmark(capture.socks.plan,server,measurement)
+                :Libbox.routerNodeChainNewLatencyBenchmark(capture.plan,server,measurement);
         if(orderedLatency==null)throw new IllegalStateException("The native ordered benchmark returned no facade.");
         return orderedLatency;
     }
@@ -361,6 +362,8 @@ final class AndroidNodeChainSession {
             throw new IllegalStateException("The original ordered execution Box has no successful native close receipt.");
         nativeClosed = true;
     }
+    boolean orderedLatencyEligible() { return execution == null && candidatePrefix == null && "local".equals(source.execution) && (typedNative() || capture.plan != null); }
+
     boolean typedNative() { return capture.socks != null || capture.connect != null; }
     boolean released() { return released; }
     boolean claimed() { return claimed; }

@@ -242,6 +242,12 @@ func (owner *routerVPNNodeChainRuntime) close(ctx context.Context) error {
 		owner.candidates = nil
 	}
 	if owner.measurement != nil {
+		owner.measurement.cancelWorker()
+		if owner.measurement.latency != nil {
+			if err := owner.measurement.latency.CloseContext(ctx); err != nil {
+				return err
+			}
+		}
 		if err := owner.measurement.service.CloseContext(ctx); err != nil {
 			return err
 		}

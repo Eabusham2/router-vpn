@@ -5,7 +5,7 @@ import CoreFoundation
 /// connection authority. The closed receipt grammar excludes labels/secrets.
 struct IOSOrderedLatencyRecord: Sendable {
     let raw: String, source: String, config: String, generation: String, node: String, request: String, kind: String
-    let position: Int, measuredAt: Int64
+    let position: Int, count: Int, measuredAt: Int64
     let minimum: Double, median: Double, average: Double, trimmed: Double, p90: Double, maximum: Double, jitter: Double
     static func issue() -> NSError { NSError(domain: "RouterVPN.OrderedLatency", code: 1, userInfo: [NSLocalizedDescriptionKey: "No complete, correctly bound 50-response ordered benchmark."]) }
     static func hex(_ value: String, _ count: Int = 64) -> Bool {
@@ -43,23 +43,30 @@ struct IOSOrderedLatencyRecord: Sendable {
         let p = try Self.integer(v, "position"); measuredAt = try Self.integer(v, "measured_at")
         guard try Self.integer(v, "schema") == 1, Self.hex(source), Self.hex(config), Self.hex(generation), Self.hex(request, 32),
               node.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
-              p < 3, measuredAt > 0, Double(measuredAt) <= now.timeIntervalSince1970 * 1000 + 60000,
+              p < 8, measuredAt > 0, Double(measuredAt) <= now.timeIntervalSince1970 * 1000 + 60000,
               let result = v["result"] as? [String: Any] else { throw Self.issue() }
         position = Int(p)
         try Self.keys(result, ["node_id", "role", "kind", "label", "ready", "benchmark"])
         kind = try Self.text(result, "kind")
-        let role = position == 0 ? "entry" : position == 2 ? "exit" : "intermediate"
-        let expectedKind = position == 1 ? "public-path" : "private-node"
-        let label = position == 1 ? "Cumulative path through custom node 2 of 3 → Cloudflare edge" : "Cumulative path through node \(position + 1) of 3"
+        let incomingLabel = try Self.text(result, "label")
+        let label: String
+        if kind == "public-path" {
+            guard position == 1 else { throw Self.issue() }
+            count = 3; label = "Cumulative path through custom node 2 of 3 → Cloudflare edge"
+        } else {
+            guard kind == "private-node", let suffix = incomingLabel.split(separator: " ").last, let capturedCount = Int(suffix), (2...8).contains(capturedCount), position < capturedCount else { throw Self.issue() }
+            count = capturedCount; label = "Cumulative path through node \(position + 1) of \(capturedCount)"
+        }
+        let role = position == 0 ? "entry" : position == count - 1 ? "exit" : "intermediate"
         guard try Self.text(result, "node_id") == node, try Self.text(result, "role") == role,
-              try Self.text(result, "label") == label, try Self.boolean(result, "ready"), kind == expectedKind,
+              try Self.text(result, "label") == label, try Self.boolean(result, "ready"),
               let benchmark = result["benchmark"] as? [String: Any], let d = benchmark["distribution"] as? [String: Any] else { throw Self.issue() }
         try Self.keys(benchmark, ["schema", "measurement", "endpoint", "attempts", "failed", "distribution", "trimmed_mean_ms"])
         try Self.keys(d, ["samples", "min_ms", "median_ms", "average_ms", "p90_ms", "max_ms", "jitter_ms"])
         guard try Self.integer(benchmark, "schema") == 1, try Self.integer(benchmark, "attempts") == 50, try Self.integer(benchmark, "failed") == 0,
               try Self.integer(d, "samples") == 50,
-              try Self.text(benchmark, "measurement") == (position == 1 ? "routed-https-response-after-tls" : "routed-private-response-including-connection"),
-              try Self.text(benchmark, "endpoint") == (position == 1 ? "https://speed.cloudflare.com/__down?bytes=1" : "") else { throw Self.issue() }
+              try Self.text(benchmark, "measurement") == (kind == "public-path" ? "routed-https-response-after-tls" : "routed-private-response-including-connection"),
+              try Self.text(benchmark, "endpoint") == (kind == "public-path" ? "https://speed.cloudflare.com/__down?bytes=1" : "") else { throw Self.issue() }
         minimum = try Self.number(d, "min_ms"); median = try Self.number(d, "median_ms"); average = try Self.number(d, "average_ms")
         p90 = try Self.number(d, "p90_ms"); maximum = try Self.number(d, "max_ms"); jitter = try Self.number(d, "jitter_ms"); trimmed = try Self.number(benchmark, "trimmed_mean_ms")
         guard [minimum, median, average, p90, maximum, trimmed].allSatisfy({ $0 > 0 && $0 <= 60000 }),
@@ -69,7 +76,7 @@ struct IOSOrderedLatencyRecord: Sendable {
     }
     var key: String { "\(source):\(config):\(position):\(node):\(kind)" }
     var detail: String {
-        let meaning = position == 1 ? "HTTPS responses through the custom middle, timed after DNS, TCP and TLS preparation." : "Authenticated private HTTP responses through the ordered prefix, including connection establishment."
+        let meaning = kind == "public-path" ? "HTTPS responses through the custom middle, timed after DNS, TCP and TLS preparation." : "Authenticated private HTTP responses through the ordered prefix, including connection establishment."
         return String(format: "Historical • 50 successful responses, 0 failed\nMedian %.2f ms • min %.2f • average %.2f\n10%% trimmed mean %.2f • p90 %.2f • max %.2f • jitter %.2f\n", median, minimum, average, trimmed, p90, maximum, jitter) +
             Date(timeIntervalSince1970: Double(measuredAt) / 1000).formatted() + "\n" + meaning + " Not ICMP or a server-to-server link measurement."
     }

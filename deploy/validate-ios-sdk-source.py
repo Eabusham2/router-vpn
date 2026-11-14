@@ -67,6 +67,7 @@ C_FUNCTIONS = (
     ("LibboxRouterNodeChainSOCKSNewCommandServer", "LibboxCommandServer* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "id<LibboxCommandServerHandler> _Nullable", "id<LibboxPlatformInterface> _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainImportedSOCKSMemberInput", "NSString* _Nonnull", ("NSString* _Nullable", "NSString* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainSOCKSNewHopMeasurement", "LibboxRouterHopMeasurement* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "LibboxCommandServer* _Nullable", "NSError* _Nullable* _Nullable")),
+    ("LibboxRouterNodeChainNewLatencyBenchmark", "LibboxRouterOrderedLatency* _Nullable", ("LibboxRouterNodeChain* _Nullable", "LibboxCommandServer* _Nullable", "LibboxRouterHopMeasurement* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainSOCKSNewLatencyBenchmark", "LibboxRouterOrderedLatency* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "LibboxCommandServer* _Nullable", "LibboxRouterHopMeasurement* _Nullable", "NSError* _Nullable* _Nullable")),
     ("LibboxRouterNodeChainSOCKSNewMTU", "LibboxRouterMTU* _Nullable", ("LibboxRouterNodeChainSOCKS* _Nullable", "LibboxCommandServer* _Nullable", "id<LibboxRouterMTUPlatform> _Nullable", "NSError* _Nullable* _Nullable")),
 )

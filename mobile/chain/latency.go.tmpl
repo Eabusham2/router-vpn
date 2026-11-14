@@ -1,0 +1,47 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+)
+
+// The facade borrows the already captured ordered measurement service. Its
+// validated hop inventory retains each paired/private or imported/public kind;
+// the factory grants no additional native route, endpoint or execution mode.
+func RouterNodeChainNewLatencyBenchmark(m *RouterNodeChain, server *CommandServer, measurement *RouterHopMeasurement) (*RouterOrderedLatency, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	return m.newOrderedLatencyContext(ctx, server, measurement)
+}
+
+func (m *RouterNodeChain) newOrderedLatencyContext(ctx context.Context, server *CommandServer, measurement *RouterHopMeasurement) (*RouterOrderedLatency, error) {
+	if m == nil || m.self != m || m.chain == nil || ctx == nil || server == nil || measurement == nil || measurement.service == nil {
+		return nil, errors.New("ordered latency requires its original captured owner")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	state, instance := m.state.Load(), m.instance
+	if state == nil || instance == nil || m.server != server || m.healthyContext(ctx) != nil {
+		return nil, errors.New("ordered latency changed its original proved native server")
+	}
+	service := m.measurement.Load()
+	if service == nil || service != measurement.service {
+		return nil, errors.New("ordered latency changed its original measurement service")
+	}
+	latency, err := hopmeasure.NewOrderedLatencyValidatedContext(ctx, service, m.chain.SourceSHA256(), m.chain.ConfigSHA256(), func(call context.Context) error {
+		err := m.healthyContext(call)
+		if err != nil || m.state.Load() != state || m.instance != instance || m.server != server || m.measurement.Load() != service {
+			return errors.Join(err, errors.New("ordered latency owner changed during adoption"))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &RouterOrderedLatency{service: latency}, nil
+}

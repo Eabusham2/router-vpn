@@ -97,6 +97,7 @@ ORDERED_LATENCY_SIGNATURES = (
     "void networkChanged();",
 )
 ORDERED_LATENCY_STATIC_SIGNATURES = (
+    PACKAGE+"RouterOrderedLatency routerNodeChainNewLatencyBenchmark("+PACKAGE+"RouterNodeChain, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
     PACKAGE+"RouterOrderedLatency routerNodeChainSOCKSNewLatencyBenchmark("+PACKAGE+"RouterNodeChainSOCKS, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
     PACKAGE+"RouterOrderedLatency routerNodeChainCONNECTNewLatencyBenchmark("+PACKAGE+"RouterNodeChainCONNECT, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
 )
@@ -527,7 +528,7 @@ def self_test():
         def test_exact_signature_inventory(self):
             self.assertEqual(len(PLAN_SIGNATURES),15);self.assertEqual(len(STATIC_SIGNATURES),4)
             self.assertEqual(len(CONNECT_PLAN_SIGNATURES),15);self.assertEqual(len(CONNECT_STATIC_SIGNATURES),5)
-            self.assertEqual(len(ORDERED_LATENCY_SIGNATURES),7);self.assertEqual(len(ORDERED_LATENCY_STATIC_SIGNATURES),2)
+            self.assertEqual(len(ORDERED_LATENCY_SIGNATURES),7);self.assertEqual(len(ORDERED_LATENCY_STATIC_SIGNATURES),3)
             for owner,signatures in GENERATED_API_INVENTORIES:
                 raw=transcript(owner,signatures);self.assertEqual(len(require_signatures(raw,signatures,owner)["required_signatures"]),len(signatures))
         def test_every_missing_duplicate_and_changed_method_refused(self):
@@ -575,7 +576,7 @@ def self_test():
                             signature.replace(PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement", PACKAGE+"RouterHopMeasurement, "+PACKAGE+"CommandServer"),
                             signature.replace(PACKAGE+"RouterOrderedLatency ",PACKAGE+"RouterHopMeasurement ")):
                     with self.subTest(signature=signature),self.assertRaises(ValueError):require_signatures(raw.replace(signature.encode(),bad.encode()),ORDERED_LATENCY_STATIC_SIGNATURES,"Libbox")
-            signature=ORDERED_LATENCY_STATIC_SIGNATURES[1]
+            signature=next(s for s in ORDERED_LATENCY_STATIC_SIGNATURES if "CONNECTNewLatencyBenchmark" in s)
             wrong=signature.replace(PACKAGE+"RouterNodeChainCONNECT,",PACKAGE+"RouterNodeChainSOCKS,")
             with self.assertRaises(ValueError):require_signatures(raw.replace(signature.encode(),wrong.encode()),ORDERED_LATENCY_STATIC_SIGNATURES,"Libbox")
         def test_every_required_generated_class_must_exist_in_actual_archive(self):

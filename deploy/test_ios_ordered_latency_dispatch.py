@@ -26,8 +26,10 @@ class TypedBoundary {
 }
 final class RouterVPNNodeChainSOCKSHost:TypedBoundary{init(){super.init("socks")}}
 final class RouterVPNNodeChainCONNECTHost:TypedBoundary{init(){super.init("connect")}}
+final class NodeChainDelivery:TypedBoundary{init(){super.init("ordinary")}}
 final class RouterVPNLibboxEngine{
  let ownershipLock=NSLock(),settingsEpoch=UUID().uuidString
+ var nodeChainDelivery:NodeChainDelivery?,nodeChainExecution:NSObject?,nodeCandidatePrefix:NSObject?
  var nodeChainSOCKS:RouterVPNNodeChainSOCKSHost?,nodeChainCONNECT:RouterVPNNodeChainCONNECTHost?,ownershipGeneration=UUID(),starting=false,permanentlyStopped=false,server:NSObject?=NSObject()
  // DISPATCH
 }
@@ -51,17 +53,22 @@ TESTS=r'''
   guard let data=reply.wait() else{return nil};return try! JSONSerialization.jsonObject(with:data) as? [String:Any]
  }
  static func main()throws{
-  for kind in ["socks","connect"]{
-   let e=RouterVPNLibboxEngine();if kind=="socks"{e.nodeChainSOCKS=RouterVPNNodeChainSOCKSHost()}else{e.nodeChainCONNECT=RouterVPNNodeChainCONNECTHost()}
+  for kind in ["socks","connect","ordinary"]{
+   let e=RouterVPNLibboxEngine();if kind=="socks"{e.nodeChainSOCKS=RouterVPNNodeChainSOCKSHost()}else if kind=="connect"{e.nodeChainCONNECT=RouterVPNNodeChainCONNECTHost()}else{e.nodeChainDelivery=NodeChainDelivery()}
    check(call(e,request(e,1))?["typed"] as? String==kind,"typed info dispatch "+kind)
    check(call(e,request(e,2,"ordered-latency-open"))?["opened"] as? Bool==true,"typed open dispatch "+kind)
    check(call(e,request(e,2,"ordered-latency-start"))?["status"] as? String=="{}","typed start original facade "+kind)
    check(call(e,request(e,2,"ordered-latency-status"))?["status"] as? String=="{}","typed status original facade "+kind)
    check(call(e,request(e,3,"ordered-latency-open",foreign:true))==nil,"foreign provider session rejected")
-   let events=e.nodeChainSOCKS?.events ?? e.nodeChainCONNECT!.events;check(events==["info","open"],"foreign session cannot call factory")
+   let events=e.nodeChainSOCKS?.events ?? e.nodeChainCONNECT?.events ?? e.nodeChainDelivery!.events;check(events==["info","open"],"foreign session cannot call factory")
   }
   do{let e=RouterVPNLibboxEngine();check(call(e,request(e,4))==nil,"ordinary owner unavailable")}
   do{let e=RouterVPNLibboxEngine();e.nodeChainCONNECT=RouterVPNNodeChainCONNECTHost();e.nodeChainSOCKS=RouterVPNNodeChainSOCKSHost();check(call(e,request(e,5))==nil,"mixed typed owners rejected")}
+  for conflict in ["typed","execution","candidate"]{
+   let e=RouterVPNLibboxEngine();e.nodeChainDelivery=NodeChainDelivery()
+   if conflict=="typed"{e.nodeChainSOCKS=RouterVPNNodeChainSOCKSHost()}else if conflict=="execution"{e.nodeChainExecution=NSObject()}else{e.nodeCandidatePrefix=NSObject()}
+   check(call(e,request(e,30))==nil,"ordinary owner rejects foreign "+conflict)
+  }
   for stage in ["starting","retired","server"]{
    let e=RouterVPNLibboxEngine();e.nodeChainCONNECT=RouterVPNNodeChainCONNECTHost()
    if stage=="starting"{e.starting=true}else if stage=="retired"{e.permanentlyStopped=true}else{e.server=nil}
@@ -94,7 +101,7 @@ def main():
         v=run(dispatch);assert v.returncode==0,v.stdout+v.stderr;print(v.stdout.strip(),flush=True)
         for name,before,after,witness in [
             ('typed-connect-dispatch','if let connect { result = try connect.latencyInfo','if let connect = socks { result = try connect.latencyInfo','typed info dispatch connect'),
-            ('exclusive-owner','(socks != nil) != (connect != nil)','(socks != nil) || (connect != nil)','mixed typed owners rejected'),
+            ('exclusive-owner','[socks != nil, connect != nil, ordinary != nil].filter({ $0 }).count == 1','[socks != nil, connect != nil, ordinary != nil].filter({ $0 }).count >= 1','mixed typed owners rejected'),
             ('original-session','request.session == engine.settingsEpoch','true','foreign provider session rejected'),
             ('post-response-owner','                guard current() else { throw CancellationError() }\n            } catch','                // Lost original owner check\n            } catch','late original owner response rejected'),
         ]:

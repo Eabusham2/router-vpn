@@ -140,9 +140,15 @@ func desktopNodeChainReferenceAddressPair(address, client string) bool {
 }
 
 func desktopNodeChainPeerIdentity(request desktopNodeChainPeerRequest) ([]string, error) {
+	return desktopNodeChainPeerIdentityBounds(request, 2, 3)
+}
+
+// The separate fifty fixture admits the original ordinary1–7 prefix inventory;
+// legacy physical peer admission retains its original2–3 bounds.
+func desktopNodeChainPeerIdentityBounds(request desktopNodeChainPeerRequest, minimum, maximum int) ([]string, error) {
 	bad := errors.New("ordered reference requires complete independent captured peers")
 	if request.Schema != 1 || !desktopNodeChainReferenceAddressPair(request.Address, request.ClientAddress) ||
-		len(request.Prefixes) < 2 || len(request.Prefixes) > 3 ||
+		minimum < 1 || maximum > 7 || minimum > maximum || len(request.Prefixes) < minimum || len(request.Prefixes) > maximum ||
 		(request.BenchmarkPort != 0 && request.BenchmarkPort != 45998) {
 		return nil, bad
 	}
@@ -326,8 +332,12 @@ func desktopNodeChainPrefixFactory(t *testing.T, identity desktopNodeChainPrefix
 }
 
 func desktopNodeChainPeerStart(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr) *desktopNodeChainPeer {
+	return desktopNodeChainPeerStartBounds(t, request, local, remote, 2, 3)
+}
+
+func desktopNodeChainPeerStartBounds(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr, minimum, maximum int) *desktopNodeChainPeer {
 	t.Helper()
-	ipcs, err := desktopNodeChainPeerIdentity(request)
+	ipcs, err := desktopNodeChainPeerIdentityBounds(request, minimum, maximum)
 	if err != nil {
 		t.Fatal(err)
 	}

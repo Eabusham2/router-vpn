@@ -1417,6 +1417,13 @@ def require_native_verdicts(output, names, label):
         raise ValueError("Node " + label + " gate omitted, duplicated or replaced an original lifetime verdict")
 
 
+ORDINARY_FIFTY_SUITE = (
+    "ordinary-ordered-fifty", "./cmd/sing-box",
+    "^TestRouterVPNDesktopOrdinaryFifty(OperationSchema|HTTPComposition)$",
+    ("TestRouterVPNDesktopOrdinaryFiftyOperationSchema", "TestRouterVPNDesktopOrdinaryFiftyHTTPComposition"),
+)
+
+
 def execute_baseline_suite(baselines, suite):
     name, package, selector, required = suite
     # Encrypted graph/layer and selected-DNS cases alone consumed 89.58 s on
@@ -1431,6 +1438,8 @@ def execute_baseline_suite(baselines, suite):
         raise ValueError("Node " + name + " omitted a required native boundary")
     if name in (NODE_SOURCE_RETIRE_SUITE[0], NODE_BOX_RETIRE_SUITE[0]):
         require_native_verdicts(output, required, "captured source before irreversible Box retirement")
+    if name == ORDINARY_FIFTY_SUITE[0]:
+        require_native_verdicts(output, required, "ordinary fifty captured native child")
     if name == OPENVPN_CAPACITY_SUITE[0]:
         require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
     if name in {suite[0] for suite in (ORDERED_PHYSICAL_SUITE, *EXECUTION_DESKTOP_SUITES, *CANDIDATE_PREFIX_DESKTOP_SUITES)}:
@@ -1652,6 +1661,7 @@ def baseline_suites(windows, *, bootstrap_only=False):
                    ("TestRouterVPNDesktopNodeChainMeasurementAdmissionRetainsReader",
                     "TestRouterVPNDesktopNodeChainMeasurementExcludesMTUAndRetiredReader",
                     "TestRouterVPNDesktopNodeChainMeasurementHTTPComposition")))
+    suites.append(ORDINARY_FIFTY_SUITE)
     suites.append(ORDERED_PHYSICAL_SUITE)
     suites.append(CANDIDATE_COMMAND_SUITE)
     suites.extend(EXECUTION_DESKTOP_SUITES)

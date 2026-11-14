@@ -29,6 +29,8 @@ final class LibboxRouterNodeChain: @unchecked Sendable {
  func healthy()->Bool{!cancelled}
  func networkChanged(){cancelled=true}
  func progressJSON()->String{"{}"}
+ func sourceSHA256()->String{""}
+ func configSHA256()->String{""}
 }
 final class NativeFixture: @unchecked Sendable {
  static let shared=NativeFixture()
@@ -40,7 +42,7 @@ func LibboxRouterNodeChainNewHopMeasurement(_ plan:LibboxRouterNodeChain,_ serve
  guard plan.original === server,plan.healthy(),!fixture.fail else{failure=NSError(domain:"native",code:1);return nil}
  let probe=LibboxRouterHopMeasurement();plan.retained=probe;fixture.probe=probe;fixture.hook?();return probe
 }
-final class MTU {var proofObservationToken:Int?{1}}
+final class MTU {var proofObservationToken:Int?{1};func request(operation:String,request:String,session:String)->Data?{nil}}
 final class Platform {let mtu=MTU()}
 final class Tunnel {func nativeLibboxFailure(_ owner:RouterVPNLibboxEngine,error:Error){}}
 final class RouterVPNLibboxEngine: @unchecked Sendable {
@@ -104,7 +106,12 @@ def main():
     source=(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift').read_text()
     admission=MEMBERS.member(source,'    func completeNodeChainExecution(')
     delivery=MEMBERS.member(source,'    private final class NodeChainDelivery:')
-    code=SWIFT.replace(' // SHIPPING_ADMISSION',admission).replace(' // SHIPPING_DELIVERY',delivery)
+    latency=(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNOrderedLatency.swift').read_text().replace('import Libbox\n','')
+    spec=importlib.util.spec_from_file_location('ordinary_measure_latency_boundary',ROOT/'deploy/ios_ordered_latency_boundary.py');boundary=importlib.util.module_from_spec(spec);spec.loader.exec_module(boundary)
+    native=boundary.NATIVE.split('public func LibboxRouterNodeChainSOCKSNewLatencyBenchmark')[0].replace('public ','')
+    native += 'func LibboxRouterValidatePrivateNodeJSON(_ raw:String,_ error:inout NSError?)->Bool{(try? JSONSerialization.jsonObject(with:Data(raw.utf8))) != nil}\n'
+    native += 'func LibboxRouterNodeChainNewLatencyBenchmark(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ probe:LibboxRouterHopMeasurement,_ error:inout NSError?)->LibboxRouterOrderedLatency?{error=NSError(domain:"NoLatencyInProofDeliveryBoundary",code:1);return nil}\n'
+    code=SWIFT.replace(' // SHIPPING_ADMISSION',admission).replace(' // SHIPPING_DELIVERY',delivery)+native+latency
     with tempfile.TemporaryDirectory(prefix='ios-ordered-measure-delivery-') as temporary:
         folder=Path(temporary);swift=folder/'Main.swift';binary=folder/'test'
         swift.write_text(code)

@@ -1625,7 +1625,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='routervpn-libbox-delivery-') as tmp:
         tmp = Path(tmp)
         stub, harness = tmp/'Libbox.swift', tmp/'Harness.swift'
-        stub.write_text(LIBBOX + DNS.NATIVE + CANDIDATE_NATIVE + EXECUTION.NATIVE + PREFIX.NATIVE + SOCKS.NATIVE + CONNECT.NATIVE + LATENCY.NATIVE + LATENCY.CONNECT_FACTORY); harness.write_text(DNS.STORAGE + HARNESS.replace("    func activateImported(server:", EXECUTION.MTU_METHODS + SOCKS.MTU_METHODS + CONNECT.MTU_METHODS + "    func activateImported(server:", 1) .replace('        let chainText=', CONNECT.TESTS + SOCKS.TESTS + PREFIX.TESTS + EXECUTION.TESTS + '        let chainText=', 1) + CANDIDATE_SOURCE + EXECUTION.SOURCE + EXECUTION.IPC_TYPES + PREFIX.SOURCE + SOCKS.SOURCE + CONNECT.SOURCE)
+        stub.write_text(LIBBOX + DNS.NATIVE + CANDIDATE_NATIVE + EXECUTION.NATIVE + PREFIX.NATIVE + SOCKS.NATIVE + CONNECT.NATIVE + LATENCY.NATIVE + LATENCY.CONNECT_FACTORY + LATENCY.ORDINARY_FACTORY); harness.write_text(DNS.STORAGE + HARNESS.replace("    func activateImported(server:", EXECUTION.MTU_METHODS + SOCKS.MTU_METHODS + CONNECT.MTU_METHODS + "    func activateImported(server:", 1) .replace('        let chainText=', CONNECT.TESTS + SOCKS.TESTS + PREFIX.TESTS + EXECUTION.TESTS + '        let chainText=', 1) + CANDIDATE_SOURCE + EXECUTION.SOURCE + EXECUTION.IPC_TYPES + PREFIX.SOURCE + SOCKS.SOURCE + CONNECT.SOURCE)
         hop_types = (ROOT/'ios/RouterVPN/App/IOSHopMeasurements.swift').read_text().split('// HOP_RESULT_TYPES_BEGIN',1)[1].split('// HOP_RESULT_TYPES_END',1)[0]
         binding = tmp/'HopBinding.swift'; binding.write_text('import Foundation\n' + hop_types)
         lib = tmp/('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')

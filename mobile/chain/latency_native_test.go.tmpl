@@ -1,0 +1,440 @@
+//go:build linux && !android
+
+package libbox
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing/service"
+)
+
+type ordinaryFiftyReply struct {
+	Schema       int             `json:"schema"`
+	Source       string          `json:"source,omitempty"`
+	SourceSHA256 string          `json:"source_sha256"`
+	ConfigSHA256 string          `json:"config_sha256"`
+	Address      string          `json:"address"`
+	PublicCA     string          `json:"public_ca,omitempty"`
+	Peer         json.RawMessage `json:"peer"`
+	DNS          uint64          `json:"dns"`
+	PublicDNS    uint64          `json:"public_dns"`
+	FinalAuth    uint64          `json:"final_auth"`
+	HeldProofs   uint64          `json:"held_proofs"`
+	Associations int             `json:"associations"`
+}
+type ordinaryFiftyPeer struct {
+	command  *exec.Cmd
+	input    io.WriteCloser
+	reader   *bufio.Reader
+	stderr   bytes.Buffer
+	cancel   context.CancelFunc
+	mu       sync.Mutex
+	done     chan struct{}
+	waitErr  error
+	joined   bool
+	original ordinaryFiftyReply
+}
+
+func ordinaryFiftyStartPeer(t *testing.T, mode string, count int) *ordinaryFiftyPeer {
+	t.Helper()
+	image := os.Getenv("ROUTERVPN_ORDINARY_FIFTY_PEER")
+	if !filepath.IsAbs(image) {
+		t.Fatal("original separately compiled peer image missing")
+	}
+	// Cover the original proof (40s), measurement (90s), drain (5s), and
+	// finite startup/observation/teardown overhead. The independent peer still
+	// has its own earlier deadline and must join the captured process owner.
+	ctx, cancel := context.WithTimeout(context.Background(), 175*time.Second)
+	p := &ordinaryFiftyPeer{cancel: cancel, done: make(chan struct{})}
+	p.command = exec.CommandContext(ctx, image, "-test.run=^TestRouterVPNDesktopNodeChainOrdinaryFiftyReference$", "-test.timeout=170s", "-test.v=false")
+	p.command.Env = append(os.Environ(), "ROUTERVPN_ORDINARY_FIFTY_REFERENCE=1")
+	p.command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	p.command.WaitDelay = 2 * time.Second
+	p.command.Cancel = func() error {
+		if p.command.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-p.command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	input, err := p.command.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	p.input = input
+	output, writer, err := os.Pipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	p.command.Stdout = writer
+	p.reader = bufio.NewReaderSize(output, mobilemultihop.NodeChainInputLimit+65536)
+	t.Cleanup(func() { _ = output.Close() })
+	p.command.Stderr = &p.stderr
+	if err = p.command.Start(); err != nil {
+		_ = writer.Close()
+		_ = output.Close()
+		cancel()
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	go func() { p.waitErr = p.command.Wait(); close(p.done) }()
+	t.Cleanup(func() {
+		if err := p.close(); err != nil {
+			t.Error("original encrypted peer did not join", err)
+		}
+	})
+	if err = json.NewEncoder(input).Encode(map[string]any{"schema": 1, "mode": mode, "count": count}); err != nil {
+		t.Fatal(err)
+	}
+	p.original = p.reply(t)
+	address, err := netip.ParseAddrPort(p.original.Address)
+	if err != nil || !address.Addr().Is4() || address.Addr() != netip.MustParseAddr("127.0.0.1") || address.Port() == 0 ||
+		p.original.Source == "" || p.original.PublicCA == "" || p.original.Schema != 1 {
+		t.Fatal("original peer's bounded physical/source receipt changed")
+	}
+	return p
+}
+func (p *ordinaryFiftyPeer) reply(t *testing.T) ordinaryFiftyReply {
+	t.Helper()
+	type value struct {
+		line []byte
+		err  error
+	}
+	done := make(chan value, 1)
+	go func() { line, err := p.reader.ReadSlice('\n'); done <- value{append([]byte(nil), line...), err} }()
+	var result value
+	select {
+	case result = <-done:
+	case <-time.After(3 * time.Second):
+		p.cancel()
+		<-p.done
+		result = <-done
+		t.Fatal("original peer response did not join", result.err)
+	}
+	if result.err != nil || len(result.line) > mobilemultihop.NodeChainInputLimit+65535 {
+		t.Fatal("original peer reply missing or oversized", result.err)
+	}
+	var response ordinaryFiftyReply
+	decoder := json.NewDecoder(bytes.NewReader(result.line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&response) != nil || decoder.Decode(new(any)) != io.EOF || response.Schema != 1 {
+		t.Fatal("original peer reply schema changed")
+	}
+	if p.original.Source != "" && (response.SourceSHA256 != p.original.SourceSHA256 || response.ConfigSHA256 != p.original.ConfigSHA256 || response.Address != p.original.Address) {
+		t.Fatal("original peer identity changed during observation")
+	}
+	return response
+}
+func (p *ordinaryFiftyPeer) observe(t *testing.T) ordinaryFiftyReply {
+	t.Helper()
+	if _, err := io.WriteString(p.input, "snapshot\n"); err != nil {
+		t.Fatal(err)
+	}
+	return p.reply(t)
+}
+func (p *ordinaryFiftyPeer) close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.joined {
+		return p.waitErr
+	}
+	_, writeErr := io.WriteString(p.input, "quit\n")
+	_ = p.input.Close()
+	var tail []byte
+	readDone := make(chan struct{})
+	go func() { tail, _ = io.ReadAll(io.LimitReader(p.reader, 65537)); close(readDone) }()
+	select {
+	case <-p.done:
+	case <-time.After(5 * time.Second):
+		p.cancel()
+		<-p.done
+	}
+	<-readDone
+	p.cancel()
+	p.joined = true
+	if p.waitErr != nil || writeErr != nil || len(tail) > 65536 ||
+		strings.Count(string(tail), "ORDINARY_FIFTY_PEER_JOINED\n") != 1 ||
+		strings.Contains(string(tail), "FAIL") || strings.Contains(p.stderr.String(), "WARNING: DATA RACE") {
+		return errors.Join(p.waitErr, writeErr, errors.New("original peer cleanup receipt absent or failed"))
+	}
+	return nil
+}
+
+// Preserve the shipping ordinary constructor and original CommandServer. Only
+// OS TUN/monitor and the first captured physical tuple are fixture boundaries.
+func ordinaryFiftyNative(t *testing.T, p *ordinaryFiftyPeer) (*RouterNodeChain, *CommandServer, *socksRunPhysical) {
+	t.Helper()
+	socksBridgeNativeSetup(t)
+	owner, err := RouterNodeChainLaunch(p.original.Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner.SourceSHA256() != p.original.SourceSHA256 || owner.ConfigSHA256() != p.original.ConfigSHA256 {
+		t.Fatal("ordinary source/config mismatch")
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(p.original.PublicCA)) || os.Getenv("GODEBUG") != "x509usefallbackroots=1" {
+		t.Fatal("isolated TLS root process required")
+	}
+	x509.SetFallbackRoots(roots)
+	server, err := NewCommandServer(&socksBridgeHandler{}, &socksBridgeNativePlatform{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		owner.NetworkChanged()
+		if err := owner.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := RouterStrategyCloseService(server); err != nil {
+			t.Error("original ordinary native close", err)
+		}
+		server.Close()
+	})
+	ins, ok := service.FromContext[adapter.InboundRegistry](server.ctx).(*inbound.Registry)
+	if !ok {
+		t.Fatal("original inbound registry")
+	}
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, o option.TunInboundOptions) (adapter.Inbound, error) {
+		n := &socksBridgeNativeTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: "original-ordinary-tun"}
+		n.index.Store(41)
+		n.mtu.Store(int32(o.MTU))
+		return n, nil
+	})
+	proofs := owner.chain.ProofInventory()
+	first := proofs[0].Tag
+	lower := &socksRunPhysical{virtual: "192.168.210.2:51820", original: p.original.Address}
+	ends, ok := service.FromContext[adapter.EndpointRegistry](server.ctx).(*endpoint.Registry)
+	if !ok {
+		t.Fatal("original endpoint registry")
+	}
+	mapped := func(ctx context.Context, tag string) (context.Context, bool) {
+		if tag != first {
+			return ctx, false
+		}
+		original := service.FromContext[adapter.OutboundManager](ctx)
+		child := service.ExtendContext(ctx)
+		child = service.ContextWith[adapter.OutboundManager](child, &socksRunPhysicalManager{OutboundManager: original, lower: lower})
+		return child, true
+	}
+	endpoint.Register[option.WireGuardEndpointOptions](ends, C.TypeWireGuard, func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
+		ctx, first := mapped(ctx, tag)
+		if first {
+			if o.Detour != "" {
+				return nil, errors.New("ordinary entry acquired detour")
+			}
+			o.Detour = "captured-socks-run-physical"
+		}
+		native, err := WG.NewEndpoint(ctx, r, l, tag, o)
+		if err == nil && first {
+			return &socksRunEndpoint{native}, nil
+		}
+		return native, err
+	})
+	endpoint.Register[AWG.Options](ends, mobilemultihop.AmneziaType, func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o AWG.Options) (adapter.Endpoint, error) {
+		ctx, first := mapped(ctx, tag)
+		if first {
+			if o.Detour != "" {
+				return nil, errors.New("ordinary AWG entry acquired detour")
+			}
+			o.Detour = "captured-socks-run-physical"
+		}
+		native, err := AWG.NewEndpoint(ctx, r, l, tag, o)
+		if err == nil && first {
+			return &socksRunEndpoint{native}, nil
+		}
+		return native, err
+	})
+	if err := server.StartedService.StartOrReloadService(server.ctx, owner.Config(), nil); err != nil {
+		t.Fatal("actual ordinary native start", err)
+	}
+	if err := owner.Run(server); err != nil {
+		t.Fatal("actual ordinary encrypted proof", err)
+	}
+	if !owner.Healthy() || lower.calls.Load() == 0 {
+		t.Fatal("ordinary original proof or physical encryption absent")
+	}
+	return owner, server, lower
+}
+func TestRouterNodeChainOrdinaryEncryptedOrderedFifty(t *testing.T) {
+	mode := os.Getenv("ROUTERVPN_ORDINARY_FIFTY_MODE")
+	if mode == "" {
+		t.Skip("original separately compiled encrypted reference required")
+	}
+	var count int
+	if _, err := fmt.Sscan(os.Getenv("ROUTERVPN_ORDINARY_FIFTY_COUNT"), &count); err != nil || count < 2 || count > 8 {
+		t.Fatal("uncaptured ordinary inventory")
+	}
+	peer := ordinaryFiftyStartPeer(t, mode, count)
+	owner, server, _ := ordinaryFiftyNative(t, peer)
+	probe, err := RouterNodeChainNewHopMeasurement(owner, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := owner.measurement.Load()
+	copied := &RouterNodeChain{self: owner.self, chain: owner.chain, server: owner.server, instance: owner.instance, session: owner.session, identity: owner.identity}
+	copied.state.Store(owner.state.Load())
+	copied.measurement.Store(original)
+	expired, cancelExpired := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	value, expiredError := owner.newOrderedLatencyContext(expired, server, probe)
+	cancelExpired()
+	if value != nil || !errors.Is(expiredError, context.DeadlineExceeded) {
+		t.Fatal("ordinary original caller deadline lost", expiredError)
+	}
+	mtuPlan, err := owner.chain.MTUPlan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform := &socksRunMTUPlatform{routerMTUContextPlatform: routerMTUContextPlatform{state: RouterMTUState{Session: owner.session, Path: "original-ordinary-physical", Interface: "original-ordinary-tun", MTU: int32(mtuPlan.Original)}}}
+	optimizer, err := RouterNodeChainNewMTU(owner, server, platform)
+	if err != nil {
+		t.Fatal("ordinary original MTU adoption", err)
+	}
+	t.Cleanup(func() {
+		if err := optimizer.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	held, err := owner.BeginMeasurementContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := owner.state.Load()
+	changed, blocked := owner.beforeMTUChange(t.Context(), optimizer.owner, 1280)
+	held()
+	if changed || blocked == nil || owner.state.Load() != state || !owner.Healthy() {
+		t.Fatal("ordinary measurement failed original MTU exclusion")
+	}
+
+	for _, wrong := range []struct {
+		plan   *RouterNodeChain
+		server *CommandServer
+		probe  *RouterHopMeasurement
+	}{{nil, server, probe}, {owner, &CommandServer{}, probe}, {owner, server, &RouterHopMeasurement{service: new(hopmeasure.Service)}}, {copied, server, probe}} {
+		if value, err := RouterNodeChainNewLatencyBenchmark(wrong.plan, wrong.server, wrong.probe); value != nil || err == nil {
+			t.Fatal("foreign ordinary owner admitted")
+		}
+	}
+	facade, err := RouterNodeChainNewLatencyBenchmark(owner, server, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, err := RouterNodeChainNewLatencyBenchmark(owner, server, probe); value != nil || err == nil {
+		t.Fatal("second facade borrowed service")
+	}
+	proofs := owner.chain.ProofInventory()
+	if len(proofs) != count {
+		t.Fatal("ordinary inventory mismatch")
+	}
+	var selected int
+	if _, err := fmt.Sscan(os.Getenv("ROUTERVPN_ORDINARY_FIFTY_POSITION"), &selected); err != nil || selected < 0 || selected >= count {
+		t.Fatal("uncaptured ordinary selected position")
+	}
+	for position, node := range proofs {
+		if position != selected {
+			continue
+		}
+		request := fmt.Sprintf("%032x", position+1)
+		if err := facade.Start(request, node.ProfileID); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(hopmeasure.RequestTimeout + hopmeasure.ObservationTimeout)
+		for time.Now().Before(deadline) {
+			var pending hopmeasure.Status
+			if json.Unmarshal([]byte(facade.StatusJSON()), &pending) != nil {
+				t.Fatal("ordinary native status changed")
+			}
+			if pending.Complete {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err := facade.Drain(request); err != nil {
+			t.Fatal("actual ordinary50 drain", err)
+		}
+		var status hopmeasure.Status
+		if json.Unmarshal([]byte(facade.StatusJSON()), &status) != nil || !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 1 {
+			t.Fatal("actual ordinary50 completion", facade.StatusJSON())
+		}
+		row := status.Results[0]
+		if !row.Ready || row.ID != node.ProfileID || row.Kind != "private-node" || row.Label != fmt.Sprintf("Cumulative path through node %d of %d", position+1, count) || row.Benchmark == nil || row.Benchmark.Attempts != 50 || row.Benchmark.Failed != 0 || row.Benchmark.Distribution == nil || row.Benchmark.Distribution.Samples != 50 || row.Idle != nil || row.Download != nil || row.Upload != nil {
+			t.Fatal("ordinary native fifty metric changed", row)
+		}
+		var saved hopmeasure.OrderedLatencyReceipt
+		if json.Unmarshal([]byte(facade.SavedJSON(node.ProfileID)), &saved) != nil || saved.Position != position || saved.NodeID != node.ProfileID || saved.SourceSHA256 != owner.SourceSHA256() || saved.ConfigSHA256 != owner.ConfigSHA256() {
+			t.Fatal("ordinary native saved identity changed", saved)
+		}
+		t.Logf("ORDINARY_FIFTY_NODE mode=%s count=%d position=%d samples=50", mode, count, position)
+	}
+	previous := facade.SavedJSON(proofs[selected].ProfileID)
+	cancelRequest := strings.Repeat("d", 32)
+	if err := facade.Start(cancelRequest, proofs[selected].ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	facade.Cancel(cancelRequest)
+	if err := facade.Drain(cancelRequest); err != nil {
+		t.Fatal("ordinary original cancellation did not join", err)
+	}
+	if facade.SavedJSON(proofs[selected].ProfileID) != previous {
+		t.Fatal("ordinary cancellation replaced completed history")
+	}
+	if err := facade.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if owner.measurement.Load() != original || !owner.Healthy() {
+		t.Fatal("ordinary facade retired original service/proof")
+	}
+	next, err := RouterNodeChainNewLatencyBenchmark(owner, server, probe)
+	if err != nil {
+		t.Fatal("ordinary Retest lost original borrowed service", err)
+	}
+	if err := next.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := peer.observe(t)
+	var snapshot struct {
+		Prefixes []struct {
+			RawUDP int64  `json:"raw_udp"`
+			Proof  uint64 `json:"proof_queries"`
+		} `json:"prefixes"`
+	}
+	if json.Unmarshal(before.Peer, &snapshot) != nil || len(snapshot.Prefixes) != count-1 {
+		t.Fatal("independent encrypted peer inventory")
+	}
+	for _, prefix := range snapshot.Prefixes {
+		if prefix.RawUDP == 0 || prefix.Proof == 0 {
+			t.Fatal("ordinary peer missing real encrypted fifty traffic")
+		}
+	}
+}

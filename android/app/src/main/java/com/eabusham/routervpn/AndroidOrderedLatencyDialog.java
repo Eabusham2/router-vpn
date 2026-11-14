@@ -24,7 +24,7 @@ final class AndroidOrderedLatencyDialog {
                     .setNegativeButton("Close",(d,w)->close()).create();
             dialog.setOnCancelListener(d->close());dialog.show();
         }catch(Exception error){dialog=new AlertDialog.Builder(activity).setTitle("Ordered fifty-response benchmark")
-                .setMessage("Connect an ordered SOCKS or HTTP(S) CONNECT path and wait for connection checks or MTU adjustments to finish, then try again.\n\nNo test was started.")
+                .setMessage("Connect a captured ordered path and wait for connection checks or MTU adjustments to finish, then try again.\n\nNo test was started.")
                 .setNegativeButton("Close",(d,w)->close()).create();dialog.setOnDismissListener(d->close());dialog.show();}
     }
     private void showTarget(){
@@ -43,6 +43,7 @@ final class AndroidOrderedLatencyDialog {
     private void history(){
         if(closed||benchmark.isRunning())return;
         try{AndroidOrderedLatencyStore.Record record=AndroidOrderedLatencyStore.load(activity,target.source,target.config,target.position,target.node,target.kind);
+            if(record!=null&&(record.count!=target.count||!record.role.equals(target.role)))throw new IllegalStateException("Historical inventory differs from this captured path.");
             output.setText(target.label+"\n\n"+meaning()+"\n\n"+(record==null?"No saved result for this node on this path. Press Fifty / Retest to measure.":record.detail()));
         }catch(Exception invalid){output.setText("The saved result could not be read. Press Fifty / Retest for a new measurement.");}
     }

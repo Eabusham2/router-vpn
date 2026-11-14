@@ -17,7 +17,7 @@ func RouterNodeChainMemberInput(mode, files, profile, start, bootstrap string) (
 
 // Preserve original external kind and bytes; no paired credentials are created.
 func RouterNodeChainImportedMemberInput(config, capture string) (string, error) {
- return mobilemultihop.NodeChainImportedMemberInput(config,capture)
+	return mobilemultihop.NodeChainImportedMemberInput(config, capture)
 }
 
 func NewRouterNodeChain(source string) (*RouterNodeChain, error) {
@@ -25,7 +25,9 @@ func NewRouterNodeChain(source string) (*RouterNodeChain, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &RouterNodeChain{chain: chain}, nil
+	value := &RouterNodeChain{chain: chain}
+	value.self = value
+	return value, nil
 }
 
 // Keep this named factory outside gomobile's New<Type> constructor family:
@@ -35,7 +37,9 @@ func RouterNodeChainLaunch(input string) (*RouterNodeChain, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &RouterNodeChain{chain: chain}, nil
+	value := &RouterNodeChain{chain: chain}
+	value.self = value
+	return value, nil
 }
 
 func (m *RouterNodeChain) Config() string               { return m.chain.Config() }

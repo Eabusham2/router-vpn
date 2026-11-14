@@ -17,6 +17,7 @@ import (
 )
 
 type RouterNodeChain struct {
+	self        *RouterNodeChain // original factory-owned plan; never copied into another latency owner
 	chain       *mobilemultihop.NodeChain
 	mu          sync.Mutex
 	retired     atomic.Bool

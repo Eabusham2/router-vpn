@@ -22,3 +22,5 @@ public func LibboxRouterNodeChainCONNECTNewLatencyBenchmark(_ plan:LibboxRouterN
  guard plan.healthy() else{error?.pointee=NSError(domain:"OrderedLatencyBoundary",code:1);return nil};return LibboxRouterOrderedLatency()
 }
 '''
+
+ORDINARY_FACTORY = CONNECT_FACTORY.replace("RouterNodeChainCONNECT", "RouterNodeChain")

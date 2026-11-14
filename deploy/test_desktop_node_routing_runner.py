@@ -20,6 +20,27 @@ NODE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NODE)
 
 
+class OrdinaryFiftyChildVerdicts(unittest.TestCase):
+    def test_actual_child_suite_is_additive_and_has_original_ninety_second_bound(self):
+        suite=NODE.ORDINARY_FIFTY_SUITE
+        self.assertEqual(suite[3],("TestRouterVPNDesktopOrdinaryFiftyOperationSchema","TestRouterVPNDesktopOrdinaryFiftyHTTPComposition"))
+        for windows in (False,True):
+            suites=NODE.baseline_suites(windows)
+            self.assertEqual(suites.count(suite),1)
+            self.assertEqual(sum(item[0]=="ordered-measurement" for item in suites),1)
+        output="".join("=== RUN   "+name+"\n--- PASS: "+name+" (0.01s)\n" for name in suite[3])+"PASS\n"
+        baseline=Mock();baseline.execute.return_value=(0,output)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(NODE.execute_baseline_suite(baseline,suite),output)
+        baseline.execute.assert_called_once_with(*suite[:3],90)
+        faults=[output+output,output+"--- SKIP: foreign (0s)\n",output+"DATA RACE\n",output+"panic: timeout\n"]
+        faults += [output.replace("--- PASS: "+name+" (0.01s)\n","") for name in suite[3]]
+        for bad in faults:
+            baseline=Mock();baseline.execute.return_value=(0,bad)
+            with self.subTest(output=bad),contextlib.redirect_stdout(io.StringIO()),self.assertRaises(ValueError):
+                NODE.execute_baseline_suite(baseline,suite)
+
+
 class NodeSourceRetirementVerdicts(unittest.TestCase):
     SUITES = (NODE.NODE_SOURCE_RETIRE_SUITE, NODE.NODE_BOX_RETIRE_SUITE)
 

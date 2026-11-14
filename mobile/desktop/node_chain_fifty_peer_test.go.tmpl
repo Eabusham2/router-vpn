@@ -1,0 +1,84 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/netip"
+	"os"
+	"strings"
+	"testing"
+)
+
+// This separate inherited fixture owns all encrypted WG/AWG prefixes and the
+// final SS2022 service. Only its first physical tuple is mapped to loopback.
+func TestRouterVPNDesktopNodeChainOrdinaryFiftyReference(t *testing.T) {
+	if os.Getenv("ROUTERVPN_ORDINARY_FIFTY_REFERENCE") != "1" {
+		t.Skip("separately compiled ordinary reference required")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, 4097)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 4096 {
+		t.Fatal("bounded original request missing")
+	}
+	var input struct {
+		Schema int    `json:"schema"`
+		Count  int    `json:"count"`
+		Mode   string `json:"mode"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF || input.Schema != 1 || input.Count < 2 || input.Count > 8 || (input.Mode != "wg" && input.Mode != "awg2-fast" && input.Mode != "awg2-strong") {
+		t.Fatal("uncaptured ordinary fifty inventory")
+	}
+	t.Cleanup(func() {
+		if !t.Failed() {
+			fmt.Fprintln(os.Stdout, "ORDINARY_FIFTY_PEER_JOINED")
+		}
+	})
+	request, clients := desktopNodeChainPeerFixture(t, input.Count-1)
+	modes := make([]string, input.Count-1)
+	for i := range modes {
+		modes[i] = input.Mode
+	}
+	desktopNodeChainSetModes(t, &request, modes)
+	loopback := netip.MustParseAddr("127.0.0.1")
+	peer := desktopNodeChainPeerStartBounds(t, request, loopback, loopback, 1, 7)
+	chain := desktopNodeChainPeerSource(t, request, clients, "192.168.210.2:51820")
+	source, err := chain.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func(include bool) map[string]any {
+		value := map[string]any{"schema": 1, "source_sha256": chain.SourceSHA256(), "config_sha256": chain.ConfigSHA256(), "address": peer.prefixes[0].bind.address(), "public_ca": peer.final.ca, "peer": peer.snapshot()}
+		if include {
+			value["source"] = source
+		}
+		return value
+	}
+	fmt.Fprintln(os.Stdout, desktopNodeChainJSON(t, snapshot(true)))
+	for {
+		line, err = reader.ReadSlice('\n')
+		if err == io.EOF {
+			return
+		}
+		if err != nil || len(line) > 128 {
+			t.Fatal("bounded original command missing")
+		}
+		command := strings.TrimSpace(string(line))
+		switch command {
+		case "snapshot":
+		case "quit":
+			return
+		default:
+			if err := peer.control(command); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fmt.Fprintln(os.Stdout, desktopNodeChainJSON(t, snapshot(false)))
+	}
+}

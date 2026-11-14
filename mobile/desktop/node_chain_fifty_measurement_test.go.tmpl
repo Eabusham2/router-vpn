@@ -1,0 +1,98 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNDesktopOrdinaryFiftyOperationSchema(t *testing.T) {
+	old := routerVPNNodeChainMeasurementRequest{Schema: 1, Bytes: 65536}
+	if !old.validOperation() {
+		t.Fatal("original throughput refused")
+	}
+	for position := 0; position < 8; position++ {
+		r := routerVPNNodeChainMeasurementRequest{Schema: 2, Operation: "ordered-latency-50", NodeID: "captured", Position: position}
+		if !r.validOperation() {
+			t.Fatal("ordinary position refused", position)
+		}
+		r.Bytes = 65536
+		if r.validOperation() {
+			t.Fatal("fifty borrowed throughput bytes")
+		}
+	}
+	for _, position := range []int{-1, 8} {
+		if (routerVPNNodeChainMeasurementRequest{Schema: 2, Operation: "ordered-latency-50", NodeID: "captured", Position: position}).validOperation() {
+			t.Fatal("foreign position admitted")
+		}
+	}
+	for _, raw := range []string{`{"schema":1,"bytes":65536,"operation":""}`, `{"schema":1,"bytes":65536,"node_id":""}`, `{"schema":1,"bytes":65536,"position":0}`} {
+		if old.validOperationJSON([]byte(raw)) {
+			t.Fatal("old schema borrowed fifty fields")
+		}
+	}
+}
+
+// Shipping child polling, original captured service, real HTTP50 and saved
+// receipt execute together; this is distinct from encrypted native acceptance.
+func TestRouterVPNDesktopOrdinaryFiftyHTTPComposition(t *testing.T) {
+	if os.Getenv("ROUTERVPN_ORDINARY_FIFTY_HTTP_CHILD") != "1" {
+		image, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, image, "-test.run=^TestRouterVPNDesktopOrdinaryFiftyHTTPComposition$", "-test.timeout=40s")
+		command.Env = append(os.Environ(), "ROUTERVPN_ORDINARY_FIFTY_HTTP_CHILD=1")
+		if out, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("ordinary50 HTTP mailbox: %v\n%s", err, out)
+		}
+		return
+	}
+	f := desktopNodeChainHTTPMeasurementFixture(t, nil)
+	_, meta, _, err := f.runtime.policy.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for position, node := range meta.Prefixes {
+		request := routerVPNNodeChainMeasurementRequest{Schema: 2, Operation: "ordered-latency-50", NodeID: node.ProfileID, Position: position, Request: fmt.Sprintf("%032x", position+1), Generation: uint64(position + 1), Deadline: time.Now().Add(30 * time.Second).UnixMilli(), Path: f.mtu.record.Path, Capture: f.ready(t)}
+		raw, _ := json.Marshal(request)
+		if err := os.WriteFile(filepath.Join(f.runtime.files.root.Name(), "node-chain-measure-request.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			if err := f.runtime.pollMeasurement(t.Context()); err != nil {
+				t.Fatal("ordinary50 mailbox", err)
+			}
+			if err := f.runtime.heartbeat(t.Context(), f.mtu.record); err != nil {
+				t.Fatal("ordinary50 blocked heartbeat", err)
+			}
+			if f.runtime.measurement == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("ordinary50 child did not drain")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		raw, err = f.runtime.files.read("node-chain-measure-result.json", 128<<10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result routerVPNNodeChainMeasurementResult
+		if json.Unmarshal(raw, &result) != nil || result.routerVPNNodeChainMeasurementRequest != request || !result.Status.Complete || !result.Status.Drained || result.Status.Failure != "" || len(result.Status.Results) != 1 || result.Saved == nil || result.Saved.Position != position || result.Saved.NodeID != node.ProfileID || result.Saved.SourceSHA256 != meta.OriginalSourceSHA256 || result.Saved.ConfigSHA256 != meta.ConfigSHA256 || f.runtime.measurementHold.Load() {
+			t.Fatalf("ordinary50 child receipt lost capture: %s", raw)
+		}
+		row := result.Status.Results[0]
+		if !row.Ready || row.Kind != "private-node" || row.Benchmark == nil || row.Benchmark.Attempts != 50 || row.Benchmark.Distribution == nil || row.Benchmark.Distribution.Samples != 50 || row.Download != nil || row.Upload != nil {
+			t.Fatal("ordinary50 child mislabeled throughput", row)
+		}
+	}
+}

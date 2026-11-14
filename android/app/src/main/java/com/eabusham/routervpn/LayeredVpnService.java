@@ -708,9 +708,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         final AndroidNodeChainSession chain;
         final AndroidHomeStateStore.Snapshot home;
         final String source,config,node,kind,role,label;
-        final int position;
+        final int position,count;
         OrderedLatencyTarget(AndroidNodeChainSession chain,AndroidHomeStateStore.Snapshot home,int position)throws Exception {
-            this.chain=chain;this.home=home;this.position=position;
+            this.chain=chain;this.home=home;this.position=position;this.count=chain.source.members.size();
             AndroidNodeStore.ChainSource member=chain.source.members.get(position);
             source=chain.capture.sourceSHA256;config=chain.capture.configSHA256;node=member.profileId;
             kind=member.imported?"public-path":"private-node";
@@ -720,10 +720,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
     }
     static java.util.List<OrderedLatencyTarget> orderedLatencyTargets() throws Exception {
-        LayeredVpnService service=currentService.get();if(service==null)throw new IllegalStateException("Connect the typed ordered path before measuring its nodes.");
+        LayeredVpnService service=currentService.get();if(service==null)throw new IllegalStateException("Connect the ordered path before measuring its nodes.");
         synchronized(service.lock){
             AndroidNodeChainSession chain=service.nodeChainSession;AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(service);
-            if(chain==null||!chain.typedNative()||!chain.healthy()||!home.connected||!"passed".equals(home.pathProof)||!home.sessionId.equals(chain.home.sessionId)||!"UP".equals(service.state)||service.explicitStop)
+            if(chain==null||!chain.orderedLatencyEligible()||!chain.healthy()||!home.connected||!"passed".equals(home.pathProof)||!home.sessionId.equals(chain.home.sessionId)||!"UP".equals(service.state)||service.explicitStop)
                 throw new IllegalStateException("Fifty-response measurements require the complete proved typed ordered path.");
             java.util.List<OrderedLatencyTarget> targets=new java.util.ArrayList<>();
             for(int i=0;i<chain.source.members.size();i++)targets.add(new OrderedLatencyTarget(chain,home,i));

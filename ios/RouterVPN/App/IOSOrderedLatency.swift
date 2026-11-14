@@ -6,7 +6,7 @@ import Combine
     let identity: IOSSessionIdentity, selection: UUID
     let source: String, config: String, profile: String
     let snapshot: Data
-    let ids: [String]
+    let ids: [String], kinds: [String]
     let mode: String, logicalMode: String, automatic: Bool
     static func bytes(_ model: RouterVPNModel) throws -> Data {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -14,7 +14,7 @@ import Combine
     }
     init(_ model: RouterVPNModel) throws {
         guard model.connected, let identity = model.activeSessionIdentity,
-              let active = identity.nodeChainSource, let path = IOSNodeChainPresentation.active(identity), path.count == 3, ["socks5", "http-connect", "https-connect"].contains(path[1].mode) else { throw CancellationError() }
+              let active = identity.nodeChainSource, let path = IOSNodeChainPresentation.active(identity), (2...8).contains(path.count) else { throw CancellationError() }
         let captured = try model.captureIOSOrderedRoute(model.bundle)
         defer { try? captured.close() }
         switch captured {
@@ -24,8 +24,11 @@ import Combine
         case .connect(let original):
             guard ["http-connect", "https-connect"].contains(path[1].mode), Data(original.source.utf8) == active else { throw CancellationError() }
             source = original.plan.sourceSHA256(); config = original.plan.configSHA256(); ids = original.members.map(\.id)
-        default: throw CancellationError()
+        case .ordinary(let original):
+            guard original.selectionExecution == "local", Data(original.launchInput.utf8) == active else { throw CancellationError() }
+            source = original.sourceSHA256; config = original.configSHA256; ids = original.members.map(\.id)
         }
+        kinds = captured.members.map { $0.profile["node_kind"] as? String == "external" ? "public-path" : "private-node" }
         self.identity = identity; selection = model.iosConnectGeneration
         snapshot = try Self.bytes(model); profile = RouterVPNModel.iosStrategyDigest(snapshot)
         mode = model.selectedMode; logicalMode = model.selectedLogicalMode; automatic = model.auto
@@ -125,8 +128,8 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
     private var task: Task<Void, Never>?
     private var cancelled = false
     static func supported(_ model: RouterVPNModel) -> Bool {
-        guard model.connected, let path = IOSNodeChainPresentation.active(model.activeSessionIdentity) else { return false }
-        return path.count == 3 && ["socks5", "http-connect", "https-connect"].contains(path[1].mode)
+        guard model.connected, model.activeSessionIdentity?.nodeChainSource != nil, let path = IOSNodeChainPresentation.active(model.activeSessionIdentity) else { return false }
+        return (2...8).contains(path.count)
     }
     func load(_ model: RouterVPNModel) {
         guard !running else { return }
@@ -134,10 +137,13 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
             let capture = try IOSOrderedLatencyCapture(model)
             var saved: [String: String] = [:]
             for (position, id) in capture.ids.enumerated() {
-                saved[id] = try IOSOrderedLatencyHistory.load(profile: capture.profile, source: capture.source, config: capture.config, position: position, node: id)?.detail
+                if let record = try IOSOrderedLatencyHistory.load(profile: capture.profile, source: capture.source, config: capture.config, position: position, node: id) {
+                    guard record.count == capture.ids.count, record.kind == capture.kinds[position] else { throw CancellationError() }
+                    saved[id] = record.detail
+                }
             }
             displayed = capture; ids = capture.ids; history = saved; text = "Select one node on this captured route."
-        } catch { displayed = nil; ids = []; history = [:]; text = "Connect the selected saved SOCKS or CONNECT route to measure its captured nodes." }
+        } catch { displayed = nil; ids = []; history = [:]; text = "Connect the selected saved ordered route to measure its captured nodes." }
     }
     private func send(_ connection: NETunnelProviderSession, operation: String, request: String, session: String,
                       owner: String, lease: String, source: String, config: String, node: String) async throws -> [String: Any] {
@@ -184,9 +190,9 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
                 let info = try await send(original.connection, operation: "ordered-latency-info", request: request, session: "", owner: owner, lease: "", source: "", config: "", node: "")
                 guard info["source_sha256"] as? String == capture.source, info["config_sha256"] as? String == capture.config,
                       info["mtu_session_id"] as? String == original.session, let session = info["provider_session"] as? String,
-                      UUID(uuidString: session) != nil, let nodes = info["nodes"] as? [[String: Any]], nodes.count == 3 else { throw CancellationError() }
+                      UUID(uuidString: session) != nil, let nodes = info["nodes"] as? [[String: Any]], nodes.count == capture.ids.count else { throw CancellationError() }
                 for (index, item) in nodes.enumerated() {
-                    guard item["position"] as? Int == index, item["node_id"] as? String == capture.ids[index], item["kind"] as? String == (index == 1 ? "public-path" : "private-node") else { throw CancellationError() }
+                    guard item["position"] as? Int == index, item["node_id"] as? String == capture.ids[index], item["kind"] as? String == capture.kinds[index] else { throw CancellationError() }
                 }
                 guard !cancelled else { throw CancellationError() }; try capture.require(model)
                 let owned = IOSOrderedLatencyTransaction(request: request, source: capture.source, config: capture.config, node: node, position: position,
@@ -196,6 +202,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
                     guard !self.cancelled, IOSMTUMeasurementGate.current == lease.request, IOSMTUControl.current(original, model: model) else { throw CancellationError() }
                     try capture.require(model)
                 }, update: { self.text = $0 })
+                guard record.count == capture.ids.count, record.kind == capture.kinds[position] else { throw CancellationError() }
                 try IOSOrderedLatencyHistory.save(record, profile: capture.profile) {
                     guard !self.cancelled, IOSMTUMeasurementGate.current == lease.request, IOSMTUControl.current(original, model: model) else { throw CancellationError() }
                     try capture.require(model)

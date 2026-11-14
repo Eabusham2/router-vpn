@@ -1,0 +1,46 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func TestRouterNodeChainLatencyRequiresOriginalProvedFactory(t *testing.T) {
+	if candidate, err := RouterNodeChainNewLatencyBenchmark(nil, nil, nil); candidate != nil || err == nil {
+		t.Fatal("missing original plan acquired ordered latency")
+	}
+	m, _ := routerNodeChainNativeOwnerFixture(t)
+	m.self = m
+	m.chain = new(mobilemultihop.NodeChain)
+	service := new(hopmeasure.Service)
+	probe := &RouterHopMeasurement{service: service}
+	m.measurement.Store(service)
+	if candidate, err := RouterNodeChainNewLatencyBenchmark(m, m.server, probe); candidate != nil || err == nil {
+		t.Fatal("native service without original path proof acquired ordered latency")
+	}
+	copied := &RouterNodeChain{self: m, chain: m.chain, server: m.server, instance: m.instance}
+	copied.state.Store(m.state.Load())
+	copied.measurement.Store(service)
+	if candidate, err := RouterNodeChainNewLatencyBenchmark(copied, m.server, probe); candidate != nil || err == nil {
+		t.Fatal("copied plan acquired original ordered latency")
+	}
+}
+
+func TestRouterNodeChainLatencyKeepsOriginalAdmissionDeadline(t *testing.T) {
+	m := &RouterNodeChain{chain: new(mobilemultihop.NodeChain)}
+	m.self = m
+	probe := &RouterHopMeasurement{service: new(hopmeasure.Service)}
+	m.mu.Lock()
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Millisecond)
+	candidate, err := m.newOrderedLatencyContext(ctx, &CommandServer{}, probe)
+	cancel()
+	m.mu.Unlock()
+	if candidate != nil || !errors.Is(err, context.DeadlineExceeded) || m.measurement.Load() != nil {
+		t.Fatal("held original factory lost caller deadline or adopted a foreign service", err)
+	}
+}

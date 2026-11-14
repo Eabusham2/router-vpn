@@ -127,7 +127,7 @@ stub(APP,'AndroidNodeChainSession','''{static final String MODE="node-chain";fin
  final AndroidNodeChainExecutionCapture execution=null;boolean retainsServerCleanup(io.nekohasekai.libbox.CommandServer server){return false;}
  interface Owner{boolean current(AndroidNodeChainSession source,io.nekohasekai.libbox.CommandServer server);String network();default AutoCloseable beginMTUCleanup(AndroidNodeChainSession source,io.nekohasekai.libbox.CommandServer server,io.nekohasekai.libbox.RouterMTUPlatform platform)throws Exception{throw new IllegalStateException("No execution cleanup in this boundary");}}
  io.nekohasekai.libbox.CommandServer newCommandServer(io.nekohasekai.libbox.CommandServerHandler handler,io.nekohasekai.libbox.PlatformInterface platform)throws Exception{return new io.nekohasekai.libbox.CommandServer(handler,platform);}
- boolean typedNative(){return false;}
+ boolean typedNative(){return false;} boolean orderedLatencyEligible(){return false;}
  interface Host{void stop(AndroidNodeChainSession source,Runnable complete);}void adoptHost(Host host){}boolean hasHost(){return false;}void requestStop(Runnable complete){throw new IllegalStateException("No ordered cleanup owner in this boundary");}
  static AndroidNodeChainSession pending(String id){return null;}
  static AndroidNodeChainSession retained(){return null;}
