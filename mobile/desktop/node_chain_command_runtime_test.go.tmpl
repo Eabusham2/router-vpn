@@ -520,3 +520,263 @@ func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *tes
 		})
 	}
 }
+
+// desktopObservationalCompleteFixture models only the physical MTU attachment
+// boundary. Its run/current/close callbacks are the original concrete typed
+// owners. The actual Box, retained TUN reader and common command loop run here;
+// this component fixture does not establish encrypted or installed ownership.
+type desktopObservationalCompleteFixture struct {
+	start func(context.Context) error
+	current func(context.Context) error
+	session, config string
+	observe func(context.Context) context.Context
+	raw *routerVPNNodeMTU
+}
+func (f *desktopObservationalCompleteFixture) run(ctx context.Context) error {
+	return f.start(ctx)
+}
+func (f *desktopObservationalCompleteFixture) attachMTU(ctx context.Context, raw *routerVPNNodeMTU, physical *box.RouterVPNDesktopNodePhysical) error {
+	if f.raw != nil || raw == nil || physical != nil || raw.record.Session != f.session || raw.record.Config != f.config ||
+		raw.record.Reader != 1 || raw.record.Interface != "router-vpn" || raw.record.Index != 17 || raw.record.MTU != 1420 {
+		return errors.New("modeled attachment changed original TUN capture")
+	}
+	if err := f.current(ctx); err != nil {
+		return err
+	}
+	f.raw = raw
+	return nil
+}
+func (f *desktopObservationalCompleteFixture) loopCurrent(ctx context.Context) error {
+	return f.current(f.observe(ctx))
+}
+func (f *desktopObservationalCompleteFixture) heartbeat(ctx context.Context, record routerVPNNodeMTURecord) error {
+	if f.raw == nil || record.Session != f.session || record.Config != f.config || record.Reader != f.raw.record.Reader ||
+		record.Interface != f.raw.record.Interface || record.Index != f.raw.record.Index || record.MTU != f.raw.record.MTU {
+		return errors.New("modeled heartbeat changed original TUN capture")
+	}
+	return f.current(ctx)
+}
+
+type desktopObservationalContextKey struct{}
+
+func TestRouterVPNDesktopNodeChainObservationalStopOwnership(t *testing.T) {
+	for _, family := range []string{"socks", "connect", "execution"} {
+		t.Run(family, func(t *testing.T) {
+			for _, fault := range []string{"parent", "graph", "foreign", "invalid-with-stop"} {
+				t.Run(fault, func(t *testing.T) {
+					token := new(int)
+					var armed atomic.Bool
+					entered := make(chan context.Context, 1)
+					release := make(chan struct{})
+					var releaseOnce sync.Once
+					var foreignContext context.Context
+					observe := func(ctx context.Context) context.Context {
+						if !armed.Load() {
+							return ctx
+						}
+						// This adapter method is called only by complete.loopCurrent.
+						// Heartbeat delegates directly to the concrete owner instead.
+						if ctx.Value(desktopObservationalContextKey{}) != token {
+							panic("current observation lost original parent marker")
+						}
+						if _, bounded := ctx.Deadline(); bounded {
+							panic("bounded heartbeat entered loopCurrent adapter")
+						}
+						select {
+						case entered <- ctx:
+						default:
+						}
+						<-release
+						if foreignContext != nil {
+							return foreignContext
+						}
+						return ctx
+					}
+					var files *routerVPNExternalFiles
+					var session, config string
+					var complete *desktopObservationalCompleteFixture
+					var current, closeOwner func(context.Context) error
+					var captureRetained func() func() bool
+					var invalidate func()
+					var joined func() bool
+					switch family {
+					case "socks":
+						f := newDesktopSOCKSRuntimeFixture(t)
+						invalidate = func() { f.valid.Store(false) }
+						files, session, config = f.owner.files, f.construction.metadata.SessionID, f.construction.metadata.ConfigSHA256
+						current, closeOwner = f.owner.loopCurrent, f.owner.close
+						complete = &desktopObservationalCompleteFixture{start: f.owner.run, current: current, observe: observe, session: session, config: config}
+						captureRetained = func() func() bool {
+							state := f.owner.state.Load()
+							return func() bool { return state != nil && f.owner.state.Load() == state && !f.owner.closed.Load() && f.proof.closed.Load() == 0 }
+						}
+						joined = func() bool { return f.owner.closed.Load() && f.proof.closed.Load() == 1 }
+					case "connect":
+						f := newDesktopCONNECTRuntimeFixture(t)
+						invalidate = func() { f.valid.Store(false) }
+						files, session, config = f.owner.files, f.construction.metadata.SessionID, f.construction.metadata.ConfigSHA256
+						current, closeOwner = f.owner.loopCurrent, f.owner.close
+						complete = &desktopObservationalCompleteFixture{start: f.owner.run, current: current, observe: observe, session: session, config: config}
+						captureRetained = func() func() bool {
+							state := f.owner.state.Load()
+							return func() bool { return state != nil && f.owner.state.Load() == state && !f.owner.closed.Load() && f.proof.closed.Load() == 0 }
+						}
+						joined = func() bool { return f.owner.closed.Load() && f.proof.closed.Load() == 1 }
+					case "execution":
+						f := newDesktopExecutionRuntimeFixture(t)
+						invalidate = func() { f.valid.Store(false) }
+						files, session, config = f.owner.files, f.owner.meta.SessionID, f.owner.prep.ConfigSHA256()
+						current, closeOwner = f.owner.loopCurrent, f.owner.close
+						complete = &desktopObservationalCompleteFixture{start: f.owner.run, current: current, observe: observe, session: session, config: config}
+						captureRetained = func() func() bool {
+							state := f.owner.state.Load()
+							return func() bool { return state != nil && f.owner.state.Load() == state && !f.owner.closed.Load() }
+						}
+						joined = func() bool { return f.owner.closed.Load() }
+
+					}
+					// An original parent marker identifies the exact loop callback.
+					// Shared proof workers have their own lifetime and cannot satisfy
+					// this barrier; bounded heartbeat reads are also excluded.
+					parent, stopParent := context.WithCancel(context.WithValue(context.Background(), desktopObservationalContextKey{}, token))
+					defer stopParent()
+					registry := include.InboundRegistry()
+					tun := &desktopNodeMTUHeartbeatFixture{entered: make(chan struct{}), release: make(chan struct{}), raw: desktopNetworkReceiptFixture(t, 17, 1420, strings.Repeat("d", 32))}
+					close(tun.release)
+					inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+						tun.Adapter = inbound.NewAdapter(C.TypeTun, tag)
+						return tun, nil
+					})
+					graph, stopGraph := context.WithCancel(box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry()))
+					defer stopGraph()
+					options, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(`{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"routervpn-chain-tun","interface_name":"router-vpn","mtu":1420,"address":["10.8.0.2/24"],"auto_route":false,"stack":"system"}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"auto_detect_interface":true,"final":"direct"}}`))
+					if err != nil {
+						t.Fatal(err)
+					}
+					instance, err := box.New(box.Options{Context: graph, Options: options})
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer instance.Close()
+					if err := instance.RouterVPNStrategyStart(); err != nil {
+						t.Fatal(err)
+					}
+					done := make(chan error, 1)
+					finished := false
+					// This cleanup is registered after Box.Close, so it first
+					// releases/joins the loop and original proof owner.
+					defer func() {
+						releaseOnce.Do(func() { close(release) })
+						stopParent()
+						stopGraph()
+						if !finished {
+							select {
+							case <-done:
+							case <-time.After(3 * time.Second):
+								t.Error("observational loop failed to join")
+							}
+						}
+						cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+						defer cancel()
+						if err := closeOwner(cleanup); err != nil {
+							t.Error("original observation owner cleanup", err)
+						}
+					}()
+					go func() {
+						var typed routerVPNNodeMTUComplete
+						if complete != nil {
+							typed = complete
+						}
+						done <- routerVPNRunNodeMTULoopWithComplete(parent, graph, files, instance, session, config, nil,
+							func(ctx context.Context) error { return ctx.Err() }, func() error { return nil }, nil, typed, nil)
+					}()
+					deadline := time.NewTimer(3 * time.Second)
+					tick := time.NewTicker(10 * time.Millisecond)
+					defer deadline.Stop()
+					defer tick.Stop()
+					published := false
+					for !published {
+						raw, readErr := files.read("node-mtu-status.json", routerVPNNodeMTURecordLimit)
+						var status routerVPNNodeMTURecord
+						published = readErr == nil && routerVPNMTUStrict(raw, &status) && status.Schema == 1 &&
+							status.Session == session && status.Config == config && status.Reader == 1 &&
+							status.Interface == "router-vpn" && status.Index == 17 && status.MTU == 1420 &&
+							status.Heartbeat > 0 && status.Failure == "" && !status.Active
+						if published {
+							break
+						}
+						select {
+						case err := <-done:
+							finished = true
+							t.Fatal("observational loop failed before original heartbeat", err)
+						case <-deadline.C:
+							t.Fatal("observational loop did not publish original heartbeat")
+						case <-tick.C:
+						}
+					}
+					retained := captureRetained()
+					if !retained() {
+						t.Fatal("observational loop lost original active owner")
+					}
+					armed.Store(true)
+					var observing context.Context
+					select {
+					case observing = <-entered:
+					case err := <-done:
+						finished = true
+						t.Fatal("observational loop exited before captured current", err)
+					case <-time.After(3 * time.Second):
+						t.Fatal("observational loop missed captured current")
+					}
+					switch fault {
+					case "parent":
+						stopParent()
+					case "graph":
+						stopGraph()
+					case "foreign":
+						foreign, cancel := context.WithCancel(context.Background())
+						cancel()
+						foreignContext = foreign
+						if foreign.Err() == nil || parent.Err() != nil || graph.Err() != nil {
+							t.Fatal("foreign cancellation changed original parent")
+						}
+					case "invalid-with-stop":
+						invalidate()
+						desktopExternalStopFile(t, files.root.Name(), session, config)
+					}
+					if fault == "parent" || fault == "graph" {
+						select {
+						case <-observing.Done():
+						case <-time.After(3 * time.Second):
+							t.Fatal("original observation did not receive cancellation")
+						}
+					}
+					releaseOnce.Do(func() { close(release) })
+					select {
+					case err := <-done:
+						finished = true
+						if (err == nil) != (fault == "parent") {
+							t.Fatal("observational Stop changed captured parent authority", err)
+						}
+					case <-time.After(3 * time.Second):
+						t.Fatal("observational loop did not finish")
+					}
+					if !retained() {
+						t.Fatal("loop return prematurely closed original owner")
+					}
+					cancelled, cancel := context.WithCancel(context.Background())
+					cancel()
+					if current(cancelled) == nil {
+						t.Fatal("lower current admitted a cancelled observation")
+					}
+					cleanup, stopCleanup := context.WithTimeout(context.Background(), 3*time.Second)
+					err = closeOwner(cleanup)
+					stopCleanup()
+					if err != nil || !joined() {
+						t.Fatal("original observation owner did not join before Box close", err)
+					}
+				})
+			}
+		})
+	}
+}

@@ -71,7 +71,7 @@ class ChildVerdictTests(unittest.TestCase):
     def test_exact_every_baseline_and_control_inventory(self):
         self.assertEqual(len(G.CHILD["command_cases"]), 83)
         self.assertEqual(len(G.CHILD["box_cases"]), 14)
-        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [20, 28, 52, 27, 11])
+        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [36, 28, 52, 27, 11])
         for family, key in (("cmd", "command_cases"), ("box", "box_cases")):
             cases = G.CHILD[key]
             G.require_verdict(raw(transcript(cases, G.PACKAGE[family])), 0, G.PACKAGE[family], cases)
@@ -93,6 +93,23 @@ class ChildVerdictTests(unittest.TestCase):
             "graph-cancel-current", "wrong-parent-cancel-current",
             "invalid-proof-with-stop-current")}
         self.assertEqual({name for name in suite["cases"] if name.startswith(root + "/")}, expected)
+        package = G.PACKAGE[suite["package"]]
+        events = transcript(suite["cases"], package)
+        G.require_verdict(raw(events), 0, package, suite["cases"])
+        for omitted in expected:
+            with self.subTest(omitted=omitted), self.assertRaises(ValueError):
+                G.require_verdict(raw([event for event in events if event.get("Test") != omitted]),
+                                  0, package, suite["cases"])
+
+    def test_typed_observation_stop_cases_are_mandatory(self):
+        root = "TestRouterVPNDesktopNodeChainObservationalStopOwnership"
+        suite = next(item for item in G.REGRESSIONS if item["name"] == "original-ordered-runtime")
+        expected = {root}
+        for family in ("socks", "connect", "execution"):
+            expected.add(root + "/" + family)
+            expected.update(root + "/" + family + "/" + fault for fault in
+                            ("parent", "graph", "foreign", "invalid-with-stop"))
+        self.assertEqual({name for name in suite["cases"] if name == root or name.startswith(root + "/")}, expected)
         package = G.PACKAGE[suite["package"]]
         events = transcript(suite["cases"], package)
         G.require_verdict(raw(events), 0, package, suite["cases"])

@@ -1195,6 +1195,9 @@ func routerVPNRunNodeMTULoopWithComplete(parent, ctx context.Context, files *rou
 		}
 		if complete != nil {
 			if err := complete.loopCurrent(observe); err != nil {
+				if parent.Err() != nil {
+					return nil
+				}
 				return err
 			}
 		}
