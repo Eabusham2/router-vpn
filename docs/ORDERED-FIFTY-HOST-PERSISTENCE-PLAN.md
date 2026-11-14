@@ -1,6 +1,43 @@
 # Typed ordered fifty-response host integration
 
-Status: source proposal, uncompiled. This plan records missing shipping work; it does not claim Android, iOS, desktop, persistence, device, or encrypted-native acceptance. The MTU proposal is a separate dependency. Existing failed CONNECT Run receipts remain authoritative failures until an unchanged actual rerun passes.
+## Published SOCKS implementation update — November 14, 2026
+
+The SOCKS ordered-fifty implementation described by this original plan is now
+published. Its shared/native facade is in `6d1518b76f29f02eb76759ba8cbfebe807dd7d1a`,
+Android caller and durable history in `373f768cf1d593c03e394d10d6d7c8ab3c908752`,
+Apple app/extension caller and history in `7c2d4c5089257372c46d44b1911c2e162edd3534`,
+and desktop controller, native command and Windows/macOS/Linux controls in
+`4bfe28f394611a3cee515ee0efc33a6a6343ca91`. These are source commits, not a
+claim that the current complete release or physical devices passed.
+
+The retained native SOCKS matrix exercised WG, AWG Fast and AWG Strong with
+five compiled causal controls. Android's shipping Java composition passed 341
+checks and nine controls; Apple component, callback and host suites passed
+50, 59 and 21 checks with eight, two and five controls respectively. The
+desktop controller verification passed eleven race-instrumented roots and
+75 subcases in two groups, each retaining the original 90-second package
+bound. Its first combined run exhausted that aggregate bound and remains a
+failed recorded attempt. These host fixtures explicitly substitute their OS
+or native boundaries; they do not establish installed-device acceptance.
+
+`5c6eb8e1afd87a6e9b151acbae8dc584a1aaade4` additionally bounds cancellation
+while acquiring the shared measurement lifecycle mutex and adopting a joined
+operation. The complete affected package passed under the race detector, and
+two compiled negative controls caught the original blocked cancellation and
+incorrect admission behavior. Original release ownership stays intact.
+
+`8d43566c3c364195a3d338a1fbb6fed30a1bcf61` adds the distinct native SOCKS Run,
+CONNECT runtime, CONNECT Run and CONNECT MTU workflows as required exact-source
+release dependencies. Existing release producers remain required. CONNECT
+ordered-fifty, generated SDK/package validation, complete release publication,
+private deployment and physical-device acceptance must each be checked against
+their own current evidence; the SOCKS evidence above cannot substitute for them.
+
+## Original design specification
+
+The future-tense implementation points below are the preserved original plan.
+They are not a current list of missing SOCKS host or persistence work. Use the
+published implementations and current exact-SHA results to assess their status.
 
 ## API and lifetime contract
 

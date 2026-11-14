@@ -1,10 +1,36 @@
 # Current implementation status
 
-Updated November 13, 2026 UTC. This file distinguishes published source,
+Updated November 14, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
+
+## November 14: published ordered fifty-response integration
+
+The typed SOCKS fifty-response facade, all three host callers, private history
+stores and desktop controls are published. The
+[implementation update and original design](ORDERED-FIFTY-HOST-PERSISTENCE-PLAN.md)
+records exact commits, executable evidence and retained failed attempts. Do not
+replay the old recovery units or treat the historical plan's future tense as
+proof that these shipping paths are still absent.
+
+| Shipping area | Published source | Verification boundary |
+|---|---|---|
+| Shared/native SOCKS facade | `6d1518b7` | Real encrypted WG/AWG fifty-response matrix and compiled causal controls; installed/device proof remains separate. |
+| Android service, controls and atomic history | `373f768c` | Shipping Java caller, service and transaction logic; SDK/native/physical boundaries are identified in the tests. |
+| Apple app, provider and atomic history | `7c2d4c50` | Shipping Swift component, callback and typed-host paths; full Xcode/package and device results remain separate. |
+| Desktop controller, command and native UI controls | `4bfe28f3` | Race-instrumented controller tests, Windows model/HTTP and macOS model/URLSession checks; installed networking and native UI acceptance remain separate. |
+| Shared cancellation under lifecycle contention | `5c6eb8e1` | Bounded original admission and joined-release ownership, full affected race suite and negative controls. |
+| Required native release dependencies | `8d43566c` | Four focused native proof jobs added to the authoritative exact-SHA aggregate; their presence is not a passing release result. |
+
+These measurements retain their original meanings: private authenticated
+response time includes connection establishment, while public middle HTTPS
+response time begins after TLS. Candidate selection separately measures fifty
+routed TCP connections. None is labeled ICMP, and none changes the required
+Local/Server comparison formula. History remains bound to its complete original
+path and does not grant current proof, readiness or permission to adopt an old
+result after a replacement connection.
 
 ## Continuation from 35ff28a7: release convergence and retained scope
 
