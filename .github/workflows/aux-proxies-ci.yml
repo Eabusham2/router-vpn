@@ -11,8 +11,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: aux-proxies-${{ github.ref }}
-  cancel-in-progress: true
+  # Supersede automatic main pushes; retain explicit and pull-request evidence.
+  group: aux-proxies-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   native-runtimes:

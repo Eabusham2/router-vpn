@@ -114,10 +114,10 @@ jobs:
   runtime:
     name: Complete native engine ${{ matrix.target }}
     needs: [targets, tor-windows, macos-physical-sockets]
-    # A superseded Linux main push must release its caller's concurrency lane.
+    # Superseded standalone Linux and Aux main pushes must release their runners.
     # The reusable github context names its caller; explicit dispatches and
     # exact-SHA release callers retain the original prerequisite behavior.
-    if: always() && !(cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Linux native app') && needs.targets.result == 'success' && (needs.tor-windows.result == 'success' || needs.tor-windows.result == 'skipped') && (needs.macos-physical-sockets.result == 'success' || needs.macos-physical-sockets.result == 'skipped')
+    if: always() && !(cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (github.workflow == 'Linux native app' || github.workflow == 'Aux proxies and setup assets ARM64')) && needs.targets.result == 'success' && (needs.tor-windows.result == 'success' || needs.tor-windows.result == 'skipped') && (needs.macos-physical-sockets.result == 'success' || needs.macos-physical-sockets.result == 'skipped')
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}

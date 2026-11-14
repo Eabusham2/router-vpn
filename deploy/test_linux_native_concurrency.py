@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep superseded automatic Linux pushes separate from retained evidence runs.
+"""Keep superseded automatic desktop producers separate from retained evidence.
 
 Evaluate the actual workflow expressions, not a second dispatch implementation.
 GitHub re-evaluates job conditions during cancellation; a true always() job
@@ -15,8 +15,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 LINUX = ROOT / '.github/workflows/linux-native-app.yml'
+AUX = ROOT / '.github/workflows/aux-proxies-ci.yml'
 NATIVE = ROOT / '.github/workflows/desktop-native-runtime.yml'
 RESULTS = ('success', 'skipped', 'failure', 'cancelled')
+AUTOMATIC_CALLERS = ('Linux native app', 'Aux proxies and setup assets ARM64')
 
 
 def section(raw, key, indent):
@@ -88,39 +90,42 @@ def check_runtime(raw):
     if field(header, 'needs', 4) != '[targets, tor-windows, macos-physical-sockets]':
         raise AssertionError('Native runtime lost its original prerequisite jobs')
     condition = field(header, 'if', 4)
-    contexts = (
-        (context(), True), (context(run=202), True),
-        (context(event='workflow_dispatch'), False),
-        (context(event='pull_request', ref='refs/pull/7/merge'), False),
-        (context(ref='refs/heads/release'), False), (context(ref='refs/tags/v1'), False),
+    contexts = tuple(
+        (values, values['github.event_name'] == 'push' and values['github.ref'] == 'refs/heads/main')
+        for caller in AUTOMATIC_CALLERS
+        for values in (context(caller=caller), context(caller=caller, run=202),
+                       context(event='workflow_dispatch', caller=caller),
+                       context(event='pull_request', ref='refs/pull/7/merge', caller=caller),
+                       context(ref='refs/heads/release', caller=caller), context(ref='refs/tags/v1', caller=caller))
+    ) + (
         (context(caller='Build all Router VPN release gates'), False),
         (context(caller='Router VPN release candidate'), False),
         (context(event='workflow_dispatch', caller='Complete native desktop transport runtimes'), False),
         (context(caller='macOS native app'), False),
     )
-    for (values, automatic_linux), results, cancelled in itertools.product(contexts, itertools.product(RESULTS, repeat=3), (False, True)):
+    for (values, automatic_producer), results, cancelled in itertools.product(contexts, itertools.product(RESULTS, repeat=3), (False, True)):
         captured = dict(values, **dict(zip(('needs.targets.result', 'needs.tor-windows.result', 'needs.macos-physical-sockets.result'), results)))
         original = results[0] == 'success' and results[1] in ('success', 'skipped') and results[2] in ('success', 'skipped')
-        expected = original and not (cancelled and automatic_linux)
+        expected = original and not (cancelled and automatic_producer)
         if expression(condition, captured, cancelled) is not expected:
             raise AssertionError('Native runtime changed a prerequisite or cancellation boundary: ' + repr((values, results, cancelled)))
 
 
-def check_concurrency(raw):
-    if field(raw, 'name', 0) != 'Linux native app':
-        raise AssertionError('Native cancellation lost its exact Linux caller')
+def check_concurrency(raw, name='Linux native app', prefix='linux-native-'):
+    if field(raw, 'name', 0) != name:
+        raise AssertionError('Native cancellation lost its exact producer caller')
     block = section(raw, 'concurrency', 0)
     group, cancel = field(block, 'group', 2), field(block, 'cancel-in-progress', 2)
     seen = {}
     for event, ref in itertools.product(('push', 'workflow_dispatch', 'pull_request'),
                                         ('refs/heads/main', 'refs/heads/release', 'refs/tags/v1')):
         for run in (101, 202):
-            values = context(event, ref, run=run)
+            values = context(event, ref, caller=name, run=run)
             automatic = event == 'push' and ref == 'refs/heads/main'
             if expression(cancel, values) is not automatic:
                 raise AssertionError('Cancellation extended beyond automatic main pushes')
             actual = render(group, values)
-            expected = 'linux-native-' + (ref if automatic else str(run))
+            expected = prefix + (ref if automatic else str(run))
             if actual != expected:
                 raise AssertionError('Dispatch or other event shares an automatic main push group')
             seen[event, ref, run] = actual
@@ -135,11 +140,17 @@ class LinuxNativeCancellation(unittest.TestCase):
     def test_actual_groups_cancel_only_superseded_automatic_main_pushes(self):
         check_concurrency(LINUX.read_text())
 
+    def test_aux_groups_preserve_manual_and_pull_request_evidence(self):
+        check_concurrency(AUX.read_text(), AUTOMATIC_CALLERS[1], 'aux-proxies-')
+
     def test_original_blocker_broad_cancellation_and_missing_prerequisite_are_rejected(self):
         raw = NATIVE.read_text()
-        exclusion = " && !(cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.workflow == 'Linux native app')"
+        callers = "(github.workflow == 'Linux native app' || github.workflow == 'Aux proxies and setup assets ARM64')"
+        exclusion = " && !(cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && " + callers + ")"
         self.assertEqual(raw.count(exclusion), 1)
         for changed in (raw.replace(exclusion, ''), raw.replace(exclusion, ' && !cancelled()'),
+                        raw.replace(callers, "github.workflow == 'Linux native app'"),
+                        raw.replace(callers, "github.workflow == 'Aux proxies and setup assets ARM64'"),
                         raw.replace(" && needs.targets.result == 'success'", ''),
                         raw.replace("needs.tor-windows.result == 'success' || needs.tor-windows.result == 'skipped'", "always()"),
                         raw.replace("needs.macos-physical-sockets.result == 'success' || needs.macos-physical-sockets.result == 'skipped'", "always()")):
@@ -147,14 +158,16 @@ class LinuxNativeCancellation(unittest.TestCase):
                 check_runtime(changed)
 
     def test_manual_group_collision_or_nonpush_cancellation_is_rejected(self):
-        raw = LINUX.read_text()
-        group = field(section(raw, 'concurrency', 0), 'group', 2)
-        cancel = field(section(raw, 'concurrency', 0), 'cancel-in-progress', 2)
-        for changed in (raw.replace(group, 'linux-native-${{ github.ref }}'),
-                        raw.replace(cancel, '${{ always() }}'),
-                        raw.replace(cancel, '${{ github.event_name == \'push\' }}')):
-            with self.subTest(workflow=changed), self.assertRaises(AssertionError):
-                check_concurrency(changed)
+        for path, name, prefix in ((LINUX, AUTOMATIC_CALLERS[0], 'linux-native-'),
+                                   (AUX, AUTOMATIC_CALLERS[1], 'aux-proxies-')):
+            raw = path.read_text()
+            group = field(section(raw, 'concurrency', 0), 'group', 2)
+            cancel = field(section(raw, 'concurrency', 0), 'cancel-in-progress', 2)
+            for changed in (raw.replace(group, prefix + '${{ github.ref }}'),
+                            raw.replace(cancel, '${{ always() }}'),
+                            raw.replace(cancel, '${{ github.event_name == \'push\' }}')):
+                with self.subTest(caller=name, workflow=changed), self.assertRaises(AssertionError):
+                    check_concurrency(changed, name, prefix)
 
     def test_validation_inventory_and_cleanup_still_execute(self):
         raw = NATIVE.read_text()
@@ -174,6 +187,8 @@ class LinuxNativeCancellation(unittest.TestCase):
         self.assertNotIn('\nconcurrency:\n', raw, 'A reusable job must not cancel its caller through a new shared workflow group')
         self.assertIn('      platform: linux\n', section(LINUX.read_text(), 'native-runtimes', 2))
         self.assertIn('    needs: native-runtimes\n', section(LINUX.read_text(), 'native-linux', 2))
+        self.assertIn('      platform: windows\n', section(AUX.read_text(), 'native-runtimes', 2))
+        self.assertIn('    needs: native-runtimes\n', section(AUX.read_text(), 'arm64', 2))
         for path in ('deploy/test_linux_native_concurrency.py', '.github/workflows/desktop-native-runtime.yml'):
             self.assertEqual(LINUX.read_text().count("      - '" + path + "'\n"), 2)
 
