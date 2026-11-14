@@ -66,8 +66,12 @@ struct IOSNodeChainCapture {
                   let assets = root["profiles"] as? [String: [String: String]] else {
                 throw issue("A selected node lost its complete private bundle.")
             }
+            // Startup scheduling is owned by the saved app profile, not the
+            // forwarding path. Keep full bundle ownership outside this exact
+            // private Server/Compare compiler projection.
+            let nativeProfile = selectionExecution == "local" ? profile : executionProfile(profile)
             if profile["node_kind"] as? String == "external" {
-                let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: profile))
+                let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: nativeProfile))
                 guard bundles.count == 3, position == 1, !imported, IOSImportedShadowsocksSource.eligible(typed),
                       selection[position]["id"] as? String == selected, selection[position]["mode"] as? String == "shadowsocks" else {
                     throw issue("One original imported Shadowsocks 2022 node may sit between the paired first and final nodes.")
@@ -99,10 +103,6 @@ struct IOSNodeChainCapture {
                 start = try json(captured, maximum: 16 * 1024 * 1024)
             }
             let bootstrap = try profile["dns_bootstrap"].map { try json($0, maximum: 16384) } ?? ""
-            // Startup scheduling is owned by the saved app profile, not the
-            // forwarding path. Keep full bundle ownership outside this exact
-            // private Server/Compare compiler projection.
-            let nativeProfile = selectionExecution == "local" ? profile : executionProfile(profile)
             var failure: NSError?
             let input: String? = LibboxRouterNodeChainMemberInput(mode,
                 try json(files, maximum: 16 * 1024 * 1024), try json(nativeProfile, maximum: 256 * 1024), start, bootstrap, &failure)
