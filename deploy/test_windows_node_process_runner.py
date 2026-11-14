@@ -19,6 +19,58 @@ SPEC.loader.exec_module(GATE)
 
 
 class NodeProcessRunner(unittest.TestCase):
+    def test_ordered_execution_and_ordinary_history_are_mandatory_windows_models(self):
+        execution = (
+            "GraphRetainsSelectedAuthority", "ObservationHonorsCallerAndBusyReceipt",
+            "StaleOperationCannotMutateReplacement", "PublicationRequiresOriginalOperation",
+            "RestoreKeepsRetainedCloseIntent", "OwnedStartupProofAndRetirement",
+            "SessionOwnsChildResultAndRetirement", "SessionCleanupKeepsReplacementPublications",
+            "SessionRestoresOnlyCapturedChoice", "SessionPartialStartupCleanup",
+            "SessionChangedSourceStillJoinsOriginalChild",
+        )
+        ordinary = (
+            "ReceiptRejectsWrongMeaningAndPartialFifty", "SavedReceiptBindsOriginalMailboxAndGeneration",
+            "HistoryAtomicReadbackAndExactRollback", "HistoryBoundsAndStrictRestart",
+            "CancellationRetainsOriginalCaptureAfterReplacement", "ControllerKeepsCapturedLeaseThroughCommit",
+            "OrdinaryController", "ViewWaitsForExactLeaseRelease", "OriginalInventoryTwoThroughEight",
+            "ReceiptCannotRelabelCapturedPath", "RejectsExecutionBeforeNativeObservation",
+        )
+        roots = tuple("TestDesktopNodeChainExecution" + name for name in execution) + tuple(
+            "TestDesktopOrderedLatency" + name for name in ordinary)
+        self.assertEqual(tuple(GATE.ORDERED_CASES), roots)
+        self.assertEqual(sum(1 + len(children) for children in GATE.ORDERED_CASES.values()), 162)
+        self.assertTrue(set(roots).issubset(GATE.SHARED_TESTS))
+        for root, children in GATE.ORDERED_CASES.items():
+            for name in (root, *(root + "/" + child for child in children)):
+                self.assertIn(name, GATE.EXPECTED)
+        for root in ("TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement",
+                     "TestDesktopNodeChainExecutionSessionOwnsChildResultAndRetirement",
+                     "TestDesktopOrderedLatencyRejectsExecutionBeforeNativeObservation"):
+            self.assertEqual(GATE.ORDERED_CASES[root], ("local", "server"))
+        self.assertEqual(GATE.ORDERED_CASES["TestDesktopOrderedLatencyOrdinaryController"], ("2", "3", "8"))
+        self.assertEqual(GATE.ORDERED_CASES["TestDesktopNodeChainExecutionSessionPartialStartupCleanup"],
+                         ("prepared", "staged"))
+        self.assertFalse(any(root.startswith("TestDesktopLinux") for root in roots))
+        for path in ("cmd/client/desktop_node_chain_execution_session.go",
+                     "cmd/client/desktop_node_chain_execution_session_test.go",
+                     "cmd/client/desktop_node_chain_execution_stale_test.go",
+                     "cmd/client/desktop_ordered_latency_test.go",
+                     "cmd/client/desktop_ordered_latency_history.go"):
+            self.assertIn(path, GATE.REQUIRED_SOURCES)
+
+    def test_ordered_phases_preserve_original_groups_and_all_case_bounds(self):
+        groups = GATE.baseline_groups()
+        original = [("native-child-and-storage", GATE.NATIVE_TESTS)]
+        for offset in range(0, len(GATE.LEGACY_SHARED_TESTS), 16):
+            original.append(("shared-ownership-" + str(offset // 16 + 1),
+                             GATE.LEGACY_SHARED_TESTS[offset:offset + 16]))
+        self.assertEqual([(label, selected) for label, selected, _ in groups[:len(original)]], original)
+        self.assertEqual([selected for _, selected, _ in groups[len(original):]],
+                         [(root,) for root in GATE.ORDERED_CASES])
+        for _, selected, expected in groups[len(original):]:
+            root, = selected
+            self.assertEqual(set(expected), {root, *(root + "/" + child for child in GATE.ORDERED_CASES[root])})
+
     def test_prefix_parent_retains_closed_scope_full_control_and_cleanup_inventory(self):
         self.assertEqual(len(GATE.PREFIX_CASES), 6)
         self.assertEqual(sum(map(len, GATE.PREFIX_CASES.values())), 18)

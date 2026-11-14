@@ -184,7 +184,197 @@ PREFIX_CASES = {
     "TestDesktopCandidatePrefixOwnedCommandAndProtectionRemainTyped": (),
     "TestDesktopCandidatePrefixOwnedAlwaysProtectionKeepsFullSavedControl": (),
 }
-SHARED_TESTS = (*SHARED_TESTS, *IMPORTED_CASES, *PREFIX_CASES)
+# These common tests run on Windows with explicit child/controller/kernel models.
+# Local/Server are selected winners; ordinary latency stays Local-only. These
+# verdicts do not stand in for encrypted-peer or installed-device acceptance.
+ORDERED_CASES = {
+    'TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority': (
+        'local',
+        'local/epoch',
+        'local/identity',
+        'local/label',
+        'local/omitted',
+        'local/original',
+        'local/physical',
+        'local/preparation',
+        'local/projection',
+        'local/target',
+        'local/winner',
+        'server',
+        'server/epoch',
+        'server/identity',
+        'server/label',
+        'server/omitted',
+        'server/original',
+        'server/physical',
+        'server/preparation',
+        'server/projection',
+        'server/target',
+        'server/winner',
+    ),
+    'TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt': (
+    ),
+    'TestDesktopNodeChainExecutionStaleOperationCannotMutateReplacement': (
+        'cancelled-caller',
+        'replacement-operation',
+        'replacement-runtime',
+    ),
+    'TestDesktopNodeChainExecutionPublicationRequiresOriginalOperation': (
+        'cancelled-operation',
+        'changed-source',
+        'foreign-app',
+        'omitted-operation',
+        'original',
+        'replacement-command',
+        'replacement-operation',
+    ),
+    'TestDesktopNodeChainExecutionRestoreKeepsRetainedCloseIntent': (
+        'cancelled',
+        'failed-retained',
+        'foreign-execution',
+        'foreign-launch',
+        'linux-fallback',
+        'missing-darwin',
+        'retained-darwin',
+        'windows-fallback',
+    ),
+    'TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement': (
+        'local',
+        'server',
+    ),
+    'TestDesktopNodeChainExecutionSessionOwnsChildResultAndRetirement': (
+        'local',
+        'server',
+    ),
+    'TestDesktopNodeChainExecutionSessionCleanupKeepsReplacementPublications': (
+    ),
+    'TestDesktopNodeChainExecutionSessionRestoresOnlyCapturedChoice': (
+    ),
+    'TestDesktopNodeChainExecutionSessionPartialStartupCleanup': (
+        'prepared',
+        'staged',
+    ),
+    'TestDesktopNodeChainExecutionSessionChangedSourceStillJoinsOriginalChild': (
+    ),
+    'TestDesktopOrderedLatencyReceiptRejectsWrongMeaningAndPartialFifty': (
+        'attempts',
+        'distribution',
+        'endpoint',
+        'failure',
+        'failure-count',
+        'future',
+        'generation',
+        'idle-six',
+        'impossible-jitter',
+        'jitter',
+        'meaning',
+        'nan',
+        'node',
+        'not-ready',
+        'position',
+        'probe-budget',
+        'response-three',
+        'samples',
+        'schema',
+        'secret-label',
+        'secret-node',
+        'source',
+        'throughput',
+    ),
+    'TestDesktopOrderedLatencySavedReceiptBindsOriginalMailboxAndGeneration': (
+        'bytes',
+        'config',
+        'future-adoption',
+        'generation',
+        'missing-saved',
+        'operation',
+        'position',
+        'request',
+        'saved-node',
+        'saved-request',
+        'schema',
+        'source',
+        'status-partial',
+        'status-request',
+        'status-row',
+        'undrained',
+    ),
+    'TestDesktopOrderedLatencyHistoryAtomicReadbackAndExactRollback': (
+        'cancel-after-rename',
+        'cancel-before-write',
+        'invalid-history',
+        'newer-writer',
+        'same-inode-newer-bytes',
+        'success',
+    ),
+    'TestDesktopOrderedLatencyHistoryBoundsAndStrictRestart': (
+    ),
+    'TestDesktopOrderedLatencyCancellationRetainsOriginalCaptureAfterReplacement': (
+    ),
+    'TestDesktopOrderedLatencyControllerKeepsCapturedLeaseThroughCommit': (
+    ),
+    'TestDesktopOrderedLatencyOrdinaryController': (
+        '2',
+        '3',
+        '8',
+    ),
+    'TestDesktopOrderedLatencyViewWaitsForExactLeaseRelease': (
+    ),
+    'TestDesktopOrderedLatencyOriginalInventoryTwoThroughEight': (
+        '2',
+        '2/foreign-node',
+        '2/kind',
+        '2/missing',
+        '2/position',
+        '2/public-entry',
+        '3',
+        '3/foreign-node',
+        '3/kind',
+        '3/missing',
+        '3/position',
+        '3/public-entry',
+        '4',
+        '4/foreign-node',
+        '4/kind',
+        '4/missing',
+        '4/position',
+        '4/public-entry',
+        '5',
+        '5/foreign-node',
+        '5/kind',
+        '5/missing',
+        '5/position',
+        '5/public-entry',
+        '6',
+        '6/foreign-node',
+        '6/kind',
+        '6/missing',
+        '6/position',
+        '6/public-entry',
+        '7',
+        '7/foreign-node',
+        '7/kind',
+        '7/missing',
+        '7/position',
+        '7/public-entry',
+        '8',
+        '8/foreign-node',
+        '8/kind',
+        '8/missing',
+        '8/position',
+        '8/public-entry',
+        'connect',
+        'socks',
+    ),
+    'TestDesktopOrderedLatencyReceiptCannotRelabelCapturedPath': (
+    ),
+    'TestDesktopOrderedLatencyRejectsExecutionBeforeNativeObservation': (
+        'local',
+        'server',
+    ),
+}
+LEGACY_SHARED_TESTS = (*SHARED_TESTS, *IMPORTED_CASES, *PREFIX_CASES)
+SHARED_TESTS = (*LEGACY_SHARED_TESTS, *ORDERED_CASES)
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
     "interpreter", "another-directory", "missing-source", "duplicate-source",
@@ -195,7 +385,7 @@ ARGUMENT_CASES = (
 PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2",
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
-EXPECTED = (*REQUIRED, *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
+EXPECTED = (*REQUIRED, *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
             *(root + "/" + case for root, cases in PREFIX_CASES.items() for case in cases),
             *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
             *("TestDesktopProtectionOffContextGuardsActualPublication/" + case for case in ("before-rename", "after-rename")),
@@ -252,6 +442,21 @@ EXPECTED = (*REQUIRED, *(root + "/" + case for root, cases in IMPORTED_CASES.ite
             *("TestPrivateStoreCheckedWriteRetainsOriginalTarget/" + case for case in
               ("unchanged", "same-content", "different-content", "appeared", "removed", "refused")))
 REQUIRED_SOURCES = (
+    'cmd/client/desktop_node_chain_execution_graph.go',
+    'cmd/client/desktop_node_chain_execution_graph_test.go',
+    'cmd/client/desktop_node_chain_execution_owned_test.go',
+    'cmd/client/desktop_node_chain_execution_publication_test.go',
+    'cmd/client/desktop_node_chain_execution_restore.go',
+    'cmd/client/desktop_node_chain_execution_restore_test.go',
+    'cmd/client/desktop_node_chain_execution_session.go',
+    'cmd/client/desktop_node_chain_execution_session_test.go',
+    'cmd/client/desktop_node_chain_execution_stale_test.go',
+    'cmd/client/desktop_node_chain_launch_test.go',
+    'cmd/client/desktop_node_chain_owned_test.go',
+    'cmd/client/desktop_ordered_latency.go',
+    'cmd/client/desktop_ordered_latency_history.go',
+    'cmd/client/desktop_ordered_latency_test.go',
+
     "cmd/client/desktop_imported_owned.go", "cmd/client/desktop_imported_owned_test.go",
     "cmd/client/desktop_imported_mtu_policy.go", "cmd/client/desktop_imported_mtu_policy_test.go",
     "cmd/client/desktop_imported_mtu_ui.go",
@@ -470,8 +675,15 @@ def baseline_groups():
     # original root and leaf remains mandatory and runs exactly once; no child
     # operation deadline or durable write is changed to fit the larger suite.
     groups = [("native-child-and-storage", NATIVE_TESTS)]
-    for offset in range(0, len(SHARED_TESTS), 16):
-        groups.append(("shared-ownership-" + str(offset // 16 + 1), SHARED_TESTS[offset:offset + 16]))
+    # Keep every original phase intact. Each new whole root gets the same
+    # existing alarm independently; a larger inventory must not consume another
+    # root's budget or silently drop its nested negative cases.
+    original = tuple(root for root in SHARED_TESTS if root not in ORDERED_CASES)
+    for offset in range(0, len(original), 16):
+        groups.append(("shared-ownership-" + str(offset // 16 + 1), original[offset:offset + 16]))
+    for root in SHARED_TESTS:
+        if root in ORDERED_CASES:
+            groups.append(("ordered-" + root, (root,)))
     roots = tuple(root for _, selected in groups for root in selected)
     if (roots != REQUIRED or len(set(roots)) != len(roots) or len(set(EXPECTED)) != len(EXPECTED) or
             any(name.split("/", 1)[0] not in roots for name in EXPECTED)):
