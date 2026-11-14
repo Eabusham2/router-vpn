@@ -119,15 +119,17 @@ type Status struct {
 	Results  []Result `json:"results"`
 }
 type Service struct {
-	mu       sync.Mutex
-	hops     []Hop
-	engine   Engine
-	identity string
-	closed   bool
-	state    Status
-	cancel   context.CancelFunc
-	done     chan struct{}
-	pending  *measurementAdmission
+	ordered        bool
+	orderedLatency *OrderedLatencyService
+	mu             sync.Mutex
+	hops           []Hop
+	engine         Engine
+	identity       string
+	closed         bool
+	state          Status
+	cancel         context.CancelFunc
+	done           chan struct{}
+	pending        *measurementAdmission
 	// Unexported trusted-root seam for local TLS protocol/lifetime tests.
 	publicTLS *tls.Config
 }
@@ -253,7 +255,7 @@ func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, im
 	if err != nil {
 		return nil, err
 	}
-	return &Service{hops: copyHops, engine: engine, identity: identity, state: Status{Stage: "idle", Results: []Result{}}}, nil
+	return &Service{ordered: ordered, hops: copyHops, engine: engine, identity: identity, state: Status{Stage: "idle", Results: []Result{}}}, nil
 }
 
 func observedIdentity(ctx context.Context, engine Engine) (string, error) {
@@ -331,6 +333,12 @@ func (s *Service) start(id string, work func(context.Context)) error {
 }
 
 func (s *Service) startContext(parent context.Context, id string, work func(context.Context)) error {
+	return s.startContextOwned(parent, id, work, nil)
+}
+
+// A typed latency facade may borrow this worker, but only the original host
+// owns the service. Publish its exact admission token under the same lock.
+func (s *Service) startContextOwned(parent context.Context, id string, work func(context.Context), latency *OrderedLatencyService) error {
 	if parent == nil || !tokenID.MatchString(id) || work == nil {
 		return errors.New("invalid bounded hop measurement request")
 	}
@@ -375,6 +383,13 @@ func (s *Service) startContext(parent context.Context, id string, work func(cont
 	}
 	// Publish only cancellation/drain ownership before an external observation.
 	// Rejected admission leaves the prior completed result unchanged.
+	if latency != nil {
+		if latency.self != latency || latency.service != s || latency.closed || s.orderedLatency != latency {
+			s.mu.Unlock()
+			return ErrStale
+		}
+		latency.operation = op
+	}
 	s.pending = op
 	s.mu.Unlock()
 	if err := s.valid(ctx); err != nil {
@@ -396,7 +411,7 @@ func (s *Service) startContext(parent context.Context, id string, work func(cont
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed || s.pending != op {
+	if s.closed || s.pending != op || latency != nil && (latency.closed || s.orderedLatency != latency || latency.operation != op) {
 		return ErrStale
 	}
 	if err := ctx.Err(); err != nil {
