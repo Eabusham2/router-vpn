@@ -42,6 +42,24 @@ type server struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "compile-server-node-chain-plan" {
+		if len(os.Args) != 2 {
+			log.Fatal("compile-server-node-chain-plan accepts only bounded private stdin")
+		}
+		if err := compileServerNodeChainPlan(os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "compile-server-node-chain-source" {
+		if len(os.Args) != 2 {
+			log.Fatal("compile-server-node-chain-source accepts only bounded private stdin")
+		}
+		if err := compileServerNodeChainSource(os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "compile-server-tor-source" {
 		if len(os.Args) != 2 {
 			log.Fatal("compile-server-tor-source accepts only bounded private stdin")
@@ -122,14 +140,17 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "check-multihop-registry" {
-		if len(os.Args) != 4 && len(os.Args) != 5 {
-			log.Fatal("check-multihop-registry requires private registry and entry configuration paths, with an optional staged Tor source directory")
+		if len(os.Args) < 4 || len(os.Args) > 6 {
+			log.Fatal("check-multihop-registry requires private registry and entry configuration paths, with optional staged Tor and ordered source directories")
 		}
-		sources := serverTorSourcesDirectory
-		if len(os.Args) == 5 {
+		sources, ordered := serverTorSourcesDirectory, serverNodeChainSourcesDirectory
+		if len(os.Args) >= 5 {
 			sources = os.Args[4]
 		}
-		count, err := checkRelayRegistryWithTorSources(os.Args[2], os.Args[3], sources)
+		if len(os.Args) == 6 {
+			ordered = os.Args[5]
+		}
+		count, err := checkRelayRegistryWithSources(os.Args[2], os.Args[3], sources, ordered)
 		if err != nil {
 			log.Fatal(err)
 		}

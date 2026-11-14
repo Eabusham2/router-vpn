@@ -222,7 +222,7 @@ router-vpn-agent check-multihop-registry \
   /private/stage/tor-sources
 ```
 
-This checker includes ordinary and Tor entries in its validated count. It
+This checker includes ordinary, Tor and ordered entries in its validated count. It
 rejects missing or changed sources, wrong entry/source/DNS identities, unsafe
 private files, an unavailable installed Tor package, or native parser failures.
 It does not launch the Tor worker or prove public connectivity. Apply the
@@ -230,6 +230,137 @@ reviewed registry and source tree only through the normal exact-SHA image
 deployment process, then deliberately restart the agent. Live bootstrap,
 selected-path DNS, cancellation, reconnection, and client acceptance remain
 separate runtime checks.
+
+## Provisioning an ordered Server path from private bundles
+
+Ordered paths use a separate `node_chains` registry reference. The operator
+command accepts a private plan naming the exact entry and suffix members in
+traffic order. It resolves complete node bundles through the same typed
+compiler as the running native worker. The entry identity comes from
+`--agent-config`; neither a client lease nor a file's default selected profile
+can replace it.
+
+The supported paired plan has two through eight total nodes: a WG or AWG
+Fast/Strong entry, zero through six WG/AWG intermediates, and a paired
+Shadowsocks final node. Each paired suffix needs its own independently
+provisioned server bundle. That includes the final Shadowsocks node's standard
+WG identity asset. Packet peers must have independent canonical public keys
+and assigned addresses; copying the device bundle into the server slot is
+rejected. The server bundles must retain the same remote node, endpoint,
+protocol parameters and selected transport. The original client selections
+govern DNS, Start Layers, LAN and IPv6 policy.
+
+For example, this mode-0600 plan selects three paired nodes. Replace the paths
+and explicit profile IDs with those in the actual private bundles:
+
+```json
+{
+  "schema": 1,
+  "entry": {
+    "bundle_file": "entry-client.json",
+    "profile_id": "home-entry",
+    "mode": "wg"
+  },
+  "members": [
+    {
+      "paired": {
+        "bundle_file": "middle-client.json",
+        "profile_id": "middle",
+        "mode": "awg2-strong"
+      },
+      "server_peer": {
+        "bundle_file": "middle-server.json",
+        "profile_id": "middle-server"
+      }
+    },
+    {
+      "paired": {
+        "bundle_file": "exit-client.json",
+        "profile_id": "exit",
+        "mode": "shadowsocks"
+      },
+      "server_peer": {
+        "bundle_file": "exit-server.json",
+        "profile_id": "exit-server"
+      }
+    }
+  ]
+}
+```
+
+Paths may be absolute or relative to the plan's directory. Every referenced
+file must be an owned mode-0600 regular file without symlinks or hard links.
+When a selected node has an explicit DNS bootstrap capture, add
+`dns_bootstrap_file` beside its `bundle_file`, `profile_id` and `mode`. That file
+contains the original bootstrap JSON; the operator command does not choose a
+public resolver. Bundle contents and private capture data are sent to the
+agent compiler through stdin, never command-line arguments or terminal output.
+
+Create a private review result before applying the staged configuration:
+
+```sh
+router-vpn-relay-pair \
+  --node-chain-plan /private/ordered-path.json \
+  --agent-config /private/stage/router-agent.json \
+  --registry /private/stage/multihop-relays.json \
+  --tor-sources /private/stage/tor-sources \
+  --node-chain-sources /private/stage/node-chain-sources \
+  --listen-ip ENTRY_PRIVATE_TUNNEL_IP \
+  --dry-run /private/review/ordered-pairing-plan.json
+```
+
+Ordered pairing uses its complete descriptor and source digest, so it does
+not accept `--exit-id`, `--bundle-profile` or `--server-peer-profile`. After
+review, repeat the same command without `--dry-run` to publish into the chosen
+staging tree. This repeats validation against the current inputs. It retains
+existing ordinary, Tor and ordered references, with a combined limit of 64.
+Distinct selected DNS, Start Layer or source variants keep distinct records;
+an identical source reuses its existing immutable file.
+
+The plan metadata is bounded to 64 KiB, each bundle to 32 MiB, an explicit
+DNS bootstrap to 16 KiB, and the resolved private compiler input to 40 MiB.
+The command snapshots the plan and every referenced file, checks the complete
+candidate registry with the actual installed native parser, then rechecks
+all captured identities before publishing. A changed input, an equal-byte
+replacement inode, a conflicting source digest or a failed check prevents
+registry publication. Rollback removes only a newly created source still owned
+by that operation; it preserves replacement owners and sources already adopted
+by a registry.
+
+For the supported three-node imported variant, the entry is WG/AWG, the
+middle is one unlayered Shadowsocks 2022 import with a literal endpoint, and
+the final node is paired Shadowsocks. Replace the middle member with:
+
+```json
+{"imported": {"capture_file": "original-imported-capture.json"}}
+```
+
+The private capture file must contain exactly two strings, `config` and
+`capture`, from the original imported-node capture compiler. Keep their exact
+contents; an ordinary provider configuration alone lacks the captured policy
+and proof identity. A guided client export for that private capture remains
+separate unfinished work. Hostname imports, SOCKS and CONNECT middle nodes do
+not gain Server execution through this bounded plan format. Existing complete
+server sources can alternatively be paired with `--node-chain-source FILE`;
+they use the same descriptor validation and publication transaction.
+
+To check an existing staging tree containing ordered sources, provide both
+source-directory positions, including a private empty Tor directory when no
+Tor source is present:
+
+```sh
+router-vpn-agent check-multihop-registry \
+  /private/stage/multihop-relays.json \
+  /private/stage/router-agent.json \
+  /private/stage/tor-sources \
+  /private/stage/node-chain-sources
+```
+
+The registry check parses the original native graph without starting a lease,
+listener or tunnel. Successful pairing does not deploy the configuration or
+prove device traffic. Apply the reviewed tree through the exact-SHA image
+deployment procedure; client Server/Compare admission still requires matching
+authenticated discovery, an owned lease and fresh selected-path proofs.
 
 ## Router entry to a paired external proxy exit
 

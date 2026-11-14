@@ -27,6 +27,7 @@ HERE = Path(__file__).resolve().parent
 # Match multihoprelay.MaxRegistryBytes; lease HTTP limits remain unchanged.
 MAX_REGISTRY_BYTES = 32 << 20
 MAX_TOR_SOURCE_BYTES = 64 << 10
+MAX_NODE_CHAIN_SOURCE_BYTES = 40 << 20
 
 def helpers():
     writer = runpy.run_path(str(HERE/'atomic-private-write.py'))
@@ -680,6 +681,83 @@ def compile_tor_source(raw, alias, node):
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError, TypeError, KeyError, UnicodeError):
         raise bad from None
 
+def node_chain_source_digest(canonical, schema):
+    """Match the shared source domain and Go's JSON string encoding exactly."""
+    domain = 'routervpn-server-node-chain-source-v' + str(schema)
+    encoded = json.dumps([domain, canonical], ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+    for character, escaped in (('&', '\\u0026'), ('<', '\\u003c'), ('>', '\\u003e'),
+                               ('\u2028', '\\u2028'), ('\u2029', '\\u2029')):
+        encoded = encoded.replace(character, escaped)
+    return hashlib.sha256(encoded.encode('utf-8')).hexdigest()
+
+
+def compile_node_chain_source(raw, node):
+    """Keep the shared compiler's complete descriptor and original private input."""
+    bad = ValueError('private ordered source failed shared policy compilation')
+    try:
+        if not raw or len(raw) > MAX_NODE_CHAIN_SOURCE_BYTES:
+            raise bad
+        source = decode(raw)
+        fields = {'schema', 'entry_id', 'entry_node_id', 'entry_mode', 'nodes', 'identity_sources'}
+        if not isinstance(source, dict) or set(source) != fields:
+            raise bad
+        payload = json.dumps(dict(entry_node_id=node, source=source), ensure_ascii=False,
+                             allow_nan=False, separators=(',', ':')).encode('utf-8')
+        if len(payload) > MAX_NODE_CHAIN_SOURCE_BYTES + 4096:
+            raise bad
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-server-node-chain-source'],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+        return compiled_node_chain_source(result.stdout, node, source)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError, TypeError, KeyError, UnicodeError):
+        raise bad from None
+
+
+def compiled_node_chain_source(raw, node, original=None):
+    """Validate the shared compiler output for either private input form."""
+    bad = ValueError('private ordered source failed shared policy compilation')
+    try:
+        if not raw or len(raw) > 2 * MAX_NODE_CHAIN_SOURCE_BYTES + 4096:
+            raise bad
+        compiled = decode(raw)
+        if not isinstance(compiled, dict) or set(compiled) != {'source_json', 'reference'}:
+            raise bad
+        reference, canonical = compiled['reference'], compiled['source_json']
+        descriptor_fields = {'schema', 'entry_id', 'entry_node_id', 'entry_mode', 'source_sha256', 'dns_policy_sha256', 'members'}
+        if not isinstance(reference, dict) or set(reference) != descriptor_fields or not isinstance(canonical, str):
+            raise bad
+        body = canonical.encode('utf-8')
+        if not body or len(body) > MAX_NODE_CHAIN_SOURCE_BYTES:
+            raise bad
+        captured = decode(body)
+        source_fields = {'schema', 'entry_id', 'entry_node_id', 'entry_mode', 'nodes', 'identity_sources'}
+        if (not isinstance(captured, dict) or set(captured) != source_fields or
+                original is not None and captured != original or
+                type(captured.get('schema')) is not int or captured['schema'] not in (1, 2)):
+            raise bad
+        if any(reference.get(key) != captured.get(key) for key in ('schema', 'entry_id', 'entry_node_id', 'entry_mode')) or captured['entry_node_id'] != node:
+            raise bad
+        if any(not isinstance(reference.get(key), str) or not re.fullmatch('[0-9a-f]{64}', reference[key]) for key in ('source_sha256', 'dns_policy_sha256')):
+            raise bad
+        if node_chain_source_digest(canonical, captured['schema']) != reference['source_sha256']:
+            raise bad
+        members = reference['members']
+        if not isinstance(members, list) or not isinstance(captured['nodes'], list) or not 1 <= len(members) <= 7 or len(members) != len(captured['nodes']):
+            raise bad
+        member_fields = {'position', 'profile_id', 'node_id', 'mode', 'start_layer'}
+        optional_fields = {'client_public_key', 'server_public_key', 'node_kind', 'proof_kind', 'source_sha256', 'expected_public_ip'}
+        for position, member in enumerate(members, 1):
+            if (not isinstance(member, dict) or not member_fields <= set(member) or set(member) - member_fields - optional_fields or
+                    type(member['position']) is not int or member['position'] != position or
+                    any(not isinstance(value, str) for key, value in member.items() if key != 'position')):
+                raise bad
+        # Positional keys, exact node identities, selected DNS and every other
+        # descriptor field remain owned by the native compiler and checker.
+        return reference, body
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        raise bad from None
+
+
 def private_snapshot(path, limit, *, optional=False):
     """Capture the exact owned file; replacements with equal bytes are stale."""
     path = Path(os.path.abspath(path))
@@ -704,7 +782,85 @@ def require_snapshot(snapshot):
     if current[1] != snapshot[1] or not os.path.samestat(current[2], snapshot[2]) or current[2].st_mtime_ns != snapshot[2].st_mtime_ns or current[2].st_ctime_ns != snapshot[2].st_ctime_ns:
         raise ValueError('private pairing input changed during native validation')
 
-def source_directory(path, *, create=False):
+
+def compile_node_chain_plan(path, node):
+    """Resolve explicit private bundle files into the shared typed plan compiler.
+
+    The plan contains paths and selections only. Imported capture strings stay
+    byte-for-byte as exported, and every source inode remains captured until
+    the staged registry is checked and publication is ready to commit.
+    """
+    bad = ValueError('private ordered bundle plan failed shared policy compilation')
+    try:
+        plan_snapshot = private_snapshot(path, 64 << 10)
+        plan = decode(plan_snapshot[1])
+        if (not isinstance(plan, dict) or set(plan) != {'schema', 'entry', 'members'} or
+                type(plan['schema']) is not int or plan['schema'] != 1 or
+                not isinstance(plan['members'], list) or not 1 <= len(plan['members']) <= 7):
+            raise bad
+        snapshots = {plan_snapshot[0]: plan_snapshot}
+        captured_bytes = len(plan_snapshot[1])
+
+        def capture(name, limit):
+            nonlocal captured_bytes
+            if (not isinstance(name, str) or not name or len(name) > 4096 or
+                    '\x00' in name or '://' in name):
+                raise bad
+            selected = Path(os.path.abspath(plan_snapshot[0].parent / name))
+            if selected not in snapshots:
+                snapshot = private_snapshot(selected, limit)
+                captured_bytes += len(snapshot[1])
+                if captured_bytes > MAX_NODE_CHAIN_SOURCE_BYTES:
+                    raise bad
+                snapshots[selected] = snapshot
+            snapshot = snapshots[selected]
+            if not snapshot[1] or len(snapshot[1]) > limit:
+                raise bad
+            return snapshot[1]
+
+        def selection(value, *, peer=False):
+            required = {'bundle_file', 'profile_id'} if peer else {'bundle_file', 'profile_id', 'mode'}
+            optional = set() if peer else {'dns_bootstrap_file'}
+            if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
+                raise bad
+            result = {'bundle': decode(capture(value['bundle_file'], 32 << 20)), 'profile_id': value['profile_id']}
+            if not peer:
+                result['mode'] = value['mode']
+                if 'dns_bootstrap_file' in value:
+                    result['dns_bootstrap'] = capture(value['dns_bootstrap_file'], 16384).decode('utf-8')
+            return result
+
+        resolved = dict(schema=1, entry_node_id=node, entry=selection(plan['entry']), members=[])
+        for member in plan['members']:
+            if not isinstance(member, dict):
+                raise bad
+            if set(member) == {'imported'}:
+                imported = member['imported']
+                if not isinstance(imported, dict) or set(imported) != {'capture_file'}:
+                    raise bad
+                original = decode(capture(imported['capture_file'], MAX_NODE_CHAIN_SOURCE_BYTES))
+                if (not isinstance(original, dict) or set(original) != {'config', 'capture'} or
+                        any(not isinstance(value, str) or not value for value in original.values())):
+                    raise bad
+                resolved['members'].append({'imported': original})
+            elif set(member) == {'paired', 'server_peer'}:
+                resolved['members'].append(dict(paired=selection(member['paired']),
+                                                server_peer=selection(member['server_peer'], peer=True)))
+            else:
+                raise bad
+        payload = json.dumps(resolved, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
+        if not payload or len(payload) > MAX_NODE_CHAIN_SOURCE_BYTES:
+            raise bad
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-server-node-chain-plan'],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+        addition = compiled_node_chain_source(result.stdout, node)
+        return addition, list(snapshots.values())
+    except (OSError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired,
+            ValueError, TypeError, KeyError, UnicodeError):
+        raise bad from None
+
+def source_directory(path, *, create=False, label='Tor'):
     path = Path(os.path.abspath(path))
     _, _, parent = helpers()
     if create:
@@ -716,47 +872,54 @@ def source_directory(path, *, create=False):
             except FileNotFoundError:
                 continue
             if not stat.S_ISDIR(info.st_mode):
-                raise ValueError('Tor source path must not traverse linked or non-directory ancestors')
+                raise ValueError(label + ' source path must not traverse linked or non-directory ancestors')
         # A missing directory is valid only until its first source is published.
         if not path.exists() and not path.is_symlink():
             return path
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
-        raise ValueError('Tor source directory must be an owned mode-0700 directory')
+        raise ValueError(label + ' source directory must be an owned mode-0700 directory')
     return path
 
-def source_directory_snapshot(path):
-    source_directory(path)
+def source_directory_snapshot(path, *, label='Tor'):
+    source_directory(path, label=label)
     try:
         return path.lstat()
     except FileNotFoundError:
         return None
 
-def require_source_directory(path, before):
-    current = source_directory_snapshot(path)
+def require_source_directory(path, before, *, label='Tor'):
+    current = source_directory_snapshot(path, label=label)
     if before is None and current is not None or before is not None and (current is None or not os.path.samestat(before, current)):
-        raise ValueError('Tor source directory changed during native validation')
+        raise ValueError(label + ' source directory changed during native validation')
 
 def stage_tor_sources(registry, sources, stage, addition):
-    references = registry.get('tor_exits', [])
+    return stage_private_sources(registry.get('tor_exits', []), sources, stage, addition, MAX_TOR_SOURCE_BYTES, 'Tor')
+
+
+def stage_node_chain_sources(registry, sources, stage, addition):
+    return stage_private_sources(registry.get('node_chains', []), sources, stage, addition, MAX_NODE_CHAIN_SOURCE_BYTES, 'ordered')
+
+
+def stage_private_sources(references, sources, stage, addition, limit, label):
     if not references:
         return {}, []
-    sources = source_directory(sources)
+    sources = source_directory(sources, label=label)
     _, write, _ = helpers()
     stage.mkdir(mode=0o700)
     bodies, snapshots = {}, []
     for reference in references:
         digest = reference.get('source_sha256') if isinstance(reference, dict) else None
         if not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
-            raise ValueError('Tor registry source reference is not canonical')
+            raise ValueError(label + ' registry source reference is not canonical')
         if digest in bodies:
             continue
         selected = addition is not None and digest == addition[0]['source_sha256']
-        snapshot = private_snapshot(sources / (digest + '.json'), MAX_TOR_SOURCE_BYTES, optional=selected)
+        snapshot = private_snapshot(sources / (digest + '.json'), limit, optional=selected)
         if selected:
             body = addition[1]
             if snapshot is not None and snapshot[1] != body:
-                raise ValueError('existing immutable Tor source differs from its canonical selection')
+                raise ValueError('existing immutable ' + label + ' source differs from its canonical selection')
         else:
             body = snapshot[1]
         if snapshot is not None:
@@ -766,10 +929,18 @@ def stage_tor_sources(registry, sources, stage, addition):
     return bodies, snapshots
 
 def publish_tor_source(path, body):
+    return publish_private_source(path, body, 'Tor', '.tor-source-')
+
+
+def publish_node_chain_source(path, body):
+    return publish_private_source(path, body, 'ordered', '.node-chain-source-')
+
+
+def publish_private_source(path, body, label, prefix):
     """Publish one immutable hash-addressed source without replacing any file."""
     path = Path(os.path.abspath(path))
-    source_directory(path.parent, create=True)
-    descriptor, name = tempfile.mkstemp(prefix='.tor-source-', dir=path.parent)
+    source_directory(path.parent, create=True, label=label)
+    descriptor, name = tempfile.mkstemp(prefix=prefix, dir=path.parent)
     temporary = Path(name)
     owned, linked = os.fstat(descriptor), False
     try:
@@ -784,7 +955,7 @@ def publish_tor_source(path, body):
         os.link(temporary, path, follow_symlinks=False)
         linked = True
         if not os.path.samestat(owned, path.lstat()):
-            raise ValueError('Tor source ownership changed during publication')
+            raise ValueError(label + ' source ownership changed during publication')
         temporary.unlink()
         directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -831,33 +1002,52 @@ def main():
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--bundle', type=Path)
     source.add_argument('--tor-source', type=Path, help='private data-only Tor source; shared native compiler preserves its ID and selected DNS')
-    parser.add_argument('--exit-id', required=True, help='ID used for this exit in client profiles')
+    source.add_argument('--node-chain-source', type=Path, help='private complete ordered server source; preserve its original descriptor and selected DNS')
+    source.add_argument('--node-chain-plan', type=Path, help='private ordered plan naming complete client and independent server bundle files')
+    parser.add_argument('--exit-id', help='required ID for ordinary and Tor exits; ordered sources retain their own descriptor identity')
     parser.add_argument('--bundle-profile')
     parser.add_argument('--server-peer-profile', type=Path, help='separate private WG/AWG/OpenVPN server peer JSON; never a client bundle')
     parser.add_argument('--agent-config', type=Path, default=Path('/etc/router-vpn/router-agent.json'))
     parser.add_argument('--registry', type=Path, default=Path('/etc/router-vpn/multihop-relays.json'))
     parser.add_argument('--tor-sources', type=Path, help='private immutable source directory; defaults to tor-sources beside the registry')
+    parser.add_argument('--node-chain-sources', type=Path, help='private immutable ordered source directory; defaults to node-chain-sources beside the registry')
     parser.add_argument('--dry-run', type=Path, help='write a private validated review plan to this explicit file; leave the registry and sources unchanged')
     parser.add_argument('--listen-ip', required=True, help='entry tunnel IP used by clients for the Router API')
     args = parser.parse_args()
+    ordered = args.node_chain_source is not None or args.node_chain_plan is not None
+    if not ordered and args.exit_id is None:
+        parser.error('--exit-id is required for ordinary and Tor pairing')
+    if ordered and args.exit_id is not None:
+        parser.error('ordered source pairing preserves its descriptor and does not accept --exit-id')
     read, write, parent = helpers()
     args.registry = Path(os.path.abspath(args.registry))
     args.agent_config = Path(os.path.abspath(args.agent_config))
     sources = Path(os.path.abspath(args.tor_sources or args.registry.parent / 'tor-sources'))
+    chain_sources = Path(os.path.abspath(args.node_chain_sources or args.registry.parent / 'node-chain-sources'))
     if args.tor_source is not None and (args.bundle_profile is not None or args.server_peer_profile is not None):
         raise ValueError('Tor source pairing does not accept a bundle profile or provider peer')
+    if ordered and (args.bundle_profile is not None or args.server_peer_profile is not None):
+        raise ValueError('ordered source pairing does not accept a bundle profile or provider peer')
     if args.dry_run is not None:
         args.dry_run = Path(os.path.abspath(args.dry_run))
-        protected = [args.registry, args.agent_config, args.bundle, args.tor_source, args.server_peer_profile]
-        if args.dry_run in [Path(os.path.abspath(path)) for path in protected if path is not None] or args.dry_run == sources or sources in args.dry_run.parents:
+        protected = [args.registry, args.agent_config, args.bundle, args.tor_source, args.node_chain_source, args.node_chain_plan, args.server_peer_profile]
+        if args.dry_run in [Path(os.path.abspath(path)) for path in protected if path is not None] or any(args.dry_run == directory or directory in args.dry_run.parents for directory in (sources, chain_sources)):
             raise ValueError('dry-run output must be separate from live and input files')
         parent(args.dry_run)
     agent_snapshot = private_snapshot(args.agent_config, 1 << 20)
     agent = decode(agent_snapshot[1])
     input_snapshot = private_snapshot(args.tor_source, MAX_TOR_SOURCE_BYTES) if args.tor_source is not None else None
     addition = compile_tor_source(input_snapshot[1], args.exit_id, agent.get('node_id')) if input_snapshot is not None else None
+    chain_input = private_snapshot(args.node_chain_source, MAX_NODE_CHAIN_SOURCE_BYTES) if args.node_chain_source is not None else None
+    chain_addition = compile_node_chain_source(chain_input[1], agent.get('node_id')) if chain_input is not None else None
+    input_snapshots = [snapshot for snapshot in (input_snapshot, chain_input) if snapshot is not None]
+    if args.node_chain_plan is not None:
+        chain_addition, plan_snapshots = compile_node_chain_plan(args.node_chain_plan, agent.get('node_id'))
+        input_snapshots.extend(plan_snapshots)
+        if args.dry_run is not None and args.dry_run in [snapshot[0] for snapshot in plan_snapshots]:
+            raise ValueError('dry-run output must be separate from every private plan input')
     server_peer = decode(read(args.server_peer_profile, 512 << 10)) if args.server_peer_profile is not None else None
-    entries = [] if addition is not None else pair(decode(read(args.bundle, 32 << 20)), args.exit_id, args.bundle_profile, server_peer)
+    entries = [] if addition is not None or chain_addition is not None else pair(decode(read(args.bundle, 32 << 20)), args.exit_id, args.bundle_profile, server_peer)
     listen = ipaddress.ip_address(literal(args.listen_ip))
     if not listen.is_private or not any(listen in ipaddress.ip_network(n) for n in agent.get('tunnel_cidrs', [])):
         raise ValueError('listen IP must belong to the entry tunnel ranges')
@@ -874,16 +1064,24 @@ def main():
             registry = decode(registry_snapshot[1])
         if registry.get('listen_ip') != str(listen):
             raise ValueError('existing registry has a different entry listener')
-        ordinary, tor = registry.get('exits'), registry.get('tor_exits')
+        ordinary, tor, chains = registry.get('exits'), registry.get('tor_exits'), registry.get('node_chains')
         ordinary = [] if ordinary is None else ordinary
         tor = [] if tor is None else tor
-        if not isinstance(ordinary, list) or not isinstance(tor, list):
+        chains = [] if chains is None else chains
+        if not all(isinstance(value, list) for value in (ordinary, tor, chains)):
             raise ValueError('registry exits must be bounded lists')
-        if addition is None:
-            registry['exits'] = [e for e in ordinary if e['id'] != args.exit_id] + entries
-        else:
+        if chain_addition is not None:
+            # The manager keys ordered paths by source digest, not an exit alias
+            # or a tuple of node names. Keep distinct DNS/layer/source variants.
+            same = [item for item in chains if isinstance(item, dict) and item.get('source_sha256') == chain_addition[0]['source_sha256']]
+            if len(same) > 1 or same and same[0] != chain_addition[0]:
+                raise ValueError('existing ordered descriptor differs from its immutable source identity')
+            registry['node_chains'] = chains if same else [*chains, chain_addition[0]]
+        elif addition is not None:
             registry['tor_exits'] = [e for e in tor if e['id'] != args.exit_id] + [addition[0]]
-        if len(registry.get('exits') or []) + len(registry.get('tor_exits') or []) > 64:
+        else:
+            registry['exits'] = [e for e in ordinary if e['id'] != args.exit_id] + entries
+        if sum(len(registry.get(name) or []) for name in ('exits', 'tor_exits', 'node_chains')) > 64:
             raise ValueError('paired exit count exceeds bound')
         body = registry_bytes(registry)
         staging_parent = args.dry_run.parent if args.dry_run is not None else args.registry.parent
@@ -891,34 +1089,52 @@ def main():
             stage = Path(tmp)/'registry.json'
             write(stage, body)
             directory_identity = source_directory_snapshot(sources) if registry.get('tor_exits') else None
+            chain_directory_identity = source_directory_snapshot(chain_sources, label='ordered') if registry.get('node_chains') else None
             source_bodies, source_snapshots = stage_tor_sources(registry, sources, Path(tmp)/'tor-sources', addition)
+            chain_bodies, chain_snapshots = stage_node_chain_sources(registry, chain_sources, Path(tmp)/'node-chain-sources', chain_addition)
+            source_snapshots.extend(chain_snapshots)
             command = ['/usr/local/bin/router-vpn-agent', 'check-multihop-registry', str(stage), str(args.agent_config)]
-            if source_bodies:
+            if source_bodies or chain_bodies:
+                # The optional ordered directory is argv[5]; argv[4] remains
+                # the Tor directory, including an empty private placeholder.
+                (Path(tmp)/'tor-sources').mkdir(mode=0o700, exist_ok=True)
                 command.append(str(Path(tmp)/'tor-sources'))
+            if chain_bodies:
+                command.append(str(Path(tmp)/'node-chain-sources'))
             subprocess.run(command, check=True, timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            for snapshot in [agent_snapshot, *source_snapshots, *([input_snapshot] if input_snapshot is not None else [])]:
+            for snapshot in [agent_snapshot, *source_snapshots, *input_snapshots]:
                 require_snapshot(snapshot)
             if source_bodies:
                 require_source_directory(sources, directory_identity)
+            if chain_bodies:
+                require_source_directory(chain_sources, chain_directory_identity, label='ordered')
             if not registry_unchanged(args.registry, registry_snapshot):
                 raise ValueError('registry changed during native validation; no replacement was written')
             if args.dry_run is not None:
                 plan = dict(schema=1, kind='routervpn-relay-pairing-plan', entry_node_id=agent['node_id'], registry=registry,
                             tor_sources={digest: raw.decode('utf-8') for digest, raw in source_bodies.items()})
+                if chain_bodies:
+                    plan['node_chain_sources'] = {digest: raw.decode('utf-8') for digest, raw in chain_bodies.items()}
                 write(args.dry_run, registry_bytes(plan))
             else:
                 created = None
-                target = sources / (addition[0]['source_sha256'] + '.json') if addition is not None else None
+                selected = chain_addition if chain_addition is not None else addition
+                selected_sources = chain_sources if chain_addition is not None else sources
+                selected_limit = MAX_NODE_CHAIN_SOURCE_BYTES if chain_addition is not None else MAX_TOR_SOURCE_BYTES
+                publish = publish_node_chain_source if chain_addition is not None else publish_tor_source
+                target = selected_sources / (selected[0]['source_sha256'] + '.json') if selected is not None else None
                 try:
                     if source_bodies:
                         require_source_directory(sources, directory_identity)
+                    if chain_bodies:
+                        require_source_directory(chain_sources, chain_directory_identity, label='ordered')
                     if target is not None and all(snapshot[0] != target for snapshot in source_snapshots):
-                        created = publish_tor_source(target, addition[1])
-                        snapshot = private_snapshot(target, MAX_TOR_SOURCE_BYTES)
-                        if not os.path.samestat(created, snapshot[2]) or snapshot[1] != addition[1]:
-                            raise ValueError('new private Tor source changed before registry publication')
+                        created = publish(target, selected[1])
+                        snapshot = private_snapshot(target, selected_limit)
+                        if not os.path.samestat(created, snapshot[2]) or snapshot[1] != selected[1]:
+                            raise ValueError('new private source changed before registry publication')
                         source_snapshots.append(snapshot)
-                    for snapshot in [agent_snapshot, *source_snapshots, *([input_snapshot] if input_snapshot is not None else [])]:
+                    for snapshot in [agent_snapshot, *source_snapshots, *input_snapshots]:
                         require_snapshot(snapshot)
                     if not registry_unchanged(args.registry, registry_snapshot):
                         raise ValueError('registry changed before publication; no replacement was written')
@@ -932,7 +1148,7 @@ def main():
     if args.dry_run is not None:
         print('Validated private pairing plan written. Registry and source files were not changed.')
     else:
-        print('Paired',1 if addition is not None else len(entries),'validated transport configurations. No tunnel or service was started.')
+        print('Paired',1 if addition is not None or chain_addition is not None else len(entries),'validated transport configurations. No tunnel or service was started.')
 
 if __name__ == '__main__':
     try:

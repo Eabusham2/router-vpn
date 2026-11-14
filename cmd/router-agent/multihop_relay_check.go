@@ -28,8 +28,12 @@ func checkRelayRegistry(registryPath, agentPath string) (int, error) {
 }
 
 func checkRelayRegistryWithTorSources(registryPath, agentPath, torSources string) (int, error) {
+	return checkRelayRegistryWithSources(registryPath, agentPath, torSources, serverNodeChainSourcesDirectory)
+}
+
+func checkRelayRegistryWithSources(registryPath, agentPath, torSources, nodeChainSources string) (int, error) {
 	return checkRelayRegistryWithPaths(registryPath, agentPath, relayRegistryCheckPaths{
-		torSources: torSources, packagePrefix: "/usr/local", core: "/usr/local/bin/sing-box", temporary: "/run/router-vpn-relay-checks",
+		torSources: torSources, nodeChainSources: nodeChainSources, packagePrefix: "/usr/local", core: "/usr/local/bin/sing-box", temporary: "/run/router-vpn-relay-checks",
 	})
 }
 
@@ -37,7 +41,7 @@ func checkRelayRegistryWithTorSources(registryPath, agentPath, torSources string
 // The production executable/package paths remain fixed; tests can exercise the
 // identical checker against a real isolated build without installing it.
 type relayRegistryCheckPaths struct {
-	torSources, packagePrefix, core, temporary string
+	torSources, nodeChainSources, packagePrefix, core, temporary string
 }
 
 func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegistryCheckPaths) (int, error) {
@@ -83,6 +87,10 @@ func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegi
 			return 0, errors.New("private server Tor source directory is unavailable")
 		}
 	}
+	ordered, err := newRelayNodeChainRegistryCheck(registry, entry, paths)
+	if err != nil {
+		return 0, err
+	}
 	root := paths.temporary
 	if err = validatePrivilegedStateParent(filepath.Join(root, "plan")); err != nil {
 		return 0, err
@@ -117,12 +125,18 @@ func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegi
 			return 0, errors.New("bundled relay core rejected a private server Tor configuration")
 		}
 	}
+	if err := ordered.checkNative(dir); err != nil {
+		return 0, err
+	}
 	for _, source := range registry.TorExits {
 		if _, err := torSources.source(source, entry.NodeID); err != nil || !torBinary.Current() {
 			return 0, errors.New("private server Tor source or package changed during validation")
 		}
 	}
-	return len(registry.Exits) + len(registry.TorExits), nil
+	if err := ordered.current(); err != nil {
+		return 0, err
+	}
+	return len(registry.Exits) + len(registry.TorExits) + len(registry.NodeChains), nil
 }
 
 func checkNativeRelayConfig(dir, core string, body []byte) error {

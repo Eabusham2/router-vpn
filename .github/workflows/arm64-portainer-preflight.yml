@@ -140,6 +140,19 @@ jobs:
             --entrypoint python3 router-vpn-preflight-agent:arm64 \
             /routervpn-source/deploy/test_server_tor_pairing.py --installed -v
 
+      - name: Verify installed private ordered provisioning without network access
+        run: |
+          umask 077
+          python3 deploy/test_server_node_chain_pairing.py \
+            --generate-fixtures "$RUNNER_TEMP/routervpn-ordered-pairing-fixtures.json"
+          docker run --rm --network none --platform linux/arm64 \
+            -e ROUTERVPN_ORDERED_PAIRING_SOURCE_SHA=${{ github.sha }} \
+            --mount "type=bind,src=${PWD},dst=/routervpn-source,readonly" \
+            --mount "type=bind,src=${RUNNER_TEMP}/routervpn-ordered-pairing-fixtures.json,dst=/ordered-fixtures.json,readonly" \
+            --entrypoint python3 router-vpn-preflight-agent:arm64 \
+            /routervpn-source/deploy/test_server_node_chain_pairing.py \
+            --installed --fixtures /ordered-fixtures.json -v
+
       - name: Prove benchmark and Emergency Stop tooling in ARM64 agent
         run: |
           set -euo pipefail
