@@ -284,6 +284,7 @@ class MacOSNativeVerdicts(unittest.TestCase):
         self.gate = GATES[1]
         names = ['TestMacOSOwnedControllerNative'+name for name in self.gate.CASES]
         names += ['TestDesktopMacOS'+name for name in self.gate.PARENT_CASES]
+        names += ['TestDesktopMacOS'+name for name in self.gate.EXECUTION_PARENT_CASES]
         self.lines = ['--- PASS: '+name+' (0.01s)' for name in names]
         self.output = '\n'.join(self.lines+['PASS', ''])
 
@@ -315,6 +316,49 @@ class MacOSNativeVerdicts(unittest.TestCase):
                         'fatal error: concurrent map writes', 'FAIL package [build failed]'):
             with self.subTest(failure=failure), self.assertRaises(RuntimeError):
                 self.gate.require_native_verdicts(failure+'\n'+self.output)
+
+    def test_execution_parent_requires_all_five_exact_native_roots(self):
+        expected = ('ExecutionReaderKeepsPreparationAndAdoptionDistinct',
+                    'ExecutionReaderCancellationDoesNotWaitForOwnerMutex',
+                    'ExecutionReaderRequiresPhysicalRetirement',
+                    'ExecutionReplacementJoinsBeforeHoldingOriginalProtection',
+                    'ExecutionReplacementRefusesForeignPreparation')
+        self.assertEqual(self.gate.EXECUTION_PARENT_CASES, expected)
+        self.assertEqual(len(self.gate.CASES)+len(self.gate.PARENT_CASES), 26)
+        for suffix in expected:
+            line = '--- PASS: TestDesktopMacOS'+suffix+' (0.01s)'
+            self.assertIn(line, self.lines)
+            for changed in ('', line+'\n'+line, 'diagnostic '+line,
+                            line.replace(' (', '/subcase ('),
+                            line.replace('--- PASS:', '--- SKIP:'),
+                            line.replace('--- PASS:', '--- FAIL:')):
+                with self.subTest(case=suffix, verdict=changed), self.assertRaises(RuntimeError):
+                    self.gate.require_native_verdicts(self.output.replace(line, changed, 1))
+
+    def test_actual_native_command_selects_execution_roots_without_changing_bounds(self):
+        arguments = self.gate.native_test_arguments()
+        self.assertEqual(arguments[1:], ['-test.v', '-test.timeout=180s'])
+        self.assertTrue(arguments[0].startswith('-test.run='))
+        pattern = arguments[0].removeprefix('-test.run=')
+        for line in self.lines:
+            name = line.removeprefix('--- PASS: ').split(' ', 1)[0]
+            with self.subTest(case=name):
+                self.assertIsNotNone(re.search(pattern, name))
+        for suffix in self.gate.EXECUTION_PARENT_CASES:
+            self.assertIsNone(re.search(pattern, 'TestDesktopMacOS'+suffix+'Unrelated'))
+        for name in ('TestDesktopMacOSExecutionBaselineRetainsExactFamily',
+                     'TestDesktopMacOSExecutionUnrelated'):
+            self.assertIsNone(re.search(pattern, name))
+        tree = ast.parse(Path(self.gate.__file__).read_text())
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+        commands = [node.value for node in ast.walk(main) if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == 'command' for target in node.targets)]
+        # The original second assignment adds sudo around this same command.
+        self.assertEqual(len(commands), 2)
+        selected = [node for node in ast.walk(commands[0]) if isinstance(node, ast.Starred)
+                    and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                    and node.value.func.id == 'native_test_arguments']
+        self.assertEqual(len(selected), 1, 'actual native invocation omitted the required execution roots')
 
 
 class DarwinMutationOverlays(unittest.TestCase):

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"router-vpn/internal/macosprocess"
+	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
 )
 
@@ -34,6 +35,8 @@ type desktopMacOSProcess struct {
 	nativeAcknowledged bool
 	nativeStopped      bool
 	nativeStopErr      error
+	execution          *mobilemultihop.NodeChainExecutionPreparation
+	executionPhysical  *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
 }
 
 func startDesktopMacOSProcess(ctx context.Context, parent *desktopMacOSSessionCapture, scope macosprocess.Scope) (*desktopMacOSProcess, error) {
@@ -43,20 +46,44 @@ func startDesktopMacOSProcess(ctx context.Context, parent *desktopMacOSSessionCa
 // Only complete package metadata/version verification has a fixture seam;
 // fixed paths, native image identity, descriptors and child creation do not.
 func startDesktopMacOSProcessWithVerifier(ctx context.Context, parent *desktopMacOSSessionCapture, scope macosprocess.Scope, verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
+	return startDesktopMacOSProcessCaptured(ctx, parent, scope, nil, nil, verify)
+}
+
+func startDesktopMacOSExecutionProcessWithVerifier(ctx context.Context, parent *desktopMacOSSessionCapture,
+	scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation,
+	physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,
+	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
+	if preparation == nil || physical == nil {
+		return nil, errors.New("macOS execution child requires its original typed preparation")
+	}
+	return startDesktopMacOSProcessCaptured(ctx, parent, scope, preparation, physical, verify)
+}
+
+func startDesktopMacOSProcessCaptured(ctx context.Context, parent *desktopMacOSSessionCapture,
+	scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation,
+	physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,
+	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
 	if ctx == nil || parent == nil || verify == nil {
 		return nil, errors.New("macOS child requires its original captured application")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	arguments, err := desktopMacOSProcessArguments(scope)
+	var arguments []string
+	var err error
+	if preparation != nil || physical != nil {
+		arguments, err = desktopMacOSExecutionProcessArguments(scope, preparation, physical)
+	} else {
+		arguments, err = desktopMacOSProcessArguments(scope)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if err := parent.Current(ctx); err != nil {
 		return nil, err
 	}
-	p := &desktopMacOSProcess{parent: parent, scope: scope, gate: make(chan struct{}, 1), joined: make(chan struct{})}
+	p := &desktopMacOSProcess{parent: parent, scope: scope, execution: preparation, executionPhysical: physical,
+		gate: make(chan struct{}, 1), joined: make(chan struct{})}
 	// The initially empty gate holds construction until every partial native
 	// owner is published to this retained dependent. Parent close can wait for it.
 	if err := parent.session.Retain(ctx, p); err != nil {
@@ -147,6 +174,11 @@ func (p *desktopMacOSProcess) enter(ctx context.Context) error {
 func (p *desktopMacOSProcess) currentLocked(ctx context.Context) error {
 	if p.closed || p.retiring.Load() || !p.started.Load() || p.bootstrap == nil {
 		return errors.New("macOS child has no live captured handshake")
+	}
+	if p.execution != nil || p.executionPhysical != nil || p.scope.Family == macosprocess.NodeChainExecutionFamily {
+		if _, err := desktopMacOSExecutionProcessArguments(p.scope, p.execution, p.executionPhysical); err != nil {
+			return err
+		}
 	}
 	select {
 	case <-p.joined:

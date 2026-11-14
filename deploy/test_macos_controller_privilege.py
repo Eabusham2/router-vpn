@@ -39,6 +39,17 @@ PARENT_CASES = ('ParentOriginalSessionAndJoin', 'ParentFailedDependentRetainsOri
                 'SessionReleaseJoinsOnlyOriginalDependent', 'SessionCleanupRetainsOnlyOriginalAuthorityAfterCancellation',
                 'ExternalBaselineExactReceiptAndRetirement', 'ExternalRetirementRetryEscalatesHeldBaseline',
                 'ExternalRetirementRetryDoesNotRemoveWorkspaceTwice', 'ExternalRetirementPreservesReplacementDNSIdentity')
+EXECUTION_PARENT_CASES = ('ExecutionReaderKeepsPreparationAndAdoptionDistinct',
+                          'ExecutionReaderCancellationDoesNotWaitForOwnerMutex',
+                          'ExecutionReaderRequiresPhysicalRetirement',
+                          'ExecutionReplacementJoinsBeforeHoldingOriginalProtection',
+                          'ExecutionReplacementRefusesForeignPreparation')
+
+
+def native_test_arguments():
+    original = '^Test(MacOSOwnedControllerNative|DesktopMacOS(Parent|Session|External))'
+    execution = '|'.join('TestDesktopMacOS'+name for name in EXECUTION_PARENT_CASES)
+    return ['-test.run='+original+'|^('+execution+')$', '-test.v', '-test.timeout=180s']
 
 
 def require_native_verdicts(output):
@@ -49,6 +60,7 @@ def require_native_verdicts(output):
         raise RuntimeError('Native macOS output contains failure, skip, race or incomplete build evidence')
     names = ['TestMacOSOwnedControllerNative'+name for name in CASES]
     names += ['TestDesktopMacOS'+name for name in PARENT_CASES]
+    names += ['TestDesktopMacOS'+name for name in EXECUTION_PARENT_CASES]
     for name in names:
         pattern = r'^--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$'
         if len(re.findall(pattern, output, flags=re.MULTILINE)) != 1:
@@ -291,7 +303,7 @@ def main():
                    'ROUTERVPN_MACOS_FIXTURE_PYTHON=' + str(Path(python).absolute()),
                    'ROUTERVPN_MACOS_FIXTURE_INSTALLCAP=' + str(capability),
                    'ROUTERVPN_MACOS_FIXTURE_APPKIT=' + str(appkit), 'GORACE=atexit_sleep_ms=0',
-                   str(binary), '-test.run=^Test(MacOSOwnedControllerNative|DesktopMacOS(Parent|Session|External))', '-test.v', '-test.timeout=180s']
+                   str(binary), *native_test_arguments()]
         if sudo: command = [sudo, '-n', '--', *command]
         output = reported_run(command, cwd=ROOT, env=environment, timeout=200, sudo=sudo)
         print(output, end='')

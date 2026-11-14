@@ -66,9 +66,18 @@ func desktopMacOSMTUHost(snapshot mtuRetestSnapshot) (*desktopMacOSNodeChainHost
 	runtime := capture.Platform
 	if runtime == nil || runtime.host == nil || runtime.capture != capture.Capture ||
 		runtime.host.runtime != runtime || runtime.host.launch != capture.Launch ||
-		capture.Launch == nil || capture.Launch.chain != capture.Chain ||
+		capture.Launch == nil || capture.Chain == nil || capture.Launch.chain != capture.Chain ||
+		runtime.host.execution != capture.Chain.execution ||
 		!capture.Chain.hasPolicy() || capture.Chain.policy != capture.Policy || capture.Chain.socksPolicy != capture.SOCKSPolicy || capture.Chain.connectPolicy != capture.CONNECTPolicy || capture.Chain.policyMetadata().TargetOS != "darwin" {
 		return nil, true, errors.New("macOS ordered MTU capture lost its original platform host")
+	}
+	if runtime.host.execution == nil {
+		if capture.Execution != nil {
+			return nil, true, errors.New("macOS ordered MTU capture borrowed an execution proof")
+		}
+	} else if capture.Execution == nil || capture.Execution.execution != runtime.host.execution ||
+		capture.Execution.physical != runtime.host.executionPhysical {
+		return nil, true, errors.New("macOS execution MTU capture lost its original physical proof")
 	}
 	return runtime.host, true, nil
 }
@@ -84,6 +93,7 @@ func validateDesktopMacOSMTUSnapshotLocked(h *desktopMacOSNodeChainHost, snapsho
 	path, chain := snapshot.Multihop, snapshot.Multihop.Chain
 	if h.runtime != chain.Platform || h.runtime.capture != chain.Capture || h.launch != chain.Launch ||
 		h.launch.chain != chain.Chain || h.policy != chain.Policy || h.socksPolicy != chain.SOCKSPolicy || h.connectPolicy != chain.CONNECTPolicy || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy || h.launch.chain.connectPolicy != h.connectPolicy ||
+		h.launch.chain.execution != h.execution || h.executionProof != chain.Execution || h.executionProof != path.Native.execution ||
 		h.launch.chain.platform != h.runtime || h.runtime.capture == nil || h.runtime.capture.platform == nil ||
 		h.runtime.capture.platform.parent != h.parent || h.bound != path.Native || h.graph == nil || *h.graph != path.Graph ||
 		path.Native.launch != h.launch || path.Native.selection.Native != chain.Native ||
@@ -93,6 +103,11 @@ func validateDesktopMacOSMTUSnapshotLocked(h *desktopMacOSNodeChainHost, snapsho
 		snapshot.Profile.ID != h.launch.profileID || snapshot.Mode != h.launch.mode ||
 		!strings.EqualFold(strings.TrimSpace(snapshot.Profile.MTUPolicy), "auto") {
 		return errors.New("macOS MTU snapshot substituted its proved original session or full graph")
+	}
+	if h.execution != nil && (chain.Execution == nil || chain.Execution.execution != h.execution ||
+		chain.Execution.physical != h.executionPhysical || h.execution.preparation != h.executionPreparation ||
+		h.process.execution != h.executionPreparation || h.process.executionPhysical != h.executionPhysical) {
+		return errors.New("macOS MTU snapshot replaced its adopted execution or physical preparation")
 	}
 	return validateMTURetestSnapshotState(h.parent.app, snapshot)
 }
@@ -109,15 +124,10 @@ func readDesktopMacOSMTURecordLocked(ctx context.Context, h *desktopMacOSNodeCha
 	if err != nil {
 		return empty, err
 	}
-	if err := mobilemtu.LockContext(ctx, &h.launch.chain.mu); err != nil {
+	matched, err := h.matchesMTUReaderLocked(ctx, record)
+	if err != nil {
 		return empty, err
 	}
-	ready := h.launch.chain.ready
-	matched := ready != nil && ready.Reader == record.Reader && ready.InterfaceName == record.Interface &&
-		int(ready.InterfaceIndex) == record.Index && ready.MTU == record.MTU &&
-		ready.Identity.SessionID == record.Session && ready.Identity.ConfigSHA256 == record.Config &&
-		h.launch.chain.mtuPath == record.Path
-	h.launch.chain.mu.Unlock()
 	if !matched {
 		return empty, errors.New("macOS MTU status changed its original proved reader")
 	}
@@ -129,6 +139,31 @@ func readDesktopMacOSMTURecordLocked(ctx context.Context, h *desktopMacOSNodeCha
 		return empty, err
 	}
 	return record, ctx.Err()
+}
+
+func (h *desktopMacOSNodeChainHost) matchesMTUReaderLocked(ctx context.Context, record desktopNodeMTURecord) (bool, error) {
+	if h.execution != nil {
+		if err := mobilemtu.LockContext(ctx, &h.execution.mu); err != nil {
+			return false, err
+		}
+		defer h.execution.mu.Unlock()
+		ready := h.execution.ready
+		// The actual TUN/MTU service retains the preparation graph, while the
+		// adopted execution identity names the later proved selector graph.
+		return ready != nil && ready.Reader == record.Reader && ready.InterfaceName == record.Interface &&
+			int(ready.InterfaceIndex) == record.Index && ready.MTU == record.MTU &&
+			ready.Identity.SessionID == record.Session && ready.PreparationConfigSHA256 == record.Config &&
+			h.execution.mtuPath == record.Path, nil
+	}
+	if err := mobilemtu.LockContext(ctx, &h.launch.chain.mu); err != nil {
+		return false, err
+	}
+	defer h.launch.chain.mu.Unlock()
+	ready := h.launch.chain.ready
+	return ready != nil && ready.Reader == record.Reader && ready.InterfaceName == record.Interface &&
+		int(ready.InterfaceIndex) == record.Index && ready.MTU == record.MTU &&
+		ready.Identity.SessionID == record.Session && ready.Identity.ConfigSHA256 == record.Config &&
+		h.launch.chain.mtuPath == record.Path, nil
 }
 
 // Active Retest work is not a connection transaction. Claim the existing

@@ -46,6 +46,10 @@ type desktopMacOSNodeChainHost struct {
 	policy                                                             *mobilemultihop.DesktopNodeChainPolicy
 	socksPolicy                                                        *mobilemultihop.DesktopNodeChainSOCKSPolicy
 	connectPolicy                                                      *mobilemultihop.DesktopNodeChainCONNECTPolicy
+	execution                                                          *desktopNodeChainExecutionLaunch
+	executionPreparation                                               *mobilemultihop.NodeChainExecutionPreparation
+	executionPhysical                                                  *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	executionProof                                                     *desktopNodeChainExecutionProof
 	selection                                                          desktopMacOSNodeChainSelection
 	operation                                                          context.Context
 	gate                                                               chan struct{}
@@ -91,6 +95,11 @@ func (capture *desktopNodeChainPlatformCapture) prepare(ctx context.Context, own
 
 func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Context, owner *desktopNodeChainHostCapture,
 	selection multihopSelection, purpose *orderedCandidatePreparation) (launch *desktopNodeLaunch, image string, failure error) {
+	return capture.prepareForPurposeAndExecution(ctx, owner, selection, purpose, nil)
+}
+
+func (capture *desktopNodeChainPlatformCapture) prepareForPurposeAndExecution(ctx context.Context, owner *desktopNodeChainHostCapture,
+	selection multihopSelection, purpose *orderedCandidatePreparation, execution *desktopNodeChainExecutionRequest) (launch *desktopNodeLaunch, image string, failure error) {
 	if capture == nil || capture.parent == nil || owner == nil || owner.platform != capture || owner.windows != nil ||
 		owner.sources == nil || owner.app != capture.parent.app || selection.Native == nil || selection.Native.chain == nil ||
 		selection.Native.chain.host != owner || owner.sources.selection.Native != selection.Native {
@@ -117,7 +126,7 @@ func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Co
 	if err != nil {
 		return nil, "", err
 	}
-	launch, err = newDesktopNodeChainLaunchForPurpose(ctx, selection, session, "darwin", purpose)
+	launch, err = newDesktopNodeChainLaunchForExecution(ctx, owner, selection, session, "darwin", purpose, execution)
 	if err != nil {
 		return nil, "", err
 	}
@@ -128,6 +137,10 @@ func (capture *desktopNodeChainPlatformCapture) prepareForPurpose(ctx context.Co
 		operation: operation, gate: make(chan struct{}, 1), baselineRun: runDesktopMacOSNodeChainBaseline,
 		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
 			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
+	if launch.chain.execution != nil {
+		h.execution = launch.chain.execution
+		h.executionPreparation, h.executionPhysical = h.execution.preparation, h.execution.physical
+	}
 	runtime.host, launch.chain.platform = h, runtime
 	// Publish a complete dependent before any private stage or PF mutation.
 	// Parent Close can wait for this construction gate and retain failed cleanup.
@@ -168,9 +181,18 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 		h.runtime.capture == nil || h.runtime.capture.platform == nil || h.runtime.capture.platform.parent != h.parent ||
 		h.launch == nil || h.launch.chain == nil || h.launch.chain.platform != h.runtime ||
 		h.launch.chain.capture != h.runtime.capture || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy || h.launch.chain.connectPolicy != h.connectPolicy ||
+		h.launch.chain.execution != h.execution ||
 		h.launch.ownedNode != nil || h.operation == nil || h.baselineRun == nil || h.retiring || h.closed ||
 		h.launch.root != macOSOwnedControllerRoot {
 		return errors.New("macOS ordered host lost its unique original policy and parent")
+	}
+	if h.execution != nil {
+		if h.execution.preparation != h.executionPreparation || h.execution.physical != h.executionPhysical ||
+			h.execution.operation != h.operation || h.execution.bound(h.launch) != nil {
+			return errors.New("macOS execution host replaced its original preparation or physical owner")
+		}
+	} else if h.executionPreparation != nil || h.executionPhysical != nil {
+		return errors.New("macOS ordered host acquired an unrelated execution preparation")
 	}
 	if err := h.runtime.capture.current(ctx); err != nil {
 		return err
@@ -221,7 +243,8 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 		if exists {
 			bound, ok := raw.(*nativeMultihopRuntime)
 			if !ok || bound == nil || bound.launch != h.launch || bound.selection.Native != h.launch.chain.selection.Native ||
-				h.bound != nil && bound != h.bound {
+				h.bound != nil && bound != h.bound || !sameDesktopMacOSExecutionProof(bound.execution, h.executionProof) ||
+				h.bound != nil && bound.execution != h.executionProof {
 				return errors.New("macOS ordered runtime has another graph owner")
 			}
 		} else if h.bound != nil {
@@ -232,7 +255,10 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 			if !found || graph != *h.graph || h.bound != nil && h.bound.graph != *h.graph {
 				return errors.New("macOS ordered runtime changed its complete captured graph")
 			}
-		} else if h.bound != nil {
+			if err := h.executionProof.currentContext(ctx, h.launch, graph); err != nil {
+				return err
+			}
+		} else if h.bound != nil || h.executionProof != nil {
 			return errors.New("macOS ordered runtime lost its original pre-bind graph receipt")
 		}
 	}
@@ -241,6 +267,7 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 			Source: h.selection.Source, Config: h.selection.Config, Workspace: h.launch.directory}
 		if !h.published || h.process == nil || h.process.parent != h.parent || h.process.capture == nil ||
 			h.process.scope != expectedScope || h.process.command != h.launch.command || h.baseline == nil ||
+			h.process.execution != h.executionPreparation || h.process.executionPhysical != h.executionPhysical ||
 			h.baseline.Phase != "active" || h.started.IsZero() {
 			return errors.New("macOS ordered runtime has no admitted original child and PF receipt")
 		}
@@ -292,12 +319,29 @@ func (owner *desktopNodeChainPlatformRuntime) PublishGraph(ctx context.Context, 
 	}
 	defer func() { h.gate <- struct{}{} }()
 	original := launch.chain.selection
-	if !h.published || h.retiring || h.closed || h.graph != nil || h.bound != nil || launch.command == nil ||
-		selection.Native == nil || selection.Native != original.Native || selection.Native.chain == nil || execution != "local" ||
+	if !h.published || h.retiring || h.closed || h.graph != nil || h.bound != nil || h.executionProof != nil || launch.command == nil ||
+		selection.Native == nil || selection.Native != original.Native || selection.Native.chain == nil ||
+		h.execution == nil && execution != "local" ||
 		selection.Control.ID != original.Control.ID || selection.Entry.ID != original.Entry.ID || selection.Exit.ID != original.Exit.ID ||
 		selection.Base != original.Base || selection.ExitMode != original.ExitMode || len(selection.Nodes) != len(original.Nodes) ||
 		selection.Native.validate(selection) != nil {
 		return empty, errors.New("macOS ordered graph changed its complete original publication")
+	}
+	var chosen activeMultihopGraph
+	var chosenProof *desktopNodeChainExecutionProof
+	if h.execution != nil {
+		if err := h.readReadyLocked(ctx, false); err != nil {
+			return empty, err
+		}
+		var err error
+		chosen, err = desktopNodeChainExecutionGraph(ctx, launch, original)
+		if err != nil || execution != chosen.Execution {
+			return empty, errors.Join(err, errors.New("macOS execution publication changed its actual chosen graph"))
+		}
+		chosenProof, err = captureDesktopNodeChainExecutionProofContext(ctx, launch)
+		if err != nil || chosenProof == nil {
+			return empty, errors.Join(err, errors.New("macOS execution publication lost its adopted proof"))
+		}
 	}
 	if err := mobilemtu.LockContext(ctx, &a.mu); err != nil {
 		return empty, err
@@ -305,6 +349,14 @@ func (owner *desktopNodeChainPlatformRuntime) PublishGraph(ctx context.Context, 
 	defer a.mu.Unlock()
 	if a.localController != h.parent.controller || a.cmd != launch.command || a.checkCapturedConnectionOperationLocked(h.operation) != nil {
 		return empty, errors.New("macOS ordered graph publication lost its original command or operation")
+	}
+	if h.execution != nil {
+		if err := h.execution.publicationCurrentLocked(ctx, a, launch, original); err != nil {
+			return empty, err
+		}
+		if err := chosenProof.currentLocked(launch, chosen); err != nil {
+			return empty, err
+		}
 	}
 	if _, found := nativeMultihopOwners.Load(a); found {
 		return empty, errors.New("macOS ordered graph already has another bound owner")
@@ -330,10 +382,26 @@ func (owner *desktopNodeChainPlatformRuntime) PublishGraph(ctx context.Context, 
 	// There is no fallible observation between publication and retaining its
 	// exact receipt. Cancellation after the store revokes later activation,
 	// never this original owner's ability to retire its own unbound graph.
-	graph := setActiveMultihopGraph(a, original)
+	graph := chosen
+	if h.execution == nil {
+		graph = setActiveMultihopGraph(a, original)
+	} else {
+		activeMultihopGraphs.Store(a, graph)
+		homeExitProofs.Delete(a)
+	}
 	copy := graph
-	h.graph = &copy
+	h.graph, h.executionProof = &copy, chosenProof
 	return graph, nil
+}
+
+// Publication precedes native bind, which captures its own immutable proof
+// object. Both must name the identical original adoption. After prove binds
+// the native owner, the host retains that exact proof pointer as well.
+func sameDesktopMacOSExecutionProof(a, b *desktopNodeChainExecutionProof) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func (owner *desktopNodeChainPlatformRuntime) stage(ctx context.Context) error {
@@ -475,7 +543,12 @@ func (owner *desktopNodeChainPlatformRuntime) start(ctx context.Context) error {
 	scope := macosprocess.Scope{Family: h.selection.Family, Session: h.selection.Session,
 		Source: h.selection.Source, Config: h.selection.Config, Workspace: h.launch.directory}
 	h.started = time.Now()
-	h.process, err = startDesktopMacOSProcessWithVerifier(ctx, h.parent, scope, owner.capture.platform.verify)
+	if h.execution != nil {
+		h.process, err = startDesktopMacOSExecutionProcessWithVerifier(ctx, h.parent, scope,
+			h.executionPreparation, h.executionPhysical, owner.capture.platform.verify)
+	} else {
+		h.process, err = startDesktopMacOSProcessWithVerifier(ctx, h.parent, scope, owner.capture.platform.verify)
+	}
 	if err != nil {
 		return err
 	}
@@ -488,7 +561,16 @@ func (owner *desktopNodeChainPlatformRuntime) start(ctx context.Context) error {
 	}
 	h.launch.command, a.cmd = h.process.command, h.process.command
 	a.mu.Unlock()
-	return h.currentLocked(ctx, true)
+	if err := h.currentLocked(ctx, true); err != nil {
+		return err
+	}
+	if h.execution != nil {
+		// The chosen graph cannot be published until this exact child has
+		// adopted and proved its winner. This pins typed readiness without
+		// claiming the later graph bind, activation or MTU ownership.
+		return h.awaitReadyLocked(ctx, true)
+	}
+	return nil
 }
 
 func validateDesktopMacOSNodeChainInterface(record desktopNodeMTURecord, link *net.Interface) error {
@@ -510,13 +592,21 @@ func validateDesktopMacOSNodeChainInterface(record desktopNodeMTURecord, link *n
 // a decoded generation counter alone is never a retirement receipt.
 func validateDesktopMacOSNodeChainReaderRetirement(previous *mobilemultihop.DesktopNodeChainReadyRecord,
 	live desktopNodeMTURecord, inventory []net.Interface) error {
-	if previous == nil || previous.InterfaceName == live.Interface || live.Reader <= previous.Reader {
+	if previous == nil {
+		return errors.New("macOS ordered replacement lacks its original reader")
+	}
+	return validateDesktopMacOSReaderRetirement(previous.InterfaceName, int(previous.InterfaceIndex), previous.Reader, live, inventory)
+}
+
+func validateDesktopMacOSReaderRetirement(name string, index int, reader uint64,
+	live desktopNodeMTURecord, inventory []net.Interface) error {
+	if name == "" || index < 1 || reader == 0 || name == live.Interface || live.Reader <= reader {
 		return errors.New("macOS ordered replacement lacks an advanced original reader")
 	}
 	found := false
 	for i := range inventory {
 		link := &inventory[i]
-		if link.Index == int(previous.InterfaceIndex) && link.Name == previous.InterfaceName {
+		if link.Index == index && link.Name == name {
 			return errors.New("macOS ordered replacement retained its original utun reader")
 		}
 		if link.Index == live.Index {
@@ -542,15 +632,10 @@ func (h *desktopMacOSNodeChainHost) readReadyLocked(ctx context.Context, fresh b
 	if err != nil || h.transfer != "" && h.transfer != transfer {
 		return errors.Join(err, errors.New("macOS ordered readiness changed its original transfer"))
 	}
-	var previous *mobilemultihop.DesktopNodeChainReadyRecord
-	if err := mobilemtu.LockContext(ctx, &h.launch.chain.mu); err != nil {
+	previousName, previousIndex, previousReader, err := h.capturedReaderLocked(ctx)
+	if err != nil {
 		return err
 	}
-	if h.launch.chain.ready != nil {
-		copy := *h.launch.chain.ready
-		previous = &copy
-	}
-	h.launch.chain.mu.Unlock()
 	live, err := readDesktopNodeMTUContext(ctx, h.launch)
 	if err != nil {
 		return err
@@ -562,16 +647,16 @@ func (h *desktopMacOSNodeChainHost) readReadyLocked(ctx context.Context, fresh b
 	if err := validateDesktopMacOSNodeChainInterface(live, link); err != nil {
 		return err
 	}
-	if previous != nil && previous.InterfaceName != live.Interface {
+	if previousName != "" && previousName != live.Interface {
 		inventory, err := desktopnetwork.InterfacesContext(ctx)
 		if err != nil {
 			return err
 		}
-		if err := validateDesktopMacOSNodeChainReaderRetirement(previous, live, inventory); err != nil {
+		if err := validateDesktopMacOSReaderRetirement(previousName, previousIndex, previousReader, live, inventory); err != nil {
 			return err
 		}
 	}
-	if _, err := readDesktopNodeChainReadyContext(ctx, h.launch, transfer, h.started, fresh, live); err != nil {
+	if err := readDesktopNodeChainNativeReadyContext(ctx, h.launch, transfer, h.started, fresh, live); err != nil {
 		return err
 	}
 	if err := h.currentLocked(ctx, true); err != nil {
@@ -582,6 +667,30 @@ func (h *desktopMacOSNodeChainHost) readReadyLocked(ctx context.Context, fresh b
 	}
 	h.transfer = transfer
 	return nil
+}
+
+// Only the original typed observer can publish a prior reader. Retain just its
+// physical identity for the OS retirement observation; do not relabel an
+// execution heartbeat as an ordinary Local policy or receipt.
+func (h *desktopMacOSNodeChainHost) capturedReaderLocked(ctx context.Context) (string, int, uint64, error) {
+	if h.execution != nil {
+		if err := mobilemtu.LockContext(ctx, &h.execution.mu); err != nil {
+			return "", 0, 0, err
+		}
+		defer h.execution.mu.Unlock()
+		if ready := h.execution.ready; ready != nil {
+			return ready.InterfaceName, int(ready.InterfaceIndex), ready.Reader, nil
+		}
+		return "", 0, 0, nil
+	}
+	if err := mobilemtu.LockContext(ctx, &h.launch.chain.mu); err != nil {
+		return "", 0, 0, err
+	}
+	defer h.launch.chain.mu.Unlock()
+	if ready := h.launch.chain.ready; ready != nil {
+		return ready.InterfaceName, int(ready.InterfaceIndex), ready.Reader, nil
+	}
+	return "", 0, 0, nil
 }
 
 func (owner *desktopNodeChainPlatformRuntime) current(ctx context.Context) error {
@@ -615,14 +724,27 @@ func (owner *desktopNodeChainPlatformRuntime) prove(ctx context.Context) error {
 	bound, ok := raw.(*nativeMultihopRuntime)
 	graph, graphFound := getActiveMultihopGraph(h.parent.app)
 	if !found || !ok || bound == nil || bound.launch != h.launch || bound.selection.Native != h.launch.chain.selection.Native ||
-		!graphFound || h.graph == nil || graph != *h.graph || graph != bound.graph || graph.Execution != "local" || graph.ChainNodes != len(h.launch.chain.selection.Nodes) ||
+		!graphFound || h.graph == nil || graph != *h.graph || graph != bound.graph ||
+		h.execution == nil && graph.Execution != "local" || graph.ChainNodes != len(h.launch.chain.selection.Nodes) ||
+		!sameDesktopMacOSExecutionProof(bound.execution, h.executionProof) ||
 		h.bound != nil && h.bound != bound {
 		return errors.New("macOS ordered proof lost its original complete bound graph")
 	}
-	h.bound = bound
+	if err := bound.execution.currentContext(ctx, h.launch, graph); err != nil {
+		return err
+	}
+	h.bound, h.executionProof = bound, bound.execution
 	if h.proved {
 		return h.readReadyLocked(ctx, false)
 	}
+	if err := h.awaitReadyLocked(ctx, true); err != nil {
+		return err
+	}
+	h.proved = true
+	return nil
+}
+
+func (h *desktopMacOSNodeChainHost) awaitReadyLocked(ctx context.Context, fresh bool) error {
 	budget, err := desktopNodeReadyBudget(h.launch)
 	if err != nil {
 		return err
@@ -632,8 +754,7 @@ func (owner *desktopNodeChainPlatformRuntime) prove(ctx context.Context) error {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if err := h.readReadyLocked(proof, true); err == nil {
-			h.proved = true
+		if err := h.readReadyLocked(proof, fresh); err == nil {
 			return nil
 		}
 		if err := h.currentLocked(proof, true); err != nil {
@@ -817,8 +938,20 @@ func (h *desktopMacOSNodeChainHost) closeCaptured(ctx context.Context, hold bool
 	}
 	if h.parent == nil || h.parent.session == nil || h.runtime == nil || h.runtime.host != h || h.launch == nil ||
 		h.launch.chain == nil || h.launch.chain.platform != h.runtime || !h.launch.chain.hasPolicy() || h.launch.chain.policy != h.policy || h.launch.chain.socksPolicy != h.socksPolicy || h.launch.chain.connectPolicy != h.connectPolicy ||
+		h.launch.chain.execution != h.execution ||
 		h.baselineRun == nil {
 		return errors.New("macOS ordered retirement lost its original typed host")
+	}
+	if h.execution != nil {
+		if h.execution.original != h.launch.chain || h.execution.preparation != h.executionPreparation ||
+			h.execution.physical != h.executionPhysical || h.executionPreparation == nil || h.executionPhysical == nil {
+			return errors.New("macOS execution retirement lost its original preparation and physical owner")
+		}
+	} else if h.executionPreparation != nil || h.executionPhysical != nil {
+		return errors.New("macOS ordered retirement acquired an unrelated execution owner")
+	}
+	if h.process != nil && (h.process.execution != h.executionPreparation || h.process.executionPhysical != h.executionPhysical) {
+		return errors.New("macOS execution retirement changed its originally created child preparation")
 	}
 	if err := h.parent.cleanupCurrent(ctx); err != nil {
 		return err
@@ -896,7 +1029,9 @@ func (h *desktopMacOSNodeChainHost) closeCaptured(ctx context.Context, hold bool
 		if raw, found := nativeMultihopOwners.Load(a); found {
 			var ok bool
 			bound, ok = raw.(*nativeMultihopRuntime)
-			if !ok || bound == nil || bound.launch != h.launch || h.bound != nil && h.bound != bound {
+			if !ok || bound == nil || bound.launch != h.launch || h.bound != nil && h.bound != bound ||
+				!sameDesktopMacOSExecutionProof(bound.execution, h.executionProof) ||
+				h.bound != nil && bound.execution != h.executionProof {
 				p.gate <- struct{}{}
 				a.mu.Unlock()
 				return errors.New("macOS ordered retirement cannot erase a replacement graph owner")
@@ -960,6 +1095,19 @@ func (owner *desktopNodeChainPlatformRuntime) close(ctx context.Context) error {
 		return nil
 	}
 	return owner.host.Close(ctx)
+}
+
+// Replacement retirement keeps the existing empty deny baseline across the
+// fresh saved-choice session. Ordinary Disconnect continues to use Close.
+// The common restore owner must pass its exact captured execution adjunct.
+func (owner *desktopNodeChainPlatformRuntime) closeForExecutionRestore(ctx context.Context,
+	execution *desktopNodeChainExecutionLaunch) error {
+	if owner == nil || !owner.registered || owner.host == nil || execution == nil ||
+		owner.host.runtime != owner || owner.host.execution != execution || owner.host.launch == nil ||
+		owner.host.launch.chain == nil || owner.host.launch.chain.execution != execution {
+		return errors.New("macOS execution replacement retirement lost its original retained host")
+	}
+	return owner.host.closeWithIntent(ctx, true)
 }
 
 func (owner *desktopNodeChainPlatformRuntime) closePreparation(ctx context.Context, p *orderedCandidatePreparation) error {

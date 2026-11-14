@@ -33,7 +33,7 @@ type desktopMacOSNodeChainReceipt struct {
 }
 
 func (s desktopMacOSNodeChainSelection) valid() bool {
-	return s.Schema == 2 && (s.Family == macosprocess.NodeChainFamily || s.Family == macosprocess.NodeChainSOCKSFamily || s.Family == macosprocess.NodeChainCONNECTFamily) && validProfileID(s.ProfileID) &&
+	return s.Schema == 2 && (s.Family == macosprocess.NodeChainFamily || s.Family == macosprocess.NodeChainSOCKSFamily || s.Family == macosprocess.NodeChainCONNECTFamily || s.Family == macosprocess.NodeChainExecutionFamily) && validProfileID(s.ProfileID) &&
 		desktopMacOSExternalShort.MatchString(s.Session) && desktopMacOSExternalLong.MatchString(s.Source) &&
 		desktopMacOSExternalLong.MatchString(s.Config) && (s.Policy == "on-connect" || s.Policy == "always")
 }
