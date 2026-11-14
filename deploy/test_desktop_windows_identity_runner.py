@@ -260,6 +260,7 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
              patch.object(prep.STRATEGY, "prepare"), patch.object(prep.EXTERNAL, "prepare"), \
              patch.object(prep, "prepare_network_startup"), \
              patch.object(prep.NODE_CHAIN, "prepare") as node_chain_prepare, \
+             patch.object(prep.CONNECT, "prepare") as connect_prepare, \
              patch.object(prep, "prepare_node_capture"), \
              patch.object(prep, "prepare_daemon_capture") as daemon_capture, \
              patch.object(prep.RELAY.OPENVPN_REMOTE, "prepare"), \
@@ -274,6 +275,7 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
             prep.prepare(vendor)
             naive_prepare.assert_called_once_with(vendor.resolve())
             node_chain_prepare.assert_called_once_with(vendor.resolve(), mobile=False)
+            connect_prepare.assert_called_once_with(vendor.resolve(), mobile=False)
             daemon_capture.assert_called_once_with(vendor.resolve())
             self.assertEqual(len(ordered_preparers), 3)
             for prepare in ordered_preparers:
