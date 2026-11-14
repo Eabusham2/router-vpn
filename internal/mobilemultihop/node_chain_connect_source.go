@@ -5,14 +5,15 @@ import (
 	"reflect"
 )
 
-// NodeChainCONNECTSource is a dormant source/compiler result. It deliberately
-// has no LaunchInput, Run, Ready or native projection method. Existing generic
-// NodeChain parsers continue to reject its schema 4 source.
+// NodeChainCONNECTSource is a closed source/compiler result. Execution retains
+// its original typed owner; source bytes alone grant no Run or Ready authority.
+// Existing generic NodeChain parsers continue to reject its schema 4 source.
 type NodeChainCONNECTSource struct {
 	sourceJSON, config, seal string
 	pair                     *NodeChain
 	middle                   *nodeChainCONNECTMember
 	metadata                 NodeChainCONNECTSourceMetadata
+	desktop                  *nodeChainCONNECTDesktopBinding
 	integrity                *nodeChainCONNECTIntegrity
 }
 
@@ -161,6 +162,9 @@ func (p *NodeChainCONNECTSource) digest() string {
 	values := []any{
 		"routervpn-node-chain-connect-compiler-v1", p.sourceJSON, p.config, p.metadata, p.pair.seal, p.middle.seal,
 	}
+	if p.desktop != nil {
+		values = append(values, p.desktop.currentSeal())
+	}
 	raw, err := json.Marshal(values)
 	if err != nil {
 		return ""
@@ -179,6 +183,9 @@ func (p *NodeChainCONNECTSource) validateCompiled() error {
 	if p == nil || p.seal == "" || p.digest() != p.seal || p.pair.validateCapture() != nil ||
 		p.middle.validate() != nil || p.metadata.Kind != "routervpn-node-chain-connect-source" ||
 		p.metadata.Schema != 1 || p.metadata.NativeAdmission != "closed" || p.metadata.TransportCapability != "uot-v2" {
+		return nodeChainCONNECTSourceError
+	}
+	if p.desktop != nil && p.desktop.validate(p) != nil {
 		return nodeChainCONNECTSourceError
 	}
 	return nil

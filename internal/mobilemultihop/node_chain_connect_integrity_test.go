@@ -184,11 +184,12 @@ func TestNodeChainCONNECTIntegrityFieldInventory(t *testing.T) {
 		value  any
 		fields string
 	}{
-		{NodeChainCONNECTSource{}, "sourceJSON config seal pair middle metadata integrity"},
+		{NodeChainCONNECTSource{}, "sourceJSON config seal pair middle metadata desktop integrity"},
 		{NodeChain{}, "sourceJSON sourceSHA config metadata seal nodes importedMiddle socksSource connectSource proofs dns physical runtime originalConfigSHA projection"},
 		{NodeProfile{}, "config source metadata mode profile inputs desktopSeal"},
 		{nodeChainCONNECTMember{}, "input source seal selection policy"},
 		{ExternalPolicy{}, "config metadata source capture desktopSeal"},
+		{nodeChainCONNECTDesktopBinding{}, "original projection metadata nativeMetadata seal"},
 	}
 	for _, value := range values {
 		kind := reflect.TypeOf(value.value)

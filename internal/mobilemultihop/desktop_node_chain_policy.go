@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"reflect"
 	"sort"
 )
 
@@ -204,6 +205,12 @@ func captureDesktopNodeChain(base, projected *NodeChain) (DesktopPhysicalCapture
 // The original and typed SOCKS desktop families share this private traversal.
 // Neither a selected proof nor application DNS can add a physical tuple.
 func captureDesktopNodeChainGraph(originalConfig, projectedConfig string, proofs []NodeChainProof, dnsCapture NodeChainDNSCapture, physical []PhysicalEgress, finalCapture NodeDesktopCapture, kill, ipv6 string, lan bool) (DesktopPhysicalCapture, string, bool, error) {
+	return captureDesktopNodeChainGraphWithCONNECT(originalConfig, projectedConfig, proofs, dnsCapture, physical, finalCapture, kill, ipv6, lan, nil)
+}
+
+// Only a sealed CONNECT constructor can supply its final UoT capability. The
+// ordinary physical scanner remains closed to inline or caller-supplied UoT.
+func captureDesktopNodeChainGraphWithCONNECT(originalConfig, projectedConfig string, proofs []NodeChainProof, dnsCapture NodeChainDNSCapture, physical []PhysicalEgress, finalCapture NodeDesktopCapture, kill, ipv6 string, lan bool, original *NodeChainCONNECTSource) (DesktopPhysicalCapture, string, bool, error) {
 	bad := func() (DesktopPhysicalCapture, string, bool, error) {
 		return DesktopPhysicalCapture{}, "", false, desktopNodeChainPolicyError
 	}
@@ -219,9 +226,19 @@ func captureDesktopNodeChainGraph(originalConfig, projectedConfig string, proofs
 	if err != nil {
 		return bad()
 	}
+	var connect *nodeChainCONNECTPhysicalProof
+	if original != nil {
+		if original.config != originalConfig || !reflect.DeepEqual(original.metadata.Proofs, proofs) {
+			return bad()
+		}
+		connect, err = desktopNodeChainCONNECTPhysicalProof(original, string(projection))
+		if err != nil {
+			return bad()
+		}
+	}
 	collector := &externalDesktopRecorder{families: map[string]string{}, roots: map[string]*ExternalDesktopPhysicalRoot{}, bootstrap: map[string]ExternalDesktopDNS{}}
 	for _, proof := range proofs {
-		tuples, err := compiledPhysicalEgressWithDesktopProof(string(projection), []string{"tcp", "udp"}, collector, proof.Tag)
+		tuples, err := compiledPhysicalEgressWithCapturedTransports(string(projection), []string{"tcp", "udp"}, collector, proof.Tag, false, connect)
 		if err != nil || !nodeChainSamePhysical(tuples, physical) {
 			return bad()
 		}

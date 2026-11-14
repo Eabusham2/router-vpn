@@ -17,6 +17,8 @@ type nodeChainCONNECTIntegrity struct {
 	paired               nodeChainCONNECTPairIntegrity
 	middle               *nodeChainCONNECTMember
 	imported             nodeChainCONNECTMemberIntegrity
+	desktop              *nodeChainCONNECTDesktopBinding
+	binding              nodeChainCONNECTBindingIntegrity
 }
 
 type nodeChainCONNECTPairIntegrity struct {
@@ -34,6 +36,14 @@ type nodeChainCONNECTMemberIntegrity struct {
 	selection           externalPolicyCapture
 	policy              *ExternalPolicy
 	compiled            ExternalPolicy
+}
+
+type nodeChainCONNECTBindingIntegrity struct {
+	original       *NodeChainCONNECTSource
+	projection     nodeChainProjection
+	metadata       DesktopNodeChainCONNECTMetadata
+	nativeMetadata NodeChainCONNECTSourceMetadata
+	seal           string
 }
 
 func nodeChainCONNECTIntegrityCopy[T any](value T) (T, error) {
@@ -56,7 +66,7 @@ func (p *NodeChainCONNECTSource) retainIntegrity() error {
 	}
 	saved := &nodeChainCONNECTIntegrity{
 		owner: p, source: p.sourceJSON, config: p.config, seal: p.seal,
-		pair: p.pair, middle: p.middle,
+		pair: p.pair, middle: p.middle, desktop: p.desktop,
 	}
 	var err error
 	saved.metadata, err = nodeChainCONNECTIntegrityCopy(p.metadata)
@@ -94,6 +104,20 @@ func (p *NodeChainCONNECTSource) retainIntegrity() error {
 	if err != nil {
 		return nodeChainCONNECTSourceError
 	}
+	if p.desktop != nil {
+		binding := p.desktop
+		saved.binding = nodeChainCONNECTBindingIntegrity{
+			original: binding.original, projection: binding.projection, seal: binding.seal,
+		}
+		saved.binding.metadata, err = nodeChainCONNECTIntegrityCopy(binding.metadata)
+		if err != nil {
+			return nodeChainCONNECTSourceError
+		}
+		saved.binding.nativeMetadata, err = nodeChainCONNECTIntegrityCopy(binding.nativeMetadata)
+		if err != nil {
+			return nodeChainCONNECTSourceError
+		}
+	}
 	if !saved.current(p) {
 		return nodeChainCONNECTSourceError
 	}
@@ -104,7 +128,7 @@ func (p *NodeChainCONNECTSource) retainIntegrity() error {
 func (saved *nodeChainCONNECTIntegrity) current(p *NodeChainCONNECTSource) bool {
 	if saved == nil || p == nil || saved.owner != p ||
 		p.sourceJSON != saved.source || p.config != saved.config || p.seal != saved.seal ||
-		p.pair != saved.pair || p.middle != saved.middle ||
+		p.pair != saved.pair || p.middle != saved.middle || p.desktop != saved.desktop ||
 		!reflect.DeepEqual(p.metadata, saved.metadata) {
 		return false
 	}
@@ -128,6 +152,16 @@ func (saved *nodeChainCONNECTIntegrity) current(p *NodeChainCONNECTSource) bool 
 		!reflect.DeepEqual(middle.selection, imported.selection) ||
 		!reflect.DeepEqual(*middle.policy, imported.compiled) {
 		return false
+	}
+	if p.desktop != nil {
+		binding, prior := p.desktop, &saved.binding
+		if binding.original == nil || binding.original != prior.original ||
+			binding.original.desktop != nil || binding.original.validate() != nil ||
+			binding.projection != prior.projection || binding.seal != prior.seal ||
+			!reflect.DeepEqual(binding.metadata, prior.metadata) ||
+			!reflect.DeepEqual(binding.nativeMetadata, prior.nativeMetadata) {
+			return false
+		}
 	}
 	return true
 }
