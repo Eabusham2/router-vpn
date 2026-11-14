@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,6 +23,29 @@ import (
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/nativecomposite"
 )
+
+// The installed CONNECT fixture must use the same public admission and source
+// capability as the daily-use controller. It supplies no private Local bridge.
+func linuxNodeChainCONNECTPublicConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime) error {
+	if r.Method != http.MethodPost || r.URL.Path != "/api/multihop/connect" || !nativeNodeChainCONNECTPlatformSupported() {
+		return fmt.Errorf("installed CONNECT requires its original public ordered host")
+	}
+	a.mu.Lock()
+	control, found := a.profileByIDLocked(a.profiles.SelectedID)
+	if !found || len(control.MultihopNodes) != 3 {
+		a.mu.Unlock()
+		return fmt.Errorf("installed CONNECT lost its original selected graph")
+	}
+	middle, found := a.profileByIDLocked(control.MultihopNodes[1].ID)
+	view := publicProfileFor(middle)
+	valid := found && view.External != nil && view.External.OrderedMiddle && desktopNodeChainCONNECTMiddle(middle, control.MultihopNodes[1].Mode)
+	a.mu.Unlock()
+	if !valid {
+		return fmt.Errorf("installed CONNECT requires its original public profile capability")
+	}
+	a.nativeMultihopConnectOwned(w, r, driver)
+	return nil
+}
 
 var linuxNodeChainCONNECTHostCases = []string{
 	"node-chain-connect-http-wg-connect", "node-chain-connect-http-awg-fast-connect", "node-chain-connect-http-awg-strong-connect",

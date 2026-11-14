@@ -490,6 +490,7 @@ func installLinuxNodeChainProfiles(t *testing.T, peer *linuxNodeChainPeer, fault
 }
 
 type linuxNodeChainHostResult struct {
+	PublicCONNECT bool                               `json:"public_connect,omitempty"`
 	FiftyReceipts []hopmeasure.OrderedLatencyReceipt `json:"fifty_receipts,omitempty"`
 	linuxImportedHostResult
 	Proof       *mobilemultihop.DesktopNodeChainReadyRecord                `json:"proof,omitempty"`
@@ -507,6 +508,9 @@ func (process *linuxHostTUNController) readNodeChain(t *testing.T, scenario stri
 	var result linuxNodeChainHostResult
 	if err != nil || len(raw) > 32768 || decodeRelayControlJSON(raw, &result) != nil || result.Scenario != scenario {
 		t.Fatal("ordered installed host omitted its complete bounded result", err, string(raw), process.diagnostic.String())
+	}
+	if strings.HasPrefix(scenario, "node-chain-connect-") && !result.PublicCONNECT {
+		t.Fatal("installed CONNECT controller omitted its actual public admission and profile capability")
 	}
 	return result
 }
@@ -621,7 +625,7 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 			t.Fatal("typed installed retirement retained original SOCKS association", after.Associations)
 		}
 		t.Log("verified installed host typed SOCKS association joined:", scenario)
-	t.Log("verified installed Linux public SOCKS /api/multihop/connect:", scenario)
+		t.Log("verified installed Linux public SOCKS /api/multihop/connect:", scenario)
 	}
 	if peer.middleCONNECT != "" {
 		after := peer.observe(t, "stats")
@@ -629,6 +633,7 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 			t.Fatal("typed installed retirement retained an original CONNECT stream", after.OpenCONNECTStreams)
 		}
 		linuxNodeChainCONNECTClose(t, peer)
+		t.Log("verified installed host public CONNECT route and capability:", scenario)
 		t.Log("verified installed host typed CONNECT UoT2 streams joined:", scenario)
 	}
 	t.Log("verified installed host native lifecycle:", scenario)
@@ -707,7 +712,9 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 	if strings.HasPrefix(scenario, "node-chain-socks-") {
 		linuxNodeChainNativeConnect(a, response, request, driver)
 	} else if strings.HasPrefix(scenario, "node-chain-connect-") {
-		linuxNodeChainInstalledConnect(a, response, request, driver, nativeNodeChainCONNECTPlatformSupported())
+		if err := linuxNodeChainCONNECTPublicConnect(a, response, request, driver); err != nil {
+			return err
+		}
 	} else {
 		a.nativeMultihopConnectOwned(response, request, driver)
 	}
@@ -723,7 +730,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		}
 	}()
 	negative := action == "wrong-awg-parameters" || action == "wrong-middle-key" || action == "wrong-middle-proof" || action == "wrong-middle-public" || action == "final-dns-failure" || action == "final-node-failure" || action == "final-password" || action == "final-trust" || action == "final-mask" || linuxNodeChainCONNECTNegative(action)
-	result := linuxNodeChainHostResult{linuxImportedHostResult: linuxImportedHostResult{Scenario: scenario}}
+	result := linuxNodeChainHostResult{linuxImportedHostResult: linuxImportedHostResult{Scenario: scenario}, PublicCONNECT: strings.HasPrefix(scenario, "node-chain-connect-")}
 	if negative {
 		if response.Code == http.StatusOK || a.state.Connected || a.cmd != nil || constructed == nil || constructed.chain == nil || constructed.chain.platform == nil {
 			return fmt.Errorf("ordered native negative admitted, retained a command or failed before construction: %d %s", response.Code, response.Body.String())

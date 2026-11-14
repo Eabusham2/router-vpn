@@ -18,57 +18,30 @@ import (
 )
 
 type windowsCONNECTInspection struct {
-	Connected       bool                                        `json:"connected"`
-	OriginalSources bool                                        `json:"original_sources"`
-	NativeJoined    bool                                        `json:"native_joined"`
-	JournalSettled  bool                                        `json:"journal_settled"`
-	WFPAbsent       bool                                        `json:"wfp_absent"`
-	TUNAbsent       bool                                        `json:"tun_absent"`
-	MeasurementRows int                                         `json:"measurement_rows"`
-	Proof           *mobilemultihop.DesktopNodeChainReadyRecord `json:"proof,omitempty"`
-}
-
-// Only the tagged disposable controller adds this private CONNECT bridge. The shipping
-// decoder, profile transaction, typed preflight, child, proofs and stop run
-// unchanged. No public platform admission is changed by this fixture.
-func windowsCONNECTNativeConnect(a *app, w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime) {
-	if nativeNodeChainCONNECTPlatformSupported() {
-		a.nativeMultihopConnectOwned(w, r, driver)
-		return
-	}
-	operation, finish, err := a.beginConnectionOperationContext(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), 409)
-		return
-	}
-	defer finish()
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", 405)
-		return
-	}
-	q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))
-	if err != nil || !q.ordered() || !desktopNodeChainHasCONNECT(q.Nodes) {
-		http.Error(w, "original typed ordered request required", 400)
-		return
-	}
-	if execution, err := routeExecution(q); err != nil || execution != "local" {
-		http.Error(w, "original Local source required", 400)
-		return
-	}
-	a.mu.Lock()
-	selection, err := a.resolveNativeMultihopRequestLocked(q)
-	a.mu.Unlock()
-	if err != nil {
-		http.Error(w, err.Error(), 409)
-		return
-	}
-	a.nativeMultihopConnectLocalOwned(w, r, operation, selection, driver)
+	PublicConnectCalls      int                                         `json:"public_connect_calls"`
+	PublicProfileCapability bool                                        `json:"public_profile_capability"`
+	Connected               bool                                        `json:"connected"`
+	OriginalSources         bool                                        `json:"original_sources"`
+	NativeJoined            bool                                        `json:"native_joined"`
+	JournalSettled          bool                                        `json:"journal_settled"`
+	WFPAbsent               bool                                        `json:"wfp_absent"`
+	TUNAbsent               bool                                        `json:"tun_absent"`
+	MeasurementRows         int                                         `json:"measurement_rows"`
+	Proof                   *mobilemultihop.DesktopNodeChainReadyRecord `json:"proof,omitempty"`
 }
 
 func windowsCONNECTRegisterRoutes(mux *http.ServeMux, a *app, original common.RouterProfileStore) (func(), error) {
 	selected, found := a.profileByIDLocked(original.SelectedID)
 	if !found || !desktopNodeChainHasCONNECT(selected.MultihopNodes) {
 		return func() {}, nil
+	}
+	if !nativeNodeChainCONNECTPlatformSupported() || len(selected.MultihopNodes) != 3 {
+		return nil, errors.New("installed CONNECT requires the original public ordered host")
+	}
+	middle, found := a.profileByIDLocked(selected.MultihopNodes[1].ID)
+	view := publicProfileFor(middle)
+	if !found || view.External == nil || !view.External.OrderedMiddle || !desktopNodeChainCONNECTMiddle(middle, selected.MultihopNodes[1].Mode) {
+		return nil, errors.New("installed CONNECT requires its original public profile capability")
 	}
 	hold, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	release, err := a.holdCapturedMTU(hold)
@@ -80,6 +53,7 @@ func windowsCONNECTRegisterRoutes(mux *http.ServeMux, a *app, original common.Ro
 	var launch *desktopNodeLaunch
 	var proof *mobilemultihop.DesktopNodeChainReadyRecord
 	var configuredTUN string
+	publicConnectCalls := 0
 	driver := nativeMultihopConnectRuntime{capture: captureNativeMultihopForApp, stage: stageOwnedNativeMultihopCommand, proof: (*app).proveNativeMultihop,
 		preflight: func(owner *app, selection multihopSelection, descriptor *desktopExecutionDescriptor) (*desktopNodeLaunch, error) {
 			candidate, err := preflightOwnedNativeMultihopCommand(owner, selection, descriptor)
@@ -119,7 +93,16 @@ func windowsCONNECTRegisterRoutes(mux *http.ServeMux, a *app, original common.Ro
 		id := a.profiles.SelectedID
 		_ = json.NewEncoder(w).Encode(multihopConnectRequest{Nodes: control.MultihopNodes, Execution: "local", desktopProfileExpectations: desktopProfileExpectations{ExpectedSelectedNodeID: &id, ExpectedProfileTokens: tokens}})
 	})
-	mux.HandleFunc("/api/native-connect/connect", func(w http.ResponseWriter, r *http.Request) { windowsCONNECTNativeConnect(a, w, r, driver) })
+	mux.HandleFunc("/api/multihop/connect", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/multihop/connect" || !nativeNodeChainCONNECTPlatformSupported() {
+			http.Error(w, "original public CONNECT request required", http.StatusNotImplemented)
+			return
+		}
+		mu.Lock()
+		publicConnectCalls++
+		mu.Unlock()
+		a.nativeMultihopConnectOwned(w, r, driver)
+	})
 	mux.HandleFunc("/api/disconnect", a.disconnect)
 	mux.HandleFunc("/api/native-connect/middle-source", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -149,12 +132,15 @@ func windowsCONNECTRegisterRoutes(mux *http.ServeMux, a *app, original common.Ro
 		owner := launch
 		initial := proof
 		tunName := configuredTUN
+		publicCalls := publicConnectCalls
 		mu.Unlock()
 		result, err := windowsCONNECTInspect(r.Context(), a, owner, original, initial, tunName, r.URL.Query().Get("retired") == "1")
 		if err != nil {
 			http.Error(w, err.Error(), 409)
 			return
 		}
+		result.PublicConnectCalls = publicCalls
+		result.PublicProfileCapability = view.External.OrderedMiddle
 		if result.Proof != nil {
 			mu.Lock()
 			if proof == nil {

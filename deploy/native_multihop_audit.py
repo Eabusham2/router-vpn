@@ -946,12 +946,23 @@ def native_multihop_shipping_chain(source: str, read=None) -> bool:
                                 "func nativeNodeChainCONNECTPlatformSupported() bool")
     connect_detector = _function(_tokens(read("cmd/client/multihop_node_chain_connect_selection.go")),
                                  "func desktopNodeChainHasCONNECT(nodes []common.MultihopNodeSelection) bool")
-    if connect_support != _tokens("return false") or connect_detector != _tokens('''
+    connect_admission = _tokens(read("cmd/client/desktop_node_chain_connect_admission.go"))
+    connect_bounds = _function(connect_admission,
+        "func desktopNodeChainCONNECTAdmissionSupported(targetOS, targetArch string, retained, orderedHost bool) bool")
+    connect_host = _function(connect_admission, "func nativeNodeChainCONNECTHostSupported() bool")
+    if (connect_support != _tokens("return nativeNodeChainCONNECTHostSupported()") or
+        connect_bounds != _tokens('''
+            return retained && orderedHost && (targetOS == "linux" || targetOS == "windows") &&
+                (targetArch == "amd64" || targetArch == "arm64")
+        ''') or connect_host != _tokens('''
+            return desktopNodeChainCONNECTAdmissionSupported(runtime.GOOS, runtime.GOARCH,
+                retainedNativeMultihopSelected(), nativeNodeChainPlatformSupported())
+        ''') or connect_detector != _tokens('''
         for _, node := range nodes {
             if node.Mode == "http-connect" || node.Mode == "https-connect" { return true }
         }
         return false
-    '''):
+    ''')):
         return False
     tokens = _tokens(source)
     public = _function(tokens, "func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request)")

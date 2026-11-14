@@ -336,8 +336,9 @@ func desktopNodeChainSelectionHasSOCKS(selection multihopSelection) bool {
 	return false
 }
 
-// Physical WFP/nft/PF acceptance is a separate gate from typed compilation.
-func nativeNodeChainCONNECTPlatformSupported() bool { return false }
+// Public CONNECT uses the same retained ordered host whose native acceptance
+// covers its concrete physical policy, final UoT proof and joined retirement.
+func nativeNodeChainCONNECTPlatformSupported() bool { return nativeNodeChainCONNECTHostSupported() }
 
 func desktopNodeChainSelectionHasCONNECT(selection multihopSelection) bool {
 	for _, member := range selection.Nodes {

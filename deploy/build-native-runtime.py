@@ -165,6 +165,8 @@ def inputs():
                              ROOT/'deploy/windows_connect_node_chain_overlay.py',
                              ROOT/'deploy/test_desktop_connect_parent.py',
                              ROOT/'deploy/test_desktop_connect_parent_runner.py',
+                             ROOT/'deploy/test_desktop_connect_admission.py',
+                             ROOT/'deploy/test_desktop_connect_admission_runner.py',
                              *sorted((ROOT/'deploy/fixtures/windows-connect-node-chain').glob('*.go')),
                              ROOT/'deploy/windows_socks_node_chain_overlay.py',
                              *sorted((ROOT/'deploy/fixtures/windows-socks-node-chain').glob('*.go')),
@@ -1160,6 +1162,7 @@ def verify_installed_windows_prefix(source, bundle, target, env):
     run([sys.executable, ROOT/'deploy/test_windows_socks_node_chain_host_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_windows_socks_release_receipt.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_desktop_connect_parent_runner.py'], cwd=ROOT, env=env, timeout=60)
+    run([sys.executable, ROOT/'deploy/test_desktop_connect_admission_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_windows_connect_node_chain_host_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_windows_connect_release_receipt.py'], cwd=ROOT, env=env, timeout=60)
     # The composed gate executes original prefix6 and SOCKS8 exactly once,
@@ -1265,7 +1268,8 @@ def verify_installed_windows_connect_receipt(output, target, original, digest_be
             type(receipt.get('ordered_latency_samples_per_hop')) is not int or receipt.get('ordered_latency_samples_per_hop') != 50 or
             receipt.get('native_joined') is not True or receipt.get('command_job_joined') is not True or
             receipt.get('tun_absent_all_outcomes') is not True or type(receipt.get('remote_connect_streams_after_retirement')) is not int or
-            receipt.get('remote_connect_streams_after_retirement') != 0 or receipt.get('public_admission') != 'closed' or
+            receipt.get('remote_connect_streams_after_retirement') != 0 or receipt.get('public_admission') != 'public-typed-connect' or
+            receipt.get('public_route') != '/api/multihop/connect' or receipt.get('public_profile_capability') is not True or
             receipt.get('final_udp_transport') != 'SS-UoT-v2' or receipt.get('connect_middle_tcp_only') is not True or
             receipt.get('connect_protocols') != ['http-connect', 'https-connect'] or
             receipt.get('original_socks_acceptance') != socks_receipt or
@@ -1284,6 +1288,13 @@ def verify_installed_windows_connect_receipt(output, target, original, digest_be
             parent.get('cases') != parent_cases or not isinstance(parent.get('output_sha256'), str) or
             not re.fullmatch('[0-9a-f]{64}', parent['output_sha256'])):
         raise ValueError('Installed Windows CONNECT lost its distinct complete compiled parent controls')
+    public_gate = load('windows_connect_public_receipt', 'test_desktop_connect_admission.py')
+    public = receipt.get('typed_connect_public_source_controls')
+    if (not isinstance(public, dict) or public.get('scope') != 'registered-public-connect-source-controls' or
+            public.get('native_kernel_acceptance') is not False or public.get('target') != 'windows' or
+            public.get('cases') != list(public_gate.REQUIRED) or not isinstance(public.get('output_sha256'), str) or
+            not re.fullmatch('[0-9a-f]{64}', public['output_sha256'])):
+        raise ValueError('Installed Windows CONNECT lost its complete public source transaction controls')
     return receipt
 
 

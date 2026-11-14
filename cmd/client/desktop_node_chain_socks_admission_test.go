@@ -19,6 +19,7 @@ import (
 )
 
 func TestDesktopSOCKSPublicAdmissionTargetBounds(t *testing.T) {
+	connectBefore := nativeNodeChainCONNECTPlatformSupported()
 	for _, target := range []string{"linux", "windows", "darwin", "android", "freebsd"} {
 		for _, arch := range []string{"amd64", "arm64", "386", "arm", "riscv64", ""} {
 			for _, retained := range []bool{false, true} {
@@ -29,8 +30,8 @@ func TestDesktopSOCKSPublicAdmissionTargetBounds(t *testing.T) {
 			}
 		}
 	}
-	if nativeNodeChainCONNECTPlatformSupported() {
-		t.Fatal("SOCKS admission opened the separately owned CONNECT gate")
+	if nativeNodeChainCONNECTPlatformSupported() != connectBefore {
+		t.Fatal("SOCKS target checks changed the separately owned CONNECT admission")
 	}
 }
 
@@ -234,8 +235,9 @@ func TestDesktopSOCKSRegisteredPublicRouteRefusesStaleAndUnsupportedGraphs(t *te
 			case "final":
 				q.Nodes[2].Mode = "hysteria2"
 			case "connect":
+				// CONNECT is admitted on this same retained Windows/Linux host,
+				// but a SOCKS source cannot acquire its distinct typed authority.
 				q.Nodes[1].Mode = "http-connect"
-				status = http.StatusNotImplemented
 			}
 			before := cloneRouterProfileStore(a.profiles)
 			raw, err := json.Marshal(q)

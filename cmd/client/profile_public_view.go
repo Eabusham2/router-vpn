@@ -148,7 +148,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 		RuntimeImplemented: true, RuntimeSupported: true, Editable: kind == "router-vpn",
 	}
 	if kind == "external" && p.External != nil {
-		out.External = &publicExternalNode{OrderedMiddle: desktopNodeChainImported(p, "shadowsocks") || nativeNodeChainSOCKSPlatformSupported() && desktopNodeChainSOCKSMiddle(p, "socks5"), Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HasResponseProbe: p.External.ResponseProbe != nil || len(p.External.OpenVPNResponseProbes) != 0, HasServerPeer: p.External.ServerPeer != nil, HasOpenVPNPairing: p.External.OpenVPNPairing != nil}
+		out.External = &publicExternalNode{OrderedMiddle: desktopNodeChainImported(p, "shadowsocks") || nativeNodeChainSOCKSPlatformSupported() && desktopNodeChainSOCKSMiddle(p, "socks5") || nativeNodeChainCONNECTPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")), Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HasResponseProbe: p.External.ResponseProbe != nil || len(p.External.OpenVPNResponseProbes) != 0, HasServerPeer: p.External.ServerPeer != nil, HasOpenVPNPairing: p.External.OpenVPNPairing != nil}
 		out.RouterAPI = ""
 		out.AdGuardIPv4 = ""
 		out.AdGuardIPv6 = ""

@@ -164,6 +164,11 @@ func TestWindowsInstalledCONNECTNodeChain(t *testing.T) {
 			if strings.Count(string(output), witness) != 1 {
 				t.Fatal("typed installed case omitted unique original native receipt", string(output))
 			}
+			public := "verified installed Windows public CONNECT route and capability: " + scenario
+			if strings.Count(string(output), public) != 1 {
+				t.Fatal("typed installed case omitted its exact public handler receipt", string(output))
+			}
+			t.Log(public)
 			t.Log(witness)
 		})
 	}
@@ -238,7 +243,7 @@ func TestWindowsCONNECTLauncher(t *testing.T) {
 	if request.Status != 200 {
 		t.Fatal("typed request capture", request.Status, string(request.Body))
 	}
-	response := call("POST", "/api/native-connect/connect", request.Body)
+	response := call("POST", "/api/multihop/connect", request.Body)
 	negative := action != "connect" && action != "middle-source"
 	if negative && response.Status == 200 || !negative && response.Status != 200 {
 		t.Fatal("typed Connect crossed intended proof boundary", response.Status, string(response.Body))
@@ -249,7 +254,7 @@ func TestWindowsCONNECTLauncher(t *testing.T) {
 	var ready windowsCONNECTInspection
 	if !negative {
 		response = call("GET", "/api/native-connect/inspect", nil)
-		if response.Status != 200 || json.Unmarshal(response.Body, &ready) != nil || !ready.Connected || !ready.OriginalSources || ready.MeasurementRows != 3 || ready.Proof == nil || ready.Proof.Kind != "routervpn-node-chain-connect-ready-v1" {
+		if response.Status != 200 || json.Unmarshal(response.Body, &ready) != nil || !ready.Connected || !ready.OriginalSources || ready.PublicConnectCalls != 1 || !ready.PublicProfileCapability || ready.MeasurementRows != 3 || ready.Proof == nil || ready.Proof.Kind != "routervpn-node-chain-connect-ready-v1" {
 			t.Fatal("typed actual proof/measurement", response.Status, string(response.Body))
 		}
 	}
@@ -322,7 +327,7 @@ func TestWindowsCONNECTLauncher(t *testing.T) {
 	}
 	response = call("GET", "/api/native-connect/inspect?retired=1", nil)
 	var retired windowsCONNECTInspection
-	if response.Status != 200 || json.Unmarshal(response.Body, &retired) != nil || retired.Connected || !retired.NativeJoined || !retired.JournalSettled || !retired.WFPAbsent || !retired.TUNAbsent || action != "middle-source" && !retired.OriginalSources {
+	if response.Status != 200 || json.Unmarshal(response.Body, &retired) != nil || retired.Connected || retired.PublicConnectCalls != 1 || !retired.PublicProfileCapability || !retired.NativeJoined || !retired.JournalSettled || !retired.WFPAbsent || !retired.TUNAbsent || action != "middle-source" && !retired.OriginalSources {
 		t.Fatal("typed original native retirement", response.Status, string(response.Body))
 	}
 	after := observe("stats")
@@ -330,5 +335,6 @@ func TestWindowsCONNECTLauncher(t *testing.T) {
 		t.Fatal("typed original native retirement retained authenticated CONNECT streams", after.OpenStreams)
 	}
 	closeController()
+	t.Log("verified installed Windows public CONNECT route and capability:", scenario)
 	t.Log("verified installed Windows typed CONNECT full path and joined retirement:", scenario)
 }

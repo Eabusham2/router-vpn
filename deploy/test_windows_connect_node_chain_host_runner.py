@@ -18,7 +18,8 @@ spec.loader.exec_module(G)
 
 def completed():
     return (''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n' for name in G.REQUIRED) +
-            ''.join('verified installed Windows typed CONNECT full path and joined retirement: ' + case + '\n' for case in G.CASES) + 'PASS\n')
+            ''.join('verified installed Windows typed CONNECT full path and joined retirement: ' + case + '\n' for case in G.CASES) +
+            ''.join('verified installed Windows public CONNECT route and capability: ' + case + '\n' for case in G.CASES) + 'PASS\n')
 
 
 def original_receipt():

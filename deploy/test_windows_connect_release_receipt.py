@@ -33,12 +33,15 @@ FULL = 'Native Windows typed CONNECT full-path acceptance: '
 def receipts(digest):
     prefix, socks = ORIGINAL.receipts(digest)
     connect = copy.deepcopy(socks)
-    for name in ('remote_associations_after_retirement', 'original_prefix_acceptance', 'typed_socks_parent_controls'):
+    for name in ('remote_associations_after_retirement', 'original_prefix_acceptance', 'typed_socks_parent_controls', 'public_connect_path'):
         del connect[name]
-    connect.update(cases=list(GATE.CASES), original_socks_acceptance=copy.deepcopy(socks),
+    connect.update(schema=1, cases=list(GATE.CASES), original_socks_acceptance=copy.deepcopy(socks),
                    remote_connect_streams_after_retirement=0, final_udp_transport='SS-UoT-v2',
                    connect_middle_tcp_only=True, connect_protocols=['http-connect', 'https-connect'],
-                   ordered_latency_samples_per_hop=50,
+                   typed_connect_public_source_controls=dict(scope='registered-public-connect-source-controls',
+                       native_kernel_acceptance=False, target='windows', cases=list(GATE.CONNECT_PUBLIC.REQUIRED), output_sha256='9' * 64),
+                   ordered_latency_samples_per_hop=50, public_admission='public-typed-connect',
+                   public_route='/api/multihop/connect', public_profile_capability=True,
                    typed_connect_parent_controls=dict(scope='compiled-parent-model-and-source-controls',
                        native_kernel_acceptance=False, target='windows', cases=list(PARENT.inventory('windows')[1]), output_sha256='8' * 64))
     return prefix, socks, connect
@@ -61,7 +64,7 @@ class WindowsCONNECTReleaseReceipt(unittest.TestCase):
     def test_carrier_source_ownership_and_numeric_types_cannot_be_substituted(self):
         _, socks, connect = receipts('7' * 64)
         faults = (
-            ('schema', True), ('native', 1), ('target', 'windows/arm64'), ('source_sha256', '8' * 64),
+            ('schema', True), ('schema', 2), ('native', 1), ('target', 'windows/arm64'), ('source_sha256', '8' * 64),
             ('bundle_sha256', '9' * 64), ('cases', connect['cases'][:-1]), ('cases', socks['cases']),
             ('unmodified_shipping_image', True), ('test_scope', 'modeled'), ('typed_full_path', 1),
             ('positive_application_and_selected_dns_proved', False), ('measurement_bytes_per_direction_per_hop', float(8 << 20)),
@@ -70,7 +73,8 @@ class WindowsCONNECTReleaseReceipt(unittest.TestCase):
             ('native_joined', 1), ('command_job_joined', False), ('command_job_joined', 1),
             ('tun_absent_all_outcomes', False), ('tun_absent_all_outcomes', 1),
             ('remote_connect_streams_after_retirement', 1), ('remote_connect_streams_after_retirement', False),
-            ('public_admission', 'complete'), ('original_socks_acceptance', {}), ('final_udp_transport', 'SOCKS-UDP'),
+            ('public_admission', 'closed'), ('public_admission', 'complete'),
+            ('public_route', '/api/native-connect/connect'), ('public_profile_capability', False), ('public_profile_capability', 1), ('original_socks_acceptance', {}), ('final_udp_transport', 'SOCKS-UDP'),
             ('connect_middle_tcp_only', 1), ('connect_protocols', ['https-connect']),
             ('sources', {}), ('sources', {'actual': 'invalid'}), ('images', {'controller': '3' * 64}),
             ('scope_sources', {'foreign': '2' * 64}))
@@ -118,7 +122,7 @@ class WindowsCONNECTReleaseReceipt(unittest.TestCase):
                 outcomes.append(('\n'.join(part for i, part in enumerate(parts) if i != index), False))
                 outcomes.append((good + '\n' + parts[index], False))
             for output, accepted in outcomes:
-                with self.subTest(accepted=accepted), patch.object(BUILD.platform, 'system', return_value='Windows'), patch.object(BUILD, 'native_host_target', return_value='windows/amd64'), patch.object(BUILD, 'reuse', return_value={'policy_sha256': 'a' * 64}) as reuse, patch.object(BUILD, 'run', side_effect=['', '', '', '', '', '', output]) as run:
+                with self.subTest(accepted=accepted), patch.object(BUILD.platform, 'system', return_value='Windows'), patch.object(BUILD, 'native_host_target', return_value='windows/amd64'), patch.object(BUILD, 'reuse', return_value={'policy_sha256': 'a' * 64}) as reuse, patch.object(BUILD, 'run', side_effect=['', '', '', '', '', '', '', output]) as run:
                     if accepted:
                         BUILD.verify_installed_windows_prefix(ROOT, bundle, 'windows/amd64', {})
                         self.assertEqual(reuse.call_count, 2)
@@ -129,6 +133,7 @@ class WindowsCONNECTReleaseReceipt(unittest.TestCase):
                     self.assertEqual([Path(call.args[0][1]).name for call in run.call_args_list], [
                         'test_windows_candidate_prefix_runner.py', 'test_windows_socks_node_chain_host_runner.py',
                         'test_windows_socks_release_receipt.py', 'test_desktop_connect_parent_runner.py',
+                        'test_desktop_connect_admission_runner.py',
                         'test_windows_connect_node_chain_host_runner.py', 'test_windows_connect_release_receipt.py',
                         'test_windows_connect_node_chain_host.py'])
                     self.assertEqual(run.call_args_list[-1].kwargs['timeout'], 3000 + 4200 + 4200)

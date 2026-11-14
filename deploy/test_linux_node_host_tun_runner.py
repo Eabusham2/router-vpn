@@ -299,7 +299,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
         for case in expected:
             good = InstalledLinuxHostVerdict().completed((case,))
             G.check_verdict(good, case)
-            for label in ('typed CONNECT UoT2 streams joined:', 'ordered independent prefixes and final:'):
+            for label in ('typed CONNECT UoT2 streams joined:', 'ordered independent prefixes and final:', 'public CONNECT route and capability:'):
                 receipt = next(line for line in good.splitlines(True) if label in line)
                 for changed in (good.replace(receipt, '', 1), good + receipt,
                                 good.replace(receipt, receipt.replace(case, case + '-foreign')),
@@ -619,6 +619,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:38: verified installed host typed SOCKS association joined: ' + case for case in cases if case in G.NODE_CHAIN_SOCKS_HOST_CASES),
                           *('    native_test.go:40: verified installed Linux public SOCKS /api/multihop/connect: ' + case for case in cases if case in G.NODE_CHAIN_SOCKS_HOST_CASES),
                           *('    native_test.go:39: verified installed host typed CONNECT UoT2 streams joined: ' + case for case in cases if case in G.NODE_CHAIN_CONNECT_HOST_CASES),
+                          *('    native_test.go:40: verified installed host public CONNECT route and capability: ' + case for case in cases if case in G.NODE_CHAIN_CONNECT_HOST_CASES),
                           *('    native_test.go:37: verified installed host ordered Hysteria2 native final and joined retirement: ' + case for case in cases if case in G.NODE_CHAIN_HYSTERIA_HOST_CASES),
                           *('    native_test.go:35: verified installed host saved candidate API fifty samples native DOWN and explicit decision: ' + case for case in cases if case in G.SAVED_CANDIDATE_HOST_CASES),
                           *('    native_test.go:21: verified installed host independent WireGuard entry and CONNECT final: ' + case for case in cases if case in G.EXTERNAL_WG_CONNECT_CASES),

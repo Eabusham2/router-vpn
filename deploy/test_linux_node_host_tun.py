@@ -39,6 +39,7 @@ HOSTNAME = load('linux_hostname_native_preflight', 'test_desktop_node_imported_h
 HYSTERIA_FINAL = load('linux_hysteria_final_native_preflight', 'test_desktop_node_chain_hysteria_final.py')
 SOCKS_PARENT = load('linux_installed_socks_parent', 'test_desktop_socks_parent.py')
 CONNECT_PARENT = load('linux_installed_connect_parent', 'test_desktop_connect_parent.py')
+CONNECT_PUBLIC = load('linux_public_connect_source', 'test_desktop_connect_admission.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
 WIREGUARD_CASES = tuple('wg-' + case for case in ('public-connect', 'home-lan', 'wrong-key', 'resolver-failure', 'wrong-node',
                                                 'active-network-change', 'cancelled-proof', 'restore-sealed', 'always',
@@ -326,7 +327,8 @@ def checked_sources(source):
         raise ValueError('Ordered Hysteria2 native preflight lost its original encrypted peer source')
     for name in ('test_desktop_node_chain_hysteria_final.py', 'test_desktop_node_chain_hysteria_final_runner.py',
                  'test_desktop_socks_parent.py', 'test_desktop_socks_parent_runner.py',
-                 'test_desktop_connect_parent.py', 'test_desktop_connect_parent_runner.py'):
+                 'test_desktop_connect_parent.py', 'test_desktop_connect_parent_runner.py',
+                 'test_desktop_connect_admission.py', 'test_desktop_connect_admission_runner.py'):
         path = ROOT / 'deploy' / name
         if path.is_symlink() or not path.is_file():
             raise ValueError('Ordered Hysteria2 native preflight lost its original runner')
@@ -351,6 +353,8 @@ def checked_sources(source):
     app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
     required = {'cmd/client/desktop_node_chain_socks_linux_tun_native_test.go',
                 'cmd/client/desktop_node_chain_connect_linux_tun_native_test.go',
+                'cmd/client/desktop_node_chain_connect_admission.go',
+                'cmd/client/desktop_node_chain_connect_admission_test.go',
                 'cmd/client/desktop_node_chain_connect_linux_test.go',
                 'cmd/client/desktop_node_chain_connect_platform_test.go',
                 'cmd/client/multihop_node_chain_connect_selection.go',
@@ -772,7 +776,9 @@ def check_verdict(output, case=None):
                     chain_receipts[value] != 1 or exact_passes[value] != 1):
                 raise ValueError('Installed typed SOCKS omitted or duplicated original encrypted traffic and joined association retirement: ' + value)
         if value in membership['NODE_CHAIN_CONNECT_HOST_CASES']:
-            if suffix_receipts['verified installed host typed CONNECT UoT2 streams joined: ' + value] != 1 or chain_receipts[value] != 1 or exact_passes[value] != 1:
+            if (suffix_receipts['verified installed host typed CONNECT UoT2 streams joined: ' + value] != 1 or
+                    suffix_receipts['verified installed host public CONNECT route and capability: ' + value] != 1 or
+                    chain_receipts[value] != 1 or exact_passes[value] != 1):
                 raise ValueError('Installed typed CONNECT omitted or duplicated original TCP/UoT traffic and joined stream retirement: ' + value)
         if value in membership['NODE_CHAIN_HYSTERIA_HOST_CASES']:
             if suffix_receipts['verified installed host ordered Hysteria2 native final and joined retirement: ' + value] != 1 or exact_passes[value] != 1:
@@ -1210,6 +1216,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         node_chain_socks_candidate_output = execute_node_chain_socks_candidates(peer, source, captured)
         socks_parent_controls = SOCKS_PARENT.execute(binary, 'linux', NODE.run, ROOT, captured)
         connect_parent_controls = CONNECT_PARENT.execute(binary, 'linux', NODE.run, ROOT, captured)
+        connect_public_controls = CONNECT_PUBLIC.execute(binary, 'linux', NODE.run, ROOT, captured)
         node_chain_host_authority_output = execute_node_chain_host_authority(binary, captured)
         logs = []
         for case in (*CASES, *REVERSE_CASES):
@@ -1256,6 +1263,8 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'typed_socks_parent_controls': socks_parent_controls, 'typed_socks_installed_cases': list(NODE_CHAIN_SOCKS_HOST_CASES),
                   'typed_socks_public_admission': {'schema': 1, 'enabled': True, 'path': '/api/multihop/connect', 'cases': list(NODE_CHAIN_SOCKS_HOST_CASES)},
                   'typed_connect_parent_controls': connect_parent_controls, 'typed_connect_installed_cases': list(NODE_CHAIN_CONNECT_HOST_CASES),
+                  'typed_connect_public_route': '/api/multihop/connect', 'typed_connect_public_profile_capability': True,
+                  'typed_connect_public_source_controls': connect_public_controls,
                   'node_chain_host_authority_cases': list(NODE_CHAIN_HOST_AUTHORITY_CASES), 'node_chain_host_authority_output_sha256': hashlib.sha256(node_chain_host_authority_output.encode()).hexdigest(),
                   'node_chain_candidate_cases': list(NODE_CHAIN_CANDIDATE_VERDICTS),
                   'node_chain_connect_candidate_cases': list(NODE_CHAIN_CONNECT_CANDIDATE_VERDICTS),

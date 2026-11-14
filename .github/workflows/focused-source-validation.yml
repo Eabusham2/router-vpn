@@ -139,6 +139,7 @@ jobs:
             python3 validator/deploy/test_validate_desktop_socks_child.py
             python3 validator/deploy/test_validate_desktop_connect_child.py
             python3 validator/deploy/test_desktop_connect_parent_runner.py
+            python3 validator/deploy/test_desktop_connect_admission_runner.py
             python3 validator/deploy/test_macos_connect_node_chain_host_runner.py
             python3 validator/deploy/test_windows_connect_node_chain_host_runner.py
             python3 validator/deploy/test_windows_connect_release_receipt.py

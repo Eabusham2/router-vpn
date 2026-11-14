@@ -36,6 +36,7 @@ CONTROLLER = load("windows_prefix_controller", "test_windows_controller_privileg
 NODE = load("windows_prefix_native_source", "test_desktop_node_physical.py")
 BUILD = load("windows_prefix_complete_bundle", "build-native-runtime.py")
 CONNECT_PARENT = load("windows_retained_connect_parent", "test_desktop_connect_parent.py")
+CONNECT_PUBLIC = load("windows_public_connect_source", "test_desktop_connect_admission.py")
 COMMAND_OWNER = load("windows_socks_command_owner", "test_windows_node_max.py")
 ROOT_TEST = "TestWindowsInstalledCONNECTNodeChain"
 ORIGINAL_PREFIX_CASES = ("wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel")
@@ -54,7 +55,9 @@ OWNED = (*SOCKS_GATE.OWNED,
          "deploy/fixtures/windows-connect-node-chain/peer.go",
          "mobile/desktop/node_chain_connect_peer_test.go.tmpl",
          "mobile/chain/connect_reference_test.go.tmpl",
-         "deploy/test_desktop_connect_parent.py", "deploy/test_desktop_connect_parent_runner.py")
+         "deploy/test_desktop_connect_parent.py", "deploy/test_desktop_connect_parent_runner.py",
+         "deploy/test_desktop_connect_admission.py", "deploy/test_desktop_connect_admission_runner.py",
+         "cmd/client/desktop_node_chain_connect_admission.go", "cmd/client/desktop_node_chain_connect_admission_test.go")
 
 
 def sources(source):
@@ -86,8 +89,10 @@ def require_verdicts(output):
     if len(runs) != len(REQUIRED) or set(runs) != set(REQUIRED) or len(passes) != len(REQUIRED) or set(passes) != set(REQUIRED):
         raise ValueError("Installed typed full-path native gate omitted or duplicated an exact required verdict")
     for case in CASES:
-        if len(re.findall(r"(?m)^\s*(?:[A-Za-z0-9_./\\-]+\.go:[0-9]+: )?" + re.escape("verified installed Windows typed CONNECT full path and joined retirement: " + case) + r"\r?$", output)) != 1:
-            raise ValueError("Installed typed full-path native gate omitted its original lifecycle receipt: " + case)
+        for label in ("verified installed Windows typed CONNECT full path and joined retirement: ",
+                      "verified installed Windows public CONNECT route and capability: "):
+            if len(re.findall(r"(?m)^\s*(?:[A-Za-z0-9_./\\-]+\.go:[0-9]+: )?" + re.escape(label + case) + r"\r?$", output)) != 1:
+                raise ValueError("Installed typed full-path native gate omitted its original lifecycle/public receipt: " + case)
     if len(re.findall(r"^PASS\s*$", output, re.M)) != 1:
         raise ValueError("Installed typed full-path native gate omitted its successful process footer")
 
@@ -241,6 +246,7 @@ def execute_typed(source, bundle, go, env, before, original_socks_receipt, owner
         identities = {name: hashlib.sha256(path.read_bytes()).hexdigest()
                       for name, path in (("controller", controller), ("peer", peer), ("scoped_engine", child))}
         connect_parent_controls = CONNECT_PARENT.execute(controller, 'windows', run, ROOT, captured)
+        connect_public_controls = CONNECT_PUBLIC.execute(controller, 'windows', run, ROOT, captured)
         child_env = dict(captured, ROUTERVPN_WINDOWS_PREFIX_ROOT=str(installed), ROUTERVPN_WINDOWS_PREFIX_PEER=str(peer))
         status, output = run([controller, "-test.v", "-test.count=1", "-test.timeout=1800s", "-test.run=^" + ROOT_TEST + "$"],
                              cwd=ROOT, env=child_env, timeout=1820)
@@ -260,11 +266,12 @@ def execute_typed(source, bundle, go, env, before, original_socks_receipt, owner
                    "measurement_bytes_per_direction_per_hop": 8 << 20, "measurement_hops": 3,
                    "native_joined": True, "remote_connect_streams_after_retirement": 0,
                    "command_job_joined": owner.retired, "tun_absent_all_outcomes": True,
-                   "public_admission": "closed", "original_socks_acceptance": original_socks_receipt,
+                   "public_admission": "public-typed-connect", "public_route": "/api/multihop/connect",
+                   "public_profile_capability": True, "original_socks_acceptance": original_socks_receipt,
                    "sources": before, "scope_sources": native_records, "images": identities,
                    "final_udp_transport": "SS-UoT-v2", "connect_middle_tcp_only": True,
                    "connect_protocols": ["http-connect", "https-connect"], "ordered_latency_samples_per_hop": 50,
-                   "typed_connect_parent_controls": connect_parent_controls}
+                   "typed_connect_parent_controls": connect_parent_controls, "typed_connect_public_source_controls": connect_public_controls}
         print(PREFIX + json.dumps(receipt, sort_keys=True), flush=True)
         return receipt
 
