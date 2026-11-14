@@ -1,0 +1,354 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"reflect"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+	ownedCONNECT "github.com/sagernet/sing-box/protocol/routervpnnodeconnect"
+	"github.com/sagernet/sing/common/json"
+)
+
+type routerVPNNodeCONNECTContextKey struct{}
+type routerVPNNodeCONNECTConstruction struct {
+	source    *mobilemultihop.NodeChainCONNECTSource
+	capture   *ownedCONNECT.Capture
+	config    string
+	metadata  mobilemultihop.NodeChainCONNECTSourceMetadata
+	digest    string
+	mu        sync.Mutex
+	attempted bool
+	box       *Box
+}
+
+// RouterVPNNodeCONNECTContext binds one caller-local factory to the complete
+// original graph. It neither opens ordinary parsing nor grants Ready/DOWN.
+func RouterVPNNodeCONNECTContext(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSource,
+	capture *ownedCONNECT.Capture) (context.Context, error) {
+	if ctx == nil || ctx.Err() != nil || source == nil || capture == nil ||
+		ctx.Value(routerVPNNodeCONNECTContextKey{}) != nil || ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil {
+		return nil, errors.New("ordered CONNECT construction needs its one original context")
+	}
+	if err := capture.RequireOriginalContext(ctx, source); err != nil {
+		return nil, err
+	}
+	config, metadata, err := source.ReadValidated()
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(config))
+	if err != nil {
+		return nil, err
+	}
+	digest := routerVPNNodeChainOptionsDigest(ctx, compiled)
+	if digest == "" || ctx.Err() != nil {
+		return nil, errors.New("ordered CONNECT construction lost its complete original graph")
+	}
+	return context.WithValue(ctx, routerVPNNodeCONNECTContextKey{}, &routerVPNNodeCONNECTConstruction{
+		source: source, capture: capture, config: config, metadata: metadata, digest: digest,
+	}), nil
+}
+
+func (c *routerVPNNodeCONNECTConstruction) require(ctx, native context.Context,
+	source *mobilemultihop.NodeChainCONNECTSource) error {
+	if c == nil || ctx == nil || ctx.Err() != nil || native == nil || native.Err() != nil ||
+		source == nil || c.source != source || c.capture == nil ||
+		native.Value(routerVPNNodeCONNECTContextKey{}) != c {
+		return errors.New("ordered CONNECT construction has another original owner")
+	}
+	if err := c.capture.RequireOriginalContext(native, source); err != nil {
+		return err
+	}
+	config, metadata, err := source.ReadValidated()
+	if err != nil || config != c.config || !reflect.DeepEqual(metadata, c.metadata) {
+		return errors.New("ordered CONNECT construction source changed")
+	}
+	return ctx.Err()
+}
+
+// The exact constructor return binds one acquired native Box. Context or
+// equal source bytes alone cannot authorize a copied Box's engine or Close.
+func routerVPNNodeCONNECTBind(s *Box) *Box {
+	if s == nil || s.ctx == nil {
+		return s
+	}
+	value := s.ctx.Value(routerVPNNodeCONNECTContextKey{})
+	if value == nil {
+		return s
+	}
+	original, ok := value.(*routerVPNNodeCONNECTConstruction)
+	if !ok || original == nil {
+		return s
+	}
+	original.mu.Lock()
+	if original.attempted && original.box == nil && s.ctx.Value(routerVPNNodeSOCKSContextKey{}) == nil {
+		original.box = s
+		s.RouterVPNCaptureCloseReceipt()
+	}
+	original.mu.Unlock()
+	return s
+}
+func (c *routerVPNNodeCONNECTConstruction) requireBox(ctx context.Context, s *Box) error {
+	if c == nil || ctx == nil || s == nil {
+		return errors.New("CONNECT lost acquired Box")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+		return err
+	}
+	valid := c.attempted && c.box == s
+	c.mu.Unlock()
+	if !valid {
+		return errors.New("CONNECT acquired Box was copied or replaced")
+	}
+	return ctx.Err()
+}
+
+// Called at the original Box.New boundary, before managers, inbounds or any
+// native component is constructed. Ordinary contexts retain their old path.
+func routerVPNNodeCONNECTOptions(ctx context.Context, options option.Options) error {
+	if ctx == nil {
+		return nil
+	}
+	value := ctx.Value(routerVPNNodeCONNECTContextKey{})
+	if value == nil {
+		return nil
+	}
+	if ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil {
+		return errors.New("mixed SOCKS and CONNECT construction owners")
+	}
+	original, ok := value.(*routerVPNNodeCONNECTConstruction)
+	if !ok || original == nil {
+		return errors.New("ordered CONNECT construction context is invalid")
+	}
+	if err := original.require(ctx, ctx, original.source); err != nil {
+		return err
+	}
+	if routerVPNNodeChainOptionsDigest(ctx, options) != original.digest {
+		return errors.New("ordered CONNECT native graph differs before construction")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &original.mu); err != nil {
+		return err
+	}
+	defer original.mu.Unlock()
+	if original.attempted || ctx.Err() != nil {
+		return errors.New("ordered CONNECT construction was already attempted or cancelled")
+	}
+	// Retain this first attempt even if Box.New later fails. Another Box
+	// must not acquire components before the original graph's close receipt.
+	original.attempted = true
+	return nil
+}
+
+type routerVPNNodeCONNECTReader interface {
+	RouterVPNExecutionMTUReadbackContext(context.Context) (string, int, int, error)
+}
+
+// This adapter retains typed schema-4 source and the actual per-position
+// association owner. The private common observer retains no generic NodeChain.
+type RouterVPNNodeChainCONNECTEngine struct {
+	observation *routerVPNNodeChainObservation
+	source      *mobilemultihop.NodeChainCONNECTSource
+	middle      *ownedCONNECT.Outbound
+	middleTag   string
+	ipv6        bool
+}
+
+var _ mobilemultihop.NodeChainCONNECTEngine = (*RouterVPNNodeChainCONNECTEngine)(nil)
+
+func (s *Box) RouterVPNNewNodeChainCONNECTEngine(ctx context.Context,
+	source *mobilemultihop.NodeChainCONNECTSource, session string,
+	current func(context.Context) error) (*RouterVPNNodeChainCONNECTEngine, error) {
+	if ctx == nil || ctx.Err() != nil || s == nil || s.ctx == nil || source == nil ||
+		current == nil || !routerVPNNodeChainSession(session) {
+		return nil, errors.New("ordered CONNECT engine needs its original native owner")
+	}
+	original, ok := s.ctx.Value(routerVPNNodeCONNECTContextKey{}).(*routerVPNNodeCONNECTConstruction)
+	if !ok || original == nil {
+		return nil, errors.New("ordinary native Box cannot adopt typed CONNECT source")
+	}
+	if err := original.require(ctx, s.ctx, source); err != nil {
+		return nil, err
+	}
+	if err := original.requireBox(ctx, s); err != nil {
+		return nil, err
+	}
+	meta := original.metadata
+	if len(meta.Proofs) != 3 || len(meta.Devices) != 3 || (meta.Proofs[1].Mode != "http-connect" && meta.Proofs[1].Mode != "https-connect") {
+		return nil, errors.New("ordered CONNECT engine lost its original source inventory")
+	}
+	outbound, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, meta.Proofs[1].Tag)
+	middle, ok := outbound.(*ownedCONNECT.Outbound)
+	if err != nil || !found || !ok || middle == nil {
+		return nil, errors.Join(err, errors.New("ordered CONNECT middle has no retained native association owner"))
+	}
+	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
+	if err != nil || len(inbounds) != 1 || inbounds[0].Type() != "tun" || inbounds[0].Tag() != meta.DNS.TUNTag {
+		return nil, errors.Join(err, errors.New("ordered CONNECT engine lost its actual native TUN"))
+	}
+	inbound := inbounds[0]
+	reader, ok := inbound.(routerVPNNodeCONNECTReader)
+	if !ok {
+		return nil, errors.New("ordered CONNECT native TUN has no actual bounded MTU reader")
+	}
+	name, index, mtu, err := reader.RouterVPNExecutionMTUReadbackContext(ctx)
+	if err != nil || name == "" || index <= 0 || mtu != meta.MTU.Original || mtu < 1280 || mtu > meta.MTU.Ceiling {
+		return nil, errors.Join(err, errors.New("ordered CONNECT native reader differs from captured MTU bounds"))
+	}
+	observe := func(call context.Context) error {
+		if call == nil || call.Err() != nil {
+			return errors.New("ordered CONNECT observation lost its original caller")
+		}
+		if err := current(call); err != nil {
+			return err
+		}
+		if err := original.require(call, s.ctx, source); err != nil {
+			return err
+		}
+		if err := original.requireBox(call, s); err != nil {
+			return err
+		}
+		if err := middle.ObserveContext(call, source); err != nil {
+			return err
+		}
+		actual, found, err := adapter.RouterVPNInboundContext(call, s.inbound, meta.DNS.TUNTag)
+		if err != nil || !found || actual != inbound {
+			return errors.Join(err, errors.New("ordered CONNECT native TUN was replaced"))
+		}
+		actualName, actualIndex, actualMTU, err := reader.RouterVPNExecutionMTUReadbackContext(call)
+		if err != nil || actualName != name || actualIndex != index || actualMTU != mtu {
+			return errors.Join(err, errors.New("ordered CONNECT actual native reader changed"))
+		}
+		if err := current(call); err != nil {
+			return err
+		}
+		return call.Err()
+	}
+	tags := make([]string, len(meta.Proofs))
+	for i, proof := range meta.Proofs {
+		tags[i] = proof.Tag
+	}
+	observation, err := s.routerVPNNewNodeChainObservation(ctx, original.config, meta.DNS, tags,
+		meta.Proofs[2].Tag, meta.SourceSHA256, meta.ConfigSHA256, session, observe)
+	if err != nil {
+		return nil, err
+	}
+	engine := &RouterVPNNodeChainCONNECTEngine{observation: observation, source: source, middle: middle,
+		middleTag: meta.Proofs[1].Tag, ipv6: meta.Devices[1].IPv6Mode == "on"}
+	return engine, nil
+}
+
+func (e *RouterVPNNodeChainCONNECTEngine) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
+	if e == nil || e.observation == nil || e.source == nil || e.middle == nil {
+		return mobilemultihop.NodeChainIdentity{}, errors.New("ordered CONNECT observation has no retained engine")
+	}
+	if ctx == nil {
+		return mobilemultihop.NodeChainIdentity{}, errors.New("ordered CONNECT observation has no caller")
+	}
+	if err := ctx.Err(); err != nil {
+		return mobilemultihop.NodeChainIdentity{}, err
+	}
+
+	return e.observation.ObserveChainContext(ctx)
+}
+func (e *RouterVPNNodeChainCONNECTEngine) ObserveCONNECTMiddleContext(ctx context.Context,
+	original *mobilemultihop.NodeChainCONNECTSource) error {
+	if e == nil || original == nil || original != e.source || e.middle == nil {
+		return errors.New("ordered CONNECT observation has another source pointer")
+	}
+	if err := e.middle.ObserveContext(ctx, original); err != nil {
+		return err
+	}
+	_, err := e.ObserveChainContext(ctx)
+	return err
+}
+func (e *RouterVPNNodeChainCONNECTEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return nil, err
+	}
+	if address != hopmeasure.PublicAddress {
+		return e.observation.Dial(ctx, tag, address)
+	}
+	if tag != e.middleTag || e.observation.instance.dnsRouter == nil || e.observation.resolver == nil {
+		return nil, errors.New("ordered CONNECT measurement requires its captured middle and DNS")
+	}
+	query, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	query = adapter.WithContext(query, &adapter.InboundContext{
+		Inbound: e.observation.dns.TUNTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns",
+	})
+	addresses, err := e.observation.instance.dnsRouter.Lookup(query, hopmeasure.PublicHost,
+		adapter.DNSQueryOptions{Transport: e.observation.resolver, DisableCache: true, DisableOptimisticCache: true})
+	_, observed := e.ObserveChainContext(ctx)
+	if err != nil || observed != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, observed, ctx.Err(), errors.New("ordered CONNECT captured DNS lookup failed"))
+	}
+	for _, ip := range addresses {
+		if !ip.IsValid() || ip.Zone() != "" || ip.Is4In6() || !ip.IsGlobalUnicast() ||
+			ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+			ip.Is6() && !e.ipv6 {
+			continue
+		}
+		connection, dialErr := e.observation.Dial(ctx, tag, net.JoinHostPort(ip.String(), "443"))
+		if dialErr == nil && connection != nil {
+			return connection, nil
+		}
+		if _, observeErr := e.ObserveChainContext(ctx); observeErr != nil {
+			return nil, errors.Join(dialErr, observeErr, ctx.Err())
+		}
+	}
+	return nil, errors.New("ordered CONNECT captured route could not reach its public measurement origin")
+}
+func (e *RouterVPNNodeChainCONNECTEngine) SelectedContext(ctx context.Context) (string, error) {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return "", err
+	}
+	return e.observation.SelectedContext(ctx)
+}
+func (e *RouterVPNNodeChainCONNECTEngine) SelectContext(ctx context.Context, tag string) error {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return err
+	}
+	return e.observation.SelectContext(ctx, tag)
+}
+func (e *RouterVPNNodeChainCONNECTEngine) DNSProofContext(ctx context.Context, capture mobilemultihop.NodeChainDNSCapture) error {
+	if _, err := e.ObserveChainContext(ctx); err != nil {
+		return err
+	}
+	return e.observation.DNSProofContext(ctx, capture)
+}
+
+// This preclose drains only the original CONNECT sockets while their packet
+// predecessor still exists. Successful preclose does not publish native DOWN.
+func (s *Box) RouterVPNCloseCONNECTMiddleContext(ctx context.Context) error {
+	if s == nil || ctx == nil {
+		return errors.New("CONNECT preclose lost native owner")
+	}
+	if s.ctx == nil {
+		return nil
+	}
+	value := s.ctx.Value(routerVPNNodeCONNECTContextKey{})
+	if value == nil {
+		return nil
+	}
+	original, ok := value.(*routerVPNNodeCONNECTConstruction)
+	if !ok || original == nil || original.capture == nil {
+		return errors.New("CONNECT preclose lost original construction")
+	}
+	if err := original.requireBox(ctx, s); err != nil {
+		return err
+	}
+	return original.capture.CloseContext(ctx)
+}
+func (s *Box) RouterVPNCloseCONNECTMiddle() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return s.RouterVPNCloseCONNECTMiddleContext(ctx)
+}

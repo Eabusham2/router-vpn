@@ -1,0 +1,69 @@
+package routervpnnodeconnect
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	ss "github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing/service"
+	"reflect"
+)
+
+func (c *Capture) constructShadowsocks(ctx context.Context, router adapter.Router, logger log.ContextLogger,
+	tag string, options option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+	if ctx == nil || ctx.Err() != nil || ctx.Value(captureKey{}) != c || c.validate() != nil {
+		return nil, errCapture
+	}
+	c.mu.Lock()
+	expected, found := c.shadowsocks[tag]
+	if c.retired.Load() || !c.registered || !found || c.ssClaimed[tag] || !reflect.DeepEqual(expected, options) {
+		c.mu.Unlock()
+		return nil, errCapture
+	}
+	c.ssClaimed[tag] = true
+	c.mu.Unlock()
+	original, err := ss.NewOutbound(ctx, router, logger, tag, options)
+	if err != nil {
+		return original, err
+	}
+	if tag != c.metadata.Proofs[2].Tag {
+		return original, nil
+	}
+	final, ok := original.(*ss.Outbound)
+	if !ok || final == nil {
+		return original, errCapture
+	}
+	readback, err := final.RouterVPNCONNECTFinalReadback(options)
+	if err != nil {
+		return original, err
+	}
+	manager := service.FromContext[adapter.OutboundManager](ctx)
+	if manager == nil {
+		return original, errCapture
+	}
+	c.mu.Lock()
+	c.final, c.finalReadback, c.finalManager = final, readback, manager
+	c.mu.Unlock()
+	return original, nil
+}
+
+func (c *Capture) observeFinal(ctx context.Context) error {
+	if c == nil || c.self != c || c.retired.Load() || ctx == nil || ctx.Err() != nil {
+		return errCapture
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+		return err
+	}
+	final, readback, manager := c.final, c.finalReadback, c.finalManager
+	c.mu.Unlock()
+	if final == nil || readback == nil || manager == nil {
+		return errCapture
+	}
+	actual, found, err := adapter.RouterVPNOutboundContext(ctx, manager, c.metadata.Proofs[2].Tag)
+	if err != nil || !found || actual != final {
+		return errors.Join(err, errCapture)
+	}
+	return readback(ctx)
+}

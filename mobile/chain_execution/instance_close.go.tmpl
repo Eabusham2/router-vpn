@@ -39,6 +39,10 @@ func (i *Instance) routerVPNCloseOriginal(closeOriginal func() error) error {
 	done := r.done
 	r.mu.Unlock()
 	preclose := i.instance.RouterVPNCloseSOCKSMiddle()
+	connectPreclose := i.instance.RouterVPNCloseCONNECTMiddle()
+	if connectPreclose != nil {
+		preclose = errors.Join(preclose, connectPreclose)
+	}
 	result := closeOriginal()
 	if preclose != nil {
 		result = errors.Join(preclose, result)

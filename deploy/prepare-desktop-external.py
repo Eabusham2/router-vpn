@@ -31,6 +31,7 @@ EXTERNAL = load('prepare-mobile-external-policy')
 MTU = load('prepare-mobile-mtu')
 STRATEGY = load('prepare-mobile-strategy')
 NODE_CHAIN = load('prepare-mobile-node-chain')
+CONNECT = load('prepare-mobile-connect')
 NODE_EXECUTION = tuple(load(name) for name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution', 'prepare-node-chain-execution-owner'))
 DAEMON_CAPTURE = load('prepare-mobile-node-chain-execution')
 DAEMON_CAPTURE_TEMPLATES = {
@@ -307,7 +308,7 @@ def darwin_node_chain_peer_copies():
 def inputs():
     files = [Path(__file__).resolve(), Path(DAEMON_CAPTURE.__file__).resolve(),
              *(ROOT/'mobile/chain_execution'/name for name in DAEMON_CAPTURE_TEMPLATES),
-             *(path for module in NODE_EXECUTION for path in module.inputs()), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
+             *(path for module in NODE_EXECUTION for path in module.inputs()), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *CONNECT.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
              ROOT/'mobile/toroutbound/padding_box.go.tmpl', ROOT/'mobile/toroutbound/padding_box_test.go.tmpl',
              ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-desktop-command-retirement.py', ROOT/'deploy/prepare-desktop-dbus.py', ROOT/'deploy/test_desktop_tun_retirement_projection.py', ROOT/'deploy/prepare-mobile-tor.py',
@@ -861,6 +862,7 @@ def prepare(vendor, go='go', *, env=None):
     prepare_node_capture(vendor)
     for module in NODE_EXECUTION:
         module.prepare(vendor)
+    CONNECT.prepare(vendor, mobile=False)
     prepare_daemon_capture(vendor)
     RELAY.OPENVPN_REMOTE.prepare(vendor)
     templates = [*sorted((ROOT/'mobile/desktop').glob('standard*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl')),

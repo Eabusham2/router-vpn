@@ -3,7 +3,9 @@
 
 The validator checkout is the parent of this helper's deploy directory. A
 candidate may equal that captured base or be exactly one single-parent commit
-above it. No ref is updated and no candidate code is executed by this helper.
+above it for the suites with explicit file allowlists. Published-only native
+suites require the exact captured base. No ref is updated and no candidate
+code is executed by this helper.
 """
 from pathlib import Path
 import argparse
@@ -21,6 +23,9 @@ from unittest import mock
 
 REPOSITORY = "Eabusham2/router-vpn"
 WORKFLOW_REF = "refs/heads/main"
+# Encrypted CONNECT acceptance runs only from the already-published validator
+# commit. It does not expand any existing single-parent candidate allowlist.
+PUBLISHED_ONLY_SUITES = frozenset({"connect-run"})
 HEX40 = re.compile(r"[0-9a-f]{40}")
 ALLOWLISTS = {
     "socks-preclose": frozenset({
@@ -904,7 +909,7 @@ def changed_files(root, base, source, suite):
 def capture_identity(*, source, validator, source_sha, base_sha, suite, repository, workflow_ref):
     if repository != REPOSITORY or workflow_ref != WORKFLOW_REF:
         raise ValueError("focused validation is restricted to the original repository main workflow")
-    if suite not in ALLOWLISTS:
+    if suite not in ALLOWLISTS and suite not in PUBLISHED_ONLY_SUITES:
         raise ValueError("focused validation requires an exact supported suite")
     exact_sha(source_sha, "source SHA")
     exact_sha(base_sha, "captured validator SHA")
@@ -915,6 +920,8 @@ def capture_identity(*, source, validator, source_sha, base_sha, suite, reposito
     if source_sha == base_sha:
         relation, changes = "base", []
     else:
+        if suite in PUBLISHED_ONLY_SUITES:
+            raise ValueError("native suite requires the exact published main validator commit")
         if commit_parents(source, source_sha) != [base_sha]:
             raise ValueError("candidate must have exactly the captured base as its single parent")
         relation = "single-parent"
@@ -1029,6 +1036,15 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(captured["source_sha"], child)
                 self.assertEqual({row["path"] for row in captured["changes"]}, paths)
                 self.assertEqual(captured["validator_sha"], self.base)
+
+    def test_published_native_suite_requires_exact_validator_commit(self):
+        captured = self.capture("connect-run")
+        self.assertEqual(captured["relation"], "base")
+        self.assertEqual(captured["changes"], [])
+        self.edit("internal/mobilemultihop/plan.go")
+        self.commit(self.source, "unpublished native change")
+        with self.assertRaisesRegex(ValueError, "exact published main"):
+            self.capture("connect-run")
 
     def test_existing_executable_mode_is_preserved_but_new_executable_is_refused(self):
         self.edit("internal/mobilemultihop/plan.go")
@@ -1298,7 +1314,7 @@ class IdentityTests(unittest.TestCase):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
-    parser.add_argument("--suite", choices=tuple(ALLOWLISTS))
+    parser.add_argument("--suite", choices=(*ALLOWLISTS, *sorted(PUBLISHED_ONLY_SUITES)))
     parser.add_argument("--source", type=Path)
     parser.add_argument("--source-sha")
     parser.add_argument("--base-sha")

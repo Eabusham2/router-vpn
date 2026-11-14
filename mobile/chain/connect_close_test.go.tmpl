@@ -1,0 +1,260 @@
+package routervpnnodeconnect
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type connectHeldClose struct {
+	net.Conn
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+	failure error
+}
+
+func (c *connectHeldClose) Close() error {
+	c.calls.Add(1)
+	close(c.entered)
+	<-c.release
+	return c.failure
+}
+func (*connectHeldClose) Read([]byte) (int, error)         { return 0, io.EOF }
+func (*connectHeldClose) CloseWrite() error                { return nil }
+func (*connectHeldClose) SetReadDeadline(time.Time) error  { return nil }
+func (*connectHeldClose) SetWriteDeadline(time.Time) error { return nil }
+func connectCloseOperation(owner *Outbound, raw net.Conn) *operation {
+	owner.self = owner
+	ctx, cancel := context.WithCancel(context.Background())
+	op := &operation{owner: owner, ctx: ctx, cancel: cancel, constructed: make(chan struct{}), drained: make(chan struct{})}
+	op.budget.Store(&closeState{changed: make(chan struct{})})
+	op.tcp = newOriginalConn(raw, op)
+	close(op.constructed)
+	owner.operations[op] = struct{}{}
+	return op
+}
+func TestCONNECTCloseSharesOneOriginalBudget(t *testing.T) {
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	var held []*connectHeldClose
+	var all []*operation
+	for range 12 {
+		raw := &connectHeldClose{entered: make(chan struct{}), release: make(chan struct{})}
+		held = append(held, raw)
+		all = append(all, connectCloseOperation(owner, raw))
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if err := owner.CloseContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("held original close was accepted", err)
+	}
+	if time.Since(started) > 300*time.Millisecond {
+		t.Fatal("close multiplied the original caller budget")
+	}
+	for i, raw := range held {
+		select {
+		case <-raw.entered:
+		default:
+			t.Fatal("sibling was not retired before join", i)
+		}
+		all[i].mu.Lock()
+		retired := all[i].retired
+		all[i].mu.Unlock()
+		if !retired {
+			t.Fatal("held original operation stayed active", i)
+		}
+	}
+	owner.mu.Lock()
+	count := len(owner.operations)
+	owner.mu.Unlock()
+	if count != len(held) {
+		t.Fatal("unjoined original handle disappeared")
+	}
+	for _, raw := range held {
+		close(raw.release)
+	}
+	joined, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	if err := owner.CloseContext(joined); err != nil {
+		t.Fatal("original completion could not join", err)
+	}
+	for _, raw := range held {
+		if raw.calls.Load() != 1 {
+			t.Fatal("original raw Close executed twice")
+		}
+	}
+}
+func TestCONNECTCloseRetainsOriginalFailure(t *testing.T) {
+	for _, failure := range []error{errors.New("original socket failure"), net.ErrClosed} {
+		owner := &Outbound{operations: make(map[*operation]struct{})}
+		raw := &connectHeldClose{entered: make(chan struct{}), release: make(chan struct{}), failure: failure}
+		connectCloseOperation(owner, raw)
+		close(raw.release)
+		for range 2 {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			err := owner.CloseContext(ctx)
+			cancel()
+			if !errors.Is(err, failure) {
+				t.Fatal("first original Close failure became success", err)
+			}
+		}
+		owner.mu.Lock()
+		retained := len(owner.operations)
+		owner.mu.Unlock()
+		if retained != 1 || raw.calls.Load() != 1 {
+			t.Fatal("failed original receipt was discarded or rerun")
+		}
+	}
+}
+func TestCONNECTCancelledHandshakeRetainsLateClose(t *testing.T) {
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	raw := &connectHeldClose{entered: make(chan struct{}), release: make(chan struct{})}
+	op := connectCloseOperation(owner, raw)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := op.closeContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled caller lost its deadline", err)
+	}
+	<-raw.entered
+	select {
+	case <-op.drained:
+		t.Fatal("held close invented a completed receipt")
+	default:
+	}
+	close(raw.release)
+	ctx, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	if err := owner.CloseContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCONNECTCompletedOriginalCloseWinsCancellation(t *testing.T) {
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	raw := &connectHeldClose{entered: make(chan struct{}), release: make(chan struct{})}
+	op := connectCloseOperation(owner, raw)
+	close(raw.release)
+	if err := op.tcp.joinClose(); err != nil {
+		t.Fatal(err)
+	}
+	op.cancel()
+	for range 1000 {
+		if err := op.tcp.Close(); err != nil {
+			t.Fatal("cancelled context replaced joined original success", err)
+		}
+	}
+	if raw.calls.Load() != 1 {
+		t.Fatal("completed close reran original socket")
+	}
+}
+
+type connectHeldHalfClose struct {
+	connectHeldClose
+	halfEntered, halfRelease chan struct{}
+}
+
+func (c *connectHeldHalfClose) CloseWrite() error { close(c.halfEntered); <-c.halfRelease; return nil }
+func TestCONNECTForceCloseRetainsHeldGracefulStage(t *testing.T) {
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	raw := &connectHeldHalfClose{connectHeldClose: connectHeldClose{entered: make(chan struct{}), release: make(chan struct{})}, halfEntered: make(chan struct{}), halfRelease: make(chan struct{})}
+	close(raw.release)
+	op := connectCloseOperation(owner, raw)
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+	defer cancel()
+	if err := owner.CloseContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("held graceful stage was accepted", err)
+	}
+	select {
+	case <-raw.halfEntered:
+	case <-time.After(time.Second):
+		t.Fatal("original half-close did not start")
+	}
+	select {
+	case <-raw.entered:
+	case <-time.After(time.Second):
+		t.Fatal("held graceful stage prevented actual original Close")
+	}
+	if completed(op.tcp.done) || completed(op.drained) {
+		t.Fatal("forced actual Close fabricated a joined graceful receipt")
+	}
+	close(raw.halfRelease)
+	joined, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	if err := owner.CloseContext(joined); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("forced retirement lost its original timeout", err)
+	}
+	if raw.calls.Load() != 1 {
+		t.Fatal("forced and graceful paths duplicated actual Close")
+	}
+}
+
+func TestCONNECTCompletedOperationWinsExpiredWait(t *testing.T) {
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	raw := &connectHeldClose{entered: make(chan struct{}), release: make(chan struct{})}
+	op := connectCloseOperation(owner, raw)
+	close(raw.release)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := op.closeContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	expired, stop := context.WithCancel(t.Context())
+	stop()
+	for range 1000 {
+		if err := op.closeContext(expired); err != nil {
+			t.Fatal("completed operation became a cancelled failure", err)
+		}
+	}
+	if raw.calls.Load() != 1 {
+		t.Fatal("expired waiter reopened original close")
+	}
+}
+
+type connectDeadlineRecorder struct {
+	connectHeldClose
+	mu            sync.Mutex
+	writeDeadline time.Time
+}
+
+func (c *connectDeadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	c.writeDeadline = deadline
+	c.mu.Unlock()
+	return nil
+}
+func TestCONNECTTLSDeadlineCannotExtendOriginalOwnerBudget(t *testing.T) {
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	raw := &connectDeadlineRecorder{connectHeldClose: connectHeldClose{entered: make(chan struct{}), release: make(chan struct{})}}
+	op := connectCloseOperation(owner, raw)
+	deadline := time.Now().Add(120 * time.Millisecond)
+	owner.mu.Lock()
+	owner.closed = true
+	owner.closeDeadline = deadline
+	owner.closeDeadlineRead.Store(&deadline)
+	owner.mu.Unlock()
+	op.beginClose()
+	<-raw.entered
+	// This is the pinned TLS close_notify setter's five-second request. The
+	// original published owner budget must win, even before a waiter returns.
+	if err := op.tcp.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	raw.mu.Lock()
+	got := raw.writeDeadline
+	raw.mu.Unlock()
+	if got.After(deadline) {
+		t.Fatal("TLS replaced the original shared close budget", got, deadline)
+	}
+	close(raw.release)
+	joined, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	if err := op.closeContext(joined); err != nil {
+		t.Fatal(err)
+	}
+}

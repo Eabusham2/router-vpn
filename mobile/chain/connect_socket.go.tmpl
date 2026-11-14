@@ -1,0 +1,589 @@
+package routervpnnodeconnect
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"io"
+	"net"
+	"net/netip"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+const closeBudget = time.Second
+
+func earlier(a, b time.Time) time.Time {
+	if a.IsZero() || !b.IsZero() && b.Before(a) {
+		return b
+	}
+	return a
+}
+func completed(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+func joinContext(ctx context.Context, done <-chan struct{}) error {
+	if ctx == nil {
+		return errCapture
+	}
+	if completed(done) {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		if completed(done) {
+			return nil
+		}
+		return ctx.Err()
+	}
+}
+func joinDeadline(deadline time.Time, done <-chan struct{}) error {
+	if completed(done) {
+		return nil
+	}
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		if completed(done) {
+			return nil
+		}
+		return context.DeadlineExceeded
+	}
+}
+
+// The original outbound deadline and closed flag are published atomically.
+// Concurrent connection closes consult this same owner before setting any
+// transport deadline; a TLS close_notify cannot install its own five seconds.
+func (o *Outbound) CloseContext(ctx context.Context) error {
+	if o == nil || o.self != o || ctx == nil {
+		return errCapture
+	}
+	attempted := time.Now()
+	if err := adapter.RouterVPNLockContext(ctx, &o.mu); err != nil {
+		return err
+	}
+	if !o.closed {
+		o.closed = true
+		o.closeDeadline = attempted.Add(closeBudget)
+		if limit, ok := ctx.Deadline(); ok {
+			o.closeDeadline = earlier(o.closeDeadline, limit)
+		}
+		limit := o.closeDeadline
+		o.closeDeadlineRead.Store(&limit)
+	}
+	all := make([]*operation, 0, len(o.operations))
+	for op := range o.operations {
+		op.mu.Lock()
+		op.deadline = earlier(op.deadline, o.closeDeadline)
+		op.publishBudgetLocked()
+		op.retired = true
+		op.mu.Unlock()
+		all = append(all, op)
+	}
+	o.mu.Unlock()
+	for _, op := range all {
+		op.beginClose()
+	}
+	var failure error
+	for _, op := range all {
+		if err := joinContext(ctx, op.drained); err != nil {
+			return errors.Join(failure, err)
+		}
+		failure = errors.Join(failure, op.closeErr)
+	}
+	return failure
+}
+func (o *Outbound) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), closeBudget)
+	defer cancel()
+	return o.CloseContext(ctx)
+}
+
+type closeState struct {
+	deadline time.Time
+	changed  chan struct{}
+}
+
+type operation struct {
+	budget               atomic.Pointer[closeState]
+	mu                   sync.Mutex
+	owner                *Outbound
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	tcp                  *originalConn
+	transport            *transportConn
+	result               net.Conn
+	tcpAsked, retired    bool
+	deadline             time.Time
+	constructed, drained chan struct{}
+	closeOnce            sync.Once
+	closeErr             error
+}
+
+func (s *operation) reserveDeadline(attempted time.Time) time.Time {
+	s.owner.mu.Lock()
+	s.mu.Lock()
+	if s.deadline.IsZero() {
+		s.deadline = attempted.Add(closeBudget)
+	}
+	s.deadline = earlier(s.deadline, s.owner.closeDeadline)
+	s.publishBudgetLocked()
+	deadline := s.deadline
+	s.retired = true
+	s.mu.Unlock()
+	s.owner.mu.Unlock()
+	return deadline
+}
+func (s *operation) retireAt(attempted time.Time) {
+	deadline := s.reserveDeadline(attempted)
+	s.mu.Lock()
+	raw := s.tcp
+	s.mu.Unlock()
+	if raw != nil {
+		raw.retire(deadline)
+	}
+	// Deadlines and raw reader retirement precede cancellation callbacks.
+	s.cancel()
+}
+
+func (s *operation) retire() { s.retireAt(time.Now()) }
+
+// Caller holds owner.mu and operation.mu. Closing the previous state's
+// channel broadcasts a shortened budget to every retained close waiter.
+func (s *operation) publishBudgetLocked() {
+	old := s.budget.Load()
+	if old != nil && old.deadline == s.deadline {
+		return
+	}
+	next := &closeState{deadline: s.deadline, changed: make(chan struct{})}
+	s.budget.Store(next)
+	if old != nil {
+		close(old.changed)
+	}
+}
+func (s *operation) joinBudget(initial time.Time, done <-chan struct{}) error {
+	for {
+		if completed(done) {
+			return nil
+		}
+		state := s.budget.Load()
+		limit := initial
+		var changed <-chan struct{}
+		if state != nil {
+			limit = earlier(limit, state.deadline)
+			changed = state.changed
+		}
+		if ownerLimit := s.owner.closeDeadlineRead.Load(); ownerLimit != nil {
+			limit = earlier(limit, *ownerLimit)
+		}
+		timer := time.NewTimer(time.Until(limit))
+		select {
+		case <-done:
+			timer.Stop()
+			return nil
+		case <-changed:
+			timer.Stop()
+			continue
+		case <-timer.C:
+			if completed(done) {
+				return nil
+			}
+			return context.DeadlineExceeded
+		}
+	}
+}
+func (s *operation) current() error {
+	s.mu.Lock()
+	retired := s.retired
+	s.mu.Unlock()
+	if retired {
+		return net.ErrClosed
+	}
+	return s.owner.current(s.owner.ctx)
+}
+
+// Capture the exact stock TLS/plain transport before HTTP may wrap it in a
+// CachedConn. Its original Close is joined once, separately from raw TCP.
+type transportDialer struct {
+	N.Dialer
+	operation *operation
+}
+
+func (d *transportDialer) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	if d == nil || d.operation == nil || ctx != d.operation.ctx {
+		return nil, errCapture
+	}
+	original, err := d.Dialer.DialContext(ctx, network, address)
+	if original == nil {
+		return nil, err
+	}
+	captured := &transportConn{Conn: original, operation: d.operation, done: make(chan struct{})}
+	d.operation.mu.Lock()
+	duplicate := d.operation.transport != nil
+	if !duplicate {
+		d.operation.transport = captured
+	}
+	retired := d.operation.retired
+	d.operation.mu.Unlock()
+	if duplicate {
+		return nil, errors.Join(errCapture, captured.Close())
+	}
+	if err == nil && (retired || ctx.Err() != nil) {
+		err = net.ErrClosed
+	}
+	return captured, err
+}
+
+type transportConn struct {
+	net.Conn
+	operation    *operation
+	once         sync.Once
+	done         chan struct{}
+	err          error
+	waitDeadline time.Time
+}
+
+func (c *transportConn) beginClose() {
+	attempted := time.Now()
+	c.once.Do(func() {
+		c.waitDeadline = attempted.Add(closeBudget)
+		c.operation.armRawForce(c.waitDeadline)
+		go func() { c.operation.retireAt(attempted); c.err = c.Conn.Close(); close(c.done) }()
+	})
+}
+func (c *transportConn) Close() error {
+	c.beginClose()
+	if err := c.operation.joinBudget(c.waitDeadline, c.done); err != nil {
+		return err
+	}
+	return c.err
+}
+func (c *transportConn) joinClose() error { c.beginClose(); <-c.done; return c.err }
+
+// readGate owns every original raw read, including TLS and HTTP handshakes.
+// Retirement rejects new readers and interrupts/joins the current reader.
+// Only then may cleanup itself read raw TCP to EOF. TLS-alert EOF is never
+// substituted for the original TCP EOF, and no competing reader is started.
+type originalConn struct {
+	waitDeadline time.Time
+	nativeOnce   sync.Once
+	nativeDone   chan struct{}
+	nativeErr    error
+	gracefulDone chan struct{}
+	forceOnce    sync.Once
+	forceDone    chan struct{}
+	forceErr     error
+	net.Conn
+	operation         *operation
+	mu                sync.Mutex
+	deadline          time.Time
+	retired, draining bool
+	readGate          chan struct{}
+	eof               chan struct{}
+	eofOnce           sync.Once
+	once              sync.Once
+	done              chan struct{}
+	err               error
+	deadlineErr       error
+}
+
+func newOriginalConn(raw net.Conn, op *operation) *originalConn {
+	c := &originalConn{Conn: raw, operation: op, readGate: make(chan struct{}, 1), eof: make(chan struct{}), done: make(chan struct{}), nativeDone: make(chan struct{}), gracefulDone: make(chan struct{}), forceDone: make(chan struct{})}
+	c.readGate <- struct{}{}
+	return c
+}
+func (c *originalConn) Read(p []byte) (int, error) {
+	<-c.readGate
+	defer func() { c.readGate <- struct{}{} }()
+	c.mu.Lock()
+	retired := c.retired
+	c.mu.Unlock()
+	if retired {
+		return 0, net.ErrClosed
+	}
+	n, err := c.Conn.Read(p)
+	if err == io.EOF {
+		c.eofOnce.Do(func() { close(c.eof) })
+	}
+	return n, err
+}
+func (c *originalConn) retire(deadline time.Time) {
+	c.armForce(deadline)
+	c.mu.Lock()
+	if completed(c.done) || completed(c.nativeDone) {
+		c.mu.Unlock()
+		return
+	}
+	next := earlier(c.deadline, deadline)
+	if c.retired && next == c.deadline {
+		c.mu.Unlock()
+		return
+	}
+	c.deadline = next
+	c.retired = true
+	readLimit := time.Now()
+	if c.draining {
+		readLimit = c.deadline
+	}
+	// Both setters operate under the same lock as intercepted setters.
+	c.deadlineErr = errors.Join(c.deadlineErr, c.Conn.SetWriteDeadline(c.deadline), c.Conn.SetReadDeadline(readLimit))
+	c.mu.Unlock()
+}
+func (c *originalConn) setDeadline(value time.Time, read, write bool) error {
+	// Keep the owner lock until the actual setter returns. Otherwise a setter
+	// could read the old limit and overwrite a concurrently installed budget.
+	o, s := c.operation.owner, c.operation
+	o.mu.Lock()
+	s.mu.Lock()
+	limit := earlier(s.deadline, o.closeDeadline)
+	s.mu.Unlock()
+	c.mu.Lock()
+	limit = earlier(limit, c.deadline)
+	var failure error
+	if write {
+		failure = c.Conn.SetWriteDeadline(earlier(value, limit))
+	}
+	if read {
+		if c.retired {
+			failure = errors.Join(failure, net.ErrClosed)
+		} else {
+			failure = errors.Join(failure, c.Conn.SetReadDeadline(earlier(value, limit)))
+		}
+	}
+	c.mu.Unlock()
+	o.mu.Unlock()
+	return failure
+}
+func (c *originalConn) SetDeadline(t time.Time) error      { return c.setDeadline(t, true, true) }
+func (c *originalConn) SetReadDeadline(t time.Time) error  { return c.setDeadline(t, true, false) }
+func (c *originalConn) SetWriteDeadline(t time.Time) error { return c.setDeadline(t, false, true) }
+func (c *originalConn) graceful() error {
+	c.mu.Lock()
+	deadline := c.deadline
+	c.mu.Unlock()
+	// A completed reader gets priority even if the budget expired concurrently.
+	select {
+	case <-c.readGate:
+	default:
+		timer := time.NewTimer(time.Until(deadline))
+		defer timer.Stop()
+		select {
+		case <-c.readGate:
+		case <-timer.C:
+			select {
+			case <-c.readGate:
+			default:
+				return context.DeadlineExceeded
+			}
+		}
+	}
+	defer func() { c.readGate <- struct{}{} }()
+	half, ok := c.Conn.(interface{ CloseWrite() error })
+	if !ok {
+		return errors.New("original CONNECT TCP has no joined half-close boundary")
+	}
+	if err := half.CloseWrite(); err != nil {
+		return err
+	}
+	if completed(c.eof) {
+		return nil
+	}
+	c.mu.Lock()
+	c.draining = true
+	deadline = c.deadline
+	err := c.Conn.SetReadDeadline(deadline)
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	data := make([]byte, 4096)
+	for {
+		_, err = c.Conn.Read(data)
+		if err == io.EOF {
+			c.eofOnce.Do(func() { close(c.eof) })
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+func (c *originalConn) startNativeClose() {
+	c.nativeOnce.Do(func() { go func() { c.nativeErr = c.Conn.Close(); close(c.nativeDone) }() })
+}
+func (c *originalConn) armForce(deadline time.Time) {
+	c.forceOnce.Do(func() {
+		go func() {
+			if err := c.operation.joinBudget(deadline, c.gracefulDone); err != nil {
+				c.forceErr = err
+				// A held graceful setter/read/half-close cannot prevent the original
+				// actual Close attempt. Both stages remain retained and must join.
+				c.startNativeClose()
+			}
+			close(c.forceDone)
+		}()
+	})
+}
+func (c *originalConn) startClose() {
+	attempted := time.Now()
+	c.once.Do(func() {
+		c.waitDeadline = attempted.Add(closeBudget)
+		c.armForce(c.waitDeadline)
+		go func() {
+			c.operation.retireAt(attempted)
+			graceful := c.graceful()
+			close(c.gracefulDone)
+			c.startNativeClose()
+			<-c.nativeDone
+			<-c.forceDone
+			c.mu.Lock()
+			deadlineErr := c.deadlineErr
+			c.mu.Unlock()
+			c.err = errors.Join(deadlineErr, graceful, c.nativeErr, c.forceErr)
+			close(c.done)
+		}()
+	})
+}
+func (c *originalConn) Close() error {
+	c.startClose()
+	if err := c.operation.joinBudget(c.waitDeadline, c.done); err != nil {
+		return err
+	}
+	return c.err
+}
+func (c *originalConn) joinClose() error { c.startClose(); <-c.done; return c.err }
+
+func (s *operation) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	if s == nil || ctx != s.ctx || s.owner.current(ctx) != nil {
+		return nil, errCapture
+	}
+	s.mu.Lock()
+	valid := !s.retired && network == "tcp" && !s.tcpAsked && address == s.owner.control
+	if valid {
+		s.tcpAsked = true
+	}
+	s.mu.Unlock()
+	remote, err := netip.ParseAddrPort(address.String())
+	if !valid || err != nil || address.IsDomain() || !remote.IsValid() || remote.Port() == 0 || remote.Addr().IsUnspecified() || remote.Addr().IsMulticast() || remote.Addr().Is4In6() || remote.Addr().Zone() != "" || remote.Addr().Is6() && s.owner.capture.metadata.Devices[1].IPv6Mode == "off" {
+		return nil, errCapture
+	}
+	s.owner.mu.Lock()
+	lower := s.owner.lower
+	s.owner.mu.Unlock()
+	raw, failure := lower.DialContext(ctx, network, address)
+	var captured *originalConn
+	if raw != nil {
+		captured = newOriginalConn(raw, s)
+	}
+	s.mu.Lock()
+	s.tcp = captured
+	retired, deadline := s.retired, s.deadline
+	s.mu.Unlock()
+	if retired && captured != nil {
+		captured.retire(deadline)
+	}
+	if failure == nil && (captured == nil || retired || ctx.Err() != nil || s.owner.current(ctx) != nil) {
+		failure = net.ErrClosed
+	}
+	if failure != nil {
+		return nil, failure
+	}
+	return captured, nil
+}
+func (*operation) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errCapture
+}
+func (s *operation) armRawForce(deadline time.Time) {
+	s.mu.Lock()
+	raw := s.tcp
+	s.mu.Unlock()
+	if raw != nil {
+		raw.armForce(deadline)
+	}
+}
+func (s *operation) beginClose() {
+	attempted := time.Now()
+	s.closeOnce.Do(func() {
+		s.armRawForce(attempted.Add(closeBudget))
+		go func() {
+			s.retireAt(attempted)
+			// Cancellation and raw read interruption join the stock handshake before
+			// deciding which exact TLS/plain result owns shutdown. Late handles stay.
+			<-s.constructed
+			s.mu.Lock()
+			transport, raw, result := s.transport, s.tcp, s.result
+			s.mu.Unlock()
+			if transport != nil {
+				s.closeErr = errors.Join(s.closeErr, transport.joinClose())
+			}
+			if result != nil {
+				s.closeErr = errors.Join(s.closeErr, result.Close())
+			}
+			if raw != nil {
+				s.closeErr = errors.Join(s.closeErr, raw.joinClose())
+			}
+			s.owner.mu.Lock()
+			if s.closeErr == nil {
+				delete(s.owner.operations, s)
+			}
+			s.owner.mu.Unlock()
+			close(s.drained)
+		}()
+	})
+}
+func (s *operation) closeContext(ctx context.Context) error {
+	if ctx == nil {
+		return errCapture
+	}
+	s.beginClose()
+	if err := joinContext(ctx, s.drained); err != nil {
+		return err
+	}
+	return s.closeErr
+}
+func (s *operation) close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), closeBudget)
+	defer cancel()
+	return s.closeContext(ctx)
+}
+
+type ownedConn struct {
+	net.Conn
+	operation *operation
+}
+
+func (c *ownedConn) Close() error { return c.operation.close() }
+func (c *ownedConn) Read(p []byte) (int, error) {
+	if err := c.operation.current(); err != nil {
+		return 0, errors.Join(err, c.Close())
+	}
+	n, err := c.Conn.Read(p)
+	if current := c.operation.current(); current != nil {
+		err = errors.Join(err, current, c.Close())
+	}
+	return n, err
+}
+func (c *ownedConn) Write(p []byte) (int, error) {
+	if err := c.operation.current(); err != nil {
+		return 0, errors.Join(err, c.Close())
+	}
+	n, err := c.Conn.Write(p)
+	if current := c.operation.current(); current != nil {
+		err = errors.Join(err, current, c.Close())
+	}
+	return n, err
+}

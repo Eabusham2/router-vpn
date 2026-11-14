@@ -1,0 +1,95 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"reflect"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	ownedCONNECT "github.com/sagernet/sing-box/protocol/routervpnnodeconnect"
+	"github.com/sagernet/sing/service"
+)
+
+type routerNodeCONNECTServerKey struct{}
+type routerNodeCONNECTServerOwner struct {
+	source   *mobilemultihop.NodeChainCONNECTSource
+	capture  *ownedCONNECT.Capture
+	config   string
+	metadata mobilemultihop.NodeChainCONNECTSourceMetadata
+	registry *outbound.Registry
+	server   *CommandServer
+	started  *daemon.StartedService
+}
+
+// Only the typed plan can request this private construction. Stock callers
+// retain NewCommandServer and its unmodified ordinary registries.
+func newRouterNodeCONNECTCommandServer(handler CommandServerHandler, platform PlatformInterface,
+	source *mobilemultihop.NodeChainCONNECTSource) (*CommandServer, error) {
+	if handler == nil || platform == nil || source == nil {
+		return nil, errors.New("ordered CONNECT server needs its original source and platform")
+	}
+	config, metadata, err := source.ReadValidated()
+	if err != nil {
+		return nil, err
+	}
+	ctx := baseContext(platform)
+	capture, err := ownedCONNECT.NewCapture(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	registry := include.OutboundRegistry()
+	if err = capture.Register(registry); err != nil {
+		return nil, err
+	}
+	ctx = capture.Context()
+	// box.Context preserves existing registries. Both parsing and native
+	// construction must instead refer to this one new caller-local registry.
+	ctx = service.ContextWith[option.OutboundOptionsRegistry](ctx, registry)
+	ctx = service.ContextWith[adapter.OutboundRegistry](ctx, registry)
+	ctx, err = box.RouterVPNNodeCONNECTContext(ctx, source, capture)
+	if err != nil {
+		return nil, err
+	}
+	owner := &routerNodeCONNECTServerOwner{
+		source: source, capture: capture, config: config, metadata: metadata, registry: registry,
+	}
+	ctx = context.WithValue(ctx, routerNodeCONNECTServerKey{}, owner)
+	// The original constructor body is infallible. Every new guard above
+	// runs before acquisition, so gomobile can never hide a partial server
+	// behind an error result. The host retains this result, then BindNative.
+	server := newCommandServerWithContext(handler, platform, ctx)
+	owner.server, owner.started = server, server.StartedService
+	return server, nil
+}
+
+func requireRouterNodeCONNECTServer(ctx context.Context, server *CommandServer,
+	source *mobilemultihop.NodeChainCONNECTSource) error {
+	if ctx == nil || ctx.Err() != nil || server == nil || server.ctx == nil ||
+		server.ctx.Err() != nil || server.StartedService == nil || source == nil {
+		return errors.New("ordered CONNECT server lost its original caller or native owner")
+	}
+	owner, ok := server.ctx.Value(routerNodeCONNECTServerKey{}).(*routerNodeCONNECTServerOwner)
+	if !ok || owner == nil || owner.source != source || owner.server != server ||
+		owner.started != server.StartedService || owner.capture == nil ||
+		service.FromContext[adapter.OutboundRegistry](server.ctx) != owner.registry ||
+		service.FromContext[option.OutboundOptionsRegistry](server.ctx) != owner.registry {
+		return errors.New("ordered CONNECT server has a foreign source, registry or native service")
+	}
+	if err := owner.capture.RequireOriginalContext(server.ctx, source); err != nil {
+		return err
+	}
+	config, metadata, err := source.ReadValidated()
+	if err != nil || config != owner.config || !reflect.DeepEqual(metadata, owner.metadata) {
+		return errors.New("ordered CONNECT server source changed after original capture")
+	}
+	if err := server.ctx.Err(); err != nil {
+		return err
+	}
+	return ctx.Err()
+}

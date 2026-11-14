@@ -1,0 +1,183 @@
+package libbox
+
+import (
+	"bufio"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"errors"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	CERT "github.com/sagernet/sing-box/common/certificate"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+func TestRouterNodeChainCONNECTNativeOriginalTLSVerification(t *testing.T) {
+	for _, fault := range []string{"success", "caller-store", "trust", "server-name"} {
+		t.Run(fault, func(t *testing.T) {
+			public, key, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			certificate := &x509.Certificate{SerialNumber: big.NewInt(781), DNSNames: []string{"proxy.example.com"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+			der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, public, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := "proxy.example.com"
+			if fault == "server-name" {
+				name = "foreign.example.com"
+			}
+			source, err := connectBridgeSourceProtocol(t, "wg", "https-connect", name).Source()
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner, err := NewRouterNodeChainCONNECT(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := connectBridgeNativeReserved(t, owner)
+			roots := []string{string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}
+			if fault == "trust" {
+				roots = nil
+			}
+			store, err := CERT.NewStore(f.server.ctx, log.NewNOPFactory().Logger(), option.CertificateOptions{Store: "none", Certificate: roots})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			service.MustRegister[adapter.CertificateStore](f.server.ctx, store)
+			config, err := owner.Config()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = f.server.StartedService.StartOrReloadService(f.server.ctx, config, nil); err != nil {
+				t.Fatal(err)
+			}
+			f.instance = f.server.StartedService.Instance()
+			if f.instance == nil {
+				t.Fatal("original instance missing")
+			}
+			f.box = f.instance.Box()
+			_, meta, err := owner.source.ReadValidated()
+			if err != nil {
+				t.Fatal(err)
+			}
+			middle, found := f.box.Outbound().Outbound(meta.Proofs[1].Tag)
+			if !found {
+				t.Fatal("original TLS middle missing")
+			}
+			hello := make(chan string, 1)
+			joined := make(chan error, 1)
+			f.prefix.mu.Lock()
+			f.prefix.dial = func(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+				if network != "tcp" || destination.String() != "203.0.113.20:1080" {
+					return nil, errors.New("TLS bypassed captured predecessor")
+				}
+				client, peer := connectNativeTCPPair(t)
+				go func() {
+					defer peer.Close()
+					secured := tls.Server(peer, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) { hello <- info.ServerName; return nil, nil }})
+					ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+					defer cancel()
+					err := secured.HandshakeContext(ctx)
+					if err != nil {
+						joined <- err
+						return
+					}
+					request, err := http.ReadRequest(bufio.NewReader(secured))
+					if err != nil {
+						joined <- err
+						return
+					}
+					defer request.Body.Close()
+					if request.Method != http.MethodConnect || request.Host != "1.1.1.1:443" || request.Header.Get("Proxy-Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte("original-middle-user:original-middle-password")) {
+						joined <- errors.New("TLS CONNECT changed original HTTP credentials")
+						return
+					}
+					_, err = io.WriteString(secured, "HTTP/1.1 200 Connection Established\r\n\r\n")
+					if err == nil {
+						_, err = secured.Read(make([]byte, 1))
+						if err == io.EOF {
+							err = secured.Close()
+						} else if err == nil {
+							err = errors.New("TLS peer missed original close_notify")
+						}
+					}
+					joined <- err
+				}()
+				return client, nil
+			}
+			f.prefix.mu.Unlock()
+			caller := t.Context()
+			if fault == "caller-store" {
+				foreign, failure := CERT.NewStore(caller, log.NewNOPFactory().Logger(), option.CertificateOptions{Store: "none"})
+				if failure != nil {
+					t.Fatal(failure)
+				}
+				t.Cleanup(func() { _ = foreign.Close() })
+				caller = service.ContextWith[adapter.CertificateStore](caller, foreign)
+			}
+			ctx, cancel := context.WithTimeout(caller, time.Second)
+			defer cancel()
+			connection, err := middle.DialContext(ctx, "tcp", M.ParseSocksaddr("1.1.1.1:443"))
+			success := fault == "success" || fault == "caller-store"
+			if success {
+				if err != nil || connection == nil {
+					t.Fatal("original stock TLS failed", err)
+				}
+				if err = connection.Close(); err != nil {
+					t.Fatal("original TLS close", err)
+				}
+			} else {
+				if err == nil || connection != nil {
+					t.Fatal("TLS verifier admitted foreign trust or server name")
+				}
+				if fault == "trust" {
+					var refusal x509.UnknownAuthorityError
+					if !errors.As(err, &refusal) {
+						t.Fatal("wrong CA control missed original verifier", err)
+					}
+				}
+				if fault == "server-name" {
+					var refusal x509.HostnameError
+					if !errors.As(err, &refusal) {
+						t.Fatal("wrong name control missed original verifier", err)
+					}
+				}
+			}
+			select {
+			case observed := <-hello:
+				if observed != name {
+					t.Fatal("captured TLS server name changed", observed)
+				}
+			case <-ctx.Done():
+				t.Fatal("original TLS peer missed ClientHello")
+			}
+			select {
+			case peerErr := <-joined:
+				if (peerErr == nil) != success {
+					t.Fatal("original TLS peer did not observe expected verifier result", peerErr)
+				}
+			case <-ctx.Done():
+				t.Fatal("original TLS peer did not join")
+			}
+			if owner.Healthy() || owner.NativeClosed() {
+				t.Fatal("TLS component proof invented complete ordered path")
+			}
+		})
+	}
+}

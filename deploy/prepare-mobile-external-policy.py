@@ -7,6 +7,9 @@ import importlib.util
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+_binding_spec=importlib.util.spec_from_file_location("native_connect_binding",ROOT/"deploy/native_connect_binding.py")
+CONNECT_BINDING=importlib.util.module_from_spec(_binding_spec)
+_binding_spec.loader.exec_module(CONNECT_BINDING)
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 _graphs_spec = importlib.util.spec_from_file_location('routervpn_external_graphs', ROOT/'deploy/test_mobile_external_graphs.py')
 GRAPHS = importlib.util.module_from_spec(_graphs_spec)
@@ -72,7 +75,7 @@ def composed_selection_source(vendor, relative, expected, *, current=True):
 
 
 def inputs():
-    return list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/test_mobile_external_pinned.sh'] + sorted((ROOT/'mobile/externalpolicy').glob('*.tmpl')) + GRAPHS.inputs() + execution_preparer().inputs()))
+    return list(dict.fromkeys([*CONNECT_BINDING.inputs(), Path(__file__).resolve(), ROOT/'deploy/test_mobile_external_pinned.sh'] + sorted((ROOT/'mobile/externalpolicy').glob('*.tmpl')) + GRAPHS.inputs() + execution_preparer().inputs()))
 
 def digest():
     value=hashlib.sha256()
@@ -86,7 +89,7 @@ def prepare(vendor, *, mobile=True):
         raise ValueError('external proof requires the exact pinned native core')
     path=vendor/'box.go'
     if path.is_symlink():raise ValueError('linked native external policy boundary')
-    source=path.read_text()
+    source, connect_bound = CONNECT_BINDING.strip(path.read_text())
     box_return = '\treturn &Box{\n'
     if 'routerVPNNodeSOCKSBind' in source:
         box_return = '\treturn routerVPNNodeSOCKSBind(&Box{\n'
@@ -103,6 +106,8 @@ def prepare(vendor, *, mobile=True):
         if after in source:continue
         if source.count(before)!=1:raise ValueError('native external configuration capture boundary changed')
         source=source.replace(before,after,1)
+    if connect_bound:
+        source = CONNECT_BINDING.bind(source)
     path.write_text(source)
     # Both preparation and execution prove the full pinned commit body. A
     # partial or foreign patch cannot erase cache/interrupt/history semantics.

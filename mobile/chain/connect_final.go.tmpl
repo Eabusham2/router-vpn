@@ -1,0 +1,32 @@
+package shadowsocks
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common"
+)
+
+// RouterVPNCONNECTFinalReadback retains the actual original encrypted method,
+// dialer and UoT client. It does not manufacture a packet transport for HTTP.
+func (h *Outbound) RouterVPNCONNECTFinalReadback(options option.ShadowsocksOutboundOptions) (func(context.Context) error, error) {
+	invalid := errors.New("CONNECT final lost its original Shadowsocks UoT-v2 owner")
+	uotOptions := common.PtrValueOrDefault(options.UDPOverTCP)
+	if h == nil || h.method == nil || h.dialer == nil || h.uotClient == nil ||
+		!uotOptions.Enabled || uotOptions.Version != 2 || h.uotClient.Version != 2 ||
+		h.uotClient.Dialer != (*shadowsocksDialer)(h) || h.serverAddr != options.ServerOptions.Build() ||
+		h.plugin != nil || h.multiplexDialer != nil {
+		return nil, invalid
+	}
+	method, dialer, client, server := h.method, h.dialer, h.uotClient, h.serverAddr
+	return func(ctx context.Context) error {
+		if ctx == nil || ctx.Err() != nil {
+			return invalid
+		}
+		if h.method != method || h.dialer != dialer || h.uotClient != client || h.serverAddr != server ||
+			client.Version != 2 || client.Dialer != (*shadowsocksDialer)(h) || h.plugin != nil || h.multiplexDialer != nil {
+			return invalid
+		}
+		return ctx.Err()
+	}, nil
+}

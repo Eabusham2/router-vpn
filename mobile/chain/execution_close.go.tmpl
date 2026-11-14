@@ -80,6 +80,10 @@ func (s *Box) Close() error {
 	state.mu.Unlock()
 	// Do not defer publication: a panic or abandoned close cannot prove join.
 	preclose := s.RouterVPNCloseSOCKSMiddle()
+	connectPreclose := s.RouterVPNCloseCONNECTMiddle()
+	if connectPreclose != nil {
+		preclose = errors.Join(preclose, connectPreclose)
+	}
 	err := s.routerVPNCloseOriginal()
 	if preclose != nil {
 		err = errors.Join(preclose, err)

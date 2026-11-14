@@ -52,6 +52,9 @@ _naive_spec.loader.exec_module(NAIVE)
 _chain_spec = importlib.util.spec_from_file_location('routervpn_node_chain', ROOT/'deploy/prepare-mobile-node-chain.py')
 NODE_CHAIN = importlib.util.module_from_spec(_chain_spec)
 _chain_spec.loader.exec_module(NODE_CHAIN)
+_connect_spec = importlib.util.spec_from_file_location("routervpn_connect", ROOT/"deploy/prepare-mobile-connect.py")
+CONNECT = importlib.util.module_from_spec(_connect_spec)
+_connect_spec.loader.exec_module(CONNECT)
 _execution_modules = []
 for _name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution', 'prepare-node-chain-execution-owner', 'prepare-mobile-node-chain-execution'):
     _spec = importlib.util.spec_from_file_location('mobile_'+_name.replace('-', '_'), ROOT/'deploy'/(_name+'.py'))
@@ -79,7 +82,7 @@ def inputs():
     paths.append(ROOT/'mobile/routervpn_multihop_context_test.go.tmpl')
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + [path for module in _execution_modules for path in module.inputs()] + NODE_CHAIN.inputs() + NAIVE.inputs() + OBSERVATION.inputs() + HY2_DEADLINES.inputs() + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
+    return paths + [path for module in _execution_modules for path in module.inputs()] + CONNECT.inputs() + NODE_CHAIN.inputs() + NAIVE.inputs() + OBSERVATION.inputs() + HY2_DEADLINES.inputs() + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -151,6 +154,7 @@ def prepare(vendor):
     EXTERNAL_POLICY.prepare(vendor)
     for module in _execution_modules:
         module.prepare(vendor)
+    CONNECT.prepare(vendor)
     COMPOSITE.prepare(vendor)
     WIREGUARD_BIND.prepare(vendor)
     OPENVPN_CLOSE.prepare(vendor)

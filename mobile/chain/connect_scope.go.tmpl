@@ -1,0 +1,20 @@
+package routervpnnodeconnect
+
+import (
+	"context"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// RequireOriginalContext proves a private construction context and its exact
+// source pointer. It grants no native health, selection, socket or DOWN proof.
+func (c *Capture) RequireOriginalContext(ctx context.Context, original *mobilemultihop.NodeChainCONNECTSource) error {
+	if c == nil || ctx == nil || ctx.Err() != nil || original == nil ||
+		original != c.source || ctx.Value(captureKey{}) != c {
+		return errCapture
+	}
+	if err := c.validate(); err != nil {
+		return err
+	}
+	return ctx.Err()
+}

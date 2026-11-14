@@ -1,0 +1,860 @@
+package libbox
+
+import (
+	"bufio"
+	"context"
+	"encoding/base64"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime/debug"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mdns "github.com/miekg/dns"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	ownedCONNECT "github.com/sagernet/sing-box/protocol/routervpnnodeconnect"
+	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/uot"
+	"github.com/sagernet/sing/service"
+)
+
+// These tests execute the original command constructor, daemon, Box, managers,
+// exact-source middle owner and selector. TUN/OS interfaces, packet-prefix I/O
+// and selected DNS responses are explicit component boundaries. They make no
+// encrypted packet, kernel TUN, physical route or successful path-proof claim.
+type connectBridgeNativePlatform struct{ connectBridgePlatform }
+
+func (*connectBridgeNativePlatform) UsePlatformAutoDetectInterfaceControl() bool { return true }
+func (*connectBridgeNativePlatform) AutoDetectInterfaceControl(int32) error      { return nil }
+func (*connectBridgeNativePlatform) StartDefaultInterfaceMonitor(listener InterfaceUpdateListener) error {
+	listener.UpdateDefaultInterface("original-connect-physical", 31, false, false)
+	return nil
+}
+func (*connectBridgeNativePlatform) CloseDefaultInterfaceMonitor(InterfaceUpdateListener) error {
+	return nil
+}
+func (*connectBridgeNativePlatform) GetInterfaces() (NetworkInterfaceIterator, error) {
+	return newIterator([]*NetworkInterface{{Index: 31, MTU: 1500, Name: "original-connect-physical",
+		Flags: 1, Type: InterfaceTypeEthernet, Addresses: newIterator([]string{"192.0.2.2/24"}),
+		DNSServer: newIterator([]string{}), Gateway: newIterator([]string{})}}), nil
+}
+func (*connectBridgeNativePlatform) UnderNetworkExtension() bool                       { return false }
+func (*connectBridgeNativePlatform) IncludeAllNetworks() bool                          { return false }
+func (*connectBridgeNativePlatform) ReadWIFIState() *WIFIState                         { return nil }
+func (*connectBridgeNativePlatform) ClearDNSCache()                                    {}
+func (*connectBridgeNativePlatform) StartNeighborMonitor(NeighborUpdateListener) error { return nil }
+func (*connectBridgeNativePlatform) CloseNeighborMonitor(NeighborUpdateListener) error { return nil }
+func (*connectBridgeNativePlatform) UsePlatformShell() bool                            { return false }
+func (*connectBridgeNativePlatform) UsePlatformBridge() bool                           { return false }
+func (*connectBridgeNativePlatform) OpenTun(TunOptions) (int32, error) {
+	return -1, errors.New("unexpected real TUN acquisition")
+}
+func (*connectBridgeNativePlatform) RegisterMyInterface(string)             {}
+func (*connectBridgeNativePlatform) SendNotification(*Notification) error   { return nil }
+func (*connectBridgeNativePlatform) CancelNotification(string, int32) error { return nil }
+
+type connectBridgeNativeTUN struct {
+	inbound.Adapter
+	name                       string
+	index, mtu                 atomic.Int32
+	started                    atomic.Bool
+	mu                         sync.Mutex
+	closeEntered, closeRelease chan struct{}
+	closeError                 error
+}
+
+func (n *connectBridgeNativeTUN) Start(stage adapter.StartStage) error {
+	if stage == adapter.StartStateStart {
+		n.started.Store(true)
+	}
+	return nil
+}
+func (n *connectBridgeNativeTUN) Close() error {
+	n.mu.Lock()
+	entered, release, failure := n.closeEntered, n.closeRelease, n.closeError
+	n.mu.Unlock()
+	if entered != nil {
+		close(entered)
+	}
+	if release != nil {
+		<-release
+	}
+	n.started.Store(false)
+	return failure
+}
+func (n *connectBridgeNativeTUN) RouterVPNExecutionMTUReadbackContext(ctx context.Context) (string, int, int, error) {
+	if ctx == nil || !n.started.Load() {
+		return "", 0, 0, errors.New("original TUN not started")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	return n.name, int(n.index.Load()), int(n.mtu.Load()), nil
+}
+
+type connectBridgeNativePrefix struct {
+	outbound.Adapter
+	mu    sync.Mutex
+	dial  func(context.Context, string, M.Socksaddr) (net.Conn, error)
+	calls atomic.Int32
+}
+
+func (p *connectBridgeNativePrefix) Start(adapter.StartStage) error { return nil }
+func (p *connectBridgeNativePrefix) Close() error                   { return nil }
+func (p *connectBridgeNativePrefix) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("explicit packet boundary has no admitted association")
+}
+func (p *connectBridgeNativePrefix) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	p.calls.Add(1)
+	p.mu.Lock()
+	call := p.dial
+	p.mu.Unlock()
+	if call == nil {
+		return nil, errors.New("explicit packet prefix boundary refuses traffic")
+	}
+	return call(ctx, network, destination)
+}
+
+type connectBridgeNativeDNS struct {
+	dns.TransportAdapter
+	calls     atomic.Int32
+	mu        sync.Mutex
+	addresses []netip.Addr
+	hold      func(context.Context) error
+}
+
+func (*connectBridgeNativeDNS) Start(adapter.StartStage) error { return nil }
+func (*connectBridgeNativeDNS) Close() error                   { return nil }
+func (*connectBridgeNativeDNS) Reset()                         {}
+func (d *connectBridgeNativeDNS) Exchange(ctx context.Context, q *mdns.Msg) (*mdns.Msg, error) {
+	d.calls.Add(1)
+	if len(q.Question) != 1 || q.Question[0].Name != hopmeasure.PublicHost+"." {
+		return nil, errors.New("component resolver refuses non-measurement proof")
+	}
+	d.mu.Lock()
+	addresses := append([]netip.Addr(nil), d.addresses...)
+	held := d.hold
+	d.mu.Unlock()
+	if held != nil {
+		if err := held(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	result := new(mdns.Msg)
+	result.SetReply(q)
+	for _, ip := range addresses {
+		head := mdns.RR_Header{Name: q.Question[0].Name, Class: mdns.ClassINET, Ttl: 0}
+		if ip.Is4() && q.Question[0].Qtype == mdns.TypeA {
+			head.Rrtype = mdns.TypeA
+			result.Answer = append(result.Answer, &mdns.A{Hdr: head, A: net.IP(ip.AsSlice())})
+		}
+		if ip.Is6() && q.Question[0].Qtype == mdns.TypeAAAA {
+			head.Rrtype = mdns.TypeAAAA
+			result.Answer = append(result.Answer, &mdns.AAAA{Hdr: head, AAAA: net.IP(ip.AsSlice())})
+		}
+	}
+	return result, nil
+}
+func (d *connectBridgeNativeDNS) ExchangeAsync(ctx context.Context, q *mdns.Msg, callback func(*mdns.Msg, error)) {
+	response, err := d.Exchange(ctx, q)
+	callback(response, err)
+}
+
+type connectBridgeNativeFixture struct {
+	owner         *RouterNodeChainCONNECT
+	server        *CommandServer
+	instance      *daemon.Instance
+	box           *box.Box
+	tun           *connectBridgeNativeTUN
+	prefix        *connectBridgeNativePrefix
+	resolver      *connectBridgeNativeDNS
+	platform      *connectBridgeNativePlatform
+	workingPath   string
+	constructed   atomic.Int32
+	expectedClose error
+	closeOnce     sync.Once
+	closeError    error
+}
+
+// The native host calls Setup before constructing a CommandServer. Component
+// tests use that same options application and real owned directories, while
+// leaving stderr attached so race/panic/control diagnostics remain observable.
+// These fixtures are deliberately sequential; cleanup restores the setup only
+// after the original server and every native component have been closed.
+func connectBridgeNativeSetup(t *testing.T) string {
+	t.Helper()
+	base := t.TempDir()
+	working, temporary := filepath.Join(base, "work"), filepath.Join(base, "temp")
+	for _, path := range []string{working, temporary} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal("original libbox owned directory", err)
+		}
+	}
+	oldBase, oldWork, oldTemp, oldUID, oldGID := sBasePath, sWorkingPath, sTempPath, sUserID, sGroupID
+	memoryLimit := debug.SetMemoryLimit(-1)
+	applySetupOptions(&SetupOptions{BasePath: base, WorkingPath: working, TempPath: temporary,
+		FixAndroidStack: sFixAndroidStack, CommandServerListenPort: int32(sCommandServerListenPort),
+		CommandServerSecret: sCommandServerSecret, LogMaxLines: sLogMaxLines, Debug: sDebug,
+		CrashReportSource: sCrashReportSource, AppVersion: sAppVersion, AppMarketingVersion: sAppMarketingVersion,
+		OomKillerEnabled: sOOMKillerEnabled, OomKillerDisabled: sOOMKillerDisabled,
+		OomMemoryLimit: sOOMMemoryLimit, PowerReportEnabled: sPowerReportEnabled})
+	debug.SetMemoryLimit(memoryLimit)
+	t.Cleanup(func() {
+		sBasePath, sWorkingPath, sTempPath, sUserID, sGroupID = oldBase, oldWork, oldTemp, oldUID, oldGID
+	})
+	if sBasePath != base || sWorkingPath != working || sTempPath != temporary || sUserID != os.Getuid() || sGroupID != os.Getgid() {
+		t.Fatal("original libbox setup lost process filesystem ownership")
+	}
+	return working
+}
+
+func connectBridgeNativeReserved(t *testing.T, owner *RouterNodeChainCONNECT) *connectBridgeNativeFixture {
+	t.Helper()
+	working := connectBridgeNativeSetup(t)
+	f := &connectBridgeNativeFixture{owner: owner, platform: &connectBridgeNativePlatform{}, workingPath: working}
+	server, err := owner.NewCommandServer(&connectBridgeHandler{}, f.platform)
+	if err != nil || server == nil {
+		t.Fatal("actual typed server constructor", err)
+	}
+	f.server = server
+	// Modify only the fresh factory-local test boundaries before its first
+	// native construction. The original CONNECT registry/factory is untouched.
+	ins, ok := service.FromContext[adapter.InboundRegistry](server.ctx).(*inbound.Registry)
+	if !ok {
+		t.Fatal("original TUN registry type")
+	}
+	ends, ok := service.FromContext[adapter.EndpointRegistry](server.ctx).(*endpoint.Registry)
+	if !ok {
+		t.Fatal("original packet-prefix registry type")
+	}
+	resolvers, ok := service.FromContext[adapter.DNSTransportRegistry](server.ctx).(*dns.TransportRegistry)
+	if !ok {
+		t.Fatal("original resolver registry type")
+	}
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, opts option.TunInboundOptions) (adapter.Inbound, error) {
+		f.constructed.Add(1)
+		n := &connectBridgeNativeTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: "original-connect-tun"}
+		n.index.Store(41)
+		n.mtu.Store(int32(opts.MTU))
+		f.tun = n
+		return n, nil
+	})
+	prefix := func(kind, tag string) *connectBridgeNativePrefix {
+		f.constructed.Add(1)
+		p := &connectBridgeNativePrefix{Adapter: outbound.NewAdapter(kind, tag, []string{"tcp", "udp"}, nil)}
+		f.prefix = p
+		return p
+	}
+	endpoint.Register[option.WireGuardEndpointOptions](ends, C.TypeWireGuard, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
+		return prefix(C.TypeWireGuard, tag), nil
+	})
+	endpoint.Register[AWG.Options](ends, mobilemultihop.AmneziaType, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ AWG.Options) (adapter.Endpoint, error) {
+		return prefix(mobilemultihop.AmneziaType, tag), nil
+	})
+	dns.RegisterTransport[option.RemoteDNSServerOptions](resolvers, C.DNSTypeUDP, func(_ context.Context, _ log.ContextLogger, tag string, opts option.RemoteDNSServerOptions) (adapter.DNSTransport, error) {
+		f.constructed.Add(1)
+		d := &connectBridgeNativeDNS{TransportAdapter: dns.NewTransportAdapterWithRemoteOptions(C.DNSTypeUDP, tag, opts), addresses: []netip.Addr{netip.MustParseAddr("1.1.1.1")}}
+		f.resolver = d
+		return d, nil
+	})
+	t.Cleanup(func() {
+		if err := f.close(); err != nil && !errors.Is(err, f.expectedClose) {
+			t.Error("original native fixture cleanup", err)
+		}
+		server.Close()
+	})
+	if err = owner.BindNative(server); err != nil {
+		t.Fatal("original pre-start native reservation", err)
+	}
+	return f
+}
+func connectBridgeStarted(t *testing.T, owner *RouterNodeChainCONNECT) *connectBridgeNativeFixture {
+	t.Helper()
+	f := connectBridgeNativeReserved(t, owner)
+	config, err := owner.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.server.StartedService.StartOrReloadService(f.server.ctx, config, nil); err != nil {
+		t.Fatal("actual original typed Box start", err)
+	}
+	cache, err := os.Lstat(filepath.Join(f.workingPath, "cache.db"))
+	if err != nil || !cache.Mode().IsRegular() {
+		t.Fatal("actual typed Box did not initialize its owned cache", err)
+	}
+	f.instance = f.server.StartedService.Instance()
+	if f.instance == nil || f.instance.Box() == nil || f.tun == nil || f.prefix == nil || f.resolver == nil {
+		t.Fatal("actual typed native component was not constructed")
+	}
+	f.box = f.instance.Box()
+	return f
+}
+func (f *connectBridgeNativeFixture) close() error {
+	f.closeOnce.Do(func() {
+		f.closeError = errors.Join(f.owner.Close(), f.server.StartedService.CloseService())
+	})
+	return f.closeError
+}
+func (f *connectBridgeNativeFixture) capture(ctx context.Context) (*box.RouterVPNNodeChainCONNECTEngine, error) {
+	return f.box.RouterVPNNewNodeChainCONNECTEngine(ctx, f.owner.source, strings.Repeat("s", 32), func(call context.Context) error {
+		if err := requireRouterNodeCONNECTServer(call, f.server, f.owner.source); err != nil {
+			return err
+		}
+		native := f.owner.native.Load()
+		if native == nil || native.capture == nil || !native.capture.Owns(f.instance, f.box) {
+			return errors.New("original component capture changed")
+		}
+		actual, err := f.server.StartedService.RouterVPNInstanceContext(call)
+		if err != nil || actual != f.instance {
+			return errors.Join(err, errors.New("original instance changed"))
+		}
+		return call.Err()
+	})
+}
+
+func TestRouterNodeChainCONNECTNativeCaptureKeepsOriginalSource(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			owner := connectBridgeOwner(t, mode)
+			f := connectBridgeStarted(t, owner)
+			engine, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal("original native typed capture", err)
+			}
+			identity, err := engine.ObserveChainContext(t.Context())
+			if err != nil || identity.SourceSHA256 != owner.SourceSHA256() || identity.ConfigSHA256 != owner.ConfigSHA256() {
+				t.Fatal("original source identity was not retained", err)
+			}
+			input, err := owner.source.Source()
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := mobilemultihop.NewNodeChainCONNECTSource(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if engine.ObserveCONNECTMiddleContext(t.Context(), other) == nil {
+				t.Fatal("equal reconstructed source borrowed original native middle")
+			}
+			if _, err = f.box.RouterVPNNewNodeChainCONNECTEngine(t.Context(), other, strings.Repeat("z", 32), func(context.Context) error { return nil }); err == nil {
+				t.Fatal("typed native Box lent its original source pointer")
+			}
+			if owner.Healthy() || owner.NativeClosed() {
+				t.Fatal("native construction invented path proof or DOWN")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainCONNECTNativeWholeGraphPrecedesAcquisition(t *testing.T) {
+	for _, name := range []string{"middle-password", "middle-detour", "dns", "mtu", "extra-inbound", "route-final"} {
+		t.Run(name, func(t *testing.T) {
+			owner := connectBridgeOwner(t, "wg")
+			f := connectBridgeNativeReserved(t, owner)
+			config, err := owner.Config()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var graph map[string]any
+			if err = SJ.Unmarshal([]byte(config), &graph); err != nil {
+				t.Fatal(err)
+			}
+			switch name {
+			case "middle-password", "middle-detour":
+				found := false
+				for _, raw := range graph["outbounds"].([]any) {
+					row := raw.(map[string]any)
+					if row["type"] != "http" {
+						continue
+					}
+					if name == "middle-password" {
+						row["password"] = "foreign-secret"
+					} else {
+						row["detour"] = "foreign-prefix"
+					}
+					found = true
+				}
+				if !found {
+					t.Fatal("original source has no middle")
+				}
+			case "dns":
+				graph["dns"].(map[string]any)["final"] = "foreign-resolver"
+			case "mtu":
+				graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = 1401
+			case "extra-inbound":
+				graph["inbounds"] = append(graph["inbounds"].([]any), map[string]any{"type": "mixed", "tag": "foreign", "listen": "127.0.0.1", "listen_port": 0})
+			case "route-final":
+				graph["route"].(map[string]any)["final"] = "foreign-final"
+			}
+			changed := candidateBridgeJSON(t, graph)
+			if changed == config {
+				t.Fatal("graph control did not change original")
+			}
+			err = f.server.StartedService.StartOrReloadService(f.server.ctx, changed, nil)
+			if err == nil || !strings.Contains(err.Error(), "ordered CONNECT native graph differs before construction") {
+				t.Fatal("altered complete graph did not fail at original preconstruction guard", err)
+			}
+			if f.constructed.Load() != 0 || f.server.StartedService.Instance() != nil {
+				t.Fatal("altered typed graph reached native component acquisition")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainCONNECTNativeSecondBoxCannotReacquire(t *testing.T) {
+	owner := connectBridgeOwner(t, "wg")
+	f := connectBridgeStarted(t, owner)
+	config, err := owner.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](f.server.ctx, []byte(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := f.constructed.Load()
+	replacement, err := box.New(box.Options{Context: f.server.ctx, Options: options})
+	if replacement != nil {
+		_ = replacement.Close()
+	}
+	if err == nil || replacement != nil || f.constructed.Load() != before {
+		t.Fatal("same typed construction reacquired native components")
+	}
+	if _, err = f.capture(t.Context()); err != nil {
+		t.Fatal("refused replacement stole original Box", err)
+	}
+}
+
+func TestRouterNodeChainCONNECTNativeReadbackAndCallerStayCurrent(t *testing.T) {
+	owner := connectBridgeOwner(t, "wg")
+	f := connectBridgeStarted(t, owner)
+	engine, err := f.capture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalMTU, originalIndex := f.tun.mtu.Load(), f.tun.index.Load()
+	f.tun.mtu.Store(originalMTU + 1)
+	if _, err = engine.ObserveChainContext(t.Context()); err == nil {
+		t.Fatal("changed actual MTU kept original engine")
+	}
+	if _, err = f.capture(t.Context()); err == nil {
+		t.Fatal("fresh engine accepted MTU without continuation receipt")
+	}
+	f.tun.mtu.Store(originalMTU)
+	f.tun.index.Store(originalIndex + 1)
+	if _, err = engine.ObserveChainContext(t.Context()); err == nil {
+		t.Fatal("changed original interface reader stayed current")
+	}
+	f.tun.index.Store(originalIndex)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err = engine.ObserveChainContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("native observer discarded original caller cancellation", err)
+	}
+	held := routerMTUField[sync.RWMutex](t, f.server.StartedService, "serviceAccess")
+	held.Lock()
+	bounded, stop := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	_, err = engine.ObserveChainContext(bounded)
+	stop()
+	held.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("actual native owner observation ignored caller deadline", err)
+	}
+}
+
+func TestRouterNodeChainCONNECTNativePublicMeasurementUsesCapturedDNS(t *testing.T) {
+	owner := connectBridgeOwner(t, "wg")
+	f := connectBridgeStarted(t, owner)
+	engine, err := f.capture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, meta, err := owner.source.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	for _, request := range [][2]string{{meta.Proofs[0].Tag, hopmeasure.PublicAddress}, {meta.Proofs[1].Tag, "foreign.example:443"}} {
+		if connection, err := engine.Dial(ctx, request[0], request[1]); err == nil || connection != nil {
+			t.Fatal("uncaptured hostname or prefix gained native measurement")
+		}
+	}
+	if f.resolver.calls.Load() != 0 || f.prefix.calls.Load() != 0 {
+		t.Fatal("refused measurement reached resolver or native prefix")
+	}
+	connection, err := engine.Dial(ctx, meta.Proofs[1].Tag, hopmeasure.PublicAddress)
+	if connection != nil {
+		_ = connection.Close()
+	}
+	if err == nil || f.resolver.calls.Load() == 0 || f.prefix.calls.Load() == 0 {
+		t.Fatal("original public measurement did not use selected DNS and original middle", err)
+	}
+	// The explicit packet boundary refuses the actual CONNECT control connect.
+	// A response from the selected resolver cannot by itself grant traffic.
+	f.resolver.mu.Lock()
+	f.resolver.addresses = []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("2001:4860:4860::8888")}
+	f.resolver.mu.Unlock()
+	before := f.prefix.calls.Load()
+	if connection, err = engine.Dial(ctx, meta.Proofs[1].Tag, hopmeasure.PublicAddress); err == nil || connection != nil {
+		t.Fatal("private or disabled IPv6 answer gained a native measurement")
+	}
+	if f.prefix.calls.Load() != before {
+		t.Fatal("filtered resolver answer reached original packet prefix")
+	}
+	original := f.tun.mtu.Load()
+	f.resolver.mu.Lock()
+	f.resolver.addresses = []netip.Addr{netip.MustParseAddr("1.1.1.1")}
+	f.resolver.hold = func(context.Context) error { f.tun.mtu.Store(original + 1); return nil }
+	f.resolver.mu.Unlock()
+	if connection, err = engine.Dial(ctx, meta.Proofs[1].Tag, hopmeasure.PublicAddress); err == nil || connection != nil {
+		t.Fatal("late native reader replacement escaped original DNS observation")
+	}
+	if f.prefix.calls.Load() != before {
+		t.Fatal("late DNS result reached native middle after owner changed")
+	}
+	f.tun.mtu.Store(original)
+}
+
+func TestRouterNodeChainCONNECTNativePrivateContextCannotBeBorrowed(t *testing.T) {
+	source := connectBridgeSource(t, "wg")
+	input, err := source.Source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := mobilemultihop.NewNodeChainCONNECTSource(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture, err := ownedCONNECT.NewCapture(baseContext(nil), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range []struct {
+		ctx    context.Context
+		source *mobilemultihop.NodeChainCONNECTSource
+	}{
+		{context.Background(), source}, {capture.Context(), other},
+	} {
+		if ctx, err := box.RouterVPNNodeCONNECTContext(pair.ctx, pair.source, capture); err == nil || ctx != nil {
+			t.Fatal("foreign context/source pair acquired original native construction")
+		}
+	}
+	original, err := box.RouterVPNNodeCONNECTContext(capture.Context(), source, capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx, err := box.RouterVPNNodeCONNECTContext(original, source, capture); err == nil || ctx != nil {
+		t.Fatal("original construction context was wrapped twice")
+	}
+}
+
+func TestRouterNodeChainCONNECTNativeMixedCapturesRefused(t *testing.T) {
+	owner := connectBridgeOwner(t, "wg")
+	f := connectBridgeNativeReserved(t, owner)
+	socksSource := socksBridgeSource(t, "wg")
+	socksCapture, err := ownedSOCKS.NewCapture(f.server.ctx, socksSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := include.OutboundRegistry()
+	if err = socksCapture.Register(registry); err != nil {
+		t.Fatal(err)
+	}
+	mixed := service.ContextWith[option.OutboundOptionsRegistry](socksCapture.Context(), registry)
+	mixed = service.ContextWith[adapter.OutboundRegistry](mixed, registry)
+	mixed, err = box.RouterVPNNodeSOCKSContext(mixed, socksSource, socksCapture)
+	if err != nil {
+		t.Fatal("valid private SOCKS capture fixture", err)
+	}
+	config, _, err := socksSource.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](mixed, []byte(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquired, err := box.New(box.Options{Context: mixed, Options: options})
+	if acquired != nil {
+		_ = acquired.Close()
+	}
+	if err == nil || acquired != nil || !strings.Contains(err.Error(), "mixed SOCKS and CONNECT") || f.constructed.Load() != 0 {
+		t.Fatal("mixed exact private captures reached native acquisition", err)
+	}
+	connectCapture, err := ownedCONNECT.NewCapture(mixed, owner.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound, err := box.RouterVPNNodeCONNECTContext(connectCapture.Context(), owner.source, connectCapture); err == nil || bound != nil {
+		t.Fatal("CONNECT accepted an existing private SOCKS context")
+	}
+}
+
+func TestRouterNodeChainCONNECTNativeFinalUoTObjectCannotChange(t *testing.T) {
+	for _, fault := range []string{"version", "owner", "dialer"} {
+		t.Run(fault, func(t *testing.T) {
+			owner := connectBridgeOwner(t, "wg")
+			f := connectBridgeStarted(t, owner)
+			engine, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, meta, err := owner.source.ReadValidated()
+			if err != nil {
+				t.Fatal(err)
+			}
+			final, found := f.box.Outbound().Outbound(meta.Proofs[2].Tag)
+			if !found {
+				t.Fatal("original encrypted final missing")
+			}
+			slot := routerMTUField[*uot.Client](t, final, "uotClient")
+			original := *slot
+			if original == nil || original.Version != 2 {
+				t.Fatal("original final is not captured UoT-v2")
+			}
+			restore := func() {}
+			switch fault {
+			case "version":
+				original.Version = 1
+				restore = func() { original.Version = 2 }
+			case "owner":
+				copy := *original
+				*slot = &copy
+				restore = func() { *slot = original }
+			case "dialer":
+				dialer := routerMTUField[N.Dialer](t, final, "dialer")
+				saved := *dialer
+				*dialer = nil
+				restore = func() { *dialer = saved }
+			}
+			if _, err = engine.ObserveChainContext(t.Context()); err == nil {
+				restore()
+				t.Fatal("changed actual encrypted final retained proof authority")
+			}
+			restore()
+			if _, err = engine.ObserveChainContext(t.Context()); err != nil {
+				t.Fatal("fixture did not restore original captured final", err)
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainCONNECTNativeMiddleRemainsTCPOnly(t *testing.T) {
+	owner := connectBridgeOwner(t, "wg")
+	f := connectBridgeStarted(t, owner)
+	_, meta, err := owner.source.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	middle, found := f.box.Outbound().Outbound(meta.Proofs[1].Tag)
+	if !found {
+		t.Fatal("original middle missing")
+	}
+	if networks := middle.Network(); len(networks) != 1 || networks[0] != "tcp" {
+		t.Fatal("HTTP middle acquired packet capability", networks)
+	}
+	destination := M.ParseSocksaddr("192.168.50.133:53")
+	before := f.prefix.calls.Load()
+	if c, err := middle.DialContext(t.Context(), "udp", destination); err == nil || c != nil {
+		t.Fatal("HTTP middle accepted direct UDP")
+	}
+	if c, err := middle.ListenPacket(t.Context(), destination); err == nil || c != nil {
+		t.Fatal("HTTP middle accepted a packet socket")
+	}
+	if f.prefix.calls.Load() != before {
+		t.Fatal("refused HTTP UDP acquired lower traffic")
+	}
+}
+
+func TestRouterNodeChainCONNECTNativeOriginalHTTPHandshake(t *testing.T) {
+	for _, fault := range []string{"success", "credentials", "cancel"} {
+		t.Run(fault, func(t *testing.T) {
+			owner := connectBridgeOwner(t, "wg")
+			f := connectBridgeStarted(t, owner)
+			_, meta, err := owner.source.ReadValidated()
+			if err != nil {
+				t.Fatal(err)
+			}
+			middle, found := f.box.Outbound().Outbound(meta.Proofs[1].Tag)
+			if !found {
+				t.Fatal("original middle missing")
+			}
+			entered := make(chan struct{})
+			joined := make(chan error, 1)
+			caller, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			f.prefix.mu.Lock()
+			f.prefix.dial = func(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+				if network != "tcp" || destination.String() != "203.0.113.20:1080" {
+					return nil, errors.New("HTTP socket bypassed original predecessor tuple")
+				}
+				client, peer := connectNativeTCPPair(t)
+				go func() {
+					defer peer.Close()
+					request, e := http.ReadRequest(bufio.NewReader(peer))
+					if e != nil {
+						joined <- e
+						return
+					}
+					defer request.Body.Close()
+					if request.Method != http.MethodConnect || request.Host != "1.1.1.1:443" || request.Header.Get("Proxy-Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte("original-middle-user:original-middle-password")) {
+						joined <- errors.New("stock HTTP client changed captured credentials or destination")
+						return
+					}
+					close(entered)
+					if fault == "cancel" {
+						cancel()
+						_, e = peer.Read(make([]byte, 1))
+						if e == nil {
+							joined <- errors.New("cancelled handshake remained open")
+						} else {
+							joined <- nil
+						}
+						return
+					}
+					if fault == "credentials" {
+						_, e = io.WriteString(peer, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n")
+						joined <- e
+						return
+					}
+					if _, e = io.WriteString(peer, "HTTP/1.1 200 Connection Established\r\n\r\n"); e != nil {
+						joined <- e
+						return
+					}
+					payload := make([]byte, 5)
+					_, e = io.ReadFull(peer, payload)
+					if e == nil && string(payload) != "owned" {
+						e = errors.New("CONNECT payload changed")
+					}
+					if e == nil {
+						_, e = peer.Write(payload)
+					}
+					if e == nil {
+						_, e = peer.Read(make([]byte, 1))
+						if e == io.EOF {
+							e = nil
+						} else if e == nil {
+							e = errors.New("HTTP peer missed original half-close")
+						}
+					}
+					joined <- e
+				}()
+				return client, nil
+			}
+			f.prefix.mu.Unlock()
+			connection, err := middle.DialContext(caller, "tcp", M.ParseSocksaddr("1.1.1.1:443"))
+			if fault == "success" {
+				if err != nil || connection == nil {
+					t.Fatal("stock HTTP CONNECT failed", err)
+				}
+				if _, err = connection.Write([]byte("owned")); err != nil {
+					t.Fatal(err)
+				}
+				payload := make([]byte, 5)
+				if _, err = io.ReadFull(connection, payload); err != nil || string(payload) != "owned" {
+					t.Fatal("owned HTTP transport payload", err)
+				}
+				if err = connection.Close(); err != nil {
+					t.Fatal("original HTTP close", err)
+				}
+			} else if err == nil || connection != nil {
+				t.Fatal("failed original handshake acquired an owned stream")
+			}
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("original HTTP peer never observed handshake")
+			}
+			select {
+			case err = <-joined:
+				if err != nil {
+					t.Fatal("original HTTP peer", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("original HTTP peer did not join")
+			}
+			if owner.Healthy() || owner.NativeClosed() {
+				t.Fatal("HTTP component handshake invented whole-path proof")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainCONNECTNativeCopiedBoxCannotAdoptOwner(t *testing.T) {
+	owner := connectBridgeOwner(t, "wg")
+	f := connectBridgeStarted(t, owner)
+	originalEngine, err := f.capture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately copy the complete idle Box, including its context and
+	// acquired receipt, to exercise pointer binding rather than a missing field.
+	foreign := new(box.Box)
+	reflect.ValueOf(foreign).Elem().Set(reflect.ValueOf(f.box).Elem())
+	if err := foreign.RouterVPNCloseCONNECTMiddleContext(t.Context()); err == nil {
+		t.Fatal("copied Box retired original middle")
+	}
+	if err := foreign.Close(); err == nil {
+		t.Fatal("copied Box borrowed original native receipt")
+	}
+	if engine, err := foreign.RouterVPNNewNodeChainCONNECTEngine(t.Context(), owner.source, strings.Repeat("c", 32), func(context.Context) error { return nil }); err == nil || engine != nil {
+		t.Fatal("copied native Box adopted original source context")
+	}
+	if _, err := originalEngine.ObserveChainContext(t.Context()); err != nil {
+		t.Fatal("copied Box rejection disturbed original owner", err)
+	}
+	if !f.tun.started.Load() {
+		t.Fatal("foreign Box closed original TUN")
+	}
+}
+
+// These component handshakes use real TCP half-close semantics. The lower
+// packet-prefix routing boundary remains explicitly replaced by the fixture.
+func connectNativeTCPPair(t *testing.T) (net.Conn, net.Conn) {
+	t.Helper()
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := (&net.Dialer{}).DialContext(t.Context(), "tcp4", listener.Addr().String())
+	if err != nil {
+		listener.Close()
+		t.Fatal(err)
+	}
+	peer, err := listener.AcceptTCP()
+	listener.Close()
+	if err != nil {
+		client.Close()
+		t.Fatal(err)
+	}
+	return client, peer
+}

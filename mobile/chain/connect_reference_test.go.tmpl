@@ -1,0 +1,773 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"crypto/tls"
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	UOT "github.com/sagernet/sing-box/common/uot"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-tun"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// The separate process reuses the original peer providers. Its only client
+// input is a finite mode/fault choice; it cannot proxy an arbitrary target.
+type nodeCONNECTRunRequest struct {
+	Schema   int    `json:"schema"`
+	Mode     string `json:"mode"`
+	Protocol string `json:"protocol"`
+	Fault    string `json:"fault"`
+}
+type nodeCONNECTRunReply struct {
+	Schema       int                           `json:"schema"`
+	Source       string                        `json:"source,omitempty"`
+	SourceSHA256 string                        `json:"source_sha256"`
+	ConfigSHA256 string                        `json:"config_sha256"`
+	Address      string                        `json:"address"`
+	PublicCA     string                        `json:"public_ca,omitempty"`
+	Peer         desktopNodeChainImportedReply `json:"peer"`
+	DNS          uint64                        `json:"dns"`
+	PublicDNS    uint64                        `json:"public_dns"`
+	FinalAuth    uint64                        `json:"final_auth"`
+	HeldProofs   uint64                        `json:"held_proofs"`
+	Associations int                           `json:"associations"`
+	MiddleAuth   int64                         `json:"middle_auth"`
+	TLSRefused   int64                         `json:"tls_refused"`
+}
+
+// This boundary is called only after the unchanged peer has verified TLS,
+// exact Basic credentials, CONNECT method and its original target allowlist.
+// The five-second handshake deadline ends here; the owning peer context and
+// original Run/measurement deadlines retain the authenticated stream lifetime.
+type nodeCONNECTRunMiddleRouter struct{ server *desktopNodeLayerServer }
+
+func (r *nodeCONNECTRunMiddleRouter) RouteConnection(ctx context.Context, c net.Conn, m adapter.InboundContext) error {
+	if err := c.SetDeadline(time.Time{}); err != nil {
+		return err
+	}
+	if buffered, ok := c.(*desktopNodeLayerBufferedConn); ok {
+		if secured, ok := buffered.Conn.(*tls.Conn); ok {
+			return r.routeTLS(ctx, c, secured, m)
+		}
+	}
+	return r.server.plainConnection(ctx, c, M.Metadata{Source: m.Source, Destination: m.Destination})
+}
+
+// A completed response must not expire the reciprocal TLS reader. Doing so
+// can leave the client's close_notify unread when the original OS socket is
+// closed, causing a genuine TCP reset in the encrypted client. Keep both copy
+// directions until their actual EOF; error/cancellation remains a failed close.
+func (r *nodeCONNECTRunMiddleRouter) routeTLS(ctx context.Context, connection net.Conn, secured *tls.Conn, metadata adapter.InboundContext) error {
+	target, found := r.server.route("tcp", metadata.Destination.String())
+	if !found || secured == nil || !secured.ConnectionState().HandshakeComplete {
+		return errors.New("CONNECT TLS reference lost its authenticated target")
+	}
+	native, err := (&net.Dialer{}).DialContext(ctx, "tcp", target)
+	if err != nil {
+		return err
+	}
+	peer, ok := native.(*net.TCPConn)
+	if !ok {
+		return errors.Join(errors.New("CONNECT reference target lost TCP owner"), native.Close())
+	}
+	if !r.server.enter(peer) {
+		return errors.Join(net.ErrClosed, peer.Close())
+	}
+	defer r.server.leave(peer)
+	r.server.plainTCP.Add(1)
+	raw := secured.NetConn()
+	drain := make(chan struct{})
+	finished := make(chan struct{})
+	watched := make(chan struct{})
+	var drainOnce, interruptOnce sync.Once
+	var limit time.Time
+	var forced, interruptFailure error
+	interrupt := func() {
+		interruptOnce.Do(func() { interruptFailure = errors.Join(raw.Close(), peer.Close()) })
+	}
+	beginDrain := func() {
+		drainOnce.Do(func() { limit = time.Now().Add(time.Second); close(drain) })
+	}
+	// tls.CloseWrite installs its own five-second write deadline. The original
+	// raw TCP watchdog, armed before either half-close, enforces one second
+	// independently and keeps any forced close error distinct from success.
+	go func() {
+		defer close(watched)
+		select {
+		case <-finished:
+			return
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			select {
+			case <-finished:
+				return
+			default:
+			}
+			forced = ctx.Err()
+			interrupt()
+			return
+		case <-finished:
+			return
+		case <-drain:
+		}
+		timer := time.NewTimer(time.Until(limit))
+		defer timer.Stop()
+		select {
+		case <-finished:
+			return
+		case <-ctx.Done():
+			select {
+			case <-finished:
+				return
+			default:
+			}
+			forced = ctx.Err()
+			interrupt()
+		case <-timer.C:
+			select {
+			case <-finished:
+				return
+			default:
+			}
+			forced = context.DeadlineExceeded
+			interrupt()
+		}
+	}()
+	uploaded := make(chan error, 1)
+	go func() {
+		_, failure := io.Copy(peer, connection)
+		beginDrain()
+		if failure == nil {
+			failure = peer.CloseWrite()
+		}
+		if failure != nil {
+			interrupt()
+		}
+		uploaded <- failure
+	}()
+	_, downloadFailure := io.Copy(connection, peer)
+	beginDrain()
+	if downloadFailure == nil {
+		downloadFailure = secured.CloseWrite()
+	}
+	if downloadFailure != nil {
+		interrupt()
+	}
+	uploadFailure := <-uploaded
+	close(finished)
+	<-watched
+	return errors.Join(downloadFailure, uploadFailure, forced, interruptFailure, connection.Close())
+}
+
+func (r *nodeCONNECTRunMiddleRouter) RouteConnectionEx(ctx context.Context, c net.Conn, m adapter.InboundContext, done N.CloseHandlerFunc) {
+	err := r.RouteConnection(ctx, c, m)
+	if done != nil {
+		done(err)
+	}
+}
+func (*nodeCONNECTRunMiddleRouter) RoutePacketConnection(context.Context, N.PacketConn, adapter.InboundContext) error {
+	return errors.New("CONNECT reference middle is TCP only")
+}
+func (r *nodeCONNECTRunMiddleRouter) RoutePacketConnectionEx(ctx context.Context, c N.PacketConn, m adapter.InboundContext, done N.CloseHandlerFunc) {
+	err := r.RoutePacketConnection(ctx, c, m)
+	if done != nil {
+		done(err)
+	}
+}
+
+func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
+	if os.Getenv("ROUTERVPN_CONNECT_RUN_REFERENCE") == "" {
+		t.Skip("isolated inherited CONNECT Run peer only")
+	}
+	if os.Getenv("ROUTERVPN_CONNECT_RUN_REFERENCE") != "1" {
+		t.Fatal("CONNECT Run peer requires original inherited invocation")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, 4097)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 4096 {
+		t.Fatal("bounded original CONNECT Run request missing")
+	}
+	var input nodeCONNECTRunRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || decoder.Decode(new(any)) != io.EOF || input.Schema != 1 {
+		t.Fatal("CONNECT Run request changed")
+	}
+	if input.Mode != "wg" && input.Mode != "awg2-fast" && input.Mode != "awg2-strong" {
+		t.Fatal("uncaptured CONNECT Run mode")
+	}
+	if input.Protocol != "http-connect" && input.Protocol != "https-connect" {
+		t.Fatal("uncaptured CONNECT protocol")
+	}
+	switch input.Fault {
+	case "", "middle-password", "final-key", "final-token", "selected-dns", "middle-public", "hold-prefix", "tls-trust", "tls-name":
+	default:
+		t.Fatal("uncaptured CONNECT Run fault")
+	}
+	// Registered first: this is emitted only after every original provider,
+	// packet reader, association and HTTP/DNS server cleanup has returned.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			fmt.Fprintln(os.Stdout, "CONNECT_RUN_PEER_JOINED")
+		}
+	})
+	request, clients := desktopNodeChainPeerFixture(t, 1)
+	desktopNodeChainSetModes(t, &request, []string{input.Mode})
+	finalKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalPublic := base64.StdEncoding.EncodeToString(finalKey.PublicKey().Bytes())
+	proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + finalPublic))
+	request.FinalNodeProofID = hex.EncodeToString(proof[:])
+	identity := desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf(
+		"[Interface]\nAddress=10.77.0.2/32\nPrivateKey=%s\nMTU=1420\n[Peer]\nPublicKey=%s\nEndpoint=10.77.0.1:51820\nAllowedIPs=0.0.0.0/0,::/0\n", clients[0], finalPublic)))})
+	const control = "10.79.0.1:1080"
+	const password = "captured-connect-run-password"
+	certificate, proxyCA := desktopNodeChainImportedCertificate(t)
+	var provider *desktopImportedCONNECTPeer
+	hooks := &desktopNodeChainImportedPeerHooks{
+		decorate: func(original *desktopNodeWGHandler) tun.Handler { return original },
+		middle: func(middle *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			middle.streamRouter = &nodeCONNECTRunMiddleRouter{server: middle}
+			var secured *tls.Certificate
+			if input.Protocol == "https-connect" {
+				secured = &certificate
+			}
+			provider = desktopStartImportedCONNECTPeer(t, middle, "captured-native-user", password, secured, func() { t.Error("unowned cancellation") }, "")
+			return desktopExternalInstalledSSPeer{address: provider.address, close: provider.close}
+		},
+	}
+	middleKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, 32))
+	fixtureRequest := desktopNodeChainImportedRequest{1, request, mobilemultihop.NativeStartLayerMethod, middleKey}
+	loopback := netip.MustParseAddr("127.0.0.1")
+	peer := desktopNodeChainImportedPeerStartWithHooks(t, fixtureRequest, loopback, loopback, nil, hooks)
+	peer.paired.final.streamRouter = UOT.NewRouter(&desktopImportedCONNECTRouter{server: peer.paired.final}, log.NewNOPFactory().Logger())
+	// Only the exact TCP CONNECT endpoint is reachable through the first prefix.
+	delete(peer.paired.entry.rules, "tcp/10.79.0.1:8388")
+	delete(peer.paired.entry.rules, "udp/10.79.0.1:8388")
+	peer.paired.entry.rules["tcp/"+control] = desktopReferenceRule{Network: "tcp", Address: "10.79.0.1", Port: 1080, Target: provider.address}
+	var selectedQueries, publicQueries, finalAuth, heldProofs atomic.Uint64
+	var releaseHeld atomic.Bool
+	prefixRule := peer.paired.entry.rules["tcp/10.78.0.1:8787"]
+	if prefixRule.Target == "" {
+		t.Fatal("original first private proof missing")
+	}
+	// Require the exact final token before forwarding to the original final
+	// private service. Its original HTTP/body/proof implementation is reused.
+	finalTarget, ok := peer.paired.final.route("tcp", desktopNodeRouterHealthTarget)
+	if !ok {
+		t.Fatal("original final private proof missing")
+	}
+	forward := func(target string) *http.Transport {
+		transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, ResponseHeaderTimeout: 2 * time.Second,
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				if network != "tcp" || address != target {
+					return nil, errors.New("reference proof escaped original target")
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, address)
+			}}
+		t.Cleanup(transport.CloseIdleConnections)
+		return transport
+	}
+	serve := func(w http.ResponseWriter, r *http.Request, target string, transport *http.Transport) {
+		copy := r.Clone(r.Context())
+		copy.RequestURI = ""
+		copy.URL.Scheme = "http"
+		copy.URL.Host = target
+		response, err := transport.RoundTrip(copy)
+		if err != nil {
+			http.Error(w, "original proof unavailable", 502)
+			return
+		}
+		defer response.Body.Close()
+		for key, values := range response.Header {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
+		w.WriteHeader(response.StatusCode)
+		_, _ = io.Copy(w, io.LimitReader(response.Body, 16<<20+1))
+	}
+	finalTransport := forward(finalTarget)
+	finalHTTP := desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != desktopNodeRouterHealthTarget || r.Header.Get("Authorization") != "Bearer "+request.FinalAPIToken {
+			finalAuth.Add(1)
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		serve(w, r, finalTarget, finalTransport)
+	}))
+	firstTarget := prefixRule.Target
+	firstTransport := forward(firstTarget)
+	firstHTTP := desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if input.Fault == "hold-prefix" && !releaseHeld.Load() {
+			heldProofs.Add(1)
+			<-r.Context().Done()
+			return
+		}
+		serve(w, r, firstTarget, firstTransport)
+	}))
+	prefixRule.Target = firstHTTP
+	peer.paired.entry.rules["tcp/10.78.0.1:8787"] = prefixRule
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		reply := new(dns.Msg).SetReply(q)
+		if len(q.Question) != 1 {
+			reply.Rcode = dns.RcodeRefused
+		} else {
+			question := q.Question[0]
+			address := ""
+			switch question.Name {
+			case "example.com.":
+				selectedQueries.Add(1)
+				address = "93.184.216.34"
+			case "speed.cloudflare.com.":
+				publicQueries.Add(1)
+				address = "1.1.1.1"
+			default:
+				reply.Rcode = dns.RcodeRefused
+			}
+			if input.Fault == "selected-dns" {
+				reply.Rcode = dns.RcodeNameError
+				address = ""
+			}
+			if address != "" && question.Qtype == dns.TypeA {
+				reply.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: question.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}, A: net.ParseIP(address)}}
+			}
+		}
+		_ = w.WriteMsg(reply)
+	})}
+	dnsDone := make(chan error, 1)
+	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
+	t.Cleanup(func() {
+		_ = dnsServer.Shutdown()
+		_ = packet.Close()
+		if err := <-dnsDone; err != nil {
+			t.Error(err)
+		}
+	})
+	for i := range peer.paired.final.routes {
+		route := &peer.paired.final.routes[i]
+		if route.Network == "tcp" && route.Destination == desktopNodeRouterHealthTarget {
+			route.Physical = finalHTTP
+		}
+		if route.Network == "udp" && route.Destination == "192.168.50.133:53" {
+			route.Physical = packet.LocalAddr().String()
+		}
+	}
+	// The measurement engine must use a public literal returned by this final
+	// resolver. The original middle HTTPS responder still checks its TLS/Host.
+	if mustCONNECTRunRoute(t, peer.middle, "tcp", "1.1.1.1:443") != mustCONNECTRunRoute(t, peer.middle, "tcp", "speed.cloudflare.com:443") {
+		t.Fatal("public literal and TLS hostname escaped original middle responder")
+	}
+	if input.Fault == "middle-public" {
+		peer.wrongPublic.Store(true)
+	}
+	socket := netip.MustParseAddrPort(peer.paired.address)
+	sourceRequest := request
+	if input.Fault == "final-token" {
+		sourceRequest.FinalAPIToken = "different-final-private-token"
+	}
+	base := desktopNodeChainImportedSource(t, sourceRequest, clients, net.JoinHostPort(request.Address, strconv.Itoa(int(socket.Port()))), mobilemultihop.NativeStartLayerMethod, middleKey, identity)
+	launch, err := base.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &source) != nil {
+		t.Fatal("original captured source vanished")
+	}
+	secret := password
+	if input.Fault == "middle-password" {
+		secret += "-wrong"
+	}
+	memberConfig := map[string]any{
+		"inbounds":  []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}},
+		"endpoints": []any{}, "outbounds": []any{map[string]any{"type": "http", "tag": "custom-exit", "server": "10.79.0.1", "server_port": 1080, "username": "captured-native-user", "password": secret}},
+		"route": map[string]any{"final": "custom-exit", "rules": []any{}, "auto_detect_interface": true}}
+	profile := map[string]any{"id": "captured-connect-middle", "node_kind": "external", "external": map[string]any{"protocol": "http-connect", "expected_public_ip": "203.0.113.88", "http_connect": map[string]any{"host": "10.79.0.1", "port": 1080, "username": "captured-native-user", "password": secret}},
+		"endpoint": "10.79.0.1", "dns_mode": "home", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": false, "kill_switch_policy": "on-connect"}
+	capture := map[string]any{"schema": 1, "exit_id": "captured-connect-middle", "protocol": "http-connect", "expected_public_ip": "203.0.113.88", "profile": profile}
+	if input.Protocol == "https-connect" {
+		name := "speed.cloudflare.com"
+		if input.Fault == "tls-name" {
+			name = "different.example.com"
+		}
+		memberConfig["outbounds"].([]any)[0].(map[string]any)["tls"] = map[string]any{"enabled": true, "server_name": name}
+		external := profile["external"].(map[string]any)
+		transport := external["http_connect"].(map[string]any)
+		transport["tls_server_name"] = name
+		delete(external, "http_connect")
+		external["https_connect"] = transport
+		external["protocol"] = input.Protocol
+		capture["protocol"] = input.Protocol
+	}
+	middle, err := mobilemultihop.NodeChainImportedCONNECTMemberInput(desktopNodeChainJSON(t, memberConfig), desktopNodeChainJSON(t, capture))
+	if err != nil {
+		t.Fatal("original CONNECT member", err)
+	}
+	source.Schema, source.Nodes[1] = 4, middle
+	var final struct {
+		Mode         string `json:"mode"`
+		Files        string `json:"files"`
+		ProfileJSON  string `json:"profile_json"`
+		Start        string `json:"start"`
+		DNSBootstrap string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[2]), &final) != nil {
+		t.Fatal("original final member vanished")
+	}
+	var assets map[string]string
+	if json.Unmarshal([]byte(final.Files), &assets) != nil {
+		t.Fatal("original final assets vanished")
+	}
+	raw, err := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finalGraph map[string]any
+	if json.Unmarshal(raw, &finalGraph) != nil {
+		t.Fatal("original final config vanished")
+	}
+	out := finalGraph["outbounds"].([]any)[0].(map[string]any)
+	if input.Fault == "final-key" {
+		out["password"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{97}, 32))
+		raw = []byte(desktopNodeChainJSON(t, finalGraph))
+		assets["sing-box.json"] = base64.StdEncoding.EncodeToString(raw)
+	}
+	var finalProfile map[string]any
+	if json.Unmarshal([]byte(final.ProfileJSON), &finalProfile) != nil {
+		t.Fatal("original final identity vanished")
+	}
+	configHash, keyHash := sha256.Sum256(raw), sha256.Sum256([]byte(out["password"].(string)))
+	declaration := map[string]any{"schema": 1, "node_id": finalProfile["node_proof_id"], "configured_image": nativecomposite.SSServiceImage, "uot_version": 2,
+		"endpoint": out["server"], "port": out["server_port"], "method": out["method"], "source_sha256": hex.EncodeToString(configHash[:]), "key_sha256": hex.EncodeToString(keyHash[:])}
+	assets[nativecomposite.SSServiceAsset] = base64.StdEncoding.EncodeToString([]byte(desktopNodeChainJSON(t, declaration)))
+	finalNode, err := mobilemultihop.NewNodeProfile(final.Mode, desktopNodeChainJSON(t, assets), final.ProfileJSON, final.Start, final.DNSBootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Nodes[2], err = finalNode.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := mobilemultihop.NewNodeChainCONNECTSource(desktopNodeChainJSON(t, source))
+	if err != nil {
+		t.Fatal("original typed Run source", err)
+	}
+	_, meta, err := sealed.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := sealed.Source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.NativeAdmission != "closed" || len(meta.Physical) != 1 || meta.DNS.ResolverTag == "" {
+		t.Fatal("peer source widened native admission")
+	}
+	respond := func(include bool) {
+		peer.middle.mu.Lock()
+		associations := len(peer.middle.connections)
+		peer.middle.mu.Unlock()
+		peer.paired.final.mu.Lock()
+		associations += len(peer.paired.final.connections)
+		peer.paired.final.mu.Unlock()
+		peerReply := peer.snapshot()
+		peerReply.Middle.Method = input.Protocol
+		reply := nodeCONNECTRunReply{Schema: 1, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Address: peer.paired.address,
+			Peer: peerReply, DNS: selectedQueries.Load(), PublicDNS: publicQueries.Load(), FinalAuth: finalAuth.Load(), HeldProofs: heldProofs.Load(), Associations: associations, MiddleAuth: provider.auth.Load(), TLSRefused: provider.tlsRefused.Load()}
+		if include {
+			reply.Source = original
+			reply.PublicCA = peer.paired.ca
+			if input.Fault != "tls-trust" {
+				reply.PublicCA += proxyCA
+			}
+		}
+		if json.NewEncoder(os.Stdout).Encode(reply) != nil {
+			t.Fatal("original CONNECT Run response pipe")
+		}
+	}
+	respond(true)
+	for {
+		line, err = reader.ReadSlice('\n')
+		if err != nil || len(line) > 64 {
+			t.Fatal("original CONNECT Run control pipe", err)
+		}
+		command := strings.TrimSuffix(string(line), "\n")
+		switch command {
+		case "snapshot":
+			respond(false)
+		case "release-prefix":
+			releaseHeld.Store(true)
+			respond(false)
+		case "quit":
+			return
+		default:
+			t.Fatal("uncaptured CONNECT Run control")
+		}
+	}
+}
+func mustCONNECTRunRoute(t *testing.T, server *desktopNodeLayerServer, network, destination string) string {
+	t.Helper()
+	result, ok := server.route(network, destination)
+	if !ok || result == "" {
+		t.Fatal("original peer route vanished")
+	}
+	return result
+}
+
+// These observations wrap actual TLS/TCP I/O; they do not substitute a native
+// owner or fabricate either the reciprocal TLS EOF or the underlying TCP EOF.
+type connectReferenceTLSRead struct {
+	io.Reader
+	eof  *atomic.Bool
+	done chan struct{}
+	once sync.Once
+}
+
+func (r *connectReferenceTLSRead) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err == io.EOF {
+		r.eof.Store(true)
+		r.once.Do(func() { close(r.done) })
+	}
+	return n, err
+}
+
+type connectReferenceRawClose struct {
+	net.Conn
+	tlsEOF *atomic.Bool
+	early  atomic.Bool
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (c *connectReferenceRawClose) Close() error {
+	if !c.tlsEOF.Load() {
+		c.early.Store(true)
+	}
+	err := c.Conn.Close()
+	c.once.Do(func() { close(c.closed) })
+	return err
+}
+
+func TestRouterVPNCONNECTReferenceTLSReciprocalClose(t *testing.T) {
+	for _, phase := range []string{"reciprocal", "held", "cancelled"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			certificate, ca := desktopNodeChainImportedCertificate(t)
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM([]byte(ca)) {
+				t.Fatal("captured reference CA missing")
+			}
+			backend, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer backend.Close()
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			server := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: make(map[io.Closer]bool), routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "192.0.2.99:443", Physical: backend.Addr().String()}}}
+			backendDone := make(chan error, 1)
+			backendFinished := make(chan struct{})
+			go func() {
+				defer close(backendFinished)
+				accepted, failure := backend.Accept()
+				if failure != nil {
+					backendDone <- failure
+					return
+				}
+				defer accepted.Close()
+				stop := context.AfterFunc(ctx, func() { _ = accepted.Close() })
+				defer stop()
+				request := make([]byte, len("request"))
+				_, failure = io.ReadFull(accepted, request)
+				if failure != nil || string(request) != "request" {
+					backendDone <- errors.Join(failure, errors.New("original reference request changed"))
+					return
+				}
+				_, failure = io.WriteString(accepted, "response")
+				if failure == nil {
+					failure = accepted.(*net.TCPConn).CloseWrite()
+				}
+				if failure == nil {
+					_, failure = io.Copy(io.Discard, accepted)
+				}
+				backendDone <- failure
+			}()
+			captured := make(chan *connectReferenceRawClose, 1)
+			routeDone := make(chan error, 1)
+			routeFinished := make(chan struct{})
+			var tlsEOF atomic.Bool
+			tlsEOFSeen := make(chan struct{})
+			go func() {
+				defer close(routeFinished)
+				raw, failure := listener.Accept()
+				if failure != nil {
+					routeDone <- failure
+					return
+				}
+				original := &connectReferenceRawClose{Conn: raw, tlsEOF: &tlsEOF, closed: make(chan struct{})}
+				captured <- original
+				secured := tls.Server(original, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
+				if failure = secured.HandshakeContext(ctx); failure != nil {
+					routeDone <- errors.Join(failure, original.Close())
+					return
+				}
+				connection := &desktopNodeLayerBufferedConn{Conn: secured, reader: &connectReferenceTLSRead{Reader: secured, eof: &tlsEOF, done: tlsEOFSeen}}
+				routeDone <- (&nodeCONNECTRunMiddleRouter{server: server}).RouteConnection(ctx, connection, adapter.InboundContext{Destination: M.ParseSocksaddr("192.0.2.99:443")})
+			}()
+			raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer raw.Close()
+			client := tls.Client(raw, &tls.Config{RootCAs: pool, ServerName: "speed.cloudflare.com", MinVersion: tls.VersionTLS12})
+			if err = client.HandshakeContext(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var original *connectReferenceRawClose
+			select {
+			case original = <-captured:
+			case <-ctx.Done():
+				t.Fatal("original TLS raw owner missing")
+			}
+			t.Cleanup(func() {
+				cancel()
+				_ = raw.Close()
+				_ = original.Close()
+				for _, done := range []<-chan struct{}{routeFinished, backendFinished} {
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Error("original TLS regression worker did not join cleanup")
+					}
+				}
+			})
+			if _, err = io.WriteString(client, "request"); err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(client)
+			if err != nil || string(body) != "response" {
+				t.Fatal("original TLS response or close_notify missing", err)
+			}
+			if phase == "reciprocal" {
+				held := time.NewTimer(25 * time.Millisecond)
+				select {
+				case <-original.closed:
+					held.Stop()
+					t.Fatal("reference closed original TLS before reciprocal close_notify")
+				case <-held.C:
+				}
+				if tlsEOF.Load() {
+					t.Fatal("reference invented reciprocal TLS EOF while client held it")
+				}
+				// Match the shipping client: send the real TLS alert, then half-close its
+				// original raw TCP and read its real EOF. Neither EOF substitutes the other.
+				if err = client.CloseWrite(); err != nil {
+					t.Fatal(err)
+				}
+				// Raw TCP is still write-open here. This EOF can only follow the
+				// actual TLS alert just sent, rather than a substituted raw FIN.
+				select {
+				case <-tlsEOFSeen:
+				case <-ctx.Done():
+					t.Fatal("original reciprocal TLS alert was not read before raw half-close")
+				}
+				if err = raw.(*net.TCPConn).CloseWrite(); err != nil {
+					t.Fatal(err)
+				}
+				remainder, readErr := io.ReadAll(raw)
+				if readErr != nil || len(remainder) != 0 {
+					t.Fatal("original raw EOF did not follow TLS reciprocal join", readErr)
+				}
+			} else if phase == "cancelled" {
+				cancel()
+			}
+			var failure error
+			select {
+			case failure = <-routeDone:
+			case <-time.After(1500 * time.Millisecond):
+				t.Fatal("original TLS close exceeded its one-second drain budget")
+			case <-ctx.Done():
+				select {
+				case failure = <-routeDone:
+				case <-time.After(time.Second):
+					t.Fatal("original TLS forwarding workers did not join")
+				}
+			}
+			if phase == "reciprocal" {
+				if failure != nil || !tlsEOF.Load() || original.early.Load() {
+					t.Fatal("original reciprocal TLS close lost its joined receipt", failure)
+				}
+			} else if phase == "held" {
+				if !errors.Is(failure, context.DeadlineExceeded) || tlsEOF.Load() {
+					t.Fatal("held reciprocal TLS close escaped original one-second budget", failure)
+				}
+			} else if !errors.Is(failure, context.Canceled) {
+				t.Fatal("cancelled TLS forwarding lost original cause", failure)
+			}
+			select {
+			case err = <-backendDone:
+				if phase == "reciprocal" && err != nil {
+					t.Fatal("original target half-close failed", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("original target copy did not join")
+			}
+			joined := make(chan struct{})
+			go func() { server.workers.Wait(); close(joined) }()
+			select {
+			case <-joined:
+			case <-time.After(time.Second):
+				t.Fatal("original reference retained worker did not join")
+			}
+			server.mu.Lock()
+			left := len(server.connections)
+			server.mu.Unlock()
+			if left != 0 {
+				t.Fatal("original reference retained target association", left)
+			}
+		})
+	}
+}

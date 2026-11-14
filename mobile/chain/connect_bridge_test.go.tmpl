@@ -1,0 +1,286 @@
+package libbox
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"reflect"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Sources use the existing paired constructor fixtures and the actual strict
+// typed CONNECT compiler. This helper supplies no substitute compiled graph,
+// credentials, proof receipt or native owner.
+func connectBridgeSource(t *testing.T, mode string) *mobilemultihop.NodeChainCONNECTSource {
+	return connectBridgeSourceProtocol(t, mode, "http-connect", "")
+}
+func connectBridgeSourceProtocol(t *testing.T, mode, protocol, serverName string) *mobilemultihop.NodeChainCONNECTSource {
+	t.Helper()
+	paired := candidateBridgeSourceModes(t, []string{mode, "wg"})
+	identities := candidateBridgeSourceModes(t, []string{"wg", "wg", "wg"})
+	decode := func(chain *mobilemultihop.NodeChain) mobilemultihop.NodeChainSource {
+		input, err := chain.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var source mobilemultihop.NodeChainSource
+		if err := json.Unmarshal([]byte(input), &source); err != nil {
+			t.Fatal(err)
+		}
+		return source
+	}
+	source, identity := decode(paired), decode(identities)
+	files := func(input string) string {
+		var record struct {
+			Files string `json:"files"`
+		}
+		if err := json.Unmarshal([]byte(input), &record); err != nil || record.Files == "" {
+			t.Fatal("original paired identity fixture has no files", err)
+		}
+		return record.Files
+	}
+	graph := map[string]any{
+		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn",
+			"address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280,
+			"auto_route": true, "strict_route": true, "stack": "system"}},
+		"outbounds": []any{map[string]any{"type": "http", "tag": "custom-exit", "server": "203.0.113.20",
+			"server_port": 1080, "username": "original-middle-user", "password": "original-middle-password"}},
+		"route": map[string]any{"rules": []any{}, "final": "custom-exit", "auto_detect_interface": true},
+	}
+	profile := map[string]any{"id": "saved-connect-middle", "node_kind": "external", "dns_mode": "home",
+		"kill_switch_policy": "always", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "auto",
+		"external": map[string]any{"protocol": "http-connect", "expected_public_ip": "203.0.113.88",
+			"http_connect": map[string]any{"host": "203.0.113.20", "port": 1080,
+				"username": "original-middle-user", "password": "original-middle-password"}}}
+	capture := map[string]any{"schema": 1, "exit_id": "saved-connect-middle", "protocol": "http-connect",
+		"expected_public_ip": "203.0.113.88", "profile": profile}
+
+	if protocol == "https-connect" {
+		graph["outbounds"].([]any)[0].(map[string]any)["tls"] = map[string]any{"enabled": true, "server_name": serverName}
+		external := profile["external"].(map[string]any)
+		transport := external["http_connect"].(map[string]any)
+		transport["tls_server_name"] = serverName
+		delete(external, "http_connect")
+		external["https_connect"] = transport
+		external["protocol"] = protocol
+		capture["protocol"] = protocol
+	} else if protocol != "http-connect" {
+		t.Fatal("foreign fixture protocol")
+	}
+	member, err := RouterNodeChainImportedCONNECTMemberInput(candidateBridgeJSON(t, graph), candidateBridgeJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Schema, source.Nodes[1] = 4, member
+	var final struct {
+		Mode         string `json:"mode"`
+		Files        string `json:"files"`
+		ProfileJSON  string `json:"profile_json"`
+		Start        string `json:"start"`
+		DNSBootstrap string `json:"dns_bootstrap"`
+	}
+	if err := json.Unmarshal([]byte(source.Nodes[2]), &final); err != nil {
+		t.Fatal(err)
+	}
+	// Preserve the existing final credentials and add the actual service's
+	// authenticated UoT-v2 declaration, including original config/key hashes.
+	var assets map[string]string
+	if err := json.Unmarshal([]byte(final.Files), &assets); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finalGraph map[string]any
+	if err := json.Unmarshal(raw, &finalGraph); err != nil {
+		t.Fatal(err)
+	}
+	out := finalGraph["outbounds"].([]any)[0].(map[string]any)
+	var finalProfile map[string]any
+	if err := json.Unmarshal([]byte(final.ProfileJSON), &finalProfile); err != nil {
+		t.Fatal(err)
+	}
+	configHash, keyHash := sha256.Sum256(raw), sha256.Sum256([]byte(out["password"].(string)))
+	declaration := map[string]any{"schema": 1, "node_id": finalProfile["node_proof_id"], "configured_image": nativecomposite.SSServiceImage, "uot_version": 2,
+		"endpoint": out["server"], "port": out["server_port"], "method": out["method"], "source_sha256": hex.EncodeToString(configHash[:]), "key_sha256": hex.EncodeToString(keyHash[:])}
+	assets[nativecomposite.SSServiceAsset] = base64.StdEncoding.EncodeToString([]byte(candidateBridgeJSON(t, declaration)))
+	finalNode, err := mobilemultihop.NewNodeProfile(final.Mode, candidateBridgeJSON(t, assets), final.ProfileJSON, final.Start, final.DNSBootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Nodes[2], err = finalNode.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source.IdentitySources = []string{files(identity.Nodes[0]), "", files(identity.Nodes[2])}
+	result, err := mobilemultihop.NewNodeChainCONNECTSource(candidateBridgeJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+type connectBridgePlatform struct{ PlatformInterface }
+
+func (*connectBridgePlatform) LocalDNSTransport() LocalDNSTransport { return nil }
+func (*connectBridgePlatform) UseProcFS() bool                      { return false }
+
+type connectBridgeHandler struct{ CommandServerHandler }
+
+func (*connectBridgeHandler) WriteDebugMessage(string) {}
+
+func connectBridgeOwner(t *testing.T, mode string) *RouterNodeChainCONNECT {
+	t.Helper()
+	input, err := connectBridgeSource(t, mode).Source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := NewRouterNodeChainCONNECT(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return owner
+}
+func connectBridgeServer(t *testing.T, owner *RouterNodeChainCONNECT) *CommandServer {
+	t.Helper()
+	server, err := owner.NewCommandServer(&connectBridgeHandler{}, &connectBridgePlatform{})
+	if err != nil || server == nil {
+		t.Fatal("actual typed command factory failed", err)
+	}
+	t.Cleanup(func() {
+		if err := owner.Close(); err != nil {
+			t.Error("original bridge cleanup failed", err)
+		}
+		if err := server.StartedService.CloseService(); err != nil {
+			t.Error("original native service cleanup failed", err)
+		}
+		server.Close()
+	})
+	return server
+}
+
+func TestRouterNodeChainCONNECTBridgeKeepsSourceAndExplicitBinding(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			owner := connectBridgeOwner(t, mode)
+			input, err := owner.Source()
+			if err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := NewRouterNodeChainCONNECT(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, err := owner.Config()
+			again, otherErr := reopened.Config()
+			if err != nil || otherErr != nil || config != again || owner.Metadata() != reopened.Metadata() ||
+				owner.SourceSHA256() != reopened.SourceSHA256() || owner.ConfigSHA256() != reopened.ConfigSHA256() {
+				t.Fatal("private original typed source did not reopen exactly", err, otherErr)
+			}
+			if owner.Healthy() || owner.NativeClosed() {
+				t.Fatal("unacquired source fabricated native proof or DOWN")
+			}
+			server := connectBridgeServer(t, owner)
+			if owner.native.Load().capture != nil || owner.Run(server) == nil {
+				t.Fatal("factory implicitly bound or started native proof")
+			}
+			if err := owner.BindNative(server); err != nil {
+				t.Fatal(err)
+			}
+			if owner.Healthy() || owner.NativeClosed() {
+				t.Fatal("reserved daemon fabricated actual path proof or close")
+			}
+			if err := owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := server.StartedService.CloseService(); err != nil || !owner.NativeClosed() {
+				t.Fatal("positively sealed never-acquired daemon did not join", err)
+			}
+			if _, err := owner.NewCommandServer(&connectBridgeHandler{}, &connectBridgePlatform{}); err == nil {
+				t.Fatal("retired typed bridge created a replacement server")
+			}
+			if _, exists := reflect.TypeOf(owner).MethodByName("LaunchInput"); exists {
+				t.Fatal("typed bridge acquired generic launch authority")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainCONNECTBridgeBindingFailureKeepsHostHandle(t *testing.T) {
+	owner := connectBridgeOwner(t, "wg")
+	server := connectBridgeServer(t, owner)
+	held := routerMTUField[sync.RWMutex](t, server.StartedService, "serviceAccess")
+	held.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	owner.mu.Lock()
+	err := owner.bindNativeLocked(ctx, server)
+	owner.mu.Unlock()
+	cancel()
+	held.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) || owner.native.Load().server != server ||
+		owner.native.Load().capture != nil || owner.NativeClosed() {
+		t.Fatal("binding failure lost the already-returned original server", err)
+	}
+	if err := owner.BindNative(server); err != nil {
+		t.Fatal("same original binding retry failed", err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.StartedService.CloseService(); err != nil || !owner.NativeClosed() {
+		t.Fatal("original binding retry did not retain close authority", err)
+	}
+}
+
+func TestRouterNodeChainCONNECTBridgeRefusesForeignAndOrdinaryServer(t *testing.T) {
+	owner := connectBridgeOwner(t, "wg")
+	server := connectBridgeServer(t, owner)
+	foreign := connectBridgeOwner(t, "wg")
+	other := connectBridgeServer(t, foreign)
+	ordinary, err := NewCommandServer(&connectBridgeHandler{}, &connectBridgePlatform{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ordinary.Close()
+	for _, value := range []*CommandServer{other, ordinary} {
+		if owner.BindNative(value) == nil || owner.Run(value) == nil {
+			t.Fatal("foreign server adopted typed source or native receipt")
+		}
+	}
+	if requireRouterNodeCONNECTServer(t.Context(), other, owner.source) == nil ||
+		requireRouterNodeCONNECTServer(t.Context(), ordinary, owner.source) == nil {
+		t.Fatal("equal source or ordinary registry borrowed original source pointer")
+	}
+	if err := owner.BindNative(server); err != nil {
+		t.Fatal(err)
+	}
+	if err := foreign.BindNative(other); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterNodeChainCONNECTBridgeEmptyOwnerDoesNotProveDOWN(t *testing.T) {
+	if value, err := NewRouterNodeChainCONNECT("{}"); err == nil || value != nil {
+		t.Fatal("invalid source acquired a typed owner")
+	}
+	owner := connectBridgeOwner(t, "wg")
+	if _, err := owner.NewCommandServer(nil, nil); err == nil {
+		t.Fatal("missing platform/handler reached native construction")
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if owner.NativeClosed() || owner.Healthy() || (*RouterNodeChainCONNECT)(nil).Run(nil) == nil {
+		t.Fatal("unacquired owner fabricated native retirement")
+	}
+}

@@ -559,3 +559,61 @@ SHA-256 `0f69d6dd55881a2f9d663fbdbe59d94b84fb50f70a6053e4ec292a0263b61e22`.
 The preceding full-gate attempt lacking Java and Swift on PATH remains an
 environment failure, not a passing run. Native builds, published packages and
 physical-device acceptance remain separate evidence.
+
+## Captured native CONNECT graph and encrypted reference acceptance
+
+The native increment compiles the captured ordered CONNECT graph into the
+existing Box/CommandServer composition: WireGuard or AWG entry, authenticated
+HTTP or verified HTTPS CONNECT middle, and the supported Shadowsocks-2022
+UoTv2 final node. It retains original source, per-node credentials, selected
+DNS, native proof, measurement and shutdown ownership. The original ordinary
+HTTP implementation and its registry remain unchanged. Android, Apple and
+desktop preparation/build paths include the new templates and owner tests.
+This bounded native graph is TCP-only at the CONNECT middle; it does not
+establish every requested graph or completed platform-host adoption.
+
+The actual encrypted HTTPS/AWG-fast case exposed a reference-peer shutdown
+defect. The reference interrupted its TLS request reader when response copying
+ended, then closed the raw socket before consuming the reciprocal TLS alert.
+Only the reference's HTTPS branch changed: it joins both actual copy directions
+under the existing one-second shutdown budget. Production close errors, TLS
+certificate/name verification and original probe/worker deadlines remain.
+An actual TCP/TLS regression passed four records; restoring the old helper
+failed exactly the root and reciprocal-alert case with the expected witness.
+The original failure and peer-reset diagnostic are retained, not relabeled.
+
+The repaired native run passed the complete original 73-record imported-peer
+baseline, all 14 encrypted run cases and all four compiled fault controls.
+The latter still reject selected-DNS bypass, omitted prefix proof, fabricated
+native shutdown and unjoined cancellation. The identical complete mobile
+projection and original client image retain the previously passed seven
+owner tests and 38 component records. All 23 new process groups joined and
+source/native/image checks remained unchanged. The detailed native receipt
+SHA-256 is `340cc7a3f8acc21455e9b5fc8bf15fdbc3af0442b7b1e1bdedc455ac74ea944c`.
+Its log hashes and actual required verdict inventories were independently
+rechecked during integration.
+
+The reviewed 33-file patch SHA-256 is
+`894b1734b6953ee8d09cb8d9d8ebd333c09959daded1ce259022298a6eaf5cce`.
+It was composed with current main rather than replacing newer Windows runtime
+verification or source-selection changes. The focused `connect-run` workflow
+requires an already-published exact validator/source commit; existing candidate
+allowlists remain unchanged. Four preparer, seven CONNECT-runner, twelve
+original bridge-runner and 21 exact-source identity tests passed on the
+composed source. Public host admission, the separate native MTU/50-sample
+increments, installed-device networking and exact-SHA release acceptance
+remain outstanding.
+
+## Independent verification of the published iOS/SOCKS host artifacts
+
+GitHub runs `43556692027` (native SOCKS bridge) and `43556691951` (macOS-hosted
+iOS source/retained-host checks) succeeded at
+`38ebb6edc6a91a0f134b7019f3c6ae1efc4f9d9c`. Downloaded artifacts were verified
+against their published SHA-256 digests, all 5,260 actual Git blob contents,
+before/after exact source selections, and every phase log hash. The bridge
+artifact includes 51 typed native verdicts, the original 22 encrypted-owner,
+15 peer, 13 libbox and 27 Box records, plus all ten compiled causal controls.
+The iOS host artifact includes all ten original phases and 54 controls.
+All recorded process groups joined. These close the recorded focused gates
+for that commit; they do not establish Apple SDK binding, PacketTunnel package
+build, signing, installed host or physical-device acceptance.

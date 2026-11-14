@@ -2,12 +2,16 @@
 """Bind ordered node proofs to the actual pinned native Box and network owner."""
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+_binding_spec=importlib.util.spec_from_file_location("native_connect_binding",ROOT/"deploy/native_connect_binding.py")
+CONNECT_BINDING=importlib.util.module_from_spec(_binding_spec)
+_binding_spec.loader.exec_module(CONNECT_BINDING)
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-node-chain-source.json'
 TEMPLATES = {
@@ -48,7 +52,7 @@ TEMPLATES = {
 
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_node_chain_candidate_preparation.py',
+    return [*CONNECT_BINDING.inputs(), Path(__file__).resolve(), ROOT/'deploy/test_node_chain_candidate_preparation.py',
             ROOT/'deploy/test_node_chain_candidate_preparation_runner.py',
             *sorted((ROOT/'mobile/chain').glob('*.tmpl'))]
 
@@ -98,7 +102,8 @@ def box_close_binding(source, *, bind):
 
 
 def box_source(source):
-    source = box_close_binding(source.replace('\r\n', '\n'), bind=False)
+    source, connect_bound = CONNECT_BINDING.strip(source.replace('\r\n', '\n'))
+    source = box_close_binding(source, bind=False)
     for before, added, neighbors in (
         ('type Box struct {\n', '\trouterVPNNodeChainOptions string\n',
          ('\trouterVPNExternalOptions string\n', '\trouterVPNTorOptions string\n', '\trouterVPNNodeOptions string\n')),
@@ -141,7 +146,10 @@ def box_source(source):
         source = source.replace(anchor, anchor+guard, 1)
     if source.count('routerVPNNodeChainOptions') != 3 or source.count('chainOptionsDigest') != 2:
         raise ValueError('unexpected ordered native graph snapshot')
-    return box_close_binding(source, bind=True).encode()
+    source = box_close_binding(source, bind=True)
+    if connect_bound:
+        source = CONNECT_BINDING.bind(source)
+    return source.encode()
 
 
 def command_source(vendor, source):
