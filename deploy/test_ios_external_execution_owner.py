@@ -92,6 +92,15 @@ final class RouterVPNNodeChainSOCKSHost {
  func releaseRetirement(){fatalError("unexpected SOCKS release in external fixture")}
  func progress()->Data?{nil}
 }
+// CONNECT has its own retained host and cannot be acquired by this fixture.
+// Its actual lifecycle runs in test_ios_node_chain_connect_host.py.
+final class RouterVPNNodeChainCONNECTHost {
+ private init(){}
+ func close()throws{throw FixtureFailure.error}
+ func retainForRetirement(){fatalError("unexpected CONNECT retirement in external fixture")}
+ func releaseRetirement(){fatalError("unexpected CONNECT release in external fixture")}
+ func progress()->Data?{nil}
+}
 // The ordinary external fixture cannot acquire a prefix host. Its actual
 // implementation is compiled/executed by the whole-engine and prefix gates.
 final class RouterVPNNodeCandidatePrefixHost {
