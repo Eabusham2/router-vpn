@@ -1789,6 +1789,83 @@ func TestOriginalSSFinalTrustFault(t *testing.T){
                     self.workspace = previous
 
 
+class OrderedExecutionDispatchMutations(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="execution-dispatch-mutation-")
+        self.addCleanup(self.temp.cleanup)
+        self.source = Path(self.temp.name)
+        self.relative = "cmd/sing-box/routervpn_node_chain_execution_dispatch.go"
+        self.path = self.source / self.relative
+        self.path.parent.mkdir(parents=True)
+        self.original = (ROOT / "mobile/desktop/node_chain_execution_dispatch.go.tmpl").read_text()
+        self.path.write_text(self.original)
+        self.controls = (
+            ("execution-dispatch-source", "RejectsSubstitution", "execution",
+             "invalid execution CLI entered a native owner",
+             "func (capture routerVPNNodeChainExecutionCommand) validate() error {",
+             "!routerVPNExternalSource.MatchString(capture.source)", "false"),
+            ("execution-dispatch-mtu", "CapturesOriginal", "linux/server",
+             "execution CLI accepted a different captured MTU",
+             "func routerVPNNodeChainExecutionCommandTarget(",
+             "meta.RestoredMTU != capture.mtu", "meta.RestoredMTU < 0"),
+            ("execution-dispatch-caller", "CapturesOriginal", "linux/server",
+             "execution CLI substituted a captured source or caller",
+             "func routerVPNNewNodeChainExecutionCommand(",
+             "signal.NotifyContext(command.Context(),", "signal.NotifyContext(context.Background(),"),
+        )
+
+    def function_range(self, raw, signature):
+        self.assertEqual(raw.count(signature), 1)
+        start = raw.index(signature)
+        end = raw.find("\nfunc ", start + len(signature))
+        return start, len(raw) if end < 0 else end
+
+    def test_all_three_controls_mutate_only_the_actual_shipping_function(self):
+        variants = GATE.NODE.ordered_execution_dispatch_mutants(self.source)
+        self.assertEqual(len(variants), 3)
+        formatter = shutil.which("gofmt")
+        self.assertIsNotNone(formatter, "gofmt is required to parse the compiled negative controls")
+        for variant, (label, suffix, child, witness, function, before, after) in zip(variants, self.controls):
+            with self.subTest(control=label):
+                self.assertEqual(variant[:6], (label, self.relative, "./cmd/sing-box",
+                                              GATE.NODE.EXECUTION_DISPATCH_ROOT + suffix, child, witness))
+                start, end = self.function_range(self.original, function)
+                body = self.original[start:end]
+                self.assertEqual(body.count(before), 1)
+                self.assertEqual(variant[6], self.original[:start] + body.replace(before, after, 1) + self.original[end:])
+                parsed = subprocess.run([formatter], input=variant[6], text=True, capture_output=True, timeout=15)
+                self.assertEqual(parsed.returncode, 0, parsed.stderr)
+        self.assertEqual(self.path.read_text(), self.original)
+
+    def test_source_guard_position_does_not_change_the_native_control(self):
+        before = "!routerVPNExternalSource.MatchString(capture.source)"
+        # The production guard is now the last disjunct. Its identity must
+        # survive another guard following it without rewriting that guard.
+        self.assertIn(before + " {", self.original)
+        for following in ("", " || false"):
+            with self.subTest(following=following):
+                raw = self.original.replace(before + " {", before + following + " {", 1)
+                self.path.write_text(raw)
+                variant = GATE.NODE.ordered_execution_dispatch_mutants(self.source)[0]
+                self.assertEqual(variant[6], raw.replace(before, "false", 1))
+                self.assertEqual(self.path.read_text(), raw)
+
+    def test_missing_duplicate_or_other_function_guards_are_not_adopted(self):
+        for label, _, _, _, function, before, after in self.controls:
+            start, end = self.function_range(self.original, function)
+            body = self.original[start:end]
+            for fault in ("missing", "duplicate", "other-function"):
+                with self.subTest(control=label, fault=fault):
+                    changed = body.replace(before, before + " /* " + before + " */" if fault == "duplicate" else after, 1)
+                    raw = self.original[:start] + changed + self.original[end:]
+                    if fault == "other-function":
+                        raw += "\nfunc unrelatedDispatchGuard() {\n// " + before + "\n}\n"
+                    self.path.write_text(raw)
+                    with self.assertRaisesRegex(ValueError, "exact production boundary"):
+                        GATE.NODE.ordered_execution_dispatch_mutants(self.source)
+                    self.assertEqual(self.path.read_text(), raw)
+
+
 class NativePhaseOrchestration(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="windows-phase-parser-")

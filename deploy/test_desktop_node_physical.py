@@ -1036,15 +1036,19 @@ def ordered_execution_dispatch_mutants(source):
     relative = "cmd/sing-box/routervpn_node_chain_execution_dispatch.go"
     controls = (
         ("execution-dispatch-source", "RejectsSubstitution", "execution", "invalid execution CLI entered a native owner",
-         "!routerVPNExternalSource.MatchString(capture.source) || ", ""),
+         "func (capture routerVPNNodeChainExecutionCommand) validate() error {",
+         "!routerVPNExternalSource.MatchString(capture.source)", "false"),
         ("execution-dispatch-mtu", "CapturesOriginal", "linux/server", "execution CLI accepted a different captured MTU",
+         "func routerVPNNodeChainExecutionCommandTarget(",
          "meta.RestoredMTU != capture.mtu", "meta.RestoredMTU < 0"),
         ("execution-dispatch-caller", "CapturesOriginal", "linux/server", "execution CLI substituted a captured source or caller",
+         "func routerVPNNewNodeChainExecutionCommand(",
          "signal.NotifyContext(command.Context(),", "signal.NotifyContext(context.Background(),"),
     )
     raw = (source/relative).read_text(encoding="utf-8")
     return [(label, relative, "./cmd/sing-box", EXECUTION_DISPATCH_ROOT + suffix, child, witness,
-             BOOT.IDENTITY.replace_once(raw, before, after)) for label, suffix, child, witness, before, after in controls]
+             mutation_in_function(raw, function, before, after))
+            for label, suffix, child, witness, function, before, after in controls]
 
 
 def ordered_execution_mtu_mutants(source):
