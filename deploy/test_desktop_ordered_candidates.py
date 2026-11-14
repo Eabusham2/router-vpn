@@ -351,7 +351,8 @@ def linux_actions(directory):
 typedef struct {void *window;} App;
 FIELDS
 static gboolean busy,saved_path,saved_prefix;
-static unsigned launches,checks;
+static unsigned launches,latency_launches,checks;
+static App*latency_app;
 static void check(gboolean ok,const char*message){checks++;if(!ok)g_error("%s",message);}
 static gboolean linux_async_busy_v16(App*a){(void)a;return busy;}
 static void linux_async_cancel_request_v17(App*a,guint64 generation){(void)a;(void)generation;}
@@ -364,6 +365,7 @@ static void linux_performance_begin_v17(LinuxPerformanceV17*p,const char*path,co
 static void linux_ordered_candidates_open_captured(App*a,gboolean path,gboolean prefix){(void)a;launches++;saved_path=path;saved_prefix=prefix;}
 static void linux_ordered_candidates_open_purpose(App*a,gboolean path){linux_ordered_candidates_open_captured(a,path,FALSE);}
 static void linux_ordered_candidates_open(App*a){linux_ordered_candidates_open_captured(a,FALSE,FALSE);}
+static void linux_ordered_latency_open_v1(App*a){latency_launches++;latency_app=a;}
 ACTION
 int main(void){
  App app={0};LinuxPerformanceV17 panel={.app=&app};
@@ -373,20 +375,30 @@ int main(void){
  panel.generation=1;linux_performance_response_v17(NULL,10,&panel);check(launches==3,"pending Performance launched prefix test");
  panel.generation=0;busy=TRUE;linux_performance_response_v17(NULL,10,&panel);check(launches==3,"busy Performance launched prefix test");
  busy=FALSE;linux_performance_response_v17(NULL,10,&panel);check(launches==4&&saved_path&&saved_prefix,"settled Performance lost prefix purpose");
+ linux_performance_response_v17(NULL,11,&panel);check(latency_launches==1&&latency_app==&app&&launches==4,"ordered latency button lost its captured application");
+ panel.generation=1;linux_performance_response_v17(NULL,11,&panel);check(latency_launches==1,"pending Performance launched ordered latency");
+ panel.generation=0;busy=TRUE;linux_performance_response_v17(NULL,11,&panel);check(latency_launches==1,"busy Performance launched ordered latency");
+ busy=FALSE;linux_performance_response_v17(NULL,11,&panel);check(latency_launches==2&&latency_app==&app&&launches==4,"settled Performance lost ordered latency");
  printf("GTK actual Performance candidate actions: %u checks PASS; dialog construction doubled.\n",checks);return 0;
 }
 '''.replace('FIELDS',fields).replace('ACTION',action)
     flags=subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','json-glib-1.0'],text=True).split()
     anchor='linux_ordered_candidates_open_captured(p->app,TRUE,TRUE)'
     assert program.count(anchor)==1
-    for mutation in [False,True]:
+    latency_anchor='linux_ordered_latency_open_v1(p->app)'
+    assert program.count(latency_anchor)==1
+    for label,before,after,witness in [
+        ('positive','','',''),
+        ('selected-prefix',anchor,'linux_ordered_candidates_open_captured(p->app,TRUE,FALSE)','prefix button launched complete saved connection'),
+        ('ordered-latency',latency_anchor,'linux_ordered_latency_open_v1(NULL)','ordered latency button lost its captured application'),
+    ]:
         path=directory/'performance-candidate-actions.c';binary=directory/'performance-candidate-actions'
-        path.write_text(program.replace(anchor,'linux_ordered_candidates_open_captured(p->app,TRUE,FALSE)',1) if mutation else program)
+        path.write_text(program.replace(before,after,1) if witness else program)
         subprocess.run(['gcc','-O1','-Wall','-Wextra','-Werror',str(path),'-o',str(binary),*flags],check=True,timeout=60)
         result=subprocess.run([str(binary)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=15)
-        if mutation:
-            assert result.returncode!=0 and 'prefix button launched complete saved connection' in result.stdout,result.stdout
-            print('GTK selected-prefix button purpose control rejected',flush=True)
+        if witness:
+            assert result.returncode!=0 and witness in result.stdout,result.stdout
+            print('GTK '+label+' button ownership control rejected',flush=True)
         else:
             assert result.returncode==0,result.stdout
             print(result.stdout.strip(),flush=True)

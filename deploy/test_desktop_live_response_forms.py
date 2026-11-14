@@ -25,6 +25,7 @@ MUTATIONS = {
         ('!liveHTTPSPaused(), ', ''),
         ('@transform-product', ''),
         ('@transform-unified', ''),
+        (' || orderedLatencyPresented()', ''),
     ],
     'linux': [
         ('if(strcmp(linux_ec_string(a,keys[i]),linux_ec_string(b,keys[i])))return FALSE;', 'if(FALSE)return FALSE;'),
@@ -148,9 +149,10 @@ OWNER
 final class Form {
  let liveTelemetryDelivery=RouterVPNLiveTelemetryDelivery();var window:Window?=Window();var map=Map();var routerPopup=Popup();var routerIDs=["selected"]
  var telemetryLiveLabel:Field?=Field(),telemetryHopLabel:Field?=Field();var connectionProfileSelectionGeneration=UUID();var api=ProductAPI()
- var multihopEntryPopup=Popup(),multihopExitPopup=Popup(),multihopNodeIDs:[String]=[];var connect=MacUnifiedConnectButton();var paused=false;let errorLabel=Field()
+ var multihopEntryPopup=Popup(),multihopExitPopup=Popup(),multihopNodeIDs:[String]=[];var connect=MacUnifiedConnectButton();var paused=false,orderedLatencyVisible=false;let errorLabel=Field()
  func telemetryFind(_ id:String)->NSView?{id=="unified-connect" ? connect : NSButton()}
  func refreshUnifiedFastNodeMenu(){};func refreshUnifiedForwardingMaster(){};func unifiedSpeedLabPresented()->Bool{paused}
+ func orderedLatencyPresented()->Bool{orderedLatencyVisible}
  func findUnifiedView(_ id:String)->NSView?{telemetryFind(id)};func appendHelp(_ message:String){};func refreshAll(){};func refreshLive(){};func refreshUnifiedChrome(){};func startUnifiedSelectedMode(){}
  METHODS
 }
@@ -165,12 +167,12 @@ for fault in ["partial","fifty","expired","boolean","endpoint","mixed","source",
  switch fault{case "partial":d["samples"]=2;case "fifty":r["attempts"]=50;case "expired":v["expires_in_ms"]=0;case "boolean":d["median_ms"]=true;case "endpoint":r["endpoint"]="https://elsewhere.invalid";case "mixed":v["benchmark"] = [:] as [String:String];case "source":v.removeValue(forKey:"source_sha256");case "future":v["measured_at"]=Date().timeIntervalSince1970*1000+1000;default:v["network_sha256"]="invalid"}
  r["distribution"]=d;v["response"]=r;check(decode(v)==nil,"invalid live receipt accepted: "+fault)
 }
-for fault in ["valid","source","selection","generation","closed","disconnect","paused","modal","mutation","connect-mutation"] {
+for fault in ["valid","source","selection","generation","closed","disconnect","paused","ordered-latency","modal","mutation","connect-mutation"] {
  let f=Form();let v=value();var checked=v;if fault=="source"{checked["source_sha256"]=String(repeating:"0",count:64)}
  f.api.replies=[v,checked];f.refreshUnifiedTelemetry()
  check(f.telemetryLiveLabel!.stringValue=="-- ms","background reply published before main delivery")
  check(f.api.calls.count==2 && f.api.calls[1].hasSuffix("?request_id="+String(repeating:"c",count:32)),"delivery skipped exact-request validation")
- switch fault{case "selection":f.connectionProfileSelectionGeneration=UUID();case "generation":f.liveTelemetryDelivery.generation=UUID();case "closed":f.window!.isVisible=false;case "disconnect":f.connect.title="Connect";case "paused":f.paused=true;case "modal":f.window!.attachedSheet=Window();case "mutation":f.asyncAction{"completed mutation"};case "connect-mutation":f.api.replies=[["connected":true]];f.connectUnified();default:break}
+ switch fault{case "selection":f.connectionProfileSelectionGeneration=UUID();case "generation":f.liveTelemetryDelivery.generation=UUID();case "closed":f.window!.isVisible=false;case "disconnect":f.connect.title="Connect";case "paused":f.paused=true;case "ordered-latency":f.orderedLatencyVisible=true;case "modal":f.window!.attachedSheet=Window();case "mutation":f.asyncAction{"completed mutation"};case "connect-mutation":f.api.replies=[["connected":true]];f.connectUnified();default:break}
  if fault=="mutation"||fault=="connect-mutation" {
   check(!f.liveTelemetryDelivery.mutations.isEmpty,"shipping mutation did not retain its exact UI lease")
   let before=f.api.calls.count;f.refreshUnifiedTelemetry();check(f.api.calls.count==before,"polling crossed unfinished same-profile mutation")
@@ -185,6 +187,7 @@ for fault in ["valid","source","selection","generation","closed","disconnect","p
 }
 let f=Form();f.paused=true;f.refreshUnifiedTelemetry();check(f.api.calls.isEmpty,"background polling starved explicit measurement")
 f.paused=false;candidatePresented=true;f.refreshUnifiedTelemetry();check(f.api.calls.isEmpty,"connected prefix dialog did not pause background live measurement");candidatePresented=false
+f.orderedLatencyVisible=true;f.refreshUnifiedTelemetry();check(f.api.calls.isEmpty,"ordered latency dialog did not pause background live measurement")
 let r=decode(value())!;check(!r.current(r.deadline),"deadline remained current")
 print("Shipping Swift live HTTPS decoder/delivery: \(checks) checks PASS; native controls/HTTP are fixture boundaries.")
 '''.replace('POLICY',policy).replace('OWNER',owner).replace('METHODS',methods)
