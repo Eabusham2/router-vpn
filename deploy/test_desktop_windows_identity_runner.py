@@ -315,6 +315,12 @@ class DesktopEncryptedPeerSourceCopies(unittest.TestCase):
         self.prep = GATE.PREP
         for name in self.prep.PEER_TEMPLATES:
             (self.sources / name).write_bytes((ROOT / 'mobile/desktop' / name).read_bytes())
+        # The shipping copier also relocates the independently sourced CONNECT
+        # reference peer for Darwin. Keep the complete declared source fixture.
+        for relative in self.prep.DARWIN_NODE_CHAIN_CONNECT_PEERS:
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((ROOT / relative).read_bytes())
         self.patch = patch.object(self.prep, 'ROOT', self.root)
         self.patch.start()
         self.addCleanup(self.patch.stop)
@@ -325,6 +331,46 @@ class DesktopEncryptedPeerSourceCopies(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(relative.endswith('_test.go'))
                 self.assertEqual((self.vendor / relative).read_bytes(), (self.sources / name).read_bytes())
+
+        before = b'//go:build linux && !android\n\npackage routervpnamnezia\n'
+        after = b'//go:build darwin && routervpn_darwin_node_chain && routervpn_darwin_external_host\n\npackage routervpnamnezia\n'
+        darwin_sources = {'mobile/desktop/' + name: relative
+                          for name, relative in self.prep.DARWIN_NODE_CHAIN_PEERS.items()}
+        darwin_sources.update(self.prep.DARWIN_NODE_CHAIN_CONNECT_PEERS)
+        for source, relative in darwin_sources.items():
+            with self.subTest(darwin_source=source):
+                original = (self.root / source).read_bytes()
+                self.assertTrue(original.startswith(before))
+                self.assertEqual((self.vendor / relative).read_bytes(), after + original[len(before):])
+
+    def test_darwin_connect_reference_requires_original_regular_source_and_selector(self):
+        for relative, target in self.prep.DARWIN_NODE_CHAIN_CONNECT_PEERS.items():
+            source = self.root / relative
+            original = source.read_bytes()
+            with self.subTest(source=relative, defect='missing'):
+                source.unlink()
+                vendor = self.vendor / 'missing'
+                with self.assertRaisesRegex(ValueError, 'lost its original encrypted source'):
+                    self.prep.copy_encrypted_peer_templates(vendor)
+                self.assertFalse((vendor / target).exists())
+                source.write_bytes(original)
+            with self.subTest(source=relative, defect='changed-selector'):
+                source.write_bytes(original.replace(b'linux && !android', b'windows', 1))
+                vendor = self.vendor / 'changed-selector'
+                with self.assertRaisesRegex(ValueError, 'changed its original test-only package selector'):
+                    self.prep.copy_encrypted_peer_templates(vendor)
+                self.assertFalse((vendor / target).exists())
+                source.write_bytes(original)
+            with self.subTest(source=relative, defect='symlink'):
+                borrowed = source.with_name('borrowed-reference.go.tmpl')
+                source.rename(borrowed)
+                source.symlink_to(borrowed)
+                vendor = self.vendor / 'symlink'
+                with self.assertRaisesRegex(ValueError, 'lost its original encrypted source'):
+                    self.prep.copy_encrypted_peer_templates(vendor)
+                self.assertFalse((vendor / target).exists())
+                source.unlink()
+                borrowed.rename(source)
 
     def test_wg_and_awg_changed_platform_or_package_is_rejected_before_copy(self):
         for name in ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_chain_socks_process_test.go.tmpl'):
