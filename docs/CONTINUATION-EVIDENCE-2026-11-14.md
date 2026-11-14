@@ -254,6 +254,29 @@ typed native engine. Generic Server/Compare, prefix-candidate and CONNECT
 admission are not silently enabled by this increment. Those remaining graph
 requirements, SDK/native builds and device acceptance stay on the ledger.
 
+## Accompanying Linux cleanup diagnostic fixture correction
+
+The exact `814eecee8b3381c589cbe11f57e5c1c7b5fd2ded` Linux generated
+TUN run `43548736789` failed before native execution on both architectures:
+the diagnostic fixture omitted the newly captured SOCKS owner and retained an
+unused local cancellation variable. The shipping cleanup body was already
+correctly joining that owner before native retirement.
+
+The fixture now projects the complete unchanged shipping defer, models its
+distinct SOCKS join, and retains every original ordinary cleanup case. All
+eighteen runner tests and five compiled rejection controls passed with Go
+1.26.3. The added control proves that a failed SOCKS join cannot reach Box,
+source, protection or retirement completion. The original fifteen-second
+cleanup deadline, fifty-millisecond retry cadence and error identities remain
+asserted. No production source or timeout changed. The joined result log has
+SHA-256 `228a832b3d0c5f173b50b2d2a69242a6db3ed14d24da6da587b4b27587ad5386`.
+These explicitly modeled cleanup checks do not replace actual TUN execution.
+
+Two preserved hosted focused jobs also completed successfully: encrypted
+SOCKS preclose job `132292468087` at `3dff2d60`, and desktop SOCKS child job
+`132296739124` at `f8047686`. Their original commit identities remain distinct
+from the current main release.
+
 ## Active source work and acceptance still required
 
 Windows/Linux typed retained-parent adapters and full native-host acceptance
