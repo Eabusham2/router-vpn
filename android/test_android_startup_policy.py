@@ -19,8 +19,8 @@ import (
  libbox "router-vpn/mobile"
 )
 func main() {
- raw,err:=io.ReadAll(io.LimitReader(os.Stdin,4097))
- if err!=nil || len(raw)>4096 || libbox.RouterValidatePrivateNodeJSON(string(raw))!=nil { os.Exit(1) }
+ raw,err:=io.ReadAll(io.LimitReader(os.Stdin,40961))
+ if err!=nil || len(raw)>40960 || libbox.RouterValidatePrivateNodeJSON(string(raw))!=nil { os.Exit(1) }
 }
 '''
 PRIVATE_JSON_JAVA=r'''package io.nekohasekai.libbox;
@@ -89,14 +89,14 @@ NODE=r'''final class AndroidNodeStore {
  // The actual store/compiler have their own gate. This storage boundary keeps
  // every original byte and generation, so Startup cannot borrow later sources.
  static long chainGeneration;static volatile Runnable beforeChainCapture;static volatile boolean enforceChainWorker;
- static final class ChainSource {final String id,profileId;final boolean imported=false;private final byte[] original;ChainSource(String id,byte[] bytes)throws Exception{this.id=id;original=bytes.clone();profileId=profile().getString("id");}byte[] bytes(){return original.clone();}JSONObject bundle()throws Exception{return new JSONObject(new String(original,StandardCharsets.UTF_8));}JSONObject profile()throws Exception{return AndroidProfileSelection.selectedRouterProfile(bundle());}}
- static final class ChainCapture {final ChainSource control;final List<ChainSource> members;final List<String> modes;private final AndroidNodeStore owner;private final long epoch;
-  ChainCapture(AndroidNodeStore owner,ChainSource control,List<ChainSource> members,List<String> modes){this.owner=owner;this.control=control;this.members=Collections.unmodifiableList(new ArrayList<>(members));this.modes=Collections.unmodifiableList(new ArrayList<>(modes));epoch=chainGeneration;}
+ static final class ChainSource {final String id,profileId;final boolean imported=false;private final byte[] original;ChainSource(String id,byte[] bytes)throws Exception{this.id=id;original=bytes.clone();profileId=profile().getString("id");}byte[] bytes(){return original.clone();}JSONObject bundle()throws Exception{return new JSONObject(new String(original,StandardCharsets.UTF_8));}JSONObject profile()throws Exception{return AndroidProfileSelection.selectedRouterProfile(bundle());}AndroidStandardExitStore.Entry external(){throw new IllegalStateException("paired startup fixture has no imported source");}}
+ static final class ChainCapture {final ChainSource control;final List<ChainSource> members;final List<String> modes;final String execution;private final AndroidNodeStore owner;private final long epoch;
+  ChainCapture(AndroidNodeStore owner,ChainSource control,List<ChainSource> members,List<String> modes)throws Exception{execution=control.profile().getString("multihop_execution");this.owner=owner;this.control=control;this.members=Collections.unmodifiableList(new ArrayList<>(members));this.modes=Collections.unmodifiableList(new ArrayList<>(modes));epoch=chainGeneration;}
   void requireCurrent()throws Exception{if(enforceChainWorker&&Thread.currentThread().getName().equals("main"))throw new AssertionError("ordered startup private sources were checked on the UI thread");if(epoch!=chainGeneration||!control.id.equals(active))throw new IllegalStateException("changed ordered publication");for(ChainSource member:members)if(!Arrays.equals(member.bytes(),Files.readAllBytes(owner.file(member.id).toPath())))throw new IllegalStateException("changed original ordered source");}}
  ChainCapture captureChain(String controlID)throws Exception{Runnable hook=beforeChainCapture;if(hook!=null)hook.run();if(!controlID.equals(active))throw new IllegalStateException("changed control");ChainSource control=new ChainSource(controlID,Files.readAllBytes(file(controlID).toPath()));JSONArray selected=orderedSelection(control.profile());List<ChainSource> members=new ArrayList<>();List<String> modes=new ArrayList<>();
   for(int i=0;i<selected.length();i++){JSONObject ref=selected.getJSONObject(i);ChainSource match=null;for(Node n:nodes){ChainSource source=n.id.equals(controlID)?control:new ChainSource(n.id,Files.readAllBytes(n.file.toPath()));if(source.profileId.equals(ref.getString("id"))){if(match!=null)throw new IllegalStateException("duplicate profile");match=source;}}if(match==null)throw new IllegalStateException("missing member");members.add(match);modes.add(ref.getString("mode"));}
   if(members.get(members.size()-1)!=control)throw new IllegalStateException("changed final control");ChainCapture result=new ChainCapture(this,control,members,modes);result.requireCurrent();return result;}
- static JSONArray orderedSelection(JSONObject p)throws Exception{if(!p.getBoolean("multihop_enabled")||!p.getString("multihop_execution").equals("local"))throw new IllegalStateException("invalid saved ordered policy");JSONArray result=p.getJSONArray("multihop_nodes");if(result.length()<2||result.length()>8||!p.getString("id").equals(result.getJSONObject(result.length()-1).getString("id")))throw new IllegalStateException("invalid ordered control");return new JSONArray(result.toString());}
+ static JSONArray orderedSelection(JSONObject p)throws Exception{if(!p.getBoolean("multihop_enabled")||!List.of("local","server","auto").contains(p.getString("multihop_execution")))throw new IllegalStateException("invalid saved ordered policy");JSONArray result=p.getJSONArray("multihop_nodes");if(result.length()<2||result.length()>8||!p.getString("id").equals(result.getJSONObject(result.length()-1).getString("id")))throw new IllegalStateException("invalid ordered control");return new JSONArray(result.toString());}
  AndroidNodeStore(Context c){}List<Node> list(){return new ArrayList<>(nodes);}String activeId(){return active;}
  File file(String id){for(Node n:nodes)if(n.id.equals(id)&&n.file.isFile())return n.file;throw new IllegalStateException("missing private node");}
  static void validateBundle(JSONObject b)throws Exception{b.getJSONObject("profiles");b.getJSONArray("modes");AndroidProfileSelection.selectedRouterProfile(b);}
@@ -122,18 +122,26 @@ ORCHESTRATOR=r'''final class AndroidModeOrchestrator {
  void auto(File f,boolean smart,Callback cb){start(f,smart?"smart-auto":"auto","wg",cb);}void all(File f,Callback cb){start(f,"all","max-tls-wg",cb);}void custom(File f,List<String> l,Callback cb){start(f,"custom","shadowsocks",cb);}void logical(File f,String m,Callback cb){start(f,m,m,cb);}
 }
 '''
+ORDERED_LAST_BOUNDARY = '\nfinal class OrderedLastBoundary {\n static final Map<String,String> issued=new HashMap<>();static int validations;\n static String original(AndroidNodeStore.ChainCapture source)throws Exception{JSONArray values=new JSONArray();for(var member:source.members){JSONObject copy=member.bundle();JSONObject profile=AndroidProfileSelection.selectedRouterProfile(copy);profile.remove("startup_mode");profile.remove("auto_connect");values.put(copy);}return AndroidTorProfile.digest(values.toString().getBytes(StandardCharsets.UTF_8));}\n static String record(AndroidNodeStore.ChainCapture source,String selected)throws Exception{String key=original(source)+"/"+source.execution+"/"+selected;String raw=new JSONObject().put("schema",1).put("setting",source.execution).put("execution",selected).put("fixture_source",original(source)).toString();issued.put(key,raw);return raw;}\n static void validate(AndroidNodeStore.ChainCapture source,String requested,String raw)throws Exception{validations++;io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);JSONObject value=new JSONObject(raw);String selected=value.getString("execution"),key=original(source)+"/"+requested+"/"+selected;if(value.length()!=4||value.getInt("schema")!=1||!requested.equals(source.execution)||!requested.equals(value.getString("setting"))||!List.of("local","server").contains(selected)||!requested.equals("auto")&&!requested.equals(selected)||!raw.equals(issued.get(key)))throw new IllegalStateException("original native Last boundary rejected source or choice");}\n}\nfinal class AndroidNodeChainCapture implements AutoCloseable {\n final AndroidNodeStore.ChainCapture source;private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source){this.source=source;}\n static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source)throws Exception{source.requireCurrent();return new AndroidNodeChainCapture(source);}public void close(){}\n}\nfinal class AndroidNodeChainExecutionCapture implements AutoCloseable {\n static AndroidNodeChainExecutionCapture fromLast(AndroidNodeChainCapture local,String requested,String raw)throws Exception{local.source.requireCurrent();OrderedLastBoundary.validate(local.source,requested,raw);return new AndroidNodeChainExecutionCapture();}public void close(){}\n}\n'
+
 CHAIN_RUNTIME=r'''final class AndroidNodeChainRuntime {
  interface Callback{void progress(String message);void finished(boolean ok,String message);default void owned(String session){}}
- int starts,lastStarts;Context context;AndroidNodeStore.ChainCapture source;boolean busy,connected;Runnable beforeAdmission;
- static final class ActiveCapture{final String homeSession,progressJSON="{}";final long pathGeneration;final List<AndroidNodeStore.ChainSource> sources;final List<String> modes;ActiveCapture(AndroidNodeStore.ChainCapture source,AndroidHomeStateStore.Snapshot home){homeSession=home.sessionId;pathGeneration=home.pathGeneration;sources=source.members;modes=source.modes;}}
- static final class RestoreCapture{final AndroidNodeStore.ChainCapture source;final String selection="";RestoreCapture(AndroidNodeStore.ChainCapture source){this.source=source;}}
+ int starts,lastStarts;String selectedExecution="",lastRecord="";Context context;AndroidNodeStore.ChainCapture source;boolean busy,connected;Runnable beforeAdmission;
+ static final class ActiveCapture{final String homeSession,progressJSON="{}",requestedExecution,selectedExecution;final long pathGeneration;final List<AndroidNodeStore.ChainSource> sources;final List<String> modes;ActiveCapture(AndroidNodeStore.ChainCapture source,AndroidHomeStateStore.Snapshot home){requestedExecution=source.execution;selectedExecution=source.execution.equals("auto")?"server":source.execution;homeSession=home.sessionId;pathGeneration=home.pathGeneration;sources=source.members;modes=source.modes;}}
+ static final class RestoreCapture{final AndroidNodeStore.ChainCapture source;final String selection="",requestedExecution,selectedExecution="local";RestoreCapture(AndroidNodeStore.ChainCapture source){this.source=source;requestedExecution=source.execution;}}
  ActiveCapture captureActive(){return connected?new ActiveCapture(source,AndroidHomeStateStore.snapshot(context)):null;}
  void connect(AndroidNodeStore.ChainCapture capture,Callback callback){connect(capture,AndroidHomeStateStore.snapshot(context),callback);}
  void connect(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,Callback callback){start(capture,idle,true,callback);}
  void connectLast(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,Callback callback){lastStarts++;start(capture,idle,false,callback);}
  void connect(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,String selected,Callback callback){try{AndroidConnectionSelection.requireCurrent(context,new AndroidNodeStore(context),selected);start(capture,idle,true,callback);}catch(Exception changed){callback.finished(false,changed.toString());}}
+ void connectLast(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,String selected,String expected,String raw,Callback callback){try{
+  AndroidConnectionSelection.requireCurrent(context,new AndroidNodeStore(context),selected);
+  if(capture.execution.equals("local")){if(!expected.equals("local")||!raw.isEmpty())throw new IllegalStateException("Local startup borrowed native Last");}
+  else{try(var local=AndroidNodeChainCapture.compile(capture);var last=AndroidNodeChainExecutionCapture.fromLast(local,capture.execution,raw)){if(!expected.equals(new JSONObject(raw).getString("execution")))throw new IllegalStateException("changed captured selected Last");}}
+  selectedExecution=expected;lastRecord=raw;lastStarts++;start(capture,idle,false,callback);
+ }catch(Exception changed){callback.finished(false,changed.toString());}}
  void connectLast(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,String selected,Callback callback){try{AndroidConnectionSelection.requireCurrent(context,new AndroidNodeStore(context),selected);lastStarts++;start(capture,idle,false,callback);}catch(Exception changed){callback.finished(false,changed.toString());}}
- private void start(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,boolean remember,Callback callback){try{if(beforeAdmission!=null){beforeAdmission.run();beforeAdmission=null;}var now=AndroidHomeStateStore.snapshot(context);if(idle==null||idle.pathGeneration!=now.pathGeneration||!idle.sessionId.equals(now.sessionId))throw new IllegalStateException("original ordered startup Home changed");capture.requireCurrent();source=capture;starts++;var history=remember?AndroidStartupPolicy.prepareOrderedExecution(context,capture):null;var home=AndroidHomeStateStore.beginNodeChain(context,capture);callback.owned(home.sessionId);if(!AndroidHomeStateStore.connectedNodeChain(context,home))throw new IllegalStateException("controlled native proof failed");connected=busy=true;if(remember)AndroidStartupPolicy.recordOrderedExecution(context,history,AndroidHomeStateStore.snapshot(context));callback.finished(true,"controlled native ordered proof");}catch(Exception changed){callback.finished(false,changed.toString());}}
+ private void start(AndroidNodeStore.ChainCapture capture,AndroidHomeStateStore.Snapshot idle,boolean remember,Callback callback){try{if(beforeAdmission!=null){beforeAdmission.run();beforeAdmission=null;}var now=AndroidHomeStateStore.snapshot(context);if(idle==null||idle.pathGeneration!=now.pathGeneration||!idle.sessionId.equals(now.sessionId))throw new IllegalStateException("original ordered startup Home changed");capture.requireCurrent();source=capture;starts++;var history=remember?AndroidStartupPolicy.prepareOrderedExecution(context,capture):null;var home=AndroidHomeStateStore.beginNodeChain(context,capture);callback.owned(home.sessionId);if(!AndroidHomeStateStore.connectedNodeChain(context,home))throw new IllegalStateException("controlled native proof failed");connected=busy=true;if(remember){selectedExecution=capture.execution.equals("auto")?"server":capture.execution;String record=capture.execution.equals("local")?"":OrderedLastBoundary.record(capture,selectedExecution);AndroidStartupPolicy.recordOrderedExecution(context,history,AndroidHomeStateStore.snapshot(context),selectedExecution,record);}callback.finished(true,"controlled native ordered proof");}catch(Exception changed){callback.finished(false,changed.toString());}}
  boolean isActiveOrTransitioning(){return busy;}boolean isConnected(){return connected;}
  boolean retainsCapturedOwner(String home){return busy&&home.equals(AndroidHomeStateStore.snapshot(context).sessionId);}
  List<AndroidNodeStore.ChainSource> activeSources(){return connected?source.members:List.of();}List<String> activeModes(){return connected?source.modes:List.of();}
@@ -247,6 +255,34 @@ public final class StartupTest {
  }
  static void enableOrderedLast(Fixture f)throws Exception{f.policy("last",true);AndroidHomeStateStore.disconnected(f.activity);resetProcess();}
  static void refuseOrdered(Fixture f,String reason)throws Exception{boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}check(rejected&&f.starts()==0,reason);}
+
+ static AndroidNodeStore.ChainCapture orderedExecution(Fixture f,String requested)throws Exception{
+  orderedPath(f,3,"auto",false,true);JSONObject bundle=f.root();AndroidProfileSelection.selectedRouterProfile(bundle).put("multihop_execution",requested);Files.writeString(f.nodes.file(FIRST).toPath(),bundle.toString());f.prefs().edit().putString("multihop_execution",requested).apply();return f.nodes.captureChain(FIRST);
+ }
+ static String saveOrderedExecutionLast(Fixture f,AndroidNodeStore.ChainCapture source,String selected)throws Exception{
+  var prepared=AndroidStartupPolicy.prepareOrderedExecution(f.activity,source);check(prepared!=null,"complete Server/Compare source did not prepare Last");
+  var home=AndroidHomeStateStore.beginNodeChain(f.activity,source);check(AndroidHomeStateStore.connectedNodeChain(f.activity,home),"controlled execution proof setup failed");
+  String raw=OrderedLastBoundary.record(source,selected);check(AndroidStartupPolicy.recordOrderedExecution(f.activity,prepared,AndroidHomeStateStore.snapshot(f.activity),selected,raw),"proved ordered execution did not save its native Last choice");return raw;
+ }
+ static void orderedExecutionLast(Path root)throws Exception{
+  for(String variant:List.of("server/server","auto/local","auto/server"))for(boolean rotate:new boolean[]{false,true}){
+   String requested=variant.split("/")[0],selected=variant.split("/")[1];Fixture f=new Fixture(root);var source=orderedExecution(f,requested);String nativeRecord=saveOrderedExecutionLast(f,source,selected),receipt=Files.readString(orderedReceipt(f));
+   JSONObject saved=new JSONObject(receipt);check(saved.length()==7&&saved.getInt("schema")==2&&saved.getString("requested_execution").equals(requested)&&saved.getString("selected_execution").equals(selected)&&saved.getString("native_last").equals(nativeRecord),"ordered Last lost exact requested/selected native capsule");
+   enableOrderedLast(f);Bundle state=f.request();check(f.captured.execution.equals(requested)&&f.captured.lastExecution.equals(selected)&&f.captured.lastRaw.equals(nativeRecord),"cold ordered Last replaced captured native selection");
+   if(rotate){state.putString("multihop_execution_pending",requested.equals("server")?"auto":"server");f.restore(state);}f.allow();var runtime=AndroidRuntimeRegistry.instance.nodeChain;
+   check(f.cb.ok&&runtime.lastStarts==1&&runtime.starts==1&&runtime.source.execution.equals(requested)&&runtime.selectedExecution.equals(selected)&&runtime.lastRecord.equals(nativeRecord),"ordered Last dispatch reran Compare or replaced the requested execution");
+   check(Files.readString(orderedReceipt(f)).equals(receipt),"cold ordered Last overwrote its historical capsule");
+  }
+  for(String fault:List.of("native-record","requested","selected","middle-key","late-receipt")){
+   Fixture f=new Fixture(root);var source=orderedExecution(f,"auto");saveOrderedExecutionLast(f,source,"local");enableOrderedLast(f);
+   if(fault.equals("late-receipt")){f.request();JSONObject receipt=new JSONObject(Files.readString(orderedReceipt(f)));receipt.put("native_last",receipt.getString("native_last")+" ");Files.writeString(orderedReceipt(f),receipt.toString());f.allow();check(!f.cb.ok&&f.starts()==0,"pending ordered Last borrowed a replaced native receipt");continue;}
+   JSONObject receipt=new JSONObject(Files.readString(orderedReceipt(f)));
+   if(fault.equals("native-record")){JSONObject nativeValue=new JSONObject(receipt.getString("native_last"));nativeValue.put("fixture_source","0".repeat(64));receipt.put("native_last",nativeValue.toString());}
+   if(fault.equals("requested"))receipt.put("requested_execution","server");if(fault.equals("selected"))receipt.put("selected_execution","server");
+   if(fault.equals("middle-key")){Path file=f.nodes.file(EXIT).toPath();JSONObject changed=new JSONObject(Files.readString(file));AndroidProfileSelection.selectedRouterProfile(changed).put("api_token","different-original-key");Files.writeString(file,changed.toString());}
+   Files.writeString(orderedReceipt(f),receipt.toString());refuseOrdered(f,"changed ordered native Last source or choice was accepted: "+fault);
+  }
+ }
  static void orderedStartup(Path root)throws Exception{
   for(boolean mixed:new boolean[]{false,true})for(int count:new int[]{2,3,4,8})for(String mode:List.of("auto","smart-auto","last")){
    Fixture f=new Fixture(root);var source=orderedPath(f,count,mode,true,mixed);if(mode.equals("last")){saveOrderedLast(f,source);AndroidHomeStateStore.disconnected(f.activity);resetProcess();}
@@ -541,7 +577,7 @@ public final class StartupTest {
    boolean refused=false;try{f.capture();}catch(Exception expected){refused=true;}check(refused&&f.starts()==0,"invalid imported Router startup was accepted: "+invalid);
   }
  }}
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){switch(args[1]){case "ordered":orderedStartup(root);System.out.println("Android ordered startup: "+checks+" source, history and idle ownership checks PASS");break;case "private-last":routerLastReceipts(root);break;case "strict":strictReceipts(root);break;case "external-last":externalLastReceipts(root);break;case "missing-external-last":missingExternalLast(root);break;case "changed":changes(root);break;case "ordinary":ordinaryStartup(root);break;case "imported-naive-h3":case "imported-openvpn":case "imported-connect":case "imported-socks":case "imported":case "imported-packet":case "imported-packet-final":case "imported-nested":importedRouterStartup(root,args[1]);System.out.println("Android "+args[1]+" startup: "+checks+" exact entry/final, permission, source and cancellation checks PASS");break;default:throw new AssertionError("unknown causal group");}return;}defaults(root);missingExternalLast(root);permission(root);changes(root);graph(root);receipts(root);strictReceipts(root);routerLastReceipts(root);settings(root);activity(root);externalLastReceipts(root);externalStartup(root);ordinaryStartup(root);orderedStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1){switch(args[1]){case "ordered-execution":orderedExecutionLast(root);break;case "ordered":orderedStartup(root);System.out.println("Android ordered startup: "+checks+" source, history and idle ownership checks PASS");break;case "private-last":routerLastReceipts(root);break;case "strict":strictReceipts(root);break;case "external-last":externalLastReceipts(root);break;case "missing-external-last":missingExternalLast(root);break;case "changed":changes(root);break;case "ordinary":ordinaryStartup(root);break;case "imported-naive-h3":case "imported-openvpn":case "imported-connect":case "imported-socks":case "imported":case "imported-packet":case "imported-packet-final":case "imported-nested":importedRouterStartup(root,args[1]);System.out.println("Android "+args[1]+" startup: "+checks+" exact entry/final, permission, source and cancellation checks PASS");break;default:throw new AssertionError("unknown causal group");}return;}defaults(root);missingExternalLast(root);permission(root);changes(root);graph(root);receipts(root);strictReceipts(root);routerLastReceipts(root);settings(root);activity(root);externalLastReceipts(root);externalStartup(root);ordinaryStartup(root);orderedStartup(root);orderedExecutionLast(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
 }
 '''
 
@@ -580,7 +616,7 @@ def main():
     if 'final class AndroidExternalPolicy ' in boundaries:boundaries=replace_class(boundaries,'AndroidExternalPolicy','')
     if 'final class AndroidConnectionProfileStore ' in boundaries:boundaries=replace_class(boundaries,'AndroidConnectionProfileStore','')
     boundaries=replace_class(boundaries,'AndroidNodeStore',NODE);boundaries=replace_class(boundaries,'AndroidModeOrchestrator',ORCHESTRATOR)
-    boundaries=replace_class(boundaries,'AndroidNodeChainRuntime',CHAIN_RUNTIME)
+    boundaries=replace_class(boundaries,'AndroidNodeChainRuntime',CHAIN_RUNTIME)+ORDERED_LAST_BOUNDARY
     runtime=(JAVA/'AndroidMultihopRuntime.java').read_text()
     startup_capture=block(runtime,'    static String importedEntryMode(')+'\n'+block(runtime,'    static final class StartupCapture {')+'\n'+block(runtime,'    static StartupCapture startupCapture(')
     boundaries=replace_class(boundaries,'AndroidMultihopRuntime',MULTIHOP.replace(' // SHIPPING_STARTUP_CAPTURE',startup_capture))
@@ -641,7 +677,7 @@ def main():
             ('AndroidStartupPolicy.java','.put("selected_sha256",profileIdentity(selected))','.put("selected_sha256","unbound")','changed private Last source or receipt accepted: selected-dns'),
             ('AndroidStartupPolicy.java','.put("exit_sha256",profileIdentity(exit))','.put("exit_sha256","unbound")','changed private Last source or receipt accepted: exit-dns'),
             ('AndroidStartupPolicy.java','if(AndroidMTUMeasurementGate.held()||entry==null','if(false||entry==null','unowned private Last receipt persisted: speed-lab'),
-            ('AndroidStartupPolicy.java','io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);','/* mutation: raw duplicate and trailing validation omitted */','ambiguous single-node Last receipt accepted: duplicate-schema'),
+            ('AndroidStartupPolicy.java','io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);\n        JSONObject object=', '/* mutation: raw duplicate and trailing validation omitted */\n        JSONObject object=','ambiguous single-node Last receipt accepted: duplicate-schema'),
             ('AndroidStartupPolicy.java','!(schema instanceof Integer||schema instanceof Long)||((Number)schema).longValue()!=1','object.getInt("schema")!=1','ambiguous single-node Last receipt accepted: schema-text'),
             ('AndroidStartupPolicy.java','if(!(object.opt(key) instanceof String))','if(false&&!(object.opt(key) instanceof String))','ambiguous single-node Last receipt accepted: wrong-text'),
             ('AndroidUnifiedConnectionController.java','execution,startup.lastExecution,bridge','execution,"local",bridge','external Last reran Compare or restored the wrong execution'),
@@ -655,19 +691,42 @@ def main():
             ('AndroidStartupPolicy.java','if(!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','if(false&&!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','stale startup capture started'),
             ('AndroidStartupPolicy.java','if(ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','if(false&&ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','stale ordinary startup capture started: captured-key'),
             ('AndroidStartupPolicy.java','if(ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','if(false&&ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','stale imported Router startup launched: captured-key'),
-            ('AndroidStartupPolicy.java','if("last".equals(mode))requireLastOrdered(context,ordered);','if(false)requireLastOrdered(context,ordered);','Startup Last without ordered history fell back to a pair or Auto'),
-            ('AndroidStartupPolicy.java','profileIdentity(source.members.get(i).bundle())','profileIdentity((i==1?source.control:source.members.get(i)).bundle())','changed complete ordered Last source or history accepted: middle-key'),
-            ('AndroidStartupPolicy.java','if(ordered!=null){ordered.requireCurrent();requireOrderedChoice(context,ordered);}','if(ordered!=null){requireOrderedChoice(context,ordered);}','pending ordered startup borrowed newer source or owner: publication'),
-            ('AndroidStartupPolicy.java','if(record==null||AndroidMTUMeasurementGate.held())return false;','if(record==null)return false;','Speed Lab trial overwrote original ordered Last'),
+            ('AndroidStartupPolicy.java','requireLastOrdered(context,ordered)','new OrderedStartup("","","local")','Startup Last without ordered history fell back to a pair or Auto'),
+            ('AndroidStartupPolicy.java','orderedMemberIdentity(source.members.get(i))','orderedMemberIdentity(i==1?source.control:source.members.get(i))','changed complete ordered Last source or history accepted: middle-key'),
+            ('AndroidStartupPolicy.java','ordered.requireCurrent();requireOrderedChoice(context,ordered);\n                if(!execution.equals', 'requireOrderedChoice(context,ordered);\n                if(!execution.equals','pending ordered startup borrowed newer source or owner: publication'),
+            ('AndroidStartupPolicy.java','if(record==null||AndroidMTUMeasurementGate.held()||nativeRecord==null','if(record==null||nativeRecord==null','Speed Lab trial overwrote original ordered Last'),
             ('AndroidUnifiedConnectionController.java','if(startup!=null&&"last".equals(startup.mode))runtime.nodeChain.connectLast(','if(false&&startup!=null&&"last".equals(startup.mode))runtime.nodeChain.connectLast(','ordered Startup Last rewrote history through ordinary connect'),
             ('AndroidStartupPolicy.java','startupEpoch++;coldLaunchClaimed=true;if(pending!=null)pending.cancel();','coldLaunchClaimed=true;if(pending!=null)pending.cancel();','cancelled cold ordered capture published a new startup owner'),
             ('AndroidStartupPolicy.java','startupEpoch++;coldLaunchClaimed=true;if(pending!=null)pending.cancel();','startupEpoch++;if(pending!=null)pending.cancel();','cancelled queued ordered startup rearmed on same-process reopen'),
         )
         for name,old,new,assertion in controls:
-            target=app/name;original=target.read_text();assert original.count(old)==1,(name,old);target.write_text(original.replace(old,new));subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE);group=("ordered" if "ordered" in assertion else "imported-connect" if assertion in ("Startup must retain two distinct exact path owners.","The imported startup path lost its selected final node or entry transport.") else "imported-socks" if assertion.startswith("The saved multihop startup path") else "missing-external-last" if assertion=="external Last without a source-bound winner reran Compare" else "private-last" if "private Last" in assertion or "Router Last" in assertion else "strict" if "single-node Last" in assertion else "external-last" if "external Last" in assertion else "ordinary" if "stale ordinary" in assertion else "imported" if "stale imported" in assertion else "changed")
+            target=app/name;original=target.read_text();assert original.count(old)==(2 if old=='requireLastOrdered(context,ordered)' else 1),(name,old);target.write_text(original.replace(old,new));subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE);group=("ordered" if "ordered" in assertion else "imported-connect" if assertion in ("Startup must retain two distinct exact path owners.","The imported startup path lost its selected final node or entry transport.") else "imported-socks" if assertion.startswith("The saved multihop startup path") else "missing-external-last" if assertion=="external Last without a source-bound winner reran Compare" else "private-last" if "private Last" in assertion or "Router Last" in assertion else "strict" if "single-node Last" in assertion else "external-last" if "external Last" in assertion else "ordinary" if "stale ordinary" in assertion else "imported" if "stale imported" in assertion else "changed")
             broken=subprocess.run([*run,group],timeout=60,capture_output=True,text=True);target.write_text(original)
             assert broken.returncode and assertion in broken.stderr,'startup negative control was not rejected at the intended assertion: '+name+'\n'+broken.stdout+broken.stderr
             print('Android startup negative control rejected: '+name)
+        execution_controls=(
+            ('AndroidStartupPolicy.java',
+             'AndroidNodeChainExecutionCapture validated=AndroidNodeChainExecutionCapture.fromLast(original,source.execution,nativeRecord)',
+             'AndroidNodeChainExecutionCapture validated=null',
+             'changed ordered native Last source or choice was accepted: native-record'),
+            ('AndroidStartupPolicy.java',
+             '.put("requested_execution",record.requested).put("native_last",nativeRecord)',
+             '.put("requested_execution","auto").put("native_last",nativeRecord)',
+             'ordered Last lost exact requested/selected native capsule'),
+            ('AndroidUnifiedConnectionController.java',
+             'runtime.nodeChain.connectLast(ordered,permission.idleHome,permission.selection,startup.lastExecution,startup.lastRaw,bridge)',
+             'runtime.nodeChain.connectLast(ordered,permission.idleHome,permission.selection,"local",startup.lastRaw,bridge)',
+             'ordered Last dispatch reran Compare or replaced the requested execution'),
+        )
+        for name,old,new,witness in execution_controls:
+            target=app/name;original=target.read_text();assert original.count(old)==1,(name,old)
+            try:
+                target.write_text(original.replace(old,new))
+                subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                broken=subprocess.run([*run,"ordered-execution"],timeout=60,capture_output=True,text=True)
+                assert broken.returncode and witness in broken.stderr,'ordered Last causal control missed exact witness: '+name+'\n'+broken.stdout+broken.stderr
+            finally:target.write_text(original)
+            print('Android ordered execution Last causal control rejected: '+name+' / '+witness)
 
 
 if __name__=='__main__':main()

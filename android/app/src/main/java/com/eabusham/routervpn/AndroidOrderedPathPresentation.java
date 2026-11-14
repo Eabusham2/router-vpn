@@ -21,13 +21,14 @@ final class AndroidOrderedPathPresentation {
     }
     final List<Member> members;
     final boolean live, testing;
+    final String requestedExecution, selectedExecution;
     private final AndroidNodeCandidatePreparation preparation;
     private final String selection,homeSession;
     private final long homeGeneration;
 
-    private AndroidOrderedPathPresentation(List<Member> members,boolean live,boolean testing,AndroidNodeCandidatePreparation preparation,String selection,AndroidHomeStateStore.Snapshot home) {
+    private AndroidOrderedPathPresentation(List<Member> members,boolean live,boolean testing,AndroidNodeCandidatePreparation preparation,String selection,AndroidHomeStateStore.Snapshot home,String requested,String selected) {
         this.members=Collections.unmodifiableList(new ArrayList<>(members));this.live=live;this.testing=testing;this.preparation=preparation;this.selection=selection;
-        homeSession=home.sessionId;homeGeneration=home.pathGeneration;
+        homeSession=home.sessionId;homeGeneration=home.pathGeneration;requestedExecution=requested;selectedExecution=selected;
     }
 
     static boolean configured(Context context) {
@@ -41,16 +42,20 @@ final class AndroidOrderedPathPresentation {
         final AndroidNodeCandidatePreparation preparation;final boolean testing;
         synchronized(AndroidNodeCandidatePreparation.class){preparation=AndroidNodeCandidatePreparation.retained();testing=AndroidNodeCandidatePreparation.busy();}
         boolean live=!testing&&home.connected&&"node-chain".equals(home.logicalMode);
-        List<AndroidNodeStore.ChainSource> sources;List<String> modes;JSONObject progress=null;
+        List<AndroidNodeStore.ChainSource> sources;List<String> modes;JSONObject progress=null;String requested,selected="";
         if(live) {
             AndroidNodeChainRuntime.ActiveCapture active=runtime.captureActive();
             if(active==null||active.pathGeneration!=home.pathGeneration||!active.homeSession.equals(home.sessionId))throw new IllegalStateException("The ordered display lost its current native owner.");
             sources=active.sources;modes=active.modes;progress=new JSONObject(active.progressJSON);
-            if(!progress.optBoolean("ready")||!progress.optBoolean("complete")||!"local".equals(progress.optString("execution")))throw new IllegalStateException("The ordered proof receipt is no longer ready.");
+            requested=active.requestedExecution;selected=active.selectedExecution;
+            if(!java.util.Arrays.asList("local","server","auto").contains(requested)
+                    ||!java.util.Arrays.asList("local","server").contains(selected)||!"auto".equals(requested)&&!requested.equals(selected)
+                    ||!progress.optBoolean("ready")||!progress.optBoolean("complete")||!selected.equals(progress.optString("execution")))
+                throw new IllegalStateException("The ordered proof receipt lost its current selected execution.");
         } else {
             if(!configured(context))return null;
             AndroidNodeStore.ChainCapture captured=new AndroidConnectionProfileStore(context,nodes,exits).currentOrderedPath();
-            sources=captured.members;modes=captured.modes;
+            sources=captured.members;modes=captured.modes;requested=captured.execution;
         }
         if(sources.size()<2||sources.size()!=modes.size())throw new IllegalStateException("The complete ordered display is unavailable.");
         JSONArray prefixes=live?progress.getJSONArray("prefixes"):new JSONArray();
@@ -67,9 +72,14 @@ final class AndroidOrderedPathPresentation {
             }
             values.add(new Member(sources.get(i),modes.get(i),ms,testing&&preparation.testsSavedPosition(i)));
         }
-        AndroidOrderedPathPresentation out=new AndroidOrderedPathPresentation(values,live,testing,preparation,choice,home);
+        AndroidOrderedPathPresentation out=new AndroidOrderedPathPresentation(values,live,testing,preparation,choice,home,requested,selected);
         if(!out.current(context))throw new IllegalStateException("The ordered display changed during capture.");
         return out;
+    }
+
+    String executionLabel() {
+        String requested="auto".equals(requestedExecution)?"Compare both":"server".equals(requestedExecution)?"Server":"Local";
+        return live&&"auto".equals(requestedExecution)?requested+" → "+("server".equals(selectedExecution)?"Server":"Local"):requested;
     }
 
     /** Lightweight main-thread admission: only immutable Home and preference values. */
@@ -86,7 +96,7 @@ final class AndroidOrderedPathPresentation {
         SharedPreferences p=context.getSharedPreferences("router-vpn-unified",Context.MODE_PRIVATE);
         synchronized(p) {
             return new JSONArray().put(p.getString("selected_kind","router-vpn")).put(p.getString("selected_id",""))
-                    .put(p.getBoolean("multihop_on",false)).put(p.getString("multihop_nodes","")).toString();
+                    .put(p.getBoolean("multihop_on",false)).put(p.getString("multihop_nodes","")).put(p.getString("multihop_execution","local")).toString();
         }
     }
 }

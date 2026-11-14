@@ -133,6 +133,17 @@ final class AndroidNodeStore {
         }
     }
 
+    /** Pure staged sources for compiler validation before a profile transaction.
+     * These values cannot create a ChainCapture or borrow an active store owner. */
+    static ChainSource stagedChainSource(String id, byte[] bytes) throws Exception {
+        if (bytes == null || bytes.length == 0 || bytes.length > MAX_BUNDLE)
+            throw new IllegalStateException("The staged ordered source exceeds its private bound.");
+        return new ChainSource(id, bytes);
+    }
+    static ChainSource stagedChainSource(AndroidStandardExitStore.Entry entry) throws Exception {
+        return new ChainSource(entry);
+    }
+
     /** Source authority stays with the original store publication epoch. */
     static final class ChainCapture {
         final ChainSource control;
@@ -449,9 +460,10 @@ final class AndroidNodeStore {
     /** Validate references without resolving or inventing a transport owner. */
     static JSONArray orderedSelection(JSONObject profile) throws Exception {
         if (!(profile.get("multihop_enabled") instanceof Boolean) || !profile.getBoolean("multihop_enabled")
-                || !"local".equals(profile.getString("multihop_execution"))
+                || !(profile.get("multihop_execution") instanceof String)
+                || !java.util.Arrays.asList("local", "server", "auto").contains(profile.getString("multihop_execution"))
                 || !"router-vpn".equals(profile.optString("node_kind", "router-vpn")) || profile.has("external")) {
-            throw new IllegalStateException("An ordered path requires its enabled original Local Router control.");
+            throw new IllegalStateException("An ordered path requires its enabled original Router control and exact Local, Server or Compare selection.");
         }
         for (String key : new String[]{"multihop_entry_id", "multihop_entry_mode", "multihop_exit_id", "multihop_exit_mode"}) {
             if (profile.has(key) && (!(profile.get(key) instanceof String) || !profile.getString(key).isEmpty())) {
@@ -469,6 +481,16 @@ final class AndroidNodeStore {
         }
         if (!profile.getString("id").equals(selected.getJSONObject(selected.length() - 1).getString("id"))) {
             throw new IllegalStateException("The selected control must be the original final ordered member.");
+        }
+        if (!"local".equals(profile.getString("multihop_execution"))) {
+            if (!"shadowsocks".equals(selected.getJSONObject(selected.length()-1).getString("mode")))
+                throw new IllegalStateException("Ordered Server and Compare require the original Shadowsocks 2022 final.");
+            for (int i=0;i<selected.length()-1;i++) {
+                String mode=selected.getJSONObject(i).getString("mode");
+                if (!java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(mode)
+                        && !(selected.length()==3 && i==1 && "shadowsocks".equals(mode)))
+                    throw new IllegalStateException("This ordered transport has no supported Server or Compare graph.");
+            }
         }
         return new JSONArray(selected.toString());
     }

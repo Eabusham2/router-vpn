@@ -351,5 +351,41 @@ class NodeChainPreparation(unittest.TestCase):
                 self.assertTrue(any(re.search(pattern, name) for pattern in patterns), ('desktop', package, name))
 
 
+    def test_android_sdk_selects_all_required_ordered_latency_families(self):
+        # These are build-selection contracts, not evidence that native fixtures
+        # ran. The separate native fifty gate supplies required peer/IO evidence.
+        required = (
+            'TestRouterNodeChainLatencyRequiresOriginalProvedFactory',
+            'TestRouterNodeChainLatencyKeepsOriginalAdmissionDeadline',
+            'TestRouterNodeChainOrdinaryEncryptedOrderedFifty',
+            'TestRouterNodeChainRemainingEncryptedOrderedFifty',
+        )
+        original = ('Multihop', 'NativeWireGuard', 'NativeAmnezia', 'NativePerformance',
+                    'NativeBaseStartLayer', 'NativeSIP003StartLayer', 'MTU',
+                    'NodeChainBridge', 'NodeChainSOCKS', 'NodeChainCONNECT')
+        def require_selected(shell):
+            commands = [shlex.split(line) for line in shell.splitlines()
+                        if re.match(r'\s*go_retry test ', line)]
+            selected = [command for command in commands if './experimental/libbox' in command and '-run' in command]
+            self.assertEqual(len(selected), 1, 'preserve the one explicit SDK libbox test selector')
+            command = selected[0]
+            self.assertIn('-count=1', command)
+            self.assertIn('-tags', command)
+            self.assertTrue({'with_quic', 'with_wireguard', 'with_gvisor'}.issubset(
+                command[command.index('-tags')+1].split(',')))
+            self.assertIn('-run', command)
+            selector = re.compile(command[command.index('-run')+1])
+            for name in (*required, *('TestRouter'+family for family in original)):
+                self.assertIsNotNone(selector.search(name), 'actual SDK command omits '+name)
+        shell = (ROOT/'android/build-sing-box-libbox.sh').read_text()
+        require_selected(shell)
+        for family in ('NodeChainLatency', 'NodeChainOrdinary', 'NodeChainRemaining'):
+            anchor = '|'+family
+            self.assertEqual(shell.count(anchor), 1)
+            changed = shell.replace(anchor, '', 1)+'\n# decoy '+anchor+'\n'
+            with self.subTest(omitted=family), self.assertRaises(AssertionError):
+                require_selected(changed)
+
+
 if __name__ == '__main__':
     unittest.main()

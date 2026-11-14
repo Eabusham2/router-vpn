@@ -23,11 +23,13 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     final String requested, source, launchInput, config, sourceSHA256, configSHA256;
     private volatile boolean closed;
     private final RestoreCapture restoredFrom;
+    private final String expectedExecution, lastRecord;
 
     static AndroidNodeChainExecutionCapture compile(AndroidNodeChainCapture local, String requested) throws Exception {
         requireRequested(requested);
         if (local == null || local.socks != null || local.connect != null) throw new IllegalStateException("This execution requires an original ordinary ordered source.");
         local.requireCurrent();
+        if (!requested.equals(local.selectionExecution)) throw new IllegalStateException("The execution differs from the complete original saved selection.");
         RouterNodeChainExecution plan = Libbox.routerNodeChainExecutionFromLaunch(local.launchInput, requested);
         return adopt(local, requested, plan);
     }
@@ -38,6 +40,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         if (local == null || local.socks != null || local.connect != null) throw new IllegalStateException("This execution requires an original ordinary ordered source.");
         local.requireCurrent();
         JSONObject record = privateJSON(input, AndroidNodeChainCapture.MAX_INPUT);
+        if (record.getInt("schema") != 1 || record.has("last")) throw new IllegalStateException("Ordinary execution cannot replace an explicit saved Last choice.");
         JSONObject preparation = privateJSON(record.getString("source"), AndroidNodeChainCapture.MAX_INPUT);
         String requested = preparation.getString("execution");
         requireRequested(requested);
@@ -50,6 +53,38 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         return result;
     }
 
+    /** A saved choice is parsed against every original source by the native
+     * factory. It grants no current discovery, forwarding, cleanup or proof. */
+    static AndroidNodeChainExecutionCapture fromLast(AndroidNodeChainCapture local, String requested, String record) throws Exception {
+        requireRequested(requested);
+        if (local == null || local.socks != null || local.connect != null || !requested.equals(local.selectionExecution))
+            throw new IllegalStateException("Last requires the complete original saved execution source.");
+        local.requireCurrent();
+        String raw=bounded(record,16*1024);
+        JSONObject saved=privateJSON(raw,16*1024);
+        String selected=saved.getString("execution");
+        if (!("local".equals(selected)||"server".equals(selected)) || !"auto".equals(requested)&&!requested.equals(selected)
+                || !requested.equals(saved.getString("setting")))
+            throw new IllegalStateException("Last lost its original requested and selected execution.");
+        RouterNodeChainExecution plan=Libbox.routerNodeChainExecutionFromLast(local.launchInput,requested,raw);
+        if (plan == null) throw new IllegalStateException("Last returned no original native preparation.");
+        try { return new AndroidNodeChainExecutionCapture(local,requested,plan,null,selected,raw); }
+        catch (Exception invalid) { try { plan.close(); } catch (Exception cleanup) { invalid.addSuppressed(cleanup); } throw invalid; }
+    }
+
+    /** Call only while this original native owner still has a current proof. */
+    String captureLastRecord() throws Exception {
+        requireCurrent();
+        if (!healthy()) throw new IllegalStateException("Last requires this exact proved execution.");
+        String selected=execution(),raw=bounded(plan.captureLastJSON(),16*1024);
+        try (AndroidNodeChainExecutionCapture validation=fromLast(local,requested,raw)) {
+            if (!source.equals(validation.source) || !selected.equals(validation.expectedExecution)
+                    || !healthy() || !selected.equals(execution()))
+                throw new IllegalStateException("The saved Last record changed its original source or selected proof.");
+        }
+        requireCurrent(); return raw;
+    }
+
     private static AndroidNodeChainExecutionCapture adopt(AndroidNodeChainCapture local, String requested,
                                                            RouterNodeChainExecution plan) throws Exception {
         return adopt(local, requested, plan, null);
@@ -57,7 +92,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     private static AndroidNodeChainExecutionCapture adopt(AndroidNodeChainCapture local, String requested,
                                                            RouterNodeChainExecution plan, RestoreCapture restore) throws Exception {
         if (plan == null) throw new IllegalStateException("The native execution compiler returned no original owner.");
-        try { return new AndroidNodeChainExecutionCapture(local, requested, plan, restore); }
+        try { return new AndroidNodeChainExecutionCapture(local, requested, plan, restore, restore == null ? null : restore.execution, null); }
         catch (Exception invalid) {
             try { plan.close(); } catch (Exception cleanup) { invalid.addSuppressed(cleanup); }
             throw invalid;
@@ -65,8 +100,13 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     }
 
     private AndroidNodeChainExecutionCapture(AndroidNodeChainCapture local, String requested,
-                                              RouterNodeChainExecution plan, RestoreCapture restore) throws Exception {
+                                              RouterNodeChainExecution plan, RestoreCapture restore, String expected, String last) throws Exception {
+        requireRequested(requested);
+        if (local == null || !requested.equals(local.selectionExecution) || restore != null && last != null
+                || expected != null && !("server".equals(expected) || "auto".equals(requested) && "local".equals(expected)))
+            throw new IllegalStateException("The execution changed its original saved selection or concrete result.");
         this.local = local; this.requested = requested; this.plan = plan; restoredFrom = restore;
+        expectedExecution=expected;lastRecord=last;
         if (restore != null) plan.requireRestore(restore.nativeCapture);
         source = bounded(plan.source(), AndroidNodeChainCapture.MAX_INPUT);
         launchInput = bounded(plan.launchInput(), AndroidNodeChainCapture.MAX_INPUT);
@@ -79,8 +119,9 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
                 || !local.sourceSHA256.equals(plan.localSourceSHA256())
                 || sourceSHA256 == null || !sourceSHA256.matches("[0-9a-f]{64}")
                 || configSHA256 == null || !configSHA256.equals(digest(config))
-                || launch.length() != 5 || !"routervpn-node-chain-execution-preparation-input".equals(launch.getString("kind"))
-                || launch.getInt("schema") != 1 || !source.equals(launch.getString("source"))
+                || launch.length() != (lastRecord == null ? 5 : 6) || !"routervpn-node-chain-execution-preparation-input".equals(launch.getString("kind"))
+                || launch.getInt("schema") != (lastRecord == null ? 1 : 2)
+                || (lastRecord == null ? launch.has("last") : !lastRecord.equals(launch.getString("last"))) || !source.equals(launch.getString("source"))
                 || !sourceSHA256.equals(launch.getString("source_sha256")) || !configSHA256.equals(launch.getString("config_sha256"))) {
             throw new IllegalStateException("The execution preparation changed its original requested path or native source.");
         }
@@ -117,7 +158,8 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     String execution() throws Exception {
         requireCurrent();
         String result = plan.execution();
-        if (!("local".equals(result) || "server".equals(result)) || !"auto".equals(requested) && !requested.equals(result))
+        if (!("local".equals(result) || "server".equals(result)) || !"auto".equals(requested) && !requested.equals(result)
+                || expectedExecution != null && !expectedExecution.equals(result))
             throw new IllegalStateException("The original ordered execution has no proved selected result.");
         requireCurrent(); return result;
     }

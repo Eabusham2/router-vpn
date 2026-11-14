@@ -127,6 +127,7 @@ final class AndroidConnectionProfileStore {
             }
         }
         else if(!external)stageNode(updates,nodeId,row.optJSONObject("policy"),row.optString("node_profile_id",""));
+        if(ordered&&!"local".equals(execution))validateOrderedExecution(updates,row,updatedOrdinary);
         if(multi&&!ordered){if(!ordinary)stageNode(updates,entry,row.optJSONObject("entry_policy"),row.optString("entry_profile_id",""));if(!external)stageNode(updates,exit,row.optJSONObject("exit_policy"),row.optString("exit_profile_id",""));}
         if(external)validateExternalGraph(updatedExternal!=null?updatedExternal:originalExternal,multi&&!ordinary?findNode(entry):null,updatedOrdinary,entryMode,execution);
         else if(multi&&ordinary){
@@ -198,6 +199,11 @@ final class AndroidConnectionProfileStore {
      * existing load transaction owns file/preference rollback and copies no keys. */
     synchronized AndroidNodeStore.ChainCapture selectOrderedPath(AndroidNodeStore.ChainCatalog catalog,
             List<AndroidNodeStore.ChainSource> sources,List<String> modes,Map<String,Object> originalPreferences) throws Exception {
+        return selectOrderedPath(catalog,sources,modes,originalPreferences,"local");
+    }
+    synchronized AndroidNodeStore.ChainCapture selectOrderedPath(AndroidNodeStore.ChainCatalog catalog,
+            List<AndroidNodeStore.ChainSource> sources,List<String> modes,Map<String,Object> originalPreferences,String execution) throws Exception {
+        normalizeExecution(execution);
         requireIdle("saving an ordered Router path");
         if(catalog==null||sources==null||modes==null||sources.size()<2||sources.size()>8||sources.size()!=modes.size())
             throw new IllegalStateException("Choose every member of the complete ordered path.");
@@ -214,7 +220,7 @@ final class AndroidConnectionProfileStore {
                 AndroidNodeStore.ChainSource control=sources.get(sources.size()-1);
                 JSONObject row=new JSONObject().put("id",newId()).put("name","Ordered Router path").put("node_kind","router-vpn")
                         .put("node_id",control.id).put("node_profile_id",control.profileId).put("policy",members.getJSONObject(members.length()-1).getJSONObject("policy"))
-                        .put("mode","smart-auto").put("custom_layers",new JSONArray()).put("multihop_enabled",true).put("multihop_execution","local")
+                        .put("mode","smart-auto").put("custom_layers",new JSONArray()).put("multihop_enabled",true).put("multihop_execution",execution)
                         .put(MULTI_ENTRY_KIND,"router-vpn").put("multihop_entry_id","").put("multihop_entry_mode","")
                         .put("multihop_exit_id","").put("multihop_exit_mode","").put(MULTI_NODES,members);
                 validateOrderedRow(row,SCHEMA_VERSION);
@@ -273,11 +279,12 @@ final class AndroidConnectionProfileStore {
             SharedPreferences p=prefs();
             if(enabled&&!p.getBoolean(MULTI_ON,false)||!"router-vpn".equals(p.getString(SELECTED_KIND,"router-vpn"))
                     ||!"router-vpn".equals(p.getString(MULTI_ENTRY_KIND,"router-vpn"))
-                    ||!"local".equals(p.getString("multihop_execution","local")))throw new IllegalStateException("Choose the original Local ordered Router path.");
+                    ||!java.util.Arrays.asList("local","server","auto").contains(p.getString("multihop_execution","local")))throw new IllegalStateException("Choose the original complete ordered Router path and execution.");
             for(String key:new String[]{MULTI_ENTRY,MULTI_EXIT,MULTI_MODE,"multihop_entry_mode"})
                 if(!p.getString(key,"").isEmpty())throw new IllegalStateException("An ordered path cannot also select a legacy pair.");
             AndroidNodeStore.ChainCapture captured=nodes.captureChain(p.getString(SELECTED_ID,nodes.activeId()));
-            if(!sameJSONValue(new JSONArray(p.getString(MULTI_NODES,"")),AndroidNodeStore.orderedSelection(captured.control.profile())))
+            if(!captured.execution.equals(p.getString("multihop_execution","local"))
+                    ||!sameJSONValue(new JSONArray(p.getString(MULTI_NODES,"")),AndroidNodeStore.orderedSelection(captured.control.profile())))
                 throw new IllegalStateException("The ordered connection choice differs from its original control source.");
             captured.requireCurrent();return captured;
         }
@@ -295,7 +302,7 @@ final class AndroidConnectionProfileStore {
         JSONObject row=new JSONObject().put("id",id).put("name",name).put("node_kind","router-vpn")
                 .put("node_id",captured.control.id).put("node_profile_id",control.profileId).put("policy",control.choices)
                 .put("mode",mode).put("custom_layers",new JSONArray(customLayers(mode)))
-                .put("multihop_enabled",true).put("multihop_execution","local").put(MULTI_ENTRY_KIND,"router-vpn")
+                .put("multihop_enabled",true).put("multihop_execution",captured.execution).put(MULTI_ENTRY_KIND,"router-vpn")
                 .put("multihop_entry_id","").put("multihop_entry_mode","").put("multihop_exit_id","").put("multihop_exit_mode","")
                 .put(MULTI_NODES,members);
         validateOrderedRow(row,SCHEMA_VERSION);
@@ -343,7 +350,7 @@ final class AndroidConnectionProfileStore {
         }
         String controlId=row.getString("node_id");NodeUpdate control=updates.get(controlId);
         JSONObject bundle=new JSONObject(AndroidTorProfile.strictText(control.updated)),profile=selectedProfile(bundle);
-        profile.put("multihop_enabled",true).put("multihop_execution","local").put(MULTI_NODES,orderedReferences(members));
+        profile.put("multihop_enabled",true).put("multihop_execution",row.getString("multihop_execution")).put(MULTI_NODES,orderedReferences(members));
         for(String key:new String[]{"multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"})profile.remove(key);
         AndroidNodeStore.orderedSelection(profile);AndroidNodeStore.validateBundle(bundle);
         byte[] updated=bundle.toString().getBytes(StandardCharsets.UTF_8);
@@ -352,6 +359,25 @@ final class AndroidConnectionProfileStore {
         long complete=0;
         for(NodeUpdate member:updates.values())complete+=member.updated.length;
         if(complete>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("Complete ordered sources with their final references exceed the aggregate bound.");
+    }
+
+    private void validateOrderedExecution(Map<String,NodeUpdate> updates,JSONObject row,AndroidStandardExitStore.Entry imported) throws Exception {
+        JSONArray references=row.getJSONArray(MULTI_NODES);
+        List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
+        for(int i=0;i<references.length();i++) {
+            JSONObject member=references.getJSONObject(i);String id=member.getString("node_id");
+            AndroidNodeStore.ChainSource source;
+            if("external".equals(member.optString("node_kind"))) {
+                if(imported==null||!id.equals(imported.id))throw new IllegalStateException("The execution preview lost its exact imported source.");
+                source=AndroidNodeStore.stagedChainSource(imported);
+            } else {
+                NodeUpdate update=updates.get(id);
+                if(update==null)throw new IllegalStateException("The execution preview omitted a staged paired member.");
+                source=AndroidNodeStore.stagedChainSource(id,update.updated);
+            }
+            sources.add(source);modes.add(member.getString("mode"));
+        }
+        AndroidNodeChainCapture.validateExecutionSources(sources,modes,row.getString("multihop_execution"));
     }
 
     private static JSONArray orderedReferences(JSONArray members) throws Exception {

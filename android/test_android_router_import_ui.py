@@ -147,7 +147,7 @@ final class AndroidStandardExitStore {
     sources['com/eabusham/routervpn/PolicyUIBoundaries.java']=sources['com/eabusham/routervpn/PolicyUIBoundaries.java'].replace('package com.eabusham.routervpn;', 'package com.eabusham.routervpn;import android.content.SharedPreferences;').replace('final class AndroidConnectionProfileStore{','final class AndroidConnectionProfileStore{'+selection_publication+'AndroidNodeStore.ChainCapture currentOrderedPath(){throw new IllegalStateException("Import fixture has no ordered source capture");}')
     sources['com/eabusham/routervpn/AndroidNodeChainRuntime.java']=r'''package com.eabusham.routervpn;
 // Native proof is outside this import/policy fixture and must never be invented.
-final class AndroidNodeChainRuntime {static final class ActiveCapture {long pathGeneration;String homeSession,progressJSON;java.util.List<AndroidNodeStore.ChainSource> sources;java.util.List<String> modes;}ActiveCapture captureActive(){throw new IllegalStateException("Import fixture has no native ordered owner");}}'''
+final class AndroidNodeChainRuntime {static final class ActiveCapture {long pathGeneration;String homeSession,progressJSON,requestedExecution,selectedExecution;java.util.List<AndroidNodeStore.ChainSource> sources;java.util.List<String> modes;}ActiveCapture captureActive(){throw new IllegalStateException("Import fixture has no native ordered owner");}}'''
     # Retain the telemetry fixture's explicit temporary-purpose boundary,
     # including testingHome. This import fixture never reserves or starts one.
     purpose='com/eabusham/routervpn/AndroidNodeCandidatePreparation.java'

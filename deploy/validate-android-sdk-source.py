@@ -103,10 +103,22 @@ ORDERED_LATENCY_STATIC_SIGNATURES = (
     PACKAGE+"RouterOrderedLatency routerNodeChainSOCKSNewLatencyBenchmark("+PACKAGE+"RouterNodeChainSOCKS, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
     PACKAGE+"RouterOrderedLatency routerNodeChainCONNECTNewLatencyBenchmark("+PACKAGE+"RouterNodeChainCONNECT, "+PACKAGE+"CommandServer, "+PACKAGE+"RouterHopMeasurement) throws java.lang.Exception;",
 )
+# Cold Last must reach the distinct generated execution owner and the actual
+# native saved-choice parser; ordinary source replay cannot supply this API.
+EXECUTION_PLAN_SIGNATURES = (
+    "java.lang.String source();", "java.lang.String launchInput() throws java.lang.Exception;",
+    "java.lang.String requestedExecution();", "java.lang.String execution();",
+    "java.lang.String captureLastJSON() throws java.lang.Exception;",
+)
+EXECUTION_STATIC_SIGNATURES = (
+    PACKAGE+"RouterNodeChainExecution routerNodeChainExecutionFromLaunch(java.lang.String, java.lang.String) throws java.lang.Exception;",
+    PACKAGE+"RouterNodeChainExecution routerNodeChainExecutionFromLast(java.lang.String, java.lang.String, java.lang.String) throws java.lang.Exception;",
+)
 GENERATED_API_INVENTORIES = (("RouterNodeChainSOCKS", PLAN_SIGNATURES),
                            ("RouterNodeChainCONNECT", CONNECT_PLAN_SIGNATURES),
                            ("RouterOrderedLatency", ORDERED_LATENCY_SIGNATURES),
-                           ("Libbox", (*STATIC_SIGNATURES, *CONNECT_STATIC_SIGNATURES, *ORDERED_LATENCY_STATIC_SIGNATURES)))
+                           ("RouterNodeChainExecution", EXECUTION_PLAN_SIGNATURES),
+                           ("Libbox", (*STATIC_SIGNATURES, *CONNECT_STATIC_SIGNATURES, *ORDERED_LATENCY_STATIC_SIGNATURES, *EXECUTION_STATIC_SIGNATURES)))
 GENERATED_CLASSES = ("go/Seq.class", "io/nekohasekai/libbox/Libbox.class",
                      "io/nekohasekai/libbox/RouterNodeChainSOCKS.class", "io/nekohasekai/libbox/RouterNodeChainCONNECT.class",
                      "io/nekohasekai/libbox/RouterNodeChainExecution.class",
@@ -606,6 +618,7 @@ def self_test():
             self.assertEqual(len(PLAN_SIGNATURES),15);self.assertEqual(len(STATIC_SIGNATURES),4)
             self.assertEqual(len(CONNECT_PLAN_SIGNATURES),15);self.assertEqual(len(CONNECT_STATIC_SIGNATURES),5)
             self.assertEqual(len(ORDERED_LATENCY_SIGNATURES),8);self.assertEqual(len(ORDERED_LATENCY_STATIC_SIGNATURES),4)
+            self.assertEqual(len(EXECUTION_PLAN_SIGNATURES),5);self.assertEqual(len(EXECUTION_STATIC_SIGNATURES),2)
             for owner,signatures in GENERATED_API_INVENTORIES:
                 raw=transcript(owner,signatures);self.assertEqual(len(require_signatures(raw,signatures,owner)["required_signatures"]),len(signatures))
         def test_every_missing_duplicate_and_changed_method_refused(self):
@@ -631,21 +644,33 @@ def self_test():
                 with self.assertRaises(ValueError):require_signatures(wrong,CONNECT_STATIC_SIGNATURES,"Libbox")
             wrong=transcript("Libbox",CONNECT_STATIC_SIGNATURES).replace((PACKAGE+"CommandServerHandler, "+PACKAGE+"PlatformInterface").encode(),(PACKAGE+"PlatformInterface, "+PACKAGE+"CommandServerHandler").encode())
             with self.assertRaises(ValueError):require_signatures(wrong,CONNECT_STATIC_SIGNATURES,"Libbox")
-        def test_actual_inspection_requires_all_four_classes_from_same_captured_jar(self):
+        def test_actual_inspection_requires_all_five_classes_from_same_captured_jar(self):
             calls=[];jar=Path("captured-classes.jar")
             def run(name,command,bound):
                 calls.append((name,command,bound));owner=command[-1].removeprefix(PACKAGE)
                 return transcript(owner,dict(GENERATED_API_INVENTORIES)[owner])
             rows=inspect_generated_apis(run,jar)
             self.assertEqual([row["class"] for row in rows],[PACKAGE+owner for owner,_ in GENERATED_API_INVENTORIES])
-            self.assertEqual(len(calls),4)
+            self.assertEqual(len(calls),5)
             for (_,command,bound),(owner,_) in zip(calls,GENERATED_API_INVENTORIES):
                 self.assertEqual(command,["javap","-classpath",str(jar),PACKAGE+owner]);self.assertEqual(bound,60)
-            for absent in ("RouterNodeChainCONNECT","RouterOrderedLatency","Libbox"):
+            for absent in ("RouterNodeChainCONNECT","RouterOrderedLatency","RouterNodeChainExecution","Libbox"):
                 def missing(name,command,bound):
                     owner=command[-1].removeprefix(PACKAGE)
                     return b"Error: missing generated class" if owner==absent else transcript(owner,dict(GENERATED_API_INVENTORIES)[owner])
                 with self.assertRaises(ValueError):inspect_generated_apis(missing,jar)
+        def test_last_factory_and_capture_cannot_be_replaced_by_ordinary_source_replay(self):
+            raw=transcript("Libbox",EXECUTION_STATIC_SIGNATURES)
+            signature=EXECUTION_STATIC_SIGNATURES[1]
+            for replacement in (signature.replace("FromLast", "FromLaunch"),
+                                signature.replace("java.lang.String, java.lang.String, java.lang.String", "java.lang.String, java.lang.String"),
+                                signature.replace("RouterNodeChainExecution ", "RouterNodeChain ")):
+                with self.subTest(replacement=replacement),self.assertRaises(ValueError):
+                    require_signatures(raw.replace(signature.encode(),replacement.encode()),EXECUTION_STATIC_SIGNATURES,"Libbox")
+            raw=transcript("RouterNodeChainExecution",EXECUTION_PLAN_SIGNATURES)
+            with self.assertRaises(ValueError):
+                require_signatures(raw.replace(b"captureLastJSON",b"launchInput"),EXECUTION_PLAN_SIGNATURES,"RouterNodeChainExecution")
+
         def test_fifty_factory_requires_the_exact_retained_service_and_typed_owner(self):
             raw=transcript("Libbox",ORDERED_LATENCY_STATIC_SIGNATURES)
             for signature in ORDERED_LATENCY_STATIC_SIGNATURES:

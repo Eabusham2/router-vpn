@@ -24,8 +24,8 @@ def once(text, before, after):
 def sources():
     result = HOST.sources()
     native = result[HOST.NATIVE + 'RouterNodeChainExecution.java']
-    native = once(native, 'public final String localLaunch,requested,source,config,sourceSHA,configSHA,localSHA,launch;',
-                  'public String localLaunch,requested,source,config,sourceSHA,configSHA,localSHA,launch;public int effectiveMTU=1500;public RouterNodeChainExecutionRestoreCapture issuedRestore;')
+    native = once(native, 'public final String localLaunch,requested,source,config,sourceSHA,configSHA,localSHA,launch,lastRecord;',
+                  'public String localLaunch,requested,source,config,sourceSHA,configSHA,localSHA,launch;public final String lastRecord;public int effectiveMTU=1500;public RouterNodeChainExecutionRestoreCapture issuedRestore;')
     native = once(native, 'return new RouterNodeChainExecutionRestoreCapture(this,selected);',
                   'if(issuedRestore==null)issuedRestore=new RouterNodeChainExecutionRestoreCapture(this,selected);return issuedRestore;')
     native = once(native, 'public void requireRestore(RouterNodeChainExecutionRestoreCapture capture){if(capture==null||restore!=capture||capture.original==this||!capture.original.nativeClosed())throw new IllegalStateException("foreign or unjoined native restore capsule");}',

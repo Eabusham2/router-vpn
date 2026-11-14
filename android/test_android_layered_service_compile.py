@@ -110,8 +110,10 @@ STUBS[PKG.replace('.', '/') + '/RouterMTUState.java'] = '''package io.nekohaseka
  public String getInterface(){return name;}public void setInterface(String v){name=v;}public int getMTU(){return mtu;}public void setMTU(int v){mtu=v;}
 }'''
 stub(APP,'AndroidNodeChainExecutionCapture','''{final String config="",launchInput="";
- static final class RestoreCapture{}
+ static final class RestoreCapture{final String execution="";}
  static AndroidNodeChainExecutionCapture compile(AndroidNodeChainCapture local,String requested)throws Exception{throw new IllegalStateException("No execution preparation in this boundary");}
+ static AndroidNodeChainExecutionCapture fromLast(AndroidNodeChainCapture local,String requested,String raw)throws Exception{throw new IllegalStateException("No execution Last preparation in this boundary");}
+ String captureLastRecord()throws Exception{throw new IllegalStateException("No native Last proof in this boundary");}
  static AndroidNodeChainExecutionCapture restore(AndroidNodeChainCapture local,RestoreCapture capture)throws Exception{throw new IllegalStateException("No execution restore in this boundary");}
  void bindNative(io.nekohasekai.libbox.CommandServer server)throws Exception{throw new IllegalStateException("No execution native construction in this boundary");}
  void run(io.nekohasekai.libbox.CommandServer server)throws Exception{throw new IllegalStateException("No execution native owner in this boundary");}

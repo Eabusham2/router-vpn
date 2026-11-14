@@ -554,17 +554,30 @@ public final class ProductActivity extends Activity {
             }
             if(members.isEmpty())labels.add("Choose final Router node");
             else if(members.size()<8)labels.add("Add another intermediate node");
-            choiceDialog("Ordered Router path", "Local execution supports two to eight independent nodes: WireGuard, AmneziaWG Fast or AmneziaWG Strong intermediate hops and a Shadowsocks 2022 or Hysteria2 final. Hysteria2 requires its final node's Start Layer Off and paired intermediate nodes. An imported Shadowsocks or SOCKS5 middle keeps a Shadowsocks 2022 final. Tap an intermediate hop to change its transport, reorder or remove it, or tap the final node to choose its exact transport. The final node supplies the selected DNS; every node keeps its own permitted Start Layer and MTU choice.")
+            choiceDialog("Ordered Router path", "Build an ordered path with two to eight nodes. Choose Local, Server or Compare both for the complete ordered path. Server and Compare support paired WireGuard/AmneziaWG prefixes and a Shadowsocks 2022 final, including one literal Shadowsocks 2022 middle. Local also supports Hysteria2 with its final Start Layer Off, and SOCKS5 or HTTP/HTTPS CONNECT middle paths. Each choice is compiled against the original private graph before saving. Tap an intermediate hop to change its transport, reorder or remove it, or tap the final node to choose its exact transport. The final node supplies the selected DNS; every node keeps its own permitted Start Layer and MTU choice.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                         if(members.isEmpty()){chooseOrderedNode(draft,true);return;}
                         if(w==members.size()){chooseOrderedNode(draft,false);return;}
                         if(w==members.size()-1){chooseOrderedNode(draft,true);return;}
                         editOrderedPrefix(draft,w);
-                    }).setPositiveButton("Save path",(d,w)->{
+                    }).setNeutralButton("Execution: "+AndroidOrderedPathSelection.executionTitle(draft.execution()),(d,w)->chooseOrderedExecution(draft))
+                    .setPositiveButton("Save path",(d,w)->{
                         try{if(mutationBusy())throw new IllegalStateException("The VPN state changed before saving the ordered path.");draft.save();refreshAll();statusView.setText("Ordered path saved. Press Connect to prove every selected node.");}
                         catch(Exception error){toast(safe(error));}
                     }).setNegativeButton("Cancel",null).show();
         } catch(Exception error) { toast(safe(error)); }
+    }
+
+    private void chooseOrderedExecution(AndroidOrderedPathSelection draft){
+        try {
+            if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing execution.");
+            draft.requireCurrent();
+            choiceDialog("Ordered execution","Compare both probes the same external endpoint through Local and Server, compares each path's average of final-node and external HTTP response times, and verifies the winner again. Failed paths receive no score. Saving does not connect.")
+                    .setItems(new String[]{"Local","Server","Compare both"},(d,w)->{
+                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while choosing execution.");draft.setExecution(new String[]{"local","server","auto"}[w]);showOrderedEditor(draft);}
+                        catch(Exception error){toast(safe(error));}
+                    }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
+        }catch(Exception error){toast(safe(error));}
     }
 
     private void chooseOrderedNode(AndroidOrderedPathSelection draft,boolean finalNode){
@@ -743,7 +756,7 @@ public final class ProductActivity extends Activity {
                 AndroidOrderedPathPresentation presentation=currentOrderedPresentation();if(presentation==null){multihopHint.setText("Checking the complete ordered path…");return;}
                 StringBuilder summary=new StringBuilder(presentation.testing?"TESTING • ":presentation.live?"LIVE • ":"");
                 for(int i=0;i<presentation.members.size();i++){if(i>0)summary.append(" → ");AndroidOrderedPathPresentation.Member member=presentation.members.get(i);if(presentation.testing)summary.append(member.testing?"Testing ":"Saved ");summary.append(i+1).append(". ").append(member.name).append(" [").append(member.mode).append("]");if(member.httpResponseMs>0)summary.append(String.format(Locale.US,member.imported?" • Public path via custom node %.1f ms":" • HTTP proof %.1f ms",member.httpResponseMs));}
-                multihopHint.setText(summary.append(" • Local").toString());
+                multihopHint.setText(summary.append(" • ").append(presentation.executionLabel()).toString());
             }catch(Exception invalid){multihopHint.setText("The ordered path changed; reopen Edit hops.");}
             return;
         }

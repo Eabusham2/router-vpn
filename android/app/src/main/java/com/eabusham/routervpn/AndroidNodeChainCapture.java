@@ -2,6 +2,7 @@ package com.eabusham.routervpn;
 
 import io.nekohasekai.libbox.Libbox;
 import io.nekohasekai.libbox.RouterNodeChain;
+import io.nekohasekai.libbox.RouterNodeChainExecution;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -143,10 +144,55 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             if (!member.profileId.equals(reference.getString("id")) || !mode.equals(reference.getString("mode"))) {
                 throw new IllegalStateException("The ordered member changed its original position or exact mode.");
             }
-            inputs.add(memberInput(member, mode, profile));
+            inputs.add(memberInput(member, mode, "local".equals(original.execution) ? profile : executionProfile(profile)));
         }
         original.requireCurrent();
         return inputs;
+    }
+
+    /** Startup controls schedule a connection; they do not change its native
+     * execution source. Full original bundle bytes remain owned by ChainCapture. */
+    static JSONObject executionProfile(JSONObject profile) throws Exception {
+        JSONObject result=new JSONObject(profile.toString());
+        result.remove("startup_mode");result.remove("auto_connect");
+        return result;
+    }
+
+    /** Validate Server/Compare before a saved-profile transaction publishes any
+     * node, preference or credential reference. The native preparation stays closed. */
+    static void validateExecutionSources(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
+        if (!java.util.Arrays.asList("server","auto").contains(execution) || members==null || modes==null
+                || members.size()!=modes.size() || members.size()<2 || members.size()>8)
+            throw new IllegalStateException("The ordered execution preview lost its complete original graph.");
+        JSONObject control=members.get(members.size()-1).profile();
+        JSONArray selected=AndroidNodeStore.orderedSelection(control);
+        if (!execution.equals(control.getString("multihop_execution")) || selected.length()!=members.size())
+            throw new IllegalStateException("The staged ordered execution differs from its final source.");
+        JSONArray inputs=new JSONArray(),identities=new JSONArray();
+        for(int i=0;i<members.size();i++) {
+            AndroidNodeStore.ChainSource member=members.get(i);JSONObject reference=selected.getJSONObject(i);
+            if(!member.profileId.equals(reference.getString("id")) || !modes.get(i).equals(reference.getString("mode")))
+                throw new IllegalStateException("The staged execution reordered or replaced an original member.");
+            inputs.put(memberInput(member,modes.get(i),executionProfile(member.profile())));
+            identities.put(identityInput(member));
+        }
+        String input=bounded(new JSONObject().put("schema",sourceSchema(members)).put("execution","local")
+                .put("nodes",inputs).put("identity_sources",identities).toString(),MAX_INPUT);
+        RouterNodeChain local=Libbox.newRouterNodeChain(input);
+        if(local==null)throw new IllegalStateException("The native compiler returned no complete Local source.");
+        try { validateExecutionPlan(local,execution); } finally { local.close(); }
+    }
+
+    static void validateExecutionPlan(RouterNodeChain local,String execution) throws Exception {
+        if(local==null || !java.util.Arrays.asList("server","auto").contains(execution))
+            throw new IllegalStateException("Choose the original ordered Server or Compare graph.");
+        RouterNodeChainExecution preview=Libbox.routerNodeChainExecutionFromLaunch(local.launchInput(),execution);
+        if(preview==null)throw new IllegalStateException("The native compiler returned no ordered execution preparation.");
+        try {
+            if(!execution.equals(preview.requestedExecution()) || !local.sourceSHA256().equals(preview.localSourceSHA256())
+                    || preview.config()==null || preview.config().isEmpty())
+                throw new IllegalStateException("The ordered execution preview changed its original Local source.");
+        } finally { preview.close(); }
     }
 
     /** Pure compiler input shared by the editor preview and the launch capture. */

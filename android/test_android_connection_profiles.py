@@ -78,9 +78,86 @@ public static void routerValidateExternalOpenVPNPairing(String profile,String pa
 public static void routerValidateExternalOpenVPNResponseProbes(String profile,String probes)throws Exception{call("openvpn-probes",profile,probes);}
 public static void routerValidateExternalOpenVPNStartLayers(String profile,String probes,String layers,String mode)throws Exception{call("openvpn-layers",profile,probes,layers,mode);}
 private static String call(String...args)throws Exception{
- Process process=new ProcessBuilder(System.getenv("ROUTERVPN_PROFILE_COMPILER")).start();process.getOutputStream().write(new JSONArray(java.util.Arrays.asList(args)).toString().getBytes(StandardCharsets.UTF_8));process.getOutputStream().close();String out=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8),error=new String(process.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);if(process.waitFor()!=0)throw new IllegalStateException(error);return out;
+ Process process=new ProcessBuilder(System.getenv("ROUTERVPN_PROFILE_COMPILER")).start();
+ try{
+  try(java.io.OutputStream output=new java.io.BufferedOutputStream(process.getOutputStream(),16384)){writeArguments(output,args);}
+  String out=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8),error=new String(process.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);
+  if(process.waitFor()!=0)throw new IllegalStateException(error);return out;
+ }finally{if(process.isAlive()){process.destroyForcibly();process.waitFor();}}
+}
+// Fixture IPC retains the original JSON-array protocol and complete argument
+// bytes. Quote only a bounded chunk instead of duplicating a 40 MiB source in
+// one JSONArray/StringBuilder and then another full UTF-8 buffer.
+static void writeArguments(java.io.OutputStream output,String[] args)throws Exception{
+ output.write('[');
+ for(int index=0;index<args.length;index++){
+  if(index!=0)output.write(',');String value=args[index];
+  if(value==null){output.write(new byte[]{'n','u','l','l'});continue;}
+  output.write('"');
+  for(int from=0;from<value.length();){
+   int end=Math.min(value.length(),from+2048);
+   if(end<value.length()&&Character.isHighSurrogate(value.charAt(end-1))&&Character.isLowSurrogate(value.charAt(end)))end--;
+   String quoted=org.json.JSONObject.quote(value.substring(from,end));
+   output.write(quoted.substring(1,quoted.length()-1).getBytes(StandardCharsets.UTF_8));from=end;
+  }
+  output.write('"');
+ }
+ output.write(']');
 }}''',
 }
+
+TRANSPORT_GO = r'''package main
+import("encoding/json";"fmt";"io";"os")
+func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var out []byte;if err==nil{out,err=json.Marshal(args)};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};os.Stdout.Write(out)}
+'''
+
+TRANSPORT_HARNESS = r'''package io.nekohasekai.libbox;
+import org.json.JSONArray;import java.io.*;import java.nio.charset.StandardCharsets;import java.security.MessageDigest;import java.util.*;
+public final class FixtureTransportHarness {
+ static void check(boolean value,String message){if(!value)throw new AssertionError(message);}
+ static String legacy(String[] args)throws Exception{
+  Process child=new ProcessBuilder(System.getenv("ROUTERVPN_PROFILE_COMPILER")).start();
+  try{
+   child.getOutputStream().write(new JSONArray(Arrays.asList(args)).toString().getBytes(StandardCharsets.UTF_8));child.getOutputStream().close();
+   String output=new String(child.getInputStream().readAllBytes(),StandardCharsets.UTF_8),error=new String(child.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);
+   if(child.waitFor()!=0)throw new IllegalStateException(error);return output;
+  }finally{if(child.isAlive()){child.destroyForcibly();child.waitFor();}}
+ }
+ static final class BoundedSink extends OutputStream {
+  final MessageDigest digest=MessageDigest.getInstance("SHA-256");long bytes;int largest;
+  BoundedSink()throws Exception{}
+  public void write(int value){digest.update((byte)value);bytes++;largest=Math.max(largest,1);}
+  public void write(byte[] value,int offset,int length){
+   check(length<=12288,"fixture streaming transport emitted an unbounded write");
+   digest.update(value,offset,length);bytes+=length;largest=Math.max(largest,length);
+  }
+ }
+ public static void main(String[] ignored)throws Exception{
+  StringBuilder controls=new StringBuilder();for(int i=0;i<32;i++)controls.append((char)i);
+  List<String[]> vectors=List.of(
+   new String[]{},new String[]{null,""},new String[]{"plain"},new String[]{"\"\\/\b\f\n\r\t"},
+   new String[]{controls.toString()},new String[]{"\u00e9 中文 \u2028 \u2029 \ud83d\ude80"},
+   new String[]{"\ud800","\udc00","\ud800\ud800\udc00"},
+   new String[]{"x".repeat(2047)+"\ud83d\ude80"+"y"},new String[]{"x".repeat(2048)+"\ud83d\ude80"},
+   new String[]{"x".repeat(2047)+"\ud800"+"x"},new String[]{"x".repeat(2047)+"\udc00"+"x"},
+   new String[]{"x".repeat(2047)+"<"+"/script>"},new String[]{"\u0000".repeat(65537)},
+   new String[]{"left",null,"middle\r\n","right\\"},
+   new String[]{"x".repeat(2047)+"\"\\\n"+"\ud83d\ude80".repeat(2048)});
+  var call=Libbox.class.getDeclaredMethod("call",String[].class);call.setAccessible(true);
+  for(int index=0;index<vectors.size();index++){
+   String witness="fixture transport roundtrip vector "+index;
+   try{String original=legacy(vectors.get(index));String actual=(String)call.invoke(null,(Object)vectors.get(index));check(original.equals(actual),witness);}
+   catch(Throwable failure){throw new AssertionError(witness,failure);}
+  }
+  String[] large={"\u0000".repeat(65537)};BoundedSink sink=new BoundedSink();Libbox.writeArguments(sink,large);
+  byte[] expected=new JSONArray(Arrays.asList(large)).toString().getBytes(StandardCharsets.UTF_8);
+  check(sink.bytes==expected.length,"fixture bounded transport changed byte count");
+  check(Arrays.equals(sink.digest.digest(),MessageDigest.getInstance("SHA-256").digest(expected)),"fixture bounded transport changed byte identity");
+  check(sink.largest<=12288&&sink.largest>1,"fixture bounded transport lost its chunk bound");
+  System.out.println("Android profile fixture transport: "+vectors.size()+" exact Go-decoded argument vectors and 3 bounded-write checks PASS");
+ }
+}
+'''
 
 BOUNDARIES = r'''package com.eabusham.routervpn;
 import org.json.*;import java.util.*;import java.io.*;import java.nio.file.*;import android.content.Context;import java.nio.charset.StandardCharsets;import io.nekohasekai.libbox.Libbox;
@@ -158,7 +235,7 @@ final class AndroidDirectStandardExitController { EXTERNAL_TRANSPORT }
 PRODUCT = r'''package com.eabusham.routervpn;
 import android.content.*;import java.util.*;import org.json.*;import java.nio.charset.StandardCharsets;
 // Native-owned ordered display capture is exercised by the ordered usage suite.
-final class AndroidOrderedPathPresentation {static final class Member{String name,mode;double httpResponseMs;boolean imported,testing;}boolean live,testing;List<Member> members;}
+final class AndroidOrderedPathPresentation {String executionLabel(){return "Local";}static final class Member{String name,mode;double httpResponseMs;boolean imported,testing;}boolean live,testing;List<Member> members;}
 // Only UI rendering and runtime dispatch are doubled. The shipping handler reads
 // the same actual profile/node/exit stores used by the persistence regression.
 final class ProductConnectSurface extends Context {
@@ -921,12 +998,43 @@ def run_temporary_cancel_control(work, app, classes, jar, env):
     print("Android profile Product causal control: original temporary purpose must cancel before connecting")
 
 
+def run_transport_fixture(work, src, classes, jar, env):
+    """Exercise the actual fixture call path against the unchanged Go JSON-array format."""
+    transport_source = work / "transport-roundtrip.go"
+    transport_source.write_text(TRANSPORT_GO)
+    transport = work / "transport-roundtrip"
+    subprocess.run(["go", "build", "-o", str(transport), str(transport_source)], cwd=ROOT, check=True, timeout=120)
+    transport_env = env.copy()
+    transport_env["ROUTERVPN_PROFILE_COMPILER"] = str(transport)
+    command = ["java", "-cp", str(classes) + os.pathsep + str(jar), "io.nekohasekai.libbox.FixtureTransportHarness"]
+    subprocess.run(command, env=transport_env, check=True, timeout=180)
+    libbox = src / "io/nekohasekai/libbox/Libbox.java"
+    original = libbox.read_text()
+    controls = (
+        ("omitted-array", "writeArguments(output,args);", "/* broken: original argument array omitted */", "fixture transport roundtrip vector 0"),
+        ("changed-byte", "value.substring(from,end)", "value.substring(Math.min(from+1,end),end)", "fixture transport roundtrip vector 2"),
+    )
+    for name, before, after, witness in controls:
+        assert original.count(before) == 1, (name, before)
+        changed = work / ("transport-source-" + name) / "Libbox.java"
+        changed.parent.mkdir()
+        changed.write_text(original.replace(before, after))
+        output = work / ("transport-negative-" + name)
+        shutil.copytree(classes, output)
+        classpath = str(output) + os.pathsep + str(jar)
+        subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", classpath, "-d", str(output), str(changed)], check=True, timeout=60)
+        result = subprocess.run(["java", "-cp", classpath, "io.nekohasekai.libbox.FixtureTransportHarness"], env=transport_env, capture_output=True, text=True, timeout=180)
+        if result.returncode == 0 or witness not in result.stderr:
+            raise AssertionError("Profile fixture transport negative missed its intended witness: " + name + "\n" + result.stdout + result.stderr)
+        print("Android profile fixture transport negative control rejected:", name, witness)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-execution", "general-stores"), default="all")
+    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-execution", "general-stores", "fixture-transport"), default="all")
     args = parser.parse_args()
     chain = None
-    if args.case_family in ("all", "ordered-chain", "ordered-imported"):
+    if args.case_family in ("all", "ordered-chain", "ordered-imported", "fixture-transport"):
         import test_android_node_chain_capture as chain
     if args.case_family == "ordered-execution":
         import test_android_node_chain_execution_capture as chain
@@ -967,11 +1075,21 @@ def main():
         (app / "ConnectionProfilesHarness.java").write_text(HARNESS)
         if chain:
             chain.prepare_sources(src, app, JAVA)
+        else:
+            # Non-ordered fixtures cannot accidentally accept a new execution
+            # preview; actual ordered source families use the shared compiler.
+            (app / "AndroidNodeChainCapture.java").write_text('package com.eabusham.routervpn; final class AndroidNodeChainCapture {static void validateExecutionSources(java.util.List<AndroidNodeStore.ChainSource> nodes,java.util.List<String> modes,String execution)throws Exception{throw new IllegalStateException("No ordered execution compiler in this non-ordered fixture");}}')
+        if args.case_family in ("all", "fixture-transport"):
+            (src / "io/nekohasekai/libbox/FixtureTransportHarness.java").write_text(TRANSPORT_HARNESS)
         classes = work / "classes"
         subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(classes), *map(str, src.rglob("*.java"))], check=True, timeout=60)
         data = work / "data"
         data.mkdir()
         env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler);env["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-aes-client.json");env["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-layered-xor-client.json")
+        if args.case_family in ("all", "fixture-transport"):
+            run_transport_fixture(work, src, classes, jar, env)
+            if args.case_family == "fixture-transport":
+                return
         if chain:
             chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")
             if args.case_family in ("ordered-chain", "ordered-imported", "ordered-execution"):

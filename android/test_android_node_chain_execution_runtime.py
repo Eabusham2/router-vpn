@@ -21,19 +21,23 @@ EXECUTION = r'''package io.nekohasekai.libbox;
 import org.json.*;import java.nio.charset.StandardCharsets;import java.security.*;import java.util.concurrent.*;
 public final class RouterNodeChainExecution {
  public static java.util.function.Consumer<RouterNodeChainExecution> configured;public static volatile RouterNodeChainExecution latest;
- public final String localLaunch,requested,source,config,sourceSHA,configSHA,localSHA,launch;
+ public final String localLaunch,requested,source,config,sourceSHA,configSHA,localSHA,launch,lastRecord;
+ public static int ordinaryPreparations,lastPreparations;public CountDownLatch lastEntered,lastRelease;
  public CommandServer server;public volatile boolean valid=true,cancelled,closed,cleanupToken,paused,nativeReceipt=true;public volatile String selected;
  public int runs,closes,failCloses,binds,failBindBefore,failBindAfter;public Runnable afterRun,duringClose;public CountDownLatch entered,release;
  public RouterNodeChainExecutionRestoreCapture restore;
- RouterNodeChainExecution(String input,String requested)throws Exception{
-  localLaunch=input;this.requested=requested;JSONObject original=new JSONObject(input);localSHA=original.getString("source_sha256");
+ RouterNodeChainExecution(String input,String requested)throws Exception{this(input,requested,"");}
+ RouterNodeChainExecution(String input,String requested,String last)throws Exception{
+  lastRecord=last;localLaunch=input;this.requested=requested;JSONObject original=new JSONObject(input);localSHA=original.getString("source_sha256");
   JSONObject local=new JSONObject().put("schema",1).put("execution","local").put("nodes",original.getJSONArray("nodes")).put("identity_sources",original.getJSONArray("identity_sources"));
   source=new JSONObject().put("schema",1).put("execution",requested).put("local_source",local.toString()).toString();
   config=new JSONObject().put("inbounds",new JSONArray().put(new JSONObject().put("type","tun").put("tag","routervpn-chain-tun")))
    .put("route",new JSONObject().put("final","routervpn-chain-application")).put("original_source",digest(source)).toString();
   sourceSHA=digest(source);configSHA=digest(config);
-  launch=new JSONObject().put("kind","routervpn-node-chain-execution-preparation-input").put("schema",1).put("source",source).put("source_sha256",sourceSHA).put("config_sha256",configSHA).toString();
+  JSONObject envelope=new JSONObject().put("kind","routervpn-node-chain-execution-preparation-input").put("schema",last.isEmpty()?1:2).put("source",source).put("source_sha256",sourceSHA).put("config_sha256",configSHA);
+  if(!last.isEmpty())envelope.put("last",last);launch=envelope.toString();
   selected="server";latest=this;if(configured!=null)configured.accept(this);
+  if(!last.isEmpty()){JSONObject choice=new JSONObject(last);if(choice.length()!=4||choice.getInt("schema")!=1||!requested.equals(choice.getString("setting"))||!digest(input).equals(choice.getString("fixture_original_source")))throw new IllegalStateException("changed controlled Last source");selected=choice.getString("execution");if(!java.util.Arrays.asList("local","server").contains(selected)||!requested.equals("auto")&&!requested.equals(selected))throw new IllegalStateException("changed controlled Last choice");}
  }
  public static String digest(String value)throws Exception{StringBuilder out=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)))out.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return out.toString();}
  public String source(){return source;}public String config(){return config;}public String launchInput(){return launch;}public String sourceSHA256(){return sourceSHA;}public String configSHA256(){return configSHA;}public String localSourceSHA256(){return localSHA;}public String requestedExecution(){return requested;}
@@ -54,6 +58,7 @@ public final class RouterNodeChainExecution {
   try{server.platform.autoDetectInterfaceControl(10);if(duringClose!=null)duringClose.run();if(failCloses-->0)throw new IllegalStateException("controlled original lease drain pending");closed=true;}
   finally{cleanupToken=false;}
  }
+ public String captureLastJSON()throws Exception{if(!healthy())throw new IllegalStateException("no original native Last proof");if(lastEntered!=null)lastEntered.countDown();if(lastRelease!=null&&!lastRelease.await(3,TimeUnit.SECONDS))throw new IllegalStateException("held Last capture did not drain");if(!healthy())throw new IllegalStateException("retired Last proof");return new JSONObject().put("schema",1).put("setting",requested).put("execution",selected).put("fixture_original_source",digest(localLaunch)).toString();}
  public RouterNodeChainExecutionRestoreCapture captureRestore(){if(!healthy())throw new IllegalStateException("no original execution proof");return new RouterNodeChainExecutionRestoreCapture(this,selected);}
  public void requireRestore(RouterNodeChainExecutionRestoreCapture capture){if(capture==null||restore!=capture||capture.original==this||!capture.original.nativeClosed())throw new IllegalStateException("foreign or unjoined native restore capsule");}
 }
@@ -63,9 +68,9 @@ CAPTURE = r'''package com.eabusham.routervpn;
 import org.json.*;import io.nekohasekai.libbox.*;
 final class AndroidNodeChainCapture {
  static final int MAX_INPUT=40*1024*1024;static final String SESSION_FILE="routervpn-node-chain.json";
- final AndroidNodeStore.ChainCapture source;final RouterNodeChain plan;final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;final String config="{\"original\":\"local-pure-graph\"}",launchInput,sourceSHA256,configSHA256;final boolean strict;
+ final AndroidNodeStore.ChainCapture source;final RouterNodeChain plan;final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;final String config="{\"original\":\"local-pure-graph\"}",launchInput,sourceSHA256,configSHA256,selectionExecution;final boolean strict;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source)throws Exception{
-  this.source=source;strict=source.strict;plan=new RouterNodeChain(source.members.size());sourceSHA256="a".repeat(64);configSHA256=RouterNodeChainExecution.digest(config);
+  this.source=source;selectionExecution=source.execution;strict=source.strict;plan=new RouterNodeChain(source.members.size());sourceSHA256="a".repeat(64);configSHA256=RouterNodeChainExecution.digest(config);
   JSONArray nodes=new JSONArray(),identities=new JSONArray();for(int i=0;i<source.members.size();i++){nodes.put("original-node-"+source.members.get(i).id);identities.put("original-identity-"+source.members.get(i).id);}
   launchInput=new JSONObject().put("kind","routervpn-node-chain-launch-input").put("schema",1).put("execution","local").put("nodes",nodes).put("identity_sources",identities).put("source_sha256",sourceSHA256).put("config_sha256",configSHA256).toString();
  }
@@ -114,8 +119,35 @@ public final class OrderedExecutionRuntimeTest {
    check(restored.ok&&f.runtime.restoredMatches(capture),"temporary restore reran Compare or lost its captured execution");
    var replacement=f.owner();check(replacement!=original&&replacement.source==original.source&&replacement.execution.plan!=plan&&replacement.execution.plan.restore!=null,"restore reconstructed authority instead of retaining original capture");
    check(replacement.provedExecution().equals(chosen)&&CommandServer.created==initial+2,"restore chose another execution or reused original Box");
-   if(variant.startsWith("auto")){replacement.execution.plan.selected=chosen.equals("server")?"local":"server";check(!f.runtime.restoredMatches(capture),"restored match accepted another execution winner");replacement.execution.plan.selected=chosen;}
+   if(variant.startsWith("auto")){replacement.execution.plan.selected=chosen.equals("server")?"local":"server";reject(replacement::provedExecution,"restored plan accepted another execution winner");check(!f.runtime.restoredMatches(capture),"restored match accepted another execution winner");replacement.execution.plan.selected=chosen;}
    f.stop();
+  }
+ }
+
+ static void coldLast()throws Exception{
+  for(String variant:List.of("server/server","auto/server","auto/local"))try(Fixture f=new Fixture(3,variant.split("/")[0])){
+   String chosen=variant.split("/")[1];RouterNodeChainExecution.configured=plan->plan.selected=chosen;f.connected();var original=f.owner();String last=original.captureLastRecord();
+   var active=f.runtime.captureActive();check(active.requestedExecution.equals(f.source.execution)&&active.selectedExecution.equals(chosen),"active capture lost exact requested/selected execution");
+   f.stop();int ordinary=RouterNodeChainExecution.ordinaryPreparations,records=AndroidStartupPolicy.recorded;
+   RouterNodeChainExecution.configured=plan->plan.selected=chosen.equals("local")?"server":"local";
+   Result result=new Result();f.runtime.connectLast(f.source,AndroidHomeStateStore.snapshot(f.service),AndroidNodeChainSession.selection(f.service,f.source),chosen,last,result);result.finished();f.drain();
+   check(result.ok&&f.owner()!=original&&f.owner().execution.plan.lastRecord.equals(last)&&f.owner().provedExecution().equals(chosen),"cold Last failed to freshly prove the saved winner");
+   check(RouterNodeChainExecution.ordinaryPreparations==ordinary&&AndroidStartupPolicy.recorded==records&&f.owner().execution.plan.runs==1,"cold Last reran Compare or rewrote saved history");f.stop();
+   Result missing=new Result();f.runtime.connectLast(f.source,AndroidHomeStateStore.snapshot(f.service),missing);missing.finished();check(!missing.ok&&!f.runtime.isConnected()&&RouterNodeChainExecution.ordinaryPreparations==ordinary,"missing cold Last silently reran execution selection");
+  }
+ }
+ static void heldLast()throws Exception{
+  for(String fault:List.of("cancel","source","replacement"))try(Fixture f=new Fixture(3,"auto")){
+   CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);RouterNodeChainExecution.configured=plan->{plan.lastEntered=entered;plan.lastRelease=release;};
+   int records=AndroidStartupPolicy.recorded;Result result=new Result();f.runtime.connect(f.source,result);check(entered.await(4,TimeUnit.SECONDS),"native Last capture did not enter held observation");
+   String replacement="";
+   if(fault.equals("source"))f.source.valid=false;
+   else if(fault.equals("replacement")){replacement=AndroidHomeStateStore.begin(f.service,"replacement","wg","wg","newer-node");AndroidHomeStateStore.connected(f.service,"replacement","wg","wg","","newer-node");f.runtime.disconnect();}
+   else f.runtime.disconnect();
+   release.countDown();result.finished();f.drain();
+   check(!result.ok&&AndroidStartupPolicy.recorded==records,"retired Last observation delivered late success or saved history");
+   if(!replacement.isEmpty())check(AndroidHomeStateStore.snapshot(f.service).sessionId.equals(replacement)&&AndroidHomeStateStore.snapshot(f.service).connected,"retired Last capture replaced newer Home owner");
+   f.source.valid=true;
   }
  }
  static void failure()throws Exception{
@@ -261,7 +293,7 @@ public final class OrderedExecutionRuntimeTest {
    check(plan.server!=null&&plan.closed&&plan.server.closed&&plan.nativeClosed()&&!f.runtime.isActiveOrTransitioning(),"before-bind failure lost original sealed construction receipt: "+fault);
   }
  }
- public static void main(String[] args)throws Exception{String family=args.length==0?"all":args[0];if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("failure"))failure();if(family.equals("all")||family.equals("cleanup"))cleanup();if(family.equals("all")||family.equals("cancel"))cancel();if(family.equals("all")||family.equals("mtu-cleanup"))mtuCleanup();if(family.equals("all")||family.equals("mtu-pause"))mtuPause();if(family.equals("all")||family.equals("mtu-pause-close"))mtuPauseClose();if(family.equals("all")||family.equals("native-receipt"))nativeReceipt();if(family.equals("all")||family.equals("bind-failure"))bindFailure();if(family.equals("all")||family.equals("bind-pending"))bindPending();if(family.equals("all")||family.equals("constructor"))constructorFailure();if(family.equals("all")||family.equals("before-bind"))beforeBind();System.out.println("Android ordered execution host: "+checks+" actual shipping Java checks PASS; native/OS boundaries doubled");}
+ public static void main(String[] args)throws Exception{String family=args.length==0?"all":args[0];if(family.equals("all")||family.equals("success"))success();if(family.equals("all")||family.equals("last"))coldLast();if(family.equals("all")||family.equals("held-last"))heldLast();if(family.equals("all")||family.equals("failure"))failure();if(family.equals("all")||family.equals("cleanup"))cleanup();if(family.equals("all")||family.equals("cancel"))cancel();if(family.equals("all")||family.equals("mtu-cleanup"))mtuCleanup();if(family.equals("all")||family.equals("mtu-pause"))mtuPause();if(family.equals("all")||family.equals("mtu-pause-close"))mtuPauseClose();if(family.equals("all")||family.equals("native-receipt"))nativeReceipt();if(family.equals("all")||family.equals("bind-failure"))bindFailure();if(family.equals("all")||family.equals("bind-pending"))bindPending();if(family.equals("all")||family.equals("constructor"))constructorFailure();if(family.equals("all")||family.equals("before-bind"))beforeBind();System.out.println("Android ordered execution host: "+checks+" actual shipping Java checks PASS; native/OS boundaries doubled");}
 }
 '''
 
@@ -288,8 +320,8 @@ def sources():
     result[NATIVE + 'RouterNodeChainExecutionRestoreCapture.java'] = '''package io.nekohasekai.libbox;public final class RouterNodeChainExecutionRestoreCapture {final RouterNodeChainExecution original;final String selected;RouterNodeChainExecutionRestoreCapture(RouterNodeChainExecution original,String selected){this.original=original;this.selected=selected;}}'''
     lib = result[NATIVE + 'Libbox.java']
     result[NATIVE + 'Libbox.java'] = lib[:-1] + r'''
- public static void routerValidatePrivateNodeJSON(String value)throws Exception{new org.json.JSONObject(value);}
- public static RouterNodeChainExecution routerNodeChainExecutionFromLaunch(String launch,String requested)throws Exception{return new RouterNodeChainExecution(launch,requested);}
+ public static RouterNodeChainExecution routerNodeChainExecutionFromLaunch(String launch,String requested)throws Exception{RouterNodeChainExecution.ordinaryPreparations++;return new RouterNodeChainExecution(launch,requested);}
+ public static RouterNodeChainExecution routerNodeChainExecutionFromLast(String launch,String requested,String last)throws Exception{RouterNodeChainExecution.lastPreparations++;return new RouterNodeChainExecution(launch,requested,last);}
  public static RouterNodeChainExecution newRouterNodeChainExecutionLaunch(String launch){throw new AssertionError("Host cannot reconstruct process authority from a private file");}
  public static RouterNodeChainExecution newRouterNodeChainExecutionRestore(RouterNodeChainExecutionRestoreCapture capture)throws Exception{
   if(capture==null||!capture.original.closed||capture.original.server==null||!capture.original.server.closed)throw new IllegalStateException("original Box and remote cleanup not joined");
@@ -331,7 +363,7 @@ def main():
             ('LayeredVpnService', 'System.nanoTime() < cleanup.deadline', 'true', 'cleanup', 'expired execution cleanup scope opened a physical socket'),
             ('LayeredVpnService', 'chain.retainsServerCleanup(cleanup.server)', 'true', 'cleanup', 'Java scope bypassed the original native cleanup token'),
             ('LayeredVpnService', 'NodeChainCleanup mtuCleanup = beginNodeChainCleanup(chain, capturedServer);', 'NodeChainCleanup mtuCleanup = new NodeChainCleanup(chain, capturedServer, nodeChainPhysicalNetwork, executionNetwork);', 'mtu-cleanup', 'original execution cleanup did not join'),
-            ('AndroidNodeChainExecutionCapture', '&& captured.execution.equals(execution()) && healthy();', '&& healthy();', 'success', 'restored match accepted another execution winner'),
+            ('AndroidNodeChainExecutionCapture', 'expectedExecution != null && !expectedExecution.equals(result)', 'false', 'success', 'restored plan accepted another execution winner'),
             ('AndroidNodeChainMTUPlatform', 'cleanup = owner.beginMTUCleanup(session, server, platform);', 'cleanup = () -> {};', 'mtu-pause', 'MTU Begin omitted its original cleanup call'),
             ('LayeredVpnService', 'if (!item.closed) original = item;', 'if (!item.closed && original == null) original = item;', 'mtu-pause-close', 'later Close extended an outstanding MTU deadline'),
             ('LayeredVpnService', 'while (nodeChainCleanup != null && nodeChainCleanup.closed) nodeChainCleanup = nodeChainCleanup.previous;', 'nodeChainCleanup = null;', 'mtu-pause-close', 'late MTU End cleared another Close cleanup scope'),
@@ -340,6 +372,15 @@ def main():
             ('LayeredVpnService', 'chain.closePlan(); chain.requireNativeBindingDrain();', 'chain.closePlan();', 'bind-pending', 'failed reservation destroyed original unstarted server before positive receipt'),
             ('AndroidNodeChainSession', 'server == null ? owner != null || !proofClosed : !execution.nativeClosed()', '!execution.nativeClosed()', 'constructor', 'unbound constructor failure retained its original preparation indefinitely'),
             ('AndroidNodeChainSession', 'execution.bindNative(original);\n        nativeBound = true;\n        requireSource();', 'execution.bindNative(original);\n        nativeBound = true;', 'before-bind', 'retired source started native construction after binding'),
+        )
+        runtime=originals['AndroidNodeChainRuntime']
+        start=runtime.index('            // Native Last may block while cancellation retires this session.')
+        end=runtime.index('\n        } catch (Throwable failure)',start)
+        original_barrier=runtime[start:end]
+        missing_barrier='            LayeredVpnService.startNodeChainAutomaticMTU(session);\n            callback.finished(true, "Every ordered node and selected DNS passed the original native path proof.");'
+        controls += (
+            ('AndroidNodeChainRuntime',original_barrier,missing_barrier,'held-last','retired Last observation delivered late success or saved history'),
+            ('AndroidNodeChainSession','AndroidNodeChainExecutionCapture.fromLast(capture,source.execution,lastRecord)','AndroidNodeChainExecutionCapture.compile(capture,source.execution)','last','cold Last failed to freshly prove the saved winner'),
         )
         for number, (name, old, new, family, witness) in enumerate(controls):
             original = originals[name]

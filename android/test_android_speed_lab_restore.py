@@ -24,6 +24,8 @@ ORDERED_SOURCE = r'''static final class ChainSource {
  byte[] bytes(){return source.clone();}JSONObject profile()throws Exception{return new JSONObject().put("id",profileId).put("name",id);}
 }'''
 ORDERED_CAPTURE = r'''static final class ChainCapture {
+ // This legacy restoration fixture owns Local paths only; typed execution restoration has its separate actual-host gate.
+ final String execution="local";
  final ChainSource control;final List<ChainSource> members;final List<String> modes;boolean revoked;
  ChainCapture(List<Node> nodes,List<String> modes)throws Exception{this(nodes,modes,null);}
  ChainCapture(List<Node> nodes,List<String> modes,AndroidStandardExitStore.Entry middle)throws Exception{
@@ -69,7 +71,7 @@ final class AndroidNodeChainRuntime {
  final Set<String> drained=new HashSet<>();
  static volatile boolean holdCapture;static java.util.concurrent.CountDownLatch captureEntered=new java.util.concurrent.CountDownLatch(1),captureRelease=new java.util.concurrent.CountDownLatch(1);
  static void workerOnly(){if(Thread.currentThread().getName().equals("main"))throw new AssertionError("ordered native/source verification ran on UI thread");}
- static final class RestoreCapture{final AndroidNodeStore.ChainCapture source;final AndroidHomeStateStore.Snapshot home;final String selection;RestoreCapture(AndroidNodeStore.ChainCapture source,AndroidHomeStateStore.Snapshot home)throws Exception{this.source=source;this.home=home;selection=AndroidConnectionSelection.digest(new Context(),new AndroidNodeStore(new Context()));}}
+ static final class RestoreCapture{final AndroidNodeStore.ChainCapture source;final AndroidHomeStateStore.Snapshot home;final String selection,requestedExecution,selectedExecution="local";RestoreCapture(AndroidNodeStore.ChainCapture source,AndroidHomeStateStore.Snapshot home)throws Exception{this.source=source;this.home=home;requestedExecution=source.execution;selection=AndroidConnectionSelection.digest(new Context(),new AndroidNodeStore(new Context()));}}
  static String chain(AndroidNodeStore.ChainCapture source)throws Exception{JSONArray values=new JSONArray();for(int i=0;i<source.members.size();i++)values.put(new JSONObject().put("id",source.members.get(i).id).put("mode",source.modes.get(i)));return values.toString();}
  void begin(AndroidNodeStore.ChainCapture captured)throws Exception{source=captured;AndroidHomeStateStore.begin("node-chain","node-chain","","","","");AndroidHomeStateStore.current.activeNodeId=captured.control.id;AndroidHomeStateStore.current.activeChain=chain(captured);home=AndroidHomeStateStore.copy();active=true;}
  boolean isActiveOrTransitioning(){return active;}boolean isConnected(){return active&&home!=null&&home.sessionId.equals(AndroidHomeStateStore.current.sessionId)&&AndroidHomeStateStore.current.connected;}
@@ -79,6 +81,7 @@ final class AndroidNodeChainRuntime {
  boolean restoredMatches(RestoreCapture capture){workerOnly();try{capture.source.requireCurrent();return isConnected()&&source==capture.source&&chain(source).equals(AndroidHomeStateStore.current.activeChain)&&source.control.id.equals(AndroidHomeStateStore.current.activeNodeId);}catch(Exception changed){return false;}}
  void connect(AndroidNodeStore.ChainCapture captured,Callback callback){connect(captured,AndroidHomeStateStore.copy(),callback);}
  void connect(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot idle,String selection,Callback callback){try{AndroidConnectionSelection.requireCurrent(context,new AndroidNodeStore(context),selection);connect(captured,idle,callback);}catch(Exception changed){callback.finished(false,changed.toString());}}
+ void connectLast(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot idle,String selection,String expected,String raw,Callback callback){throw new AssertionError("temporary restore must replay its original native capture, not Startup Last");}
  void connectLast(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot idle,String selection,Callback callback){throw new AssertionError("temporary restore must replay its original native capture, not Startup Last");}
  void connectLast(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot idle,Callback callback){throw new AssertionError("temporary restore must replay its original native capture, not Startup Last");}
  void connect(AndroidNodeStore.ChainCapture captured,AndroidHomeStateStore.Snapshot idle,Callback callback){try{captured.requireCurrent();if(active||idle==null||idle.connected||idle.pathGeneration!=AndroidHomeStateStore.current.pathGeneration||!idle.sessionId.equals(AndroidHomeStateStore.current.sessionId))throw new IllegalStateException("ordered launch lost original idle epoch");begin(captured);RuntimeBoundary.starts++;callback.owned(home.sessionId);RuntimeBoundary.ready(()->{AndroidHomeStateStore.proved();callback.finished(true,"controlled ordered proof");});}catch(Exception changed){callback.finished(false,changed.toString());}}

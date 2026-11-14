@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import android_execution_compiler_fixture as EXECUTION_COMPILER
 
 
 def compiler_source(source):
@@ -18,7 +19,7 @@ def compiler_source(source):
     cases += r'''case len(args)==2&&(args[0]=="chain-socks-new"||args[0]=="chain-socks-config"||args[0]=="chain-socks-meta"):var chain *mobilemultihop.NodeChainSOCKSSource;chain,err=mobilemultihop.NewNodeChainSOCKSSource(args[1]);if err==nil{if args[0]=="chain-socks-new"{result,err=chain.Source()}else{var config string;var meta mobilemultihop.NodeChainSOCKSSourceMetadata;config,meta,err=chain.ReadValidated();if err==nil{if args[0]=="chain-socks-config"{result=config}else{var raw []byte;raw,err=json.Marshal(meta);result=string(raw)}}}};'''
     cases += r'''case len(args)==2&&(args[0]=="chain-connect-new"||args[0]=="chain-connect-config"||args[0]=="chain-connect-meta"):var chain *mobilemultihop.NodeChainCONNECTSource;chain,err=mobilemultihop.NewNodeChainCONNECTSource(args[1]);if err==nil{if args[0]=="chain-connect-new"{result,err=chain.Source()}else{var config string;var meta mobilemultihop.NodeChainCONNECTSourceMetadata;config,meta,err=chain.ReadValidated();if err==nil{if args[0]=="chain-connect-config"{result=config}else{var raw []byte;raw,err=json.Marshal(meta);result=string(raw)}}}};'''
     assert source.count("case len(args)==2:") == 1
-    return source.replace("case len(args)==2:", cases + "case len(args)==2:")
+    return EXECUTION_COMPILER.compiler_source(source.replace("case len(args)==2:", cases + "case len(args)==2:"))
 
 
 GENERATOR = r'''package mobilemultihop
@@ -101,17 +102,18 @@ public final class NodeChainCaptureHarness {
  static final class Fixture {
   final Context context;final AndroidNodeStore nodes;final AndroidConnectionProfileStore profiles;final MemoryPreferences prefs;
   final List<AndroidNodeStore.Node> members=new ArrayList<>();final List<JSONObject> original=new ArrayList<>();final Path rows;
-  Fixture(Path root,String key)throws Exception{
+  Fixture(Path root,String key)throws Exception{this(root,new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE")))).getJSONArray(key));}
+  Fixture(Path root,JSONArray bundles)throws Exception{
    context=new Context(Files.createTempDirectory(root,"ordered-").toFile());nodes=new AndroidNodeStore(context);
    profiles=new AndroidConnectionProfileStore(context,nodes,new AndroidStandardExitStore(context));prefs=context.getSharedPreferences("router-vpn-unified",0);
    rows=context.getFilesDir().toPath().resolve("connection-profiles-v4.json");
-   JSONArray bundles=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE")))).getJSONArray(key);
    for(int i=0;i<bundles.length();i++){JSONObject bundle=bundles.getJSONObject(i);original.add(new JSONObject(bundle.toString()));members.add(nodes.importBundle(bundle.toString().getBytes(StandardCharsets.UTF_8)));}
    JSONArray selected=AndroidNodeStore.orderedSelection(profile(original.get(original.size()-1)));
    prefs.edit().putString("selected_kind","router-vpn").putString("selected_id",control().id).putString("mode","smart-auto")
-    .putBoolean("multihop_on",true).putString("multihop_nodes",selected.toString()).putString("multihop_execution","local").putString("multihop_entry_kind","router-vpn")
+    .putBoolean("multihop_on",true).putString("multihop_nodes",selected.toString()).putString("multihop_execution",profile(original.get(original.size()-1)).getString("multihop_execution")).putString("multihop_entry_kind","router-vpn")
     .putString("multihop_entry","").putString("multihop_exit","").putString("multihop_entry_mode","").putString("multihop_exit_mode","").commit();
   }
+  void chooseExecution(String requested)throws Exception{var draft=new AndroidOrderedPathSelection(nodes,profiles);draft.setExecution(requested);draft.save();}
   AndroidNodeStore.Node control(){return members.get(members.size()-1);}
   JSONObject bundle(int position)throws Exception{return new JSONObject(Files.readString(members.get(position).file.toPath()));}
   void replace(int position,JSONObject bundle)throws Exception{nodes.importBundle(bundle.toString().getBytes(StandardCharsets.UTF_8));}
@@ -186,11 +188,11 @@ public final class NodeChainCaptureHarness {
   reject(captured::requireCurrent,"ordered capture revived after selection-away and back");
  }
  static void validationControls(Path root)throws Exception{
-  for(String fault:List.of("missing-middle","duplicate-middle","unknown-mode","pair-field","wrong-control","server-execution","imported","extra-member-field","missing-selected-id","one","nine")){
+  for(String fault:List.of("missing-middle","duplicate-middle","unknown-mode","pair-field","wrong-control","invalid-execution","imported","extra-member-field","missing-selected-id","one","nine")){
    Fixture f=new Fixture(root,"3/");JSONObject rootBundle=f.bundle(2),control=profile(rootBundle);JSONArray refs=control.getJSONArray("multihop_nodes");
    switch(fault){case "missing-middle":refs.getJSONObject(1).put("id","missing-node");break;case "duplicate-middle":refs.getJSONObject(1).put("id",refs.getJSONObject(0).getString("id"));break;
     case "unknown-mode":refs.getJSONObject(1).put("mode","not-generated");break;case "pair-field":control.put("multihop_entry_id","legacy");break;case "wrong-control":refs.getJSONObject(2).put("id","another-control");break;
-    case "server-execution":control.put("multihop_execution","server");break;case "imported":control.put("node_kind","external");break;case "extra-member-field":refs.getJSONObject(1).put("token","other");break;
+    case "invalid-execution":control.put("multihop_execution","Server");break;case "imported":control.put("node_kind","external");break;case "extra-member-field":refs.getJSONObject(1).put("token","other");break;
     case "missing-selected-id":rootBundle.remove("selectedRouterID");break;case "one":control.put("multihop_nodes",new JSONArray().put(refs.getJSONObject(2)));break;case "nine":for(int i=3;i<9;i++)refs.put(new JSONObject().put("id","extra-"+i).put("mode","wg"));break;}
    Files.writeString(f.control().file.toPath(),rootBundle.toString());Files.writeString(new File(f.context.getFilesDir(),AndroidNodeStore.ACTIVE_BUNDLE).toPath(),rootBundle.toString());
    reject(()->f.nodes.captureChain(f.control().id),"ordered source accepted "+fault);
@@ -306,12 +308,19 @@ public final class NodeChainCaptureHarness {
   check(!premature,"ordered editor did not exclude an independent source publisher until complete publication");
   check(editorFailure.get()==null&&writerFailure.get()==null&&published.getCount()==0,"original editor or subsequent publisher failed");
  }
- static void editorFinalBudget(Path root)throws Exception{
+ // Finish constructing the original full-size inputs before the staged save
+ // retains its own captured copies. No synthetic padding object remains
+ // live in the caller while actual store/compiler validation executes.
+ static Fixture editorFinalBudgetFixture(Path root)throws Exception{
   Fixture f=new Fixture(root,"2/");JSONObject a=f.bundle(0),b=f.bundle(1);
   for(String key:List.of("multihop_nodes","multihop_enabled","multihop_execution"))profile(b).remove(key);
   a.put("unused_private_source","");b.put("unused_private_source","");
   int payload=AndroidNodeStore.MAX_CHAIN_SOURCE-8-a.toString().getBytes(StandardCharsets.UTF_8).length-b.toString().getBytes(StandardCharsets.UTF_8).length;
   a.put("unused_private_source","x".repeat(payload/2));b.put("unused_private_source","y".repeat(payload-payload/2));f.replace(0,a);f.replace(1,b);f.nodes.select(f.control().id);
+  return f;
+ }
+ static void editorFinalBudget(Path root)throws Exception{
+  Fixture f=editorFinalBudgetFixture(root);
   f.prefs.edit().putString("multihop_nodes","").putBoolean("multihop_on",false).commit();
   AndroidOrderedPathSelection draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);draft.addPrefix(f.members.get(0).id);int before=AndroidPrivateFileStore.writes;
   reject(()->draft.save(),"ordered editor accepted sources beyond the final aggregate budget");
@@ -687,7 +696,7 @@ def prepare_sources(src, app, java):
     shutil.copyfile(java / "AndroidConnectionSelection.java", app / "AndroidConnectionSelection.java")
     (app / "NodeChainCaptureHarness.java").write_text(HARNESS)
     from test_android_connection_profiles import method
-    handlers="\n".join(method("ProductActivity.java", signature) for signature in ("private void configureMultihop(","private void showOrderedEditor(","private void chooseOrderedNode(","private void chooseOrderedFinalMode(","private void chooseOrderedMode(","private void editOrderedPrefix("))
+    handlers="\n".join(method("ProductActivity.java", signature) for signature in ("private void configureMultihop(","private void showOrderedEditor(","private void chooseOrderedExecution(","private void chooseOrderedNode(","private void chooseOrderedFinalMode(","private void chooseOrderedMode(","private void editOrderedPrefix("))
     surface=r'''package com.eabusham.routervpn;
 import android.content.*;import java.util.*;
 final class OrderedProductSurface extends Context {
@@ -698,8 +707,8 @@ final class OrderedProductSurface extends Context {
  boolean mutationBusy(){return AndroidVpnMutationGuard.isBusy(this);}boolean isExternalSelected(){return false;}void configurePairMultihop(){throw new AssertionError("ordered editor silently became pair editor");}
  void toast(String value){message=value;}static String safe(Exception e){return e.getMessage();}void refreshAll(){refreshes++;}
  interface Click{void run(Object d,int index);}
- static final class Choice{final OrderedProductSurface owner;String title,detail;CharSequence[] labels;Click selected,positive,negative;Choice(OrderedProductSurface owner,String title,String detail){this.owner=owner;this.title=title;this.detail=detail;}Choice setItems(CharSequence[] items,Click listener){labels=items;selected=listener;return this;}Choice setPositiveButton(String label,Click listener){positive=listener;return this;}Choice setNegativeButton(String label,Click listener){negative=listener;return this;}void show(){owner.dialog=this;}}
- Choice dialog;Choice choiceDialog(String title,String detail){return new Choice(this,title,detail);}void open(){configureMultihop();}void choose(int i){Choice before=dialog;dialog=null;before.selected.run(before,i);}void save(){Choice before=dialog;dialog=null;before.positive.run(before,0);}void cancel(){dialog=null;}
+ static final class Choice{final OrderedProductSurface owner;String title,detail;CharSequence[] labels;Click selected,positive,negative,neutral;Choice(OrderedProductSurface owner,String title,String detail){this.owner=owner;this.title=title;this.detail=detail;}Choice setItems(CharSequence[] items,Click listener){labels=items;selected=listener;return this;}Choice setPositiveButton(String label,Click listener){positive=listener;return this;}Choice setNegativeButton(String label,Click listener){negative=listener;return this;}Choice setNeutralButton(String label,Click listener){neutral=listener;return this;}void show(){owner.dialog=this;}}
+ Choice dialog;Choice choiceDialog(String title,String detail){return new Choice(this,title,detail);}void open(){configureMultihop();}void choose(int i){Choice before=dialog;dialog=null;before.selected.run(before,i);}void save(){Choice before=dialog;dialog=null;before.positive.run(before,0);}void execution(){Choice before=dialog;dialog=null;before.neutral.run(before,0);}void cancel(){dialog=null;}
  static final class AlertDialog{static final class Builder{final Choice choice;Builder(OrderedProductSurface owner){choice=owner.choiceDialog("","");}Builder setTitle(String title){choice.title=title;return this;}Builder setItems(CharSequence[] items,Click selected){choice.setItems(items,selected);return this;}Builder setNegativeButton(String label,Click selected){choice.setNegativeButton(label,selected);return this;}void show(){choice.show();}}}
  // ACTUAL_ORDERED_HANDLERS
 }
@@ -739,6 +748,7 @@ public static String routerNodeChainImportedCONNECTMemberInput(String config,Str
  public void close(){closed=true;}
 }''')
     (src / "io/nekohasekai/libbox/RouterNodeChain.java").write_text(NATIVE)
+    EXECUTION_COMPILER.prepare_native(src)
     boundaries = app / "Boundaries.java"
     source = boundaries.read_text()
     marker = "static byte[] read(File file,int max)throws Exception{byte[] bytes=Files.readAllBytes(file.toPath());"

@@ -177,18 +177,18 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
     static final class ActiveCapture {
         final String homeSession;
         final long pathGeneration;
-        final String progressJSON;
+        final String progressJSON, requestedExecution, selectedExecution;
         final List<AndroidNodeStore.ChainSource> sources;
         final List<String> modes;
-        private ActiveCapture(AndroidNodeChainSession owner,String progress) { homeSession=owner.home.sessionId;pathGeneration=owner.home.pathGeneration;progressJSON=progress;sources=owner.source.members;modes=owner.source.modes; }
+        private ActiveCapture(AndroidNodeChainSession owner,String progress,String selected) { homeSession=owner.home.sessionId;pathGeneration=owner.home.pathGeneration;progressJSON=progress;sources=owner.source.members;modes=owner.source.modes;requestedExecution=owner.source.execution;selectedExecution=selected; }
     }
     ActiveCapture captureActive() {
         AndroidNodeChainSession captured=connectedOwner();
         if(captured==null)return null;
         try {
-            String progress=captured.progressJSON();
-            if(progress==null||progress.length()>65536||connectedOwner()!=captured)return null;
-            return new ActiveCapture(captured,progress);
+            String selected=captured.provedExecution(),progress=captured.progressJSON();
+            if(progress==null||progress.length()>65536||!selected.equals(captured.provedExecution())||connectedOwner()!=captured)return null;
+            return new ActiveCapture(captured,progress,selected);
         } catch(Exception retired) { return null; }
     }
     List<AndroidNodeStore.ChainSource> activeSources() {
@@ -202,25 +202,54 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
 
     void connect(AndroidNodeStore.ChainCapture capture, Callback callback) { connect(capture, AndroidHomeStateStore.snapshot(context), callback); }
     void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, Callback callback) { connectSelected(capture,idle,true,callback); }
-    void connectLast(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, Callback callback) { connectSelected(capture,idle,false,callback); }
+    void connectLast(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, Callback callback) {
+        try { connectLast(capture,idle,AndroidNodeChainSession.selection(context,capture),callback); }
+        catch(Exception invalid){callback.finished(false,safe(invalid));}
+    }
     private void connectSelected(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, boolean remember, Callback callback) {
         try { connect(capture,idle,AndroidNodeChainSession.selection(context,capture),remember,callback); }
         catch(Exception invalid){callback.finished(false,safe(invalid));}
     }
     void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected, Callback callback) { connect(capture,idle,selected,true,callback); }
-    void connectLast(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected, Callback callback) { connect(capture,idle,selected,false,callback); }
+    void connectLast(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected, Callback callback) {
+        connectLast(capture,idle,selected,"local","",callback);
+    }
+    void connectLast(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected,
+                     String expectedExecution,String lastRecord,Callback callback) {
+        try {
+            capture.requireCurrent();
+            if(lastRecord==null||!("local".equals(expectedExecution)||"server".equals(expectedExecution))
+                    ||!"auto".equals(capture.execution)&&!capture.execution.equals(expectedExecution))
+                throw new IllegalStateException("Last lost the original requested and selected execution.");
+            if("local".equals(capture.execution)){
+                if(!lastRecord.isEmpty())throw new IllegalStateException("A Local path cannot borrow another execution's Last choice.");
+            }else{
+                if(lastRecord.isEmpty()||lastRecord.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>16*1024)
+                    throw new IllegalStateException("Server or Compare Last requires its exact saved native choice.");
+                io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(lastRecord);
+                org.json.JSONObject choice=new org.json.JSONObject(lastRecord);
+                if(!expectedExecution.equals(choice.getString("execution"))||!capture.execution.equals(choice.getString("setting")))
+                    throw new IllegalStateException("The saved native choice differs from the captured Last request.");
+            }
+            connect(capture,idle,selected,false,null,lastRecord,callback);
+        }catch(Exception invalid){callback.finished(false,safe(invalid));}
+    }
     private synchronized void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected, boolean remember, Callback callback) {
         connect(capture, idle, selected, remember, null, callback);
     }
     private synchronized void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected,
                                       boolean remember, AndroidNodeChainExecutionCapture.RestoreCapture restore, Callback callback) {
+        connect(capture,idle,selected,remember,restore,"",callback);
+    }
+    private synchronized void connect(AndroidNodeStore.ChainCapture capture, AndroidHomeStateStore.Snapshot idle, String selected,
+                                      boolean remember, AndroidNodeChainExecutionCapture.RestoreCapture restore,String lastRecord,Callback callback) {
         reconcile();
         if (closed || temporary != null || transitioning || owner != null || !terminal(singBox.getState())) {
             callback.finished(false, "The previous native owner must finish cleanup before an ordered path can start."); return;
         }
         transitioning = true; stopping = false; submitted = false;
         long selectedOperation=++operation;
-        executor.execute(() -> launch(capture, idle, selected, selectedOperation, remember, restore, callback));
+        executor.execute(() -> launch(capture,idle,selected,selectedOperation,remember,restore,null,null,lastRecord,callback));
     }
 
     private void launch(AndroidNodeStore.ChainCapture source, AndroidHomeStateStore.Snapshot idle, String selected, long selectedOperation, boolean remember,
@@ -230,11 +259,17 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
     private void launch(AndroidNodeStore.ChainCapture source, AndroidHomeStateStore.Snapshot idle, String selected, long selectedOperation, boolean remember,
                         AndroidNodeChainExecutionCapture.RestoreCapture restore,AndroidNodeCandidatePrefixCapture prefix,
                         AndroidNodeCandidateCatalog catalog,Callback callback) {
+        launch(source,idle,selected,selectedOperation,remember,restore,prefix,catalog,"",callback);
+    }
+    private void launch(AndroidNodeStore.ChainCapture source, AndroidHomeStateStore.Snapshot idle, String selected, long selectedOperation, boolean remember,
+                        AndroidNodeChainExecutionCapture.RestoreCapture restore,AndroidNodeCandidatePrefixCapture prefix,
+                        AndroidNodeCandidateCatalog catalog,String lastRecord,Callback callback) {
         AndroidHomeStateStore.Snapshot home = null;
         AndroidNodeChainSession session = null;
         try {
             if (source == null) throw new IllegalStateException("The original ordered selection is missing.");
-            if(prefix!=null&&(remember||restore!=null))throw new IllegalStateException("A candidate prefix cannot record or restore a connection.");
+            if(lastRecord==null||!lastRecord.isEmpty()&&(remember||restore!=null)||prefix!=null&&(remember||restore!=null||!lastRecord.isEmpty()))
+                throw new IllegalStateException("A candidate prefix or temporary restore cannot borrow a saved Last choice.");
             source.requireCurrent(); callback.validate(); requireStarting(selectedOperation);
             AndroidStartupPolicy.OrderedLast history = remember ? AndroidStartupPolicy.prepareOrderedExecution(context, source) : null;
             synchronized (context.getSharedPreferences("router-vpn-unified",Context.MODE_PRIVATE)) {
@@ -251,7 +286,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             }
             callback.owned(home.sessionId);
             callback.progress(prefix==null?"Preparing every original ordered node and authenticated layer…":"Testing the selected packet prefix with application and DNS traffic closed…");
-            session = prefix==null?new AndroidNodeChainSession(context, source, home, selected, restore)
+            session = prefix==null?new AndroidNodeChainSession(context, source, home, selected, restore,lastRecord)
                     :new AndroidNodeChainSession(context, source, home, selected,prefix,catalog);
             synchronized (this) {
                 requireStarting(selectedOperation);
@@ -290,12 +325,27 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             synchronized (this) {
                 requireStarting(selectedOperation); connected = true; transitioning = false;
             }
-            LayeredVpnService.startNodeChainAutomaticMTU(session);
+            // Capture native Last outside runtime/Home locks. Failure to save
+            // history never replaces a working connection with a fabricated
+            // choice; the previous historical record remains unchanged.
+            String historyExecution="",historyRecord="";
+            if(history!=null)try{
+                historyExecution=session.provedExecution();historyRecord=session.captureLastRecord();
+                if(!historyExecution.equals(session.provedExecution()))history=null;
+            }catch(Exception unavailable){history=null;}
+            // Native Last may block while cancellation retires this session.
+            // Recheck its exact proof and operation before any success delivery.
+            session.requireCurrent();callback.validate();
+            if(!LayeredVpnService.nodeChainReady(session))throw new IllegalStateException("The ordered proof retired while its Last choice was captured.");
             synchronized (this) {
-                if (operation == selectedOperation && owner == session && connected && !stopping)
-                    AndroidStartupPolicy.recordOrderedExecution(context, history, AndroidHomeStateStore.snapshot(context));
+                requireConnectedDelivery(session,selectedOperation);
+                AndroidStartupPolicy.recordOrderedExecution(context,history,AndroidHomeStateStore.snapshot(context),historyExecution,historyRecord);
             }
-            callback.finished(true, "Every ordered node and selected DNS passed the original native path proof.");
+            LayeredVpnService.startNodeChainAutomaticMTU(session);
+            synchronized(this){
+                requireConnectedDelivery(session,selectedOperation);
+                callback.finished(true, "Every ordered node and selected DNS passed the original native path proof.");
+            }
         } catch (Throwable failure) {
             String message = safe(failure);
             AndroidHomeStateStore.failedNodeChain(context, home, message, false);
@@ -304,6 +354,11 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             synchronized (this) { if(operation==selectedOperation){connected = false; transitioning = false; reconcile();} }
             callback.finished(false, clean ? message : message + " Native cleanup remains pending; retry Disconnect.");
         }
+    }
+
+    private synchronized void requireConnectedDelivery(AndroidNodeChainSession captured,long selectedOperation) {
+        if(operation!=selectedOperation||owner!=captured||closed||stopping||!connected||transitioning)
+            throw new IllegalStateException("The original ordered connection retired before success delivery.");
     }
 
     private synchronized void requireStarting(long selectedOperation) {
@@ -430,12 +485,15 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
 
     static final class RestoreCapture {
         final AndroidNodeStore.ChainCapture source;
-        final String selection;
+        final String selection, requestedExecution, selectedExecution;
         private final AndroidNodeChainSession original;
         private final AndroidNodeChainExecutionCapture.RestoreCapture execution;
         private RestoreCapture(AndroidNodeChainSession owner) throws Exception {
             original = owner; source = owner.source; selection = owner.selectionDigest;
+            requestedExecution=owner.source.execution;selectedExecution=owner.provedExecution();
             execution = owner.execution == null ? null : owner.execution.captureRestore();
+            if(!selectedExecution.equals(owner.provedExecution()) || execution!=null&&!selectedExecution.equals(execution.execution))
+                throw new IllegalStateException("The original execution changed during restoration capture.");
         }
     }
     RestoreCapture captureRestore() throws Exception {
@@ -449,7 +507,9 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
     boolean captureCurrent(RestoreCapture capture) {
         try {
             if (capture == null || connectedOwner() != capture.original) return false;
-            capture.source.requireCurrent(); AndroidNodeChainSession.requireSelection(context,capture.source,capture.selection); return connectedOwner() == capture.original;
+            capture.source.requireCurrent(); AndroidNodeChainSession.requireSelection(context,capture.source,capture.selection);
+            return capture.requestedExecution.equals(capture.source.execution)
+                    && capture.selectedExecution.equals(capture.original.provedExecution()) && connectedOwner() == capture.original;
         } catch (Exception stale) { return false; }
     }
     boolean restoredMatches(RestoreCapture capture) {
@@ -460,6 +520,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             if (capture.execution == null ? current.execution != null
                     : current.execution == null || !current.execution.restoredMatches(capture.execution)) return false;
             capture.source.requireCurrent(); AndroidNodeChainSession.requireSelection(context,capture.source,capture.selection); current.requireCurrent();
+            if(!capture.requestedExecution.equals(current.source.execution)||!capture.selectedExecution.equals(current.provedExecution()))return false;
             return connectedOwner() == current;
         } catch (Exception stale) { return false; }
     }

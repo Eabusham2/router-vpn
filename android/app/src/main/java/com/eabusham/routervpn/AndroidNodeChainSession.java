@@ -65,21 +65,27 @@ final class AndroidNodeChainSession {
     AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
                             AndroidHomeStateStore.Snapshot home,String selectionDigest,
                             AndroidNodeChainExecutionCapture.RestoreCapture restore) throws Exception {
-        this(context,source,home,selectionDigest,restore,null,null);
+        this(context,source,home,selectionDigest,restore,"",null,null);
     }
     AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
                             AndroidHomeStateStore.Snapshot home,String selectionDigest,
                             AndroidNodeCandidatePrefixCapture prefix,AndroidNodeCandidateCatalog catalog) throws Exception {
-        this(context,source,home,selectionDigest,null,prefix,catalog);
+        this(context,source,home,selectionDigest,null,"",prefix,catalog);
+    }
+    AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
+                            AndroidHomeStateStore.Snapshot home,String selectionDigest,
+                            AndroidNodeChainExecutionCapture.RestoreCapture restore,String lastRecord) throws Exception {
+        this(context,source,home,selectionDigest,restore,lastRecord,null,null);
     }
     private AndroidNodeChainSession(Context context, AndroidNodeStore.ChainCapture source,
                             AndroidHomeStateStore.Snapshot home,String selectionDigest,
-                            AndroidNodeChainExecutionCapture.RestoreCapture restore,
+                            AndroidNodeChainExecutionCapture.RestoreCapture restore,String lastRecord,
                             AndroidNodeCandidatePrefixCapture prefix,AndroidNodeCandidateCatalog catalog) throws Exception {
         this.context = context.getApplicationContext();
         this.source = source; this.home = home; this.selectionDigest=selectionDigest;
         candidatePrefix=prefix;candidateCatalog=catalog;
-        if((prefix==null)!=(catalog==null)||prefix!=null&&(restore!=null||!"local".equals(source.execution)
+        if(lastRecord==null||restore!=null&&!lastRecord.isEmpty())throw new IllegalStateException("Last cannot borrow an in-process restoration owner.");
+        if((prefix==null)!=(catalog==null)||prefix!=null&&(restore!=null||!lastRecord.isEmpty()||!"local".equals(source.execution)
                 ||!prefix.original.ownsSource(source)||catalog.originalSource!=source||prefix.prefix!=catalog.prefix
                 ||!prefix.inventory.equals(catalog.inventory)))
             throw new IllegalStateException("The candidate prefix lost its original saved source and catalog.");
@@ -93,10 +99,11 @@ final class AndroidNodeChainSession {
         capture = prefix==null?AndroidNodeChainCapture.compile(source):prefix.original;
         try {
             if ("local".equals(source.execution)) {
-                if (restore != null) throw new IllegalStateException("A Local source cannot borrow another execution's restore owner.");
+                if (restore != null || !lastRecord.isEmpty()) throw new IllegalStateException("A Local source cannot borrow another execution's restore or Last owner.");
                 execution = null;
-            } else execution = restore == null ? AndroidNodeChainExecutionCapture.compile(capture, source.execution)
-                    : AndroidNodeChainExecutionCapture.restore(capture, restore);
+            } else execution = restore != null ? AndroidNodeChainExecutionCapture.restore(capture, restore)
+                    : !lastRecord.isEmpty() ? AndroidNodeChainExecutionCapture.fromLast(capture,source.execution,lastRecord)
+                    : AndroidNodeChainExecutionCapture.compile(capture, source.execution);
         } catch (Exception invalid) {
             if(prefix==null)try { capture.close(); } catch (Exception cleanup) { invalid.addSuppressed(cleanup); }
             throw invalid;
@@ -285,6 +292,12 @@ final class AndroidNodeChainSession {
         if (!nativeHealthy()) throw new IllegalStateException("The ordered execution has no current proof.");
         String selected = execution == null ? "local" : execution.execution();
         requireCurrent(); return selected;
+    }
+    String captureLastRecord() throws Exception {
+        String selected=provedExecution();
+        String raw=execution==null?"":execution.captureLastRecord();
+        if(!selected.equals(provedExecution()))throw new IllegalStateException("The proved execution changed while Last was captured.");
+        return raw;
     }
     String progressJSON() throws Exception { requireCurrent(); String result = candidatePrefix!=null?candidatePrefix.plan.progressJSON():capture.connect!=null?capture.connect.plan.progressJSON():capture.socks!=null?capture.socks.plan.progressJSON():execution == null ? capture.plan.progressJSON() : execution.progressJSON(); requireCurrent(); return result; }
     RouterMTU newMTU(RouterMTUPlatform platform) throws Exception {

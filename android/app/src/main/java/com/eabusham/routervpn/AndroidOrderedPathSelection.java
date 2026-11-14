@@ -28,6 +28,7 @@ final class AndroidOrderedPathSelection {
     private final Map<String,Object> preferences;
     private final List<Member> members=new ArrayList<>();
     private boolean saved;
+    private String execution="local";
 
     AndroidOrderedPathSelection(AndroidNodeStore nodes,AndroidConnectionProfileStore profiles) throws Exception {
         this.profiles=profiles;
@@ -36,6 +37,7 @@ final class AndroidOrderedPathSelection {
         String selection=(String)preferences.getOrDefault("multihop_nodes","");
         if(!selection.isEmpty()) {
             AndroidNodeStore.ChainCapture captured=profiles.orderedEditorPath();
+            execution=captured.execution;
             for(int i=0;i<captured.members.size();i++)members.add(new Member(catalog.source(captured.members.get(i).id),captured.modes.get(i)));
         } else if(!catalog.selectedId.isEmpty()) {
             AndroidNodeStore.ChainSource selected=catalog.source(catalog.selectedId);
@@ -46,6 +48,19 @@ final class AndroidOrderedPathSelection {
     }
 
     List<Member> members() { return Collections.unmodifiableList(new ArrayList<>(members)); }
+    String execution() { return execution; }
+    static String executionTitle(String value) {
+        switch(value) {
+            case "local":return "Local";
+            case "server":return "Server";
+            case "auto":return "Compare both";
+            default:throw new IllegalArgumentException("Choose Local, Server or Compare both.");
+        }
+    }
+    void setExecution(String value) throws Exception {
+        requireCurrent();executionTitle(value);String previous=execution;execution=value;
+        try { requireBound(); } catch(Exception invalid) { execution=previous;throw invalid; }
+    }
 
     List<AndroidNodeStore.Node> choices(boolean finalNode) throws Exception {
         requireCurrent();
@@ -167,11 +182,11 @@ final class AndroidOrderedPathSelection {
         for(int i=0;i<members.size();i++) {
             Member member=members.get(i);JSONObject profile=member.source.profile();
             if(i==members.size()-1) {
-                profile.put("multihop_enabled",true).put("multihop_execution","local").put("multihop_nodes",references);
+                profile.put("multihop_enabled",true).put("multihop_execution",execution).put("multihop_nodes",references);
                 for(String key:new String[]{"multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"})profile.remove(key);
                 AndroidNodeStore.orderedSelection(profile);
             }
-            inputs.put(AndroidNodeChainCapture.memberInput(member.source,member.mode,profile));
+            inputs.put(AndroidNodeChainCapture.memberInput(member.source,member.mode,"local".equals(execution)?profile:AndroidNodeChainCapture.executionProfile(profile)));
             identities.put(AndroidNodeChainCapture.identityInput(member.source));
             sources.add(member.source);modes.add(member.mode);
         }
@@ -188,10 +203,11 @@ final class AndroidOrderedPathSelection {
             if(preview==null)throw new IllegalStateException("The native compiler returned no complete ordered path.");
             try {
                 if(preview.config()==null||preview.config().isEmpty())throw new IllegalStateException("The native compiler returned no complete ordered graph.");
+                if(!"local".equals(execution))AndroidNodeChainCapture.validateExecutionPlan(preview,execution);
                 requireCurrent();
             } finally { preview.close(); }
         }
-        AndroidNodeStore.ChainCapture captured=profiles.selectOrderedPath(catalog,sources,modes,preferences);
+        AndroidNodeStore.ChainCapture captured=profiles.selectOrderedPath(catalog,sources,modes,preferences,execution);
         saved=true;return captured;
     }
 
@@ -216,7 +232,13 @@ final class AndroidOrderedPathSelection {
             if(!proofs.add(member.source.identityKey()))throw new IllegalStateException("Ordered members must retain distinct paired node identities.");
         }
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();for(Member member:members)sources.add(member.source);
-        AndroidNodeChainCapture.sourceSchema(sources);
+        int schema=AndroidNodeChainCapture.sourceSchema(sources);
+        if(!"local".equals(execution)&&!members.isEmpty()) {
+            if(schema>=3||!"shadowsocks".equals(members.get(members.size()-1).mode))
+                throw new IllegalStateException("Server and Compare require paired packet prefixes or one literal Shadowsocks middle, with a Shadowsocks 2022 final.");
+            for(Member member:members)if(member.source.imported)
+                AndroidNumericAddress.parse(member.source.external().server);
+        }
         if(size>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
     }
 

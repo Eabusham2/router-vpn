@@ -224,7 +224,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         AndroidNodeChainRuntime.RestoreCapture orderedCapture=null;
         java.util.Map<File,String> files=new java.util.LinkedHashMap<>();
         if("node-chain".equals(home.logicalMode)){
-            topology="node-chain";execution=selectedExecution="local";orderedCapture=runtime.nodeChain.captureRestore();
+            topology="node-chain";orderedCapture=runtime.nodeChain.captureRestore();execution=orderedCapture.requestedExecution;selectedExecution=orderedCapture.selectedExecution;
             for(AndroidNodeStore.ChainSource member:orderedCapture.source.members)if(!member.imported)files.put(requiredNode(member.id).file,AndroidTorProfile.digest(member.bytes()));
         }else if("multihop".equals(home.logicalMode)){
             topology="multihop";ordinaryEntry=multihop.capturedOrdinaryEntry(home);
@@ -336,7 +336,12 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     }
     private void validateRestorePoint(RestorePoint point)throws Exception{
         if("node-chain".equals(point.topology)){
-            if(point.orderedCapture==null)throw new IllegalStateException("The original ordered native source is unavailable.");
+            if(point.orderedCapture==null || !point.execution.equals(point.orderedCapture.requestedExecution)
+                    || !point.selectedExecution.equals(point.orderedCapture.selectedExecution)
+                    || !java.util.Arrays.asList("local","server","auto").contains(point.execution)
+                    || !java.util.Arrays.asList("local","server").contains(point.selectedExecution)
+                    || !"auto".equals(point.execution)&&!point.execution.equals(point.selectedExecution))
+                throw new IllegalStateException("The original ordered native source or proved execution is unavailable.");
             AndroidConnectionSelection.requireCurrent(activity,nodeStore,point.orderedCapture.selection);
             AndroidNodeStore.ChainCapture original=point.orderedCapture.source;original.requireCurrent();
             int routerFiles=0;
@@ -552,7 +557,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             AndroidConnectionSelection.requireCurrent(activity,nodeStore,selection);if(!pathCurrent(expected))throw new IllegalStateException("The original ordered capture decision changed.");
             if(startup!=null){prepareStartup(startup,callback);}
             else{pendingMode="node-chain";pendingLayers=Collections.emptyList();pendingNode=null;pendingEntry=null;pendingExit=null;
-                pendingStandardExit=null;pendingOrdinaryEntry=null;pendingExternalDirect=false;pendingEntryMode="wg";pendingExitMode="";pendingExecution="local";pendingOrdered=captured;pendingCallback=callback;}
+                pendingStandardExit=null;pendingOrdinaryEntry=null;pendingExternalDirect=false;pendingEntryMode="wg";pendingExitMode="";pendingExecution=captured.execution;pendingOrdered=captured;pendingCallback=callback;}
         }catch(Exception changed){clearPending();if(startup!=null)startup.cancel();callback.finished(false,safe(changed));return;}
         final long ticket=++orderedWorkGeneration;orderedWorkPending=true;pendingOrderedHome=expected;
         callback.progress("Checking every original ordered source before Android permission…");
@@ -924,7 +929,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
                     public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}
                     public void finished(boolean ok,String message){String result=usageResult(permission,ok,message);activity.runOnUiThread(()->callback.finished(ok,result));}
                 };
-                if(startup!=null&&"last".equals(startup.mode))runtime.nodeChain.connectLast(ordered,permission.idleHome,permission.selection,bridge);
+                if(startup!=null&&"last".equals(startup.mode))runtime.nodeChain.connectLast(ordered,permission.idleHome,permission.selection,startup.lastExecution,startup.lastRaw,bridge);
                 else runtime.nodeChain.connect(ordered,permission.idleHome,permission.selection,bridge);
             });
         },"routervpn-ordered-permission-admission").start();

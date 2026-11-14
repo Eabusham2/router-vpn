@@ -33,7 +33,7 @@ TEST = r'''
    check(f.activity.orderedPresentation==null,"slow ordered worker published after a newer Home decision");
    check(f.activity.mapView.ordered.isEmpty()&&!f.activity.mapView.orderedLive,"retired ordered receipt animated the map");
   }
-  testing(Path.of(args[0]));
+  testing(Path.of(args[0]));executions(Path.of(args[0]));
   System.out.println("Android actual Product ordered worker: single observation, off-main native/source capture, queued stale Home publication rejection PASS");
  }
 
@@ -85,6 +85,17 @@ TEST = r'''
    runtime.active=new AndroidNodeChainRuntime.ActiveCapture(source,home,orderedProgress(source).toString());var ordinary=capture(f);
    check(ordinary.live&&!ordinary.testing&&ordinary.members.get(0).httpResponseMs==10&&HomeObservation.connected(f.activity),"Testing presentation changed ordinary proved connection");
   }finally{AndroidNodeCandidatePreparation.active=null;AndroidConnectionProfileStore.beforeOrderedRead=null;AndroidConnectionProfileStore.orderedChoice=null;}
+ }
+
+ static void executions(Path root)throws Exception{
+  for(String requested:List.of("server","auto"))for(String selected:requested.equals("server")?List.of("server"):List.of("local","server"))try(Fixture f=new Fixture(root)){
+   var local=ordered(f);JSONObject control=local.control.bundle();AndroidProfileSelection.selectedRouterProfile(control).put("multihop_execution",requested);f.store.importBundle(control.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));f.activity.getSharedPreferences("router-vpn-unified",0).edit().putString("multihop_execution",requested).apply();var source=f.store.captureChain(local.control.id);
+   var home=AndroidHomeStateStore.beginNodeChain(f.activity,source);check(AndroidHomeStateStore.connectedNodeChain(f.activity,home),"execution display Home setup failed");var runtime=AndroidRuntimeRegistry.get(f.activity).nodeChain;
+   JSONObject progress=orderedProgress(source).put("execution",selected);runtime.active=new AndroidNodeChainRuntime.ActiveCapture(source,home,progress.toString(),requested,selected);
+   var shown=capture(f);check(shown.live&&shown.requestedExecution.equals(requested)&&shown.selectedExecution.equals(selected)&&shown.executionLabel().equals(requested.equals("server")?"Server":"Compare both → "+(selected.equals("server")?"Server":"Local")),"ordered display replaced requested or proved selected execution");
+   runtime.active=new AndroidNodeChainRuntime.ActiveCapture(source,home,progress.toString(),"server","local");boolean rejected=false;try{capture(f);}catch(Exception expected){rejected=true;}check(rejected,"ordered display accepted an impossible requested/selected pair");
+   runtime.active=new AndroidNodeChainRuntime.ActiveCapture(source,home,progress.put("execution",selected.equals("local")?"server":"local").toString(),requested,selected);rejected=false;try{capture(f);}catch(Exception expected){rejected=true;}check(rejected,"ordered display accepted another execution's prefix receipt");
+  }
  }
  static void waitUI(UsageActivity a)throws Exception{long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);while(a.pendingUI.isEmpty()&&System.nanoTime()<end)Thread.yield();check(!a.pendingUI.isEmpty(),"ordered worker did not finish its captured observation");}
 '''
