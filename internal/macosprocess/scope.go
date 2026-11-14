@@ -8,11 +8,12 @@ import "errors"
 type Family string
 
 const (
-	ExternalFamily         Family = ""
-	NodeChainFamily        Family = "ordered-node-chain-v1"
-	NodeChainSOCKSFamily   Family = "ordered-node-chain-socks-v1"
-	NodeChainCONNECTFamily Family = "ordered-node-chain-connect-v1"
-	CandidatePrefixFamily  Family = "node-candidate-prefix-v1"
+	ExternalFamily           Family = ""
+	NodeChainFamily          Family = "ordered-node-chain-v1"
+	NodeChainSOCKSFamily     Family = "ordered-node-chain-socks-v1"
+	NodeChainCONNECTFamily   Family = "ordered-node-chain-connect-v1"
+	NodeChainExecutionFamily Family = "ordered-node-chain-execution-v1"
+	CandidatePrefixFamily    Family = "node-candidate-prefix-v1"
 )
 
 // Scope is the expected policy identity, never a substitute for the original
@@ -32,7 +33,7 @@ func (family Family) protocolSchema() int {
 	switch family {
 	case ExternalFamily:
 		return 1
-	case NodeChainFamily, NodeChainSOCKSFamily, NodeChainCONNECTFamily, CandidatePrefixFamily:
+	case NodeChainFamily, NodeChainSOCKSFamily, NodeChainCONNECTFamily, NodeChainExecutionFamily, CandidatePrefixFamily:
 		return 2
 	default:
 		return 0
@@ -63,6 +64,11 @@ func (scope Scope) inputManifest() ([]scopeInput, error) {
 		// authorizing only its selected packet prefix. Ordinary chain inputs
 		// cannot stand in for this independent, application-closed purpose.
 		return []scopeInput{{"node-candidate-prefix-source.json", 40 << 20}, {"sing-box.json", 4 << 20}}, nil
+	case NodeChainExecutionFamily:
+		// Server and Compare retain their complete execution preparation, not
+		// an ordinary Local graph with the same physical packet prefix. The
+		// inherited input digest binds the requested execution and discovery.
+		return []scopeInput{{"node-chain-execution-source.json", 40 << 20}, {"sing-box.json", 4 << 20}}, nil
 	default:
 		return nil, errors.New("native child scope has an unsupported concrete policy family")
 	}
