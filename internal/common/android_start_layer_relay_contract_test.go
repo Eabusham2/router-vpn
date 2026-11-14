@@ -107,9 +107,12 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 	}
 	prepare := strings.Index(service, "startLayerRelay = AndroidStartLayerRelay.prepareIfConfigured(this, session")
 	activate := strings.Index(service, "if(startLayerRelay!=null)startLayerRelay.start();")
-	engine := strings.Index(service, "commandServer = new CommandServer(this, this);")
-	if prepare < 0 || activate <= prepare || engine <= activate {
-		t.Fatal("Android must retain the prepared relay before starting its workers and then the native VPN engine")
+	engine := strings.Index(service, "commandServer = preparedChain==null?new CommandServer(this, this):preparedChain.newCommandServer(this,this);")
+	bind := strings.Index(service, "if (preparedChain != null) preparedChain.bindNative(commandServer);")
+	start := strings.Index(service, "commandServer.start();")
+	reload := strings.Index(service, "commandServer.startOrReloadService(config, new OverrideOptions());")
+	if prepare < 0 || activate <= prepare || engine <= activate || bind <= engine || start <= bind || reload <= start {
+		t.Fatal("Android must retain and start the prepared relay before creating, binding and starting its exact native VPN engine")
 	}
 
 	for _, raw := range []struct {

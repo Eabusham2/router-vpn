@@ -374,3 +374,24 @@ are not added into a product completion count. The receipt's own boundaries
 remain explicit: SDK and native-tunnel acceptance are both false. Its
 SHA-256 is
 `10199ece13893e2e53546674ea54147a5af9f7e0981aeb10f518e97b7108262d`.
+
+## Android Start Layer startup assertion follows the typed factory
+
+At `740747a573a15fe4df387128a4b7a473a30e1088`, Release gap audit run
+`43552611467` / job `132318227993` and Multihop contract run `43552611619`
+/ job `132318228248` failed the same shared source assertion. Each had
+completed its controller inventory of 2,037 whole roots, with 15,837 PASS
+and 25 explicitly reported SKIP records; neither complete workflow passed.
+The subsequent common-package check still searched for the old unconditional
+`CommandServer` constructor. The shipping service already selects its ordinary
+or retained typed factory after preparing and starting the owned relay.
+
+The assertion now checks that exact factory selection and also requires
+typed binding, server start and service start in their actual order. It keeps
+the existing relay ownership, asynchronous failure and cleanup controls.
+No production source or timeout changed. All three focused Start Layer/MAX
+tests, including nine separately reported cleanup rejection cases, passed
+with Go 1.26.3: 12 test records, no failures or skips. The joined log has
+SHA-256 `ac06a794195c991b9d5e58941fb850374ab8c99c6db7584cbb315580f7f52283`.
+This repairs the obsolete source assertion; native networking remains a
+separate acceptance check, and new exact-SHA workflows still need to finish.
