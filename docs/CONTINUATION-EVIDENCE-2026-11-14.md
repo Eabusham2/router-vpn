@@ -538,3 +538,24 @@ failed environment attempts. The existing scorer's 88 source / 12 live split
 is unchanged and is not a completion percentage for the full original product
 requirements. Exact-SHA native builds, release publication and live acceptance
 remain separate evidence.
+
+## Speed Lab audit fixture includes the concrete policy dispatcher
+
+The recovered map-first gate at `5398754f7c0ae3ef88f5358a2494526ceb747ff8`
+failed in run `43557266913`, job `132332829415`. Its isolated Speed Lab
+fixture did not include `desktop_node_chain_policy_dispatch.go`, which the
+updated shipping audit now reads. The same 29-test command reproduced 49
+`KeyError` subtest errors locally; the original failure log SHA-256 is
+`4ff6a3aa1e7abbe0022122d0381c8b8175289be3fe44fa630fecc35c3c32c7c7`.
+
+The fixture now explicitly supplies that shipping source alongside its other
+platform inputs. Its existing per-file removal and comment-only controls also
+exercise the added dispatcher. No fallback to unmodified sources, audit
+condition, production guard, or original negative assertion changed.
+
+All 29 tests passed. The complete recovered map-first release gate then passed
+with the installed Go, Swift and Java toolchains selected explicitly; log
+SHA-256 `0f69d6dd55881a2f9d663fbdbe59d94b84fb50f70a6053e4ec292a0263b61e22`.
+The preceding full-gate attempt lacking Java and Swift on PATH remains an
+environment failure, not a passing run. Native builds, published packages and
+physical-device acceptance remain separate evidence.
