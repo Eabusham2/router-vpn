@@ -26,7 +26,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
 
     static AndroidNodeChainExecutionCapture compile(AndroidNodeChainCapture local, String requested) throws Exception {
         requireRequested(requested);
-        if (local == null) throw new IllegalStateException("The original complete ordered source is missing.");
+        if (local == null || local.socks != null) throw new IllegalStateException("This execution requires an original ordinary ordered source.");
         local.requireCurrent();
         RouterNodeChainExecution plan = Libbox.routerNodeChainExecutionFromLaunch(local.launchInput, requested);
         return adopt(local, requested, plan);
@@ -35,7 +35,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     /** Pure source replay. The service still requires its process-owned session,
      * original Home epoch, current selection and exact private file inventory. */
     static AndroidNodeChainExecutionCapture reopen(AndroidNodeChainCapture local, String input) throws Exception {
-        if (local == null) throw new IllegalStateException("The original complete ordered source is missing.");
+        if (local == null || local.socks != null) throw new IllegalStateException("This execution requires an original ordinary ordered source.");
         local.requireCurrent();
         JSONObject record = privateJSON(input, AndroidNodeChainCapture.MAX_INPUT);
         JSONObject preparation = privateJSON(record.getString("source"), AndroidNodeChainCapture.MAX_INPUT);
@@ -152,7 +152,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     }
 
     static AndroidNodeChainExecutionCapture restore(AndroidNodeChainCapture local, RestoreCapture captured) throws Exception {
-        if (captured == null || !captured.original.closed || local == null
+        if (captured == null || !captured.original.closed || local == null || local.socks != null
                 || !local.launchInput.equals(captured.original.local.launchInput))
             throw new IllegalStateException("Execution restore needs the complete original source and acknowledged native drain.");
         local.requireCurrent();

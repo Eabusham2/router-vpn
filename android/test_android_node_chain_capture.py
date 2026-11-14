@@ -15,6 +15,7 @@ import subprocess
 
 def compiler_source(source):
     cases = r'''case len(args)==6&&args[0]=="chain-member":var node *mobilemultihop.NodeProfile;node,err=mobilemultihop.NewNodeProfile(args[1],args[2],args[3],args[4],args[5]);if err==nil{result,err=node.LaunchInput()};case len(args)==2&&args[0]=="chain-new":var chain *mobilemultihop.NodeChain;chain,err=mobilemultihop.NewNodeChain(args[1]);if err==nil{result,err=chain.LaunchInput()};case len(args)==2&&(args[0]=="chain-replay"||args[0]=="chain-config"):var chain *mobilemultihop.NodeChain;chain,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{if args[0]=="chain-config"{result=chain.Config()}else{result,err=chain.LaunchInput()}};'''
+    cases += r'''case len(args)==2&&(args[0]=="chain-socks-new"||args[0]=="chain-socks-config"||args[0]=="chain-socks-meta"):var chain *mobilemultihop.NodeChainSOCKSSource;chain,err=mobilemultihop.NewNodeChainSOCKSSource(args[1]);if err==nil{if args[0]=="chain-socks-new"{result,err=chain.Source()}else{var config string;var meta mobilemultihop.NodeChainSOCKSSourceMetadata;config,meta,err=chain.ReadValidated();if err==nil{if args[0]=="chain-socks-config"{result=config}else{var raw []byte;raw,err=json.Marshal(meta);result=string(raw)}}}};'''
     assert source.count("case len(args)==2:") == 1
     return source.replace("case len(args)==2:", cases + "case len(args)==2:")
 
@@ -412,6 +413,34 @@ public final class NodeChainCaptureHarness {
   }finally{AndroidHomeStateStore.current=previous;}
  }
 
+
+ static void socksMiddle(Path root)throws Exception{
+  int before=checks;
+  for(String key:List.of("2/","2/awg-fast","3/aes-256-gcm","4/mixed-awg"))for(boolean auth:List.of(false,true)){
+   Fixture f=new Fixture(root,key);AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);
+   AndroidStandardExitStore.Entry custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Original SOCKS middle";custom.protocol="socks5";custom.server="198.51.100.76";custom.serverPort=1080;custom.expectedPublicIp="203.0.113.76";custom.username=auth?"original-proxy-user":"";custom.password=auth?"private-original-proxy-password":"";custom.policy.put("dns_mode","rescue").put("start_layer","off").put("home_lan_access",false).put("kill_switch_policy","always");exits.save(custom);
+   // The typed source is exactly paired first -> imported middle -> paired final.
+   AndroidOrderedPathSelection editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+   while(editor.members().size()>2)editor.removePrefix(1);
+   check(editor.prefixModes(custom.id).equals(List.of("socks5")),"original SOCKS middle was not offered with its exact mode");editor.addPrefix(custom.id,"socks5");
+   reject(()->editor.movePrefix(1,0),"SOCKS middle moved into physical first position");
+   AndroidNodeStore.ChainCapture saved=editor.save();
+   try(AndroidNodeChainCapture captured=AndroidNodeChainCapture.compile(saved)){
+    check(captured.plan==null&&captured.socks!=null,"typed SOCKS capture borrowed generic chain authority");
+    JSONObject source=new JSONObject(captured.launchInput),member=new JSONObject(captured.memberInputs.get(1));
+    check(source.getInt("schema")==3&&!source.has("kind")&&member.getString("kind").equals("routervpn-node-chain-socks-member")&&captured.identityInputs.get(1).isEmpty(),"typed SOCKS source lost its exact schema or borrowed paired identity");
+    JSONObject transport=new JSONObject(member.getString("capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("socks5");
+    check(transport.optString("username","").equals(custom.username)&&transport.optString("password","").equals(custom.password),"typed SOCKS source changed original credentials");
+    try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(captured.launchInput,saved)){check(replay.launchInput.equals(captured.launchInput)&&replay.config.equals(captured.config),"typed SOCKS canonical replay changed original graph");}
+    String changed=new JSONObject(source.toString()).put("schema",2).toString();reject(()->AndroidNodeChainCapture.reopen(changed,saved),"typed SOCKS accepted generic replay source");
+   }
+   var row=f.profiles.add("Original SOCKS ordered route");String serialized=Files.readString(f.rows);check(!serialized.contains("private-original-proxy-password")&&!serialized.contains("original-proxy-user")&&!serialized.contains("api_token"),"saved typed SOCKS profile duplicated credentials");
+   f.profiles.load(row.id);check(f.profiles.currentOrderedPath().modes.get(1).equals("socks5")&&f.profiles.currentOrderedPath().members.get(1).external().password.equals(custom.password),"saved typed SOCKS profile changed exact source reference");
+   var live=f.profiles.currentOrderedPath();custom.password=auth?"replacement-password":"";custom.name="Changed source";exits.save(custom);reject(live::requireCurrent,"typed SOCKS source replacement revived old proof");
+  }
+  System.out.println("Android ordered SOCKS source: "+(checks-before)+" checks; actual shared compiler and saved profile ownership passed");
+ }
+
  static void importedMiddle(Path root)throws Exception{
   for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305")){
   int keySize=method.equals("2022-blake3-aes-128-gcm")?16:32;
@@ -587,13 +616,14 @@ public final class NodeChainCaptureHarness {
   if(family.equals("paired-identity")){pairedIdentity(root);return;}
   if(family.equals("native-identity")){nativeIdentityReceipt(root);return;}
   if(family.equals("identity-compiler")){identityCompilerAdmission(root);return;}
+  if(family.equals("socks")){socksMiddle(root);return;}
   if(family.equals("editor-mixed")){editorMixed(root);return;}
   if(family.equals("editor-mixed-ui")){editorMixedHandlers(root);return;}
   for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle","2/awg-fast","3/awg-strong","4/mixed-awg","8/mixed-awg"))roundtrip(root,key);
   sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);
   editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);editorFinalBudget(root);editorHandlers(root);productHandoff(root);
   pairedIdentity(root);nativeIdentityReceipt(root);identityCompilerAdmission(root);editorMixed(root);editorMixedHandlers(root);
-  importedMiddle(root);System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");
+  importedMiddle(root);socksMiddle(root);System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");
  }
 }
 '''
@@ -601,6 +631,7 @@ public final class NodeChainCaptureHarness {
 
 def prepare_sources(src, app, java):
     shutil.copyfile(java / "AndroidNodeChainCapture.java", app / "AndroidNodeChainCapture.java")
+    shutil.copyfile(java / "AndroidNodeChainSOCKSCapture.java", app / "AndroidNodeChainSOCKSCapture.java")
     shutil.copyfile(java / "AndroidOrderedPathSelection.java", app / "AndroidOrderedPathSelection.java")
     shutil.copyfile(java / "AndroidConnectionSelection.java", app / "AndroidConnectionSelection.java")
     (app / "NodeChainCaptureHarness.java").write_text(HARNESS)
@@ -631,8 +662,20 @@ final class OrderedProductSurface extends Context {
 public static String routerNodeChainMemberInput(String mode,String files,String profile,String start,String bootstrap)throws Exception{String value=call("chain-member",mode,files,profile,start,bootstrap);Runnable hook=afterChainMember;afterChainMember=null;if(hook!=null)hook.run();return value;}
 public static RouterNodeChain newRouterNodeChain(String source)throws Exception{return new RouterNodeChain(call("chain-new",source));}
 public static RouterNodeChain routerNodeChainLaunch(String source)throws Exception{return new RouterNodeChain(call("chain-replay",source));}
+public static RouterNodeChainSOCKS newRouterNodeChainSOCKS(String source)throws Exception{return new RouterNodeChainSOCKS(call("chain-socks-new",source));}
 static String call(String...args)throws Exception{''')
+    if 'routerNodeChainImportedSOCKSMemberInput' not in source:
+        source=source[:-1]+'''public static String routerNodeChainImportedSOCKSMemberInput(String config,String capture)throws Exception{return call("chain-socks-member",config,capture);}}'''
     libbox.write_text(source)
+    (src / "io/nekohasekai/libbox/RouterNodeChainSOCKS.java").write_text(r'''package io.nekohasekai.libbox;public final class RouterNodeChainSOCKS {
+ private final String original;private boolean closed;RouterNodeChainSOCKS(String source){original=source;}
+ public String source()throws Exception{if(closed)throw new IllegalStateException("retired typed source");return original;}
+ public String config()throws Exception{return Libbox.call("chain-socks-config",source());}
+ public String metadata()throws Exception{return Libbox.call("chain-socks-meta",source());}
+ public String sourceSHA256()throws Exception{return new org.json.JSONObject(metadata()).getString("source_sha256");}
+ public String configSHA256()throws Exception{return new org.json.JSONObject(metadata()).getString("config_sha256");}
+ public void close(){closed=true;}
+}''')
     (src / "io/nekohasekai/libbox/RouterNodeChain.java").write_text(NATIVE)
     boundaries = app / "Boundaries.java"
     source = boundaries.read_text()
@@ -668,7 +711,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     from test_android_connection_profiles import method
     hostname_policy = method("AndroidStandardExitStore.java", "static void validateImportedHostnamePolicy(")
     assert standard.count(hostname_policy) == 1
-    preview_start = editor.index("        RouterNodeChain preview=")
+    preview_start = editor.index("        if(AndroidNodeChainCapture.sourceSchema(sources)==3)")
     preview_end = editor.index("        AndroidNodeStore.ChainCapture captured=", preview_start)
     publication_lock = "synchronized <T> T publishChainCatalog(ChainCatalog captured, ChainPublication<T> publication) throws Exception { synchronized (STORE_LOCK)"
     source_guard = "!java.util.Arrays.equals(source.original, chainSourceBytes(source))"

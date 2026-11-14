@@ -549,7 +549,7 @@ public final class ProductActivity extends Activity {
             }
             if(members.isEmpty())labels.add("Choose final Router node");
             else if(members.size()<8)labels.add("Add another intermediate node");
-            choiceDialog("Ordered Router path", "Local execution supports two to eight independent nodes: WireGuard, AmneziaWG Fast or AmneziaWG Strong intermediate hops and a Shadowsocks 2022 or Hysteria2 final. Hysteria2 requires its final node's Start Layer Off and paired intermediate nodes. An imported Shadowsocks middle keeps a Shadowsocks 2022 final. Tap an intermediate hop to change its transport, reorder or remove it, or tap the final node to choose its exact transport. The final node supplies the selected DNS; every node keeps its own permitted Start Layer and MTU choice.")
+            choiceDialog("Ordered Router path", "Local execution supports two to eight independent nodes: WireGuard, AmneziaWG Fast or AmneziaWG Strong intermediate hops and a Shadowsocks 2022 or Hysteria2 final. Hysteria2 requires its final node's Start Layer Off and paired intermediate nodes. An imported Shadowsocks or SOCKS5 middle keeps a Shadowsocks 2022 final. Tap an intermediate hop to change its transport, reorder or remove it, or tap the final node to choose its exact transport. The final node supplies the selected DNS; every node keeps its own permitted Start Layer and MTU choice.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                         if(members.isEmpty()){chooseOrderedNode(draft,true);return;}
                         if(w==members.size()){chooseOrderedNode(draft,false);return;}

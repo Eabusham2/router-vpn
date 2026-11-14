@@ -525,6 +525,12 @@ ALLOWLISTS = {
         "android/test_android_node_chain_execution_runtime.py",
         "android/test_android_node_chain_runtime.py",
         "android/test_android_node_chain_socks_runtime.py",
+        ".github/workflows/android-multihop-contract.yml",
+        "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java",
+        "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
+        "android/test_android_node_candidate_prefix_host.py",
+        "android/test_android_runtime_contract.py",
+        "deploy/test_android_multihop_workflow.py",
     }),
     "socks-native-mtu": frozenset({
         "android/build-sing-box-libbox.sh",

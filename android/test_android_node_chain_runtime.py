@@ -118,12 +118,21 @@ SOURCES[APP + 'AndroidNodeStore.java'] = r'''package com.eabusham.routervpn;fina
 }'''
 SOURCES[APP + 'AndroidNodeChainCapture.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeChainCapture {
  static final String SESSION_FILE="routervpn-node-chain.json";final AndroidNodeStore.ChainCapture source;final io.nekohasekai.libbox.RouterNodeChain plan;
- final String config,launchInput;final boolean strict;
+ final String config,launchInput;final boolean strict;final AndroidNodeChainSOCKSCapture socks=null;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source){this.source=source;strict=source.strict;plan=new io.nekohasekai.libbox.RouterNodeChain(source.members.size());config="{\"original\":\"one-complete-TUN\",\"modes\":"+new org.json.JSONArray(source.modes).toString()+"}";launchInput="ordered:"+source.members.size()+":"+String.join(",",source.modes);}
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source){source.requireCurrent();return new AndroidNodeChainCapture(source);}
  boolean ownsSource(AndroidNodeStore.ChainCapture value){return source==value;}
  void requireCurrent(){source.requireCurrent();}void close()throws Exception{plan.close();}
 }'''
+SOURCES[APP + 'AndroidNodeChainSOCKSCapture.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeChainSOCKSCapture {final io.nekohasekai.libbox.RouterNodeChainSOCKS plan=new io.nekohasekai.libbox.RouterNodeChainSOCKS();}'''
+SOURCES[NATIVE + 'RouterNodeChainSOCKS.java'] = r'''package io.nekohasekai.libbox;public class RouterNodeChainSOCKS {
+ public CommandServer newCommandServer(CommandServerHandler handler,PlatformInterface platform)throws Exception{throw new IllegalStateException("No typed factory in ordinary host fixture");}
+ public void bindNative(CommandServer server)throws Exception{throw new IllegalStateException("No typed binding in ordinary host fixture");}
+ public void run(CommandServer server)throws Exception{throw new IllegalStateException("No typed proof in ordinary host fixture");}
+ public boolean healthy(){return false;}public void networkChanged(){}public void close(){}public boolean nativeClosed(){return false;}public boolean retainsServerCleanup(CommandServer server){return false;}public String progressJSON(){return "{}";}
+}'''
+SOURCES[NATIVE+'Libbox.java']=SOURCES[NATIVE+'Libbox.java'][:-1]+'''public static RouterHopMeasurement routerNodeChainSOCKSNewHopMeasurement(RouterNodeChainSOCKS plan,CommandServer server)throws Exception{throw new IllegalStateException("No typed measurement in ordinary host fixture");}
+public static RouterMTU routerNodeChainSOCKSNewMTU(RouterNodeChainSOCKS plan,CommandServer server,RouterMTUPlatform platform)throws Exception{throw new IllegalStateException("No typed MTU in ordinary host fixture");}}'''
 SOURCES[APP + 'AndroidNodeCandidatePrefixCapture.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeCandidatePrefixCapture {
  final AndroidNodeChainCapture original;final int prefix;final String inventory,config="{\"prefix\":\"closed-TUN\"}",launchInput="prefix-only";
  final io.nekohasekai.libbox.RouterNodeChainCandidatePreparation plan=new io.nekohasekai.libbox.RouterNodeChainCandidatePreparation();

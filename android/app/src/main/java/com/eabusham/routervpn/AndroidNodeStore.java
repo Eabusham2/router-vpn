@@ -89,8 +89,10 @@ final class AndroidNodeStore {
             if(importedGeneration!=AndroidStandardExitStore.publicationGeneration())throw new IllegalStateException("The imported node changed during capture.");
         }
         static void requireImported(AndroidStandardExitStore.Entry entry) throws Exception {
-            if(entry==null||!"shadowsocks".equals(entry.protocol)
-                    ||entry.startLayer!=null||entry.policy!=null&&!"off".equals(entry.policy.optString("start_layer","off")))throw new IllegalStateException("This ordered custom position requires an original Shadowsocks 2022 node with Start Layer Off.");
+            if(entry==null||!java.util.Arrays.asList("shadowsocks","socks5").contains(entry.protocol)
+                    ||entry.startLayer!=null||entry.policy!=null&&!"off".equals(entry.policy.optString("start_layer","off")))throw new IllegalStateException("This ordered custom position requires an original Shadowsocks 2022 or SOCKS5 node with Start Layer Off.");
+            AndroidStandardExitStore.validate(entry);
+            if("socks5".equals(entry.protocol))return;
             int expected;
             switch(entry.method) {
                 case "2022-blake3-aes-128-gcm":expected=16;break;
@@ -364,7 +366,7 @@ final class AndroidNodeStore {
             if (source == null || !proofs.add(source.identityKey())) throw new IllegalStateException("An ordered member is missing or shares another node's paired identity.");
             String mode = reference.getString("mode");
             if(source.imported) {
-                if(selected.length()!=3||i!=1||!"shadowsocks".equals(mode))throw new IllegalStateException("A custom ordered node belongs only between the paired first and final nodes of this three-node path.");
+                if(selected.length()!=3||i!=1||!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("A custom ordered node belongs only between the paired first and final nodes of this three-node path.");
                 ChainSource.requireImported(source.external());
             } else {
                 source.requirePairedIdentity();

@@ -324,9 +324,10 @@ final class AndroidConnectionProfileStore {
                 AndroidStandardExitStore.Entry source=AndroidStandardExitStore.copy(exits.get(id));
                 source.policy=AndroidConnectionProfilePolicy.external(member.getJSONObject("policy"),source.protocol);
                 AndroidNodeStore.ChainSource.requireImported(source);
-                if(!source.id.equals(member.getString("id"))||!source.expectedPublicIp.equals(member.getString("expected_public_ip")))throw new IllegalStateException("The saved custom middle node changed its original external identity.");
+                if(!source.id.equals(member.getString("id"))||!AndroidExternalPolicy.protocol(source.protocol).equals(member.getString("mode"))||!source.expectedPublicIp.equals(member.getString("expected_public_ip")))throw new IllegalStateException("The saved custom middle node changed its original external identity.");
                 AndroidExternalPolicy.Captured input=AndroidExternalPolicy.captureImportedEntry(source);
-                io.nekohasekai.libbox.Libbox.routerNodeChainImportedMemberInput(input.source,input.capture);
+                if("socks5".equals(source.protocol))io.nekohasekai.libbox.Libbox.routerNodeChainImportedSOCKSMemberInput(input.source,input.capture);
+                else io.nekohasekai.libbox.Libbox.routerNodeChainImportedMemberInput(input.source,input.capture);
                 total+=AndroidStandardExitStore.snapshot(source).getBytes(StandardCharsets.UTF_8).length;
                 continue;
             }
@@ -369,9 +370,9 @@ final class AndroidConnectionProfileStore {
         for(int i=0;i<members.length();i++) {
             JSONObject member=members.getJSONObject(i);
             if("external".equals(member.optString("node_kind"))) {
-                if(member.length()!=6||members.length()!=3||i!=1||!"shadowsocks".equals(member.getString("mode"))||!member.getString("id").equals(member.getString("node_id"))
+                if(member.length()!=6||members.length()!=3||i!=1||!java.util.Arrays.asList("shadowsocks","socks5").contains(member.getString("mode"))||!member.getString("id").equals(member.getString("node_id"))
                         ||!member.getString("id").matches("[A-Za-z0-9_-]{1,64}")||!local.add(member.getString("node_id"))||!(member.get("expected_public_ip") instanceof String))throw new IllegalStateException("A saved imported node requires its original middle position and external identity.");
-                AndroidConnectionProfilePolicy.external(member.getJSONObject("policy"),"shadowsocks");continue;
+                AndroidConnectionProfilePolicy.external(member.getJSONObject("policy"),member.getString("mode"));continue;
             }
             if(member.length()!=4||!(member.get("id") instanceof String)||!(member.get("mode") instanceof String)
                     ||!(member.get("node_id") instanceof String)||!member.getString("node_id").matches("[0-9a-f]{32}")

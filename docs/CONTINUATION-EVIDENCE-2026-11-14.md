@@ -218,6 +218,42 @@ jobs of the exact `c3b8100e` Windows MAX run `43541580151` completed
 successfully. Their older source identities are retained; neither is relabeled
 as acceptance of a later main commit or the whole product.
 
+## Accompanying Android typed SOCKS host adoption
+
+The shipping Android editor, node store, complete connection profiles and
+existing `LayeredVpnService` now retain a distinct schema-three SOCKS source.
+The source-bound native factory creates the original command server, which is
+retained and bound before startup. Proof, hop measurement and MTU dispatch use
+the typed native APIs. Shared workers must join before the original Box closes;
+the original native close receipt precedes releasing its private source.
+Saved profiles retain credential references and original node identities.
+The original measurement service survives an authorized MTU reproof.
+
+The actual shared-Go compiler and shipping Java source/profile gate passed
+the 1,033-check ordered inventory, whose separately reported typed SOCKS
+portion contains eighty checks, plus 360 hostname and 167 paired HY2 checks.
+All twenty-nine original source defect controls rejected their intended
+mutations. Its original log has SHA-256
+`26356a3a140f94e64143497aa4458ee5a4e4dc1d072dfeffa8c6e56c7ff39883`.
+
+The final typed host fixture was rerun independently: all 93 checks, seven
+lifecycle families and six compiled controls passed. Existing Local,
+Server/Compare, restore, MTU, prefix-host and dialog suites also passed their
+retained inventories and controls. All thirteen workflow contract tests and
+twenty source-identity tests passed. Java retained `--release 17`, and every
+original test deadline remains unchanged. The twenty-one frozen source files
+were verified against both the final test inputs and current main preimages;
+their manifest has SHA-256
+`545b59bd1301f9048b8cab5010f3f881498fa716a14ae49736f27b4057746fd8`.
+
+These are shared-compiler and shipping Java ownership results. The host
+fixtures explicitly double Android OS and native handles; they do not prove
+an APK, device, encrypted tunnel or physical MTU. The new source is limited to
+the captured Local three-node SOCKS-middle graph already supported by its
+typed native engine. Generic Server/Compare, prefix-candidate and CONNECT
+admission are not silently enabled by this increment. Those remaining graph
+requirements, SDK/native builds and device acceptance stay on the ledger.
+
 ## Active source work and acceptance still required
 
 Windows/Linux typed retained-parent adapters and full native-host acceptance

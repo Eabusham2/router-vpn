@@ -17,6 +17,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static final int MAX_INPUT = 40 * 1024 * 1024;
     static final String SESSION_FILE = "routervpn-node-chain.json";
     final RouterNodeChain plan;
+    final AndroidNodeChainSOCKSCapture socks;
     final String sourceInput, launchInput, config, sourceSHA256, configSHA256, selectionExecution;
     final List<String> memberInputs, identityInputs;
     final boolean strict, homeLANAccess;
@@ -26,6 +27,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         List<String> inputs = memberInputs(original);
         List<String> identities = identityInputs(original);
         String source = sourceInput(original, inputs, identities);
+        if (sourceSchema(original.members) == 3) return new AndroidNodeChainCapture(original, inputs, identities, source);
         RouterNodeChain plan = Libbox.newRouterNodeChain(source);
         try { return new AndroidNodeChainCapture(original, inputs, identities, source, plan); }
         catch (Exception failure) { try { plan.close(); } catch (Exception close) { failure.addSuppressed(close); } throw failure; }
@@ -34,6 +36,11 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static AndroidNodeChainCapture reopen(String input, AndroidNodeStore.ChainCapture original) throws Exception {
         List<String> inputs = memberInputs(original);
         List<String> identities = identityInputs(original);
+        if (sourceSchema(original.members) == 3) {
+            AndroidNodeChainCapture captured = compile(original);
+            if (!input.equals(captured.launchInput)) { captured.close(); throw new IllegalStateException("The typed private source differs from its original complete capture."); }
+            return captured;
+        }
         RouterNodeChain plan = Libbox.routerNodeChainLaunch(bounded(input, MAX_INPUT));
         try {
             AndroidNodeChainCapture capture = new AndroidNodeChainCapture(original, inputs, identities, sourceInput(original, inputs, identities), plan);
@@ -51,7 +58,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source, RouterNodeChain plan) throws Exception {
         if (plan == null) throw new IllegalStateException("The native ordered compiler returned no source owner.");
-        this.original = original; this.plan = plan; selectionExecution = original.execution;
+        this.original = original; this.plan = plan; socks = null; selectionExecution = original.execution;
         if (inputs.size() != original.members.size()) throw new IllegalStateException("The native input omitted an original ordered member.");
         memberInputs = Collections.unmodifiableList(new ArrayList<>(inputs));
         identityInputs = Collections.unmodifiableList(new ArrayList<>(identities));
@@ -85,6 +92,27 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         }
         strict = protect; homeLANAccess = lan;
         original.requireCurrent();
+    }
+
+    private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source) throws Exception {
+        this.original=original; plan=null; selectionExecution=original.execution;
+        if (!"local".equals(selectionExecution)) throw new IllegalStateException("The typed SOCKS source requires its original Local execution.");
+        socks=AndroidNodeChainSOCKSCapture.compile(source,inputs,identities);
+        try {
+            memberInputs=Collections.unmodifiableList(new ArrayList<>(inputs));
+            identityInputs=Collections.unmodifiableList(new ArrayList<>(identities));
+            sourceInput=source; launchInput=socks.source; config=socks.config;
+            sourceSHA256=socks.sourceSHA256; configSHA256=socks.configSHA256;
+            boolean protect=false,lan=true;
+            for (AndroidNodeStore.ChainSource member:original.members) {
+                JSONObject profile=member.profile();
+                String policy=profile.optString("kill_switch_policy",profile.optBoolean("kill_switch",false)?"on-connect":"off");
+                if(!java.util.Arrays.asList("off","on-connect","always").contains(policy))throw new IllegalStateException("An ordered member has an invalid protection policy.");
+                protect|=!"off".equals(policy)||profile.optBoolean("kill_switch",false);
+                lan&=profile.optBoolean("home_lan_access",true);
+            }
+            strict=protect;homeLANAccess=lan;original.requireCurrent();
+        } catch(Exception failure) { try{socks.close();}catch(Exception cleanup){failure.addSuppressed(cleanup);}throw failure; }
     }
 
     private static List<String> identityInputs(AndroidNodeStore.ChainCapture original) throws Exception {
@@ -121,9 +149,10 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     /** Pure compiler input shared by the editor preview and the launch capture. */
     static String memberInput(AndroidNodeStore.ChainSource member, String mode, JSONObject profile) throws Exception {
         if(member.imported) {
-            if(!"shadowsocks".equals(mode)||!member.profileId.equals(profile.getString("id"))||!"external".equals(profile.getString("node_kind"))||profile.has("node_proof_id")||profile.has("router_api")||profile.has("api_token"))throw new IllegalStateException("The imported source cannot borrow a paired Router identity.");
+            if(!mode.equals(AndroidExternalPolicy.protocol(member.external().protocol))||!member.profileId.equals(profile.getString("id"))||!"external".equals(profile.getString("node_kind"))||profile.has("node_proof_id")||profile.has("router_api")||profile.has("api_token"))throw new IllegalStateException("The imported source cannot borrow a paired Router identity.");
             AndroidExternalPolicy.Captured captured=AndroidExternalPolicy.captureImportedEntry(member.external());
-            return bounded(Libbox.routerNodeChainImportedMemberInput(captured.source,captured.capture),MAX_INPUT);
+            return bounded("socks5".equals(mode)?Libbox.routerNodeChainImportedSOCKSMemberInput(captured.source,captured.capture)
+                    :Libbox.routerNodeChainImportedMemberInput(captured.source,captured.capture),MAX_INPUT);
         }
         member.requirePairedIdentity();
         if (!member.profileId.equals(profile.getString("id")) || !member.proofId.equals(profile.getString("node_proof_id"))) {
@@ -142,14 +171,14 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static int sourceSchema(List<AndroidNodeStore.ChainSource> members) throws Exception {
         int imported=0;for(int i=0;i<members.size();i++)if(members.get(i).imported){imported++;if(members.size()!=3||i!=1)throw new IllegalStateException("A custom node requires one paired first node and one paired final node.");}
         if(imported>1)throw new IllegalStateException("This custom path supports one imported intermediate node.");
-        return imported==0?1:2;
+        return imported==0?1:"socks5".equals(members.get(1).external().protocol)?3:2;
     }
 
     JSONObject controlProfile() throws Exception { return original.control.profile(); }
     JSONObject finalProfile() throws Exception { return original.members.get(original.members.size() - 1).profile(); }
     boolean ownsSource(AndroidNodeStore.ChainCapture source) { return original == source; }
     void requireCurrent() throws Exception { original.requireCurrent(); }
-    @Override public void close() throws Exception { plan.close(); }
+    @Override public void close() throws Exception { if(socks!=null)socks.close();else plan.close(); }
 
     private static String bounded(String value, int limit) {
         if (value == null || value.isEmpty() || value.getBytes(StandardCharsets.UTF_8).length > limit) throw new IllegalStateException("The complete ordered private source exceeds its bound.");

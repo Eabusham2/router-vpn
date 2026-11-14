@@ -1127,7 +1127,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     if (!explicitStop && activeSession == session) shutdownRetainingOwner("FAILED", message);
                 }));
                 if(startLayerRelay!=null)startLayerRelay.start();
-                commandServer = new CommandServer(this, this);
+                commandServer = preparedChain==null?new CommandServer(this, this):preparedChain.newCommandServer(this,this);
                 if (preparedChain != null) preparedChain.bindNative(commandServer);
                 commandServer.start();
                 commandServer.startOrReloadService(config, new OverrideOptions());
@@ -1508,7 +1508,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     publish("STOPPING",activeMode,"The original candidate prefix cleanup is pending; its VPN and MTU hold remain owned.");
                     throw new IllegalStateException("The original candidate prefix has not acknowledged native cleanup.",pending);
                 }
-            } else if (chain.execution != null) {
+            } else if (chain.execution != null || chain.typedNative()) {
+                // Typed cleanup joins its original workers before Box close.
                 // Server cleanup owns authenticated DELETE through the original
                 // lower path. Destroying that Box first would discard its only
                 // cleanup authority; every failed join must remain retryable.

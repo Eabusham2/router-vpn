@@ -60,7 +60,7 @@ final class AndroidOrderedPathSelection {
 
     List<String> prefixModes(String id) throws Exception {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
-        if(source.imported){if(members.size()==2&&!members.get(0).source.imported&&"shadowsocks".equals(members.get(1).mode))result.add("shadowsocks");}
+        if(source.imported){if(members.size()==2&&!members.get(0).source.imported&&"shadowsocks".equals(members.get(1).mode))result.add(AndroidExternalPolicy.protocol(source.external().protocol));}
         else for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
         requireCurrent();return Collections.unmodifiableList(result);
     }
@@ -68,6 +68,7 @@ final class AndroidOrderedPathSelection {
     static String prefixModeTitle(String mode) {
         switch(mode) {
             case "shadowsocks":return "Custom Shadowsocks 2022";
+            case "socks5":return "Custom SOCKS5";
             case "wg":return "WireGuard";
             case "awg2-fast":return "AmneziaWG Fast";
             case "awg2-strong":return "AmneziaWG Strong";
@@ -134,7 +135,7 @@ final class AndroidOrderedPathSelection {
     }
 
     private static void requirePrefixMode(AndroidNodeStore.ChainSource source,String mode) throws Exception {
-        if(source.imported){AndroidNodeStore.ChainSource.requireImported(source.external());if(!"shadowsocks".equals(mode))throw new IllegalStateException("Keep the original imported Shadowsocks transport.");return;}
+        if(source.imported){AndroidNodeStore.ChainSource.requireImported(source.external());if(!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("Keep the original imported transport.");return;}
         if(!PREFIX_MODES.contains(mode))throw new IllegalStateException("Choose WireGuard, AmneziaWG Fast or AmneziaWG Strong for this intermediate node.");
         if(!hasMode(source,mode))throw new IllegalStateException("The selected intermediate node has no complete "+prefixModeTitle(mode)+" source.");
     }
@@ -174,14 +175,23 @@ final class AndroidOrderedPathSelection {
         }
         String source=new JSONObject().put("schema",AndroidNodeChainCapture.sourceSchema(sources)).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString();
         if(source.getBytes(StandardCharsets.UTF_8).length>AndroidNodeChainCapture.MAX_INPUT)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
-        RouterNodeChain preview=Libbox.newRouterNodeChain(source);
-        if(preview==null)throw new IllegalStateException("The native compiler returned no complete ordered path.");
-        try {
-            if(preview.config()==null||preview.config().isEmpty())throw new IllegalStateException("The native compiler returned no complete ordered graph.");
-            requireCurrent();
-        } finally { preview.close(); }
+        if(AndroidNodeChainCapture.sourceSchema(sources)==3) {
+            AndroidNodeChainSOCKSCapture preview=AndroidNodeChainSOCKSCapture.compile(source,jsonStrings(inputs),jsonStrings(identities));
+            try { requireCurrent(); } finally { preview.close(); }
+        } else {
+            RouterNodeChain preview=Libbox.newRouterNodeChain(source);
+            if(preview==null)throw new IllegalStateException("The native compiler returned no complete ordered path.");
+            try {
+                if(preview.config()==null||preview.config().isEmpty())throw new IllegalStateException("The native compiler returned no complete ordered graph.");
+                requireCurrent();
+            } finally { preview.close(); }
+        }
         AndroidNodeStore.ChainCapture captured=profiles.selectOrderedPath(catalog,sources,modes,preferences);
         saved=true;return captured;
+    }
+
+    private static List<String> jsonStrings(JSONArray values)throws Exception {
+        List<String> result=new ArrayList<>();for(int i=0;i<values.length();i++)result.add(values.getString(i));return result;
     }
 
     void requireCurrent() throws Exception {

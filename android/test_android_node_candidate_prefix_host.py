@@ -117,7 +117,7 @@ def main():
         cp=os.pathsep.join((str(classes),str(jar)))
         subprocess.run(['java','-cp',cp,'com.eabusham.routervpn.OrderedRuntimeTest'],check=True,timeout=90)
         controls=(
-            ('AndroidNodeChainSession','candidatePrefix==null&&(execution == null ? capture.plan.healthy() : execution.healthy())','candidatePrefix!=null|| (execution == null ? capture.plan.healthy() : execution.healthy())','success','private prefix lent ordinary execution proof'),
+            ('AndroidNodeChainSession','candidatePrefix==null&&(capture.socks!=null?capture.socks.plan.healthy():execution == null ? capture.plan.healthy() : execution.healthy())','candidatePrefix!=null|| (capture.socks!=null?capture.socks.plan.healthy():execution == null ? capture.plan.healthy() : execution.healthy())','success','private prefix lent ordinary execution proof'),
             ('LayeredVpnService','capturedChain.prepareCandidates();','capturedChain.prove();','success','private prefix failed host startup:'),
             ('AndroidNodeChainRuntime','// Internal completion lends only candidate authority.','AndroidHomeStateStore.connectedNodeChain(context,home); // Internal completion lends only candidate authority.','success','private prefix published ordinary Connected Home'),
             ('LayeredVpnService','chain.closePlan();chain.requireNativeBindingDrain();','chain.requireNativeBindingDrain();','drain','pending prefix join destroyed native graph or MTU'),
