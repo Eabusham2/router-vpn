@@ -158,6 +158,15 @@ STUBS['com/eabusham/routervpn/AndroidMTUSession.java'] = STUBS['com/eabusham/rou
 STUBS['com/eabusham/routervpn/AndroidMTUSession.java'] = STUBS['com/eabusham/routervpn/AndroidMTUSession.java'][:-1] + 'public void activateNodeChain(AndroidNodeChainSession source){}public boolean candidatePrefixCurrent(AndroidNodeChainSession source){return false;}public void prepareNodeCandidates(AndroidNodeChainSession source,Object lease)throws Exception{throw new IllegalStateException("No ordered candidate MTU proof in this boundary");}public Long proofObservationToken(){return 0L;}public boolean proofOwnerCurrent(){return true;}}'
 stub(APP,'AndroidStartLayerRelay','implements java.io.Closeable{public interface SocketProtector{void protectRelaySocket(java.net.Socket s)throws Exception;void protectRelaySocket(java.net.DatagramSocket s)throws Exception;}public static AndroidStartLayerRelay prepareIfConfigured(android.content.Context c,java.io.File f,java.util.function.Consumer<String> failure)throws Exception{return null;}public void start(){}public void close(){} }')
 
+# Ordered fifty is a distinct typed facade. This general service type fixture
+# refuses admission; the ordered-fifty runtime fixture supplies its real host.
+stub(PKG,'RouterOrderedLatency','{public void start(String r,String n)throws Exception{}public void cancel(String r){}public void drain(String r)throws Exception{}public String statusJSON(){return "{}";}public String savedJSON(String n){return "";}public void close()throws Exception{}}')
+stub(APP,'AndroidNodeStore','{static class ChainSource{final String profileId="";final boolean imported=false;org.json.JSONObject profile()throws Exception{return new org.json.JSONObject("{}");}}static class ChainCapture{final java.util.List<ChainSource> members=java.util.List.of();final java.util.List<String> modes=java.util.List.of();}}')
+stub(APP,'AndroidOrderedLatencyStore','{interface Guard{void require()throws Exception;}static class Record{String role;int count;void require(String s,String c,int p,String n,String k,String r)throws Exception{}}static void save(android.content.Context c,Record r,Guard g)throws Exception{g.require();throw new IllegalStateException("No ordered persistence in type boundary");}}')
+STUBS[APP.replace('.', '/')+'/AndroidNodeChainCapture.java']=STUBS[APP.replace('.', '/')+'/AndroidNodeChainCapture.java'][:-1]+'final String sourceSHA256="",configSHA256="";}'
+STUBS[APP.replace('.', '/')+'/AndroidNodeChainSession.java']=STUBS[APP.replace('.', '/')+'/AndroidNodeChainSession.java'][:-1]+'''final AndroidNodeStore.ChainCapture source=null;final AndroidNodeChainCapture capture=null;
+io.nekohasekai.libbox.RouterOrderedLatency newOrderedLatency(io.nekohasekai.libbox.RouterHopMeasurement m)throws Exception{throw new IllegalStateException("No ordered benchmark in type boundary");}void closeOrderedLatency()throws Exception{}void closeOrderedLatency(io.nekohasekai.libbox.RouterOrderedLatency m)throws Exception{} }'''
+
 STUBS['com/eabusham/routervpn/AndroidExternalProtection.java'] = (SERVICE.parent / 'AndroidExternalProtection.java').read_text(encoding='utf-8')
 
 

@@ -22,11 +22,11 @@ SOURCES[NATIVE+'CommandServer.java']=SOURCES[NATIVE+'CommandServer.java'].replac
 SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('selected.add(i==count-1?finalMode:prefixMode);','selected.add(i==count-1?finalMode:i==1?io.nekohasekai.libbox.RouterNodeChainCONNECT.transport:prefixMode);')
 SOURCES[APP+'AndroidNodeChainCapture.java']=r'''package com.eabusham.routervpn;final class AndroidNodeChainCapture {
  static final int MAX_INPUT=40*1024*1024;static final String SESSION_FILE="routervpn-node-chain.json";
- final AndroidNodeStore.ChainCapture source;final io.nekohasekai.libbox.RouterNodeChain plan=null;final AndroidNodeChainCONNECTCapture connect;final AndroidNodeChainSOCKSCapture socks=null;final String config,launchInput;final boolean strict;
+ final AndroidNodeStore.ChainCapture source;final io.nekohasekai.libbox.RouterNodeChain plan=null;final AndroidNodeChainCONNECTCapture connect;final AndroidNodeChainSOCKSCapture socks=null;final String sourceSHA256,configSHA256;final String config,launchInput;final boolean strict;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source)throws Exception{
   this.source=source;strict=source.strict;java.util.List<String> nodes=java.util.List.of("original-first","private-connect-credentials","original-final"),ids=java.util.List.of("first-paired-identity","","final-paired-identity");
   String input=new org.json.JSONObject().put("schema",4).put("execution","local").put("nodes",new org.json.JSONArray(nodes)).put("identity_sources",new org.json.JSONArray(ids)).toString();
-  connect=AndroidNodeChainCONNECTCapture.compile(input,nodes,ids);config=connect.config;launchInput=connect.source;
+  connect=AndroidNodeChainCONNECTCapture.compile(input,nodes,ids);config=connect.config;sourceSHA256=connect.sourceSHA256;configSHA256=connect.configSHA256;launchInput=connect.source;
  }
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source)throws Exception{source.requireCurrent();return new AndroidNodeChainCapture(source);}
  boolean ownsSource(AndroidNodeStore.ChainCapture source){return this.source==source;}void requireCurrent(){source.requireCurrent();}void close()throws Exception{connect.close();}

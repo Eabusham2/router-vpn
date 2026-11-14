@@ -48,6 +48,7 @@ final class AndroidNodeChainSession {
     private final Object staging = new Object();
     private volatile boolean staged, claimed, cancelled, proofClosed, nativeClosed, released, nativeBound;
     private volatile CommandServer server;
+    private io.nekohasekai.libbox.RouterOrderedLatency orderedLatency;
     private volatile Owner owner;
     private volatile Host host;
     private volatile TemporaryDrain temporaryDrain;
@@ -228,6 +229,26 @@ final class AndroidNodeChainSession {
         return capture.connect!=null?Libbox.routerNodeChainCONNECTNewHopMeasurement(capture.connect.plan,server):capture.socks!=null?Libbox.routerNodeChainSOCKSNewHopMeasurement(capture.socks.plan,server):execution == null ? Libbox.routerNodeChainNewHopMeasurement(capture.plan, server) : execution.newHopMeasurement(server);
     }
 
+    synchronized io.nekohasekai.libbox.RouterOrderedLatency newOrderedLatency(io.nekohasekai.libbox.RouterHopMeasurement measurement) throws Exception {
+        requireCurrent();
+        if(!nativeHealthy()||capture.socks==null||measurement==null||orderedLatency!=null)
+            throw new IllegalStateException("The original typed ordered benchmark owner is unavailable or still draining.");
+        // The third argument is the service retained by LayeredVpnService.
+        // The native factory refuses any second or foreign measurement owner.
+        orderedLatency=Libbox.routerNodeChainSOCKSNewLatencyBenchmark(capture.socks.plan,server,measurement);
+        if(orderedLatency==null)throw new IllegalStateException("The native ordered benchmark returned no facade.");
+        return orderedLatency;
+    }
+    synchronized void closeOrderedLatency(io.nekohasekai.libbox.RouterOrderedLatency original) throws Exception {
+        if(original==null)return;
+        if(orderedLatency!=null&&orderedLatency!=original)throw new IllegalStateException("Another ordered benchmark owns cleanup.");
+        original.close();
+        if(orderedLatency==original)orderedLatency=null;
+    }
+    synchronized void closeOrderedLatency() throws Exception {
+        if(orderedLatency!=null)closeOrderedLatency(orderedLatency);
+    }
+
     void requireSource() throws Exception {
         if (cancelled || released || proofClosed) throw new IllegalStateException("The original ordered source has been retired.");
         capture.requireCurrent();
@@ -290,6 +311,7 @@ final class AndroidNodeChainSession {
     void closePlan() throws Exception {
         requireTemporaryDrain();
         cancel();
+        closeOrderedLatency();
         if(candidatePrefix!=null){
             if(!nativeBound&&server!=null)try{candidatePrefix.plan.bindNative(server);}catch(Exception admissionRefused){ /* Retain exact cleanup-only reservation. */ }
             candidatePrefix.close();

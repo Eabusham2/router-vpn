@@ -171,7 +171,7 @@ public final class ProductDialogHarness extends android.app.Activity {
  void selectCatalog(AndroidUnifiedNodeCatalog.Item item){selected=item.id;}
  void showProfileActions(AndroidNodeStore.Node node){profile=node.id;}
  AndroidNodeStore.Node nodeById(String id){for(AndroidNodeStore.Node n:nodeStore.nodes)if(n.id.equals(id))return n;return null;}
- JSONObject activeRouterProfile(){return new JSONObject();}void runRoutedHopSpeeds(){routed++;}void runCandidateTimes(){candidateTimes++;}
+ JSONObject activeRouterProfile(){return new JSONObject();}void runRoutedHopSpeeds(){routed++;}void runCandidateTimes(){candidateTimes++;}int orderedFifty;void runOrderedLatency(){orderedFifty++;}
  void refreshMultihopSummary(){}
  void prepareViaEntryExitMeasurement(AndroidNodeStore.Node node,List<AndroidNodeStore.Node> nodes){entry=node.id;exit=Integer.toString(nodes.size());}
  void chooseImportedRouterFinal(AndroidStandardExitStore.Entry first,List<AndroidNodeStore.Node> finals){importedEntry=first;importedFinals=finals;}
@@ -212,19 +212,19 @@ HARNESS_SUFFIX = r'''
  }
  static void performance(){
   for(boolean close:new boolean[]{false,true}){
-   ProductDialogHarness held=new ProductDialogHarness();held.telemetry.delayFastest=true;held.showPerformance();shown(10,"Performance").clickItem(2);AlertDialog progress=AlertDialog.last;
+   ProductDialogHarness held=new ProductDialogHarness();held.telemetry.delayFastest=true;held.showPerformance();shown(11,"Performance").clickItem(2);AlertDialog progress=AlertDialog.last;
    check(held.telemetry.allSamples==50&&progress.showing,"Performance comparison uses owned fifty-sample progress");
    if(close)progress.dismiss();else progress.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();
    check(held.telemetry.fastestCancels==1&&held.fastestProgressDialog==progress,"Performance cancellation retains original batch until drain");
    held.telemetry.pendingFastest.result(null,new IllegalStateException("drained cancellation"));
    check(held.fastestProgressDialog==null&&held.nodeStore.selections==0&&held.saved.writes==0,"Performance cancellation cannot select a node");
   }
-  ProductDialogHarness compared=new ProductDialogHarness();compared.showPerformance();shown(10,"Performance").clickItem(2);
+  ProductDialogHarness compared=new ProductDialogHarness();compared.showPerformance();shown(11,"Performance").clickItem(2);
   check(compared.infoTitle.equals("50-sample Router comparison")&&compared.info.contains("10% trimmed mean")&&compared.nodeStore.selections==0&&compared.saved.writes==0,"compare-only displays complete statistics without winner adoption");
-  ProductDialogHarness selected=new ProductDialogHarness();selected.saved.values.put(SELECTED_KIND,"external");selected.saved.values.put(SELECTED_ID,"provider-only");selected.showPerformance();shown(10,"Performance").clickItem(1);check(selected.externalBenchmarks==1&&selected.telemetry.nodeSamples==0,"selected external benchmark fell back to the active Router node");
-  for(int action=0;action<10;action++){
-   ProductDialogHarness h=new ProductDialogHarness();h.showPerformance();AlertDialog d=shown(10,"Performance");d.clickItem(action);
-   switch(action){case 0:check(h.telemetry.currentSamples==5,"current path actual callback");break;
+  ProductDialogHarness selected=new ProductDialogHarness();selected.saved.values.put(SELECTED_KIND,"external");selected.saved.values.put(SELECTED_ID,"provider-only");selected.showPerformance();shown(11,"Performance").clickItem(1);check(selected.externalBenchmarks==1&&selected.telemetry.nodeSamples==0,"selected external benchmark fell back to the active Router node");
+  for(int action=0;action<11;action++){
+   ProductDialogHarness h=new ProductDialogHarness();h.showPerformance();AlertDialog d=shown(11,"Performance");d.clickItem(action);
+   switch(action){case 10:check(h.orderedFifty==1&&h.telemetry.nodeSamples==0,"ordered fifty has distinct native dispatch");break;case 0:check(h.telemetry.currentSamples==5,"current path actual callback");break;
     case 1:check(h.telemetry.nodeSamples==50&&h.telemetry.measuredNode.equals("a"),"durable 50-sample selected node");break;
     case 2:check(h.telemetry.allSamples==50,"all-node callback");break;
     case 3:check(h.telemetry.speedBytes==8<<20,"real transfer requested8MiB");break;
@@ -238,7 +238,7 @@ HARNESS_SUFFIX = r'''
    check(action>=7||h.externalComparisons==0,"existing Performance actions cannot start an external comparison");
    check(action<7||h.telemetry.allSamples==0&&h.telemetry.nodeSamples==0&&h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0&&h.routed==0,"external comparison dispatch cannot substitute Router or current-path measurement");
   }
-  for(int action:new int[]{0,3}){ProductDialogHarness h=new ProductDialogHarness();h.connection.connected=false;h.showPerformance();shown(10,"Performance").clickItem(action);check(h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0,"disconnected path speed cannot run");}
+  for(int action:new int[]{0,3}){ProductDialogHarness h=new ProductDialogHarness();h.connection.connected=false;h.showPerformance();shown(11,"Performance").clickItem(action);check(h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0,"disconnected path speed cannot run");}
  }
  static void nodes(){
   ProductDialogHarness h=new ProductDialogHarness();h.showNodes();AlertDialog d=shown(2,"Choose node");check(d.items[1].contains("list only"),"no invented external coordinates");d.clickItem(1);check(h.selected.equals("external"),"exact external node callback");

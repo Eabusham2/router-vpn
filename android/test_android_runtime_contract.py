@@ -318,7 +318,7 @@ for executable_contract in (
     "test_android_multihop_layers.py",
     "test_android_layered_service_compile.py",
     "test_android_node_chain_execution_capture.py",
-    "test_android_node_chain_runtime.py", "test_android_node_chain_socks_runtime.py", "test_android_node_chain_connect_runtime.py", "test_android_node_candidate_preparation.py", "test_android_node_candidate_preparation_owner.py", "test_android_node_candidate_preparation_ui.py", "test_android_node_candidate_profile.py", "test_android_node_candidate_prefix_capture.py", "test_android_node_candidate_prefix_host.py", "test_android_node_candidate_prefix_owner.py", "test_android_node_chain_execution_runtime.py", "test_android_node_chain_execution_restore.py", "test_android_node_chain_mtu.py",
+    "test_android_node_chain_runtime.py", "test_android_node_chain_socks_runtime.py", "test_android_node_chain_connect_runtime.py", "test_android_ordered_latency.py", "test_android_node_candidate_preparation.py", "test_android_node_candidate_preparation_owner.py", "test_android_node_candidate_preparation_ui.py", "test_android_node_candidate_profile.py", "test_android_node_candidate_prefix_capture.py", "test_android_node_candidate_prefix_host.py", "test_android_node_candidate_prefix_owner.py", "test_android_node_chain_execution_runtime.py", "test_android_node_chain_execution_restore.py", "test_android_node_chain_mtu.py",
     "test_android_max_dns_owner.py",
     "test_android_max_fixture_composition.py",
     "test_android_max_preparation.py",

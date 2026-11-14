@@ -38,6 +38,10 @@ on:
       - 'android/test_android_node_chain_runtime.py'
       - 'android/test_android_node_chain_socks_runtime.py'
       - 'android/test_android_node_chain_connect_runtime.py'
+      - 'android/test_android_ordered_latency.py'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyBenchmark.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyStore.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyDialog.java'
       - 'android/test_android_node_candidate_preparation.py'
       - 'android/test_android_node_candidate_preparation_owner.py'
       - 'android/test_android_node_candidate_preparation_ui.py'
@@ -111,6 +115,10 @@ on:
       - 'android/test_android_node_chain_runtime.py'
       - 'android/test_android_node_chain_socks_runtime.py'
       - 'android/test_android_node_chain_connect_runtime.py'
+      - 'android/test_android_ordered_latency.py'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyBenchmark.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyStore.java'
+      - 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyDialog.java'
       - 'android/test_android_node_candidate_preparation.py'
       - 'android/test_android_node_candidate_preparation_owner.py'
       - 'android/test_android_node_candidate_preparation_ui.py'
@@ -186,6 +194,7 @@ jobs:
           python3 android/test_android_node_chain_runtime.py
           python3 android/test_android_node_chain_socks_runtime.py
           python3 android/test_android_node_chain_connect_runtime.py
+          python3 android/test_android_ordered_latency.py
           python3 android/test_android_node_candidate_preparation.py
           python3 android/test_android_node_candidate_preparation_owner.py
           python3 android/test_android_node_candidate_preparation_ui.py

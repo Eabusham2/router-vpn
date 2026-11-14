@@ -702,6 +702,91 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
     }
 
+    /** An immutable original member selection. Native profile IDs are distinct
+     * from local store IDs and from paired cryptographic proof IDs. */
+    static final class OrderedLatencyTarget {
+        final AndroidNodeChainSession chain;
+        final AndroidHomeStateStore.Snapshot home;
+        final String source,config,node,kind,role,label;
+        final int position;
+        OrderedLatencyTarget(AndroidNodeChainSession chain,AndroidHomeStateStore.Snapshot home,int position)throws Exception {
+            this.chain=chain;this.home=home;this.position=position;
+            AndroidNodeStore.ChainSource member=chain.source.members.get(position);
+            source=chain.capture.sourceSHA256;config=chain.capture.configSHA256;node=member.profileId;
+            kind=member.imported?"public-path":"private-node";
+            role=position==0?"entry":position==chain.source.members.size()-1?"exit":"intermediate";
+            String name=member.profile().optString("name",node).trim();if(name.isEmpty())name=node;if(name.length()>100)name=name.substring(0,100);
+            label=(position+1)+". "+name+" ["+node+"] • "+chain.source.modes.get(position)+(member.imported?" • public HTTPS response":" • private Router response");
+        }
+    }
+    static java.util.List<OrderedLatencyTarget> orderedLatencyTargets() throws Exception {
+        LayeredVpnService service=currentService.get();if(service==null)throw new IllegalStateException("Connect the typed ordered path before measuring its nodes.");
+        synchronized(service.lock){
+            AndroidNodeChainSession chain=service.nodeChainSession;AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(service);
+            if(chain==null||!chain.typedNative()||!chain.healthy()||!home.connected||!"passed".equals(home.pathProof)||!home.sessionId.equals(chain.home.sessionId)||!"UP".equals(service.state)||service.explicitStop)
+                throw new IllegalStateException("Fifty-response measurements require the complete proved typed ordered path.");
+            java.util.List<OrderedLatencyTarget> targets=new java.util.ArrayList<>();
+            for(int i=0;i<chain.source.members.size();i++)targets.add(new OrderedLatencyTarget(chain,home,i));
+            return java.util.Collections.unmodifiableList(targets);
+        }
+    }
+    static final class OrderedLatencyOwner {
+        private final LayeredVpnService service;
+        private final HopMeasurementOwner original;
+        private final OrderedLatencyTarget target;
+        private final io.nekohasekai.libbox.RouterOrderedLatency facade;
+        private final String request;
+        private volatile boolean attempted,started,ended;
+        private Long mtuObservation;
+        private OrderedLatencyOwner(LayeredVpnService service,OrderedLatencyTarget target,String request)throws Exception {
+            this.service=service;this.target=target;this.request=request;original=new HopMeasurementOwner(service,request);
+            requireCurrent();
+            facade=target.chain.newOrderedLatency(original.probe);
+        }
+        private void requireCurrent()throws Exception {
+            original.requireCurrent();
+            AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(service);
+            if(currentService.get()!=service||target.chain!=service.nodeChainSession||target.chain!=original.chain
+                    ||target.chain.sessionId==null||original.sessionFile!=service.activeSession||original.sessionFile==null
+                    ||!target.chain.sessionId.equals(original.sessionFile.getName())||!original.config.equals(service.activeConfig)
+                    ||!target.source.equals(target.chain.capture.sourceSHA256)||!target.config.equals(target.chain.capture.configSHA256)
+                    ||!target.home.sessionId.equals(home.sessionId)||target.home.pathGeneration!=home.pathGeneration
+                    ||!home.connected||!"node-chain".equals(home.logicalMode)||!"connected".equals(home.phase)||!"passed".equals(home.pathProof)
+                    ||AndroidHomeStateStore.emergencyDisconnectPending(service)
+                    ||!target.node.equals(target.chain.source.members.get(target.position).profileId))
+                throw new IllegalStateException("The ordered fifty request lost its exact source, path or Home generation.");
+            if(mtuObservation!=null&&!mtuObservation.equals(original.mtu==null?Long.valueOf(0L):original.mtu.proofObservationToken()))
+                throw new IllegalStateException("The ordered benchmark MTU proof generation changed.");
+            target.chain.requireCurrent();
+        }
+        void start()throws Exception{synchronized(service.lock){
+            requireCurrent();if(ended||attempted||service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("The captured MTU or benchmark worker has not joined.");
+            mtuObservation=original.mtu==null?Long.valueOf(0L):original.mtu.proofObservationToken();
+            if(mtuObservation==null)throw new IllegalStateException("The original ordered MTU proof is changing.");
+            attempted=true;facade.start(request,target.node);started=true;requireCurrent();
+        }}
+        boolean started(){return started;}
+        String status()throws Exception{synchronized(service.lock){requireCurrent();String result=facade.statusJSON();requireCurrent();return result;}}
+        String saved()throws Exception{synchronized(service.lock){requireCurrent();String result=facade.savedJSON(target.node);requireCurrent();return result;}}
+        void cancel(){facade.cancel(request);}
+        void drain()throws Exception{if(started)facade.drain(request);}
+        void close()throws Exception{synchronized(service.lock){if(!ended){target.chain.closeOrderedLatency(facade);ended=true;}}}
+        void requireDelivery()throws Exception{synchronized(service.lock){requireCurrent();}}
+        void commit(AndroidOrderedLatencyStore.Record record,AndroidOrderedLatencyStore.Guard cancellation)throws Exception {
+            synchronized(service.lock){synchronized(AndroidHomeStateStore.class){
+                requireCurrent();if(!ended||!started)throw new IllegalStateException("The original ordered benchmark facade has not joined.");
+                record.require(target.source,target.config,target.position,target.node,target.kind,request);
+                if(!record.role.equals(target.role)||record.count!=target.chain.source.members.size())throw new IllegalStateException("The receipt names another ordered inventory.");
+                AndroidOrderedLatencyStore.save(service,record,()->{cancellation.require();requireCurrent();});
+            }}
+        }
+        String requestID(){return request;}
+    }
+    static OrderedLatencyOwner captureOrderedLatency(String request,OrderedLatencyTarget target)throws Exception {
+        LayeredVpnService service=currentService.get();if(service==null||target==null||request==null||!request.matches("[0-9a-f]{32}"))throw new IllegalStateException("No captured ordered fifty request.");
+        synchronized(service.lock){return new OrderedLatencyOwner(service,target,request);}
+    }
+
     /** The request retains its exact old DNS handle after network/Box replacement.
      * Status/start require the live owner; cancel/drain always reach that handle. */
     static final class DNSMeasurementOwner {
@@ -1660,6 +1745,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     private void closeNodeChainMeasurementsLocked() {
+        if(nodeChainSession!=null)try{nodeChainSession.closeOrderedLatency();}
+        catch(Exception pending){throw new IllegalStateException("The original ordered fifty request has not joined.",pending);}
         if (hopMeasurement != null) {
             hopMeasurement.networkChanged();
             try { hopMeasurement.close(); }
