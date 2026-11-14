@@ -610,11 +610,84 @@ func (f *desktopImportedH3WindowsFixture) proofLane(ctx context.Context, entry b
 	return nil
 }
 
+// grantFailureDiagnostic compares the already captured observations with one
+// readback under the caller's original deadline. It never authorizes a grant:
+// the unmatched original grant still fails, including when the fresh readback
+// observes retirement, renewal, another owner, or an expired caller.
+func (f *desktopImportedH3WindowsFixture) grantFailureDiagnostic(ctx context.Context, original mobiletor.DesktopWindowsNodeCompositionReadback, grant mobiletor.DesktopSocketGrant, associations []desktopExternalSOCKSWFPReceipt, nativeObserved, peerObserved time.Time) string {
+	fresh, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	freshObserved := time.Now()
+	const maxRows = 8
+	const maxFieldBytes = 96
+	field := func(value string) string {
+		if len(value) > maxFieldBytes {
+			return value[:maxFieldBytes-3] + "..."
+		}
+		return value
+	}
+	errorClass := func(value error) string {
+		switch {
+		case value == nil:
+			return "none"
+		case errors.Is(value, context.DeadlineExceeded):
+			return "deadline"
+		case errors.Is(value, context.Canceled):
+			return "cancelled"
+		case errors.Is(value, net.ErrClosed):
+			return "closed"
+		default:
+			return "native-readback-failure"
+		}
+	}
+	peerRows := make([]string, 0, maxRows)
+	peerRelevant, peerExactLive, peerExactClosed := 0, 0, 0
+	for _, association := range associations {
+		if association.Client != grant.Local.String() && association.Relay != grant.Remote.String() {
+			continue
+		}
+		peerRelevant++
+		if association.Client == grant.Local.String() && association.Relay == grant.Remote.String() {
+			if association.Closed {
+				peerExactClosed++
+			} else {
+				peerExactLive++
+			}
+		}
+		if len(peerRows) < maxRows {
+			peerRows = append(peerRows, fmt.Sprintf("{index=%d control=%q relay=%q client=%q packets=%d closed=%t}", association.Index, field(association.Control), field(association.Relay), field(association.Client), association.Packets, association.Closed))
+		}
+	}
+	freshRows := make([]string, 0, maxRows)
+	freshRelevant, freshSameSocket, freshSameTuple, freshExactGrant := 0, 0, 0, 0
+	for _, actual := range fresh.Grants {
+		if actual.SocketID != grant.SocketID && actual.Local != grant.Local && actual.Remote != grant.Remote {
+			continue
+		}
+		freshRelevant++
+		if actual.SocketID == grant.SocketID {
+			freshSameSocket++
+		}
+		if actual.Network == grant.Network && actual.Local == grant.Local && actual.Remote == grant.Remote {
+			freshSameTuple++
+		}
+		if actual == grant {
+			freshExactGrant++
+		}
+		if len(freshRows) < maxRows {
+			freshRows = append(freshRows, fmt.Sprintf("{socket=%q sequence=%d network=%q local=%q remote=%q same_capture=%t same_owner=%t}", field(actual.SocketID), actual.Sequence, field(actual.Network), field(actual.Local.String()), field(actual.Remote.String()), actual.Capture == original.Capture, actual.Binding.Owner == original.Owner))
+		}
+	}
+	return fmt.Sprintf("grant_observation={network=%q local=%q remote=%q socket=%q sequence=%d same_capture=%t same_owner=%t original_grants=%d native_to_peer=%s peer_to_fresh=%s peer_total=%d peer_relevant=%d peer_shown=%d peer_exact_live=%d peer_exact_closed=%d peer_rows=[%s] fresh_error=%q caller_error=%q fresh_closed=%t same_target=%t same_capture=%t same_owner=%t same_options=%t same_calls=%t owner_current=%t fresh_grants=%d fresh_relevant=%d fresh_shown=%d fresh_same_socket=%d fresh_same_tuple=%d fresh_exact_grant=%d fresh_rows=[%s]}",
+		field(grant.Network), field(grant.Local.String()), field(grant.Remote.String()), field(grant.SocketID), grant.Sequence, grant.Capture == original.Capture, grant.Binding.Owner == original.Owner, len(original.Grants), peerObserved.Sub(nativeObserved), freshObserved.Sub(peerObserved),
+		len(associations), peerRelevant, len(peerRows), peerExactLive, peerExactClosed, strings.Join(peerRows, ","), errorClass(err), errorClass(ctx.Err()), fresh.Closed, fresh.Target == original.Target, fresh.Capture == original.Capture, fresh.Owner == original.Owner, reflect.DeepEqual(fresh.Options, original.Options), fresh.Calls == original.Calls, f.owner != nil && f.owner.Current(), len(fresh.Grants), freshRelevant, len(freshRows), freshSameSocket, freshSameTuple, freshExactGrant, strings.Join(freshRows, ","))
+}
+
 func (f *desktopImportedH3WindowsFixture) snapshot(t *testing.T, peer *desktopImportedH3Reference) mobiletor.DesktopWindowsNodeCompositionReadback {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	view, e := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	nativeObserved := time.Now()
 	if e != nil || view.Closed || view.Target != f.prepared || view.Owner.Kind != "windows-isolated-token" || !view.Options.RetainBaselineForHandoff || !f.owner.Current() {
 		t.Fatal("protected imported H3 lost actual BFE/socket owner readback", e)
 	}
@@ -623,6 +696,7 @@ func (f *desktopImportedH3WindowsFixture) snapshot(t *testing.T, peer *desktopIm
 		t.Fatal(e)
 	}
 	associations := peer.observe(t).SOCKS
+	peerObserved := time.Now()
 	for _, grant := range view.Grants {
 		if grant.Capture != f.prepared.Capture || grant.Binding.Owner != view.Owner {
 			t.Fatal("protected imported H3 grant changed its original captured owner")
@@ -644,7 +718,7 @@ func (f *desktopImportedH3WindowsFixture) snapshot(t *testing.T, peer *desktopIm
 			}
 		}
 		if !static && !authenticated {
-			t.Fatal("protected imported H3 granted its final or DNS as a direct physical root", grant.Network, grant.Remote)
+			t.Fatal("protected imported H3 granted its final or DNS as a direct physical root", grant.Network, grant.Remote, f.grantFailureDiagnostic(ctx, view, grant, associations, nativeObserved, peerObserved))
 		}
 	}
 	if len(view.Grants) == 0 {
