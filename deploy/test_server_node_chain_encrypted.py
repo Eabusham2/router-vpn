@@ -48,7 +48,7 @@ OWNER = 'routervpn-server-encrypted-test-source.json'
 NATIVE = 'TestServerChainEncryptedNative'
 SOURCE = 'TestServerChainEncryptedSourceInventory'
 IMPORTED_CASES = ('original', 'wrong-middle-key', 'wrong-final-key', 'wrong-final-identity',
-                  'failed-selected-dns', 'wrong-public-identity', 'joined-active-udp')
+                  'failed-selected-dns', 'wrong-public-identity', 'joined-active-udp', 'admission-restrictions')
 IMPORTED_NATIVE = 'TestServerChainImportedEncryptedNative'
 IMPORTED_SOURCE = 'TestServerChainImportedEncryptedSource'
 IMPORTED_TEMPLATE = 'mobile/server_chain_acceptance/imported_linux_test.go.tmpl'
@@ -245,19 +245,24 @@ def check_imported_verdict(output, case, *, source_only=False):
                 raise ValueError('Imported Server late or foreign receipt')
             keys = []
             value = json.loads(line.split('IMPORTED_SERVER_RECEIPT ', 1)[1], object_pairs_hook=lambda entries: keys.extend(k for k,v in entries) or dict(entries))
-            fields = {'case', 'capture_sha256', 'source_sha256', 'ready', 'selected_dns', 'middle_tcp', 'middle_udp', 'final_tcp', 'final_udp', 'retired', 'worker_joined', 'peer_joined'}
+            fields = {'case', 'capture_sha256', 'source_sha256', 'ready', 'selected_dns', 'middle_tcp', 'middle_udp', 'final_tcp', 'final_udp', 'retired', 'worker_joined', 'peer_joined', 'private_udp_refused', 'private_sink_packets', 'private_sink_replies'}
             if set(value) != fields or len(keys) != len(set(keys)) or value['case'] != case:
                 raise ValueError('Imported Server receipt identity changed')
             if any(value[k] is not True for k in ('retired','worker_joined','peer_joined')):
                 raise ValueError('Imported Server lost original joined retirement')
             if any(not isinstance(value[k], str) or re.fullmatch('[0-9a-f]{64}', value[k]) is None for k in ('capture_sha256','source_sha256')):
                 raise ValueError('Imported Server source identity missing')
-            ready = case in ('original', 'joined-active-udp')
+            ready = case in ('original', 'joined-active-udp', 'admission-restrictions')
             if value['ready'] is not ready or value['selected_dns'] is not ready:
                 raise ValueError('Imported Server success/refusal changed')
             counters = ('middle_tcp','middle_udp','final_tcp','final_udp')
             if any(type(value[k]) is not int or value[k] < 0 for k in counters) or value['middle_tcp'] <= 0 or ready and any(value[k] <= 0 for k in counters):
                 raise ValueError('Imported Server missing actual encrypted observations')
+            restricted = case == 'admission-restrictions'
+            if value['private_udp_refused'] is not restricted or any(type(value[k]) is not int or value[k] < 0 for k in ('private_sink_packets','private_sink_replies')):
+                raise ValueError('Imported Server omitted original private policy observation')
+            if restricted and (value['private_sink_packets'] != 0 or value['private_sink_replies'] != 0) or case in ('original','joined-active-udp') and (value['private_sink_packets'] <= 0 or value['private_sink_replies'] <= 0):
+                raise ValueError('Imported Server private policy observation contradicts its original source')
             receipts.append(value)
     if runs != expected or passes != expected or not ended or len(receipts) != (0 if source_only else 1) or not re.search(r'^PASS\r?$', output, re.M):
         raise ValueError('Imported Server omitted exact required verdict')

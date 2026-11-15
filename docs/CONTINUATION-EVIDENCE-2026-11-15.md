@@ -2455,3 +2455,42 @@ modeled. This result does not establish installed Windows execution, physical
 networking or private deployment. Those hosted and live requirements remain
 separate. Receipts and source manifests are in
 `imported-controller-gate-validation`.
+
+
+## Imported Server fixture distinguishes LAN permission from UDP support
+
+The actual encrypted Server jobs at `98dfdab7`, ARM64 `132906465749` and
+AMD64 `132906465803`, passed all fourteen original native cases. The first
+new imported case then failed with `real imported UDP echo EOF` after Ready,
+private health and selected DNS succeeded. The original imported profile had
+`home_lan_access: false`, but the positive fixture requested the private
+`10.77.0.1:45999` echo sink. The running policy correctly refused that request.
+This was a contradictory positive fixture, not evidence of a broken shipping
+UDP implementation or an expired native deadline.
+
+The positive source now explicitly captures LAN permission. A mandatory eighth
+imported case captures LAN Off, retains Ready and selected DNS, attempts the
+same private UDP destination and requires refusal. Its private sink packet
+and reply counters must remain unchanged and zero. This does not require all
+encrypted UDP counters to be zero: the original selected-DNS exception still
+works. The original and active-UDP-retirement cases require positive private
+sink counters and real echo traffic. Exact receipts distinguish these outcomes
+and reject missing or contradictory permission evidence.
+
+The actual source tests check private UDP admission against the captured LAN
+choice and independently preserve selected DNS. All fifteen original source
+records and nine imported source records passed. All twenty-two gate-runner
+tests passed, including the integrated rerun. The race-instrumented driver
+compiled; two separately compiled controls restoring constant LAN Off and
+removing the LAN-Off restriction failed at the exact policy witness. The
+shipping worker's eleven captured files are unchanged.
+
+All fourteen original native cases and all seven prior imported cases remain
+mandatory, with the eighth restriction case added. Their 90-second Go,
+105-second namespace and 125-second outer bounds remain unchanged. The local
+corrected native attempt again stopped at the required netlink operation with
+`Operation not permitted`, before any native case; no local encrypted pass is
+claimed. Both hosted Linux architectures must execute the corrected matrix
+at the new published SHA. No production policy, transport or DNS code changed.
+The exact host logs, source/driver identities and causal evidence remain in
+`release-98dfdab7-audit` and `imported-server-lan-validation`.

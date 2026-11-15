@@ -27,7 +27,7 @@ import (
 // This witnesses the real schema2 Server suffix. Entry lease acquisition and
 // desktop Compare selection are separate authorities; this fixture does not
 // synthesize an authenticated Router API request or report either as exercised.
-var serverChainImportedCases = []string{"original", "wrong-middle-key", "wrong-final-key", "wrong-final-identity", "failed-selected-dns", "wrong-public-identity", "joined-active-udp"}
+var serverChainImportedCases = []string{"original", "wrong-middle-key", "wrong-final-key", "wrong-final-identity", "failed-selected-dns", "wrong-public-identity", "joined-active-udp", "admission-restrictions"}
 
 type serverChainImportedMiddleStats struct {
 	Method        string `json:"method"`
@@ -120,7 +120,7 @@ func serverChainImportedSource(t *testing.T, p *serverChainImportedPeer, fault s
 	}
 	out := map[string]any{"type": "shadowsocks", "tag": "custom-exit", "server": endpoint.Addr().String(), "server_port": endpoint.Port(), "method": mobilemultihop.NativeStartLayerMethod, "password": password}
 	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "endpoints": []any{}, "outbounds": []any{out}, "route": map[string]any{"final": "custom-exit", "rules": []any{}, "auto_detect_interface": true}}
-	profile := map[string]any{"id": "encrypted-imported-middle", "node_kind": "external", "external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "shadowsocks": map[string]any{"server": endpoint.Addr().String(), "port": endpoint.Port(), "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "endpoint": endpoint.Addr().String(), "dns_mode": "home", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": false, "kill_switch_policy": "on-connect"}
+	profile := map[string]any{"id": "encrypted-imported-middle", "node_kind": "external", "external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "shadowsocks": map[string]any{"server": endpoint.Addr().String(), "port": endpoint.Port(), "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "endpoint": endpoint.Addr().String(), "dns_mode": "home", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": fault != "admission-restrictions", "kill_switch_policy": "on-connect"}
 	capture := map[string]any{"schema": 1, "exit_id": "encrypted-imported-middle", "protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "profile": profile}
 	middle, err := mobilemultihop.NodeChainImportedMemberInput(serverChainEncryptedJSON(t, graph), serverChainEncryptedJSON(t, capture))
 	if err != nil {
@@ -216,32 +216,47 @@ func serverChainImportedScenario(t *testing.T, name string) {
 			t.Fatal("middle or foreign credentials reached final")
 		}
 		target := M.ParseSocksaddr("10.77.0.1:45999")
-		active = worker.packets(t, target)
-		payload := []byte("original-imported-server-" + serverChainEncryptedRandom(t, 16))
-		if n, err := active.WriteTo(payload, target); err != nil || n != len(payload) {
-			t.Fatal("real imported UDP write", err)
-		}
-		buffer := make([]byte, 2048)
-		n, from, err := active.ReadFrom(buffer)
-		if err != nil || from.String() != target.String() || !bytes.Equal(buffer[:n], payload) {
-			t.Fatal("real imported UDP echo", err)
-		}
-		if name == "joined-active-udp" {
-			p.control(t, "drop-cover")
-			if _, err := active.WriteTo(payload, target); err != nil {
-				t.Fatal(err)
+		if name == "admission-restrictions" {
+			before := p.control(t, "stats")
+			denied := worker.packets(t, target)
+			_, _ = denied.WriteTo([]byte("original-imported-private-policy-refusal"), target)
+			_ = denied.SetReadDeadline(time.Now().Add(time.Second))
+			if _, _, err := denied.ReadFrom(make([]byte, 2048)); err == nil {
+				t.Fatal("captured imported LAN-off policy forwarded private final UDP")
 			}
-			until := time.Now().Add(2 * time.Second)
-			for time.Now().Before(until) {
-				v := p.control(t, "stats")
-				if v.Peer.Final.CoverPackets > v.Peer.Final.CoverReplies {
-					break
+			_ = denied.Close()
+			after := p.control(t, "stats")
+			if after.Peer.Final.CoverPackets != before.Peer.Final.CoverPackets || after.Peer.Final.CoverReplies != before.Peer.Final.CoverReplies {
+				t.Fatal("imported LAN-off refusal reached original private sink")
+			}
+		} else {
+			active = worker.packets(t, target)
+			payload := []byte("original-imported-server-" + serverChainEncryptedRandom(t, 16))
+			if n, err := active.WriteTo(payload, target); err != nil || n != len(payload) {
+				t.Fatal("real imported UDP write", err)
+			}
+			buffer := make([]byte, 2048)
+			n, from, err := active.ReadFrom(buffer)
+			if err != nil || from.String() != target.String() || !bytes.Equal(buffer[:n], payload) {
+				t.Fatal("real imported UDP echo", err)
+			}
+			if name == "joined-active-udp" {
+				p.control(t, "drop-cover")
+				if _, err := active.WriteTo(payload, target); err != nil {
+					t.Fatal(err)
 				}
-				time.Sleep(10 * time.Millisecond)
-			}
-			v := p.control(t, "stats")
-			if v.Peer.Final.CoverPackets <= v.Peer.Final.CoverReplies {
-				t.Fatal("no original pending UDP at retirement")
+				until := time.Now().Add(2 * time.Second)
+				for time.Now().Before(until) {
+					v := p.control(t, "stats")
+					if v.Peer.Final.CoverPackets > v.Peer.Final.CoverReplies {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				v := p.control(t, "stats")
+				if v.Peer.Final.CoverPackets <= v.Peer.Final.CoverReplies {
+					t.Fatal("no original pending UDP at retirement")
+				}
 			}
 		}
 	}
@@ -286,7 +301,7 @@ func serverChainImportedScenario(t *testing.T, name string) {
 	}
 	_ = p.original.process.input.Close()
 	p.original.process.join(t)
-	t.Log("IMPORTED_SERVER_RECEIPT " + serverChainEncryptedJSON(t, map[string]any{"case": name, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "ready": ready, "selected_dns": ready, "middle_tcp": stats.Peer.Middle.RawTCP, "middle_udp": stats.Peer.Middle.RawUDP, "final_tcp": stats.Peer.Final.FinalRawTCP, "final_udp": stats.Peer.Final.FinalRawUDP, "retired": true, "worker_joined": true, "peer_joined": true}))
+	t.Log("IMPORTED_SERVER_RECEIPT " + serverChainEncryptedJSON(t, map[string]any{"case": name, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "ready": ready, "selected_dns": ready, "middle_tcp": stats.Peer.Middle.RawTCP, "middle_udp": stats.Peer.Middle.RawUDP, "final_tcp": stats.Peer.Final.FinalRawTCP, "final_udp": stats.Peer.Final.FinalRawUDP, "retired": true, "worker_joined": true, "peer_joined": true, "private_udp_refused": name == "admission-restrictions", "private_sink_packets": stats.Peer.Final.CoverPackets, "private_sink_replies": stats.Peer.Final.CoverReplies}))
 }
 func TestServerChainImportedEncryptedNative(t *testing.T) {
 	if os.Getenv("ROUTERVPN_SERVER_CHAIN_NATIVE_NS") != "1" || os.Geteuid() != 0 {
@@ -319,6 +334,12 @@ func TestServerChainImportedEncryptedSource(t *testing.T) {
 			routes, err := policy.FrontRoutes(capture)
 			if err != nil || len(routes) != 2 || routes[0].Final || !routes[1].Final || routes[1].UDPOverTCPVersion != 2 || routes[0].AllowsDestination("tcp", "10.77.0.1:8787") {
 				t.Fatal("positional source grants changed", err)
+			}
+			if routes[1].AllowsDestination("udp", "10.77.0.1:45999") != (name != "admission-restrictions") {
+				t.Fatal("imported original LAN policy changed private UDP admission")
+			}
+			if !routes[1].AllowsDestination("udp", "192.168.50.133:53") {
+				t.Fatal("imported LAN policy removed original selected DNS exception")
 			}
 			foreign := capture.Clone()
 			foreign.Request.SourceSHA256 = strings.Repeat("f", 64)

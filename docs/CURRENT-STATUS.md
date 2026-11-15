@@ -33,7 +33,7 @@ The required native component gate checks adoption, physical-policy
 construction, restoration and altered-source refusals on supported Windows
 and Linux native hosts. Its encrypted-prefix, privileged TUN and DNS-I/O
 fixtures are explicitly bounded. The separate required Linux encrypted Server
-gate preserves fourteen original cases and adds seven imported-suffix cases
+gate preserves fourteen original cases and adds eight imported-suffix cases
 using the shipping worker, independent SS2022 peers, selected DNS and joined
 retirement. Local race/source evidence, hosted kernel evidence, exact-SHA
 publication and physical-device acceptance remain distinct in the

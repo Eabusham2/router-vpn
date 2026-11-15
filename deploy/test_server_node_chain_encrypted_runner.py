@@ -323,18 +323,19 @@ func TestActualCopyAndSnapshot(t *testing.T){
 
 class ImportedServerBoundaries(unittest.TestCase):
     def sample(self, case='original'):
-        ready=case in ('original','joined-active-udp')
+        ready=case in ('original','joined-active-udp','admission-restrictions')
         value=dict(case=case,capture_sha256='a'*64,source_sha256='b'*64,
                    ready=ready,selected_dns=ready,middle_tcp=4,middle_udp=3 if ready else 0,
                    final_tcp=2 if ready else 0,final_udp=1 if ready else 0,
-                   retired=True,worker_joined=True,peer_joined=True)
+                   retired=True,worker_joined=True,peer_joined=True,private_udp_refused=case=='admission-restrictions',
+                   private_sink_packets=0 if case=='admission-restrictions' else 1, private_sink_replies=0 if case=='admission-restrictions' else 1)
         root=GATE.IMPORTED_NATIVE
         return '\n'.join(('=== RUN   '+root,'=== RUN   '+root+'/'+case,
             '    source.go:1: IMPORTED_SERVER_RECEIPT '+json.dumps(value),
             '--- PASS: '+root+' (1.0s)','    --- PASS: '+root+'/'+case+' (1.0s)','PASS',''))
 
     def test_exact_imported_native_receipts_and_refusals(self):
-        self.assertEqual(GATE.IMPORTED_CASES,('original','wrong-middle-key','wrong-final-key','wrong-final-identity','failed-selected-dns','wrong-public-identity','joined-active-udp'))
+        self.assertEqual(GATE.IMPORTED_CASES,('original','wrong-middle-key','wrong-final-key','wrong-final-identity','failed-selected-dns','wrong-public-identity','joined-active-udp','admission-restrictions'))
         for case in GATE.IMPORTED_CASES:
             text=self.sample(case)
             self.assertEqual(GATE.check_imported_verdict(text,case)['case'],case)
@@ -349,6 +350,18 @@ class ImportedServerBoundaries(unittest.TestCase):
         for before,after in (('"selected_dns": true','"selected_dns": false'),('"final_udp": 1','"final_udp": 0'),('"capture_sha256": "'+'a'*64+'"','"capture_sha256": "bad"')):
             with self.assertRaises(ValueError):GATE.check_imported_verdict(self.sample().replace(before,after), 'original')
         with self.assertRaises(ValueError):GATE.check_imported_verdict(self.sample('wrong-middle-key').replace('"ready": false','"ready": true'),'wrong-middle-key')
+
+    def test_imported_lan_policy_receipt_cannot_be_omitted_or_relabelled(self):
+        text=self.sample('admission-restrictions')
+        for before,after in (('"private_udp_refused": true','"private_udp_refused": false'),
+                             ('"private_sink_packets": 0','"private_sink_packets": 1'),
+                             ('"private_sink_replies": 0','"private_sink_replies": 1'),
+                             ('"selected_dns": true','"selected_dns": false'),
+                             ('"ready": true','"ready": false')):
+            with self.subTest(mutation=before), self.assertRaises(ValueError):
+                GATE.check_imported_verdict(text.replace(before,after), 'admission-restrictions')
+        with self.assertRaises(ValueError):
+            GATE.check_imported_verdict(self.sample().replace('"private_udp_refused": false','"private_udp_refused": true'), 'original')
 
     def test_imported_source_inventory_cannot_substitute_native(self):
         root=GATE.IMPORTED_SOURCE
