@@ -790,6 +790,16 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     source_guard = "!java.util.Arrays.equals(source.original, chainSourceBytes(source))"
     epoch_guard = "captured.generation != selectionGeneration"
     capture_lock = "synchronized ChainCapture captureChain(String controlId) throws Exception { synchronized (STORE_LOCK)"
+    # History readback independently checks the same bytes and epoch. Mutate
+    # only the original capture validator exercised by these two controls;
+    # duplicate guards in another shipping operation must remain intact.
+    current_capture = method("AndroidNodeStore.java", "private synchronized void requireChainCapture(")
+    history_capture = method("AndroidNodeStore.java", "private void requireHistorySource(")
+    assert node.count(current_capture) == node.count(history_capture) == 1
+    assert current_capture.count(source_guard) == current_capture.count(epoch_guard) == node.count(capture_lock) == 1
+    source_control = node.replace(current_capture, current_capture.replace(source_guard, "false", 1), 1)
+    epoch_control = node.replace(current_capture, current_capture.replace(epoch_guard, "false", 1), 1)
+    assert source_control.count(history_capture) == epoch_control.count(history_capture) == 1
     stage_start = store.index("    private void stageOrderedNodes(")
     stage_end = store.index("    private static JSONArray orderedReferences(", stage_start)
     stage = store[stage_start:stage_end]
@@ -814,8 +824,8 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ("product-handoff", "ProductConnectSurface", product_ui.replace("if(!connection.pathCurrent(home))", "if(false)"), "ordered Product adopted a replaced Home"),
         ("product-handoff", "ProductConnectSurface", product_ui.replace("ticket!=orderedConnectTicket", "false"), "ordered Product adopted a replaced cancel"),
         ("product-handoff", "ProductConnectSurface", product_ui.replace("isFinishing()||isDestroyed()", "false"), "ordered Product adopted a replaced destroy"),
-        ("source", "AndroidNodeStore", node.replace(source_guard, "false"), "ordered capture accepted replacement middle source"),
-        ("generation", "AndroidNodeStore", node.replace(epoch_guard, "false"), "ordered capture revived after change-away and back"),
+        ("source", "AndroidNodeStore", source_control, "ordered capture accepted replacement middle source"),
+        ("generation", "AndroidNodeStore", epoch_control, "ordered capture revived after change-away and back"),
         ("atomic", "AndroidNodeStore", node.replace(capture_lock, capture_lock.replace("STORE_LOCK", "new Object()")), "ordered capture did not exclude the independent store publisher"),
         ("restore", "AndroidConnectionProfileStore", store[:stage_start] + stage.replace("for(int i=0;i<members.length();i++)", "for(int i=0;i<members.length();i+=2)") + store[stage_end:], "saved middle policy was dropped"),
         ("editor-generation", "AndroidNodeStore", node.replace("captured.selected.generation != selectionGeneration", "false"), "ordered editor revived after source change-away and back"),
@@ -825,7 +835,6 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ("editor-budget", "AndroidConnectionProfileStore", store.replace('if(complete>AndroidNodeStore.MAX_CHAIN_SOURCE)', 'if(false)'), "ordered final references exceeded their aggregate bound after private publication"),
         ("editor-ui", "OrderedProductSurface", editor_ui.replace('else draft.movePrefix(position,target);', 'else {}'), "shipping ordered editor did not move the original first node later"),
     )
-    assert node.count(source_guard) == node.count(epoch_guard) == node.count(capture_lock) == 1
     for index, (family, name, changed, witness) in enumerate(controls):
         if imported_only and family not in ("imported", "hostname"):
             continue
