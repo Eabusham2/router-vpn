@@ -31,7 +31,7 @@ func (b *DesktopLinuxNodeBaseline) Created(ctx context.Context) (DesktopLinuxNod
 	if err != nil {
 		return DesktopLinuxNodeCreationRecord{}, err
 	}
-	record := DesktopLinuxNodeCreationRecord{Capture: b.nft.Capture, HomeLAN: b.homeLAN, TableName: b.nft.TableName,
+	record := DesktopLinuxNodeCreationRecord{HostProtectionOff: b.nft.HostProtectionOff, Capture: b.nft.Capture, HomeLAN: b.homeLAN, TableName: b.nft.TableName,
 		TableHandle: b.nft.TableHandle, ChainHandle: b.nft.ChainHandle, BaselineSHA256: desktopLinuxBaselineDigest(encoded)}
 	if err := record.Validate(); err != nil || ctx.Err() != nil {
 		return DesktopLinuxNodeCreationRecord{}, errors.Join(err, ctx.Err())

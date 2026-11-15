@@ -30,7 +30,7 @@ type ProtectionTarget struct {
 }
 
 func (t ProtectionTarget) Validate() error {
-	if t.Native.Validate() != nil || !lowerHex(t.ConfigSHA256, 64) || (t.Policy != "on-connect" && t.Policy != "always") ||
+	if t.Native.Validate() != nil || !lowerHex(t.ConfigSHA256, 64) || (t.Policy != "on-connect" && t.Policy != "always" && t.Policy != "off") || (t.Policy == "off") != t.Native.HostProtectionOff ||
 		t.Guardian.Validate() != nil || uint32(t.Guardian.ProcessID) != t.Native.Owner.ProcessID {
 		return errors.New("Linux journal target lost its exact baseline, selected policy or original guardian")
 	}

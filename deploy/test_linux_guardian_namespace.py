@@ -277,6 +277,8 @@ def check_verdict_inventory():
     flattened = tuple(case for _, cases in GUARDIAN.KERNEL_GROUPS for case in cases)
     if flattened != GUARDIAN.KERNEL_CASES or len(flattened) != len(set(flattened)):
         raise AssertionError('Bounded native groups omit or repeat a required kernel boundary')
+    if dict(GUARDIAN.KERNEL_GROUPS).get('off') != ('NodeOff',):
+        raise AssertionError('Off lifecycle must retain its own bounded mandatory kernel group')
     for prefix, cases in (('TestLinuxStandardImageTransfer', GUARDIAN.IMAGE_TRANSFER_PARSER),
                           ('TestDesktopLinuxGuardianKernelStandardImageTransfer/', GUARDIAN.IMAGE_TRANSFER_NATIVE),
                           ('TestLinuxNodeStandardTransfer', GUARDIAN.REVERSE_TRANSFER_PARSER),
@@ -295,7 +297,8 @@ def check_verdict_inventory():
                           ('TestDesktopLinuxSOCKS', GUARDIAN.SOCKS_PARSER_CASES),
                           ('TestDesktopLinuxGuardianKernelSOCKSAssociation/', GUARDIAN.SOCKS_CASES),
                           ('TestDesktopLinuxRunningSOCKS', GUARDIAN.RUNNING_SOCKS_PARSER_CASES),
-                          ('TestDesktopLinuxGuardianKernelNodeRunning/', GUARDIAN.RUNNING_CASES)):
+                          ('TestDesktopLinuxGuardianKernelNodeRunning/', GUARDIAN.RUNNING_CASES),
+                          ('TestDesktopLinuxGuardianKernelNodeOff/', GUARDIAN.NODE_OFF_CASES)):
         lines = ['--- PASS: '+prefix+case+' (0.01s)' for case in cases]
         valid = '\n'.join(lines)
         GUARDIAN.require_socks_verdicts(valid, prefix, cases)

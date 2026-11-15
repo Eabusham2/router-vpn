@@ -81,7 +81,7 @@ func desktopLinuxJoined(joined <-chan struct{}) bool {
 
 func (p *DesktopLinuxSocketPolicy) protectionRecord() (DesktopLinuxProtectionRecord, error) {
 	n := p.nft
-	if n == nil || n.Capture != p.capture || n.UID != p.uid || p.command == nil || p.command.Process == nil ||
+	if n == nil || n.Capture != p.capture || n.UID != p.uid || n.HostProtectionOff != p.options.HostProtectionOff || p.command == nil || p.command.Process == nil ||
 		uint32(p.command.Process.Pid) != p.owner.ProcessID || len(n.Rules) != 4 || len(n.Sets) != 4 ||
 		len(n.Baseline) < 4 || len(n.Baseline) > 6 {
 		return DesktopLinuxProtectionRecord{}, errors.New("Linux protection has no complete captured native inventory")
@@ -111,7 +111,7 @@ func (p *DesktopLinuxSocketPolicy) protectionRecord() (DesktopLinuxProtectionRec
 		return DesktopLinuxProtectionRecord{}, err
 	}
 	digest := sha256.Sum256(encoded)
-	record := DesktopLinuxProtectionRecord{Capture: p.capture, Owner: p.owner, UID: p.uid, PermitPrefix: n.Prefix,
+	record := DesktopLinuxProtectionRecord{HostProtectionOff: n.HostProtectionOff, DenyHandle: n.DenyHandle, Capture: p.capture, Owner: p.owner, UID: p.uid, PermitPrefix: n.Prefix,
 		TableName: n.TableName, TableHandle: n.TableHandle, ChainHandle: n.ChainHandle, BaselineSHA256: hex.EncodeToString(digest[:])}
 	if err = record.Validate(); err != nil {
 		return DesktopLinuxProtectionRecord{}, err
@@ -172,6 +172,9 @@ func desktopLinuxProtectionRows(n *desktopLinuxNFT, rows []map[string]any, prepa
 // permission. No permit rule or set is allowed in its closed baseline.
 func desktopLinuxProtectionInventoryRows(n *desktopLinuxNFT, rows []map[string]any, prepared bool) error {
 	tables, chains, metadata, rules, sets := 0, 0, 0, 0, 0
+	if err := n.verifyOffDeny(rows, prepared); err != nil {
+		return err
+	}
 	baseline := make(map[uint64]bool)
 	for _, row := range rows {
 		if len(row) != 1 {
@@ -200,7 +203,7 @@ func desktopLinuxProtectionInventoryRows(n *desktopLinuxNFT, rows []map[string]a
 				if !desktopLinuxProtectionKeys(value, "family", "table", "name", "handle", "type", "hook", "prio", "policy", "comment") ||
 					value["family"] != "inet" || value["table"] != n.table() || value["name"] != "output" ||
 					desktopLinuxNumber(value["handle"]) != n.ChainHandle || value["type"] != "filter" || value["hook"] != "output" ||
-					value["prio"] != float64(-310) || value["policy"] != "drop" ||
+					value["prio"] != float64(-310) || value["policy"] != n.chainPolicy() ||
 					value["comment"] != "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256 {
 					return errors.New("Linux closed protection chain lost its exact captured baseline")
 				}
@@ -215,6 +218,9 @@ func desktopLinuxProtectionInventoryRows(n *desktopLinuxNFT, rows []map[string]a
 						return errors.New("Linux closed protection baseline gained or changed an exemption")
 					}
 					baseline[handle] = true
+					continue
+				}
+				if n.HostProtectionOff && prepared && handle == n.DenyHandle && value["comment"] == n.comment("deny") {
 					continue
 				}
 				owned := false

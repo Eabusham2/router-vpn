@@ -21,15 +21,17 @@ import (
 )
 
 type desktopLinuxNFT struct {
-	Capture     DesktopSocketCapture
-	TableName   string `json:",omitempty"`
-	UID         uint32
-	Prefix      string
-	TableHandle uint64
-	ChainHandle uint64
-	Rules       map[string]uint64
-	Sets        map[string]uint64
-	Baseline    map[uint64]any
+	HostProtectionOff bool   `json:",omitempty"`
+	DenyHandle        uint64 `json:",omitempty"`
+	Capture           DesktopSocketCapture
+	TableName         string `json:",omitempty"`
+	UID               uint32
+	Prefix            string
+	TableHandle       uint64
+	ChainHandle       uint64
+	Rules             map[string]uint64
+	Sets              map[string]uint64
+	Baseline          map[uint64]any
 }
 
 func desktopLinuxSetNormalized(value any) any {
@@ -242,7 +244,7 @@ func (n *desktopLinuxNFT) captureChain(ctx context.Context, options DesktopLinux
 			}
 			n.TableHandle = desktopLinuxNumber(table["handle"])
 		}
-		if chain, ok := row["chain"].(map[string]any); ok && chain["family"] == "inet" && chain["table"] == n.table() && chain["name"] == "output" && chain["type"] == "filter" && chain["hook"] == "output" && chain["policy"] == "drop" && chain["prio"] == float64(-310) && chain["comment"] == "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256 {
+		if chain, ok := row["chain"].(map[string]any); ok && chain["family"] == "inet" && chain["table"] == n.table() && chain["name"] == "output" && chain["type"] == "filter" && chain["hook"] == "output" && chain["policy"] == n.chainPolicy() && chain["prio"] == float64(-310) && chain["comment"] == "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256 {
 			n.ChainHandle = desktopLinuxNumber(chain["handle"])
 		}
 	}
@@ -254,6 +256,10 @@ func (n *desktopLinuxNFT) captureChain(ctx context.Context, options DesktopLinux
 
 func desktopLinuxValidateNFTBaseline(ctx context.Context, c DesktopSocketCapture, options DesktopLinuxSocketOptions, node bool) error {
 	n := desktopLinuxNFTForCapture(c, node)
+	n.HostProtectionOff = options.HostProtectionOff
+	if n.HostProtectionOff && !node {
+		return errors.New("nonblocking baseline requires a Node owner")
+	}
 	return n.captureChain(ctx, options)
 }
 
@@ -263,6 +269,10 @@ func desktopLinuxNewNFT(c DesktopSocketCapture, uid uint32, options DesktopLinux
 		return nil, err
 	}
 	n := desktopLinuxNFTForCapture(c, node)
+	n.HostProtectionOff = options.HostProtectionOff
+	if n.HostProtectionOff && !node {
+		return nil, errors.New("nonblocking baseline requires a Node owner")
+	}
 	n.UID, n.Prefix, n.Rules, n.Sets = uid, "rvpn_"+hex.EncodeToString(nonce[:]), make(map[string]uint64), make(map[string]uint64)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -270,6 +280,12 @@ func desktopLinuxNewNFT(c DesktopSocketCapture, uid uint32, options DesktopLinux
 		return n, err
 	}
 	var script strings.Builder
+	// Insert the exact isolated UID deny first, then insert its expiring
+	// tuple permits ahead of it in the same atomic transaction. Ordinary
+	// host traffic keeps the selected accept policy; this UID never does.
+	if n.HostProtectionOff {
+		fmt.Fprintf(&script, "insert rule inet %s output meta skuid %d drop comment %s\n", n.table(), uid, strconv.Quote(n.comment("deny")))
+	}
 	for _, kind := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
 		network, family := kind[:3], "ip"
 		if kind[3] == '6' {
@@ -295,6 +311,12 @@ func desktopLinuxNewNFT(c DesktopSocketCapture, uid uint32, options DesktopLinux
 			}
 		}
 		if rule, ok := row["rule"].(map[string]any); ok {
+			if n.HostProtectionOff && rule["comment"] == n.comment("deny") {
+				if n.DenyHandle != 0 {
+					return n, errors.New("duplicate original UID deny")
+				}
+				n.DenyHandle = desktopLinuxNumber(rule["handle"])
+			}
 			for _, kind := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
 				if rule["comment"] == n.comment(kind) {
 					n.Rules[kind] = desktopLinuxNumber(rule["handle"])
@@ -327,6 +349,9 @@ func (n *desktopLinuxNFT) verifyRows(rows []map[string]any, required bool) error
 	if n == nil || !desktopLinuxTableValid(n.Capture, n.TableName) || n.UID == 0 || len(n.Prefix) != 25 || !strings.HasPrefix(n.Prefix, "rvpn_") {
 		return errors.New("Linux physical nft identity is malformed")
 	}
+	if err := n.verifyOffDeny(rows, required); err != nil {
+		return err
+	}
 	tableOK, chainOK := false, false
 	foundRules, foundSets := make(map[string]bool), make(map[string]bool)
 	baselineFound := make(map[uint64]bool)
@@ -335,11 +360,15 @@ func (n *desktopLinuxNFT) verifyRows(rows []map[string]any, required bool) error
 			tableOK = desktopLinuxNumber(table["handle"]) == n.TableHandle && desktopLinuxNFTTableActive(table)
 		}
 		if chain, ok := row["chain"].(map[string]any); ok && chain["name"] == "output" {
-			chainOK = chain["family"] == "inet" && chain["table"] == n.table() && desktopLinuxNumber(chain["handle"]) == n.ChainHandle && chain["policy"] == "drop" && chain["type"] == "filter" && chain["hook"] == "output" && chain["prio"] == float64(-310) && chain["comment"] == "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256
+			chainOK = chain["family"] == "inet" && chain["table"] == n.table() && desktopLinuxNumber(chain["handle"]) == n.ChainHandle && chain["policy"] == n.chainPolicy() && chain["type"] == "filter" && chain["hook"] == "output" && chain["prio"] == float64(-310) && chain["comment"] == "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256
 		}
 		if rule, ok := row["rule"].(map[string]any); ok && required {
 			comment, _ := rule["comment"].(string)
-			if !strings.Contains(comment, ":"+n.Prefix+":") {
+			owned := n.HostProtectionOff && comment == n.comment("deny")
+			for _, transport := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
+				owned = owned || comment == n.comment(transport)
+			}
+			if !owned {
 				handle := desktopLinuxNumber(rule["handle"])
 				expected, found := n.Baseline[handle]
 				if !found || baselineFound[handle] || rule["family"] != "inet" || rule["table"] != n.table() || rule["chain"] != "output" || !reflect.DeepEqual(rule["expr"], expected) {
@@ -478,9 +507,21 @@ func (n *desktopLinuxNFT) revoke(ctx context.Context, g DesktopSocketGrant) erro
 }
 
 func (n *desktopLinuxNFT) allAbsent(ctx context.Context) error {
+	return n.allAbsentKeepingOffDeny(ctx, false)
+}
+
+func (n *desktopLinuxNFT) allAbsentKeepingOffDeny(ctx context.Context, keep bool) error {
 	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return err
+	}
+	if keep {
+		if !n.HostProtectionOff {
+			return errors.New("unselected UID deny retention")
+		}
+		if err := n.verifyOffDeny(rows, true); err != nil {
+			return err
+		}
 	}
 	for _, row := range rows {
 		if set, ok := row["set"].(map[string]any); ok {
@@ -490,6 +531,9 @@ func (n *desktopLinuxNFT) allAbsent(ctx context.Context) error {
 		}
 		if rule, ok := row["rule"].(map[string]any); ok {
 			if comment, _ := rule["comment"].(string); strings.Contains(comment, ":"+n.Prefix+":") {
+				if keep && comment == n.comment("deny") {
+					continue
+				}
 				return errors.New("Linux owned socket rule remains")
 			}
 		}
@@ -498,6 +542,10 @@ func (n *desktopLinuxNFT) allAbsent(ctx context.Context) error {
 }
 
 func (n *desktopLinuxNFT) close(ctx context.Context) error {
+	return n.closeKeepingOffDeny(ctx, false)
+}
+
+func (n *desktopLinuxNFT) closeKeepingOffDeny(ctx context.Context, keep bool) error {
 	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return err
@@ -508,6 +556,9 @@ func (n *desktopLinuxNFT) close(ctx context.Context) error {
 	var script strings.Builder
 	for _, row := range rows {
 		rule, _ := row["rule"].(map[string]any)
+		if n.HostProtectionOff && !keep && rule["comment"] == n.comment("deny") {
+			fmt.Fprintf(&script, "delete rule inet %s output handle %d\n", n.table(), n.DenyHandle)
+		}
 		for _, kind := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
 			if rule["comment"] == n.comment(kind) {
 				fmt.Fprintf(&script, "delete rule inet %s output handle %d\n", n.table(), n.Rules[kind])
@@ -527,5 +578,5 @@ func (n *desktopLinuxNFT) close(ctx context.Context) error {
 			return err
 		}
 	}
-	return n.allAbsent(ctx)
+	return n.allAbsentKeepingOffDeny(ctx, keep)
 }

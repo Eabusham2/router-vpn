@@ -53,7 +53,7 @@ func (n *NodeNetworkOwner) prepareNodePhysicalLinux(policy mobilemultihop.Deskto
 	if err != nil || meta.TargetOS != "linux" || !n.Matches(meta.SessionID, meta.SourceSHA256) {
 		return errors.New("Linux Router node physical sockets belong to another native target")
 	}
-	options := mobiletor.DesktopLinuxSocketOptions{}
+	options := mobiletor.DesktopLinuxSocketOptions{HostProtectionOff: meta.KillSwitchPolicy == "off"}
 	for _, destination := range captured.PrivateDestinations {
 		address, err := netip.ParseAddr(destination.Host)
 		if err != nil || address.String() != destination.Host || !(address.IsPrivate() || address.IsLinkLocalUnicast()) || destination.Port < 1 || destination.Port > 65535 ||

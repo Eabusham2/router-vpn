@@ -16,6 +16,10 @@ import (
 )
 
 func linuxNodeBaselineFixture(t *testing.T, homeLAN bool) *DesktopLinuxNodeBaseline {
+	return linuxNodeBaselinePolicyFixture(t, homeLAN, "on-connect")
+}
+
+func linuxNodeBaselinePolicyFixture(t *testing.T, homeLAN bool, policy string) *DesktopLinuxNodeBaseline {
 	t.Helper()
 	if os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Geteuid() != 0 {
 		t.Fatal("Node baseline tests require the original isolated namespace runner")
@@ -26,7 +30,7 @@ func linuxNodeBaselineFixture(t *testing.T, homeLAN bool) *DesktopLinuxNodeBasel
 		t.Fatal(err)
 	}
 	capture.SessionID = hex.EncodeToString(nonce[:])
-	baseline, err := NewDesktopLinuxNodeBaseline(context.Background(), capture, homeLAN)
+	baseline, err := NewDesktopLinuxNodeBaselineWithPolicy(context.Background(), capture, homeLAN, policy)
 	if baseline != nil {
 		t.Cleanup(func() {
 			if err := baseline.Close(context.Background()); err != nil {
@@ -57,7 +61,7 @@ func linuxNodeBaselineSource(t *testing.T, baseline *DesktopLinuxNodeBaseline, h
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := DesktopLinuxSocketOptions{Interfaces: []DesktopLinuxSocketInterface{{Name: physical.Name, Index: uint32(physical.Index), Address: netip.MustParseAddr("198.18.0.1")}}, PrivateDestinations: destinations}
+	options := DesktopLinuxSocketOptions{HostProtectionOff: baseline.nft.HostProtectionOff, Interfaces: []DesktopLinuxSocketInterface{{Name: physical.Name, Index: uint32(physical.Index), Address: netip.MustParseAddr("198.18.0.1")}}, PrivateDestinations: destinations}
 	if homeLAN {
 		for _, prefix := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"} {
 			options.LANPrefixes = append(options.LANPrefixes, netip.MustParsePrefix(prefix))

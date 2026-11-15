@@ -817,7 +817,7 @@ func (g *desktopLinuxGuardian) cleanup(release bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if g.nft != nil {
-		if err := g.nft.close(ctx); err != nil {
+		if err := g.nft.closeKeepingOffDeny(ctx, !release && g.nft.HostProtectionOff); err != nil {
 			return err
 		}
 	}

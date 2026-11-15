@@ -76,11 +76,12 @@ STANDARD_SOURCE_FILES |= frozenset({'desktop_standard_linux_bootstrap_netlink.go
 BOOTSTRAP_GRANT_FILES = tuple('desktop_standard_linux_bootstrap_grant_'+suffix+'.go' for suffix in ('wire','receipt','transport','observe','wire_test','native_test'))
 STANDARD_SOURCE_FILES |= frozenset(BOOTSTRAP_GRANT_FILES)
 STANDARD_SOURCE_FILES |= frozenset({'desktop_standard_linux_bootstrap_upstream.go', 'desktop_standard_linux_bootstrap_upstream_test.go', 'desktop_standard_linux_bootstrap_upstream_native_test.go'})
-KERNEL_CASES += STANDARD_KERNEL_CASES
+KERNEL_CASES += STANDARD_KERNEL_CASES + ('NodeOff',)
 KERNEL_GROUPS = (('sockets', KERNEL_CASES[:15]),
                  ('retained', KERNEL_CASES[15:KERNEL_CASES.index('SOCKSAssociation')]),
                  ('socks', ('SOCKSAssociation',)), ('standard', STANDARD_KERNEL_CASES[:-1]),
-                 ('dnssec', STANDARD_KERNEL_CASES[-1:]))
+                 ('dnssec', STANDARD_KERNEL_CASES[-1:]), ('off', ('NodeOff',)))
+NODE_OFF_CASES = ('live', 'guardian-death', 'channel-loss')
 SOCKS_CASES = ('private-ipv4', 'private-ipv6', 'public-cross-family', 'reject/future-control',
                'reject/changed-binding', 'reject/native-control-absent', 'reject/closed-control',
                'reject/plain-relay-bypass', 'reject/parent-before-child', 'reject/association-reuse')
@@ -496,6 +497,7 @@ def execute(source: Path, go='go', *, env=None):
     source, before = UID.checked_sources(source)
     required = {'desktop_socket_linux_policy.go', 'desktop_socket_linux_helper.go',
                 'desktop_socket_linux_nft.go', 'desktop_socket_linux_guardian_test.go',
+                'desktop_socket_linux_off.go', 'desktop_socket_linux_off_test.go', 'desktop_socket_linux_off_native_test.go',
                 'desktop_socket_linux_socks.go', 'desktop_socket_linux_socks_guardian.go',
                 'desktop_socket_linux_socks_nft.go', 'desktop_socket_linux_socks_test.go',
                 'desktop_socket_linux_socks_native_test.go',
@@ -560,6 +562,7 @@ def execute(source: Path, go='go', *, env=None):
         if any('--- PASS: TestDesktopLinuxGuardianKernel' + name + ' (' not in output for name in KERNEL_CASES) or '--- SKIP:' in output:
             raise ValueError('Linux guardian kernel gate did not execute every required boundary')
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernel', STANDARD_KERNEL_CASES)
+        require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelNodeOff/', NODE_OFF_CASES)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapSocket/', ('original', 'cancel-after-grant', 'tcp-original', 'tcp-cancel-after-grant'))
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapConditionalRemoval/', BOOTSTRAP_REMOVAL_NATIVE)
         require_socks_verdicts(output, 'TestDesktopLinuxGuardianKernelStandardBootstrapFiniteGrant/', BOOTSTRAP_FINITE_NATIVE)

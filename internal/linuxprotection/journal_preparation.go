@@ -21,11 +21,11 @@ type JournalPreparation struct {
 
 func (p JournalPreparation) Validate(owner ParentRecord) error {
 	if !lowerHex(p.Capture.SessionID, 32) || !lowerHex(p.Capture.SourceSHA256, 64) || !lowerHex(p.Capture.NetworkID, 32) ||
-		!lowerHex(p.ConfigSHA256, 64) || (p.Policy != "always" && p.Policy != "on-connect") ||
+		!lowerHex(p.ConfigSHA256, 64) || (p.Policy != "always" && p.Policy != "on-connect" && p.Policy != "off") ||
 		p.Engine.Validate() != nil || !processBelongsToParent(p.Engine, owner) {
 		return errors.New("Linux prepare intent lost its selected capture or original native engine")
 	}
-	if p.Created != nil && (p.Created.Validate() != nil || p.Created.Capture != p.Capture || p.Created.HomeLAN != p.HomeLAN) {
+	if p.Created != nil && (p.Created.Validate() != nil || p.Created.Capture != p.Capture || p.Created.HomeLAN != p.HomeLAN || p.Created.HostProtectionOff != (p.Policy == "off")) {
 		return errors.New("Linux prepare intent substituted its original creation receipt")
 	}
 	return nil

@@ -47,7 +47,7 @@ func (p linuxPhysicalPolicy) identity() (linuxPhysicalPolicyIdentity, error) {
 		return identity, errors.New("Linux native admission requires one original typed policy")
 	}
 	if target != "linux" || !networkSessionID.MatchString(identity.session) || !networkSourceID.MatchString(identity.source) ||
-		identity.policy != "on-connect" && identity.policy != "always" {
+		identity.policy != "on-connect" && identity.policy != "always" && identity.policy != "off" {
 		return linuxPhysicalPolicyIdentity{}, errors.New("Linux native admission lost its selected protection policy")
 	}
 	return identity, nil
@@ -196,7 +196,7 @@ func prepareLinuxPhysicalLifecycle(n linuxPhysicalNetwork, policy linuxPhysicalP
 		}
 		before, err := retention.Prepared(ctx)
 		sourceIdentity, identityErr := owned.Owner()
-		if err != nil || identityErr != nil || before.Validate() != nil || before.Capture != capture || before.Owner != sourceIdentity ||
+		if err != nil || identityErr != nil || before.Validate() != nil || before.Capture != capture || before.HostProtectionOff != (identity.policy == "off") || before.Owner != sourceIdentity ||
 			ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
 			return owned, errors.Join(err, identityErr, errors.New("Linux preparation lost its exact native source readback"))
 		}

@@ -47,12 +47,26 @@ type DesktopLinuxNodeBaseline struct {
 // bracketed readback. A partial return remains owned and closeable; neither
 // its label nor a later matching readback can recover an unknown creation.
 func NewDesktopLinuxNodeBaseline(ctx context.Context, capture DesktopSocketCapture, homeLAN bool) (*DesktopLinuxNodeBaseline, error) {
+	return newDesktopLinuxNodeBaseline(ctx, capture, homeLAN, false)
+}
+
+// NewDesktopLinuxNodeBaselineWithPolicy binds the accepted protection choice
+// before any native mutation. Off never installs a host-wide deny policy.
+func NewDesktopLinuxNodeBaselineWithPolicy(ctx context.Context, capture DesktopSocketCapture, homeLAN bool, policy string) (*DesktopLinuxNodeBaseline, error) {
+	if policy != "off" && policy != "on-connect" && policy != "always" {
+		return nil, errors.New("Linux Node baseline lost its selected policy")
+	}
+	return newDesktopLinuxNodeBaseline(ctx, capture, homeLAN, policy == "off")
+}
+
+func newDesktopLinuxNodeBaseline(ctx context.Context, capture DesktopSocketCapture, homeLAN, off bool) (*DesktopLinuxNodeBaseline, error) {
 	if ctx == nil || ctx.Err() != nil || !capture.valid() || os.Geteuid() != 0 {
 		return nil, errors.New("Linux Node baseline requires its live captured privileged creator")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	b := &DesktopLinuxNodeBaseline{gate: make(chan struct{}, 1), nft: desktopLinuxNFTForCapture(capture, true), homeLAN: homeLAN}
+	b.nft.HostProtectionOff = off
 	defer func() { b.gate <- struct{}{} }()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -69,7 +83,7 @@ func NewDesktopLinuxNodeBaseline(ctx context.Context, capture DesktopSocketCaptu
 	if err != nil {
 		return b, err
 	}
-	options := DesktopLinuxSocketOptions{}
+	options := DesktopLinuxSocketOptions{HostProtectionOff: off}
 	if homeLAN {
 		for _, prefix := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"} {
 			options.LANPrefixes = append(options.LANPrefixes, netip.MustParsePrefix(prefix))
@@ -105,7 +119,7 @@ func desktopLinuxNodeBaselineRequest(c DesktopSocketCapture, options DesktopLinu
 	table := desktopLinuxNodeTable(c)
 	request := []map[string]any{
 		{"create": map[string]any{"table": map[string]any{"family": "inet", "name": table}}},
-		{"add": map[string]any{"chain": map[string]any{"family": "inet", "table": table, "name": "output", "type": "filter", "hook": "output", "prio": float64(-310), "policy": "drop", "comment": "routervpn-owned-baseline:" + c.SessionID + ":" + c.SourceSHA256}}},
+		{"add": map[string]any{"chain": map[string]any{"family": "inet", "table": table, "name": "output", "type": "filter", "hook": "output", "prio": float64(-310), "policy": desktopLinuxChainPolicy(options.HostProtectionOff), "comment": "routervpn-owned-baseline:" + c.SessionID + ":" + c.SourceSHA256}}},
 	}
 	for _, expressions := range desktopLinuxBaselineExpressions(options) {
 		request = append(request, map[string]any{"add": map[string]any{"rule": map[string]any{"family": "inet", "table": table, "chain": "output", "expr": expressions}}})
@@ -115,7 +129,9 @@ func desktopLinuxNodeBaselineRequest(c DesktopSocketCapture, options DesktopLinu
 
 func desktopLinuxNodeBaselineReceipt(raw []byte, c DesktopSocketCapture, options DesktopLinuxSocketOptions) (*desktopLinuxNFT, error) {
 	request := desktopLinuxNodeBaselineRequest(c, options)
-	return desktopLinuxBaselineReceipt(raw, c, request, desktopLinuxNFTForCapture(c, true))
+	n := desktopLinuxNFTForCapture(c, true)
+	n.HostProtectionOff = options.HostProtectionOff
+	return desktopLinuxBaselineReceipt(raw, c, request, n)
 }
 
 // Shared receipt parsing does not grant guardian authority. Each caller supplies
@@ -286,7 +302,7 @@ func (b *DesktopLinuxNodeBaseline) BindPrepared(ctx context.Context, record Desk
 	}
 	defer func() { b.gate <- struct{}{} }()
 	if b.standard || !b.complete || b.removed || b.prepared != nil || record.Validate() != nil || record.Capture != b.nft.Capture ||
-		record.TableName != b.nft.TableName || record.TableHandle != b.nft.TableHandle || record.ChainHandle != b.nft.ChainHandle {
+		record.HostProtectionOff != b.nft.HostProtectionOff || record.TableName != b.nft.TableName || record.TableHandle != b.nft.TableHandle || record.ChainHandle != b.nft.ChainHandle {
 		return errors.New("Linux Node preparation belongs to another original baseline or source")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -306,6 +322,7 @@ func (b *DesktopLinuxNodeBaseline) BindPrepared(ctx context.Context, record Desk
 	}
 	n := *b.nft
 	n.UID, n.Prefix = record.UID, record.PermitPrefix
+	n.DenyHandle = record.DenyHandle
 	n.Rules, n.Sets = make(map[string]uint64), make(map[string]uint64)
 	for _, row := range rows {
 		for _, transport := range []string{"tcp4", "udp4", "tcp6", "udp6"} {

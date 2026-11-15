@@ -7,12 +7,13 @@ import "errors"
 // no process authority and cannot reconstruct the original creator or adopt a
 // same-name table after an interrupted or uncertain operation.
 type DesktopLinuxNodeCreationRecord struct {
-	Capture        DesktopSocketCapture `json:"capture"`
-	HomeLAN        bool                 `json:"home_lan"`
-	TableName      string               `json:"table_name"`
-	TableHandle    uint64               `json:"table_handle"`
-	ChainHandle    uint64               `json:"chain_handle"`
-	BaselineSHA256 string               `json:"baseline_sha256"`
+	HostProtectionOff bool                 `json:"host_protection_off,omitempty"`
+	Capture           DesktopSocketCapture `json:"capture"`
+	HomeLAN           bool                 `json:"home_lan"`
+	TableName         string               `json:"table_name"`
+	TableHandle       uint64               `json:"table_handle"`
+	ChainHandle       uint64               `json:"chain_handle"`
+	BaselineSHA256    string               `json:"baseline_sha256"`
 }
 
 func (r DesktopLinuxNodeCreationRecord) Validate() error {
@@ -29,6 +30,6 @@ func (r DesktopLinuxNodeCreationRecord) Validate() error {
 // UID, process birth, permit inventory and selected policy require their actual
 // retained native source and authenticated engine channel separately.
 func (r DesktopLinuxNodeCreationRecord) MatchesPrepared(p DesktopLinuxProtectionRecord) bool {
-	return r.Validate() == nil && p.Validate() == nil && r.Capture == p.Capture && r.TableName == p.TableName &&
+	return r.Validate() == nil && p.Validate() == nil && r.Capture == p.Capture && r.HostProtectionOff == p.HostProtectionOff && r.TableName == p.TableName &&
 		r.TableHandle == p.TableHandle && r.ChainHandle == p.ChainHandle && r.BaselineSHA256 == p.BaselineSHA256
 }

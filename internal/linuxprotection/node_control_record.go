@@ -28,7 +28,7 @@ type NodeSelection struct {
 }
 
 func (s NodeSelection) Validate() error {
-	if _, err := s.CaptureSHA256(); err != nil || s.Policy != "on-connect" && s.Policy != "always" {
+	if _, err := s.CaptureSHA256(); err != nil || s.Policy != "on-connect" && s.Policy != "always" && s.Policy != "off" {
 		return errors.New("Linux Node control lost its captured command and selected protection")
 	}
 	return nil
@@ -60,7 +60,7 @@ type NodePreparedRecord struct {
 
 func (r NodePreparedRecord) Validate() error {
 	if r.Protection.Validate() != nil || r.Protection.TableName == "" || r.Guardian.Validate() != nil ||
-		uint32(r.Guardian.Guardian.ProcessID) != r.Protection.Owner.ProcessID || r.Policy != "on-connect" && r.Policy != "always" {
+		uint32(r.Guardian.Guardian.ProcessID) != r.Protection.Owner.ProcessID || r.Policy != "on-connect" && r.Policy != "always" && r.Policy != "off" || (r.Policy == "off") != r.Protection.HostProtectionOff {
 		return errors.New("Linux Node prepared record lost its scoped baseline or original guardian")
 	}
 	return nil

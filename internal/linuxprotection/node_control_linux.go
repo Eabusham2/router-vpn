@@ -152,7 +152,7 @@ func (c *NodeControl) receiveMessage(ctx context.Context, awaitCleanup bool) (No
 func (c *NodeControl) validPrepared(record NodePreparedRecord) bool {
 	return record.Validate() == nil && c.selection.matches(record.Protection.Capture) &&
 		record.Protection.Capture.NetworkID == c.network && record.Policy == c.selection.Policy &&
-		record.Guardian.Engine == c.engine && c.created != nil && c.created.HomeLAN == c.selection.HomeLAN &&
+		record.Guardian.Engine == c.engine && c.created != nil && c.created.HomeLAN == c.selection.HomeLAN && c.created.HostProtectionOff == (c.selection.Policy == "off") &&
 		c.created.MatchesPrepared(record.Protection)
 }
 
@@ -227,7 +227,7 @@ func (c *NodeControl) ServePreparation(ctx context.Context,
 	if err != nil || ctx.Err() != nil {
 		return c.refuse(ctx, "baseline", errors.Join(err, ctx.Err()))
 	}
-	if created.Validate() != nil || created.Capture != capture || created.HomeLAN != c.selection.HomeLAN {
+	if created.Validate() != nil || created.Capture != capture || created.HomeLAN != c.selection.HomeLAN || created.HostProtectionOff != (c.selection.Policy == "off") {
 		return c.refuse(ctx, "baseline", errors.New("Linux Node creation callback changed its exact captured receipt"))
 	}
 	c.created = &created
@@ -283,7 +283,7 @@ func (c *NodeControl) CreateBaseline(ctx context.Context, capture mobiletor.Desk
 		c.refused = true
 		return mobiletor.DesktopLinuxNodeCreationRecord{}, ErrNodeControlRefused
 	}
-	if message.Action != "created" || message.Created == nil || message.Created.Capture != capture || message.Created.HomeLAN != c.selection.HomeLAN {
+	if message.Action != "created" || message.Created == nil || message.Created.Capture != capture || message.Created.HomeLAN != c.selection.HomeLAN || message.Created.HostProtectionOff != (c.selection.Policy == "off") {
 		return mobiletor.DesktopLinuxNodeCreationRecord{}, c.fail(errors.New("Linux Node child lost the exact original baseline creation receipt"))
 	}
 	created := *message.Created

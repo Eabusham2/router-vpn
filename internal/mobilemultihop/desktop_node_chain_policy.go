@@ -92,7 +92,7 @@ func deriveDesktopNodeChainPolicy(original *NodeChain, inputs desktopNodePolicyI
 		return bad()
 	}
 	capture, kill, lan, err := captureDesktopNodeChain(base, derived)
-	if err != nil || kill != "on-connect" && kill != "always" {
+	if err != nil || (kill != "on-connect" && kill != "always" && !(kill == "off" && inputs.targetOS == "linux")) {
 		return bad()
 	}
 	launch, err := base.LaunchInput()

@@ -34,6 +34,8 @@ type DesktopLinuxSocketDestination struct {
 }
 
 type DesktopLinuxSocketOptions struct {
+	// Only a Node-scoped original owner may select a nonblocking host baseline.
+	HostProtectionOff   bool `json:",omitempty"`
 	Interfaces          []DesktopLinuxSocketInterface
 	PrivateDestinations []DesktopLinuxSocketDestination
 	LANPrefixes         []netip.Prefix
@@ -147,17 +149,19 @@ type DesktopLinuxSocketPolicy struct {
 	sequence uint64
 	// socketActivity is monotonic under mu. Empty sets after an earlier socket
 	// retires cannot turn an already used source into a fresh preparation.
-	socketActivity      bool
-	closeAcknowledged   atomic.Bool
-	current             atomic.Bool
-	observed            atomic.Int64
-	closing             atomic.Bool
-	joined              chan struct{}
-	monitorDone         chan struct{}
-	joinErr             error
-	parentStop          func() bool
-	nativeGuardian      *desktopLinuxGuardianProcess
-	protectionRetention *desktopLinuxRetainedProtection // One native retention for this exact source, under mu.
+	offSockets           map[string]*desktopLinuxOffDescriptor // Returned original descriptors, under mu.
+	offDescriptorFailure error
+	socketActivity       bool
+	closeAcknowledged    atomic.Bool
+	current              atomic.Bool
+	observed             atomic.Int64
+	closing              atomic.Bool
+	joined               chan struct{}
+	monitorDone          chan struct{}
+	joinErr              error
+	parentStop           func() bool
+	nativeGuardian       *desktopLinuxGuardianProcess
+	protectionRetention  *desktopLinuxRetainedProtection // One native retention for this exact source, under mu.
 }
 
 var _ DesktopSocketPolicy = (*DesktopLinuxSocketPolicy)(nil)
@@ -176,7 +180,7 @@ func NewDesktopLinuxNodeSocketPolicy(ctx context.Context, capture DesktopSocketC
 }
 
 func newDesktopLinuxSocketPolicy(ctx context.Context, capture DesktopSocketCapture, options DesktopLinuxSocketOptions, node bool) (*DesktopLinuxSocketPolicy, error) {
-	if ctx == nil || ctx.Err() != nil || !capture.valid() || os.Geteuid() != 0 || options.validate() != nil {
+	if ctx == nil || ctx.Err() != nil || !capture.valid() || os.Geteuid() != 0 || options.validate() != nil || options.HostProtectionOff && !node {
 		return nil, errors.New("Linux owned physical sockets require captured policy and the privileged native host")
 	}
 	channel, child, err := desktopLinuxSocketPair()
@@ -378,6 +382,9 @@ func (p *DesktopLinuxSocketPolicy) Close(ctx context.Context) (closeErr error) {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	if !p.offDescriptorsRetired() {
+		return errors.New("Linux Off source still owns returned native descriptors")
+	}
 	if p.nft == nil {
 		p.channel.Close()
 		select {
@@ -430,10 +437,16 @@ func (p *DesktopLinuxSocketPolicy) ReleaseSocket(ctx context.Context, c DesktopS
 		return errors.New("Linux socket release transferred a descriptor")
 	}
 	if err == nil {
-		return nil
+		return p.releaseOffDescriptor(ctx, c)
 	}
 	select {
 	case <-p.joined:
+		if err := p.releaseOffDescriptor(ctx, c); err != nil {
+			return err
+		}
+		if !p.offDescriptorsRetired() {
+			return nil
+		}
 		return p.nft.close(ctx)
 	default:
 		return err
@@ -521,6 +534,12 @@ func (p *DesktopLinuxSocketPolicy) callLocked(ctx context.Context, request deskt
 	}
 	var reply desktopLinuxReply
 	received, err := desktopLinuxReceive(p.channel, &reply, uint32(p.command.Process.Pid), 0)
+	// Record a transferred socket before dropping the same mutex that closes
+	// the original source. Even a failed/late receipt leaves its descriptor
+	// owned until the caller closes it and retires this exact creation.
+	if p.options.HostProtectionOff && request.Operation == "create" && received != nil {
+		err = errors.Join(err, p.retainOffDescriptor(request.Creation, received))
+	}
 	if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture || reply.Error != "" {
 		p.current.Store(false)
 		if err != nil || reply.Sequence != request.Sequence || reply.Capture != p.capture {

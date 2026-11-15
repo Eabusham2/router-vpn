@@ -839,7 +839,7 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_linux_flags_parser_test.go', 'desktop_socket_linux_flags_test.go',
                     'desktop_socket_linux_socks_test.go', 'desktop_socket_linux_socks_native_test.go',
                     'desktop_socket_linux_protection_native_test.go', 'desktop_socket_linux_protection_record_test.go',
-                    'desktop_socket_linux_protection_test.go',
+                    'desktop_socket_linux_protection_test.go', 'desktop_socket_linux_off_test.go', 'desktop_socket_linux_off_native_test.go',
                     'desktop_socket_linux_baseline_netlink_test.go', 'desktop_socket_linux_baseline_netlink_native_test.go',
                     'desktop_socket_linux_baseline_owner_test.go', 'desktop_socket_linux_baseline_owner_native_test.go',
                     'desktop_socket_linux_node_baseline_test.go', 'desktop_socket_linux_node_baseline_native_test.go',

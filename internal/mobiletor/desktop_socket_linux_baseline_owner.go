@@ -43,7 +43,7 @@ type desktopLinuxRetainedProtection struct {
 // second capability. The netlink socket and namespace descriptor are opened
 // on the same native thread before generation-bracketed preparation readback.
 func (p *DesktopLinuxSocketPolicy) RetainProtection(ctx context.Context, capture DesktopSocketCapture, policy string) (DesktopLinuxProtectionOwner, error) {
-	if p == nil || ctx == nil || ctx.Err() != nil || capture != p.capture || !capture.valid() || (policy != "on-connect" && policy != "always") {
+	if p == nil || ctx == nil || ctx.Err() != nil || capture != p.capture || !capture.valid() || (policy != "on-connect" && policy != "always" && policy != "off") || (policy == "off") != p.options.HostProtectionOff {
 		return nil, errors.New("Linux protection retention requires its exact live source and selected policy")
 	}
 	p.mu.Lock()
@@ -159,7 +159,7 @@ func (b *desktopLinuxRetainedProtection) Disconnect(ctx context.Context) (bool, 
 		_, err := b.Retired(ctx)
 		return err == nil, err
 	}
-	if b.policy != "on-connect" {
+	if b.policy != "on-connect" && b.policy != "off" {
 		return false, errors.New("Linux protection lost its captured disconnect policy")
 	}
 	return false, b.Release(ctx)

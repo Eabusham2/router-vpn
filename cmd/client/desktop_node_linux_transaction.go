@@ -399,7 +399,7 @@ func (t *desktopLinuxNodeTransaction) createBaseline(ctx context.Context, captur
 	}
 	// Once this captured bounded native operation enters, a user cancellation
 	// prevents admission but does not erase its result or durable receipt.
-	t.baseline, err = mobiletor.NewDesktopLinuxNodeBaseline(ctx, capture, t.selection.HomeLAN)
+	t.baseline, err = mobiletor.NewDesktopLinuxNodeBaselineWithPolicy(ctx, capture, t.selection.HomeLAN, t.selection.Policy)
 	if err != nil {
 		return mobiletor.DesktopLinuxNodeCreationRecord{}, err
 	}

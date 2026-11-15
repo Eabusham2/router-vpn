@@ -168,7 +168,7 @@ func checkDesktopLinuxEmptyRecoveryCheckpoint(original, current linuxprotection.
 		return pids, nil
 	}
 	target, intent := r.Committed.Target, r.Intent
-	if r.Phase != "intent" || target == nil || r.Committed.Engine != nil || target.Policy != "on-connect" ||
+	if r.Phase != "intent" || target == nil || r.Committed.Engine != nil || (target.Policy != "on-connect" && target.Policy != "off") ||
 		target.Native.TableName == "" || intent == nil || intent.Action != "release" || intent.Preparation != nil ||
 		intent.RequestID != target.Native.Capture.SessionID || intent.ProfileID != r.Committed.ProfileID ||
 		intent.ProfileRevision != r.Committed.ProfileRevision || intent.ResultProfileRevision != r.Committed.ProfileRevision ||

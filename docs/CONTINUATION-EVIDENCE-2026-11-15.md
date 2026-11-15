@@ -62,8 +62,13 @@ back from the remote. There was no force push or live deployment.
 | `63cff292cd8201c69f40a17225df2aac9694ff90` | Windows MAX fixture gives complete captured-policy validation and retirement a ten-second aggregate allowance, preserving the native source's own three-second join limit. | Eleven focused tests passed, including race-enabled extraction of actual admission, identity and native close bodies. Held/foreign/invalid sources still cannot authorize Box close; shorter caller deadlines still win. Actual Windows cleanup remains a native CI gate. |
 | `c81021dce2b132d5dee6ad9e0e12182be630a471` | Native ordered heartbeat fixture waits for the original owner/reader startup callback before beginning its unchanged three-second heartbeat observation. | Shipping focused-native command image compiled; original-generation, failed-join, eight foreign-identity and activity-join cases passed. The executor denies netlink needed by the twelve actual Stop cases; those were not reported as passing. |
 | `9fe62718a1a71a01e15879240a1a5d9a09453c0e` | Darwin lifecycle runner requires serial baseline and control phases, each bounded and tied to the same source, target, tags and compiled-image receipts. | All six packages/316 verdicts and all 43 separately compiled controls remain mandatory. Fifteen lifecycle-runner tests, eight retirement checks and builder orchestration checks passed; actual-Go boundary classes passed after selecting pinned Go. Original 120-second test and 600-second compiler limits remain. Native-host execution is pending. |
+| `aa585f99b97715ca6c799ec6017225dd5768b352` | Final native Box tests run in six mandatory families against one retained compiled image; two inventories prove the original selector is exhaustive and disjoint. | Source/environment/image identity is checked throughout. Unexpected skips fail; the four Windows and ten Darwin roots with exact original platform guards are recorded separately as platform skips. Builder, runner corruption controls and actual-Go phase tests passed. Native matrix acceptance remains required. |
+| `216a893a99afb804a9c66a77b79493dbb9b90078` | Pinned WireGuard endpoint startup joins the original device/peer Up transition after hostname resolver installation and before returning to dependent endpoints. | The original source fails both literal and hostname readiness controls. The corrected actual ClientBind race suite and twenty fresh encrypted eight-node/fifty-sample replays passed with the original reference peer. The five-second proof deadline and ordinary retry timer are unchanged. |
+| `ad7c8edea47c824cd512e98b516a87223f471b01` | Expired Darwin native command observations distinguish the fixed PF query category and queue/path/Start/Wait durations from total elapsed time. | Actual shipping-adapter baseline and eight causal/control outcomes passed; output remains nonblocking and bounded to 512 bytes. This is diagnostic evidence, not a claim that the native PF refusal is repaired. |
+| `b16b0f1180f2fbcb4c5cdf59ddff1d49c7a73f84` | Darwin read-only native commands with no captured input use null-device EOF instead of an empty input pipe and copy goroutine. Explicit empty and nonempty input retain their original pipe lifecycle. | The actual adapter and child verify stdin kind, binary bytes, EOF, cancellation and joined ownership; all twelve baseline/control outcomes passed. No native deadline, PF proof, command inventory or slot limit changed. Darwin performance acceptance remains required. |
 
-The last row is this document's source cutoff, not a claim that `main` cannot
+The last row is the verified publication checkpoint preceding the Linux Off
+implementation accompanying this update, not a claim that `main` cannot
 advance. The complete release-orchestration source audit also passed in the
 working tree containing these repairs. That local working-tree result is not
 relabeled as an exact-SHA hosted release.
@@ -72,6 +77,37 @@ The actual encrypted ordered Server suffix jobs passed on both AMD64 and
 ARM64 in run `43675813281`, at `bedf040c`. This closes that specific native
 witness only. Current aggregate packages, images, compose and release
 publication have not yet been certified together.
+
+### Linux connection with every member's kill switch Off
+
+The accompanying source change admits the captured Off choice for Linux
+ordered, typed SOCKS and typed CONNECT paths. It selects an accepting host
+chain while retaining an exact isolated engine-UID deny behind the four
+expiring tuple permits and ahead of baseline exemptions. The selected mode,
+original deny handle, UID and rule order are bound through creation,
+preparation, the authenticated child channel, retention, journal and recovery.
+Mixed-member choices retain the existing stronger aggregate policy.
+
+Exceptional guardian cleanup removes permissions but retains the UID deny.
+The original engine retains an atomically acquired CLOEXEC duplicate and
+kernel socket identity for each returned socket. Successful retirement
+requires the guardian's original join/release and stable original-engine
+descriptor inventories with no surviving aliases. This is not a global
+claim about arbitrary processes. Unknown retirement keeps the deny owned;
+closing one Go wrapper cannot authorize removal while its duplicate lives.
+Existing protected modes retain their prior JSON representation and behavior.
+
+Focused race tests passed in the shared policy, Linux protection, native
+socket and desktop controller packages. Fresh canonical preparation includes
+the new source, templates and tests in source/cache identity. Generated
+mobiletor race tests passed, and the complete generated desktoppt test image
+compiled with its shipping tags. Native Linux gate cases independently require
+ordinary-host traffic, ungranted/granted engine traffic, kernel expiry, live
+duplicate retention, guardian death, channel loss and joined cleanup. The new
+three-case Off group has its own existing 120/150-second bounds; every original
+group remains unchanged. Missing, repeated, renamed, skipped or failed child
+verdicts are rejected. The local executor denies netlink; these kernel cases
+are compiled and mandatory in CI, not reported as locally accepted.
 
 ## Requirement-to-evidence ledger
 
@@ -92,9 +128,9 @@ prove these behaviors merely because a filename or string is present.
 | 149–159; 340; later graph additions | Mode catalog, shared graph compilers, SMART/AUTO rollback, MAX/ALL native witnesses | All requested graph/platform combinations remain accountable. Ordered paths currently have bounded family/placement/length and execution support; those bounds are not full delivery. |
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
-| 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners | **All-Off ordered desktop connection admission is a real source gap.** Linux implementation is in progress; Windows/macOS still require their corresponding complete paths. Physical leak checks remain distinct. |
+| 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; the Linux Off source path and mandatory native gate described above | Linux exact-SHA kernel/packaged acceptance remains required. Windows/macOS Off paths are in progress and are not closed by the Linux implementation. Physical leak checks remain distinct. |
 | 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses | Generic ordered source accepts 2–8 members; typed CONNECT uses a fixed three-member composition at this cutoff. Broader requested positions/protocols/execution choices remain open. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. |
-| 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites | Real path MTU/throughput/loaded-latency behavior and unresolved deep ordered encrypted startup failure. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
+| 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |
 | 263–276 | Authoritative exact-SHA build-all/release-candidate chain and native reference workflows | **No fully green current release is established here.** Native builds, all packages, nine server images, compose and publication must converge on one final SHA. |
@@ -102,7 +138,7 @@ prove these behaviors merely because a filename or string is present.
 | 292–301; 348–356 | Current guide, license/package scans, composed settings/Methods, secret-free linking and regression gates | Documentation/readiness must follow actual behavior; qualified signing/notarization and physical validation remain separate. |
 | 302–311 | Retired-source/package checks | Remain retired: PAF, mandatory giant all-platform ZIP, home-node installers, browser/PWA daily app, fake iOS readiness, duplicated WG/AWG logical rows, CSS-only readiness, routine AI Board builds, production source builds and public administration. |
 
-## Concrete unresolved native findings
+## Native continuation findings
 
 1. **Darwin PF grant:** baseline job `132590548214` retained about 1.997
    seconds on entry, but full pre-mutation readback took about 2.091 seconds.
@@ -111,21 +147,28 @@ prove these behaviors merely because a filename or string is present.
    PF readback race tests passed. No timeout was relaxed and no refusal was
    suppressed. Native profiling or an equivalent reduction in readback work
    is still needed.
-2. **Deep ordinary encrypted startup:** the eight-node WG fixture failed
-   before fifty-sample measurement, with six authenticated prefixes already
-   proved and no seventh-prefix peer traffic. The selected measurement
-   position is not yet used at that point. The original five-second prefix
-   deadline remains intact; the failure is not assigned a guessed cause.
+2. **Deep ordinary encrypted startup, locally repaired:** a retained trace
+   proved that the next endpoint wrote its first handshake about 1.76 ms
+   before its predecessor opened. WireGuard discarded the packet because
+   the predecessor peer was not running; the normal retransmission arrived
+   about 5.28 seconds later. `216a893a` joins actual predecessor readiness
+   after resolver installation. Literal/hostname negative controls and
+   twenty fresh actual encrypted eight-node runs passed. Exact-SHA native
+   release execution remains separate; the five-second proof deadline and
+   ordinary retransmission policy were not relaxed.
 3. **Aggregate native test envelope:** the Darwin Intel lifecycle job reached
    all six baselines and 39 of 43 compiled controls before the combined
    1,800-second parent expired. The published two-phase repair retains all
-   controls. Separate final root-package timeouts still need their own
-   diagnosis; a passing isolated MTU root does not certify the full package.
-4. **All-Off ordered desktop:** changing a host chain to accept alone would
-   also bypass expiry enforcement on engine-owned sockets. A complete Linux
-   implementation needs separately captured nonblocking host behavior,
-   original engine-UID permit enforcement, durable mode binding, and owned
-   teardown/recovery. Removing a validator alone is insufficient.
+   controls. `aa585f99` also separates the final root-package inventory into
+   six required bounded families against the same retained compiled image.
+   This retains every applicable test and rejects unexpected skips; actual
+   full native matrix execution remains required.
+4. **All-Off ordered desktop:** the Linux source implementation now retains
+   separate nonblocking host behavior and original engine-UID expiry,
+   descriptor, journal and recovery authority. Its actual native gate is
+   still required. Windows/macOS need the corresponding complete platform
+   implementations, including preservation of unrelated host traffic and
+   joined original socket retirement. Removing a validator is insufficient.
 
 Use `docs/LIVE-RELEASE-EVIDENCE.md` for physical/private acceptance after an
 actually green exact-SHA release. No source test, unsigned IPA, generated

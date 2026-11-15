@@ -19,10 +19,12 @@ func desktopLinuxTableValid(capture DesktopSocketCapture, table string) bool {
 // In particular, the kernel chain binds SessionID and SourceSHA256; NetworkID
 // and Owner are bound by the actual retained source, not by the chain comment.
 type DesktopLinuxProtectionRecord struct {
-	Capture      DesktopSocketCapture     `json:"capture"`
-	Owner        DesktopSocketKernelOwner `json:"owner"`
-	UID          uint32                   `json:"uid"`
-	PermitPrefix string                   `json:"permit_prefix"`
+	HostProtectionOff bool                     `json:"host_protection_off,omitempty"`
+	DenyHandle        uint64                   `json:"deny_handle,omitempty"`
+	Capture           DesktopSocketCapture     `json:"capture"`
+	Owner             DesktopSocketKernelOwner `json:"owner"`
+	UID               uint32                   `json:"uid"`
+	PermitPrefix      string                   `json:"permit_prefix"`
 	// Empty preserves the original fixed Tor/global table canonical record.
 	// Node tables are derived from the exact session, never arbitrary names.
 	TableName      string `json:"table_name,omitempty"`
@@ -35,7 +37,7 @@ func (r DesktopLinuxProtectionRecord) Validate() error {
 	// Keep handles within the exact integer range of the nft JSON decoder.
 	// Refuse a larger handle rather than identifying two objects as one.
 	const maximumExactJSONInteger = uint64(1<<53 - 1)
-	if !desktopLinuxTableValid(r.Capture, r.TableName) || !r.Owner.valid() || r.Owner.Kind != "unix-isolated-uid" || r.UID == 0 ||
+	if !desktopLinuxTableValid(r.Capture, r.TableName) || r.HostProtectionOff && (r.TableName == "" || r.DenyHandle == 0 || r.DenyHandle > maximumExactJSONInteger) || !r.HostProtectionOff && r.DenyHandle != 0 || !r.Owner.valid() || r.Owner.Kind != "unix-isolated-uid" || r.UID == 0 ||
 		len(r.PermitPrefix) != 25 || r.PermitPrefix[:5] != "rvpn_" || !desktopSocketHex(r.PermitPrefix[5:], 20) ||
 		r.TableHandle == 0 || r.TableHandle > maximumExactJSONInteger || r.ChainHandle == 0 || r.ChainHandle > maximumExactJSONInteger ||
 		!desktopSocketHex(r.BaselineSHA256, 64) {
