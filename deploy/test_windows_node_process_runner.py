@@ -5,7 +5,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import re
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -19,6 +21,36 @@ SPEC.loader.exec_module(GATE)
 
 
 class NodeProcessRunner(unittest.TestCase):
+    def test_actual_entry_publication_refuses_the_original_partial_marker(self):
+        filename = "cmd/client/desktop_node_process_entry_fixture_test.go"
+        source = (ROOT / filename).read_text()
+        self.assertIn(filename, GATE.REQUIRED_SOURCES)
+        roots = (
+            "TestDesktopNodeProcessEntryPublication",
+            "TestDesktopNodeProcessEntryPublicationFailureKeepsMarkerAbsent",
+            "TestDesktopNodeProcessEntryPublicationRejectsInvalidInput",
+        )
+        for root in roots:
+            self.assertIn(root, GATE.NATIVE_TESTS)
+        native = (ROOT / "cmd/client/desktop_node_process_windows_native_test.go").read_text()
+        self.assertEqual(native.count("desktopNodeProcessNativePublishEntry(directory, os.Getpid(), os.Rename)"), 1)
+        original = 'pending, err := os.CreateTemp(directory, ".node-process-entered-*")'
+        self.assertEqual(source.count(original), 1)
+        premature = 'pending, err := os.OpenFile(filepath.Join(directory, "node-process-entered"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)'
+        with tempfile.TemporaryDirectory(prefix="native-entry-publication-") as directory:
+            path = Path(directory) / "entry_test.go"
+            command = ["go", "test", "-count=1", "-timeout=30s", "-p=1", str(path)]
+            environment = dict(os.environ, GOMAXPROCS="2")
+            path.write_text(source)
+            passed = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=45)
+            self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
+            path.write_text(source.replace(original, premature))
+            failed = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=45)
+            self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+            self.assertIn("native entry marker became visible before complete publication", failed.stdout + failed.stderr)
+            self.assertIn("--- FAIL: TestDesktopNodeProcessEntryPublication", failed.stdout + failed.stderr)
+            self.assertNotIn("[build failed]", failed.stdout + failed.stderr)
+
     def test_single_node_off_uses_separate_required_original_owner_groups(self):
         self.assertEqual(GATE.SINGLE_NODE_OFF_CASES, {
             "TestDesktopSingleNodeOffPublicTemporaryRestoresOriginalOwner": ("router-external-router", "external-router-external"),

@@ -42,7 +42,7 @@ func init() {
 		}
 	}
 	if err == nil {
-		err = os.WriteFile(filepath.Join(directory, "node-process-entered"), []byte(strconv.Itoa(os.Getpid())), 0600)
+		err = desktopNodeProcessNativePublishEntry(directory, os.Getpid(), os.Rename)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -206,7 +206,7 @@ func testWindowsOwnedProcessActualRetirement(t *testing.T, command string) {
 		if err == nil {
 			child := owner.child.(*windowscontroller.GUIChild)
 			if string(body) != strconv.FormatUint(uint64(child.PID()), 10) {
-				t.Fatal("native child entry came from another process")
+				t.Fatalf("native child entry came from another process: actual=%q expected=%d", body, child.PID())
 			}
 			break
 		}

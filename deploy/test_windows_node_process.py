@@ -35,6 +35,9 @@ NATIVE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NATIVE)
 TAG = "routervpn_controller_windows_native"
 NATIVE_TESTS = (
+    "TestDesktopNodeProcessEntryPublication",
+    "TestDesktopNodeProcessEntryPublicationFailureKeepsMarkerAbsent",
+    "TestDesktopNodeProcessEntryPublicationRejectsInvalidInput",
     "TestWindowsOwnedNodeProcessActualRetirement",
     "TestWindowsOwnedRecoveryFreshCallbackContext",
     "TestWindowsOwnedNodeProcessRejectsMissingController",
@@ -532,6 +535,7 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_process_test.go",
     "cmd/client/desktop_node_process_windows.go",
     "cmd/client/desktop_node_process_windows_native_test.go",
+    "cmd/client/desktop_node_process_entry_fixture_test.go",
     "cmd/client/desktop_external_owned.go", "cmd/client/desktop_external_owned_stop.go",
     "cmd/client/desktop_external_owned_dns.go", "cmd/client/desktop_external_owned_test.go", "cmd/client/desktop_external_owned_context_test.go", "cmd/client/desktop_external_openvpn_owned_test.go",
     "cmd/client/desktop_protection_selection.go", "cmd/client/desktop_external_native.go",
