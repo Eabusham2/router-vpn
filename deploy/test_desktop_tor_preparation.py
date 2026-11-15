@@ -395,6 +395,7 @@ class DesktopPTPreparation(unittest.TestCase):
                          'desktop_socket_pf_readback_toolchain_test.go',
                          'desktop_socket_pf_system_children.go', 'desktop_socket_pf_system_children_test.go',
                          'desktop_socket_pf_baseline.go', 'desktop_socket_pf_baseline_test.go',
+                         'desktop_socket_pf_scoped.go', 'desktop_socket_pf_scoped_test.go',
                          'desktop_socket_pf_baseline_transition.go', 'desktop_socket_pf_baseline_transition_test.go',
                          'desktop_socket_darwin_baseline.go', 'desktop_socket_darwin_baseline_other.go',
                          'desktop_socket_darwin_baseline_test.go',

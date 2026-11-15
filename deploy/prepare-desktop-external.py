@@ -857,7 +857,7 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_pf_system_children_test.go',
                     'desktop_socket_pf_filter_test.go', 'desktop_socket_pf_abi_test.go',
                     'desktop_socket_pf_filter_native_test.go', 'desktop_socket_darwin_filter_test.go',
-                    'desktop_socket_pf_baseline_test.go', 'desktop_socket_pf_baseline_transition_test.go',
+                    'desktop_socket_pf_baseline_test.go', 'desktop_socket_pf_baseline_transition_test.go', 'desktop_socket_pf_scoped_test.go',
                     'desktop_socket_darwin_baseline_test.go', 'desktop_socket_pf_reference_test.go',
                     'desktop_socket_darwin_reference_test.go'))):
                 continue

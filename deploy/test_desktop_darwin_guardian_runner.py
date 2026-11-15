@@ -684,6 +684,7 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
         original += ['--- PASS: TestDesktopDarwinGuardian'+name+' (0.01s)' for name in
                      ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol')]
         original += ['--- PASS: TestDesktopDarwinGuardianKernelTCPAndUDP/'+network+' (0.01s)' for network in ('tcp4', 'udp4', 'tcp6', 'udp6')]
+        original += ['--- PASS: TestDesktopDarwinGuardianKernelIsolatedStateInspection/'+network+' (0.01s)' for network in ('udp4', 'udp6')]
         for missing in (None,)+gate.SEPARATE_CASES:
             calls = []
             def run(command, **kwargs):
@@ -711,6 +712,17 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
             self.assertNotIn('--case', calls[1])
             for command, case in zip(calls[2:], expected):
                 self.assertEqual(command, calls[1]+['--case', case])
+
+    def test_isolated_state_requires_both_native_families_once(self):
+        root = 'TestDesktopDarwinGuardianKernelIsolatedStateInspection'
+        lines = ['--- PASS: '+name+' (0.01s)' for name in (root, root+'/udp4', root+'/udp6')]
+        self.gate.require_isolated_state_verdicts('\n'.join(lines))
+        for index in range(len(lines)):
+            for changed in (lines[:index]+lines[index+1:], lines+[lines[index]],
+                            lines[:index]+[lines[index].replace('PASS', 'SKIP')]+lines[index+1:],
+                            lines+[lines[index].replace('PASS', 'FAIL')]):
+                with self.assertRaises(ValueError):
+                    self.gate.require_isolated_state_verdicts('\n'.join(changed))
 
     def test_mutation_requires_exact_assertion_and_join_without_timeout_or_race(self):
         witness = 'SOCKS control retired before its original UDP descriptor'

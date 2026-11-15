@@ -34,7 +34,7 @@ SPEC.loader.exec_module(UID)
 CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorPaths', 'PFGenerationRetirement', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'FrameAdmission', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
          'CreatorAdmission', 'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
-         'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
+         'FinishRequiresDescriptorRetirement', 'IsolatedStateInspection', 'FloatingStateRetirement',
          'StaleCaptureAndReplacement')
 READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAndCancellationJoin',
                   'PFReadbackDeadlineAndInvalidCapture', 'PFReadbackNestedNativeCommandBudget',
@@ -63,6 +63,15 @@ def require_renewal_capture_verdicts(output):
     for name in expected:
         if len(re.findall(r'^\s*--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$', output, re.M)) != 1:
             raise ValueError('Darwin renewal capture omitted or duplicated its original ownership verdict: '+name)
+
+
+def require_isolated_state_verdicts(output):
+    root = 'TestDesktopDarwinGuardianKernelIsolatedStateInspection'
+    for name in (root, root+'/udp4', root+'/udp6'):
+        if len(re.findall(r'(?m)^\s*--- PASS: '+re.escape(name)+r' \(', output)) != 1:
+            raise ValueError('Darwin isolated state gate omitted or duplicated an original native address family')
+        if re.search(r'(?m)^\s*--- (?:SKIP|FAIL): '+re.escape(name)+r' \(', output):
+            raise ValueError('Darwin isolated state gate retained an unsuccessful native address family')
 
 
 def native_case_name(case):
@@ -561,6 +570,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             'desktop_socket_darwin_frame_test.go', 'desktop_socket_darwin_socks.go',
             'desktop_socket_darwin_socks_guardian.go', 'desktop_socket_darwin_socks_pf.go',
             'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go',
+            'desktop_socket_pf_scoped.go', 'desktop_socket_pf_scoped_test.go',
             'desktop_socket_pf_system_children.go', 'desktop_socket_pf_system_children_test.go',
             'desktop_socket_darwin_readback.go', 'desktop_socket_darwin_pf_probe_cgo.go',
             'desktop_socket_darwin_pf_probe_nocgo.go', 'desktop_socket_darwin_filter_cgo.go',
@@ -605,6 +615,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         wanted = (case,) if case else CASES+READBACK_CASES+SOCKS_CASES
         if any('--- PASS: '+native_case_name(name)+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
+        if case in (None, 'IsolatedStateInspection'):
+            require_isolated_state_verdicts(output)
         if '--- PASS: TestDesktopPFABIRejectsUnprovedKernel (' not in output:
             raise ValueError('Darwin guardian omitted the private ABI version-rejection boundary')
         if case is None:
@@ -689,6 +701,10 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
     compiler, captured = UID.compiler_toolchain(source, go, captured)
     sudo = UID.privilege_tool()
     mutations = (
+        ('isolated socket stale state rejection', 'IsolatedStateInspection', 'isolated state proof missed original native floating tuple',
+         'desktop_socket_pf_scoped.go', (('address == local.Addr() && endpoint.Port() == local.Port()', 'false'),)),
+        ('unrelated host state preservation', 'IsolatedStateInspection', 'isolated state inspection rejected unrelated live host state',
+         'desktop_socket_pf_scoped.go', (('address == local.Addr() && endpoint.Port() == local.Port()', 'true'),)),
         ('SOCKS original kernel identity', 'SOCKSAssociations', 'SOCKS authority accepted another original kernel identity',
          'desktop_socket_darwin_socks_guardian.go', ((' || identity != owned.identity', ''),)),
         ('SOCKS original permit sequence', 'SOCKSAssociations', 'SOCKS authority accepted a replaced original PF permit',

@@ -2402,6 +2402,53 @@ func TestDesktopDarwinGuardianKernelFinishRequiresDescriptorRetirement(t *testin
 	}
 }
 
+func TestDesktopDarwinGuardianKernelIsolatedStateInspection(t *testing.T) {
+	for _, network := range []string{"udp4", "udp6"} {
+		t.Run(network, func(t *testing.T) { desktopDarwinIsolatedStateInspection(t, network) })
+	}
+}
+
+func desktopDarwinIsolatedStateInspection(t *testing.T, network string) {
+	remote := desktopDarwinKernelPeer(t, network)
+	local := desktopDarwinTestFixture.Addresses[0]
+	family := "inet"
+	if network == "udp6" {
+		local, family = desktopDarwinTestFixture.Addresses[2], "inet6"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rules := fmt.Sprintf("pass out quick on lo0 %s proto udp from %s to %s port %d keep state (floating)\n", family, local, remote.Addr(), remote.Port())
+	if err := desktopDarwinPFLoad(ctx, desktopDarwinPFNamespace, rules); err != nil {
+		t.Fatal(err)
+	}
+	host, err := net.DialUDP(network, net.UDPAddrFromAddrPort(netip.AddrPortFrom(local, 0)), net.UDPAddrFromAddrPort(remote))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Close()
+	desktopDarwinExchange(t, host)
+	other, err := net.ListenUDP(network, net.UDPAddrFromAddrPort(netip.AddrPortFrom(local, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	for range 2 {
+		raw, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "states")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if desktopPFIsolatedStatesAbsent(raw, "udp", host.LocalAddr().(*net.UDPAddr).AddrPort()) == nil {
+			t.Fatal("isolated state proof missed original native floating tuple", string(raw))
+		}
+		if err := desktopPFIsolatedStatesAbsent(raw, "udp", other.LocalAddr().(*net.UDPAddr).AddrPort()); err != nil {
+			t.Fatal("isolated state inspection rejected unrelated live host state", string(raw), err)
+		}
+		// Inspection has no state mutation authority; the original ordinary
+		// host's same retained socket and real echo must remain usable.
+		desktopDarwinExchange(t, host)
+	}
+}
+
 func TestDesktopDarwinGuardianKernelFloatingStateRetirement(t *testing.T) {
 	remote := desktopDarwinKernelPeer(t, "udp4")
 	local := desktopDarwinTestFixture.Addresses[0]
