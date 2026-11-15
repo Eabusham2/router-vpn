@@ -40,6 +40,10 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             "static let maximumNodes = 8", '(2...maximumNodes).contains(nodes.count), execution == "local"',
             '[entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" })',
             "seen.insert(node.id).inserted", "nodes.last?.id != controlID")),
+        ("models", "bounded imported position", "static func supportsImportedMiddle(", "static func transportName(", (
+            'guard (3...maximumNodes).contains(count), position == count - 2 else { return false }',
+            'if ["http-connect", "https-connect"].contains(mode) { return true }',
+            'return count == 3 && ["shadowsocks", "socks5", "openvpn"].contains(mode)')),
         ("profiles", "all-member snapshot", "static func snapshot(", "static func add(", (
             "let members = try model.iosNodeChainBundles(for: source)", "record.chainPolicies = try members.map",
             "nodeProofID: profile.nodeProofID", "preferences: try capturePreferences(profile)")),
@@ -60,7 +64,7 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             "try validate(selected.bundle, prepared)", "guard records == originalRecords", "try commitRecords(next)")),
         ("capture", "original selected sources", "func iosNodeChainBundles(", "static let ordinaryExternalHopProtocols", (
             "controlID: control.id", "for (position, node) in nodes.enumerated()", "proofs.insert(proof).inserted",
-            "nodes.count == 3, position == 1", "IOSImportedShadowsocksSource.eligible(profile)",
+            "IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)", "IOSImportedShadowsocksSource.eligible(profile)",
             "let files = source.profiles[node.mode], !files.isEmpty", "source.selectedRouterID = profile.id", "result.append(source)")),
     )
     for owner, label, begin, end, markers in scopes:
@@ -322,7 +326,10 @@ if not ordered_issues:
         ("profiles", "captures.count == nodes.count", "captures.count >= 2"),
         ("profiles", "profile.nodeProofID == capture.nodeProofID", "true"),
         ("profiles", "data == original, capture.preferences == saved.preferences", "data == original"),
-        ("capture", "nodes.count == 3, position == 1", "nodes.count >= 2"),
+        ("capture", "IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)", "true"),
+        ("models", "guard (3...maximumNodes).contains(count), position == count - 2 else { return false }", "guard count >= 3 else { return false }"),
+        ("models", 'if ["http-connect", "https-connect"].contains(mode) { return true }', 'if mode != "" { return true }'),
+        ("models", 'return count == 3 && ["shadowsocks", "socks5", "openvpn"].contains(mode)', 'return ["shadowsocks", "socks5", "openvpn"].contains(mode)'),
         ("capture", "IOSImportedShadowsocksSource.eligible(profile)", "true"),
         ("store", "replacement.updated.profiles == original.profiles", "true"),
         ("store", "guard records == originalRecords", "guard true"),
@@ -335,6 +342,9 @@ if not ordered_issues:
 require("deploy/test_ios_node_chain_profiles.py", '"missing-middle"', '"changed-proof"', '"final-policy"',
         '"stale-during-prepare"', '"missing-capture"', "old-two-record-limit", "lost-ordered-selection")
 require("ios/RouterVPN/test_runtime_selection_contract.py", "test_ios_node_chain_profiles.py")
+require("deploy/test_ios_node_chain_connect_capture.py", "for count in 3...8", "every original paired identity retained", "[str(binary),str(compiler)]")
+require("deploy/test_ios_node_chain_connect_profiles.py", "for count in 3...8", "typed profile Load keeps paired final assets", "binary_args=[compiler]")
+require("deploy/validate-ios-socks-host.py", "test_ios_node_chain_connect_capture.py", "test_ios_node_chain_connect_profiles.py")
 require(
     "ios/RouterVPN/App/IOSUnifiedProductView.swift",
     "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",

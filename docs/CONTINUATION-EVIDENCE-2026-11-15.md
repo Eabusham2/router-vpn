@@ -1408,3 +1408,29 @@ also reparses the original scenario and requires its exact captured modes.
 Production request, proof, worker, cancellation and ownership limits are
 unchanged. Executable selector/command checks and five causal controls
 require this exact boundary; the allowance itself is not an installed pass.
+
+## Published longer-path audit continuation
+
+The complete 118-file longer Local CONNECT unit is published in
+`1419c0a35ef02c18fd2432cc2bc31e3404e26658`, tree
+`d3fbdec8259acd5fa8dc88e4f17ee31e2442fdad`. The required full release
+orchestration/source audit passed locally on that exact clean commit,
+including the recovered source/security checks, provenance rules, private
+boundaries, durable-state checks and aggregate controls. Native packaging,
+the full encrypted matrix and final publication remain separate gates.
+
+The exact-commit map-first workflow then exposed an obsolete static audit
+anchor: `profile-settings-audit.py` still required the former iOS
+`nodes.count == 3, position == 1` expression. The shipping capture now calls
+the shared `supportsImportedMiddle` rule. The audit now checks that actual
+call and the scoped helper's three-through-eight bounds, penultimate
+position, exact HTTP/HTTPS branch, and unchanged three-node fallback for
+Shadowsocks, SOCKS and OpenVPN. It also requires the existing actual
+Swift/shared-Go CONNECT capture and profile gates and their host invocation.
+
+The original audit failure was reproduced against published 1419 source.
+The corrected actual-source audit passes and rejects all thirteen
+missing-boundary controls: the original ten remain, with three additional
+helper-bound/family controls. No production app code or runtime validation
+was changed. Exact source hashes and both original-failure and successful
+logs are retained in `ios-profile-audit-validation`.
