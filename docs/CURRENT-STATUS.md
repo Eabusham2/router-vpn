@@ -68,6 +68,17 @@ installation alias may retire. The final Darwin controller and peer source
 compositions cross-compile; the strict runner and workflow controls pass.
 Actual macOS execution of this new suite remains required CI evidence.
 
+The required Linux CONNECT execution workflow now covers AMD64 and ARM64
+with the same fourteen Server/Compare, retained-restoration and failure cases.
+It consumes the current release's verified native bundle and checks the
+captured controller, private engine copy, namespace, TUN, firewall and DNS.
+The shared peer keeps separate Linux namespace/address checks and the original
+Darwin same-host rule. Its portable source controls cover both platform rules,
+including exact omitted-guard failures. Local controller/peer compilation and
+source controls pass; actual encrypted kernel acceptance remains a required
+hosted result. The published driver selects the actual pinned Linux compiler
+and checks the resulting image version before executing the suite.
+
 ## November 15: original scope and bounded desktop additions
 
 ### Windows and Linux imported Shadowsocks Server/Compare

@@ -64,7 +64,27 @@ def execute_endpoint_controls(go,environment):
    print(ran.stdout,end='',flush=True)
    receipts[name]={'exit_code':ran.returncode,'source_sha256':__import__('hashlib').sha256(body.encode()).hexdigest(),'image_sha256':__import__('hashlib').sha256(image.read_bytes()).hexdigest(),'output_sha256':__import__('hashlib').sha256(ran.stdout.encode()).hexdigest()}
  if source.read_text()!=original:raise ValueError('Endpoint source changed during compiled controls')
- return {'boundary':'actual source ownership checks; interface/netns observations explicitly doubled, no kernel acceptance','attempts':receipts}
+ darwin=ROOT/'mobile/desktop/node_chain_connect_execution_peer_darwin_test.go.tmpl'
+ darwin_source=darwin.read_text()
+ if not darwin_source.startswith('//go:build darwin && routervpn_darwin_node_chain\n\n'):raise ValueError('Darwin endpoint platform boundary changed')
+ portable=darwin_source.split('\n\n',1)[1]
+ tests='package routervpnamnezia\nimport("net/netip";"testing")\nfunc TestDarwinOriginalEndpoint(t *testing.T){for _,name:=range []string{"original","foreign"}{t.Run(name,func(t *testing.T){local:=netip.MustParseAddr("192.0.2.1");remote:=local;if name=="foreign"{remote=netip.MustParseAddr("192.0.2.2")};err:=connectExecutionPhysicalPeer(local,remote);if name=="original"&&err!=nil{t.Fatal("original Darwin endpoint refused",err)};if name=="foreign"&&err==nil{t.Fatal("foreign Darwin endpoint accepted")}})}}\n'
+ with tempfile.TemporaryDirectory(prefix='darwin-connect-endpoint-') as temporary:
+  work=Path(temporary);(work/'go.mod').write_text('module fixture\n\ngo 1.25\n');(work/'owner_test.go').write_text(tests)
+  for name,body in (('darwin-original',portable),('darwin-guard-omitted',portable.replace('if local != remote','if local != local',1))):
+   if name=='darwin-guard-omitted' and body==portable:raise ValueError('Darwin original guard anchor moved')
+   (work/'owner.go').write_text(body);image=work/(name+'.test')
+   built=subprocess.run([str(go),'test','-race','-c','-p=1','-o',str(image),'.'],cwd=work,env=environment,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=300)
+   if built.returncode:raise ValueError('Original Darwin endpoint helper failed compilation: '+built.stdout)
+   ran=subprocess.run([str(image),'-test.v','-test.count=1','-test.timeout=20s'],cwd=work,env=environment,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=30)
+   if name=='darwin-original':
+    if ran.returncode:raise ValueError('Darwin original endpoint failed: '+ran.stdout)
+    GATE.NODE.require_native_verdicts(ran.stdout,('TestDarwinOriginalEndpoint','TestDarwinOriginalEndpoint/original','TestDarwinOriginalEndpoint/foreign'),'preserved original Darwin endpoint predicate')
+   elif ran.returncode==0 or set(re.findall(r'^\s*--- FAIL: (\S+) \([0-9.]+s\)$',ran.stdout,re.M))!={'TestDarwinOriginalEndpoint','TestDarwinOriginalEndpoint/foreign'} or 'foreign Darwin endpoint accepted' not in ran.stdout or 'DATA RACE' in ran.stdout or '--- SKIP:' in ran.stdout:raise ValueError('Darwin endpoint omission control lost exact witness')
+   print(ran.stdout,end='',flush=True)
+   receipts[name]={'exit_code':ran.returncode,'source_sha256':__import__('hashlib').sha256(body.encode()).hexdigest(),'image_sha256':__import__('hashlib').sha256(image.read_bytes()).hexdigest(),'output_sha256':__import__('hashlib').sha256(ran.stdout.encode()).hexdigest()}
+ if darwin.read_text()!=darwin_source:raise ValueError('Darwin endpoint source changed')
+ return {'boundary':'actual source ownership checks; Linux interface/netns observations explicitly doubled and Darwin pure predicate compiled portably; no kernel acceptance','attempts':receipts}
 
 class LinuxCONNECTExecutionGate(unittest.TestCase):
  def test_exact_inventory(self):

@@ -3522,3 +3522,44 @@ bbfa9e8355623458450e6f6e872abafc5b7383fb4309708e57c990a552a7085d.
 Its exact preimages were checked after 999e67d9 before integration. Earlier
 superseded diagnostic failures, including unavailable local physical-network
 capture, remain outside this passing source-inventory evidence.
+
+
+## Preserve both platform endpoint controls in the published Linux CONNECT gate
+
+Concurrent commit 0ac2a510 already published the Linux installed CONNECT suite
+and its required AMD64/ARM64 workflow. All six central workflow/source-inventory
+files and five of the nine native/driver files matched the frozen unit exactly.
+The other four differences were reviewed before continuing. Both platform
+peer helpers equal gofmt of the frozen bodies. The published driver correctly
+replaces an inappropriate Darwin-only compiler selector with the existing
+Linux selected_compiler and verifies each built image's Go version. Those
+corrections are preserved. The published runner had omitted the final portable
+Darwin predicate baseline and its exact guard-removal control.
+
+This follow-on changes only that runner and documentation. It restores those
+two mandatory source attempts alongside the current Linux checks. The original
+Darwin same-host predicate accepts its own address and rejects a different
+address; removing that guard must fail at the exact foreign-address witness.
+The checks compile the actual helper source under race and preserve its hash
+through the run. Linux interface and namespace observations remain explicitly
+modeled in this portable source test. Native kernel acceptance remains the
+separate fourteen-case hosted suite on both architectures.
+
+The actual restored endpoint controls pass seven attempts: seventeen positive
+Go records and five intended causal failures. All fourteen runner roots and
+seven authoritative workflow roots pass on the integrated source. The narrow
+manifest SHA-256 is
+83ad5d2fd67e1605fb0c4e028232771459ef87f36862768f28b041c244e8020f;
+the final validation receipt is
+7d9c9f567f2f63b160e1ecfff6b0025e57dff0601630c875df726f19416b6723.
+The original native-nine manifest remains
+2e4f84460f3fdb9cb17d45309c960ebb6ceb2ff78e4fbd13ef8b52b7f9edcd98.
+Its Linux controller/peer and Darwin compatibility compilation evidence records
+those original byte identities. Formatting equivalence does not relabel them
+as freshly built current artifacts. Corrected current driver orchestration
+and the mandatory exact-SHA hosted suite provide the remaining evidence.
+
+No original Local case, native fourteen-case inventory, process/namespace
+ownership check, runtime deadline, compiler/image readback or release dependency
+was removed or weakened. The current published Linux files were retained;
+the earlier frozen snapshot was not restored over them.
