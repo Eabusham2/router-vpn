@@ -22,17 +22,28 @@ func desktopPFIsolatedPointer(c DesktopSocketCapture, generation string, uid uin
 	if scope == "" {
 		scope = "all"
 	}
+	// PF places its interface before proto, and the address scope after it.
+	// In native fixtures scope includes both ("on lo0 to { v4, v6 }").
+	// Keep the complete scope; moving proto ahead of "on" is not PF grammar.
+	// https://www.openbsd.org/faq/pf/filter.html#syntax
+	interfaceScope := ""
+	if strings.HasPrefix(scope, "on ") {
+		iface, addresses, found := strings.Cut(strings.TrimPrefix(scope, "on "), " ")
+		if found && desktopPFFilterInterface.MatchString(iface) && addresses != "" {
+			interfaceScope, scope = "on "+iface+" ", addresses
+		}
+	}
 	lines := []string{}
 	for _, network := range []string{"tcp", "udp"} {
 		flags := ""
 		if network == "tcp" {
 			flags = " flags any"
 		}
-		lines = append(lines, fmt.Sprintf("pass out proto %s %s user %d%s tag \"%s\" no state", network, scope, uid, flags, reset))
+		lines = append(lines, fmt.Sprintf("pass out %sproto %s %s user %d%s tag \"%s\" no state", interfaceScope, network, scope, uid, flags, reset))
 	}
 	lines = append(lines, fmt.Sprintf("anchor \"/%s\" out all", generation))
 	for _, network := range []string{"tcp", "udp"} {
-		lines = append(lines, fmt.Sprintf("block drop out quick proto %s %s user %d ! tagged \"%s\" label \"%s\"", network, scope, uid, allowed, label))
+		lines = append(lines, fmt.Sprintf("block drop out quick %sproto %s %s user %d ! tagged \"%s\" label \"%s\"", interfaceScope, network, scope, uid, allowed, label))
 	}
 	return strings.Join(lines, "\n") + "\n"
 }

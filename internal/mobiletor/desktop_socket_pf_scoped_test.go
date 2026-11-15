@@ -98,3 +98,61 @@ func TestDesktopPFIsolatedStatesPreserveUnrelatedHost(t *testing.T) {
 		}
 	}
 }
+
+// The real guardian fixture includes an interface plus both IP families.
+// Execute the actual finite compiler and native projection; no PF observation
+// or kernel success is supplied by this portable grammar regression.
+func TestDesktopPFReadbackIsolatedInterfaceScope(t *testing.T) {
+	capture := desktopSocketFixtureCapture()
+	uid := uint32(0x40000001)
+	scope := "on lo0 to { 127.78.1.11, fd73:1::2 }"
+	text := desktopPFIsolatedPointer(capture, "com.apple/000.router-vpn/g-original", uid, scope)
+	rules, err := desktopPFCompileFilters(text)
+	if err != nil || len(rules) != 9 {
+		t.Fatal("native Off interface scope did not compile with exact dual-family guard", err, text)
+	}
+	counts := map[string]int{}
+	for _, rule := range rules {
+		if _, err := desktopPFNativeProject(rule); err != nil {
+			t.Fatal("native Off scope lost finite kernel projection", err)
+		}
+		if rule.Action == "anchor" {
+			continue
+		}
+		if rule.Interface != "lo0" || !rule.User || rule.UID != uid || rule.KeepState || rule.Direction != "out" || rule.Source.IsValid() {
+			t.Fatal("native Off scope widened interface, creator, direction or state ownership", rule)
+		}
+		if rule.Destination != netip.MustParsePrefix("127.78.1.11/32") && rule.Destination != netip.MustParsePrefix("fd73:1::2/128") {
+			t.Fatal("native Off scope changed its captured destination", rule)
+		}
+		if rule.Protocol != 6 && rule.Protocol != 17 {
+			t.Fatal("native Off scope changed its captured transport", rule)
+		}
+		key := rule.Action + "/" + rule.Destination.String()
+		counts[key]++
+		if rule.Action == "pass" && (rule.Quick || rule.Tag == "" || rule.Protocol == 6 && !rule.FlagsAny) || rule.Action == "block" && (!rule.Quick || !rule.MatchTagNot || rule.MatchTag == "") {
+			t.Fatal("native Off scope dropped reset or isolated deny", rule)
+		}
+	}
+	for _, action := range []string{"pass", "block"} {
+		for _, destination := range []string{"127.78.1.11/32", "fd73:1::2/128"} {
+			if counts[action+"/"+destination] != 2 {
+				t.Fatal("native Off scope omitted TCP/UDP or an IP family", counts)
+			}
+		}
+	}
+	// The pre-fix interface-after-protocol form must remain rejected, rather
+	// than weakening the independent finite parser to accept invalid PF text.
+	malformed := strings.ReplaceAll(strings.ReplaceAll(text, "on lo0 proto tcp ", "proto tcp on lo0 "), "on lo0 proto udp ", "proto udp on lo0 ")
+	if malformed == text {
+		t.Fatal("native Off scope never retained its interface")
+	}
+	if _, err := desktopPFCompileFilters(malformed); err == nil {
+		t.Fatal("native Off grammar accepted interface after protocol")
+	}
+	for _, scope := range []string{"on lo0", "on !lo0 to 127.78.1.11", "on lo0 proto tcp all"} {
+		if _, err := desktopPFCompileFilters(desktopPFIsolatedPointer(capture, "com.apple/000.router-vpn/g-original", uid, scope)); err == nil {
+			t.Fatal("invalid native Off scope was silently broadened", scope)
+		}
+	}
+}
