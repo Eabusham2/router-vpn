@@ -76,12 +76,11 @@ func desktopSocketLocal(fd int) (netip.AddrPort, error) {
 }
 
 func desktopSocketDuplicate(fd int) (*desktopSocketKeeper, error) {
-	duplicate, err := syscall.Dup(fd)
-	if err != nil {
-		return nil, err
+	duplicate, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_DUPFD_CLOEXEC, 0)
+	if errno != 0 {
+		return nil, errno
 	}
-	syscall.CloseOnExec(duplicate)
-	return &desktopSocketKeeper{file: os.NewFile(uintptr(duplicate), "routervpn-owned-physical-socket")}, nil
+	return &desktopSocketKeeper{file: os.NewFile(duplicate, "routervpn-owned-physical-socket")}, nil
 }
 
 func desktopSocketBindTCP(raw syscall.RawConn, address netip.Addr) (*desktopSocketKeeper, netip.AddrPort, error) {

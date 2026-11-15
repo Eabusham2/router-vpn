@@ -31,7 +31,7 @@ SPEC = importlib.util.spec_from_file_location('darwin_guardian_uid', ROOT/'deplo
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
-CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorPaths', 'PFGenerationRetirement', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'FrameAdmission', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
+CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorPaths', 'PFGenerationRetirement', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'DescriptorOwnership', 'FrameAdmission', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
          'CreatorAdmission', 'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'IsolatedStateInspection', 'FloatingStateRetirement',
@@ -72,6 +72,19 @@ def require_isolated_state_verdicts(output):
             raise ValueError('Darwin isolated state gate omitted or duplicated an original native address family')
         if re.search(r'(?m)^\s*--- (?:SKIP|FAIL): '+re.escape(name)+r' \(', output):
             raise ValueError('Darwin isolated state gate retained an unsuccessful native address family')
+
+
+
+DESCRIPTOR_LEAVES = ('socket-and-duplicate', 'received-rights', 'idle-fork',
+                     'receive-excludes-fork', 'closed-receive', 'deadline-receive')
+
+def require_descriptor_verdicts(output):
+    root = 'TestDesktopDarwinGuardianKernelDescriptorOwnership'
+    for name in (root, *(root+'/'+leaf for leaf in DESCRIPTOR_LEAVES)):
+        if len(re.findall(r'(?m)^\s*--- PASS: '+re.escape(name)+r' \(', output)) != 1:
+            raise ValueError('Darwin descriptor gate omitted or duplicated an original native boundary')
+        if re.search(r'(?m)^\s*--- (?:SKIP|FAIL): '+re.escape(name)+r' \(', output):
+            raise ValueError('Darwin descriptor gate retained an unsuccessful native boundary')
 
 
 def native_case_name(case):
@@ -567,7 +580,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             'desktop_socket_darwin_renewal.go', 'desktop_socket_darwin_renewal_test.go',
             'desktop_socket_admission_observation.go', 'desktop_socket_native_observation.go',
             'desktop_socket_darwin_observation.go', 'desktop_socket_observation_test.go',
-            'desktop_socket_darwin_frame_test.go', 'desktop_socket_darwin_socks.go',
+            'desktop_socket_darwin_frame_test.go', 'desktop_socket_darwin_descriptor.go',
+            'desktop_socket_darwin_descriptor_test.go', 'desktop_socket_darwin_socks.go',
             'desktop_socket_darwin_socks_guardian.go', 'desktop_socket_darwin_socks_pf.go',
             'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go',
             'desktop_socket_pf_scoped.go', 'desktop_socket_pf_scoped_test.go',
@@ -615,6 +629,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         wanted = (case,) if case else CASES+READBACK_CASES+SOCKS_CASES
         if any('--- PASS: '+native_case_name(name)+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
+        if case in (None, 'DescriptorOwnership'):
+            require_descriptor_verdicts(output)
         if case in (None, 'IsolatedStateInspection'):
             require_isolated_state_verdicts(output)
         if '--- PASS: TestDesktopPFABIRejectsUnprovedKernel (' not in output:
@@ -843,6 +859,22 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('foreign block composition', 'ForeignBlockAndLaterPass', 'owned permit bypassed a later foreign block',
          'desktop_socket_darwin_pf.go', (
              ('"pass out on %s %s proto %s', '"pass out quick on %s %s proto %s'),)),
+        ('descriptor close-on-exec installation', 'DescriptorOwnership', 'original descriptor is not close-on-exec',
+         'desktop_socket_darwin_descriptor.go', (
+             ('syscall.F_SETFD, syscall.FD_CLOEXEC)', 'syscall.F_SETFD, 0)'),)),
+        ('retained descriptor atomic close-on-exec', 'DescriptorOwnership', 'original descriptor is not close-on-exec',
+         'desktop_socket_raw_unix.go', (
+             ('syscall.F_DUPFD_CLOEXEC, 0)', 'syscall.F_DUPFD, 0)'),)),
+        ('idle descriptor readiness releases fork exclusion', 'DescriptorOwnership', 'idle descriptor receiver blocked unrelated fork',
+         'desktop_socket_darwin_descriptor.go', (
+             ('\terr := raw.Read(func(fd uintptr) bool {',
+              '\tsyscall.ForkLock.RLock()\n\tdefer syscall.ForkLock.RUnlock()\n\terr := raw.Read(func(fd uintptr) bool {'),
+             ('\t\tsyscall.ForkLock.RLock()\n\t\tdefer syscall.ForkLock.RUnlock()',
+              '\t\t// causal control: fork exclusion now spans readiness wait'),)),
+        ('descriptor receive excludes fork', 'DescriptorOwnership', 'descriptor receipt crossed active fork exclusion',
+         'desktop_socket_darwin_descriptor.go', (
+             ('\t\tsyscall.ForkLock.RLock()\n\t\tdefer syscall.ForkLock.RUnlock()',
+              '\t\t// causal control: receipt no longer excludes fork'),)),
         ('admitted frame completion deadline', 'FrameAdmission', 'admitted Darwin frame reused its idle polling deadline',
          'desktop_socket_darwin_channel.go', (
              ('if err := channel.SetReadDeadline(frameDeadline); err != nil {',

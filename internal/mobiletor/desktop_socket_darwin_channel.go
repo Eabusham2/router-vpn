@@ -48,12 +48,9 @@ var desktopDarwinIdle = errors.New("Darwin physical control has no pending frame
 // each bounded frame, and descriptor creator UID is checked independently.
 // Transfer/finish acknowledgments keep the peer alive until that observation.
 func desktopDarwinSocketPair() (*net.UnixConn, *os.File, error) {
-	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	pair, err := desktopDarwinSocketPairCloseOnExec()
 	if err != nil {
 		return nil, nil, err
-	}
-	for _, fd := range pair {
-		syscall.CloseOnExec(fd)
 	}
 	first, second := os.NewFile(uintptr(pair[0]), "routervpn-physical-control"), os.NewFile(uintptr(pair[1]), "routervpn-physical-helper")
 	connection, err := net.FileConn(first)
@@ -121,11 +118,11 @@ func desktopDarwinSend(channel *net.UnixConn, value any, file *os.File) error {
 }
 
 func desktopDarwinReceive(channel *net.UnixConn, value any, pid, uid uint32) (file *os.File, failure error) {
-	return desktopDarwinReceiveBounded(channel, value, pid, uid, time.Time{})
+	return desktopDarwinReceiveBounded(desktopDarwinCloexecFrame{channel}, value, pid, uid, time.Time{})
 }
 
 type desktopDarwinFrameReceiver interface {
-	ReadMsgUnix([]byte, []byte) (int, int, int, *net.UnixAddr, error)
+	readMsgCloseOnExec([]byte, []byte) (int, int, int, *net.UnixAddr, error)
 	SetReadDeadline(time.Time) error
 	SyscallConn() (syscall.RawConn, error)
 }
@@ -136,7 +133,7 @@ type desktopDarwinFrameReceiver interface {
 func desktopDarwinReceiveBounded(channel desktopDarwinFrameReceiver, value any, pid, uid uint32, frameDeadline time.Time) (file *os.File, failure error) {
 	var header [4]byte
 	control := make([]byte, syscall.CmsgSpace(4*8))
-	n, oob, flags, _, err := channel.ReadMsgUnix(header[:], control)
+	n, oob, flags, _, err := channel.readMsgCloseOnExec(header[:], control)
 	if desktopSocketIdleReceive(n, oob, flags, err) {
 		return nil, desktopDarwinIdle
 	}
@@ -152,7 +149,6 @@ func desktopDarwinReceiveBounded(channel desktopDarwinFrameReceiver, value any, 
 			parseErr = e
 		}
 		for _, fd := range rights {
-			syscall.CloseOnExec(fd)
 			files = append(files, os.NewFile(uintptr(fd), "routervpn-physical-transferred"))
 		}
 	}
@@ -178,7 +174,7 @@ func desktopDarwinReceiveBounded(channel desktopDarwinFrameReceiver, value any, 
 	// an unexpected descriptor attached to a later byte of this stream.
 	readRemainder := func(buffer []byte) error {
 		for len(buffer) != 0 {
-			n, oob, flags, _, readErr := channel.ReadMsgUnix(buffer, control)
+			n, oob, flags, _, readErr := channel.readMsgCloseOnExec(buffer, control)
 			messages, parseErr := syscall.ParseSocketControlMessage(control[:oob])
 			for _, message := range messages {
 				if message.Header.Level == syscall.SOL_SOCKET && message.Header.Type == syscall.SCM_RIGHTS {

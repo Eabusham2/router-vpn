@@ -17,6 +17,39 @@ import (
 	"time"
 )
 
+func TestDesktopSocketDuplicatePreservesObjectAndCloseOnExec(t *testing.T) {
+	original, err := os.CreateTemp(t.TempDir(), "original-descriptor-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	kept, err := desktopSocketDuplicate(int(original.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer kept.Close()
+	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, kept.file.Fd(), syscall.F_GETFD, 0)
+	if errno != 0 || flags&syscall.FD_CLOEXEC == 0 {
+		t.Fatal("original retained descriptor is not close-on-exec", errno)
+	}
+	if _, err := kept.file.Write([]byte("same original object")); err != nil {
+		t.Fatal(err)
+	}
+	position, err := original.Seek(0, io.SeekCurrent)
+	if err != nil || position != int64(len("same original object")) {
+		t.Fatal("retained descriptor lost original shared offset", position, err)
+	}
+	if err := kept.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := original.Write([]byte(" still owned")); err != nil {
+		t.Fatal("retained descriptor retirement closed its original owner", err)
+	}
+	if invalid, err := desktopSocketDuplicate(-1); err == nil || invalid != nil {
+		t.Fatal("invalid descriptor acquired fabricated retained ownership", err)
+	}
+}
+
 func TestDesktopSocketIdleReceiveKeepsPartialFramesDistinct(t *testing.T) {
 	deadline := &net.OpError{Op: "read", Net: "unix", Err: os.ErrDeadlineExceeded}
 	for _, test := range []struct {

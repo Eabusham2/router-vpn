@@ -149,8 +149,8 @@ type desktopDarwinControlFrame struct {
 	started bool
 }
 
-func (r *desktopDarwinControlFrame) ReadMsgUnix(data, control []byte) (int, int, int, *net.UnixAddr, error) {
-	n, oob, flags, peer, err := r.UnixConn.ReadMsgUnix(data, control)
+func (r *desktopDarwinControlFrame) readMsgCloseOnExec(data, control []byte) (int, int, int, *net.UnixAddr, error) {
+	n, oob, flags, peer, err := desktopDarwinReadMsgCloseOnExec(r.UnixConn, data, control)
 	if !r.started && n > 0 {
 		r.started = true
 		deadline := time.Now().Add(5 * time.Second)

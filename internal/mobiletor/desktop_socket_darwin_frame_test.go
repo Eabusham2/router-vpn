@@ -28,8 +28,8 @@ type desktopDarwinFrameAdmissionFixture struct {
 	expires     time.Time
 }
 
-func (f *desktopDarwinFrameAdmissionFixture) ReadMsgUnix(body, control []byte) (int, int, int, *net.UnixAddr, error) {
-	n, ancillary, flags, address, err := f.UnixConn.ReadMsgUnix(body, control)
+func (f *desktopDarwinFrameAdmissionFixture) readMsgCloseOnExec(body, control []byte) (int, int, int, *net.UnixAddr, error) {
+	n, ancillary, flags, address, err := desktopDarwinReadMsgCloseOnExec(f.UnixConn, body, control)
 	if n > 0 && err == nil {
 		f.first.Do(func() {
 			// Model admission near the end of the existing 100ms idle poll.

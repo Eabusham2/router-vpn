@@ -685,6 +685,7 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                      ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol')]
         original += ['--- PASS: TestDesktopDarwinGuardianKernelTCPAndUDP/'+network+' (0.01s)' for network in ('tcp4', 'udp4', 'tcp6', 'udp6')]
         original += ['--- PASS: TestDesktopDarwinGuardianKernelIsolatedStateInspection/'+network+' (0.01s)' for network in ('udp4', 'udp6')]
+        original += ['--- PASS: TestDesktopDarwinGuardianKernelDescriptorOwnership/'+leaf+' (0.01s)' for leaf in gate.DESCRIPTOR_LEAVES]
         for missing in (None,)+gate.SEPARATE_CASES:
             calls = []
             def run(command, **kwargs):
@@ -712,6 +713,17 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
             self.assertNotIn('--case', calls[1])
             for command, case in zip(calls[2:], expected):
                 self.assertEqual(command, calls[1]+['--case', case])
+
+    def test_descriptor_requires_every_native_boundary_once(self):
+        root = 'TestDesktopDarwinGuardianKernelDescriptorOwnership'
+        lines = ['--- PASS: '+name+' (0.01s)' for name in (root, *(root+'/'+leaf for leaf in self.gate.DESCRIPTOR_LEAVES))]
+        self.gate.require_descriptor_verdicts('\n'.join(lines))
+        for index in range(len(lines)):
+            for changed in (lines[:index]+lines[index+1:], lines+[lines[index]],
+                            lines[:index]+[lines[index].replace('PASS', 'SKIP')]+lines[index+1:],
+                            lines+[lines[index].replace('PASS', 'FAIL')]):
+                with self.assertRaises(ValueError):
+                    self.gate.require_descriptor_verdicts('\n'.join(changed))
 
     def test_isolated_state_requires_both_native_families_once(self):
         root = 'TestDesktopDarwinGuardianKernelIsolatedStateInspection'

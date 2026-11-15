@@ -317,13 +317,12 @@ func (p *DesktopDarwinSocketPolicy) bindSocket(ctx context.Context, c DesktopSoc
 			failed = errors.New("Darwin physical descriptor has another kernel creator")
 			return
 		}
-		fd, e := syscall.Dup(int(handle))
+		kept, e := desktopSocketDuplicate(int(handle))
 		if e != nil {
 			failed = e
 			return
 		}
-		syscall.CloseOnExec(fd)
-		duplicate = os.NewFile(uintptr(fd), "routervpn-guardian-binding")
+		duplicate = kept.file
 	})
 	if duplicate != nil {
 		defer duplicate.Close()

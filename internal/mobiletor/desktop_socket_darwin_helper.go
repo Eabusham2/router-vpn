@@ -143,7 +143,7 @@ func RunDesktopDarwinSocketHelper(role string) error {
 			return err
 		}
 		var next desktopDarwinRequest
-		file, err := desktopDarwinReceiveBounded(channel, &next, parent, 0, frameDeadline)
+		file, err := desktopDarwinReceiveBounded(desktopDarwinCloexecFrame{channel}, &next, parent, 0, frameDeadline)
 		if errors.Is(err, desktopDarwinIdle) && time.Since(lastRequest) < 6*time.Second {
 			continue
 		}
@@ -281,11 +281,10 @@ func desktopDarwinCreator(channel *net.UnixConn, parent uint32) error {
 	if c.Network == "udp" {
 		kind = syscall.SOCK_DGRAM
 	}
-	fd, err := syscall.Socket(family, kind, 0)
+	fd, err := desktopDarwinSocketCloseOnExec(family, kind)
 	if err != nil {
 		return err
 	}
-	syscall.CloseOnExec(fd)
 	socket := os.NewFile(uintptr(fd), "routervpn-isolated-physical")
 	defer socket.Close()
 	if err := desktopDarwinSend(channel, desktopDarwinReply{Sequence: request.Sequence, Capture: c.Capture, Creation: c}, socket); err != nil {
@@ -592,12 +591,11 @@ func (g *desktopDarwinGuardian) bindTunnel(ctx context.Context, name string, ind
 			return errors.New("Darwin tunnel cannot grant a physical interface")
 		}
 	}
-	fd, err := syscall.Dup(int(file.Fd()))
+	kept, err := desktopSocketDuplicate(int(file.Fd()))
 	if err != nil {
 		return err
 	}
-	syscall.CloseOnExec(fd)
-	g.tunnel = os.NewFile(uintptr(fd), "routervpn-retained-utun-control")
+	g.tunnel = kept.file
 	return g.pf.bindTunnel(ctx, name, index)
 }
 
