@@ -87,6 +87,11 @@ def mutants(target):
          IDENTITY.replace_once(identity,
                                'if _, _, err := p.api.endpointProperties(p.engine, endpoint); !errors.Is(err, desktopWindowsEndpointNotFound) {',
                                'if _, _, err := p.api.endpointProperties(p.engine, endpoint); false {')),
+        ("off-changed-udp-family", "desktop_socket_windows_identity.go", REQUIRED[10],
+         "Off source accepted an ambiguous or changed UDP family",
+         IDENTITY.replace_once(identity,
+                               'if base != "tcp" && base != "udp" || network != base+map[bool]string{true: "4", false: "6"}[binding.LocalAddress.Is4()] {',
+                               'if false {')),
         ("different-adapter-lease", "desktop_socket_windows_network.go", REQUIRED[0],
          "selected physical adapter lease:",
          IDENTITY.replace_once(network,
@@ -158,7 +163,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production WFP traffic mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP traffic source changed during its actual native gate")
-    print("Owned Windows WFP traffic passed all four TCP/UDP address families, connected renewal, blocked control with entered I/O and retained source ports, native-process BFE rundown, selected-adapter DHCP capture, exact UDP bind/close ownership, and three production negative controls. Native factory and device acceptance remain separately gated.", flush=True)
+    print("Owned Windows WFP traffic passed all four TCP/UDP address families, connected renewal, blocked control with entered I/O and retained source ports, native-process BFE rundown, selected-adapter DHCP capture, exact UDP family/bind/close ownership, and " + str(len(candidates)) + " production negative controls. Native factory and device acceptance remain separately gated.", flush=True)
 
 
 if __name__ == "__main__":

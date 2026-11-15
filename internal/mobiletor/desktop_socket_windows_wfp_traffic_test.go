@@ -793,7 +793,22 @@ func TestDesktopSocketWindowsWFPOffOwnedSource(t *testing.T) {
 					}
 				}
 			})
-			packet, err := desktopSocketImportNativePacket(ctx, network, created.Native, binding.LocalAddress, func(_, _ string, raw syscall.RawConn) error { return p.Bind(ctx, p.capture, binding, "udp", raw) })
+			raw, err := created.Native.SyscallConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherFamily := "udp4"
+			if network == otherFamily {
+				otherFamily = "udp6"
+			}
+			for _, refused := range []string{"udp", otherFamily} {
+				if _, err := p.identity.MatchSocket(ctx, p.capture, binding, refused, raw); err == nil {
+					t.Fatal("Off source accepted an ambiguous or changed UDP family", refused)
+				}
+			}
+			packet, err := desktopSocketImportNativePacket(ctx, network, created.Native, binding.LocalAddress, func(actual, _ string, raw syscall.RawConn) error {
+				return p.Bind(ctx, p.capture, binding, actual, raw)
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -810,7 +825,7 @@ func TestDesktopSocketWindowsWFPOffOwnedSource(t *testing.T) {
 			if writeErr == nil && readErr == nil && bytes.Equal(payload, answer) {
 				t.Fatal("Off isolated source bypassed its exact socket grant")
 			}
-			raw, err := created.Native.SyscallConn()
+			raw, err = created.Native.SyscallConn()
 			if err != nil {
 				t.Fatal(err)
 			}
