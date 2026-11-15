@@ -77,7 +77,7 @@ func newDesktopOwnedNodeLaunch(profile common.RouterProfile, original *mobilemul
 		return nil, err
 	}
 	meta := policy.Metadata()
-	if meta.ProfileID != profile.ID || meta.Mode != mode || meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
+	if meta.ProfileID != profile.ID || meta.Mode != mode || meta.KillSwitchPolicy != "off" && meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
 		return nil, errors.New("native Router ownership changed its original node or protection policy")
 	}
 	source, err := original.LaunchInput()
@@ -1007,7 +1007,7 @@ func desktopOwnedNodeProtectionPolicy(profile common.RouterProfile) string {
 func desktopOwnedNodeModeEligible(profile common.RouterProfile, mode string) bool {
 	policy := desktopOwnedNodeProtectionPolicy(profile)
 	return (profile.NodeKind == "" || profile.NodeKind == "router-vpn") && profile.External == nil &&
-		mobilemultihop.DesktopNodePhysicalGraphSupported(mode, profile.StartLayer) && (policy == "on-connect" || policy == "always")
+		mobilemultihop.DesktopNodePhysicalGraphSupported(mode, profile.StartLayer) && (policy == "off" || policy == "on-connect" || policy == "always")
 }
 
 func (a *app) guardDesktopOwnedNodeTemporary(request speedLabRequest, snapshot speedLabTemporarySnapshot) error {

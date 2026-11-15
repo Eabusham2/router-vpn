@@ -24,7 +24,7 @@ func newDesktopLinuxNodeHostWithSource(ctx context.Context, parent *desktopLinux
 	endpoint, network string, savedOptions [3]bool, restoredMTU int) (*desktopLinuxNodeHost, error) {
 	if ctx == nil || ctx.Err() != nil || parent == nil || parent.app == nil || parent.parent == nil ||
 		operation == nil || operation.Err() != nil || original == nil ||
-		!mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(mode, profile.StartLayer) || desktopOwnedNodeProtectionPolicy(profile) == "off" {
+		!mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(mode, profile.StartLayer) {
 		return nil, errors.New("Linux source construction requires its original supported prepared graph")
 	}
 	session, err := randomHex(16)

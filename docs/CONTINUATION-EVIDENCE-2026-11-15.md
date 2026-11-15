@@ -103,11 +103,12 @@ back from the remote. There was no force push or live deployment.
 | `b482e6062f212693ff8f08ce75b9cd9acbdc3d8d` | The Windows receipt audit includes the already-required Off native witnesses in its exact counts. | All eight focused runner checks passed, retaining missing and substituted receipt rejection. No native case was removed. |
 | `09522604698b7acfe63211f32e8bcb118fe1ec7b` | The two external-Off Speed Lab fixtures use a supported On-connect paired Router and explicitly verify original, trial and restored protection policies in both directions. | All 26 restoration leaves and the public lifecycle/retirement roots passed with race detection and an explicitly local physical-inventory boundary double. This did not implement single-Router Off or report a real Windows network test. |
 | `cd3d8b14559c7ebebc1b3d66bace36563f86e9e7` | Imported-layer fixture construction and persistence mutation acquire the application lock already used by live telemetry. | The actual race was observed before correction. All eight persistence variants then passed with race detection in 3.958 seconds, without the network-inventory overlay. Production source and credential-refusal assertions were unchanged. |
+| `7c7afb8789114709186aab3ca19644e00fbddc12` | A bounded Local ordered path retains one imported TCP/UDP OpenVPN middle between an original paired WG/AWG entry and an independent paired SS2022 final across native capture, editors, profiles, proof, measurement and restoration. | The complete encrypted component witness passed all six mode/transport paths and fourteen refusal leaves; shared, generated command and native UI component evidence is detailed below. Native SDK, kernel, package and physical acceptance remain separate. |
+| `a1d8811f67540bec1b3ccd6968cea1101deea1d5` | Apple generated-header and Android family fixtures recognize the new constructor, and the native audit follows its actual platform/architecture and Local-execution guards. | All 28 Apple contract tests, the Android profile contract, all 43 native shipping audit tests and the complete release-orchestration audit passed. Missing methods, malformed signatures and bypassed guards remain rejected. These repair the three observed exact-`7c7afb87` source-gate failures without weakening native acceptance. |
 
 The last named commit is the verified publication checkpoint preceding this
-evidence refresh. The new bounded OpenVPN middle source is described below;
-a document does not manufacture a
-publication receipt for itself. This is not a claim that `main` cannot
+evidence refresh. The new single paired Router Off source is described below;
+a document does not manufacture a publication receipt for itself. This is not a claim that `main` cannot
 advance. The complete release-orchestration source audit also passed in the
 working tree containing these repairs. That local working-tree result is not
 relabeled as an exact-SHA hosted release.
@@ -576,9 +577,49 @@ authoritative run at `17267175` failed in the separate controller socket frame
 reader before this addition was published. The source correction is published
 as `09a9b781`; a cross-compile does not close its native acceptance gate.
 
+### Single paired Router Off on Windows and Linux
+
+Freshly captured Off now enters the retained Windows single-node host and the
+existing six-mode Linux host: WireGuard, AWG Fast, AWG Strong, Shadowsocks,
+Hysteria2 and SS/V2Ray. Windows preserves its nineteen existing raw modes and
+their valid Start Layers. Preparation, public eligibility, captured policy,
+restoration and teardown preserve the selected mode, exact original source,
+DNS/proof and MTU. Off leaves ordinary host traffic open while retaining the
+isolated engine UID/SID, exact socket permissions, journal and joined cleanup.
+A protected original source cannot be replaced by a fresh Off source.
+
+Focused policy and source-matrix checks passed in 5.984 seconds. The actual
+client lifecycle/restoration roots passed with race detection in 9.171 seconds,
+including all-Off Router-to-external and external-to-Router temporary tests,
+cancellation, failed join with exact retry, catalog/preparation and captured
+Linux MTU restoration. Only unavailable physical network inventory was replaced
+at the explicitly recorded local component boundary; these are not native
+kernel or physical-device observations. Successful Off retirement removes its
+original application protection slot; the fixture checks that absence.
+
+Canonical native preparation passed. The actual Windows AMD64 WFP image and
+Linux encrypted peer image compiled. Their SHA-256 identities were respectively
+`0f865eb25bd17cfed883b2befb4a07c78f144266b4190e3ede9ed690e93bb7c4`
+and `7602e4c24331a233e17f7ecabb7000966fd2c73e11f194772de870cc66a6db42`.
+The Linux generated-factory runtime cases encountered `netlinkrib: operation
+not permitted`; they are not reported as passing. Lifecycle receipt, process
+group, missing-case and protected-group preservation checks passed, including
+the complete Windows process omission control. The new public-handler fallback
+mutation remains required in CI and was not executed locally.
+
+Mandatory Windows WG/AWG Off leaves use the actual encrypted peer and require
+ordinary host traffic, denied ungranted engine sockets, refusal of a foreign
+source, held-kernel-alias retirement failure and successful original retry.
+The original protected group remains intact. Linux adds actual single-node
+owner live/cancel/network-change cases and a Box/TUN/DNS encrypted Off case;
+existing external cases remain intact. These witnesses require hosted native
+execution. The separate Darwin single paired Router retained host, and broader
+Linux graph families, remain open; a policy-only guard change would not supply
+their missing host composition.
+
 ### Imported OpenVPN middle with original native connection ownership
 
-The ordered compiler now has a bounded Local composition with exactly three
+Published `7c7afb87` adds a bounded Local composition with exactly three
 members: a paired WireGuard/AWG Fast/AWG Strong entry, one imported OpenVPN
 middle with one literal TCP or UDP remote and Start Layer Off, and an
 independent paired SS2022 final. Schema 5 preserves each original source and
@@ -674,7 +715,7 @@ prove these behaviors merely because a filename or string is present.
 | 149–159; 340; later graph additions | Mode catalog, shared graph compilers, SMART/AUTO rollback, MAX/ALL native witnesses | All requested graph/platform combinations remain accountable. Ordered paths currently have bounded family/placement/length and execution support; those bounds are not full delivery. |
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
-| 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix and supported ordinary external Off paths with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Ordinary external admission now reaches its retained host; a mode-only baseline/receipt remains insufficient. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
+| 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and Windows/Linux single paired Router Off paths with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin single paired Router retained hosting remains unfinished; a mode-only baseline/receipt is insufficient. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
 | 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members; typed CONNECT uses a fixed three-member composition at this cutoff. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |

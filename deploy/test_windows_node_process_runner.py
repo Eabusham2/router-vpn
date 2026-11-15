@@ -19,6 +19,19 @@ SPEC.loader.exec_module(GATE)
 
 
 class NodeProcessRunner(unittest.TestCase):
+    def test_single_node_off_uses_separate_required_original_owner_groups(self):
+        groups=GATE.baseline_groups()
+        self.assertEqual([selected for _,selected,_ in groups[-4:]], [(root,) for root in GATE.SINGLE_NODE_OFF_CASES])
+        for label,selected,expected in groups[-4:]:
+            root,=selected
+            self.assertTrue(label.startswith("single-node-off-"))
+            self.assertEqual(set(expected),{root,*(root+"/"+child for child in GATE.SINGLE_NODE_OFF_CASES[root])})
+        self.assertIn("cmd/client/desktop_node_off_test.go",GATE.REQUIRED_SOURCES)
+        control=next(c for c in GATE.mutants() if c[1]=="public-off-node-uses-ordinary-helper")
+        self.assertEqual(control[2],"TestDesktopSingleNodeOffPublicTemporaryRestoresOriginalOwner/router-external-router")
+        self.assertEqual(control[3],"original Router connect")
+        self.assertIn('desktopOwnedNodeProtectionPolicy(profile) != "off"',control[4])
+
     def test_external_aggregate_public_route_and_both_members_are_required(self):
         root = "TestDesktopExternalProtectionPublicRouteUsesActualAggregate"
         expected = (root, root + "/off-entry-always", root + "/on-connect-entry-always")

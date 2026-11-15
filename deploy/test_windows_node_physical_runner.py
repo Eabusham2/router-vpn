@@ -42,6 +42,17 @@ class NativeNodeScope(unittest.TestCase):
             self.original[relative] = actual.read_bytes()
             path.write_bytes(self.original[relative])
 
+    def test_single_node_off_requires_all_original_native_leaves(self):
+        rows = ["--- PASS: " + case + " (0.10s)" for case in GATE.SINGLE_NODE_OFF_CASES]
+        GATE.require_single_node_off("\n".join(rows))
+        for index in range(len(rows)):
+            for changed in (rows[:index]+rows[index+1:], rows+[rows[index]]):
+                with self.subTest(index=index), self.assertRaises(ValueError):
+                    GATE.require_single_node_off("\n".join(changed))
+        for marker in ("--- FAIL:", "--- SKIP:", "DATA RACE"):
+            with self.assertRaises(ValueError):
+                GATE.require_single_node_off("\n".join(rows)+"\n"+marker)
+
     def test_both_actual_constructors_are_scoped_without_changing_shipping_files(self):
         path = GATE.overlay(self.source, self.observer)
         mapping = json.loads(path.read_text())["Replace"]

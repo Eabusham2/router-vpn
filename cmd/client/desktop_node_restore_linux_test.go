@@ -30,11 +30,18 @@ func linuxSealedRestoreFixtureWithLayer(t *testing.T, runtimeCover bool, layer s
 	return linuxSealedRestoreFixtureWithGraph(t, runtimeCover, "shadowsocks", layer)
 }
 
-func linuxSealedRestoreFixtureWithGraph(t *testing.T, runtimeCover bool, mode, layer string) (*linuxSpeedLabPathFixture, common.RouterProfile) {
+func linuxSealedRestoreFixtureWithGraph(t *testing.T, runtimeCover bool, mode, layer string, policies ...string) (*linuxSpeedLabPathFixture, common.RouterProfile) {
 	t.Helper()
 	f := newLinuxSpeedLabPathFixture(t)
 	profile := cloneRouterProfile(f.a.profiles.Profiles[0])
 	profile.StartLayer = layer
+	if len(policies) > 1 {
+		t.Fatal("more than one saved policy")
+	}
+	if len(policies) == 1 {
+		profile.KillSwitchPolicy = policies[0]
+		profile.KillSwitch = policies[0] != "off"
+	}
 	profile.EffectiveMTU = 9000
 	profile.DAITAHost, profile.DAITAPort, profile.DAITARateKbps = "10.77.0.1", 45999, 192
 	runtimeProfile := cloneRouterProfile(profile)

@@ -89,8 +89,8 @@ func (a *app) checkDesktopNodeConnectionPackage() (bool, string) {
 }
 
 func (a *app) prepareDesktopNodeConnection(profile common.RouterProfile, mode string) (*desktopNodeLaunch, error) {
-	if a.desktopNodeConnectionHost() != nil && desktopOwnedNodeProtectionPolicy(profile) != "off" {
-		// Unsupported protected graphs remain catalog requirements. Reject them
+	if a.desktopNodeConnectionHost() != nil {
+		// Unsupported graphs remain catalog requirements. Reject them
 		// before Stop; never retry their failure through the ordinary helper.
 		return prepareDesktopOwnedNodeLaunch(a, profile, mode)
 	}

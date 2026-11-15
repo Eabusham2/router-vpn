@@ -359,13 +359,13 @@ func TestDesktopOwnedNodePreparationRejectsSourceBeforeLookup(t *testing.T) {
 }
 
 func TestDesktopOwnedNodePreparationRejectsUnsupportedAdmission(t *testing.T) {
-	for _, fault := range []string{"off", "layer", "mode", "no-operation", "wrong-operation", "no-network", "no-controller"} {
+	for _, fault := range []string{"invalid-policy", "layer", "mode", "no-operation", "wrong-operation", "no-network", "no-controller"} {
 		t.Run(fault, func(t *testing.T) {
 			f := newDesktopOwnedNodePreparationFixture(t, "wg")
 			mode := "wg"
 			switch fault {
-			case "off":
-				f.profile.KillSwitchPolicy = "off"
+			case "invalid-policy":
+				f.profile.KillSwitchPolicy = "unknown"
 			case "layer":
 				f.profile.StartLayer = "xor-only"
 			case "mode":

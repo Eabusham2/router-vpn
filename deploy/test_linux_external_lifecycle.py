@@ -37,7 +37,7 @@ CASES = ("shadowsocks-succession", "http-connect-succession", "https-connect-suc
          "openvpn-tcp-succession", "openvpn-udp-succession", "openvpn-mixed-succession",
          "socks5-succession", "socks5-private-relay-rejected")
 OFF_CASES = ("live", "cancelled", "network-change")
-NATIVE_PHASES = ("ExternalLifecycle", "ExternalOff")
+NATIVE_PHASES = ("ExternalLifecycle", "ExternalOff", "SingleNodeOff")
 MODEL = ("KeepsTypedSourceAndJoinedOwner", "RejectsForeignOrReusedCapabilities",
          "RetainsRefusedAndCancelledSources")
 RUNNERS = ("test_linux_external_lifecycle.py", "test_linux_external_lifecycle_runner.py",
@@ -146,7 +146,7 @@ if __name__ == "__main__":
     parser.add_argument("--go", default="go")
     parser.add_argument("--namespace-test-binary", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--namespace-test-sha256", help=argparse.SUPPRESS)
-    parser.add_argument("--namespace-test-case", choices=("ExternalLifecycle", "ExternalOff"), default="ExternalLifecycle", help=argparse.SUPPRESS)
+    parser.add_argument("--namespace-test-case", choices=NATIVE_PHASES, default="ExternalLifecycle", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.namespace_test_binary is not None:
         raise SystemExit(namespace_test(args.namespace_test_binary, args.namespace_test_sha256, args.namespace_test_case))

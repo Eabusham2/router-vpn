@@ -910,3 +910,92 @@ func TestRouterVPNDesktopNodeWindowsWFPWrongPeerRejected(t *testing.T) {
 	}
 	retained = desktopNodeWFPDrain(t, f)
 }
+
+// Off keeps the real isolated token/endpoint authority while ordinary host
+// traffic remains open. The held duplicate must prevent successful source
+// retirement; it does not become authority to retain a host-wide deny.
+func TestRouterVPNDesktopNodeOffWindowsWFP(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			peer := desktopNodeWFPStartReference(t, mode)
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopNodeWFPCleanup(t, &retained)
+			f := desktopNodeWFPBox(t, peer.original(t, "off", false), nil)
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal(err)
+			}
+			retained = f.prepared
+			if retained.Policy != "off" || f.admitted != 1 {
+				t.Fatal("single Node Off lost original native admission")
+			}
+			peer.positiveProbe(t, true)
+			for _, network := range []string{"tcp", "udp"} {
+				if err := f.exchange(network, "192.0.2.99"); err != nil {
+					t.Fatal("single Node Off lost actual encrypted transport", err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+			if err != nil || snapshot.Target != retained || snapshot.Options.KillSwitchPolicy != "off" || len(snapshot.Grants) == 0 {
+				t.Fatal("single Node Off lost captured native readback", err)
+			}
+			foreign := retained
+			foreign.Capture.SourceSHA256 = strings.Repeat("9", 64)
+			if socket, err := mobiletor.DesktopWindowsNodeCompositionOffSocketCreate(ctx, foreign, snapshot.Grants[0]); socket != nil || err == nil {
+				t.Fatal("single Node Off adopted a foreign source identity")
+			}
+			socket, err := mobiletor.DesktopWindowsNodeCompositionOffSocketCreate(ctx, retained, snapshot.Grants[0])
+			if socket != nil {
+				t.Cleanup(func() {
+					cleanup, finish := context.WithTimeout(context.Background(), 3*time.Second)
+					defer finish()
+					if err := socket.Release(cleanup); err != nil {
+						t.Error(err)
+					}
+				})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			nonce := desktopNodeWFPProbeNonce(t)
+			if peer.probeCommand(t, "arm", nonce) != 0 {
+				t.Fatal("single Node Off ungranted marker was not fresh")
+			}
+			if err := socket.Packet.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			_, writeErr := socket.Packet.WriteTo([]byte(desktopNodePeerProbePrefix+nonce), net.UDPAddrFromAddrPort(peer.remote))
+			var body [256]byte
+			_, _, readErr := socket.Packet.ReadFrom(body[:])
+			if peer.probeCommand(t, "observe", nonce) != 0 || writeErr == nil && readErr == nil {
+				t.Fatal("single Node Off ungranted isolated socket escaped original deny")
+			}
+			var timeout net.Error
+			if !errors.Is(writeErr, syscall.Errno(10013)) && !(errors.As(readErr, &timeout) && timeout.Timeout()) {
+				t.Fatal("single Node Off lacks bounded native denial", writeErr, readErr)
+			}
+			if err := socket.Hold(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.network.Close(); err == nil {
+				t.Fatal("single Node Off retired an original held kernel alias")
+			}
+			if err := socket.RequireHeld(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if f.network.Current() || f.network.SocketCurrent() || f.exchange("udp") == nil {
+				t.Fatal("single Node Off retained original proof after failed cleanup")
+			}
+			peer.positiveProbe(t, true)
+			if err := socket.Release(ctx); err != nil {
+				t.Fatal(err)
+			}
+			retained = desktopNodeWFPDrain(t, f)
+			peer.positiveProbe(t, true)
+		})
+	}
+}

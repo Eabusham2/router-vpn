@@ -406,8 +406,14 @@ PRODUCT_CASES = {'TestDesktopOrderedExecutionProductPublishesChildAndStopsExactO
                                                                       'failed-absence'),
  'TestDesktopNodeCapturedReleasePreservesPolicyAndFailedOwner': ('on-connect', 'always'),
  'TestDesktopNodeCapturedReleasePendingOffKeepsOriginalCaller': ()}
+SINGLE_NODE_OFF_CASES = {
+    "TestDesktopSingleNodeOffPublicTemporaryRestoresOriginalOwner": ("router-external-router", "external-router-external"),
+    "TestDesktopSingleNodeOffPublicJoinRetainsOriginalSource": (),
+    "TestDesktopSingleNodeOffCatalogHasCompleteRetainedCoverage": (),
+    "TestDesktopSingleNodeOffPreparationSealsBeforePreviousStop": ("wg", "awg2-fast", "awg2-strong"),
+}
 LEGACY_SHARED_TESTS = (*SHARED_TESTS, *IMPORTED_CASES, *PREFIX_CASES)
-SHARED_TESTS = (*LEGACY_SHARED_TESTS, *ORDERED_CASES, *PRODUCT_CASES)
+SHARED_TESTS = (*LEGACY_SHARED_TESTS, *ORDERED_CASES, *PRODUCT_CASES, *SINGLE_NODE_OFF_CASES)
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
     "interpreter", "another-directory", "missing-source", "duplicate-source",
@@ -423,7 +429,7 @@ EXTERNAL_OFF_CAPTURE_CASES = tuple("TestDesktopExternalOffCapturedOwnerRejectsSu
     for fault in ("none", "source", "capture", "expected", "final-policy", "entry-policy", "final-id", "entry-id", "missing-seal", "changed-seal", "changed-shape")
     if paired or fault not in ("entry-policy", "entry-id"))
 
-EXPECTED = (*REQUIRED, *EXTERNAL_OFF_CAPTURE_CASES, *("TestDesktopExternalOffWindowsRouterKeepsOriginalObligation/" + case for case in ("local","server","auto")), *("TestDesktopExternalProtectionPublicRouteUsesActualAggregate/" + case for case in ("off-entry-always", "on-connect-entry-always")), *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
+EXPECTED = (*REQUIRED, *(root+"/"+child for root,children in SINGLE_NODE_OFF_CASES.items() for child in children), *EXTERNAL_OFF_CAPTURE_CASES, *("TestDesktopExternalOffWindowsRouterKeepsOriginalObligation/" + case for case in ("local","server","auto")), *("TestDesktopExternalProtectionPublicRouteUsesActualAggregate/" + case for case in ("off-entry-always", "on-connect-entry-always")), *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
             *(root + "/" + case for root, cases in PREFIX_CASES.items() for case in cases),
             *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
             *("TestDesktopProtectionOffContextGuardsActualPublication/" + case for case in ("before-rename", "after-rename")),
@@ -480,6 +486,7 @@ EXPECTED = (*REQUIRED, *EXTERNAL_OFF_CAPTURE_CASES, *("TestDesktopExternalOffWin
             *("TestPrivateStoreCheckedWriteRetainsOriginalTarget/" + case for case in
               ("unchanged", "same-content", "different-content", "appeared", "removed", "refused")))
 REQUIRED_SOURCES = (
+    "cmd/client/desktop_node_off_test.go",
     "cmd/client/desktop_external_protection_policy.go",
     "cmd/client/desktop_external_protection_policy_test.go",
     "internal/mobilemultihop/external_desktop_capture.go",
@@ -724,7 +731,7 @@ def baseline_groups():
     # Keep every original phase intact. Each new whole root gets the same
     # existing alarm independently; a larger inventory must not consume another
     # root's budget or silently drop its nested negative cases.
-    original = tuple(root for root in SHARED_TESTS if root not in ORDERED_CASES and root not in PRODUCT_CASES)
+    original = tuple(root for root in SHARED_TESTS if root not in ORDERED_CASES and root not in PRODUCT_CASES and root not in SINGLE_NODE_OFF_CASES)
     for offset in range(0, len(original), 16):
         groups.append(("shared-ownership-" + str(offset // 16 + 1), original[offset:offset + 16]))
     for root in SHARED_TESTS:
@@ -732,6 +739,8 @@ def baseline_groups():
             groups.append(("ordered-" + root, (root,)))
         elif root in PRODUCT_CASES:
             groups.append(("product-" + root, (root,)))
+        elif root in SINGLE_NODE_OFF_CASES:
+            groups.append(("single-node-off-" + root, (root,)))
     roots = tuple(root for _, selected in groups for root in selected)
     if (roots != REQUIRED or len(set(roots)) != len(roots) or len(set(EXPECTED)) != len(EXPECTED) or
             any(name.split("/", 1)[0] not in roots for name in EXPECTED)):
@@ -955,8 +964,12 @@ def mutants():
          once(initial, "if !requireJournal {", "if false && !requireJournal {")),
         (host_file, "public-protected-node-uses-ordinary-helper", "TestDesktopNodePublicConnectUsesCapturedOwnedHost/wg/off",
          "public Connect did not execute its captured owned native path",
-         once(host, 'if a.desktopNodeConnectionHost() != nil && desktopOwnedNodeProtectionPolicy(profile) != "off" {',
-              'if false && a.desktopNodeConnectionHost() != nil && desktopOwnedNodeProtectionPolicy(profile) != "off" {')),
+         once(host, 'if a.desktopNodeConnectionHost() != nil {',
+              'if false && a.desktopNodeConnectionHost() != nil {')),
+        (host_file, "public-off-node-uses-ordinary-helper", "TestDesktopSingleNodeOffPublicTemporaryRestoresOriginalOwner/router-external-router",
+         "original Router connect",
+         once(host, 'if a.desktopNodeConnectionHost() != nil {',
+              'if a.desktopNodeConnectionHost() != nil && desktopOwnedNodeProtectionPolicy(profile) != "off" {')),
         (native_file, "public-node-borrows-mutable-package", "TestDesktopNodePublicConnectUsesCapturedOwnedHost/wg/off",
          "public Connect did not execute its captured owned native path",
          once(native, 'desktopNativeEnvironmentForPackage(os.Environ(), root, launch.profileID, "", packageRoot)',

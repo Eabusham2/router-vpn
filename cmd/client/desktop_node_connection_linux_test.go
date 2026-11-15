@@ -25,7 +25,7 @@ func TestDesktopLinuxPublicSelectionStaysBounded(t *testing.T) {
 	for _, mode := range []string{"shadowsocks", "wg", "awg2-fast", "awg2-strong", "hysteria2", "ss-v2ray"} {
 		for _, policy := range []string{"off", "on-connect", "always", "malformed"} {
 			profile.KillSwitchPolicy = policy
-			if got := a.desktopLinuxNodeConnectionSelected(profile, mode); got != (policy != "off") {
+			if got := a.desktopLinuxNodeConnectionSelected(profile, mode); !got {
 				t.Fatal("missing protection validation became a legacy fallback", mode, policy, got)
 			}
 		}
@@ -40,7 +40,7 @@ func TestDesktopLinuxPublicSelectionStaysBounded(t *testing.T) {
 }
 
 func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
-	for _, scenario := range []string{"cover-runtime", "start-aes", "start-whitening", "malformed-layer", "external", "unknown-policy", "missing-controller", "cancelled", "wg-plain", "wg-aes", "wg-whitening", "wg-cancelled", "hysteria2-plain", "hysteria2-aes", "hysteria2-whitening", "hysteria2-cancelled", "awg2-fast-plain", "awg2-fast-aes", "awg2-fast-whitening", "awg2-fast-cancelled", "awg2-strong-plain", "awg2-strong-aes", "awg2-strong-whitening", "awg2-strong-cancelled", "ss-v2ray-plain", "ss-v2ray-aes", "ss-v2ray-whitening", "ss-v2ray-cancelled", "ss-v2ray-malformed-layer"} {
+	for _, scenario := range []string{"cover-runtime", "start-aes", "start-whitening", "malformed-layer", "external", "unknown-policy", "off-missing-controller", "off-cancelled", "off-unsafe-layer", "missing-controller", "cancelled", "wg-plain", "wg-aes", "wg-whitening", "wg-cancelled", "hysteria2-plain", "hysteria2-aes", "hysteria2-whitening", "hysteria2-cancelled", "awg2-fast-plain", "awg2-fast-aes", "awg2-fast-whitening", "awg2-fast-cancelled", "awg2-strong-plain", "awg2-strong-aes", "awg2-strong-whitening", "awg2-strong-cancelled", "ss-v2ray-plain", "ss-v2ray-aes", "ss-v2ray-whitening", "ss-v2ray-cancelled", "ss-v2ray-malformed-layer"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("HOMEVPN_ROOT", root)
@@ -67,7 +67,7 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 					mode, a.modes[0].ID = candidate, candidate
 				}
 			}
-			expected := "supported protected graph and exact Start Layer"
+			expected := "supported captured graph and exact Start Layer"
 			switch scenario {
 			case "cover-runtime":
 				a.state.DAITA = true    // Saved false remains independent from this actual selection.
@@ -84,6 +84,16 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 				profile.NodeKind = "external"
 			case "unknown-policy":
 				profile.KillSwitchPolicy = "malformed"
+			case "off-missing-controller", "off-cancelled", "off-unsafe-layer":
+				profile.KillSwitch, profile.KillSwitchPolicy = false, "off"
+				expected = "Linux Node"
+				if scenario == "off-cancelled" {
+					cancel()
+				}
+				if scenario == "off-unsafe-layer" {
+					profile.StartLayer = "xor-only"
+					expected = "supported captured graph"
+				}
 			case "missing-controller":
 				expected = "Linux Node"
 			case "wg-plain", "hysteria2-plain", "awg2-fast-plain", "awg2-strong-plain", "ss-v2ray-plain":
@@ -112,7 +122,7 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 			if err == nil || transition.StopBegun || a.state != before || a.cmd != command || !reflect.DeepEqual(a.profiles, profiles) {
 				t.Fatal("Linux public preflight changed its original connection before rejecting unsupported launch", err)
 			}
-			if scenario == "cancelled" || scenario == "wg-cancelled" || scenario == "hysteria2-cancelled" || scenario == "awg2-fast-cancelled" || scenario == "awg2-strong-cancelled" || scenario == "ss-v2ray-cancelled" {
+			if scenario == "cancelled" || scenario == "off-cancelled" || scenario == "wg-cancelled" || scenario == "hysteria2-cancelled" || scenario == "awg2-fast-cancelled" || scenario == "awg2-strong-cancelled" || scenario == "ss-v2ray-cancelled" {
 				if !errors.Is(err, errConnectionOperationCancelled) {
 					t.Fatal("public Linux cancellation lost the shared operation sentinel", err)
 				}

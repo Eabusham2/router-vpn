@@ -38,6 +38,7 @@ type nodeUnixFactoryBinding struct {
 }
 
 type nodeUnixFactoryOptions struct {
+	HostProtectionOff   bool
 	Interfaces          []nodeUnixFactoryBinding
 	PrivateDestinations []mobilemultihop.PhysicalEgress
 	LANPrefixes         []netip.Prefix
@@ -165,6 +166,9 @@ func newNodeUnixFactoryFixture(t *testing.T, mode, target, ipv6, kill string, la
 
 func (f *nodeUnixFactoryFixture) checkOptions(t *testing.T, actual nodeUnixFactoryOptions) {
 	t.Helper()
+	if actual.HostProtectionOff != (f.kill == "off") {
+		t.Error("Unix Node factory changed captured host protection mode")
+	}
 	want := []mobilemultihop.PhysicalEgress{{Host: "192.168.50.7", Port: 51820, Network: "udp"}}
 	if f.mode == "shadowsocks" {
 		want = []mobilemultihop.PhysicalEgress{{Host: "192.168.50.7", Port: 8443, Network: "tcp"}, {Host: "192.168.50.7", Port: 8443, Network: "udp"}}
@@ -202,7 +206,10 @@ func TestRouterVPNNodePhysicalUnixCapturesPolicyAndRetainsLateOwner(t *testing.T
 	for _, mode := range []string{"wg", "shadowsocks"} {
 		for _, lan := range []bool{false, true} {
 			for _, ipv6 := range []string{"off", "on"} {
-				for _, kill := range []string{"on-connect", "always"} {
+				for _, kill := range []string{"off", "on-connect", "always"} {
+					if kill == "off" && runtime.GOOS != "linux" {
+						continue
+					}
 					for _, fault := range []string{"live", "index", "name", "address", "mask", "down", "loopback", "partial", "cancel"} {
 						t.Run(mode+"/"+map[bool]string{false: "lan-off", true: "lan-on"}[lan]+"/ipv6-"+ipv6+"/"+kill+"/"+fault, func(t *testing.T) {
 							f := newNodeUnixFactoryFixture(t, mode, runtime.GOOS, ipv6, kill, lan)

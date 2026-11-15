@@ -34,6 +34,18 @@ REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
     "LayerTraffic", "LayerSuccession", "LayerWrongCredential", "XrayTraffic", "XraySuccession", "XrayWrongCredential",
     "NaiveTraffic", "NaiveSuccession", "NaiveWrongCredential", "CompositeTraffic", "CompositeSuccession", "CompositeWrongCredential",
     "LoopbackIPC"))
+SINGLE_NODE_OFF_ROOT = "TestRouterVPNDesktopNodeOffWindowsWFP"
+SINGLE_NODE_OFF_CASES = (SINGLE_NODE_OFF_ROOT, *(SINGLE_NODE_OFF_ROOT+"/"+mode for mode in ("wg", "awg2-fast", "awg2-strong")))
+
+
+def require_single_node_off(output):
+    if any(marker in output for marker in ("--- FAIL:", "--- SKIP:", "DATA RACE")):
+        raise ValueError("single Node Off native ownership failed")
+    for case in SINGLE_NODE_OFF_CASES:
+        if len(re.findall(r"^[ \t]*--- PASS: " + re.escape(case) + r" \([0-9]+(?:\.[0-9]+)?s\)$", output, re.MULTILINE)) != 1:
+            raise ValueError("single Node Off omitted or duplicated original native witness: " + case)
+
+
 EXTERNAL_HY2_ROOT = "TestRouterVPNDesktopExternalWindowsHysteria2WFP"
 EXTERNAL_HY2_CASES = (EXTERNAL_HY2_ROOT, *(EXTERNAL_HY2_ROOT + "/" + leaf for leaf in (
     "off", "off/original-alias-join", "on-connect", "always", "successor-and-original-restore", "reject/password", "reject/trust",
@@ -1059,6 +1071,14 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 print(output, end="" if output.endswith("\n") else "\n", flush=True)
                 if status or any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *IPC_CASES)) or any(value in output for value in ("--- SKIP:", "DATA RACE")):
                     raise ValueError("Actual WFP encrypted Node omitted a required native proof")
+                # Off has its own bounded invocation; no protected case loses
+                # time from its original aggregate budget or per-owner deadline.
+                off_status, off_output = BOOT.IDENTITY.run([binary, "-test.run=^" + SINGLE_NODE_OFF_ROOT + "$", "-test.count=1", "-test.timeout=120s", "-test.v"],
+                                                           cwd=source, env=captured, timeout=135)
+                print(off_output, end="" if off_output.endswith("\n") else "\n", flush=True)
+                if off_status:
+                    raise ValueError("single Node Off native ownership failed:\n" + off_output[-32768:])
+                require_single_node_off(off_output)
                 for mode in ("wg", "awg2-fast", "awg2-strong"):
                     if "--- PASS: " + REQUIRED[0] + "/" + mode + " (" not in output:
                         raise ValueError("Actual WFP encrypted Node omitted a base protocol: " + mode)

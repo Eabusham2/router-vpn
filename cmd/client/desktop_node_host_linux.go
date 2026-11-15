@@ -84,8 +84,8 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 		return nil, operation.Err()
 	}
 	if operation == nil || operation.Err() != nil || a == nil || verify == nil ||
-		!mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(mode, profile.StartLayer) || desktopOwnedNodeProtectionPolicy(profile) == "off" {
-		return nil, errors.New("Linux Node host requires its captured supported protected graph")
+		!mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(mode, profile.StartLayer) {
+		return nil, errors.New("Linux Node host requires its captured supported graph")
 	}
 	ctx, cancel := context.WithTimeout(operation, 30*time.Second)
 	defer cancel()

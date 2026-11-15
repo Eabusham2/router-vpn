@@ -98,7 +98,7 @@ func deriveDesktopNodePolicyCapture(original *NodeProfile, inputs desktopNodePol
 		return nil, desktopNodePolicyError
 	}
 	capture, err := original.DesktopCapture()
-	if err != nil || (capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
+	if err != nil || (capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always" && !(capture.KillSwitchPolicy == "off" && (targetOS == "windows" || targetOS == "linux"))) ||
 		(capture.IPv6Mode != "on" && capture.IPv6Mode != "off") || !capture.UDPAvailable ||
 		capture.FinalTag != "proxy" || len(capture.PhysicalRoots) == 0 || len(capture.PhysicalRoots) > 32 {
 		return nil, desktopNodePolicyError

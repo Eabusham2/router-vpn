@@ -612,3 +612,67 @@ func TestDesktopLinuxGuardianKernelNodeRestoreCaptured(t *testing.T) {
 		desktopNodeLinuxProbe(t, peer, true)
 	})
 }
+
+// The actual encrypted Box/TUN/DNS path must retain Off independently of the
+// lower-source held-descriptor and ungranted-UID lifecycle gate.
+func TestDesktopLinuxGuardianKernelSingleNodeOffEncrypted(t *testing.T) {
+	desktopNodeLinuxNamespace(t)
+	for _, kill := range []string{"off"} {
+		t.Run(kill, func(t *testing.T) {
+			desktopNodeLinuxRequireTUN(t)
+			peer := desktopNodeLinuxReference(t)
+			desktopNodeLinuxProbe(t, peer, false)
+			f := desktopNodeLinuxBox(t, peer.original(t, kill, ""), 0, "")
+			beforeTUNProbes := 0
+			// The baseline is created during Initialize after capture of the
+			// actual interface, before sockets and the TUN can be admitted.
+			// Probe at that barrier, not before the native factory has run.
+			f.beforeTUN = func() {
+				desktopNodeLinuxProbe(t, peer, false)
+				beforeTUNProbes++
+			}
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal("actual Linux TUN/guardian native startup", err)
+			}
+			if f.admissions != 1 || beforeTUNProbes != 1 || f.network.Current() || !f.network.SocketCurrent() {
+				t.Fatal("actual Linux native startup fabricated completed readiness")
+			}
+			owner, err := f.box.RouterVPNDesktopLinuxNodeActivatePhysical(context.Background(), f.policy)
+			if err != nil || owner == nil || !owner.Current() || peer.observe(t, "stats").DNSQueries != 1 {
+				t.Fatal("actual Linux owner missed its selected DNS/TUN proof", err)
+			}
+			name, index, mtu, err := owner.ClaimTUN(owner.Current)
+			capture, captureErr := f.policy.Capture()
+			if err != nil || captureErr != nil || name != "router-vpn" || index <= 0 || mtu != capture.ConfiguredMTU {
+				t.Fatal("actual Linux TUN readback changed the sealed configuration", err, captureErr)
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				for _, address := range []string{"192.0.2.99", "2001:db8::99"} {
+					if err := desktopNodeLinuxTUNTraffic(network, address); err != nil {
+						t.Fatal("actual Linux TUN payload did not traverse the owned encrypted path", network, address, err)
+					}
+				}
+			}
+			observed := peer.observe(t, "stats")
+			if observed.RawTCP == 0 || observed.RawUDP == 0 || observed.PlainTCP == 0 || observed.PlainUDP == 0 {
+				t.Fatal("Linux native TUN payload lacked actual encrypted peer evidence", observed)
+			}
+			desktopNodeLinuxProbe(t, peer, false)
+			peer.observe(t, "fail-dns")
+			if err := owner.ProveSelectedDNS(context.Background()); err == nil || peer.observe(t, "stats").DNSQueries != 2 {
+				t.Fatal("Linux native selected DNS accepted a stale or substituted answer")
+			}
+			f.network.InterfaceUpdated(context.Background())
+			if owner.Current() || f.network.SocketCurrent() || f.exchange("udp") == nil {
+				t.Fatal("Linux native network transition retained the old encrypted generation")
+			}
+			desktopNodeLinuxDrain(t, f)
+			desktopNodeLinuxProbe(t, peer, false)
+			kept, err := f.preparation.DisconnectProtection(context.Background())
+			if err != nil || kept != (kill == "always") {
+				t.Fatal("actual Linux disconnect changed selected baseline retention", kept, err)
+			}
+			desktopNodeLinuxProbe(t, peer, kill == "always")
+		})
+	}
+}

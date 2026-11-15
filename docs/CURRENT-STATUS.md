@@ -10,7 +10,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md)
 records the recovered original requirements and newer published source through
-`cd3d8b14`: macOS prefix-only candidate controls with purpose-safe dialog
+`a1d8811f`: macOS prefix-only candidate controls with purpose-safe dialog
 ownership, atomic native descriptor transfer, the measured Compare test oracle,
 Linux/Windows ordinary OpenVPN-entry to independent SS2022-final hosts,
 macOS ordered Off ownership, the corrected macOS final-policy baseline ID,
@@ -20,9 +20,10 @@ protocol catalog, strongest original member protection and Darwin PF interface
 clause ordering, ordinary external all-Off native ownership, exact original
 member policy in ordinary macOS ordered baselines, and subsequent Windows
 durable-release, receipt-inventory, mixed-policy restoration and fixture-race
-repairs.
+repairs, the bounded imported OpenVPN middle and its native source-audit
+corrections.
 
-The new source adds one imported OpenVPN middle between a paired WG/AWG
+Published `7c7afb87` adds one imported OpenVPN middle between a paired WG/AWG
 entry and an independent paired SS2022 final, with Local execution and one
 literal TCP/UDP OpenVPN remote. Shared and native capture, connected-generation
 and capacity ownership, original DNS/proof/MTU/measurement, all five native
@@ -30,7 +31,16 @@ editor families, saved profiles and startup are wired through the same captured
 graph. The evidence ledger records the exact executable boundaries and broader
 placements, profiles and execution choices that remain open. A source pass or
 encrypted component witness does not establish installed kernel, SDK package,
-device or complete release acceptance. The separate single paired Router
+device or complete release acceptance.
+
+The new source admits freshly captured Off through the existing Windows single
+paired Router host and Linux's six retained WG/AWG/Shadowsocks/Hysteria2/SS-V2Ray
+modes. Windows's nineteen raw modes and valid Start Layers remain covered.
+Preparation, temporary tests, exact source, proof, DNS, MTU and joined cleanup
+keep their original native ownership while ordinary traffic remains open.
+Focused policy, client race, restoration and runner checks passed; Windows WFP
+and Linux encrypted native images compiled. Their new actual kernel cases are
+mandatory hosted gates, not reported local passes. The separate single paired Router
 Darwin retained host remains unfinished; opening an Off policy guard alone
 cannot supply its captured parent/process, PF baseline and native lifecycle.
 Published `d41f4d4a` also adopts the bounded ordinary OpenVPN-entry/SS2022-final pair

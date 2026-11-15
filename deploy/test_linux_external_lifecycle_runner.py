@@ -39,20 +39,24 @@ class LinuxExternalLifecycleRunner(unittest.TestCase):
         self.assertEqual(len(RUNNER.CASES), 14)
 
     def test_off_requires_every_actual_child_and_separate_original_bounds(self):
-        parent = "TestDesktopLinuxGuardianKernelExternalOff"
-        rows = ["--- PASS: " + name + " (0.10s)" for name in (parent, *(parent+"/"+c for c in RUNNER.OFF_CASES))]
-        RUNNER.check_verdict("\n".join(rows), "ExternalOff")
-        self.assertEqual(RUNNER.NATIVE_PHASES, ("ExternalLifecycle", "ExternalOff"))
-        RUNNER.check_all_verdicts("\n".join(completed()+rows))
-        for missing in (completed(), rows):
-            with self.assertRaises(ValueError): RUNNER.check_all_verdicts("\n".join(missing))
-        for index in range(len(rows)):
+        self.assertEqual(RUNNER.NATIVE_PHASES, ("ExternalLifecycle", "ExternalOff", "SingleNodeOff"))
+        all_rows = completed()
+        for phase in RUNNER.NATIVE_PHASES[1:]:
+            parent = "TestDesktopLinuxGuardianKernel" + phase
+            rows = ["--- PASS: " + name + " (0.10s)" for name in (parent, *(parent+"/"+c for c in RUNNER.OFF_CASES))]
+            RUNNER.check_verdict("\n".join(rows), phase)
+            all_rows += rows
+            for index in range(len(rows)):
+                with self.subTest(phase=phase,index=index), self.assertRaises(ValueError):
+                    RUNNER.check_verdict("\n".join(rows[:index]+rows[index+1:]), phase)
+            binary, digest = Path("/captured/external-lifecycle.test"), "b"*64
+            with patch.object(RUNNER.GUARD, "namespace_test", return_value=23) as native:
+                self.assertEqual(RUNNER.namespace_test(binary,digest,phase),23)
+            native.assert_called_once_with(binary,phase,digest)
+        RUNNER.check_all_verdicts("\n".join(all_rows))
+        for index in range(len(all_rows)):
             with self.assertRaises(ValueError):
-                RUNNER.check_verdict("\n".join(rows[:index]+rows[index+1:]), "ExternalOff")
-        binary, digest = Path("/captured/external-lifecycle.test"), "b"*64
-        with patch.object(RUNNER.GUARD, "namespace_test", return_value=23) as native:
-            self.assertEqual(RUNNER.namespace_test(binary,digest,"ExternalOff"),23)
-        native.assert_called_once_with(binary,"ExternalOff",digest)
+                RUNNER.check_all_verdicts("\n".join(all_rows[:index]+all_rows[index+1:]))
 
     def test_only_original_digest_enters_namespace(self):
         binary, digest = Path("/captured/external-lifecycle.test"), "b" * 64
