@@ -34,9 +34,9 @@ extension RouterVPNModel {
                 source = try JSONDecoder().decode(ClientBundle.self, from: data)
             }
             if let profile = source.routerProfiles.first(where: { $0.id == node.id }), profile.normalizedNodeKind == "external" {
-                guard source.routerProfiles.filter({ $0.id == node.id }).count == 1, nodes.count == 3, position == 1,
+                guard source.routerProfiles.filter({ $0.id == node.id }).count == 1, IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count),
                       (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) else {
-                    throw IOSMultihopNodeSelection.issue("A custom middle requires its original supported Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN source between two paired Router nodes.")
+                    throw IOSMultihopNodeSelection.issue("A custom middle requires its original supported Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN source in its supported penultimate position before the paired final node.")
                 }
                 source.selectedRouterID = profile.id; source.nodeProofID = ""
                 source.routerAPI = profile.routerAPI; source.apiToken = profile.apiToken; source.endpoint = profile.endpoint

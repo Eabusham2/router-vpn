@@ -26,12 +26,16 @@ final class AndroidNodeChainCONNECTCapture implements AutoCloseable {
         JSONObject value=new JSONObject(source),metadata=new JSONObject(bounded(plan.metadata(),1024*1024));
         if(value.length()!=4||value.getInt("schema")!=4||!"local".equals(value.getString("execution"))
                 ||!same(value.getJSONArray("nodes"),members)||!same(value.getJSONArray("identity_sources"),identities)
-                ||members.size()!=3||identities.size()!=3||!identities.get(1).isEmpty()
+                ||members.size()<3||members.size()>8||identities.size()!=members.size()||!originalIdentities(identities)
                 ||!"routervpn-node-chain-connect-source".equals(metadata.getString("kind"))||metadata.getInt("schema")!=1
                 ||sourceSHA256==null||!sourceSHA256.matches("[0-9a-f]{64}")
                 ||!sourceSHA256.equals(metadata.getString("source_sha256"))
                 ||!digest(config).equals(configSHA256)||!configSHA256.equals(metadata.getString("config_sha256")))
             throw new IllegalStateException("The typed CONNECT graph changed an original ordered member, identity or config.");
+    }
+    private static boolean originalIdentities(List<String> values) {
+        for(int i=0;i<values.size();i++)if(values.get(i)==null||(i==values.size()-2?!values.get(i).isEmpty():values.get(i).isEmpty()))return false;
+        return true;
     }
     private static boolean same(JSONArray returned,List<String> original)throws Exception {
         if(returned.length()!=original.size())return false;

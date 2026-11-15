@@ -44,6 +44,8 @@ PREFIX_OFF_CASES = ("wg-off-save", "wg-off-cancel")
 REQUIRED_PREFIX_CASES = ORIGINAL_PREFIX_CASES + PREFIX_OFF_CASES
 ORIGINAL_SOCKS_CASES = ("wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off")
 CASES = ("http-wg-connect", "http-awg-fast-connect", "http-awg-strong-connect", "https-wg-connect", "https-awg-fast-connect", "https-awg-strong-connect", "https-wg-wrong-middle-key", "http-wg-wrong-middle-public", "https-wg-tls-name", "https-wg-tls-trust", "http-wg-final-dns-failure", "https-wg-final-node-failure", "https-wg-final-key", "https-wg-middle-source", "http-wg-connect-off", "https-wg-connect-off")
+CASES += ("http-wg-four-connect", "https-wg-eight-connect")
+ORDERED_PREFIX_MEASUREMENTS = [{"case": "http-wg-four-connect", "nodes": 4, "positions": [2, 3], "samples": 50}, {"case": "https-wg-eight-connect", "nodes": 8, "positions": [6, 7], "samples": 50}]
 REQUIRED = (ROOT_TEST, *(ROOT_TEST + "/" + case for case in CASES))
 PREFIX = "Native Windows typed CONNECT full-path acceptance: "
 OWNED = (*SOCKS_GATE.OWNED,
@@ -268,6 +270,7 @@ def execute_typed(source, bundle, go, env, before, original_socks_receipt, owner
                    "unmodified_shipping_image": False, "test_scope": "captured-native-child-app-id",
                    "typed_full_path": True, "positive_application_and_selected_dns_proved": True,
                    "measurement_bytes_per_direction_per_hop": 8 << 20, "measurement_hops": 3,
+                   "ordered_prefix_measurements": ORDERED_PREFIX_MEASUREMENTS,
                    "native_joined": True, "remote_connect_streams_after_retirement": 0,
                    "command_job_joined": owner.retired, "tun_absent_all_outcomes": True,
                    "public_admission": "public-typed-connect", "public_route": "/api/multihop/connect",

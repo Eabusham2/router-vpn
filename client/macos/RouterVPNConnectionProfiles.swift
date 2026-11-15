@@ -20,6 +20,12 @@ enum RouterVPNOrderedNodes {
         guard let layer = raw as? String else { return false }
         return layer.isEmpty || layer == "off"
     }
+    static func importedPosition(_ mode: String, position: Int, count: Int) -> Bool {
+        if ["http-connect", "https-connect"].contains(mode) {
+            return (3...8).contains(count) && position == count - 2
+        }
+        return count == 3 && position == 1
+    }
     static func importedMiddleMode(_ profile: [String: Any]) -> String? {
         guard profile["node_kind"] as? String == "external",
               let external = profile["external"] as? [String: Any],
@@ -59,8 +65,8 @@ enum RouterVPNOrderedNodes {
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
                   seen.insert(id).inserted,
                   let mode = row["mode"],
-                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || (rows.count == 3 && position == 1 && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
-                throw issue("Choose paired WireGuard or AWG2 prefixes and a paired Shadowsocks 2022 or unlayered Hysteria2 exit. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a three-node path ending in Shadowsocks 2022.")
+                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || (importedPosition(mode, position: position, count: rows.count) && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
+                throw issue("Choose paired WireGuard or AWG2 prefixes and a paired Shadowsocks 2022 or unlayered Hysteria2 exit. An imported CONNECT node follows one to six paired prefixes and precedes the Shadowsocks 2022 exit. Other imported middles require three nodes.")
             }
         }
         guard !control.isEmpty, rows.last?["id"] == control else {
@@ -82,7 +88,7 @@ enum RouterVPNOrderedNodes {
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
             guard importedMode == nil || selection.execution == "local" else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
-            guard importedMode != nil ? rows.count == 3 && position == 1 && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
+            guard importedMode != nil ? importedPosition(importedMode!, position: position, count: rows.count) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 requires StartLayer Off.") }
             }
@@ -203,7 +209,7 @@ struct RouterVPNOrderedNodeDraft {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
         guard execution == "local" || !prefixes.contains(where: importedIDs.contains) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
-            guard importedIDs.contains(id) ? ordered.count == 3 && index == 1 && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN member requires one middle position between a paired entry and final.") }
+            guard importedIDs.contains(id) ? RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("An imported CONNECT node must immediately precede the Shadowsocks 2022 exit after one to six paired prefixes. Other imported middles require three nodes.") }
         }
         return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
             execution: execution, profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)

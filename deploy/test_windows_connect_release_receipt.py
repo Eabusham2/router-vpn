@@ -40,6 +40,7 @@ def receipts(digest):
                    connect_middle_tcp_only=True, connect_protocols=['http-connect', 'https-connect'],
                    typed_connect_public_source_controls=dict(scope='registered-public-connect-source-controls',
                        native_kernel_acceptance=False, target='windows', cases=list(GATE.CONNECT_PUBLIC.REQUIRED), output_sha256='9' * 64),
+                   ordered_prefix_measurements=copy.deepcopy(GATE.ORDERED_PREFIX_MEASUREMENTS),
                    ordered_latency_samples_per_hop=50, public_admission='public-typed-connect',
                    public_route='/api/multihop/connect', public_profile_capability=True,
                    typed_connect_parent_controls=dict(scope='compiled-parent-model-and-source-controls',
@@ -88,6 +89,18 @@ class WindowsCONNECTReleaseReceipt(unittest.TestCase):
             broken['cases'].remove(case)
             with self.subTest(case=case), self.assertRaises(ValueError):
                 self.verify(broken, socks)
+
+    def test_long_prefix_measurements_require_exact_original_positions_and_types(self):
+        _, socks, original = receipts('7' * 64)
+        mutations = [[], original['ordered_prefix_measurements'][:1], list(reversed(original['ordered_prefix_measurements']))]
+        for index in range(2):
+            for field, value in (('case', 'foreign'), ('nodes', True), ('nodes', 8.0), ('positions', [0,1]), ('positions', [6,7,0]), ('positions', [6.0,7]), ('samples', 49), ('samples', 50.0)):
+                changed=copy.deepcopy(original['ordered_prefix_measurements']);changed[index][field]=value;mutations.append(changed)
+            for field in original['ordered_prefix_measurements'][index]:
+                changed=copy.deepcopy(original['ordered_prefix_measurements']);del changed[index][field];mutations.append(changed)
+        for value in mutations:
+            changed=copy.deepcopy(original);changed['ordered_prefix_measurements']=value
+            with self.subTest(value=value), self.assertRaises(ValueError): self.verify(changed,socks)
 
     def test_parent_model_cannot_replace_native_or_drop_original_controls(self):
         _, socks, connect = receipts('7' * 64)

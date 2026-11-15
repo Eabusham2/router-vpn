@@ -93,6 +93,18 @@ func (c *NodeChain) hasImportedMiddle() bool {
 	return c != nil && (c.importedMiddle != nil || c.openVPNMiddle != nil || c.socksSource != nil || c.connectSource != nil)
 }
 
+// The CONNECT source alone admits a variable-length packet prefix. Other
+// imported families retain their existing single-middle position.
+func (c *NodeChain) importedMiddlePosition() int {
+	if c == nil || !c.hasImportedMiddle() {
+		return -1
+	}
+	if c.connectSource != nil {
+		return len(c.nodes) - 2
+	}
+	return 1
+}
+
 func (c *NodeChain) importedMiddlePublicIP() string {
 	if c.openVPNMiddle != nil {
 		return c.openVPNMiddle.selection.ExpectedPublicIP

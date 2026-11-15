@@ -10,12 +10,12 @@ final class IOSNodeChainCONNECTCapture {
     let members: [IOSNodeChainCapture.Member]
     let strict: Bool
     let homeLANAccess: Bool
-    var finalProfile: [String: Any] { members[2].profile }
+    var finalProfile: [String: Any] { members[members.count - 1].profile }
     var startupTimeout: TimeInterval { 75 }
     static let providerKey = "nodeChainCONNECTSource"
 
     static func compile(bundles: [Data]) throws -> IOSNodeChainCONNECTCapture {
-        guard bundles.count == 3 else { throw issue() }
+        guard (3...IOSMultihopNodeSelection.maximumNodes).contains(bundles.count) else { throw issue() }
         var inputs: [String] = [], identities: [String] = []
         for (position, data) in bundles.enumerated() {
             let root = try object(data, maximum: 32 * 1024 * 1024)
@@ -24,15 +24,15 @@ final class IOSNodeChainCONNECTCapture {
                   profiles.filter({ $0["id"] as? String == id }).count == 1,
                   let profile = profiles.first(where: { $0["id"] as? String == id }),
                   let assets = root["profiles"] as? [String: [String: String]] else { throw issue() }
-            let final = try object(bundles[2], maximum: 32 * 1024 * 1024)
+            let final = try object(bundles[bundles.count - 1], maximum: 32 * 1024 * 1024)
             guard let finalID = final["selectedRouterID"] as? String,
                   let finals = final["routerProfiles"] as? [[String: Any]],
                   finals.filter({ $0["id"] as? String == finalID }).count == 1,
                   let control = finals.first(where: { $0["id"] as? String == finalID }),
-                  let selected = control["multihop_nodes"] as? [[String: Any]], selected.count == 3,
+                  let selected = control["multihop_nodes"] as? [[String: Any]], selected.count == bundles.count,
                   selected[position]["id"] as? String == id, let mode = selected[position]["mode"] as? String else { throw issue() }
             var failure: NSError?
-            if position == 1 {
+            if position == bundles.count - 2 {
                 let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(json(profile).utf8))
                 guard mode == typed.external?.protocolName, IOSImportedCONNECTSource.eligible(typed) else { throw issue() }
                 let original = try IOSImportedCONNECTSource.capture(typed)
@@ -41,9 +41,9 @@ final class IOSNodeChainCONNECTCapture {
                 inputs.append(input); identities.append("")
             } else {
                 guard profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
-                      position == 0 ? IOSMultihopNodeSelection.supportsNativePrefix(mode) : mode == "shadowsocks",
+                      position < bundles.count - 2 ? IOSMultihopNodeSelection.supportsNativePrefix(mode) : mode == "shadowsocks",
                       let files = assets[mode], !files.isEmpty, let identity = assets["wg"], !identity.isEmpty else { throw issue() }
-                guard position != 2 || files["routervpn-ss-service.json"]?.isEmpty == false else {
+                guard position != bundles.count - 1 || files["routervpn-ss-service.json"]?.isEmpty == false else {
                     throw IOSMultihopNodeSelection.issue("CONNECT requires the paired final node’s original SS UoT-v2 service declaration.")
                 }
                 let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: assets)
@@ -88,14 +88,14 @@ final class IOSNodeChainCONNECTCapture {
         let root = try Self.object(Data(original.utf8), maximum: IOSNodeChainCapture.maximumInputBytes)
         guard Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
               root["schema"] as? Int == 4, root["execution"] as? String == "local",
-              let nodes = root["nodes"] as? [String], nodes.count == 3,
-              let identities = root["identity_sources"] as? [String], identities.count == 3,
-              !identities[0].isEmpty, identities[1].isEmpty, !identities[2].isEmpty else { throw Self.issue() }
+              let nodes = root["nodes"] as? [String], (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
+              let identities = root["identity_sources"] as? [String], identities.count == nodes.count,
+              identities.enumerated().allSatisfy({ $0.offset == nodes.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }) else { throw Self.issue() }
         var members: [IOSNodeChainCapture.Member] = []
         for (position, input) in nodes.enumerated() {
             let node = try Self.object(Data(input.utf8), maximum: IOSNodeChainCapture.maximumInputBytes)
             let profile: [String: Any], mode: String, files: String
-            if position == 1 {
+            if position == nodes.count - 2 {
                 guard node["kind"] as? String == "routervpn-node-chain-connect-member", node["schema"] as? Int == 1,
                       let raw = node["capture"] as? String, let config = node["config"] as? String,
                       let saved = try Self.object(Data(raw.utf8), maximum: 8 * 1024 * 1024)["profile"] as? [String: Any] else { throw Self.issue() }
@@ -106,7 +106,7 @@ final class IOSNodeChainCONNECTCapture {
                 guard node["kind"] as? String == "routervpn-node-launch-input", node["schema"] as? Int == 1,
                       let raw = node["profile_json"] as? String, let selected = node["mode"] as? String,
                       let assets = node["files"] as? String,
-                      position == 0 ? IOSMultihopNodeSelection.supportsNativePrefix(selected) : selected == "shadowsocks" else { throw Self.issue() }
+                      position < nodes.count - 2 ? IOSMultihopNodeSelection.supportsNativePrefix(selected) : selected == "shadowsocks" else { throw Self.issue() }
                 profile = try Self.object(Data(raw.utf8), maximum: 256 * 1024)
                 guard profile["node_kind"] as? String == "router-vpn", profile["external"] == nil else { throw Self.issue() }
                 mode = selected; files = assets
@@ -114,7 +114,7 @@ final class IOSNodeChainCONNECTCapture {
             guard let id = profile["id"] as? String else { throw Self.issue() }
             members.append(.init(id: id, mode: mode, profileJSON: try Self.json(profile), filesJSON: files, profile: profile))
         }
-        let final = try JSONDecoder().decode(RouterProfile.self, from: Data(members[2].profileJSON.utf8))
+        let final = try JSONDecoder().decode(RouterProfile.self, from: Data(members[members.count - 1].profileJSON.utf8))
         guard final.multihopEnabled == true, let selected = final.multihopNodes,
               selected == members.map({ .init(id: $0.id, mode: $0.mode) }) else { throw Self.issue() }
         try IOSMultihopNodeSelection.validate(selected, execution: final.multihopExecution,
@@ -125,7 +125,7 @@ final class IOSNodeChainCONNECTCapture {
               metadata["source_sha256"] as? String == plan.sourceSHA256(), metadata["config_sha256"] as? String == plan.configSHA256(),
               plan.sourceSHA256().range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
               plan.configSHA256().range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
-              let devices = metadata["devices"] as? [[String: Any]], devices.count == 3 else { throw Self.issue() }
+              let devices = metadata["devices"] as? [[String: Any]], devices.count == members.count else { throw Self.issue() }
         var strict = false, lan = true
         for (position, device) in devices.enumerated() {
             guard device["position"] as? Int == position, device["profile_id"] as? String == members[position].id,
@@ -148,7 +148,7 @@ final class IOSNodeChainCONNECTCapture {
               let profile = profiles.first(where: { $0["id"] as? String == id }) else { throw issue() }
         let capture = try reopen(source, selectedProfile: profile)
         do {
-            let final = capture.members[2]
+            let final = capture.members[capture.members.count - 1]
             guard final.id == id, configuration["mode"] as? String == final.mode,
                   configuration["rawProfileID"] as? String == final.mode,
                   configuration["modeCandidates"] as? [String] == [final.mode],

@@ -92,7 +92,13 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			if record.Prefs.MultihopExecution != "local" {
 				return errors.New("saved imported ordered execution lacks native Server or Compare admission")
 			}
-			if len(record.NodeChain) != 3 || i != 1 || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" ||
+			count, middle := len(record.NodeChain), 1
+			bounded := count == 3
+			if captured.Mode == "http-connect" || captured.Mode == "https-connect" {
+				bounded = count >= 3 && count <= 8
+				middle = count - 2
+			}
+			if !bounded || i != middle || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" ||
 				(captured.Mode != "openvpn" && captured.Mode != "shadowsocks" && captured.Mode != "socks5" && captured.Mode != "http-connect" && captured.Mode != "https-connect") ||
 				captured.NodeProofID != "" || captured.Preferences != nil || captured.External == nil || captured.External.Protocol != captured.Mode || captured.External.validate() != nil || captured.External.StartLayer != "" && captured.External.StartLayer != "off" || len(captured.Sources) != 1 || captured.Sources[0].Mode != "external-"+captured.Mode || !savedNodeChainDigest(captured.Sources[0].SHA256) {
 				return errors.New("saved imported middle lost its original external policy or source")

@@ -39,15 +39,29 @@ type windowsCONNECTPeerReply struct {
 	FinalUOTVersion int    `json:"final_uot_version"`
 }
 
-func windowsCONNECTPeerStart(t *testing.T, mode, protocol string) (*windowsPrefixPeer, string, string, string, func(string) windowsCONNECTPeerReply) {
+func windowsCONNECTPeerStart(t *testing.T, mode, protocol string, prefixes int) (*windowsPrefixPeer, string, string, string, func(string) windowsCONNECTPeerReply) {
 	t.Helper()
-	if protocol != "http-connect" && protocol != "https-connect" {
+	if prefixes < 1 || prefixes > 6 || (protocol != "http-connect" && protocol != "https-connect") {
 		t.Fatal("original CONNECT protocol required")
 	}
 	peer := windowsPrefixPeerKeys(t, 3)
-	middlePassword := peer.requests[1].PreSharedKey
-	peer.requests, peer.clients = peer.requests[:1], peer.clients[:1]
-	windowsPrefixSetModes(t, peer, []string{mode})
+	for len(peer.requests) < prefixes+1 {
+		extra := windowsPrefixPeerKeys(t, 3)
+		peer.requests = append(peer.requests, extra.requests...)
+		peer.clients = append(peer.clients, extra.clients...)
+	}
+	if prefixes > 1 {
+		for i := range peer.requests {
+			peer.requests[i].APIToken = "installed-connect-prefix-" + peer.requests[i].NodeProofID
+		}
+	}
+	middlePassword := peer.requests[prefixes].PreSharedKey
+	peer.requests, peer.clients = peer.requests[:prefixes], peer.clients[:prefixes]
+	modes := make([]string, prefixes)
+	for i := range modes {
+		modes[i] = mode
+	}
+	windowsPrefixSetModes(t, peer, modes)
 	image := os.Getenv("ROUTERVPN_WINDOWS_PREFIX_PEER")
 	if !filepath.IsAbs(image) {
 		t.Fatal("prefix peer requires original compiled image")
@@ -151,7 +165,7 @@ func windowsCONNECTPeerStart(t *testing.T, mode, protocol string) (*windowsPrefi
 	peer.reply = first.windowsPrefixPeerReply
 	// The original peer binds port zero and returns its actual owned UDP tuple.
 	endpoint, endpointError := netip.ParseAddrPort(peer.reply.Address)
-	if peer.reply.Schema != 1 || endpointError != nil || !endpoint.Addr().Is4() || endpoint.Port() == 0 || endpoint.String() != peer.reply.Address || endpoint.Addr().String() != physical.Address || len(peer.reply.Prefixes) != 1 || first.Middle.Method != protocol || first.Protocol != protocol || first.OpenStreams == nil || first.FinalUOTVersion != 2 || peer.reply.PublicCA == "" {
+	if peer.reply.Schema != 1 || endpointError != nil || !endpoint.Addr().Is4() || endpoint.Port() == 0 || endpoint.String() != peer.reply.Address || endpoint.Addr().String() != physical.Address || len(peer.reply.Prefixes) != prefixes || first.Middle.Method != protocol || first.Protocol != protocol || first.OpenStreams == nil || first.FinalUOTVersion != 2 || peer.reply.PublicCA == "" {
 		t.Fatal("prefix peer changed original physical/key inventory")
 	}
 	if protocol == "https-connect" && (first.ConnectCA == "" || first.ConnectCA == first.PublicCA || first.ServerName != "speed.cloudflare.com") || protocol == "http-connect" && (first.ConnectCA != "" || first.ServerName != "") {

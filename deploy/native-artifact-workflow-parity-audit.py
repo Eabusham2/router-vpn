@@ -47,7 +47,7 @@ def check_release_aggregate_gates(source: str) -> None:
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
                 "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "server-ordered-encrypted",
-                "typed-socks-native", "typed-connect-runtime", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
+                "typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
     pq = job("imported-pq-reality")
@@ -86,6 +86,7 @@ def check_release_aggregate_gates(source: str) -> None:
     focused = []
     for name, suite in (("typed-socks-native", "socks-run"),
                         ("typed-connect-runtime", "connect-runtime"),
+                        ("typed-connect-source", "connect-source"),
                         ("typed-connect-native", "connect-run"),
                         ("typed-connect-native-mtu", "connect-native-mtu"),
                         ("desktop-connect-child", "desktop-connect-child")):
@@ -147,6 +148,7 @@ def check_focused_native_release_workflow(source: str) -> None:
         assert marker in scope, "required focused native workflow lost source identity: " + marker
     for suite, driver in (("socks-run", "test_focused_socks_run.py"),
                           ("connect-runtime", "test_focused_connect_runtime.py"),
+                          ("connect-source", "test_focused_connect_source.py"),
                           ("connect-run", "test_focused_connect_run.py"),
                           ("connect-native-mtu", "test_focused_connect_native_mtu.py")):
         marker = "        if: inputs.suite == '" + suite + "'"

@@ -36,12 +36,12 @@ func windowsCONNECTRegisterRoutes(mux *http.ServeMux, a *app, original common.Ro
 	if !found || !desktopNodeChainHasCONNECT(selected.MultihopNodes) {
 		return func() {}, nil
 	}
-	if !nativeNodeChainCONNECTPlatformSupported() || len(selected.MultihopNodes) != 3 {
+	if !nativeNodeChainCONNECTPlatformSupported() || (len(selected.MultihopNodes) < 3 || len(selected.MultihopNodes) > 8) {
 		return nil, errors.New("installed CONNECT requires the original public ordered host")
 	}
-	middle, found := a.profileByIDLocked(selected.MultihopNodes[1].ID)
+	middle, found := a.profileByIDLocked(selected.MultihopNodes[len(selected.MultihopNodes)-2].ID)
 	view := publicProfileFor(middle)
-	if !found || view.External == nil || !view.External.OrderedMiddle || !desktopNodeChainCONNECTMiddle(middle, selected.MultihopNodes[1].Mode) {
+	if !found || view.External == nil || !view.External.OrderedMiddle || !desktopNodeChainCONNECTMiddle(middle, selected.MultihopNodes[len(selected.MultihopNodes)-2].Mode) {
 		return nil, errors.New("installed CONNECT requires its original public profile capability")
 	}
 	hold, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -112,11 +112,11 @@ func windowsCONNECTRegisterRoutes(mux *http.ServeMux, a *app, original common.Ro
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if len(a.profiles.Profiles) != 3 || a.profiles.Profiles[1].External == nil {
+		if len(a.profiles.Profiles) < 3 || len(a.profiles.Profiles) > 8 || a.profiles.Profiles[len(a.profiles.Profiles)-2].External == nil {
 			http.Error(w, "original imported CONNECT middle unavailable", 409)
 			return
 		}
-		external := a.profiles.Profiles[1].External
+		external := a.profiles.Profiles[len(a.profiles.Profiles)-2].External
 		proxy := external.HTTPConnect
 		if external.Protocol == "https-connect" {
 			proxy = external.HTTPSConnect
@@ -187,7 +187,7 @@ func windowsCONNECTInspect(ctx context.Context, a *app, launch *desktopNodeLaunc
 		}
 		graph, found := getActiveMultihopGraph(a)
 		runtime, err := capturedNativeMultihopRuntimeContext(ctx, a, launch.command, graph)
-		if err != nil || !found || runtime == nil || runtime.launch != launch || graph.ChainNodes != 3 {
+		if err != nil || !found || runtime == nil || runtime.launch != launch || len(runtime.selection.Nodes) < 3 || len(runtime.selection.Nodes) > 8 || graph.ChainNodes != len(runtime.selection.Nodes) {
 			return result, errors.Join(err, errors.New("typed native activation lost full original graph"))
 		}
 		finish, err := beginDesktopNodeChainMeasurementHold(ctx, a, launch)
@@ -200,7 +200,7 @@ func windowsCONNECTInspect(ctx context.Context, a *app, launch *desktopNodeLaunc
 			return result, err
 		}
 		rows, err := desktopNodeChainMeasurementRows(status, runtime.selection.Nodes, 8<<20)
-		if err != nil || len(rows) != 3 {
+		if err != nil || len(rows) != len(runtime.selection.Nodes) {
 			return result, errors.Join(err, errors.New("typed native measurement omitted original prefix"))
 		}
 		result.MeasurementRows = len(rows)

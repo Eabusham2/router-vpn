@@ -15,7 +15,7 @@ struct IOSNodeChainDraft {
         (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) &&
             nodes.allSatisfy({ $0.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil }) &&
             Set(nodes.map(\.id)).count == nodes.count && nodes.last?.id == controlID &&
-            nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || nodes.count == 3 && position == 1 && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(node.mode) && nodes.last?.mode == "shadowsocks" }) &&
+            nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count) && nodes.last?.mode == "shadowsocks" }) &&
             IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "")
     }
 
@@ -29,8 +29,8 @@ struct IOSNodeChainDraft {
 
     mutating func chooseMode(_ mode: String, at position: Int) throws {
         guard nodes.indices.contains(position), position < nodes.count - 1,
-              (IOSMultihopNodeSelection.supportsNativePrefix(mode) || nodes.count == 3 && position == 1 && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode)) else {
-            throw IOSMultihopNodeSelection.issue("Choose WireGuard or AWG2 for a paired node. A three-node route can use a supported imported middle before a Shadowsocks final.")
+              (IOSMultihopNodeSelection.supportsNativePrefix(mode) || IOSMultihopNodeSelection.supportsImportedMiddle(mode, position: position, count: nodes.count)) else {
+            throw IOSMultihopNodeSelection.issue("Choose WireGuard or AWG2 for a paired node. HTTP/HTTPS CONNECT can follow one to six paired prefixes before a Shadowsocks final; other supported imported middles require three nodes.")
         }
         nodes[position].mode = mode
     }
@@ -39,7 +39,8 @@ struct IOSNodeChainDraft {
         guard nodes.count < IOSMultihopNodeSelection.maximumNodes else {
             throw IOSMultihopNodeSelection.issue("An ordered route supports at most eight nodes.")
         }
-        nodes.insert(.init(id: "", mode: "wg"), at: nodes.count - 1)
+        let beforeCONNECT = nodes.count >= 3 && ["http-connect", "https-connect"].contains(nodes[nodes.count - 2].mode)
+        nodes.insert(.init(id: "", mode: "wg"), at: nodes.count - (beforeCONNECT ? 2 : 1))
     }
 
     mutating func chooseFinalMode(_ mode: String) throws {
@@ -188,7 +189,7 @@ enum IOSNodeChainEditorVisible {
         guard nodes.indices.contains(position), position < nodes.count - 1 else { return [] }
         return unique(profiles).filter { profile in
             eligible(profile) &&
-            (profile.normalizedNodeKind != "external" || nodes.count == 3 && position == 1 && nodes.last?.mode == "shadowsocks") &&
+            (profile.normalizedNodeKind != "external" || IOSMultihopNodeSelection.supportsImportedMiddle(profile.external?.protocolName ?? "", position: position, count: nodes.count) && nodes.last?.mode == "shadowsocks") &&
             !nodes.enumerated().contains(where: { $0.offset != position && $0.element.id == profile.id })
         }
     }

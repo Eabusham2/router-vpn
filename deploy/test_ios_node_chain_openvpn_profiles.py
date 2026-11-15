@@ -14,7 +14,7 @@ def replace_once(source, before, after):
 def main():
     source=C.TYPED
     source=replace_once(source,'static func connectRoundtrip()throws','static func openVPNRoundtrip()throws')
-    source=replace_once(source,'for mode in ["wg","awg2-fast","awg2-strong"] {for host in ["198.51.100.76","2001:db8::76"] {for authenticated in [false,true] {for kind in ["http-connect","https-connect"] {','for mode in ["wg","awg2-fast","awg2-strong"] {for network in ["tcp","udp"] { let host="203.0.113.20",kind="openvpn"')
+    source=replace_once(source,'for count in 3...8 {for mode in (count==3 ? ["wg","awg2-fast","awg2-strong"]:["wg"]) {for host in (count==3 ? ["198.51.100.76","2001:db8::76"]:["198.51.100.76"]) {for authenticated in (count==3 ? [false,true]:[true]) {for kind in ["http-connect","https-connect"] {','for mode in ["wg","awg2-fast","awg2-strong"] {for network in ["tcp","udp"] { let count=3,host="203.0.113.20",kind="openvpn"')
     first=source.index('   var socks:[String:Any]')
     last=source.index('   profile.external=',first)
     source=source[:first]+r'''
@@ -27,8 +27,8 @@ def main():
     first=source.index('     if kind=="https-connect" {source.routerProfiles[0].external?.httpsConnect?.username=')
     last=source.index('\n    }',first)
     source=source[:first]+'     source.routerProfiles[0].external?.openVPN?.username="relinked-user";source.routerProfiles[0].external?.openVPN?.password="relinked-valid-password"'+source[last:]
-    source=replace_once(source,'(kind=="https-connect" ? stored(ids[1]).routerProfiles[0].external?.httpsConnect?.password : stored(ids[1]).routerProfiles[0].external?.httpConnect?.password)','stored(ids[1]).routerProfiles[0].external?.openVPN?.password')
-    source=replace_once(source,'  }}}}','  }}')
+    source=replace_once(source,'(kind=="https-connect" ? stored(ids[middlePosition]).routerProfiles[0].external?.httpsConnect?.password : stored(ids[middlePosition]).routerProfiles[0].external?.httpConnect?.password)','stored(ids[middlePosition]).routerProfiles[0].external?.openVPN?.password')
+    source=replace_once(source,'  }}}}}','  }}')
     source=source.replace('Typed CONNECT original route','OpenVPN original route')
     source=source.replace('failure("actual typed Add callback did not persist")','failure("actual OpenVPN Add callback did not persist: "+actions.status)')
     C.TYPED=source

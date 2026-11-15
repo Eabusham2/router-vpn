@@ -30,6 +30,7 @@ var windowsCONNECTHostCases = []string{
 	"https-wg-tls-name", "https-wg-tls-trust", "http-wg-final-dns-failure",
 	"https-wg-final-node-failure", "https-wg-final-key", "https-wg-middle-source",
 	"http-wg-connect-off", "https-wg-connect-off",
+	"http-wg-four-connect", "https-wg-eight-connect",
 }
 
 func windowsCONNECTCase(scenario string) (protocol, mode, action string, found bool) {
@@ -50,7 +51,7 @@ func windowsCONNECTCase(scenario string) (protocol, mode, action string, found b
 
 func windowsCONNECTInstalledSources(t *testing.T, peer *windowsPrefixPeer, protocol, password, serverName, fault string) (common.RouterProfileStore, map[string]map[string]map[string][]byte) {
 	t.Helper()
-	if len(peer.requests) != 1 || password == "" || (protocol != "http-connect" && protocol != "https-connect") {
+	if len(peer.requests) < 1 || len(peer.requests) > 6 || password == "" || (protocol != "http-connect" && protocol != "https-connect") {
 		t.Fatal("installed CONNECT source lost original independent first and authenticated middle")
 	}
 	store, assets := windowsPrefixInstalledSources(t, peer, "")
@@ -76,11 +77,15 @@ func windowsCONNECTInstalledSources(t *testing.T, peer *windowsPrefixPeer, proto
 	if err := common.NormalizeRouterProfile(&middle); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.Profiles) != 2 || len(assets) != 2 {
+	if len(store.Profiles) != len(peer.requests)+1 || len(assets) != len(peer.requests)+1 {
 		t.Fatal("CONNECT fixture changed original paired source inventory")
 	}
-	first, final := store.Profiles[0], store.Profiles[1]
-	final.MultihopNodes = []common.MultihopNodeSelection{{ID: first.ID, Mode: peer.requests[0].Mode}, {ID: middle.ID, Mode: protocol}, {ID: final.ID, Mode: "shadowsocks"}}
+	final := store.Profiles[len(store.Profiles)-1]
+	final.MultihopNodes = nil
+	for position, request := range peer.requests {
+		final.MultihopNodes = append(final.MultihopNodes, common.MultihopNodeSelection{ID: store.Profiles[position].ID, Mode: request.Mode})
+	}
+	final.MultihopNodes = append(final.MultihopNodes, common.MultihopNodeSelection{ID: middle.ID, Mode: protocol}, common.MultihopNodeSelection{ID: final.ID, Mode: "shadowsocks"})
 	if err := common.NormalizeRouterProfile(&final); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +124,7 @@ func windowsCONNECTInstalledSources(t *testing.T, peer *windowsPrefixPeer, proto
 		t.Fatal("CONNECT fixture lost exact final service authority", err)
 	}
 	assets[final.ID]["shadowsocks"][nativecomposite.SSServiceAsset] = declaration
-	store.Profiles = []common.RouterProfile{first, middle, final}
+	store.Profiles = append(store.Profiles[:len(store.Profiles)-1], middle, final)
 	return store, assets
 }
 
@@ -188,9 +193,19 @@ func TestWindowsCONNECTLauncher(t *testing.T) {
 	if !ok {
 		t.Fatal("unknown installed CONNECT scenario")
 	}
+	prefixes := 1
+	if strings.HasPrefix(action, "four-") {
+		prefixes = 2
+		action = strings.TrimPrefix(action, "four-")
+	}
+	if strings.HasPrefix(action, "eight-") {
+		prefixes = 6
+		action = strings.TrimPrefix(action, "eight-")
+	}
+	count := prefixes + 2
 	off := strings.HasSuffix(action, "-off")
 	action = strings.TrimSuffix(action, "-off")
-	peer, password, connectCA, serverName, observe := windowsCONNECTPeerStart(t, mode, protocol)
+	peer, password, connectCA, serverName, observe := windowsCONNECTPeerStart(t, mode, protocol, prefixes)
 	windowsSOCKSTrust(t, peer.reply.PublicCA)
 	if protocol == "https-connect" && action != "tls-trust" {
 		windowsSOCKSTrust(t, connectCA)
@@ -265,7 +280,7 @@ func TestWindowsCONNECTLauncher(t *testing.T) {
 	var ready windowsCONNECTInspection
 	if !negative {
 		response = call("GET", "/api/native-connect/inspect", nil)
-		if response.Status != 200 || json.Unmarshal(response.Body, &ready) != nil || off && ready.KillSwitchPolicy != "off" || !ready.Connected || !ready.OriginalSources || ready.PublicConnectCalls != 1 || !ready.PublicProfileCapability || ready.MeasurementRows != 3 || ready.Proof == nil || ready.Proof.Kind != "routervpn-node-chain-connect-ready-v1" {
+		if response.Status != 200 || json.Unmarshal(response.Body, &ready) != nil || off && ready.KillSwitchPolicy != "off" || !ready.Connected || !ready.OriginalSources || ready.PublicConnectCalls != 1 || !ready.PublicProfileCapability || ready.MeasurementRows != count || ready.Proof == nil || ready.Proof.Kind != "routervpn-node-chain-connect-ready-v1" {
 			t.Fatal("typed actual proof/measurement", response.Status, string(response.Body))
 		}
 	}
@@ -274,24 +289,34 @@ func TestWindowsCONNECTLauncher(t *testing.T) {
 			windowsOrderedOffStatusAdapter(t, ctx, root)
 		}
 		beforeFifty := observe("stats")
-		receipts, err := desktopOrderedLatencyNativeRoundTrip(ctx, func(callCtx context.Context, method, path string, body []byte) (int, []byte, error) {
+		receipts, err := desktopOrderedLatencyNativeRoundTripPositions(ctx, func(callCtx context.Context, method, path string, body []byte) (int, []byte, error) {
 			response, err := client.Request(callCtx, method, path, body, 1<<20)
 			return response.Status, response.Body, err
-		})
-		if err != nil || len(receipts) != 3 {
+		}, desktopCONNECTInstalledFiftyPositions(count))
+		if err != nil || len(receipts) != desktopCONNECTInstalledFiftyCount(count) {
 			t.Fatal("installed Windows ordered fifty", err)
 		}
 		afterFifty := observe("stats")
-		if len(beforeFifty.Prefixes) != 1 || len(afterFifty.Prefixes) != 1 || afterFifty.Prefixes[0].ProofQueries < beforeFifty.Prefixes[0].ProofQueries+50 || afterFifty.Middle.PublicQueries < beforeFifty.Middle.PublicQueries+50 || afterFifty.Final.RouterQueries < beforeFifty.Final.RouterQueries+50 || afterFifty.Final.DirectQueries != 0 {
+		if len(beforeFifty.Prefixes) != prefixes || len(afterFifty.Prefixes) != prefixes || (prefixes == 1 && afterFifty.Prefixes[0].ProofQueries < beforeFifty.Prefixes[0].ProofQueries+50) || afterFifty.Middle.PublicQueries < beforeFifty.Middle.PublicQueries+50 || afterFifty.Final.RouterQueries < beforeFifty.Final.RouterQueries+50 || afterFifty.Final.DirectQueries != 0 {
 			t.Fatal("ordered fifty omitted independently routed original prefix responses", beforeFifty, afterFifty)
 		}
 	}
 	before := observe("stats")
-	if len(before.Prefixes) != 1 || before.Prefixes[0].Mode != mode || before.Prefixes[0].RawUDP == 0 || before.Prefixes[0].ProofQueries == 0 || before.Middle.Method != protocol {
+	if len(before.Prefixes) != prefixes || before.Prefixes[0].Mode != mode || before.Prefixes[0].RawUDP == 0 || before.Prefixes[0].ProofQueries == 0 || before.Middle.Method != protocol {
 		t.Fatal("typed path did not reach original independently encrypted first", before)
 	}
-	if before.Protocol != protocol || before.FinalUOTVersion != 2 || before.Middle.RawUDP != 0 || before.Middle.UDP != 0 || before.Final.FinalRawUDP != 0 || before.Prefixes[0].UDP != 0 || before.Final.DirectQueries != 0 {
+	if before.Protocol != protocol || before.FinalUOTVersion != 2 || before.Middle.RawUDP != 0 || before.Middle.UDP != 0 || before.Final.FinalRawUDP != 0 || before.Prefixes[prefixes-1].UDP != 0 || before.Final.DirectQueries != 0 {
 		t.Fatal("CONNECT acquired a packet relay or bypassed the original final UoT-v2 owner", before)
+	}
+	if !negative {
+		if before.Final.DNSQueries == 0 || before.Final.RouterQueries == 0 || before.Final.FinalPublicQueries == 0 {
+			t.Fatal("CONNECT omitted selected DNS/private/public proof")
+		}
+		for position, prefix := range before.Prefixes {
+			if prefix.Mode != peer.requests[position].Mode || prefix.RawUDP == 0 || prefix.TCP == 0 || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 || (position < prefixes-1 && prefix.UDP == 0) {
+				t.Fatal("CONNECT omitted original encrypted prefix", position, prefix)
+			}
+		}
 	}
 	switch action {
 	case "wrong-middle-key":

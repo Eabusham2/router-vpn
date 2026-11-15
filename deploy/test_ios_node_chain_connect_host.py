@@ -57,7 +57,7 @@ final class LibboxRouterNodeChainCONNECT {
 }
 final class IOSNodeChainCONNECTCapture:@unchecked Sendable {
  struct Member{let id:String}
- let members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]
+ let members:[Member]
  let plan=LibboxRouterNodeChainCONNECT(),config="exact-preparation"
  private let lock=NSLock()
  var runGate:DispatchSemaphore?,healthGate:DispatchSemaphore?,healthEntered=DispatchSemaphore(value:0)
@@ -66,7 +66,7 @@ final class IOSNodeChainCONNECTCapture:@unchecked Sendable {
  var bindHook:(()->Void)?
  private var closed=false,cancelled=false,nativeReceipt=false,ran=false,reserved=false
  private(set) var server:LibboxCommandServer?
- init(){plan.owner=self}
+ init(count:Int=3){members=(0..<(count-2)).map{Member(id:$0==0 ? "entry":"prefix-\($0)")}+[Member(id:"middle"),Member(id:"final")];plan.owner=self}
  func requireCurrent()throws{lock.lock();let good = !closed;lock.unlock();if !good{throw failure("closed capture")}}
  func bindNative(_ server:LibboxCommandServer)throws{
   bindHook?()

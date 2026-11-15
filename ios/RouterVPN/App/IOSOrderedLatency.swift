@@ -23,7 +23,7 @@ import Combine
             guard path[1].mode == "socks5", Data(original.source.utf8) == active else { throw CancellationError() }
             source = original.plan.sourceSHA256(); config = original.plan.configSHA256(); ids = original.members.map(\.id)
         case .connect(let original):
-            guard ["http-connect", "https-connect"].contains(path[1].mode), Data(original.source.utf8) == active else { throw CancellationError() }
+            guard path.count >= 3, ["http-connect", "https-connect"].contains(path[path.count - 2].mode), Data(original.source.utf8) == active else { throw CancellationError() }
             source = original.plan.sourceSHA256(); config = original.plan.configSHA256(); ids = original.members.map(\.id)
         case .ordinary(let original):
             guard original.selectionExecution == "local", Data(original.launchInput.utf8) == active else { throw CancellationError() }

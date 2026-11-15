@@ -150,6 +150,28 @@ static void ordinary_validation(App *app) {
     }
 }
 
+static void connect_validation(App *app) {
+    JsonArray *cases = json_object_get_array_member(json_node_get_object(fixture), "connect");
+    check(json_array_get_length(cases) == 6, "all bounded CONNECT path lengths");
+    for (guint index = 0; index < json_array_get_length(cases); index++) {
+        JsonObject *item = json_array_get_object_element(cases, index);
+        JsonArray *receipts = json_object_get_array_member(item, "receipts");
+        int count = (int)json_array_get_length(receipts);
+        LinuxOrderedLatencyV1 *s = panel(app); freeze(s);
+        reply(s->jobs[OL_INFO_V1], 200, fixture_copy(json_object_get_member(item, "info"))); linux_ol_tick_v1(s);
+        check(s->capture != NULL && !s->invalid && (int)json_array_get_length(json_node_get_array(s->nodes)) == count, "whole CONNECT inventory admitted by shipping GTK callback");
+        GtkTreeModel *model = gtk_combo_box_get_model(GTK_COMBO_BOX(s->hops));
+        check(gtk_tree_model_iter_n_children(model, NULL) == count, "all CONNECT hops appear in actual GTK chooser");
+        start(s, count-2);
+        JsonNode *terminal = status(s, "complete", TRUE, TRUE, FALSE), *saved = fixture_copy(json_array_get_element(receipts, count-2));
+        json_object_set_string_member(json_node_get_object(saved), "request_id", s->request);
+        json_object_set_member(json_node_get_object(terminal), "receipt", saved);
+        check(linux_ol_receive_v1(s, json_node_get_object(terminal), FALSE), "CONNECT penultimate hop durable receipt accepted");
+        check(s->complete && s->drained && json_array_get_length(json_node_get_array(s->history)) == 2, "CONNECT penultimate hop history changes only after native drain");
+        json_node_free(terminal);finish_jobs(s);dispose(s);
+    }
+}
+
 static void selected_validation(App *app) {
     JsonArray *cases = json_object_get_array_member(json_node_get_object(fixture), "selected");
     check(json_array_get_length(cases) == 16, "all selected GTK path fixtures retained");
@@ -226,7 +248,7 @@ int main(int argc,char **argv) {
     gtk_init(&argc,&argv);curl_global_init(CURL_GLOBAL_DEFAULT);App app={gtk_window_new(GTK_WINDOW_TOPLEVEL),"exit-a"};gtk_widget_show_all(app.window);
 #ifndef ROUTERVPN_ORDERED_LIVE
     check(argc==2,"fixture JSON supplied");char *text=NULL;check(g_file_get_contents(argv[1],&text,NULL,NULL),"read fixture");fixture=parse_json(text);g_free(text);check(fixture!=NULL,"fixture JSON valid");records=g_ptr_array_new();
-    validation(&app);ordinary_validation(&app); selected_validation(&app);cancellation(&app);checked_parent_shutdown=TRUE;gtk_widget_destroy(app.window);pump();
+    validation(&app);ordinary_validation(&app);connect_validation(&app); selected_validation(&app);cancellation(&app);checked_parent_shutdown=TRUE;gtk_widget_destroy(app.window);pump();
     for(guint i=0;i<records->len;i++){Record*r=g_ptr_array_index(records,i);check(r->freed,"every original HTTP worker released");g_free(r->path);g_free(r->body);g_free(r);}g_ptr_array_free(records,TRUE);json_node_free(fixture);
 #else
     check(argc==2,"live scenario supplied");live(&app,argv[1]);gtk_widget_destroy(app.window);pump();

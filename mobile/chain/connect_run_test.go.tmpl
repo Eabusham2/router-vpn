@@ -41,6 +41,7 @@ import (
 )
 
 type connectRunReply struct {
+	Samples      []uint64        `json:"samples"`
 	Schema       int             `json:"schema"`
 	Source       string          `json:"source,omitempty"`
 	SourceSHA256 string          `json:"source_sha256"`
@@ -70,6 +71,10 @@ type connectRunPeer struct {
 }
 
 func connectRunStartPeer(t *testing.T, mode, protocol, fault string) *connectRunPeer {
+	return connectRunStartPeerPrefixes(t, mode, protocol, fault, 0)
+}
+
+func connectRunStartPeerPrefixes(t *testing.T, mode, protocol, fault string, prefixes int) *connectRunPeer {
 	t.Helper()
 	image := os.Getenv("ROUTERVPN_CONNECT_RUN_PEER")
 	if !filepath.IsAbs(image) {
@@ -122,7 +127,7 @@ func connectRunStartPeer(t *testing.T, mode, protocol, fault string) *connectRun
 			t.Error("original encrypted peer did not join", err)
 		}
 	})
-	if err = json.NewEncoder(input).Encode(map[string]any{"schema": 1, "mode": mode, "protocol": protocol, "fault": fault}); err != nil {
+	if err = json.NewEncoder(input).Encode(map[string]any{"schema": 1, "mode": mode, "protocol": protocol, "fault": fault, "prefixes": prefixes}); err != nil {
 		t.Fatal(err)
 	}
 	p.original = p.reply(t)
@@ -257,7 +262,7 @@ func connectRunNative(t *testing.T, p *connectRunPeer) (*connectBridgeNativeFixt
 	x509.SetFallbackRoots(roots)
 	f := connectBridgeNativeReserved(t, owner)
 	_, meta, err := owner.source.ReadValidated()
-	if err != nil || len(meta.Physical) != 1 || len(meta.Proofs) != 3 {
+	if err != nil || len(meta.Physical) != 1 || len(meta.Proofs) < 3 || len(meta.Proofs) > mobilemultihop.NodeChainMaximumNodes {
 		t.Fatal("complete typed source missing", err)
 	}
 	physical := meta.Physical[0]
@@ -299,6 +304,14 @@ func connectRunNative(t *testing.T, p *connectRunPeer) (*connectBridgeNativeFixt
 		return &connectRunEndpoint{native}, nil
 	}
 	endpoint.Register[option.WireGuardEndpointOptions](ends, C.TypeWireGuard, func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
+		if tag != meta.Proofs[0].Tag {
+			for i := 1; i < len(meta.Proofs)-2; i++ {
+				if tag == meta.Proofs[i].Tag && o.Detour == meta.Proofs[i-1].Tag {
+					return WG.NewEndpoint(ctx, r, l, tag, o)
+				}
+			}
+			return nil, errors.New("uncaptured additional WG prefix")
+		}
 		ctx, err := contextFor(ctx, tag)
 		if err != nil {
 			return nil, err
@@ -310,6 +323,14 @@ func connectRunNative(t *testing.T, p *connectRunPeer) (*connectBridgeNativeFixt
 		return capture(WG.NewEndpoint(ctx, r, l, tag, o))
 	})
 	endpoint.Register[AWG.Options](ends, mobilemultihop.AmneziaType, func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o AWG.Options) (adapter.Endpoint, error) {
+		if tag != meta.Proofs[0].Tag {
+			for i := 1; i < len(meta.Proofs)-2; i++ {
+				if tag == meta.Proofs[i].Tag && o.Detour == meta.Proofs[i-1].Tag {
+					return AWG.NewEndpoint(ctx, r, l, tag, o)
+				}
+			}
+			return nil, errors.New("uncaptured additional AWG prefix")
+		}
 		ctx, err := contextFor(ctx, tag)
 		if err != nil {
 			return nil, err

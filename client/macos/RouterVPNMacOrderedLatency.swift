@@ -33,7 +33,7 @@ struct RouterVPNOrderedLatencyNode: Decodable, Equatable {
     var timingLabel: String { kind == "private-node" ? "HTTP response including connection" : "HTTPS response after TLS" }
     func receiptLabel(count: Int, execution: String = "ordinary") -> String {
         let prefix = execution == "ordinary" ? "Cumulative path" : "Cumulative \(execution) path"
-        return kind == "public-path" ? "\(prefix) through custom node 2 of 3 → Cloudflare edge" : "\(prefix) through node \(position + 1) of \(count)"
+        return kind == "public-path" ? "\(prefix) through custom node \(position + 1) of \(count) → Cloudflare edge" : "\(prefix) through node \(position + 1) of \(count)"
     }
     func receiptKind(count: Int) -> String? {
         ["ordinary", "local", "server"].first { label == receiptLabel(count: count, execution: $0) }
@@ -43,7 +43,7 @@ struct RouterVPNOrderedLatencyNode: Decodable, Equatable {
         let isPublic = kind == "public-path"
         guard RouterVPNOrderedCapture.text(node_id), RouterVPNOrderedCapture.text(label, maximum: 256),
               (2...8).contains(count), position >= 0, position < count, role == expectedRole, receiptKind(count: count) != nil,
-              kind == "private-node" || isPublic && count == 3 && position == 1,
+              kind == "private-node" || isPublic && count >= 3 && position == count - 2,
               measurement == (isPublic ? "routed-https-response-after-tls" : "routed-private-response-including-connection") else {
             throw orderedLatencyIssue("A measured hop changed its original position or timing method.")
         }

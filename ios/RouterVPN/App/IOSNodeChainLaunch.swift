@@ -54,7 +54,7 @@ extension IOSRuntimeSelector {
             return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: original.members[2].mode,
                                        files: [:], nodeChainInput: original.source)
         case .connect(let original):
-            return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: original.members[2].mode,
+            return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: original.members[original.members.count - 1].mode,
                                        files: [:], nodeChainInput: original.source)
         }
     }

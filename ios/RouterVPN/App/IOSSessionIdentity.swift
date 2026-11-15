@@ -32,7 +32,9 @@ struct IOSSessionIdentity: Equatable, Sendable {
                   !nodeChainSource.isEmpty, nodeChainSource.count <= 40 * 1024 * 1024,
                   let source = try JSONSerialization.jsonObject(with: nodeChainSource) as? [String: Any],
                   (source["kind"] as? String == "routervpn-node-chain-launch-input" ||
-                   [3, 4].contains(source["schema"] as? Int ?? 0) && Set(source.keys) == Set(["schema", "execution", "nodes", "identity_sources"]) && (source["nodes"] as? [String])?.count == 3), source["execution"] as? String == "local",
+                   Set(source.keys) == Set(["schema", "execution", "nodes", "identity_sources"]) &&
+                   (source["schema"] as? Int == 3 && (source["nodes"] as? [String])?.count == 3 ||
+                    source["schema"] as? Int == 4 && (3...8).contains((source["nodes"] as? [String])?.count ?? 0))), source["execution"] as? String == "local",
                   source["projection_kind"] == nil, source["session_id"] == nil, source["target_os"] == nil, source["restored_mtu"] == nil,
                   let nodes = source["nodes"] as? [String], (2...8).contains(nodes.count) else { throw Self.invalid() }
         } else if engine == "multihop-libbox" || engine == "external-libbox" && entryBundleData != nil {

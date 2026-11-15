@@ -109,6 +109,25 @@ TESTS = r'''
    try editMiddle{$0.routerProfiles[0].external?.httpsConnect?.password="relinked-password"}
    try reject("typed CONNECT editor cannot reuse relinked private source"){try model.saveIOSNodeChain(selection,owner:stale)}
   }
+  for count in 4...8 {
+   IOSNodeBundleStore.shared.records=[:]
+   var nodes=try sources(count),custom=try sources(3,false,"",true)[1]
+   custom.selectedRouterID="custom-long";custom.routerProfiles[0].id=custom.selectedRouterID
+   nodes[count-2]=custom
+   nodes[count-1].routerProfiles[0].multihopNodes=nodes.enumerated().map{.init(id:$0.element.selectedRouterID,mode:$0.offset==count-2 ? "https-connect":$0.offset==count-1 ? "shadowsocks":"wg")}
+   nodes[count-1]=try JSONDecoder().decode(ClientBundle.self,from:Data(LibboxTestCONNECTService(String(decoding:JSONEncoder().encode(nodes[count-1]),as:UTF8.self)).utf8))
+   let model=RouterVPNModel();model.bundle=nodes.last!
+   for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
+   let owner=try model.captureIOSNodeChainEditorOwner()
+   var draft=IOSNodeChainDraft(saved:model.selectedNodeProfile!.multihopNodes,finalID:owner.controlID)
+   try check("CONNECT longer editor complete original path",draft.canSave)
+   try draft.move(from:0,to:count-3)
+   try model.saveIOSNodeChain(draft.nodes,owner:owner)
+   let capture=try model.captureIOSOrderedRoute(model.bundle!);defer{try? capture.close()}
+   let selected=try IOSRuntimeSelector.selectNodeChain(capture)
+   try check("CONNECT longer editor preserves final dispatch",selected.rawProfileID=="shadowsocks" && capture.members.count==count && capture.members[count-2].id==custom.selectedRouterID && capture.members.last?.id==owner.controlID)
+   if count<8 {try draft.append();try check("CONNECT append preserves penultimate selected source",draft.nodes[draft.nodes.count-2].id==custom.selectedRouterID && !draft.canSave)}
+  }
   try visibleCONNECT()
   for mode in ["wg","awg2-fast","awg2-strong"] {
    let model=try setup(3,false,mode),owner=try model.captureIOSNodeChainEditorOwner()
@@ -164,7 +183,8 @@ TESTS = r'''
    var firstRole=selection;firstRole[1].id="other-middle";firstRole[0].id=middle.id
    try check("visible CONNECT excludes first "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:firstRole,position:0).isEmpty)
    var four=selection;four.insert(.init(id:"other-prefix",mode:"wg"),at:1)
-   try check("visible CONNECT excludes longer path "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:four,position:2).isEmpty)
+   try check("visible CONNECT retains penultimate longer path "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:four,position:2).contains(where:{$0.id==middle.id})==eligible)
+   try check("visible CONNECT rejects earlier longer position "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:four,position:1).isEmpty)
    var duplicate=selection;duplicate[0].id=middle.id
    try check("visible CONNECT excludes reused selected source "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:duplicate,position:1).isEmpty)
    try check("visible CONNECT unique original source "+label,IOSNodeChainEditorVisible.unique([middle,middle]).isEmpty)
@@ -344,7 +364,7 @@ def main(selected_mutations=None):
             ('compile-before-save', editor.replace(compile_source, '        _ = value', 1), 'ACCEPTED invalid draft prefix-mode'),
             ('visible-connect-eligibility', editor.replace('IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile) || (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))\n    }','IOSImportedShadowsocksSource.eligible(profile)\n    }',1), 'visible CONNECT eligibility auth'),
             ('visible-connect-mode', editor.replace('return [profile.external?.protocolName ?? ""]','return ["shadowsocks"]',1), 'visible CONNECT mode auth'),
-            ('visible-middle-position', editor.replace('nodes.count == 3 && position == 1 && nodes.last?.mode == "shadowsocks") &&','true) &&',1), 'visible CONNECT excludes first auth'),
+            ('visible-middle-position', editor.replace('IOSMultihopNodeSelection.supportsImportedMiddle(profile.external?.protocolName ?? "", position: position, count: nodes.count) && nodes.last?.mode == "shadowsocks") &&','true) &&',1), 'visible CONNECT excludes first auth'),
             ('visible-source-admission', editor.replace('actualHash == expectedHash else','!expectedHash.isEmpty else',1), 'visible CONNECT original source admission auth'),
             ('visible-unique-source', editor.replace('profiles.filter({ $0.id == profile.id }).count == 1','!profile.id.isEmpty',1), 'visible CONNECT unique original source auth'),
         )

@@ -15,7 +15,9 @@ class NativeCONNECTMTUValidator(unittest.TestCase):
  def test_exact_inventory_preserves_original_mtu(self):
   self.assertEqual((len(V.NATIVE_ROOTS),len(V.NATIVE_CASES),len(V.WRAPPER_ROOTS),len(V.WRAPPER_CASES)),(9,21,7,13))
   self.assertEqual((len(V.PRESERVED_TYPED),len(V.PRESERVED_BOX),len(V.PRESERVED_CONTROLS)),(64,45,19))
-  self.assertEqual((len(V.BASE.VERDICTS),len(V.BASE.ORIGINAL_BOX),len(V.BASE.CONTROLS)),(77,66,34))
+  self.assertEqual((len(V.BASE.VERDICTS),len(V.BASE.ORIGINAL_BOX),len(V.BASE.CONTROLS)),(77,77,34))
+  self.assertEqual(len(V.PREFIX_CASES),11)
+  self.assertEqual(P.TEMPLATES[V.PREFIX_TEMPLATE],V.PREFIX_PROJECTION)
   self.assertIn("TestRouterNodeChainSOCKSExportedFactoryRetainsTypedOwner", V.PRESERVED_TYPED)
   for names in (V.BASE.VERDICTS,V.BASE.ORIGINAL_BOX,[c['name'] for c in V.BASE.CONTROLS]):self.assertEqual(len(names),len(set(names)))
  def test_all_phases_keep_original_bounds_and_scope(self):
@@ -23,6 +25,8 @@ class NativeCONNECTMTUValidator(unittest.TestCase):
    f=F.Composition(Path(directory));f.validator=V.validate;r=f.run()
    self.assertEqual(len(f.calls),49);self.assertEqual(len(r['controls']),34);self.assertEqual(len(r['owner_controls']),4)
    self.assertTrue(r['native_connect_mtu_component_accepted'])
+   self.assertTrue(r['native_connect_prefix_mtu_component_accepted'])
+   self.assertEqual(r['prefix_connect_mtu_cases'],list(V.PREFIX_CASES))
    for key in ('encrypted_connect_run_accepted','public_mtu_constructor_accepted','physical_mtu_accepted','generated_sdk_accepted','installed_native_accepted','public_native_admission','successful_run_accepted'):self.assertFalse(r[key],key)
    for name,cmd,bound in f.calls:
     if name in {c['name'] for c in V.BASE.CONTROLS}:self.assertEqual(bound,600);self.assertIn('-timeout=90s',cmd);self.assertIn('-race',cmd)
@@ -42,7 +46,7 @@ class NativeCONNECTMTUValidator(unittest.TestCase):
      with self.assertRaises(ValueError):V.BASE.require_events(bad,status,package,c['cases'],c)
  def test_missing_or_duplicate_cases_refused(self):
   with patch.object(F,'V',V.BASE):
-   for package,names in ((V.BASE.BOX,V.NATIVE_CASES),(V.BASE.LIBBOX,V.WRAPPER_CASES)):
+   for package,names in ((V.BASE.BOX,V.NATIVE_CASES),(V.BASE.LIBBOX,V.WRAPPER_CASES),(V.BASE.BOX,V.PREFIX_CASES)):
     rows=F.events(package,names);V.BASE.require_events(F.encoded(rows),0,package,names)
     for name in names:
      missing=[r for r in rows if not(r.get('Test')==name and r.get('Action')=='pass')]

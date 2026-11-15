@@ -75,7 +75,11 @@ final class AndroidOrderedPathSelection {
 
     List<String> prefixModes(String id) throws Exception {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
-        if(source.imported){if(members.size()==2&&!members.get(0).source.imported&&"shadowsocks".equals(members.get(1).mode))result.add(AndroidExternalPolicy.protocol(source.external().protocol));}
+        if(source.imported){
+            String mode=AndroidExternalPolicy.protocol(source.external().protocol);boolean connect="http-connect".equals(mode)||"https-connect".equals(mode);
+            boolean paired=true;for(Member member:members)paired&=!member.source.imported;
+            if(members.size()>=2&&members.size()<8&&(connect||members.size()==2)&&paired&&"shadowsocks".equals(members.get(members.size()-1).mode))result.add(mode);
+        }
         else for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
         requireCurrent();return Collections.unmodifiableList(result);
     }
@@ -139,9 +143,11 @@ final class AndroidOrderedPathSelection {
         AndroidNodeStore.ChainSource source=catalog.source(id);
         if(source.imported&&!"shadowsocks".equals(members.get(members.size()-1).mode))throw new IllegalStateException("An imported middle requires its paired Shadowsocks 2022 final.");
         requirePrefixMode(source,mode);
-        members.add(members.size()-1,new Member(source,mode));
+        int position=members.size()-1;
+        if(!source.imported&&members.size()>=3&&members.get(members.size()-2).source.imported&&List.of("http-connect","https-connect").contains(members.get(members.size()-2).mode))position--;
+        members.add(position,new Member(source,mode));
         try { requireBound(); }
-        catch(Exception failure) { members.remove(members.size()-2);throw failure; }
+        catch(Exception failure) { members.remove(position);throw failure; }
     }
 
     void setPrefixMode(int position,String mode) throws Exception {

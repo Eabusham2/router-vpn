@@ -1,0 +1,66 @@
+package box
+
+import (
+	"fmt"
+	"testing"
+)
+
+// The actual Box/manager/continuation owns every captured prefix. Kernel TUN
+// and physical-source observations remain the explicit existing component
+// boundaries; full proof and real encrypted transport are separate gates.
+func TestRouterVPNNodeChainCONNECTPrefixMTUOriginalContinuation(t *testing.T) {
+	for _, count := range []int{2, 6} {
+		for _, scenario := range []string{"candidate", "rollback", "unchanged", "foreign-operation", "retired-source"} {
+			t.Run(fmt.Sprintf("%d-%s", count, scenario), func(t *testing.T) {
+				source := connectMTUSourcePrefixes(t, count, "wg", "http-connect", "")
+				f := newCONNECTMTUFixtureSource(t, source)
+				ctx, p, m := connectMTUBegin(t, f)
+				candidate, rollback := connectMTUNewReader("prefix-candidate", 73, 1300), connectMTUNewReader("prefix-rollback", 74, 1280)
+				candidate.startFailure.Store(scenario == "rollback")
+				target := 1300
+				if scenario == "unchanged" {
+					target = 1280
+				}
+				attempts := 0
+				if scenario == "foreign-operation" {
+					foreign, _ := connectMTUOperation(t)
+					if _, err := m.changeContext(foreign, f.tun, target, connectMTUAcquire(f, candidate, rollback, &attempts)); err == nil || attempts != 0 {
+						t.Fatal("long CONNECT path lost original MTU operation")
+					}
+				}
+				value, err := m.changeContext(ctx, f.tun, target, connectMTUAcquire(f, candidate, rollback, &attempts))
+				if scenario == "rollback" {
+					if err == nil || value != rollback {
+						t.Fatal("long CONNECT rollback lost native owner", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if m.step == nil || !m.step.joined || m.Current() != value {
+					t.Fatal("long CONNECT path lost joined native reader")
+				}
+				if scenario == "retired-source" {
+					f.current.Store(false)
+					if _, err = m.ResumeContext(ctx, f.observe); err == nil {
+						t.Fatal("long CONNECT retired source issued a proof continuation")
+					}
+					f.current.Store(true)
+				}
+				next, err := m.ResumeContext(ctx, f.observe)
+				if err != nil || next == nil {
+					t.Fatal("long CONNECT path failed original reproof handoff", err)
+				}
+				p.engine = next
+				if _, err = next.ObserveChainContext(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = f.engine.ObserveChainContext(ctx); err == nil {
+					t.Fatal("long CONNECT stale engine retained proof authority")
+				}
+				if err = m.FinishContext(ctx); err != nil || m.RetainsCleanup() {
+					t.Fatal("long CONNECT path lost original joined cleanup", err)
+				}
+			})
+		}
+	}
+}

@@ -624,6 +624,13 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         nativePrefixModes.contains(mode)
     }
 
+    /// Position availability only; the original native compiler remains authoritative.
+    static func supportsImportedMiddle(_ mode: String, position: Int, count: Int) -> Bool {
+        guard (3...maximumNodes).contains(count), position == count - 2 else { return false }
+        if ["http-connect", "https-connect"].contains(mode) { return true }
+        return count == 3 && ["shadowsocks", "socks5", "openvpn"].contains(mode)
+    }
+
     static func transportName(_ mode: String) -> String {
         switch mode {
         case "wg": return "WireGuard"

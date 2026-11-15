@@ -16,13 +16,36 @@ import (
 // scenarios. The caller supplies its original protected/local controller
 // transport; no replacement VPN, profile, proxy or endpoint is constructed.
 func desktopOrderedLatencyNativeRoundTrip(ctx context.Context, call func(context.Context, string, string, []byte) (int, []byte, error)) ([]hopmeasure.OrderedLatencyReceipt, error) {
+	return desktopOrderedLatencyNativeRoundTripPositions(ctx, call, nil)
+}
+
+// A nil selector retains the complete original matrix. Installed CONNECT4/8
+// cases select only the captured penultimate public and final private rows;
+// the independent encrypted matrix owns fifty samples at every prefix.
+func desktopOrderedLatencyNativeRoundTripPositions(ctx context.Context, call func(context.Context, string, string, []byte) (int, []byte, error), positions []int) ([]hopmeasure.OrderedLatencyReceipt, error) {
 	status, raw, err := call(ctx, http.MethodGet, "/api/speed-lab/ordered-latency", nil)
 	var info desktopOrderedLatencyView
 	if err != nil || status != 200 || decodeRelayControlJSON(raw, &info) != nil || info.Schema != 1 || len(info.Nodes) < 2 || len(info.Nodes) > 8 {
 		return nil, errors.Join(err, errors.New("installed ordered fifty lacks its actual captured API"))
 	}
+	if positions == nil {
+		for i := range info.Nodes {
+			positions = append(positions, i)
+		}
+	}
+	previous := -1
+	for _, position := range positions {
+		if position <= previous || position < 0 || position >= len(info.Nodes) {
+			return nil, errors.New("installed fifty lost finite original positions")
+		}
+		previous = position
+	}
+	if len(positions) == 0 {
+		return nil, errors.New("installed fifty requires captured positions")
+	}
 	receipts := []hopmeasure.OrderedLatencyReceipt{}
-	for position, node := range info.Nodes {
+	for _, position := range positions {
+		node := info.Nodes[position]
 		nonce, err := randomHex(16)
 		if err != nil {
 			return nil, err
@@ -90,4 +113,17 @@ func desktopOrderedLatencyNativeRoundTrip(ctx context.Context, call func(context
 		}
 	}
 	return receipts, nil
+}
+
+func desktopCONNECTInstalledFiftyPositions(count int) []int {
+	if count == 4 || count == 8 {
+		return []int{count - 2, count - 1}
+	}
+	return nil
+}
+func desktopCONNECTInstalledFiftyCount(count int) int {
+	if count == 4 || count == 8 {
+		return 2
+	}
+	return count
 }

@@ -19,12 +19,14 @@ BOUNDARY=r'''
 '''
 CASES=r'''
    let realNodes=try bundles.map{try JSONDecoder().decode(ClientBundle.self,from:$0)}
-   let identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[2],configuration:["nodeChainCONNECTSource":capture.source])
+   let identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[finalPosition],configuration:["nodeChainCONNECTSource":capture.source])
    let model=RouterVPNModel(realNodes,identity:identity),fifty=try IOSOrderedLatencyCapture(model)
    try check("fifty exact source/config/member capture",fifty.source==capture.plan.sourceSHA256() && fifty.config==capture.plan.configSHA256() && fifty.ids==capture.members.map(\.id))
    try fifty.require(model)
-   model.nodes[1].routerProfiles[0].name="edited private saved record"
-   try reject("fifty complete source change"){try fifty.require(model)}
+   for position in realNodes.indices {
+    model.nodes=realNodes;model.nodes[position].routerProfiles[0].name="edited private saved record"
+    try reject("fifty complete source change"){try fifty.require(model)}
+   }
    try reject("fifty initial current source"){_ = try IOSOrderedLatencyCapture(model)}
    model.nodes=realNodes;model.iosConnectGeneration=UUID()
    try reject("fifty original app generation"){try fifty.require(model)}

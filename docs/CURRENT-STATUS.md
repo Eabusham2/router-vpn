@@ -8,9 +8,48 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## November 15: original scope and bounded desktop additions
 
+### Longer Local CONNECT paths
+
+The schema-4 CONNECT composition now retains one to six original paired
+WireGuard/AWG prefixes, one HTTP or verified-TLS HTTPS CONNECT penultimate
+member, and an independent paired Shadowsocks 2022 UoT-v2 final. This extends
+that specific Local path from three to eight total nodes. The shared source,
+native owner and physical projection retain every original paired identity,
+credential, device/DNS policy and proof. The imported CONNECT member remains
+TCP-only; the original final owns the UoT-v2 transport. Other imported-middle
+families keep their existing bounds, and this change does not admit Server,
+Compare, arbitrary imported positions, or multiple imported members.
+
+Android and iOS capture, editors, complete saved profiles, startup, session
+identity and ordered measurement history adopt the same bounded graph.
+Windows, AppKit and GTK editors and measurement history do likewise. Existing
+restoration retains the already-proved execution choice. The Mac measurement
+transport's separate position-0-through-7 correction is published in
+`44e6b98b`.
+
+The local source gate passed all nineteen attempts: 372 positive execution
+records and ten required causal controls. Its new source inventory contains
+seventy unique records, including every length, original-pointer substitution
+refusal and loss of each retained prefix proof. The original fourteen source
+attempts remain required. Mobile and desktop executable source/model checks
+are recorded in the November 15 evidence ledger; they do not establish
+physical-device or native-widget acceptance.
+
+Release validation now requires the source gate at the same workflow SHA.
+The encrypted gate preserves its original sixty-nine phases and additionally
+requires thirty-six grouped path/measurement invocations, eight refusal
+invocations and the IPv6 contrast. Each grouped invocation proves the full
+path and measures two positions with fifty samples each; the complete matrix
+covers every position of four- and eight-node paths for both CONNECT protocols
+and all three WG/AWG modes. The native MTU gate also requires eleven new
+original-owner continuation records. Installed desktop gates require actual
+four- and eight-node paths and their captured penultimate/final measurements.
+These mandatory gates remain distinct from local focused execution, published
+packages, physical-device acceptance and private deployment.
+
 The [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md)
-records the recovered original requirements and newer published source through
-`a1d8811f`: macOS prefix-only candidate controls with purpose-safe dialog
+records the recovered original requirements and the earlier additions through
+`a1d8811f`, followed by subsequent source and gate corrections: macOS prefix-only candidate controls with purpose-safe dialog
 ownership, atomic native descriptor transfer, the measured Compare test oracle,
 Linux/Windows ordinary OpenVPN-entry to independent SS2022-final hosts,
 macOS ordered Off ownership, the corrected macOS final-policy baseline ID,

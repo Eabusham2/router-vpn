@@ -52,14 +52,14 @@ func deriveDesktopNodeChainCONNECTPolicy(original *NodeChainCONNECTSource, input
 		return bad()
 	}
 	config, originalMeta, err := original.ReadValidated()
-	if err != nil || len(originalMeta.Proofs) != 3 || len(originalMeta.Devices) != 3 {
+	if err != nil || len(originalMeta.Proofs) != len(original.pair.nodes)+1 || len(originalMeta.Devices) != len(originalMeta.Proofs) {
 		return bad()
 	}
-	projectedConfig, err := projectNodeChainTUN(config, original.pair.nodes[1].profile, inputs.targetOS, inputs.restoredMTU)
+	projectedConfig, err := projectNodeChainTUN(config, original.pair.nodes[len(original.pair.nodes)-1].profile, inputs.targetOS, inputs.restoredMTU)
 	if err != nil {
 		return bad()
 	}
-	finalCapture, err := original.pair.nodes[1].DesktopCapture()
+	finalCapture, err := original.pair.nodes[len(original.pair.nodes)-1].DesktopCapture()
 	if err != nil {
 		return bad()
 	}
@@ -91,7 +91,7 @@ func deriveDesktopNodeChainCONNECTPolicy(original *NodeChainCONNECTSource, input
 	if err != nil {
 		return bad()
 	}
-	final := originalMeta.Proofs[2]
+	final := originalMeta.Proofs[len(originalMeta.Proofs)-1]
 	meta := DesktopNodeChainCONNECTMetadata{
 		Kind: "routervpn-desktop-node-chain-connect",
 		DesktopNodeChainMetadata: DesktopNodeChainMetadata{

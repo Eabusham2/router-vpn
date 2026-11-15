@@ -42,12 +42,14 @@ import (
 // The separate process reuses the original peer providers. Its only client
 // input is a finite mode/fault choice; it cannot proxy an arbitrary target.
 type nodeCONNECTRunRequest struct {
+	Prefixes int    `json:"prefixes,omitempty"`
 	Schema   int    `json:"schema"`
 	Mode     string `json:"mode"`
 	Protocol string `json:"protocol"`
 	Fault    string `json:"fault"`
 }
 type nodeCONNECTRunReply struct {
+	Samples      []uint64                      `json:"samples"`
 	Schema       int                           `json:"schema"`
 	Source       string                        `json:"source,omitempty"`
 	SourceSHA256 string                        `json:"source_sha256"`
@@ -201,8 +203,19 @@ func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
 			fmt.Fprintln(os.Stdout, "CONNECT_RUN_PEER_JOINED")
 		}
 	})
-	request, clients := desktopNodeChainPeerFixture(t, 1)
-	desktopNodeChainSetModes(t, &request, []string{input.Mode})
+	prefixCount := input.Prefixes
+	if prefixCount == 0 {
+		prefixCount = 1
+	}
+	if prefixCount < 1 || prefixCount > 6 {
+		t.Fatal("CONNECT prefix count outside captured bound")
+	}
+	request, clients := desktopNodeChainPeerFixture(t, prefixCount)
+	modes := make([]string, prefixCount)
+	for i := range modes {
+		modes[i] = input.Mode
+	}
+	desktopNodeChainSetModes(t, &request, modes)
 	finalKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -231,9 +244,27 @@ func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
 		},
 	}
 	middleKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, 32))
-	fixtureRequest := desktopNodeChainImportedRequest{1, request, mobilemultihop.NativeStartLayerMethod, middleKey}
+	lastRequest := request
+	lastRequest.Prefixes = append([]desktopNodeChainPrefixRequest(nil), request.Prefixes[prefixCount-1:]...)
+	fixtureRequest := desktopNodeChainImportedRequest{1, lastRequest, mobilemultihop.NativeStartLayerMethod, middleKey}
 	loopback := netip.MustParseAddr("127.0.0.1")
 	peer := desktopNodeChainImportedPeerStartWithHooks(t, fixtureRequest, loopback, loopback, nil, hooks)
+	var complete *desktopNodeChainPeer
+	if prefixCount > 1 {
+		ipcs, err := desktopNodeChainPeerIdentityBounds(request, 1, 6)
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete = &desktopNodeChainPeer{prefixes: make([]*desktopNodeChainPrefixPeer, prefixCount), final: peer.paired}
+		complete.prefixes[prefixCount-1] = peer.prefix
+		desktopNodeChainStartCapturedPrefixes(t, request, loopback, loopback, complete, ipcs, prefixCount-2)
+		clear(ipcs)
+	}
+	physicalAddress := peer.paired.address
+	if complete != nil {
+		physicalAddress = complete.prefixes[0].bind.address()
+	}
+
 	peer.paired.final.streamRouter = UOT.NewRouter(&desktopImportedCONNECTRouter{server: peer.paired.final}, log.NewNOPFactory().Logger())
 	// Only the exact TCP CONNECT endpoint is reachable through the first prefix.
 	delete(peer.paired.entry.rules, "tcp/10.79.0.1:8388")
@@ -359,20 +390,41 @@ func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
 	if input.Fault == "middle-public" {
 		peer.wrongPublic.Store(true)
 	}
-	socket := netip.MustParseAddrPort(peer.paired.address)
+	socket := netip.MustParseAddrPort(physicalAddress)
 	sourceRequest := request
 	if input.Fault == "final-token" {
 		sourceRequest.FinalAPIToken = "different-final-private-token"
 	}
-	base := desktopNodeChainImportedSource(t, sourceRequest, clients, net.JoinHostPort(request.Address, strconv.Itoa(int(socket.Port()))), mobilemultihop.NativeStartLayerMethod, middleKey, identity)
+	base := desktopNodeChainPeerSource(t, sourceRequest, clients, net.JoinHostPort(request.Address, strconv.Itoa(int(socket.Port()))))
 	launch, err := base.LaunchInput()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var source mobilemultihop.NodeChainSource
 	if json.Unmarshal([]byte(launch), &source) != nil {
-		t.Fatal("original captured source vanished")
+		t.Fatal("original complete paired source vanished")
 	}
+	source.IdentitySources = make([]string, len(source.Nodes)+1)
+	for i, prefix := range request.Prefixes {
+		private, err := base64.StdEncoding.DecodeString(prefix.PrivateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, err := ecdh.X25519().NewPrivateKey(private)
+		clear(private)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, client := desktopNodeChainInner(i, prefixCount)
+		target := desktopNodeChainNext(i)
+		if i == 0 {
+			target = net.JoinHostPort(request.Address, strconv.Itoa(int(socket.Port())))
+		}
+		text := fmt.Sprintf("[Interface]\nAddress=%s/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", client, clients[i], base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()), prefix.PreSharedKey, target)
+		source.IdentitySources[i] = desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(text))})
+	}
+	source.IdentitySources[prefixCount+1] = identity
+	source.Nodes = append(append(append([]string(nil), source.Nodes[:prefixCount]...), ""), source.Nodes[prefixCount])
 	secret := password
 	if input.Fault == "middle-password" {
 		secret += "-wrong"
@@ -402,7 +454,7 @@ func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
 	if err != nil {
 		t.Fatal("original CONNECT member", err)
 	}
-	source.Schema, source.Nodes[1] = 4, middle
+	source.Schema, source.Nodes[prefixCount] = 4, middle
 	var final struct {
 		Mode         string `json:"mode"`
 		Files        string `json:"files"`
@@ -410,7 +462,7 @@ func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
 		Start        string `json:"start"`
 		DNSBootstrap string `json:"dns_bootstrap"`
 	}
-	if json.Unmarshal([]byte(source.Nodes[2]), &final) != nil {
+	if json.Unmarshal([]byte(source.Nodes[prefixCount+1]), &final) != nil {
 		t.Fatal("original final member vanished")
 	}
 	var assets map[string]string
@@ -443,7 +495,7 @@ func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source.Nodes[2], err = finalNode.LaunchInput()
+	source.Nodes[prefixCount+1], err = finalNode.LaunchInput()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,9 +522,19 @@ func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
 		associations += len(peer.paired.final.connections)
 		peer.paired.final.mu.Unlock()
 		peerReply := peer.snapshot()
+		if complete != nil {
+			peerReply.Prefixes = complete.snapshot().Prefixes
+		}
 		peerReply.Middle.Method = input.Protocol
-		reply := nodeCONNECTRunReply{Schema: 1, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Address: peer.paired.address,
+		reply := nodeCONNECTRunReply{Schema: 1, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Address: physicalAddress,
 			Peer: peerReply, DNS: selectedQueries.Load(), PublicDNS: publicQueries.Load(), FinalAuth: finalAuth.Load(), HeldProofs: heldProofs.Load(), Associations: associations, MiddleAuth: provider.auth.Load(), TLSRefused: provider.tlsRefused.Load()}
+		reply.Samples = make([]uint64, prefixCount+2)
+		for i := 0; i < prefixCount-1; i++ {
+			reply.Samples[i] = complete.prefixes[i].measuredHealth.Load()
+		}
+		reply.Samples[prefixCount-1] = peer.measuredFirstHealth.Load()
+		reply.Samples[prefixCount] = peerReply.Middle.DownloadBytes
+		reply.Samples[prefixCount+1] = peer.paired.measuredHealth.Load()
 		if include {
 			reply.Source = original
 			reply.PublicCA = peer.paired.ca

@@ -46,6 +46,11 @@ func newNodeChainCONNECTRuntimeFixture(t *testing.T, mode string, protocols ...s
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newNodeChainCONNECTRuntimeSourceFixture(t, source)
+}
+
+func newNodeChainCONNECTRuntimeSourceFixture(t *testing.T, source *NodeChainCONNECTSource) (*NodeChainCONNECTRuntime, *nodeChainCONNECTTestEngine) {
+	t.Helper()
 	runtime, err := NewNodeChainCONNECTRuntime(source)
 	if err != nil {
 		t.Fatal(err)
@@ -112,12 +117,12 @@ func (e *nodeChainCONNECTTestEngine) Dial(ctx context.Context, tag, address stri
 			return conn, err
 		}
 	}
-	if tag == e.chain.proofs[1].Tag {
+	if tag == e.chain.proofs[len(e.chain.proofs)-2].Tag {
 		if address != "1.1.1.1:443" && address != hopmeasure.PublicAddress {
 			return nil, errors.New("CONNECT middle cannot adopt a private proof target")
 		}
 		e.mu.Lock()
-		dead := e.dead == 1
+		dead := e.dead == len(e.chain.proofs)-2
 		e.mu.Unlock()
 		if dead {
 			return nil, errors.New("original CONNECT middle route stopped")

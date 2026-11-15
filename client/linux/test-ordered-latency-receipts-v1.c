@@ -55,6 +55,23 @@ int main(int argc, char **argv) {
         JsonObject *first = json_array_get_object_element(nodes, 0);
         check(!linux_ol_node_v1(first, 0, 1) && !linux_ol_node_v1(first, 0, 9), "bounded path inventory");
     }
+    JsonArray *connect = json_object_get_array_member(root, "connect");
+    check(json_array_get_length(connect) == 6, "all six CONNECT path counts");
+    for (guint c=0;c<6;c++) {
+        int count=c+3, position=count-2;
+        JsonObject *fixture=json_array_get_object_element(connect,c), *view=json_object_get_object_member(fixture,"info");
+        JsonObject *node=json_array_get_object_element(json_object_get_array_member(view,"nodes"),position);
+        JsonObject *saved=json_array_get_object_element(json_object_get_array_member(fixture,"receipts"),position);
+        JsonObject *owner=json_object_get_object_member(view,"capture");
+        check(linux_ol_node_v1(node,position,count),"CONNECT bounded penultimate row");
+        check(linux_ol_receipt_v1(saved,owner,node,count,TRUE) && linux_ol_receipt_v1(saved,owner,node,count,FALSE),"CONNECT current and saved fifty receipt");
+        for(int other=0;other<count;other++)if(other!=position){
+            JsonNode *copy=fixture_copy(json_array_get_element(json_object_get_array_member(view,"nodes"),position));
+            JsonObject *bad=json_node_get_object(copy);char label[160];g_snprintf(label,sizeof(label),"Cumulative path through custom node %d of %d → Cloudflare edge",other+1,count);
+            json_object_set_int_member(bad,"position",other);json_object_set_string_member(bad,"role",other==0?"entry":other==count-1?"exit":"intermediate");json_object_set_string_member(bad,"label",label);
+            check(!linux_ol_node_v1(bad,other,count),"CONNECT public row must remain penultimate");json_node_free(copy);
+        }
+    }
     JsonObject *info = json_object_get_object_member(root, "info"), *capture = json_object_get_object_member(info, "capture");
     JsonArray *nodes = json_object_get_array_member(info, "nodes");
     for (int position = 0; position < 3; position++) {

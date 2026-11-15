@@ -118,6 +118,37 @@ for count in [1,9] {
     check(owner.controller.requestClose(),"refused inventory joined");owner.controller.stop()
 }
 
+// Every CONNECT prefix count retains its original public penultimate receipt.
+for count in 3...8 {
+    let middle=count-2, owner=Driver()
+    var rows=pairedNodes(count), publicNode=nodes[1]
+    publicNode["position"]=middle;publicNode["node_id"]="node-\(middle)"
+    publicNode["label"]="Cumulative path through custom node \(middle+1) of \(count) → Cloudflare edge"
+    rows[middle]=publicNode
+    func saved(_ request:String)->[String:Any] {
+        var value=receipt(request,1), result=value["result"] as! [String:Any]
+        value["position"]=middle;value["node_id"]=publicNode["node_id"]!
+        result["node_id"]=publicNode["node_id"]!;result["label"]=publicNode["label"]!;value["result"]=result
+        return value
+    }
+    owner.controller.open();var info=response();info["nodes"]=rows;info["history"]=[saved(String(repeating:"e",count:32))]
+    try owner.jobs[0].reply(info);owner.pump()
+    check(owner.controller.canRetest && owner.controller.nodes.count == count,"CONNECT bounded inventory \(count)")
+    let capture=try decoded(info).capture,node=try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(publicNode))
+    for current in [false,true] {try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(saved(String(repeating:"e",count:32)))).validate(capture:capture,node:node,count:count,current:current,now:fixedNow);checks += 1}
+    for position in 0..<count where position != middle {
+        var misplaced=publicNode;misplaced["position"]=position;misplaced["role"]=position == 0 ? "entry" : position == count-1 ? "exit" : "intermediate"
+        misplaced["label"]="Cumulative path through custom node \(position+1) of \(count) → Cloudflare edge"
+        rejected("CONNECT public row must remain penultimate") {try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(misplaced)).validate(count:count)}
+    }
+    var stale=saved(String(repeating:"e",count:32));stale["generation_sha256"]=String(repeating:"f",count:64)
+    rejected("CONNECT current result cannot borrow replacement generation") {try JSONDecoder().decode(RouterVPNOrderedLatencyReceipt.self,from:raw(stale)).validate(capture:capture,node:node,count:count,current:true,now:fixedNow)}
+    owner.controller.retest(position:middle);let request=owner.controller.requestID
+    try owner.jobs.last!.reply(response(request,position:middle,stage:"complete",saved:saved(request)));owner.pump()
+    check(owner.controller.drained && owner.controller.history.contains(where:{$0.position == middle && $0.request_id == request}),"CONNECT original callback committed fifty receipt \(count)")
+    check(owner.controller.requestClose(),"CONNECT complete owner joins");owner.controller.stop()
+}
+
 // Receipt meanings remain separate, exact-fifty and tied to their original path.
 let cap = try decoded(response()).capture
 check(RouterVPNOrderedCapture.session(cap.session_id),"tracker session remains its real opaque format")
@@ -283,6 +314,7 @@ print("PASS \(checks) shipping ordered-fifty checks")
 '''
 
 CONTROLS = {
+    "connect_three_only": ("isPublic && count >= 3 && position == count - 2", "isPublic && count == 3 && position == 1"),
     "selected_labels": ('["ordinary", "local", "server"].first', '["ordinary"].first'),
     "selected_receipt": ('result.label == node.label', 'true'),
     "mixed_inventory": ('Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1', 'true'),

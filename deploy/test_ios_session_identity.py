@@ -81,6 +81,17 @@ reject("typed source cannot borrow legacy pair"){_ = try captured(["nodeChainSOC
 let connect=String(decoding:try JSONSerialization.data(withJSONObject:["schema":4,"execution":"local","nodes":["first","connect-middle","final"],"identity_sources":["first-identity","","final-identity"]]),as:UTF8.self)
 let connected=try captured(["nodeChainCONNECTSource":connect],"multihop-libbox","shadowsocks")
 try check("CONNECT session retains original complete source",connected.nodeChainSource==Data(connect.utf8) && connected != typed && connected != ordered)
+for count in 2...9 {
+ let input=String(decoding:try JSONSerialization.data(withJSONObject:["schema":4,"execution":"local","nodes":(0..<count).map{"source-\($0)"},"identity_sources":(0..<count).map{$0 == count-2 ? "" : "identity-\($0)"}]),as:UTF8.self)
+ if (3...8).contains(count) {
+  let owner=try captured(["nodeChainCONNECTSource":input],"multihop-libbox","shadowsocks")
+  try check("bounded CONNECT exact complete session source",owner.nodeChainSource==Data(input.utf8) && owner != connected)
+ } else { reject("CONNECT session source bounds"){_ = try captured(["nodeChainCONNECTSource":input],"multihop-libbox","shadowsocks") } }
+ if count != 3 {
+  let foreign=input.replacingOccurrences(of:"\"schema\":4",with:"\"schema\":3")
+  reject("SOCKS session remains exactly three members"){_ = try captured(["nodeChainSOCKSSource":foreign],"multihop-libbox","shadowsocks")}
+ }
+}
 for extra in [["nodeChainSource":connect],["nodeChainSOCKSSource":connect],["nodeChainCONNECTSource":socks],["nodeChainCONNECTSource":chain],["nodeChainCONNECTSource":connect,"nodeChainSOCKSSource":socks],["nodeChainCONNECTSource":connect,"nodeChainSource":chain]] {
  reject("CONNECT source discriminator cannot borrow another owner"){_ = try captured(extra,"multihop-libbox","shadowsocks")}
 }

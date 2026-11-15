@@ -282,8 +282,21 @@ func startLinuxNodeChainPeer(t *testing.T, modes []string) *linuxNodeChainPeer {
 	return startLinuxNodeChainPeerFinal(t, modes, false)
 }
 
-func startLinuxNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *linuxNodeChainPeer {
+func startLinuxNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool, scenarios ...string) *linuxNodeChainPeer {
 	t.Helper()
+	scenario := ""
+	if len(scenarios) > 1 {
+		t.Fatal("installed peer acquired multiple case owners")
+	}
+	if len(scenarios) == 1 {
+		scenario = scenarios[0]
+		original, _, err := linuxNodeChainScenario(scenario)
+		if err != nil || fmt.Sprint(original) != fmt.Sprint(modes) {
+			t.Fatal("installed peer case replaced captured modes", err)
+		}
+	}
+	budgets := linuxCONNECTInstalledBudget(scenario)
+
 	directory, err := os.MkdirTemp("/opt", "routervpn-node-chain-peer-")
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +308,7 @@ func startLinuxNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *
 	if hysteria {
 		linuxNodeChainHysteriaCredentials(t, peer)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), budgets.peerContext)
 	root, child := "TestRouterVPNDesktopNodeChainReferenceProcess", "ROUTERVPN_NODE_CHAIN_REFERENCE_CHILD=1"
 	if peer.middlePassword != "" {
 		root, child = "TestRouterVPNDesktopNodeChainImportedMiddleReferenceProcess", "ROUTERVPN_NODE_CHAIN_IMPORTED_REFERENCE_CHILD=1"
@@ -309,7 +322,7 @@ func startLinuxNodeChainPeerFinal(t *testing.T, modes []string, hysteria bool) *
 	if hysteria {
 		root, child = "TestRouterVPNDesktopNodeChainHysteriaReferenceProcess", "ROUTERVPN_NODE_CHAIN_HYSTERIA_REFERENCE_CHILD=1"
 	}
-	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image, "-test.run=^"+root+"$", "-test.count=1", "-test.timeout=115s")
+	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image, "-test.run=^"+root+"$", "-test.count=1", "-test.timeout="+budgets.peerTest.String())
 	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", child}
 	inputRead, inputWrite, err := os.Pipe()
 	if err != nil {
@@ -508,7 +521,7 @@ type linuxNodeChainHostResult struct {
 
 func (process *linuxHostTUNController) readNodeChain(t *testing.T, scenario string) linuxNodeChainHostResult {
 	t.Helper()
-	if err := process.output.SetReadDeadline(time.Now().Add(75 * time.Second)); err != nil {
+	if err := process.output.SetReadDeadline(time.Now().Add(linuxCONNECTInstalledBudget(scenario).read)); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := process.reader.ReadSlice('\n')
@@ -528,7 +541,7 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 		t.Fatal(err)
 	}
 	count := len(modes) + 1
-	peer := startLinuxNodeChainPeerFinal(t, modes, strings.HasPrefix(scenario, "node-chain-hy2-"))
+	peer := startLinuxNodeChainPeerFinal(t, modes, strings.HasPrefix(scenario, "node-chain-hy2-"), scenario)
 	installLinuxNodeChainProfiles(t, peer, action)
 	if strings.HasPrefix(action, "prefix-candidates-") {
 		linuxHostTUNPrefixCandidateParent(t, installed, scenario, action, modes, peer)
@@ -593,11 +606,15 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 			linuxNodeChainImportedPositiveCounters(t, before)
 		}
 		if peer.middleSOCKS || peer.middleCONNECT != "" {
-			if len(result.FiftyReceipts) != 3 || before.Prefixes[0].ProofQueries < 50 || before.Middle == nil || before.Middle.PublicQueries < 50 || before.Final.RouterQueries < 50 || before.Final.DirectQueries != 0 {
+			if len(result.FiftyReceipts) != desktopCONNECTInstalledFiftyCount(count) || (count == 3 && before.Prefixes[0].ProofQueries < 50) || before.Middle == nil || before.Middle.PublicQueries < 50 || before.Final.RouterQueries < 50 || before.Final.DirectQueries != 0 {
 				t.Fatal("installed typed fifty omitted independently routed complete receipts", result, before)
 			}
 			for position, saved := range result.FiftyReceipts {
-				if saved.Position != position || validateDesktopOrderedReceipt(saved, time.Now()) != nil {
+				expectedPosition := position
+				if peer.middleCONNECT != "" && count > 3 {
+					expectedPosition = count - 2 + position
+				}
+				if saved.Position != expectedPosition || validateDesktopOrderedReceipt(saved, time.Now()) != nil {
 					t.Fatal("installed typed fifty returned invalid saved prefix", position)
 				}
 			}
@@ -684,7 +701,7 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 	if err := os.Setenv("SSL_CERT_FILE", filepath.Join(linuxOwnedControllerRoot, "node-chain-peer-ca.pem")); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), linuxCONNECTInstalledBudget(scenario).operation)
 	defer cancel()
 	if action == "candidates-save" || action == "candidates-cancel" || strings.HasPrefix(action, "prefix-candidates-") {
 		return linuxHostTUNPreparedCandidateFixture(ctx, a, controller, gate, scenario, action)
@@ -787,13 +804,13 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 			sessionTrackerFor(a).snapshot(0)
 			mux := http.NewServeMux()
 			registerSpeedLabRoutes(mux, a)
-			result.FiftyReceipts, err = desktopOrderedLatencyNativeRoundTrip(ctx, func(call context.Context, method, path string, body []byte) (int, []byte, error) {
+			result.FiftyReceipts, err = desktopOrderedLatencyNativeRoundTripPositions(ctx, func(call context.Context, method, path string, body []byte) (int, []byte, error) {
 				response := httptest.NewRecorder()
 				request := httptest.NewRequest(method, path, bytes.NewReader(body)).WithContext(call)
 				mux.ServeHTTP(response, request)
 				return response.Code, response.Body.Bytes(), call.Err()
-			})
-			if err != nil || len(result.FiftyReceipts) != 3 {
+			}, desktopCONNECTInstalledFiftyPositions(count))
+			if err != nil || len(result.FiftyReceipts) != desktopCONNECTInstalledFiftyCount(count) {
 				return errors.Join(err, errors.New("installed Linux ordered fifty failed original API/history"))
 			}
 		}

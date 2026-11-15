@@ -1114,7 +1114,7 @@ prove these behaviors merely because a filename or string is present.
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
 | 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and bounded Windows/Linux/macOS single paired Router hosts with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin paired source now includes actual installed parent/child composition; its new native gate has not yet passed at this cutoff. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
-| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members; typed CONNECT uses a fixed three-member composition at this cutoff. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
+| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT addition below extends that typed family to 3–8 members with one penultimate CONNECT node; other imported families retain their existing bounds. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |
@@ -1282,3 +1282,129 @@ independently fails the exact `owned ephemeral tuple rejected` witness.
 All ten runner tests passed. The frozen source hashes, patch and executable
 log are retained in `windows-peer-owned-tuple-validation`; these portable
 assertion results do not establish Windows peer, WFP or installed acceptance.
+
+## Longer Local CONNECT paths: source, native ownership and consumers
+
+This continuation extends the existing schema-4 Local graph to one through
+six original paired WG/AWG prefixes, an original literal HTTP/HTTPS CONNECT
+penultimate member, and an independent paired SS2022 UoT-v2 final: three
+through eight total members. It addresses part of the original 214–224 and
+later external-hop scope without redefining those requirements as this one
+graph family. Broader protocols, placements, layers, execution choices and
+platform/device acceptance remain separately accountable.
+
+The compiler removes only the CONNECT member before validating every paired
+member through the existing canonical WG/AWG key, node/proof and duplicate
+identity checks. Its integrity receipt and physical proof scope keep each
+original node and closure pointer. All captured MTU ceilings, resolver
+detours, IPv6/LAN restrictions, protection and final DNS policy continue
+through the original graph. Only the first original prefix obtains physical
+network authority. Native lifecycle, proof observation, cancellation,
+retirement and typed MTU continuation use dynamically located original
+owners; they do not substitute a parallel tunnel or a new restore operation.
+
+The Android/iOS source capture, editors, saved connection profiles, startup,
+session identity, connected measurement and retained history now preserve
+all members. The iOS saved-profile path had two independent three-member
+checks; both now use the same bounded imported-position rule. A new fixture
+initializes its extra paired member through the existing saved-preference
+normalizer so exact pre/post source comparison remains intact. No production
+normalization rule was relaxed. Windows/AppKit/GTK selection, persistence and
+measurement history adopt the same placement rule; other imported middles
+remain bounded to their existing three-member composition. Native desktop
+editors can add, reorder and remove paired prefixes, retain the selected
+final, and validate the complete path before applying it.
+
+### Focused local evidence and preserved failures
+
+The actual Go 1.26.3 race-instrumented source execution passed nineteen
+attempts, 372 positive execution records and ten causal controls. Its new
+seventy-record inventory is split into three thirteen-record transport
+matrices and one thirty-three-record ownership/runtime phase. The shared
+matrix root therefore executes three times, giving seventy-two new positive
+execution records without adding duplicate requirements. The original
+fourteen source attempts and nine controls remain intact. Removing the
+original physical-prefix pointer guard makes the exact retained rejection
+test fail with its required witness. Source hashes were checked before and
+after every attempt.
+
+The first combined new source phase exceeded the existing 120-second test
+budget while still processing its matrix. That failed log is retained;
+splitting the same exact inventory permits each bounded phase to complete
+without increasing the test or process timeout. A longest-path encrypted
+attempt also reached its original 170-second peer lifetime while measuring
+four positions serially. The final fixture measures two positions per
+invocation and requires all positions across the complete matrix. An earlier
+failed sample remains recorded as an unreproduced observation, not a claimed
+production fix. No UDP lifetime, proof deadline or production timeout was
+changed to obtain a pass.
+
+Focused encrypted execution on the final prepared native image passed the
+eight-member HTTP/WG path with fifty samples at positions 0/1, and the
+eight-member HTTPS/AWG Strong path with fifty samples at positions 4/5 and
+6/7. These invocations prove the complete path, every required private/public
+identity and selected DNS before measurement, then require original joined
+cleanup. The two HTTPS/AWG Strong invocations completed in 88.36 and 130.13
+seconds under the existing bounds. All eight new bad-credential, final-key,
+final-token, selected-DNS, public-exit, held-prefix, TLS-trust and TLS-name
+refusals passed. The original three-member HTTP/WG encrypted smoke passed
+as well. The final gate parser independently accepted all twelve focused
+invocations and their twenty-four exact records. The separate IPv6 contrast
+passed three records and native MTU continuation passed eleven. The full
+thirty-six-group encrypted matrix is still a mandatory exact-SHA CI result,
+not inferred from this focused subset.
+
+Local source/model checks include actual shared-Go parsing, shipping Swift,
+Java, PowerShell and C behavior with the native boundaries identified by each
+fixture. The iOS long-path Add/Load checks passed 900 assertions and three
+causal controls; its connected fifty-sample fixture passed 1,206 assertions
+and three controls. The complete OpenVPN saved-profile regression retained
+its six existing protocol/mode variants. Desktop validation includes 7,216
+Mac profile/editor assertions with forty-five controls, 880 Windows editor
+assertions with ten controls, and 2,859 Linux model/serialization/persistence
+assertions with ten controls. These counts describe executable checks, not
+completed user requirements or accepted physical platforms. Windows WPF was
+not available locally, and the local GTK display attempt could not create
+its required Unix socket. Actual native widgets remain hosted gates.
+
+Exact per-file preimages and frozen mobile/desktop files were checked against
+published `44e6b98bfbcefe0bceb6e8089598237edac7d659`. Local source receipts and
+historical failed logs are retained in `connect-prefix-validation`;
+consumer manifests and executable evidence are in
+`mobile-connect-prefix-validation` and `desktop-connect-prefix-validation`.
+
+### Mandatory release evidence
+
+The authoritative release now requires `typed-connect-source` at the same
+workflow SHA alongside its existing runtime, encrypted, MTU and desktop-child
+gates. The encrypted composition preserves the original sixty-nine phases
+and appends thirty-six full-path grouped positives, eight refusal phases,
+and the IPv6 contrast. For HTTP and HTTPS, WG, AWG Fast and AWG Strong, and
+two/six paired prefixes, every ordered position is measured once with fifty
+samples in a complete independently proved path. Missing, failed, skipped,
+unjoined, source-changed or image-changed observations prevent acceptance.
+The existing 150-minute job bound is unchanged.
+
+The native MTU composition retains its original inventories and controls
+and adds eleven records for candidate, rollback, unchanged, foreign-operation
+and retired-source behavior at both depths. Installed Windows/macOS/Linux
+tests additionally require a four-node HTTP/WG path and an eight-node HTTPS/WG
+path, full path/DNS/proof ownership, joined retirement, and fifty-sample
+measurements at the penultimate public and final private positions. Their
+original three-node cases and measurements remain required. No local source
+receipt stands in for those actual host tests, exact-SHA packaged delivery,
+physical devices, signing, or private server/router deployment.
+
+The two new Linux installed scenarios have a separate finite test envelope.
+The observed 130.13-second successful deep-path component measurement cannot
+fit the old 65-second whole-test operation allowance, even before the
+installed all-member 8 MiB measurement exchange. Only the exact four-node
+HTTP/WG and eight-node HTTPS/WG scenario names select the additional time:
+210 seconds for the controller operation, 220 for its parent read, 230 for
+the controller process, 240/245 for the peer test/process, 250/265 for the
+namespace test/process, and 280 for the outer installed case. Every old case
+keeps its original 65/75/85/115/120/120/135/150-second hierarchy. The peer
+also reparses the original scenario and requires its exact captured modes.
+Production request, proof, worker, cancellation and ownership limits are
+unchanged. Executable selector/command checks and five causal controls
+require this exact boundary; the allowance itself is not an installed pass.

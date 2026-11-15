@@ -74,7 +74,7 @@ enum IOSNodeChainPresentation {
                    (position == nodes.count - 1 ? node.mode == "shadowsocks" || node.mode == "hysteria2" &&
                     ["", "off"].contains(profile.startLayer ?? "") &&
                     points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode)) ||
-                   nodes.count == 3 && position == 1 && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile)))) else { return nil }
+                   IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count) && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile)))) else { return nil }
             points.append(IOSNodePathPoint(profile, mode: node.mode))
         }
         return points
@@ -166,9 +166,9 @@ enum IOSNodeChainPresentation {
         guard !source.isEmpty, source.count <= 40 * 1024 * 1024, !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024,
               let root = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
               Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]), root["schema"] as? Int == 4,
-              root["execution"] as? String == "local", let inputs = root["nodes"] as? [String], inputs.count == 3,
-              let identities = root["identity_sources"] as? [String], identities.count == 3,
-              !identities[0].isEmpty, identities[1].isEmpty, !identities[2].isEmpty,
+              root["execution"] as? String == "local", let inputs = root["nodes"] as? [String], (3...8).contains(inputs.count),
+              let identities = root["identity_sources"] as? [String], identities.count == inputs.count,
+              identities.enumerated().allSatisfy({ $0.offset == inputs.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }),
               let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
               bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
               let control = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) else { return nil }
@@ -176,7 +176,7 @@ enum IOSNodeChainPresentation {
         for (position, input) in inputs.enumerated() {
             guard let member = try? JSONDecoder().decode(Member.self, from: Data(input.utf8)), member.schema == 1 else { return nil }
             let profile: RouterProfile, mode: String
-            if position == 1 {
+            if position == inputs.count - 2 {
                 guard member.kind == "routervpn-node-chain-connect-member", let raw = member.capture,
                       let capture = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
                       let saved = capture["profile"], let data = try? JSONSerialization.data(withJSONObject: saved),
@@ -209,7 +209,7 @@ enum IOSNodeChainPresentation {
                   response.doubleValue.isFinite, response.doubleValue > 0 else { return nil }
             let role = position == 0 ? "Entry" : position == expected.count - 1 ? "Exit" : "Hop \(position)"
             let publicPath = row["kind"] as? String == "public-path"
-            guard row["kind"] == nil || publicPath && expected.count == 3 && position == 1 || row["kind"] as? String == "private-node" else { return nil }
+            guard row["kind"] == nil || publicPath && expected.count >= 3 && position == expected.count - 2 || row["kind"] as? String == "private-node" else { return nil }
             lines.append(String(format: publicPath ? "%@ · %@: public path via custom node %.1f ms" : "%@ · %@: verification HTTP response %.1f ms", role, expected[position], response.doubleValue))
         }
         if rows.count < expected.count { lines.append("Verified \(rows.count) of \(expected.count) nodes") }

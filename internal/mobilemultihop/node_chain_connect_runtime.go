@@ -40,7 +40,7 @@ func NewNodeChainCONNECTRuntime(source *NodeChainCONNECTSource) (*NodeChainCONNE
 	}
 	chain := &NodeChain{
 		sourceJSON: source.sourceJSON, sourceSHA: meta.SourceSHA256, config: config,
-		nodes:         []*NodeProfile{source.pair.nodes[0], nil, source.pair.nodes[1]},
+		nodes:         source.runtimeNodes(),
 		connectSource: source, proofs: meta.Proofs, dns: meta.DNS, physical: meta.Physical,
 		originalConfigSHA: source.originalConfigSHA256(), projection: source.runtimeProjection(),
 	}
@@ -54,6 +54,16 @@ func NewNodeChainCONNECTRuntime(source *NodeChainCONNECTSource) (*NodeChainCONNE
 	return &NodeChainCONNECTRuntime{source: source, chain: chain}, nil
 }
 
+// runtimeNodes preserves every original paired pointer and one empty imported
+// position. The runtime never reconstructs a same-content substitute owner.
+func (s *NodeChainCONNECTSource) runtimeNodes() []*NodeProfile {
+	if s == nil || s.pair == nil || len(s.pair.nodes) < 2 {
+		return nil
+	}
+	nodes := append([]*NodeProfile(nil), s.pair.nodes[:len(s.pair.nodes)-1]...)
+	return append(nodes, nil, s.pair.nodes[len(s.pair.nodes)-1])
+}
+
 func (c *NodeChain) validateCONNECTSource() error {
 	if c == nil || c.connectSource == nil || c.importedMiddle != nil || c.openVPNMiddle != nil || c.socksSource != nil {
 		return nodeChainCONNECTSourceError
@@ -64,9 +74,13 @@ func (c *NodeChain) validateCONNECTSource() error {
 		c.config != config || c.originalConfigSHA != source.originalConfigSHA256() ||
 		c.projection != source.runtimeProjection() || c.dns != meta.DNS ||
 		!reflect.DeepEqual(c.proofs, meta.Proofs) || !reflect.DeepEqual(c.physical, meta.Physical) ||
-		len(c.nodes) != 3 || c.nodes[0] != source.pair.nodes[0] ||
-		c.nodes[1] != nil || c.nodes[2] != source.pair.nodes[1] {
+		len(c.nodes) != len(source.pair.nodes)+1 {
 		return nodeChainCONNECTSourceError
+	}
+	for i, node := range source.runtimeNodes() {
+		if c.nodes[i] != node {
+			return nodeChainCONNECTSourceError
+		}
 	}
 	return nil
 }

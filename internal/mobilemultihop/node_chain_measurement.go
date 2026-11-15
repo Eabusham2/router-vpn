@@ -51,13 +51,16 @@ func (c *NodeChain) NewHopMeasurementContext(ctx context.Context, owner NodeChai
 			role = "exit"
 		}
 		node := c.nodes[position]
-		if position == 1 && c.hasImportedMiddle() {
-			hops[position] = hopmeasure.Hop{ID: proof.ProfileID, Role: role, Tag: proof.Tag, Kind: "public-path", Label: "Cumulative path through custom node 2 of 3 → Cloudflare edge"}
+		if position == c.importedMiddlePosition() {
+			hops[position] = hopmeasure.Hop{ID: proof.ProfileID, Role: role, Tag: proof.Tag, Kind: "public-path", Label: fmt.Sprintf("Cumulative path through custom node %d of %d → Cloudflare edge", position+1, len(c.proofs))}
 			continue
 		}
 		hops[position] = hopmeasure.Hop{ID: proof.ProfileID, Role: role, Tag: proof.Tag,
 			API: predecessorText(node.profile, "router_api"), Token: predecessorText(node.profile, "api_token"), Proof: proof.NodeID,
 			Kind: "private-node", Label: fmt.Sprintf("Cumulative path through node %d of %d", position+1, len(c.proofs))}
+	}
+	if c.connectSource != nil {
+		return hopmeasure.NewOrderedCONNECTPrefixContext(ctx, engine, hops)
 	}
 	if c.hasImportedMiddle() {
 		return hopmeasure.NewOrderedImportedMiddleContext(ctx, engine, hops)
@@ -128,7 +131,7 @@ func (e *nodeChainMeasurementEngine) Dial(ctx context.Context, tag, address stri
 	}
 	allowed := false
 	for position, proof := range e.source.proofs {
-		if position == 1 && e.source.hasImportedMiddle() {
+		if position == e.source.importedMiddlePosition() {
 			if proof.Tag == tag && address == hopmeasure.PublicAddress {
 				allowed = true
 			}

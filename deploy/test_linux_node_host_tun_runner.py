@@ -304,9 +304,9 @@ class InstalledNodeChainHostGate(unittest.TestCase):
                           for protocol in ('http', 'https') for action in (
                               'wrong-middle-key', 'wrong-middle-user', 'wrong-middle-public',
                               'final-dns-failure', 'final-node-failure', 'middle-source', 'prefix-lost'))
-        expected += ('node-chain-connect-https-wg-wrong-middle-sni', 'node-chain-connect-https-wg-wrong-middle-trust')
+        expected += ('node-chain-connect-https-wg-wrong-middle-sni', 'node-chain-connect-https-wg-wrong-middle-trust', 'node-chain-connect-http-wg-four-connect', 'node-chain-connect-https-wg-eight-connect')
         self.assertEqual(G.NODE_CHAIN_CONNECT_HOST_CASES, expected)
-        self.assertEqual(len(expected), 22)
+        self.assertEqual(len(expected), 24)
         self.assertEqual(G.CASES[:-len(G.EXTERNAL_ALL_OFF_CASES)][-len(expected):], expected)
         self.assertFalse(set(expected) & set(G.NODE_CHAIN_HOST_CASES + G.NODE_CHAIN_SOCKS_HOST_CASES))
         source = (G.ROOT / 'cmd/client/desktop_node_chain_connect_linux_tun_native_test.go').read_text()
@@ -398,6 +398,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
                 'awg-fast-awg-strong-wg-4-nodes', 'awg-strong-wg-awg-fast-4-nodes')),
             G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT, *(G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg2-fast', 'awg2-strong')),
             G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT, *(G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT + '/' + protocol + '/' + mode for protocol in ('http', 'https') for mode in ('wg', 'awg2-fast', 'awg2-strong')),
+            *(G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT+'/'+name for name in ('http/wg-four','https/wg-eight')),
             G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT,
             *(G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '/' + name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong')),
             G.PREFIX_HOST_AUTHORITY_ROOT, *(G.PREFIX_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg-fast', 'awg-strong')),
@@ -1550,6 +1551,67 @@ class InstalledLinuxWarmReuse(unittest.TestCase):
                 with self.subTest(arch=arch, failure=type(failure).__name__): self.exercise_warm_build(arch, failure)
             with self.assertRaisesRegex(AssertionError, 'identity-only warm reuse bypassed installed-host execution'):
                 self.exercise_warm_build(arch, omit_gate=True)
+
+
+
+class InstalledCONNECTLongEnvelope(unittest.TestCase):
+    CASES = ('node-chain-connect-http-wg-four-connect', 'node-chain-connect-https-wg-eight-connect')
+
+    def test_only_exact_additional_cases_receive_outer_and_namespace_envelopes(self):
+        for case in (*G.CASES, *G.REVERSE_CASES, '', 'node-chain-connect-http-wg-five-connect', 'node-chain-connect-https-wg-eight-wrong-middle-key'):
+            extended = case in self.CASES
+            self.assertEqual(G.installed_case_timeout(case), 280 if extended else 150)
+            environment = {'original': 'captured'}
+            selector = '^OriginalCapturedTest$'
+            with patch.object(G.GUARD.subprocess, 'run', return_value=type('Result', (), {'returncode': 0})()) as run:
+                result = G.GUARD.namespace_test_execution(Path('/original/test'), selector, 'NodeHostTUN/'+case, environment)
+            self.assertEqual(result.returncode, 0)
+            run.assert_called_once_with(['/original/test', '-test.run='+selector, '-test.count=1',
+                '-test.timeout='+('250s' if extended else '120s'), '-test.v'],
+                env=environment, timeout=265 if extended else 135)
+        for case in (*self.CASES, 'NodeStandardServiceReverse/'+self.CASES[0], 'NodeHostTUN/'+self.CASES[0]+'-foreign', None):
+            with patch.object(G.GUARD.subprocess, 'run') as run:
+                G.GUARD.namespace_test_execution(Path('/original/test'), '^Original$', case, {})
+            self.assertEqual(run.call_args.kwargs['timeout'],135)
+        self.assertIn('namespace_test_execution(executable, selector, case, environment).returncode', inspect.getsource(G.GUARD.namespace_test))
+        self.assertIn('timeout=installed_case_timeout(case)', inspect.getsource(G.execute))
+
+    def test_actual_go_envelope_and_original_scope(self):
+        source=(ROOT/'cmd/client/desktop_node_chain_connect_linux_tun_native_test.go').read_text()
+        start=source.index('type linuxCONNECTInstalledBudgets struct {')
+        end=source.index('\nfunc linuxNodeChainCONNECTCipherCases()',start)
+        body=source[start:end]
+        imported=(ROOT/'cmd/client/desktop_node_chain_linux_tun_native_test.go').read_text()
+        controller=(ROOT/'cmd/client/desktop_node_host_linux_tun_native_test.go').read_text()
+        for anchor in ('linuxCONNECTInstalledBudget(scenario).operation', 'linuxCONNECTInstalledBudget(scenario).read',
+                       'context.WithTimeout(context.Background(), budgets.peerContext)', '"-test.timeout="+budgets.peerTest.String()',
+                       'startLinuxNodeChainPeerFinal(t, modes, strings.HasPrefix(scenario, "node-chain-hy2-"), scenario)',
+                       'fmt.Sprint(original) != fmt.Sprint(modes)'):
+            self.assertIn(anchor, imported)
+        self.assertIn('context.WithTimeout(context.Background(), linuxCONNECTInstalledBudget(scenario).controller)',controller)
+        compiler=__import__('shutil').which('go')
+        self.assertIsNotNone(compiler)
+        test='''package envelope
+import("testing";"time")
+func TestCapturedEnvelope(t *testing.T){
+ old:=linuxCONNECTInstalledBudgets{65*time.Second,75*time.Second,85*time.Second,115*time.Second,120*time.Second}
+ long:=linuxCONNECTInstalledBudgets{210*time.Second,220*time.Second,230*time.Second,240*time.Second,245*time.Second}
+ for _,s:=range []string{"node-chain-connect-http-wg-four-connect","node-chain-connect-https-wg-eight-connect"}{if linuxCONNECTInstalledBudget(s)!=long{t.Fatal("original long envelope changed",s)}}
+ for _,s:=range []string{"","node-chain-connect-http-wg-connect","node-chain-connect-https-wg-connect","node-chain-connect-http-wg-four-wrong-middle-key","node-chain-connect-https-wg-eight-connect-off","node-chain-connect-http-wg-eight-connect","node-chain-connect-https-wg-four-connect"}{if linuxCONNECTInstalledBudget(s)!=old{t.Fatal("old or foreign envelope changed",s)}}
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='installed-connect-envelope-') as directory:
+            work=Path(directory);(work/'go.mod').write_text('module envelope\n\ngo 1.25\n');(work/'envelope_test.go').write_text(test)
+            environment=dict(os.environ,GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='',GOMAXPROCS='1')
+            def execute(value):
+                (work/'envelope.go').write_text('package envelope\nimport "time"\n'+value)
+                return subprocess.run([compiler,'test','-count=1','-timeout=10s','-v','.'],cwd=work,env=environment,capture_output=True,text=True,timeout=45)
+            positive=execute(body)
+            self.assertEqual(positive.returncode,0,positive.stdout+positive.stderr)
+            for current,old in ((210,65),(220,75),(230,85),(240,115),(245,120)):
+                anchor=str(current)+' * time.Second';self.assertEqual(body.count(anchor),1)
+                result=execute(body.replace(anchor,str(old)+' * time.Second',1));output=result.stdout+result.stderr
+                self.assertEqual(result.returncode,1,output);self.assertIn('original long envelope changed',output);self.assertNotIn('build failed',output)
 
 
 if __name__ == '__main__':

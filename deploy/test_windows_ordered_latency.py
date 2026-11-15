@@ -25,21 +25,27 @@ NODES = [dict(node_id=f"node-{p}", position=p, role=("entry", "intermediate", "e
               kind="public-path" if p == 1 else "private-node",
               measurement="routed-https-response-after-tls" if p == 1 else "routed-private-response-including-connection") for p in range(3)]
 
-def receipt(request="e"*32, position=0):
-    node = NODES[position]
+def receipt(request="e"*32, position=0, nodes=NODES):
+    node = nodes[position]
     return dict(schema=1, position=position, source_sha256=CAPTURE["source_sha256"], config_sha256=CAPTURE["config_sha256"],
                 generation_sha256=CAPTURE["generation_sha256"], node_id=node["node_id"], request_id=request, measured_at=int(time.time()*1000)-100,
-                result=dict(node_id=node["node_id"], role=node["role"], kind=node["kind"], label="Cumulative path through custom node 2 of 3 → Cloudflare edge" if position == 1 else f"Cumulative path through node {position+1} of 3", ready=True,
-                  benchmark=dict(schema=1, measurement=node["measurement"], endpoint="https://speed.cloudflare.com/__down?bytes=1" if position == 1 else "",
+                result=dict(node_id=node["node_id"], role=node["role"], kind=node["kind"], label=node["label"], ready=True,
+                  benchmark=dict(schema=1, measurement=node["measurement"], endpoint="https://speed.cloudflare.com/__down?bytes=1" if node["kind"] == "public-path" else "",
                                  attempts=50, failed=0, trimmed_mean_ms=12.0,
                                  distribution=dict(samples=50,min_ms=10.0,median_ms=11.0,average_ms=12.0,p90_ms=15.0,max_ms=20.0,jitter_ms=.5))))
 
 @contextlib.contextmanager
 def controller(scenario):
+    nodes = NODES
+    if scenario == "connect8":
+        nodes = [dict(node_id=f"node-{p}", position=p, role="entry" if p == 0 else "exit" if p == 7 else "intermediate",
+                      label=f"Cumulative path through custom node {p+1} of 8 → Cloudflare edge" if p == 6 else f"Cumulative path through node {p+1} of 8",
+                      kind="public-path" if p == 6 else "private-node",
+                      measurement="routed-https-response-after-tls" if p == 6 else "routed-private-response-including-connection") for p in range(8)]
     state = dict(request="", position=0, admitted=False, cancelled=False, polls=0, cancel_polls=0, failures=[], bodies=[])
     lock = threading.Lock()
     def view(stage="idle", complete=True, drained=True):
-        return dict(schema=1,capture=CAPTURE.copy(),nodes=NODES,history=[receipt()],request_id=state["request"],
+        return dict(schema=1,capture=CAPTURE.copy(),nodes=nodes,history=[receipt(nodes=nodes)],request_id=state["request"],
                     node_id=f"node-{state['position']}" if state["request"] else "",position=state["position"],
                     status=dict(request_id=state["request"],stage=stage,complete=complete,drained=drained,
                                 failure="cancelled" if stage == "cancelled" else "",results=[]))
@@ -66,7 +72,7 @@ def controller(scenario):
                 state["polls"] += 1
                 if scenario == "transport" and state["polls"] == 1: return self.reply(503,{"error":"fixture request failed"})
                 if state["polls"] == 1: return self.reply(200,view("draining", True, False))
-                value = view("complete");value["receipt"] = receipt(request,state["position"])
+                value = view("complete");value["receipt"] = receipt(request,state["position"],nodes)
                 if scenario == "partial": value["receipt"]["result"]["benchmark"]["distribution"]["samples"] = 49
                 if scenario == "foreign": value["capture"]["generation_sha256"] = "f"*64
                 return self.reply(200,value)
@@ -74,7 +80,7 @@ def controller(scenario):
             try:
                 length=int(self.headers.get("Content-Length","0"));assert 0 < length < 4096
                 body=json.loads(self.rfile.read(length));assert set(body)=={"capture","node_id","position","request_id"}
-                assert body["capture"] == CAPTURE;position=body["position"];assert type(position) is int and 0 <= position <= 2
+                assert body["capture"] == CAPTURE;position=body["position"];assert type(position) is int and 0 <= position < len(nodes)
                 assert body["node_id"] == f"node-{position}"
                 request=body["request_id"];assert len(request)==32 and set(request)<=(set("0123456789abcdef"))
                 if self.path not in ("/api/speed-lab/ordered-latency", "/api/speed-lab/ordered-latency/cancel"): raise AssertionError("foreign POST")
@@ -100,6 +106,7 @@ def controller(scenario):
     finally: server.shutdown();server.server_close();thread.join()
 
 CONTROLS = {
+    "connect_three_only": ("$Public-and$Count-ge3-and$Position-eq($Count-2)", "$Public-and$Count-eq3-and$Position-eq1"),
     "selected_labels": ("@('ordinary','local','server')", "@('ordinary')"),
     "selected_receipt": ("if([string](Get-RouterVPNOrderedValue $Result 'label')-cne$Label)", "if($false)"),
     "mixed_inventory": ("if($Index-gt0-and(Get-RouterVPNOrderedLabelKind", "if($false-and(Get-RouterVPNOrderedLabelKind"),
@@ -126,7 +133,7 @@ def run(shell, arguments, *, broken=False):
 def main():
     parser=argparse.ArgumentParser();parser.add_argument("--shell",default="pwsh");parser.add_argument("--self-test",action="store_true");args=parser.parse_args()
     results=[dict(case="shipping-model",**run(args.shell,[]))]
-    for scenario in ("success","public","exit","early","cancel","owner-close","partial","foreign","transport"):
+    for scenario in ("success","public","exit","connect8","early","cancel","owner-close","partial","foreign","transport"):
         with controller(scenario) as (base,state):
             result=run(args.shell,["-Live","-Scenario",scenario,"-BaseUrl",base])
             if state["failures"] or not state["bodies"]: raise AssertionError(state)

@@ -183,10 +183,10 @@ func (s *Box) RouterVPNNewNodeChainCONNECTEngine(ctx context.Context,
 		return nil, err
 	}
 	meta := original.metadata
-	if len(meta.Proofs) != 3 || len(meta.Devices) != 3 || (meta.Proofs[1].Mode != "http-connect" && meta.Proofs[1].Mode != "https-connect") {
+	if len(meta.Proofs) < 3 || len(meta.Proofs) > mobilemultihop.NodeChainMaximumNodes || len(meta.Devices) != len(meta.Proofs) || (meta.Proofs[len(meta.Proofs)-2].Mode != "http-connect" && meta.Proofs[len(meta.Proofs)-2].Mode != "https-connect") {
 		return nil, errors.New("ordered CONNECT engine lost its original source inventory")
 	}
-	outbound, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, meta.Proofs[1].Tag)
+	outbound, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, meta.Proofs[len(meta.Proofs)-2].Tag)
 	middle, ok := outbound.(*ownedCONNECT.Outbound)
 	if err != nil || !found || !ok || middle == nil {
 		return nil, errors.Join(err, errors.New("ordered CONNECT middle has no retained native association owner"))
@@ -238,12 +238,12 @@ func (s *Box) RouterVPNNewNodeChainCONNECTEngine(ctx context.Context,
 		tags[i] = proof.Tag
 	}
 	observation, err := s.routerVPNNewNodeChainObservation(ctx, original.config, meta.DNS, tags,
-		meta.Proofs[2].Tag, meta.SourceSHA256, meta.ConfigSHA256, session, observe)
+		meta.Proofs[len(meta.Proofs)-1].Tag, meta.SourceSHA256, meta.ConfigSHA256, session, observe)
 	if err != nil {
 		return nil, err
 	}
 	engine := &RouterVPNNodeChainCONNECTEngine{observation: observation, source: source, middle: middle,
-		middleTag: meta.Proofs[1].Tag, ipv6: meta.Devices[1].IPv6Mode == "on"}
+		middleTag: meta.Proofs[len(meta.Proofs)-2].Tag, ipv6: meta.Devices[len(meta.Devices)-2].IPv6Mode == "on"}
 	engine.bindCONNECTMTUObservation()
 	return engine, nil
 }

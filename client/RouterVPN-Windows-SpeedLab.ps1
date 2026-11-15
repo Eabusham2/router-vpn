@@ -370,7 +370,7 @@ function global:Get-RouterVPNOrderedLabelKind {
     $Public=[string](Get-RouterVPNOrderedValue $Node 'kind')-ceq'public-path'
     foreach($Execution in @('ordinary','local','server')){
         $Prefix=if($Execution-ceq'ordinary'){'Cumulative path'}else{'Cumulative '+$Execution+' path'}
-        $Expected=if($Public){$Prefix+' through custom node 2 of 3 '+[char]0x2192+' Cloudflare edge'}else{$Prefix+' through node '+($Position+1)+' of '+$Count}
+        $Expected=if($Public){$Prefix+' through custom node '+($Position+1)+' of '+$Count+' '+[char]0x2192+' Cloudflare edge'}else{$Prefix+' through node '+($Position+1)+' of '+$Count}
         if([string](Get-RouterVPNOrderedValue $Node 'label')-ceq$Expected){return $Execution}
     }
     return $null
@@ -381,7 +381,7 @@ function global:Assert-RouterVPNOrderedNode {
     if($Count-lt2-or$Count-gt8-or$Position-lt0-or$Position-ge$Count-or-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'node_id'))-or-not(Test-RouterVPNOrderedText (Get-RouterVPNOrderedValue $Node 'label') 256)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or[string](Get-RouterVPNOrderedValue $Node 'role')-cne$Role){throw 'A measured hop changed its identity or position.'}
     $Kind=[string](Get-RouterVPNOrderedValue $Node 'kind');$Public=$Kind-ceq'public-path'
     $Method=if($Public){'routed-https-response-after-tls'}else{'routed-private-response-including-connection'}
-    if(($Kind-cne'private-node'-and-not($Public-and$Count-eq3-and$Position-eq1))-or[string](Get-RouterVPNOrderedValue $Node 'measurement')-cne$Method-or$null-eq(Get-RouterVPNOrderedLabelKind $Node $Position $Count)){throw 'A measured hop changed its timing method.'}
+    if(($Kind-cne'private-node'-and-not($Public-and$Count-ge3-and$Position-eq($Count-2)))-or[string](Get-RouterVPNOrderedValue $Node 'measurement')-cne$Method-or$null-eq(Get-RouterVPNOrderedLabelKind $Node $Position $Count)){throw 'A measured hop changed its timing method.'}
 }
 function global:Assert-RouterVPNOrderedReceipt {
     param($Receipt,$Capture,$Node,[switch]$Current,[int]$Count=3)
@@ -533,11 +533,11 @@ function global:Update-RouterVPNOrderedView {
     }
     if($null-ne$State.Window){
         $W=$State.Window;$W.FindName('Progress').Text=$State.Status;$Combo=$W.FindName('Hop')
-        if(-not$State.Populated-and$State.Nodes.Count-eq3){$Rows=@();foreach($Node in $State.Nodes){$Rows+=@([pscustomobject]@{position=[int](Get-RouterVPNOrderedValue $Node 'position');display=('{0}. {1} - {2}'-f((Get-RouterVPNOrderedValue $Node 'position')+1),(Get-RouterVPNOrderedValue $Node 'label'),(Get-RouterVPNOrderedValue $Node 'role'))})};$State.Populated=$true;$Combo.ItemsSource=$Rows;$Combo.SelectedIndex=0}
+        if(-not$State.Populated-and$State.Nodes.Count-ge2-and$State.Nodes.Count-le8){$Rows=@();foreach($Node in $State.Nodes){$Rows+=@([pscustomobject]@{position=[int](Get-RouterVPNOrderedValue $Node 'position');display=('{0}. {1} - {2}'-f((Get-RouterVPNOrderedValue $Node 'position')+1),(Get-RouterVPNOrderedValue $Node 'label'),(Get-RouterVPNOrderedValue $Node 'role'))})};$State.Populated=$true;$Combo.ItemsSource=$Rows;$Combo.SelectedIndex=0}
         $Idle=$State.Drained-and$State.Jobs.Count-eq0-and-not$State.Closing-and-not$State.Closed-and-not$State.Invalid-and$null-ne$State.Capture
         $Combo.IsEnabled=[bool]$Idle;$W.FindName('Retest').IsEnabled=[bool]$Idle;$W.FindName('CancelTest').IsEnabled=[bool](-not$State.Drained-and-not$State.Cancelled)
         if($Combo.SelectedIndex-ge0-and$Combo.SelectedIndex-lt$State.Nodes.Count){
-            $Node=$State.Nodes[$Combo.SelectedIndex];$Timing=if($Combo.SelectedIndex-eq1){'HTTPS response after TLS'}else{'HTTP response including connection'}
+            $Node=$State.Nodes[$Combo.SelectedIndex];$Timing=if([string](Get-RouterVPNOrderedValue $Node 'kind')-ceq'public-path'){'HTTPS response after TLS'}else{'HTTP response including connection'}
             $Records=@($State.History|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'node_id')-ceq[string](Get-RouterVPNOrderedValue $Node 'node_id')}|Sort-Object {Get-RouterVPNOrderedValue $_ 'measured_at'} -Descending)
             $Detail=$Timing+"`r`n`r`nNo saved result for this route and hop."
             if($Records.Count){$R=$Records[0];$B=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $R 'result') 'benchmark';$D=Get-RouterVPNOrderedValue $B 'distribution';$Date=([DateTime]::SpecifyKind([DateTime]'1970-01-01',[DateTimeKind]::Utc)).AddMilliseconds([double](Get-RouterVPNOrderedValue $R 'measured_at')).ToLocalTime();$Detail=$Timing+"`r`n`r`nSaved "+$Date.ToString('g')+"`r`n"+('50 responses - median {0:N2} ms - trimmed mean {1:N2} ms'-f(Get-RouterVPNOrderedValue $D 'median_ms'),(Get-RouterVPNOrderedValue $B 'trimmed_mean_ms'))+"`r`n"+('Min {0:N2} - average {1:N2} - p90 {2:N2} - max {3:N2} - jitter {4:N2} ms'-f(Get-RouterVPNOrderedValue $D 'min_ms'),(Get-RouterVPNOrderedValue $D 'average_ms'),(Get-RouterVPNOrderedValue $D 'p90_ms'),(Get-RouterVPNOrderedValue $D 'max_ms'),(Get-RouterVPNOrderedValue $D 'jitter_ms'))}

@@ -37,19 +37,40 @@ func macOSNodeChainImportedCipherCases() []macOSNodeChainCipherCase {
 
 func macOSNodeChainPeerForModes(t *testing.T, modes []string) *macOSNodeChainPeer {
 	t.Helper()
-	peer := macOSNodeChainPeerKeys(t, len(modes)+1)
-	if len(modes) == 2 && (modes[1] == "shadowsocks" || modes[1] == "socks5" || modes[1] == "http-connect" || modes[1] == "https-connect") {
+	middle := len(modes) - 1
+	connect := len(modes) >= 2 && len(modes) <= 7 && (modes[middle] == "http-connect" || modes[middle] == "https-connect")
+	count := len(modes) + 1
+	if connect {
+		count = 3
+	}
+	peer := macOSNodeChainPeerKeys(t, count)
+	if connect {
+		// Extend only this typed fixture using separately generated original keys.
+		// The existing generic key helper and all non-CONNECT bounds stay intact.
+		for len(peer.requests) < len(modes) {
+			extra := macOSNodeChainPeerKeys(t, 3)
+			peer.requests = append(peer.requests, extra.requests...)
+			peer.clients = append(peer.clients, extra.clients...)
+		}
+		peer.requests, peer.clients = peer.requests[:len(modes)], peer.clients[:len(modes)]
+		if len(modes) > 2 {
+			for i := range peer.requests {
+				peer.requests[i].APIToken = "installed-connect-prefix-" + peer.requests[i].NodeProofID
+			}
+		}
+	}
+	if connect || len(modes) == 2 && (modes[1] == "shadowsocks" || modes[middle] == "socks5") {
 		// Keep the original paired first and final keys. The custom middle receives
 		// only its own independent SS2022 PSK, never a synthetic WG/API identity.
-		peer.middlePassword = peer.requests[1].PreSharedKey
+		peer.middlePassword = peer.requests[middle].PreSharedKey
 		peer.middleMethod = mobilemultihop.NativeStartLayerMethod
-		peer.middleSOCKS = modes[1] == "socks5"
-		if modes[1] == "http-connect" || modes[1] == "https-connect" {
-			peer.middleCONNECT = modes[1]
+		peer.middleSOCKS = modes[middle] == "socks5"
+		if modes[middle] == "http-connect" || modes[middle] == "https-connect" {
+			peer.middleCONNECT = modes[middle]
 		}
-		peer.requests = peer.requests[:1]
-		peer.clients = peer.clients[:1]
-		macOSNodeChainSetModes(t, peer, modes[:1])
+		peer.requests = peer.requests[:middle]
+		peer.clients = peer.clients[:middle]
+		macOSNodeChainSetModes(t, peer, modes[:middle])
 	} else {
 		macOSNodeChainSetModes(t, peer, modes)
 	}

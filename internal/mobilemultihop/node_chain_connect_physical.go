@@ -18,25 +18,31 @@ type nodeChainCONNECTPhysicalProof struct {
 }
 
 func (s *nodeChainCONNECTProofScope) capturePhysical(config string, proofs []NodeChainProof) (*nodeChainCONNECTPhysicalProof, error) {
-	if s == nil || s.pair == nil || s.middle == nil || len(s.pair.nodes) != 2 ||
-		s.pair.validateCapture() != nil || s.middle.validate() != nil || len(proofs) != 3 ||
-		s.closures[0] == nil || s.closures[1] == nil || s.closures[2] == nil {
+	if !s.ownsOriginalNodes() || s.pair == nil || s.middle == nil || len(s.pair.nodes) < 2 || len(s.pair.nodes) >= NodeChainMaximumNodes ||
+		s.pair.validateCapture() != nil || s.middle.validate() != nil || len(proofs) != len(s.pair.nodes)+1 || len(s.closures) != len(proofs) {
 		return nil, nodeChainCONNECTSourceError
 	}
-	for i, source := range []string{s.pair.nodes[0].source, s.middle.source, s.pair.nodes[1].source} {
-		if proofs[i].Position != i || proofs[i].SourceSHA256 != source ||
-			proofs[i].Tag != nodeChainNamespace(i, source, "node", s.closures[i].finalTag) {
+	sources := make([]string, 0, len(proofs))
+	for i, node := range s.pair.nodes {
+		if i == len(s.pair.nodes)-1 {
+			sources = append(sources, s.middle.source)
+		}
+		sources = append(sources, node.source)
+	}
+	for i, source := range sources {
+		if s.closures[i] == nil || proofs[i].Position != i || proofs[i].SourceSHA256 != source || proofs[i].Tag != nodeChainNamespace(i, source, "node", s.closures[i].finalTag) {
 			return nil, nodeChainCONNECTSourceError
 		}
 	}
-	finalJSON, err := json.Marshal(s.closures[2].final)
+	finalPosition := len(proofs) - 1
+	finalJSON, err := json.Marshal(s.closures[finalPosition].final)
 	if err != nil {
 		return nil, nodeChainCONNECTSourceError
 	}
 	p := &nodeChainCONNECTPhysicalProof{
 		scope: s, pair: s.pair, middle: s.middle,
-		first: s.pair.nodes[0], final: s.pair.nodes[1],
-		config: config, finalTag: proofs[2].Tag, finalJSON: string(finalJSON),
+		first: s.pair.nodes[0], final: s.pair.nodes[len(s.pair.nodes)-1],
+		config: config, finalTag: proofs[finalPosition].Tag, finalJSON: string(finalJSON),
 	}
 	p.owner = p
 	p.seal = p.digest()
@@ -60,10 +66,10 @@ func (p *nodeChainCONNECTPhysicalProof) digest() string {
 
 func (p *nodeChainCONNECTPhysicalProof) validate(config string) error {
 	bad := nodeChainCONNECTSourceError
-	if p == nil || p.seal == "" || p.digest() != p.seal || p.owner != p || p.scope == nil || p.scope.pair != p.pair ||
+	if p == nil || p.seal == "" || p.digest() != p.seal || p.owner != p || !p.scope.ownsOriginalNodes() || p.scope.pair != p.pair ||
 		p.scope.middle != p.middle || p.pair == nil || p.middle == nil ||
 		p.pair.validateCapture() != nil || p.middle.validate() != nil ||
-		len(p.pair.nodes) != 2 || p.pair.nodes[0] != p.first || p.pair.nodes[1] != p.final ||
+		len(p.pair.nodes) < 2 || len(p.pair.nodes) >= NodeChainMaximumNodes || p.pair.nodes[0] != p.first || p.pair.nodes[len(p.pair.nodes)-1] != p.final ||
 		p.config == "" || p.config != config || p.finalJSON == "" {
 		return bad
 	}
@@ -79,8 +85,8 @@ func (p *nodeChainCONNECTPhysicalProof) validate(config string) error {
 	if err != nil || capability != "uot-v2" {
 		return bad
 	}
-	captured.final["tag"] = nodeChainNamespace(2, p.final.source, "node", captured.finalTag)
-	captured.final["detour"] = nodeChainNamespace(1, p.middle.source, "node", ExternalFinalTag)
+	captured.final["tag"] = nodeChainNamespace(len(p.pair.nodes), p.final.source, "node", captured.finalTag)
+	captured.final["detour"] = nodeChainNamespace(len(p.pair.nodes)-1, p.middle.source, "node", ExternalFinalTag)
 	want, err := json.Marshal(captured.final)
 	if err != nil || captured.final["tag"] != p.finalTag || string(want) != p.finalJSON {
 		return bad

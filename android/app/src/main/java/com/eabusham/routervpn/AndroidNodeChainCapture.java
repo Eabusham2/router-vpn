@@ -220,10 +220,14 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     }
 
     static int sourceSchema(List<AndroidNodeStore.ChainSource> members) throws Exception {
-        int imported=0;for(int i=0;i<members.size();i++)if(members.get(i).imported){imported++;if(members.size()!=3||i!=1)throw new IllegalStateException("A custom node requires one paired first node and one paired final node.");}
+        int imported=0,middle=-1;for(int i=0;i<members.size();i++)if(members.get(i).imported){
+            imported++;middle=i;String protocol=AndroidExternalPolicy.protocol(members.get(i).external().protocol);
+            boolean connect="http-connect".equals(protocol)||"https-connect".equals(protocol);
+            if(members.size()<3||members.size()>8||i!=members.size()-2||!connect&&members.size()!=3)throw new IllegalStateException("A custom node requires its supported penultimate position before the paired final node.");
+        }
         if(imported>1)throw new IllegalStateException("This custom path supports one imported intermediate node.");
         if(imported==0)return 1;
-        String protocol=AndroidExternalPolicy.protocol(members.get(1).external().protocol);
+        String protocol=AndroidExternalPolicy.protocol(members.get(middle).external().protocol);
         return "openvpn".equals(protocol)?5:"socks5".equals(protocol)?3:("http-connect".equals(protocol)||"https-connect".equals(protocol))?4:2;
     }
 

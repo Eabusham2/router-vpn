@@ -37,12 +37,16 @@ class CONNECTSourceGate(unittest.TestCase):
 
     def test_exact_new_and_original_connect_inventory_and_bounds(self):
         selected=D.cases()
-        self.assertEqual([len(x.expected) for x in selected[9:]], [84,52,2,2,1])
+        self.assertEqual([len(x.expected) for x in selected[9:]], [84,52,2,2,1,13,13,13,33,2])
         self.assertEqual(len(D.INVENTORY["files"]),7)
         self.assertEqual(len(D.INVENTORY["roots"]),7)
-        self.assertEqual(sum(len(x.expected) for x in selected if not x.mutation),300)
-        self.assertEqual(sum(bool(x.mutation) for x in selected),9)
-        self.assertEqual(len({x.name for x in selected}),14)
+        self.assertEqual(len(D.PREFIX_ROOTS),4)
+        self.assertEqual(len(D.PREFIX_REFUSALS),20)
+        self.assertEqual(len(D.PREFIX_REQUIRED),70)
+        self.assertEqual(frozenset().union(*(required for _,_,required in D.PREFIX_PHASES)),D.PREFIX_REQUIRED)
+        self.assertEqual(sum(len(x.expected) for x in selected if not x.mutation),372)
+        self.assertEqual(sum(bool(x.mutation) for x in selected),10)
+        self.assertEqual(len({x.name for x in selected}),19)
         for case in selected:
             self.assertEqual((case.seconds,case.outer_seconds),(120,600))
             args=D.BASE.command_for("/captured/go",case,Path("/exact.overlay.json") if case.mutation else None)
@@ -53,9 +57,10 @@ class CONNECTSourceGate(unittest.TestCase):
         for suite in ["socks-source","",None,"connect-runtime"]:
             with self.assertRaises(ValueError):D.cases(suite)
         for case in D.cases()[11:]:
+            if not case.mutation:continue
             with self.assertRaises(ValueError):D.BASE.command_for("/go",case)
             path,anchor,replacement=D.BASE.CONTROL_MUTATIONS[case.mutation]
-            self.assertIn(path,D.INVENTORY["files"])
+            self.assertIn(path,(*D.INVENTORY["files"],*D.PREFIX_FILES))
             self.assertEqual(D.BASE.mutation_source(case,"before\n"+anchor+"\nafter"),"before\n"+replacement+"\nafter")
             for invalid in ["",anchor+anchor]:
                 with self.assertRaises(ValueError):D.BASE.mutation_source(case,invalid)
@@ -66,17 +71,21 @@ class CONNECTSourceGate(unittest.TestCase):
             value=json.loads((output/"manifest.json").read_bytes())
             self.assertEqual(value["status"],"passed")
             self.assertEqual([x["name"] for x in value["attempts"]],[x.name for x in D.cases()])
-            self.assertEqual(len(calls),14)
+            self.assertEqual(len(calls),19)
             self.assertEqual(value["composition"]["driver_sha256"],hashlib.sha256(Path(D.__file__).read_bytes()).hexdigest())
             self.assertEqual(value["composition"]["original_driver_sha256"],hashlib.sha256(D.BASE_PATH.read_bytes()).hexdigest())
             self.assertEqual(value["composition"]["runtime_native_host_delivery"],"unfinished")
+            self.assertEqual(value["composition"]["prefix_source_records"],70)
+            self.assertEqual(value["composition"]["prefix_source_execution_records"],72)
+            self.assertEqual(value["composition"]["prefix_compiled_controls"],1)
             self.assertTrue(value["formatting"]["process_group_joined"])
             self.assertIn("no native owner",value["scope"])
 
     def test_missing_duplicate_skipped_or_foreign_native_record_is_rejected(self):
-        for fault in ["missing","duplicate","skip","foreign","race"]:
+        for target,fault in ((target,fault) for target in ("ordered-connect-source",*(row[0] for row in D.PREFIX_PHASES))
+                             for fault in ("missing","duplicate","skip","foreign","race")):
             def mutate(case,source,log,calls):
-                if case.name=="ordered-connect-source":
+                if case.name==target:
                     rows=[json.loads(x) for x in log.read_bytes().splitlines()]
                     if fault=="missing":rows.pop(0)
                     elif fault=="duplicate":rows.insert(1,dict(rows[0]))
@@ -85,7 +94,7 @@ class CONNECTSourceGate(unittest.TestCase):
                     else:rows.insert(1,{"Action":"output","Package":D.BASE.CORE.PACKAGE,"Test":rows[0]["Test"],"Output":"WARNING: DATA RACE\n"})
                     log.write_bytes(b"\n".join(json.dumps(x).encode() for x in rows)+b"\n")
                 return (1 if case.mutation else 0),False,True
-            with self.subTest(fault=fault),self.fixture(mutate) as (args,source,output,calls):
+            with self.subTest(target=target,fault=fault),self.fixture(mutate) as (args,source,output,calls):
                 with self.assertRaises(RuntimeError):D.validate(args)
                 self.assertEqual(json.loads((output/"manifest.json").read_bytes())["status"],"failed")
 

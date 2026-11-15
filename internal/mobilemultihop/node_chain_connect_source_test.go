@@ -16,9 +16,26 @@ import (
 // No independent proxy, paired identity or UDP receiver is invented by a label.
 func nodeChainCONNECTFixture(t *testing.T, mode, protocol, layer, method, authentication string) NodeChainSource {
 	t.Helper()
-	nodes := nodeChainModeFixtureNodes(t, []string{mode, "wg", "shadowsocks"}, []string{"", "", layer})
-	identities := nodeChainModeFixtureNodes(t, []string{"wg", "wg", "wg"}, []string{"", "", ""})
-	final := nodes[2]
+	return nodeChainCONNECTPrefixFixture(t, 1, mode, protocol, layer, method, authentication)
+}
+
+func nodeChainCONNECTPrefixFixture(t *testing.T, prefixes int, mode, protocol, layer, method, authentication string) NodeChainSource {
+	t.Helper()
+	if prefixes < 1 || prefixes > 6 {
+		t.Fatal("fixture prefix count outside original chain bound")
+	}
+	count := prefixes + 2
+	modes, layers, identityModes := make([]string, count), make([]string, count), make([]string, count)
+	for i := range modes {
+		modes[i], identityModes[i] = "wg", "wg"
+		if i < prefixes {
+			modes[i] = mode
+		}
+	}
+	modes[count-1], layers[count-1] = "shadowsocks", layer
+	nodes := nodeChainModeFixtureNodes(t, modes, layers)
+	identities := nodeChainModeFixtureNodes(t, identityModes, make([]string, count))
+	final := nodes[count-1]
 	var assets map[string]string
 	if err := exactJSON([]byte(final.inputs.Files), &assets, 16<<20); err != nil {
 		t.Fatal(err)
@@ -44,7 +61,7 @@ func nodeChainCONNECTFixture(t *testing.T, mode, protocol, layer, method, authen
 		"source_sha256": hex.EncodeToString(sourceHash[:]), "key_sha256": hex.EncodeToString(keyHash[:]),
 	}
 	assets[nativecomposite.SSServiceAsset] = base64.StdEncoding.EncodeToString([]byte(startJSON(t, claim)))
-	nodes[2], err = NewNodeProfile("shadowsocks", startJSON(t, assets), final.inputs.ProfileJSON, final.inputs.Start, final.inputs.DNSBootstrap)
+	nodes[count-1], err = NewNodeProfile("shadowsocks", startJSON(t, assets), final.inputs.ProfileJSON, final.inputs.Start, final.inputs.DNSBootstrap)
 	if err != nil {
 		t.Fatal("captured paired SS service", err)
 	}
@@ -65,10 +82,16 @@ func nodeChainCONNECTFixture(t *testing.T, mode, protocol, layer, method, authen
 		t.Fatal("original CONNECT member", err)
 	}
 	source := nodeChainFixtureSource(t, nodes)
-	source.Schema, source.Nodes[1] = 4, member
-	source.IdentitySources = []string{identities[0].inputs.Files, "", identities[2].inputs.Files}
-	if mode == "wg" {
-		source.IdentitySources[0] = nodes[0].inputs.Files
+	source.Schema, source.Nodes[prefixes] = 4, member
+	source.IdentitySources = make([]string, count)
+	for i := range nodes {
+		if i == prefixes {
+			continue
+		}
+		source.IdentitySources[i] = identities[i].inputs.Files
+		if i < prefixes && mode == "wg" {
+			source.IdentitySources[i] = nodes[i].inputs.Files
+		}
 	}
 	return source
 }

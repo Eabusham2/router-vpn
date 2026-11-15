@@ -84,8 +84,8 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 22 {
 		return true, errors.New("ordered native test lost actual mode catalog")
 	}
-	if len(modes) == 2 && (modes[1] == "socks5" || modes[1] == "http-connect" || modes[1] == "https-connect") {
-		middle, found := a.profileByIDLocked(control.MultihopNodes[1].ID)
+	if len(modes) >= 2 && ((len(modes) == 2 && modes[1] == "socks5") || modes[len(modes)-1] == "http-connect" || modes[len(modes)-1] == "https-connect") {
+		middle, found := a.profileByIDLocked(control.MultihopNodes[len(control.MultihopNodes)-2].ID)
 		public := publicProfileFor(middle)
 		if !found || public.External == nil || !public.External.OrderedMiddle {
 			return true, errors.New("installed typed middle source lacks its shipping public capability")
@@ -212,7 +212,11 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 			return
 		}
 		a.mu.Lock()
-		middle := &a.profiles.Profiles[1]
+		middlePosition := 1
+		if desktopNodeChainHasCONNECT(control.MultihopNodes) {
+			middlePosition = len(control.MultihopNodes) - 2
+		}
+		middle := &a.profiles.Profiles[middlePosition]
 		if middle.NodeKind == "external" && middle.External != nil && middle.External.HTTPConnect != nil {
 			middle.External.HTTPConnect.Password += "-replaced-after-original-proof"
 		} else if middle.NodeKind == "external" && middle.External != nil && middle.External.HTTPSConnect != nil {
@@ -495,18 +499,22 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 		performanceCapture = macOSNodeChainNativeMeasurement(t, ctx, client, peer, request, live)
 		if peer.middleSOCKS || peer.middleCONNECT != "" {
 			beforeFifty := peer.observe(t, "stats")
-			receipts, err := desktopOrderedLatencyNativeRoundTrip(ctx, func(call context.Context, method, path string, body []byte) (int, []byte, error) {
+			receipts, err := desktopOrderedLatencyNativeRoundTripPositions(ctx, func(call context.Context, method, path string, body []byte) (int, []byte, error) {
 				return macOSExternalNativeHTTP(call, client, method, path, string(body))
-			})
-			if err != nil || len(receipts) != 3 {
+			}, desktopCONNECTInstalledFiftyPositions(len(request.Nodes)))
+			if err != nil || len(receipts) != desktopCONNECTInstalledFiftyCount(len(request.Nodes)) {
 				t.Fatal("installed Darwin ordered fifty", err)
 			}
 			afterFifty := peer.observe(t, "stats")
-			if len(beforeFifty.Prefixes) != 1 || len(afterFifty.Prefixes) != 1 || beforeFifty.Middle == nil || afterFifty.Middle == nil || afterFifty.Prefixes[0].ProofQueries < beforeFifty.Prefixes[0].ProofQueries+50 || afterFifty.Middle.PublicQueries < beforeFifty.Middle.PublicQueries+50 || afterFifty.Final.RouterQueries < beforeFifty.Final.RouterQueries+50 || afterFifty.Final.DirectQueries != 0 {
+			if len(beforeFifty.Prefixes) != len(peer.requests) || len(afterFifty.Prefixes) != len(peer.requests) || beforeFifty.Middle == nil || afterFifty.Middle == nil || (len(peer.requests) == 1 && afterFifty.Prefixes[0].ProofQueries < beforeFifty.Prefixes[0].ProofQueries+50) || afterFifty.Middle.PublicQueries < beforeFifty.Middle.PublicQueries+50 || afterFifty.Final.RouterQueries < beforeFifty.Final.RouterQueries+50 || afterFifty.Final.DirectQueries != 0 {
 				t.Fatal("ordered fifty omitted original encrypted prefix responses", beforeFifty, afterFifty)
 			}
 			if peer.middleCONNECT != "" {
-				t.Log(macOSNodeChainCONNECTFiftyReceipt)
+				if len(peer.requests) == 1 {
+					t.Log(macOSNodeChainCONNECTFiftyReceipt)
+				} else {
+					t.Log(macOSNodeChainCONNECTLongFiftyReceipt)
+				}
 			}
 		}
 
@@ -669,7 +677,7 @@ func macOSNodeChainNativeMeasurement(t *testing.T, ctx context.Context, client *
 			role = "exit"
 		}
 		label := fmt.Sprintf("Cumulative path through node %d of %d", i+1, len(request.Nodes))
-		if peer.middlePassword != "" && i == 1 {
+		if peer.middlePassword != "" && i == len(peer.requests) {
 			label += " to the public benchmark"
 		}
 		if row.RouterID != request.Nodes[i].ID || row.Role != role || row.LatencyLabel != label+" HTTP response" || row.SpeedLabel != label+" transfer" ||
@@ -737,11 +745,11 @@ func macOSNodeChainNativeProved(t *testing.T, peer *macOSNodeChainPeer, request 
 	stats := peer.observe(t, "stats")
 	macOSNodeChainHysteriaCounters(t, peer, stats, "connect")
 	for i, prefix := range stats.Prefixes {
-		if prefix.Mode != request.Nodes[i].Mode || prefix.RawUDP == 0 || prefix.TCP == 0 || (peer.middleCONNECT == "" && prefix.UDP == 0) || (peer.middleCONNECT != "" && prefix.UDP != 0) || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 {
+		if prefix.Mode != request.Nodes[i].Mode || prefix.RawUDP == 0 || prefix.TCP == 0 || (peer.middleCONNECT == "" && prefix.UDP == 0) || (peer.middleCONNECT != "" && i == len(peer.requests)-1 && prefix.UDP != 0) || (peer.middleCONNECT != "" && i < len(peer.requests)-1 && prefix.UDP == 0) || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 {
 			t.Fatal("ordered path omitted actual independent authenticated prefix", i, prefix)
 		}
 	}
-	if peer.middlePassword != "" && (len(request.Nodes) != 3 || request.Nodes[1].Mode != peer.observedMiddleProtocol() || stats.Middle == nil ||
+	if peer.middlePassword != "" && (len(request.Nodes) != len(peer.requests)+2 || request.Nodes[len(peer.requests)].Mode != peer.observedMiddleProtocol() || stats.Middle == nil ||
 		stats.Middle.Method != peer.observedMiddleMethod() || stats.Middle.RawTCP == 0 || stats.Middle.TCP == 0 || stats.Middle.PublicQueries == 0 ||
 		(peer.middleCONNECT == "" && (stats.Middle.RawUDP == 0 || stats.Middle.UDP == 0))) {
 		t.Fatal("ordered path omitted actual independent imported cipher or public-path proof", stats.Middle)

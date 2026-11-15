@@ -63,7 +63,7 @@ func (capture *nativeMultihopCapture) validateCONNECTNodeChainSelection(selectio
 	bad := errors.New("typed CONNECT parent lost its original source or complete selection")
 	if capture == nil || capture.chain == nil || capture.chain.connect == nil || capture.chain.chain != nil || capture.chain.socks != nil ||
 		capture.imported || capture.importedHost != nil || capture.importedPlatform != nil || capture.openVPN != nil ||
-		capture.importedInput != "" || capture.importedOriginalSource != "" || selection.Native != capture || len(selection.Nodes) != 3 ||
+		capture.importedInput != "" || capture.importedOriginalSource != "" || selection.Native != capture || len(selection.Nodes) < 3 || len(selection.Nodes) > mobilemultihop.NodeChainMaximumNodes ||
 		selection.Control.ID != selection.Exit.ID || selection.serverPacketPublic != "" || selection.serverPQIdentity != "" {
 		return bad
 	}
@@ -73,7 +73,7 @@ func (capture *nativeMultihopCapture) validateCONNECTNodeChainSelection(selectio
 		capture.entryMode != selection.EntryMode || capture.entrySelection != selection.EntryMode ||
 		capture.entryID != selection.Entry.ID || capture.exitID != selection.Exit.ID ||
 		capture.controlToken != liveMeasurementProfileToken(selection.Control) || capture.entryToken != liveMeasurementProfileToken(selection.Entry) ||
-		capture.exitToken != liveMeasurementProfileToken(selection.Exit) || len(capture.configs) != 1 || capture.configs[selection.ExitMode] != typed.config {
+		capture.exitToken != liveMeasurementProfileToken(selection.Exit) || len(chain.members) != len(selection.Nodes) || len(capture.configs) != 1 || capture.configs[selection.ExitMode] != typed.config {
 		return bad
 	}
 	profiles := make([]common.RouterProfile, len(selection.Nodes))
@@ -84,9 +84,9 @@ func (capture *nativeMultihopCapture) validateCONNECTNodeChainSelection(selectio
 		profiles[i] = member.Profile
 	}
 	resolved, err := resolveDesktopNodeChainCONNECTMembers(selection.Control, profiles, nodeChainSelectedReferences(selection.Nodes), "local")
-	if err != nil || selection.EntryMode != resolved[0].Mode || selection.ExitMode != resolved[2].Mode ||
+	if err != nil || selection.EntryMode != resolved[0].Mode || selection.ExitMode != resolved[len(resolved)-1].Mode ||
 		selection.Base != desktopExternalEntryBase(resolved[0].Mode) || liveMeasurementProfileToken(selection.Entry) != liveMeasurementProfileToken(resolved[0].Profile) ||
-		liveMeasurementProfileToken(selection.Exit) != liveMeasurementProfileToken(resolved[2].Profile) {
+		liveMeasurementProfileToken(selection.Exit) != liveMeasurementProfileToken(resolved[len(resolved)-1].Profile) {
 		return bad
 	}
 	_, meta, err := typed.source.ReadValidated()

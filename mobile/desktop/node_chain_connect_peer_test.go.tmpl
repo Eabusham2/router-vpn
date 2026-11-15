@@ -121,9 +121,20 @@ func TestRouterVPNDesktopNodeChainCONNECTInstalledReferenceProcess(t *testing.T)
 	var request nodeCONNECTInstalledRequest
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || desktopNodeChainImportedRequestValid(request.desktopNodeChainImportedRequest) != nil || request.Paired.BenchmarkPort != 45998 ||
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || request.Paired.BenchmarkPort != 45998 ||
 		(request.Protocol != "http-connect" && request.Protocol != "https-connect") {
 		t.Fatal("installed CONNECT reference source changed")
+	}
+	ipcs, identityErr := desktopNodeChainPeerIdentityBounds(request.Paired, 1, 6)
+	if identityErr != nil {
+		t.Fatal("installed CONNECT lost original complete prefix identities", identityErr)
+	}
+	defer clear(ipcs)
+	prefixCount := len(request.Paired.Prefixes)
+	tail := request.desktopNodeChainImportedRequest
+	tail.Paired.Prefixes = append([]desktopNodeChainPrefixRequest(nil), request.Paired.Prefixes[prefixCount-1:]...)
+	if desktopNodeChainImportedRequestValid(tail) != nil {
+		t.Fatal("installed CONNECT lost original imported tail")
 	}
 	physical, client, err := nodeCONNECTInstalledPhysical(request.Paired.Address, request.Paired.ClientAddress)
 	if err != nil {
@@ -166,7 +177,17 @@ func TestRouterVPNDesktopNodeChainCONNECTInstalledReferenceProcess(t *testing.T)
 			return desktopExternalInstalledSSPeer{address: provider.address, close: provider.close}
 		},
 	}
-	peer := desktopNodeChainImportedPeerStartWithHooks(t, request.desktopNodeChainImportedRequest, physical, client, nil, hooks)
+	tailLocal, tailRemote := physical, client
+	if prefixCount > 1 {
+		tailLocal, tailRemote = netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("127.0.0.1")
+	}
+	peer := desktopNodeChainImportedPeerStartWithHooks(t, tail, tailLocal, tailRemote, nil, hooks)
+	var complete *desktopNodeChainPeer
+	if prefixCount > 1 {
+		complete = &desktopNodeChainPeer{prefixes: make([]*desktopNodeChainPrefixPeer, prefixCount), final: peer.paired}
+		complete.prefixes[prefixCount-1] = peer.prefix
+		desktopNodeChainStartCapturedPrefixes(t, request.Paired, physical, client, complete, ipcs, prefixCount-2)
+	}
 	peer.paired.final.streamRouter = UOT.NewRouter(&desktopImportedCONNECTRouter{server: peer.paired.final}, log.NewNOPFactory().Logger())
 	delete(peer.paired.entry.rules, "tcp/10.79.0.1:8388")
 	delete(peer.paired.entry.rules, "udp/10.79.0.1:8388")
@@ -179,6 +200,10 @@ func TestRouterVPNDesktopNodeChainCONNECTInstalledReferenceProcess(t *testing.T)
 	})
 	respond := func() {
 		original := peer.snapshot()
+		if complete != nil {
+			original.Prefixes = complete.snapshot().Prefixes
+			original.Address = complete.prefixes[0].bind.address()
+		}
 		original.Middle.Method = request.Protocol
 		if original.Middle.RawUDP != 0 || original.Middle.UDP != 0 || original.Final.FinalRawUDP != 0 {
 			t.Fatal("installed CONNECT peer acquired unowned raw UDP carriage")

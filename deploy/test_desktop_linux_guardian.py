@@ -374,6 +374,16 @@ def wait_for_fixture_carriers():
         time.sleep(min(remaining, 0.02))
 
 
+def namespace_test_execution(executable, selector, case, environment):
+    # A finite additional installed fixture, never a caller-selected timeout.
+    extended = case in ('NodeHostTUN/node-chain-connect-http-wg-four-connect',
+                        'NodeHostTUN/node-chain-connect-https-wg-eight-connect')
+    seconds, timeout = (250, 265) if extended else (120, 135)
+    return subprocess.run([str(executable), '-test.run=' + selector,
+                           '-test.count=1', '-test.timeout=' + str(seconds) + 's', '-test.v'],
+                          env=environment, timeout=timeout)
+
+
 def namespace_test(binary: Path, case=None, expected_sha256=None, group=None) -> int:
     # The expanded native inventory exceeded the old aggregate two-minute
     # test deadline despite successful individual boundaries. Retain that
@@ -453,9 +463,7 @@ def namespace_test(binary: Path, case=None, expected_sha256=None, group=None) ->
                 wait_for_fixture_carriers()
                 environment = dict(os.environ, ROUTERVPN_LINUX_GUARDIAN_TEST_NS='1')
                 namespace_progress('execute owned test process')
-                result = subprocess.run([str(executable), '-test.run=' + selector,
-                                         '-test.count=1', '-test.timeout=120s', '-test.v'],
-                                        env=environment, timeout=135).returncode
+                result = namespace_test_execution(executable, selector, case, environment).returncode
                 namespace_progress('retire owned peer namespace; test status ' + str(result))
                 subprocess.run(['ip', 'netns', 'delete', 'rvpn-peer'], check=True)
                 # /run is a private tmpfs owned by this PID/mount namespace.

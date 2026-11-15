@@ -123,12 +123,17 @@ TESTS = r'''
    var changed=nodes.last!;changed.routerProfiles[0].apiToken="relinked-final"
    try check("typed SOCKS map rejects replaced final source",IOSNodeChainPresentation.captured(source:source,bundleData:bundleData(changed))==nil)
   }
-  do {
-   let nodes=try sources(3,false,"",false,true),capture=try IOSNodeChainCONNECTCapture.compile(bundles:nodes.map{try bundleData($0)})
+  for count in 3...8 {
+   var nodes=try sources(count),custom=try sources(3,false,"",false,true)[1]
+   custom.selectedRouterID="custom-connect";custom.routerProfiles[0].id=custom.selectedRouterID
+   nodes[count-2]=custom
+   nodes[count-1].routerProfiles[0].multihopNodes=nodes.enumerated().map{.init(id:$0.element.selectedRouterID,mode:$0.offset==count-2 ? "https-connect":$0.offset==count-1 ? "shadowsocks":"wg")}
+   nodes[count-1]=try JSONDecoder().decode(ClientBundle.self,from:Data(LibboxTestCONNECTService(String(decoding:bundleData(nodes[count-1]),as:UTF8.self)).utf8))
+   let capture=try IOSNodeChainCONNECTCapture.compile(bundles:nodes.map{try bundleData($0)})
    defer{try? capture.plan.close()}
    let final=try bundleData(nodes.last!),source=Data(capture.source.utf8)
    let identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:final,configuration:["nodeChainCONNECTSource":capture.source])
-   try check("typed CONNECT active map keeps exact source and protocol",IOSNodeChainPresentation.active(identity)?.map(\.mode)==["wg","https-connect","shadowsocks"])
+   try check("typed CONNECT active map keeps exact source and protocol",IOSNodeChainPresentation.active(identity)?.map(\.mode)==Array(repeating:"wg",count:count-2)+["https-connect","shadowsocks"])
    var changed=nodes.last!;changed.routerProfiles[0].apiToken="relinked-final"
    try check("typed CONNECT map rejects replaced final source",IOSNodeChainPresentation.captured(source:source,bundleData:bundleData(changed))==nil)
   }

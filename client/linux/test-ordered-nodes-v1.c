@@ -83,6 +83,7 @@ static void select_row(GtkWidget *list,int index) { gtk_list_box_select_row(GTK_
 static char *snapshot(void) { LinuxOrderedStateV1*o=linux_ordered_state_v1(unified);JsonObject*v=linux_ordered_value_v1(o->selection);char*raw=linux_ordered_json_v1(v);json_object_unref(v);return raw; }
 static int editor_case;
 static const char *connect_editor_protocol, *connect_editor_prefix;
+static guint connect_editor_count = 3;
 static gboolean drive_editor(gpointer data) {
     (void)data;check(++ticks<100,"editor callback timeout");GtkWidget*d=dialog_named("Ordered native path");if(!d)return G_SOURCE_CONTINUE;
     GtkWidget*list=find_type(d,GTK_TYPE_LIST_BOX),*candidate=find_name(d,"ordered-node-candidate"),*transport=find_name(d,"ordered-prefix-transport");check(list&&candidate&&transport,"ordered controls missing");
@@ -121,19 +122,22 @@ static gboolean drive_editor(gpointer data) {
         select_row(list,2);choose(transport,"hysteria2");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"SOCKS middle admitted an unsupported final");
         gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_APPLY);
     } else if(editor_case==10) {
-        choose(candidate,"n1");click(d,"Add entry / hop");choose(transport,connect_editor_prefix);
+        for(guint i=0;i<connect_editor_count-2;i++){
+            char *id=g_strdup_printf("n%u",i==0?1:i+2);choose(candidate,id);g_free(id);
+            click(d,"Add entry / hop");choose(transport,connect_editor_prefix);
+        }
         choose(transport,connect_editor_protocol);
         check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),connect_editor_prefix)==0,"CONNECT acquired physical entry transport");
         choose(candidate,"n2");click(d,"Add entry / hop");
         check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),connect_editor_protocol)==0,"CONNECT Add substituted its exact saved transport");
-        GtkListBoxRow *middle_row=gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),1);
+        GtkListBoxRow *middle_row=gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),connect_editor_count-2);
         GtkWidget *middle_label=find_type(GTK_WIDGET(middle_row),GTK_TYPE_LABEL);
         const char *title=strcmp(connect_editor_protocol,"openvpn")==0?"OpenVPN":strcmp(connect_editor_protocol,"https-connect")==0?"HTTPS CONNECT":"HTTP CONNECT";
         check(middle_label&&strstr(gtk_label_get_text(GTK_LABEL(middle_label)),title),"CONNECT row concealed its saved transport");
         const char *other=strcmp(connect_editor_protocol,"https-connect")==0?"http-connect":"https-connect";
         choose(transport,other);check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),connect_editor_protocol)==0,"CONNECT Change mode substituted its saved protocol");
         choose(transport,"shadowsocks");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),connect_editor_protocol)==0,"CONNECT Change mode substituted Shadowsocks");
-        select_row(list,2);choose(transport,"hysteria2");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"CONNECT middle admitted an unsupported final");
+        select_row(list,connect_editor_count-1);choose(transport,"hysteria2");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"CONNECT middle admitted an unsupported final");
         gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_APPLY);
     } else if(editor_case==7) {
         choose(candidate,"n1");click(d,"Add entry / hop");choose(transport,"awg2-fast");
@@ -230,15 +234,19 @@ static int model_only(void) {
 static void connect_model_only(void) {
     const char *protocols[]={"http-connect","https-connect","openvpn"}, *prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint p=0;p<G_N_ELEMENTS(protocols);p++)for(guint prefix=0;prefix<G_N_ELEMENTS(prefixes);prefix++){
+        for(guint count=3;count<=(p==2?3:8);count++){
+        guint middle_index=count-2;
         JsonArray *nodes=json_array_new(), *profiles=json_array_new();JsonObject *store=json_object_new(), *tokens=json_object_new();
-        const char *ids[]={"entry","middle","exit"}, *modes[]={prefixes[prefix],protocols[p],"shadowsocks"};
-        for(guint i=0;i<3;i++){
+        for(guint i=0;i<count;i++){
+            char id_buffer[24];g_snprintf(id_buffer,sizeof(id_buffer),"prefix-%u",i);
+            const char *id=i==middle_index?"middle":i==count-1?"exit":id_buffer;
+            const char *mode=i==middle_index?protocols[p]:i==count-1?"shadowsocks":prefixes[(prefix+i)%G_N_ELEMENTS(prefixes)];
             JsonObject *row=json_object_new(), *profile=json_object_new();char *token=g_strdup_printf("%064x",i+1);
-            json_object_set_string_member(row,"id",ids[i]);json_object_set_string_member(row,"mode",modes[i]);json_array_add_object_element(nodes,row);
-            json_object_set_string_member(profile,"id",ids[i]);json_object_set_string_member(profile,"node_kind",i==1?"external":"router-vpn");json_object_set_string_member(profile,"profile_token",token);json_array_add_object_element(profiles,profile);
-            json_object_set_string_member(tokens,ids[i],token);g_free(token);
+            json_object_set_string_member(row,"id",id);json_object_set_string_member(row,"mode",mode);json_array_add_object_element(nodes,row);
+            json_object_set_string_member(profile,"id",id);json_object_set_string_member(profile,"node_kind",i==middle_index?"external":"router-vpn");json_object_set_string_member(profile,"profile_token",token);json_array_add_object_element(profiles,profile);
+            json_object_set_string_member(tokens,id,token);g_free(token);
         }
-        JsonObject *middle=json_array_get_object_element(profiles,1), *external=json_object_new();
+        JsonObject *middle=json_array_get_object_element(profiles,middle_index), *external=json_object_new();
         json_object_set_string_member(external,"protocol",protocols[p]);json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);json_object_set_string_member(external,"password","connect-model-secret");json_object_set_object_member(middle,"external",external);
         json_object_set_array_member(store,"profiles",profiles);json_object_set_string_member(store,"selected_id","exit");
         JsonNode *catalog_root=json_node_new(JSON_NODE_OBJECT);json_node_take_object(catalog_root,store);
@@ -246,13 +254,13 @@ static void connect_model_only(void) {
         check(selection&&linux_ordered_current_v1(selection,store),"CONNECT source model refused original typed graph");
         const char *title=p==0?"HTTP CONNECT":p==1?"HTTPS CONNECT":"OpenVPN";check(strcmp(linux_ordered_mode_name_v1(protocols[p]),title)==0,"CONNECT model concealed exact transport title");
         LinuxOrderedEditorV1 editor={.catalog=catalog_root,.control="exit",.modes=g_ptr_array_new_with_free_func(g_free)};
-        g_ptr_array_add(editor.modes,g_strdup(prefixes[prefix]));g_ptr_array_add(editor.modes,g_strdup(protocols[p]));
+        for(guint i=0;i<middle_index;i++)g_ptr_array_add(editor.modes,g_strdup(prefixes[(prefix+i)%G_N_ELEMENTS(prefixes)]));g_ptr_array_add(editor.modes,g_strdup(protocols[p]));
         check(linux_ordered_editor_final_allowed_v1(&editor,"shadowsocks"),"CONNECT final chooser refused original paired final");
         check(!linux_ordered_editor_final_allowed_v1(&editor,"hysteria2"),"CONNECT final chooser admitted Hysteria2");
         char *body=linux_ordered_connect_body_v1(selection);JsonNode *request=parse_json(body);JsonObject *q=json_node_get_object(request);JsonArray *sent=linux_ordered_array_v1(q,"nodes");
-        check(sent&&json_array_get_length(sent)==3&&strcmp(obj_string(q,"execution"),"local")==0,"CONNECT source model changed complete Local graph");
-        for(guint i=0;i<3;i++)check(strcmp(obj_string(json_array_get_object_element(sent,i),"id"),ids[i])==0&&strcmp(obj_string(json_array_get_object_element(sent,i),"mode"),modes[i])==0,"CONNECT source model changed original member reference");
-        check(json_object_get_size(linux_ordered_object_v1(q,"expected_profile_tokens"))==3&&strstr(body,"connect-model-secret")==NULL,"CONNECT source model lost references or copied credentials");
+        check(sent&&json_array_get_length(sent)==count&&strcmp(obj_string(q,"execution"),"local")==0,"CONNECT source model changed complete Local graph");
+        for(guint i=0;i<count;i++)check(strcmp(obj_string(json_array_get_object_element(sent,i),"id"),obj_string(json_array_get_object_element(nodes,i),"id"))==0&&strcmp(obj_string(json_array_get_object_element(sent,i),"mode"),obj_string(json_array_get_object_element(nodes,i),"mode"))==0,"CONNECT source model changed original member reference");
+        check(json_object_get_size(linux_ordered_object_v1(q,"expected_profile_tokens"))==count&&strstr(body,"connect-model-secret")==NULL,"CONNECT source model lost references or copied credentials");
         JsonObject *value=linux_ordered_value_v1(selection);char *raw=linux_ordered_json_v1(value);JsonNode *disk=parse_json(raw);LinuxOrderedSelectionV1 *reopened=linux_ordered_decode_v1(json_node_get_object(disk));
         check(reopened&&linux_ordered_current_v1(reopened,store),"CONNECT source model lost exact roundtrip");
         json_object_set_string_member(external,"protocol",protocols[(p+1)%G_N_ELEMENTS(protocols)]);check(!linux_ordered_current_v1(selection,store),"CONNECT selection borrowed a different saved protocol");json_object_set_string_member(external,"protocol",protocols[p]);
@@ -261,10 +269,20 @@ static void connect_model_only(void) {
         json_object_set_string_member(external,"ordered_middle_supported","true");check(!linux_ordered_current_v1(selection,store),"CONNECT source model accepted string capability");
         json_object_remove_member(external,"ordered_middle_supported");check(!linux_ordered_current_v1(selection,store),"CONNECT source model accepted absent capability");json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);
         char *token=g_strdup(obj_string(middle,"profile_token"));json_object_set_string_member(middle,"profile_token","eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");check(!linux_ordered_current_v1(selection,store),"CONNECT source model borrowed relinked source");json_object_set_string_member(middle,"profile_token",token);g_free(token);
-        JsonObject *first=json_array_get_object_element(nodes,0), *last=json_array_get_object_element(nodes,2);
+        JsonObject *first=json_array_get_object_element(nodes,0), *last=json_array_get_object_element(nodes,count-1);
         json_object_set_string_member(first,"mode",protocols[p]);check(!linux_ordered_rows_v1(nodes,"exit"),"CONNECT source model granted physical entry");json_object_set_string_member(first,"mode",prefixes[prefix]);
         json_object_set_string_member(last,"mode","hysteria2");check(!linux_ordered_rows_v1(nodes,"exit"),"CONNECT source model granted unsupported final");json_object_set_string_member(last,"mode","shadowsocks");
+        if(count>3){
+            JsonObject *typed=json_array_get_object_element(nodes,middle_index);
+            const char *bounded[]={"shadowsocks","socks5","openvpn"};
+            for(guint j=0;j<G_N_ELEMENTS(bounded);j++){
+                json_object_set_string_member(typed,"mode",bounded[j]);
+                check(!linux_ordered_rows_v1(nodes,"exit"),"non-CONNECT imported family retained exact three-node bound");
+            }
+            json_object_set_string_member(typed,"mode",protocols[p]);
+        }
         g_ptr_array_unref(editor.modes);linux_ordered_selection_free_v1(reopened);linux_ordered_selection_free_v1(selection);json_node_free(disk);json_object_unref(value);json_node_free(request);json_array_unref(nodes);json_object_unref(tokens);json_node_free(catalog_root);g_free(raw);g_free(body);
+    }
     }
     printf("Shipping ordered source model including CONNECT: %u checks PASS.\n",checks);
 }
@@ -329,14 +347,15 @@ int main(int argc,char **argv) {
     g_free(socks_saved);
     const char *connect_protocols[]={"http-connect","https-connect","openvpn"}, *connect_prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint protocol_index=0;protocol_index<G_N_ELEMENTS(connect_protocols);protocol_index++)for(guint prefix_index=0;prefix_index<G_N_ELEMENTS(connect_prefixes);prefix_index++){
+        for(connect_editor_count=3;connect_editor_count<=(protocol_index==2?3:8);connect_editor_count++){
         connect_editor_protocol=connect_protocols[protocol_index];connect_editor_prefix=connect_prefixes[prefix_index];
         json_object_set_string_member(external,"protocol",connect_editor_protocol);json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);
         refresh_all(&app);edit(10,TRUE);
         check(owned->selection!=NULL&&linux_ordered_current_v1(owned->selection,json_node_get_object(catalog)),"CONNECT editor Apply lost original source");
         before=posts;linux_profile_connect_v11(NULL,&state);check(posts==before+1,"CONNECT editor did not reach shipping Connect");
         request=parse_json(last_body);q=json_node_get_object(request);JsonArray *connect_nodes=linux_ordered_array_v1(q,"nodes");
-        check(connect_nodes&&json_array_get_length(connect_nodes)==3&&strcmp(obj_string(q,"execution"),"local")==0,"CONNECT request lost complete Local ordering");
-        check(strcmp(obj_string(json_array_get_object_element(connect_nodes,0),"mode"),connect_editor_prefix)==0&&strcmp(obj_string(json_array_get_object_element(connect_nodes,1),"mode"),connect_editor_protocol)==0&&strcmp(obj_string(json_array_get_object_element(connect_nodes,2),"mode"),"shadowsocks")==0,"CONNECT request changed an original transport");
+        check(connect_nodes&&json_array_get_length(connect_nodes)==connect_editor_count&&strcmp(obj_string(q,"execution"),"local")==0,"CONNECT request lost complete Local ordering");
+        check(strcmp(obj_string(json_array_get_object_element(connect_nodes,0),"mode"),connect_editor_prefix)==0&&strcmp(obj_string(json_array_get_object_element(connect_nodes,connect_editor_count-2),"mode"),connect_editor_protocol)==0&&strcmp(obj_string(json_array_get_object_element(connect_nodes,connect_editor_count-1),"mode"),"shadowsocks")==0,"CONNECT request changed an original transport");
         check(strcmp(linux_ordered_string_v1(linux_ordered_object_v1(q,"expected_profile_tokens"),"n2"),obj_string(custom,"profile_token"))==0,"CONNECT request lost original source token");
         check(strstr(last_body,"password")==NULL&&strstr(last_body,"api_token")==NULL,"CONNECT request copied credentials");json_node_free(request);
         char *connect_saved=snapshot();profiles(0);linux_ordered_store_v1(owned,NULL,FALSE);profiles(1);after=snapshot();
@@ -355,12 +374,16 @@ int main(int argc,char **argv) {
         json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);
         char *connect_token=g_strdup(obj_string(custom,"profile_token"));json_object_set_string_member(custom,"profile_token","dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
         check(!linux_ordered_current_v1(owned->selection,json_node_get_object(catalog)),"CONNECT relinking retained old source authority");json_object_set_string_member(custom,"profile_token",connect_token);g_free(connect_token);
-        JsonObject *connect_entry=json_array_get_object_element(owned->selection->nodes,0), *connect_final=json_array_get_object_element(owned->selection->nodes,2);
+        JsonObject *connect_entry=json_array_get_object_element(owned->selection->nodes,0), *connect_final=json_array_get_object_element(owned->selection->nodes,connect_editor_count-1);
         json_object_set_string_member(connect_entry,"mode",connect_editor_protocol);check(!linux_ordered_rows_v1(owned->selection->nodes,"exit"),"CONNECT middle became physical entry");json_object_set_string_member(connect_entry,"mode",connect_editor_prefix);
         json_object_set_string_member(connect_final,"mode","hysteria2");check(!linux_ordered_rows_v1(owned->selection->nodes,"exit"),"CONNECT middle acquired unsupported final authority");json_object_set_string_member(connect_final,"mode","shadowsocks");
-        JsonArray *extended=json_array_new();for(guint i=0;i<2;i++)json_array_add_element(extended,json_node_copy(json_array_get_element(owned->selection->nodes,i)));
-        JsonObject *extra=json_object_new();json_object_set_string_member(extra,"id","n3");json_object_set_string_member(extra,"mode","wg");json_array_add_object_element(extended,extra);json_array_add_element(extended,json_node_copy(json_array_get_element(owned->selection->nodes,2)));
+        JsonArray *extended=json_array_new();
+        for(guint i=0;i<connect_editor_count;i++){
+            guint original=i==connect_editor_count-3?connect_editor_count-2:i==connect_editor_count-2?connect_editor_count-3:i;
+            json_array_add_element(extended,json_node_copy(json_array_get_element(owned->selection->nodes,original)));
+        }
         check(!linux_ordered_rows_v1(extended,"exit"),"CONNECT borrowed an unsupported graph shape");json_array_unref(extended);
+    }
     }
     json_object_set_string_member(external,"protocol","shadowsocks");
     refresh_all(&app);edit(7,TRUE);check(owned->selection!=NULL&&strcmp(obj_string(json_array_get_object_element(owned->selection->nodes,1),"mode"),"hysteria2")==0,"editor did not retain Hysteria2 final");

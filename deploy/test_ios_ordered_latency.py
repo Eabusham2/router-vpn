@@ -51,11 +51,20 @@ TESTS=r'''
    row["role"]=position==0 ? "exit":"entry";value["result"]=row
    rejects("ordinary role bound to captured count"){_ = try IOSOrderedLatencyRecord(json(value))}
   }}
+  for count in 3...8 {
+   var value=receipt(1);value["position"]=count-2
+   var row=value["result"] as! [String:Any];row["label"]="Cumulative path through custom node \(count-1) of \(count) → Cloudflare edge";value["result"]=row
+   let record=try IOSOrderedLatencyRecord(json(value));check("CONNECT dynamic public receipt",record.count==count && record.position==count-2 && record.kind=="public-path")
+   for wrong in 0..<count where wrong != count-2 {
+    var changed=value;changed["position"]=wrong
+    rejects("CONNECT public receipt keeps captured penultimate position"){_ = try IOSOrderedLatencyRecord(json(changed))}
+   }
+  }
   var mutations:[(String,([String:Any])->[String:Any])]=[]
   for (key,value) in [("schema",2 as Any),("position",8),("source_sha256","bad"),("generation_sha256","bad"),("request_id","bad"),("measured_at",-1),("extra","secret")] {mutations.append((key,{v in var v=v;v[key]=value;return v}))}
   for (key,value) in [("attempts",49 as Any),("failed",1),("endpoint","https://secret.invalid"),("measurement","icmp")] {mutations.append((key,{v in var v=v;var r=v["result"] as! [String:Any];var b=r["benchmark"] as! [String:Any];b[key]=value;r["benchmark"]=b;v["result"]=r;return v}))}
   for (key,value) in [("samples",49 as Any),("min_ms",0),("average_ms",6),("jitter_ms",7),("max_ms",true)] {mutations.append((key,{v in var v=v;var r=v["result"] as! [String:Any];var b=r["benchmark"] as! [String:Any];var d=b["distribution"] as! [String:Any];d[key]=value;b["distribution"]=d;r["benchmark"]=b;v["result"]=r;return v}))}
-  for (key,value) in [("label","secret credential" as Any),("ready",false),("role","exit"),("node_id","other"),("download",["bytes":1])] {mutations.append((key,{v in var v=v;var r=v["result"] as! [String:Any];r[key]=value;v["result"]=r;return v}))}
+  for (key,value) in [("label","Cumulative path through password node 2 of 3 → Cloudflare edge" as Any),("ready",false),("role","exit"),("node_id","other"),("download",["bytes":1])] {mutations.append((key,{v in var v=v;var r=v["result"] as! [String:Any];r[key]=value;v["result"]=r;return v}))}
   for (name,mutate) in mutations {rejects("reject invalid receipt "+name){_ = try IOSOrderedLatencyRecord(json(mutate(receipt())))}}
   let r=try IOSOrderedLatencyRecord(json(receipt())),profile=String(repeating:"4",count:64)
   try IOSOrderedLatencyHistory.save(r,profile:profile,current:{})

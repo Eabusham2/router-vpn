@@ -21,7 +21,7 @@ class TypedInstalledGate(unittest.TestCase):
         if case in G.MEASUREMENT_CASES:
             lines.append('    desktop_node_chain_darwin_native_test.go:657: '+G.BASE.public_status_receipt(case))
             lines.append('    desktop_node_chain_darwin_native_test.go:657: '+G.BASE.MEASUREMENT_RECEIPT)
-            lines.append('    desktop_node_chain_darwin_native_test.go:657: '+G.FIFTY_RECEIPT)
+            lines.append('    desktop_node_chain_darwin_native_test.go:657: '+(G.LONG_FIFTY_RECEIPT if case in G.LONG_CASES else G.FIFTY_RECEIPT))
         lines.append('    desktop_node_chain_darwin_native_test.go:657: '+G.STREAMS_RECEIPT)
         lines += ['    desktop_node_chain_darwin_native_test.go:570: actual sealed Darwin ordered host verified '+case+': original native transaction and intended proof boundary, complete captured identities, stopped acknowledgment, PF and utun retirement, controller join',
                   '--- PASS: '+G.TEST+' (2.00s)', '    --- PASS: '+G.TEST+'/'+case+' (2.00s)', 'PASS']
@@ -43,9 +43,9 @@ class TypedInstalledGate(unittest.TestCase):
         self.assertEqual(G.case_inventory(), G.CASES)
         self.assertEqual(len(G.BASE.case_inventory()),37)
         self.assertEqual(len(G.SOCKS.case_inventory()),8)
-        self.assertEqual(len(G.CASES),22)
+        self.assertEqual(len(G.CASES),24)
         self.assertTrue(set(G.BASE.CASES).isdisjoint(G.CASES))
-        self.assertEqual(len(G.AUTHORITY_CASES),7)
+        self.assertEqual(len(G.AUTHORITY_CASES),9)
         self.assertTrue(all((ROOT/name).is_file() for name in G.SOURCES))
 
     def test_each_complete_native_verdict(self):
@@ -111,7 +111,7 @@ class TypedInstalledGate(unittest.TestCase):
     def test_connect_receipts_cannot_be_omitted_borrowed_or_repeated(self):
         for case in G.CASES:
             output=self.completed(case)
-            markers=[G.STREAMS_RECEIPT]+([G.FIFTY_RECEIPT] if case in G.MEASUREMENT_CASES else [])
+            markers=[G.STREAMS_RECEIPT]+([G.LONG_FIFTY_RECEIPT if case in G.LONG_CASES else G.FIFTY_RECEIPT] if case in G.MEASUREMENT_CASES else [])
             for marker in markers:
                 line=next(row for row in output.splitlines() if row.endswith(marker))
                 for changed in (output.replace(line,''),output.replace(line,line+'\n'+line),output.replace(marker,'actual installed Darwin CONNECT foreign')):

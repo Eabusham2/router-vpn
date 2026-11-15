@@ -26,7 +26,7 @@ PEER_TAGS = BASE.PEER_TAGS
 TEST = 'TestMacOSRetainedNodeChainCONNECTNativeHost'
 FLAG = 'ROUTERVPN_DARWIN_CONNECT_NODE_CHAIN_HOST_ACCEPTANCE'
 AUTHORITY_TEST = 'TestDesktopDarwinInstalledCONNECTNodeChainFixtureKeepsOriginalSources'
-AUTHORITY_CASES = (AUTHORITY_TEST, *(AUTHORITY_TEST+'/'+name for name in ('http-wg','http-awg-fast','http-awg-strong','https-wg','https-awg-fast','https-awg-strong')))
+AUTHORITY_CASES = (AUTHORITY_TEST, *(AUTHORITY_TEST+'/'+name for name in ('http-wg','http-awg-fast','http-awg-strong','https-wg','https-awg-fast','https-awg-strong','http-wg-four','https-wg-eight')))
 AUTHORITY_SOURCE = 'cmd/client/desktop_node_chain_connect_darwin_native_test.go'
 SOURCE_CONTROL = 'installed source changed original CONNECT credential or invented paired assets'
 CASES = (
@@ -52,9 +52,12 @@ CASES = (
     'node-chain-https-connect-wg-prefix-lost',
     'node-chain-https-connect-wg-tls-name',
     'node-chain-https-connect-wg-tls-trust',
+    'node-chain-http-connect-wg-four-connect', 'node-chain-https-connect-wg-eight-connect',
 )
 MEASUREMENT_CASES = tuple(case for case in CASES if case.endswith(("-connect", "-middle-source", "-prefix-lost")))
 FIFTY_RECEIPT = "actual installed Darwin CONNECT fifty: all three original members returned fifty samples and retained exact durable receipts"
+LONG_FIFTY_RECEIPT = "actual installed Darwin CONNECT long path fifty: captured penultimate public and final private members retained exact durable receipts"
+LONG_CASES = CASES[-2:]
 STREAMS_RECEIPT = "actual installed Darwin CONNECT streams: original authenticated TCP owners joined before controller release"
 SOURCES = (
     'deploy/test_macos_connect_node_chain_host.py', 'deploy/test_macos_connect_node_chain_host_runner.py',
@@ -94,11 +97,11 @@ def case_inventory():
     source = (ROOT/AUTHORITY_SOURCE).read_text()
     match = re.search(r'var macOSNodeChainCONNECTHostCases = \[\]string\{([^}]+)\}', source)
     if match is None or tuple(re.findall(r'"([a-z0-9-]+)"', match[1])) != CASES or re.sub(r'"[a-z0-9-]+"|\s|,', '', match[1]):
-        raise ValueError('Installed CONNECT source lost its exact22 cases')
+        raise ValueError('Installed CONNECT source lost its exact24 cases')
     BASE.case_inventory()
     SOCKS.case_inventory()
-    if len(BASE.CASES) != 37 or len(SOCKS.CASES) != 8 or len(set(CASES)) != 22 or not set(CASES).isdisjoint((*BASE.CASES, *SOCKS.CASES)):
-        raise ValueError('Installed CONNECT gate lost original37, SOCKS8 or typed22')
+    if len(BASE.CASES) != 37 or len(SOCKS.CASES) != 8 or len(set(CASES)) != 24 or not set(CASES).isdisjoint((*BASE.CASES, *SOCKS.CASES)):
+        raise ValueError('Installed CONNECT gate lost original37, SOCKS8 or typed24')
     return CASES
 
 
@@ -118,9 +121,9 @@ def source_identity(core):
 def check_verdict(output, case):
     BASE.check_verdict(output, case, test=TEST, cases=CASES, mtu_cases=(), measurement_cases=MEASUREMENT_CASES, public_cases=CASES)
     receipts = [match[1] for line in output.splitlines() if (match := re.match(r'^\s+[^ ]+\.go:[0-9]+: (.*)$', line))]
-    if receipts.count(FIFTY_RECEIPT) != (1 if case in MEASUREMENT_CASES else 0) or receipts.count(STREAMS_RECEIPT) != 1:
+    if receipts.count(FIFTY_RECEIPT) != (1 if case in MEASUREMENT_CASES and case not in LONG_CASES else 0) or receipts.count(LONG_FIFTY_RECEIPT) != (1 if case in LONG_CASES else 0) or receipts.count(STREAMS_RECEIPT) != 1:
         raise ValueError('Installed CONNECT case lost actual fifty or joined TCP owner receipt')
-    if any(value.startswith('actual installed Darwin CONNECT ') and value not in (FIFTY_RECEIPT, STREAMS_RECEIPT) for value in receipts):
+    if any(value.startswith('actual installed Darwin CONNECT ') and value not in (FIFTY_RECEIPT, LONG_FIFTY_RECEIPT, STREAMS_RECEIPT) for value in receipts):
         raise ValueError('Installed CONNECT case borrowed another native receipt')
 
 

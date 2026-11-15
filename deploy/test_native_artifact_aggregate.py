@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "deploy/native-artifact-workflow-parity-audit.py"
-TYPED_NATIVE = ("typed-socks-native", "typed-connect-runtime", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child")
+TYPED_NATIVE = ("typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child")
 
 
 def shipping_check(name="check_release_aggregate_gates"):
@@ -84,6 +84,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                 ("source_sha: ${{ github.sha }}", "source_sha: " + "a" * 40),
                 ("source_sha: ${{ github.sha }}", "source_sha: ${{ inputs.source_sha }}"),
                 ("suite: " + {"typed-socks-native": "socks-run", "typed-connect-runtime": "connect-runtime",
+                             "typed-connect-source": "connect-source",
                              "typed-connect-native": "connect-run", "typed-connect-native-mtu": "connect-native-mtu", "desktop-connect-child": "desktop-connect-child"}[job],
                  "suite: socks-source"),
                 ("    uses: ./.github/workflows/focused-source-validation.yml",
@@ -113,6 +114,7 @@ class NativeArtifactAggregate(unittest.TestCase):
         ]
         for suite, driver in (("socks-run", "test_focused_socks_run.py"),
                               ("connect-runtime", "test_focused_connect_runtime.py"),
+                              ("connect-source", "test_focused_connect_source.py"),
                               ("connect-run", "test_focused_connect_run.py"),
                               ("connect-native-mtu", "test_focused_connect_native_mtu.py")):
             condition = "        if: inputs.suite == '" + suite + "'"

@@ -712,24 +712,26 @@ rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["s
 for middleMode in ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"] { for prefixMode in ["wg", "awg2-fast", "awg2-strong"] {
     let connectMiddle = ["http-connect", "https-connect"].contains(middleMode)
     let otherMiddle = middleMode == "http-connect" ? "https-connect" : middleMode == "https-connect" ? "http-connect" : middleMode == "socks5" ? "shadowsocks" : "socks5"
-    _ = chooseOrdered(3, prefixMode: prefixMode)
+    for count in (connectMiddle ? Array(3...8) : [3]) {
+    let middle = count - 2
+    _ = chooseOrdered(count, prefixMode: prefixMode)
     let paired = owner.captureConnectionProfileSelection()
     var catalog = owner.profiles
-    catalog[1]["node_kind"] = "external"
-    catalog[1]["external"] = ["protocol": middleMode, "ordered_middle_supported": true]
+    catalog[middle]["node_kind"] = "external"
+    catalog[middle]["external"] = ["protocol": middleMode, "ordered_middle_supported": true]
     var captured = paired
-    captured.orderedNodes[1]["mode"] = middleMode
+    captured.orderedNodes[middle]["mode"] = middleMode
     owner.profiles = catalog
     owner.api.orderedCurrent = ["selected_id": captured.selectedNodeID, "profiles": catalog]
     owner.connectionProfileSelection = captured
     let draft = try owner.makeOrderedNodeDraft()
-    check(draft.allowedModes(at: 1) == [middleMode] && draft.nodes == captured.orderedNodes,
+    check(draft.allowedModes(at: middle) == [middleMode] && draft.nodes == captured.orderedNodes,
           "typed imported editor substituted the saved middle protocol")
     if middleMode == "openvpn" { check(RouterVPNOrderedNodes.modeName(middleMode) == "OpenVPN", "OpenVPN editor concealed its transport") }
     if connectMiddle {
         check(RouterVPNOrderedNodes.modeName(middleMode) == (middleMode == "http-connect" ? "HTTP CONNECT" : "HTTPS CONNECT"), "CONNECT editor mislabeled the exact imported protocol")
     }
-    check(draft.allowedModes(at: 2) == ["shadowsocks"],
+    check(draft.allowedModes(at: count - 1) == ["shadowsocks"],
           "SOCKS imported middle editor offered a Hysteria2 final")
     let staged = try draft.selection()
     let body = try RouterVPNOrderedNodes.connectBody(staged, current: owner.api.orderedCurrent)
@@ -752,28 +754,28 @@ for middleMode in ["shadowsocks", "socks5", "http-connect", "https-connect", "op
     check(confirmed == captured, "typed middle Save adopted another captured selection")
     var changedReply = payload
     var changedRows = captured.orderedNodes
-    changedRows[1]["mode"] = otherMiddle
+    changedRows[middle]["mode"] = otherMiddle
     changedReply["multihop_nodes"] = changedRows
     rejects({ _ = try owner.confirmedConnectionProfileSave(changedReply, body: prepared, original: captured) },
             "typed middle response borrowed another compiler family")
     var changedCatalog = catalog
-    changedCatalog[1]["external"] = ["protocol": otherMiddle, "ordered_middle_supported": true]
+    changedCatalog[middle]["external"] = ["protocol": otherMiddle, "ordered_middle_supported": true]
     rejects({ _ = try RouterVPNOrderedNodes.connectBody(captured, current: ["selected_id": captured.selectedNodeID, "profiles": changedCatalog]) },
             connectMiddle ? "CONNECT Connect borrowed HTTP or HTTPS transport" : "SOCKS Connect borrowed another imported protocol")
     rejects({ _ = try RouterVPNOrderedNodeDraft(selection: captured, generation: UUID(), catalog: changedCatalog) },
             "SOCKS draft reopened against another imported protocol")
     changedCatalog = catalog
-    changedCatalog[1]["profile_token"] = String(repeating: "f", count: 64)
+    changedCatalog[middle]["profile_token"] = String(repeating: "f", count: 64)
     rejects({ _ = try RouterVPNOrderedNodes.connectBody(captured, current: ["selected_id": captured.selectedNodeID, "profiles": changedCatalog]) },
             "typed imported middle reused changed credential identity")
     var noMiddle = paired
-    noMiddle.orderedNodes.remove(at: 1)
-    noMiddle.profileTokens.removeValue(forKey: "ordered-1")
+    noMiddle.orderedNodes.remove(at: middle)
+    noMiddle.profileTokens.removeValue(forKey: "ordered-\(middle)")
     var added = try RouterVPNOrderedNodeDraft(selection: noMiddle, generation: UUID(), catalog: catalog)
-    try added.add("ordered-1")
-    check(added.modes == [prefixMode, middleMode], connectMiddle ? "CONNECT editor Add replaced the captured middle mode" : "SOCKS editor Add replaced the captured middle mode")
+    try added.add("ordered-\(middle)")
+    check(added.modes == Array(repeating: prefixMode, count: count - 2) + [middleMode], connectMiddle ? "CONNECT editor Add replaced the captured middle mode" : "SOCKS editor Add replaced the captured middle mode")
     check(try added.selection().orderedNodes == captured.orderedNodes, "typed editor Add lost the complete order")
-    try added.move(1, by: -1)
+    try added.move(middle, by: -1)
     rejects({ _ = try added.selection() }, "typed imported member acquired the physical prefix")
     var otherExecution = captured
     otherExecution.execution = "server"
@@ -787,7 +789,7 @@ for middleMode in ["shadowsocks", "socks5", "http-connect", "https-connect", "op
     owner.connectMultihop()
     DispatchQueue.background.run()
     check(owner.api.calls.count == calls, "closed Darwin capability dispatched a typed imported path")
-} }
+} } }
 _ = chooseOrdered(3)
 var socksCatalog = owner.profiles
 socksCatalog[1]["node_kind"] = "external"

@@ -1277,7 +1277,8 @@ def verify_installed_windows_connect_receipt(output, target, original, digest_be
     cases = ['http-wg-connect', 'http-awg-fast-connect', 'http-awg-strong-connect',
              'https-wg-connect', 'https-awg-fast-connect', 'https-awg-strong-connect',
              'https-wg-wrong-middle-key', 'http-wg-wrong-middle-public', 'https-wg-tls-name', 'https-wg-tls-trust',
-             'http-wg-final-dns-failure', 'https-wg-final-node-failure', 'https-wg-final-key', 'https-wg-middle-source', 'http-wg-connect-off', 'https-wg-connect-off']
+             'http-wg-final-dns-failure', 'https-wg-final-node-failure', 'https-wg-final-key', 'https-wg-middle-source', 'http-wg-connect-off', 'https-wg-connect-off',
+             'http-wg-four-connect', 'https-wg-eight-connect']
     if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or
             receipt.get('target') != target or receipt.get('source_sha256') != original['policy_sha256'] or
             receipt.get('bundle_sha256') != digest_before or receipt.get('cases') != cases or
@@ -1296,6 +1297,18 @@ def verify_installed_windows_connect_receipt(output, target, original, digest_be
             set(receipt['scope_sources']) != set(socks_receipt['scope_sources']) or
             set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
         raise ValueError('Installed Windows CONNECT lost its actual carrier, joined retirement or original prefix/SOCKS evidence')
+    prefix_measurements = receipt.get('ordered_prefix_measurements')
+    expected_prefix_measurements = [
+        {'case': 'http-wg-four-connect', 'nodes': 4, 'positions': [2, 3], 'samples': 50},
+        {'case': 'https-wg-eight-connect', 'nodes': 8, 'positions': [6, 7], 'samples': 50},
+    ]
+    if (prefix_measurements != expected_prefix_measurements or
+            not isinstance(prefix_measurements, list) or
+            any(not isinstance(row, dict) or set(row) != {'case', 'nodes', 'positions', 'samples'} or
+                type(row['nodes']) is not int or type(row['samples']) is not int or
+                not isinstance(row['positions'], list) or any(type(position) is not int for position in row['positions'])
+                for row in prefix_measurements)):
+        raise ValueError('Installed Windows CONNECT lost its exact four/eight-node measured positions')
     roots = {
         'TestDesktopCONNECTOwnedParentRetainsStartProofAndJoinedRetirement': ('wg', 'awg2-fast', 'awg2-strong'),
         'TestDesktopCONNECTProtectionRejectsForeignAndMixedOwners': ('foreign-policy', 'equal-policy', 'ordinary-policy', 'socks-policy', 'all-policies', 'foreign-source', 'foreign-attempt', 'equal-attempt', 'foreign-launch', 'wrong-command'),

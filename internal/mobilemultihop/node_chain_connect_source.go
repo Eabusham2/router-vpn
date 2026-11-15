@@ -41,57 +41,50 @@ type NodeChainCONNECTSourceMetadata struct {
 	Devices             []NodeChainCONNECTDevicePolicy `json:"devices"`
 }
 
-// NewNodeChainCONNECTSource validates the two original paired nodes using the
-// existing constructor, then uses the same ordered closure compiler, physical
-// traversal, final-DNS policy and per-prefix MTU projection as shipping paths.
+// NewNodeChainCONNECTSource retains one to six original paired packet prefixes,
+// one CONNECT member, and the paired SS final. The paired constructor still
+// validates every original member and identity before any closure is composed.
 func NewNodeChainCONNECTSource(input string) (*NodeChainCONNECTSource, error) {
 	var source NodeChainSource
 	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil ||
-		source.Schema != 4 || source.Execution != "local" || len(source.Nodes) != 3 ||
-		len(source.IdentitySources) != 3 || source.IdentitySources[0] == "" ||
-		source.IdentitySources[1] != "" || source.IdentitySources[2] == "" {
+		source.Schema != 4 || source.Execution != "local" || len(source.Nodes) < 3 || len(source.Nodes) > NodeChainMaximumNodes ||
+		len(source.IdentitySources) != len(source.Nodes) {
 		return nil, nodeChainCONNECTSourceError
 	}
-	middle, err := parseNodeChainCONNECTMember(source.Nodes[1])
+	middlePosition := len(source.Nodes) - 2
+	for i, identity := range source.IdentitySources {
+		if (i == middlePosition) != (identity == "") {
+			return nil, nodeChainCONNECTSourceError
+		}
+	}
+	middle, err := parseNodeChainCONNECTMember(source.Nodes[middlePosition])
 	if err != nil {
 		return nil, err
 	}
-	paired := NodeChainSource{Schema: 1, Execution: "local",
-		Nodes:           []string{source.Nodes[0], source.Nodes[2]},
-		IdentitySources: []string{source.IdentitySources[0], source.IdentitySources[2]}}
+	paired := NodeChainSource{Schema: 1, Execution: "local"}
+	for i := range source.Nodes {
+		if i == middlePosition {
+			continue
+		}
+		paired.Nodes = append(paired.Nodes, source.Nodes[i])
+		paired.IdentitySources = append(paired.IdentitySources, source.IdentitySources[i])
+	}
 	pairJSON, err := json.Marshal(paired)
 	if err != nil {
 		return nil, nodeChainCONNECTSourceError
 	}
 	pair, err := NewNodeChain(string(pairJSON))
-	if err != nil || len(pair.nodes) != 2 || !NodeChainPrefixMode(pair.nodes[0].mode) ||
-		pair.nodes[1].mode != "shadowsocks" ||
-		middle.selection.ExitID == predecessorText(pair.nodes[0].profile, "id") ||
-		middle.selection.ExitID == predecessorText(pair.nodes[1].profile, "id") {
-		return nil, nodeChainCONNECTSourceError
-	}
-	first, err := nodeMultihopPredecessor(pair.nodes[0])
 	if err != nil {
 		return nil, nodeChainCONNECTSourceError
 	}
-	custom, err := middle.closure()
+	members, closures, err := nodeChainCONNECTMembers(pair, middle)
 	if err != nil {
 		return nil, err
 	}
-	final, err := nodeMultihopPredecessor(pair.nodes[1])
-	if err != nil {
-		return nil, nodeChainCONNECTSourceError
-	}
-	closures := []*externalPredecessor{first, custom, final}
 	for _, closure := range closures {
 		if services, _ := closure.graph["services"].([]any); len(services) != 0 {
 			return nil, nodeChainCONNECTSourceError
 		}
-	}
-	members := []nodeChainGraphMember{
-		{profile: pair.nodes[0].profile, source: pair.nodes[0].source, mode: pair.nodes[0].mode},
-		{profile: middle.selection.Profile, source: middle.source, mode: middle.selection.Protocol, imported: true},
-		{profile: pair.nodes[1].profile, source: pair.nodes[1].source, mode: "shadowsocks"},
 	}
 	physical, err := pair.nodes[0].PhysicalEgress()
 	if err != nil {
@@ -126,12 +119,12 @@ func NewNodeChainCONNECTSource(input string) (*NodeChainCONNECTSource, error) {
 	}
 	for position := range members {
 		var device nodeChainImportedDevicePolicy
-		if position == 1 {
+		if position == middlePosition {
 			device, err = middle.devicePolicy()
 		} else {
-			index := 0
-			if position == 2 {
-				index = 1
+			index := position
+			if position > middlePosition {
+				index--
 			}
 			var captured NodeDesktopCapture
 			captured, err = pair.nodes[index].DesktopCapture()
@@ -212,76 +205,96 @@ func (p *NodeChainCONNECTSource) ReadValidated() (string, NodeChainCONNECTSource
 	return p.config, meta, nil
 }
 
-// nodeChainCONNECTProofScope is a private one-construction receipt. Ordinary
-// callers cannot supply a network flag. The exact three original closures are
-// checked again before the shared compiler mutates their private copies.
+// nodeChainCONNECTMembers reconstructs all original immutable paired members.
+// The imported member remains penultimate; no arbitrary graph can supply UoT
+// authority, and every earlier member must retain a supported packet owner.
+func nodeChainCONNECTMembers(pair *NodeChain, middle *nodeChainCONNECTMember) ([]nodeChainGraphMember, []*externalPredecessor, error) {
+	if pair == nil || pair.validateCapture() != nil || len(pair.nodes) < 2 || len(pair.nodes) >= NodeChainMaximumNodes ||
+		pair.importedMiddle != nil || pair.openVPNMiddle != nil || pair.socksSource != nil || pair.connectSource != nil || middle == nil || middle.validate() != nil {
+		return nil, nil, nodeChainCONNECTSourceError
+	}
+	members := make([]nodeChainGraphMember, 0, len(pair.nodes)+1)
+	closures := make([]*externalPredecessor, 0, len(pair.nodes)+1)
+	for i, node := range pair.nodes {
+		final := i == len(pair.nodes)-1
+		if node == nil || (!final && !NodeChainPrefixMode(node.mode)) || (final && node.mode != "shadowsocks") ||
+			middle.selection.ExitID == predecessorText(node.profile, "id") {
+			return nil, nil, nodeChainCONNECTSourceError
+		}
+		if final {
+			closure, err := middle.closure()
+			if err != nil {
+				return nil, nil, err
+			}
+			members = append(members, nodeChainGraphMember{profile: middle.selection.Profile, source: middle.source, mode: middle.selection.Protocol, imported: true})
+			closures = append(closures, closure)
+		}
+		closure, err := nodeMultihopPredecessor(node)
+		if err != nil {
+			return nil, nil, err
+		}
+		members = append(members, nodeChainGraphMember{profile: node.profile, source: node.source, mode: node.mode})
+		closures = append(closures, closure)
+	}
+	return members, closures, nil
+}
+
+// This private construction receipt retains every original closure pointer.
+// Validation occurs before the compiler mutates their private graph copies.
 type nodeChainCONNECTProofScope struct {
 	pair     *NodeChain
 	middle   *nodeChainCONNECTMember
-	closures [3]*externalPredecessor
+	closures []*externalPredecessor
+	nodes    []*NodeProfile
 }
 
 func newNodeChainCONNECTProofScope(pair *NodeChain, middle *nodeChainCONNECTMember, closures []*externalPredecessor) (*nodeChainCONNECTProofScope, error) {
-	if pair == nil || pair.validateCapture() != nil || len(pair.nodes) != 2 ||
-		middle == nil || middle.validate() != nil || len(closures) != 3 ||
-		closures[0] == nil || closures[1] == nil || closures[2] == nil {
+	if pair == nil || pair.validateCapture() != nil || len(pair.nodes) < 2 || len(pair.nodes) >= NodeChainMaximumNodes || middle == nil || middle.validate() != nil || len(closures) != len(pair.nodes)+1 {
 		return nil, nodeChainCONNECTSourceError
 	}
-	final := pair.nodes[1]
-	// Existing authority includes every original SS method, key, service
-	// declaration and supported layer. A TCP-only declaration cannot carry
-	// the original Home AdGuard UDP policy and is not promoted here.
-	capability, err := importedCONNECTCapture(closures[2].graph, closures[2].final, "",
-		final.mode, final.profile, final.inputs.Files)
+	for _, closure := range closures {
+		if closure == nil {
+			return nil, nodeChainCONNECTSourceError
+		}
+	}
+	final := pair.nodes[len(pair.nodes)-1]
+	capability, err := importedCONNECTCapture(closures[len(closures)-1].graph, closures[len(closures)-1].final, "", final.mode, final.profile, final.inputs.Files)
 	if err != nil || capability != "uot-v2" {
 		return nil, nodeChainCONNECTSourceError
 	}
-	return &nodeChainCONNECTProofScope{pair: pair, middle: middle,
-		closures: [3]*externalPredecessor{closures[0], closures[1], closures[2]}}, nil
+	return &nodeChainCONNECTProofScope{pair: pair, middle: middle, closures: append([]*externalPredecessor(nil), closures...), nodes: append([]*NodeProfile(nil), pair.nodes...)}, nil
 }
 
 func (s *nodeChainCONNECTProofScope) validate(members []nodeChainGraphMember, closures []*externalPredecessor) error {
-	bad := nodeChainCONNECTSourceError
-	if s == nil || s.pair == nil || s.pair.validateCapture() != nil || s.middle == nil ||
-		s.middle.validate() != nil || len(s.pair.nodes) != 2 || len(members) != 3 || len(closures) != 3 {
-		return bad
+	if !s.ownsOriginalNodes() {
+		return nodeChainCONNECTSourceError
 	}
-	first, final := s.pair.nodes[0], s.pair.nodes[1]
-	if !NodeChainPrefixMode(first.mode) || final.mode != "shadowsocks" ||
-		(s.middle.selection.Protocol != "http-connect" && s.middle.selection.Protocol != "https-connect") {
-		return bad
+	wantedMembers, wanted, err := nodeChainCONNECTMembers(s.pair, s.middle)
+	if err != nil || !reflect.DeepEqual(members, wantedMembers) || len(closures) != len(wanted) || len(s.closures) != len(wanted) {
+		return nodeChainCONNECTSourceError
 	}
-	wantMembers := []nodeChainGraphMember{
-		{profile: first.profile, source: first.source, mode: first.mode},
-		{profile: s.middle.selection.Profile, source: s.middle.source, mode: s.middle.selection.Protocol, imported: true},
-		{profile: final.profile, source: final.source, mode: final.mode},
-	}
-	if !reflect.DeepEqual(members, wantMembers) {
-		return bad
-	}
-	firstClosure, err := nodeMultihopPredecessor(first)
-	if err != nil {
-		return bad
-	}
-	middleClosure, err := s.middle.closure()
-	if err != nil {
-		return bad
-	}
-	finalClosure, err := nodeMultihopPredecessor(final)
-	if err != nil {
-		return bad
-	}
-	capability, err := importedCONNECTCapture(finalClosure.graph, finalClosure.final, "",
-		final.mode, final.profile, final.inputs.Files)
+	final := s.pair.nodes[len(s.pair.nodes)-1]
+	last := wanted[len(wanted)-1]
+	capability, err := importedCONNECTCapture(last.graph, last.final, "", final.mode, final.profile, final.inputs.Files)
 	if err != nil || capability != "uot-v2" {
-		return bad
+		return nodeChainCONNECTSourceError
 	}
-	wanted := []*externalPredecessor{firstClosure, middleClosure, finalClosure}
 	for i := range wanted {
-		if closures[i] == nil || closures[i] != s.closures[i] ||
-			!reflect.DeepEqual(closures[i], wanted[i]) {
-			return bad
+		if closures[i] == nil || closures[i] != s.closures[i] || !reflect.DeepEqual(closures[i], wanted[i]) {
+			return nodeChainCONNECTSourceError
 		}
 	}
 	return nil
+}
+
+func (s *nodeChainCONNECTProofScope) ownsOriginalNodes() bool {
+	if s == nil || s.pair == nil || len(s.nodes) != len(s.pair.nodes) || len(s.nodes) < 2 {
+		return false
+	}
+	for i, node := range s.nodes {
+		if node == nil || node != s.pair.nodes[i] {
+			return false
+		}
+	}
+	return true
 }

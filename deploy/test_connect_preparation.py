@@ -74,6 +74,14 @@ class Projection(unittest.TestCase):
    self.assertEqual(original.count('routerVPNNodeSOCKSBind'),bound.count('routerVPNNodeSOCKSBind'))
    for broken in (bound+"routerVPNNodeCONNECTBind",bound.replace('routerVPNNodeCONNECTBind(', 'routerVPNNodeCONNECTBind(foreign('),bound.replace('), nil',', nil',1),bound.replace('return routerVPNNodeCONNECTBind','return foreign + routerVPNNodeCONNECTBind')):
     with self.assertRaises(ValueError):P.CONNECT_BINDING.strip(broken)
+ def test_complete_prefix_templates_are_required(self):
+  expected={
+   'connect_prefix_run_test.go.tmpl':'experimental/libbox/routervpn_node_chain_connect_prefix_run_test.go',
+   'connect_prefix_policy_test.go.tmpl':'experimental/libbox/routervpn_node_chain_connect_prefix_policy_test.go',
+   'connect_prefix_mtu_test.go.tmpl':'routervpn_node_chain_connect_prefix_mtu_test.go'}
+  for name,relative in expected.items():
+   self.assertEqual(relative,P.TEMPLATES.get(name))
+   self.assertIn(ROOT/'mobile/chain'/name,P.inputs())
  def test_every_projected_template_is_an_input(self):
   paths=set(P.inputs())
   self.assertTrue({ROOT/'mobile/chain'/name for name in P.TEMPLATES}<=paths)

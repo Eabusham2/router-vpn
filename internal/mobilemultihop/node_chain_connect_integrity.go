@@ -27,8 +27,8 @@ type nodeChainCONNECTPairIntegrity struct {
 	dns                                                              NodeChainDNSCapture
 	physical                                                         []PhysicalEgress
 	projection                                                       nodeChainProjection
-	nodes                                                            [2]*NodeProfile
-	values                                                           [2]NodeProfile
+	nodes                                                            []*NodeProfile
+	values                                                           []NodeProfile
 }
 
 type nodeChainCONNECTMemberIntegrity struct {
@@ -61,7 +61,7 @@ func nodeChainCONNECTIntegrityCopy[T any](value T) (T, error) {
 // No read can install, refresh or replace this receipt.
 func (p *NodeChainCONNECTSource) retainIntegrity() error {
 	if p == nil || p.integrity != nil || p.validateCompiled() != nil ||
-		p.pair.importedMiddle != nil || p.pair.openVPNMiddle != nil || p.pair.socksSource != nil || p.pair.connectSource != nil || len(p.pair.nodes) != 2 {
+		p.pair.importedMiddle != nil || p.pair.openVPNMiddle != nil || p.pair.socksSource != nil || p.pair.connectSource != nil || len(p.pair.nodes) < 2 || len(p.pair.nodes) >= NodeChainMaximumNodes {
 		return nodeChainCONNECTSourceError
 	}
 	saved := &nodeChainCONNECTIntegrity{
@@ -78,6 +78,7 @@ func (p *NodeChainCONNECTSource) retainIntegrity() error {
 		sourceJSON: pair.sourceJSON, sourceSHA: pair.sourceSHA, config: pair.config,
 		metadata: pair.metadata, seal: pair.seal, originalConfigSHA: pair.originalConfigSHA,
 		dns: pair.dns, projection: pair.projection,
+		nodes: make([]*NodeProfile, len(pair.nodes)), values: make([]NodeProfile, len(pair.nodes)),
 		proofs:   append([]NodeChainProof(nil), pair.proofs...),
 		physical: append([]PhysicalEgress(nil), pair.physical...),
 	}

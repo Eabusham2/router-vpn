@@ -63,6 +63,20 @@ def ordinary_fixture(count):
                           status=dict(request_id="", stage="idle", complete=True, drained=True, results=[])), receipts=receipts)
 
 
+def connect_fixture(count):
+    value = ordinary_fixture(count)
+    position = count-2
+    node = copy.deepcopy(NODES[1])
+    node.update(node_id=f"node-{position}", position=position,
+                label=f"Cumulative path through custom node {position+1} of {count} → Cloudflare edge")
+    value['info']['nodes'][position] = node
+    saved = receipt(1)
+    saved.update(node_id=node['node_id'], position=position)
+    saved['result'].update(node_id=node['node_id'], label=node['label'])
+    value['receipts'][position] = saved
+    return value
+
+
 def selected_fixture(execution, count):
     value = ordinary_fixture(count) if count else dict(info=info(), receipts=[receipt(i) for i in range(3)])
     for node in value['info']['nodes']:
@@ -76,6 +90,7 @@ def selected_fixture(execution, count):
 def fixture_data():
     return {'info': info(), **{f'receipt{i}': receipt(i) for i in range(3)},
             'ordinary': [ordinary_fixture(count) for count in range(2, 9)],
+            'connect': [connect_fixture(count) for count in range(3, 9)],
             'selected': [selected_fixture(execution, count) for execution in ('local','server') for count in (0,2,3,4,5,6,7,8)]}
 
 
@@ -90,6 +105,7 @@ def receipt_model(directory, data):
     flags = shlex.split(subprocess.check_output(['pkg-config', '--cflags', '--libs', 'json-glib-1.0'], text=True))
     fixture = ROOT/'client/linux/test-ordered-latency-receipts-v1.c'
     controls = {
+        'connect-length': ('public_path && count >= 3 && position == count - 2', 'public_path && count == 3 && position == 1'),
         'selected-labels': ('"Cumulative path", "Cumulative local path", "Cumulative server path"', '"Cumulative path"'),
         'selected-receipt': ('if (g_strcmp0(linux_ol_string_v1(result, "label"), linux_ol_string_v1(node, "label"))) return FALSE;', 'if (FALSE) return FALSE;'),
         'private-budget': ('double maximum = public_path ? 5000 : 2000;', 'double maximum = position == 1 ? 5000 : 2000;'),

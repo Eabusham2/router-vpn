@@ -21,6 +21,13 @@ def events(case,control=None):
     rows.extend(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX,Test=x) for x in (leaf,root))
     rows.append(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX))
     return rows
+def prefix_rows(case=None,refusal=False):
+    names=V.PREFIX_POLICY_CASES if case is None else V.prefix_names(case,refusal)
+    rows=[dict(Action="start",Package=V.BASE.LIBBOX),dict(Action="run",Package=V.BASE.LIBBOX,Test=names[0])]
+    for name in names[1:]:
+        rows.extend((dict(Action="run",Package=V.BASE.LIBBOX,Test=name),dict(Action="pass",Package=V.BASE.LIBBOX,Test=name)))
+    rows.extend((dict(Action="pass",Package=V.BASE.LIBBOX,Test=names[0]),dict(Action="pass",Package=V.BASE.LIBBOX)))
+    return rows
 def fifty_rows(mode,control=None):
     root,leaf=V.FIFTY.names(mode)
     rows=[dict(Action="start",Package=V.BASE.LIBBOX)]
@@ -143,6 +150,26 @@ class Composition:
             assert Path(replacements[original]).read_text()==V.BASE.mutate(V.LIFETIME.CONTROL,Path(original).read_text())
             root=V.LIFETIME.ROOT
             raw=(f"=== RUN   {root}\n=== RUN   {root}/retained\n"+V.LIFETIME.CONTROL["witness"]+f"\n--- FAIL: {root} (31.00s)\n    --- FAIL: {root}/retained (31.00s)\nFAIL\n").encode();status=1
+        elif name.startswith("prefix-"):
+            assert cwd==self.roles["mobile"][0] and Path(env["ROUTERVPN_CONNECT_RUN_PEER"])==self.images[0]
+            assert "ROUTERVPN_CONNECT_RUN_CASE" not in env and "ROUTERVPN_CONNECT_FIFTY_CASE" not in env
+            assert env["GODEBUG"]=="x509usefallbackroots=1"
+            if name=="prefix-ipv6-policy":
+                assert "ROUTERVPN_CONNECT_PREFIX_CASE" not in env and "ROUTERVPN_CONNECT_PREFIX_REFUSAL" not in env
+                raw=encoded(prefix_rows())
+            else:
+                refusal=name.startswith("prefix-refusal-")
+                selected="ROUTERVPN_CONNECT_PREFIX_REFUSAL" if refusal else "ROUTERVPN_CONNECT_PREFIX_CASE"
+                excluded="ROUTERVPN_CONNECT_PREFIX_CASE" if refusal else "ROUTERVPN_CONNECT_PREFIX_REFUSAL"
+                assert excluded not in env
+                case=env[selected];V.prefix_names(case,refusal)
+                assert name==("prefix-refusal-" if refusal else "prefix-run-")+case.replace("/","-")
+                raw=encoded(prefix_rows(case,refusal))
+            if self.fault==("prefix-terminal",name):raw=encoded([json.loads(row) for row in raw.splitlines()][:-1])
+            if self.fault==("prefix-failed",name):status=1
+            if self.fault==("prefix-skipped",name):raw=raw.replace(b'"pass"',b'"skip"')
+            if self.fault=="prefix-image-changed":self.images[0].write_bytes(b"foreign prefix executable")
+            if self.fault=="prefix-source-changed":(cwd/"original.go").write_text("foreign prefix source")
         elif name.startswith("ordinary-remaining-fifty-"):
             case=(env["ROUTERVPN_ORDINARY_FIFTY_GRAPH"],env["ROUTERVPN_ORDINARY_FIFTY_MODE"],int(env["ROUTERVPN_ORDINARY_FIFTY_COUNT"]),int(env["ROUTERVPN_ORDINARY_FIFTY_POSITION"]),env["ROUTERVPN_ORDINARY_FIFTY_METHOD"])
             assert case in V.REMAINING.CASES
@@ -270,6 +297,8 @@ class Composition:
         timed_out=timed_out or (self.fault=="lifetime-positive-timeout" and name=="reference-established-positive") or (self.fault=="lifetime-negative-timeout" and name==V.LIFETIME.CONTROL["name"])
         unjoined=(self.fault=="unjoined" and name=="run-http-wg") or (self.fault=="reference-unjoined" and name=="reference-tls-close") or (self.fault=="tcp-reference-unjoined" and name=="reference-tcp-close") or (self.fault=="packet-reference-unjoined" and name==V.REFERENCE_PACKET_CONTROL["name"]) or (self.fault=="fifty-unjoined" and name=="fifty-http-wg") or (self.fault=="fifty-control-unjoined" and name==V.FIFTY.CONTROLS[0]["name"])
         unjoined=unjoined or (self.fault=="lifetime-positive-unjoined" and name=="reference-established-positive") or (self.fault=="lifetime-negative-unjoined" and name==V.LIFETIME.CONTROL["name"])
+        timed_out=timed_out or self.fault==("prefix-timeout",name)
+        unjoined=unjoined or self.fault==("prefix-unjoined",name)
         return status,timed_out,not unjoined
     def run(self):
         with patch.object(V.BASE.COMMON,"git",side_effect=self.git),patch.object(V.BASE.CORE,"snapshot",side_effect=self.snapshot),\
@@ -286,7 +315,7 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
         self.assertEqual(len(V.FIFTY.MODES),6);self.assertEqual(len(V.FIFTY.LEAVES),14);self.assertEqual(len(V.FIFTY.CONTROLS),7)
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
-            self.assertEqual(len(c.calls),69)
+            self.assertEqual(len(c.calls),114)
             self.assertEqual([x[0] for x in c.calls[44:60]],[V.ORDINARY.name(c) for c in V.ORDINARY.CASES]+[c["name"] for c in V.ORDINARY.CONTROLS])
             self.assertEqual([x[4] for x in c.calls[:44]],[60,600,600,600,600,100,30,600,30,600,600,60,600,*([190]*14),*([600]*4),*([190]*6),*([600]*7)])
             self.assertEqual([x[0] for x in c.calls[11:13]],["reference-established-positive",V.LIFETIME.CONTROL["name"]])
@@ -314,8 +343,16 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
             self.assertEqual([(r["mode"],r["count"],r["position"]) for r in receipt["ordinary_ordered_fifty_records"]],list(V.ORDINARY.CASES))
             self.assertEqual([r["name"] for r in receipt["ordinary_ordered_fifty_controls"]],[c["name"] for c in V.ORDINARY.CONTROLS])
             self.assertEqual([x[4] for x in c.calls[44:60]],[190]*11+[600]*5)
-            self.assertEqual([x[0] for x in c.calls[60:]],[V.REMAINING.name(c) for c in V.REMAINING.CASES]+[V.REMAINING.CONTROL["name"]])
-            self.assertEqual([x[4] for x in c.calls[60:]],[190]*8+[600])
+            self.assertEqual([x[0] for x in c.calls[60:69]],[V.REMAINING.name(c) for c in V.REMAINING.CASES]+[V.REMAINING.CONTROL["name"]])
+            self.assertEqual([x[4] for x in c.calls[60:69]],[190]*8+[600])
+            self.assertEqual([x[0] for x in c.calls[69:]],
+                ["prefix-run-"+case.replace("/","-") for case in V.PREFIX_CASES]+
+                ["prefix-refusal-"+case for case in V.PREFIX_REFUSALS]+["prefix-ipv6-policy"])
+            self.assertEqual([x[4] for x in c.calls[69:]],[190]*44+[100])
+            self.assertEqual([row["case"] for row in receipt["prefix_records"]],list(V.PREFIX_CASES))
+            self.assertEqual([row["case"] for row in receipt["prefix_refusal_records"]],list(V.PREFIX_REFUSALS))
+            self.assertTrue(receipt["prefix_ipv6_policy"]["accepted"])
+            self.assertTrue(receipt["complete_connect_prefix_native_run_accepted"])
             self.assertTrue(receipt["ordinary_remaining_fifty_native_borrow_accepted"])
             self.assertEqual([(r["graph"],r["mode"],r["count"],r["position"],r["method"]) for r in receipt["ordinary_remaining_fifty_records"]],list(V.REMAINING.CASES))
             self.assertTrue(receipt["ordinary_remaining_fifty_control"]["accepted"])
@@ -328,6 +365,43 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
                 if name=="original-imported-middle":self.assertIn("-test.timeout=90s",command)
                 if name=="reference-established-positive":self.assertIn("-test.timeout=45s",command)
                 if name==V.LIFETIME.CONTROL["name"]:self.assertIn("-timeout=45s",command)
+                if name.startswith(("prefix-run-","prefix-refusal-")):self.assertIn("-test.timeout=180s",command)
+                if name=="prefix-ipv6-policy":self.assertIn("-test.timeout=90s",command)
+    def test_complete_prefix_inventory_and_retained_selection_are_exact(self):
+        self.assertEqual((len(V.PREFIX_CASES),len(set(V.PREFIX_CASES)),len(V.PREFIX_REFUSALS)),(36,36,8))
+        for protocol in ("http-connect","https-connect"):
+            for mode in ("wg","awg2-fast","awg2-strong"):
+                for count in (2,6):
+                    self.assertEqual({case.rsplit("/",1)[1] for case in V.PREFIX_CASES
+                        if case.startswith(f"{protocol}/{mode}/{count}/")},
+                        {str(group) for group in range((count+2)//2)})
+        self.assertEqual(V.PREFIX_REFUSALS,V.CASES[6:])
+        for refusal,inventory in ((False,V.PREFIX_CASES),(True,V.PREFIX_REFUSALS)):
+            for case in inventory:
+                rows=prefix_rows(case,refusal)
+                self.assertTrue(V.prefix_events(encoded(rows),0,case,refusal)["accepted"])
+                for bad in (rows[:-1],rows+rows,list(reversed(rows))):
+                    with self.assertRaises(ValueError):V.prefix_events(encoded(bad),0,case,refusal)
+                for status in (1,-9,124):
+                    with self.assertRaises(ValueError):V.prefix_events(encoded(rows),status,case,refusal)
+                env=V.prefix_environment({"ROUTERVPN_CONNECT_RUN_CASE":"old","ROUTERVPN_CONNECT_PREFIX_CASE":"old",
+                    "ROUTERVPN_CONNECT_PREFIX_REFUSAL":"old","ROUTERVPN_CONNECT_FIFTY_CASE":"old"},"/original/peer",case,refusal)
+                self.assertNotIn("ROUTERVPN_CONNECT_RUN_CASE",env);self.assertNotIn("ROUTERVPN_CONNECT_FIFTY_CASE",env)
+                self.assertEqual(env["ROUTERVPN_CONNECT_PREFIX_REFUSAL" if refusal else "ROUTERVPN_CONNECT_PREFIX_CASE"],case)
+                self.assertNotIn("ROUTERVPN_CONNECT_PREFIX_CASE" if refusal else "ROUTERVPN_CONNECT_PREFIX_REFUSAL",env)
+            with self.assertRaises(ValueError):V.prefix_names("foreign",refusal)
+    def test_every_complete_prefix_phase_requires_joined_original_terminal(self):
+        phases=["prefix-run-"+case.replace("/","-") for case in V.PREFIX_CASES]
+        phases += ["prefix-refusal-"+case for case in V.PREFIX_REFUSALS]+["prefix-ipv6-policy"]
+        faults=[("prefix-terminal",phase) for phase in phases]
+        faults += [(fault,phases[0]) for fault in ("prefix-failed","prefix-skipped","prefix-timeout","prefix-unjoined")]
+        faults += ["prefix-image-changed","prefix-source-changed"]
+        for fault in faults:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                c=Composition(Path(directory),fault)
+                with self.assertRaises((ValueError,RuntimeError)):c.run()
+                self.assertFalse((c.output/"receipt.json").exists())
+                self.assertEqual(json.loads((c.output/"progress.json").read_text())["status"],"failed")
     def test_no_failed_missing_or_unjoined_phase_can_publish_acceptance(self):
         for fault in ("ordinary-wrong-position","ordinary-missing-fifty","ordinary-control-pass","ordinary-control-witness","ordinary-image-changed","ordinary-source-changed",*( ("ordinary-terminal",name) for name in [V.ORDINARY.name(c) for c in V.ORDINARY.CASES]+[c["name"] for c in V.ORDINARY.CONTROLS]),"preflight","owner-prepare","mobile-prepare","build","original-missing","case-missing","case-failed",
                       "reference-missing","reference-control-pass","reference-control-witness","reference-unjoined",

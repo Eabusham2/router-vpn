@@ -21,6 +21,7 @@ import (
 )
 
 const macOSNodeChainCONNECTFiftyReceipt = "actual installed Darwin CONNECT fifty: all three original members returned fifty samples and retained exact durable receipts"
+const macOSNodeChainCONNECTLongFiftyReceipt = "actual installed Darwin CONNECT long path fifty: captured penultimate public and final private members retained exact durable receipts"
 const macOSNodeChainCONNECTStreamsReceipt = "actual installed Darwin CONNECT streams: original authenticated TCP owners joined before controller release"
 
 var macOSNodeChainCONNECTHostCases = []string{
@@ -46,6 +47,7 @@ var macOSNodeChainCONNECTHostCases = []string{
 	"node-chain-https-connect-wg-prefix-lost",
 	"node-chain-https-connect-wg-tls-name",
 	"node-chain-https-connect-wg-tls-trust",
+	"node-chain-http-connect-wg-four-connect", "node-chain-https-connect-wg-eight-connect",
 }
 
 func macOSNodeChainCONNECTCipherCases() []macOSNodeChainCipherCase {
@@ -56,6 +58,8 @@ func macOSNodeChainCONNECTCipherCases() []macOSNodeChainCipherCase {
 		{"https-wg", "node-chain-https-connect-wg-", []string{"wg", "https-connect"}},
 		{"https-awg-fast", "node-chain-https-connect-awg-fast-", []string{"awg2-fast", "https-connect"}},
 		{"https-awg-strong", "node-chain-https-connect-awg-strong-", []string{"awg2-strong", "https-connect"}},
+		{"http-wg-four", "node-chain-http-connect-wg-four-", []string{"wg", "wg", "http-connect"}},
+		{"https-wg-eight", "node-chain-https-connect-wg-eight-", []string{"wg", "wg", "wg", "wg", "wg", "wg", "https-connect"}},
 	}
 }
 func macOSNodeChainCONNECTProfile(t *testing.T, peer *macOSNodeChainPeer, fault string) common.RouterProfile {
@@ -187,21 +191,23 @@ func TestMacOSRetainedNodeChainCONNECTNativeHost(t *testing.T) {
 func TestDesktopDarwinInstalledCONNECTNodeChainFixtureKeepsOriginalSources(t *testing.T) {
 	for _, scenario := range macOSNodeChainCONNECTCipherCases() {
 		t.Run(scenario.name, func(t *testing.T) {
+			middlePosition := len(scenario.modes) - 1
+			count := len(scenario.modes) + 1
 			peer := macOSNodeChainPeerForModes(t, scenario.modes)
 			peer.reply.Address = net.JoinHostPort("192.168.210.2", "51820")
-			if scenario.modes[1] == "https-connect" {
+			if scenario.modes[middlePosition] == "https-connect" {
 				peer.reply.CONNECTServerName = "speed.cloudflare.com"
 			}
 			profiles, assets := macOSNodeChainInstalledSources(t, peer, "")
-			middle := profiles.Profiles[1]
-			if len(profiles.Profiles) != 3 || len(peer.requests) != 1 || middle.NodeKind != "external" || middle.NodeProofID != "" || middle.APIToken != "" || middle.RouterAPI != "" || assets[middle.ID] != nil || middle.External == nil || middle.External.Protocol != scenario.modes[1] {
+			middle := profiles.Profiles[middlePosition]
+			if len(profiles.Profiles) != count || len(peer.requests) != middlePosition || middle.NodeKind != "external" || middle.NodeProofID != "" || middle.APIToken != "" || middle.RouterAPI != "" || assets[middle.ID] != nil || middle.External == nil || middle.External.Protocol != scenario.modes[middlePosition] {
 				t.Fatal("installed source changed original CONNECT credential or invented paired assets")
 			}
 			proxy := middle.External.HTTPConnect
-			if scenario.modes[1] == "https-connect" {
+			if scenario.modes[middlePosition] == "https-connect" {
 				proxy = middle.External.HTTPSConnect
 			}
-			if proxy == nil || proxy.Password != peer.middlePassword || proxy.Username != "captured-native-user" || proxy.Host != "10.79.0.1" || proxy.Port != 1080 || (scenario.modes[1] == "https-connect" && proxy.TLSServerName != "speed.cloudflare.com") || (scenario.modes[1] == "http-connect" && proxy.TLSServerName != "") {
+			if proxy == nil || proxy.Password != peer.middlePassword || proxy.Username != "captured-native-user" || proxy.Host != "10.79.0.1" || proxy.Port != 1080 || (scenario.modes[middlePosition] == "https-connect" && proxy.TLSServerName != "speed.cloudflare.com") || (scenario.modes[middlePosition] == "http-connect" && proxy.TLSServerName != "") {
 				t.Fatal("installed source changed original CONNECT credential or invented paired assets")
 			}
 			root := t.TempDir()
@@ -218,7 +224,7 @@ func TestDesktopDarwinInstalledCONNECTNodeChainFixtureKeepsOriginalSources(t *te
 					}
 				}
 			}
-			control := profiles.Profiles[2]
+			control := profiles.Profiles[count-1]
 			selection, err := resolveDesktopNodeChainSelection(control, profiles.Profiles, control.MultihopNodes, "local")
 			if err != nil {
 				t.Fatal(err)
@@ -235,12 +241,21 @@ func TestDesktopDarwinInstalledCONNECTNodeChainFixtureKeepsOriginalSources(t *te
 				t.Fatal("installed typed source acquired generic chain authority")
 			}
 			_, meta, physical, err := launch.chain.readPolicy()
-			if err != nil || len(meta.Prefixes) != 3 || meta.Prefixes[0].Mode != scenario.modes[0] || meta.Prefixes[1].Mode != scenario.modes[1] || meta.Prefixes[1].NodeID != "" || meta.Prefixes[1].Kind != "public-path" || meta.Prefixes[1].ProfileID != middle.ID || meta.Prefixes[2].NodeID != control.NodeProofID || len(physical.PhysicalRoots) != 1 || physical.PhysicalRoots[0].Destinations[0].Host != "192.168.210.2" {
+			if err != nil || len(meta.Prefixes) != count || meta.Prefixes[0].Mode != scenario.modes[0] || meta.Prefixes[middlePosition].Mode != scenario.modes[middlePosition] || meta.Prefixes[middlePosition].NodeID != "" || meta.Prefixes[middlePosition].Kind != "public-path" || meta.Prefixes[middlePosition].ProfileID != middle.ID || meta.Prefixes[count-1].NodeID != control.NodeProofID || len(physical.PhysicalRoots) != 1 || physical.PhysicalRoots[0].Destinations[0].Host != "192.168.210.2" {
 				t.Fatal("installed typed source lost original proof or physical identity", err)
 			}
 			var source mobilemultihop.NodeChainSource
-			if json.Unmarshal([]byte(selection.Native.chain.connect.original.input), &source) != nil || source.Schema != 4 || source.IdentitySources[1] != "" {
+			if json.Unmarshal([]byte(selection.Native.chain.connect.original.input), &source) != nil || source.Schema != 4 || source.IdentitySources[middlePosition] != "" {
 				t.Fatal("typed original source acquired paired middle identity")
+			}
+			if len(source.Nodes) != count || len(source.IdentitySources) != count {
+				t.Fatal("CONNECT lost original full source inventory")
+			}
+			for position := 0; position < middlePosition; position++ {
+				original := profiles.Profiles[position]
+				if source.IdentitySources[position] == "" || meta.Prefixes[position].ProfileID != original.ID || meta.Prefixes[position].NodeID != original.NodeProofID || meta.Prefixes[position].Mode != scenario.modes[position] {
+					t.Fatal("CONNECT replaced an original paired prefix", position)
+				}
 			}
 			var envelope struct {
 				Config  string `json:"config"`
@@ -249,11 +264,11 @@ func TestDesktopDarwinInstalledCONNECTNodeChainFixtureKeepsOriginalSources(t *te
 			var captured struct {
 				Profile common.RouterProfile `json:"profile"`
 			}
-			if json.Unmarshal([]byte(source.Nodes[1]), &envelope) != nil || json.Unmarshal([]byte(envelope.Capture), &captured) != nil || !reflect.DeepEqual(captured.Profile, middle) {
+			if json.Unmarshal([]byte(source.Nodes[middlePosition]), &envelope) != nil || json.Unmarshal([]byte(envelope.Capture), &captured) != nil || !reflect.DeepEqual(captured.Profile, middle) {
 				t.Fatal("installed typed source changed original complete imported policy")
 			}
 			for _, action := range []string{"connect", "wrong-middle-key", "wrong-middle-user", "wrong-middle-public", "final-dns-failure", "final-node-failure", "middle-source", "prefix-lost", "tls-name", "tls-trust"} {
-				if (scenario.modes[0] != "wg" && action != "connect") || (scenario.modes[1] != "https-connect" && (action == "tls-name" || action == "tls-trust")) {
+				if (count > 3 && action != "connect") || (scenario.modes[0] != "wg" && action != "connect") || (scenario.modes[middlePosition] != "https-connect" && (action == "tls-name" || action == "tls-trust")) {
 					continue
 				}
 				modes, actual, err := macOSNodeChainScenario(scenario.prefix + action)

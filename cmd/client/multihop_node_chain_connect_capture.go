@@ -59,13 +59,13 @@ func desktopNodeChainCONNECTMiddle(profile common.RouterProfile, mode string) bo
 }
 
 func resolveDesktopNodeChainCONNECTMembers(control common.RouterProfile, profiles []common.RouterProfile, nodes []common.MultihopNodeSelection, execution string) ([]desktopNodeChainMember, error) {
-	bad := errors.New("ordered CONNECT capture requires its original three-member Local WG/AWG, literal CONNECT and paired SS path")
+	bad := errors.New("ordered CONNECT capture requires its original Local WG/AWG prefix, literal CONNECT and paired SS path")
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return nil, err
 	}
-	if execution != "local" || len(nodes) != 3 || control.External != nil ||
+	if execution != "local" || len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes || control.External != nil ||
 		control.NodeKind != "" && control.NodeKind != "router-vpn" ||
-		nodes[2].ID != control.ID || nodes[2].Mode != "shadowsocks" ||
+		nodes[len(nodes)-1].ID != control.ID || nodes[len(nodes)-1].Mode != "shadowsocks" ||
 		!mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) {
 		return nil, bad
 	}
@@ -80,22 +80,25 @@ func resolveDesktopNodeChainCONNECTMembers(control common.RouterProfile, profile
 	if !found || liveMeasurementProfileToken(currentControl) != liveMeasurementProfileToken(control) {
 		return nil, bad
 	}
-	members := make([]desktopNodeChainMember, 0, 3)
+	members := make([]desktopNodeChainMember, 0, len(nodes))
 	for i, selected := range nodes {
 		profile, found := byID[selected.ID]
 		if !found {
 			return nil, bad
 		}
-		if i == 1 {
+		if i == len(nodes)-2 {
 			if !desktopNodeChainCONNECTMiddle(profile, selected.Mode) {
 				return nil, bad
 			}
 		} else {
+			if i < len(nodes)-2 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) {
+				return nil, bad
+			}
 			if profile.External != nil || profile.NodeKind != "" && profile.NodeKind != "router-vpn" ||
 				!common.ValidNodeProofID(profile.NodeProofID) {
 				return nil, bad
 			}
-			if i == 2 {
+			if i == len(nodes)-1 {
 				address, err := netip.ParseAddr(profile.Endpoint)
 				if err != nil || address.Zone() != "" || address.Is4In6() ||
 					address.IsUnspecified() || address.IsMulticast() {
@@ -134,7 +137,7 @@ func captureDesktopNodeChainCONNECT(ctx context.Context, root string, control co
 			return nil, err
 		}
 		var input, endpoint, identity string
-		if i == 1 {
+		if i == len(members)-2 {
 			var config, capture string
 			config, capture, endpoint, err = desktopImportedEntrySource(ctx, member.Profile, nil)
 			if err == nil && endpoint != member.Profile.Endpoint {

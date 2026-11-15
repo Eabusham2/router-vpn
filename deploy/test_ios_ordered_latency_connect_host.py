@@ -25,8 +25,8 @@ func LibboxRouterNodeChainCONNECTNewLatencyBenchmark(_ plan:LibboxRouterNodeChai
  let result=LibboxRouterOrderedLatency();f.returned=result;f.hook?();return result
 }
 func LibboxRouterValidatePrivateNodeJSON(_ raw:String,_ error:inout NSError?)->Bool{(try? JSONSerialization.jsonObject(with:Data(raw.utf8))) != nil}
-func req(_ n:Int)->RouterVPNOrderedLatencyRequest{
- let body:[String:String]=["operation":"ordered-latency-open","request_id":String(format:"%032x",n),"session_id":"00000000-0000-0000-0000-000000000001","owner":String(repeating:"b",count:32),"lease":String(repeating:"c",count:32),"source_sha256":String(repeating:"1",count:64),"config_sha256":String(repeating:"2",count:64),"node_id":"middle"]
+func req(_ n:Int,node:String="middle")->RouterVPNOrderedLatencyRequest{
+ let body:[String:String]=["operation":"ordered-latency-open","request_id":String(format:"%032x",n),"session_id":"00000000-0000-0000-0000-000000000001","owner":String(repeating:"b",count:32),"lease":String(repeating:"c",count:32),"source_sha256":String(repeating:"1",count:64),"config_sha256":String(repeating:"2",count:64),"node_id":node]
  return RouterVPNOrderedLatencyRequest.parse(try! JSONSerialization.data(withJSONObject:body))!
 }
 '''
@@ -36,14 +36,29 @@ extension RouterVPNNodeChainCONNECTHost{func fixtureHealth(){checkHealth()}}
  nonisolated(unsafe) static var checks=0
  static func check(_ good:Bool,_ name:String){if !good{fatalError(name)};checks+=1}
  static func reject(_ name:String,_ work:()throws->Void){do{try work();fatalError(name)}catch{checks+=1}}
- static func ready()throws->(RouterVPNNodeChainCONNECTHost,RouterVPNLibboxPlatform){
+ static func ready(_ count:Int=3)throws->(RouterVPNNodeChainCONNECTHost,RouterVPNLibboxPlatform){
   Factory.shared.reset();Native50.shared.reset()
-  let capture=IOSNodeChainCONNECTCapture(),platform=RouterVPNLibboxPlatform(),host=RouterVPNNodeChainCONNECTHost(capture:capture,platform:platform,isCurrent:{true},onFailure:{_ in})
+  let capture=IOSNodeChainCONNECTCapture(count:count),platform=RouterVPNLibboxPlatform(),host=RouterVPNNodeChainCONNECTHost(capture:capture,platform:platform,isCurrent:{true},onFailure:{_ in})
   let server=LibboxCommandServer();try host.beginFactory();try host.finishFactory(server);try host.startNative();host.finishConstruction()
   let result=Result();host.run(adoptMeasurement:{_,_ in true},completion:result.finish);check(result.wait() && result.values==[false],"original typed proof")
   return(host,platform)
  }
  static func main()throws{
+  for count in 3...8 {
+   let(host,_)=try ready(count)
+   let info=RouterVPNOrderedLatencyRequest(operation:"ordered-latency-info",request:String(repeating:"a",count:32),session:"",owner:String(repeating:"b",count:32),lease:"",source:"",config:"",node:"")
+   guard let raw=try host.latencyInfo(info,session:"original-provider"),let body=try JSONSerialization.jsonObject(with:raw) as? [String:Any],let nodes=body["nodes"] as? [[String:Any]] else{fatalError("CONNECT complete latency inventory missing")}
+   check(nodes.count==count,"CONNECT complete latency inventory count")
+   for position in nodes.indices {
+    let row=nodes[position],node=row["node_id"] as! String
+    check(row["position"] as? Int==position && row["kind"] as? String==(position==count-2 ? "public-path":"private-node"),"CONNECT latency kind follows captured penultimate member")
+    let facade:RouterVPNOrderedLatencyOwner
+    do{facade=try host.latencyOpen(req(100+count*10+position,node:node))}catch{fatalError("returned facade missing original retention")}
+    try facade.close()
+   }
+   try host.close()
+  }
+
   do{
    let (host,platform)=try ready();let original=Factory.shared.probe!
    platform.mtu.ready=false
@@ -101,6 +116,7 @@ def main():
             return subprocess.run([str(binary)],capture_output=True,text=True,timeout=35)
         result=run(source);assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip(),flush=True)
         for name,before,after,witness in [
+            ('captured-middle-position','position == capture.members.count - 2 ? "public-path"','position == 1 ? "public-path"','CONNECT latency kind follows captured penultimate member'),
             ('quiesce-before-factory','body["measurement_ready"] as? Bool == true','true','busy MTU must precede factory'),
             ('exact-lease','body["measurement_lease"] as? String == request.lease','true','foreign lease must refuse factory'),
             ('borrowed-service','capture.plan, original, probe, &failure','capture.plan, original, LibboxRouterHopMeasurement(), &failure','factory borrows exact original throughput'),

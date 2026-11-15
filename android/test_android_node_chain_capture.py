@@ -26,7 +26,7 @@ GENERATOR = r'''package mobilemultihop
 import("encoding/json";"encoding/base64";"crypto/ecdh";"crypto/sha256";"encoding/hex";"router-vpn/internal/nativecomposite";"bytes";"strings";"os";"testing";"fmt")
 func TestAndroidOrderedSourceFixture(t *testing.T){
  result:=map[string]any{}
- for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{2,"awg-strong"},{3,"awg-strong"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"},{2,"hy2-wg"},{3,"hy2-awg-fast"},{4,"hy2-awg-strong"},{8,"hy2-long"}}{
+ for _,test:=range []struct{count int;layer string}{{2,""},{3,""},{4,""},{5,""},{6,""},{7,""},{8,""},{3,"aes-256-gcm"},{4,"aes-256-gcm+xor-whitening"},{4,"fixed-middle"},{2,"awg-fast"},{2,"awg-strong"},{3,"awg-strong"},{4,"mixed-awg"},{8,"mixed-awg"},{4,"mixed-options"},{2,"hy2-wg"},{3,"hy2-awg-fast"},{4,"hy2-awg-strong"},{8,"hy2-long"}}{
   hy2:=strings.HasPrefix(test.layer,"hy2-");layer:=test.layer;if layer=="fixed-middle"||hy2{layer=""}
   mixed:=strings.Contains(layer,"awg")||layer=="mixed-options"
   modes,layers:=make([]string,test.count),make([]string,test.count)
@@ -498,35 +498,39 @@ public final class NodeChainCaptureHarness {
   System.out.println("Android ordered SOCKS source: "+(checks-before)+" checks; actual shared compiler and saved profile ownership passed");
  }
 
- static void connectMiddle(Path root)throws Exception{
+ static void connectMiddle(Path root)throws Exception{connectMiddle(root,false);}
+ static void connectMiddle(Path root,boolean extended)throws Exception{
   int before=checks;
-  for(String key:List.of("2/","2/awg-fast","3/aes-256-gcm","4/mixed-awg"))for(boolean auth:List.of(false,true))for(String wire:List.of("http","https")){
+  for(String key:(extended?List.of("3/","4/","5/","6/","7/"):List.of("2/","2/awg-fast","3/aes-256-gcm","4/mixed-awg")))for(boolean auth:List.of(false,true))for(String wire:List.of("http","https")){
    Fixture f=new Fixture(root,"connect/"+key);AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);
    AndroidStandardExitStore.Entry custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Original CONNECT middle";custom.protocol=wire;custom.tlsServerName="original.proxy.example";custom.server="198.51.100.76";custom.serverPort=1080;custom.expectedPublicIp="203.0.113.76";custom.username=auth?"original-proxy-user":"";custom.password=auth?"private-original-proxy-password":"";custom.policy.put("dns_mode","rescue").put("start_layer","off").put("home_lan_access",false).put("kill_switch_policy","always");exits.save(custom);
-   // The typed source is exactly paired first -> imported middle -> paired final.
+   // Preserve every selected packet prefix before the single imported CONNECT and paired final.
    AndroidOrderedPathSelection editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
-   while(editor.members().size()>2)editor.removePrefix(1);
+   if(!extended)while(editor.members().size()>2)editor.removePrefix(1);
+   int middlePosition=editor.members().size()-1,total=editor.members().size()+1;
    check(editor.prefixModes(custom.id).equals(List.of(AndroidExternalPolicy.protocol(wire))),"original CONNECT middle was not offered with its exact mode");editor.addPrefix(custom.id,AndroidExternalPolicy.protocol(wire));
-   reject(()->editor.movePrefix(1,0),"CONNECT middle moved into physical first position");
+   reject(()->editor.movePrefix(middlePosition,0),"CONNECT middle moved into physical first position");
    AndroidNodeStore.ChainCapture saved=editor.save();
    try(AndroidNodeChainCapture captured=AndroidNodeChainCapture.compile(saved)){
     check(captured.plan==null&&captured.connect!=null,"typed CONNECT capture borrowed generic chain authority");
-    JSONObject source=new JSONObject(captured.launchInput),member=new JSONObject(captured.memberInputs.get(1));
-    check(source.getInt("schema")==4&&!source.has("kind")&&member.getString("kind").equals("routervpn-node-chain-connect-member")&&captured.identityInputs.get(1).isEmpty(),"typed CONNECT source lost its exact schema or borrowed paired identity");
+    check(saved.members.size()==total&&captured.memberInputs.size()==total,"CONNECT omitted an original prefix");
+    for(int prefix=0;prefix<middlePosition;prefix++)check(!captured.identityInputs.get(prefix).isEmpty()&&!saved.members.get(prefix).imported,"CONNECT prefix lost independent paired identity");
+    JSONObject source=new JSONObject(captured.launchInput),member=new JSONObject(captured.memberInputs.get(middlePosition));
+    check(source.getInt("schema")==4&&!source.has("kind")&&member.getString("kind").equals("routervpn-node-chain-connect-member")&&captured.identityInputs.get(middlePosition).isEmpty(),"typed CONNECT source lost its exact schema or borrowed paired identity");
     JSONObject transport=new JSONObject(member.getString("capture")).getJSONObject("profile").getJSONObject("external").getJSONObject(AndroidExternalPolicy.protocol(wire).replace('-','_'));
     check(transport.optString("username","").equals(custom.username)&&transport.optString("password","").equals(custom.password),"typed CONNECT source changed original credentials");
     if("https".equals(wire))check(transport.getString("tls_server_name").equals(custom.tlsServerName),"typed CONNECT lost original TLS server name");
     JSONObject metadata=new JSONObject(captured.connect.plan.metadata()),graph=new JSONObject(captured.config);JSONArray proofs=metadata.getJSONArray("proofs");
-    String finalTag=proofs.getJSONObject(2).getString("tag");JSONObject finalOut=tagged(graph.getJSONArray("outbounds"),finalTag),middleOut=tagged(graph.getJSONArray("outbounds"),proofs.getJSONObject(1).getString("tag"));
+    String finalTag=proofs.getJSONObject(total-1).getString("tag");JSONObject finalOut=tagged(graph.getJSONArray("outbounds"),finalTag),middleOut=tagged(graph.getJSONArray("outbounds"),proofs.getJSONObject(middlePosition).getString("tag"));
     check(finalOut.getJSONObject("udp_over_tcp").getBoolean("enabled")&&finalOut.getJSONObject("udp_over_tcp").getInt("version")==2&&!middleOut.has("udp_over_tcp")&&!middleOut.has("network"),"CONNECT promoted generic UDP or lost captured final UoT-v2");
     JSONObject dns=graph.getJSONObject("dns"),resolver=tagged(dns.getJSONArray("servers"),dns.getString("final"));
     check(resolver.getString("type").equals("udp")&&resolver.getString("detour").equals(finalTag)&&resolver.getString("server").equals(captured.finalProfile().getString("adguard_ipv4")),"CONNECT middle replaced original final Home AdGuard DNS");
-    check(graph.getJSONArray("inbounds").length()==1&&graph.getJSONArray("endpoints").length()==1&&proofs.getJSONObject(1).getString("node_kind").equals("external")&&proofs.getJSONObject(1).getString("node_id").isEmpty(),"CONNECT gained another system VPN or borrowed paired identity");
+    check(graph.getJSONArray("inbounds").length()==1&&graph.getJSONArray("endpoints").length()==middlePosition&&proofs.getJSONObject(middlePosition).getString("node_kind").equals("external")&&proofs.getJSONObject(middlePosition).getString("node_id").isEmpty(),"CONNECT gained another system VPN or borrowed paired identity");
     try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(captured.launchInput,saved)){check(replay.launchInput.equals(captured.launchInput)&&replay.config.equals(captured.config),"typed CONNECT canonical replay changed original graph");}
     String changed=new JSONObject(source.toString()).put("schema",2).toString();reject(()->AndroidNodeChainCapture.reopen(changed,saved),"typed CONNECT accepted generic replay source");
    }
    var row=f.profiles.add("Original CONNECT ordered route");String serialized=Files.readString(f.rows);check(!serialized.contains("private-original-proxy-password")&&!serialized.contains("original-proxy-user")&&!serialized.contains("api_token"),"saved typed CONNECT profile duplicated credentials");
-   f.profiles.load(row.id);check(f.profiles.currentOrderedPath().modes.get(1).equals(AndroidExternalPolicy.protocol(wire))&&f.profiles.currentOrderedPath().members.get(1).external().password.equals(custom.password),"saved typed CONNECT profile changed exact source reference");
+   f.profiles.load(row.id);check(f.profiles.currentOrderedPath().modes.get(middlePosition).equals(AndroidExternalPolicy.protocol(wire))&&f.profiles.currentOrderedPath().members.get(middlePosition).external().password.equals(custom.password),"saved typed CONNECT profile changed exact source reference");
    JSONObject withoutReceipt=f.bundle(f.members.size()-1);withoutReceipt.getJSONObject("profiles").getJSONObject("shadowsocks").remove("routervpn-ss-service.json");
    JSONObject originalFinal=f.bundle(f.members.size()-1);f.replace(f.members.size()-1,withoutReceipt);f.nodes.select(f.control().id);
    reject(()->new AndroidOrderedPathSelection(f.nodes,f.profiles).save(),"CONNECT promoted a TCP-only final without original UoT-v2 declaration");
@@ -714,6 +718,7 @@ public final class NodeChainCaptureHarness {
   if(family.equals("identity-compiler")){identityCompilerAdmission(root);return;}
   if(family.equals("socks")){socksMiddle(root);return;}
   if(family.equals("connect")){connectMiddle(root);return;}
+  if(family.equals("connect-prefixes")){connectMiddle(root,true);return;}
   if(family.equals("editor-mixed")){editorMixed(root);return;}
   if(family.equals("editor-mixed-ui")){editorMixedHandlers(root);return;}
   for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle","2/awg-fast","3/awg-strong","4/mixed-awg","8/mixed-awg"))roundtrip(root,key);
@@ -813,6 +818,7 @@ def run(root, work, app, classes, jar, env, imported_only=False, openvpn_only=Fa
     subprocess.run(command + ["hostname"], env=env, check=True, timeout=180)
     if not imported_only:
         subprocess.run(command + ["connect"], env=env, check=True, timeout=180)
+        subprocess.run(command + ["connect-prefixes"], env=env, check=True, timeout=180)
         subprocess.run(command + ["openvpn"], env=env, check=True, timeout=180)
         subprocess.run(command + ["hysteria-final"], env=env, check=True, timeout=180)
     node = (app / "AndroidNodeStore.java").read_text()
@@ -859,7 +865,7 @@ def run(root, work, app, classes, jar, env, imported_only=False, openvpn_only=Fa
         ("identity-compiler", "AndroidOrderedPathSelection", editor.replace('.put("identity_sources",identities)', ''), "ordered editor skipped full native identity source validation"),
         ("paired-identity", "AndroidNodeStore", node.replace('source.requirePairedIdentity();', ''), "ordered admission accepted a saved identity label without its original WireGuard asset"),
         ("paired-identity", "AndroidNodeChainCapture", capture.replace('member.requirePairedIdentity();', ''), "ordered compiler preview accepted an unproved saved identity label"),
-        ("editor-mixed", "AndroidOrderedPathSelection", editor.replace('members.add(members.size()-1,new Member(source,mode));', 'members.add(members.size()-1,new Member(source,"wg"));'), "editor reordered a node without its exact transport"),
+        ("editor-mixed", "AndroidOrderedPathSelection", editor.replace('members.add(position,new Member(source,mode));', 'members.add(position,new Member(source,"wg"));'), "editor reordered a node without its exact transport"),
         ("editor-mixed-ui", "OrderedProductSurface", editor_ui.replace('else draft.setPrefixMode(position,modes.get(w));', 'else draft.setPrefixMode(position,"wg");'), "shipping ordered mode callback ignored the selected transport"),
         ("editor-mixed-ui", "OrderedProductSurface", editor_ui.replace('AndroidOrderedPathSelection.prefixModeTitle(member.mode)', '"WireGuard"'), "shipping ordered editor mislabeled exact per-prefix transports"),
         ("product-handoff", "ProductConnectSurface", product_ui.replace("AndroidConnectionSelection.requireCurrent(this,nodeStore,selection);", ""), "ordered Product adopted a replaced choice"),

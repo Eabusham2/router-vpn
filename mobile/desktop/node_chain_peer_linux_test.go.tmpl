@@ -222,12 +222,13 @@ func desktopNodeChainPeerIdentityBounds(request desktopNodeChainPeerRequest, min
 }
 
 type desktopNodeChainPrefixPeer struct {
-	mode          string
-	readback      func() (string, error)
-	bind          *desktopNodeWGBind
-	handler       *desktopNodeWGHandler
-	proof, denied atomic.Uint64
-	wrong, held   atomic.Bool
+	measuredHealth atomic.Uint64
+	mode           string
+	readback       func() (string, error)
+	bind           *desktopNodeWGBind
+	handler        *desktopNodeWGHandler
+	proof, denied  atomic.Uint64
+	wrong, held    atomic.Bool
 }
 
 type desktopNodeChainPeer struct {
@@ -425,7 +426,23 @@ func desktopNodeChainPeerStartBounds(t *testing.T, request desktopNodeChainPeerR
 			route.Physical = public
 		}
 	}
-	for position := count - 1; position >= 0; position-- {
+	desktopNodeChainStartCapturedPrefixes(t, request, local, remote, p, ipcs, count-1)
+
+	clear(ipcs)
+	return p
+}
+
+// Extend only the captured original encrypted prefix inventory. The final
+// reference owner is supplied by the existing paired or typed peer constructor;
+// each earlier peer still permits only its own API and the next encrypted UDP.
+func desktopNodeChainStartCapturedPrefixes(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr, p *desktopNodeChainPeer, ipcs []string, first int) {
+	t.Helper()
+	count := len(request.Prefixes)
+	if p == nil || len(p.prefixes) != count || len(ipcs) != count || first < 0 || first >= count {
+		t.Fatal("captured prefix construction lost original inventory")
+	}
+	loopback := netip.MustParseAddr("127.0.0.1")
+	for position := first; position >= 0; position-- {
 		prefix := p.prefixes[position]
 		if prefix == nil {
 			prefix = &desktopNodeChainPrefixPeer{}
@@ -483,6 +500,9 @@ func desktopNodeChainPeerStartBounds(t *testing.T, request desktopNodeChainPeerR
 				return
 			}
 			prefix.proof.Add(1)
+			if r.Header.Get("Cache-Control") == "no-store, no-transform" {
+				prefix.measuredHealth.Add(1)
+			}
 			if prefix.held.Load() {
 				<-r.Context().Done()
 				return
@@ -527,8 +547,6 @@ func desktopNodeChainPeerStartBounds(t *testing.T, request desktopNodeChainPeerR
 		}
 		t.Cleanup(func() { prefix.handler.close(); device.close() })
 	}
-	clear(ipcs)
-	return p
 }
 
 func TestRouterVPNDesktopNodeChainReferenceProcess(t *testing.T) {

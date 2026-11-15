@@ -45,10 +45,13 @@ if($Live){
     $Until=[DateTime]::UtcNow.AddSeconds(20)
     $Pump={Update-RouterVPNOrderedView $S;if($Visual){[Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{},[Windows.Threading.DispatcherPriority]::Background)};Start-Sleep -Milliseconds 5}
     while($null-eq$S.Capture-and-not$S.Invalid-and[DateTime]::UtcNow-lt$Until){&$Pump}
-    Check ($null-ne$S.Capture-and-not$S.Invalid-and$S.Nodes.Count-eq3) 'live exact ordered capture'
+    $Count=if($Scenario-ceq'connect8'){8}else{3}
+    Check ($null-ne$S.Capture-and-not$S.Invalid-and$S.Nodes.Count-eq$Count) 'live exact ordered capture'
+    if($Visual){&$Pump;Check ($S.Window.FindName('Hop').Items.Count-eq$Count) 'actual WPF chooser retains every captured hop'}
     $Prior=[string](Get-RouterVPNOrderedValue $S.History[0] 'request_id')
-    $Position=if($Scenario-ceq'public'){1}elseif($Scenario-ceq'exit'){2}else{0}
+    $Position=if($Scenario-ceq'connect8'){6}elseif($Scenario-ceq'public'){1}elseif($Scenario-ceq'exit'){2}else{0}
     if($Visual){$S.Window.FindName('Hop').SelectedIndex=$Position;$S.Window.FindName('Retest').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))}else{[void](Start-RouterVPNOrderedLatency $S $Position)}
+    if($Visual-and$Scenario-ceq'connect8'){&$Pump;Check ($S.Window.FindName('Detail').Text.StartsWith('HTTPS response after TLS')) 'actual WPF public penultimate timing label'}
     Check ($S.Request-cmatch'^[0-9a-f]{32}$'-and-not$S.Drained) 'live Retest captures request before HTTP completion'
     if($Scenario-cin@('early','cancel','owner-close')){
         if($Scenario-cne'early'){while((Test-RouterVPNOrderedJob $S 'start')-and[DateTime]::UtcNow-lt$Until){&$Pump}}
@@ -62,7 +65,7 @@ if($Live){
         while((-not$S.Drained-or$S.Jobs.Count-ne0)-and[DateTime]::UtcNow-lt$Until){&$Pump}
         Check ($S.Drained-and$S.Jobs.Count-eq0) 'live test waits for native drain and all HTTP tasks'
         $Saved=@($S.History|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'request_id')-ceq$S.Request})
-        if($Scenario-cin@('success','public','exit')){Check ($Saved.Count-eq1) 'live durable fifty receipt adopted';Assert-RouterVPNOrderedReceipt $Saved[0] $S.Capture $S.Node -Current}
+        if($Scenario-cin@('success','public','exit','connect8')){Check ($Saved.Count-eq1) 'live durable fifty receipt adopted';Assert-RouterVPNOrderedReceipt $Saved[0] $S.Capture $S.Node -Current -Count $Count}
         else{Check ($Saved.Count-eq0-and[string](Get-RouterVPNOrderedValue $S.History[0] 'request_id')-ceq$Prior) 'failed or foreign result preserves saved history'}
         if($Visual){$S.Window.Close();&$Pump}else{Check (Request-RouterVPNOrderedClose $S) 'settled close';[void](Close-RouterVPNOrderedView $S)}
         Check $S.Closed 'settled view releases owned transport'
@@ -164,6 +167,22 @@ foreach($Count in @(1,9)){
     Reject {Receive-RouterVPNOrderedStatus $S $V -Initial} 'unbounded inventory refused'
 }
 
+
+# CONNECT counts3–8 retain their original public penultimate row and fifty receipt.
+foreach($Count in 3..8){
+    $Position=$Count-2;$Rows=PairedNodes $Count;$N=(Nodes)[1]
+    $N.position=$Position;$N.node_id='node-'+$Position;$N.label='Cumulative path through custom node '+($Position+1)+' of '+$Count+' '+[char]0x2192+' Cloudflare edge';$Rows[$Position]=$N
+    $R=Receipt ('e'*32) 1;$R.position=$Position;$R.node_id=$N.node_id;$R.result.node_id=$N.node_id;$R.result.label=$N.label
+    $S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient;$V=Status;$V.nodes=$Rows;$V.history=@($R)
+    try{Receive-RouterVPNOrderedStatus $S $V -Initial}catch{Check $false ('CONNECT bounded inventory rejected: '+$_.Exception.Message)};Check ($S.Nodes.Count-eq$Count-and-not$S.Invalid) 'CONNECT bounded inventory'
+    Assert-RouterVPNOrderedReceipt $R (Capture) $N -Current -Count $Count;Assert-RouterVPNOrderedReceipt $R (Capture) $N -Count $Count;$script:Checks+=2
+    foreach($Other in 0..($Count-1)){if($Other-eq$Position){continue};$Bad=CopyValue $N;$Bad.position=$Other;$Bad.role=if($Other-eq0){'entry'}elseif($Other-eq($Count-1)){'exit'}else{'intermediate'};$Bad.label='Cumulative path through custom node '+($Other+1)+' of '+$Count+' '+[char]0x2192+' Cloudflare edge';Reject {Assert-RouterVPNOrderedNode $Bad $Other $Count} 'CONNECT public row must remain penultimate'}
+    Check (Start-RouterVPNOrderedLatency $S $Position) 'CONNECT original public hop starts'
+    $Start=Pending $S '';$ID=$S.Request;$R.request_id=$ID;$V=Status $ID $Position 'complete';$V.receipt=$R
+    Reply $Start 200 $V;Update-RouterVPNOrderedView $S
+    Check ($S.Drained-and@($S.History|Where-Object{$_.request_id-ceq$ID-and$_.position-eq$Position}).Count-eq1) 'CONNECT callback commits original fifty receipt'
+    Check (Request-RouterVPNOrderedClose $S) 'CONNECT complete owner joins';[void](Close-RouterVPNOrderedView $S)
+}
 
 # Canonical selected paths execute through the original callback and receipt guards.
 foreach($Execution in @('local','server')){

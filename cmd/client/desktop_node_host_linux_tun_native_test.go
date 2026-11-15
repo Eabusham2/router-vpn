@@ -734,7 +734,7 @@ func linuxHostTUNStartController(t *testing.T, installed, scenario string) *linu
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 85*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), linuxCONNECTInstalledBudget(scenario).controller)
 	base := linuxControllerBootstrapCommand(installed, reader)
 	command := exec.CommandContext(ctx, installed, base.Args[1:]...)
 	command.Stdin, command.Env, command.ExtraFiles = reader, append(base.Env, "ROUTERVPN_CONTROLLER_NODE_PARENT_CASE=host-tun/"+scenario), []*os.File{gateRead}

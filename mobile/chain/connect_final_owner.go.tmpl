@@ -28,7 +28,7 @@ func (c *Capture) constructShadowsocks(ctx context.Context, router adapter.Route
 	if err != nil {
 		return original, err
 	}
-	if tag != c.metadata.Proofs[2].Tag {
+	if tag != c.metadata.Proofs[len(c.metadata.Proofs)-1].Tag {
 		return original, nil
 	}
 	final, ok := original.(*ss.Outbound)
@@ -61,7 +61,7 @@ func (c *Capture) observeFinal(ctx context.Context) error {
 	if final == nil || readback == nil || manager == nil {
 		return errCapture
 	}
-	actual, found, err := adapter.RouterVPNOutboundContext(ctx, manager, c.metadata.Proofs[2].Tag)
+	actual, found, err := adapter.RouterVPNOutboundContext(ctx, manager, c.metadata.Proofs[len(c.metadata.Proofs)-1].Tag)
 	if err != nil || !found || actual != final {
 		return errors.Join(err, errCapture)
 	}

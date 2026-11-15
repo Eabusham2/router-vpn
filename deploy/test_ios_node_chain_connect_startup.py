@@ -106,20 +106,26 @@ TESTS = r'''
    try check("advanced startup generation still binds original middle",!model.matches(intent))
   }
 
-  for mode in ["auto","smart-auto","last"] {
+  for count in 3...8 {for mode in ["auto","smart-auto","last"] {
    IOSNodeBundleStore.shared.records=[:]
-   let nodes=try sources(3,false,"",true),model=RouterVPNModel();model.bundle=nodes.last!
+   var nodes=try sources(count),custom=try sources(3,false,"",true)[1]
+   custom.selectedRouterID="custom-connect";custom.routerProfiles[0].id=custom.selectedRouterID
+   nodes[count-2]=custom
+   nodes[count-1].routerProfiles[0].multihopNodes=nodes.enumerated().map{.init(id:$0.element.selectedRouterID,mode:$0.offset==count-2 ? "https-connect":$0.offset==count-1 ? "shadowsocks":"wg")}
+   nodes[count-1]=try JSONDecoder().decode(ClientBundle.self,from:Data(LibboxTestCONNECTService(String(decoding:JSONEncoder().encode(nodes[count-1]),as:UTF8.self)).utf8))
+   let model=RouterVPNModel();model.bundle=nodes.last!
    for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
    let captured=try model.capture(),intent=IOSStartupIntent(captured),owner=try model.captureIOSOrderedRoute(model.bundle!)
    defer{try? owner.close()}
    try check("typed cold startup keeps exact source",captured.nodeChainSource==Data(owner.launchInput.utf8) && owner.providerKey==IOSNodeChainCONNECTCapture.providerKey)
    await model.start(mode,intent:intent)
    try check("typed cold startup dispatches only complete ordered source",model.events==["ordered"])
-   try editMiddle{$0.routerProfiles[0].external?.httpsConnect?.password="replacement-private-password"}
+   custom.routerProfiles[0].external?.httpsConnect?.password="replacement-private-password"
+   IOSNodeBundleStore.shared.records[custom.selectedRouterID]=try JSONEncoder().encode(custom)
    try check("changed typed startup refuses credential",!model.matches(intent))
    model.events=[];await model.start(mode,intent:intent)
    try check("changed typed startup makes no raw or ordered dispatch",model.events.isEmpty)
-  }
+  }}
   do {
    let model=try setup(),source=try model.capture(),bundle=model.bundle!
    try reject("ordered source omitted"){_ = try IOSStartupCapture(bundle:bundle,entry:nil,generation:model.iosConnectGeneration)}
@@ -182,7 +188,7 @@ def main():
         run(body.replace(branch, '', 1), policy, 'ordered startup never selects a raw member')
         typed_tests=tests.replace('  for count in [3,4,8] {for mode in ["auto","smart-auto","last"] {','  for count in [Int]() {for mode in ["auto","smart-auto","last"] {',1)
         start=typed_tests.index('  for fault in ["middle-token"')
-        end=typed_tests.index('  for mode in ["auto","smart-auto","last"] {',start)
+        end=typed_tests.index('  for count in 3...8 {for mode in ["auto","smart-auto","last"] {',start)
         typed_tests=typed_tests[:start]+typed_tests[end:]
         original_tests=tests
         tests=typed_tests

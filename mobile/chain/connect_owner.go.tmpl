@@ -62,9 +62,9 @@ func NewCapture(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSour
 	}
 	config, meta, err := source.ReadValidated()
 	if err != nil || meta.Kind != "routervpn-node-chain-connect-source" || meta.Schema != 1 ||
-		meta.NativeAdmission != "closed" || len(meta.Proofs) != 3 || len(meta.Devices) != 3 ||
-		meta.Proofs[1].Position != 1 || (meta.Proofs[1].Mode != "http-connect" && meta.Proofs[1].Mode != "https-connect") ||
-		meta.Proofs[1].ProfileID == "" || meta.Proofs[1].SourceSHA256 == "" {
+		meta.NativeAdmission != "closed" || len(meta.Proofs) < 3 || len(meta.Proofs) > mobilemultihop.NodeChainMaximumNodes || len(meta.Devices) != len(meta.Proofs) ||
+		meta.Proofs[len(meta.Proofs)-2].Position != len(meta.Proofs)-2 || (meta.Proofs[len(meta.Proofs)-2].Mode != "http-connect" && meta.Proofs[len(meta.Proofs)-2].Mode != "https-connect") ||
+		meta.Proofs[len(meta.Proofs)-2].ProfileID == "" || meta.Proofs[len(meta.Proofs)-2].SourceSHA256 == "" {
 		return nil, errCapture
 	}
 	var graph struct {
@@ -76,7 +76,7 @@ func NewCapture(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSour
 	}
 	capture := &Capture{ctx: ctx, source: source, config: config, metadata: meta,
 		shadowsocks: make(map[string]option.ShadowsocksOutboundOptions), ssClaimed: make(map[string]bool),
-		tag: meta.Proofs[1].Tag, lowerTag: meta.Proofs[0].Tag}
+		tag: meta.Proofs[len(meta.Proofs)-2].Tag, lowerTag: meta.Proofs[len(meta.Proofs)-3].Tag}
 	var selected, lower int
 	for _, raw := range append(graph.Outbounds, graph.Endpoints...) {
 		var identity struct {
@@ -109,14 +109,14 @@ func NewCapture(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSour
 		capture.tag == capture.lowerTag || capture.lowerType == "" ||
 		capture.options.Detour != capture.lowerTag ||
 		!reflect.DeepEqual(capture.options.DialerOptions, option.DialerOptions{Detour: capture.lowerTag}) ||
-		(meta.Proofs[1].Mode == "https-connect") != (capture.options.TLS != nil && capture.options.TLS.Enabled) ||
+		(meta.Proofs[len(meta.Proofs)-2].Mode == "https-connect") != (capture.options.TLS != nil && capture.options.TLS.Enabled) ||
 		parseErr != nil || address.String() != capture.options.Server || address.Is4In6() ||
 		address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || capture.options.ServerPort == 0 ||
 		(capture.options.Username == "") != (capture.options.Password == "") ||
 		len(capture.options.Username) > 255 || len(capture.options.Password) > 255 {
 		return nil, errCapture
 	}
-	final, found := capture.shadowsocks[meta.Proofs[2].Tag]
+	final, found := capture.shadowsocks[meta.Proofs[len(meta.Proofs)-1].Tag]
 	if !found || final.UDPOverTCP == nil || !final.UDPOverTCP.Enabled || final.UDPOverTCP.Version != 2 {
 		return nil, errCapture
 	}

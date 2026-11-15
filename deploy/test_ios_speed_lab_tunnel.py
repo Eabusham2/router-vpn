@@ -46,7 +46,7 @@ enum Status {case connected,connecting,reasserting,disconnecting,disconnected,in
  var pinsJSON="{}",restorePinsOverride:String?
  func startVPNTunnel(options:[String:NSObject]?=nil)throws{
   if let config=(NETunnelProviderManager.stored.first?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
-     config["nodeChainSource"] == nil, try IOSMultihopExecution.requiresCapture(configuration:config) {
+     config["nodeChainSource"] == nil, config["nodeChainCONNECTSource"] == nil, config["nodeChainSOCKSSource"] == nil, try IOSMultihopExecution.requiresCapture(configuration:config) {
    let source=try IOSMultihopExecution.Source(configuration:config,digest:RouterVPNModel.iosStrategyDigest)
    let restored=try IOSMultihopExecution.restoredCapture(option:options?[IOSMultihopExecution.launchKey],source:source,mtuHold:options?["routervpn_mtu_hold"] as? String ?? "")
    if source.requested=="auto",restored==nil{comparisonStarts+=1}
@@ -202,6 +202,20 @@ typealias NETunnelProviderSession=Connection
    let config=(m.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
    check("ordered Disconnect restores sources without restarting",m.connection.starts==0 && !m.isOnDemandEnabled && config["nodeChainSource"] as? String==String(data:before.nodeChainSource!,encoding:.utf8))
   }
+  // Equality/restore boundary only; native CONNECT proof remains in its real provider gate.
+  for count in 3...8 {for reconnect in [true,false] {
+   let (model,m,owner)=try freshChain(),p=m.protocolConfiguration as! NETunnelProviderProtocol
+   let original=String(decoding:try JSONSerialization.data(withJSONObject:["schema":4,"execution":"local","nodes":(0..<count).map{"original-member-\($0)"},"identity_sources":(0..<count).map{$0==count-2 ? "":"original-identity-\($0)"}],options:[.sortedKeys]),as:UTF8.self)
+   p.providerConfiguration!.removeValue(forKey:"nodeChainSource");p.providerConfiguration!["nodeChainCONNECTSource"]=original
+   model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:m.connection.connectedDate!,engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:p.providerConfiguration!["bundle"] as! Data,configuration:p.providerConfiguration!)
+   let before=model.activeSessionIdentity!,captured=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
+   try await captured.stopOriginal(model:model,owner:owner)
+   if !reconnect {_ = model.iosSpeedLabOwnership.admit(.disconnect)}
+   try await captured.restore(model:model,owner:owner,reconnect:reconnect)
+   let config=(m.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+   check("bounded CONNECT restoration retains original complete source",config["nodeChainCONNECTSource"] as? String==original && config["nodeChainSource"]==nil && config["bundle"] as? Data==before.bundleData)
+   check("bounded CONNECT restores original intent without comparison",m.connection.starts==(reconnect ? 1:0) && m.connection.comparisonStarts==0 && (!reconnect || model.activeSessionIdentity?.nodeChainSource==before.nodeChainSource))
+  }}
   for kind in ["tor","tor-bridge"] {for execution in ["local","server"] {for requested in [execution,"auto"] {
    do {
     let (model,m,owner)=try fresh("external-libbox","external-"+kind,false,true,false,execution,requested),before=model.activeSessionIdentity!

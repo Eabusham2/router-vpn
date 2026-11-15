@@ -32,13 +32,13 @@ func linuxNodeChainCONNECTPublicConnect(a *app, w http.ResponseWriter, r *http.R
 	}
 	a.mu.Lock()
 	control, found := a.profileByIDLocked(a.profiles.SelectedID)
-	if !found || len(control.MultihopNodes) != 3 {
+	if !found || (len(control.MultihopNodes) < 3 || len(control.MultihopNodes) > 8) {
 		a.mu.Unlock()
 		return fmt.Errorf("installed CONNECT lost its original selected graph")
 	}
-	middle, found := a.profileByIDLocked(control.MultihopNodes[1].ID)
+	middle, found := a.profileByIDLocked(control.MultihopNodes[len(control.MultihopNodes)-2].ID)
 	view := publicProfileFor(middle)
-	valid := found && view.External != nil && view.External.OrderedMiddle && desktopNodeChainCONNECTMiddle(middle, control.MultihopNodes[1].Mode)
+	valid := found && view.External != nil && view.External.OrderedMiddle && desktopNodeChainCONNECTMiddle(middle, control.MultihopNodes[len(control.MultihopNodes)-2].Mode)
 	a.mu.Unlock()
 	if !valid {
 		return fmt.Errorf("installed CONNECT requires its original public profile capability")
@@ -55,10 +55,30 @@ var linuxNodeChainCONNECTHostCases = []string{
 	"node-chain-connect-https-wg-wrong-middle-key", "node-chain-connect-https-wg-wrong-middle-user", "node-chain-connect-https-wg-wrong-middle-public",
 	"node-chain-connect-https-wg-final-dns-failure", "node-chain-connect-https-wg-final-node-failure", "node-chain-connect-https-wg-middle-source", "node-chain-connect-https-wg-prefix-lost",
 	"node-chain-connect-https-wg-wrong-middle-sni", "node-chain-connect-https-wg-wrong-middle-trust",
+	"node-chain-connect-http-wg-four-connect", "node-chain-connect-https-wg-eight-connect",
+}
+
+// Only the two additional installed long-path scenarios get a separate test
+// envelope. Observed encrypted public/final fifty work took 130.13 seconds;
+// production probe/worker deadlines and every original installed case stay fixed.
+type linuxCONNECTInstalledBudgets struct {
+	operation, read, controller, peerTest, peerContext time.Duration
+}
+
+func linuxCONNECTInstalledBudget(scenario string) linuxCONNECTInstalledBudgets {
+	switch scenario {
+	case "node-chain-connect-http-wg-four-connect", "node-chain-connect-https-wg-eight-connect":
+		return linuxCONNECTInstalledBudgets{210 * time.Second, 220 * time.Second, 230 * time.Second, 240 * time.Second, 245 * time.Second}
+	default:
+		return linuxCONNECTInstalledBudgets{65 * time.Second, 75 * time.Second, 85 * time.Second, 115 * time.Second, 120 * time.Second}
+	}
 }
 
 func linuxNodeChainCONNECTCipherCases() []linuxNodeChainCipherCase {
-	var cases []linuxNodeChainCipherCase
+	cases := []linuxNodeChainCipherCase{
+		{"http/wg-four", "node-chain-connect-http-wg-four-", []string{"wg", "wg", "http-connect"}},
+		{"https/wg-eight", "node-chain-connect-https-wg-eight-", []string{"wg", "wg", "wg", "wg", "wg", "wg", "https-connect"}},
+	}
 	for _, protocol := range []string{"http", "https"} {
 		for _, entry := range []struct{ mode, label string }{{"wg", "wg"}, {"awg2-fast", "awg-fast"}, {"awg2-strong", "awg-strong"}} {
 			name := protocol + "/" + entry.mode
@@ -213,18 +233,20 @@ func linuxNodeChainCONNECTClose(t *testing.T, peer *linuxNodeChainPeer) {
 func TestDesktopLinuxInstalledCONNECTNodeChainFixtureKeepsOriginalSources(t *testing.T) {
 	for _, scenario := range linuxNodeChainCONNECTCipherCases() {
 		t.Run(scenario.name, func(t *testing.T) {
+			middlePosition := len(scenario.modes) - 1
+			count := len(scenario.modes) + 1
 			peer := linuxNodeChainPeerForModes(t, scenario.modes)
 			peer.reply.Address = net.JoinHostPort("192.168.210.2", "51820")
 			peer.reply.CONNECTServerName = "original-connect.routervpn.test"
 			profiles, assets := linuxNodeChainInstalledSources(t, peer, "")
-			middle := profiles.Profiles[1]
+			middle := profiles.Profiles[middlePosition]
 			proxy := middle.External.HTTPConnect
-			if scenario.modes[1] == "https-connect" {
+			if scenario.modes[middlePosition] == "https-connect" {
 				proxy = middle.External.HTTPSConnect
 			}
-			if len(profiles.Profiles) != 3 || len(peer.requests) != 1 || middle.NodeKind != "external" || middle.NodeProofID != "" || middle.APIToken != "" || middle.RouterAPI != "" || assets[middle.ID] != nil ||
-				middle.External.Protocol != scenario.modes[1] || proxy == nil || proxy.Password != peer.middlePassword || proxy.Username != "captured-native-user" ||
-				(scenario.modes[1] == "https-connect" && proxy.TLSServerName != peer.reply.CONNECTServerName) || (scenario.modes[1] == "http-connect" && proxy.TLSServerName != "") {
+			if len(profiles.Profiles) != count || len(peer.requests) != middlePosition || middle.NodeKind != "external" || middle.NodeProofID != "" || middle.APIToken != "" || middle.RouterAPI != "" || assets[middle.ID] != nil ||
+				middle.External.Protocol != scenario.modes[middlePosition] || proxy == nil || proxy.Password != peer.middlePassword || proxy.Username != "captured-native-user" ||
+				(scenario.modes[middlePosition] == "https-connect" && proxy.TLSServerName != peer.reply.CONNECTServerName) || (scenario.modes[middlePosition] == "http-connect" && proxy.TLSServerName != "") {
 				t.Fatal("installed source changed original CONNECT protocol, credential or TLS authority, or invented paired assets")
 			}
 			root := t.TempDir()
@@ -241,7 +263,7 @@ func TestDesktopLinuxInstalledCONNECTNodeChainFixtureKeepsOriginalSources(t *tes
 					}
 				}
 			}
-			control := profiles.Profiles[2]
+			control := profiles.Profiles[count-1]
 			selection, err := resolveDesktopNodeChainSelection(control, profiles.Profiles, control.MultihopNodes, "local")
 			if err != nil {
 				t.Fatal(err)
@@ -258,13 +280,22 @@ func TestDesktopLinuxInstalledCONNECTNodeChainFixtureKeepsOriginalSources(t *tes
 				t.Fatal("installed CONNECT source acquired generic or SOCKS authority")
 			}
 			_, meta, physical, err := launch.chain.readPolicy()
-			if err != nil || len(meta.Prefixes) != 3 || meta.Prefixes[0].Mode != scenario.modes[0] || meta.Prefixes[1].Mode != scenario.modes[1] || meta.Prefixes[1].NodeID != "" || meta.Prefixes[1].Kind != "public-path" ||
-				meta.Prefixes[1].ProfileID != middle.ID || meta.Prefixes[2].NodeID != control.NodeProofID || len(physical.PhysicalRoots) != 1 || physical.PhysicalRoots[0].Destinations[0].Host != "192.168.210.2" {
+			if err != nil || len(meta.Prefixes) != count || meta.Prefixes[0].Mode != scenario.modes[0] || meta.Prefixes[middlePosition].Mode != scenario.modes[middlePosition] || meta.Prefixes[middlePosition].NodeID != "" || meta.Prefixes[middlePosition].Kind != "public-path" ||
+				meta.Prefixes[middlePosition].ProfileID != middle.ID || meta.Prefixes[count-1].NodeID != control.NodeProofID || len(physical.PhysicalRoots) != 1 || physical.PhysicalRoots[0].Destinations[0].Host != "192.168.210.2" {
 				t.Fatal("installed CONNECT source lost original proof or physical identity", err)
 			}
 			var source mobilemultihop.NodeChainSource
-			if json.Unmarshal([]byte(selection.Native.chain.connect.original.input), &source) != nil || source.Schema != 4 || source.IdentitySources[1] != "" {
+			if json.Unmarshal([]byte(selection.Native.chain.connect.original.input), &source) != nil || source.Schema != 4 || source.IdentitySources[middlePosition] != "" {
 				t.Fatal("installed CONNECT source acquired paired middle identity")
+			}
+			if len(source.Nodes) != count || len(source.IdentitySources) != count {
+				t.Fatal("CONNECT lost original full source inventory")
+			}
+			for position := 0; position < middlePosition; position++ {
+				original := profiles.Profiles[position]
+				if source.IdentitySources[position] == "" || meta.Prefixes[position].ProfileID != original.ID || meta.Prefixes[position].NodeID != original.NodeProofID || meta.Prefixes[position].Mode != scenario.modes[position] {
+					t.Fatal("CONNECT replaced an original paired prefix", position)
+				}
 			}
 			var envelope struct {
 				Config  string `json:"config"`
@@ -273,11 +304,20 @@ func TestDesktopLinuxInstalledCONNECTNodeChainFixtureKeepsOriginalSources(t *tes
 			var captured struct {
 				Profile common.RouterProfile `json:"profile"`
 			}
-			if json.Unmarshal([]byte(source.Nodes[1]), &envelope) != nil || json.Unmarshal([]byte(envelope.Capture), &captured) != nil || !reflect.DeepEqual(captured.Profile, middle) {
+			if json.Unmarshal([]byte(source.Nodes[middlePosition]), &envelope) != nil || json.Unmarshal([]byte(envelope.Capture), &captured) != nil || !reflect.DeepEqual(captured.Profile, middle) {
 				t.Fatal("installed CONNECT source changed its original complete imported policy")
 			}
 			for _, named := range linuxNodeChainCONNECTHostCases {
 				if !strings.HasPrefix(named, scenario.prefix) {
+					continue
+				}
+				shadowed := false
+				for _, longer := range linuxNodeChainCONNECTCipherCases() {
+					if len(longer.prefix) > len(scenario.prefix) && strings.HasPrefix(named, longer.prefix) {
+						shadowed = true
+					}
+				}
+				if shadowed {
 					continue
 				}
 				modes, action, err := linuxNodeChainScenario(named)

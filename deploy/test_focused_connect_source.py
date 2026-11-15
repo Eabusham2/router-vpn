@@ -202,6 +202,66 @@ INVENTORY = {'controls': [{'after': '',
            'TestNodeChainCONNECTSourceDoesNotBroadenGenericAuthority',
            'TestNodeChainCONNECTPhysicalReceiptOwnsExactUoTFinal']}
 
+# The longer CONNECT path has its own closed inventory. Keep the original
+# source records and mutation attempts intact so extending the path cannot
+# silently replace the original imported-middle authority checks.
+PREFIX_ROOTS = (
+    "TestNodeChainCONNECTCompletePacketPrefixes",
+    "TestNodeChainCONNECTPrefixIntegrityAndSourceRefusal",
+    "TestNodeChainCONNECTPrefixPreservesNativeMTUCeiling",
+    "TestNodeChainCONNECTPrefixRuntimeRetainsEveryProof",
+)
+PREFIX_REFUSALS = (
+    "foreign-prefix-owner", "prefix-order", "prefix-omission", "prefix-credential",
+    "foreign-middle-owner", "foreign-final-owner", "wrong-final-key", "metadata-order",
+    "closure-pointer", "physical-prefix-pointer", "runtime-pointer", "too-short",
+    "too-long", "nonlocal", "middle-first", "middle-not-penultimate", "middle-identity",
+    "missing-prefix-identity", "duplicate-prefix", "wrong-final-mode",
+)
+PREFIX_REQUIRED = frozenset((
+    *PREFIX_ROOTS,
+    *(f"{PREFIX_ROOTS[0]}/{mode}/{protocol}/{count}"
+      for mode in ("wg", "awg2-fast", "awg2-strong")
+      for protocol in ("http-connect", "https-connect") for count in range(1, 7)),
+    *(f"{PREFIX_ROOTS[1]}/{name}" for name in PREFIX_REFUSALS),
+    *(f"{PREFIX_ROOTS[3]}/{protocol}/{count}"
+      for protocol in ("http-connect", "https-connect") for count in (2, 6)),
+    *(f"{PREFIX_ROOTS[3]}/refuse-prefix-{index}" for index in range(6)),
+))
+PREFIX_PHASES = tuple(
+    ("ordered-connect-prefix-" + mode, "^" + PREFIX_ROOTS[0] + "$/^" + mode + "$",
+     frozenset((PREFIX_ROOTS[0], *(name for name in PREFIX_REQUIRED
+                 if name.startswith(PREFIX_ROOTS[0] + "/" + mode + "/")))))
+    for mode in ("wg", "awg2-fast", "awg2-strong")
+) + (("ordered-connect-prefix-authority", "^(" + "|".join(PREFIX_ROOTS[1:]) + ")$",
+      frozenset(name for name in PREFIX_REQUIRED if not name.startswith(PREFIX_ROOTS[0]))),)
+PREFIX_FILES = (
+    "internal/mobilemultihop/node_chain.go",
+    "internal/mobilemultihop/node_chain_connect_integrity.go",
+    "internal/mobilemultihop/node_chain_connect_runtime.go",
+    "internal/mobilemultihop/node_chain_connect_runtime_test.go",
+    "internal/mobilemultihop/node_chain_runtime.go",
+    "internal/mobilemultihop/node_chain_measurement.go",
+    "internal/mobilemultihop/node_chain_socks_runtime.go",
+    "internal/mobilemultihop/desktop_node_chain_connect_policy.go",
+    "internal/mobilemultihop/desktop_node_chain_connect_physical.go",
+    "internal/mobilemultihop/node_chain_connect_prefix_test.go",
+    "internal/mobilemultihop/node_chain_connect_prefix_runtime_test.go",
+    "internal/hopmeasure/measure.go",
+    "internal/hopmeasure/ordered_connect_prefix_test.go",
+)
+PREFIX_CONTROL = {
+    "name": "original-prefix-pointer",
+    "path": "internal/mobilemultihop/node_chain_connect_physical.go",
+    "before": "!p.scope.ownsOriginalNodes()",
+    "after": "false",
+    "selector": "^TestNodeChainCONNECTPrefixIntegrityAndSourceRefusal$/^physical-prefix-pointer$",
+    "failures": (
+        PREFIX_ROOTS[1], PREFIX_ROOTS[1] + "/physical-prefix-pointer",
+    ),
+    "witness": "physical construction accepted same-content foreign prefix owner",
+}
+
 def cases(suite=SUITE):
     if suite != SUITE:
         raise ValueError("Only the fixed CONNECT source suite is accepted")
@@ -216,6 +276,13 @@ def cases(suite=SUITE):
         witnesses = frozenset(name for name in required if "/" in name) or required
         additional.append(BASE.Case("connect-" + control["name"], control["selector"],
                           required, 120, 600, "connect-" + control["name"], control["witness"], witnesses))
+    for name, selector, required in PREFIX_PHASES:
+        additional.append(BASE.Case(name, selector, required, 120, 600))
+    control = PREFIX_CONTROL
+    required = frozenset(control["failures"])
+    additional.append(BASE.Case("connect-" + control["name"], control["selector"], required,
+                               120, 600, "connect-" + control["name"], control["witness"],
+                               frozenset(name for name in required if "/" in name)))
     return (*ORIGINAL_CASES, *additional)
 
 # One private module instance composes the existing executor, read-only source
@@ -223,11 +290,12 @@ def cases(suite=SUITE):
 # objects, controls and deadlines remain intact.
 BASE.SUITE = SUITE
 BASE.cases = cases
-BASE.SOURCE_PATHS = tuple(dict.fromkeys((*ORIGINAL_SOURCE_PATHS, *INVENTORY["files"])))
-BASE.FORMAT_PATHS = tuple(dict.fromkeys((*ORIGINAL_FORMAT_PATHS, *INVENTORY["files"])))
+BASE.SOURCE_PATHS = tuple(dict.fromkeys((*ORIGINAL_SOURCE_PATHS, *INVENTORY["files"], *PREFIX_FILES)))
+BASE.FORMAT_PATHS = tuple(dict.fromkeys((*ORIGINAL_FORMAT_PATHS, *INVENTORY["files"], *PREFIX_FILES)))
 BASE.CONTROL_MUTATIONS = {
     **ORIGINAL_MUTATIONS,
     **{"connect-" + c["name"]: (c["path"], c["before"], c["after"]) for c in INVENTORY["controls"]},
+    "connect-" + PREFIX_CONTROL["name"]: (PREFIX_CONTROL["path"], PREFIX_CONTROL["before"], PREFIX_CONTROL["after"]),
 }
 
 def validate(args):
@@ -251,6 +319,9 @@ def validate(args):
                 "new_source_records": len(INVENTORY["required"]),
                 "original_connect_records": len(INVENTORY["original"]["required"]),
                 "new_compiled_controls": len(INVENTORY["controls"]),
+                "prefix_source_records": len(PREFIX_REQUIRED),
+                "prefix_source_execution_records": sum(len(required) for _, _, required in PREFIX_PHASES),
+                "prefix_compiled_controls": 1,
                 "runtime_native_host_delivery": "unfinished",
             }
             path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")

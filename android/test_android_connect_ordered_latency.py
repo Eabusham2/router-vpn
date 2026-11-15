@@ -24,11 +24,12 @@ SOURCES=dict(F.SOURCES)
 for name in ('AndroidNodeChainCapture','AndroidNodeChainSOCKSCapture'):
     SOURCES[APP+name+'.java']=C.SOURCES[APP+name+'.java']
 SOURCES.pop(APP+'AndroidNodeChainCONNECTCapture.java')
-SOURCES[APP+'AndroidNodeStore.java']=C.SOURCES[APP+'AndroidNodeStore.java'].replace('final boolean imported=false;','final boolean imported;').replace('this.id=id;profileId=', 'this.id=id;imported=id.endsWith("2");profileId=')
+SOURCES[APP+'AndroidNodeStore.java']=C.SOURCES[APP+'AndroidNodeStore.java'].replace('final boolean imported=false;','boolean imported=false;').replace('list.add(new ChainSource(String.format("%032x",i+1)));','ChainSource member=new ChainSource(String.format("%032x",i+1));member.imported=i==count-2;list.add(member);')
 SOURCES[NATIVE+'RouterNodeChainSOCKS.java']=C.SOURCES[NATIVE+'RouterNodeChainSOCKS.java']
 SOURCES[NATIVE+'RouterNodeChainCONNECT.java']=C.SOURCES[NATIVE+'RouterNodeChainCONNECT.java'].replace('public final String input;','public RouterHopMeasurement measurement;public final String input;')
 SOURCES[NATIVE+'Libbox.java']=C.SOURCES[NATIVE+'Libbox.java'].replace('plan.hopCalls++;return new RouterHopMeasurement();','plan.hopCalls++;return plan.measurement=new RouterHopMeasurement();').replace('throw new IllegalStateException("No CONNECT fifty in ordinary host fixture");','if(!plan.healthy()||plan.server!=server||plan.measurement!=measurement||RouterOrderedLatency.mtuOccupied)throw new AssertionError("CONNECT facade borrowed another native measurement");return new RouterOrderedLatency(plan,measurement);')
 SOURCES[NATIVE+'RouterOrderedLatency.java']=F.SOURCES[NATIVE+'RouterOrderedLatency.java'].replace('RouterNodeChainSOCKS','RouterNodeChainCONNECT')
+SOURCES[NATIVE+'RouterOrderedLatency.java']=SOURCES[NATIVE+'RouterOrderedLatency.java'].replace('boolean pub=position==1;','int count=new JSONObject(plan.source()).getJSONArray("nodes").length();boolean pub=position==count-2;').replace('position==2?"exit"','position==count-1?"exit"').replace('"Cumulative path through custom node 2 of 3 → Cloudflare edge"','"Cumulative path through custom node "+(position+1)+" of "+count+" → Cloudflare edge"').replace('+" of 3"','+" of "+count')
 HARNESS=F.HARNESS.replace('OrderedFiftyTest','CONNECTFiftyTest').replace('RouterNodeChainSOCKS','RouterNodeChainCONNECT').replace('.capture.socks','.capture.connect').replace('private-socks-credentials','private-connect-credentials').replace('public static void main(String[] args)', 'static void originalMain(String[] args)')
 HARNESS=HARNESS.replace('targets.size()==3&&targets.get(1).kind.equals("public-path")','targets.size()==3&&targets.get(1).kind.equals("public-path")&&targets.get(1).label.contains(RouterNodeChainCONNECT.transport)&&f.owner().capture.socks==null&&f.owner().capture.plan==null')
 HARNESS=HARNESS.replace('static void originalMain(String[] args)',r'''static void destroyedFifty()throws Exception{RouterOrderedLatency.reset();try(Fixture f=new Fixture(3)){
@@ -38,9 +39,17 @@ HARNESS=HARNESS.replace('static void originalMain(String[] args)',r'''static voi
  }}
  static void originalMain(String[] args)''')
 HARNESS=HARNESS[:HARNESS.rfind('}')]+r'''
+ static void longPrefixes()throws Exception{
+  for(int count=4;count<=8;count++){RouterOrderedLatency.reset();try(Fixture f=new Fixture(count)){
+   f.connected();var targets=LayeredVpnService.orderedLatencyTargets();check(targets.size()==count,"CONNECT long captured target count");
+   for(var target:targets){check(target.kind.equals(target.position==count-2?"public-path":"private-node"),"CONNECT long captured target kind");Outcome result=measure(target);check(result.error==null&&result.record!=null&&result.record.count==count,"CONNECT long completed receipt lost original count");check(result.record.raw.equals(saved(f,target).raw),"CONNECT long history changed original receipt");check(RouterOrderedLatency.latest.closed&&!AndroidMTUMeasurementGate.held(),"CONNECT long measurement escaped cleanup");}
+   f.stop();
+  }}
+ }
+
  public static void main(String[] args)throws Exception{
   if(args.length<1||!List.of("http-connect","https-connect").contains(args[0]))throw new AssertionError("Explicit CONNECT middle transport required");
-  RouterNodeChainCONNECT.transport=args[0];if(args.length==1||args[1].equals("destroyed")){destroyedFifty();System.out.println("CONNECT fifty destruction passed: "+args[0]);}if(args.length==1||!args[1].equals("destroyed"))originalMain(args.length>1?new String[]{args[1]}:new String[0]);
+  RouterNodeChainCONNECT.transport=args[0];if(args.length>1&&args[1].equals("prefixes")){longPrefixes();System.out.println("CONNECT long fifty prefixes passed: "+args[0]);return;}if(args.length==1||args[1].equals("destroyed")){destroyedFifty();System.out.println("CONNECT fifty destruction passed: "+args[0]);}if(args.length==1||!args[1].equals("destroyed"))originalMain(args.length>1?new String[]{args[1]}:new String[0]);
   System.out.println("CONNECT fifty transport passed: "+args[0]);
  }
 }'''
@@ -66,6 +75,7 @@ def main():
         subprocess.run(['javac','-J-Xmx512m','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(classes),*map(str,src.rglob('*.java'))],check=True,timeout=60)
         for transport in ('http-connect','https-connect'):
             subprocess.run(['java','-Xmx512m','-cp',os.pathsep.join((str(classes),str(jar))),'com.eabusham.routervpn.CONNECTFiftyTest',transport],check=True,timeout=120)
+            subprocess.run(['java','-Xmx512m','-cp',os.pathsep.join((str(classes),str(jar))),'com.eabusham.routervpn.CONNECTFiftyTest',transport,'prefixes'],check=True,timeout=120)
         controls=original_controls()+(
             ('LayeredVpnService','if(nodeChainSession!=null)try{nodeChainSession.closeOrderedLatency();}','if(false)try{nodeChainSession.closeOrderedLatency();}','destroyed','destroyed CONNECT fifty lost original facade before join'),
             ('AndroidNodeChainSession','capture.connect!=null?Libbox.routerNodeChainCONNECTNewLatencyBenchmark(capture.connect.plan,server,measurement)\n                :','', 'success','complete benchmark not adopted'),

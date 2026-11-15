@@ -409,7 +409,8 @@ final class AndroidNodeStore {
             if (source == null || !proofs.add(source.identityKey())) throw new IllegalStateException("An ordered member is missing or shares another node's paired identity.");
             String mode = reference.getString("mode");
             if(source.imported) {
-                if(selected.length()!=3||i!=1||!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("A custom ordered node belongs only between the paired first and final nodes of this three-node path.");
+                boolean connect="http-connect".equals(mode)||"https-connect".equals(mode);
+                if(selected.length()<3||selected.length()>8||i!=selected.length()-2||!connect&&selected.length()!=3||!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("A custom ordered node requires its supported penultimate position before the paired final node.");
                 ChainSource.requireImported(source.external());
             } else {
                 source.requirePairedIdentity();

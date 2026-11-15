@@ -258,7 +258,8 @@ NODE_CHAIN_CONNECT_HOST_CASES = (
     'node-chain-connect-http-wg-final-dns-failure', 'node-chain-connect-http-wg-final-node-failure', 'node-chain-connect-http-wg-middle-source', 'node-chain-connect-http-wg-prefix-lost',
     'node-chain-connect-https-wg-wrong-middle-key', 'node-chain-connect-https-wg-wrong-middle-user', 'node-chain-connect-https-wg-wrong-middle-public',
     'node-chain-connect-https-wg-final-dns-failure', 'node-chain-connect-https-wg-final-node-failure', 'node-chain-connect-https-wg-middle-source', 'node-chain-connect-https-wg-prefix-lost',
-    'node-chain-connect-https-wg-wrong-middle-sni', 'node-chain-connect-https-wg-wrong-middle-trust')
+    'node-chain-connect-https-wg-wrong-middle-sni', 'node-chain-connect-https-wg-wrong-middle-trust',
+    'node-chain-connect-http-wg-four-connect', 'node-chain-connect-https-wg-eight-connect')
 CASES += NODE_CHAIN_CONNECT_HOST_CASES
 
 EXTERNAL_ALL_OFF_CASES = ('external-ss-off-public', 'external-ss-off-cancelled', 'external-ss-off-source',
@@ -282,6 +283,7 @@ NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledCONNECTNodeCh
 NODE_CHAIN_HOST_AUTHORITY_CASES += (NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT,
     *(NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT + '/' + protocol + '/' + mode
       for protocol in ('http', 'https') for mode in ('wg', 'awg2-fast', 'awg2-strong')))
+NODE_CHAIN_HOST_AUTHORITY_CASES += tuple(NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT+'/'+name for name in ('http/wg-four','https/wg-eight'))
 NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledImportedNodeChainFixtureKeepsOriginalSources'
 NODE_CHAIN_HOST_AUTHORITY_CASES += (NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT,
     *(NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT + '/' + name for name in ('custom-wg', 'custom-awg-fast', 'custom-awg-strong')))
@@ -903,6 +905,11 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its exact retained external HY2 layer and physical/private authentication: ' + value)
 
 
+def installed_case_timeout(case):
+    return 280 if case in ('node-chain-connect-http-wg-four-connect',
+                           'node-chain-connect-https-wg-eight-connect') else 150
+
+
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None):
     if case not in (*CASES, *REVERSE_CASES):
         raise ValueError('Installed Linux host has no such captured native scenario')
@@ -1236,7 +1243,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                        '--whitening-binary', str(whitening), '--whitening-sha256', whitening_sha256]
             if sudo is not None:
                 command = [sudo, '-n', '--', *command]
-            output = GUARD.UID.run(command, cwd=ROOT, env=captured, timeout=150, sudo=sudo)
+            output = GUARD.UID.run(command, cwd=ROOT, env=captured, timeout=installed_case_timeout(case), sudo=sudo)
             check_verdict(output, case)
             logs.append(output)
             print(output, end='' if output.endswith('\n') else '\n')
