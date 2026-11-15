@@ -98,6 +98,9 @@ final class AndroidTorProfile {
  static String strictText(byte[] raw)throws Exception{return java.nio.charset.StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(raw)).toString();}
 }
 final class AndroidExternalPolicy {
+ // CAPTURE_TYPE_SOURCE
+ // Native imported construction remains outside this history-only fixture.
+ static Captured captureImportedEntry(AndroidStandardExitStore.Entry e){throw new AssertionError("Native imported compilation outside immutable readback fixture");}
  // PURE_POLICY_SOURCE
  static JSONObject profile(AndroidStandardExitStore.Entry e){throw new AssertionError("Native imported compilation outside immutable readback fixture");}
 }
@@ -259,12 +262,20 @@ def fixture_sources():
               "org/amnezia/awg/backend/Tunnel.java": "package org.amnezia.awg.backend;public interface Tunnel{enum State{UP,DOWN}}",
               "io/nekohasekai/libbox/Libbox.java": literal(startup, "PRIVATE_JSON_JAVA"),
               APP + "OrderedHistorySourceTest.java": HARNESS}
+    # History transactions never open a native chain. Preserve that refusal
+    # while compiling the current shipping NodeStore constructor call.
+    libbox = result["io/nekohasekai/libbox/Libbox.java"]
+    opening = "public final class Libbox {"
+    assert libbox.count(opening) == 1
+    result["io/nekohasekai/libbox/Libbox.java"] = libbox.replace(opening, opening + \
+        '\n public static String routerNodeChainImportedOpenVPNMemberInput(String source,String capture){throw new AssertionError("Native OpenVPN chain outside immutable readback fixture");}', 1)
     policy = (JAVA / "AndroidExternalPolicy.java").read_text()
     start = policy.index("    private static final Set<String> POLICY =")
     constants = policy[start:policy.index(";", start) + 1]
     methods = "\n".join(block(policy, signature) for signature in
                         ("    static boolean supports(", "    static String protocol(", "    static void checkPolicy(", "    private static boolean bounded("))
-    result[APP + "Boundaries.java"] = BOUNDARY.replace(" // PURE_POLICY_SOURCE", " static final int MAX_CAPTURE=8*1024*1024;\n" + constants + methods)
+    result[APP + "Boundaries.java"] = BOUNDARY.replace(" // PURE_POLICY_SOURCE", " static final int MAX_CAPTURE=8*1024*1024;\n" + constants + methods).replace(
+        " // CAPTURE_TYPE_SOURCE", block(policy, "    static final class Captured {"))
     for name in ACTUAL:
         result[APP + name + ".java"] = (JAVA / (name + ".java")).read_text()
     return result
