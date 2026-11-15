@@ -1233,3 +1233,26 @@ all ran under Go 1.26.3 race instrumentation. The nine composed validator
 tests passed. Exact commands and event hashes are retained in
 `connect-seal-control-validation`. Source validation remains distinct from
 native encrypted execution, packaged delivery, and device acceptance.
+
+## Mac ordered measurement transport positions
+
+The shipping Swift ordered-latency transport independently limited requests
+to positions `0...2`, although ordinary ordered paths already support up to
+eight nodes. This blocked measurement of later hops before the controller
+could receive a request. `RouterVPNMacSpeedLabTransport.swift` now admits
+the existing bounded `0...7` positions for ordered start and cancellation.
+Its exact capture/source fields, request identity, body shape, six-second
+transport bound, Boolean exclusion, and integer validation are unchanged.
+
+The existing executable Swift fixture now constructs and cancels actual
+shipping transport objects for every position `0...7`, and rejects `8`,
+negative, fractional and Boolean positions plus the original invalid
+body/source/timeout cases. Its 1,039 shipping model/controller checks pass.
+Three compiled causal controls fail at the intended witnesses: restoring
+the old three-node bound rejects position 3; removing the Boolean or
+integrality guard admits the corresponding invalid request. Exact source
+hashes and logs are retained in `macos-ordered-transport-validation`.
+
+These are portable Swift constructor/model results with the existing
+loopback task boundary. AppKit rendering, actual macOS controller/tunnel
+execution, and physical-device acceptance remain separate required gates.

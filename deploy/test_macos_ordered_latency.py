@@ -256,15 +256,19 @@ check(construction.controller.requestClose(),"factory failure closes");construct
 
 // Actual shipping transport validates operation-specific paths, bodies and bounds.
 let body:[String:Any]=["capture":capture,"node_id":"node-0","position":0,"request_id":String(repeating:"e",count:32)]
-for suffix in ["", "/cancel"] {
-    let value=try RouterVPNMacSpeedLabTransport(url:URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency"+suffix)!,body:body,timeout:6){_ in};value.cancel();checks += 1
-}
-for item in ["extra","position-bool","position-high","request","session","token","timeout","query","cancel-get","foreign"] {
+for position in 0...7 { for suffix in ["", "/cancel"] {
+    var capturedBody=body;capturedBody["position"]=position;capturedBody["node_id"]="node-\(position)"
+    do { let value=try RouterVPNMacSpeedLabTransport(url:URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency"+suffix)!,body:capturedBody,timeout:6){_ in};value.cancel();checks += 1 }
+    catch { check(false,"original bounded hop transport rejected position \(position)") }
+} }
+for item in ["extra","position-bool","position-high","position-negative","position-fractional","request","session","token","timeout","query","cancel-get","foreign"] {
     var b=body, url="http://127.0.0.1:8788/api/speed-lab/ordered-latency", timeout=6.0, get=false
     switch item {
     case "extra":b["other"]=true
     case "position-bool":b["position"]=true
-    case "position-high":b["position"]=3
+    case "position-high":b["position"]=8
+    case "position-negative":b["position"] = -1
+    case "position-fractional":b["position"]=1.5
     case "request":b["request_id"]="other"
     case "session":var c=capture;c["session_id"]="other";b["capture"]=c
     case "token":var c=capture;c["profile_token"]="other";b["capture"]=c
@@ -292,7 +296,7 @@ CONTROLS = {
     "invalidated_drain": ("guard finished, reply.status.stage == \"complete\",", "guard finished, !invalid, reply.status.stage == \"complete\","),
 }
 
-def run_case(directory, name, change):
+def run_case(directory, name, change, transport_change=None):
     case = directory / name
     case.mkdir()
     source = SOURCE.read_text()
@@ -307,21 +311,35 @@ def run_case(directory, name, change):
         if source.count(before) != 1:
             raise AssertionError(f"control {name} no longer targets exactly one shipping statement")
         source = source.replace(before, after, 1)
+    transport = (ROOT / "client/macos/RouterVPNMacSpeedLabTransport.swift").read_text()
+    if transport_change:
+        before, after = transport_change
+        if transport.count(before) != 1:
+            raise AssertionError(f"transport control {name} lost its exact source seam")
+        transport = transport.replace(before, after, 1)
+    (case / "Transport.swift").write_text(transport)
     (case / "Ordered.swift").write_text(source)
     (case / "main.swift").write_text(FIXTURE)
     command = ["swiftc", "-swift-version", "5", "-module-cache-path", str(directory / "module-cache"),
                str(ROOT / "client/macos/RouterVPNMacControllerAuth.swift"),
-               str(ROOT / "client/macos/RouterVPNMacSpeedLabTransport.swift"),
+               str(case / "Transport.swift"),
                str(case / "Ordered.swift"), str(case / "main.swift"), "-o", str(case / "fixture")]
     build = subprocess.run(command, capture_output=True, text=True, timeout=120)
     if build.returncode:
         raise AssertionError(f"{name} fixture failed to compile:\n{build.stdout}{build.stderr}")
     result = subprocess.run([str(case / "fixture")], capture_output=True, text=True, timeout=30)
-    if (result.returncode == 0) != (change is None):
+    if (result.returncode == 0) != (change is None and transport_change is None):
         raise AssertionError(f"{name} wrong verdict {result.returncode}:\n{result.stdout}{result.stderr}")
-    if change is not None and "FAIL:" not in result.stderr:
+    if (change is not None or transport_change is not None) and "FAIL:" not in result.stderr:
         raise AssertionError(f"{name} failed without its semantic assertion")
     return {"case":name,"exit":result.returncode,"stdout":result.stdout.strip(),"stderr":result.stderr.strip()}
+
+TRANSPORT_CONTROLS = {
+    "transport-three-only": ("                    position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue)\n", "                    position!.doubleValue.rounded() == position!.doubleValue && (0...2).contains(position!.intValue)\n"),
+    "transport-boolean": ("position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() &&\n", "position != nil && true &&\n"),
+    "transport-fractional": ("                    position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue)\n", "                    (0...7).contains(position!.intValue)\n"),
+}
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -332,6 +350,7 @@ def main():
         rows = [run_case(directory, "shipping", None)]
         if args.self_test:
             rows.extend(run_case(directory, name, change) for name, change in CONTROLS.items())
+            rows.extend(run_case(directory, name, None, change) for name, change in TRANSPORT_CONTROLS.items())
         print(json.dumps({"scope":"Swift production model/controller with loopback task double; transport constructor validation", "results":rows}, indent=2))
 
 if __name__ == "__main__":

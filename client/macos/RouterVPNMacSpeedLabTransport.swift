@@ -75,7 +75,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                     session.utf8.count <= 64 && session.range(of: "^session-[0-9]+-[0-9]+$", options: .regularExpression) != nil &&
                     text(capture["profile_id"], 128) && ["profile_token", "source_sha256", "config_sha256", "generation_sha256"].allSatisfy({ hex(capture[$0], 64) }) &&
                     text(body?["node_id"], 128) && hex(body?["request_id"], 32) && position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() &&
-                    position!.doubleValue.rounded() == position!.doubleValue && (0...2).contains(position!.intValue)
+                    position!.doubleValue.rounded() == position!.doubleValue && (0...7).contains(position!.intValue)
             }
         case candidateBase + "/catalog": performanceValid = candidateCatalog && body == nil && bounded(25)
         case candidateBase, candidateBase + "/cancel", candidateBase + "/save-profile":
