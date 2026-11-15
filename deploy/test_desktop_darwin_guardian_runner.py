@@ -1110,6 +1110,105 @@ func TestShippingCreatorAdmission(t *testing.T){
                 print('Darwin creator admission: '+label+' verified', flush=True)
 
 
+class DarwinGenerationRetirement(unittest.TestCase):
+    def test_shipping_full_close_retains_retry_state_until_native_absence(self):
+        # Execute the original close, permissions-only close and absence checks.
+        # Only PF command/readback results are modeled here; the mandatory
+        # native PFGenerationRetirement case retains actual kernel references.
+        source = (ROOT/'internal/mobiletor/desktop_socket_darwin_pf.go').read_text()
+        start, end = 'func (p *desktopDarwinPF) filtersAbsent(', '\nfunc (p *desktopDarwinPF) bindTunnel('
+        self.assertEqual(source.count(start), 1)
+        self.assertEqual(source.count(end), 1)
+        methods = source[source.index(start):source.index(end)]
+        off = (ROOT/'internal/mobiletor/desktop_socket_darwin_off.go').read_text()
+        start, end = 'func (p *desktopDarwinPF) retirePermissions(', '\nfunc (g *desktopDarwinGuardian) prepareOffSocket('
+        self.assertEqual(off.count(start), 1)
+        self.assertEqual(off.count(end), 1)
+        permissions = off[off.index(start):off.index(end)]
+        header = '''package retirement
+import("context";"errors")
+type desktopDarwinPF struct{Anchor,Slot,Pointer,tunnel string;index uint32;permits map[string]int}
+func(p *desktopDarwinPF)valid()bool{return p.Anchor=="original-generation"&&p.Slot=="original-slot"&&p.Pointer=="original-pointer"}
+var fixtureRules map[string]string
+var fixtureFault string
+var fixtureRetained bool
+var fixtureSlotReads int
+var fixtureError=errors.New("original native failure")
+func desktopDarwinPFLoad(_ context.Context,anchor,text string)error{
+ if fixtureFault=="load"&&anchor=="original-generation"||fixtureFault=="slot-load"&&anchor=="original-slot"{return fixtureError}
+ if text=="\\n"{text=""};fixtureRules[anchor]=text;return nil
+}
+func desktopDarwinPFRead(_ context.Context,anchor string)(string,error){
+ if anchor=="original-slot"{fixtureSlotReads++;if fixtureFault=="slot-read"||fixtureFault=="slot-readback"&&fixtureSlotReads==2{return "",fixtureError}}
+ if fixtureFault=="filter-read"&&anchor=="original-generation"{return "",fixtureError}
+ return fixtureRules[anchor],nil
+}
+func desktopDarwinPFNamespacePresent(_ context.Context,anchor string)(bool,error){
+ if fixtureFault=="namespace-read"{return false,fixtureError}
+ return fixtureRetained||fixtureRules[anchor]!=""||fixtureRules["original-slot"]=="original-pointer",nil
+}
+'''
+        test = r'''package retirement
+import("context";"errors";"testing")
+func original()*desktopDarwinPF{
+ fixtureRules=map[string]string{"original-generation":"deny-only","original-slot":"original-pointer","root-baseline":"original-baseline","other-reference":"original-pointer"}
+ fixtureFault="";fixtureRetained=false;fixtureSlotReads=0
+ return &desktopDarwinPF{Anchor:"original-generation",Slot:"original-slot",Pointer:"original-pointer",tunnel:"utun777",index:777,permits:map[string]int{"pending-close":41}}
+}
+func TestShippingFullGenerationClose(t *testing.T){
+ for _,failure:=range []string{"load","filter-read","slot-read","slot-load","slot-readback","namespace-read","retained-reference","success","replacement"}{t.Run(failure,func(t *testing.T){
+  p:=original();fixtureFault=failure;fixtureRetained=failure=="retained-reference"
+  if failure=="replacement"{fixtureRules[p.Slot]="replacement-pointer"}
+  err:=p.close(context.Background())
+  if failure!="success"&&failure!="replacement"{
+   if err==nil{t.Fatal("unproved native generation retirement acquired success")}
+   if failure!="retained-reference"&&!errors.Is(err,fixtureError){t.Fatal("original native failure was discarded",err)}
+   if len(p.permits)!=1||p.permits["pending-close"]!=41||p.tunnel!="utun777"||p.index!=777{t.Fatal("failed generation retirement forgot its exact retained cleanup state",p.permits,p.tunnel,p.index)}
+   fixtureFault="";fixtureRetained=false
+   if err:=p.close(context.Background());err!=nil{t.Fatal("original generation could not retry after reference release",err)}
+  }else if err!=nil{t.Fatal(err)}
+  if len(p.permits)!=0||p.tunnel!=""||p.index!=0{t.Fatal("proved retirement retained stale memory")}
+  if fixtureRules["root-baseline"]!="original-baseline"||fixtureRules["other-reference"]!="original-pointer"{t.Fatal("retirement changed an independent owner")}
+  expected:="";if failure=="replacement"{expected="replacement-pointer"}
+  if fixtureRules[p.Slot]!=expected{t.Fatal("retirement removed replacement pointer")}
+ })}
+}
+func TestShippingOffPermissionRetirementKeepsIndependentGuard(t *testing.T){
+ p:=original();fixtureRetained=true
+ if err:=p.retirePermissions(context.Background());err!=nil{t.Fatal(err)}
+ if len(p.permits)!=0||p.tunnel!=""||p.index!=0{t.Fatal("permissions-only retirement retained revoked authority")}
+ if fixtureRules[p.Anchor]!=""||fixtureRules[p.Slot]!=p.Pointer||!fixtureRetained{t.Fatal("permissions-only retirement removed independent slot ownership")}
+}
+'''
+        flush = '\tif err := desktopDarwinPFLoad(ctx, p.Anchor, "\\n"); err != nil {\n\t\treturn err\n\t}\n\tif err := p.filtersAbsent(ctx); err != nil {\n\t\treturn err\n\t}'
+        self.assertEqual(methods.count(flush), 1)
+        variants = [('baseline', methods, None),
+                    ('old-permissions-only-close', methods.replace(flush, '\tif err := p.retirePermissions(ctx); err != nil {\n\t\treturn err\n\t}'),
+                     'failed generation retirement forgot its exact retained cleanup state')]
+        compiler = shutil.which('go')
+        self.assertIsNotNone(compiler, 'Go is required for shipping generation retirement regression')
+        with tempfile.TemporaryDirectory(prefix='darwin-generation-retirement-') as directory:
+            folder = Path(directory)
+            implementation, regression = folder/'retirement.go', folder/'retirement_test.go'
+            regression.write_text(test)
+            for label, selected, witness in variants:
+                implementation.write_text(header+selected+permissions)
+                result = subprocess.run([compiler, 'test', '-race', '-v', '-timeout=20s', str(implementation), str(regression)],
+                                        capture_output=True, text=True, timeout=120,
+                                        env=dict(os.environ, GOTOOLCHAIN='local'))
+                output = result.stdout+result.stderr
+                if witness is None:
+                    self.assertEqual(result.returncode, 0, output)
+                    self.assertEqual(output.count('--- PASS: TestShippingFullGenerationClose/'), 9, output)
+                    self.assertIn('--- PASS: TestShippingOffPermissionRetirementKeepsIndependentGuard (', output)
+                else:
+                    self.assertNotEqual(result.returncode, 0, output)
+                    self.assertIn(witness, output)
+                    for invalid in ('panic:', 'fatal error:', 'WARNING: DATA RACE', '[build failed]'):
+                        self.assertNotIn(invalid, output)
+                print('Darwin generation retirement: '+label+' verified', flush=True)
+
+
 class DarwinRecvmsgInputFlags(unittest.TestCase):
     def test_shipping_receive_normalizes_input_and_preserves_output_refusals(self):
         # Run the actual descriptor receiver and bounded frame parser over real

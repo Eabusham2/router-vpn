@@ -577,7 +577,13 @@ func (p *desktopDarwinPF) close(ctx context.Context) error {
 	// The leaf binds the full session, source and fresh network nonce. A
 	// replacement may change the slot, but cannot acquire this old leaf's identity. Never clear or
 	// rewrite that replacement slot or the household/system PF ruleset.
-	if err := p.retirePermissions(ctx); err != nil {
+	// Retain retry ownership until both the slot and native generation are
+	// absent. Off permissions-only retirement clears state earlier and is not
+	// a complete generation close.
+	if err := desktopDarwinPFLoad(ctx, p.Anchor, "\n"); err != nil {
+		return err
+	}
+	if err := p.filtersAbsent(ctx); err != nil {
 		return err
 	}
 	pointer, err := desktopDarwinPFRead(ctx, p.Slot)
