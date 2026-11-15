@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/route"
 )
 
 type connectHeldClose struct {
@@ -256,5 +259,223 @@ func TestCONNECTTLSDeadlineCannotExtendOriginalOwnerBudget(t *testing.T) {
 	defer stop()
 	if err := op.closeContext(joined); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func connectServerTCPFixture(t *testing.T) (*net.TCPConn, *net.TCPConn) {
+	t.Helper()
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	client, err := net.DialTCP("tcp4", nil, listener.Addr().(*net.TCPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	peer, err := listener.AcceptTCP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	return client, peer
+}
+
+// Keep full Close and the connection-manager mutation behind an explicit
+// channel. Count is not synchronized, so socket FIN/EOF alone cannot order it.
+type connectServerTrackedConn struct {
+	net.Conn
+	closes       atomic.Int32
+	closeAllowed <-chan struct{}
+	closeEntered chan struct{}
+}
+
+func (c *connectServerTrackedConn) Upstream() any { return c.Conn }
+func (c *connectServerTrackedConn) Close() error {
+	c.closes.Add(1)
+	if c.closeEntered != nil {
+		close(c.closeEntered)
+	}
+	if c.closeAllowed != nil {
+		<-c.closeAllowed
+	}
+	return c.Conn.Close()
+}
+
+func TestCONNECTServerTrackedTCPJoinsFINAndOriginalOwner(t *testing.T) {
+	for _, closeOwner := range []bool{false, true} {
+		name := "operation"
+		if closeOwner {
+			name = "outbound"
+		}
+		t.Run(name, func(t *testing.T) {
+			client, peer := connectServerTCPFixture(t)
+			if err := peer.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			raw := &connectServerTrackedConn{Conn: client}
+			manager := route.NewConnectionManager(log.NewNOPFactory().Logger())
+			tracked := manager.TrackConn(raw)
+			allowed := make(chan struct{})
+			var allowOnce sync.Once
+			allow := func() { allowOnce.Do(func() { close(allowed) }) }
+			outer := &connectServerTrackedConn{Conn: tracked, closeAllowed: allowed, closeEntered: make(chan struct{})}
+			captured, err := captureServerTCP(outer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := &Outbound{operations: make(map[*operation]struct{})}
+			op := connectCloseOperation(owner, captured)
+			t.Cleanup(func() {
+				allow()
+				_ = peer.Close()
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = owner.CloseContext(ctx)
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			closed := make(chan error, 1)
+			go func() {
+				if closeOwner {
+					closed <- owner.CloseContext(ctx)
+				} else {
+					closed <- op.closeContext(ctx)
+				}
+			}()
+			var b [1]byte
+			if _, err := peer.Read(b[:]); !errors.Is(err, io.EOF) {
+				t.Fatal("tracked CONNECT TCP half-close did not reach peer", err)
+			}
+			// No tracked Close can remove the manager entry before allow().
+			if manager.Count() != 1 || raw.closes.Load() != 0 {
+				t.Fatal("tracked CONNECT owner escaped before remote EOF")
+			}
+			select {
+			case <-outer.closeEntered:
+				t.Fatal("tracked CONNECT full Close started before remote EOF")
+			default:
+			}
+			select {
+			case err := <-closed:
+				t.Fatal("tracked CONNECT operation abandoned remote EOF", err)
+			default:
+			}
+			if err := peer.CloseWrite(); err != nil {
+				t.Fatal(err)
+			}
+			allow()
+			select {
+			case err := <-closed:
+				if err != nil {
+					t.Fatal("tracked CONNECT original close did not join", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("tracked CONNECT original operation did not drain", ctx.Err())
+			}
+			// The operation receipt now orders the manager's original mutation.
+			if manager.Count() != 0 || raw.closes.Load() != 1 || outer.closes.Load() != 1 {
+				t.Fatal("tracked CONNECT full-close owner was bypassed or repeated")
+			}
+			if err := owner.CloseContext(ctx); err != nil || raw.closes.Load() != 1 || outer.closes.Load() != 1 {
+				t.Fatal("tracked CONNECT retirement retry changed original ownership", err)
+			}
+		})
+	}
+}
+
+type connectServerOpaqueConn struct{ net.Conn }
+
+func TestCONNECTServerMissingHalfCloseRetainsOriginalFailedHandle(t *testing.T) {
+	client, _ := connectServerTCPFixture(t)
+	raw := &connectServerTrackedConn{Conn: &connectServerOpaqueConn{Conn: client}}
+	manager := route.NewConnectionManager(log.NewNOPFactory().Logger())
+	tracked := manager.TrackConn(raw)
+	captured, err := captureServerTCP(tracked)
+	if err == nil || captured != tracked || manager.Count() != 1 || raw.closes.Load() != 0 {
+		t.Fatal("missing CONNECT half-close discarded original acquired handle")
+	}
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	op := connectCloseOperation(owner, captured)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := op.closeContext(ctx); err == nil || !completed(op.drained) {
+		t.Fatal("missing CONNECT half-close lost its joined original failure", err)
+	}
+	if manager.Count() != 0 || raw.closes.Load() != 1 {
+		t.Fatal("failed CONNECT handle did not retain original full Close")
+	}
+	if err := owner.CloseContext(ctx); err == nil || raw.closes.Load() != 1 {
+		t.Fatal("failed CONNECT retirement was discarded or repeated", err)
+	}
+	owner.mu.Lock()
+	retained := len(owner.operations)
+	owner.mu.Unlock()
+	if retained != 1 {
+		t.Fatal("failed CONNECT operation disappeared")
+	}
+}
+
+type connectServerCycle struct {
+	net.Conn
+	reads atomic.Int32
+}
+
+func (c *connectServerCycle) Upstream() any { c.reads.Add(1); return c }
+func TestCONNECTServerHalfCloseTraversalIsBounded(t *testing.T) {
+	client, _ := connectServerTCPFixture(t)
+	cycle := &connectServerCycle{Conn: client}
+	if captured, err := captureServerTCP(cycle); err == nil || captured != cycle || cycle.reads.Load() != 16 {
+		t.Fatal("cyclic CONNECT wrapper escaped bounded original traversal")
+	}
+	var deep net.Conn = client
+	for range 16 {
+		deep = &connectServerTrackedConn{Conn: deep}
+	}
+	if captured, err := captureServerTCP(deep); err == nil || captured != deep {
+		t.Fatal("overdeep CONNECT wrapper acquired half-close authority")
+	}
+	var typedNil *connectServerTrackedConn
+	if captured, err := captureServerTCP(typedNil); err == nil || captured != typedNil {
+		t.Fatal("typed nil CONNECT wrapper acquired half-close authority")
+	}
+}
+
+type connectServerHalfCloseFailure struct {
+	net.Conn
+	failure error
+	calls   atomic.Int32
+}
+
+func (c *connectServerHalfCloseFailure) CloseWrite() error { c.calls.Add(1); return c.failure }
+func TestCONNECTServerTrackedHalfCloseFailureRetainsReceipt(t *testing.T) {
+	client, _ := connectServerTCPFixture(t)
+	failure := errors.New("original tracked CONNECT half-close failure")
+	half := &connectServerHalfCloseFailure{Conn: client, failure: failure}
+	raw := &connectServerTrackedConn{Conn: half}
+	manager := route.NewConnectionManager(log.NewNOPFactory().Logger())
+	captured, err := captureServerTCP(manager.TrackConn(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	op := connectCloseOperation(owner, captured)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := op.closeContext(ctx); !errors.Is(err, failure) {
+		t.Fatal("tracked CONNECT half-close lost original failure", err)
+	}
+	if manager.Count() != 0 || raw.closes.Load() != 1 || half.calls.Load() != 1 {
+		t.Fatal("failed tracked CONNECT did not join original full Close")
+	}
+	if err := owner.CloseContext(ctx); !errors.Is(err, failure) || raw.closes.Load() != 1 || half.calls.Load() != 1 {
+		t.Fatal("tracked CONNECT retry changed original failed receipt", err)
+	}
+	owner.mu.Lock()
+	retained := len(owner.operations)
+	owner.mu.Unlock()
+	if retained != 1 {
+		t.Fatal("failed tracked CONNECT operation lost its retained owner")
 	}
 }

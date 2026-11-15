@@ -3,6 +3,7 @@ package routervpnnodeconnect
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/netip"
 	"os"
@@ -140,10 +141,52 @@ func (d *serverLiteralDialer) DialContext(ctx context.Context, network string, a
 	if d == nil || ctx == nil || ctx.Err() != nil || d.owner == nil || d.owner.validate() != nil || d.owner.server == nil || d.owner.server.lower.Load() != d || d.original == nil || network != "tcp" || address != d.remote {
 		return nil, errCapture
 	}
-	return d.original.DialContext(ctx, network, address)
+	original, failure := d.original.DialContext(ctx, network, address)
+	if original == nil {
+		return nil, failure
+	}
+	retained, captureFailure := captureServerTCP(original)
+	return retained, errors.Join(failure, captureFailure)
 }
 func (d *serverLiteralDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
 	return nil, os.ErrInvalid
+}
+
+// Native physical dialers retain their connection-manager wrapper. Expose
+// only the same socket's half-close through that original wrapper chain;
+// reads, deadlines and full Close still belong to the captured outer owner.
+type serverTCPConnection struct {
+	net.Conn
+	half interface{ CloseWrite() error }
+}
+
+func (c *serverTCPConnection) CloseWrite() error { return c.half.CloseWrite() }
+func captureServerTCP(original net.Conn) (net.Conn, error) {
+	if original == nil {
+		return nil, errCapture
+	}
+	current := original
+	for depth := 0; depth < 16; depth++ {
+		value := reflect.ValueOf(current)
+		if value.Kind() == reflect.Pointer && value.IsNil() {
+			break
+		}
+		if half, ok := current.(interface{ CloseWrite() error }); ok {
+			return &serverTCPConnection{Conn: original, half: half}, nil
+		}
+		upstream, ok := current.(interface{ Upstream() any })
+		if !ok {
+			break
+		}
+		next, ok := upstream.Upstream().(net.Conn)
+		if !ok || next == nil {
+			break
+		}
+		current = next
+	}
+	// Return the acquired handle even on refusal. The original operation must
+	// retain and join its real Close; an error cannot abandon a live socket.
+	return original, errors.New("original CONNECT Server TCP lacks retained half-close")
 }
 
 func (c *Capture) middleIPv6Off() bool {
