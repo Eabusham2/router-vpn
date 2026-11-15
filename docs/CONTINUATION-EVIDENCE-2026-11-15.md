@@ -2988,3 +2988,37 @@ process/controller/physical integration and public product admission are
 separate work in progress. Neither the modeled component checks nor a
 cross-compiled artifact proves actual PF/WFP, encrypted network traffic,
 physical-device operation or release publication.
+
+## macOS protection dispatcher retains execution's original imported member
+
+A shipping integration review found that the macOS parent emits the
+`ordered-node-chain-execution-v1` capture family for Server/Compare, while
+the Python protection dispatcher's imported-member table omitted that
+family. The original three-member Shadowsocks execution graph therefore
+failed saved-policy validation before PF application. The new typed CONNECT
+host would meet the same rejection. This is a real dispatcher defect,
+independent of the native toolchain fixture repaired earlier.
+
+One explicit table entry now admits Shadowsocks, HTTP CONNECT and HTTPS
+CONNECT at the external middle position of an exact three-member execution
+capture. The original first paired WG/AWG member, final paired Shadowsocks
+member, digest, canonical rows, saved profile identities and aggregated
+protection policies remain required. Variable-length execution, SOCKS and
+OpenVPN middle nodes remain rejected by this path; their separate graph
+requirements are not declared complete.
+
+All 110 roots in the actual Darwin dispatcher suite passed in 8.319 seconds.
+New cases include nine protocol/base combinations, fifty-one malformed
+capture refusals and fifty-seven changed original saved-member refusals.
+The lifecycle case verifies that a middle node's Always protection survives
+a final node set to Off through apply/current/retire/release and repeated
+release; the original baseline and PF reference remain owned. Reinstating
+the original missing table entry causes exactly the nine intended dispatcher
+failures. PF/kernel effects use the suite's existing explicit double, so
+this is not native macOS kernel or physical networking acceptance.
+
+The two-file manifest SHA-256 is
+`3de2b28df433b092c4da96bb5e394517de0929d7d1f21b1d1004fbf8b81cf5a0`;
+preimages, original-map causal result and complete executable evidence are
+in `darwin-execution-member-rows-validation`. No live PF configuration or
+private network was changed.

@@ -928,6 +928,108 @@ class OwnedDarwinPF(unittest.TestCase):
                     self.assertFalse(retired['baseline']['present'])
                     self.assertEqual(self.references, {'999'})
 
+    def execution_imported_capture(self, protocol, mode='wg'):
+        capture, rows = self.connect_prefix_capture(1, protocol)
+        capture['family'] = 'ordered-node-chain-execution-v1'
+        rows[0][1] = mode
+        # A strongest middle policy must survive a final profile set to Off.
+        middle = next(profile for profile in self.store['profiles'] if profile['id'] == rows[1][0])
+        middle['kill_switch_policy'] = rows[1][3] = 'always'
+        self.private_json(self.root/'routers.json', self.store)
+        raw = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
+        capture.update(policy='always', members_json=raw,
+                       members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
+        return capture, rows
+
+    def test_execution_imported_trio_keeps_original_saved_member_baseline(self):
+        # Actual capture, saved-profile reconstruction and journal lifecycle;
+        # the existing PF/kernel double is not installed native acceptance.
+        for protocol in ('shadowsocks', 'http-connect', 'https-connect'):
+            for mode in ('wg', 'awg2-fast', 'awg2-strong'):
+                with self.subTest(protocol=protocol, mode=mode):
+                    capture, rows = self.execution_imported_capture(protocol, mode)
+                    try:
+                        active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                    except RuntimeError as error:
+                        self.fail('execution imported trio lost original saved member baseline: '+str(error))
+                    self.assertEqual(D._darwin_node_chain_capture(capture), capture)
+                    self.assertEqual(D._darwin_node_chain_rows(capture), rows)
+                    self.assertEqual(active['capture'], capture)
+                    state = self.saved()
+                    self.assertEqual(state['native_node_chain_capture'], capture)
+                    self.assertEqual(state['policy'], 'always')
+                    self.assertFalse(state['home_lan_access'])
+                    self.assertEqual(state['endpoint_ips'], [])
+                    self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+                    self.assertEqual(D.darwin_node_chain('current', dict(capture=capture, expected=active)), active)
+                    held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+                    self.assertTrue(held['baseline']['present'])
+                    retired = D.darwin_node_chain('release', dict(capture=capture, expected=held))
+                    self.assertTrue(retired['baseline']['present'])
+                    self.assertEqual(retired['capture'], capture)
+                    self.assertEqual(self.references, {'999', '417'})
+                    self.assertEqual(D.darwin_node_chain('release', dict(capture=capture, expected=retired)), retired)
+                    self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+
+    def test_execution_imported_rows_remain_exact_trio_and_original_capture(self):
+        import copy
+        for protocol in ('shadowsocks', 'http-connect', 'https-connect'):
+            capture, rows = self.execution_imported_capture(protocol)
+            for fault in ('two', 'four', 'eight', 'middle-first', 'middle-final', 'second-external',
+                          'wrong-prefix', 'wrong-final', 'paired-middle', 'socks', 'openvpn',
+                          'duplicate-id', 'digest', 'canonical', 'control', 'aggregate-policy', 'aggregate-lan'):
+                changed, modified = copy.deepcopy(capture), copy.deepcopy(rows)
+                if fault == 'two': modified.pop(0)
+                elif fault in ('four', 'eight'):
+                    for index in range(1 if fault == 'four' else 5):
+                        extra = list(modified[0]); extra[0] = 'extra-'+str(index); modified.insert(0, extra)
+                elif fault == 'middle-first': modified[0], modified[1] = modified[1], modified[0]
+                elif fault == 'middle-final': modified[1], modified[2] = modified[2], modified[1]
+                elif fault == 'second-external': modified[0][1:3] = [protocol, 'external']
+                elif fault == 'wrong-prefix': modified[0][1] = 'hysteria2'
+                elif fault == 'wrong-final': modified[-1][1] = 'hysteria2'
+                elif fault == 'paired-middle': modified[1][2] = 'router-vpn'
+                elif fault in ('socks', 'openvpn'): modified[1][1] = 'socks5' if fault == 'socks' else 'openvpn'
+                elif fault == 'duplicate-id': modified[1][0] = modified[0][0]
+                elif fault == 'control': changed['profile_id'] = 'foreign-control'
+                elif fault == 'aggregate-policy': changed['policy'] = 'off'
+                elif fault == 'aggregate-lan': changed['home_lan_access'] = True
+                raw = json.dumps(modified, separators=(',', ':'), ensure_ascii=True)
+                if fault == 'canonical': raw += ' '
+                changed.update(members_json=raw,
+                               members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
+                if fault == 'digest': changed['members_sha256'] = 'f'*64
+                before = list(self.commands)
+                with self.subTest(protocol=protocol, fault=fault), self.assertRaises(RuntimeError):
+                    D._darwin_node_chain_capture(changed)
+                self.assertEqual(self.commands, before)
+
+    def test_execution_imported_trio_checks_every_original_saved_member(self):
+        import copy
+        for protocol in ('shadowsocks', 'http-connect', 'https-connect'):
+            capture, rows = self.execution_imported_capture(protocol)
+            original = copy.deepcopy(self.store)
+            for row in rows:
+                faults = ('missing', 'duplicate', 'policy', 'lan', 'ipv6', 'kind')
+                if row[2] == 'external': faults += ('protocol',)
+                for fault in faults:
+                    changed = copy.deepcopy(original)
+                    member = next(value for value in changed['profiles'] if value['id'] == row[0])
+                    if fault == 'missing': changed['profiles'].remove(member)
+                    elif fault == 'duplicate': changed['profiles'].append(copy.deepcopy(member))
+                    elif fault == 'policy': member['kill_switch_policy'] = 'off' if row[3] == 'always' else 'always'
+                    elif fault == 'lan': member['home_lan_access'] = not row[5]
+                    elif fault == 'ipv6': member['ipv6_mode'] = 'off' if row[4] == 'on' else 'on'
+                    elif fault == 'kind': member['node_kind'] = 'router-vpn' if row[2] == 'external' else 'external'
+                    elif fault == 'protocol': member['external']['protocol'] = 'socks5'
+                    self.private_json(self.root/'routers.json', changed)
+                    before = list(self.commands)
+                    with self.subTest(protocol=protocol, member=row[0], fault=fault), self.assertRaises(RuntimeError):
+                        D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                    self.assertEqual(self.commands, before)
+                    self.assertEqual(D._linux.read_state(self.root), {})
+            self.private_json(self.root/'routers.json', original)
+
     def imported_prefix_capture(self, count, protocol):
         capture, rows = self.connect_prefix_capture(count-2, protocol)
         capture['family'] = ('ordered-node-chain-socks-v1' if protocol == 'socks5'
