@@ -9,7 +9,7 @@ import (
 func TestDesktopMacOSExternalBaselineExactReceiptAndRetirement(t *testing.T) {
 	for _, policy := range []string{"off", "on-connect", "always"} {
 		for _, phase := range []string{"active", "held", "retired"} {
-			s := desktopMacOSExternalSelection{Schema: 1, ProfileID: "owned-profile", Protocol: "hysteria2", Session: strings.Repeat("a", 32), Source: strings.Repeat("b", 64), Config: strings.Repeat("c", 64), Policy: policy}
+			s := desktopMacOSExternalSelection{Schema: 2, ProfileID: "owned-profile", Protocol: "hysteria2", Session: strings.Repeat("a", 32), Source: strings.Repeat("b", 64), Config: strings.Repeat("c", 64), Policy: policy, FinalPolicy: policy}
 			value := desktopMacOSExternalReceipt{Schema: 1, Capture: s, Phase: phase, Token: "417", Baseline: desktopMacOSBaselineProof{Present: phase == "active" || phase == "held" && policy != "off" || policy == "always"}}
 			if value.Baseline.Present {
 				value.Baseline.Rules = strings.Repeat("d", 64)
@@ -65,5 +65,57 @@ func TestDesktopMacOSExternalBaselineExactReceiptAndRetirement(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestDesktopMacOSExternalBaselineBindsEachOriginalProtectionMember(t *testing.T) {
+	for _, tc := range []struct{ final, entry, aggregate string }{
+		{"off", "off", "off"}, {"off", "on-connect", "on-connect"}, {"off", "always", "always"},
+		{"on-connect", "off", "on-connect"}, {"on-connect", "on-connect", "on-connect"}, {"on-connect", "always", "always"},
+		{"always", "off", "always"}, {"always", "on-connect", "always"}, {"always", "always", "always"},
+	} {
+		t.Run(tc.final+"/"+tc.entry, func(t *testing.T) {
+			capture := desktopMacOSExternalSelection{Schema: 2, ProfileID: "original-final", EntryProfileID: "original-entry",
+				FinalPolicy: tc.final, EntryPolicy: tc.entry, Policy: tc.aggregate, Protocol: "shadowsocks",
+				Session: strings.Repeat("a", 32), Source: strings.Repeat("b", 64), Config: strings.Repeat("c", 64)}
+			if !capture.valid() {
+				t.Fatal("original protection members lost their aggregate capture")
+			}
+			value := desktopMacOSExternalReceipt{Schema: 1, Capture: capture, Phase: "active", Token: "417",
+				Baseline: desktopMacOSBaselineProof{Present: true, Rules: strings.Repeat("d", 64)}}
+			raw, _ := json.Marshal(value)
+			if _, err := decodeDesktopMacOSExternalReceipt(raw, capture, "active"); err != nil {
+				t.Fatal(err)
+			}
+			for _, edit := range []func(*desktopMacOSExternalSelection){
+				func(s *desktopMacOSExternalSelection) { s.EntryProfileID = "another-entry" },
+				func(s *desktopMacOSExternalSelection) { s.EntryProfileID = s.ProfileID },
+				func(s *desktopMacOSExternalSelection) { s.EntryProfileID, s.EntryPolicy = "", "" },
+				func(s *desktopMacOSExternalSelection) { s.FinalPolicy = "" },
+				func(s *desktopMacOSExternalSelection) { s.EntryPolicy = "unknown" },
+				func(s *desktopMacOSExternalSelection) { s.Schema = 1 },
+				func(s *desktopMacOSExternalSelection) {
+					if s.FinalPolicy == "always" {
+						s.FinalPolicy = "on-connect"
+					} else {
+						s.FinalPolicy = "always"
+					}
+				},
+				func(s *desktopMacOSExternalSelection) {
+					if s.EntryPolicy == "always" {
+						s.EntryPolicy = "on-connect"
+					} else {
+						s.EntryPolicy = "always"
+					}
+				},
+			} {
+				changed := value
+				edit(&changed.Capture)
+				raw, _ := json.Marshal(changed)
+				if _, err := decodeDesktopMacOSExternalReceipt(raw, capture, "active"); err == nil {
+					t.Fatal("changed original member acquired the retained native receipt")
+				}
+			}
+		})
 	}
 }

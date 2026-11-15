@@ -28,9 +28,14 @@ func desktopMacOSRetirementFixture(t *testing.T) (*desktopMacOSExternalHost, *[]
 	launch.command = &exec.Cmd{}
 	a.cmd = launch.command
 	meta := launch.external.physical.Metadata()
+	captured, err := launch.external.physical.Capture()
+	if err != nil {
+		t.Fatal(err)
+	}
 	h := &desktopMacOSExternalHost{parent: &desktopMacOSSessionCapture{app: a, controller: c, parent: p, session: s}, launch: launch,
 		policy: launch.external.physical, gate: make(chan struct{}, 1), entered: true, published: true, baselineEntered: true,
-		selection: desktopMacOSExternalSelection{Schema: 1, ProfileID: launch.profileID, Protocol: meta.Protocol, Session: meta.SessionID,
+		selection: desktopMacOSExternalSelection{Schema: 2, ProfileID: launch.policyProfileID, EntryProfileID: captured.EntryID,
+			FinalPolicy: captured.FinalKillSwitchPolicy, EntryPolicy: captured.EntryKillSwitchPolicy, Protocol: meta.Protocol, Session: meta.SessionID,
 			Source: meta.SourceSHA256, Config: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}}
 	h.gate <- struct{}{}
 	h.baseline = &desktopMacOSExternalReceipt{Schema: 1, Capture: h.selection, Phase: "active", Token: "417", Baseline: desktopMacOSBaselineProof{Present: true, Rules: strings.Repeat("a", 64)}}

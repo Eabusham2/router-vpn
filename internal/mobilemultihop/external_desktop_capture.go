@@ -19,6 +19,7 @@ type ExternalDesktopCapture struct {
 	Protocol, StartLayer, EntryStartLayer, Execution          string
 	FinalTag, TUNTag                                          string
 	KillSwitchPolicy, IPv6Mode                                string
+	FinalKillSwitchPolicy, EntryKillSwitchPolicy              string
 	HomeLANAccess, UDPAvailable                               bool
 	BlockedLANCIDRs                                           []string
 	MTUPolicy                                                 string
@@ -113,6 +114,24 @@ func (p *ExternalPolicy) DesktopCapture() (ExternalDesktopCapture, error) {
 	if err != nil {
 		return result, err
 	}
+	finalPolicy := kill
+	entryPolicy := ""
+	if meta.EntryID != "" {
+		entryID, identityErr := externalProfileIdentity(p.capture.Entry)
+		if identityErr != nil || entryID != meta.EntryID || entryID == meta.ExitID || meta.EntryTag == "" {
+			return result, externalDesktopCaptureError
+		}
+		entryPolicy, err = externalDesktopKillPolicy(p.capture.Entry)
+		if err != nil {
+			return result, err
+		}
+	} else if p.capture.Entry != nil || meta.EntryTag != "" {
+		return result, externalDesktopCaptureError
+	}
+	kill, err = AggregateExternalProtectionPolicy(kill, entryPolicy)
+	if err != nil {
+		return result, err
+	}
 	collector := &externalDesktopRecorder{
 		families: map[string]string{}, roots: map[string]*ExternalDesktopPhysicalRoot{},
 		bootstrap: map[string]ExternalDesktopDNS{},
@@ -140,6 +159,7 @@ func (p *ExternalPolicy) DesktopCapture() (ExternalDesktopCapture, error) {
 		ExpectedPublicIP: meta.ExpectedPublicIP, EntryNodeID: meta.EntryNodeID, DNSBootstrapSHA256: meta.DNSBootstrapSHA256,
 		Protocol: meta.Protocol, StartLayer: meta.StartLayer, EntryStartLayer: meta.EntryStartLayer, Execution: meta.Execution,
 		FinalTag: meta.FinalTag, TUNTag: meta.TUNTag, KillSwitchPolicy: kill, IPv6Mode: meta.IPv6Mode,
+		FinalKillSwitchPolicy: finalPolicy, EntryKillSwitchPolicy: entryPolicy,
 		HomeLANAccess: meta.HomeLANAccess, UDPAvailable: meta.UDPAvailable, BlockedLANCIDRs: append([]string(nil), meta.BlockedLANCIDRs...),
 		MTUPolicy: meta.MTUPolicy, ConfiguredMTU: meta.ConfiguredMTU, EntryMTU: meta.EntryMTU,
 		SelectedDNS: collector.selected,
@@ -362,4 +382,38 @@ func sortPhysicalEgress(values []PhysicalEgress) {
 		}
 		return values[i].Network < values[j].Network
 	})
+}
+
+// AggregateExternalProtectionPolicy combines only an original final policy and
+// its actual captured entry, if present. An empty entry names a direct graph;
+// callers must separately validate captured participant identities. This pure
+// strength calculation confers no source, socket or native admission authority.
+func AggregateExternalProtectionPolicy(final, entry string) (string, error) {
+	rank := func(policy string) int {
+		switch policy {
+		case "off":
+			return 0
+		case "on-connect":
+			return 1
+		case "always":
+			return 2
+		default:
+			return -1
+		}
+	}
+	finalRank := rank(final)
+	if finalRank < 0 {
+		return "", externalDesktopCaptureError
+	}
+	if entry == "" {
+		return final, nil
+	}
+	entryRank := rank(entry)
+	if entryRank < 0 {
+		return "", externalDesktopCaptureError
+	}
+	if entryRank > finalRank {
+		return entry, nil
+	}
+	return final, nil
 }

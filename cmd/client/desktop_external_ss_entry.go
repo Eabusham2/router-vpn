@@ -20,7 +20,7 @@ func desktopExternalSSEntryOwnerWithFinal(owner *desktopExternalRuntime, final f
 	if owner.entry.StartLayer != "" && owner.entry.StartLayer != common.StartLayerOff && !desktopExternalSSLayeredFinalProfile(owner.profile) {
 		return false
 	}
-	policy := desktopOwnedNodeProtectionPolicy(owner.profile)
+	policy := desktopExternalProtectionPolicy(owner.profile, owner.entry, false)
 	return policy == "on-connect" || policy == "always"
 }
 func desktopExternalSS2022Profile(profile common.RouterProfile) bool {

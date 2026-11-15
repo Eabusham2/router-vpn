@@ -19,6 +19,28 @@ SPEC.loader.exec_module(GATE)
 
 
 class NodeProcessRunner(unittest.TestCase):
+    def test_external_aggregate_public_route_and_both_members_are_required(self):
+        root = "TestDesktopExternalProtectionPublicRouteUsesActualAggregate"
+        expected = (root, root + "/off-entry-always", root + "/on-connect-entry-always")
+        self.assertIn(root, GATE.SHARED_TESTS)
+        self.assertIn("TestDesktopExternalProtectionTemporaryGuardKeepsOriginalAggregate", GATE.SHARED_TESTS)
+        groups = [(selected, names) for _, selected, names in GATE.baseline_groups() if root in selected]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(tuple(name for name in groups[0][1] if name.split("/", 1)[0] == root), expected)
+        for path in ("cmd/client/desktop_external_protection_policy.go",
+                     "cmd/client/desktop_external_protection_policy_test.go",
+                     "internal/mobilemultihop/external_desktop_capture.go"):
+            self.assertIn(path, GATE.REQUIRED_SOURCES)
+        valid = "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.EXPECTED)
+        GATE.check_baseline(0, valid)
+        for name in (*expected, "TestDesktopExternalProtectionTemporaryGuardKeepsOriginalAggregate"):
+            receipt = "--- PASS: " + name + " (0.01s)"
+            for damaged in (valid.replace(receipt, ""), valid + "\n" + receipt,
+                            valid.replace(receipt, receipt.replace("PASS", "FAIL")),
+                            valid.replace(receipt, receipt.replace("PASS", "SKIP"))):
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    GATE.check_baseline(0, damaged)
+
     def test_ordered_execution_and_ordinary_history_are_mandatory_windows_models(self):
         execution = (
             "GraphRetainsSelectedAuthority", "ObservationHonorsCallerAndBusyReceipt",

@@ -15,7 +15,7 @@ func desktopWindowsExternalRouterServerProfile(profile common.RouterProfile, res
 		return false
 	}
 	policy := desktopOwnedNodeProtectionPolicy(profile)
-	return policy == "on-connect" || policy == "always"
+	return policy == "off" || policy == "on-connect" || policy == "always"
 }
 
 func desktopWindowsExternalRouterServerGraph(profile, entry common.RouterProfile, restored string) bool {
@@ -23,6 +23,10 @@ func desktopWindowsExternalRouterServerGraph(profile, entry common.RouterProfile
 		entry.NodeKind != "router-vpn" && entry.NodeKind != "" || entry.External != nil ||
 		entry.StartLayer != "" && entry.StartLayer != common.StartLayerOff && entry.StartLayer != common.StartLayerAES256GCM && entry.StartLayer != common.StartLayerAES256GCMXOR ||
 		!common.ValidNodeProofID(entry.NodeProofID) || entry.RouterAPI == "" || entry.APIToken == "" {
+		return false
+	}
+	policy := desktopExternalProtectionPolicy(profile, entry, false)
+	if policy != "on-connect" && policy != "always" {
 		return false
 	}
 	mode, err := desktopExternalEntryMode(profile, entry, "", "")

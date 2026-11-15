@@ -19,6 +19,7 @@ import (
 
 var macOSExternalOpenVPNSS2022Cases = []string{
 	"openvpn-entry-ss-tcp", "openvpn-entry-ss-tcp-always", "openvpn-entry-ss-udp", "openvpn-entry-ss-udp-always",
+	"openvpn-entry-ss-tcp-entry-always", "openvpn-entry-ss-tcp-final-off-entry-always",
 	"openvpn-entry-ss-tcp-wrong-entry-public", "openvpn-entry-ss-tcp-wrong-control", "openvpn-entry-ss-udp-wrong-password",
 	"openvpn-entry-ss-tcp-wrong-provider-trust", "openvpn-entry-ss-udp-wrong-final-key",
 	"openvpn-entry-ss-tcp-wrong-dns", "openvpn-entry-ss-udp-wrong-trust", "openvpn-entry-ss-tcp-wrong-exit",
@@ -31,13 +32,27 @@ func macOSExternalOpenVPNSS2022Scenario(scenario string) (network, fault string,
 		}
 		rest := strings.TrimPrefix(scenario, "openvpn-entry-ss-")
 		network, fault, _ = strings.Cut(rest, "-")
-		if fault == "always" {
+		if fault == "always" || fault == "entry-always" || fault == "final-off-entry-always" {
 			fault = ""
 		}
 		return network, fault, true
 	}
 	return "", "", false
 }
+
+// Protection aggregates captured participants; DNS, LAN and IPv6 remain final-selected.
+func (p *macOSExternalNativePeer) protectionPolicy() string {
+	// An independent expected verdict for these finite native fixture cases.
+	// Do not use the production aggregator to manufacture its own expectation.
+	if p.entryPolicy == "always" {
+		return "always"
+	}
+	if p.entryPolicy == "" || p.entryPolicy == "off" {
+		return p.policy
+	}
+	return ""
+}
+
 func macOSExternalNativeOpenVPNSS2022Read(t *testing.T, p *macOSExternalNativePeer, reply macOSExternalPeerReply) {
 	t.Helper()
 	if !p.openvpnEntry {
@@ -71,7 +86,7 @@ func macOSExternalNativeOpenVPNSS2022Profile(t *testing.T, p *macOSExternalNativ
 	if p.fault == "wrong-exit" {
 		final.External.ExpectedPublicIP = "203.0.113.89"
 	}
-	entry := &common.RouterProfile{ID: macOSExternalNativeEntryID(p), Name: "Captured physical OpenVPN entry", NodeKind: "external", Endpoint: p.physical.String(), StartLayer: common.StartLayerOff, MTUPolicy: "manual", ManualMTU: 1500, External: &common.ExternalNodeConfig{Protocol: "openvpn", ExpectedPublicIP: "203.0.113.77", OpenVPN: macOSExternalNativeOpenVPNProfile(t, p)}}
+	entry := &common.RouterProfile{ID: macOSExternalNativeEntryID(p), Name: "Captured physical OpenVPN entry", KillSwitch: p.entryPolicy == "always", KillSwitchPolicy: p.entryPolicy, NodeKind: "external", Endpoint: p.physical.String(), StartLayer: common.StartLayerOff, MTUPolicy: "manual", ManualMTU: 1500, External: &common.ExternalNodeConfig{Protocol: "openvpn", ExpectedPublicIP: "203.0.113.77", OpenVPN: macOSExternalNativeOpenVPNProfile(t, p)}}
 	if p.fault == "wrong-entry-public" {
 		entry.External.ExpectedPublicIP = "203.0.113.76"
 	}
@@ -109,6 +124,9 @@ func macOSExternalNativeOpenVPNSS2022Proved(t *testing.T, p *macOSExternalNative
 	ipv6 := "off"
 	if p.policy == "always" {
 		ipv6 = "on"
+	}
+	if live.Baseline == nil || live.Baseline.Capture.FinalPolicy != p.policy || live.Baseline.Capture.EntryPolicy != p.entryPolicy || live.Baseline.Capture.Policy != p.protectionPolicy() || live.Baseline.Capture.ProfileID != "installed-macos-external" || live.Baseline.Capture.EntryProfileID != macOSExternalNativeEntryID(p) {
+		t.Fatal("OpenVPN SS2022 baseline lost exact original member policies", live.Baseline)
 	}
 	if !p.openvpnEntry || !live.Proof.EntryProven || live.Proof.EntryID != macOSExternalNativeEntryID(p) || live.Proof.EntryNodeID != "" || live.Proof.ExitID != "installed-macos-external" || live.Proof.IP != "203.0.113.88" || live.OuterTag != "external-entry" || live.OuterType != "openvpn-client" || live.InnerHost != "198.51.100.240" || live.InnerDetour != "external-entry" || live.PhysicalAddress != p.entryAddress.String() || live.PhysicalNetwork != p.openvpnNetwork || len(live.OpenVPNRemotes) != 1 || live.OpenVPNRemotes[0] != (nativeopenvpn.Remote{Host: p.physical.String(), Port: int(p.entryAddress.Port()), Network: p.openvpnNetwork}) || live.Network.MTU != 1376 || live.DNSProtocol != "udp" || live.DNSHost != "203.0.113.53" || live.DNSPort != 5353 || live.IPv6 != ipv6 || live.HomeLAN != (p.policy == "always") || observed.OpenVPNFinalSequence == 0 || observed.OpenVPNEntryProofs < 1 || observed.Streams < 1 || observed.Packets < 1 || observed.DNSQueries < 1 || observed.PublicReplies < 1 || observed.AuthFailures != 0 || p.openvpnNetwork == "tcp" && observed.Connections < 1 || p.openvpnNetwork == "udp" && observed.PhysicalUDP < 1 {
 		t.Fatal("OpenVPN SS2022 proof omitted original encrypted entry, final, selected policy or capacity", live, observed)

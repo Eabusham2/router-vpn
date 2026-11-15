@@ -2,7 +2,7 @@
 """Actual installed Darwin closed selected-prefix acceptance; shipping public catalog and admission.
 
 Each original case retains the existing240-second native bound. This independent
-eight-case gate cannot replace any of the ordinary28host/19measurement cases.
+nine-case gate cannot replace any of the ordinary28host/19measurement cases.
 """
 from pathlib import Path
 from collections import Counter
@@ -23,8 +23,8 @@ EXTERNAL,BUILD,CONTROLLER,PEER_TAGS=G.EXTERNAL,G.BUILD,G.CONTROLLER,G.PEER_TAGS
 FLAG='ROUTERVPN_DARWIN_NODE_PREFIX_HOST_ACCEPTANCE'
 TEST='TestMacOSRetainedCandidatePrefixNativeHost'
 AUTHORITY_TEST='TestDesktopDarwinInstalledPrefixCandidateFixtureKeepsClosedAuthority'
-AUTHORITY_CASES=(AUTHORITY_TEST,*(AUTHORITY_TEST+'/'+x for x in ('wg','awg-fast','awg-strong','wg-off')))
-CASES=('wg-save','wg-cancel','awg-fast-save','awg-fast-cancel','awg-strong-save','awg-strong-cancel','wg-off-save','wg-off-cancel')
+AUTHORITY_CASES=(AUTHORITY_TEST,*(AUTHORITY_TEST+'/'+x for x in ('wg','awg-fast','awg-strong','wg-off','wg-mixed')))
+CASES=('wg-save','wg-cancel','awg-fast-save','awg-fast-cancel','awg-strong-save','awg-strong-cancel','wg-off-save','wg-off-cancel','wg-mixed-save')
 SOURCE_FILES=(
  'deploy/test_macos_node_candidate_prefix_host.py','deploy/test_macos_node_candidate_prefix_host_runner.py',
  'cmd/client/desktop_node_candidate_prefix_darwin_native_test.go',

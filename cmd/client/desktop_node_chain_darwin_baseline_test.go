@@ -77,8 +77,11 @@ func TestDesktopMacOSNodeChainBaselineExactReceiptAndRetirement(t *testing.T) {
 						}
 					})
 				}
-				ordinary := desktopMacOSExternalSelection{Schema: 1, ProfileID: value.Capture.ProfileID, Protocol: "shadowsocks",
-					Session: value.Capture.Session, Source: value.Capture.Source, Config: value.Capture.Config, Policy: policy}
+				ordinary := desktopMacOSExternalSelection{Schema: 2, ProfileID: value.Capture.ProfileID, Protocol: "shadowsocks",
+					Session: value.Capture.Session, Source: value.Capture.Source, Config: value.Capture.Config, Policy: policy, FinalPolicy: policy}
+				if !ordinary.valid() {
+					t.Fatal("cross-family refusal requires a valid ordinary capture")
+				}
 				if _, err := decodeDesktopMacOSExternalReceipt(raw, ordinary, phase); err == nil {
 					t.Fatal("ordered receipt became ordinary external authority")
 				}

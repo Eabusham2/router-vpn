@@ -9,6 +9,7 @@ then only a newly-created utun that owns a public route is promoted.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import contextlib
 import fcntl
@@ -369,7 +370,12 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
         raise RuntimeError('macOS baseline cannot combine independent native policy families')
     if external_capture is not None:
         external_capture = _darwin_external_capture(external_capture)
-        _darwin_external_profile(control_profile, runtime_id, control_id, external_capture)
+        if external_capture['schema'] == 1:
+            if retained_state is None or external_capture['policy'] != 'always':
+                raise RuntimeError('legacy macOS external capture cannot acquire a new baseline')
+            _darwin_external_state(retained_state, external_capture)
+        _darwin_external_profile(control_profile, runtime_id, control_id, external_capture, store)
+        policy = external_capture['policy']
     if node_chain_capture is not None:
         node_chain_capture = _darwin_node_chain_capture(node_chain_capture)
         if retained_state is not None:
@@ -379,7 +385,12 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
             raise RuntimeError('macOS ordered baseline changed its original selected Router control')
     if candidate_prefix_capture is not None:
         candidate_prefix_capture = _darwin_candidate_prefix_capture(candidate_prefix_capture)
-        _darwin_candidate_prefix_profile(control_profile, runtime_id, control_id, candidate_prefix_capture)
+        if candidate_prefix_capture['schema'] == 2 and retained_state is None:
+            raise RuntimeError('legacy macOS prefix capture cannot authorize a new baseline')
+        if retained_state is not None:
+            _darwin_candidate_prefix_state(retained_state, candidate_prefix_capture)
+        _darwin_candidate_prefix_profile(control_profile, runtime_id, control_id, candidate_prefix_capture, store)
+        policy = candidate_prefix_capture['policy']
         if retained_state is None and store.get('selected_id') != candidate_prefix_capture['profile_id']:
             raise RuntimeError('macOS candidate prefix baseline changed its full saved Router control')
 
@@ -405,6 +416,8 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
     else:
         endpoint_ips, native_egress = retained
     lan = bool(control_profile.get("home_lan_access", False))
+    if candidate_prefix_capture is not None:
+        lan = candidate_prefix_capture["home_lan_access"]
     _require_watcher_retired(previous)
     socket_capture = ((os.environ['HOMEVPN_TOR_SESSION'], os.environ['HOMEVPN_TOR_SOURCE_SHA256'])
                       if socket_broker and retained_state is None and external_capture is None and node_chain_capture is None and candidate_prefix_capture is None else None)
@@ -608,15 +621,17 @@ def darwin_reassert() -> int:
 
 
 
-_EXTERNAL_CAPTURE_FIELDS = ('schema', 'profile_id', 'protocol', 'session_id', 'source_sha256',
-                            'config_sha256', 'home_lan_access', 'policy')
+_EXTERNAL_LEGACY_CAPTURE_FIELDS = ('schema', 'profile_id', 'protocol', 'session_id', 'source_sha256',
+                                   'config_sha256', 'home_lan_access', 'policy')
+_EXTERNAL_CAPTURE_FIELDS = _EXTERNAL_LEGACY_CAPTURE_FIELDS + ('entry_profile_id', 'final_policy', 'entry_policy')
 _EXTERNAL_PROTOCOLS = {'socks5', 'shadowsocks', 'http-connect', 'https-connect',
                        'hysteria2', 'wireguard', 'amneziawg', 'openvpn'}
 
 
 def _darwin_external_capture(value):
-    _darwin._baseline._fields(value, _EXTERNAL_CAPTURE_FIELDS)
-    if (type(value['schema']) is not int or value['schema'] != 1
+    fields = _EXTERNAL_LEGACY_CAPTURE_FIELDS if type(value) is dict and value.get('schema') == 1 else _EXTERNAL_CAPTURE_FIELDS
+    _darwin._baseline._fields(value, fields)
+    if (type(value['schema']) is not int or value['schema'] not in (1, 2)
             or type(value['protocol']) is not str or value['protocol'] not in _EXTERNAL_PROTOCOLS
             or type(value['home_lan_access']) is not bool
             or value['policy'] not in ('off', 'on-connect', 'always')
@@ -625,17 +640,47 @@ def _darwin_external_capture(value):
                    for key in ('source_sha256', 'config_sha256'))):
         raise RuntimeError('macOS external baseline lost its exact ordinary policy capture')
     _linux.validate_profile_id(value['profile_id'], 'native external profile id')
-    return {key: value[key] for key in _EXTERNAL_CAPTURE_FIELDS}
+    if value['schema'] == 2:
+        if (type(value['entry_profile_id']) is not str
+                or value['final_policy'] not in ('off', 'on-connect', 'always')
+                or type(value['entry_policy']) is not str):
+            raise RuntimeError('macOS external capture lost its exact original member protection')
+        policies = [value['final_policy']]
+        if value['entry_profile_id']:
+            _linux.validate_profile_id(value['entry_profile_id'], 'native external entry profile id')
+            if value['entry_profile_id'] == value['profile_id'] or value['entry_policy'] not in ('off', 'on-connect', 'always'):
+                raise RuntimeError('macOS external capture substituted its original entry protection')
+            policies.append(value['entry_policy'])
+        elif value['entry_policy'] != '':
+            raise RuntimeError('direct macOS external capture invented another member protection')
+        strength = {'off': 0, 'on-connect': 1, 'always': 2}
+        if max(policies, key=strength.__getitem__) != value['policy']:
+            raise RuntimeError('macOS external capture downgraded its original member protection')
+    return {key: value[key] for key in fields}
 
 
-def _darwin_external_profile(profile, runtime_id, control_id, capture):
+def _darwin_external_profile(profile, runtime_id, control_id, capture, store):
     external = profile.get('external')
+    final_policy = capture['final_policy'] if capture['schema'] == 2 else capture['policy']
+    saved_policy = (_darwin_saved_member_policy(profile) if capture['schema'] == 2
+                    else _linux.policy_value(profile))
     if (runtime_id != control_id or runtime_id != capture['profile_id']
             or profile.get('node_kind') != 'external' or type(external) is not dict
             or external.get('protocol') != capture['protocol']
-            or _linux.policy_value(profile) != capture['policy']
+            or saved_policy != final_policy
             or bool(profile.get('home_lan_access', False)) != capture['home_lan_access']):
         raise RuntimeError('macOS external baseline differs from the captured saved protection policy')
+    if capture['schema'] == 2:
+        profiles = store.get('profiles')
+        if type(profiles) is not list or sum(type(row) is dict and row.get('id') == capture['profile_id'] for row in profiles) != 1:
+            raise RuntimeError('macOS external baseline lost the captured saved protection policy identity')
+        if capture['entry_profile_id']:
+            entries = [row for row in profiles if type(row) is dict and row.get('id') == capture['entry_profile_id']]
+            if (len(entries) != 1 or entries[0].get('node_kind') != 'external'
+                    or type(entries[0].get('external')) is not dict
+                    or entries[0]['external'].get('protocol') not in ('wireguard', 'amneziawg', 'shadowsocks', 'openvpn')
+                    or _darwin_saved_member_policy(entries[0]) != capture['entry_policy']):
+                raise RuntimeError('macOS external entry differs from the captured saved protection policy')
     # Only this independent ordinary family chooses the deny baseline. It
     # never imports endpoint exceptions or borrows Tor's session marker.
     if any(os.environ.get(key) for key in ('HOMEVPN_ENDPOINT', 'HOMEVPN_NATIVE_ENDPOINTS_JSON',
@@ -918,32 +963,114 @@ def darwin_node_chain(action, value):
     return result
 
 
-_CANDIDATE_PREFIX_CAPTURE_FIELDS = ('schema', 'family', 'profile_id', 'session_id', 'source_sha256',
+_CANDIDATE_PREFIX_CAPTURE_LEGACY_FIELDS = ('schema', 'family', 'profile_id', 'session_id', 'source_sha256',
                              'config_sha256', 'home_lan_access', 'policy')
+_CANDIDATE_PREFIX_CAPTURE_FIELDS = (*_CANDIDATE_PREFIX_CAPTURE_LEGACY_FIELDS, 'members_sha256')
 
 
 def _darwin_candidate_prefix_capture(value):
-    _darwin._baseline._fields(value, _CANDIDATE_PREFIX_CAPTURE_FIELDS)
-    if (type(value['schema']) is not int or value['schema'] != 2
+    fields = (_CANDIDATE_PREFIX_CAPTURE_LEGACY_FIELDS if type(value) is dict and value.get('schema') == 2
+              else _CANDIDATE_PREFIX_CAPTURE_FIELDS)
+    _darwin._baseline._fields(value, fields)
+    if (type(value['schema']) is not int or value['schema'] not in (2, 3)
             or value['family'] != 'node-candidate-prefix-v1'
             or type(value['home_lan_access']) is not bool
             or value['policy'] not in ('off', 'on-connect', 'always')
             or type(value['session_id']) is not str or not re.fullmatch('[0-9a-f]{32}', value['session_id'])
             or any(type(value[key]) is not str or not re.fullmatch('[0-9a-f]{64}', value[key])
-                   for key in ('source_sha256', 'config_sha256'))):
+                   for key in ('source_sha256', 'config_sha256'))
+            or value['schema'] == 3 and (type(value['members_sha256']) is not str
+                                        or not re.fullmatch('[0-9a-f]{64}', value['members_sha256']))):
         raise RuntimeError('macOS candidate prefix baseline lost its exact closed prefix policy capture')
     _linux.validate_profile_id(value['profile_id'], 'native candidate prefix control profile id')
-    return {key: value[key] for key in _CANDIDATE_PREFIX_CAPTURE_FIELDS}
+    return {key: value[key] for key in fields}
 
 
-def _darwin_candidate_prefix_profile(profile, runtime_id, control_id, capture):
-    if (runtime_id != control_id or runtime_id != capture['profile_id']
-            or profile.get('node_kind', '') not in ('', 'router-vpn') or profile.get('external') is not None
-            or _linux.policy_value(profile) != capture['policy']
-            or profile.get('home_lan_access', False) is not capture['home_lan_access']):
-        raise RuntimeError('macOS candidate prefix baseline differs from the captured saved Router protection policy')
-    # This is an empty deny baseline for one closed selected prefix. Only the
-    # original native guardian may add its exact owned socket tuples later.
+def _darwin_saved_member_policy(profile):
+    """Match the sealed Go accessor, without changing legacy global parsing."""
+    if type(profile) is not dict or type(profile.get('kill_switch', False)) is not bool:
+        raise RuntimeError('macOS native baseline requires canonical saved member protection')
+    policy = profile.get('kill_switch_policy', '')
+    if type(policy) is not str:
+        raise RuntimeError('macOS native baseline requires canonical saved member protection')
+    if policy == '':
+        return 'on-connect' if profile.get('kill_switch', False) else 'off'
+    if policy not in ('off', 'on-connect', 'always'):
+        raise RuntimeError('macOS native baseline requires canonical saved member protection')
+    return policy
+
+
+def _darwin_candidate_prefix_members(store, profile):
+    # The original saved control supplies the complete ordered references.
+    # Unrelated profiles are neither participants nor policy inputs.
+    fail = 'macOS candidate prefix baseline differs from the captured saved Router protection policy'
+    nodes = profile.get('multihop_nodes')
+    if (type(store) is not dict or type(store.get('profiles')) is not list
+            or profile.get('multihop_enabled') is not True or profile.get('multihop_execution') != 'local'
+            or type(nodes) is not list or not 2 <= len(nodes) <= 8):
+        raise RuntimeError(fail)
+    rows, seen = [], set()
+    policy, lan = 'off', True
+    for position, reference in enumerate(nodes):
+        if (type(reference) is not dict or set(reference) != {'id', 'mode'}
+                or type(reference['id']) is not str or not re.fullmatch('[A-Za-z0-9_-]{1,64}', reference['id'])
+                or reference['id'] in seen or type(reference['mode']) is not str
+                or not re.fullmatch('[a-z0-9-]{1,64}', reference['mode'])):
+            raise RuntimeError(fail)
+        seen.add(reference['id'])
+        matches = [member for member in store['profiles'] if type(member) is dict and member.get('id') == reference['id']]
+        if len(matches) != 1:
+            raise RuntimeError(fail)
+        member = matches[0]
+        kind = member.get('node_kind', '')
+        if type(kind) is not str:
+            raise RuntimeError(fail)
+        if kind == '':
+            kind = 'router-vpn'
+        if kind not in ('router-vpn', 'external'):
+            raise RuntimeError(fail)
+        if kind == 'external':
+            if (len(nodes) != 3 or position != 1 or reference['mode'] != 'shadowsocks'
+                    or type(member.get('external')) is not dict or member['external'].get('protocol') != 'shadowsocks'):
+                raise RuntimeError(fail)
+        elif member.get('external') is not None:
+            raise RuntimeError(fail)
+        # Match normalized RouterProfile device fields, including legacy bool
+        # defaults, before comparing the Go accessor's original canonical rows.
+        kill = _darwin_saved_member_policy(member)
+        ipv6 = member.get('ipv6_mode', '')
+        if type(ipv6) is not str:
+            raise RuntimeError(fail)
+        if ipv6 == '':
+            ipv6 = 'on'
+        member_lan = member.get('home_lan_access', True)
+        if kill not in ('off', 'on-connect', 'always') or ipv6 not in ('auto', 'on', 'off') or type(member_lan) is not bool:
+            raise RuntimeError(fail)
+        rows.append([reference['id'], reference['mode'], kind, kill, ipv6, member_lan])
+        if kill == 'always' or policy == 'off' and kill == 'on-connect':
+            policy = kill
+        lan = lan and member_lan
+    if nodes[-1]['id'] != profile['id']:
+        raise RuntimeError(fail)
+    encoded = json.dumps(['routervpn-prefix-protection-members-v1', rows], separators=(',', ':'), ensure_ascii=True).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest(), policy, lan
+
+
+def _darwin_candidate_prefix_profile(profile, runtime_id, control_id, capture, store=None):
+    fail = 'macOS candidate prefix baseline differs from the captured saved Router protection policy'
+    if (runtime_id != control_id or runtime_id != capture['profile_id'] or profile.get('id') != control_id
+            or profile.get('node_kind', '') not in ('', 'router-vpn') or profile.get('external') is not None):
+        raise RuntimeError(fail)
+    if capture['schema'] == 2:
+        # Only exact retained legacy readback/cleanup/reassert can reach this
+        # branch; a new owner must supply the sealed full-member binding.
+        if (_linux.policy_value(profile) != capture['policy']
+                or profile.get('home_lan_access', False) is not capture['home_lan_access']):
+            raise RuntimeError(fail)
+    else:
+        digest, policy, lan = _darwin_candidate_prefix_members(store, profile)
+        if digest != capture['members_sha256'] or policy != capture['policy'] or lan is not capture['home_lan_access']:
+            raise RuntimeError(fail)
     if any(os.environ.get(key) for key in ('HOMEVPN_ENDPOINT', 'HOMEVPN_NATIVE_ENDPOINTS_JSON',
             'HOMEVPN_NATIVE_EGRESS_JSON', 'HOMEVPN_TOR_PHYSICAL_BROKER', 'HOMEVPN_TOR_SESSION',
             'HOMEVPN_TOR_SOURCE_SHA256', 'HOMEVPN_EXTERNAL_SESSION')):
@@ -955,7 +1082,7 @@ def _darwin_candidate_prefix_selected(root, capture):
     if store.get('selected_id') != capture['profile_id']:
         raise RuntimeError('macOS candidate prefix baseline changed its original selected Router control')
     profile = _linux.required_profile(store, capture['profile_id'], 'candidate prefix policy/control')
-    _darwin_candidate_prefix_profile(profile, capture['profile_id'], capture['profile_id'], capture)
+    _darwin_candidate_prefix_profile(profile, capture['profile_id'], capture['profile_id'], capture, store)
 
 
 def _darwin_candidate_prefix_state(state, capture):
@@ -977,7 +1104,7 @@ def _darwin_candidate_prefix_state(state, capture):
 
 def _darwin_candidate_prefix_receipt(value, capture):
     _darwin._baseline._fields(value, ('schema', 'capture', 'phase', 'pf_token', 'baseline'))
-    if (type(value['schema']) is not int or value['schema'] != 2
+    if (type(value['schema']) is not int or value['schema'] != capture['schema']
             or _darwin_candidate_prefix_capture(value['capture']) != capture
             or value['phase'] not in ('active', 'held', 'retired')):
         raise RuntimeError('macOS candidate prefix baseline receipt belongs to another original capture')
@@ -989,7 +1116,7 @@ def _darwin_candidate_prefix_receipt(value, capture):
 
 
 def _darwin_candidate_prefix_result(capture, phase, token, baseline):
-    return _darwin_candidate_prefix_receipt(dict(schema=2, capture=capture, phase=phase,
+    return _darwin_candidate_prefix_receipt(dict(schema=capture['schema'], capture=capture, phase=phase,
                                           pf_token=token, baseline=baseline), capture)
 
 
@@ -1025,6 +1152,8 @@ def darwin_candidate_prefix(action, value):
     if action == 'apply':
         if expected is not None:
             raise RuntimeError('macOS candidate prefix application cannot reuse a prior receipt')
+        if capture['schema'] == 2 and state.get('native_candidate_prefix_capture') != capture:
+            raise RuntimeError('legacy macOS prefix capture cannot authorize a new baseline')
         _darwin_candidate_prefix_selected(root, capture)
         os.environ['HOMEVPN_PROFILE_ID'] = capture['profile_id']
         os.environ['HOMEVPN_POLICY_PROFILE_ID'] = capture['profile_id']

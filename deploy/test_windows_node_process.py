@@ -134,6 +134,8 @@ SHARED_TESTS = (
     "TestDesktopNodePublicALLMissingGraphsKeepOriginalOwner",
     "TestDesktopNodePublicALLCancellationKeepsCapturedOperation",
     "TestSpeedLabFallbackReleaseRequiresCapturedTransaction",
+    "TestDesktopExternalProtectionPublicRouteUsesActualAggregate",
+    "TestDesktopExternalProtectionTemporaryGuardKeepsOriginalAggregate",
     "TestDesktopWindowsExternalCurrentProofContext",
     "TestDesktopNodeProcessOwnerContextPreservesOriginalCallback",
     "TestDesktopWindowsExternalPublicConnectAndDisconnect",
@@ -414,7 +416,7 @@ ARGUMENT_CASES = (
 PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2",
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
-EXPECTED = (*REQUIRED, *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
+EXPECTED = (*REQUIRED, *("TestDesktopExternalProtectionPublicRouteUsesActualAggregate/" + case for case in ("off-entry-always", "on-connect-entry-always")), *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
             *(root + "/" + case for root, cases in PREFIX_CASES.items() for case in cases),
             *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
             *("TestDesktopProtectionOffContextGuardsActualPublication/" + case for case in ("before-rename", "after-rename")),
@@ -471,6 +473,9 @@ EXPECTED = (*REQUIRED, *(root + "/" + case for root, cases in PRODUCT_CASES.item
             *("TestPrivateStoreCheckedWriteRetainsOriginalTarget/" + case for case in
               ("unchanged", "same-content", "different-content", "appeared", "removed", "refused")))
 REQUIRED_SOURCES = (
+    "cmd/client/desktop_external_protection_policy.go",
+    "cmd/client/desktop_external_protection_policy_test.go",
+    "internal/mobilemultihop/external_desktop_capture.go",
     "cmd/client/desktop_node_chain_execution_product.go",
     "cmd/client/desktop_node_chain_execution_product_restore.go",
     "cmd/client/desktop_node_chain_execution_product_test.go",

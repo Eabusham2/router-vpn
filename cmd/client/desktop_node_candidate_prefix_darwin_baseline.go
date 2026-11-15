@@ -8,6 +8,7 @@ import (
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/macosprocess"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // The prefix baseline has its own concrete process family. ProfileID is the
@@ -15,14 +16,15 @@ import (
 // source binds prefix config and full Save provenance; it grants no ingress.
 // The Python journal verifies that saved control policy before mutation.
 type desktopMacOSCandidatePrefixSelection struct {
-	Schema    int                 `json:"schema"`
-	Family    macosprocess.Family `json:"family"`
-	ProfileID string              `json:"profile_id"`
-	Session   string              `json:"session_id"`
-	Source    string              `json:"source_sha256"`
-	Config    string              `json:"config_sha256"`
-	HomeLAN   bool                `json:"home_lan_access"`
-	Policy    string              `json:"policy"`
+	Schema        int                 `json:"schema"`
+	Family        macosprocess.Family `json:"family"`
+	ProfileID     string              `json:"profile_id"`
+	Session       string              `json:"session_id"`
+	Source        string              `json:"source_sha256"`
+	Config        string              `json:"config_sha256"`
+	MembersSHA256 string              `json:"members_sha256"`
+	HomeLAN       bool                `json:"home_lan_access"`
+	Policy        string              `json:"policy"`
 }
 
 type desktopMacOSCandidatePrefixReceipt struct {
@@ -33,10 +35,25 @@ type desktopMacOSCandidatePrefixReceipt struct {
 	Baseline desktopMacOSBaselineProof            `json:"baseline"`
 }
 
+func newDesktopMacOSCandidatePrefixSelection(policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy) (desktopMacOSCandidatePrefixSelection, error) {
+	var empty desktopMacOSCandidatePrefixSelection
+	digest, err := policy.ProtectionMembersSHA256()
+	if err != nil {
+		return empty, err
+	}
+	meta := policy.Metadata()
+	capture := desktopMacOSCandidatePrefixSelection{Schema: 3, Family: macosprocess.CandidatePrefixFamily, ProfileID: meta.PolicyProfileID,
+		Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, MembersSHA256: digest, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}
+	if meta.TargetOS != "darwin" || meta.ApplicationOpen || meta.DNSOpen || !capture.valid() {
+		return empty, errors.New("macOS prefix baseline requires its original closed saved-member policy")
+	}
+	return capture, nil
+}
+
 func (s desktopMacOSCandidatePrefixSelection) valid() bool {
-	return s.Schema == 2 && s.Family == macosprocess.CandidatePrefixFamily && validProfileID(s.ProfileID) &&
+	return s.Schema == 3 && s.Family == macosprocess.CandidatePrefixFamily && validProfileID(s.ProfileID) &&
 		desktopMacOSExternalShort.MatchString(s.Session) && desktopMacOSExternalLong.MatchString(s.Source) &&
-		desktopMacOSExternalLong.MatchString(s.Config) && (s.Policy == "off" || s.Policy == "on-connect" || s.Policy == "always")
+		desktopMacOSExternalLong.MatchString(s.Config) && desktopMacOSExternalLong.MatchString(s.MembersSHA256) && (s.Policy == "off" || s.Policy == "on-connect" || s.Policy == "always")
 }
 
 func exactDesktopMacOSCandidatePrefixFields(object map[string]any, names ...string) bool {
@@ -62,7 +79,7 @@ func decodeDesktopMacOSCandidatePrefixReceipt(raw []byte, capture desktopMacOSCa
 		return value, failure
 	}
 	fields, ok := object["capture"].(map[string]any)
-	if !ok || !exactDesktopMacOSCandidatePrefixFields(fields, "schema", "family", "profile_id", "session_id", "source_sha256", "config_sha256", "home_lan_access", "policy") {
+	if !ok || !exactDesktopMacOSCandidatePrefixFields(fields, "schema", "family", "profile_id", "session_id", "source_sha256", "config_sha256", "members_sha256", "home_lan_access", "policy") {
 		return value, failure
 	}
 	proof, ok := object["baseline"].(map[string]any)
@@ -71,7 +88,7 @@ func decodeDesktopMacOSCandidatePrefixReceipt(raw []byte, capture desktopMacOSCa
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&value) != nil || value.Schema != 2 || value.Capture != capture || value.Phase != phase ||
+	if decoder.Decode(&value) != nil || value.Schema != 3 || value.Capture != capture || value.Phase != phase ||
 		!desktopMacOSExternalToken.MatchString(value.Token) || value.Baseline.Present != (phase == "active" || phase == "held" && capture.Policy != "off" || capture.Policy == "always") ||
 		value.Baseline.Present && !desktopMacOSExternalLong.MatchString(value.Baseline.Rules) || !value.Baseline.Present && value.Baseline.Rules != "" {
 		return desktopMacOSCandidatePrefixReceipt{}, failure

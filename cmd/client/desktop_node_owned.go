@@ -1032,7 +1032,7 @@ func (a *app) guardDesktopOwnedNodeTemporary(request speedLabRequest, snapshot s
 		}
 	} else if saved := snapshot.Plan.external; saved != nil && saved.windowsHost != nil && saved.windowsHost.app == a &&
 		saved.windowsHost.current() == nil && desktopWindowsExternalGraphEligible(saved.profile, saved.entry, saved.direct, saved.execution) {
-		policy = desktopOwnedNodeProtectionPolicy(saved.profile)
+		policy = desktopExternalProtectionPolicy(saved.profile, saved.entry, saved.direct)
 	}
 	if policy == "" {
 		return errors.New("temporary testing must first resolve the retained native protection owner")

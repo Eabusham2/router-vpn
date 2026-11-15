@@ -105,6 +105,7 @@ func TestDesktopWindowsOpenVPNEntryPublicLifecycle(t *testing.T) {
 					f := newDesktopWindowsExternalFixture(t, policy)
 					p, e, _ := desktopExternalOpenVPNEntryFixture(t, network)
 					p.ID, p.KillSwitchPolicy = "windows-openvpn-final-"+network+"-"+policy, policy
+					e.KillSwitchPolicy = policy
 					f.base.a.profiles.Profiles = append(f.base.a.profiles.Profiles, p, e)
 					f.base.a.profiles.SelectedID = p.ID
 					if err := f.base.a.persistProfilesLocked(); err != nil {
@@ -168,6 +169,7 @@ func TestDesktopWindowsOpenVPNEntryRejectsUnsupportedCapture(t *testing.T) {
 				e.ID = p.ID
 			case "unprotected":
 				p.KillSwitch, p.KillSwitchPolicy = false, "off"
+				e.KillSwitch, e.KillSwitchPolicy = false, "off"
 			case "non-SS2022-final":
 				p.External.Shadowsocks.Method = "aes-256-gcm"
 			case "direct-with-entry":

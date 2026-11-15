@@ -76,12 +76,14 @@ func (capture *desktopNodeChainPlatformCapture) prepareCandidatePrefixForPurpose
 		return nil, "", err
 	}
 	launch.candidatePrefix.capture = owner
-	meta := launch.candidatePrefix.policy.Metadata()
+	baselineSelection, err := newDesktopMacOSCandidatePrefixSelection(launch.candidatePrefix.policy)
+	if err != nil {
+		return launch, "", err
+	}
 	runtime := &desktopNodeCandidatePrefixPlatformRuntime{capture: owner}
 	h := &desktopMacOSCandidatePrefixHost{parent: capture.parent, runtime: runtime, launch: launch, policy: launch.candidatePrefix.policy,
 		operation: operation, gate: make(chan struct{}, 1), baselineRun: runDesktopMacOSCandidatePrefixBaseline,
-		selection: desktopMacOSCandidatePrefixSelection{Schema: 2, Family: macosprocess.CandidatePrefixFamily, ProfileID: meta.PolicyProfileID,
-			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
+		selection: baselineSelection}
 	runtime.host, launch.candidatePrefix.platform = h, runtime
 	// Publish a complete dependent before any private stage or PF mutation.
 	// Parent Close can wait for this construction gate and retain failed cleanup.
@@ -353,9 +355,8 @@ func (h *desktopMacOSCandidatePrefixHost) currentLocked(ctx context.Context, run
 		return err
 	}
 	meta := h.policy.Metadata()
-	expected := desktopMacOSCandidatePrefixSelection{Schema: 2, Family: macosprocess.CandidatePrefixFamily, ProfileID: meta.PolicyProfileID,
-		Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}
-	if meta.TargetOS != "darwin" || h.selection != expected || !h.selection.valid() || meta.ApplicationOpen || meta.DNSOpen {
+	expected, captureErr := newDesktopMacOSCandidatePrefixSelection(h.policy)
+	if captureErr != nil || meta.TargetOS != "darwin" || h.selection != expected || !h.selection.valid() || meta.ApplicationOpen || meta.DNSOpen {
 		return errors.New("macOS candidate prefix changed its closed protection selection or saved control")
 	}
 	a := h.parent.app

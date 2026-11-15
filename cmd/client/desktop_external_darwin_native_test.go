@@ -526,13 +526,13 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/native-external-observation", "")
 	var retired macOSExternalNativeResult
 	if err != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &retired) != nil || !retired.Closed || !retired.NativeJoined || !retired.WorkspaceRetired || retired.Session != live.Session || retired.ProcessID != live.ProcessID ||
-		retired.Baseline == nil || retired.Baseline.Phase != "retired" || retired.Baseline.Baseline.Present != (peer.policy == "always") || retired.Baseline.Token != live.Baseline.Token {
+		retired.Baseline == nil || retired.Baseline.Phase != "retired" || retired.Baseline.Baseline.Present != (peer.protectionPolicy() == "always") || retired.Baseline.Token != live.Baseline.Token {
 		t.Fatal("actual Darwin Disconnect did not join native cleanup and retire its exact PF reference", status, err, string(raw))
 	}
 	if link, err := net.InterfaceByIndex(int(live.Network.Index)); err == nil && link.Name == live.Network.Name {
 		t.Fatal("actual native utun survived joined Disconnect")
 	}
-	if peer.policy == "always" {
+	if peer.protectionPolicy() == "always" {
 		macOSExternalNativeAlwaysKernel(t, ctx, retired.Baseline, beforeTunnels)
 	} else {
 		macOSExternalNativeRetiredKernel(t, ctx, retired.Baseline.Token, beforeTunnels)
@@ -545,11 +545,14 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	if receipt.ExitCode != 0 {
 		t.Fatal("original installed controller failed joined shutdown", receipt.ExitCode)
 	}
-	if peer.policy == "always" {
+	if peer.protectionPolicy() == "always" {
 		macOSExternalNativeReleaseAlways(t, ctx, retired.Baseline, beforeTunnels)
 	}
 	if peer.openvpnEntry && peer.openvpnNetwork == "tcp" {
 		t.Logf("actual sealed Darwin OpenVPN SS2022 loss accepted %s: original provider closed, stale proof and measurement refused, original child PF utun and controller joined", scenario)
+	}
+	if peer.openvpnEntry && peer.entryPolicy == "always" {
+		t.Logf("actual sealed Darwin mixed protection accepted %s: original entry Always retained through joined disconnect, final DNS LAN IPv6 unchanged", scenario)
 	}
 	t.Logf("actual sealed Darwin ordinary host accepted %s: native child, selected DNS, exit proof, MTU%d, original PF retirement and controller join", scenario, configuredMTU)
 }

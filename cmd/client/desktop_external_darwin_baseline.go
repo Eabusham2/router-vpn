@@ -8,17 +8,21 @@ import (
 	"strconv"
 
 	"router-vpn/internal/applexray"
+	"router-vpn/internal/mobilemultihop"
 )
 
 type desktopMacOSExternalSelection struct {
-	Schema    int    `json:"schema"`
-	ProfileID string `json:"profile_id"`
-	Protocol  string `json:"protocol"`
-	Session   string `json:"session_id"`
-	Source    string `json:"source_sha256"`
-	Config    string `json:"config_sha256"`
-	HomeLAN   bool   `json:"home_lan_access"`
-	Policy    string `json:"policy"`
+	Schema         int    `json:"schema"`
+	ProfileID      string `json:"profile_id"`
+	EntryProfileID string `json:"entry_profile_id"`
+	FinalPolicy    string `json:"final_policy"`
+	EntryPolicy    string `json:"entry_policy"`
+	Protocol       string `json:"protocol"`
+	Session        string `json:"session_id"`
+	Source         string `json:"source_sha256"`
+	Config         string `json:"config_sha256"`
+	HomeLAN        bool   `json:"home_lan_access"`
+	Policy         string `json:"policy"`
 }
 type desktopMacOSBaselineProof struct {
 	Present bool   `json:"present"`
@@ -37,7 +41,15 @@ var desktopMacOSExternalLong = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var desktopMacOSExternalToken = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
 
 func (s desktopMacOSExternalSelection) valid() bool {
-	return s.Schema == 1 && validProfileID(s.ProfileID) && desktopMacOSExternalShort.MatchString(s.Session) &&
+	if s.EntryProfileID == "" {
+		if s.EntryPolicy != "" {
+			return false
+		}
+	} else if !validProfileID(s.EntryProfileID) || s.EntryProfileID == s.ProfileID || s.EntryPolicy == "" {
+		return false
+	}
+	policy, err := mobilemultihop.AggregateExternalProtectionPolicy(s.FinalPolicy, s.EntryPolicy)
+	return err == nil && policy == s.Policy && s.Schema == 2 && validProfileID(s.ProfileID) && desktopMacOSExternalShort.MatchString(s.Session) &&
 		desktopMacOSExternalLong.MatchString(s.Source) && desktopMacOSExternalLong.MatchString(s.Config) &&
 		(s.Policy == "off" || s.Policy == "on-connect" || s.Policy == "always") &&
 		(s.Protocol == "socks5" || s.Protocol == "shadowsocks" || s.Protocol == "http-connect" || s.Protocol == "https-connect" || s.Protocol == "hysteria2" || s.Protocol == "wireguard" || s.Protocol == "amneziawg" || s.Protocol == "openvpn")
@@ -54,7 +66,7 @@ func decodeDesktopMacOSExternalReceipt(raw []byte, capture desktopMacOSExternalS
 		return value, failure
 	}
 	fields, ok := object["capture"].(map[string]any)
-	if !ok || len(fields) != 8 {
+	if !ok || len(fields) != 11 {
 		return value, failure
 	}
 	proof, ok := object["baseline"].(map[string]any)

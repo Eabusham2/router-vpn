@@ -136,7 +136,7 @@ func desktopWindowsExternalProfileEligible(profile common.RouterProfile, direct 
 		return false
 	}
 	policy := desktopOwnedNodeProtectionPolicy(profile)
-	if policy != "on-connect" && policy != "always" {
+	if policy != "on-connect" && policy != "always" && (direct || policy != "off") {
 		return false
 	}
 	switch profile.External.Protocol {

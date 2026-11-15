@@ -646,27 +646,41 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
         return False
     family = value.get('native_socket_family')
     if family == 'external-v1':
-        key, schema = 'native_external_capture', 1
+        key, schemas = 'native_external_capture', (1, 2)
     elif family == 'node-candidate-prefix-v1':
-        key, schema = 'native_candidate_prefix_capture', 2
+        key, schemas = 'native_candidate_prefix_capture', (2, 3)
     elif family in ('ordered-node-chain-v1', 'ordered-node-chain-socks-v1',
                     'ordered-node-chain-connect-v1', 'ordered-node-chain-execution-v1'):
-        key, schema = 'native_node_chain_capture', 2
+        key, schemas = 'native_node_chain_capture', (2,)
     else:
         return False
     if any(other in value for other in ('native_external_capture', 'native_candidate_prefix_capture', 'native_node_chain_capture') if other != key):
         return False
     capture = value.get(key)
-    if (type(capture) is not dict or type(capture.get('schema')) is not int or capture['schema'] != schema
+    if (type(capture) is not dict or type(capture.get('schema')) is not int or capture['schema'] not in schemas
             or capture.get('policy') != 'off' or capture.get('profile_id') != value.get('profile_id')
             or value.get('profile_id') != value.get('policy_profile_id')
             or type(capture.get('home_lan_access')) is not bool
             or capture['home_lan_access'] is not value.get('home_lan_access')
-            or schema == 2 and capture.get('family') != family
+            or family != 'external-v1' and capture.get('family') != family
             or type(capture.get('session_id')) is not str or not re.fullmatch('[0-9a-f]{32}', capture['session_id'])
             or any(type(capture.get(field)) is not str or not re.fullmatch('[0-9a-f]{64}', capture[field])
                    for field in ('source_sha256', 'config_sha256'))):
         return False
+    if family == 'external-v1' and capture['schema'] == 2:
+        entry = capture.get('entry_profile_id')
+        if (type(entry) is not str or capture.get('final_policy') != 'off'
+                or capture.get('entry_policy') != ('off' if entry else '')
+                or entry == capture['profile_id']):
+            return False
+        if entry:
+            try:
+                validate_profile_id(entry, 'native external entry profile id')
+            except (RuntimeError, ValueError):
+                return False
+    if family == 'node-candidate-prefix-v1' and capture['schema'] == 3:
+        if type(capture.get('members_sha256')) is not str or not re.fullmatch('[0-9a-f]{64}', capture['members_sha256']):
+            return False
     journal = value.get('darwin_native_baseline')
     if type(journal) is not dict or type(journal.get('schema')) is not int or journal['schema'] != 1 or type(journal.get('complete')) is not bool:
         return False

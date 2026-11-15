@@ -84,7 +84,8 @@ class OwnedDarwinPF(unittest.TestCase):
         self.stack.enter_context(patch.dict(os.environ, {
             'HOMEVPN_TOR_PHYSICAL_BROKER': '', 'HOMEVPN_TOR_SESSION': '',
             'HOMEVPN_TOR_SOURCE_SHA256': '', 'HOMEVPN_ENDPOINT': ''}))
-        return dict(schema=1, profile_id='direct-tor', protocol='shadowsocks',
+        return dict(schema=2, profile_id='direct-tor', entry_profile_id='', final_policy=policy,
+                    entry_policy='', protocol='shadowsocks',
                     session_id='c'*32, source_sha256='d'*64, config_sha256='e'*64,
                     home_lan_access=False, policy=policy)
 
@@ -157,6 +158,161 @@ class OwnedDarwinPF(unittest.TestCase):
                     fixture.resolver.assert_not_called()
                 finally:
                     fixture.doCleanups()
+
+    def test_external_aggregate_applies_original_members_and_preserves_final_lan(self):
+        cases = (('off', 'always', 'always'), ('on-connect', 'always', 'always'),
+                 ('always', 'off', 'always'), ('always', 'on-connect', 'always'),
+                 ('off', 'on-connect', 'on-connect'), ('on-connect', 'off', 'on-connect'))
+        for final, entry_policy, aggregate in cases:
+            with self.subTest(final=final, entry=entry_policy):
+                fixture = OwnedDarwinPF()
+                fixture.setUp()
+                try:
+                    capture = fixture.external_capture(final)
+                    entry = dict(fixture.selected, id='original-entry', external={'protocol': 'openvpn'},
+                                 kill_switch_policy=entry_policy, home_lan_access=True)
+                    fixture.store['profiles'].append(entry)
+                    fixture.private_json(fixture.root/'routers.json', fixture.store)
+                    capture.update(entry_profile_id=entry['id'], entry_policy=entry_policy, policy=aggregate)
+                    try:
+                        active = D.darwin_external('apply', dict(capture=capture, expected=None))
+                    except RuntimeError as error:
+                        self.fail('external aggregate did not reach its applied strongest policy: '+str(error))
+                    state = fixture.saved()
+                    self.assertEqual(state['policy'], aggregate, 'external aggregate lost its applied strongest policy')
+                    self.assertFalse(state['home_lan_access'])
+                    self.assertEqual(state['native_external_capture'], capture)
+                    self.assertEqual(D.darwin_external('current', dict(capture=capture, expected=active)), active)
+                    if aggregate == 'always':
+                        self.assertEqual(D.darwin_reassert(), 0)
+                        self.assertEqual(fixture.saved()['policy'], 'always')
+                        self.assertEqual(fixture.saved()['native_external_capture'], capture)
+                    fixture.resolver.assert_not_called()
+                finally:
+                    fixture.doCleanups()
+
+    def test_external_changed_member_with_same_aggregate_refuses_before_native_plan(self):
+        capture = self.external_capture('always')
+        entry = dict(self.selected, id='original-entry', external={'protocol': 'wireguard'},
+                     kill_switch_policy='off', home_lan_access=True)
+        self.store['profiles'].append(entry)
+        self.private_json(self.root/'routers.json', self.store)
+        capture.update(entry_profile_id=entry['id'], entry_policy='on-connect')
+        sentinel = RuntimeError('original native plan refuses execution')
+        with patch.object(P._baseline, '_invoke', side_effect=sentinel) as native:
+            try:
+                D.darwin_external('apply', dict(capture=capture, expected=None))
+            except RuntimeError as error:
+                self.assertIn('captured saved protection policy', str(error),
+                              'changed original member reached native mutation')
+                native.assert_not_called()
+            else:
+                self.fail('changed original member reached native mutation')
+
+    def test_external_original_member_legacy_boolean_matches_sealed_policy(self):
+        for role in ('final', 'entry'):
+            for enabled, policy in ((False, 'off'), (True, 'on-connect')):
+                for empty_policy in (False, True):
+                    with self.subTest(role=role, enabled=enabled, empty_policy=empty_policy):
+                        fixture = OwnedDarwinPF()
+                        fixture.setUp()
+                        try:
+                            capture = fixture.external_capture(policy if role == 'final' else 'always')
+                            member = fixture.selected
+                            if role == 'entry':
+                                member = dict(fixture.selected, id='original-entry', external={'protocol': 'openvpn'})
+                                fixture.store['profiles'].append(member)
+                                capture.update(entry_profile_id=member['id'], entry_policy=policy)
+                            member['kill_switch'] = enabled
+                            if empty_policy:
+                                member['kill_switch_policy'] = ''
+                            else:
+                                member.pop('kill_switch_policy')
+                            fixture.private_json(fixture.root/'routers.json', fixture.store)
+                            sentinel = RuntimeError('original member native plan refusal')
+                            with patch.object(P._baseline, '_invoke', side_effect=sentinel) as native:
+                                with self.assertRaises(RuntimeError) as raised:
+                                    D.darwin_external('apply', dict(capture=capture, expected=None))
+                                self.assertIs(raised.exception, sentinel,
+                                              'legacy member changed its sealed effective policy')
+                                self.assertEqual(native.call_count, 1)
+                        finally:
+                            fixture.doCleanups()
+
+    def test_external_original_member_rejects_noncanonical_policy_before_native_plan(self):
+        for role in ('final', 'entry'):
+            fixture = OwnedDarwinPF()
+            fixture.setUp()
+            try:
+                capture = fixture.external_capture('on-connect' if role == 'final' else 'always')
+                member = fixture.selected
+                if role == 'entry':
+                    member = dict(fixture.selected, id='original-entry', external={'protocol': 'wireguard'},
+                                  kill_switch_policy='on-connect')
+                    fixture.store['profiles'].append(member)
+                    capture.update(entry_profile_id=member['id'], entry_policy='on-connect')
+                for field, value in (('kill_switch', 'true'), ('kill_switch', None), ('kill_switch', 1),
+                                     ('kill_switch_policy', 'ON-CONNECT'), ('kill_switch_policy', ' on-connect '),
+                                     ('kill_switch_policy', None), ('kill_switch_policy', 1)):
+                    with self.subTest(role=role, field=field, value=value):
+                        original = member[field]
+                        member[field] = value
+                        fixture.private_json(fixture.root/'routers.json', fixture.store)
+                        with patch.object(P._baseline, '_invoke', side_effect=RuntimeError('native plan should remain closed')) as native:
+                            with self.assertRaises(RuntimeError):
+                                D.darwin_external('apply', dict(capture=capture, expected=None))
+                            native.assert_not_called()
+                        member[field] = original
+            finally:
+                fixture.doCleanups()
+
+    def test_external_legacy_capture_cannot_acquire_a_fresh_native_baseline(self):
+        capture = self.external_capture()
+        legacy = {key: capture[key] for key in D._EXTERNAL_LEGACY_CAPTURE_FIELDS}
+        legacy['schema'] = 1
+        with patch.object(P._baseline, '_invoke', side_effect=RuntimeError('native plan should remain closed')) as native:
+            try:
+                D.darwin_external('apply', dict(capture=legacy, expected=None))
+            except RuntimeError as error:
+                self.assertIn('legacy macOS external capture', str(error),
+                              'legacy unbound capture acquired native admission')
+                native.assert_not_called()
+            else:
+                self.fail('legacy unbound capture acquired native admission')
+        self.assertFalse((self.root/'run/kill-switch.json').exists())
+
+    def test_external_legacy_original_state_remains_readable_and_retirable(self):
+        capture = self.external_capture('on-connect')
+        active = D.darwin_external('apply', dict(capture=capture, expected=None))
+        legacy = {key: capture[key] for key in D._EXTERNAL_LEGACY_CAPTURE_FIELDS}
+        legacy['schema'] = 1
+        state = self.saved()
+        state['native_external_capture'] = legacy
+        self.private_json(self.root/'run/kill-switch.json', state)
+        receipt = dict(active, capture=legacy)
+        self.assertEqual(D.darwin_external('current', dict(capture=legacy, expected=receipt)), receipt)
+        self.assertEqual(D.darwin_external('apply', dict(capture=legacy, expected=None)), receipt)
+        held = D.darwin_external('retire', dict(capture=legacy, expected=receipt))
+        self.assertTrue(held['baseline']['present'])
+        retired = D.darwin_external('release', dict(capture=legacy, expected=held))
+        self.assertFalse(retired['baseline']['present'])
+        self.assertFalse((self.root/'run/kill-switch.json').exists())
+
+    def test_external_legacy_always_reassert_preserves_its_exact_original_deny(self):
+        capture = self.external_capture('always')
+        active = D.darwin_external('apply', dict(capture=capture, expected=None))
+        legacy = {key: capture[key] for key in D._EXTERNAL_LEGACY_CAPTURE_FIELDS}
+        legacy['schema'] = 1
+        state = self.saved()
+        state['native_external_capture'] = legacy
+        self.private_json(self.root/'run/kill-switch.json', state)
+        self.assertEqual(D.darwin_reassert(), 0)
+        self.assertEqual(self.saved()['native_external_capture'], legacy)
+        self.assertEqual(self.saved()['policy'], 'always')
+        receipt = dict(active, capture=legacy)
+        held = D.darwin_external('retire', dict(capture=legacy, expected=receipt))
+        self.assertTrue(held['baseline']['present'])
+        self.assertTrue(D.darwin_external('release', dict(capture=legacy, expected=held))['baseline']['present'])
 
     def test_external_family_uses_exact_existing_native_journal_and_always_retirement(self):
         capture = self.external_capture()
@@ -788,21 +944,96 @@ class OwnedDarwinPF(unittest.TestCase):
     def candidate_prefix_capture(self, policy='always'):
         self.selected['node_kind'] = 'router-vpn'
         self.selected.pop('external', None)
-        self.selected['kill_switch_policy'] = policy
+        self.selected.update(kill_switch_policy=policy, kill_switch=policy != 'off', ipv6_mode='on',
+                             multihop_enabled=True, multihop_execution='local',
+                             multihop_nodes=[dict(id='prefix-entry', mode='wg'), dict(id='direct-tor', mode='shadowsocks')])
+        entry = dict(id='prefix-entry', node_kind='router-vpn', kill_switch_policy=policy,
+                     kill_switch=policy != 'off', home_lan_access=False, ipv6_mode='on')
+        self.store['profiles'] = [profile for profile in self.store['profiles'] if profile.get('id') != 'prefix-entry'] + [entry]
         self.private_json(self.root/'routers.json', self.store)
         self.stack.enter_context(patch.dict(os.environ, {
             'HOMEVPN_TOR_PHYSICAL_BROKER': '', 'HOMEVPN_TOR_SESSION': '',
             'HOMEVPN_TOR_SOURCE_SHA256': '', 'HOMEVPN_ENDPOINT': ''}))
-        return dict(schema=2, family='node-candidate-prefix-v1', profile_id='direct-tor',
+        digest, aggregate, lan = D._darwin_candidate_prefix_members(self.store, self.selected)
+        return dict(schema=3, family='node-candidate-prefix-v1', profile_id='direct-tor',
                     session_id='c'*32, source_sha256='d'*64, config_sha256='e'*64,
-                    home_lan_access=False, policy=policy)
+                    members_sha256=digest, home_lan_access=lan, policy=aggregate)
+
+    def test_candidate_prefix_mixed_members_use_original_aggregate_before_native_plan(self):
+        capture = self.candidate_prefix_capture('on-connect')
+        self.selected.update(kill_switch_policy='off', kill_switch=False, home_lan_access=True)
+        digest, aggregate, lan = D._darwin_candidate_prefix_members(self.store, self.selected)
+        capture.update(members_sha256=digest, policy=aggregate, home_lan_access=lan)
+        self.private_json(self.root/'routers.json', self.store)
+        try:
+            active = D.darwin_candidate_prefix('apply', dict(capture=capture, expected=None))
+        except RuntimeError as error:
+            self.fail('prefix original aggregate did not reach its native baseline: '+str(error))
+        state = self.saved()
+        self.assertEqual(state['policy'], 'on-connect', 'prefix original aggregate did not reach its native baseline')
+        self.assertFalse(state['home_lan_access'], 'prefix original aggregate did not reach its native baseline')
+        self.assertEqual(state['native_candidate_prefix_capture'], capture)
+        self.assertEqual(active['schema'], 3)
+        self.assertFalse(state[D._darwin._baseline.STATE_KEY]['request'].get('isolated_only', False))
+        retired = D.darwin_candidate_prefix('release', dict(capture=capture, expected=active))
+        self.assertFalse(retired['baseline']['present'])
+
+    def test_candidate_prefix_bound_members_reject_replacement_without_native_mutation(self):
+        import copy
+        capture = self.candidate_prefix_capture('always')
+        original = copy.deepcopy(self.store)
+        before = list(self.commands)
+        for fault in ('missing', 'duplicate-profile', 'duplicate-reference', 'reordered', 'foreign', 'suffix-policy', 'suffix-lan', 'suffix-ipv6', 'mode'):
+            changed = copy.deepcopy(original)
+            control = next(p for p in changed['profiles'] if p['id'] == 'direct-tor')
+            if fault == 'missing': changed['profiles'] = [p for p in changed['profiles'] if p['id'] != 'prefix-entry']
+            elif fault == 'duplicate-profile': changed['profiles'].append(copy.deepcopy(changed['profiles'][-1]))
+            elif fault == 'duplicate-reference': control['multihop_nodes'][0] = dict(control['multihop_nodes'][-1])
+            elif fault == 'reordered': control['multihop_nodes'].reverse()
+            elif fault == 'foreign': control['multihop_nodes'][0]['id'] = 'unrelated'
+            elif fault == 'suffix-policy': control['kill_switch_policy'] = 'off'
+            elif fault == 'suffix-lan': control['home_lan_access'] = True
+            elif fault == 'suffix-ipv6': control['ipv6_mode'] = 'off'
+            elif fault == 'mode': control['multihop_nodes'][0]['mode'] = 'awg2-fast'
+            self.private_json(self.root/'routers.json', changed)
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError, msg='changed full prefix member reached native mutation'):
+                D.darwin_candidate_prefix('apply', dict(capture=capture, expected=None))
+            self.assertEqual(self.commands, before)
+        self.private_json(self.root/'routers.json', original)
+
+    def test_candidate_prefix_legacy_retained_readback_cleanup_and_reassert_only(self):
+        import copy
+        capture = self.candidate_prefix_capture('always')
+        active = D.darwin_candidate_prefix('apply', dict(capture=capture, expected=None))
+        legacy = dict(capture, schema=2)
+        del legacy['members_sha256']
+        state = self.saved()
+        state['native_candidate_prefix_capture'] = legacy
+        self.private_json(self.root/'run/kill-switch.json', state)
+        receipt = dict(active, schema=2, capture=legacy)
+        self.assertEqual(D.darwin_candidate_prefix('current', dict(capture=legacy, expected=receipt)), receipt)
+        self.assertEqual(D.darwin_candidate_prefix('apply', dict(capture=legacy, expected=None)), receipt)
+        self.assertEqual(D.darwin_reassert(), 0)
+        self.assertEqual(self.saved()['native_candidate_prefix_capture'], legacy)
+        changed = dict(legacy, source_sha256='f'*64)
+        before, commands = copy.deepcopy(self.saved()), list(self.commands)
+        with self.assertRaises(RuntimeError): D.darwin_candidate_prefix('apply', dict(capture=changed, expected=None))
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(self.commands, commands)
+        retired = D.darwin_candidate_prefix('release', dict(capture=legacy, expected=receipt))
+        self.assertTrue(retired['baseline']['present'])
+        D.darwin_release(True)
+        commands = list(self.commands)
+        with self.assertRaisesRegex(RuntimeError, 'legacy.*cannot authorize'):
+            D.darwin_candidate_prefix('apply', dict(capture=legacy, expected=None))
+        self.assertEqual(self.commands, commands)
 
     def test_candidate_prefix_uses_original_journal_and_exact_retirement(self):
         for policy in ('on-connect', 'always'):
             with self.subTest(policy=policy):
                 capture = self.candidate_prefix_capture(policy)
                 active = D.darwin_candidate_prefix('apply', dict(capture=capture, expected=None))
-                self.assertEqual(active['schema'], 2)
+                self.assertEqual(active['schema'], 3)
                 self.assertEqual(active['capture'], capture)
                 state = self.saved()
                 self.assertEqual(state['native_socket_family'], 'node-candidate-prefix-v1')

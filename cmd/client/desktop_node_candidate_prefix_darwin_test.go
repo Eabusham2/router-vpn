@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	"router-vpn/internal/macosprocess"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -56,13 +55,16 @@ func desktopMacOSCandidatePrefixRetirementFixture(t *testing.T) (*desktopMacOSCa
 	a.state.Connected, a.state.Phase = false, "candidate:testing"
 	parent := &desktopMacOSSessionCapture{app: a, controller: c, parent: p, session: s}
 	runtime := &desktopNodeCandidatePrefixPlatformRuntime{registered: true}
+	baselineSelection, err := newDesktopMacOSCandidatePrefixSelection(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
 	h := &desktopMacOSCandidatePrefixHost{parent: parent, runtime: runtime, launch: launch, policy: policy, operation: operation, gate: make(chan struct{}, 1),
 		entered: true, published: true, staged: true, baselineEntered: true,
-		selection: desktopMacOSCandidatePrefixSelection{Schema: 2, Family: macosprocess.CandidatePrefixFamily, ProfileID: meta.PolicyProfileID,
-			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
+		selection: baselineSelection}
 	runtime.host, launch.candidatePrefix.platform = h, runtime
 	h.gate <- struct{}{}
-	h.baseline = &desktopMacOSCandidatePrefixReceipt{Schema: 2, Capture: h.selection, Phase: "active", Token: "417", Baseline: desktopMacOSBaselineProof{Present: true, Rules: strings.Repeat("a", 64)}}
+	h.baseline = &desktopMacOSCandidatePrefixReceipt{Schema: 3, Capture: h.selection, Phase: "active", Token: "417", Baseline: desktopMacOSBaselineProof{Present: true, Rules: strings.Repeat("a", 64)}}
 	s.candidatePrefix = runtime
 	if err := s.Retain(context.Background(), h); err != nil {
 		t.Fatal(err)

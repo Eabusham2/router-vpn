@@ -91,10 +91,13 @@ back from the remote. There was no force push or live deployment.
 | `09a9b781094b1f2473d56aced4b64b7da9a8ce57` | The Darwin descriptor receiver clears only its own supplied `MSG_DONTWAIT` input bit, which XNU returns in `msg_flags`, before strict frame validation. | Both native controller and generated-child jobs had rejected valid frames at `17267175`. Six focused tests passed, including sixteen real-stream frame cases and two causal controls; truncation, ancillary truncation and unknown flags remain rejected. The full runner passed 56 of 57 tests; the remaining existing control-lifetime test could not create an AF_UNIX listener in this executor. Actual Darwin acceptance remains required. |
 | `d41f4d4a41d314ca1fc2d812bbd2cf3c17d95f12` | The bounded ordinary OpenVPN-entry/independent SS2022-final pair enters the macOS retained host with separate entry and final authentication/proofs. | Seventeen runner checks require 375 installed cases and 53 policy roots. Final canonical preparation passed 31 checks; the corrected native observer passed against actual adapted TCP/UDP policies under race detection and its old-detour mutation failed. Earlier Intel/ARM controller and peer cross-compiles precede that final observer correction. Native PF/utun/provider acceptance remains required. |
 | `dcb221fca9b851f824dde02c84a5cc996c29fc3e` | Full Darwin PF close retains its exact cleanup state until the original native generation is absent, while standalone Off permission revocation retains its separate behavior. | Both real Mac architectures exposed the retained-reference retry failure at `09a9b781`. Six focused checks passed, including actual-method failure/retry/replacement cases, the old-helper causal control and the receive-flag regression. The native retained-reference test is unchanged; exact-current-SHA native acceptance remains pending. |
+| `00ba8a2385625ba03b7113abd1a5b1fc2095e5b0` | Idle saved-prefix preparation admits aggregate Off on all three desktops while preserving the complete original graph, closed application/DNS authority and captured cleanup. | The 81-combination shared policy matrix and owned-prefix race tests passed; Windows AMD64 and Darwin ARM64 controller images cross-compiled. Required Off Save/Cancel cases supplement the original protected native cases. This publication did not yet repair Darwin's stronger mixed-member saved-profile validator. |
+| `6026e9c5c4732796e45997f0ccdb380551f33a61` | The Darwin external validator recognizes all eight protocols already supported by its Go capture and retained native host, including SOCKS5, AmneziaWG and OpenVPN. | The actual dispatcher reproduced those three pre-native refusals before the correction. All 83 then-current dispatcher/journal tests passed afterward; unknown protocols and malformed aliases remain rejected. This catalog correction does not itself prove native protocol execution. |
 
 The last named commit is the verified publication checkpoint preceding this
-evidence refresh. This change adds aggregate Off to saved-prefix preparation
-on the three desktop hosts described below; a document does not manufacture a
+evidence refresh. This change preserves every original member's protection
+in ordinary external paths and Darwin saved-prefix validation as described
+below; a document does not manufacture a
 publication receipt for itself. This is not a claim that `main` cannot
 advance. The complete release-orchestration source audit also passed in the
 working tree containing these repairs. That local working-tree result is not
@@ -104,6 +107,15 @@ The actual encrypted ordered Server suffix jobs passed on both AMD64 and
 ARM64 in run `43675813281`, at `bedf040c`. This closes that specific native
 witness only. Current aggregate packages, images, compose and release
 publication have not yet been certified together.
+
+At `6026e9c5`, the newer authoritative run
+[`43687117798`](https://github.com/Eabusham2/router-vpn/actions/runs/43687117798)
+passed Windows ALL/restoration and encrypted ordered Server execution on both
+architectures, the paired native OpenVPN gate and typed CONNECT/SOCKS witnesses.
+The Darwin generated child passed its former startup/authentication boundary;
+its complete native verdict was still pending when this evidence was recorded.
+These are observations of the published predecessor, not native acceptance of
+the subsequent member-aggregation changes or a fully green release result.
 
 ### Linux connection with every member's kill switch Off
 
@@ -236,7 +248,7 @@ addresses the original August 19 through-selected-prefix measurement request
 and the historical 214–224/336 index; it does not broaden candidate protocols,
 turn TCP connection timing into ICMP or establish native visual acceptance.
 
-This change admits aggregate Off for saved-prefix preparation on Linux, Windows
+Published `00ba8a23` admits aggregate Off for saved-prefix preparation on Linux, Windows
 and macOS. The captured policy still includes every original saved member,
 including the unstarted suffix and final: Always overrides On-connect, which
 overrides Off. The saved control profile and tested-prefix profile retain their
@@ -267,9 +279,80 @@ Runner checks passed 18 Windows prefix, 75 Linux host, nine macOS prefix and
 21 composed Windows receipt tests. Restoring either old admission guard failed
 at its intended constructor or parent-selection witness. The generated command
 run used the pure-Go WG/gVisor/QUIC/uTLS/OpenVPN configuration; full native
-library linking is still a CI obligation. This all-Off addition does not close
+library linking is still a CI obligation. That all-Off publication did not close
 the separate Darwin saved-profile validator mismatch for stronger mixed-member
-captures, which can still fail closed before native admission.
+captures. The subsequent correction is described below with its own evidence.
+
+### Original member protection across ordinary external and saved-prefix paths
+
+Ordinary external policy now derives the strongest kill-switch choice from the
+sealed final and, when present, its independently captured entry: Always wins
+over On-connect, which wins over Off. Public graph eligibility, native capture,
+restore checks and Windows temporary Speed Lab protection use that same actual
+pair. An Off final can therefore retain its entry's stronger policy without
+changing either saved profile. All-Off ordinary external admission remains
+closed in this change. Final-selected DNS, LAN, IPv6 and MTU semantics are
+unchanged; aggregation cannot borrow another node's credentials or identity.
+
+Darwin external capture schema 2 records both original profile identities and
+their individual protection choices. The Python saved-store validator requires
+one matching record per original member and independently verifies the
+aggregate. Changing a member remains a refusal even when the resulting maximum
+would stay the same. The applied journal and retained Always baseline use the
+captured aggregate. Legacy schema 1 cannot acquire a fresh baseline; exact
+retained owners can still be read, retired and released, and their Always
+protection can be reasserted. These migration rules do not create new owners.
+
+Darwin saved-prefix capture schema 3 binds the complete original graph with an
+ordered member digest derived from the sealed shared policy. Its rows include
+profile identity, mode, node kind, effective protection, IPv6 and LAN policy,
+including unstarted suffix/final members and supported imported middles. The
+dispatcher reconstructs that digest from the selected control's exact saved
+node references and rejects missing, repeated, reordered or changed members.
+It applies the existing strongest protection and whole-graph LAN conjunction;
+it never derives either from the control/final profile alone. Legacy schema 2
+retains exact readback/cleanup and Always reassertion, without fresh admission.
+The member parser matches Go's legacy Boolean fallback and rejects malformed
+Booleans, nulls, whitespace aliases and other noncanonical policy values.
+
+Two additional mandatory installed Mac external cases retain an Always entry
+with an On-connect or Off final, using the actual OpenVPN-entry/SS2022-final
+provider pair and independent proofs. The saved-prefix gate additionally
+requires a mixed On-connect entry/Off final with stricter entry LAN/IPv6 policy.
+These augment the existing native inventories and original deadlines. They
+remain actual macOS execution obligations; portable dispatcher checks stop at
+an explicitly rejecting native-plan boundary where appropriate.
+
+The shared external nine-combination matrix passed under race detection, and
+the old final-only capture failed six stronger-entry witnesses. Focused client
+source/restore families passed in 66.508 seconds. The actual temporary Speed Lab
+guard passed in 1.082 seconds; restoring its old final-only expression failed
+the original-entry Always witness. Thirty compiled host captures crossed the
+Go-to-Python saved-member boundary, with all 27 composed old-entry-ID mutations
+rejected before native mutation. The integrated journal gate passed all 20
+baseline tests, 93 dispatcher tests and 39 causal controls, including exact
+member equality, applied aggregate/LAN and legacy admission.
+
+All ten saved-prefix runner checks passed in 2.459 seconds. Its mandatory
+cross-language witness decodes explicit, missing and empty persisted fields
+through the actual common profile store, constructs the desktop prefix policy,
+and verifies the Go accessor's digest in Python. It preserves desktop defaults
+of IPv6 On and allowed LAN when those saved fields are absent, while rejecting
+malformed/null/Boolean member fields before native admission.
+
+The Mac external runner passed 18 checks and now requires 377 native cases and
+57 policy roots. The full Windows runner passed 31 checks before the final
+temporary-guard inventory addition; its three affected inventory/partition
+checks subsequently passed. Both Darwin controller architectures cross-compiled
+with CGO disabled against the combined external and prefix changes. These
+results do not include privileged PF/utun execution. Final canonical source
+preparation passed all 31 checks in 8.810 seconds against the combined tree.
+At published predecessor
+`6026e9c5`, the actual standalone Mac pipeline
+[`43687117579`](https://github.com/Eabusham2/router-vpn/actions/runs/43687117579)
+failed its separate OffHostAndBroker cases on both architectures with native
+PF rule syntax errors. That blocker remains distinct from this member-binding
+unit and the earlier repaired descriptor-frame failure.
 
 ### Ordinary OpenVPN entry and independent external final
 

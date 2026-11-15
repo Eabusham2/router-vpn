@@ -88,6 +88,10 @@ func prepareDesktopRetainedExternal(a *app, launch *desktopNodeLaunch) (desktopE
 	}
 	policy := launch.external.physical
 	meta := policy.Metadata()
+	captured, captureErr := policy.Capture()
+	if captureErr != nil {
+		return nil, captureErr
+	}
 	launch.configSHA256 = meta.ConfigSHA256
 	a.mu.Lock()
 	profile, exists := a.profileByIDLocked(launch.policyProfileID)
@@ -100,7 +104,8 @@ func prepareDesktopRetainedExternal(a *app, launch *desktopNodeLaunch) (desktopE
 		entryOptions: [3]bool{entry.DAITAEnabled, entry.JumboTUN, entry.SocksEnabled}, options: [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks},
 		savedOptions: [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled}, beforeCommand: a.cmd,
 		beforeState: a.state, beforeSelected: a.profiles.SelectedID, gate: make(chan struct{}, 1), verify: verifyBundledNativeContext, baselineRun: runDesktopMacOSExternalBaseline,
-		selection: desktopMacOSExternalSelection{Schema: 1, ProfileID: launch.policyProfileID, Protocol: meta.Protocol, Session: meta.SessionID,
+		selection: desktopMacOSExternalSelection{Schema: 2, ProfileID: launch.policyProfileID, EntryProfileID: captured.EntryID,
+			FinalPolicy: captured.FinalKillSwitchPolicy, EntryPolicy: captured.EntryKillSwitchPolicy, Protocol: meta.Protocol, Session: meta.SessionID,
 			Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
 	a.mu.Unlock()
 	if !exists || validateDesktopMacOSExternalSources(profile, entry, launch) != nil || !h.selection.valid() {

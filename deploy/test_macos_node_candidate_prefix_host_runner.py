@@ -2,8 +2,12 @@
 """Causal strict-receipt and caller-artifact controls for native Darwin prefixes."""
 from pathlib import Path
 import importlib.util
+import json
+import os
+from copy import deepcopy
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -69,6 +73,51 @@ def private_callers(sources):
 
 
 class NativePrefixGate(unittest.TestCase):
+    def test_actual_saved_store_member_digest_and_optional_fields(self):
+        # Execute the actual common-store -> desktop source -> sealed accessor
+        # path. This is source validation, not successful native PF evidence.
+        env = dict(os.environ)
+        for key in ('GOOS', 'GOARCH'): env.pop(key, None)
+        env['CGO_ENABLED'] = '0'
+        result = subprocess.run(['go', 'test', '-p=1', '-json', './cmd/client',
+            '-run', '^TestDesktopMacOSCandidatePrefixSavedMemberDigestVector$', '-count=1', '-timeout=60s'],
+            cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)
+        self.assertEqual(result.returncode, 0, result.stdout[-16000:])
+        events = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(sum(e.get('Action') == 'pass' and e.get('Test') == 'TestDesktopMacOSCandidatePrefixSavedMemberDigestVector' for e in events), 1)
+        self.assertFalse(any(e.get('Action') in ('fail', 'skip') for e in events))
+        # test2json may split one long t.Log line into multiple Output events.
+        output = ''.join(e.get('Output', '') for e in events
+                         if e.get('Test', '').split('/', 1)[0] == 'TestDesktopMacOSCandidatePrefixSavedMemberDigestVector')
+        vectors = [json.loads(line.split('PREFIX_MEMBER_BINDING_VECTOR ', 1)[1])
+                   for line in output.splitlines() if 'PREFIX_MEMBER_BINDING_VECTOR ' in line]
+        self.assertEqual([v['case'] for v in vectors], ['explicit', 'missing', 'empty'])
+        spec = importlib.util.spec_from_file_location('prefix_actual_member_dispatch', ROOT/'modes/kill-switch-platform.py')
+        dispatch = importlib.util.module_from_spec(spec)
+        with patch.object(sys, 'path', [str(ROOT/'modes'), *sys.path]):
+            spec.loader.exec_module(dispatch)
+        physical = {key:'' for key in ('HOMEVPN_ENDPOINT','HOMEVPN_NATIVE_ENDPOINTS_JSON','HOMEVPN_NATIVE_EGRESS_JSON',
+            'HOMEVPN_TOR_PHYSICAL_BROKER','HOMEVPN_TOR_SESSION','HOMEVPN_TOR_SOURCE_SHA256','HOMEVPN_EXTERNAL_SESSION')}
+        with patch.dict(os.environ, physical):
+            for vector in vectors:
+                store, capture = vector['store'], vector['capture']
+                control = next(p for p in store['profiles'] if p['id'] == capture['profile_id'])
+                member = next(p for p in store['profiles'] if p['id'] == control['multihop_nodes'][1]['id'])
+                if vector['case'] != 'explicit': self.assertNotIn('home_lan_access',member)
+                if vector['case'] == 'missing': self.assertNotIn('ipv6_mode',member); self.assertNotIn('node_kind',member)
+                if vector['case'] == 'empty': self.assertEqual(member['ipv6_mode'],''); self.assertEqual(member['node_kind'],'')
+                self.assertEqual(dispatch._darwin_candidate_prefix_members(store,control), (capture['members_sha256'],'always',False))
+                dispatch._darwin_candidate_prefix_profile(control,capture['profile_id'],capture['profile_id'],capture,store)
+                for field, values in (('ipv6_mode',(None,False,'ON',' on')), ('node_kind',(None,False)),
+                                      ('home_lan_access',(None,0,'false')), ('kill_switch',(None,0)),
+                                      ('kill_switch_policy',(None,False,'OFF',' off'))):
+                    for value in values:
+                        changed = deepcopy(store)
+                        next(p for p in changed['profiles'] if p['id'] == member['id'])[field] = value
+                        with self.subTest(case=vector['case'],field=field,value=value), self.assertRaises(RuntimeError):
+                            dispatch._darwin_candidate_prefix_profile(control,capture['profile_id'],capture['profile_id'],capture,changed)
+
+
     def output(self, case):
         return '\n'.join(('=== RUN   '+G.TEST,'=== RUN   '+G.TEST+'/'+case,
             '    desktop_node_candidate_prefix_darwin_native_test.go:400: '+G.receipt(case),
@@ -77,9 +126,9 @@ class NativePrefixGate(unittest.TestCase):
         lines=['=== RUN   '+G.AUTHORITY_TEST]
         for child in G.AUTHORITY_CASES[1:]: lines+=['=== RUN   '+child,'    --- PASS: '+child+' (0.1s)']
         return '\n'.join(lines+['--- PASS: '+G.AUTHORITY_TEST+' (0.3s)','PASS'])+'\n'
-    def test_exact_protected_and_off_cases_and_five_source_records(self):
+    def test_exact_protected_and_off_cases_and_six_source_records(self):
         self.assertEqual(G.case_inventory(),G.CASES)
-        self.assertEqual(len(G.CASES),8); self.assertEqual(len(G.AUTHORITY_CASES),5)
+        self.assertEqual(len(G.CASES),9); self.assertEqual(len(G.AUTHORITY_CASES),6)
         for case in G.CASES:G.check_verdict(self.output(case),case)
         G.check_authority_verdict(self.authority())
     def test_inventory_rejects_omission_duplication_reorder_and_computed_entry(self):

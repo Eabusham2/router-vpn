@@ -67,6 +67,7 @@ func TestDesktopDarwinOpenVPNEntryRejectsUnsupportedCapture(t *testing.T) {
 				e.ID = p.ID
 			case "unprotected":
 				p.KillSwitch, p.KillSwitchPolicy = false, "off"
+				e.KillSwitch, e.KillSwitchPolicy = false, "off"
 			case "non-SS2022-final":
 				p.External.Shadowsocks.Method = "aes-256-gcm"
 			case "direct-with-entry":

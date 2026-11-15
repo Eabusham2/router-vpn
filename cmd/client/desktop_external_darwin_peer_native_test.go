@@ -90,7 +90,7 @@ type macOSExternalNativePeer struct {
 	failure                                                          error
 	protocol, password, ca                                           string
 	name, layer, layerPassword, fault                                string
-	variant, policy, clientKey, peerKey, psk                         string
+	variant, policy, entryPolicy, clientKey, peerKey, psk            string
 	inner                                                            netip.AddrPort
 	address                                                          netip.AddrPort
 	physical                                                         netip.Addr
@@ -291,6 +291,15 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 			p.policy = "always"
 		}
 	}
+	if p.openvpnEntry {
+		p.entryPolicy = "off"
+		switch scenario {
+		case "openvpn-entry-ss-tcp-entry-always":
+			p.policy, p.entryPolicy = "on-connect", "always"
+		case "openvpn-entry-ss-tcp-final-off-entry-always":
+			p.policy, p.entryPolicy = "off", "always"
+		}
+	}
 	if protocol == "amneziawg" {
 		if awgFinal {
 			p.variant = awgFinalVariant
@@ -474,6 +483,7 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 		External: &common.ExternalNodeConfig{Protocol: p.protocol, ExpectedPublicIP: "203.0.113.88"}}
 	connect := &common.ExternalHTTPConnectConfig{Host: p.address.Addr().String(), Port: int(p.address.Port()), Username: "captured-native-user", Password: p.password}
 	profile.KillSwitchPolicy = p.policy
+	profile.KillSwitch = p.policy != "off"
 	if p.policy == "always" {
 		profile.IPv6Mode = "on"
 		profile.HomeLANAccess = true

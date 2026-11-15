@@ -14,6 +14,10 @@ func desktopWindowsExternalGraphEligible(profile, entry common.RouterProfile, di
 	if !desktopWindowsExternalProfileEligible(profile, direct, restored) {
 		return false
 	}
+	policy := desktopExternalProtectionPolicy(profile, entry, direct)
+	if policy != "on-connect" && policy != "always" {
+		return false
+	}
 	if direct {
 		return entry.ID == ""
 	}

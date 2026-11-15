@@ -32,7 +32,7 @@ func desktopExternalPacketEntryOwner(owner *desktopExternalRuntime) bool {
 		owner.profile.MultihopExecution != "" && owner.profile.MultihopExecution != "local" || owner.profile.MultihopEntryMode != "" {
 		return false
 	}
-	policy := desktopOwnedNodeProtectionPolicy(owner.profile)
+	policy := desktopExternalProtectionPolicy(owner.profile, owner.entry, false)
 	return policy == "on-connect" || policy == "always"
 }
 

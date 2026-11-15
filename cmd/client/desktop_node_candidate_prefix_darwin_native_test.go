@@ -26,7 +26,7 @@ const macOSCandidatePrefixMarker = "fixture-node-candidate-prefix-host"
 const macOSCandidatePrefixCandidate = "installed-prefix-candidate"
 
 var macOSCandidatePrefixHostCases = []string{
-	"wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel", "wg-off-save", "wg-off-cancel",
+	"wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel", "wg-off-save", "wg-off-cancel", "wg-mixed-save",
 }
 
 func macOSCandidatePrefixModes(scenario string) ([]string, string, error) {
@@ -39,7 +39,7 @@ func macOSCandidatePrefixModes(scenario string) ([]string, string, error) {
 	}
 	action := scenario[strings.LastIndexByte(scenario, '-')+1:]
 	switch strings.TrimSuffix(scenario, "-"+action) {
-	case "wg", "wg-off":
+	case "wg", "wg-off", "wg-mixed":
 		return []string{"wg", "wg"}, action, nil
 	case "awg-fast":
 		return []string{"awg2-fast", "wg"}, action, nil
@@ -84,6 +84,22 @@ func macOSCandidatePrefixSources(t *testing.T, peer *macOSNodeChainPeer) (common
 	return store, assets
 }
 
+func macOSCandidatePrefixDeviceControls(store *common.RouterProfileStore, scenario string) {
+	if !strings.Contains(scenario, "-off-") && !strings.Contains(scenario, "-mixed-") {
+		return
+	}
+	for i := range store.Profiles {
+		store.Profiles[i].KillSwitch, store.Profiles[i].KillSwitchPolicy = false, "off"
+	}
+	if strings.Contains(scenario, "-mixed-") {
+		for i := range store.Profiles {
+			store.Profiles[i].HomeLANAccess, store.Profiles[i].IPv6Mode = true, "on"
+		}
+		store.Profiles[0].KillSwitch, store.Profiles[0].KillSwitchPolicy = true, "on-connect"
+		store.Profiles[0].HomeLANAccess, store.Profiles[0].IPv6Mode = false, "off"
+	}
+}
+
 func macOSCandidatePrefixInstall(t *testing.T, peer *macOSNodeChainPeer, scenario string) common.RouterProfileStore {
 	t.Helper()
 	// Existing installer supplies the unchanged optimizer/native bundle closure.
@@ -92,12 +108,7 @@ func macOSCandidatePrefixInstall(t *testing.T, peer *macOSNodeChainPeer, scenari
 		t.Fatal(err)
 	}
 	store, assets := macOSCandidatePrefixSources(t, peer)
-	if strings.Contains(scenario, "-off-") {
-		for i := range store.Profiles {
-			store.Profiles[i].KillSwitch = false
-			store.Profiles[i].KillSwitchPolicy = "off"
-		}
-	}
+	macOSCandidatePrefixDeviceControls(&store, scenario)
 	raw, err := json.Marshal(store)
 	if err != nil || os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "routers.json"), raw, 0600) != nil {
 		t.Fatal("prefix saved source unavailable", err)
@@ -443,6 +454,12 @@ func macOSCandidatePrefixNativeCase(t *testing.T, scenario string) {
 	if !observed.NativeJoined || !observed.Closed || !observed.WorkspaceRetired || !observed.Observer || observed.ProcessID == started.ProcessID || observed.Profile != store.SelectedID || observed.Baseline == nil || observed.Baseline.Phase != "retired" || observed.Baseline.Baseline.Present || proof == nil || !proof.Prepared || proof.ApplicationOpen || proof.DNSOpen || len(proof.Prefixes) != len(modes) || proof.Identity.SessionID != observed.Session || proof.InterfaceIndex == 0 || proof.InterfaceName == "" {
 		t.Fatal("prefix original PF/process/utun receipt incomplete", observed)
 	}
+	if observed.Baseline.Schema != 3 || observed.Baseline.Capture.Schema != 3 || !desktopMacOSExternalLong.MatchString(observed.Baseline.Capture.MembersSHA256) {
+		t.Fatal("native prefix omitted original full-member binding")
+	}
+	if strings.Contains(scenario, "-mixed-") && (observed.Policy != "on-connect" || observed.Baseline.Capture.HomeLAN || store.Profiles[len(store.Profiles)-2].KillSwitchPolicy != "off" || !store.Profiles[len(store.Profiles)-2].HomeLANAccess) {
+		t.Fatal("native prefix lost stronger entry and stricter LAN while final remained Off")
+	}
 	macOSExternalNativeRetiredKernel(t, ctx, observed.Baseline.Token, beforeTunnels)
 	counters := peer.observe(t, "stats")
 	deadline := time.Now().Add(time.Second)
@@ -550,7 +567,7 @@ func macOSCandidatePrefixNativeCase(t *testing.T, scenario string) {
 }
 
 func TestDesktopDarwinInstalledPrefixCandidateFixtureKeepsClosedAuthority(t *testing.T) {
-	for _, scenario := range []string{"wg-save", "awg-fast-save", "awg-strong-save", "wg-off-save"} {
+	for _, scenario := range []string{"wg-save", "awg-fast-save", "awg-strong-save", "wg-off-save", "wg-mixed-save"} {
 		t.Run(strings.TrimSuffix(scenario, "-save"), func(t *testing.T) {
 			modes, _, err := macOSCandidatePrefixModes(scenario)
 			if err != nil {
@@ -560,12 +577,7 @@ func TestDesktopDarwinInstalledPrefixCandidateFixtureKeepsClosedAuthority(t *tes
 			macOSNodeChainSetModes(t, peer, modes)
 			peer.reply.Address = "192.168.210.2:51820"
 			store, assets := macOSCandidatePrefixSources(t, peer)
-			if strings.Contains(scenario, "-off-") {
-				for i := range store.Profiles {
-					store.Profiles[i].KillSwitch = false
-					store.Profiles[i].KillSwitchPolicy = "off"
-				}
-			}
+			macOSCandidatePrefixDeviceControls(&store, scenario)
 			root := t.TempDir()
 			for id, modes := range assets {
 				for mode, files := range modes {
@@ -613,6 +625,9 @@ func TestDesktopDarwinInstalledPrefixCandidateFixtureKeepsClosedAuthority(t *tes
 			}
 			if meta.ApplicationOpen || meta.DNSOpen || len(meta.Prefixes) != 2 || meta.PolicyProfileID != store.SelectedID || meta.ProfileID == store.SelectedID || launch.chain != nil || launch.command != nil {
 				t.Fatal("prefix source fixture adopted old final as tested authority")
+			}
+			if strings.Contains(scenario, "-mixed-") && (meta.KillSwitchPolicy != "on-connect" || meta.HomeLANAccess || meta.IPv6Mode != "off") {
+				t.Fatal("source changed original mixed-member aggregate")
 			}
 			if !strings.Contains(string(assets[store.SelectedID]["shadowsocks"]["sing-box.json"]), `"server_port":1`) || !strings.Contains(string(assets[macOSCandidatePrefixCandidate]["shadowsocks"]["sing-box.json"]), `"server_port":8388`) {
 				t.Fatal("prefix source fixture lost independently unopened final")
