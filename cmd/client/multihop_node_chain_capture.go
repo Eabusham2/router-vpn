@@ -95,11 +95,17 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 	var result []desktopNodeChainMember
 	for i, selected := range nodes {
 		profile, found := byID[selected.ID]
-		imported := found && (desktopNodeChainImported(profile, selected.Mode) || desktopNodeChainOpenVPNMiddle(profile, selected.Mode))
+		openVPN := found && desktopNodeChainOpenVPNMiddle(profile, selected.Mode)
+		imported := found && desktopNodeChainImported(profile, selected.Mode) || openVPN
 		paired := found && (profile.NodeKind == "" || profile.NodeKind == "router-vpn") && profile.External == nil && common.ValidNodeProofID(profile.NodeProofID)
 		if imported {
-			if len(nodes) != 3 || i != 1 || nodes[len(nodes)-1].Mode != "shadowsocks" {
-				return nil, errors.New("imported ordered member requires exactly one middle between a paired physical entry and paired SS2022 final")
+			middle, bounded := 1, len(nodes) == 3
+			if openVPN {
+				middle = len(nodes) - 2
+				bounded = len(nodes) >= 3 && len(nodes) <= common.MultihopMaximumNodes
+			}
+			if !bounded || i != middle || nodes[len(nodes)-1].Mode != "shadowsocks" {
+				return nil, errors.New("imported ordered member requires its captured placement before a paired SS2022 final")
 			}
 		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) || i == len(nodes)-1 && !desktopNodeChainFinalSupported(selected.Mode, profile.StartLayer) {
 			return nil, errors.New("ordered selection requires paired WireGuard or AWG2 prefixes and a paired SS2022 or unlayered Hysteria2 final")

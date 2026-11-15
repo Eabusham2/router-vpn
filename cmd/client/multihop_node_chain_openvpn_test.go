@@ -15,12 +15,16 @@ import (
 
 func installDesktopOrderedOpenVPN(t *testing.T, a *app, nodes []common.MultihopNodeSelection, network string) {
 	t.Helper()
+	if len(nodes) < 3 || len(nodes) > common.MultihopMaximumNodes || len(a.profiles.Profiles) != len(nodes) {
+		t.Fatal("OpenVPN fixture requires its complete original paired inventory")
+	}
+	middle, final := len(nodes)-2, len(nodes)-1
 	p := desktopImportedOpenVPNProfileFixture(t, network)
-	p.ID, p.Name, p.StartLayer = nodes[1].ID, "Original ordered OpenVPN middle", "off"
+	p.ID, p.Name, p.StartLayer = nodes[middle].ID, "Original ordered OpenVPN middle", "off"
 	p.MTUPolicy, p.ManualMTU = "manual", 1500
-	a.profiles.Profiles[1] = p
-	nodes[1].Mode = "openvpn"
-	a.profiles.Profiles[2].MultihopNodes = append([]common.MultihopNodeSelection(nil), nodes...)
+	a.profiles.Profiles[middle] = p
+	nodes[middle].Mode = "openvpn"
+	a.profiles.Profiles[final].MultihopNodes = append([]common.MultihopNodeSelection(nil), nodes...)
 }
 
 func TestDesktopOrderedOpenVPNOriginalCaptureAndPhysicalOwner(t *testing.T) {

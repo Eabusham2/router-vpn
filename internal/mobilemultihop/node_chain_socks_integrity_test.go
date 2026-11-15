@@ -200,6 +200,8 @@ func TestNodeChainSOCKSIntegrityConcurrentReadbackOwnsCopies(t *testing.T) {
 }
 
 func TestNodeChainSOCKSIntegrityFieldInventory(t *testing.T) {
+	// openVPNOwners seals schema-five pointers only. SOCKS never has an
+	// OpenVPN member and cannot borrow this receipt as transport authority.
 	// New compiler fields require an explicit integrity review, rather than a
 	// silently incomplete future snapshot. Runtime state remains observed by
 	// the original engine; it is deliberately outside source integrity.
@@ -208,7 +210,7 @@ func TestNodeChainSOCKSIntegrityFieldInventory(t *testing.T) {
 		fields string
 	}{
 		{NodeChainSOCKSSource{}, "sourceJSON config seal pair middle metadata desktop integrity"},
-		{NodeChain{}, "sourceJSON sourceSHA config metadata seal nodes importedMiddle openVPNMiddle socksSource connectSource proofs dns physical runtime originalConfigSHA projection"},
+		{NodeChain{}, "sourceJSON sourceSHA config metadata seal nodes importedMiddle openVPNMiddle openVPNOwners socksSource connectSource proofs dns physical runtime originalConfigSHA projection"},
 		{NodeProfile{}, "config source metadata mode profile inputs desktopSeal"},
 		{nodeChainSOCKSMember{}, "input source seal selection policy"},
 		{ExternalPolicy{}, "config metadata source capture desktopSeal"},

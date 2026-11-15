@@ -94,7 +94,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			}
 			count, middle := len(record.NodeChain), 1
 			bounded := count == 3
-			if captured.Mode == "socks5" || captured.Mode == "http-connect" || captured.Mode == "https-connect" {
+			if captured.Mode == "socks5" || captured.Mode == "http-connect" || captured.Mode == "https-connect" || captured.Mode == "openvpn" {
 				bounded = count >= 3 && count <= 8
 				middle = count - 2
 			}

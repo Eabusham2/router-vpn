@@ -30,7 +30,7 @@ struct IOSNodeChainDraft {
     mutating func chooseMode(_ mode: String, at position: Int) throws {
         guard nodes.indices.contains(position), position < nodes.count - 1,
               (IOSMultihopNodeSelection.supportsNativePrefix(mode) || IOSMultihopNodeSelection.supportsImportedMiddle(mode, position: position, count: nodes.count)) else {
-            throw IOSMultihopNodeSelection.issue("Choose WireGuard or AWG2 for a paired node. SOCKS5 or HTTP/HTTPS CONNECT can follow one to six paired prefixes before a Shadowsocks final; other supported imported middles require three nodes.")
+            throw IOSMultihopNodeSelection.issue("Choose WireGuard or AWG2 for a paired node. SOCKS5, HTTP/HTTPS CONNECT or OpenVPN can follow one to six paired prefixes before a Shadowsocks final; other supported imported middles require three nodes.")
         }
         nodes[position].mode = mode
     }
@@ -39,7 +39,7 @@ struct IOSNodeChainDraft {
         guard nodes.count < IOSMultihopNodeSelection.maximumNodes else {
             throw IOSMultihopNodeSelection.issue("An ordered route supports at most eight nodes.")
         }
-        let beforeCONNECT = nodes.count >= 3 && ["socks5", "http-connect", "https-connect"].contains(nodes[nodes.count - 2].mode)
+        let beforeCONNECT = nodes.count >= 3 && ["socks5", "http-connect", "https-connect", "openvpn"].contains(nodes[nodes.count - 2].mode)
         nodes.insert(.init(id: "", mode: "wg"), at: nodes.count - (beforeCONNECT ? 2 : 1))
     }
 

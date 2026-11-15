@@ -234,7 +234,7 @@ static int model_only(void) {
 static void connect_model_only(void) {
     const char *protocols[]={"http-connect","https-connect","openvpn","socks5"}, *prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint p=0;p<G_N_ELEMENTS(protocols);p++)for(guint prefix=0;prefix<G_N_ELEMENTS(prefixes);prefix++){
-        for(guint count=3;count<=(p==2?3:8);count++){
+        for(guint count=3;count<=8;count++){
         guint middle_index=count-2;
         JsonArray *nodes=json_array_new(), *profiles=json_array_new();JsonObject *store=json_object_new(), *tokens=json_object_new();
         for(guint i=0;i<count;i++){
@@ -274,10 +274,10 @@ static void connect_model_only(void) {
         json_object_set_string_member(last,"mode","hysteria2");check(!linux_ordered_rows_v1(nodes,"exit"),"CONNECT source model granted unsupported final");json_object_set_string_member(last,"mode","shadowsocks");
         if(count>3){
             JsonObject *typed=json_array_get_object_element(nodes,middle_index);
-            const char *bounded[]={"shadowsocks","openvpn"};
+            const char *bounded[]={"shadowsocks"};
             for(guint j=0;j<G_N_ELEMENTS(bounded);j++){
                 json_object_set_string_member(typed,"mode",bounded[j]);
-                check(!linux_ordered_rows_v1(nodes,"exit"),"SS/OpenVPN imported family retained exact three-node bound");
+                check(!linux_ordered_rows_v1(nodes,"exit"),"SS imported family retained exact three-node bound");
             }
             json_object_set_string_member(typed,"mode",protocols[p]);
         }
@@ -347,7 +347,7 @@ int main(int argc,char **argv) {
     g_free(socks_saved);
     const char *connect_protocols[]={"http-connect","https-connect","openvpn","socks5"}, *connect_prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint protocol_index=0;protocol_index<G_N_ELEMENTS(connect_protocols);protocol_index++)for(guint prefix_index=0;prefix_index<G_N_ELEMENTS(connect_prefixes);prefix_index++){
-        for(connect_editor_count=3;connect_editor_count<=(protocol_index==2?3:8);connect_editor_count++){
+        for(connect_editor_count=3;connect_editor_count<=8;connect_editor_count++){
         connect_editor_protocol=connect_protocols[protocol_index];connect_editor_prefix=connect_prefixes[prefix_index];
         json_object_set_string_member(external,"protocol",connect_editor_protocol);json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);
         refresh_all(&app);edit(10,TRUE);

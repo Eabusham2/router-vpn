@@ -23,9 +23,9 @@ from unittest import mock
 
 REPOSITORY = "Eabusham2/router-vpn"
 WORKFLOW_REF = "refs/heads/main"
-# Encrypted CONNECT acceptance runs only from the already-published validator
-# commit. It does not expand any existing single-parent candidate allowlist.
-PUBLISHED_ONLY_SUITES = frozenset({"connect-run", "connect-native-mtu", "desktop-connect-child"})
+# Encrypted CONNECT and OpenVPN prefix acceptance run only from the published
+# validator commit. They do not expand existing single-parent allowlists.
+PUBLISHED_ONLY_SUITES = frozenset({"connect-run", "connect-native-mtu", "desktop-connect-child", "openvpn-prefix-native"})
 HEX40 = re.compile(r"[0-9a-f]{40}")
 ALLOWLISTS = {
     "socks-preclose": frozenset({

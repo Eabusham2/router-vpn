@@ -65,6 +65,9 @@ func (c *NodeChain) NewHopMeasurementContext(ctx context.Context, owner NodeChai
 	if c.socksSource != nil {
 		return hopmeasure.NewOrderedSOCKSPrefixContext(ctx, engine, hops)
 	}
+	if c.openVPNMiddle != nil {
+		return hopmeasure.NewOrderedOpenVPNPrefixContext(ctx, engine, hops)
+	}
 	if c.hasImportedMiddle() {
 		return hopmeasure.NewOrderedImportedMiddleContext(ctx, engine, hops)
 	}
@@ -177,7 +180,7 @@ func (c *NodeChain) PublicMeasurementCapture() (tag string, ipv6 bool, err error
 		} else {
 			profile = c.importedMiddle.selection.Profile
 		}
-		if position != 1 {
+		if position != c.importedMiddlePosition() {
 			profile = node.profile
 		}
 		mode, _, policyErr := externalDevicePolicy(profile)
@@ -186,5 +189,5 @@ func (c *NodeChain) PublicMeasurementCapture() (tag string, ipv6 bool, err error
 		}
 		ipv6 = ipv6 && mode != "off"
 	}
-	return c.proofs[1].Tag, ipv6, nil
+	return c.proofs[c.importedMiddlePosition()].Tag, ipv6, nil
 }

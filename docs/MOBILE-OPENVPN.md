@@ -50,6 +50,39 @@ UDP OpenVPN reserves a conservative 160 bytes for supported encryption/framing
 and IPv6/UDP overhead. An oversized fixed inner MTU is rejected. These are
 configuration bounds, not an Auto-MTU measurement of an external provider.
 
+## Ordered Local intermediate paths
+
+The distinct schema-five ordered path accepts one saved OpenVPN intermediate
+after one to six original paired WireGuard or AWG Fast/Strong prefixes and
+before an original paired Shadowsocks 2022 final. This gives three to eight
+members. Android and iOS retain the same owned system VPN service or extension;
+the OpenVPN endpoint runs inside that captured graph. Desktop capture and
+native launch use the same complete source, identities and policy compiler.
+
+The intermediate retains one literal TCP or UDP remote, its private inline
+profile and credentials, and Start Layer Off. Paired members retain their own
+Start Layers and protection settings. Every earlier paired member stays in
+the source inventory; the OpenVPN endpoint detours through the last paired
+prefix. Only the first paired node grants physical network permission, and
+application DNS remains selected and proved through the paired final node.
+
+Before connection or later proof/measurement can succeed, the original native
+OpenVPN endpoint must report the captured remote, connected generation and
+packet capacity. Reconnects or replacement objects cannot borrow a previous
+receipt. MTU limits include every preceding member, and cancellation joins
+the original endpoint and prefix owners. Complete saved profiles retain node
+references without copying the imported credentials; startup and measurement
+capture the actual intermediate position.
+
+This extension preserves the original three-member path. It does not add
+Server or Compare execution for this ordered family, multiple imported
+intermediates, arbitrary intermediate positions or broader provider-profile
+compatibility. Those requested combinations retain their separate remaining
+requirements. The encrypted prefix release gate covers each position of
+four- and eight-member TCP/UDP graphs for all three paired transports. Its
+component network evidence is distinct from installed OS policy, physical
+device, signing and deployment acceptance.
+
 ## Executable evidence
 
 `go test -race ./mobile` executes parser acceptance, rejection and fuzz seed

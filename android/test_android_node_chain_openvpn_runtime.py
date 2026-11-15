@@ -13,14 +13,15 @@ import test_android_node_chain_runtime as R
 ROOT=R.ROOT
 SOURCES=dict(R.SOURCES)
 a='selected.add(i==count-1?finalMode:prefixMode);'
-b='selected.add(i==count-1?finalMode:i==1?"openvpn":prefixMode);'
+b='selected.add(i==count-1?finalMode:i==count-2?"openvpn":prefixMode);'
 assert SOURCES[R.APP+'AndroidNodeStore.java'].count(a)==1
 SOURCES[R.APP+'AndroidNodeStore.java']=SOURCES[R.APP+'AndroidNodeStore.java'].replace(a,b,1)
 HARNESS=R.HARNESS[:R.HARNESS.index(' public static void main(String[] args)throws Exception {')]+r'''
- static void openVPN()throws Exception {
-  for(String mode:List.of("wg","awg2-fast","awg2-strong"))try(Fixture f=new Fixture(3,mode,"shadowsocks")){
+ static void openVPN(int count)throws Exception {
+  for(String mode:List.of("wg","awg2-fast","awg2-strong"))try(Fixture f=new Fixture(count,mode,"shadowsocks")){
    f.connected();AndroidNodeChainSession original=f.owner();RouterNodeChain plan=original.capture.plan;
-   check(f.runtime.activeModes().equals(List.of(mode,"openvpn","shadowsocks")),"OpenVPN host reordered original modes");
+   java.util.ArrayList<String> expected=new java.util.ArrayList<>();for(int i=0;i<count-2;i++)expected.add(mode);expected.add("openvpn");expected.add("shadowsocks");
+   check(f.runtime.activeModes().equals(expected),"OpenVPN host reordered original modes");
    check(plan.runs==1&&Libbox.mtuPlan==plan&&Libbox.mtuServer==plan.server,"OpenVPN proof/MTU used another original owner");
    var restore=f.runtime.captureRestore();plan.failCloses=Integer.MAX_VALUE;
    check(!f.runtime.stopAndProve()&&!original.released()&&original.directory.exists(),"OpenVPN failed shared join discarded original source");
@@ -43,7 +44,7 @@ HARNESS=R.HARNESS[:R.HARNESS.index(' public static void main(String[] args)throw
    reject(original::requireCurrent,"OpenVPN changed source retained host authority");f.stop();
   }
  }
- public static void main(String[] args)throws Exception {openVPN();System.out.println("Android OpenVPN middle owner: "+checks+" checks PASS; native generation/OS boundaries doubled");}
+ public static void main(String[] args)throws Exception {int count=args.length==0?3:Integer.parseInt(args[0]);if(count!=3&&count!=4&&count!=8)throw new AssertionError("uncaptured OpenVPN member count");openVPN(count);System.out.println("Android OpenVPN middle owner count="+count+": "+checks+" checks PASS; native generation/OS boundaries doubled");}
 }'''
 
 def main():
@@ -56,7 +57,8 @@ def main():
         for name in names:(src/R.APP/(name+'.java')).write_text((R.JAVA/(name+'.java')).read_text())
         (src/R.APP/'OrderedRuntimeTest.java').write_text(HARNESS)
         subprocess.run(['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(classes),*map(str,src.rglob('*.java'))],check=True,timeout=60)
-        subprocess.run(['java','-cp',os.pathsep.join((str(classes),str(jar))),'com.eabusham.routervpn.OrderedRuntimeTest'],check=True,timeout=90)
+        for count in (3,4,8):
+            subprocess.run(['java','-cp',os.pathsep.join((str(classes),str(jar))),'com.eabusham.routervpn.OrderedRuntimeTest',str(count)],check=True,timeout=90)
         original=(R.JAVA/'AndroidNodeChainSession.java').read_text()
         guard='capture.close(); proofClosed = true;'
         assert original.count(guard)==1

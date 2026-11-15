@@ -181,12 +181,14 @@ func TestNodeChainCONNECTIntegrityFieldInventory(t *testing.T) {
 	// New compiler fields require an explicit integrity review, rather than a
 	// silently incomplete future snapshot. Runtime state remains observed by
 	// the original engine; it is deliberately outside source integrity.
+	// openVPNOwners is a private schema-five pointer receipt. CONNECT has no
+	// OpenVPN member and cannot consume this receipt as transport authority.
 	values := []struct {
 		value  any
 		fields string
 	}{
 		{NodeChainCONNECTSource{}, "sourceJSON config seal pair middle metadata desktop integrity"},
-		{NodeChain{}, "sourceJSON sourceSHA config metadata seal nodes importedMiddle openVPNMiddle socksSource connectSource proofs dns physical runtime originalConfigSHA projection"},
+		{NodeChain{}, "sourceJSON sourceSHA config metadata seal nodes importedMiddle openVPNMiddle openVPNOwners socksSource connectSource proofs dns physical runtime originalConfigSHA projection"},
 		{NodeProfile{}, "config source metadata mode profile inputs desktopSeal"},
 		{nodeChainCONNECTMember{}, "input source seal selection policy"},
 		{ExternalPolicy{}, "config metadata source capture desktopSeal"},

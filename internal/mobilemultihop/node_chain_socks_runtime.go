@@ -110,13 +110,13 @@ func (c *NodeChain) hasImportedMiddle() bool {
 	return c != nil && (c.importedMiddle != nil || c.openVPNMiddle != nil || c.socksSource != nil || c.connectSource != nil)
 }
 
-// Typed SOCKS and CONNECT sources admit a retained packet prefix. Other
-// imported families retain their existing single-middle position.
+// Typed SOCKS, CONNECT and schema-five OpenVPN retain a packet prefix.
+// Schema-two imported SS retains its original single-middle position.
 func (c *NodeChain) importedMiddlePosition() int {
 	if c == nil || !c.hasImportedMiddle() {
 		return -1
 	}
-	if c.connectSource != nil || c.socksSource != nil {
+	if c.connectSource != nil || c.socksSource != nil || c.openVPNMiddle != nil {
 		return len(c.nodes) - 2
 	}
 	return 1

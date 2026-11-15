@@ -44,7 +44,7 @@ func newNodeChainTestEngine(t *testing.T, chain *NodeChain) *nodeChainTestEngine
 		chain: chain, peers: map[string]string{}, expected: map[string]string{}, wrong: -1, dead: -1, publicBody: "ip=203.0.113.88\n"}
 	for position, proof := range chain.ProofInventory() {
 		node := chain.nodes[position]
-		if node == nil && position == 1 && chain.hasImportedMiddle() {
+		if node == nil && position == chain.importedMiddlePosition() && chain.hasImportedMiddle() {
 			continue
 		}
 		api, _ := url.Parse(predecessorText(node.profile, "router_api"))
@@ -122,7 +122,7 @@ func (e *nodeChainTestEngine) Dial(ctx context.Context, tag, address string) (ne
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	peer := e.peers[tag]
-	if (tag == e.chain.FinalTag() || e.chain.hasImportedMiddle() && tag == e.chain.proofs[1].Tag) && address == "1.1.1.1:443" {
+	if (tag == e.chain.FinalTag() || e.chain.hasImportedMiddle() && tag == e.chain.proofs[e.chain.importedMiddlePosition()].Tag) && address == "1.1.1.1:443" {
 		peer = e.publicPeer
 	} else if e.expected[tag] != address {
 		return nil, errors.New("foreign prefix destination")

@@ -18,7 +18,33 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 	if meta.TargetOS != target || len(meta.Prefixes) < 2 || len(meta.Prefixes) > mobilemultihop.NodeChainMaximumNodes {
 		return false
 	}
+	chain := policy.NodeChain()
+	if chain == nil {
+		return false
+	}
+	middle, err := chain.OpenVPNMiddleCapture()
+	if err != nil {
+		return false
+	}
+	publicTag, _, err := chain.PublicMeasurementCapture()
+	if err != nil {
+		return false
+	}
+	captured := chain.ProofInventory()
+	if len(captured) != len(meta.Prefixes) {
+		return false
+	}
 	for position, prefix := range meta.Prefixes {
+		if publicTag != "" && position == len(meta.Prefixes)-2 {
+			openVPN := middle.Tag != "" && middle.Tag == publicTag && prefix.Mode == "openvpn" && prefix.SourceSHA256 == middle.SourceSHA256
+			importedSS := middle.Tag == "" && len(meta.Prefixes) == 3 && position == 1 && prefix.Mode == "shadowsocks"
+			if (!openVPN && !importedSS) || meta.Prefixes[len(meta.Prefixes)-1].Mode != "shadowsocks" ||
+				prefix.Tag != publicTag || prefix.SourceSHA256 != captured[position].SourceSHA256 || prefix.Position != position ||
+				prefix.StartLayer != "off" || prefix.Kind != "public-path" || prefix.NodeKind != "external" || prefix.NodeID != "" {
+				return false
+			}
+			continue
+		}
 		modeSupported := mobilemultihop.NodeChainPrefixMode(prefix.Mode)
 		if position == len(meta.Prefixes)-1 {
 			modeSupported = prefix.Mode == "shadowsocks" ||

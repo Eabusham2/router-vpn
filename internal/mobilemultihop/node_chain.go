@@ -85,6 +85,7 @@ type NodeChain struct {
 	nodes                                         []*NodeProfile
 	importedMiddle                                *nodeChainImportedMember
 	openVPNMiddle                                 *nodeChainOpenVPNMember
+	openVPNOwners                                 *nodeChainOpenVPNOwners
 	socksSource                                   *NodeChainSOCKSSource
 	connectSource                                 *NodeChainCONNECTSource
 	proofs                                        []NodeChainProof
@@ -104,8 +105,18 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		len(source.Nodes) < 2 || len(source.Nodes) > NodeChainMaximumNodes {
 		return nil, nodeChainError
 	}
-	if (source.Schema == 2 || source.Schema == 5) && (len(source.Nodes) != 3 || len(source.IdentitySources) != 3 || source.IdentitySources[0] == "" || source.IdentitySources[1] != "" || source.IdentitySources[2] == "") {
+	if source.Schema == 2 && (len(source.Nodes) != 3 || len(source.IdentitySources) != 3 || source.IdentitySources[0] == "" || source.IdentitySources[1] != "" || source.IdentitySources[2] == "") {
 		return nil, nodeChainError
+	}
+	if source.Schema == 5 {
+		if len(source.Nodes) < 3 || len(source.IdentitySources) != len(source.Nodes) {
+			return nil, nodeChainError
+		}
+		for i, identity := range source.IdentitySources {
+			if (identity == "") != (i == len(source.Nodes)-2) {
+				return nil, nodeChainError
+			}
+		}
 	}
 	if len(source.IdentitySources) != 0 && len(source.IdentitySources) != len(source.Nodes) {
 		return nil, nodeChainError
@@ -120,7 +131,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	clear(digest)
 	ids, peers, clients, servers := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for position, input := range source.Nodes {
-		if source.Schema == 5 && position == 1 {
+		if source.Schema == 5 && position == len(source.Nodes)-2 {
 			middle, err := parseNodeChainOpenVPNMember(input)
 			if err != nil || ids[middle.id()] {
 				return nil, nodeChainOpenVPNSourceError
@@ -199,6 +210,9 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		return nil, err
 	}
 	c.seal = c.captureSeal()
+	if c.openVPNMiddle != nil {
+		c.openVPNOwners = &nodeChainOpenVPNOwners{owner: c, middle: c.openVPNMiddle, nodes: append([]*NodeProfile(nil), c.nodes...)}
+	}
 	if _, err := c.LaunchInput(); err != nil {
 		return nil, err
 	}
@@ -298,7 +312,7 @@ func (c *NodeChain) validateCapture() error {
 	}
 	if c.openVPNMiddle != nil {
 		var source NodeChainSource
-		if c.importedMiddle != nil || c.socksSource != nil || c.connectSource != nil || exactJSON([]byte(c.sourceJSON), &source, NodeChainInputLimit) != nil || source.Schema != 5 || len(source.Nodes) != 3 || source.Nodes[1] != c.openVPNMiddle.input {
+		if c.importedMiddle != nil || c.socksSource != nil || c.connectSource != nil || exactJSON([]byte(c.sourceJSON), &source, NodeChainInputLimit) != nil || source.Schema != 5 || len(source.Nodes) < 3 || len(source.Nodes) > NodeChainMaximumNodes || len(source.Nodes) != len(c.nodes) || source.Nodes[len(source.Nodes)-2] != c.openVPNMiddle.input || !c.openVPNOwners.current(c) {
 			return nodeChainError
 		}
 	}
@@ -307,9 +321,9 @@ func (c *NodeChain) validateCapture() error {
 		if (c.socksSource != nil || c.connectSource != nil) && position == len(c.nodes)-2 {
 			continue // The exact source, nil middle and complete proof inventory were validated above.
 		}
-		if position == 1 && c.openVPNMiddle != nil {
+		if position == len(c.nodes)-2 && c.openVPNMiddle != nil {
 			m := c.openVPNMiddle
-			if node != nil || m.validate() != nil || proof.Position != 1 || proof.ProfileID != m.id() || proof.SourceSHA256 != m.source || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "openvpn" || proof.StartLayer != "off" {
+			if node != nil || m.validate() != nil || proof.Position != position || proof.ProfileID != m.id() || proof.SourceSHA256 != m.source || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "openvpn" || proof.StartLayer != "off" {
 				return nodeChainError
 			}
 			continue

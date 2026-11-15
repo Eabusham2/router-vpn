@@ -48,6 +48,7 @@ TEMPLATES = {
     'box.go.tmpl': 'routervpn_node_chain.go',
     'openvpn_box.go.tmpl': 'routervpn_node_chain_openvpn.go',
     'openvpn_box_test.go.tmpl': 'routervpn_node_chain_openvpn_test.go',
+    'openvpn_prefix_box_test.go.tmpl': 'routervpn_node_chain_openvpn_prefix_test.go',
     'box_test.go.tmpl': 'routervpn_node_chain_test.go',
     'network_context.go.tmpl': 'route/routervpn_node_chain.go',
     'network_context_test.go.tmpl': 'route/routervpn_node_chain_test.go',

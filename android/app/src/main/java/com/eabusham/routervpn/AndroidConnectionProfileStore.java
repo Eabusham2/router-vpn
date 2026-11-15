@@ -398,7 +398,7 @@ final class AndroidConnectionProfileStore {
         for(int i=0;i<members.length();i++) {
             JSONObject member=members.getJSONObject(i);
             if("external".equals(member.optString("node_kind"))) {
-                boolean variablePrefix=java.util.Arrays.asList("socks5","http-connect","https-connect").contains(member.getString("mode"));
+                boolean variablePrefix=java.util.Arrays.asList("socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"));
                 if(member.length()!=6||members.length()<3||i!=members.length()-2||!variablePrefix&&members.length()!=3||!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"))||!member.getString("id").equals(member.getString("node_id"))
                         ||!member.getString("id").matches("[A-Za-z0-9_-]{1,64}")||!local.add(member.getString("node_id"))||!(member.get("expected_public_ip") instanceof String))throw new IllegalStateException("A saved imported node requires its original middle position and external identity.");
                 String mode=member.getString("mode"),protocol="http-connect".equals(mode)?"http":"https-connect".equals(mode)?"https":mode;

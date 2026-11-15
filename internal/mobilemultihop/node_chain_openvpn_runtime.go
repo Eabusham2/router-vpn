@@ -37,7 +37,7 @@ func (c *NodeChain) OpenVPNMiddleCapture() (NodeChainOpenVPNCapture, error) {
 	ends, _ := graph["endpoints"].([]any)
 	for _, raw := range ends {
 		endpoint, ok := raw.(map[string]any)
-		if !ok || endpoint["tag"] != c.proofs[1].Tag {
+		if !ok || endpoint["tag"] != c.proofs[c.importedMiddlePosition()].Tag {
 			continue
 		}
 		remotes, err := nativeopenvpn.Remotes(endpoint)
@@ -45,7 +45,7 @@ func (c *NodeChain) OpenVPNMiddleCapture() (NodeChainOpenVPNCapture, error) {
 		if err != nil || len(remotes) != 1 || !ok || mtu < 1280 || mtu > 65535 || mtu != float64(int(mtu)) {
 			return empty, nodeChainError
 		}
-		return NodeChainOpenVPNCapture{c.proofs[1].Tag, c.openVPNMiddle.source, remotes[0], int(mtu)}, nil
+		return NodeChainOpenVPNCapture{c.proofs[c.importedMiddlePosition()].Tag, c.openVPNMiddle.source, remotes[0], int(mtu)}, nil
 	}
 	return empty, nodeChainError
 }

@@ -213,6 +213,25 @@ func NewOrderedSOCKSPrefixContext(ctx context.Context, engine Engine, hops []Hop
 	return newContext(ctx, engine, hops, true, true, false)
 }
 
+// NewOrderedOpenVPNPrefixContext retains one public penultimate hop after a
+// complete private packet prefix. The caller separately binds every tag to its
+// original schema-five OpenVPN source; other imported constructors keep their bounds.
+func NewOrderedOpenVPNPrefixContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	if len(hops) < 3 || len(hops) > 8 {
+		return nil, errors.New("ordered OpenVPN measurement requires its complete captured prefix")
+	}
+	for i, hop := range hops {
+		want := "private-node"
+		if i == len(hops)-2 {
+			want = "public-path"
+		}
+		if hop.Kind != want {
+			return nil, errors.New("ordered OpenVPN measurement changed its original middle position")
+		}
+	}
+	return newContext(ctx, engine, hops, true, true, false)
+}
+
 func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, importedMiddle bool, serverOrdered bool) (*Service, error) {
 	if engine == nil || len(hops) < 1 || len(hops) > 8 {
 		return nil, errors.New("a captured native path is required")

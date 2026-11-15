@@ -42,8 +42,8 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             "seen.insert(node.id).inserted", "nodes.last?.id != controlID")),
         ("models", "bounded imported position", "static func supportsImportedMiddle(", "static func transportName(", (
             'guard (3...maximumNodes).contains(count), position == count - 2 else { return false }',
-            'if ["socks5", "http-connect", "https-connect"].contains(mode) { return true }',
-            'return count == 3 && ["shadowsocks", "openvpn"].contains(mode)')),
+            'if ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode) { return true }',
+            'return count == 3 && mode == "shadowsocks"')),
         ("profiles", "all-member snapshot", "static func snapshot(", "static func add(", (
             "let members = try model.iosNodeChainBundles(for: source)", "record.chainPolicies = try members.map",
             "nodeProofID: profile.nodeProofID", "preferences: try capturePreferences(profile)")),
@@ -328,8 +328,8 @@ if not ordered_issues:
         ("profiles", "data == original, capture.preferences == saved.preferences", "data == original"),
         ("capture", "IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)", "true"),
         ("models", "guard (3...maximumNodes).contains(count), position == count - 2 else { return false }", "guard count >= 3 else { return false }"),
-        ("models", 'if ["socks5", "http-connect", "https-connect"].contains(mode) { return true }', 'if mode != "" { return true }'),
-        ("models", 'return count == 3 && ["shadowsocks", "openvpn"].contains(mode)', 'return ["shadowsocks", "openvpn"].contains(mode)'),
+        ("models", 'if ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode) { return true }', 'if mode != "" { return true }'),
+        ("models", 'return count == 3 && mode == "shadowsocks"', 'return mode == "shadowsocks"'),
         ("capture", "IOSImportedShadowsocksSource.eligible(profile)", "true"),
         ("store", "replacement.updated.profiles == original.profiles", "true"),
         ("store", "guard records == originalRecords", "guard true"),

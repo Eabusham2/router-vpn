@@ -435,20 +435,24 @@ public final class NodeChainCaptureHarness {
 
 
  static void openVPNMiddle(Path root)throws Exception{
-  for(String key:List.of("2/","2/awg-fast","2/awg-strong"))for(String network:List.of("tcp","udp")){
+  for(String key:List.of("2/","2/awg-fast","2/awg-strong","3/","7/"))for(String network:List.of("tcp","udp")){
    Fixture f=new Fixture(root,key);AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);
    var custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Original OpenVPN middle";custom.protocol="openvpn";
    custom.server="203.0.113.20";custom.serverPort=1194;custom.expectedPublicIp="203.0.113.88";custom.username=" exact user ";custom.password=" exact secret ";
    custom.openVPNConfig="client\ndev tun\nproto "+network+"\nremote 203.0.113.20 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+"ab".repeat(32)+"\ntun-mtu 1400\ndata-ciphers AES-256-GCM:AES-128-GCM\n";
    custom.policy.put("dns_mode","rescue").put("start_layer","off").put("home_lan_access",false).put("kill_switch_policy","always");AndroidNodeStore.ChainSource.requireImported(custom);exits.save(custom);
    AndroidOrderedPathSelection editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+   int middlePosition=editor.members().size()-1,total=editor.members().size()+1;
    check(editor.prefixModes(custom.id).equals(List.of("openvpn")),"original OpenVPN source not offered with exact mode");editor.addPrefix(custom.id,"openvpn");
-   reject(()->editor.movePrefix(1,0),"OpenVPN middle became physical first");
+   reject(()->editor.movePrefix(middlePosition,0),"OpenVPN middle became physical first");
+   for(String execution:List.of("server","auto"))reject(()->editor.setExecution(execution),"OpenVPN borrowed unsupported execution");
    AndroidNodeStore.ChainCapture saved=editor.save();
    try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(saved)){
-    JSONObject launch=new JSONObject(capture.launchInput),member=new JSONObject(capture.memberInputs.get(1));
+    JSONObject launch=new JSONObject(capture.launchInput),member=new JSONObject(capture.memberInputs.get(middlePosition));
+    check(capture.memberInputs.size()==total&&capture.identityInputs.size()==total,"OpenVPN lost complete prefix source inventory");
+    for(int position=0;position<total;position++)check(capture.identityInputs.get(position).isEmpty()==(position==middlePosition),"OpenVPN changed original paired identity position");
     check(capture.plan!=null&&capture.socks==null&&capture.connect==null&&launch.getInt("schema")==5,"OpenVPN lost schema5 original generic owner");
-    check(member.getString("kind").equals("routervpn-node-chain-openvpn-member")&&capture.identityInputs.get(1).isEmpty(),"OpenVPN borrowed paired identity");
+    check(member.getString("kind").equals("routervpn-node-chain-openvpn-member")&&capture.identityInputs.get(middlePosition).isEmpty(),"OpenVPN borrowed paired identity");
     JSONObject original=new JSONObject(member.getString("capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("openvpn");
     check(original.getString("config").equals(custom.openVPNConfig)&&original.getString("username").equals(custom.username)&&original.getString("password").equals(custom.password),"OpenVPN changed original credentials or config");
     check(capture.strict&&!capture.homeLANAccess,"OpenVPN changed aggregate saved policy");
@@ -457,7 +461,7 @@ public final class NodeChainCaptureHarness {
    }
    var row=f.profiles.add("Original OpenVPN ordered route");String serialized=Files.readString(f.rows);
    check(!serialized.contains(" exact secret ")&&!serialized.contains("peer-fingerprint"),"OpenVPN saved profile duplicated private source");
-   f.profiles.load(row.id);check(f.profiles.currentOrderedPath().modes.get(1).equals("openvpn")&&f.profiles.currentOrderedPath().members.get(1).external().openVPNConfig.equals(custom.openVPNConfig),"OpenVPN saved route replaced original import");
+   f.profiles.load(row.id);check(f.profiles.currentOrderedPath().modes.get(middlePosition).equals("openvpn")&&f.profiles.currentOrderedPath().members.get(middlePosition).external().openVPNConfig.equals(custom.openVPNConfig),"OpenVPN saved route replaced original import");
    for(String fault:List.of("remote-count","hostname","private-remote","layer")){
     var changed=AndroidStandardExitStore.copy(custom);
     if(fault.equals("remote-count"))changed.openVPNConfig+="remote 203.0.113.21 443\n";

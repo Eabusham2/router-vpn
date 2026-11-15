@@ -204,17 +204,20 @@ func compileNodeChainOpenVPN(nodes []*NodeProfile, middle *nodeChainOpenVPNMembe
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
 	}
-	if len(nodes) != 3 || nodes[0] == nil || nodes[1] != nil || nodes[2] == nil || !NodeChainPrefixMode(nodes[0].mode) || nodes[2].mode != "shadowsocks" || middle.validate() != nil {
+	if len(nodes) < 3 || len(nodes) > NodeChainMaximumNodes || nodes[len(nodes)-2] != nil || nodes[len(nodes)-1] == nil || nodes[len(nodes)-1].mode != "shadowsocks" || middle.validate() != nil {
 		return fail(nodeChainError)
 	}
-	closures := make([]*externalPredecessor, 3)
-	members := make([]nodeChainGraphMember, 3)
+	closures := make([]*externalPredecessor, len(nodes))
+	members := make([]nodeChainGraphMember, len(nodes))
 	for i, node := range nodes {
 		var err error
-		if i == 1 {
+		if i == len(nodes)-2 {
 			closures[i], err = middle.closure()
 			members[i] = nodeChainGraphMember{profile: middle.selection.Profile, source: middle.source, mode: "openvpn", imported: true}
 		} else {
+			if node == nil || (i < len(nodes)-2 && !NodeChainPrefixMode(node.mode)) {
+				return fail(nodeChainError)
+			}
 			closures[i], err = nodeMultihopPredecessor(node)
 			members[i] = nodeChainGraphMember{profile: node.profile, source: node.source, mode: node.mode}
 		}
@@ -225,7 +228,13 @@ func compileNodeChainOpenVPN(nodes []*NodeProfile, middle *nodeChainOpenVPNMembe
 			return fail(nodeChainError)
 		}
 	}
-	if closures[0].final["type"] != nodeChainPrefixType(nodes[0].mode) || (closures[2].final["type"] != "shadowsocks" && closures[2].final["type"] != "routervpn-aes-xor") || closures[2].final["method"] != NativeStartLayerMethod {
+	for i := 0; i < len(nodes)-2; i++ {
+		if closures[i].final["type"] != nodeChainPrefixType(nodes[i].mode) {
+			return fail(nodeChainError)
+		}
+	}
+	final := closures[len(nodes)-1].final
+	if (final["type"] != "shadowsocks" && final["type"] != "routervpn-aes-xor") || final["method"] != NativeStartLayerMethod {
 		return fail(nodeChainError)
 	}
 	physical, err := nodes[0].PhysicalEgress()

@@ -21,7 +21,7 @@ enum RouterVPNOrderedNodes {
         return layer.isEmpty || layer == "off"
     }
     static func importedPosition(_ mode: String, position: Int, count: Int) -> Bool {
-        if ["socks5", "http-connect", "https-connect"].contains(mode) {
+        if ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode) {
             return (3...8).contains(count) && position == count - 2
         }
         return count == 3 && position == 1

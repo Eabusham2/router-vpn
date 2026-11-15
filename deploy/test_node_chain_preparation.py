@@ -418,5 +418,44 @@ class NodeChainPreparation(unittest.TestCase):
                 require_selected(changed)
 
 
+class OpenVPNPrefixProjection(unittest.TestCase):
+    def test_exact_component_sources_and_original_clock_bounds(self):
+        template = 'openvpn_prefix_box_test.go.tmpl'
+        target = 'routervpn_node_chain_openvpn_prefix_test.go'
+        self.assertEqual(PREP.TEMPLATES.get(template), target)
+        self.assertEqual(list(PREP.TEMPLATES.values()).count(target), 1)
+        spec = importlib.util.spec_from_file_location('openvpn_prefix_desktop_prep', ROOT/'deploy/prepare-desktop-external.py')
+        desktop = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(desktop)
+        physical = 'node_chain_openvpn_box_physical_test.go.tmpl'
+        physical_target = 'routervpn_desktop_node_chain_openvpn_box_physical_test.go'
+        self.assertNotIn(physical, PREP.TEMPLATES)
+        self.assertEqual(desktop.BOX_TEMPLATES.get(physical), physical_target)
+        self.assertEqual(list(desktop.BOX_TEMPLATES.values()).count(physical_target), 1)
+        common = (ROOT/'mobile/chain'/template).read_text()
+        self.assertNotIn('routerVPNDesktopNodeChainPhysicalTarget', common)
+        self.assertNotIn('TestRouterVPNNodeChainOpenVPNPrefixPhysicalTarget', common)
+        self.assertNotIn('TestRouterVPNNodeChainOriginalImportedSSPhysicalTarget', common)
+        self.assertIn('TestRouterVPNNodeChainOpenVPNPrefixMTUOriginalEndpoint', common)
+        physical_source = (ROOT/'mobile/desktop'/physical).read_text()
+        self.assertIn('TestRouterVPNNodeChainOpenVPNPrefixPhysicalTarget', physical_source)
+        self.assertIn('TestRouterVPNNodeChainOriginalImportedSSPhysicalTarget', physical_source)
+        peer = 'node_chain_openvpn_prefix_test.go.tmpl'
+        relative = 'protocol/routervpnamnezia/routervpn_desktop_node_chain_openvpn_prefix_test.go'
+        self.assertEqual(desktop.PEER_TEMPLATES.get(peer), relative)
+        self.assertEqual(list(desktop.PEER_TEMPLATES.values()).count(relative), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            desktop.copy_encrypted_peer_templates(destination)
+            self.assertEqual((destination/relative).read_bytes(), (ROOT/'mobile/desktop'/peer).read_bytes())
+        old = (ROOT/'mobile/desktop/node_chain_openvpn_peer_test.go.tmpl').read_text()
+        new = (ROOT/'mobile/desktop'/peer).read_text()
+        self.assertIn('return nodeChainOpenVPNStartBounded(t, mode, network, fault, 12*time.Second)', old)
+        self.assertIn('nodeChainOpenVPNStartBounded(t, mode, network, "", 45*time.Second)', old)
+        self.assertIn('nodeChainOpenVPNStartPrefixes(t, mode, network, "", 170*time.Second, count)', new)
+        self.assertIn('context.WithTimeout(f.ctx, 5*time.Second)', new)
+        self.assertIn('for position := group * 2; position < group*2+2; position++', new)
+
+
 if __name__ == '__main__':
     unittest.main()

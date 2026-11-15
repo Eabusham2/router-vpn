@@ -1114,7 +1114,7 @@ prove these behaviors merely because a filename or string is present.
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
 | 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and bounded Windows/Linux/macOS single paired Router hosts with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin paired source now includes actual installed parent/child composition; its new native gate has not yet passed at this cutoff. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
-| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT and SOCKS additions below extend those separate typed families to 3–8 members with one penultimate import; imported Shadowsocks and OpenVPN retain their existing trio bounds. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
+| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT and SOCKS additions and the schema-five OpenVPN addition below extend those separate families to 3–8 members with one penultimate import. Imported Shadowsocks retains its existing trio bounds and its separately proved execution capabilities. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |
@@ -1943,3 +1943,130 @@ evidence are retained in `reference-udp-idle-validation`. This is actual
 reference-handler and bounded encrypted component evidence, not kernel or
 device acceptance. The longer OpenVPN source unit, its required release gate,
 and remaining encrypted-path checks continue separately.
+
+
+## Longer Local OpenVPN paths retain the complete original prefix
+
+This unit continues original requirements #214–224, addendum #336 and later
+external/custom-node corrections. Schema five now captures one through six
+original paired WG/AWG Fast/AWG Strong prefixes, one penultimate imported
+OpenVPN member, and the original paired SS2022 final: three through eight
+members. The existing trio remains supported. It retains one literal TCP or
+UDP remote, the original private inline profile and credentials, and Start
+Layer Off at the imported member. Paired members retain their own Start
+Layers and protection. Broader positions, multiple imports, provider-profile
+forms and Server/Compare for this family remain separate source requirements.
+
+All earlier paired sources, canonical private identities, original object
+owners, proof tags, policies and MTU envelopes remain captured. The OpenVPN
+transport detours through the last paired prefix; only the first prefix may
+use physical egress. The paired final owns selected application DNS and its
+private/public proofs. Original endpoint, connected generation and actual
+native packet capacity are required before connection, measurement or MTU
+continuation can report success. An equal replacement object does not inherit
+a captured session's authority.
+
+Desktop and mobile capture/editors, complete saved-profile Add/Load/Update/
+Delete, startup/Last restoration, native launch and measured history use the
+actual middle/final positions. Fixed 1500 values which exceed the complete
+AWG packet envelope remain rejected. New longer positive fixtures explicitly
+capture 1280; no production default or guard was raised to make them pass.
+
+An independent installed-path review also found a real generic Box factory
+mismatch: it refused the existing imported OpenVPN and imported SS trios
+before native host preparation. The repair uses the original sealed capture
+and exact penultimate source/tag/mode, preserving first-only egress and all
+other prefix/final restrictions. The separate macOS baseline repair was
+already published at f9d1ffc3 and is preserved here.
+
+### Source, native-component and release evidence
+
+The actual compound source gate accepted all fourteen attempts in 505.17 seconds:
+201 positive test records and ten intended original-pointer control failures.
+Repeated root records in mode-specific attempts are not separate product
+requirements. All eighty unique desktop original/new test records pass from
+the final Go source, including saved profiles, complete capture, Start Layers
+and fixed-MTU overflow refusals. All twenty-one source identity self-tests
+passed; published acceptance still requires matching source and validator
+commits, and no existing candidate-file allowlist was expanded.
+
+Actual Windows callbacks passed 1,507 checks and ten controls; AppKit callbacks
+passed 7,831 checks and 45 controls; GTK model/include/persistence passed 3,513 checks
+and ten controls. Their portable widget/OS boundaries remain explicit. The
+frozen Android/iOS unit preserves actual capture, store, profile, lifecycle,
+launch, editor, presentation and ordered-measurement source tests and their
+original causal controls. These are not physical-device acceptance results.
+
+The final actual desktop Box image passed all 92 positive records. Restoring
+the exact original physical helper caused all nine OpenVPN OS/count positives
+and all three original SS-trio OS positives to fail at their required
+witnesses: ten and four failed records including roots. These are causal
+factory checks, not nine or three installed-OS acceptance results.
+
+The shared Box MTU tests were separated from desktop-only physical-admission
+tests before final native preparation. A fresh mobile-only pinned composition
+using the shipping iOS preparers, without any desktop factory, compiled and
+executed the new MTU scenarios and original connected-generation test with
+race detection. This prevents a desktop-prepared test tree from masking a
+mobile-only compile failure.
+
+The original WG/UDP trio and representative four/eight-member encrypted
+compositions exercised actual native WG/AWG, OpenVPN and SS owners, selected
+DNS, per-node proof, fifty measurements at each selected position, saved
+history, reconnect refusal and cleanup. The isolated outer engine/session and
+physical-map boundaries remain declared components. These are not installed
+OS policy or arbitrary-provider acceptance.
+
+One AWG Strong/UDP eight-member public/final attempt completed the public
+fifty samples but invalidated the final measurement. Its failure is retained.
+An unchanged-behavior diagnostic rerun passed while proving that seven active
+reference UDP associations expired at exactly thirty seconds with live owners
+and subsequently recreated tuples. This proves an absolute-lifetime fixture
+defect, but does not conclusively attribute the earlier invalidation to it.
+The narrowly scoped reference-forwarder repair was separately published at
+`e807fe003fe79c4c33222131b12fc15c5f4084af`. On the final corrected-helper native
+image, the original trio passed in 28.587 seconds with all 150 measurements;
+the eight-member AWG Strong/UDP public/final group passed in 35.454 seconds
+and again in 37.110 seconds. All five maximum-depth wrong-key, omitted-prefix,
+wrong-imported-password, wrong-final-identity and selected-DNS rejection
+processes passed. All eight final process receipts retain the exact same
+image/source; independent strict parsing verified every required verdict.
+These passes do not uniquely establish the cause of the earlier failure.
+Production clocks and native ownership/generation checks remain unchanged.
+
+The new mandatory release gate retains the original OpenVPN phases and adds
+all six transport combinations, four/eight-member positions, five max-depth
+refusals, exact native source/image receipts, and the compound source/Box
+contracts. Final publication cannot bypass that gate. Exact-SHA CI, native
+packages, devices, signing and private deployment remain distinct evidence.
+
+The complete hosted 36-group long-path matrix plus five maximum-depth
+rejections remains mandatory; the local encrypted evidence is a finite
+representative set. The 19 runner checks preserve exact phase, source/image,
+receipt, original inventory and mandatory prerequisite enforcement. The
+actual UDP lifetime regression is a required step before contract acceptance,
+and both its script and original handler are included in validator identity.
+
+Final combined integration passed all 17 preparation tests, all 21 source
+identity tests, the cross-platform profile-settings audit and workflow
+structure audit. Native input identity contains all ten newly relevant
+workflow/gate/template dependencies, including the corrected UDP fixture;
+its complete input inventory contains 4,037 paths. All 60 feature-owned files
+matched frozen hashes against published e807; the 61st changed file is this
+evidence ledger. The four newer f9/d1 repairs and the published UDP repair
+are preserved. Component logs, source manifests and strict parser receipts
+are retained in `desktop-openvpn-prefix-validation`,
+`mobile-openvpn-prefix-validation`, `openvpn-prefix-validation` and
+`openvpn-prefix-gates-validation`. This source publication is not a claim of
+full requested product completion or an already-green exact-SHA release.
+
+A final cross-family inventory check also updated the existing SOCKS exact
+`NodeChain` field inventory to acknowledge the private schema-five
+`openVPNOwners` receipt. The existing CONNECT inventory already included it.
+Every previous field and mutation remains required; this does not grant
+SOCKS any OpenVPN transport authority. Both actual inventory tests passed
+with race detection in 1.024 seconds. Full Go/Python/template search found
+only these two exact NodeChain inventories. This separate test-only change
+follows the fourteen source attempts; their selected test bodies and all
+production source remain unchanged. Its source and execution evidence are
+retained in `openvpn-field-inventory-validation`.
