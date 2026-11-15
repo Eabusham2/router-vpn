@@ -187,9 +187,23 @@ func TestNodeChainImportedSSPrefixPurposeBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, purpose := range []string{"server", "auto"} {
-				_, err := NewNodeChainExecutionPreparation(startJSON(t, source), purpose)
-				if (err == nil) != (count == 1) {
-					t.Fatal("literal trio execution boundary changed", purpose, count, err)
+				preparation, err := NewNodeChainExecutionPreparation(startJSON(t, source), purpose)
+				if err != nil {
+					t.Fatal("original literal imported prefix execution refused", purpose, count, err)
+				}
+				proofs := preparation.ProofInventory()
+				if preparation.Execution() != purpose || preparation.LocalSource() != startJSON(t, source) || preparation.LocalSourceSHA256() != chain.SourceSHA256() ||
+					len(proofs) != count+2 || !reflect.DeepEqual(proofs, chain.ProofInventory()) {
+					t.Fatal("execution preparation lost original source or complete ordered proofs", purpose, count)
+				}
+				for position, proof := range proofs {
+					if proof.Position != position || (proof.Kind == "public-path") != (position == count) || (proof.NodeID == "") != (position == count) {
+						t.Fatal("execution preparation moved original public or private identity", purpose, count, position)
+					}
+				}
+				hostname := nodeChainImportedSSPrefixFixture(t, count, "wg", NativeStartLayerMethod, true)
+				if _, err := NewNodeChainExecutionPreparation(startJSON(t, hostname), purpose); err == nil {
+					t.Fatal("hostname imported execution escaped literal-only boundary", purpose, count)
 				}
 			}
 			_, err = chain.NewCandidatePlan(0, inventory)

@@ -3765,3 +3765,24 @@ source manifest SHA256 is
 This updates a dependent test contract; native deadlines, failure admission and
 cleanup receipts are unchanged. The separate wrong-final-key native Stop
 failure still requires its own diagnosis and exact-current acceptance.
+
+## Complete imported execution purpose contract
+
+The exact `ef940ff7` authoritative job `132990837857` failed the older
+`TestNodeChainImportedSSPrefixPurposeBoundary` expectation that Server/Compare
+accepts only one paired prefix. The published compiler now preserves one to six
+paired prefixes before the imported SS2022 member and independent paired final.
+The seven existing purpose records now require that complete original source,
+requested execution, source hash, ordered proof inventory and penultimate public
+position. Hostname execution remains refused. The separate candidate-plan and
+candidate-preparation trio checks remain unchanged.
+
+The focused shared race suite passes all 24 records, including the original
+source-refusal cases, in 11.266 seconds. Restoring the obsolete trio constructor
+guard causes the five longer-prefix leaves and their root to fail at the exact
+original-source witness. Removing the final proof causes all six leaves and
+their root to fail at the complete-proof witness. These controls do not modify
+shipping source or widen any deadline. Frozen one-file manifest SHA256:
+`254379577f352624e5ed93b8210ff71cfc19c288e1219c586865ece70c685cac`.
+This repair changes the source contract test; native encrypted networking and
+exact-current release publication remain independently required.
