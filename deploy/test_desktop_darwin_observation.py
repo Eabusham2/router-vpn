@@ -95,6 +95,39 @@ func TestActualDarwinCommandObservation(t *testing.T){
  if err!=nil||string(output)!="actual-owned-command\n"||calls!=1{t.Fatal("observation changed actual successful command",err,calls)}
  if _,err:=desktopDarwinCommand(ctx,"/bin/false",nil);err==nil{t.Fatal("observation changed actual native command failure")}
 }
+func TestActualDarwinCommandPhaseObservation(t *testing.T){
+ // Keep the actual adapter at its protected-path boundary until its real
+ // caller cancels. No PF command is launched by this portable regression.
+ ctx,cancel:=context.WithCancel(context.Background());defer cancel()
+ ctx=desktopDarwinObserveRequest(ctx,DesktopSocketCapture{"session","source","network"},DesktopSocketKernelOwner{ProcessID:41},4,"grant")
+ reader,writer,err:=desktopDarwinObservationPipe();if err!=nil{t.Fatal(err)}
+ defer reader.Close();defer writer.Close()
+ ctx=context.WithValue(ctx,desktopDarwinObservationOutputKey{},writer)
+ queued,releaseQueue:=make(chan struct{}),make(chan struct{})
+ entered,releasePath:=make(chan struct{}),make(chan struct{})
+ enterCommand=func(context.Context)(func(),error){close(queued);<-releaseQueue;return func(){},nil}
+ defer func(){enterCommand=nil}()
+ inspectPath=func(path string,private bool)error{if path!="/sbin/pfctl"||private{t.Error("lost original protected command")};close(entered);<-releasePath;return nil}
+ result:=make(chan error,1)
+ go func(){_,err:=desktopDarwinCommand(ctx,"/sbin/pfctl",nil,"-a","private-original-anchor","-s","rules");result<-err}()
+ <-queued;time.Sleep(5*time.Millisecond);close(releaseQueue)
+ <-entered;time.Sleep(5*time.Millisecond);cancel()
+ line:="";until:=time.Now().Add(time.Second)
+ for line==""&&time.Now().Before(until){line=desktopDarwinReadbackMessages(reader);if line==""{time.Sleep(time.Millisecond)}}
+ close(releasePath)
+ select{case err=<-result:case <-time.After(time.Second):t.Fatal("phase observation original command did not join")}
+ if !errors.Is(err,context.Canceled){t.Fatal("phase observation changed actual cancellation",err)}
+ values:=map[string]string{}
+ for _,field:=range strings.Fields(line){pair:=strings.SplitN(field,"=",2);if len(pair)==2{values[pair[0]]=pair[1]}}
+ numeric:=func(key string)int64{value,err:=strconv.ParseInt(values[key],10,64);if err!=nil{t.Error("phase observation omitted numeric timing",key,line)};return value}
+ elapsed,queue,path,phase:=numeric("elapsed_us"),numeric("queued_us"),numeric("path_us"),numeric("phase_us")
+ if values["query"]!="rules"||strings.Contains(line,"private-original-anchor"){
+  t.Fatal("actual command lost its bounded PF query category",line)
+ }
+ if values["phase"]!="protected-path"||values["child"]!="0"||queue<5000||path<5000||phase!=path||elapsed<queue+path||elapsed>queue+path+1||numeric("start_us")!=0||numeric("wait_us")!=0{
+  t.Fatal("actual command charged prior queue time to native phase",line)
+ }
+}
 func TestDarwinCommandPipeChild(t *testing.T){
  if len(os.Args)<3{return}
  role:=os.Args[len(os.Args)-2];path:=os.Args[len(os.Args)-1]
@@ -204,22 +237,31 @@ func TestDarwinObservationDropsFullPipe(t *testing.T){
     if command.count(pipe_bound) != 1:
         raise RuntimeError('Darwin native command lost its exact inherited-output join bound')
     variants.append(('unbounded-inherited-output', command.replace(pipe_bound, '// mutation: original output wait is unbounded', 1), pipe, 'original native command pipe outlived bounded join'))
+    query = 'observation.describeCommand(path, args)'
+    if command.count(query) != 1 or observer.count('now.Sub(o.entered)') != 2:
+        raise RuntimeError('Darwin command lost its exact query or phase timing observation')
+    variants.append(('missing-query-category', command.replace(query, '// mutation: command query omitted', 1), pipe,
+                     'actual command lost its bounded PF query category'))
+    variants.append(('total-charged-to-phase', command, pipe,
+                     'actual command charged prior queue time to native phase'))
     with tempfile.TemporaryDirectory(prefix='darwin-command-observation-') as temporary:
         folder = Path(temporary)
         (folder/'observer.go').write_text(observer)
         (folder/'owner.go').write_text(types+owner)
         (folder/'observation_test.go').write_text(regression)
         for label, selected, selected_pipe, witness in variants:
+            selected_observer = observer.replace('now.Sub(o.entered)', 'now.Sub(o.started)') if label == 'total-charged-to-phase' else observer
+            (folder/'observer.go').write_text(selected_observer)
             (folder/'command.go').write_text(header+selected)
             (folder/'pipe.go').write_text(selected_pipe)
             files = [str(folder/name) for name in ('command.go','observer.go','owner.go','pipe.go','observation_test.go')]
-            selected_tests = [] if label == 'baseline' else ['-run=^TestDarwinCommandInheritedOutput$/exited-parent$'] if label == 'unbounded-inherited-output' else ['-run=^TestActualDarwinCommandObservation$|^TestDarwinObservationDropsFullPipe$']
+            selected_tests = [] if label == 'baseline' else ['-run=^TestDarwinCommandInheritedOutput$/exited-parent$'] if label == 'unbounded-inherited-output' else ['-run=^TestActualDarwinCommandObservation$|^TestActualDarwinCommandPhaseObservation$|^TestDarwinObservationDropsFullPipe$']
             result = subprocess.run([compiler,'test','-race','-v','-timeout=15s',*selected_tests,*files],
                                     text=True,capture_output=True,timeout=120,
                                     env=race_environment)
             output = result.stdout+result.stderr
             if witness is None:
-                required = ('TestActualDarwinCommandObservation', 'TestDarwinObservationDropsFullPipe', 'TestDarwinCommandInheritedOutput', 'TestDarwinCommandInheritedOutput/exited-parent', 'TestDarwinCommandInheritedOutput/cancelled-original-context')
+                required = ('TestActualDarwinCommandObservation', 'TestActualDarwinCommandPhaseObservation', 'TestDarwinObservationDropsFullPipe', 'TestDarwinCommandInheritedOutput', 'TestDarwinCommandInheritedOutput/exited-parent', 'TestDarwinCommandInheritedOutput/cancelled-original-context')
                 if result.returncode or any(output.count('--- PASS: '+name+' (') != 1 for name in required):
                     raise AssertionError(output)
             elif not result.returncode or witness not in output:
@@ -274,6 +316,7 @@ func TestDarwinLateOriginalReadbackAfterFailedProbe(t *testing.T){
 }
 '''
         (folder/'command.go').write_text(header+command)
+        (folder/'observer.go').write_text(observer)
         (folder/'pipe.go').write_text(pipe)
         (folder/'late_test.go').write_text(late_regression)
         checkpoint = 'desktopDarwinKernelReadbackTrace(t, policy, "after-broker-drain")'

@@ -216,6 +216,70 @@ func TestDesktopDarwinReadbackObservationJoinsAndCannotAuthorize(t *testing.T) {
 	}
 }
 
+func TestDesktopDarwinReadbackObservationSeparatesPhaseDurations(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = desktopDarwinObserveRequest(ctx, desktopSocketFixtureCapture(), DesktopSocketKernelOwner{ProcessID: 41}, 4, "grant")
+	received := make(chan desktopDarwinReadbackSnapshot, 1)
+	observation, finish := desktopDarwinObserveReadback(ctx, "pfctl", func(snapshot desktopDarwinReadbackSnapshot) { received <- snapshot })
+	observation.describeCommand("/sbin/pfctl", []string{"-a", "private-original-generation", "-s", "rules"})
+	for _, phase := range []uint32{desktopNativeObservationPath, desktopNativeObservationStart, desktopNativeObservationWait} {
+		// Accumulate a real interval in each preceding phase. There is no
+		// upper latency assertion or substituted clock in the native path.
+		time.Sleep(time.Millisecond)
+		observation.enter(phase, 61)
+	}
+	time.Sleep(time.Millisecond)
+	cancel()
+	finish()
+	snapshot := <-received
+	if snapshot.phase != desktopNativeObservationWait || snapshot.child != 61 || snapshot.query != "rules" ||
+		snapshot.queued <= 0 || snapshot.path <= 0 || snapshot.start <= 0 || snapshot.wait <= 0 ||
+		snapshot.phaseElapsed != snapshot.wait || snapshot.elapsed != snapshot.queued+snapshot.path+snapshot.start+snapshot.wait {
+		t.Fatal("readback phase timing charged a prior phase to native Start/Wait", snapshot)
+	}
+	if strings.Contains(snapshot.String(), "private-original-generation") {
+		t.Fatal("readback timing exposed its original anchor")
+	}
+}
+
+func TestDesktopDarwinReadbackObservationQueryAndOutputBounds(t *testing.T) {
+	for _, query := range []struct {
+		path string
+		args []string
+		want string
+	}{
+		{"/sbin/pfctl", []string{"-s", "info"}, "info"},
+		{"/sbin/pfctl", []string{"-a", "private-anchor", "-s", "rules"}, "rules"},
+		{"/sbin/pfctl", []string{"-a", "private-anchor/*", "-s", "nat"}, "nat"},
+		{"/sbin/pfctl", []string{"-s", "states"}, "states"},
+		{"/sbin/pfctl", []string{"-a", "private-anchor", "-s", "Anchors"}, "anchors"},
+		{"/sbin/pfctl", []string{"-i", "private-interface", "-v", "-s", "Interfaces"}, "interfaces"},
+		{"/sbin/pfctl", []string{"-n", "-v", "-a", "private-anchor", "-f", "-"}, "canonical"},
+		{"/sbin/pfctl", []string{"-s", "private-query"}, "other"},
+		{"/private/pfctl", []string{"-s", "rules"}, "other"},
+		{"/usr/bin/dscl", []string{"-read", "private-account"}, "other"},
+		{"/sbin/pfctl", nil, "other"},
+	} {
+		now := time.Now()
+		observation := &desktopDarwinReadbackObservation{started: now, entered: now}
+		observation.describeCommand(query.path, query.args)
+		snapshot := observation.capture(desktopDarwinReadbackSnapshot{})
+		if snapshot.query != query.want || strings.Contains(snapshot.String(), "private-") {
+			t.Fatal("readback query lost its bounded category", query.want, snapshot)
+		}
+	}
+	// The actual reporter still drops anything over its single 512-byte write
+	// bound. Even maximum counters/durations must retain the complete record.
+	maximum := time.Duration(1<<63 - 1)
+	snapshot := desktopDarwinReadbackSnapshot{guardian: ^uint32(0), command: ^uint32(0), sequence: ^uint64(0),
+		operation: "socks-associate", kind: "ifconfig", phase: desktopNativeObservationAcknowledge, child: ^uint32(0),
+		elapsed: maximum, phaseElapsed: maximum, queued: maximum, path: maximum, start: maximum, wait: maximum, query: "interfaces"}
+	if len(snapshot.String()+"\n") > 512 {
+		t.Fatal("complete phase timing exceeds original nonblocking pipe bound", len(snapshot.String()+"\n"))
+	}
+}
+
 func TestDesktopDarwinCreatorObservationKeepsOriginalDeadline(t *testing.T) {
 	for _, stage := range []struct {
 		phase uint32

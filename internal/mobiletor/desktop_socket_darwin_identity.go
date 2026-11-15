@@ -103,6 +103,7 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 	}
 	observation, finishObservation := desktopDarwinObserveReadback(ctx, filepath.Base(path), desktopDarwinReadbackReporter(ctx))
 	defer finishObservation()
+	observation.describeCommand(path, args)
 	release, err := desktopPFEnterCommand(ctx)
 	if err != nil {
 		return nil, err
