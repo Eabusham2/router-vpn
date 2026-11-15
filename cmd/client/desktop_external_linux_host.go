@@ -81,13 +81,15 @@ func validateDesktopLinuxProtectedArguments(arguments []string, directory string
 }
 
 func desktopLinuxExternalEligible(launch *desktopNodeLaunch) bool {
+	if launch == nil || desktopExternalCapturedProtectionPolicy(launch.external) == "" {
+		return false
+	}
 	if launch != nil && launch.ownedNode == nil && launch.tor == nil && desktopExternalLinuxEntryOwner(launch.external) {
 		return launch.profileID == launch.external.entry.ID && launch.policyProfileID == launch.external.profile.ID
 	}
 	if launch == nil || launch.external == nil || launch.tor != nil || !launch.external.direct || launch.external.predecessor != "" ||
 		launch.external.selection != "local" || launch.external.profile.External == nil ||
-		!desktopExternalStartLayerSupported(launch.external.profile.External.Protocol, launch.external.profile.StartLayer) ||
-		desktopOwnedNodeProtectionPolicy(launch.external.profile) == "off" {
+		!desktopExternalStartLayerSupported(launch.external.profile.External.Protocol, launch.external.profile.StartLayer) {
 		return false
 	}
 	switch launch.external.profile.External.Protocol {
@@ -225,13 +227,22 @@ func prepareDesktopRetainedExternal(a *app, launch *desktopNodeLaunch) (desktopE
 // parent, private staging, inherited descriptors and native proof are real.
 func prepareDesktopRetainedExternalWith(a *app, launch *desktopNodeLaunch,
 	verify func(context.Context, string) (string, error)) (desktopExternalRetainedRuntime, error) {
+	// Preserve legacy unsupported shapes, but never lose the original native
+	// Off obligation when its mutable seal or current shape is damaged.
+	off := launch != nil && desktopExternalOffRequiresRetainedForOS(launch.external, "linux")
 	if a == nil || !desktopLinuxExternalEligible(launch) {
+		if off {
+			return nil, errors.New("Linux external Off requires its unchanged captured native owner")
+		}
 		return nil, nil
 	}
 	a.mu.Lock()
 	controller := a.localController
 	a.mu.Unlock()
 	if controller == nil || controller.nodeParent == nil {
+		if off {
+			return nil, errors.New("Linux external Off requires its original installed native controller")
+		}
 		return nil, nil // The legacy guard still decides whether that distinct path may start.
 	}
 	operation := a.connectionOperationContextOrBackground()

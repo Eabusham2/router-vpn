@@ -45,6 +45,9 @@ OPENVPN_ENTRY_POSITIVE = ('openvpn-entry-ss-tcp', 'openvpn-entry-ss-tcp-always',
 OPENVPN_ENTRY_NEGATIVE = ('openvpn-entry-ss-tcp-wrong-entry-public', 'openvpn-entry-ss-tcp-wrong-control', 'openvpn-entry-ss-udp-wrong-password', 'openvpn-entry-ss-tcp-wrong-provider-trust', 'openvpn-entry-ss-udp-wrong-final-key', 'openvpn-entry-ss-tcp-wrong-dns', 'openvpn-entry-ss-udp-wrong-trust', 'openvpn-entry-ss-tcp-wrong-exit')
 POSITIVE_CASES += OPENVPN_ENTRY_POSITIVE
 NEGATIVE_CASES += OPENVPN_ENTRY_NEGATIVE
+OFF_CASES = ('shadowsocks-off', 'hysteria2-off', 'wireguard-off', 'wg-entry-ss-off', 'ss-entry-aes256-ss-aes256-off', 'openvpn-entry-ss-tcp-off')
+POSITIVE_CASES += OFF_CASES
+OPENVPN_ENTRY_EXECUTION_CASES = OPENVPN_ENTRY_POSITIVE + ('openvpn-entry-ss-tcp-off',)
 CASES = POSITIVE_CASES + NEGATIVE_CASES
 POLICY_TESTS = ('TestSpeedLabDirectLayeredHysteriaRestoreRejectsChangedCapturedLayer', 'TestSpeedLabExternalRestoreSealRetainsOriginalOwner', 'TestDesktopExternalPacketEntryHysteriaLayersRetainBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryHysteriaLayersRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryHysteriaLayersPreserveUnsupportedGraphs', 'TestDesktopMacOSHysteriaLayersRetainCompleteSavedPolicy', 'TestDesktopMacOSHysteriaLayersPreserveUnsupportedGraphBoundaries', 'TestDesktopMacOSWireGuardRetainsCapturedSourceAndGraphBoundary', 'TestDesktopMacOSSOCKSRetainsCapturedSourceAndGraphBoundary', 'TestDesktopMacOSAmneziaRetainsCapturedSourceAndGraphBoundary', 'TestDesktopMacOSOpenVPNSourceKeepsExactSavedImport', 'TestDesktopExternalWireGuardEntryRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalWireGuardEntryRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalAmneziaEntryRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalAmneziaEntryRestoreKeepsCompleteSourceAndNewSession', 'TestSpeedLabHTTPTestCancellationRestoresWholeProvedConnection', 'TestSpeedLabStaleRestoreCannotStopOrOverwriteReplacement', 'TestSpeedLabCleanupFailureRetainsOwnerAndNeverClaimsRestore', 'TestSpeedLabRestoreRequiresFreshProofAndNetwork', 'TestDesktopExternalPacketEntryCONNECTRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryCONNECTRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryHysteriaRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryHysteriaRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntrySOCKSRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntrySOCKSRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryWireGuardRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryWireGuardRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryWireGuardPreservesUnsupportedGraphs', 'TestDesktopExternalPacketEntryAmneziaRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryAmneziaRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryAmneziaPreservesUnsupportedGraphs')
 POLICY_TESTS += ('TestDesktopMacOSExternalBaselineBindsEachOriginalProtectionMember', 'TestDesktopExternalProtectionKeepsCapturedPairAndStrongestMember', 'TestDesktopExternalProtectionRejectsForeignOrUnprotectedParticipants', 'TestDesktopExternalProtectionTemporaryGuardKeepsOriginalAggregate')
@@ -55,6 +58,7 @@ POLICY_TESTS += ('TestDesktopExternalSSCONNECTRetainsBothSourcesAndMeasurement',
 POLICY_TESTS += ('TestDesktopExternalSSHysteriaRetainsBothSourcesAndMeasurement', 'TestDesktopExternalSSHysteriaRestoreRetainsCompleteLocalGraph', 'TestDesktopExternalSSHysteriaRetainsOffLayerAndLocalScope')
 POLICY_TESTS += ('TestDesktopWindowsExternalSSEntryIndependentLayersSources', 'TestDesktopWindowsExternalSSEntryIndependentLayersRestore')
 POLICY_TESTS += ('TestDesktopWindowsExternalSSEntryHysteriaIndependentLayersSources', 'TestDesktopWindowsExternalSSEntryHysteriaIndependentLayersRestore')
+POLICY_TESTS += ('TestDesktopMacOSExternalOffRetirementKeepsOriginalRetry', 'TestDesktopMacOSExternalOffRetirementPreservesReplacementOwner', 'TestDesktopMacOSExternalOffRequiresOriginalController', 'TestDesktopMacOSExternalOffPreservesLegacyRouterExecution')
 PEER_TAGS = 'with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego,routervpn_darwin_external_host'
 
 
@@ -183,11 +187,11 @@ def check_verdict(output):
         receipt = 'actual sealed Darwin latency accepted '+case+': held TLS Cancel joined, foreign cancellation and replay refused, Retest50 actual responses, original session child PF and MTU retained'
         if receipts[receipt] != 1:
             raise ValueError('Native Darwin protocol has no exact retained measurement receipt: '+case)
-    for case in OPENVPN_ENTRY_POSITIVE:
+    for case in OPENVPN_ENTRY_EXECUTION_CASES:
         receipt = 'actual sealed Darwin OpenVPN SS2022 MTU accepted '+case+': held payload Cancel restored original utun, Retest measured bytes, original source child PF retained'
         if receipts[receipt] != 1:
             raise ValueError('OpenVPN entry omitted exact native MTU/cancel receipt: '+case)
-    for case in OPENVPN_ENTRY_POSITIVE:
+    for case in OPENVPN_ENTRY_EXECUTION_CASES:
         if '-tcp' not in case:
             continue
         receipt = 'actual sealed Darwin OpenVPN SS2022 loss accepted '+case+': original provider closed, stale proof and measurement refused, original child PF utun and controller joined'
@@ -197,6 +201,10 @@ def check_verdict(output):
         receipt = 'actual sealed Darwin mixed protection accepted '+case+': original entry Always retained through joined disconnect, final DNS LAN IPv6 unchanged'
         if receipts[receipt] != 1:
             raise ValueError('Mixed protection omitted original member and retirement receipt: '+case)
+    for case in OFF_CASES:
+        receipt = 'actual sealed Darwin Off accepted '+case+': original dispatch-only PF, selected DNS and exit proof, original child and reference retired'
+        if receipts[receipt] != 1:
+            raise ValueError('Off omitted its actual dispatch-only policy and joined retirement: '+case)
     for case in NEGATIVE_CASES:
         if receipts[refusal_receipt(case)] != 1:
             raise ValueError('Native Darwin layer has no exact refusal and cleanup receipt: '+case)

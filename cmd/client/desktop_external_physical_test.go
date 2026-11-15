@@ -104,7 +104,7 @@ func TestDesktopExternalPhysicalAdmissionPreservesOtherGraphs(t *testing.T) {
 				if err := prepareDesktopExternalPhysical(launch, target); err != nil {
 					t.Fatal(protocol, target, kill, err)
 				}
-				eligible := target == "windows" && kill != "off" && (protocol == "http-connect" || protocol == "https-connect" || protocol == "shadowsocks" || protocol == "hysteria2" || protocol == "socks5" || protocol == "wireguard" || protocol == "amneziawg")
+				eligible := target == "windows" && (protocol == "http-connect" || protocol == "https-connect" || protocol == "shadowsocks" || protocol == "hysteria2" || protocol == "socks5" || protocol == "wireguard" || protocol == "amneziawg")
 				if (launch.external.physical != nil) != eligible {
 					t.Fatal("unsupported graph was admitted or an eligible graph silently fell back", protocol, target, kill)
 				}

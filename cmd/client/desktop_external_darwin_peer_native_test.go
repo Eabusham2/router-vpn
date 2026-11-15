@@ -211,6 +211,8 @@ func (p *macOSExternalNativePeer) stats(t *testing.T) macOSExternalPeerReply {
 
 func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalNativePeer {
 	t.Helper()
+	name := scenario
+	scenario, selectedOff := macOSExternalOffBase(scenario)
 	image := os.Getenv("ROUTERVPN_MACOS_EXTERNAL_PEER")
 	expected := os.Getenv("ROUTERVPN_MACOS_EXTERNAL_PEER_SHA256")
 	raw, err := os.ReadFile(image)
@@ -219,7 +221,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		t.Fatal("native fixture lost its captured independent peer image", err)
 	}
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
-	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
+	p := &macOSExternalNativePeer{policy: "on-connect", name: name, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
 	_, _, p.openvpnEntry = macOSExternalOpenVPNSS2022Scenario(scenario)
 	p.ssEntryMethod, p.ssFinalMethod, _, p.ssEntry = macOSExternalSSEntryScenario(scenario)
 	macOSSSLayerPrepare(t, p)
@@ -298,6 +300,12 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 			p.policy, p.entryPolicy = "on-connect", "always"
 		case "openvpn-entry-ss-tcp-final-off-entry-always":
 			p.policy, p.entryPolicy = "off", "always"
+		}
+	}
+	if selectedOff {
+		p.policy = "off"
+		if p.packetEntry || p.ssEntry || p.openvpnEntry {
+			p.entryPolicy = "off"
 		}
 	}
 	if protocol == "amneziawg" {
@@ -757,6 +765,7 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 }
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
+	scenario, _ = macOSExternalOffBase(scenario)
 	if _, fault, ok := macOSExternalOpenVPNSS2022Scenario(scenario); ok {
 		return "shadowsocks", "", fault
 	}

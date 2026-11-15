@@ -259,6 +259,11 @@ NODE_CHAIN_CONNECT_HOST_CASES = (
     'node-chain-connect-https-wg-final-dns-failure', 'node-chain-connect-https-wg-final-node-failure', 'node-chain-connect-https-wg-middle-source', 'node-chain-connect-https-wg-prefix-lost',
     'node-chain-connect-https-wg-wrong-middle-sni', 'node-chain-connect-https-wg-wrong-middle-trust')
 CASES += NODE_CHAIN_CONNECT_HOST_CASES
+
+EXTERNAL_ALL_OFF_CASES = ('external-ss-off-public', 'external-ss-off-cancelled', 'external-ss-off-source',
+                          'external-ss-off-replacement', 'external-ss-off-dns-failure', 'external-wgss-off-public')
+EXTERNAL_CASES += EXTERNAL_ALL_OFF_CASES
+CASES += EXTERNAL_ALL_OFF_CASES
 NODE_CHAIN_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledNodeChainFixtureKeepsCompiledAuthority'
 NODE_CHAIN_CIPHER_CASES = (
     ('3-nodes', 3, False), ('4-nodes', 4, False),

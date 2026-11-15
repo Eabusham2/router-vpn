@@ -131,7 +131,10 @@ func TestRouterVPNDesktopExternalWindowsPacketWFP(t *testing.T) {
 	x509.SetFallbackRoots(roots)
 	for _, protocol := range []string{"wireguard", "awg2-fast", "awg2-strong"} {
 		t.Run(protocol, func(t *testing.T) {
-			for _, kill := range []string{"on-connect", "always"} {
+			for _, kill := range []string{"off", "on-connect", "always"} {
+				if kill == "off" && protocol != "wireguard" {
+					continue
+				}
 				t.Run(kill, func(t *testing.T) {
 					var retained mobiletor.DesktopWindowsProtectionTarget
 					desktopExternalWFPCleanup(t, &retained)
@@ -140,7 +143,7 @@ func TestRouterVPNDesktopExternalWindowsPacketWFP(t *testing.T) {
 					f := desktopExternalWFPBox(t, original, source, capture, nil, false)
 					f.start(t)
 					f.prove(t, peer)
-					desktopExternalWFPRequireBlocked(t, peer)
+					f.requireHostPolicy(t, peer)
 					first := f.snapshot(t, peer).Grants[0]
 					deadline := time.Now().Add(8 * time.Second)
 					for {
@@ -160,7 +163,7 @@ func TestRouterVPNDesktopExternalWindowsPacketWFP(t *testing.T) {
 						time.Sleep(50 * time.Millisecond)
 					}
 					retained = f.drain(t)
-					desktopExternalWFPRequireBlocked(t, peer)
+					f.requireHostPolicy(t, peer)
 				})
 			}
 			t.Run("successor-and-original-restore", func(t *testing.T) {

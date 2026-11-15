@@ -130,9 +130,13 @@ func TestDesktopExternalOpenVPNPolicyKeepsUnsupportedHostAndGraphGuards(t *testi
 	}
 	t.Run("off", func(t *testing.T) {
 		graph, capture, _ := desktopOpenVPNPhysicalInputs(t, "mixed", "off")
-		reject(t, externalDesktopCompile(t, graph, capture), "linux")
-		reject(t, externalDesktopCompile(t, graph, capture), "windows")
-		reject(t, externalDesktopCompile(t, graph, capture), "darwin")
+		original := externalDesktopCompile(t, graph, capture)
+		for _, target := range []string{"linux", "windows", "darwin"} {
+			policy, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
+			if err != nil || policy.Metadata().KillSwitchPolicy != "off" || policy.OriginalPolicy() != original {
+				t.Fatal("Off OpenVPN lost exact original owner", target, err)
+			}
+		}
 	})
 	for _, entry := range []string{"router-wg", "socks5", "shadowsocks", "hysteria2"} {
 		t.Run("predecessor/"+entry, func(t *testing.T) {

@@ -33,7 +33,7 @@ func desktopExternalPacketEntryOwner(owner *desktopExternalRuntime) bool {
 		return false
 	}
 	policy := desktopExternalProtectionPolicy(owner.profile, owner.entry, false)
-	return policy == "on-connect" || policy == "always"
+	return policy == "off" || policy == "on-connect" || policy == "always"
 }
 
 func validateDesktopMacOSExternalSources(profile, entry common.RouterProfile, launch *desktopNodeLaunch) error {
@@ -148,5 +148,8 @@ func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
 }
 
 func desktopExternalRetainedEntryForOS(owner *desktopExternalRuntime, target string) bool {
+	if desktopExternalCapturedProtectionPolicy(owner) == "" {
+		return false
+	}
 	return target == "darwin" && (desktopExternalPacketEntryOwner(owner) || desktopExternalSSEntryOwner(owner) || desktopExternalOpenVPNEntryOwner(owner)) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && (desktopWindowsExternalSSEntryOwner(owner) || desktopWindowsExternalRouterPairedOwner(owner) || desktopExternalOpenVPNEntryOwner(owner))
 }

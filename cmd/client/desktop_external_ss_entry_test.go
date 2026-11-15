@@ -30,7 +30,7 @@ func desktopSSEntryFixture(t *testing.T, kill, entryMethod, finalMethod, dns str
 	entry.IPv6Mode = "on"
 	entry.HomeLANAccess = true
 	profile.External.Shadowsocks.Method, profile.External.Shadowsocks.Password = finalMethod, desktopSSEntryKey(finalMethod, 'e')
-	profile.KillSwitchPolicy, profile.KillSwitch, profile.MultihopExecution = kill, true, "local"
+	profile.KillSwitchPolicy, profile.KillSwitch, profile.MultihopExecution = kill, kill != "off", "local"
 	profile.MTUPolicy, profile.ManualMTU = "manual", 1360
 	profile.DNSProtocol = dns
 	exit, err := standardExitFromExternalProfile(profile)

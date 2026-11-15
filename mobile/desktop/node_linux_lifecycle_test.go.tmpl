@@ -43,7 +43,7 @@ type nodeLinuxLifecycleRetention struct {
 }
 
 func (s *nodeLinuxLifecycleSource) RetainProtection(ctx context.Context, capture mobiletor.DesktopSocketCapture, policy string) (mobiletor.DesktopLinuxProtectionOwner, error) {
-	if ctx.Err() != nil || capture != s.record.Capture || s.retention != nil || s.closed.Load() || (policy != "always" && policy != "on-connect") {
+	if ctx.Err() != nil || capture != s.record.Capture || s.retention != nil || s.closed.Load() || (policy != "always" && policy != "on-connect" && policy != "off") {
 		return nil, errors.New("fixture has no original unused source")
 	}
 	s.retention = &nodeLinuxLifecycleRetention{source: s, policy: policy}

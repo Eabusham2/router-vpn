@@ -18,7 +18,7 @@ func newDesktopExternalRouterServerPolicy(original *ExternalPolicy, capture Exte
 		p.Entry["node_kind"] != "router-vpn" || capture.EntryNodeID == "" || capture.EntryTag != externalEntryTag ||
 		capture.PredecessorSHA256 == "" || capture.Protocol != "shadowsocks" || !desktopExternalSS2022Import(final) ||
 		capture.StartLayer != "" && !multihoprelay.ValidLayerMode(capture.StartLayer) || capture.EntryStartLayer != "" && !multihoprelay.ValidLayerMode(capture.EntryStartLayer) || len(capture.PhysicalRoots) != 1 ||
-		(capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
+		(capture.KillSwitchPolicy != "off" && capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
 		(capture.IPv6Mode != "on" && capture.IPv6Mode != "off") || p.Execution == nil || p.Execution.Selection != capture.Execution {
 		return nil, bad
 	}

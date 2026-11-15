@@ -18,7 +18,7 @@ func desktopExternalOpenVPNEntryOwner(owner *desktopExternalRuntime) bool {
 		return false
 	}
 	policy := desktopExternalProtectionPolicy(owner.profile, owner.entry, false)
-	if policy != "on-connect" && policy != "always" {
+	if policy != "off" && policy != "on-connect" && policy != "always" {
 		return false
 	}
 	endpoint, err := nativeopenvpn.CompileProfile(*owner.entry.External.OpenVPN, "external-entry", "")

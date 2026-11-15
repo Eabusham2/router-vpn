@@ -26,7 +26,7 @@ func desktopWindowsExternalRouterServerGraph(profile, entry common.RouterProfile
 		return false
 	}
 	policy := desktopExternalProtectionPolicy(profile, entry, false)
-	if policy != "on-connect" && policy != "always" {
+	if policy != "off" && policy != "on-connect" && policy != "always" {
 		return false
 	}
 	mode, err := desktopExternalEntryMode(profile, entry, "", "")

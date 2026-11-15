@@ -55,6 +55,7 @@ func macOSExternalSSEntryMethod(name string) string {
 	return ""
 }
 func macOSExternalSSEntryScenario(scenario string) (entry, final, fault string, found bool) {
+	scenario, _ = macOSExternalOffBase(scenario)
 	for _, candidate := range append(macOSExternalSSEntryCases, macOSExternalSSLayerCases...) {
 		if candidate != scenario {
 			continue

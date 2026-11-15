@@ -22,7 +22,7 @@ deployment acceptance.
 
 [The November 15 ledger](CONTINUATION-EVIDENCE-2026-11-15.md) records recovery
 of the complete historical 1–311 index, original August 11/13/14 user
-passages, published repairs and feature units through `6026e9c5`, current native
+passages, published repairs and feature units through `dd9a608b`, current native
 failure evidence, Linux/Windows Off source, Android runtime/profile verification
 and macOS public prefix-candidate preparation and controls. The bounded
 Linux/Windows Local ordinary OpenVPN-entry to independent SS2022-final addition
@@ -40,9 +40,10 @@ preserves the strongest actual entry/final protection across ordinary external
 capture, public selection, restoration and temporary testing. Darwin verifies
 the original individual members before applying an external or saved-prefix
 aggregate; its legacy cleanup compatibility cannot authorize a new owner.
-Ordinary
-external public/physical Off admission remains closed despite its baseline
-adapters' mode support. The ledger preserves
+Supported ordinary external all-Off paths now enter the installed retained
+native host, with exact original member/source capture, isolated engine ownership,
+missing-controller refusal and required cleanup/traffic witnesses. Actual native
+acceptance remains separate from that source integration. The ledger preserves
 the original identifiers and separates source, native execution, publication
 and live acceptance. macOS Off kernel/packaged acceptance, broader requested
 graph integration, current release convergence and live acceptance remain

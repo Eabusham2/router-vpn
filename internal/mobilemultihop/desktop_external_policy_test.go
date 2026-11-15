@@ -308,8 +308,12 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 		}
 	}
 	for _, protocol := range []string{"socks5", "hysteria2"} {
-		if _, err := NewDesktopExternalPolicy(desktopExternalPolicyFixture(t, protocol, "off", "on", true), desktopExternalTestSession, "linux"); err == nil {
-			t.Fatal("Off acquired a strict Linux baseline without an explicit captured policy", protocol)
+		for _, target := range []string{"linux", "windows", "darwin"} {
+			original := desktopExternalPolicyFixture(t, protocol, "off", "on", true)
+			policy, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
+			if err != nil || policy.Metadata().KillSwitchPolicy != "off" || policy.OriginalPolicy() != original {
+				t.Fatal("explicit original Off capture lost native ownership", protocol, target, err)
+			}
 		}
 	}
 	for _, entry := range []string{"router-wg", "http-connect", "socks5", "shadowsocks"} {
@@ -324,9 +328,6 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 		} else if err == nil {
 			t.Fatal("predecessor or private node was silently admitted as direct", entry)
 		}
-	}
-	if _, err := NewDesktopExternalPolicy(desktopExternalPolicyFixture(t, "socks5", "off", "on", true), desktopExternalTestSession, "windows"); err == nil {
-		t.Fatal("Off acquired a strict native baseline without an explicit captured policy")
 	}
 	for _, original := range []*ExternalPolicy{nil, {}, {config: valid.Config(), metadata: valid.Metadata(), source: valid.SourceSHA256()}} {
 		if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "windows"); err == nil {
@@ -366,7 +367,13 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 		}
 	}
 	t.Run("off", func(t *testing.T) {
-		reject(t, desktopExternalPolicyFixture(t, protocol, "off", "on", true))
+		original := desktopExternalPolicyFixture(t, protocol, "off", "on", true)
+		for _, target := range []string{"linux", "windows", "darwin"} {
+			policy, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
+			if err != nil || policy.Metadata().KillSwitchPolicy != "off" || policy.OriginalPolicy() != original {
+				t.Fatal("Off changed captured native source", target, err)
+			}
+		}
 	})
 	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 		t.Run("start-layer/"+layer, func(t *testing.T) {

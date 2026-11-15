@@ -9,6 +9,8 @@ package mobiletor
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -208,7 +210,9 @@ func DesktopWindowsNodeCompositionVerifyRejected(ctx context.Context, session, s
 	desktopWindowsNodeComposition.Lock()
 	p := desktopWindowsNodeComposition.owner
 	desktopWindowsNodeComposition.Unlock()
-	if p == nil { return errors.New("rejected Node composition lost its original source") }
+	if p == nil {
+		return errors.New("rejected Node composition lost its original source")
+	}
 	_, err := desktopWindowsPolicyCall(p, ctx, true, func() (bool, error) {
 		if p.capture.SessionID != session || p.capture.SourceSHA256 != source || !p.closed || !p.baselineDone ||
 			p.installed || p.locked || len(p.permits) != 0 || len(p.bindings) != 0 || len(p.tunnel) != 0 {
@@ -666,94 +670,262 @@ func (r *DesktopWindowsNodeSocketRetirement) Cleanup(ctx context.Context) error 
 // The native Server retry case holds this original gate only long enough to
 // prove Cancel cannot return before its actual terminal WFP operation. This
 // helper exists only in the explicit executable-scoped test overlay.
-func DesktopWindowsNodeCompositionHoldLeaseBarrier(ctx context.Context,target DesktopWindowsProtectionTarget)(func(),error){
+func DesktopWindowsNodeCompositionHoldLeaseBarrier(ctx context.Context, target DesktopWindowsProtectionTarget) (func(), error) {
 	desktopWindowsNodeComposition.Lock()
-	p:=desktopWindowsNodeComposition.owner
+	p := desktopWindowsNodeComposition.owner
 	desktopWindowsNodeComposition.Unlock()
-	if p==nil||ctx==nil{return nil,net.ErrClosed}
-	select{case <-ctx.Done():return nil,ctx.Err();case <-p.gate:}
-	release:=func(){p.gate<-struct{}{}}
-	if p.closed||p.terminalCleanup!=nil||p.capture!=target.Capture||
-		desktopWindowsProtectionTarget(p.capture,p.options.KillSwitchPolicy,p.metadata)!=target||
-		!p.Current(p.capture,p.owner)||len(p.tunnel)==0{
-		release()
-		return nil,errors.New("held terminal barrier lost its original native policy")
+	if p == nil || ctx == nil {
+		return nil, net.ErrClosed
 	}
-	if err:=errors.Join(p.assertBaseline(),p.assertTunnel());err!=nil{release();return nil,err}
-	if err:=ctx.Err();err!=nil{release();return nil,err}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.gate:
+	}
+	release := func() { p.gate <- struct{}{} }
+	if p.closed || p.terminalCleanup != nil || p.capture != target.Capture ||
+		desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata) != target ||
+		!p.Current(p.capture, p.owner) || len(p.tunnel) == 0 {
+		release()
+		return nil, errors.New("held terminal barrier lost its original native policy")
+	}
+	if err := errors.Join(p.assertBaseline(), p.assertTunnel()); err != nil {
+		release()
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		release()
+		return nil, err
+	}
 	var once sync.Once
-	return func(){once.Do(release)},nil
+	return func() { once.Do(release) }, nil
 }
 
 // Exercise the actual token after the shipping Cancel acknowledged it. This
 // repeats the original receipt and tries rejected successors without changing
 // Snapshot's independent socket, token, tuple or WFP baseline validation.
-func DesktopWindowsNodeCompositionVerifyLeaseBarrier(ctx context.Context,target DesktopWindowsProtectionTarget)error{
+func DesktopWindowsNodeCompositionVerifyLeaseBarrier(ctx context.Context, target DesktopWindowsProtectionTarget) error {
 	desktopWindowsNodeComposition.Lock()
-	p:=desktopWindowsNodeComposition.owner
+	p := desktopWindowsNodeComposition.owner
 	desktopWindowsNodeComposition.Unlock()
-	if p==nil{return net.ErrClosed}
-	type captured struct{token *desktopWindowsLeaseCleanup;name string;index uint32}
-	original,err:=desktopWindowsPolicyCall(p,ctx,true,func()(captured,error){
-		token:=p.terminalCleanup
-		if p.closed||token==nil||!token.joined||!token.ownerCurrent()||
-			desktopWindowsProtectionTarget(p.capture,p.options.KillSwitchPolicy,p.metadata)!=target{
-			return captured{},errors.New("terminal barrier has no original acknowledged token")
+	if p == nil {
+		return net.ErrClosed
+	}
+	type captured struct {
+		token *desktopWindowsLeaseCleanup
+		name  string
+		index uint32
+	}
+	original, err := desktopWindowsPolicyCall(p, ctx, true, func() (captured, error) {
+		token := p.terminalCleanup
+		if p.closed || token == nil || !token.joined || !token.ownerCurrent() ||
+			desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata) != target {
+			return captured{}, errors.New("terminal barrier has no original acknowledged token")
 		}
-		if err:=token.absent();err!=nil{return captured{},err}
-		return captured{token,token.name,token.index},nil
+		if err := token.absent(); err != nil {
+			return captured{}, err
+		}
+		return captured{token, token.name, token.index}, nil
 	})
-	if err!=nil{return err}
-	token:=original.token
-	if err:=token.Current(ctx);err!=nil{return err}
-	if err:=token.Quiesce(ctx,original.name,original.index);err!=nil{return err}
-	if err:=p.BindTunnel(ctx,p.capture,original.name,original.index);err==nil{
+	if err != nil {
+		return err
+	}
+	token := original.token
+	if err := token.Current(ctx); err != nil {
+		return err
+	}
+	if err := token.Quiesce(ctx, original.name, original.index); err != nil {
+		return err
+	}
+	if err := p.BindTunnel(ctx, p.capture, original.name, original.index); err == nil {
 		return errors.New("terminal native policy permitted a later TUN bind")
 	}
-	if _,err:=p.SealLeaseCleanup(ctx,p.capture);err==nil{
+	if _, err := p.SealLeaseCleanup(ctx, p.capture); err == nil {
 		return errors.New("terminal native policy permitted a replacement cleanup capture")
 	}
-	if err:=token.Quiesce(ctx,original.name,original.index+1);err==nil{
+	if err := token.Quiesce(ctx, original.name, original.index+1); err == nil {
 		return errors.New("terminal token accepted a different native interface")
 	}
-	foreign:=&desktopWindowsLeaseCleanup{policy:p,capture:p.capture,owner:p.owner}
-	if err:=foreign.Quiesce(ctx,original.name,original.index);err==nil{
+	foreign := &desktopWindowsLeaseCleanup{policy: p, capture: p.capture, owner: p.owner}
+	if err := foreign.Quiesce(ctx, original.name, original.index); err == nil {
 		return errors.New("another token replaced the original terminal operation")
 	}
 	return token.Current(ctx)
 }
 
-func DesktopWindowsNodeCompositionVerifyInertLeaseBarrier(ctx context.Context,target DesktopWindowsProtectionTarget)error{
+func DesktopWindowsNodeCompositionVerifyInertLeaseBarrier(ctx context.Context, target DesktopWindowsProtectionTarget) error {
 	desktopWindowsNodeComposition.Lock()
-	p:=desktopWindowsNodeComposition.owner
+	p := desktopWindowsNodeComposition.owner
 	desktopWindowsNodeComposition.Unlock()
-	if p==nil||desktopWindowsProtectionTarget(p.capture,p.options.KillSwitchPolicy,p.metadata)!=target{return net.ErrClosed}
-	before,err:=DesktopWindowsNodeCompositionSnapshot(ctx)
-	if err!=nil{return err}
-	inert,err:=p.SealLeaseCleanup(ctx,p.capture)
-	if err!=nil{return err}
+	if p == nil || desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata) != target {
+		return net.ErrClosed
+	}
+	before, err := DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	inert, err := p.SealLeaseCleanup(ctx, p.capture)
+	if err != nil {
+		return err
+	}
 	inert.Discard()
-	if err:=inert.Quiesce(ctx,before.TunnelName,before.TunnelIndex);err==nil{
+	if err := inert.Quiesce(ctx, before.TunnelName, before.TunnelIndex); err == nil {
 		return errors.New("discarded inert token retired the actual native TUN")
 	}
-	wrong:=p.capture
-	wrong.SessionID+="-foreign"
-	if token,err:=p.SealLeaseCleanup(ctx,wrong);err==nil||token!=nil{
-		if token!=nil{token.Discard()}
+	wrong := p.capture
+	wrong.SessionID += "-foreign"
+	if token, err := p.SealLeaseCleanup(ctx, wrong); err == nil || token != nil {
+		if token != nil {
+			token.Discard()
+		}
 		return errors.New("another capture obtained native lease cleanup authority")
 	}
-	after,err:=DesktopWindowsNodeCompositionSnapshot(ctx)
-	if err!=nil{return err}
-	if after.Target!=before.Target||after.Capture!=before.Capture||after.Owner!=before.Owner||
-		after.Calls!=before.Calls||after.Closed||after.TunnelName!=before.TunnelName||
-		after.TunnelIndex!=before.TunnelIndex||after.TunnelLUID!=before.TunnelLUID||
-		len(after.Grants)!=len(before.Grants){
+	after, err := DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if after.Target != before.Target || after.Capture != before.Capture || after.Owner != before.Owner ||
+		after.Calls != before.Calls || after.Closed || after.TunnelName != before.TunnelName ||
+		after.TunnelIndex != before.TunnelIndex || after.TunnelLUID != before.TunnelLUID ||
+		len(after.Grants) != len(before.Grants) {
 		return errors.New("inert cleanup capture changed the active native path")
 	}
-	if len(before.Grants)!=1{return errors.New("inert cleanup test requires its one original WG lower")}
-	grant:=before.Grants[0]
-	if after.Grants[0].Sequence<grant.Sequence{return errors.New("inert cleanup capture returned an older physical permit")}
-	grant.Sequence=after.Grants[0].Sequence
-	if after.Grants[0]!=grant{return errors.New("inert cleanup capture replaced its original physical socket or tuple")}
+	if len(before.Grants) != 1 {
+		return errors.New("inert cleanup test requires its one original WG lower")
+	}
+	grant := before.Grants[0]
+	if after.Grants[0].Sequence < grant.Sequence {
+		return errors.New("inert cleanup capture returned an older physical permit")
+	}
+	grant.Sequence = after.Grants[0].Sequence
+	if after.Grants[0] != grant {
+		return errors.New("inert cleanup capture replaced its original physical socket or tuple")
+	}
 	return nil
+}
+
+// This capability exists only in the native test overlay and retains the
+// original Box-created policy. It never constructs a second authority.
+type DesktopWindowsNodeCompositionOffSocket struct {
+	policy   *DesktopWindowsSocketPolicy
+	creation DesktopSocketCreation
+	Packet   net.PacketConn
+	native   DesktopSocketNative
+	held     DesktopSocketNative
+	released bool
+}
+
+func DesktopWindowsNodeCompositionOffSocketCreate(ctx context.Context, target DesktopWindowsProtectionTarget, original DesktopSocketGrant) (*DesktopWindowsNodeCompositionOffSocket, error) {
+	desktopWindowsNodeComposition.Lock()
+	p := desktopWindowsNodeComposition.owner
+	desktopWindowsNodeComposition.Unlock()
+	if p == nil || target.Policy != "off" || original.Capture != target.Capture || original.Network != "udp" {
+		return nil, errors.New("Off observation requires the original UDP Box source")
+	}
+	_, err := desktopWindowsPolicyCall(p, ctx, false, func() (struct{}, error) {
+		if p.options.KillSwitchPolicy != "off" || desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata) != target {
+			return struct{}{}, errors.New("Off observation changed original source")
+		}
+		return struct{}{}, p.assertBaseline()
+	})
+	if err != nil {
+		return nil, err
+	}
+	binding, err := p.Select(ctx, target.Capture, "udp", original.Remote)
+	if err != nil {
+		return nil, err
+	}
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return nil, err
+	}
+	creation := DesktopSocketCreation{Capture: target.Capture, Binding: binding, SocketID: hex.EncodeToString(id[:]), Network: "udp"}
+	created, err := p.CreateSocket(ctx, creation)
+	if err != nil {
+		return nil, err
+	}
+	result := &DesktopWindowsNodeCompositionOffSocket{policy: p, creation: creation, native: created.Native}
+	network := "udp4"
+	if !binding.LocalAddress.Is4() {
+		network = "udp6"
+	}
+	result.Packet, err = desktopSocketImportNativePacket(ctx, network, created.Native, binding.LocalAddress, func(_, _ string, raw syscall.RawConn) error { return p.Bind(ctx, p.capture, binding, "udp", raw) })
+	if err != nil {
+		return result, err
+	}
+	// A different retained endpoint must not acquire the active endpoint's
+	// tuple merely by copying its successful original grant fields.
+	forged := original
+	forged.SocketID, forged.Binding, forged.Sequence = creation.SocketID, binding, 1
+	if receipt, err := p.Grant(ctx, forged); err == nil {
+		_ = p.Revoke(ctx, receipt.Grant)
+		return result, errors.New("Off foreign endpoint acquired the original active tuple")
+	}
+	return result, nil
+}
+
+func (s *DesktopWindowsNodeCompositionOffSocket) Hold(ctx context.Context) error {
+	if s == nil || s.Packet == nil || s.native == nil {
+		return errors.New("Off alias has no original socket")
+	}
+	raw, err := s.native.SyscallConn()
+	if err != nil {
+		return err
+	}
+	s.held, err = desktopWindowsNativeDuplicate(raw)
+	if err != nil {
+		return err
+	}
+	if err := s.Packet.Close(); err != nil {
+		return err
+	}
+	if err := s.native.Close(); err != nil {
+		return err
+	}
+	return s.RequireHeld(ctx)
+}
+func (s *DesktopWindowsNodeCompositionOffSocket) RequireHeld(ctx context.Context) error {
+	if s == nil || s.held == nil {
+		return errors.New("Off held alias is missing")
+	}
+	if err := s.policy.ReleaseSocket(ctx, s.creation); err == nil {
+		return errors.New("Off source retired a held native alias")
+	}
+	_, err := desktopWindowsPolicyCall(s.policy, ctx, true, func() (struct{}, error) {
+		if s.policy.closed {
+			return struct{}{}, errors.New("Off source closed with a held alias")
+		}
+		return struct{}{}, s.policy.assertBaseline()
+	})
+	return err
+}
+func (s *DesktopWindowsNodeCompositionOffSocket) Release(ctx context.Context) error {
+	if s == nil || s.released {
+		return nil
+	}
+	var failure error
+	if s.Packet != nil {
+		failure = errors.Join(failure, s.Packet.Close())
+	}
+	if s.native != nil {
+		failure = errors.Join(failure, s.native.Close())
+	}
+	if s.held != nil {
+		failure = errors.Join(failure, s.held.Close())
+		s.held = nil
+	}
+	if failure != nil {
+		return failure
+	}
+	for {
+		if err := s.policy.ReleaseSocket(ctx, s.creation); err == nil {
+			s.released = true
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }

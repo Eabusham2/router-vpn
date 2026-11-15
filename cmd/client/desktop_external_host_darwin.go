@@ -63,13 +63,20 @@ func desktopMacOSExternalEligible(launch *desktopNodeLaunch) bool {
 }
 
 func prepareDesktopRetainedExternal(a *app, launch *desktopNodeLaunch) (desktopExternalRetainedRuntime, error) {
+	off := launch != nil && desktopExternalOffRequiresRetainedForOS(launch.external, "darwin")
 	if a == nil || !desktopMacOSExternalEligible(launch) {
+		if off {
+			return nil, errors.New("macOS external Off lost its original captured native graph")
+		}
 		return nil, nil
 	}
 	a.mu.Lock()
 	controller := a.localController
 	a.mu.Unlock()
 	if controller == nil || controller.nodeParent == nil {
+		if off {
+			return nil, errors.New("macOS external Off requires its original installed native controller")
+		}
 		return nil, nil
 	}
 	operation := a.connectionOperationContextOrBackground()

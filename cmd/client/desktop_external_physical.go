@@ -58,7 +58,7 @@ func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS 
 	if capture.Protocol != "http-connect" && capture.Protocol != "https-connect" && capture.Protocol != "shadowsocks" && capture.Protocol != "hysteria2" && capture.Protocol != "socks5" &&
 		capture.Protocol != "wireguard" && capture.Protocol != "amneziawg" && capture.Protocol != "openvpn" ||
 		!entry && (capture.EntryID != "" || capture.EntryTag != "") || !server && (capture.PredecessorSHA256 != "" || capture.Execution != "") ||
-		capture.StartLayer != "" && !desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !layeredSSPair && !layeredRouterFinal || capture.EntryStartLayer != "" && !layeredSSPair && !layeredRouterEntry || capture.KillSwitchPolicy == "off" {
+		capture.StartLayer != "" && !desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !layeredSSPair && !layeredRouterFinal || capture.EntryStartLayer != "" && !layeredSSPair && !layeredRouterEntry {
 		return nil
 	}
 	// Eligibility was established from the complete compiled capture. Any

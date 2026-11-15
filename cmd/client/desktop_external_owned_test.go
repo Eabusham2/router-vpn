@@ -129,7 +129,7 @@ func newDesktopWindowsExternalFixture(t *testing.T, policy string) *desktopWindo
 		}
 		profile.ID = "external-" + protocol
 		profile.Name = protocol
-		profile.KillSwitch, profile.KillSwitchPolicy = true, policy
+		profile.KillSwitch, profile.KillSwitchPolicy = policy != "off", policy
 		profile.MTUPolicy, profile.ManualMTU, profile.EffectiveMTU = "manual", 1360, 9000
 		profile.StartLayer, profile.MultihopExecution = "", "local"
 		if strings.HasPrefix(protocol, "hysteria2-") {
@@ -537,7 +537,7 @@ func (f *desktopWindowsExternalFixture) connect(t *testing.T, protocol string) *
 }
 
 func TestDesktopWindowsExternalPublicConnectAndDisconnect(t *testing.T) {
-	for _, policy := range []string{"on-connect", "always"} {
+	for _, policy := range []string{"off", "on-connect", "always"} {
 		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
 			t.Run(policy+"/"+protocol, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
@@ -781,10 +781,10 @@ func TestDesktopWindowsExternalPolicyFamiliesStayDistinct(t *testing.T) {
 	}
 }
 
-// The deliberately absent generic package stops this dispatch check at the
-// original verifier. It proves selection and absence of retained-owner effects,
-// not an unprotected connection or any native networking behavior.
-func TestDesktopWindowsExternalOffUsesOriginalGenericPreparation(t *testing.T) {
+// A deliberately incomplete controller must refuse supported Off graphs before
+// the legacy package verifier. Unsupported legacy shapes still reach that
+// verifier. Neither refusing boundary supplies native network acceptance.
+func TestDesktopWindowsExternalOffRequiresCapturedPreparation(t *testing.T) {
 	t.Setenv("HOMEVPN_ROOT", t.TempDir())
 	t.Setenv("HOMEVPN_PORTABLE", "0")
 	_, genericFailure := verifyBundledNative(desktopAmneziaPackageRoot())
@@ -813,9 +813,15 @@ func TestDesktopWindowsExternalOffUsesOriginalGenericPreparation(t *testing.T) {
 			}
 			before := cloneRouterProfile(profile)
 			launch, err := prepareDesktopExternalLaunch(a, profile, common.RouterProfile{}, exit, true, "")
-			if launch != nil || err == nil || err.Error() != genericFailure.Error() || captured != 0 {
-				t.Fatal("Off did not retain the original generic preparation boundary", err, captured)
+			eligible := desktopWindowsExternalGraphEligible(profile, common.RouterProfile{}, true, "")
+			wantError, wantCaptured := genericFailure.Error(), 0
+			if eligible {
+				wantError, wantCaptured = "native external preparation has no complete Windows host", 0
 			}
+			if launch != nil || err == nil || !strings.Contains(err.Error(), wantError) || captured != wantCaptured {
+				t.Fatal("Off lost its exact captured preparation boundary", err, captured, eligible)
+			}
+			captured = 0
 			if !reflect.DeepEqual(before, profile) || a.cmd != nil || a.nodeProtection != nil {
 				t.Fatal("Off dispatch changed the saved source or captured an owner")
 			}
@@ -1176,10 +1182,15 @@ func TestDesktopSpeedLabDNSObservationJoinsAdmission(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
-	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-hysteria2-aes-router", "hysteria2-aes-router-hysteria2-aes", "router-hysteria2-aes-xor-router", "hysteria2-aes-xor-router-hysteria2-aes-xor", "router-socks5-router", "socks5-router-socks5", "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast", "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong", "router-openvpn-tcp-router", "openvpn-tcp-router-openvpn-tcp", "router-openvpn-udp-router", "openvpn-udp-router-openvpn-udp", "router-openvpn-mixed-router", "openvpn-mixed-router-openvpn-mixed"} {
+	for _, direction := range []string{"router-external-router-off", "external-router-external-off", "router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-hysteria2-aes-router", "hysteria2-aes-router-hysteria2-aes", "router-hysteria2-aes-xor-router", "hysteria2-aes-xor-router-hysteria2-aes-xor", "router-socks5-router", "socks5-router-socks5", "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast", "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong", "router-openvpn-tcp-router", "openvpn-tcp-router-openvpn-tcp", "router-openvpn-udp-router", "openvpn-udp-router-openvpn-udp", "router-openvpn-mixed-router", "openvpn-mixed-router-openvpn-mixed"} {
 		t.Run(direction, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				f := newDesktopWindowsExternalFixture(t, "always")
+				policy := "always"
+				if strings.HasSuffix(direction, "-off") {
+					policy = "off"
+					direction = strings.TrimSuffix(direction, "-off")
+				}
+				f := newDesktopWindowsExternalFixture(t, policy)
 				a := f.base.a
 				protocol := "https-connect"
 				if strings.Contains(direction, "hysteria2") {

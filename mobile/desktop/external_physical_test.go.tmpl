@@ -891,7 +891,7 @@ func runExternalPhysicalFactoryProtocolCases(t *testing.T, protocols []string, p
 	for _, protocol := range protocols {
 		for _, lan := range []bool{false, true} {
 			for _, ipv6 := range []string{"off", "on"} {
-				for _, kill := range []string{"on-connect", "always"} {
+				for _, kill := range []string{"off", "on-connect", "always"} {
 					// Reuse only the immutable compiled profile; each fault below
 					// constructs and retires an independent native owner.
 					// Ordinary OpenVPN imports require public provider remotes;

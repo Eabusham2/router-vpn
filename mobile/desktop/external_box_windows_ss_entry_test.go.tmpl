@@ -906,7 +906,7 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 	x509.SetFallbackRoots(roots)
 	for _, final := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 		t.Run(final, func(t *testing.T) {
-			names := []string{"on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused"}
+			names := []string{"off", "on-connect", "always", "cipher-aes128", "cipher-chacha20", "successor-and-original-restore", "reject/entry-key", "reject/entry-exit", "reject/final-key", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused"}
 			if final == "hysteria2" {
 				names = append(names, "reject/final-trust", "final-wrapper-tcp-denied")
 			}
@@ -922,6 +922,9 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 				names = append(names, "reject/entry-layer-key", "reject/final-layer-key", "reject/entry-whitening", "reject/final-whitening", "reject/entry-layer-inner", "reject/final-layer-inner")
 			}
 			for _, name := range names {
+				if name == "off" && final != "shadowsocks" {
+					continue
+				}
 				t.Run(name, func(t *testing.T) {
 					if name == "receipt-identity" {
 						desktopWFPSSEntryReceiptIdentityControl(t)
@@ -966,7 +969,7 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 						rootTag = "routervpn-external-entry-start-layer"
 					}
 					kill := "always"
-					if name == "on-connect" {
+					if name == "off" || name == "on-connect" {
 						kill = name
 					}
 					original, source, capture := desktopExternalWFPSSEntryOriginal(t, p, method, final, kill)
@@ -1188,9 +1191,9 @@ func TestRouterVPNDesktopExternalWindowsSSEntryWFP(t *testing.T) {
 					}
 					prove(f)
 					oracle := desktopExternalWFPStartReference(t, ca, "")
-					desktopExternalWFPRequireBlocked(t, oracle)
+					f.requireHostPolicy(t, oracle)
 					retained = f.drain(t)
-					desktopExternalWFPRequireBlocked(t, oracle)
+					f.requireHostPolicy(t, oracle)
 					if name == "successor-and-original-restore" || strings.HasPrefix(name, "layers/") {
 						previous := retained
 						next := desktopExternalWFPBox(t, original, source, capture, &previous, false)

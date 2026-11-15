@@ -44,6 +44,11 @@ func newExternalLinuxLifecycleFixture(t *testing.T, protocol, kill string, admit
 	source := &nodeLinuxJoinedSourceFixture{nodeLinuxLifecycleSource: &nodeLinuxLifecycleSource{nodeUnixFactorySource: physical}}
 	source.record = mobiletor.DesktopLinuxProtectionRecord{Capture: external.network.brokerCapture(), Owner: source.owner, UID: 22171,
 		PermitPrefix: "rvpn_" + strings.Repeat("e", 20), TableHandle: 11, ChainHandle: 12, BaselineSHA256: strings.Repeat("f", 64)}
+	source.record.HostProtectionOff = kill == "off"
+	if kill == "off" {
+		source.record.TableName = "router_vpn_node_" + source.record.Capture.SessionID
+		source.record.DenyHandle = 13
+	}
 	source.guardian = nodeLinuxLifecycleGuardianFixture(source.record.Owner.ProcessID)
 	f := &externalLinuxLifecycleFixture{external: external, manager: manager, source: source}
 	ctx, err := WithExternalLinuxPhysicalBaseline(external.network.ctx, policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture) error {
@@ -93,7 +98,7 @@ func (f *externalLinuxLifecycleFixture) prepare(t *testing.T, fault string) erro
 			// synthesize private or selected-DNS exceptions for those peers.
 			want = nil
 		}
-		if f.baseline != 1 || f.admitted != 0 || capture != f.source.record.Capture || ctx.Err() != nil || len(options.LANPrefixes) != 0 ||
+		if options.HostProtectionOff != (f.external.policy.Metadata().KillSwitchPolicy == "off") || f.baseline != 1 || f.admitted != 0 || capture != f.source.record.Capture || ctx.Err() != nil || len(options.LANPrefixes) != 0 ||
 			!reflect.DeepEqual(options.PrivateDestinations, want) || len(options.Interfaces) != 1 || !options.Interfaces[0].Address.Is4() {
 			t.Error("external source changed selected IPv6/LAN/private tuples or its original admission order")
 		}
@@ -107,7 +112,7 @@ func (f *externalLinuxLifecycleFixture) prepare(t *testing.T, fault string) erro
 
 func TestRouterVPNExternalLinuxLifecycleKeepsTypedSourceAndJoinedOwner(t *testing.T) {
 	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
-		for _, kill := range []string{"on-connect", "always"} {
+		for _, kill := range []string{"on-connect", "always", "off"} {
 			t.Run(protocol+"/"+kill, func(t *testing.T) {
 				f := newExternalLinuxLifecycleFixture(t, protocol, kill, nil)
 				n, policy := f.external.network, f.external.policy

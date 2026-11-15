@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -54,6 +55,7 @@ func init() {
 // exit/Router proof, authenticated app journal or public Connect acceptance.
 type linuxExternalNativeLifecycle struct {
 	policy     linuxPhysicalPolicy
+	node       *mobilemultihop.DesktopNodePolicy
 	network    linuxPhysicalNetwork
 	service    adapter.Service
 	lower      adapter.Outbound
@@ -138,7 +140,7 @@ func newLinuxExternalNativeLifecycle(t *testing.T, kind, kill string, remote net
 				return err
 			}
 		}
-		f.baseline, err = mobiletor.NewDesktopLinuxNodeBaseline(ctx, capture, false)
+		f.baseline, err = mobiletor.NewDesktopLinuxNodeBaselineWithPolicy(ctx, capture, false, kill)
 		return err
 	}
 	admit := func(ctx context.Context, prepared LinuxPhysicalPrepared) error {
@@ -175,7 +177,7 @@ func newLinuxExternalNativeLifecycle(t *testing.T, kind, kill string, remote net
 				t.Fatal(err)
 			}
 		}
-		f.policy.node = policy
+		f.policy.node, f.node = policy, policy
 		meta := policy.Metadata()
 		options := NodeCaptureOptions{meta.SessionID, meta.SourceSHA256}
 		raw, err := NewNodeNetworkOwner(native.ctx, nil, mobilemultihop.DesktopNodeNetworkTag, options)
@@ -276,6 +278,9 @@ func newLinuxExternalNativeLifecycle(t *testing.T, kind, kill string, remote net
 }
 
 func (f *linuxExternalNativeLifecycle) start() error {
+	if f.node != nil && f.policy.node != f.node {
+		return errors.New("fixture replaced its original typed Router policy")
+	}
 	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
 		if err := f.service.Start(stage); err != nil {
 			return err
@@ -454,7 +459,8 @@ func linuxExternalLifecycleProbeNetwork(t *testing.T, f *linuxExternalNativeLife
 	}
 }
 
-func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
+func linuxExternalLifecycleNamespace(t *testing.T) {
+	t.Helper()
 	// The guardian deliberately rejects the runner's RFC2544 benchmark range
 	// as a public exit. Add an exact private pair only inside the already-owned
 	// disposable namespace, so the real compiler must grant its exact private
@@ -505,6 +511,10 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
+	linuxExternalLifecycleNamespace(t)
 	linuxExternalSOCKSGuardianCases(t)
 	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
 		t.Run(protocol+"-succession", func(t *testing.T) {
@@ -565,11 +575,11 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 				linuxExternalLifecycleProbeNetwork(t, next, "udp", fallback, true)
 				linuxExternalLifecycleProbeNetwork(t, nil, "udp", fallback, true)
 			}
-			restored := newLinuxExternalNativeLifecycle(t, "node", "always", remote, next, "", old.policy.node.OriginalProfile())
-			if restored.policy.node.OriginalProfile() != old.policy.node.OriginalProfile() ||
-				old.policy.node.Metadata().OriginalSourceSHA256 != restored.policy.node.Metadata().OriginalSourceSHA256 ||
-				old.policy.node.Metadata().SourceSHA256 == restored.policy.node.Metadata().SourceSHA256 ||
-				old.policy.node.Metadata().SessionID == restored.policy.node.Metadata().SessionID {
+			restored := newLinuxExternalNativeLifecycle(t, "node", "always", remote, next, "", old.node.OriginalProfile())
+			if restored.node.OriginalProfile() != old.node.OriginalProfile() ||
+				old.node.Metadata().OriginalSourceSHA256 != restored.node.Metadata().OriginalSourceSHA256 ||
+				old.node.Metadata().SourceSHA256 == restored.node.Metadata().SourceSHA256 ||
+				old.node.Metadata().SessionID == restored.node.Metadata().SessionID {
 				t.Fatal("native restoration changed sealed Router source or reused old session")
 			}
 			if err := restored.start(); err != nil {
@@ -619,7 +629,7 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 				t.Fatal("candidate cleanup released original protection")
 			}
 			linuxExternalLifecycleProbe(t, nil, remote, true)
-			restored := newLinuxExternalNativeLifecycle(t, "node", "on-connect", remote, old, "", old.policy.node.OriginalProfile())
+			restored := newLinuxExternalNativeLifecycle(t, "node", "on-connect", remote, old, "", old.node.OriginalProfile())
 			if err := restored.start(); err != nil {
 				t.Fatal(err)
 			}
@@ -632,6 +642,111 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			linuxExternalLifecycleProbe(t, nil, remote, false)
+		})
+	}
+}
+
+// The external constructor must project Off into the same original UID-only
+// native owner used by its physical broker. Host reachability is independent
+// of both successful permits and a retained, unjoined caller descriptor.
+func TestDesktopLinuxGuardianKernelExternalOff(t *testing.T) {
+	linuxExternalLifecycleNamespace(t)
+	for _, ending := range []string{"live", "cancelled", "network-change"} {
+		t.Run(ending, func(t *testing.T) {
+			remote := linuxExternalLifecyclePeerNetwork(t, "udp4")
+			f := newLinuxExternalNativeLifecycle(t, "shadowsocks", "off", remote, nil, "", nil)
+			if err := f.start(); err != nil {
+				t.Fatal(err)
+			}
+			if f.prepared == nil || !f.prepared.Protection.HostProtectionOff || f.prepared.Policy != "off" {
+				t.Fatal("external Off lost its captured original native mode")
+			}
+			probe := func(owner *linuxExternalNativeLifecycle, blocked bool) {
+				linuxExternalLifecycleProbeNetwork(t, owner, "udp", remote, blocked)
+			}
+			probe(nil, false)
+			probe(f, false)
+			state := f.network.linuxPhysicalSnapshot()
+			source, ok := state.source.(*mobiletor.DesktopLinuxSocketPolicy)
+			if !ok || state.capture != f.prepared.Protection.Capture {
+				t.Fatal("external Off substituted its actual original socket source")
+			}
+			foreign := state.capture
+			foreign.SourceSHA256 = strings.Repeat("9", 64)
+			if _, err := source.Select(context.Background(), foreign, "udp", remote); err == nil {
+				t.Fatal("foreign source acquired original external Off authority")
+			}
+			binding, err := source.Select(context.Background(), state.capture, "udp", remote)
+			if err != nil {
+				t.Fatal(err)
+			}
+			creation := mobiletor.DesktopSocketCreation{Capture: state.capture, Binding: binding, SocketID: linuxExternalLifecycleSession(t), Network: "udp"}
+			socket, err := source.CreateSocket(context.Background(), creation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer socket.File.Close()
+			raw, err := socket.File.SyscallConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := source.Bind(context.Background(), state.capture, binding, "udp4", raw); err != nil {
+				t.Fatal(err)
+			}
+			if err := syscall.Bind(int(socket.File.Fd()), &syscall.SockaddrInet4{Addr: binding.LocalAddress.As4()}); err != nil {
+				t.Fatal(err)
+			}
+			packet, err := net.FilePacketConn(socket.File)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer packet.Close()
+			ungranted := func() {
+				t.Helper()
+				packet.SetDeadline(time.Now().Add(200 * time.Millisecond))
+				_, writeErr := packet.WriteTo([]byte("external ungranted UID"), net.UDPAddrFromAddrPort(remote))
+				body := make([]byte, 64)
+				_, _, readErr := packet.ReadFrom(body)
+				if writeErr == nil && readErr == nil {
+					t.Fatal("external Off allowed an ungranted engine socket")
+				}
+			}
+			ungranted()
+			switch ending {
+			case "cancelled":
+				f.network.(*ExternalNetworkOwner).Cancel()
+			case "network-change":
+				changed := *f.physical
+				changed.Index++
+				f.manager.selected.Store(&changed)
+			}
+			if ending != "live" {
+				probe(f, true)
+			}
+			if err := f.service.Close(); err == nil {
+				t.Fatal("external Off acknowledged a held original kernel descriptor")
+			}
+			if _, _, err := joinedLinuxPhysicalSource(context.Background(), f.network, f.policy); err == nil {
+				t.Fatal("external Off failed close fabricated a joined original owner")
+			}
+			probe(nil, false)
+			ungranted()
+			socket.File.Close()
+			if err := source.ReleaseSocket(context.Background(), creation); err == nil {
+				t.Fatal("external Off wrapper close overlooked its actual kernel duplicate")
+			}
+			packet.Close()
+			if err := source.ReleaseSocket(context.Background(), creation); err != nil {
+				t.Fatal(err)
+			}
+			f.join(t)
+			if err := f.baseline.Release(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := mobiletor.ReadDesktopLinuxNodeAbsence(context.Background(), state.capture.SessionID); err != nil {
+				t.Fatal(err)
+			}
+			probe(nil, false)
 		})
 	}
 }

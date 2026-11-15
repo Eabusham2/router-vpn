@@ -28,6 +28,22 @@ import (
 
 const macOSExternalNativeMarker = "fixture-external-host"
 
+var macOSExternalOffCases = []string{
+	"shadowsocks-off", "hysteria2-off", "wireguard-off", "wg-entry-ss-off",
+	"ss-entry-aes256-ss-aes256-off", "openvpn-entry-ss-tcp-off",
+}
+
+// Preserve the original finite encrypted scenarios and vary only the saved
+// protection choice. Unknown suffixes cannot become an admitted fixture.
+func macOSExternalOffBase(scenario string) (string, bool) {
+	for _, candidate := range macOSExternalOffCases {
+		if scenario == candidate {
+			return strings.TrimSuffix(scenario, "-off"), true
+		}
+	}
+	return scenario, false
+}
+
 // This separate test-only role serves the actual application handlers inside
 // the installed supervisor's authenticated original controller. The regular
 // installer/controller fixture retains its existing no-PF-mutation lifecycle.
@@ -316,6 +332,9 @@ func TestMacOSRetainedExternalNativeSealedProtocols(t *testing.T) {
 		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit", "openvpn-tcp", "openvpn-tcp-always", "openvpn-udp", "openvpn-udp-always", "openvpn-tcp-fallback", "openvpn-tcp-fallback-always", "openvpn-mixed-fallback", "openvpn-mixed-fallback-always", "openvpn-tcp-wrong-control", "openvpn-udp-wrong-control", "openvpn-tcp-wrong-provider-trust", "openvpn-udp-wrong-password", "openvpn-tcp-wrong-username", "openvpn-udp-wrong-dns", "openvpn-tcp-wrong-trust", "openvpn-udp-wrong-exit", "wg-entry-ss", "wg-entry-ss-always", "wg-entry-ss-wrong-entry-key", "wg-entry-ss-wrong-entry-public", "wg-entry-ss-wrong-exit-key", "wg-entry-ss-wrong-dns", "wg-entry-ss-wrong-trust", "wg-entry-ss-wrong-exit", "awg-entry-ss-fast", "awg-entry-ss-fast-always", "awg-entry-ss-strong", "awg-entry-ss-strong-always", "awg-entry-ss-fast-wrong-entry-key", "awg-entry-ss-strong-wrong-entry-psk", "awg-entry-ss-fast-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-public", "awg-entry-ss-strong-wrong-exit-key", "awg-entry-ss-strong-wrong-dns", "awg-entry-ss-strong-wrong-trust", "awg-entry-ss-strong-wrong-exit"}, macOSExternalConnectEntryCases...), macOSExternalHysteriaEntryCases...), macOSExternalSOCKSEntryCases...), append(append(macOSExternalHysteriaLayerEntryCases, macOSExternalWireGuardFinalCases...), append(append(macOSExternalAmneziaFinalCases, macOSExternalOpenVPNFinalCases...), append(append(append(macOSExternalSSEntryCases, macOSExternalSSLayerCases...), macOSExternalSSCONNECTCases...), append(macOSExternalSSHysteriaCases, macOSExternalOpenVPNSS2022Cases...)...)...)...)...) {
 		t.Run(protocol, func(t *testing.T) { macOSExternalNativeCase(t, protocol) })
 	}
+	for _, scenario := range macOSExternalOffCases {
+		t.Run(scenario, func(t *testing.T) { macOSExternalNativeCase(t, scenario) })
+	}
 }
 
 func macOSExternalNativeCase(t *testing.T, scenario string) {
@@ -463,6 +482,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		t.Fatalf("actual Darwin external ownership/readiness receipt failed: status=%d error=%v response=%s", status, err, raw)
 	}
 	macOSExternalNativeLayerAuthority(t, peer, live)
+	if peer.protectionPolicy() == "off" {
+		macOSExternalNativeOffKernel(t, ctx, live)
+	}
 	if (protocol == "wireguard" || protocol == "amneziawg") && !peer.packetEntry {
 		expectedIPv6 := "off"
 		if peer.policy == "always" {
@@ -554,6 +576,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	if peer.openvpnEntry && peer.entryPolicy == "always" {
 		t.Logf("actual sealed Darwin mixed protection accepted %s: original entry Always retained through joined disconnect, final DNS LAN IPv6 unchanged", scenario)
 	}
+	if peer.protectionPolicy() == "off" {
+		t.Logf("actual sealed Darwin Off accepted %s: original dispatch-only PF, selected DNS and exit proof, original child and reference retired", scenario)
+	}
 	t.Logf("actual sealed Darwin ordinary host accepted %s: native child, selected DNS, exit proof, MTU%d, original PF retirement and controller join", scenario, configuredMTU)
 }
 
@@ -580,6 +605,63 @@ func macOSExternalNativeLayerAuthority(t *testing.T, peer *macOSExternalNativePe
 	}
 	if remote, err := netip.ParseAddrPort(value.PhysicalAddress); err != nil || remote == peer.inner {
 		t.Fatal("Darwin layer used the inner physical socket", err)
+	}
+}
+
+// Observe the actual installed PF reference, canonical dispatch-only baseline
+// and complete durable owner without mutating the running namespace. The
+// separate native guardian gate exercises host pass, isolated UID denial,
+// colliding states and held aliases; this verifies the shipping app selected
+// that same Off policy while its real encrypted path is active.
+func macOSExternalNativeOffKernel(t *testing.T, parent context.Context, live macOSExternalNativeResult) {
+	t.Helper()
+	receipt := live.Baseline
+	if receipt == nil || receipt.Phase != "active" || !receipt.Baseline.Present || receipt.Capture.Schema != 2 || receipt.Capture.Policy != "off" || receipt.Capture.FinalPolicy != "off" || receipt.Capture.Session != live.Session || receipt.Capture.Source != live.Source ||
+		(receipt.Capture.EntryProfileID == "" && receipt.Capture.EntryPolicy != "" || receipt.Capture.EntryProfileID != "" && receipt.Capture.EntryPolicy != "off") {
+		t.Fatal("Off did not retain its complete original member policy")
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	request, err := mobiletor.EncodeDesktopDarwinPFReferenceRequest(mobiletor.DesktopDarwinPFReferenceRequest{Schema: 1, Token: receipt.Token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := mobiletor.RunDesktopDarwinPFReference(ctx, request)
+	var reference mobiletor.DesktopDarwinPFReferenceResult
+	if err != nil || decodeRelayControlJSON(raw, &reference) != nil || reference.Token != receipt.Token || !reference.Present {
+		t.Fatal("Off lost its exact live PF reference", err, string(raw))
+	}
+	proof := mobiletor.DesktopDarwinPFBaselineProof{Present: true, RulesSHA256: receipt.Baseline.Rules}
+	request, err = mobiletor.EncodeDesktopDarwinPFBaselineRequest(mobiletor.DesktopDarwinPFBaselineRequest{
+		Schema: 1, Action: "replace", IsolatedOnly: true, HomeLANAccess: receipt.Capture.HomeLAN,
+		SessionID: live.Session, SourceSHA256: live.Source, Expected: []mobiletor.DesktopDarwinPFBaselineProof{proof},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = mobiletor.RunDesktopDarwinPFBaseline(ctx, request, false)
+	var baseline mobiletor.DesktopDarwinPFBaselineResult
+	if err != nil || decodeRelayControlJSON(raw, &baseline) != nil || baseline.Applied || baseline.Previous != proof || baseline.Target != proof {
+		t.Fatal("Off active kernel baseline changed its original dispatch-only policy", err, string(raw))
+	}
+	raw, err = readPrivateRegular(filepath.Join(macOSOwnedControllerRoot, "run", "kill-switch.json"), 64<<10)
+	var journal struct {
+		Platform string                        `json:"platform"`
+		Family   string                        `json:"native_socket_family"`
+		Broker   bool                          `json:"native_socket_broker"`
+		Capture  desktopMacOSExternalSelection `json:"native_external_capture"`
+		Token    string                        `json:"pf_token"`
+		Policy   string                        `json:"policy"`
+		Pending  bool                          `json:"darwin_transition_pending"`
+		Baseline struct {
+			Complete bool                                     `json:"complete"`
+			Request  mobiletor.DesktopDarwinPFBaselineRequest `json:"request"`
+			Target   mobiletor.DesktopDarwinPFBaselineProof   `json:"target"`
+		} `json:"darwin_native_baseline"`
+	}
+	if err != nil || json.Unmarshal(raw, &journal) != nil || journal.Platform != "darwin" || journal.Family != "external-v1" || !journal.Broker || journal.Pending || journal.Capture != receipt.Capture || journal.Token != receipt.Token || journal.Policy != "off" || !journal.Baseline.Complete || journal.Baseline.Target != proof ||
+		journal.Baseline.Request.Schema != 1 || journal.Baseline.Request.Action != "replace" || !journal.Baseline.Request.IsolatedOnly || journal.Baseline.Request.SessionID != live.Session || journal.Baseline.Request.SourceSHA256 != live.Source || journal.Baseline.Request.HomeLANAccess != receipt.Capture.HomeLAN {
+		t.Fatal("Off durable journal lost its exact original dispatch-only owner", err)
 	}
 }
 

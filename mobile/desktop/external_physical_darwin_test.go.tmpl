@@ -46,8 +46,8 @@ func TestRouterVPNExternalPhysicalDarwinCapturesPolicyAndRetainsLateOwner(t *tes
 			}
 			return c.fixture.network.prepareExternalPhysicalDarwin(c.fixture.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopDarwinSocketOptions) (desktopDarwinPhysicalPolicy, error) {
 				if !reflect.DeepEqual(options.Interfaces, wantInterfaces) || !reflect.DeepEqual(options.LANPrefixes, wantLAN) ||
-					!reflect.DeepEqual(options.PrivateDestinations, wantPrivate) {
-					t.Error("Darwin ordinary factory changed selected LAN, IPv6 or exact private physical destinations", options)
+					!reflect.DeepEqual(options.PrivateDestinations, wantPrivate) || options.HostProtectionOff != (c.kill == "off") {
+					t.Error("Darwin ordinary factory changed selected protection, LAN, IPv6 or exact private physical destinations", options)
 				}
 				if len(options.Interfaces) < 1 || c.ipv6 == "off" && (len(options.Interfaces) != 1 || !options.Interfaces[0].Address.Is4()) {
 					t.Error("Darwin ordinary factory enabled an unselected physical family")

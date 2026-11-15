@@ -475,6 +475,7 @@ func linuxHostTUNExternalPublic(ctx context.Context, a *app, session *desktopLin
 	if !exists || profile.UseCount != 1 || profile.PublicIP != "203.0.113.88" || desktopOwnedNodeProfileToken(profile) != host.externalPersistedRevision {
 		return host, errors.New("public external Connect reported persistence without writing the captured profile")
 	}
+	result.SelectedOff = host.selection.Policy == "off"
 	result.Stage, result.ExternalSession, result.Proof, result.MTU, result.PublicPersisted = "external", host.selection.SessionID, &proof, 1376, true
 	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
 		return host, err
@@ -632,6 +633,7 @@ func linuxHostTUNExternalTemporary(ctx context.Context, a *app, session *desktop
 			if err != nil || proved != external || external.selection.SessionID == result.OriginalSession || external.selection.SourceSHA256 == originalSource {
 				return last, errors.Join(err, errors.New("external succession reused original Router proof authority"))
 			}
+			result.SelectedOff = external.selection.Policy == "off"
 			result.Stage, result.Proof, result.MTU = "external", &proof, 1376
 		}
 		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {

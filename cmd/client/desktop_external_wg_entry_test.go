@@ -89,7 +89,7 @@ func desktopExternalPacketEntryLayerExitFixture(t *testing.T, kill, variant, pro
 		entry.External.Protocol, entry.External.AmneziaWG = "amneziawg", &common.ExternalAmneziaWGConfig{ExternalWireGuardConfig: *entry.External.WireGuard, Parameters: parameters}
 		entry.External.WireGuard = nil
 	}
-	profile.KillSwitchPolicy, profile.KillSwitch, profile.MultihopExecution = kill, true, "local"
+	profile.KillSwitchPolicy, profile.KillSwitch, profile.MultihopExecution = kill, kill != "off", "local"
 	profile.MTUPolicy, profile.ManualMTU = "manual", 1360
 	if protocol == "openvpn" {
 		profile.ManualMTU = 1280
@@ -519,7 +519,7 @@ func TestDesktopExternalPacketEntryHysteriaLayersPreserveUnsupportedGraphs(t *te
 			case "unpaired-layer":
 				launch.external.profile.External.StartLayer = nil
 			}
-			if desktopExternalPacketEntryOwner(launch.external) {
+			if desktopExternalRetainedEntryForOS(launch.external, "darwin") {
 				t.Fatal("unsupported layer composition acquired retained entry owner", fault)
 			}
 		})
@@ -561,7 +561,7 @@ func TestDesktopExternalPacketEntryWireGuardPreservesUnsupportedGraphs(t *testin
 			case "off":
 				launch.external.profile.KillSwitchPolicy = "off"
 			}
-			if desktopExternalPacketEntryOwner(launch.external) {
+			if desktopExternalRetainedEntryForOS(launch.external, "darwin") {
 				t.Fatal("packet final expanded an unimplemented ownership boundary", fault)
 			}
 		})
@@ -619,7 +619,7 @@ func TestDesktopExternalPacketEntryAmneziaPreservesUnsupportedGraphs(t *testing.
 			case "off":
 				launch.external.profile.KillSwitchPolicy = "off"
 			}
-			if desktopExternalPacketEntryOwner(launch.external) {
+			if desktopExternalRetainedEntryForOS(launch.external, "darwin") {
 				t.Fatal("unimplemented graph acquired original packet owner", fault)
 			}
 		})
@@ -688,7 +688,7 @@ func TestDesktopExternalPacketEntryOpenVPNPreservesUnsupportedGraphs(t *testing.
 			case "off":
 				launch.external.profile.KillSwitchPolicy = "off"
 			}
-			if desktopExternalPacketEntryOwner(launch.external) {
+			if desktopExternalRetainedEntryForOS(launch.external, "darwin") {
 				t.Fatal("OpenVPN final expanded unsupported owner graph", fault)
 			}
 		})

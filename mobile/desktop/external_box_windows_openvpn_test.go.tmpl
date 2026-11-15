@@ -642,7 +642,10 @@ func TestRouterVPNDesktopExternalWindowsOpenVPNWFP(t *testing.T) {
 	alias := desktopExternalCreateAlias(t)
 	for _, network := range []string{"tcp", "udp", "mixed"} {
 		t.Run(network, func(t *testing.T) {
-			for _, name := range []string{"on-connect", "always", "successor-and-original-restore", "reject/trust", "reject/control-key", "reject/dns", "cancelled-proof", "foreign-predecessor", "commit-refused"} {
+			for _, name := range []string{"off", "on-connect", "always", "successor-and-original-restore", "reject/trust", "reject/control-key", "reject/dns", "cancelled-proof", "foreign-predecessor", "commit-refused"} {
+				if name == "off" && network != "tcp" {
+					continue
+				}
 				t.Run(name, func(t *testing.T) {
 					var retained mobiletor.DesktopWindowsProtectionTarget
 					desktopExternalWFPCleanup(t, &retained)
@@ -682,7 +685,7 @@ func TestRouterVPNDesktopExternalWindowsOpenVPNWFP(t *testing.T) {
 					}
 					profile := desktopOpenVPNCompositionProfile(pki, remotes, control, profileFault)
 					kill := "always"
-					if name == "on-connect" {
+					if name == "off" || name == "on-connect" {
 						kill = name
 					}
 					original, source, capture := desktopExternalWFPOpenVPNOriginal(t, profile, kill)
@@ -756,15 +759,15 @@ func TestRouterVPNDesktopExternalWindowsOpenVPNWFP(t *testing.T) {
 					}
 
 					connected := desktopExternalWFPOpenVPNProve(t, f, peer, alias, remotes)
-					if name == "on-connect" {
+					if name == "off" || name == "on-connect" {
 						desktopExternalWFPOpenVPNMeasurements(t, f, peer, alias, remotes, connected)
 					}
 					// An independent provider proves reachability, then verifies this app's
 					// raw UDP is denied while only the captured OpenVPN sockets are granted.
 					oracle := desktopExternalWFPStartReference(t, ca, "")
-					desktopExternalWFPRequireBlocked(t, oracle)
+					f.requireHostPolicy(t, oracle)
 					retained = f.drain(t)
-					desktopExternalWFPRequireBlocked(t, oracle)
+					f.requireHostPolicy(t, oracle)
 					if name == "successor-and-original-restore" {
 						for i := 0; i < 2; i++ {
 							previous := retained

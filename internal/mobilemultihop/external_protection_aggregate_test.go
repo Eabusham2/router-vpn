@@ -35,12 +35,6 @@ func TestExternalDesktopProtectionAggregatesOnlyOriginalParticipants(t *testing.
 						if target == "windows" && entryKind == "wireguard" {
 							continue
 						}
-						if want == "off" {
-							if err == nil {
-								t.Fatal("all-Off native admission opened", target)
-							}
-							continue
-						}
 						if err != nil || adapted.Metadata().KillSwitchPolicy != want {
 							t.Fatal("native policy downgraded original member", target, err)
 						}

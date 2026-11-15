@@ -38,6 +38,8 @@ type desktopExternalRuntime struct {
 	latencyGeneration                      uint64
 	latencyFailed                          bool
 	source, capture                        []byte
+	protection                             desktopExternalProtectionCapture
+	offRetainedTargets                     uint8
 	predecessor                            string
 	session, network, selection, execution string
 	networkIdentityContext                 func(context.Context) (string, error)
@@ -303,15 +305,20 @@ func compileDesktopExternalGraphCapturedExecution(graph map[string]any, profile,
 		selection = restored // Restoring an already proved winner never reruns Compare.
 	}
 	progress := &comparisonOwner{value: routeComparisonProgress{ID: session, Stage: "starting", Measurements: []routechoice.Measurement{}}}
-	return &desktopNodeLaunch{profileID: physicalID, policyProfileID: policyID, endpoint: endpoint, mode: "external-" + exit.Protocol, config: []byte(compiled.Config()), metadata: []byte(compiled.Metadata()), external: &desktopExternalRuntime{source: source, capture: []byte(prepared), predecessor: predecessor, session: session, selection: selection, expected: expected, profile: profile, entry: entry, physicalEndpoints: physicalEndpoints, physicalEgress: physicalEgress, direct: direct, progress: progress}}, nil
+	launch := &desktopNodeLaunch{profileID: physicalID, policyProfileID: policyID, endpoint: endpoint, mode: "external-" + exit.Protocol, config: []byte(compiled.Config()), metadata: []byte(compiled.Metadata()), external: &desktopExternalRuntime{source: source, capture: []byte(prepared), protection: captureDesktopExternalProtection(compiled, source, []byte(prepared)), predecessor: predecessor, session: session, selection: selection, expected: expected, profile: profile, entry: entry, physicalEndpoints: physicalEndpoints, physicalEgress: physicalEgress, direct: direct, progress: progress}}
+	launch.external.offRetainedTargets = desktopExternalOriginalOffTargets(launch.external)
+	return launch, nil
 }
 
 func prepareDesktopExternalLaunch(a *app, profile, entry common.RouterProfile, exit standardExit, direct bool, restored string) (*desktopNodeLaunch, error) {
-	if host := a.desktopNodeConnectionHost(); host != nil && desktopExternalProtectionPolicy(profile, entry, direct) != "off" {
+	if host := a.desktopNodeConnectionHost(); host != nil && (desktopExternalProtectionPolicy(profile, entry, direct) != "off" || desktopWindowsExternalGraphEligible(profile, entry, direct, restored)) {
 		if !desktopWindowsExternalGraphEligible(profile, entry, direct, restored) {
 			return nil, errors.New("this protected Windows external graph has no captured native controller successor; the previous path is retained")
 		}
 		return prepareDesktopWindowsExternalLaunch(a, host, profile, entry, exit, direct, restored)
+	}
+	if runtime.GOOS == "windows" && desktopExternalProtectionPolicy(profile, entry, direct) == "off" && desktopWindowsExternalGraphEligible(profile, entry, direct, restored) {
+		return nil, errors.New("captured Off external graph requires its installed Windows controller")
 	}
 	binary, err := verifyBundledNative(desktopAmneziaPackageRoot())
 	if err != nil {

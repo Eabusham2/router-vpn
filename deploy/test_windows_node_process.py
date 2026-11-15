@@ -135,6 +135,8 @@ SHARED_TESTS = (
     "TestDesktopNodePublicALLCancellationKeepsCapturedOperation",
     "TestSpeedLabFallbackReleaseRequiresCapturedTransaction",
     "TestDesktopExternalProtectionPublicRouteUsesActualAggregate",
+    "TestDesktopExternalOffCapturedOwnerRejectsSubstitution",
+    "TestDesktopExternalOffWindowsRouterKeepsOriginalObligation",
     "TestDesktopExternalProtectionTemporaryGuardKeepsOriginalAggregate",
     "TestDesktopWindowsExternalCurrentProofContext",
     "TestDesktopNodeProcessOwnerContextPreservesOriginalCallback",
@@ -143,7 +145,7 @@ SHARED_TESTS = (
     "TestDesktopWindowsExternalInvalidProofCannotConnect",
     "TestDesktopWindowsExternalStagesBeforeStoppingPrevious",
     "TestDesktopWindowsExternalPolicyFamiliesStayDistinct",
-    "TestDesktopWindowsExternalOffUsesOriginalGenericPreparation",
+    "TestDesktopWindowsExternalOffRequiresCapturedPreparation",
     "TestDesktopWindowsExternalProtectionKeepsCapturedController",
     "TestDesktopWindowsExternalProcessArgumentsRemainExact",
     "TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious",
@@ -416,25 +418,30 @@ ARGUMENT_CASES = (
 PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2",
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
-EXPECTED = (*REQUIRED, *("TestDesktopExternalProtectionPublicRouteUsesActualAggregate/" + case for case in ("off-entry-always", "on-connect-entry-always")), *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
+EXTERNAL_OFF_CAPTURE_CASES = tuple("TestDesktopExternalOffCapturedOwnerRejectsSubstitution/paired-" + str(paired).lower() + "/" + fault
+    for paired in (False, True)
+    for fault in ("none", "source", "capture", "expected", "final-policy", "entry-policy", "final-id", "entry-id", "missing-seal", "changed-seal", "changed-shape")
+    if paired or fault not in ("entry-policy", "entry-id"))
+
+EXPECTED = (*REQUIRED, *EXTERNAL_OFF_CAPTURE_CASES, *("TestDesktopExternalOffWindowsRouterKeepsOriginalObligation/" + case for case in ("local","server","auto")), *("TestDesktopExternalProtectionPublicRouteUsesActualAggregate/" + case for case in ("off-entry-always", "on-connect-entry-always")), *(root + "/" + case for root, cases in PRODUCT_CASES.items() for case in cases), *(root + "/" + case for root, cases in ORDERED_CASES.items() for case in cases), *(root + "/" + case for root, cases in IMPORTED_CASES.items() for case in cases),
             *(root + "/" + case for root, cases in PREFIX_CASES.items() for case in cases),
             *("TestDesktopNodeRecoveryNativeObserverRequiresCaller/" + case for case in ("missing", "cancelled", "missing-observer")),
             *("TestDesktopProtectionOffContextGuardsActualPublication/" + case for case in ("before-rename", "after-rename")),
             *("TestDesktopWindowsExternalCurrentProofContext/"+case for case in ("current", "owner-lock", "app-lock", "source-lock", "slot-lock", "process-done-lock", "missing-host-observer", "missing-process-observer", "wrong-session", "wrong-slot")), *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
             *("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol
-              for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed")),
+              for policy in ("off", "on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect", "hysteria2", "hysteria2-aes", "hysteria2-aes-xor", "socks5", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed")),
             *("TestDesktopWindowsExternalRetirementRetriesExactOwner/" + fault
               for fault in ("child-join", "journal-flush", "release", "foreign-receipt", "private-file")),
             *("TestDesktopWindowsExternalInvalidProofCannotConnect/" + fault
               for fault in ("router-proof", "physical-source", "physical-config", "foreign-session", "dns", "exit", "receipt", "dead-child", "cancel", "replacement")),
-            *("TestDesktopWindowsExternalOffUsesOriginalGenericPreparation/" + protocol
+            *("TestDesktopWindowsExternalOffRequiresCapturedPreparation/" + protocol
               for protocol in ("wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn", "start-layer")),
             *("TestDesktopWindowsExternalProcessArgumentsRemainExact/" + fault
               for fault in ("router-command", "missing-transfer", "physical-mtu", "early-journal", "another-directory", "invalid-source")),
             *("TestDesktopWindowsExternalUnenteredRetirementRequiresOriginalJournal/" + fault
               for fault in ("unchanged", "journal-head", "kernel-target", "constructor-entered")),
             *("TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost/" + direction
-              for direction in ("router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-hysteria2-aes-router", "hysteria2-aes-router-hysteria2-aes", "router-hysteria2-aes-xor-router", "hysteria2-aes-xor-router-hysteria2-aes-xor", "router-socks5-router", "socks5-router-socks5",
+              for direction in ("router-external-router-off", "external-router-external-off", "router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2", "router-hysteria2-aes-router", "hysteria2-aes-router-hysteria2-aes", "router-hysteria2-aes-xor-router", "hysteria2-aes-xor-router-hysteria2-aes-xor", "router-socks5-router", "socks5-router-socks5",
                                 "router-wireguard-router", "wireguard-router-wireguard", "router-amneziawg-fast-router", "amneziawg-fast-router-amneziawg-fast",
                                 "router-amneziawg-strong-router", "amneziawg-strong-router-amneziawg-strong",
                                 "router-openvpn-tcp-router", "openvpn-tcp-router-openvpn-tcp", "router-openvpn-udp-router", "openvpn-udp-router-openvpn-udp", "router-openvpn-mixed-router", "openvpn-mixed-router-openvpn-mixed")),

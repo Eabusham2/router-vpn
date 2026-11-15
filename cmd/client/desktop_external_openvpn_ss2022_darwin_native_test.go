@@ -26,6 +26,7 @@ var macOSExternalOpenVPNSS2022Cases = []string{
 }
 
 func macOSExternalOpenVPNSS2022Scenario(scenario string) (network, fault string, found bool) {
+	scenario, _ = macOSExternalOffBase(scenario)
 	for _, candidate := range macOSExternalOpenVPNSS2022Cases {
 		if scenario != candidate {
 			continue

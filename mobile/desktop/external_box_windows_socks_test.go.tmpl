@@ -825,7 +825,7 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 	roots.AddCert(certificate)
 	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
 	x509.SetFallbackRoots(roots)
-	for _, kill := range []string{"on-connect", "always"} {
+	for _, kill := range []string{"off", "on-connect", "always"} {
 		t.Run(kill, func(t *testing.T) {
 			var retained mobiletor.DesktopWindowsProtectionTarget
 			desktopExternalWFPCleanup(t, &retained)
@@ -835,7 +835,15 @@ func TestRouterVPNDesktopExternalWindowsSOCKSWFP(t *testing.T) {
 			f.start(t)
 			desktopExternalSOCKSWFPProve(t, f, p)
 			desktopExternalSOCKSWFPAssociations(t, f, p)
+			var oracle *desktopExternalWFPReference
+			if kill == "off" {
+				oracle = desktopExternalWFPStartReference(t, ca, "")
+				f.requireHostPolicy(t, oracle)
+			}
 			retained = f.drain(t)
+			if oracle != nil {
+				f.requireHostPolicy(t, oracle)
+			}
 			if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
 				t.Fatal(err)
 			}

@@ -28,7 +28,7 @@ func TestRouterVPNExternalPhysicalLinuxCapturesPolicyAndRetainsLateOwner(t *test
 			{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")},
 		}
 		return c.fixture.network.prepareExternalPhysicalLinux(c.fixture.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
-			if !reflect.DeepEqual(options.Interfaces, wantInterfaces) || !reflect.DeepEqual(options.LANPrefixes, wantLAN) ||
+			if options.HostProtectionOff != (c.kill == "off") || !reflect.DeepEqual(options.Interfaces, wantInterfaces) || !reflect.DeepEqual(options.LANPrefixes, wantLAN) ||
 				!reflect.DeepEqual(options.PrivateDestinations, wantPrivate) {
 				t.Error("Linux ordinary factory changed selected LAN, IPv6 or exact private physical destinations", options)
 			}

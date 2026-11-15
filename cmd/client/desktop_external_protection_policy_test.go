@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -27,7 +29,7 @@ func TestDesktopExternalProtectionKeepsCapturedPairAndStrongestMember(t *testing
 				if got := desktopExternalProtectionPolicy(profile, entry, false); got != wanted {
 					t.Fatal("paired admission downgraded original member", got, wanted)
 				}
-				if desktopWindowsExternalGraphEligible(profile, entry, false, "") != (wanted != "off") {
+				if desktopWindowsExternalGraphEligible(profile, entry, false, "") != true {
 					t.Fatal("Windows selected final policy instead of captured pair")
 				}
 				exit, err := standardExitFromExternalProfile(profile)
@@ -39,17 +41,11 @@ func TestDesktopExternalProtectionKeepsCapturedPairAndStrongestMember(t *testing
 					if err != nil {
 						t.Fatal(err)
 					}
-					if desktopExternalRetainedEntryForOS(launch.external, target) != (wanted != "off") {
+					if desktopExternalRetainedEntryForOS(launch.external, target) != true {
 						t.Fatal("retained owner changed aggregate admission", target)
 					}
 					if err := prepareDesktopExternalPhysicalCaptured(launch, target); err != nil {
 						t.Fatal(err)
-					}
-					if wanted == "off" {
-						if launch.external.physical != nil {
-							t.Fatal("all-Off native admission opened", target)
-						}
-						continue
 					}
 					if launch.external.physical == nil || launch.external.physical.Metadata().KillSwitchPolicy != wanted || launch.profileID != entry.ID || launch.policyProfileID != profile.ID {
 						t.Fatal("native capture changed policy or source IDs", target)
@@ -107,7 +103,7 @@ func TestDesktopExternalProtectionRejectsForeignOrUnprotectedParticipants(t *tes
 		})
 	}
 	profile.KillSwitchPolicy, profile.KillSwitch = "off", false
-	if desktopExternalProtectionPolicy(profile, common.RouterProfile{}, true) != "off" || desktopWindowsExternalGraphEligible(profile, common.RouterProfile{}, true, "") {
+	if desktopExternalProtectionPolicy(profile, common.RouterProfile{}, true) != "off" || !desktopWindowsExternalGraphEligible(profile, common.RouterProfile{}, true, "") {
 		t.Fatal("direct native Off admission changed")
 	}
 }
@@ -178,7 +174,7 @@ func TestDesktopExternalProtectionTemporaryGuardKeepsOriginalAggregate(t *testin
 				rank = entryRank
 			}
 			err := a.guardDesktopOwnedNodeTemporary(request, snapshot)
-			if (err == nil) != (rank == 1) {
+			if (err == nil) != (rank < 2) {
 				t.Fatal("temporary path downgraded original entry protection", finalPolicy, entryPolicy, err)
 			}
 			if a.nodeProtection != originalSlot || !reflect.DeepEqual(f.store.head, originalJournal) {
@@ -203,5 +199,100 @@ func TestDesktopExternalProtectionTemporaryGuardKeepsOriginalAggregate(t *testin
 		if a.guardDesktopOwnedNodeTemporary(request, snapshot) == nil {
 			t.Fatal("temporary guard borrowed another owner or member", fault)
 		}
+	}
+}
+
+func TestDesktopExternalOffCapturedOwnerRejectsSubstitution(t *testing.T) {
+	for _, paired := range []bool{false, true} {
+		for _, fault := range []string{"none", "source", "capture", "expected", "final-policy", "entry-policy", "final-id", "entry-id", "missing-seal", "changed-seal", "changed-shape"} {
+			if !paired && (fault == "entry-policy" || fault == "entry-id") {
+				continue
+			}
+			t.Run(fmt.Sprintf("paired-%t/%s", paired, fault), func(t *testing.T) {
+				profile, entry, _ := desktopExternalOpenVPNEntryFixture(t, "tcp")
+				profile.KillSwitch, profile.KillSwitchPolicy = false, "off"
+				entry.KillSwitch, entry.KillSwitchPolicy = false, "off"
+				if !paired {
+					entry = common.RouterProfile{}
+				}
+				exit, err := standardExitFromExternalProfile(profile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				launch, err := compileDesktopExternalCaptured(context.Background(), profile, entry, exit, !paired, "", nil, nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				o := launch.external
+				switch fault {
+				case "source":
+					o.source = append(o.source, ' ')
+				case "capture":
+					o.capture = append(o.capture, ' ')
+				case "expected":
+					o.expected.SourceSHA256 = strings.Repeat("a", 64)
+				case "final-policy":
+					o.profile.KillSwitchPolicy = "always"
+				case "entry-policy":
+					o.entry.KillSwitchPolicy = "always"
+				case "final-id":
+					o.profile.ID = "another-final"
+				case "entry-id":
+					o.entry.ID = "another-entry"
+				case "missing-seal":
+					o.protection = desktopExternalProtectionCapture{}
+				case "changed-seal":
+					o.protection.policy = "always"
+				case "changed-shape":
+					o.selection = "server"
+				}
+				if (desktopExternalCapturedProtectionPolicy(o) == "off") != (fault == "none" || fault == "changed-shape") {
+					t.Fatal("captured Off owner accepted substituted authority", fault)
+				}
+				for _, target := range []string{"linux", "windows", "darwin"} {
+					if !desktopExternalOffRequiresRetainedForOS(o, target) {
+						t.Fatal("original Off obligation erased", target, fault)
+					}
+				}
+				if desktopWindowsExternalEligible(launch) != (fault == "none") {
+					t.Fatal("Windows Off admission bypassed original capture", fault)
+				}
+			})
+		}
+	}
+}
+
+func TestDesktopExternalOffWindowsRouterKeepsOriginalObligation(t *testing.T) {
+	for _, execution := range []string{"local", "server", "auto"} {
+		t.Run(execution, func(t *testing.T) {
+			profile, initial := desktopExternalNativeFixture(t, "shadowsocks")
+			profile.External.ResponseProbe = &common.ExternalResponseProbe{URL: "https://" + initial.Server + "/node-response", ServerName: "exit.example.test"}
+			entry, files := desktopNodeFixture(t, "198.51.100.8")
+			profile.KillSwitch, profile.KillSwitchPolicy = false, "off"
+			entry.KillSwitch, entry.KillSwitchPolicy = false, "off"
+			profile.MultihopExecution, profile.MultihopEntryMode = execution, "wg"
+			exit, err := standardExitFromExternalProfile(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch, err := compileDesktopWindowsExternalCaptured(context.Background(), profile, entry, exit, false, "", files, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if launch.external.predecessor == "" || !desktopWindowsExternalEligible(launch) || !desktopExternalOffRequiresRetainedForOS(launch.external, "windows") {
+				t.Fatal("Windows Off lost original paired predecessor")
+			}
+			if desktopExternalOffRequiresRetainedForOS(launch.external, "linux") || desktopExternalOffRequiresRetainedForOS(launch.external, "darwin") {
+				t.Fatal("Windows paired owner widened Unix retained admission")
+			}
+			if err := prepareDesktopExternalPhysicalCaptured(launch, "windows"); err != nil || launch.external.physical == nil || launch.external.physical.Metadata().KillSwitchPolicy != "off" {
+				t.Fatal("Off paired source lost actual Windows policy", err)
+			}
+			launch.external.protection = desktopExternalProtectionCapture{}
+			launch.external.selection = "unsupported"
+			if !desktopExternalOffRequiresRetainedForOS(launch.external, "windows") || desktopWindowsExternalEligible(launch) {
+				t.Fatal("mutated Windows paired owner escaped its original obligation")
+			}
+		})
 	}
 }

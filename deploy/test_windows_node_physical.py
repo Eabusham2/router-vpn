@@ -36,20 +36,20 @@ REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
     "LoopbackIPC"))
 EXTERNAL_HY2_ROOT = "TestRouterVPNDesktopExternalWindowsHysteria2WFP"
 EXTERNAL_HY2_CASES = (EXTERNAL_HY2_ROOT, *(EXTERNAL_HY2_ROOT + "/" + leaf for leaf in (
-    "on-connect", "always", "successor-and-original-restore", "reject/password", "reject/trust",
+    "off", "off/original-alias-join", "on-connect", "always", "successor-and-original-restore", "reject/password", "reject/trust",
     "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")))
 EXTERNAL_HY2_LAYER_ROOT = "TestRouterVPNDesktopExternalWindowsHysteria2LayerWFP"
 EXTERNAL_HY2_LAYERS = ("aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXTERNAL_HY2_LAYER_CASES = {
     mode: (EXTERNAL_HY2_LAYER_ROOT, EXTERNAL_HY2_LAYER_ROOT + "/" + mode,
-           *(EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/" + case.removeprefix(EXTERNAL_HY2_ROOT + "/") for case in EXTERNAL_HY2_CASES[1:]),
+           *(EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/" + case.removeprefix(EXTERNAL_HY2_ROOT + "/") for case in EXTERNAL_HY2_CASES[1:] if not case.startswith(EXTERNAL_HY2_ROOT + "/off")),
            EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/reject/layer-key",
            *((EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/reject/whitening",) if mode.endswith("+xor-whitening") else ()))
     for mode in EXTERNAL_HY2_LAYERS
 }
 EXTERNAL_SOCKS_ROOT = "TestRouterVPNDesktopExternalWindowsSOCKSWFP"
 EXTERNAL_SOCKS_CASES = (EXTERNAL_SOCKS_ROOT, *(EXTERNAL_SOCKS_ROOT + "/" + leaf for leaf in (
-    "refusal-receipts", "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
+    "refusal-receipts", "off", "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
     "home-lan-off/tcp-retained-deny", "home-lan-off/udp-retained-deny",
     "reject/password", "reject/trust", "reject/dns", "reject/exit", "reject/auth-downgrade",
     "reject/relay-domain", "reject/relay-wildcard", "reject/relay-zero", "reject/relay-other-private", "reject/control-eof",
@@ -63,7 +63,7 @@ EXTERNAL_PACKET_LEAVES = (
 EXTERNAL_PACKET_CASES = {
     protocol: (EXTERNAL_PACKET_ROOT, EXTERNAL_PACKET_ROOT + "/" + protocol,
                *(EXTERNAL_PACKET_ROOT + "/" + protocol + "/" + leaf for leaf in
-                 (*EXTERNAL_PACKET_LEAVES, *(("reject/parameters",) if protocol != "wireguard" else ()))))
+                 (*(("off",) if protocol == "wireguard" else ()), *EXTERNAL_PACKET_LEAVES, *(("reject/parameters",) if protocol != "wireguard" else ()))))
     for protocol in EXTERNAL_PACKET_PROTOCOLS
 }
 EXTERNAL_OPENVPN_ROOT = "TestRouterVPNDesktopExternalWindowsOpenVPNWFP"
@@ -71,7 +71,7 @@ EXTERNAL_OPENVPN_NETWORKS = ("tcp", "udp", "mixed")
 EXTERNAL_OPENVPN_LEAVES = ("on-connect", "always", "successor-and-original-restore", "reject/trust",
                            "reject/control-key", "reject/dns", "cancelled-proof", "foreign-predecessor", "commit-refused")
 EXTERNAL_OPENVPN_CASES = {network: (EXTERNAL_OPENVPN_ROOT, EXTERNAL_OPENVPN_ROOT + "/" + network,
-    *(EXTERNAL_OPENVPN_ROOT + "/" + network + "/" + leaf for leaf in EXTERNAL_OPENVPN_LEAVES)) for network in EXTERNAL_OPENVPN_NETWORKS}
+    *(EXTERNAL_OPENVPN_ROOT + "/" + network + "/" + leaf for leaf in (*(("off",) if network == "tcp" else ()), *EXTERNAL_OPENVPN_LEAVES))) for network in EXTERNAL_OPENVPN_NETWORKS}
 EXTERNAL_OPENVPN_ALIAS = "TestRouterVPNDesktopExternalWindowsOpenVPNAlias"
 EXTERNAL_OPENVPN_ALIAS_CASES = (EXTERNAL_OPENVPN_ALIAS, EXTERNAL_OPENVPN_ALIAS + "/unavailable-tcp-reservation", EXTERNAL_OPENVPN_ALIAS + "/refuse-existing-address",
     *(EXTERNAL_OPENVPN_ALIAS + "/reject-" + field for field in ("address", "luid", "index", "creation", "prefix", "skip-source", "prefix-origin", "suffix-origin")))
@@ -104,7 +104,7 @@ def external_openvpn_cases(network):
     if network in EXTERNAL_OPENVPN_ENTRY_INVOCATIONS:
         _, carrier, group = network.split("-")
         root = EXTERNAL_OPENVPN_ENTRY_ROOT + "/" + carrier
-        leaves = EXTERNAL_OPENVPN_ENTRY_LIFECYCLE if group == "lifecycle" else EXTERNAL_OPENVPN_ENTRY_REFUSALS
+        leaves = (*(("off",) if carrier == "tcp" else ()), *EXTERNAL_OPENVPN_ENTRY_LIFECYCLE) if group == "lifecycle" else EXTERNAL_OPENVPN_ENTRY_REFUSALS
         return (EXTERNAL_OPENVPN_ENTRY_ROOT, root, *(root + "/" + leaf for leaf in leaves))
     if network == "alias":
         return EXTERNAL_OPENVPN_ALIAS_CASES
@@ -127,7 +127,7 @@ def external_openvpn_arguments(network):
     exact_control = "/".join("^" + part + "$" for part in EXTERNAL_OPENVPN_MIXED_CONTROL.split("/"))
     if network in EXTERNAL_OPENVPN_ENTRY_INVOCATIONS:
         _, carrier, group = network.split("-")
-        names = EXTERNAL_OPENVPN_ENTRY_LIFECYCLE if group == "lifecycle" else ("reconnect-rejects-proof", "reject", "foreign-predecessor", "commit-refused")
+        names = (*(("off",) if carrier == "tcp" else ()), *EXTERNAL_OPENVPN_ENTRY_LIFECYCLE) if group == "lifecycle" else ("reconnect-rejects-proof", "reject", "foreign-predecessor", "commit-refused")
         expression = "^" + EXTERNAL_OPENVPN_ENTRY_ROOT + "$/^" + carrier + "$/^(" + "|".join(map(re.escape, names)) + ")$"
     elif network in ("mixed-lifecycle", "mixed-refusals"):
         # ARM64 exhausted the remaining mixed batch while its final child was
@@ -160,7 +160,7 @@ EXTERNAL_SERVER_GROUPS = {
         tuple(case for case in EXTERNAL_SERVER_CASES if case == EXTERNAL_SERVER_ASSOCIATION or case.startswith(EXTERNAL_SERVER_ASSOCIATION + "/"))),
 }
 EXTERNAL_LOCAL_ROOT = "TestRouterVPNDesktopExternalWindowsRouterLocalWFP"
-EXTERNAL_LOCAL_CASES = (EXTERNAL_LOCAL_ROOT, *(EXTERNAL_LOCAL_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES if leaf not in ("reject/lease-expired", "reject/lease-credentials", "lease-stop-retry")))
+EXTERNAL_LOCAL_CASES = (EXTERNAL_LOCAL_ROOT, EXTERNAL_LOCAL_ROOT + "/off", *(EXTERNAL_LOCAL_ROOT + "/" + leaf for leaf in EXTERNAL_SERVER_LEAVES if leaf not in ("reject/lease-expired", "reject/lease-credentials", "lease-stop-retry")))
 EXTERNAL_COMPARE_ROOT = "TestRouterVPNDesktopExternalWindowsRouterCompareWFP"
 EXTERNAL_COMPARE_LEAVES = ("on-connect", "always", "local-only", "server-only", "local-timeout", "server-timeout", "neither-valid", "final-repeat-refusal", "saved-winner-restoration", "cancelled-proof", "cancelled-server-proof", "foreign-predecessor", "commit-refused")
 EXTERNAL_COMPARE_PROTOCOL = "TestRouterVPNDesktopExternalWindowsRouterCompareProtocol"
@@ -237,7 +237,7 @@ EXTERNAL_SS_ENTRY_LEAVES = ("on-connect", "always", "cipher-aes128", "cipher-cha
 EXTERNAL_SS_ENTRY_LAYER_TRAFFIC_LEAVES = tuple("layers/" + entry + "/" + final for entry in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening") for final in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")) + ("reject/entry-layer-key", "reject/final-layer-key", "reject/entry-whitening", "reject/final-whitening", "reject/entry-layer-inner", "reject/final-layer-inner")
 EXTERNAL_SS_ENTRY_LAYER_LEAVES = EXTERNAL_SS_ENTRY_LAYER_TRAFFIC_LEAVES + ("receipt-identity", "retired-initial-packet")
 EXTERNAL_SS_ENTRY_CASES = {network: (EXTERNAL_SS_ENTRY_ROOT, EXTERNAL_SS_ENTRY_ROOT + "/" + network,
-    *(EXTERNAL_SS_ENTRY_ROOT + "/" + network + "/" + leaf for leaf in EXTERNAL_SS_ENTRY_LEAVES + (EXTERNAL_SS_ENTRY_LAYER_LEAVES if network == "shadowsocks" else EXTERNAL_SS_ENTRY_LAYER_TRAFFIC_LEAVES if network == "hysteria2" else ()) + (("reject/final-trust", "final-wrapper-tcp-denied") if network == "hysteria2" else ()))) for network in EXTERNAL_SS_ENTRY_NETWORKS}
+    *(EXTERNAL_SS_ENTRY_ROOT + "/" + network + "/" + leaf for leaf in (("off",) if network == "shadowsocks" else ()) + EXTERNAL_SS_ENTRY_LEAVES + (EXTERNAL_SS_ENTRY_LAYER_LEAVES if network == "shadowsocks" else EXTERNAL_SS_ENTRY_LAYER_TRAFFIC_LEAVES if network == "hysteria2" else ()) + (("reject/final-trust", "final-wrapper-tcp-denied") if network == "hysteria2" else ()))) for network in EXTERNAL_SS_ENTRY_NETWORKS}
 
 
 def external_ss_entry_groups():
@@ -411,12 +411,31 @@ def overlay(source, directory, mutation=None):
     return result
 
 
+EXTERNAL_OFF_CONTROLS = {
+    "off-host-deny": ("routervpn/mobiletor/desktop_socket_windows_policy.go",
+        'p.pair("owned-source-deny", family, 1, false, true, p.user)',
+        'p.pair("owned-source-deny", family, 1, false, true)',
+        "Off blocked ordinary host bytes"),
+    "off-ungranted-permit": ("routervpn/mobiletor/desktop_socket_windows_policy.go",
+        'p.pair("owned-source-deny", family, 1, false, true, p.user)',
+        'p.pair("owned-source-deny", family, 1, true, true, p.user)',
+        "Off isolated endpoint bypassed its original grant"),
+    "off-foreign-tuple": ("routervpn/mobiletor/desktop_socket_windows_policy.go",
+        'if inspection.Local != q.Local || inspection.Protocol != protocol ||',
+        'if inspection.Protocol != protocol ||',
+        "Off foreign endpoint acquired the original active tuple"),
+    "off-held-alias": ("routervpn/mobiletor/desktop_socket_windows_identity.go",
+        'for _, endpoint := range endpoints {',
+        'for _, endpoint := range endpoints[:0] {',
+        "Off source retired a held native alias"),
+}
+
 def external_overlay(source, directory, mutation=None):
     # Keep the existing exact constructor/loopback scoping, then additionally
     # scope the durable constructor used by the real external journal owner.
     # No socket, tunnel, proof, TLS or admission operation is replaced.
     scope_mutation = mutants(source)[2] if mutation == "ordinary-udp-deny" else None
-    if mutation not in (None, "ordinary-udp-deny", "missing-durable-intent", "missing-socks-release", "missing-socks-readback", "missing-socks-grant-removal", "missing-openvpn-entry-generation") and mutation not in EXTERNAL_LEASE_CONTROLS:
+    if mutation not in (None, "ordinary-udp-deny", "missing-durable-intent", "missing-socks-release", "missing-socks-readback", "missing-socks-grant-removal", "missing-openvpn-entry-generation") and mutation not in EXTERNAL_LEASE_CONTROLS and mutation not in EXTERNAL_OFF_CONTROLS:
         raise ValueError("Unknown ordinary Hysteria2 native control")
     path = overlay(source, directory, scope_mutation)
     mapping = json.loads(path.read_text(encoding="utf-8"))["Replace"]
@@ -427,6 +446,13 @@ def external_overlay(source, directory, mutation=None):
     copied = directory / "external-durable-scope.go"
     copied.write_bytes(raw.encode("utf-8"))
     mapping[str(source / relative)] = str(copied)
+    if mutation in EXTERNAL_OFF_CONTROLS:
+        relative, before, after, _ = EXTERNAL_OFF_CONTROLS[mutation]
+        retained = Path(mapping.get(str(source / relative), source / relative))
+        raw = BOOT.IDENTITY.replace_once(retained.read_text(encoding="utf-8"), before, after)
+        copied = directory / (mutation + ".go")
+        copied.write_text(raw, encoding="utf-8")
+        mapping[str(source / relative)] = str(copied)
     if mutation == "missing-openvpn-entry-generation":
         relative = "experimental/libbox/routervpn/mobilemultihop/external_openvpn_entry.go"
         raw = BOOT.IDENTITY.replace_once((source / relative).read_text(encoding="utf-8"),
@@ -509,7 +535,8 @@ def execute_external_hysteria2(source, workspace, build, captured):
         raise ValueError("Actual ordinary Hysteria2 native executable changed")
     for label, leaf, witness in (
             ("ordinary-udp-deny", "always", "ordinary token bypassed actual external WFP UDP deny: independent peer marker"),
-            ("missing-durable-intent", "always", "actual HY2 source skipped its durable WFP intent")):
+            ("missing-durable-intent", "always", "actual HY2 source skipped its durable WFP intent"),
+            *((label,"off",control[3]) for label,control in EXTERNAL_OFF_CONTROLS.items())):
         changed = workspace / ("external-hysteria2-" + label)
         changed.mkdir()
         selected = external_overlay(source, changed, label)
@@ -519,14 +546,14 @@ def execute_external_hysteria2(source, workspace, build, captured):
         if status:
             raise ValueError("Actual ordinary Hysteria2 control did not compile: " + label + "\n" + output[-16384:])
         control_digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_HY2_ROOT + "$/^" + leaf + "$", "-test.count=1", "-test.timeout=60s", "-test.v"],
-            cwd=source, env=captured, timeout=75)
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_HY2_ROOT + "$/^" + leaf + "$", "-test.count=1", "-test.timeout=" + ("180s" if label in EXTERNAL_OFF_CONTROLS else "60s"), "-test.v"],
+            cwd=source, env=captured, timeout=195 if label in EXTERNAL_OFF_CONTROLS else 75)
         if status == 0 or not exact_native_verdict(output, "FAIL", EXTERNAL_HY2_ROOT + "/" + leaf) or witness not in output or \
                 socks_native_aborted(output):
             raise ValueError("Actual ordinary Hysteria2 control missed its exact defect: " + label + "\n" + output[-16384:])
         if hashlib.sha256(binary.read_bytes()).hexdigest() != control_digest:
             raise ValueError("Actual ordinary Hysteria2 control executable changed")
-        for mode in EXTERNAL_HY2_LAYERS:
+        for mode in (() if label in EXTERNAL_OFF_CONTROLS else EXTERNAL_HY2_LAYERS):
             selected_leaf = EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/" + leaf
             status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_HY2_LAYER_ROOT + "$/^" + re.escape(mode) + "$/^" + leaf + "$", "-test.count=1", "-test.timeout=60s", "-test.v"],
                 cwd=source, env=captured, timeout=75)
@@ -898,7 +925,7 @@ PHASE_TIMEOUTS = {
     "external-ss-entry": _PHASE_COMMON + 600 + sum(len(groups) for groups in EXTERNAL_SS_ENTRY_GROUPS.values()) * 195 + 2 * (600 + 75),
     "node-baseline": _PHASE_COMMON + _PHASE_REFERENCES + 600 + 1215,
     "node-controls": _PHASE_COMMON + _PHASE_REFERENCES + 4 * (600 + 105),
-    "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
+    "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75) + len(EXTERNAL_OFF_CONTROLS) * (600 + 195),
     "external-socks": _PHASE_COMMON + 600 + 315 + 6 * (600 + 75),
     "external-packet": _PHASE_COMMON + 600 + 2 * 75 + (5 + len(EXTERNAL_SERVER_GROUPS)) * 195 + 2 * (600 + 4 * 75) + len(EXTERNAL_LEASE_CONTROLS) * (600 + 75),
     "external-openvpn": _PHASE_COMMON + 600 + 2 * 75 + (len(EXTERNAL_OPENVPN_INVOCATIONS) - 2) * 195 + 6 * (600 + 75),
@@ -909,7 +936,7 @@ _PHASE_IMAGES = {
     "node-controls": ("start-layer-relay.exe", "xray-reference.exe", *(name + "/node-negative.test.exe" for name in
                       ("legacy-adoption", "late-handshake", "ordinary-udp-deny", "missing-loopback-ipc"))),
     "external-hysteria2": tuple("external-hysteria2" + suffix + "/external-hysteria2.test.exe" for suffix in
-                               ("", "-ordinary-udp-deny", "-missing-durable-intent")),
+                               ("", "-ordinary-udp-deny", "-missing-durable-intent", *("-" + label for label in EXTERNAL_OFF_CONTROLS))),
     "external-socks": tuple("external-socks" + suffix + "/external-socks.test.exe" for suffix in
                            ("", "-ordinary-tcp-deny", "-ordinary-udp-deny", "-missing-durable-intent",
                             "-missing-socket-release", "-missing-endpoint-readback", "-missing-grant-removal")),

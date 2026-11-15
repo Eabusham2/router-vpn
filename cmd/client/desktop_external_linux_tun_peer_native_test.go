@@ -36,7 +36,8 @@ var linuxHostTUNExternalWGCONNECTCases = []string{
 	"external-wghttps-on-connect", "external-wghttps-always", "external-wghttps-public", "external-wghttps-cancelled", "external-wghttps-wrong-entry-public", "external-wghttps-wrong-proxy-password", "external-wghttps-wrong-proxy-username", "external-wghttps-dns-failure", "external-wghttps-wrong-proxy-sni", "external-wghttps-wrong-proxy-trust",
 }
 var linuxHostTUNExternalWGHysteriaCases = []string{"external-wghy2-on-connect", "external-wghy2-always", "external-wghy2-public", "external-wghy2-cancelled", "external-wghy2-wrong-entry-public", "external-wghy2-wrong-key", "external-wghy2-wrong-trust", "external-wghy2-wrong-ca", "external-wghy2-dns-failure"}
-var linuxHostTUNExternalCases = append(append(append(append(append(append([]string{
+var linuxHostTUNExternalOffCases = []string{"external-ss-off-public", "external-ss-off-cancelled", "external-ss-off-source", "external-ss-off-replacement", "external-ss-off-dns-failure", "external-wgss-off-public"}
+var linuxHostTUNExternalCases = append(append(append(append(append(append(append([]string{
 	"external-ss-on-connect", "external-http-on-connect", "external-https-on-connect",
 	"external-ss-always", "external-http-always", "external-https-always",
 	"external-ss-cancelled", "external-ss-replacement", "external-ss-source", "external-ss-dns-failure",
@@ -70,7 +71,7 @@ var linuxHostTUNExternalCases = append(append(append(append(append(append([]stri
 	"external-socks-on-connect", "external-socks-always", "external-socks-public", "external-socks-cancelled",
 	"external-socks-wrong-auth", "external-socks-auth-downgrade", "external-socks-relay-domain", "external-socks-control-eof",
 	"external-socks-dns-failure", "external-socks-replacement", "external-socks-source",
-}, append(linuxHostTUNExternalLayerCases, "external-wgss-on-connect", "external-wgss-always", "external-wgss-public", "external-wgss-cancelled", "external-wgss-wrong-entry-public", "external-wgss-dns-failure")...), linuxHostTUNExternalWGCONNECTCases...), linuxHostTUNExternalWGHysteriaCases...), linuxHostTUNExternalWGHysteriaLayerCases...), linuxHostTUNExternalSSEntryCases...), append(linuxHostTUNExternalSSCONNECTCases, linuxHostTUNExternalSSHysteriaCases...)...)
+}, append(linuxHostTUNExternalLayerCases, "external-wgss-on-connect", "external-wgss-always", "external-wgss-public", "external-wgss-cancelled", "external-wgss-wrong-entry-public", "external-wgss-dns-failure")...), linuxHostTUNExternalWGCONNECTCases...), linuxHostTUNExternalWGHysteriaCases...), linuxHostTUNExternalWGHysteriaLayerCases...), linuxHostTUNExternalSSEntryCases...), append(linuxHostTUNExternalSSCONNECTCases, linuxHostTUNExternalSSHysteriaCases...)...), linuxHostTUNExternalOffCases...)
 
 func linuxHostTUNExternalCase(scenario string) bool {
 	for _, candidate := range linuxHostTUNExternalCases {
@@ -134,7 +135,16 @@ func linuxHostTUNExternalAction(scenario string) string {
 		return ""
 	}
 	_, action, _ := strings.Cut(strings.TrimPrefix(scenario, "external-"), "-")
-	return action
+	return strings.TrimPrefix(action, "off-")
+}
+
+func linuxHostTUNExternalAllOff(scenario string) bool {
+	for _, candidate := range linuxHostTUNExternalOffCases {
+		if scenario == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func linuxHostTUNExternalFailedProof(scenario string) bool {
@@ -548,10 +558,13 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 		kill = "always"
 	}
 	profiles.Profiles[0].KillSwitchPolicy = kill
+	if linuxHostTUNExternalAllOff(scenario) {
+		kill = "off"
+	}
 	profile := common.RouterProfile{ID: "installed-linux-external", Name: "Independent installed external peer", NodeKind: "external",
 		Endpoint: "11.77.0.2", DNSMode: "custom", DNSProtocol: "tcp", DNSHost: "203.0.113.53", DNSPort: 5353,
 		IPv6Mode: "off", StartLayer: common.StartLayerOff, MTUPolicy: "manual", ManualMTU: 1376, EffectiveMTU: 9000,
-		KillSwitch: true, KillSwitchPolicy: kill, MultihopExecution: "local",
+		KillSwitch: kill != "off", KillSwitchPolicy: kill, MultihopExecution: "local",
 		External: &common.ExternalNodeConfig{Protocol: peer.protocol, ExpectedPublicIP: "203.0.113.88"}}
 	if linuxHostTUNExternalAction(scenario) == "public" {
 		// Explicit Direct/Local Connect must persist its exact new execution
@@ -681,6 +694,7 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 }
 
 type linuxExternalTUNResult struct {
+	SelectedOff        bool                              `json:"selected_off,omitempty"`
 	ProtectionOff      bool                              `json:"protection_off,omitempty"`
 	Stage              string                            `json:"stage"`
 	Scenario           string                            `json:"scenario"`
@@ -859,6 +873,9 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		} else if entry == nil || entry.PhysicalUDP == 0 || entry.Streams == 0 || entry.PublicReplies == 0 || (entry.Packets > 0) != (linuxHostTUNExternalWGHysteria(scenario) && action != "wrong-entry-public") {
 			t.Fatal("entry proof or final flow bypassed its actual encrypted WireGuard owner", observed)
 		}
+	}
+	if middle.Proof != nil && middle.SelectedOff != linuxHostTUNExternalAllOff(scenario) {
+		t.Fatal("external path substituted selected protection mode", middle)
 	}
 	linuxHostTUNSSEntryObserved(t, peer, action, observed)
 	linuxHostTUNExternalLayerObserved(t, peer, action, observed)

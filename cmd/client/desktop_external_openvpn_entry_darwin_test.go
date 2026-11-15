@@ -10,9 +10,22 @@ import (
 )
 
 func TestDesktopDarwinOpenVPNEntryRetainsOriginalPair(t *testing.T) {
-	for _, network := range []string{"tcp", "udp"} {
-		t.Run(network, func(t *testing.T) {
+	for _, choice := range []struct{ network, policy string }{{"tcp", "always"}, {"udp", "always"}, {"tcp", "off"}, {"udp", "off"}} {
+		network := choice.network
+		t.Run(network+"/"+choice.policy, func(t *testing.T) {
 			profile, entry, launch := desktopExternalOpenVPNEntryFixture(t, network)
+			if choice.policy == "off" {
+				profile.KillSwitch, profile.KillSwitchPolicy = false, "off"
+				entry.KillSwitch, entry.KillSwitchPolicy = false, "off"
+				exit, err := standardExitFromExternalProfile(profile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				launch, err = compileDesktopExternalCaptured(context.Background(), profile, entry, exit, false, "", nil, nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if !desktopMacOSExternalEligible(launch) {
 				t.Fatal("bounded pair lost native Darwin host")
 			}
@@ -24,7 +37,7 @@ func TestDesktopDarwinOpenVPNEntryRetainsOriginalPair(t *testing.T) {
 				t.Fatal("journal replaced final policy with physical entry", err)
 			}
 			capture, err := launch.external.physical.Capture()
-			if err != nil || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "custom-exit" || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Tag != "external-entry" || capture.PhysicalRoots[0].Type != "openvpn-client" || len(capture.PhysicalRoots[0].Destinations) != 1 || capture.PhysicalRoots[0].Destinations[0].Network != network {
+			if err != nil || capture.KillSwitchPolicy != choice.policy || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "custom-exit" || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Tag != "external-entry" || capture.PhysicalRoots[0].Type != "openvpn-client" || len(capture.PhysicalRoots[0].Destinations) != 1 || capture.PhysicalRoots[0].Destinations[0].Network != network {
 				t.Fatal("OpenVPN entry lost physical or selected DNS authority", err)
 			}
 			if err := validateDesktopMacOSExternalSources(profile, entry, launch); err != nil {
@@ -50,7 +63,7 @@ func TestDesktopDarwinOpenVPNEntryRetainsOriginalPair(t *testing.T) {
 }
 func TestDesktopDarwinOpenVPNEntryRejectsUnsupportedCapture(t *testing.T) {
 	profile, entry, _ := desktopExternalOpenVPNEntryFixture(t, "tcp")
-	for _, fault := range []string{"multiple-remotes", "entry-layer", "final-layer", "server-execution", "same-owner", "unprotected", "non-SS2022-final", "direct-with-entry"} {
+	for _, fault := range []string{"multiple-remotes", "entry-layer", "final-layer", "server-execution", "same-owner", "invalid-protection", "non-SS2022-final", "direct-with-entry"} {
 		t.Run(fault, func(t *testing.T) {
 			p, e := cloneRouterProfile(profile), cloneRouterProfile(entry)
 			direct := false
@@ -65,9 +78,8 @@ func TestDesktopDarwinOpenVPNEntryRejectsUnsupportedCapture(t *testing.T) {
 				p.MultihopExecution = "server"
 			case "same-owner":
 				e.ID = p.ID
-			case "unprotected":
-				p.KillSwitch, p.KillSwitchPolicy = false, "off"
-				e.KillSwitch, e.KillSwitchPolicy = false, "off"
+			case "invalid-protection":
+				p.KillSwitchPolicy = "invalid"
 			case "non-SS2022-final":
 				p.External.Shadowsocks.Method = "aes-256-gcm"
 			case "direct-with-entry":

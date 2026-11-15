@@ -133,7 +133,7 @@ func desktopProtectionSelectionForConcretePurposesWithCONNECT(node *mobilemultih
 	if err != nil || meta.TargetOS != "windows" || !validProfileID(capture.ExitID) ||
 		!paired && !openvpnPair && !server && (capture.EntryID != "" || capture.EntryTag != "") || !server && (capture.PredecessorSHA256 != "" || capture.Execution != "") ||
 		!desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !(paired && layeredPair) && !server || capture.EntryStartLayer != "" && !(paired && layeredPair) && !server || meta.SOCKSUDPAssociationRequired != (meta.Protocol == "socks5") ||
-		meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" ||
+		meta.KillSwitchPolicy != "off" && meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" ||
 		meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "socks5" && meta.Protocol != "wireguard" && meta.Protocol != "amneziawg" && meta.Protocol != "openvpn" {
 		return empty, errors.Join(err, errors.New("native protection has no supported captured Windows external policy"))
 	}

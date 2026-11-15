@@ -152,7 +152,7 @@ func TestDesktopWindowsOpenVPNEntryPublicLifecycle(t *testing.T) {
 
 func TestDesktopWindowsOpenVPNEntryRejectsUnsupportedCapture(t *testing.T) {
 	profile, entry, _ := desktopExternalOpenVPNEntryFixture(t, "tcp")
-	for _, fault := range []string{"multiple-remotes", "entry-layer", "final-layer", "server-execution", "same-owner", "unprotected", "non-SS2022-final", "direct-with-entry"} {
+	for _, fault := range []string{"multiple-remotes", "entry-layer", "final-layer", "server-execution", "same-owner", "invalid-protection", "non-SS2022-final", "direct-with-entry"} {
 		t.Run(fault, func(t *testing.T) {
 			p, e := cloneRouterProfile(profile), cloneRouterProfile(entry)
 			direct := false
@@ -167,8 +167,8 @@ func TestDesktopWindowsOpenVPNEntryRejectsUnsupportedCapture(t *testing.T) {
 				p.MultihopExecution = "server"
 			case "same-owner":
 				e.ID = p.ID
-			case "unprotected":
-				p.KillSwitch, p.KillSwitchPolicy = false, "off"
+			case "invalid-protection":
+				p.KillSwitch, p.KillSwitchPolicy = false, "invalid"
 				e.KillSwitch, e.KillSwitchPolicy = false, "off"
 			case "non-SS2022-final":
 				p.External.Shadowsocks.Method = "aes-256-gcm"

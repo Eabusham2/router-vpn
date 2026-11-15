@@ -36,6 +36,8 @@ CASES = ("shadowsocks-succession", "http-connect-succession", "https-connect-suc
          "amneziawg-fast-succession", "amneziawg-strong-succession",
          "openvpn-tcp-succession", "openvpn-udp-succession", "openvpn-mixed-succession",
          "socks5-succession", "socks5-private-relay-rejected")
+OFF_CASES = ("live", "cancelled", "network-change")
+NATIVE_PHASES = ("ExternalLifecycle", "ExternalOff")
 MODEL = ("KeepsTypedSourceAndJoinedOwner", "RejectsForeignOrReusedCapabilities",
          "RetainsRefusedAndCancelledSources")
 RUNNERS = ("test_linux_external_lifecycle.py", "test_linux_external_lifecycle_runner.py",
@@ -74,13 +76,23 @@ def require_verdict(output, names):
             raise ValueError("Linux typed lifecycle omitted or duplicated its actual verdict: " + name)
 
 
-def check_verdict(output):
-    parent = "TestDesktopLinuxGuardianKernelExternalLifecycle"
-    require_verdict(output, (parent, *(parent + "/" + case for case in CASES)))
+def check_verdict(output, case="ExternalLifecycle"):
+    if case not in NATIVE_PHASES:
+        raise ValueError("unknown original native lifecycle phase")
+    parent = "TestDesktopLinuxGuardianKernel" + case
+    children = CASES if case == "ExternalLifecycle" else OFF_CASES
+    require_verdict(output, (parent, *(parent + "/" + child for child in children)))
 
 
-def namespace_test(binary, expected_sha256):
-    return GUARD.namespace_test(binary, "ExternalLifecycle", expected_sha256)
+def check_all_verdicts(output):
+    for case in NATIVE_PHASES:
+        check_verdict(output, case)
+
+
+def namespace_test(binary, expected_sha256, case="ExternalLifecycle"):
+    if case not in NATIVE_PHASES:
+        raise ValueError("unknown original native lifecycle phase")
+    return GUARD.namespace_test(binary, case, expected_sha256)
 
 
 def execute(source, go="go", *, env=None):
@@ -107,12 +119,19 @@ def execute(source, go="go", *, env=None):
                               cwd=source, env=captured, timeout=100)
         require_verdict(model, tuple("TestRouterVPNExternalLinuxLifecycle" + name for name in MODEL))
         print(model, end="" if model.endswith("\n") else "\n", flush=True)
-        command = [sys.executable, str(Path(__file__).resolve()), "--namespace-test-binary", str(binary),
-                   "--namespace-test-sha256", digest]
-        if sudo is not None:
-            command = [sudo, "-n", "--", *command]
-        output = GUARD.UID.run(command, cwd=ROOT, env=captured, timeout=150, sudo=sudo)
-        check_verdict(output)
+        outputs = []
+        # Separate mandatory namespaces retain the original 120/150-second
+        # bounds for protected succession and the added Off descriptor cases.
+        for case in NATIVE_PHASES:
+            command = [sys.executable, str(Path(__file__).resolve()), "--namespace-test-binary", str(binary),
+                       "--namespace-test-sha256", digest, "--namespace-test-case", case]
+            if sudo is not None:
+                command = [sudo, "-n", "--", *command]
+            output = GUARD.UID.run(command, cwd=ROOT, env=captured, timeout=150, sudo=sudo)
+            check_verdict(output, case)
+            outputs.append(output)
+        output = "\n".join(outputs)
+        check_all_verdicts(output)
         after = binary.stat()
         if ((after.st_dev, after.st_ino, after.st_size) != (original.st_dev, original.st_ino, original.st_size) or
                 hashlib.sha256(binary.read_bytes()).hexdigest() != digest or checked_sources(source)[1] != before):
@@ -127,9 +146,10 @@ if __name__ == "__main__":
     parser.add_argument("--go", default="go")
     parser.add_argument("--namespace-test-binary", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--namespace-test-sha256", help=argparse.SUPPRESS)
+    parser.add_argument("--namespace-test-case", choices=("ExternalLifecycle", "ExternalOff"), default="ExternalLifecycle", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.namespace_test_binary is not None:
-        raise SystemExit(namespace_test(args.namespace_test_binary, args.namespace_test_sha256))
+        raise SystemExit(namespace_test(args.namespace_test_binary, args.namespace_test_sha256, args.namespace_test_case))
     if args.namespace_test_sha256 is not None or args.source is None:
         parser.error("the prepared source is required; a compiled digest belongs only to its original namespace executable")
     try:

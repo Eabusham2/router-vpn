@@ -10,13 +10,14 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md)
 records the recovered original requirements and newer published source through
-`6026e9c5`: macOS prefix-only candidate controls with purpose-safe dialog
+`dd9a608b`: macOS prefix-only candidate controls with purpose-safe dialog
 ownership, atomic native descriptor transfer, the measured Compare test oracle,
 Linux/Windows ordinary OpenVPN-entry to independent SS2022-final hosts,
 macOS ordered Off ownership, the corrected macOS final-policy baseline ID,
 the Linux Off selection fixture, Darwin receive-flag normalization and cleanup
 retry, saved-prefix Off admission and the complete supported Darwin external
-protocol catalog.
+protocol catalog, strongest original member protection and Darwin PF interface
+clause ordering.
 Published `d41f4d4a` also adopts the bounded ordinary OpenVPN-entry/SS2022-final pair
 in the macOS retained host with independent entry and final proof fixtures.
 The OpenVPN addition is a bounded two-node Local path with one literal TCP or
@@ -40,10 +41,12 @@ ordinary ordered and typed SOCKS/CONNECT paths, including execution preparation
 derived from the ordinary policy. Published `00ba8a23` separately admits aggregate Off
 for idle saved-prefix preparation on all three desktops, with full saved-graph
 protection aggregation, closed application/DNS authority and mandatory native
-Save/Cancel cases. An existing connected owner remains untouched. Ordinary
-external physical admission still requires On-connect or Always; its baseline
-adapters alone do not enable Off. This change derives ordinary external
-protection from the actual entry/final pair and carries it through public
+Save/Cancel cases. An existing connected owner remains untouched. Supported
+ordinary external all-Off paths now enter their installed retained host and
+isolated engine source, including exact captured-member guards and refusal of
+missing-controller or damaged-seal fallback. Their new installed/native cases
+remain execution obligations. Ordinary external
+protection derives from the actual entry/final pair and carries it through public
 eligibility, native capture, restoration and Windows temporary testing. Darwin
 binds each external member's original protection and every saved-prefix member's
 identity/mode/device policy before applying the existing aggregate. An Off final

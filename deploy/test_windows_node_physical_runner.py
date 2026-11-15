@@ -186,16 +186,17 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         NativeNodeScope.setUp(self)
         for relative, actual in (
                 ("routervpn/mobiletor/desktop_socket_windows_commit.go", ROOT / "internal/mobiletor/desktop_socket_windows_commit.go"),
+                ("routervpn/mobiletor/desktop_socket_windows_identity.go", ROOT / "internal/mobiletor/desktop_socket_windows_identity.go"),
                 ("routervpn/desktoppt/external_physical_windows.go", ROOT / "mobile/desktop/external_physical_windows.go.tmpl")):
             self.original[relative] = actual.read_bytes()
             (self.source / relative).write_bytes(self.original[relative])
 
     def test_durable_constructor_and_every_mutant_keep_actual_scope(self):
-        for mutation in (None, "ordinary-udp-deny", "missing-durable-intent"):
+        for mutation in (None, "ordinary-udp-deny", "missing-durable-intent", *GATE.EXTERNAL_OFF_CONTROLS):
             with self.subTest(mutation=mutation):
                 selected = GATE.external_overlay(self.source, self.observer, mutation)
                 mapping = json.loads(selected.read_text())["Replace"]
-                self.assertEqual(len(mapping), 6 if mutation == "missing-durable-intent" else 5)
+                self.assertEqual(len(mapping), 6 if mutation in ("missing-durable-intent", "off-held-alias") else 5)
                 policy = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_policy.go")]).read_text()
                 transfer = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_transfer.go")]).read_text()
                 commit = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_commit.go")]).read_text()
@@ -226,7 +227,7 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         policy.mkdir(parents=True)
         for name in GATE.EXTERNAL_LEASE_SOURCES.values():
             (policy / name).write_bytes((ROOT / "mobile/externalpolicy" / name).read_bytes())
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_server_test.go.tmpl", "external_box_windows_compare_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_server_test.go.tmpl", "external_box_windows_compare_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_openvpn_entry_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_hysteria2_test.go.tmpl"
         original = source.read_bytes()
@@ -242,7 +243,7 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
     def test_required_root_and_each_real_leaf_are_mandatory(self):
         root = "TestRouterVPNDesktopExternalWindowsHysteria2WFP"
         expected = (root, *(root + "/" + leaf for leaf in (
-            "on-connect", "always", "successor-and-original-restore", "reject/password", "reject/trust",
+            "off", "off/original-alias-join", "on-connect", "always", "successor-and-original-restore", "reject/password", "reject/trust",
             "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")))
         self.assertEqual(GATE.EXTERNAL_HY2_CASES, expected)
         complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in expected)
@@ -262,7 +263,7 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         for mode in GATE.EXTERNAL_HY2_LAYERS:
             cases = GATE.EXTERNAL_HY2_LAYER_CASES[mode]
             self.assertEqual(len(cases), 14 if mode.endswith("+xor-whitening") else 13)
-            self.assertTrue(all(GATE.EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/" + case.split("/", 1)[1] in cases for case in GATE.EXTERNAL_HY2_CASES[1:]))
+            self.assertTrue(all(GATE.EXTERNAL_HY2_LAYER_ROOT + "/" + mode + "/" + case.split("/", 1)[1] in cases for case in GATE.EXTERNAL_HY2_CASES[1:] if not case.startswith(GATE.EXTERNAL_HY2_ROOT + "/off")))
             complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in cases)
             with contextlib.redirect_stdout(io.StringIO()):
                 GATE.report_external_hysteria2_layer(mode, 0, complete)
@@ -278,7 +279,8 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
         calls = []
         complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in GATE.EXTERNAL_HY2_CASES)
         witnesses = {"ordinary-udp-deny": "ordinary token bypassed actual external WFP UDP deny: independent peer marker",
-                     "missing-durable-intent": "actual HY2 source skipped its durable WFP intent"}
+                     "missing-durable-intent": "actual HY2 source skipped its durable WFP intent",
+                     **{label: control[3] for label,control in GATE.EXTERNAL_OFF_CONTROLS.items()}}
 
         def run(command, **kwargs):
             command = tuple(str(value) for value in command)
@@ -292,7 +294,7 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
                 self.assertEqual(kwargs["timeout"], 600)
                 selected = next(value.removeprefix("-overlay=") for value in command if value.startswith("-overlay="))
                 self.assertEqual(len(json.loads(Path(selected).read_text())["Replace"]),
-                                 6 if Path(selected).parent.name == "external-hysteria2-missing-durable-intent" else 5)
+                                 6 if Path(selected).parent.name in ("external-hysteria2-missing-durable-intent", "external-hysteria2-off-held-alias") else 5)
                 binary = Path(command[command.index("-o") + 1])
                 binary.write_bytes(b"explicit native compiler boundary")
                 return 0, ""
@@ -314,11 +316,12 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
             label = binary.parent.name.removeprefix("external-hysteria2-")
             selector = next(value for value in command if value.startswith("-test.run="))
             mode = next((mode for mode in GATE.EXTERNAL_HY2_LAYERS if selector == "-test.run=^" + GATE.EXTERNAL_HY2_LAYER_ROOT + "$/^" + re.escape(mode) + "$/^always$"), None)
-            self.assertTrue(mode or selector == "-test.run=^" + GATE.EXTERNAL_HY2_ROOT + "$/^always$")
+            leaf = "off" if label in GATE.EXTERNAL_OFF_CONTROLS else "always"
+            self.assertTrue(mode or selector == "-test.run=^" + GATE.EXTERNAL_HY2_ROOT + "$/^" + leaf + "$")
             selected = GATE.EXTERNAL_HY2_LAYER_ROOT + "/" + mode if mode else GATE.EXTERNAL_HY2_ROOT
-            self.assertIn("-test.timeout=60s", command)
-            self.assertEqual(kwargs["timeout"], 75)
-            output = "--- FAIL: " + selected + "/always (0.01s)\n" + witnesses[label] + "\n"
+            self.assertIn("-test.timeout=" + ("180s" if leaf=="off" else "60s"), command)
+            self.assertEqual(kwargs["timeout"], 195 if leaf=="off" else 75)
+            output = "--- FAIL: " + selected + "/" + leaf + " (0.01s)\n" + witnesses[label] + "\n"
             if fault == "control-image":
                 binary.write_bytes(b"changed control image")
             if fault == "prefixed-failure":
@@ -340,11 +343,11 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
 
     def test_real_dispatch_keeps_binary_identity_all_cases_and_both_compiled_controls(self):
         calls = self.dispatch()
-        self.assertEqual(len(calls), 12)
-        self.assertEqual([timeout for _, timeout in calls], [600, 195, 195, 195, 600, 75, 75, 75, 600, 75, 75, 75])
+        self.assertEqual(len(calls), 20)
+        self.assertEqual([timeout for _, timeout in calls], [600, 195, 195, 195, 600, 75, 75, 75, 600, 75, 75, 75] + [600, 195] * 4)
 
     def test_native_dispatch_rejects_missing_result_replaced_image_or_successful_mutants(self):
-        for fault, message in (("layer-leaf", "required native result"), ("leaf", "required native result"), ("image", "native executable changed"),
+        for fault, message in (*((label,"exact defect") for label in GATE.EXTERNAL_OFF_CONTROLS), ("layer-leaf", "required native result"), ("leaf", "required native result"), ("image", "native executable changed"),
                                ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
                                ("timeout", "exact defect"), ("prefixed-failure", "exact defect"),
                                ("duplicate-failure", "exact defect"), ("layer-control-success", "exact defect"),
@@ -430,7 +433,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
 
     def test_every_socks_native_verdict_is_required(self):
         expected = (GATE.EXTERNAL_SOCKS_ROOT, *(GATE.EXTERNAL_SOCKS_ROOT + "/" + leaf for leaf in (
-            "refusal-receipts", "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
+            "refusal-receipts", "off", "on-connect", "always", "home-lan-off", "home-lan-off/tcp-deny", "home-lan-off/udp-deny",
             "home-lan-off/tcp-retained-deny", "home-lan-off/udp-retained-deny",
             "reject/password", "reject/trust", "reject/dns", "reject/exit", "reject/auth-downgrade",
             "reject/relay-domain", "reject/relay-wildcard", "reject/relay-zero", "reject/relay-other-private", "reject/control-eof",
@@ -460,7 +463,7 @@ class OrdinarySOCKSScope(unittest.TestCase):
         policy.mkdir(parents=True)
         for name in GATE.EXTERNAL_LEASE_SOURCES.values():
             (policy / name).write_bytes((ROOT / "mobile/externalpolicy" / name).read_bytes())
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_server_test.go.tmpl", "external_box_windows_compare_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_server_test.go.tmpl", "external_box_windows_compare_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_openvpn_entry_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_socks_test.go.tmpl"
         original = source.read_bytes()
@@ -587,7 +590,7 @@ class OrdinaryPacketScope(unittest.TestCase):
 
     def test_router_local_requires_every_exact_unique_verdict(self):
         required = GATE.EXTERNAL_LOCAL_CASES
-        self.assertEqual(len(required), 15)
+        self.assertEqual(len(required), 16)
         self.assertNotIn(GATE.EXTERNAL_LOCAL_ROOT + "/lease-stop-retry", required)
         complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -757,7 +760,7 @@ class OrdinaryPacketScope(unittest.TestCase):
         policy.mkdir(parents=True)
         for name in GATE.EXTERNAL_LEASE_SOURCES.values():
             (policy / name).write_bytes((ROOT / "mobile/externalpolicy" / name).read_bytes())
-        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_server_test.go.tmpl", "external_box_windows_compare_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl", "external_box_windows_socks_test.go.tmpl", "external_box_windows_packet_test.go.tmpl", "external_box_windows_server_test.go.tmpl", "external_box_windows_compare_test.go.tmpl", "external_box_windows_alias_test.go.tmpl", "external_box_windows_openvpn_test.go.tmpl", "external_box_windows_openvpn_entry_test.go.tmpl", "external_box_windows_ss_entry_test.go.tmpl", "external_box_windows_hysteria2_layer_test.go.tmpl", "external_hysteria_layer_peer_test.go.tmpl"):
             (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
         source = mobile / "external_box_windows_packet_test.go.tmpl"
         original = source.read_bytes()
@@ -776,7 +779,9 @@ class OrdinaryPacketScope(unittest.TestCase):
             prefix = GATE.EXTERNAL_PACKET_ROOT + "/" + protocol
             leaves = ("on-connect", "always", "successor-and-original-restore", "reject/private-key", "reject/psk",
                       "reject/trust", "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")
-            if protocol != "wireguard":
+            if protocol == "wireguard":
+                leaves = ("off", *leaves)
+            else:
                 leaves += ("reject/parameters",)
             expected = (GATE.EXTERNAL_PACKET_ROOT, prefix, *(prefix + "/" + leaf for leaf in leaves))
             self.assertEqual(GATE.EXTERNAL_PACKET_CASES[protocol], expected)
@@ -1899,6 +1904,21 @@ class OrderedExecutionDispatchMutations(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "exact production boundary"):
                         GATE.NODE.ordered_execution_dispatch_mutants(self.source)
                     self.assertEqual(self.path.read_text(), raw)
+
+
+class OrdinaryOffInventory(unittest.TestCase):
+    def test_only_seven_native_off_paths_and_original_alias_join_are_required(self):
+        selected = [case for cases in (GATE.EXTERNAL_HY2_CASES, GATE.EXTERNAL_SOCKS_CASES,
+            *GATE.EXTERNAL_PACKET_CASES.values(), *GATE.EXTERNAL_OPENVPN_CASES.values(),
+            *(GATE.external_openvpn_cases(name) for name in GATE.EXTERNAL_OPENVPN_ENTRY_INVOCATIONS),
+            *GATE.EXTERNAL_SS_ENTRY_CASES.values(), GATE.EXTERNAL_LOCAL_CASES, GATE.EXTERNAL_SERVER_CASES,
+            GATE.EXTERNAL_COMPARE_CASES) for case in cases if case.endswith("/off") and "/layers/" not in case]
+        self.assertEqual(len(selected),7)
+        self.assertEqual(len(set(selected)),7)
+        self.assertIn(GATE.EXTERNAL_HY2_ROOT + "/off/original-alias-join", GATE.EXTERNAL_HY2_CASES)
+        self.assertEqual(set(GATE.EXTERNAL_OFF_CONTROLS), {"off-host-deny","off-ungranted-permit","off-foreign-tuple","off-held-alias"})
+        for label in GATE.EXTERNAL_OFF_CONTROLS:
+            self.assertIn("external-hysteria2-"+label+"/external-hysteria2.test.exe",GATE._PHASE_IMAGES["external-hysteria2"])
 
 
 class NativePhaseOrchestration(unittest.TestCase):

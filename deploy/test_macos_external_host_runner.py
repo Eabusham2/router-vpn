@@ -24,14 +24,16 @@ class NativeHostVerdicts(unittest.TestCase):
             lines += ['    desktop_external_darwin_native_test.go:77: '+G.success_receipt(case),
                       '    desktop_external_darwin_native_test.go:88: actual sealed Darwin latency accepted '+case+
                       ': held TLS Cancel joined, foreign cancellation and replay refused, Retest50 actual responses, original session child PF and MTU retained']
-        for case in G.OPENVPN_ENTRY_POSITIVE:
+        for case in G.OPENVPN_ENTRY_EXECUTION_CASES:
             lines += ['    desktop_external_darwin_native_test.go:89: actual sealed Darwin OpenVPN SS2022 MTU accepted '+case+': held payload Cancel restored original utun, Retest measured bytes, original source child PF retained']
-        for case in G.OPENVPN_ENTRY_POSITIVE:
+        for case in G.OPENVPN_ENTRY_EXECUTION_CASES:
             if '-tcp' not in case:
                 continue
             lines += ['    desktop_external_darwin_native_test.go:90: actual sealed Darwin OpenVPN SS2022 loss accepted '+case+': original provider closed, stale proof and measurement refused, original child PF utun and controller joined']
         for case in ('openvpn-entry-ss-tcp-entry-always', 'openvpn-entry-ss-tcp-final-off-entry-always'):
             lines += ['    desktop_external_darwin_native_test.go:91: actual sealed Darwin mixed protection accepted '+case+': original entry Always retained through joined disconnect, final DNS LAN IPv6 unchanged']
+        for case in G.OFF_CASES:
+            lines += ['    desktop_external_darwin_native_test.go:92: actual sealed Darwin Off accepted '+case+': original dispatch-only PF, selected DNS and exit proof, original child and reference retired']
         for case in G.NEGATIVE_CASES:
             lines += ['    desktop_external_darwin_native_test.go:99: '+G.refusal_receipt(case)]
         lines += ['    desktop_external_darwin_native_test.go:87: '+G.MTU_RECEIPT]
@@ -66,10 +68,10 @@ class NativeHostVerdicts(unittest.TestCase):
         self.assertEqual(tuple(ssconnect[:12]), tuple(case for case in G.POSITIVE_CASES if case.startswith('ss-entry-') and '-http' in case))
         self.assertEqual(tuple(ssconnect[12:]), tuple(case for case in G.NEGATIVE_CASES if case.startswith('ss-entry-') and '-http' in case))
         self.assertIsNotNone(ss)
-        self.assertEqual(tuple(ss[:18]), tuple(case for case in G.POSITIVE_CASES if case.startswith('ss-entry-') and '-ss-' in case and '-layers' not in case))
+        self.assertEqual(tuple(ss[:18]), tuple(case for case in G.POSITIVE_CASES if case.startswith('ss-entry-') and '-ss-' in case and '-layers' not in case and case not in G.OFF_CASES))
         self.assertEqual(tuple(ss[18:]), tuple(case for case in G.NEGATIVE_CASES if case.startswith('ss-entry-') and '-ss-' in case and '-layers' not in case))
-        self.assertEqual(len(G.CASES), 377)
-        self.assertEqual(len(G.POLICY_TESTS), 57)
+        self.assertEqual(len(G.CASES), 383)
+        self.assertEqual(len(G.POLICY_TESTS), 61)
         self.assertIsNotNone(openvpn)
         self.assertEqual(tuple(openvpn[:24]),tuple(case for case in G.POSITIVE_CASES if "-entry-" in case and "-openvpn-" in case))
         self.assertEqual(tuple(openvpn[24:]),tuple(case for case in G.NEGATIVE_CASES if "-entry-" in case and "-openvpn-" in case))
@@ -87,7 +89,7 @@ class NativeHostVerdicts(unittest.TestCase):
         self.assertEqual(tuple(actual[:6]), G.OPENVPN_ENTRY_POSITIVE)
         self.assertEqual(tuple(actual[6:]), G.OPENVPN_ENTRY_NEGATIVE)
         valid = self.completed()
-        for case in G.OPENVPN_ENTRY_POSITIVE:
+        for case in G.OPENVPN_ENTRY_EXECUTION_CASES:
             receipt = '    desktop_external_darwin_native_test.go:89: actual sealed Darwin OpenVPN SS2022 MTU accepted '+case+': held payload Cancel restored original utun, Retest measured bytes, original source child PF retained'
             for damaged in (valid.replace(receipt, ''), valid+receipt+'\n', valid.replace(receipt, receipt.replace(case, 'foreign-owner'))):
                 with self.subTest(case=case), self.assertRaises(ValueError):
@@ -106,7 +108,7 @@ class NativeHostVerdicts(unittest.TestCase):
 
     def test_openvpn_loss_requires_native_refusal_and_join(self):
         valid = self.completed()
-        for case in G.OPENVPN_ENTRY_POSITIVE:
+        for case in G.OPENVPN_ENTRY_EXECUTION_CASES:
             if '-tcp' not in case:
                 continue
             receipt = '    desktop_external_darwin_native_test.go:90: actual sealed Darwin OpenVPN SS2022 loss accepted '+case+': original provider closed, stale proof and measurement refused, original child PF utun and controller joined'
@@ -118,6 +120,15 @@ class NativeHostVerdicts(unittest.TestCase):
         valid = self.completed()
         for case in ('openvpn-entry-ss-tcp-entry-always', 'openvpn-entry-ss-tcp-final-off-entry-always'):
             receipt = '    desktop_external_darwin_native_test.go:91: actual sealed Darwin mixed protection accepted '+case+': original entry Always retained through joined disconnect, final DNS LAN IPv6 unchanged'
+            for damaged in (valid.replace(receipt, ''), valid+receipt+'\n', valid.replace(receipt, receipt.replace(case, 'foreign-owner'))):
+                with self.subTest(case=case), self.assertRaises(ValueError):
+                    G.check_verdict(damaged)
+
+    def test_off_requires_original_dispatch_policy_and_joined_retirement(self):
+        self.assertEqual(G.OFF_CASES, ('shadowsocks-off', 'hysteria2-off', 'wireguard-off', 'wg-entry-ss-off', 'ss-entry-aes256-ss-aes256-off', 'openvpn-entry-ss-tcp-off'))
+        valid = self.completed()
+        for case in G.OFF_CASES:
+            receipt = '    desktop_external_darwin_native_test.go:92: actual sealed Darwin Off accepted '+case+': original dispatch-only PF, selected DNS and exit proof, original child and reference retired'
             for damaged in (valid.replace(receipt, ''), valid+receipt+'\n', valid.replace(receipt, receipt.replace(case, 'foreign-owner'))):
                 with self.subTest(case=case), self.assertRaises(ValueError):
                     G.check_verdict(damaged)

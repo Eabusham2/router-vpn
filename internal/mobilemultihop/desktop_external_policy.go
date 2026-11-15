@@ -107,7 +107,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	packetFinal := entry && (capture.Protocol == "wireguard" || capture.Protocol == "amneziawg" || capture.Protocol == "openvpn")
 	if err != nil || !entry && (capture.EntryID != "" || capture.EntryTag != "") || capture.PredecessorSHA256 != "" ||
 		capture.Execution != "" || capture.EntryStartLayer != "" && !streamEntry ||
-		(capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
+		(capture.KillSwitchPolicy != "off" && capture.KillSwitchPolicy != "on-connect" && capture.KillSwitchPolicy != "always") ||
 		(capture.IPv6Mode != "on" && capture.IPv6Mode != "off") || len(capture.PhysicalRoots) != 1 {
 		return nil, desktopExternalPolicyError
 	}

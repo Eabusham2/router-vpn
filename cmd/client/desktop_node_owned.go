@@ -1038,7 +1038,7 @@ func (a *app) guardDesktopOwnedNodeTemporary(request speedLabRequest, snapshot s
 		return errors.New("temporary testing must first resolve the retained native protection owner")
 	}
 	if strings.EqualFold(strings.TrimSpace(request.Topology), "system-direct") {
-		if policy != "on-connect" {
+		if policy != "on-connect" && policy != "off" {
 			return errors.New("the captured Always policy cannot become a system-direct temporary path")
 		}
 		return nil

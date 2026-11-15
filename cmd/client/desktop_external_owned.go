@@ -136,7 +136,7 @@ func desktopWindowsExternalProfileEligible(profile common.RouterProfile, direct 
 		return false
 	}
 	policy := desktopOwnedNodeProtectionPolicy(profile)
-	if policy != "on-connect" && policy != "always" && (direct || policy != "off") {
+	if policy != "off" && policy != "on-connect" && policy != "always" {
 		return false
 	}
 	switch profile.External.Protocol {
@@ -147,7 +147,7 @@ func desktopWindowsExternalProfileEligible(profile common.RouterProfile, direct 
 }
 
 func desktopWindowsExternalEligible(launch *desktopNodeLaunch) bool {
-	return launch != nil && launch.ownedNode == nil && launch.tor == nil && launch.external != nil &&
+	return launch != nil && launch.ownedNode == nil && launch.tor == nil && launch.external != nil && desktopExternalCapturedProtectionPolicy(launch.external) != "" &&
 		(launch.external.predecessor == "" && launch.external.selection == "local" || desktopWindowsExternalRouterPairedOwner(launch.external)) &&
 		launch.policyProfileID == launch.external.profile.ID &&
 		(launch.external.direct && launch.profileID == launch.policyProfileID || !launch.external.direct && launch.profileID == launch.external.entry.ID) &&

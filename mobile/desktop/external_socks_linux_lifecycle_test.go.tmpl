@@ -247,11 +247,11 @@ func linuxExternalSOCKSGuardianCases(t *testing.T) {
 			if _, err := root.DialContext(context.Background(), "udp", M.ParseSocksaddr("11.77.0.2:5353")); err == nil {
 				t.Fatal("joined SOCKS owner created a late association")
 			}
-			restored := newLinuxExternalNativeLifecycle(t, "node", "always", routerPeer, next, "", old.policy.node.OriginalProfile())
-			if restored.policy.node.OriginalProfile() != old.policy.node.OriginalProfile() ||
-				old.policy.node.Metadata().OriginalSourceSHA256 != restored.policy.node.Metadata().OriginalSourceSHA256 ||
-				old.policy.node.Metadata().SourceSHA256 == restored.policy.node.Metadata().SourceSHA256 ||
-				old.policy.node.Metadata().SessionID == restored.policy.node.Metadata().SessionID {
+			restored := newLinuxExternalNativeLifecycle(t, "node", "always", routerPeer, next, "", old.node.OriginalProfile())
+			if restored.node.OriginalProfile() != old.node.OriginalProfile() ||
+				old.node.Metadata().OriginalSourceSHA256 != restored.node.Metadata().OriginalSourceSHA256 ||
+				old.node.Metadata().SourceSHA256 == restored.node.Metadata().SourceSHA256 ||
+				old.node.Metadata().SessionID == restored.node.Metadata().SessionID {
 				t.Fatal("SOCKS retirement changed the sealed original Router or reused its old session")
 			}
 			if err := restored.start(); err != nil {

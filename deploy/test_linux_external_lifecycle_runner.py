@@ -38,6 +38,22 @@ class LinuxExternalLifecycleRunner(unittest.TestCase):
         self.assertEqual(RUNNER.CASES[-2:], ("socks5-succession", "socks5-private-relay-rejected"))
         self.assertEqual(len(RUNNER.CASES), 14)
 
+    def test_off_requires_every_actual_child_and_separate_original_bounds(self):
+        parent = "TestDesktopLinuxGuardianKernelExternalOff"
+        rows = ["--- PASS: " + name + " (0.10s)" for name in (parent, *(parent+"/"+c for c in RUNNER.OFF_CASES))]
+        RUNNER.check_verdict("\n".join(rows), "ExternalOff")
+        self.assertEqual(RUNNER.NATIVE_PHASES, ("ExternalLifecycle", "ExternalOff"))
+        RUNNER.check_all_verdicts("\n".join(completed()+rows))
+        for missing in (completed(), rows):
+            with self.assertRaises(ValueError): RUNNER.check_all_verdicts("\n".join(missing))
+        for index in range(len(rows)):
+            with self.assertRaises(ValueError):
+                RUNNER.check_verdict("\n".join(rows[:index]+rows[index+1:]), "ExternalOff")
+        binary, digest = Path("/captured/external-lifecycle.test"), "b"*64
+        with patch.object(RUNNER.GUARD, "namespace_test", return_value=23) as native:
+            self.assertEqual(RUNNER.namespace_test(binary,digest,"ExternalOff"),23)
+        native.assert_called_once_with(binary,"ExternalOff",digest)
+
     def test_only_original_digest_enters_namespace(self):
         binary, digest = Path("/captured/external-lifecycle.test"), "b" * 64
         with patch.object(RUNNER.GUARD, "namespace_test", return_value=23) as native:
