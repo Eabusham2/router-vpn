@@ -87,10 +87,19 @@ for count in 2...9 {
   let owner=try captured(["nodeChainCONNECTSource":input],"multihop-libbox","shadowsocks")
   try check("bounded CONNECT exact complete session source",owner.nodeChainSource==Data(input.utf8) && owner != connected)
  } else { reject("CONNECT session source bounds"){_ = try captured(["nodeChainCONNECTSource":input],"multihop-libbox","shadowsocks") } }
- if count != 3 {
-  let foreign=input.replacingOccurrences(of:"\"schema\":4",with:"\"schema\":3")
-  reject("SOCKS session remains exactly three members"){_ = try captured(["nodeChainSOCKSSource":foreign],"multihop-libbox","shadowsocks")}
- }
+ let socksInput=input.replacingOccurrences(of:"\"schema\":4",with:"\"schema\":3")
+ if (3...8).contains(count) {
+  let owner:IOSSessionIdentity
+  do { owner=try captured(["nodeChainSOCKSSource":socksInput],"multihop-libbox","shadowsocks") }
+  catch { fatalError("rejected supported SOCKS session bound \(count)") }
+  try check("bounded SOCKS exact complete session source",owner.nodeChainSource==Data(socksInput.utf8) && owner != connected && owner != typed)
+  for position in 0..<count {
+   var changed=try JSONSerialization.jsonObject(with:Data(socksInput.utf8)) as! [String:Any]
+   var nodes=changed["nodes"] as! [String];nodes[position]="changed-captured-source-\(position)";changed["nodes"]=nodes
+   let replacement=String(decoding:try JSONSerialization.data(withJSONObject:changed),as:UTF8.self)
+   try check("every SOCKS member participates in exact session identity",owner != captured(["nodeChainSOCKSSource":replacement],"multihop-libbox","shadowsocks"))
+  }
+ } else { reject("SOCKS session source bounds"){_ = try captured(["nodeChainSOCKSSource":socksInput],"multihop-libbox","shadowsocks") } }
 }
 for extra in [["nodeChainSource":connect],["nodeChainSOCKSSource":connect],["nodeChainCONNECTSource":socks],["nodeChainCONNECTSource":chain],["nodeChainCONNECTSource":connect,"nodeChainSOCKSSource":socks],["nodeChainCONNECTSource":connect,"nodeChainSource":chain]] {
  reject("CONNECT source discriminator cannot borrow another owner"){_ = try captured(extra,"multihop-libbox","shadowsocks")}
@@ -139,6 +148,21 @@ def main():
         result=subprocess.run([str(binary)],capture_output=True,text=True,timeout=15)
         assert result.returncode != 0 and 'ordered identity captures all private source bytes' in result.stdout+result.stderr,'ordered session source mutation not detected'
         print('Rejected session identity mutation: omitted ordered source')
+        socks_bound='source["schema"] as? Int == 3 && (3...8).contains((source["nodes"] as? [String])?.count ?? 0)'
+        outer_bound='let nodes = source["nodes"] as? [String], (2...8).contains(nodes.count) else'
+        assert text.count(socks_bound)==1 and text.count(outer_bound)==1
+        defects=(
+            ('SOCKS old three-member cap', text.replace(socks_bound,'source["schema"] as? Int == 3 && ((source["nodes"] as? [String])?.count ?? 0) == 3',1), 'rejected supported SOCKS session bound 4'),
+            ('SOCKS below minimum', text.replace(socks_bound,socks_bound.replace('(3...8)','(2...8)'),1), 'accepted SOCKS session source bounds'),
+            ('SOCKS above maximum', text.replace(socks_bound,socks_bound.replace('(3...8)','(3...9)'),1).replace(outer_bound,outer_bound.replace('(2...8)','(2...9)'),1), 'accepted SOCKS session source bounds'),
+        )
+        for label,changed,expected in defects:
+            assert changed != text
+            mutated.write_text(changed)
+            subprocess.run([swift,'-swift-version','6',str(mutated),str(source),'-o',str(binary)],check=True,timeout=90)
+            result=subprocess.run([str(binary)],capture_output=True,text=True,timeout=15)
+            assert result.returncode != 0 and expected in result.stdout+result.stderr, 'session identity defect not detected: '+label
+            print('Rejected session identity mutation: '+label)
     model=(POLICY.parent/'RouterVPNModel.swift').read_text()
     runner=(POLICY.parent/'IOSSpeedLabRunner.swift').read_text()
     for marker in ['manager.connection.connectedDate','activeSessionIdentity = identity','bundleData: data, configuration: configuration','Tunnel status is unverified']:

@@ -2768,3 +2768,28 @@ failure logs and frozen repaired evidence are retained in
 `imported-trigger-closure-validation` and
 `imported-stage-namespace-validation`. Exact-SHA hosted native acceptance and
 release publication remain separate requirements.
+
+## Apple session identity fixture follows the supported SOCKS prefix bounds
+
+The exact `08eaf16ad586adb1c3b7441a12693d10a33e605f` MTU workflow
+`43752197758`, Apple job `132928465935`, failed in
+`deploy/test_ios_session_identity.py`. Its assertion still required exactly
+three SOCKS members. The shipping `IOSSessionIdentity`,
+`IOSNodeChainSOCKSCapture` and shared schema-three constructor already retain
+three through eight members, following `8826ddfc54a882093fdeeb308214fc676dfc9566`.
+The old assertion therefore rejected the implemented longer Local paths.
+
+The executable fixture now accepts every supported size from three through
+eight, checks the exact complete source bytes and verifies that replacing
+any individual member changes the session identity. Two- and nine-member
+sources remain rejected. Existing cross-family, mixed-owner, legacy-pair,
+reconnect, oversized-input and changed-source refusals remain exercised.
+
+The actual Swift 6 session-identity source passed 157 executable checks.
+Four deliberate mutations were rejected at their intended assertions:
+omitting the complete source, restoring the obsolete three-member cap,
+accepting fewer than three members and accepting more than eight members.
+The original failure and corrected run are retained in
+`ios-session-bounds-validation`. This verifies private session equality and
+bounds; native tunnel parsing, networking and physical-device acceptance
+remain separate gates.
