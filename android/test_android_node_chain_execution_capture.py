@@ -153,7 +153,27 @@ public final class NodeChainExecutionCaptureHarness {
    for(String protocol:List.of("socks5","http","https")){
     var f=new NodeChainCaptureHarness.Fixture(root,"connect/2/");var custom=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");custom.protocol=protocol;custom.server="198.51.100.75";custom.username="original-user";custom.password="original-password";custom.tlsServerName="middle.example.test";
     var exits=new AndroidStandardExitStore(f.context);exits.save(custom);var typed=new AndroidOrderedPathSelection(f.nodes,f.profiles);typed.addPrefix(custom.id,protocol.equals("socks5")?"socks5":protocol.equals("http")?"http-connect":"https-connect");
-    reject(()->typed.setExecution(requested),"Server/Compare accepted a typed middle without its native execution compiler");check(typed.execution().equals("local"),"unsupported typed graph mutated execution");
+    if(protocol.equals("socks5")){
+     reject(()->typed.setExecution(requested),"Server/Compare accepted a SOCKS middle without its native execution compiler");check(typed.execution().equals("local"),"unsupported SOCKS graph mutated execution");
+    }else{
+     typed.setExecution(requested);var selected=typed.save();
+     check(selected.execution.equals(requested)&&selected.members.size()==3,"CONNECT editor lost its exact trio or execution choice");
+     try(var local=AndroidNodeChainCapture.compile(selected);var captured=AndroidNodeChainExecutionCapture.compile(local,requested)){
+      JSONObject preparation=new JSONObject(captured.source),retained=new JSONObject(preparation.getString("local_source")),original=new JSONObject(local.launchInput);
+      check(local.connect!=null&&local.socks==null&&captured.local==local&&captured.requested.equals(requested),"CONNECT execution borrowed an ordinary or foreign source");
+      check(preparation.getInt("schema")==4&&retained.getInt("schema")==4&&retained.getString("execution").equals("local"),"CONNECT execution entered the ordinary compiler or changed its Local source");
+      for(String field:List.of("nodes","identity_sources"))check(retained.getJSONArray(field).toString().equals(original.getJSONArray(field).toString()),"CONNECT execution changed its original "+field);
+      check(!captured.healthy(),"source-only CONNECT editor fabricated native readiness");
+      reject(captured::captureRestore,"source-only CONNECT editor fabricated a restore owner");
+     }
+     // Choosing a draft value is pure. Save must reach the real typed compiler
+     // before it publishes any replacement private source or preference.
+     var retry=new AndroidOrderedPathSelection(f.nodes,f.profiles);String next=requested.equals("server")?"auto":"server";retry.setExecution(next);
+     var beforePreview=new NodeChainCaptureHarness.State(f);final boolean[] compilerReached={false};
+     Libbox.afterExecution=plan->{compilerReached[0]=true;throw new IllegalStateException("controlled CONNECT execution preview refusal");};
+     try{reject(retry::save,"CONNECT editor Save bypassed its typed compiler refusal");check(compilerReached[0]&&retry.execution().equals(next),"rejected CONNECT Save missed the real compiler or changed the draft");beforePreview.same(f,"CONNECT compiler refusal before publication");check(f.profiles.currentOrderedPath().execution.equals(requested),"rejected CONNECT Save changed the original saved execution");}
+     finally{Libbox.afterExecution=null;}
+    }
    }
   }
  }

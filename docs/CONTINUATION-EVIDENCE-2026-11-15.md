@@ -3309,3 +3309,27 @@ all 12 durability-entrypoint tests and the full enclosing durable-state
 transaction audit pass. No application, runtime deadline or protection guard
 changed. This repairs a shared source gate; a new exact-SHA release and real
 device acceptance still require their own evidence.
+
+## Reconcile the original Android execution fixture with typed CONNECT
+
+At `d219fdf119dbd3bed24ce0cf138b116b71a93bb9`, Android runtime truth run
+`43761695702`, job `132957686857`, failed an older public-editor fixture that
+still expected both HTTP and HTTPS CONNECT execution to be unavailable. Its
+original paired and imported-SS compiler remains intact; the separately typed
+CONNECT compiler was already published in `2f04d9d0`.
+
+The same original fixture now requires the exact three-member CONNECT path,
+requested execution, schema-four source, original member/identity arrays and
+source-only readiness boundaries. SOCKS execution and the unsupported HY2
+final remain rejection cases. A fresh editor's Save is forced to fail inside
+the actual typed compiler; an explicit hook witness and complete private-state
+snapshot prove the original saved choice survives. Draft selection itself is
+correctly treated as a pure structural operation.
+
+The full original gate passes 443 capture checks, 33 native Last-source checks
+and all nine existing causal controls. Every original per-process bound is
+unchanged. Final output and the exact failing CI log are retained in
+`android-execution-capture-repair-validation`. Preliminary observations are
+also retained: a saved-editor refusal did not exercise the compiler, and a
+fresh draft's selection does not call Save. Neither is counted as the final
+compiler-refusal evidence. No application or native engine code changed.
