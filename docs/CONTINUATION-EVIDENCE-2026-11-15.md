@@ -1114,7 +1114,7 @@ prove these behaviors merely because a filename or string is present.
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
 | 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and bounded Windows/Linux/macOS single paired Router hosts with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin paired source now includes actual installed parent/child composition; its new native gate has not yet passed at this cutoff. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
-| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT, SOCKS, schema-five OpenVPN and schema-two Shadowsocks additions below extend those separate families to 3–8 members with one penultimate import. Shadowsocks preserves its separately proved original literal-trio execution capabilities; the subsequent Windows/Linux public Server/Compare unit below admits that bounded original shape. Longer and hostname forms remain Local-only. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
+| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT, SOCKS, schema-five OpenVPN and schema-two Shadowsocks additions below extend those separate families to 3–8 members with one penultimate import. Shared Shadowsocks execution and the Apple public integration now retain complete 3–8-member literal imported-SS Server/Compare routes. The earlier desktop public trio admissions and each platform's actual native evidence remain separate; shared support alone does not prove host acceptance. Hostname Server execution, multiple imports and broader requested positions/protocols/compositions remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |
@@ -3832,3 +3832,60 @@ Frozen eight-file source manifest SHA256:
 The production relay materializer already copies the complete authenticated
 stream source and includes it in its digest. Exact-current native encrypted
 server acceptance and release publication remain mandatory.
+
+
+## Apple ordinary Server/Compare retains complete original routes
+
+The public Apple editor and Connect flow now admit the existing generic
+Server/Compare family: two-to-eight paired WG/AWG-to-Shadowsocks members,
+or three-to-eight members with one literal imported SS2022 node at the
+penultimate position and an independent paired Shadowsocks final. Original
+private node sources, credentials, execution selection, DNS and device policy
+are retained through preparation, native readback, complete saved profiles,
+active-session identity, presentation, Last and Speed Lab. Restoring a proved
+winner does not rerun Compare. Typed HTTP/HTTPS CONNECT remains exactly three
+members; separate candidate, SOCKS and OpenVPN admission is not broadened.
+
+The generic native public measurement now captures the original preparation,
+chain, imported policy, paired-node pointers and dynamic penultimate proof.
+Local resolution uses the original Box and selected resolver. Server public
+measurement passes the fixed hostname to the captured authenticated remote
+prefix. Both recheck the original selector generation so changing away and
+back cannot revive an older result. Existing SOCKS and CONNECT dispatch retain
+their distinct owners and precede this generic branch. The gomobile ABI and
+all 21 retained bridge templates are unchanged.
+
+The current Swift/shared-compiler gates pass 1,624 Local source checks with
+seven original causal controls, 756 execution-capture checks with eight
+controls, 1,091 session checks with all original controls, and 619 public
+consumer checks with six controls. Actual public launch/editor, Speed Lab
+restoration/cancellation, and complete saved-profile Add/Load checks pass with
+their original controls. Added four/eight-member imported Server/Compare
+profile cases preserve each private asset, token and node reference. All six
+integrated profile, workflow, aggregate, parity and native-owner runner audits
+pass. The original 46-plus-five Apple scripts and their 300-second bounds
+remain mandatory; two transitive input files are added without dropping the
+concurrent Windows inputs.
+
+Shared capture/refusal validation passes 25 records. The final native owner
+inventory passes 41 roots/160 records under race; four new native causal
+omissions and the eight-node original-receipt omission fail at their intended
+witnesses. A focused current-4d19502d dependency replay passes seven roots/50
+records under race after the canonical overlay includes the published opaque
+StreamGuard. The retained generic Libbox suite has 32 records with unchanged
+bridge sources. The initial incomplete local StreamGuard overlay and earlier
+interrupted/resource-bound attempts remain recorded as failures, not passes.
+
+Frozen root 18-file manifest SHA256:
+`f80230827d3ab32e9086f2ccf9def5ea3e3f280cb309c6b9fdd920e4dc83522e`.
+Frozen shared/native ten-file manifest SHA256:
+`1a9410f5f926d0f4411edd1cec273a7a78a8c9c1aad44eab59764d8a613cd67e`.
+All 28 code preimages and outputs were checked against 4d19502d; the existing
+cleanup and complete-prefix source contract repairs are preserved.
+
+The fixtures execute real Swift, shared Go and native Box ownership/selection
+logic. Apple OS handles, TUN, encrypted prefixes, DNS answers and remote peers
+remain explicit fixture boundaries. Actual Xcode/framework packaging,
+current-SHA native encrypted execution, physical iPhone/iPad networking,
+signing and private deployment still require their own evidence. This unit
+closes these source integration gaps, not the full original requirement set.

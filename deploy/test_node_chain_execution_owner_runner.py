@@ -34,8 +34,22 @@ def encoded(rows):
 class Verdict(unittest.TestCase):
     def test_exact_complete_three_package_inventory(self):
         result = RUNNER.verdict(encoded(events()), 0)
-        self.assertEqual(result, {'roots': 38, 'test_records': 136})
-        self.assertEqual(len(RUNNER.CONTROLS), 29)
+        self.assertEqual(result, {'roots': 41, 'test_records': 160})
+        self.assertEqual(len(RUNNER.CONTROLS), 33)
+
+    def test_generic_public_family_and_selection_controls_are_mandatory(self):
+        controls = {item[0]: item for item in RUNNER.CONTROLS}
+        for label, selected in (
+            ('generic original penultimate position', 'NativeImportedPublicPrefixes/wg/6/local'),
+            ('generic original public family', 'NativeImportedPublicDNS/original'),
+            ('generic public selected epoch', 'NativeImportedPublicDNS/changed-selector'),
+            ('generic remote selected epoch', 'NativeImportedPublicServer/away-and-back'),
+        ):
+            self.assertEqual(controls[label][5], selected)
+            self.assertIn(RUNNER.PREFIX+selected, RUNNER.expected(RUNNER.PACKAGE))
+        preparer = (ROOT/'deploy/prepare-node-chain-execution-owner.py').read_text()
+        for name in ('execution_public.go.tmpl', 'execution_public_test.go.tmpl'):
+            self.assertEqual(preparer.count("'"+name+"'"), 1)
 
     def test_selection_keeps_only_exact_owner_inventory(self):
         pattern = re.compile(RUNNER.selection())

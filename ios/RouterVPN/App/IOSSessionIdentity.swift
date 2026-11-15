@@ -138,15 +138,15 @@ struct IOSSessionIdentity: Equatable, Sendable {
               let nodes = local["nodes"] as? [String], let identities = local["identity_sources"] as? [String],
               (2...8).contains(nodes.count), identities.count == nodes.count,
               let schema = local["schema"] as? Int,
-              kind == "routervpn-node-chain-connect-execution-preparation-input" ? schema == 4 && nodes.count == 3 : (schema == 1 || schema == 2 && nodes.count == 3) else { return false }
-        // Schema two retains one imported SS member at its original middle
+              kind == "routervpn-node-chain-connect-execution-preparation-input" ? schema == 4 && nodes.count == 3 : (schema == 1 || schema == 2 && nodes.count >= 3) else { return false }
+        // Schema two retains one imported SS member at its original penultimate
         // position. Its empty paired-identity slot is intentional; accepting
         // the same exception for an entry/final or a paired source is not.
         for (position, input) in nodes.enumerated() {
             guard !input.isEmpty,
                   let member = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any],
                   member["schema"] as? Int == 1 else { return false }
-            if (schema == 2 || schema == 4) && position == 1 {
+            if (schema == 2 || schema == 4) && position == nodes.count - 2 {
                 guard member["kind"] as? String == (schema == 4 ? "routervpn-node-chain-connect-member" : "routervpn-node-chain-imported-member"),
                       identities[position].isEmpty else { return false }
             } else {

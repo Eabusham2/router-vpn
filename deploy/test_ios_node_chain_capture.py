@@ -297,7 +297,9 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
   if count>3 {
    for purpose in ["server","auto"] {
     var requested=imported;requested[finalPosition]=try editProfile(requested[finalPosition]){$0["multihop_execution"]=purpose}
-    try reject("long SS cannot borrow execution "+purpose){_ = try IOSNodeChainCapture.compileOriginalForExecution(bundles:requested,requested:purpose)}
+    let prepared=try IOSNodeChainCapture.compileOriginalForExecution(bundles:requested,requested:purpose)
+    try check("long SS preparation retains complete original source "+purpose,prepared.members.count==count && prepared.members[middlePosition].profile["node_kind"] as? String=="external" && prepared.selectionExecution==purpose)
+    try prepared.plan.close()
    }
   }
   let reopened = try IOSNodeChainCapture.reopen(complete.launchInput,selectedProfile:profile(imported[finalPosition]));defer{try? reopened.plan.close()}

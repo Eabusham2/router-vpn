@@ -23,8 +23,8 @@ extension RouterVPNModel {
         let sources = try iosNodeChainBundles(for: selected).map { try encoder.encode($0) }
         let control = selected.routerProfiles.first(where: { $0.id == selected.selectedRouterID })
         if let control, ["server", "auto"].contains(control.multihopExecution ?? "") {
-            guard let nodes = control.multihopNodes, IOSMultihopNodeSelection.supportsCONNECTExecution(nodes) else {
-                throw IOSMultihopNodeSelection.issue("This ordered execution needs its exact original CONNECT trio.")
+            guard let nodes = control.multihopNodes, IOSMultihopNodeSelection.supportsServerExecution(nodes) else {
+                throw IOSMultihopNodeSelection.issue("Choose a supported ordered Server or Compare path with its original paired nodes and Shadowsocks final.")
             }
             return .execution(try IOSNodeChainExecutionCapture.compile(bundles: sources, requested: control.multihopExecution!))
         }

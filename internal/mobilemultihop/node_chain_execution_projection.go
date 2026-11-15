@@ -63,6 +63,7 @@ type NodeChainExecutionPreparation struct {
 	mobile                                         *nodeChainExecutionMobileProjection
 	connect                                        *nodeChainCONNECTExecutionBinding
 	socks                                          *nodeChainSOCKSExecutionBinding
+	importedPublic                                 *nodeChainExecutionImportedPublicCapture
 }
 
 // NewNodeChainExecutionPreparation keeps one complete original Local graph,
@@ -198,6 +199,7 @@ func newNodeChainExecutionPreparationFamily(localSource, execution string, deskt
 	if p.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}
+	p.importedPublic = captureNodeChainExecutionImportedPublic(p)
 	if desktop != nil {
 		p.desktopPhysical, err = newDesktopNodeChainExecutionPhysicalPolicy(p)
 		if err != nil || p.desktopPhysical.Validate() != nil {

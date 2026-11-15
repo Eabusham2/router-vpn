@@ -72,7 +72,76 @@ TESTS=E.SWIFT[:E.SWIFT.index('@MainActor final class Provider')]+r'''
     }
    }
   }}
-  print("PASS Apple CONNECT public launch: exact source, execution precedence, private edits and cancellation")
+  try genericEditor()
+  try await genericLaunch()
+  print("PASS Apple ordered public launch: CONNECT and generic source, execution precedence, private edits and cancellation")
+ }
+ static func genericEditor()throws {
+  for requested in ["server","auto"] {for (count,imported) in [(2,false),(8,false),(3,true),(4,true),(8,true)] {
+   for fault in ["none","old-member","during-DNS","write"] {
+    IOSNodeBundleStore.shared.records=[:];IOSDNSRuntimePolicy.beforePatch=nil
+    let raw=try imported ? importedFixture(requested,"awg2-strong","2022-blake3-aes-256-gcm",count) : fixture(count,"off",requested,true)
+    var nodes=try appFixture(raw).map{try JSONDecoder().decode(ClientBundle.self,from:$0)}
+    nodes[count-1].routerProfiles[0].multihopExecution="local"
+    let model=RouterVPNModel();model.bundle=nodes.last!
+    for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
+    let owner=try model.captureIOSNodeChainEditorOwner(),selection=model.selectedNodeProfile!.multihopNodes!
+    let change={@MainActor in let key=nodes[0].selectedRouterID;IOSNodeBundleStore.shared.records[key]=try editProfile(IOSNodeBundleStore.shared.records[key]!){$0["api_token"]="replacement-original-member"}}
+    if fault=="old-member"{try change()}
+    if fault=="during-DNS"{IOSDNSRuntimePolicy.beforePatch=change}
+    model.failLinkedWrite=fault=="write"
+    if fault=="none" {
+     try model.saveIOSNodeChain(selection,owner:owner,execution:requested)
+     check(model.linkedWrites==1 && model.selectedNodeProfile?.multihopExecution==requested,"editor persists original generic execution choice once")
+     let capture=try model.captureIOSOrderedRoute(model.bundle!);defer{try? capture.close()}
+     check(capture.providerKey==IOSNodeChainProviderCapture.executionKey && capture.members.map(\.id)==selection.map(\.id),"editor compiles exact original generic sources before save")
+    } else {
+     do {try model.saveIOSNodeChain(selection,owner:owner,execution:requested);check(false,"ACCEPTED generic editor "+fault)}catch{}
+     check(model.linkedWrites==0 && model.selectedNodeProfile?.multihopExecution=="local","failed generic save preserves original selection and storage")
+    }
+   }
+  }}
+ }
+ static func genericLaunch()async throws {
+  for requested in ["server","auto"] {for (count,imported,awg) in [(2,false,false),(3,false,true),(8,false,true),(3,true,true),(4,true,true),(8,true,true)] {
+   for fault in ["none","cold-last-server","cold-last-local","member-private","member-removed","final-token","cancel"] where fault != "cold-last-local" || requested=="auto" {
+    NETunnelProviderManager.reset();IOSNodeBundleStore.shared.records=[:];IOSPrivateJSONStore.bytes=nil
+    let raw=try imported ? importedFixture(requested,"awg2-strong","2022-blake3-aes-256-gcm",count) : fixture(count,"off",requested,awg)
+    let bytes=try appFixture(raw),nodes=try bytes.map{try JSONDecoder().decode(ClientBundle.self,from:$0)}
+    let model=RouterVPNModel(),manager=NETunnelProviderManager(),selected=nodes.last!
+    model.bundle=selected
+    for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
+    let capture=try model.captureIOSOrderedRoute(selected);defer{try? capture.close()}
+    let selection=try IOSRuntimeSelector.selectNodeChain(capture)
+    check(capture.providerKey==IOSNodeChainProviderCapture.executionKey && selection.nodeChainExecution==requested && capture.members.count==count,"generic public selection retains exact execution family and order")
+    NETunnelProviderManager.hook={phase in
+     guard phase=="save" else{return}
+     let key=nodes[0].selectedRouterID
+     if fault=="member-private"{IOSNodeBundleStore.shared.records[key]=try editProfile(IOSNodeBundleStore.shared.records[key]!){$0["api_token"]="relinked-original-member"}}
+     if fault=="member-removed"{IOSNodeBundleStore.shared.records.removeValue(forKey:key)}
+     if fault=="final-token"{model.bundle?.routerProfiles[0].apiToken="replacement-final"}
+     if fault=="cancel"{model.iosConnectGeneration=UUID()}
+    }
+    if fault=="none" || fault.hasPrefix("cold-last-") {
+     if fault.hasPrefix("cold-last-") {
+      let source=try IOSNodeChainExecutionSession.Source.compile(bytes,requested:requested),id=String(repeating:"c",count:32)
+      let winner=fault=="cold-last-local" ? "local":"server",record=try LibboxTestSavedLast(source.input,winner)
+      let reply:[String:Any]=["schema":1,"kind":"routervpn-ordered-execution-last","request_id":id,"session_id":UUID().uuidString,"source_sha256":source.sourceSHA256,"preparation_config_sha256":source.configSHA256,"last":record]
+      try IOSNodeChainExecutionLastStore.record(IOSNodeChainExecutionSession.Last.decode(data(reply),source:source,request:id))
+      var lastSelected=selected;lastSelected.routerProfiles[0].startupMode="last";model.bundle=lastSelected
+      _ = try await IOSSpeedLabContext.$startupAdmission.withValue({true}){try await model.launch(manager,lastSelected,selection)}
+      check(manager.connection.options?[IOSNodeChainExecutionSession.lastKey] as? String==record,"generic cold Last retains original concrete winner without reranking")
+     } else {_ = try await model.launch(manager,selected,selection)}
+     let config=(manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+     check(NETunnelProviderManager.starts==1 && config[IOSNodeChainProviderCapture.executionKey] as? String==capture.launchInput && config[IOSNodeChainProviderCapture.key]==nil && config[IOSNodeChainCONNECTCapture.providerKey]==nil,"generic public launch hands exact source to original manager")
+     let replay=try IOSNodeChainExecutionCapture.reopen(config[IOSNodeChainProviderCapture.executionKey] as! String,selectedProfile:profile(bytes.last!));try replay.close()
+     check(!model.connected,"generic source handoff cannot claim native proof")
+    } else {
+     await reject("generic stale launch "+fault){_ = try await model.launch(manager,selected,selection)}
+     check(NETunnelProviderManager.starts==0,"replaced generic private source cannot start native")
+    }
+   }
+  }}
  }
 }
 '''
@@ -89,6 +158,22 @@ def main():
     body = body.replace('// SHIPPING_CANDIDATE_CONNECT', S.member(model, '    func connectCandidatePreparation('))
     body = body.replace('// SHIPPING_CONNECT', S.member(model, '    func connect(rawProfileID:'))
     body = body.replace('// SHIPPING_START', S.member(model, '    private func start(manager:'))
+    # Actual editor methods share the real compiler and original source capture.
+    # Durable writes and DNS preparation remain explicit host boundaries.
+    body = body.replace(' var bundle:ClientBundle?\n', ''' var bundle:ClientBundle?
+ var profileMutationBlocked=false,linkedWrites=0,failLinkedWrite=false
+ var selectedNodeProfile:RouterProfile?{selectedRouterProfile}
+ var allNodeProfiles:[RouterProfile]{IOSNodeBundleStore.shared.records.values.flatMap{(try? JSONDecoder().decode(ClientBundle.self,from:$0).routerProfiles) ?? []}}
+ func linkNodeBundle(_ data:Data)throws{
+  guard !failLinkedWrite else{throw CancellationError()}
+  let value=try JSONDecoder().decode(ClientBundle.self,from:data)
+  IOSNodeBundleStore.shared.records[value.selectedRouterID]=data;bundle=value;linkedWrites+=1
+ }
+''', 1)
+    body = body.replace('static func patch(_ bundle:ClientBundle)throws->ClientBundle {throw CancellationError()}', '''@MainActor static var beforePatch:(@MainActor ()throws->Void)?
+ @MainActor static func patch(_ bundle:ClientBundle)throws->ClientBundle {let change=beforePatch;beforePatch=nil;try change?();return bundle}''', 1)
+    body = body.replace('nonisolated static func iosStrategyDigest(_ data:Data)->String{"boundary"}', 'nonisolated static func iosStrategyDigest(_ data:Data)->String{try! LibboxTestDigest(data).map{String(format:"%02x",$0)}.joined()}', 1)
+    assert 'IOSMultihopNodeSelection.supportsServerExecution(draft.nodes)' in (APP/'IOSNodeChainEditorView.swift').read_text()
     with tempfile.TemporaryDirectory(prefix='.ios-chain-launch-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-launch-') as directory:
         go_dir, work = Path(go_dir), Path(directory)
         (go_dir / 'main.go').write_text(E.SAVED.GO)
@@ -103,7 +188,7 @@ def main():
         crypto=work/'CryptoKit.swift';crypto.write_text(E.SAVED.SOURCE.CRYPTO)
         subprocess.run(command+['-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/('libCryptoKit.dylib' if platform.system()=='Darwin' else 'libCryptoKit.so'))],check=True,timeout=90)
         command+=['-lCryptoKit']
-        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift','IOSNodeChainExecutionCapture.swift','IOSNodeChainExecutionSession.swift','IOSNodeChainExecutionControl.swift','IOSSessionIdentity.swift')]
+        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift','IOSNodeChainEditor.swift','IOSNodeChainExecutionCapture.swift','IOSNodeChainExecutionSession.swift','IOSNodeChainExecutionControl.swift','IOSSessionIdentity.swift')]
         binary = work / 'tests'
         subprocess.run(command + [str(code), '-o', str(binary)], check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)

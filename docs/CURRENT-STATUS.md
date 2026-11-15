@@ -103,9 +103,41 @@ editor preserve each original private member. Five new required source gates
 and their negative controls pass; the unchanged native Apple contract retains
 all 46 earlier scripts and adds these five with the original 300-second bound.
 These portable tests explicitly model Apple OS/native handles. Xcode, package,
-visual and device evidence remain required. Public ordinary paired/imported-SS
-Server/Compare admission is tracked separately and is not closed by this
-CONNECT integration.
+visual and device evidence remain required. Ordinary paired/imported-SS
+Server/Compare uses the separate source family described below.
+
+### Apple paired and imported Shadowsocks Server/Compare
+
+The Apple editor, public Connect flow, complete saved profiles, session identity
+and route presentation now retain ordinary Server/Compare for two-to-eight
+paired members, or three-to-eight members with one imported Shadowsocks 2022
+node immediately before the independent paired Shadowsocks final. Every
+preceding paired node retains its captured WireGuard/AWG transport and private
+identity. Imported Server execution requires the original literal endpoint and
+canonical SS2022 method/key; hostname imports retain their separate Local path.
+HTTP/HTTPS CONNECT keeps its distinct typed three-node execution boundary.
+
+Source preparation, readback and active-session parsing retain the complete
+penultimate position. The public editor compiles the original private sources
+before saving; stale/relinked members and failed writes cannot replace the
+saved selection. Last and Speed Lab preserve the already-proved Local/Server
+choice and the complete source through the existing PacketTunnel owner. They
+do not rerun Compare during restoration.
+
+The native generic imported public measurement uses the selected original
+outbound and DNS policy. Its captured selector generation prevents a change
+away and back from reusing an old measurement. Local resolution stays inside
+the original Box; Server measurements use the authenticated captured front.
+The separate CONNECT and SOCKS native dispatches preserve their typed owners.
+Fifty-sample latency, map/progress presentation and private-node proof positions
+remain tied to the original complete route.
+
+The required Swift/shared-compiler and native-object gates cover these paths
+with explicit source, identity, cancellation and restoration controls. Their
+OS and encrypted-peer boundaries remain stated in the evidence ledger. Actual
+Xcode/framework packaging, encrypted native acceptance, signing and physical
+iPhone/iPad networking remain required release/device evidence. This ordinary
+integration does not claim every imported protocol or graph composition.
 
 ## November 15: original scope and bounded desktop additions
 
@@ -201,10 +233,11 @@ saved profiles and measurement positions retain the same complete Local path.
 Source identity, cancellation and restoration remain tied to the original
 connection owner.
 
-The shared engine's existing literal three-node Server/Compare and candidate
-capabilities remain separate. The separate bounded desktop admissions
-are described above; this Local extension grants neither capability to
-longer imports. Multiple imports, arbitrary
+The shared engine now separately retains literal imported Shadowsocks
+Server/Compare prefixes through eight nodes, and the Apple public integration
+is described above. Desktop public admission and candidate preparation keep
+their separately documented limits; the Local extension alone grants neither
+authority. Multiple imports, arbitrary
 imported positions and the other requested graph families remain unfinished.
 MTU/layer capacity must fit the actual captured path; admitting eight members
 does not override an incompatible fixed MTU. The required source and encrypted

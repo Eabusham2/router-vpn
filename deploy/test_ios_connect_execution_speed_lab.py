@@ -43,13 +43,21 @@ TESTS=r'''
  static func reject(_ name:String,_ action:()async throws->Void)async{do{try await action();print("FAIL ACCEPTED "+name);exit(1)}catch{}}
  static func main()async throws{
   defer{LibboxTestClose()}
-  for selected in ["local","server"]{for reconnect in [false,true]{
+  for family in ["connect","paired-two","paired-eight","imported","imported-eight"]{for selected in ["local","server"]{for reconnect in [false,true]{
    NETunnelProviderManager.stored=[];FixtureClock.value=0
-   let bytes=try connectFixture("http-connect","wg","auto"),source=try IOSNodeChainExecutionSession.Source.compile(bytes,requested:"auto")
+   let raw:[Data]
+   switch family {
+   case "paired-two":raw=try fixture(2,"off","auto",false)
+   case "paired-eight":raw=try fixture(8,"off","auto",true)
+   case "imported":raw=try importedFixture("auto","awg2-strong","2022-blake3-aes-256-gcm")
+   case "imported-eight":raw=try importedFixture("auto","awg2-strong","2022-blake3-aes-256-gcm",8)
+   default:raw=try connectFixture("http-connect","wg","auto")
+   }
+   let bytes=try appFixture(raw),source=try IOSNodeChainExecutionSession.Source.compile(bytes,requested:"auto")
    let provider=Provider(source);provider.selected=selected
    let model=RouterVPNModel(),manager=NETunnelProviderManager(),proto=NETunnelProviderProtocol()
    proto.providerBundleIdentifier="com.eabusham.routervpn.PacketTunnel";proto.serverAddress="original"
-   proto.providerConfiguration=["engine":"multihop-libbox","rawProfileID":"shadowsocks","mode":"shadowsocks","bundle":bytes[2],"nodeChainExecutionSource":source.input]
+   proto.providerConfiguration=["engine":"multihop-libbox","rawProfileID":"shadowsocks","mode":"shadowsocks","bundle":bytes.last!,"nodeChainExecutionSource":source.input]
    manager.protocolConfiguration=proto;manager.connection.provider=provider;manager.onDemandRules=[NEOnDemandRuleConnect()]
    NETunnelProviderManager.stored=[manager]
    provider.ownerFault="process_id";await model.refreshTunnelStatus()
@@ -70,8 +78,8 @@ TESTS=r'''
     check(provider.releases==0,"consumed original capsule not released")
     check(try IOSNodeChainExecutionLastStore.stored(for:source) != nil,"fresh proof stored Last")
    }else{check(manager.connection.starts==0 && provider.releases==1 && !model.connected,"Disconnect joins capsule without reconnect")}
-  }}
-  print("PASS Apple CONNECT Speed Lab: actual capture/stop/restore, Local/Server winner and Disconnect")
+  }}}
+  print("PASS Apple ordered Speed Lab: CONNECT and generic actual capture/stop/restore, Local/Server winner and Disconnect")
  }
 }
 '''

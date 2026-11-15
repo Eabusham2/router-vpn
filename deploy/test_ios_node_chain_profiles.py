@@ -118,10 +118,12 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
   var value=try JSONDecoder().decode(ClientBundle.self,from:data);edit(&value);store.records[key]=try encoded(value)
  }
  static func matrix()throws {
-  for count in [3,4,8] {
+  for count in [2,3,4,8] {for execution in ["local","server","auto"] {
    let(model,ids)=try setup(count),store=IOSNodeBundleStore.shared
+   model.bundle!.routerProfiles[0].multihopExecution=execution;try store.save(model.bundle!)
    let original=store.records,selected=try encoded(model.bundle!)
    let saved=try IOSConnectionProfileStore.add(model:model,name:" Complete ordered path ")
+   try check("complete profile retains selected execution",saved.preferences?.multihopExecution==execution)
    try check("snapshot retains every selected position",saved.preferences?.multihopNodes?.map(\.id)==ids && saved.chainPolicies?.map(\.nodeID)==ids)
    try check("chain snapshot has no borrowed legacy entry",saved.entryPolicy==nil && saved.preferences?.multihopEntryID==nil && saved.preferences?.multihopEntryMode==nil)
    try check("Add leaves live selection and private records unchanged",store.records==original && encoded(model.bundle!)==selected && model.imports==0)
@@ -143,7 +145,7 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
     try check("Load preserves original member secrets and assets",restored.profiles==prior.profiles && restored.routerProfiles[0].apiToken==prior.routerProfiles[0].apiToken && restored.routerProfiles[0].socksPassword==prior.routerProfiles[0].socksPassword)
    }
    try check("model and saved current record agree",UserDefaults.standard.data(forKey:model.bundleKey)==store.bundleData(containing:ids.last!,current:nil))
-  }
+  }}
  }
  static func failures()throws {
   for fault in ["missing-middle","changed-proof","missing-assets","middle-prepare","write","stale-during-prepare","blocked","order","final-policy","pair-capture","missing-capture"] {
@@ -212,36 +214,44 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
  }
 
  static func importedRoundtrip()throws {
-  for hostname in [false,true] {
+  for (hostname,count,execution) in [(false,3,"local"),(true,3,"local"),(false,4,"server"),(false,4,"auto"),(false,8,"server"),(false,8,"auto")] {
   for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
-  let(model,ids)=try setup(3),store=IOSNodeBundleStore.shared
-  var middle=try stored(ids[1]),profile=middle.routerProfiles[0]
+  let(model,ids)=try setup(count),store=IOSNodeBundleStore.shared,middlePosition=count-2
+  var middle=try stored(ids[middlePosition]),profile=middle.routerProfiles[0]
   profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.dnsMode="rescue"
   let host=hostname ? "Middle.Example.Test":"198.51.100.76"
   if hostname {profile.endpoint=host;profile.dnsMode="custom";profile.dnsProtocol="tcp";profile.dnsHost="10.81.0.53";profile.dnsPort=5353;profile.dnsServerName=nil;profile.dnsPath=nil;profile.dnsBootstrap=nil}
   let source:[String:Any] = ["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":host,"port":443,"method":method,"password":Data(repeating:0,count:keySize).base64EncodedString()]]
   profile.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:JSONSerialization.data(withJSONObject:source))
   middle.routerProfiles=[profile];middle.profiles=[:];try store.save(middle)
-  var final=model.bundle!;final.routerProfiles[0].multihopNodes![1].mode="shadowsocks";try store.save(final);model.bundle=try stored(ids.last!)
+  var final=model.bundle!;final.routerProfiles[0].multihopNodes![middlePosition].mode="shadowsocks";final.routerProfiles[0].multihopExecution=execution;try store.save(final);model.bundle=try stored(ids.last!)
   let saved=try IOSConnectionProfileStore.add(model:model,name:"Custom middle")
+  try check("complete imported profile retains execution and every member",saved.preferences?.multihopExecution==execution && saved.preferences?.multihopNodes?.map(\.id)==ids && saved.chainPolicies?.map(\.nodeID)==ids)
+  let originalPrivate=try ids.map{try stored($0)}
+  if count==3 && execution=="local" {
   let beforeCandidate=store.records,selectedCandidate=try encoded(model.bundle!),imports=model.imports
   let complete=try model.iosNodeChainBundles(for:model.bundle!).map{try IOSDNSRuntimePolicy.selectedProfile(in:$0).unwrapCandidate()}
   let future=try IOSConnectionProfileStore.appendCandidate(name:"Measured custom future",profiles:complete,current:{})
   try check("custom candidate future profile preserves original source",future.chainPolicies?[1].externalProtocol=="shadowsocks" && future.chainPolicies?[1].nodeProofID==nil && store.records==beforeCandidate && encoded(model.bundle!)==selectedCandidate && model.imports==imports)
   _ = try IOSConnectionProfileStore.load(model:model,id:future.id)
   try check("custom candidate future Load preserves cipher",try model.iosNodeChainBundles(for:model.bundle!)[1].routerProfiles[0].external?.shadowsocks?.method==method)
-  try check("saved custom middle retains external authority",saved.chainPolicies?[1].nodeKind=="external" && saved.chainPolicies?[1].nodeProofID==nil && saved.chainPolicies?[1].externalProtocol=="shadowsocks")
+  }
+  try check("saved custom middle retains external authority",saved.chainPolicies?[middlePosition].nodeKind=="external" && saved.chainPolicies?[middlePosition].nodeProofID==nil && saved.chainPolicies?[middlePosition].externalProtocol=="shadowsocks")
   try check("saved custom middle excludes original credentials",!String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self).contains(Data(repeating:0,count:keySize).base64EncodedString()))
   _ = try IOSConnectionProfileStore.load(model:model,id:saved.id)
   let captured=try model.iosNodeChainBundles(for:model.bundle!)
-  try check("loaded custom middle retains every original position",captured.count==3 && captured[1].routerProfiles[0].normalizedNodeKind=="external" && captured[1].routerProfiles[0].nodeProofID==nil && captured[1].routerProfiles[0].external?.shadowsocks?.method==method)
+  try check("loaded custom middle retains every original position",captured.count==count && captured[middlePosition].routerProfiles[0].normalizedNodeKind=="external" && captured[middlePosition].routerProfiles[0].nodeProofID==nil && captured[middlePosition].routerProfiles[0].external?.shadowsocks?.method==method && model.bundle?.routerProfiles[0].multihopExecution==execution)
+  for (position,value) in captured.enumerated() {
+   let original=originalPrivate[position]
+   try check("complete imported Load retains each original private credential reference",value.profiles==original.profiles && value.routerProfiles[0].apiToken==original.routerProfiles[0].apiToken && value.routerProfiles[0].external==original.routerProfiles[0].external)
+  }
   if hostname {
    try check("hostname profile restores exact resolver and transport",captured[1].routerProfiles[0].endpoint==host && captured[1].routerProfiles[0].external?.shadowsocks?.server==host && captured[1].routerProfiles[0].dnsHost=="10.81.0.53" && captured[1].routerProfiles[0].dnsProtocol=="tcp" && captured[1].routerProfiles[0].dnsPort==5353)
    try replaceRaw(ids[1]){$0.routerProfiles[0].dnsHost="10.81.0.54"}
    _ = try IOSConnectionProfileStore.load(model:model,id:saved.id)
    try check("Load restores the saved hostname resolver transactionally",try stored(ids[1]).routerProfiles[0].dnsHost=="10.81.0.53")
   }
-  try replaceRaw(ids[1]){$0.routerProfiles[0].external?.expectedPublicIP="203.0.113.77"}
+  try replaceRaw(ids[middlePosition]){$0.routerProfiles[0].external?.expectedPublicIP="203.0.113.77"}
   try reject("replaced custom public identity"){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
   }
   }

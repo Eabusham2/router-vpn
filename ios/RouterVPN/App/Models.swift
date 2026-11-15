@@ -652,12 +652,24 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
             ["http-connect", "https-connect"].contains(nodes[1].mode) && nodes[2].mode == "shadowsocks"
     }
 
+    /// The shared generic execution compiler accepts paired prefixes or one
+    /// original Shadowsocks middle. Private source and policy checks run at Save and Connect.
+    static func supportsGenericExecution(_ nodes: [Self]) -> Bool {
+        guard (2...maximumNodes).contains(nodes.count), nodes.last?.mode == "shadowsocks" else { return false }
+        return nodes.dropLast().allSatisfy({ supportsNativePrefix($0.mode) }) ||
+            nodes.count >= 3 && nodes.dropLast(2).allSatisfy({ supportsNativePrefix($0.mode) }) && nodes[nodes.count - 2].mode == "shadowsocks"
+    }
+
+    static func supportsServerExecution(_ nodes: [Self]) -> Bool {
+        supportsGenericExecution(nodes) || supportsCONNECTExecution(nodes)
+    }
+
     static func validate(_ nodes: [Self], execution: String?, entryID: String?, entryMode: String?,
                          exitID: String?, exitMode: String?, controlID: String? = nil) throws {
         guard (2...maximumNodes).contains(nodes.count),
-              execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsCONNECTExecution(nodes),
+              execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires one paired prefix, an HTTP/HTTPS CONNECT middle and a Shadowsocks final.")
+            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires a Shadowsocks final after paired WireGuard/AWG2 nodes, optionally with one Shadowsocks 2022 node immediately before the final. HTTP/HTTPS CONNECT requires exactly three nodes.")
         }
         var seen = Set<String>()
         for node in nodes {

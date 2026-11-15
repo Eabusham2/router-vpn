@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile shipping Apple typed execution capture against the real shared Go parser.
+"""Compile shipping Apple execution consumers against the real shared Go parsers.
 
 The Libbox source bridge executes the actual compiler. Native lifecycle calls
 remain explicitly rejecting boundaries; this is not an Apple SDK/device gate.
@@ -33,6 +33,7 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String)throws->[Data
  @MainActor static func reject(_ name:String,_ run:()throws->Void){do{try run();fatalError("ACCEPTED "+name)}catch{checks+=1}}
  @MainActor static func main()throws{
   defer{LibboxTestClose()}
+  try genericConsumers()
   for kind in ["http-connect","https-connect"] {for mode in ["wg","awg2-fast","awg2-strong"] {for requested in ["server","auto"] {
    let bundles=try connectFixture(kind,mode,requested)
    let capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested);defer{try? capture.close()}
@@ -82,7 +83,64 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String)throws->[Data
     reject("typed source "+fault){_ = try IOSNodeChainExecutionCapture.compile(bundles:invalid,requested:requested)}
    }
   }}}
-  print("PASS Apple CONNECT execution source: \(checks) original-source checks")
+  print("PASS Apple CONNECT and generic execution consumers: \(checks) original-source checks")
+ }
+ @MainActor static func genericConsumers()throws{
+  var originals:[[Data]]=[]
+  for requested in ["server","auto"] {
+   for (count,layer,awg) in [(2,"off",false),(3,"aes-256-gcm",true),(8,"aes-256-gcm+xor-whitening",true)] {
+    originals.append(try appFixture(fixture(count,layer,requested,awg)))
+   }
+   for mode in ["wg","awg2-fast","awg2-strong"] {for method in ["2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"] {
+    originals.append(try appFixture(importedFixture(requested,mode,method)))
+   }}
+   for count in [4,8] {originals.append(try appFixture(importedFixture(requested,"awg2-strong","2022-blake3-aes-256-gcm",count)))}
+  }
+  for bundles in originals {
+   let selected=try profile(bundles.last!),requested=selected["multihop_execution"] as! String
+   let capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested);defer{try? capture.close()}
+   let nodes=try bundles.map{try JSONDecoder().decode(ClientBundle.self,from:$0)},control=nodes.last!.routerProfiles[0]
+   check(!capture.isCONNECT && IOSMultihopNodeSelection.supportsGenericExecution(control.multihopNodes!),"generic choice retains original family")
+   try IOSMultihopNodeSelection.validate(control.multihopNodes!,execution:requested,entryID:nil,entryMode:nil,exitID:nil,exitMode:nil,controlID:control.id)
+   let identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles.last!,entryBundleData:nil,nodeChainExecutionSource:Data(capture.launchInput.utf8))
+   let model=RouterVPNModel(nodes,identity:identity),fifty=try IOSOrderedLatencyCapture(model)
+   let expected=capture.members.map(\.id),kinds=capture.members.map{$0.profile["node_kind"] as? String=="external" ? "public-path":"private-node"}
+   check(fifty.source==capture.sourceSHA256 && fifty.config==capture.configSHA256 && fifty.ids==expected && fifty.kinds==kinds,"generic fifty exact source and measurement kinds")
+   check(IOSNodeChainPresentation.planned(selected:control,catalog:nodes.flatMap(\.routerProfiles))?.map(\.id)==expected,"planned generic path retains all original positions")
+   check(IOSNodeChainPresentation.active(identity)?.map(\.id)==expected,"active generic path retains all original positions")
+   if kinds.contains("public-path") {
+    var launch=try object(Data(capture.launchInput.utf8)),preparation=try object(Data(capture.source.utf8)),local=try object(Data((preparation["local_source"] as! String).utf8))
+    var inputs=local["nodes"] as! [String],identities=local["identity_sources"] as! [String]
+    let position=inputs.count-2
+    let external:[String:Any]=["schema":1,"kind":"routervpn-node-launch-input","mode":"shadowsocks","profile_json":String(decoding:try data(profile(bundles[position])),as:UTF8.self)]
+    inputs[position]=String(decoding:try data(external),as:UTF8.self);identities[position]=identities[0]
+    local["schema"]=1;local["nodes"]=inputs;local["identity_sources"]=identities
+    preparation["local_source"]=String(decoding:try data(local),as:UTF8.self);launch["source"]=String(decoding:try data(preparation),as:UTF8.self)
+    let forged=try IOSSessionIdentity(connectedAt:identity.connectedAt,engine:identity.engine,rawProfile:identity.rawProfile,bundleData:identity.bundleData,entryBundleData:nil,nodeChainExecutionSource:try data(launch))
+    check(IOSNodeChainPresentation.active(forged)==nil,"generic presentation rejects external member claiming paired schema")
+   }
+   for winner in requested=="auto" ? ["local","server"]:["server"] {
+    let rows:[[String:Any]]=capture.members.enumerated().map{["position":$0.offset,"profile_id":$0.element.id,"kind":kinds[$0.offset],"proven":true,"response_ms":1.0]}
+    let value:[String:Any]=["stage":"selected","execution":winner,"prefixes":rows,"ready":true,"complete":true,"dns_proven":true,"public_proven":true]
+    check(IOSNodeChainPresentation.progress(value,expected:expected,requestedExecution:requested)?.contains("Every captured node and final path verified")==true,"generic progress preserves selected winner and all node proofs")
+   }
+   let changed=try editProfile(bundles.last!){$0["api_token"]="replacement-final"}
+   let stale=try IOSSessionIdentity(connectedAt:identity.connectedAt,engine:identity.engine,rawProfile:identity.rawProfile,bundleData:changed,entryBundleData:nil,nodeChainExecutionSource:identity.nodeChainExecutionSource)
+   check(IOSNodeChainPresentation.active(stale)==nil,"generic presentation rejects replaced final private source")
+   try fifty.require(model)
+   model.iosConnectGeneration=UUID();reject("generic latency replacement generation"){try fifty.require(model)};model.iosConnectGeneration=fifty.selection
+   model.nodes[0].routerProfiles[0].name="changed original private member"
+   reject("generic latency complete source"){try fifty.require(model)}
+   reject("latency initial source change"){_ = try IOSOrderedLatencyCapture(model)}
+  }
+  let original=try appFixture(fixture(3,"off","server",false)),profile=try JSONDecoder().decode(ClientBundle.self,from:original.last!).routerProfiles[0]
+  let valid=profile.multihopNodes!
+  for modes in [["wg"],["wg","hysteria2"],["wg","socks5","shadowsocks"],["wg","openvpn","shadowsocks"],["wg","shadowsocks","wg","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
+   let nodes=modes.enumerated().map{IOSMultihopNodeSelection(id:"original-\($0.offset)",mode:$0.element)}
+   check(!IOSMultihopNodeSelection.supportsGenericExecution(nodes),"generic selector refuses unsupported graph shape")
+   reject("unsupported generic execution choice"){try IOSMultihopNodeSelection.validate(nodes,execution:"server",entryID:nil,entryMode:nil,exitID:nil,exitMode:nil)}
+  }
+  reject("invalid generic execution name"){try IOSMultihopNodeSelection.validate(valid,execution:"fastest",entryID:nil,entryMode:nil,exitID:nil,exitMode:nil)}
  }
 }
 '''
@@ -101,7 +159,8 @@ def main():
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(work/'Libbox.swift'),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(work/('libLibbox'+suffix))],check=True,timeout=90)
         link=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
         subprocess.run(options+link+['-emit-module','-emit-library','-module-name','CryptoKit',str(work/'CryptoKit.swift'),'-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/('libCryptoKit'+suffix))],check=True,timeout=90)
-        command=options+link+['-lCryptoKit']+[str(APP/n) for n in ('Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainProviderCapture.swift','IOSSessionIdentity.swift','IOSNodeChainPresentation.swift')]+[str(work/'Latency.swift')]
+        presentation=APP/'IOSNodeChainPresentation.swift';presented=presentation.read_text();presentationCopy=work/'Presentation.swift';presentationCopy.write_text(presented)
+        command=options+link+['-lCryptoKit']+[str(APP/n) for n in ('Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainProviderCapture.swift','IOSSessionIdentity.swift')]+[str(presentationCopy),str(work/'Latency.swift')]
         source=APP/'IOSNodeChainExecutionCapture.swift';text=source.read_text();tests=work/'Tests.swift'
         def run(value):
             path=work/'Capture.swift';path.write_text(value);binary=work/'tests'
@@ -123,4 +182,17 @@ def main():
         result=run(text)
         assert result.returncode!=0 and 'ACCEPTED latency initial source change' in result.stdout+result.stderr,result.stdout+result.stderr
         print('Rejected CONNECT execution source control: latency-original-source')
+        (work/'Latency.swift').write_text(route+model+latency)
+        start=presented.index('    private static func capturedGenericExecution(')
+        end=presented.index('    private static func capturedSOCKS(',start)
+        section=presented[start:end]
+        for name,before,after,witness in (
+            ('original-final-presentation','guard last == expected else { return nil }','guard true else { return nil }','generic presentation rejects replaced final private source'),
+            ('paired-schema-presentation','value.normalizedNodeKind == "router-vpn", value.external == nil','true','generic presentation rejects external member claiming paired schema'),
+        ):
+            assert section.count(before)==1
+            presentationCopy.write_text(presented[:start]+section.replace(before,after,1)+presented[end:])
+            result=run(text)
+            assert result.returncode!=0 and witness in result.stdout+result.stderr,result.stdout+result.stderr
+            print('Rejected generic execution source control:',name)
 if __name__=='__main__':main()

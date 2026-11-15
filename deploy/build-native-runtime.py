@@ -234,6 +234,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_node_chain_ss_prefix_contract_runner.py',
                              ROOT/'deploy/test_ios_node_chain_imported_capture.py',
                              ROOT/'deploy/test_ios_node_chain_imported_profiles.py',
+                             ROOT/'deploy/test_ios_node_chain_execution_capture.py',
+                             ROOT/'deploy/test_ios_node_chain_profiles.py',
                              ROOT/'deploy/test_ios_connect_execution_capture.py',
                              ROOT/'deploy/test_ios_connect_execution_runtime.py',
                              ROOT/'deploy/test_ios_connect_execution_control.py',

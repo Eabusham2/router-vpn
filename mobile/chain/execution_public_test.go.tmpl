@@ -1,0 +1,358 @@
+package box
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+// Real shared constructors, Box managers, selector, DNS dispatch and native
+// SOCKS frontend; privileged TUN, encrypted prefix and DNS answers are explicit
+// boundaries inherited from the original native execution fixture.
+func importedPublicNativeSources(t *testing.T, mode, execution string) (*mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainServerPolicy) {
+	t.Helper()
+	paired, _ := executionNativeSources(t, execution)
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(paired.LocalSource()), &source) != nil || len(source.Nodes) != 3 {
+		t.Fatal("original complete paired source absent")
+	}
+	if mode != "wg" {
+		packet := chainNativeSourceModes(t, []string{mode})
+		launch, err := packet.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var original mobilemultihop.NodeChainSource
+		if json.Unmarshal([]byte(launch), &original) != nil {
+			t.Fatal("original packet source absent")
+		}
+		source.Nodes[0] = original.Nodes[0]
+	}
+	password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, 32))
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "endpoints": []any{}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": "203.0.113.24", "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "rules": []any{}, "auto_detect_interface": true}}
+	profile := map[string]any{"id": "native-imported-execution", "node_kind": "external", "endpoint": "203.0.113.24", "external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "shadowsocks": map[string]any{"server": "203.0.113.24", "port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "dns_mode": "home", "start_layer": "off", "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false, "kill_switch_policy": "always"}
+	capture := map[string]any{"schema": 1, "exit_id": "native-imported-execution", "protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "profile": profile}
+	middle, err := mobilemultihop.NodeChainImportedMemberInput(chainNativeJSON(t, graph), chainNativeJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Schema, source.Nodes[1], source.IdentitySources[1] = 2, middle, ""
+	local, err := mobilemultihop.NewNodeChain(chainNativeJSON(t, source))
+	if err != nil {
+		t.Fatal("actual literal imported trio", err)
+	}
+	proofs := local.ProofInventory()
+	server, err := mobilemultihop.NewNodeChainServerPolicy(chainNativeJSON(t, mobilemultihop.NodeChainServerSource{Schema: 2, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: mode, Nodes: append([]string(nil), source.Nodes[1:]...), IdentitySources: append([]string(nil), source.IdentitySources[1:]...)}))
+	if err != nil {
+		t.Fatal("actual imported server suffix", err)
+	}
+	prep, err := mobilemultihop.NewNodeChainExecutionPreparation(chainNativeJSON(t, source), execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prep, server
+}
+
+func TestRouterVPNExecutionNativeImportedPublicDNS(t *testing.T) {
+	for _, fault := range []string{"original", "foreign-tag", "foreign-address", "changed-owner", "changed-selector", "mapped-answer", "private-answer", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			testImportedPublicDNS(t, 1, "wg", fault)
+		})
+	}
+}
+func testImportedPublicDNS(t *testing.T, count int, mode, fault string) {
+	t.Helper()
+	var prep *mobilemultihop.NodeChainExecutionPreparation
+	var server *mobilemultihop.NodeChainServerPolicy
+	if count == 1 {
+		prep, server = importedPublicNativeSources(t, mode, "auto")
+	} else {
+		prep, server = importedPublicPrefixNativeSources(t, count, mode, "auto")
+	}
+	f := newExecutionNativeFixtureWithSources(t, prep, server, nil)
+	projection := f.adopt(t)
+	e := f.engine
+	proofs, err := projection.ProofInventory("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addresses := make(chan string, 1)
+	f.prefixes[proofs[len(proofs)-2].Tag].dialAddress = func(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+		addresses <- network + "/" + destination.String()
+		client, peer := net.Pipe()
+		t.Cleanup(func() { peer.Close() })
+		return client, nil
+	}
+	tag, address := proofs[len(proofs)-2].Tag, hopmeasure.PublicAddress
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	switch fault {
+	case "old-middle-position":
+		tag = proofs[1].Tag
+	case "foreign-tag":
+		tag = proofs[len(proofs)-1].Tag
+	case "foreign-address":
+		address = "foreign.example:443"
+	case "changed-owner":
+		f.dns.during = func() { f.current.Store(false) }
+		defer f.current.Store(true)
+	case "changed-selector":
+		f.dns.during = func() {
+			if !e.selector.SelectOutbound(e.state.Load().server.Tag()) || !e.selector.SelectOutbound(e.state.Load().local.Tag()) {
+				t.Error("fixture selector transition failed")
+			}
+		}
+	case "mapped-answer":
+		f.dns.answerIP = net.IPv4(93, 184, 216, 34)
+	case "private-answer":
+		f.dns.answerIP = net.IP{10, 77, 0, 1}
+	case "cancelled":
+		cancel()
+	}
+	before := f.dns.calls.Load()
+	conn, err := e.Dial(ctx, tag, address)
+	if conn != nil {
+		defer conn.Close()
+	}
+	if fault != "original" {
+		if err == nil {
+			t.Fatal("foreign imported public DNS/selection accepted", fault)
+		}
+		if (fault == "old-middle-position" || fault == "foreign-tag" || fault == "foreign-address" || fault == "cancelled") && f.dns.calls.Load() != before {
+			t.Fatal("foreign imported target invoked DNS")
+		}
+		return
+	}
+	if err != nil || conn == nil {
+		t.Fatal("original selected DNS/public imported SS", err)
+	}
+	if f.dns.calls.Load() <= before {
+		t.Fatal("imported public origin bypassed original resolver")
+	}
+	select {
+	case got := <-addresses:
+		if got != "tcp/93.184.216.34:443" {
+			t.Fatal("wrong original imported resolved tuple", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("original imported outbound not used")
+	}
+}
+
+func TestRouterVPNExecutionNativeImportedPublicServer(t *testing.T) {
+	for _, fault := range []string{"original", "away-and-back", "foreign-tag", "foreign-address"} {
+		t.Run(fault, func(t *testing.T) {
+			testImportedPublicServer(t, 1, "wg", fault)
+		})
+	}
+}
+func testImportedPublicServer(t *testing.T, count int, mode, fault string) {
+	t.Helper()
+	var prep *mobilemultihop.NodeChainExecutionPreparation
+	var server *mobilemultihop.NodeChainServerPolicy
+	if count == 1 {
+		prep, server = importedPublicNativeSources(t, mode, "server")
+	} else {
+		prep, server = importedPublicPrefixNativeSources(t, count, mode, "server")
+	}
+	f := newExecutionNativeFixtureWithSources(t, prep, server, nil)
+	projection := f.adopt(t)
+	engine := f.engine
+	proofs, err := projection.ProofInventory("server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainExecutionSource
+	if json.Unmarshal([]byte(projection.Source()), &source) != nil {
+		t.Fatal("missing original request")
+	}
+	target, user := proofs[len(proofs)-2].Tag, source.Request.Users[len(proofs)-3]
+	address := hopmeasure.PublicAddress
+	if fault == "foreign-tag" {
+		target = proofs[len(proofs)-1].Tag
+	}
+	if fault == "foreign-address" {
+		address = "foreign.example:443"
+	}
+	observed := make(chan error, 1)
+	entry := f.prefixes[f.prep.ProofInventory()[0].Tag]
+	entry.dial = func(ctx context.Context) (net.Conn, error) {
+		client, peer := net.Pipe()
+		t.Cleanup(func() { peer.Close() })
+		go func() {
+			defer peer.Close()
+			reader := bufio.NewReader(peer)
+			greeting, err := socks5.ReadAuthRequest(reader)
+			if err != nil || len(greeting.Methods) != 1 || greeting.Methods[0] != socks5.AuthTypeUsernamePassword {
+				observed <- fmt.Errorf("original front authentication method: %v", err)
+				return
+			}
+			if err = socks5.WriteAuthResponse(peer, socks5.AuthResponse{Method: socks5.AuthTypeUsernamePassword}); err != nil {
+				observed <- err
+				return
+			}
+			credentials, err := socks5.ReadUsernamePasswordAuthRequest(reader)
+			if err != nil || credentials.Username != user.Username || credentials.Password != user.Password {
+				observed <- fmt.Errorf("original prefix credentials changed: %v", err)
+				return
+			}
+			if err = socks5.WriteUsernamePasswordAuthResponse(peer, socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusSuccess}); err != nil {
+				observed <- err
+				return
+			}
+			request, err := socks5.ReadRequest(reader)
+			if err != nil || request.Command != socks5.CommandConnect || request.Destination.String() != hopmeasure.PublicAddress {
+				observed <- fmt.Errorf("original hostname front scope changed: %v", err)
+				return
+			}
+			if fault == "away-and-back" {
+				if !engine.selector.SelectOutbound(engine.state.Load().local.Tag()) || !engine.selector.SelectOutbound(engine.state.Load().server.Tag()) {
+					observed <- errors.New("fixture selector change failed")
+					return
+				}
+			}
+			err = socks5.WriteResponse(peer, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: M.ParseSocksaddr("127.0.0.1:1234")})
+			observed <- err
+			if err == nil {
+				_, _ = io.Copy(io.Discard, peer)
+			}
+		}()
+		return client, nil
+	}
+	before := f.dns.calls.Load()
+	conn, err := engine.Dial(t.Context(), target, address)
+	if conn != nil {
+		defer conn.Close()
+	}
+	if fault == "original" && (err != nil || conn == nil) {
+		t.Fatal("original remote hostname authority", err)
+	}
+	if fault != "original" && err == nil {
+		t.Fatal("foreign remote hostname/selection accepted")
+	}
+	if f.dns.calls.Load() != before {
+		t.Fatal("client replaced remote selected DNS authority")
+	}
+	if fault == "original" || fault == "away-and-back" {
+		select {
+		case err := <-observed:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("native original SOCKS exchange missing")
+		}
+	}
+}
+
+func importedPublicPrefixNativeSources(t *testing.T, count int, mode, execution string) (*mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainServerPolicy) {
+	t.Helper()
+	trio, _ := importedPublicNativeSources(t, "wg", execution)
+	var imported mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(trio.LocalSource()), &imported) != nil {
+		t.Fatal("original imported source")
+	}
+	modes := make([]string, count+1)
+	for i := range modes {
+		modes[i] = mode
+	}
+	original := chainNativeSourceModes(t, modes)
+	launch, err := original.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &source) != nil {
+		t.Fatal("original complete prefixes")
+	}
+	source.Schema, source.Nodes[count] = 2, imported.Nodes[1]
+	proofs := original.ProofInventory()
+	serverSource := mobilemultihop.NodeChainServerSource{Schema: 2, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: mode}
+	for i, input := range source.Nodes {
+		if i == count {
+			source.IdentitySources = append(source.IdentitySources, "")
+			serverSource.Nodes = append(serverSource.Nodes, input)
+			serverSource.IdentitySources = append(serverSource.IdentitySources, "")
+			continue
+		}
+		client := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(20 + i)}, 32))
+		remote, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(70 + i)}, 32))
+		standard := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=198.51.100.%d:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", client, base64.StdEncoding.EncodeToString(remote.PublicKey().Bytes()), 20+i)
+		identity := chainNativeJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(standard))})
+		source.IdentitySources = append(source.IdentitySources, identity)
+		if i == 0 {
+			continue
+		}
+		independent := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(220 + i)}, 32))
+		serverIdentity := chainNativeJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(strings.Replace(standard, client, independent, 1)))})
+		if i < count {
+			var row struct {
+				Mode      string `json:"mode"`
+				Files     string `json:"files"`
+				Profile   string `json:"profile_json"`
+				Start     string `json:"start"`
+				Bootstrap string `json:"dns_bootstrap"`
+			}
+			if json.Unmarshal([]byte(input), &row) != nil {
+				t.Fatal("packet capture")
+			}
+			var files map[string]string
+			if json.Unmarshal([]byte(row.Files), &files) != nil {
+				t.Fatal("packet files")
+			}
+			name := "wg.conf"
+			if mode != "wg" {
+				name = "awg.conf"
+			}
+			raw, err := base64.StdEncoding.DecodeString(files[name])
+			if err != nil || !strings.Contains(string(raw), client) {
+				t.Fatal("original packet identity absent")
+			}
+			files[name] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(raw), client, independent, 1)))
+			node, err := mobilemultihop.NewNodeProfile(row.Mode, chainNativeJSON(t, files), row.Profile, row.Start, row.Bootstrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, err = node.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		serverSource.Nodes = append(serverSource.Nodes, input)
+		serverSource.IdentitySources = append(serverSource.IdentitySources, serverIdentity)
+	}
+	prep, err := mobilemultihop.NewNodeChainExecutionPreparation(chainNativeJSON(t, source), execution)
+	if err != nil {
+		t.Fatal("longer original preparation", err)
+	}
+	server, err := mobilemultihop.NewNodeChainServerPolicy(chainNativeJSON(t, serverSource))
+	if err != nil {
+		t.Fatal("longer original Server", err)
+	}
+	return prep, server
+}
+
+func TestRouterVPNExecutionNativeImportedPublicPrefixes(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-strong"} {
+		for _, count := range []int{2, 6} {
+			t.Run(fmt.Sprintf("%s/%d/local", mode, count), func(t *testing.T) { testImportedPublicDNS(t, count, mode, "original") })
+			t.Run(fmt.Sprintf("%s/%d/server", mode, count), func(t *testing.T) { testImportedPublicServer(t, count, mode, "original") })
+		}
+	}
+	t.Run("old-middle-position", func(t *testing.T) { testImportedPublicDNS(t, 6, "wg", "old-middle-position") })
+}

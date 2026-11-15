@@ -73,11 +73,11 @@ struct IOSNodeChainCapture {
             if profile["node_kind"] as? String == "external" {
                 let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: nativeProfile))
                 let openVPN = typed.external?.protocolName == "openvpn"
-                guard (selectionExecution == "local" || !openVPN && bundles.count == 3), IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: bundles.count), !imported,
+                guard (selectionExecution == "local" || !openVPN), IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: bundles.count), !imported,
                       openVPN ? IOSImportedOpenVPNSource.eligible(typed) : IOSImportedShadowsocksSource.eligible(typed),
                       selection[position]["id"] as? String == selected,
                       selection[position]["mode"] as? String == (openVPN ? "openvpn" : "shadowsocks") else {
-                    throw issue("One original imported Shadowsocks 2022 or OpenVPN node may follow the paired prefixes before the paired final. Longer imported paths require Local execution.")
+                    throw issue("One original imported Shadowsocks 2022 or OpenVPN node may follow the paired prefixes before the paired final. OpenVPN requires Local execution.")
                 }
                 let original = try openVPN ? IOSImportedOpenVPNSource.capture(typed) : IOSImportedShadowsocksSource.capture(typed)
                 var failure: NSError?
@@ -170,7 +170,7 @@ struct IOSNodeChainCapture {
             let mode: String, profileJSON: String, filesJSON: String, profile: [String: Any]
             if node["kind"] as? String == "routervpn-node-chain-imported-member" || node["kind"] as? String == "routervpn-node-chain-openvpn-member" {
                 let openVPN = node["kind"] as? String == "routervpn-node-chain-openvpn-member"
-                guard schema == (openVPN ? 5 : 2), (selectionExecution == "local" || !openVPN && nodes.count == 3), IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: nodes.count), identitySources[position].isEmpty,
+                guard schema == (openVPN ? 5 : 2), (selectionExecution == "local" || !openVPN), IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: nodes.count), identitySources[position].isEmpty,
                       let config = node["config"] as? String, let capture = node["capture"] as? String,
                       let saved = try Self.object(Data(capture.utf8), maximum: 8 * 1024 * 1024)["profile"] as? [String: Any] else {
                     throw Self.issue("The imported intermediate source lost its original external capture.")

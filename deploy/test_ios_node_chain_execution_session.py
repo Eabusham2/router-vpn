@@ -46,6 +46,9 @@ SWIFT=SAVED.SOURCE.SWIFT[:SAVED.SOURCE.SWIFT.index('@main struct Tests')]+CONNEC
     cases.append((try importedFixture(requested,first,"2022-blake3-aes-256-gcm"),requested,selected))
    }
   }}
+  for count in [4,8]{for selected in ["local","server"]{
+   cases.append((try importedFixture("auto","awg2-strong","2022-blake3-aes-256-gcm",count),"auto",selected))
+  }}
   for kind in ["http-connect","https-connect"]{for selected in ["local","server"]{cases.append((try connectFixture(kind,"wg","auto"),"auto",selected))}}
   for row in cases {
    let bundles=row.bundles,requested=row.requested,selected=row.selected
@@ -64,20 +67,21 @@ SWIFT=SAVED.SOURCE.SWIFT[:SAVED.SOURCE.SWIFT.index('@main struct Tests')]+CONNEC
    let originalPreparation=try object(Data((originalLaunch["source"] as! String).utf8))
    let originalLocal=try object(Data((originalPreparation["local_source"] as! String).utf8))
    let localSchema=originalLocal["schema"] as! Int
-   check(localSchema==1 || (localSchema==2 || localSchema==4) && (originalLocal["identity_sources"] as! [String])[1].isEmpty,"imported session lost original unpaired identity slot")
+   let publicPosition=(originalLocal["nodes"] as! [String]).count-2
+   check(localSchema==1 || (localSchema==2 || localSchema==4) && (originalLocal["identity_sources"] as! [String])[publicPosition].isEmpty,"imported session lost original unpaired identity slot")
    for fault in ["local-schema","member-schema","imported-kind","paired-identity","imported-identity","preparation-schema","launch-schema"] {
     if (fault=="imported-kind" || fault=="imported-identity") && localSchema != 2 && localSchema != 4 {continue}
     var launch=originalLaunch,preparation=originalPreparation,local=originalLocal
     if fault=="local-schema"{local["schema"]=localSchema==1 ? 2:1}
     if fault=="member-schema" || fault=="imported-kind"{
-     var members=local["nodes"] as! [String];let position=fault=="imported-kind" ? 1:0
+     var members=local["nodes"] as! [String];let position=fault=="imported-kind" ? publicPosition:0
      var member=try object(Data(members[position].utf8))
      if fault=="member-schema"{member["schema"]=2}else{member["kind"]="routervpn-node-launch-input"}
      members[position]=String(decoding:try data(member),as:UTF8.self);local["nodes"]=members
     }
     if fault=="paired-identity" || fault=="imported-identity"{
      var identities=local["identity_sources"] as! [String]
-     identities[fault=="paired-identity" ? 0:1]=fault=="paired-identity" ? "":identities[0]
+     identities[fault=="paired-identity" ? 0:publicPosition]=fault=="paired-identity" ? "":identities[0]
      local["identity_sources"]=identities
     }
     preparation["local_source"]=String(decoding:try data(local),as:UTF8.self)
@@ -175,7 +179,8 @@ def main():
    print('Rejected app execution control:',name,flush=True)
   identity=APP/'IOSSessionIdentity.swift';identity_text=identity.read_text()
   for name,before,after,witness in (
-   ('paired-only','schema == 1 || schema == 2 && nodes.count == 3','schema == 1','compiled execution session identity was refused'),
+   ('paired-only','schema == 1 || schema == 2 && nodes.count >= 3','schema == 1','compiled execution session identity was refused'),
+   ('fixed-public-position','(schema == 2 || schema == 4) && position == nodes.count - 2','(schema == 2 || schema == 4) && position == 1','compiled execution session identity was refused'),
    ('imported-kind','member["kind"] as? String == (schema == 4 ? "routervpn-node-chain-connect-member" : "routervpn-node-chain-imported-member"),','true,','ACCEPTED execution identity imported-kind'),
    ('imported-identity','                      identities[position].isEmpty else { return false }','                      true else { return false }','ACCEPTED execution identity imported-identity'),
    ('paired-identity','!identities[position].isEmpty else { return false }','true else { return false }','ACCEPTED execution identity paired-identity'),

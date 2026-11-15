@@ -118,10 +118,14 @@ func chainNativeSourceModes(t *testing.T, modes []string) *mobilemultihop.NodeCh
 
 type chainNativePrefix struct {
 	outbound.Adapter
-	dial func(context.Context) (net.Conn, error)
+	dial        func(context.Context) (net.Conn, error)
+	dialAddress func(context.Context, string, M.Socksaddr) (net.Conn, error)
 }
 
-func (p *chainNativePrefix) DialContext(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+func (p *chainNativePrefix) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if p.dialAddress != nil {
+		return p.dialAddress(ctx, network, destination)
+	}
 	if p.dial == nil {
 		return nil, errors.New("no traffic fixture installed")
 	}

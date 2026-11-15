@@ -84,14 +84,18 @@ enum IOSNodeChainPresentation {
         guard let identity, identity.engine == "multihop-libbox" else { return nil }
         if let input = identity.nodeChainExecutionSource {
             guard let launch = try? JSONSerialization.jsonObject(with: input) as? [String: Any],
-                  launch["kind"] as? String == "routervpn-node-chain-connect-execution-preparation-input",
+                  let kind = launch["kind"] as? String,
                   let raw = launch["source"] as? String,
                   let preparation = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
-                  preparation["schema"] as? Int == 4,
                   let requested = preparation["execution"] as? String, ["server", "auto"].contains(requested),
-                  let source = preparation["local_source"] as? String,
-                  let path = capturedCONNECT(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested),
-                  path.count == 3, identity.rawProfile == path.last?.mode else { return nil }
+                  let source = preparation["local_source"] as? String else { return nil }
+            let path: [IOSNodePathPoint]?
+            if kind == "routervpn-node-chain-connect-execution-preparation-input", preparation["schema"] as? Int == 4 {
+                path = capturedCONNECT(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested)
+            } else if kind == "routervpn-node-chain-execution-preparation-input", preparation["schema"] as? Int == 1 {
+                path = capturedGenericExecution(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested)
+            } else { return nil }
+            guard let path, identity.rawProfile == path.last?.mode else { return nil }
             return path
         }
         guard let source = identity.nodeChainSource,
@@ -140,6 +144,43 @@ enum IOSNodeChainPresentation {
             profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
         }
         guard profiles.last == control, control.multihopNodes == nodes else { return nil }
+        return planned(selected: control, catalog: profiles)
+    }
+
+    private static func capturedGenericExecution(source: Data, bundleData: Data, selectionExecution: String) -> [IOSNodePathPoint]? {
+        guard !source.isEmpty, source.count <= 40 * 1024 * 1024, !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024,
+              let root = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
+              Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
+              let schema = root["schema"] as? Int, schema == 1 || schema == 2,
+              root["execution"] as? String == "local", let inputs = root["nodes"] as? [String],
+              (2...8).contains(inputs.count), schema == 1 || inputs.count >= 3,
+              let identities = root["identity_sources"] as? [String], identities.count == inputs.count,
+              identities.enumerated().allSatisfy({ schema == 2 && $0.offset == inputs.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }),
+              let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
+              bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
+              let control = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) else { return nil }
+        var profiles: [RouterProfile] = [], nodes: [IOSMultihopNodeSelection] = []
+        for (position, input) in inputs.enumerated() {
+            guard let member = try? JSONDecoder().decode(Member.self, from: Data(input.utf8)), member.schema == 1 else { return nil }
+            let profile: RouterProfile, mode: String
+            if schema == 2 && position == inputs.count - 2 {
+                guard member.kind == "routervpn-node-chain-imported-member", let raw = member.capture,
+                      let capture = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                      let saved = capture["profile"], let data = try? JSONSerialization.data(withJSONObject: saved),
+                      let value = try? JSONDecoder().decode(RouterProfile.self, from: data), IOSImportedShadowsocksSource.eligible(value) else { return nil }
+                profile = value; mode = "shadowsocks"
+            } else {
+                guard member.kind == "routervpn-node-launch-input", let raw = member.profile_json, let selected = member.mode,
+                      let value = try? JSONDecoder().decode(RouterProfile.self, from: Data(raw.utf8)),
+                      value.normalizedNodeKind == "router-vpn", value.external == nil else { return nil }
+                profile = value; mode = selected
+            }
+            profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
+        }
+        guard let last = profiles.last, IOSMultihopNodeSelection.supportsGenericExecution(nodes),
+              control.multihopNodes == nodes, control.multihopExecution == selectionExecution else { return nil }
+        var expected = control; expected.startupMode = nil; expected.autoConnect = nil
+        guard last == expected else { return nil }
         return planned(selected: control, catalog: profiles)
     }
 

@@ -390,7 +390,10 @@ func (e *RouterVPNNodeChainExecutionEngine) Dial(ctx context.Context, tag, addre
 		if e.prep.RequiresSOCKSExecutionObserver() {
 			return e.dialSOCKSPublicContext(ctx, state, tag)
 		}
-		return e.dialCONNECTPublicContext(ctx, state, tag)
+		if _, err := e.prep.OriginalCONNECTSource(); err == nil {
+			return e.dialCONNECTPublicContext(ctx, state, tag)
+		}
+		return e.dialImportedPublicContext(ctx, state, tag)
 	}
 	destination, err := routerVPNExecutionDestination(address)
 	if err != nil {

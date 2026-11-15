@@ -20,7 +20,7 @@ import Combine
         defer { try? captured.close() }
         switch captured {
         case .execution(let original):
-            guard original.isCONNECT, path.count == 3, identity.nodeChainSource == nil,
+            guard path.count == original.members.count, identity.nodeChainSource == nil,
                   Data(original.ordinaryLaunchInput.utf8) == active else { throw CancellationError() }
             source = original.sourceSHA256; config = original.configSHA256; ids = original.members.map(\.id)
         case .socks(let original):

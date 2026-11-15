@@ -62,6 +62,7 @@ SMOKE = ".github/workflows/ios-native-compile-smoke.yml"
 LIBBOX = ".github/workflows/ios-libbox-engine.yml"
 RELEASE = ".github/workflows/release-candidate.yml"
 INPUTS = tuple("deploy/" + name for name in GATES) + (
+    "deploy/test_ios_node_chain_execution_capture.py", "deploy/test_ios_node_chain_profiles.py",
     "deploy/ios_ordered_execution_control_boundary.py", GUARD, CONTRACT, SMOKE, LIBBOX)
 STEP = "      - name: Require complete typed CONNECT execution contracts\n"
 BASE_COMMANDS = "        run: |\n          xcrun --find swiftc\n          python3 " + GUARD + "\n"

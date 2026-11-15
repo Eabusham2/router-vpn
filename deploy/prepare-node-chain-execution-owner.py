@@ -42,6 +42,8 @@ TEMPLATES = {
     'execution_last.go.tmpl': 'routervpn_node_chain_execution_last.go',
     'execution_last_test.go.tmpl': 'routervpn_node_chain_execution_last_test.go',
     'execution_box.go.tmpl': 'routervpn_node_chain_execution.go',
+    'execution_public.go.tmpl': 'routervpn_node_chain_execution_public.go',
+    'execution_public_test.go.tmpl': 'routervpn_node_chain_execution_public_test.go',
     'execution_box_test.go.tmpl': 'routervpn_node_chain_execution_test.go',
     'execution_mtu.go.tmpl': 'routervpn_node_chain_execution_mtu.go',
     'execution_mtu_test.go.tmpl': 'routervpn_node_chain_execution_mtu_test.go',

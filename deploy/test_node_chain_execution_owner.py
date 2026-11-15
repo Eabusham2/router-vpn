@@ -17,7 +17,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'github.com/sagernet/sing-box'
 ROOTS = {
-    PACKAGE: ('NativeRetainsOneGraphThroughDiscovery', 'NativeRejectsActualGraphSubstitution',
+    PACKAGE: ('NativeImportedPublicPrefixes', 'NativeImportedPublicDNS', 'NativeImportedPublicServer', 'NativeRetainsOneGraphThroughDiscovery', 'NativeRejectsActualGraphSubstitution',
               'NativeDNSRejectsAwayAndBackSelection', 'NativeGateRejectsForeignProofAndRetiredSelection',
               'NativeOpenCannotFinishAfterRevoke', 'NativeDiscoveryKeepsLiteralOriginalEntry',
               'NativeRestoreRetainsOriginalFront', 'NativeRetiredSourceKeepsClosedReceipt',
@@ -38,6 +38,9 @@ ROOTS = {
                                  'AppendConcurrentTagHasOneOriginalWinner'),
 }
 CHILDREN = {
+    'NativeImportedPublicPrefixes': ('wg/2/local', 'wg/2/server', 'wg/6/local', 'wg/6/server', 'awg2-strong/2/local', 'awg2-strong/2/server', 'awg2-strong/6/local', 'awg2-strong/6/server', 'old-middle-position'),
+    'NativeImportedPublicDNS': ('original', 'foreign-tag', 'foreign-address', 'changed-owner', 'changed-selector', 'mapped-answer', 'private-answer', 'cancelled'),
+    'NativeImportedPublicServer': ('original', 'away-and-back', 'foreign-tag', 'foreign-address'),
     'NativeMTURetainsUnchangedPause': ('work', 'cancelled-work-cleanup', 'repeat'),
     'NativeMTURejectsUnchangedSubstitution': ('zero-binding', 'foreign-engine', 'foreign-reader', 'actual-value', 'second-read', 'read-error', 'pending-previous', 'foreign-previous', 'no-operation', 'unbounded', 'cancelled', 'retired-source', 'open-gate', 'reader-during-read'),
     'NativeTUNReadbackRejectsInCaptureChange': ('name', 'index', 'mtu'),
@@ -158,6 +161,10 @@ def verify(core):
 
 
 CONTROLS = (
+    ('generic original penultimate position', 'experimental/libbox/routervpn/mobilemultihop/node_chain_execution_public_measurement.go', 'position := len(original.nodes) - 2', 'position := 1', '.', 'NativeImportedPublicPrefixes/wg/6/local', 'original selected DNS/public imported SS'),
+    ('generic original public family', 'routervpn_node_chain_execution.go', 'return e.dialImportedPublicContext(ctx, state, tag)', 'return e.dialCONNECTPublicContext(ctx, state, tag)', '.', 'NativeImportedPublicDNS/original', 'original selected DNS/public imported SS'),
+    ('generic public selected epoch', 'routervpn_node_chain_execution_public.go', ' || e.selector.RouterVPNNodeChainSelectionEpoch() != epoch', ' || epoch == 0', '.', 'NativeImportedPublicDNS/changed-selector', 'foreign imported public DNS/selection accepted'),
+    ('generic remote selected epoch', 'routervpn_node_chain_execution_public.go', ' || e.selector.RouterVPNNodeChainSelectionEpoch() != epoch', ' || epoch == 0', '.', 'NativeImportedPublicServer/away-and-back', 'foreign remote hostname/selection accepted'),
     ('typed Last original policy', 'routervpn_node_chain_execution_last.go', 'if e.prep.RequiresCONNECTExecutionObserver() {', 'if false {', '.', 'NativeCONNECTLastUsesOriginalDiscovery/local', 'typed native Last failed original discovery adoption'),
     ('unchanged actual MTU', 'routervpn_node_chain_execution_mtu.go', ' || actual.mtu != mtu', '', '.', 'NativeMTURejectsUnchangedSubstitution/actual-value', 'unchanged cleanup accepted changed native ownership or observation'),
     ('unchanged double native readback', 'routervpn_node_chain_execution_mtu.go', 'err != nil || confirmed != actual || e.reader.Load() != reader', 'err != nil || confirmed.name == "never" || e.reader.Load() != reader', '.', 'NativeMTURejectsUnchangedSubstitution/second-read', 'unchanged cleanup accepted changed native ownership or observation'),

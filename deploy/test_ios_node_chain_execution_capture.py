@@ -143,6 +143,16 @@ func profile(_ value:Data)throws->[String:Any]{try (object(value)["routerProfile
 func edit(_ value:Data,_ change:(inout [String:Any])->Void)throws->Data{var root=try object(value);change(&root);return try data(root)}
 func editProfile(_ value:Data,_ change:(inout [String:Any])->Void)throws->Data{var root=try object(value);var p=(root["routerProfiles"] as! [[String:Any]])[0];change(&p);root["routerProfiles"]=[p];return try data(root)}
 func fixture(_ count:Int,_ layer:String,_ requested:String,_ awg:Bool)throws->[Data]{let raw=try awg ? LibboxTestAWGFixture(count,layer):LibboxTestFixture(count,layer);var bundles=try (JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)};bundles[count-1]=try editProfile(bundles[count-1]){$0["multihop_execution"]=requested};return bundles}
+// Supply the app model's required display fields without replacing any saved
+// transport, credential or device policy. The shared compiler owns the source.
+func appFixture(_ input:[Data])throws->[Data]{
+ try input.enumerated().map{position,value in try editProfile(value){p in
+  if p["name"]==nil{p["name"]=p["id"]}
+  for key in ["adguard_ipv6","socks_host","socks_username","socks_password"]{if p[key]==nil{p[key]=""}}
+  if p["socks_port"]==nil{p["socks_port"]=0}
+  if position==input.count-1{p["startup_mode"]="manual";p["auto_connect"]=true}
+ }}
+}
 func importedFixture(_ requested:String,_ first:String,_ method:String,_ count:Int=3)throws->[Data]{
  let middlePosition=count-2,finalPosition=count-1
  var bundles=try fixture(count,"off",requested,false),middle=try object(bundles[middlePosition]),custom=try profile(bundles[middlePosition])
@@ -162,7 +172,12 @@ func importedFixture(_ requested:String,_ first:String,_ method:String,_ count:I
   defer{LibboxTestClose()}
   for count in [4,8] {for requested in ["server","auto"] {
    let long=try importedFixture(requested,"wg","2022-blake3-aes-256-gcm",count)
-   reject("long imported source cannot enter execution capture"){_ = try IOSNodeChainExecutionCapture.compile(bundles:long,requested:requested)}
+   let capture:IOSNodeChainExecutionCapture
+   do{capture=try IOSNodeChainExecutionCapture.compile(bundles:long,requested:requested)}catch{fatalError("imported SS execution was refused: \(error)")}
+   check(capture.members.count==count && capture.members[count-2].profile["node_kind"] as? String=="external","complete imported prefix retains penultimate original")
+   let replay=try IOSNodeChainExecutionCapture.reopen(capture.launchInput,selectedProfile:profile(long.last!))
+   check(replay.source==capture.source && replay.config==capture.config,"long imported source replays complete original policy")
+   try replay.close();try capture.close()
   }}
   for count in [2,3,4,8]{for requested in ["server","auto"]{for awg in [false,true]{for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"]{
    let bundles=try fixture(count,layer,requested,awg)
