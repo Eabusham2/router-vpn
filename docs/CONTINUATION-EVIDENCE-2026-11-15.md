@@ -981,6 +981,33 @@ PF/utun/encrypted-traffic acceptance remains pending. Typed SOCKS/CONNECT and
 Local/Server execution succession is a distinct follow-up and is not granted
 this ordinary-policy capability.
 
+### Paired Darwin source-close failure reaches its real retry boundary
+
+Exact-`9b9cf858` Darwin ARM64 job `132793982528` compiled and ran the Box
+component but failed `OriginalPhysical/retirement-retry`. Its fixture enabled
+an error in `RetireTunnel`, while `CloseSource` invokes the source's `Close`.
+That closer unconditionally succeeded, so the intended failed-close path was
+never exercised. Production had not fabricated a failed cleanup result.
+
+A single-node fixture wrapper now injects refusal at the actual `Close` seam.
+The first attempt must observe real source-close calls, no successful closure,
+an unclosed source and an unusable network/physical owner. After the injection
+is cleared, retry must show further calls and a successful join of the same
+source. The broker can retry internally; the test does not assume one raw
+source-close call per public request. Shared `RetireTunnel` fixtures and all
+production cleanup code remain unchanged.
+
+The local executable regression includes the actual `NodeNetworkOwner`
+retirement/close and `DesktopSocketBroker` cancel/close methods, the original
+three-second bounds and 100-millisecond retry, the source closer and native
+case assertions. Its positive and two causal controls passed; disabling the
+failure or falsely reporting source closure fails the original witness.
+Box/preparation identity, privileged-source and empty socket/worker observation
+boundaries remain explicit models. The original four Box leaves, nineteen
+paired MTU leaves and complete 105-verdict paired inventory remain mandatory
+in actual Darwin CI. The earlier draft that assumed exactly two raw closer
+calls was corrected before publication and is not acceptance evidence.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths

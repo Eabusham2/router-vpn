@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -17,10 +18,32 @@ import (
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
+// This single-node boundary injects failure at the actual source Close used
+// by CloseSource. RetireTunnel is a distinct MTU permission operation and
+// cannot demonstrate failed source-join/retry ownership.
+type desktopDarwinSingleBoxSource struct {
+	*desktopNodeDarwinControlSource
+	failClose   atomic.Bool
+	closeCalls  atomic.Int32
+	closeJoined atomic.Int32
+}
+
+func (s *desktopDarwinSingleBoxSource) Close(ctx context.Context) error {
+	s.closeCalls.Add(1)
+	if s.failClose.Load() {
+		return errors.New("fixture retained original native source during Close")
+	}
+	err := s.desktopNodeDarwinControlSource.Close(ctx)
+	if err == nil {
+		s.closeJoined.Add(1)
+	}
+	return err
+}
+
 // Actual compiler, Box, native service and inbound manager execute. The source
 // refuses public sockets and the pipe-backed TUN is explicitly a descriptor
 // model, not native PF, utun or encrypted graph acceptance.
-func desktopDarwinSingleBoxFixture(t *testing.T) (*Box, *mobilemultihop.DesktopNodePolicy, *routervpndesktoppt.NodeNetworkOwner, *desktopNodeDarwinControlSource) {
+func desktopDarwinSingleBoxFixture(t *testing.T) (*Box, *mobilemultihop.DesktopNodePolicy, *routervpndesktoppt.NodeNetworkOwner, *desktopDarwinSingleBoxSource) {
 	t.Helper()
 	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true, "mtu": 1280}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 443, "method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))}}, "route": map[string]any{"final": "proxy"}}
 	raw, _ := json.Marshal(graph)
@@ -40,7 +63,7 @@ func desktopDarwinSingleBoxFixture(t *testing.T) (*Box, *mobilemultihop.DesktopN
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := &desktopNodeDarwinControlSource{desktopExternalBoxSource: newDesktopExternalBoxSource(), box: instance, tag: tun.Tag()}
+	source := &desktopDarwinSingleBoxSource{desktopNodeDarwinControlSource: &desktopNodeDarwinControlSource{desktopExternalBoxSource: newDesktopExternalBoxSource(), box: instance, tag: tun.Tag()}}
 	if err := network.PrepareNodePhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
 		if tun.ready || tun.claimed || network.Current() {
 			t.Error("single-node preparation began after TUN ownership")
@@ -54,7 +77,7 @@ func desktopDarwinSingleBoxFixture(t *testing.T) (*Box, *mobilemultihop.DesktopN
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		source.failRetire = false
+		source.failClose.Store(false)
 		if err := network.CloseDarwinNodePhysicalSource(context.Background(), policy); err != nil {
 			t.Error(err)
 		}
@@ -114,15 +137,20 @@ func TestRouterVPNDesktopNodeDarwinOriginalPhysical(t *testing.T) {
 			if err != nil || owner == nil || !owner.Current() {
 				t.Fatal("single node failed original descriptor activation", err)
 			}
+			var failedCloseCalls int32
 			if kind == "retirement-retry" {
-				source.failRetire = true
-				if err := preparation.CloseSource(t.Context()); err == nil || source.closed.Load() {
-					t.Fatal("failed original source retirement fabricated closure")
+				source.failClose.Store(true)
+				if err := preparation.CloseSource(t.Context()); err == nil || source.closed.Load() || source.closeCalls.Load() < 1 || source.closeJoined.Load() != 0 || network.Current() || owner.Current() {
+					t.Fatal("failed original source retirement fabricated closure", err, source.closeCalls.Load())
 				}
-				source.failRetire = false
+				failedCloseCalls = source.closeCalls.Load()
+				source.failClose.Store(false)
 			}
 			if err := preparation.CloseSource(t.Context()); err != nil || !source.closed.Load() {
 				t.Fatal("original single-node source failed joined retirement", err)
+			}
+			if kind == "retirement-retry" && (source.closeJoined.Load() == 0 || source.closeCalls.Load() <= failedCloseCalls) {
+				t.Fatal("source retry did not rejoin the original retained closer", source.closeCalls.Load(), source.closeJoined.Load())
 			}
 		})
 	}

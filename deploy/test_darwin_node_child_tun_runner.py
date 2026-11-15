@@ -1554,5 +1554,89 @@ class RequiredWorkflowInventory(unittest.TestCase):
                 workflow_concurrency_cases(raw.replace(before, after, 1))
 
 
+class PairedSourceCloseRetry(unittest.TestCase):
+    def test_actual_close_failure_reaches_original_source_and_retry(self):
+        native = (ROOT/'mobile/desktop/node_box_darwin_test.go.tmpl').read_text()
+        wrapper = native[native.index('type desktopDarwinSingleBoxSource struct {'):native.index('// Actual compiler, Box,')]
+        begin = native.index('\t\t\tvar failedCloseCalls int32')
+        body = native[begin:native.index('\n\t\t})', begin)]
+        network = (ROOT/'mobile/desktop/node_network.go.tmpl').read_text()
+        retire = network[network.index('func (n *NodeNetworkOwner) retire() {'):network.index('\nfunc (n *NodeNetworkOwner) InterfaceUpdated')]
+        close = network[network.index('func (n *NodeNetworkOwner) CloseContext('):network.index('\n// CloseCapturedPhysicalSourceContext')]
+        base = (ROOT/'mobile/desktop/external_box_physical_test.go.tmpl').read_text()
+        cancel = base[base.index('func (s *desktopExternalBoxSource) Cancel()'):base.index('func (s *desktopExternalBoxSource) BindTunnel(')]
+        broker = (ROOT/'internal/mobiletor/desktop_socket_broker.go').read_text()
+        broker_cancel = broker[broker.index('func (b *DesktopSocketBroker) Cancel() {'):broker.index('// A duplicate may be acquired')]
+        broker_close = broker[broker.index('func (b *DesktopSocketBroker) Close(ctx context.Context) error {'):]
+        self.assertIn('desktopSocketControlWait     = 3 * time.Second', broker)
+        header = r'''package retirement
+import("context";"errors";"sync";"sync/atomic";"time")
+type desktopExternalBoxSource struct{live,cancelled,closed atomic.Bool}
+type desktopNodeDarwinControlSource struct{*desktopExternalBoxSource}
+type sourceBoundary interface{Cancel();Close(context.Context)error}
+const desktopSocketControlWait=3*time.Second
+type desktopSocket struct{done chan struct{}}
+func(*desktopSocket)stop(){}
+type retirementState struct{phase atomic.Int32}
+func(*retirementState)failure(error){}
+type DesktopSocketBroker struct{mu sync.Mutex;closing bool;sockets map[*desktopSocket]struct{};cancel context.CancelFunc;source sourceBoundary;joinOnce sync.Once;workers sync.WaitGroup;retirement retirementState;monitor,joined chan struct{};parentStop func()bool}
+func(*DesktopSocketBroker)retirementSnapshot()error{return nil}
+type NodeNetworkOwner struct{mu sync.Mutex;retired,ready,sockets,closed bool;cancel context.CancelFunc;preparing chan struct{};broker *DesktopSocketBroker;source sourceBoundary}
+func(n *NodeNetworkOwner)Current()bool{return !n.retired&&!n.closed}
+type preparationBoundary struct{network *NodeNetworkOwner}
+func(p *preparationBoundary)CloseSource(ctx context.Context)error{return p.network.CloseContext(ctx)}
+'''
+        test = '''package retirement
+import("context";"testing")
+func TestOriginalPairedSourceCloseRetry(t *testing.T){
+ source:=&desktopDarwinSingleBoxSource{desktopNodeDarwinControlSource:&desktopNodeDarwinControlSource{&desktopExternalBoxSource{}}}
+ source.live.Store(true)
+ ctx,cancel:=context.WithCancel(context.Background());defer cancel()
+ broker:=&DesktopSocketBroker{source:source,cancel:cancel,monitor:make(chan struct{}),joined:make(chan struct{}),parentStop:func()bool{return true}}
+ close(broker.monitor)
+ network:=&NodeNetworkOwner{source:source,broker:broker,ready:true,sockets:true}
+ _=ctx
+ t.Cleanup(func(){source.failClose.Store(false);if err:=network.CloseContext(context.Background());err!=nil{t.Error(err)}})
+ owner:=network
+ preparation:=&preparationBoundary{network}
+ kind:="retirement-retry"
+'''+body+'''
+ if !network.closed||!network.retired||network.source!=source||!source.cancelled.Load(){t.Fatal("source retry lost original joined ownership")}
+ if err:=network.CloseContext(context.Background());err!=nil{t.Fatal(err)}
+}
+'''
+        seam = 'if s.failClose.Load() {'
+        self.assertEqual(wrapper.count(seam), 1)
+        self.assertEqual(close.count('if source != nil {'), 1)
+        variants = {
+            'original': (wrapper, close),
+            'disabled-source-failure': (wrapper.replace(seam, 'if false && s.failClose.Load() {', 1), close),
+            'fabricated-source-closure': (wrapper.replace(seam, seam+'\n s.closed.Store(true)', 1), close),
+        }
+        compiler = shutil.which('go')
+        self.assertIsNotNone(compiler, 'Go is required for original source Close retry regression')
+        with tempfile.TemporaryDirectory(prefix='darwin-paired-close-') as directory:
+            folder=Path(directory)
+            implementation, regression=folder/'retirement.go',folder/'retirement_test.go'
+            regression.write_text(test)
+            for name,(actual_wrapper,actual_close) in variants.items():
+                with self.subTest(variant=name):
+                    implementation.write_text(header+cancel+actual_wrapper+retire+actual_close+broker_cancel+broker_close)
+                    result=subprocess.run([compiler,'test','-count=1','-v','-timeout=10s',str(implementation),str(regression)],
+                                          capture_output=True,text=True,timeout=120,
+                                          env=dict(os.environ,GOTOOLCHAIN='local'))
+                    output=result.stdout+result.stderr
+                    if name=='original':
+                        self.assertEqual(result.returncode,0,output)
+                        self.assertIn('--- PASS: TestOriginalPairedSourceCloseRetry (',output)
+                    else:
+                        self.assertNotEqual(result.returncode,0,output)
+                        self.assertIn('failed original source retirement fabricated closure',output)
+                        self.assertIn('--- FAIL: TestOriginalPairedSourceCloseRetry (',output)
+                        for invalid in ('panic:','fatal error:','[build failed]','test timed out'):
+                            self.assertNotIn(invalid,output)
+                    print('Darwin paired original source Close: '+name+' verified',flush=True)
+
+
 if __name__=='__main__':
     unittest.main(verbosity=2)
