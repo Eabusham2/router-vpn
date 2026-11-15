@@ -106,6 +106,7 @@ INTEGRITY_CASES = frozenset((
     "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-dns",
     "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-physical",
     "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-projection",
+    "TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-openvpn",
     "TestNodeChainSOCKSIntegrityRejectsChangedInputs/node-owner",
     "TestNodeChainSOCKSIntegrityRejectsChangedInputs/node-config",
     "TestNodeChainSOCKSIntegrityRejectsChangedInputs/node-input",

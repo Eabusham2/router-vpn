@@ -28,7 +28,7 @@ class CONNECTSourceGate(unittest.TestCase):
                 yield values
 
     def test_original_nine_attempts_and_all_original_controls_are_preserved(self):
-        self.assertEqual([len(x.expected) for x in D.ORIGINAL_CASES], [70,44,2,3,49,2,2,2,2])
+        self.assertEqual([len(x.expected) for x in D.ORIGINAL_CASES], [70,44,2,3,50,2,2,2,2])
         self.assertEqual(D.cases()[:9], D.ORIGINAL_CASES)
         for key,value in D.ORIGINAL_MUTATIONS.items():
             self.assertEqual(D.BASE.CONTROL_MUTATIONS[key], value)
@@ -40,7 +40,7 @@ class CONNECTSourceGate(unittest.TestCase):
         self.assertEqual([len(x.expected) for x in selected[9:]], [84,52,2,2,1])
         self.assertEqual(len(D.INVENTORY["files"]),6)
         self.assertEqual(len(D.INVENTORY["roots"]),7)
-        self.assertEqual(sum(len(x.expected) for x in selected if not x.mutation),299)
+        self.assertEqual(sum(len(x.expected) for x in selected if not x.mutation),300)
         self.assertEqual(sum(bool(x.mutation) for x in selected),9)
         self.assertEqual(len({x.name for x in selected}),14)
         for case in selected:

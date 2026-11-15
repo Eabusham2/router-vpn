@@ -116,7 +116,7 @@ class RunnerTests(unittest.TestCase):
                 yield args, source, output, calls
 
     def test_exact_new_and_preserved_inventory(self):
-        self.assertEqual([len(case.expected) for case in D.cases()], [70, 44, 2, 3, 49, 2, 2, 2, 2])
+        self.assertEqual([len(case.expected) for case in D.cases()], [70, 44, 2, 3, 50, 2, 2, 2, 2])
         self.assertEqual((len(D.MEMBER_FAULTS), len(D.ORDER_FAULTS), len(D.SEAL_FAULTS)), (29, 17, 9))
         self.assertEqual(len(D.SCHEMA2_FAULTS), 22)
         self.assertEqual(len(D.PRESERVATION_ROOTS), 4)
@@ -212,7 +212,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_every_integrity_record_is_mandatory(self):
         case = D.cases()[4]
-        self.assertEqual(len(case.expected), 49)
+        self.assertEqual(len(case.expected), 50)
         original = [json.loads(row) for row in events(case).splitlines()]
         for removed in case.expected:
             with self.subTest(record=removed):

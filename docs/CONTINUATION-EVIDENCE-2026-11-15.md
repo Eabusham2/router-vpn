@@ -1179,3 +1179,31 @@ Use `docs/LIVE-RELEASE-EVIDENCE.md` for physical/private acceptance after an
 actually green exact-SHA release. No source test, unsigned IPA, generated
 compose, truthful unavailability message or passing individual workflow
 substitutes for those gates.
+
+## Existing SOCKS integrity inventory correction
+
+At published baseline `5aa0185f030c4549ea790503fb22b2fa711dd9e1`, the actual
+`TestNodeChainSOCKSIntegrityRejectsChangedInputs/pair-openvpn` rejection case
+was already present, but the focused source validator's closed inventory
+omitted it. The unchanged test file has SHA-256
+`751d26cf4309937e99481e7f16b6d43510718fe8c8667bb5ee249ad353d71dce`.
+Its actual race-instrumented execution returned 50 passing records and the
+old 49-record parser refused that complete result. This is a validator
+inventory mismatch; no production tunnel code or rejection test was removed
+or weakened.
+
+The validator now requires the existing OpenVPN substitution rejection, and
+the SOCKS and composed CONNECT runner expectations track that exact set.
+The original nine SOCKS attempts, six compiled causal mutations and all
+timeouts remain unchanged. The existing composed CONNECT source gate still
+has fourteen attempts and nine causal mutations; its positive inventory is
+300 records after accounting for this already-shipping case.
+
+Focused validation passed: the actual Go 1.26.3 integrity test returned all
+50 records under `-race`, with the original test and process bounds; all
+25 SOCKS runner tests and nine CONNECT runner tests passed. Replaying the
+same actual event stream against the old inventory was rejected, as was a
+stream omitting the required `pair-openvpn` case. Logs and exact command
+evidence were retained in `source-integrity-inventory-validation`. This
+bounded correction does not establish native device acceptance, private
+deployment, or completion of the longer CONNECT implementation in progress.
