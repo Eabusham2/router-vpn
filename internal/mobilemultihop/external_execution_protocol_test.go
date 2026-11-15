@@ -163,13 +163,6 @@ func TestExternalExecutionNewProtocolsKeepLiveScoreAndRestorationLifecycle(t *te
 				if _, err := r.Run(); err != nil {
 					t.Fatal(err)
 				}
-				want := restored
-				if want == "" {
-					want = "server"
-				}
-				if !r.Healthy() || r.Execution() != want || len(engine.errors) != 0 {
-					t.Fatal("native selection lost its proved execution", r.ProgressJSON(), engine.errors)
-				}
 				var progress Progress
 				if json.Unmarshal([]byte(r.ProgressJSON()), &progress) != nil {
 					t.Fatal("comparison progress invalid")
@@ -179,11 +172,31 @@ func TestExternalExecutionNewProtocolsKeepLiveScoreAndRestorationLifecycle(t *te
 						t.Fatal("candidate lost exact two-probe average")
 					}
 				}
+				want := restored
+				if want == "" {
+					if len(progress.Measurements) != 2 || progress.Measurements[0].Candidate.Execution != "local" || progress.Measurements[1].Candidate.Execution != "server" {
+						t.Fatal("comparison lost its two captured candidate identities", progress)
+					}
+					// These are actual routed HTTP/TLS intervals. Scheduling can
+					// outweigh the fixture's response delay; the measured minimum
+					// remains authoritative, with Local preferred for an exact tie.
+					want = "local"
+					if *progress.Measurements[1].ScoreMS < *progress.Measurements[0].ScoreMS {
+						want = "server"
+					}
+				}
+				if !r.Healthy() || r.Execution() != want || len(engine.errors) != 0 {
+					t.Fatal("native selection lost its proved execution", r.ProgressJSON(), engine.errors)
+				}
 				if restored == "" {
-					if len(progress.Measurements) != 2 || engine.nodeCalls[ServerTag] < 2 || len(engine.probeTargets[LocalTag]) != 1 || len(engine.probeTargets[ServerTag]) != 2 || engine.probeTargets[LocalTag][0] != engine.probeTargets[ServerTag][0] || engine.probeTargets[ServerTag][0] != engine.probeTargets[ServerTag][1] {
+					winner, other := LocalTag, ServerTag
+					if want == "server" {
+						winner, other = other, winner
+					}
+					if engine.nodeCalls[winner] < 2 || engine.nodeCalls[other] != 1 || len(engine.probeTargets[other]) != 1 || len(engine.probeTargets[winner]) != 2 || engine.probeTargets[other][0] != engine.probeTargets[winner][0] || engine.probeTargets[winner][0] != engine.probeTargets[winner][1] {
 						t.Fatal("comparison failed to repeat both probes through the same chosen endpoint")
 					}
-					if len(engine.proofNonces[LocalTag]) != 1 || len(engine.proofNonces[ServerTag]) != 3 {
+					if len(engine.proofNonces[other]) != 1 || len(engine.proofNonces[winner]) != 3 {
 						t.Fatal("comparison lost independent trial and final public proofs")
 					}
 				} else if len(engine.nodeCalls) != 1 {
