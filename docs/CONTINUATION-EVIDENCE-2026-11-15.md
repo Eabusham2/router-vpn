@@ -2793,3 +2793,36 @@ The original failure and corrected run are retained in
 `ios-session-bounds-validation`. This verifies private session equality and
 bounds; native tunnel parsing, networking and physical-device acceptance
 remain separate gates.
+
+## Native builder fixture includes the required imported-trio stages
+
+The exact `08eaf16ad586adb1c3b7441a12693d10a33e605f` authoritative
+release run `43752198297`, source-audit job `132928423191`, reported
+66 failures in the native toolchain fixture. The production builder already
+runs the four required imported-trio execution/controller commands. The
+fixture's closed command boundary did not recognize them and stopped at
+the first command. The original matching-host root reproduced four such
+failures locally before correction.
+
+The fixture now accepts only those four exact commands in their original
+order, immediately after the existing node-physical stage. It validates the
+captured core, target tags, original race selection, private temporary
+workspace, unique receipt paths, unchanged deadlines and identical environment
+object. The unexpected-command fallback and every existing native stage
+remain enforced. Downstream ordering now includes the four stages actually
+present in the shipping builder; production code is unchanged.
+
+All 18 roots in the affected `NativeSocketUIDGate` suite passed in 299.255
+seconds. They retain six-target scheduling and add sixteen failure/timeout
+variants that stop the original build before later work. Four causal tests
+remove each exact command from the actual builder AST and require the intended
+inventory/order assertion to fail; unrelated harness errors do not count.
+The final log SHA-256 is
+`5d04b8900592986ab71f0596bc19012c398a58fd2d6bb4150d2fa93e8887191c`.
+Preimages, original failure, final patch and receipt are retained in
+`native-toolchain-trio-closure-validation`.
+
+This is execution of the real builder's scheduling and assertions with its
+existing compiler/subprocess boundaries modeled. It does not claim a new
+native application build, encrypted network run or full release. The pushed
+commit must pass the authoritative hosted build before those states advance.

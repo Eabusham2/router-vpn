@@ -2,6 +2,8 @@
 """Execute target setup and verified compiler installation at their OS boundaries."""
 from pathlib import Path
 import contextlib
+import ast
+import copy
 import hashlib
 import importlib.util
 import io
@@ -58,9 +60,56 @@ def imported_native_output(roots, names):
     return '\n'.join(json.dumps(row) for row in rows+[{'Package': package, 'Action': 'pass'}])
 
 
+IMPORTED_TRIO_GATES = ('test_desktop_imported_trio_execution_runner.py',
+                       'test_desktop_imported_trio_execution.py',
+                       'test_desktop_imported_trio_controller_runner.py',
+                       'test_desktop_imported_trio_controller.py')
+
+
 class NativeSocketUIDGate(unittest.TestCase):
     def test_matching_hosts_require_actual_unix_uid_or_windows_identity_gate(self):
         self.check_matching_hosts()
+
+    def test_imported_trio_failure_or_timeout_stops_original_build(self):
+        for name in IMPORTED_TRIO_GATES:
+            for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                with self.subTest(gate=name, failure=failure.__name__):
+                    self.check_matching_hosts(imported_failure=(name, failure))
+
+    def test_each_imported_trio_invocation_omission_is_detected(self):
+        original = ast.parse((ROOT/'deploy/build-native-runtime.py').read_text())
+        build = next(node for node in original.body if isinstance(node, ast.FunctionDef) and node.name == 'build')
+        class OriginalBuildCase(NativeSocketUIDGate):
+            def runTest(self):
+                self.check_matching_hosts(only_target='linux/amd64')
+        for name in IMPORTED_TRIO_GATES:
+            removed = []
+            class Omit(ast.NodeTransformer):
+                def visit_Expr(self, node):
+                    if (isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                            and node.value.func.id == 'run' and node.value.args
+                            and any(isinstance(value, ast.Constant) and value.value == 'deploy/'+name
+                                    for value in ast.walk(node.value.args[0]))):
+                        removed.append(name)
+                        return None
+                    return self.generic_visit(node)
+            changed = Omit().visit(copy.deepcopy(build))
+            self.assertEqual(removed, [name])
+            namespace = dict(N.__dict__)
+            exec(compile(ast.fix_missing_locations(ast.Module(body=[changed], type_ignores=[])),
+                         str(ROOT/'deploy/build-native-runtime.py'), 'exec'), namespace)
+            # Keep the mutated function on the original module globals, so the
+            # exact existing source/subprocess boundaries still apply.
+            mutated = type(N.build)(namespace['build'].__code__, N.__dict__, N.build.__name__,
+                                    N.build.__defaults__, N.build.__closure__)
+            mutated.__kwdefaults__ = N.build.__kwdefaults__
+            result = unittest.TestResult()
+            with patch.object(N, 'build', mutated):
+                OriginalBuildCase('runTest').run(result)
+            with self.subTest(omitted=name):
+                self.assertEqual(len(result.errors), 0)
+                self.assertEqual(len(result.failures), 1)
+                self.assertIn('Imported trio gate order or inventory changed', result.failures[0][1])
 
     def test_failed_or_timed_out_desktop_pt_inventory_cannot_reach_later_gates_or_compilation(self):
         for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -139,7 +188,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 with self.subTest(family=family, failure=failure.__name__):
                     self.check_matching_hosts(box_phase_failure=(family, failure))
 
-    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None, socks_reference_failure=None, proxy_reference_failure=None, connect_reference_failure=None, packet_reference_failure=None, dns_reference_failure=None, desktop_pt_failure=None, source_phase_failure=None, darwin_lifecycle_failure=None, box_phase_failure=None):
+    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None, socks_reference_failure=None, proxy_reference_failure=None, connect_reference_failure=None, packet_reference_failure=None, dns_reference_failure=None, desktop_pt_failure=None, source_phase_failure=None, darwin_lifecycle_failure=None, box_phase_failure=None, imported_failure=None, only_target=None):
         class CompilerBoundary(Exception):
             pass
 
@@ -152,6 +201,10 @@ class NativeSocketUIDGate(unittest.TestCase):
             targets = tuple(target for target in targets if target.startswith('linux/'))
         if any(failure is not None for failure in (socks_reference_failure, proxy_reference_failure, connect_reference_failure, packet_reference_failure, dns_reference_failure)):
             targets = tuple(target for target in targets if target.startswith('linux/'))
+        if imported_failure is not None:
+            targets = ('linux/amd64', 'windows/arm64')
+        if only_target is not None:
+            targets = (only_target,)
         for target in targets:
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
@@ -161,6 +214,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 env = {'GOOS': system, 'GOARCH': arch, 'CGO_ENABLED': '1', 'CGO_LDFLAGS': '', 'GOTOOLCHAIN': N.TOOLCHAIN}
                 calls = []
                 node_errors = []
+                imported_calls, imported_errors, imported_receipts = [], [], []
                 source_phase_errors = []
                 source_names = {'baselines': ['original-owner', 'original-retirement'], 'controls': ['missing-owner', 'unjoined-retirement']}
                 source_images = {phase: [name + '.exe' for name in names] for phase, names in source_names.items()}
@@ -420,6 +474,50 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(args[2:], [str(source.resolve()), '--tags='+','.join(N.tags(target))])
                         self.assertEqual(kwargs, {'env': env, 'timeout': 1800})
                         return ''
+                    if len(args) > 1 and args[1] in tuple(str(ROOT/'deploy'/name) for name in IMPORTED_TRIO_GATES):
+                        self.assertIn(system, ('linux', 'windows'))
+                        name = Path(args[1]).name
+                        self.assertLess(len(imported_calls), len(IMPORTED_TRIO_GATES))
+                        self.assertEqual(name, IMPORTED_TRIO_GATES[len(imported_calls)],
+                                         'Imported trio gate order or inventory changed')
+                        if imported_calls:
+                            self.assertEqual(calls.index(args), calls.index(imported_calls[-1]) + 1)
+                        else:
+                            self.assertEqual(Path(calls[-2][1]).name, 'test_desktop_node_physical.py')
+                        imported_calls.append(args)
+                        if name.endswith('_runner.py'):
+                            self.assertEqual(args[2:], [])
+                            self.assertEqual(kwargs, {'cwd': ROOT, 'env': env, 'timeout': 60})
+                        else:
+                            receipt_index = 6 if name == 'test_desktop_imported_trio_execution.py' else 3
+                            receipt = Path(args[receipt_index])
+                            workspace = receipt.parent
+                            self.assertEqual(workspace.parent, root.resolve(strict=True))
+                            self.assertTrue(workspace.name.startswith('.routervpn-native-'))
+                            self.assertTrue(workspace.is_dir())
+                            self.assertFalse(workspace.is_symlink())
+                            self.assertFalse(receipt.exists())
+                            if imported_receipts:
+                                self.assertEqual(workspace, imported_receipts[0].parent)
+                            imported_receipts.append(receipt)
+                            option = ['--without-race'] if target == 'windows/arm64' else []
+                            if name == 'test_desktop_imported_trio_execution.py':
+                                self.assertEqual(args[2:], ['--core', str(source.resolve()), '--tags='+','.join(N.tags(target)),
+                                    '--receipt', str(workspace/'imported-trio-execution.json'), *option])
+                                cwd = source.resolve()
+                            else:
+                                self.assertEqual(args[2:], ['--receipt', str(workspace/'imported-trio-controller.json'), *option])
+                                cwd = ROOT
+                            self.assertEqual(kwargs, {'cwd': cwd, 'env': env, 'timeout': 1200})
+                        self.assertIs(kwargs['env'], env)
+                        if imported_failure and name == imported_failure[0]:
+                            failure = imported_failure[1]
+                            error = (failure(48, args, output=b'original imported-trio gate failure')
+                                     if failure is subprocess.CalledProcessError else
+                                     failure(args, kwargs['timeout'], output=b'original imported-trio gate timeout'))
+                            imported_errors.append(error)
+                            raise error
+                        return ''  # Native subprocess boundary, not native acceptance.
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_pq.py'):
                         self.assertIn(system, ('linux', 'windows'))
                         self.assertEqual(args[2:], [str(source.resolve()), str(root/'pq'), '--cache', str(ROOT/'dist/.native-pq-cache')])
@@ -701,11 +799,19 @@ class NativeSocketUIDGate(unittest.TestCase):
                     boundaries.enter_context(patch.object(N.POLICY.AMNEZIA, 'verify'))
                     dnssec = boundaries.enter_context(patch.object(N.DNSSEC, 'build', side_effect=build_dnssec))
                     boundaries.enter_context(patch.object(N, 'stage_cronet', side_effect=stage_cronet))
-                    expected_error = (box_phase_failure[1] if box_phase_failure else None) or (darwin_lifecycle_failure[1] if darwin_lifecycle_failure else None) or desktop_pt_failure or source_phase_failure or physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or socks_reference_failure or proxy_reference_failure or connect_reference_failure or packet_reference_failure or dns_reference_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
+                    expected_error = (imported_failure[1] if imported_failure else None) or (box_phase_failure[1] if box_phase_failure else None) or (darwin_lifecycle_failure[1] if darwin_lifecycle_failure else None) or desktop_pt_failure or source_phase_failure or physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or socks_reference_failure or proxy_reference_failure or connect_reference_failure or packet_reference_failure or dns_reference_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
                 self.assertEqual(go_sockets.call_args_list, [unittest.mock.call(env=env)] if system == 'windows' else [])
+                if imported_failure:
+                    self.assertEqual(len(imported_errors), 1)
+                    self.assertIs(caught.exception, imported_errors[0])
+                    self.assertEqual(Path(calls[-1][1]).name, imported_failure[0])
+                    self.assertEqual(len(imported_calls), IMPORTED_TRIO_GATES.index(imported_failure[0]) + 1)
+                    self.assertFalse(any(args[:2] == ['go', 'build'] for args in calls))
+                    dnssec.assert_not_called()
+                    continue
                 if system == 'linux' and expected_error is CompilerBoundary:
                     dnssec.assert_called_once_with(target, dnssec_destination, compiled=None, env=env)
                 else:
@@ -775,12 +881,17 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertIs(caught.exception, node_errors[0], 'The original source-gate failure was replaced')
                     self.assertEqual(calls[-1], node[0], 'A failed source gate reached a later gate or shipping compilation')
                     continue
+                self.assertEqual([Path(args[1]).name for args in imported_calls],
+                                 list(IMPORTED_TRIO_GATES) if system in ('linux', 'windows') else [],
+                                 'Imported trio gate order or inventory changed')
+                for name in IMPORTED_TRIO_GATES:
+                    self.assertIn(ROOT/'deploy'/name, N.inputs())
                 socks_reference = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_mobile_imported_socks_xray.py')]
                 self.assertEqual(len(socks_reference), 1 if system == 'linux' else 0)
                 if socks_reference:
                     node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py')]
                     self.assertEqual(len(node), 1)
-                    self.assertEqual(calls.index(socks_reference[0]), calls.index(node[0]) + 1)
+                    self.assertEqual(calls.index(socks_reference[0]), calls.index(imported_calls[-1]) + 1)
                 for dependency in ('deploy/test_mobile_imported_socks_xray.py',
                                    'deploy/test_mobile_imported_socks_xray_runner.py',
                                    'mobile/desktop/node_imported_socks_xray_test.go.tmpl'):
@@ -935,7 +1046,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                     for previous, current in zip([imported_naive_h2[-1], *imported_naive_h3[:-1]], imported_naive_h3):
                         self.assertEqual(calls.index(current), calls.index(previous)+1)
                 if node_pq:
-                    predecessor = imported_naive_h3[-1] if imported_naive_h3 else imported_naive_h2[-1] if imported_naive_h2 else imported_xhttp[-1] if imported_xhttp else imported_pq[-1] if imported_pq else dns_reference[0] if dns_reference else node[-1]
+                    predecessor = imported_naive_h3[-1] if imported_naive_h3 else imported_naive_h2[-1] if imported_naive_h2 else imported_xhttp[-1] if imported_xhttp else imported_pq[-1] if imported_pq else dns_reference[0] if dns_reference else imported_calls[-1]
                     self.assertEqual(calls.index(node_pq[0]), calls.index(predecessor)+1)
                 max_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max_runner.py')]
                 max_graph = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max.py')]
