@@ -191,5 +191,13 @@ class NativeHostVerdicts(unittest.TestCase):
         self.assertIn("if [[ '${{ matrix.target }}' == darwin/* ]]; then", text[:opt])
 
 
+class ActualBaselineIdentity(unittest.TestCase):
+    def test_original_policy_identity_reaches_actual_saved_profile_validator(self):
+        spec = importlib.util.spec_from_file_location('macos_baseline_identity', ROOT/'deploy/test_macos_external_baseline_identity.py')
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        gate.execute(ROOT)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -251,6 +251,7 @@ def inputs():
                              ROOT/'deploy/test_linux_standard_service_bundle.py',
                              ROOT/'deploy/test_macos_external_host.py',
                              ROOT/'deploy/test_macos_external_host_runner.py',
+                             ROOT/'deploy/test_macos_external_baseline_identity.py',
                              ROOT/'deploy/seal-native-runtime.py',
                              *sorted((ROOT/'cmd/client').glob('*.go')),
                              ROOT/'cmd/client/ui.html', ROOT/'cmd/client/logical_ui.js',

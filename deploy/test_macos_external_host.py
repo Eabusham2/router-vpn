@@ -81,6 +81,7 @@ def source_identity(core):
     core, owned = NODE.checked_sources(core)
     app = CONTROLLER.source_identity()
     for name in ('deploy/test_macos_external_host.py', 'deploy/test_macos_external_host_runner.py',
+                 'deploy/test_macos_external_baseline_identity.py', 'modes/test_darwin_owned_pf.py',
                  'deploy/seal-native-runtime.py', 'configs/client/modes.json',
                  'mobile/desktop/node_external_ss_connect_test.go.tmpl', 'mobile/desktop/node_external_ss_entry_test.go.tmpl', 'mobile/desktop/node_layer_peer_test.go.tmpl', 'mobile/desktop/node_darwin_external_peer_test.go.tmpl',
                  'mobile/desktop/node_external_hysteria_layer_installed_test.go.tmpl', 'mobile/desktop/node_external_wireguard_installed_test.go.tmpl', 'mobile/desktop/node_external_amnezia_installed_test.go.tmpl', 'mobile/desktop/node_external_openvpn_installed_test.go.tmpl'):

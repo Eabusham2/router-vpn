@@ -20,6 +20,8 @@ on:
       - 'modes/darwin_pf_baseline.py'
       - 'modes/profile_id.py'
       - 'deploy/test_macos_controller_privilege.py'
+      - 'deploy/test_macos_external_baseline_identity.py'
+      - 'modes/test_darwin_owned_pf.py'
       - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_darwin_off_close_admission.py'
       - 'deploy/test_desktop_darwin_observation.py'
@@ -54,6 +56,8 @@ on:
       - 'modes/darwin_pf_baseline.py'
       - 'modes/profile_id.py'
       - 'deploy/test_macos_controller_privilege.py'
+      - 'deploy/test_macos_external_baseline_identity.py'
+      - 'modes/test_darwin_owned_pf.py'
       - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_darwin_off_close_admission.py'
       - 'deploy/test_desktop_darwin_observation.py'
@@ -124,6 +128,7 @@ jobs:
         run: python3 deploy/test_macos_generation.py
       - name: Prove installed supervisor, native peer identity and joined AppKit shutdown
         run: |
+          python3 deploy/test_macos_external_baseline_identity.py
           python3 deploy/test_desktop_darwin_guardian_runner.py
           python3 deploy/test_macos_controller_privilege.py --go "$(command -v go)"
       - name: Prove privileged interpreter ownership and installation rollback
