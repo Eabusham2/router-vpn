@@ -11,14 +11,22 @@ import (
 )
 
 func TestRouterVPNNodeChainExecutionDarwinEarlyStop(t *testing.T) {
+	testRouterVPNNodeChainExecutionDarwinEarlyStop(t, routerVPNDarwinExecutionControlFixture)
+}
+func TestRouterVPNNodeChainCONNECTExecutionDarwinEarlyStop(t *testing.T) {
+	testRouterVPNNodeChainExecutionDarwinEarlyStop(t, func(t *testing.T, choice string) (*routerVPNDarwinNodeChainExecutionControl, *routerVPNExternalFiles, *routerVPNDarwinChainCaptureRead, *routerVPNDarwinChainBootstrapRead) {
+		return routerVPNDarwinExecutionControlFixtureFromPreparation(t, desktopCONNECTExecutionCommandPreparation(t, "darwin", choice))
+	})
+}
+func testRouterVPNNodeChainExecutionDarwinEarlyStop(t *testing.T, fixture func(*testing.T, string) (*routerVPNDarwinNodeChainExecutionControl, *routerVPNExternalFiles, *routerVPNDarwinChainCaptureRead, *routerVPNDarwinChainBootstrapRead)) {
 	t.Run("receipt-before-acquisition", func(t *testing.T) {
-		control, _, _, _ := routerVPNDarwinExecutionControlFixture(t, "auto")
+		control, _, _, _ := fixture(t, "auto")
 		if control.native != nil || control.retirementReceipt() == nil {
 			t.Fatal("unpublished no-resource retirement acknowledged authenticated Stop")
 		}
 	})
 	t.Run("authenticated-before-run", func(t *testing.T) {
-		control, files, capture, _ := routerVPNDarwinExecutionControlFixture(t, "auto")
+		control, files, capture, _ := fixture(t, "auto")
 		acknowledged := false
 		err := routerVPNExternalControlledLifetime(context.Background(), func(ctx context.Context) error {
 			// The actual joined command does not begin until authenticated
@@ -53,6 +61,14 @@ func TestRouterVPNNodeChainExecutionDarwinEarlyStop(t *testing.T) {
 // Execute the actual command through admission and no-resource retirement;
 // the fixture refuses at original process capture before native construction.
 func TestRouterVPNNodeChainExecutionDarwinMailboxStartup(t *testing.T) {
+	testRouterVPNNodeChainExecutionDarwinMailboxStartup(t, routerVPNDarwinExecutionControlFixture)
+}
+func TestRouterVPNNodeChainCONNECTExecutionDarwinMailboxStartup(t *testing.T) {
+	testRouterVPNNodeChainExecutionDarwinMailboxStartup(t, func(t *testing.T, choice string) (*routerVPNDarwinNodeChainExecutionControl, *routerVPNExternalFiles, *routerVPNDarwinChainCaptureRead, *routerVPNDarwinChainBootstrapRead) {
+		return routerVPNDarwinExecutionControlFixtureFromPreparation(t, desktopCONNECTExecutionCommandPreparation(t, "darwin", choice))
+	})
+}
+func testRouterVPNNodeChainExecutionDarwinMailboxStartup(t *testing.T, fixture func(*testing.T, string) (*routerVPNDarwinNodeChainExecutionControl, *routerVPNExternalFiles, *routerVPNDarwinChainCaptureRead, *routerVPNDarwinChainBootstrapRead)) {
 	cases := []struct{ name, mailbox, kind string }{{name: "absent"}}
 	for _, mailbox := range []string{"adoption", "ready", "last"} {
 		for _, kind := range []string{"regular", "directory", "symlink"} {
@@ -61,7 +77,7 @@ func TestRouterVPNNodeChainExecutionDarwinMailboxStartup(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			control, files, capture, _ := routerVPNDarwinExecutionControlFixture(t, "auto")
+			control, files, capture, _ := fixture(t, "auto")
 			var before os.FileInfo
 			var path, target string
 			const foreign = "foreign original measurement input\n"

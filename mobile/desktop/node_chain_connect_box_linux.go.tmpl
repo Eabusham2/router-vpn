@@ -61,3 +61,47 @@ func (s *Box) RouterVPNDesktopLinuxNodeChainCONNECTActivateCover(ctx context.Con
 	}
 	return s.routerVPNDesktopLinuxActivateCover(ctx, policy, physical)
 }
+
+func (s *Box) RouterVPNDesktopLinuxNodeChainCONNECTExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy) (*RouterVPNDesktopLinuxNodePreparation, error) {
+	if !routerVPNDesktopNodeChainCONNECTExecutionPhysicalTarget(policy, "linux") {
+		return nil, errors.New("ordered CONNECT Linux execution lost its original physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopLinuxNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainCONNECTExecutionPhysicalPolicy(policy)
+}
+
+// Keep the application gate closed until the execution controller has proved
+// its actual selected path. A Local DNS exchange cannot prove Server/Compare.
+func (s *Box) RouterVPNDesktopLinuxNodeChainCONNECTExecutionActivatePhysical(ctx context.Context, policy *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if ctx == nil || ctx.Err() != nil || !routerVPNDesktopNodeChainCONNECTExecutionPhysicalTarget(policy, "linux") {
+		return nil, errors.New("ordered CONNECT Linux execution lost its original physical activation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil {
+		return nil, err
+	}
+	owner, err := s.routerVPNDesktopNodeActivatePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil || ctx.Err() != nil || !owner.Current() {
+		owner.Cancel()
+		return nil, errors.Join(err, ctx.Err(), errors.New("ordered CONNECT Linux execution changed its physical owner"))
+	}
+	return owner, nil
+}
+
+func (s *Box) RouterVPNDesktopLinuxNodeChainCONNECTExecutionActivateCover(ctx context.Context, policy *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy,
+	physical *RouterVPNDesktopNodePhysical) (*RouterVPNDesktopLinuxNodeCover, error) {
+	if !routerVPNDesktopNodeChainCONNECTExecutionPhysicalTarget(policy, "linux") {
+		return nil, errors.New("ordered CONNECT Linux execution cover lost its original policy")
+	}
+	return s.routerVPNDesktopLinuxActivateCover(ctx, policy, physical)
+}

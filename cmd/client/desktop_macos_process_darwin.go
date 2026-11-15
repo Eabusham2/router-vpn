@@ -19,24 +19,25 @@ import (
 // This owner proves process retirement only. Native PF/journal retirement
 // belongs to the enclosing host, which must finish before releasing it.
 type desktopMacOSProcess struct {
-	parent             *desktopMacOSSessionCapture
-	scope              macosprocess.Scope
-	capture            *macosprocess.Capture
-	channel            *mobiletor.DesktopDarwinControl
-	bootstrap          *macosprocess.Bootstrap
-	command            *exec.Cmd
-	childChannel       *os.File
-	gate               chan struct{}
-	joined             chan struct{}
-	started, retiring  atomic.Bool
-	stopLifetime       func() bool
-	waitErr            error // Read only after joined closes; one command.Wait writer.
-	closed             bool
-	nativeAcknowledged bool
-	nativeStopped      bool
-	nativeStopErr      error
-	execution          *mobilemultihop.NodeChainExecutionPreparation
-	executionPhysical  *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	parent                   *desktopMacOSSessionCapture
+	scope                    macosprocess.Scope
+	capture                  *macosprocess.Capture
+	channel                  *mobiletor.DesktopDarwinControl
+	bootstrap                *macosprocess.Bootstrap
+	command                  *exec.Cmd
+	childChannel             *os.File
+	gate                     chan struct{}
+	joined                   chan struct{}
+	started, retiring        atomic.Bool
+	stopLifetime             func() bool
+	waitErr                  error // Read only after joined closes; one command.Wait writer.
+	closed                   bool
+	nativeAcknowledged       bool
+	nativeStopped            bool
+	nativeStopErr            error
+	execution                *mobilemultihop.NodeChainExecutionPreparation
+	executionPhysical        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	executionCONNECTPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
 }
 
 func startDesktopMacOSProcess(ctx context.Context, parent *desktopMacOSSessionCapture, scope macosprocess.Scope) (*desktopMacOSProcess, error) {
@@ -59,9 +60,23 @@ func startDesktopMacOSExecutionProcessWithVerifier(ctx context.Context, parent *
 	return startDesktopMacOSProcessCaptured(ctx, parent, scope, preparation, physical, verify)
 }
 
+func startDesktopMacOSCONNECTExecutionProcessWithVerifier(ctx context.Context, parent *desktopMacOSSessionCapture, scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation, physical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy, verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
+	if preparation == nil || physical == nil {
+		return nil, errors.New("macOS CONNECT child requires its exact typed preparation")
+	}
+	return startDesktopMacOSProcessCapturedExecution(ctx, parent, scope, preparation, nil, physical, verify)
+}
 func startDesktopMacOSProcessCaptured(ctx context.Context, parent *desktopMacOSSessionCapture,
 	scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation,
 	physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,
+	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
+	return startDesktopMacOSProcessCapturedExecution(ctx, parent, scope, preparation, physical, nil, verify)
+}
+
+func startDesktopMacOSProcessCapturedExecution(ctx context.Context, parent *desktopMacOSSessionCapture,
+	scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation,
+	physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,
+	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy,
 	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
 	if ctx == nil || parent == nil || verify == nil {
 		return nil, errors.New("macOS child requires its original captured application")
@@ -71,7 +86,12 @@ func startDesktopMacOSProcessCaptured(ctx context.Context, parent *desktopMacOSS
 	}
 	var arguments []string
 	var err error
-	if preparation != nil || physical != nil {
+	if connectPhysical != nil {
+		if physical != nil {
+			return nil, errors.New("macOS child mixed two physical execution owners")
+		}
+		arguments, err = desktopMacOSCONNECTExecutionProcessArguments(scope, preparation, connectPhysical)
+	} else if preparation != nil || physical != nil {
 		arguments, err = desktopMacOSExecutionProcessArguments(scope, preparation, physical)
 	} else {
 		arguments, err = desktopMacOSProcessArguments(scope)
@@ -82,7 +102,7 @@ func startDesktopMacOSProcessCaptured(ctx context.Context, parent *desktopMacOSS
 	if err := parent.Current(ctx); err != nil {
 		return nil, err
 	}
-	p := &desktopMacOSProcess{parent: parent, scope: scope, execution: preparation, executionPhysical: physical,
+	p := &desktopMacOSProcess{parent: parent, scope: scope, execution: preparation, executionPhysical: physical, executionCONNECTPhysical: connectPhysical,
 		gate: make(chan struct{}, 1), joined: make(chan struct{})}
 	// The initially empty gate holds construction until every partial native
 	// owner is published to this retained dependent. Parent close can wait for it.
@@ -175,7 +195,14 @@ func (p *desktopMacOSProcess) currentLocked(ctx context.Context) error {
 	if p.closed || p.retiring.Load() || !p.started.Load() || p.bootstrap == nil {
 		return errors.New("macOS child has no live captured handshake")
 	}
-	if p.execution != nil || p.executionPhysical != nil || p.scope.Family == macosprocess.NodeChainExecutionFamily {
+	if p.executionCONNECTPhysical != nil {
+		if p.executionPhysical != nil {
+			return errors.New("macOS CONNECT process mixed native owners")
+		}
+		if _, err := desktopMacOSCONNECTExecutionProcessArguments(p.scope, p.execution, p.executionCONNECTPhysical); err != nil {
+			return err
+		}
+	} else if p.execution != nil || p.executionPhysical != nil || p.scope.Family == macosprocess.NodeChainExecutionFamily {
 		if _, err := desktopMacOSExecutionProcessArguments(p.scope, p.execution, p.executionPhysical); err != nil {
 			return err
 		}

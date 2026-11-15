@@ -159,6 +159,13 @@ COPIES.update({
     "internal/macosprocess/candidate_prefix_transfer.go": "routervpn/macosprocess/candidate_prefix_transfer.go",
     "internal/macosprocess/node_chain_execution_transfer.go": "routervpn/macosprocess/node_chain_execution_transfer.go",
 })
+PHASES['cmd/sing-box'].update({
+    'TestRouterVPNNodeChainCONNECTExecutionDarwinControl': ('server','auto','policy','preparation','mixed','missing','source','session','cancelled','retiring','foreign-prepare'),
+    'TestRouterVPNNodeChainCONNECTExecutionDarwinEarlyStop': ('receipt-before-acquisition','authenticated-before-run'),
+    'TestRouterVPNNodeChainCONNECTExecutionDarwinMailboxStartup': ('absent','adoption-regular','adoption-directory','adoption-symlink','ready-regular','ready-directory','ready-symlink','last-regular','last-directory','last-symlink'),
+})
+# The actual typed control fixtures use the canonical CONNECT command producer.
+COPIES['mobile/desktop/node_chain_connect_construction_test.go.tmpl'] = 'cmd/sing-box/routervpn_node_chain_connect_construction_test.go'
 MUTATIONS = (
     ("repeat-stack", "protocol/tun", "protocol/tun/routervpn_node_chain_retirement_darwin.go",
      "if *joined {", "if false {",
@@ -238,6 +245,8 @@ MUTATIONS = (
 		case *DesktopNodeChainPolicy:
 			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
 		case *DesktopNodeChainExecutionPhysicalPolicy:
+			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
+		case *DesktopNodeChainCONNECTExecutionPhysicalPolicy:
 			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
 		}''',
      'interfaceValid = desktopNodeChainReadyInterface("darwin", r.InterfaceName)',
@@ -355,6 +364,12 @@ def discover(output, cases):
         raise ValueError("Darwin lifecycle changed its exact compiled roots")
 
 
+MUTATIONS += (
+    ('connect-execution-physical-pointer', 'cmd/sing-box', 'cmd/sing-box/routervpn_node_chain_execution_control_darwin.go', 'owner.connectPolicy != policy', 'false', 'TestRouterVPNNodeChainCONNECTExecutionDarwinControl/foreign-prepare', 'foreign typed preparation admitted'),
+    ('connect-execution-preparation-pointer', 'cmd/sing-box', 'cmd/sing-box/routervpn_node_chain_execution_control_darwin.go', 'err != nil || p != owner.connectPolicy', 'err != nil', 'TestRouterVPNNodeChainCONNECTExecutionDarwinControl/preparation', 'foreign typed preparation admitted'),
+)
+
+
 def phase_groups(package, cases):
     # Retain the complete original command suite in its original invocation.
     # Execution admission replays another complete graph; its additive suite
@@ -362,7 +377,7 @@ def phase_groups(package, cases):
     if package != "cmd/sing-box":
         return (cases,)
     execution = {name: leaves for name, leaves in cases.items()
-                 if name.startswith("TestRouterVPNNodeChainExecutionDarwin")}
+                 if name.startswith(("TestRouterVPNNodeChainExecutionDarwin", "TestRouterVPNNodeChainCONNECTExecutionDarwin"))}
     original = {name: leaves for name, leaves in cases.items() if name not in execution}
     if not execution or not original:
         raise ValueError("Darwin lifecycle lost its original or execution phase")

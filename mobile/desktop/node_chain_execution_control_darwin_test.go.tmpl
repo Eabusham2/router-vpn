@@ -31,7 +31,12 @@ func routerVPNDarwinExecutionControlFixture(t *testing.T, mode string) (*routerV
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := prep.DesktopPhysicalPolicy()
+	return routerVPNDarwinExecutionControlFixtureFromPreparation(t, prep)
+}
+
+func routerVPNDarwinExecutionControlFixtureFromPreparation(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation) (*routerVPNDarwinNodeChainExecutionControl, *routerVPNExternalFiles, *routerVPNDarwinChainCaptureRead, *routerVPNDarwinChainBootstrapRead) {
+	t.Helper()
+	policy, err := routerVPNDesktopExecutionPhysicalPolicy(prep)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,6 +267,85 @@ func TestRouterVPNNodeChainExecutionDarwinStoppedReceipt(t *testing.T) {
 			}
 			if err != nil || json.Unmarshal(raw, &receipt) != nil || receipt.Schema != 1 || !receipt.Closed || receipt.Session != control.scope.Session || receipt.SourceSHA256 != control.scope.Config {
 				t.Fatal("execution stopped receipt lost original identity", err)
+			}
+		})
+	}
+}
+
+// The real private source parser, sealed physical policy and inherited-owner
+// comparisons execute; descriptor/handshake observations remain explicit doubles.
+func TestRouterVPNNodeChainCONNECTExecutionDarwinControl(t *testing.T) {
+	for _, choice := range []string{"server", "auto"} {
+		t.Run(choice, func(t *testing.T) {
+			prep := desktopCONNECTExecutionCommandPreparation(t, "darwin", choice)
+			control, files, _, _ := routerVPNDarwinExecutionControlFixtureFromPreparation(t, prep)
+			ctx := routerVPNDarwinExecutionControlContext(t)
+			policy, err := control.compile(ctx, files)
+			if err != nil || policy == nil || control.policy != nil || control.connectPolicy == nil || policy != control.connectPolicy || control.current(ctx) != nil {
+				t.Fatal("typed source lost exact CONNECT physical owner", err)
+			}
+			if prepared, err := control.prepare(ctx, policy); err != nil || prepared == nil {
+				t.Fatal(err)
+			}
+			if _, err := control.prep.DesktopPhysicalPolicy(); err == nil {
+				t.Fatal("CONNECT capture borrowed paired physical policy")
+			}
+			if _, err := control.compile(ctx, files); err == nil {
+				t.Fatal("source replay replaced original")
+			}
+		})
+	}
+	for _, fault := range []string{"policy", "preparation", "mixed", "missing", "source", "session", "cancelled", "retiring", "foreign-prepare"} {
+		t.Run(fault, func(t *testing.T) {
+			prep := desktopCONNECTExecutionCommandPreparation(t, "darwin", "auto")
+			control, files, _, _ := routerVPNDarwinExecutionControlFixtureFromPreparation(t, prep)
+			ctx, cancel := context.WithCancel(routerVPNDarwinExecutionControlContext(t))
+			defer cancel()
+			original, err := control.compile(ctx, files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign, err := mobilemultihop.ParseDesktopNodeChainCONNECTExecutionPreparation(control.prep.Source())
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreignPhysical, err := foreign.CONNECTDesktopPhysicalPolicy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "policy":
+				control.connectPolicy = foreignPhysical
+			case "preparation":
+				control.prep = foreign
+			case "mixed":
+				paired := desktopNodeChainCommandPolicyWithIdentity(t, 3, "darwin", 1400, true)
+				other, e := mobilemultihop.NewDesktopNodeChainExecutionPreparation(paired, "auto")
+				if e != nil {
+					t.Fatal(e)
+				}
+				control.policy, e = other.DesktopPhysicalPolicy()
+				if e != nil {
+					t.Fatal(e)
+				}
+			case "missing":
+				control.connectPolicy = nil
+			case "source":
+				control.execution = strings.Repeat("f", 64)
+			case "session":
+				control.scope.Session = strings.Repeat("f", 32)
+			case "cancelled":
+				cancel()
+			case "retiring":
+				control.retiring.Store(true)
+			case "foreign-prepare":
+				original = foreignPhysical
+			}
+			if _, err := control.prepare(ctx, original); err == nil {
+				t.Fatal("foreign typed preparation admitted", fault)
+			}
+			if fault != "foreign-prepare" && control.current(ctx) == nil {
+				t.Fatal("changed original owner current", fault)
 			}
 		})
 	}

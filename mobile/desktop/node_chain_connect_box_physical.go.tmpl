@@ -62,6 +62,37 @@ func (s *Box) RouterVPNDesktopNodeChainCONNECTActivatePhysical(policy *mobilemul
 	return s.routerVPNDesktopNodeActivatePhysical(policy)
 }
 
+func routerVPNDesktopNodeChainCONNECTExecutionPhysicalTarget(policy *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy, target string) bool {
+	if policy == nil || policy.Validate() != nil {
+		return false
+	}
+	original, err := policy.OriginalDesktopCONNECTPolicy()
+	if err != nil || !routerVPNDesktopNodeChainCONNECTPhysicalTarget(original, target) {
+		return false
+	}
+	_, meta, _, err := policy.PhysicalReadValidated()
+	return err == nil && meta.Kind == "node-chain-connect-execution" && meta.TargetOS == target
+}
+
+func (s *Box) RouterVPNDesktopNodeChainCONNECTExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy) (*RouterVPNDesktopNodePreparation, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainCONNECTExecutionPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered CONNECT Windows execution lost its original physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainCONNECTExecutionPhysicalPolicy(policy)
+}
+
+func (s *Box) RouterVPNDesktopNodeChainCONNECTExecutionActivatePhysical(policy *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainCONNECTExecutionPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered CONNECT Windows execution lost its original physical activation")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}
+
 // This callback observes the original source generation while an authorized
 // MTU transaction has deliberately retired the old TUN's physical grant.
 // It does not stand in for current TUN/readback or complete proof authority.

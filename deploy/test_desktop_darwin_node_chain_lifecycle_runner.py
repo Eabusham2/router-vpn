@@ -31,7 +31,7 @@ def wire(package, cases):
 
 class DarwinLifecycleRunnerTests(unittest.TestCase):
     def test_exact_required_inventory_and_bounds(self):
-        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 235),
+        for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 261),
                                ("experimental/libbox/routervpn/mobilemultihop", 33),
                                ("routervpn/desktoppt", 7), (".", 11)):
             validator = RUNNER.receipt(package)
@@ -42,7 +42,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
             self.assertEqual(validator.PROCESS_TIMEOUT, RUNNER.PROCESS_TIMEOUT)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
-        self.assertEqual(len(RUNNER.MUTATIONS), 43)
+        self.assertEqual(len(RUNNER.MUTATIONS), 45)
 
     def test_concrete_ready_policy_control_matches_current_source_and_real_foreign_capture(self):
         control, = [value for value in RUNNER.MUTATIONS if value[0] == "ordinary-darwin-policy"]
@@ -74,7 +74,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
         cases = RUNNER.PHASES["cmd/sing-box"]
         original, execution = RUNNER.phase_groups("cmd/sing-box", cases)
         self.assertEqual(sum(1 + len(leaves) for leaves in original.values()), 170)
-        self.assertEqual(sum(1 + len(leaves) for leaves in execution.values()), 65)
+        self.assertEqual(sum(1 + len(leaves) for leaves in execution.values()), 91)
         self.assertFalse(set(original) & set(execution))
         self.assertEqual(dict(original, **execution), cases)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
@@ -250,9 +250,9 @@ class DarwinLifecyclePhases(unittest.TestCase):
     def test_both_serial_phases_are_mandatory_with_original_bounds(self):
         result = self.orchestrate()
         self.assertEqual([item["phase"] for item in result], ["baselines", "controls"])
-        self.assertEqual(sum(result[0]["verdicts"].values()), 316)
+        self.assertEqual(sum(result[0]["verdicts"].values()), 342)
         self.assertEqual(len(result[0]["images"]), 6)
-        self.assertEqual(len(result[1]["images"]), 43)
+        self.assertEqual(len(result[1]["images"]), 45)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
 

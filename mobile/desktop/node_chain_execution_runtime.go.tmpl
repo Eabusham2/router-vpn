@@ -50,7 +50,7 @@ type routerVPNNodeChainExecutionRuntime struct {
 	ctx       context.Context
 	files     *routerVPNExternalFiles
 	prep      *mobilemultihop.NodeChainExecutionPreparation
-	physical  *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	physical  mobilemultihop.DesktopPhysicalPolicy
 	meta      mobilemultihop.DesktopPhysicalMetadata
 	transfer  string
 	instance  *box.Box
@@ -107,12 +107,12 @@ func routerVPNNewNodeChainExecutionRuntimeFactory(ctx context.Context, files *ro
 		factory == nil || proof == nil || !routerVPNExternalSource.MatchString(transfer) {
 		return nil, routerVPNExternalFailure
 	}
-	physical, err := prep.DesktopPhysicalPolicy()
+	physical, err := routerVPNDesktopExecutionPhysicalPolicy(prep)
 	if err != nil {
 		return nil, err
 	}
 	config, meta, _, err := physical.PhysicalReadValidated()
-	if err != nil || config != prep.Config() || meta.ConfigSHA256 != prep.ConfigSHA256() || meta.Kind != "node-chain-execution" {
+	if err != nil || config != prep.Config() || meta.ConfigSHA256 != prep.ConfigSHA256() || meta.Kind != routerVPNDesktopExecutionPhysicalKind(prep) {
 		return nil, errors.Join(err, routerVPNExternalFailure)
 	}
 	return &routerVPNNodeChainExecutionRuntime{ctx: ctx, files: files, prep: prep, physical: physical,
@@ -125,6 +125,10 @@ func routerVPNNewNodeChainExecutionRuntimeFactory(ctx context.Context, files *ro
 func (owner *routerVPNNodeChainExecutionRuntime) nativeCurrent(ctx context.Context, state *routerVPNDesktopExecutionState) (failure error) {
 	if owner == nil || ctx == nil || state == nil {
 		return routerVPNExternalFailure
+	}
+	physical, err := routerVPNDesktopExecutionPhysicalPolicy(owner.prep)
+	if err != nil || physical != owner.physical {
+		return errors.Join(err, routerVPNExternalFailure)
 	}
 	defer func() {
 		if failure != nil && ctx.Err() == nil {
@@ -198,7 +202,7 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 	if discovery.FirstPort < 1024 || discovery.LastPort > 65535 || discovery.LastPort < discovery.FirstPort || discovery.LastPort-discovery.FirstPort > 63 {
 		return routerVPNExternalFailure
 	}
-	last, restore, err := owner.prep.DesktopLast()
+	last, restore, err := routerVPNDesktopExecutionLastCapture(owner.prep)
 	if err != nil {
 		return err
 	}
@@ -222,7 +226,7 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 	if err != nil || projection == nil {
 		return errors.Join(err, routerVPNExternalFailure)
 	}
-	physical, err := projection.DesktopPhysicalPolicy()
+	physical, err := routerVPNDesktopExecutionProjectionPhysical(projection, owner.prep)
 	if err != nil || physical != owner.physical || projection.Execution() != owner.prep.Execution() {
 		return errors.Join(err, routerVPNExternalFailure)
 	}
@@ -252,16 +256,32 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 	if err := owner.current(startup); err != nil {
 		return err
 	}
-	adoption, err := mobilemultihop.NewDesktopNodeChainExecutionAdoptionRecord(projection, identity, owner.transfer)
+	var adoption any
+	if owner.prep.RequiresCONNECTExecutionObserver() {
+		adoption, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionAdoptionRecord(projection, identity, owner.transfer)
+	} else {
+		adoption, err = mobilemultihop.NewDesktopNodeChainExecutionAdoptionRecord(projection, identity, owner.transfer)
+	}
 	if err != nil {
 		return err
 	}
 	if err := owner.files.publish("node-chain-execution-adoption.json", adoption); err != nil {
 		return err
 	}
-	saved, err := controller.CaptureLastContext(startup)
+	var saved mobilemultihop.NodeChainExecutionLast
+	if owner.prep.RequiresCONNECTExecutionObserver() {
+		typed, ok := controller.(interface {
+			CaptureCONNECTDesktopLastContext(context.Context) (mobilemultihop.NodeChainExecutionLast, error)
+		})
+		if !ok {
+			return routerVPNExternalFailure
+		}
+		saved, err = typed.CaptureCONNECTDesktopLastContext(startup)
+	} else {
+		saved, err = controller.CaptureLastContext(startup)
+	}
 	progress := controller.Progress()
-	if err != nil || saved.ValidateDesktopProjection(projection) != nil || saved.Execution() != progress.Execution || saved.Target() != progress.Comparison.Target {
+	if err != nil || routerVPNDesktopExecutionLastCurrent(saved, projection, owner.prep) != nil || saved.Execution() != progress.Execution || saved.Target() != progress.Comparison.Target {
 		return errors.Join(err, routerVPNExternalFailure)
 	}
 	if err := owner.current(startup); err != nil {
@@ -386,10 +406,20 @@ func (owner *routerVPNNodeChainExecutionRuntime) heartbeat(ctx context.Context, 
 		TransferSHA256: owner.transfer, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, Identity: identity,
 		SelectionEpoch: epoch, Generation: state.proofGeneration.Load(), Reader: record.Reader, InterfaceName: record.Interface,
 		InterfaceIndex: uint32(record.Index), MTU: record.MTU, ObservedAt: time.Now().UnixMilli(), Progress: state.controller.Load().value.Progress()}
-	if record.Index < 1 || uint64(record.Index) > uint64(^uint32(0)) || ready.Validate(projection, owner.transfer) != nil || owner.current(ctx) != nil {
+	var heartbeat any = ready
+	var readyErr error
+	if owner.prep.RequiresCONNECTExecutionObserver() {
+		typed := mobilemultihop.DesktopNodeChainCONNECTExecutionReadyRecord(ready)
+		typed.Kind = "routervpn-node-chain-connect-execution-ready-v1"
+		readyErr = typed.Validate(projection, owner.transfer)
+		heartbeat = typed
+	} else {
+		readyErr = ready.Validate(projection, owner.transfer)
+	}
+	if record.Index < 1 || uint64(record.Index) > uint64(^uint32(0)) || readyErr != nil || owner.current(ctx) != nil {
 		return routerVPNExternalFailure
 	}
-	if err := owner.files.publish("node-chain-execution-ready.json", ready); err != nil {
+	if err := owner.files.publish("node-chain-execution-ready.json", heartbeat); err != nil {
 		return err
 	}
 	after, err := engine.CaptureExecutionTUNReadbackContext(ctx, identity)
@@ -397,4 +427,34 @@ func (owner *routerVPNNodeChainExecutionRuntime) heartbeat(ctx context.Context, 
 		return errors.Join(err, routerVPNExternalFailure, owner.files.remove("node-chain-execution-ready.json"))
 	}
 	return nil
+}
+
+func routerVPNDesktopExecutionProjectionPhysical(projection *mobilemultihop.NodeChainExecutionProjection, prep *mobilemultihop.NodeChainExecutionPreparation) (mobilemultihop.DesktopPhysicalPolicy, error) {
+	if prep == nil || projection == nil {
+		return nil, routerVPNExternalFailure
+	}
+	if prep.RequiresCONNECTExecutionObserver() {
+		return projection.CONNECTDesktopPhysicalPolicy()
+	}
+	return projection.DesktopPhysicalPolicy()
+}
+
+func routerVPNDesktopExecutionLastCapture(prep *mobilemultihop.NodeChainExecutionPreparation) (mobilemultihop.NodeChainExecutionLast, bool, error) {
+	if prep == nil {
+		return mobilemultihop.NodeChainExecutionLast{}, false, routerVPNExternalFailure
+	}
+	if prep.RequiresCONNECTExecutionObserver() {
+		return prep.CONNECTDesktopLast()
+	}
+	return prep.DesktopLast()
+}
+
+func routerVPNDesktopExecutionLastCurrent(last mobilemultihop.NodeChainExecutionLast, projection *mobilemultihop.NodeChainExecutionProjection, prep *mobilemultihop.NodeChainExecutionPreparation) error {
+	if prep == nil || projection == nil {
+		return routerVPNExternalFailure
+	}
+	if prep.RequiresCONNECTExecutionObserver() {
+		return last.ValidateCONNECTDesktopProjection(projection)
+	}
+	return last.ValidateDesktopProjection(projection)
 }

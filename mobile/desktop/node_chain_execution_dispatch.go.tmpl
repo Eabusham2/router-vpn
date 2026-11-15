@@ -125,7 +125,7 @@ func routerVPNNodeChainExecutionCommandTarget(files *routerVPNExternalFiles, cap
 	if err != nil {
 		return nil, err
 	}
-	policy, err := prep.DesktopPhysicalPolicy()
+	policy, err := routerVPNDesktopExecutionPhysicalPolicy(prep)
 	if err != nil {
 		return nil, err
 	}

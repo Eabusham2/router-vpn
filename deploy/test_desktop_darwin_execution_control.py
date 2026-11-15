@@ -27,6 +27,7 @@ CASES = {
     'TestRouterVPNDesktopNodeChainExecutionDispatchRejectsSubstitution': ('directory','session','config','physical','execution','transfer','mtu-small','mtu-large','mixed-parent','local-source','darwin-parent','cancelled'),
     'TestRouterVPNDesktopNodeChainExecutionDispatchRequiresOriginalParent': ('absent','mixed','invalid-source','cancelled','nil-caller'),
 }
+CASES['TestRouterVPNNodeChainCONNECTExecutionDarwinControl'] = ('server', 'auto', 'policy', 'preparation', 'mixed', 'missing', 'source', 'session', 'cancelled', 'retiring', 'foreign-prepare')
 CONTROLS = (
     ('selection', 'control.go', 'owner.capture.Selection() != owner.selection', 'false', 'TestRouterVPNNodeChainExecutionDarwinSelectionBinding/InputsSHA256', 'changed original execution selection reached replay'),
     ('physical-pointer', 'control.go', 'owner.policy != policy', 'false', 'TestRouterVPNNodeChainExecutionDarwinOriginalControl/policy-pointer', 'foreign or retired execution owner prepared native authority'),
@@ -34,6 +35,11 @@ CONTROLS = (
     ('execution-source', 'command.go', 'prep.SourceSHA256() != executionSource || ', '', 'TestRouterVPNNodeChainExecutionDarwinSeparateRequestedExecution/same-physical-source', 'Server source authorized a Compare launch sharing the physical graph'),
     ('source-join', 'native.go', 'if err := owner.source.CloseSource(ctx); err != nil {\n\t\t\t\treturn err\n\t\t\t}', 'if err := owner.source.CloseSource(ctx); err != nil { _ = err }', 'TestRouterVPNNodeChainExecutionDarwinStoppedReceipt/source-retry', 'unjoined execution source or foreign writer acknowledged Stop'),
     ('foreign-flag', 'dispatch.go', 'if command.Flags().Changed(name) {', 'if command.Flags().Changed(name) && false {', 'TestRouterVPNNodeChainExecutionDarwinCommandFlags/physical-mtu', 'explicit foreign or cancelled Darwin execution reached native dispatch'),
+)
+
+CONTROLS += (
+    ('connect-physical-pointer', 'control.go', 'owner.connectPolicy != policy', 'false', 'TestRouterVPNNodeChainCONNECTExecutionDarwinControl/foreign-prepare', 'foreign typed preparation admitted'),
+    ('connect-preparation-pointer', 'control.go', 'err != nil || p != owner.connectPolicy', 'err != nil', 'TestRouterVPNNodeChainCONNECTExecutionDarwinControl/preparation', 'foreign typed preparation admitted'),
 )
 
 def load(filename):
@@ -108,6 +114,12 @@ def prepare(directory):
     raw=template('node_chain_command_test')
     helpers=section(raw,'func desktopNodeChainCommandPolicy(', 'func TestRouterVPNDesktopNodeChainCommandExactSourceReplay')
     write('policy_test.go','package main\nimport("bytes";"crypto/ecdh";"crypto/sha256";"encoding/base64";"encoding/hex";"encoding/json";"fmt";"testing";"router-vpn/internal/mobilemultihop")\n'+helpers)
+    raw=template('node_chain_connect_construction_test')
+    typed=section(raw,'func desktopCONNECTCommandPolicy(', 'func TestRouterVPNDesktopCONNECTCommandExactSourceReplay')
+    typed+=section(raw,'func desktopCONNECTExecutionCommandPreparation(', '// Actual native option registries are used.')
+    constants='\n'.join(line for line in template('external_test').splitlines() if line.startswith(('const desktopExternalCapture =', 'const desktopExternalSource =')))
+    if len(constants.splitlines()) != 2: raise ValueError('Original imported fixture constants changed')
+    write('connect_policy_test.go','package main\nimport("crypto/sha256";"encoding/base64";"encoding/hex";"encoding/json";"testing";"router-vpn/internal/mobilemultihop";"router-vpn/internal/nativecomposite")\n'+constants+'\n'+typed)
     raw=template('node_command_imported_test')
     helper=section(raw,'func desktopImportedCommandFiles(', 'func TestRouterVPNDesktopNodePhysicalCommandImportedSourceBoundary')
     raw=template('node_chain_control_darwin_test')

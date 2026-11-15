@@ -16,17 +16,18 @@ import (
 // physical source and execution preparation remain distinct identities: the
 // same Local graph must not let Server borrow a Compare launch or vice versa.
 type routerVPNDarwinNodeChainExecutionControl struct {
-	capture   routerVPNDarwinNodeChainCapture
-	bootstrap routerVPNDarwinNodeChainBootstrap
-	scope     macosprocess.Scope
-	selection macosprocess.Selection
-	transfer  string
-	execution string
-	prep      *mobilemultihop.NodeChainExecutionPreparation
-	policy    *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
-	retiring  atomic.Bool
-	retired   atomic.Bool
-	native    *routerVPNDarwinNodeChainNative // assigned by the one joined command loop
+	capture       routerVPNDarwinNodeChainCapture
+	bootstrap     routerVPNDarwinNodeChainBootstrap
+	scope         macosprocess.Scope
+	selection     macosprocess.Selection
+	transfer      string
+	execution     string
+	prep          *mobilemultihop.NodeChainExecutionPreparation
+	policy        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	connectPolicy *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
+	retiring      atomic.Bool
+	retired       atomic.Bool
+	native        *routerVPNDarwinNodeChainNative // assigned by the one joined command loop
 }
 
 func (owner *routerVPNDarwinNodeChainExecutionControl) original(ctx context.Context) error {
@@ -45,8 +46,8 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) original(ctx context.Cont
 	return ctx.Err()
 }
 
-func (owner *routerVPNDarwinNodeChainExecutionControl) compile(ctx context.Context, files *routerVPNExternalFiles) (*mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy, error) {
-	if owner == nil || owner.prep != nil || owner.policy != nil || owner.retiring.Load() || files == nil || files.root == nil ||
+func (owner *routerVPNDarwinNodeChainExecutionControl) compile(ctx context.Context, files *routerVPNExternalFiles) (mobilemultihop.DesktopPhysicalPolicy, error) {
+	if owner == nil || owner.prep != nil || owner.policy != nil || owner.connectPolicy != nil || owner.retiring.Load() || files == nil || files.root == nil ||
 		owner.original(ctx) != nil || owner.workspace(files) != nil {
 		return nil, routerVPNExternalFailure
 	}
@@ -54,18 +55,29 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) compile(ctx context.Conte
 	if err != nil || prep == nil {
 		return nil, routerVPNExternalFailure
 	}
-	policy, err := prep.DesktopPhysicalPolicy()
+	policy, err := routerVPNDesktopExecutionPhysicalPolicy(prep)
 	if err != nil || policy == nil || owner.original(ctx) != nil || owner.retiring.Load() {
 		return nil, routerVPNExternalFailure
 	}
 	// Retain the parser's exact preparation and sealed physical object together.
 	// A later equivalent replay cannot replace either native owner.
-	owner.prep, owner.policy = prep, policy
+	switch captured := policy.(type) {
+	case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
+		owner.policy = captured
+	case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
+		owner.connectPolicy = captured
+	default:
+		return nil, routerVPNExternalFailure
+	}
+	owner.prep = prep
 	return policy, nil
 }
 
-func (owner *routerVPNDarwinNodeChainExecutionControl) prepare(ctx context.Context, policy *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy) (context.Context, error) {
-	if owner == nil || owner.policy == nil || owner.policy != policy || owner.current(ctx) != nil {
+func (owner *routerVPNDarwinNodeChainExecutionControl) prepare(ctx context.Context, policy mobilemultihop.DesktopPhysicalPolicy) (context.Context, error) {
+	if owner == nil || owner.current(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	if owner.policy != nil && owner.policy != policy || owner.connectPolicy != nil && owner.connectPolicy != policy {
 		return nil, routerVPNExternalFailure
 	}
 	files := owner.capture.Files()
@@ -78,16 +90,16 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) prepare(ctx context.Conte
 }
 
 func (owner *routerVPNDarwinNodeChainExecutionControl) current(ctx context.Context) error {
-	if owner == nil || owner.prep == nil || owner.policy == nil || owner.retiring.Load() || owner.original(ctx) != nil ||
+	if owner == nil || owner.prep == nil || (owner.policy == nil) == (owner.connectPolicy == nil) || owner.retiring.Load() || owner.original(ctx) != nil ||
 		owner.prep.SourceSHA256() != owner.execution {
 		return routerVPNExternalFailure
 	}
-	policy, err := owner.prep.DesktopPhysicalPolicy()
-	if err != nil || policy != owner.policy {
+	policy, err := owner.physicalPolicy()
+	if err != nil {
 		return routerVPNExternalFailure
 	}
 	_, meta, _, err := policy.PhysicalReadValidated()
-	if err != nil || meta.Kind != "node-chain-execution" || meta.TargetOS != "darwin" ||
+	if err != nil || meta.Kind != routerVPNDesktopExecutionPhysicalKind(owner.prep) || meta.TargetOS != "darwin" ||
 		meta.SessionID != owner.scope.Session || meta.SourceSHA256 != owner.scope.Source ||
 		meta.ConfigSHA256 != owner.scope.Config || owner.prep.ConfigSHA256() != owner.scope.Config {
 		return routerVPNExternalFailure
@@ -118,4 +130,24 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) retirementReceipt() error
 		return routerVPNExternalFailure
 	}
 	return nil
+}
+
+// Retain an exclusive concrete owner. The interface is only a dispatch view;
+// neither a foreign policy nor a failed typed constructor can fall back.
+func (owner *routerVPNDarwinNodeChainExecutionControl) physicalPolicy() (mobilemultihop.DesktopPhysicalPolicy, error) {
+	if owner == nil || owner.prep == nil || (owner.policy == nil) == (owner.connectPolicy == nil) {
+		return nil, routerVPNExternalFailure
+	}
+	if owner.connectPolicy != nil {
+		p, err := owner.prep.CONNECTDesktopPhysicalPolicy()
+		if err != nil || p != owner.connectPolicy {
+			return nil, routerVPNExternalFailure
+		}
+		return p, nil
+	}
+	policy, err := owner.prep.DesktopPhysicalPolicy()
+	if err != nil || policy != owner.policy {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
 }

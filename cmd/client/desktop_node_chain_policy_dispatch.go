@@ -15,7 +15,7 @@ func (c *desktopNodeChainLaunch) hasPolicy() bool {
 		return false
 	}
 	return desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1 &&
-		(c.execution == nil || c.policy != nil && c.execution.original == c && c.preparation == nil)
+		(c.execution == nil || (c.policy != nil || c.connectPolicy != nil) && c.execution.original == c && c.preparation == nil)
 }
 
 func desktopNodeChainConcretePolicyCount(chain *mobilemultihop.DesktopNodeChainPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSPolicy, connect *mobilemultihop.DesktopNodeChainCONNECTPolicy) int {
@@ -288,10 +288,7 @@ func newDesktopCONNECTNodeChainLaunch(selection multihopSelection, session, targ
 // The physical-policy boundary accepts only the original sealed concrete family.
 func (c *desktopNodeChainLaunch) physicalPolicy() (mobilemultihop.DesktopPhysicalPolicy, error) {
 	if c != nil && c.execution != nil {
-		if err := c.execution.validateSource(); err != nil {
-			return nil, err
-		}
-		return c.execution.physical, nil
+		return c.execution.physicalPolicy()
 	}
 	if !c.hasPolicy() || !c.originalPolicyCurrent() {
 		return nil, errors.New("ordered physical policy lost its original concrete source")

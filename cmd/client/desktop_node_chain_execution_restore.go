@@ -58,7 +58,7 @@ func (e *desktopNodeChainExecutionLaunch) captureRestoreContext(ctx context.Cont
 	if err := desktopnetwork.LockContext(ctx, &e.mu); err != nil {
 		return nil, err
 	}
-	matched := e.ready != nil && e.identity == ready.Identity && e.ready.SelectionEpoch == ready.SelectionEpoch && last.ValidateDesktopProjection(e.projection) == nil
+	matched := e.ready != nil && e.identity == ready.Identity && e.ready.SelectionEpoch == ready.SelectionEpoch && e.lastCurrent(last) == nil
 	e.mu.Unlock()
 	if !matched {
 		return nil, errors.New("execution restore replaced its pinned adoption or selected epoch")
@@ -125,7 +125,7 @@ func (capture *desktopNodeChainExecutionRestore) newLaunchContext(ctx context.Co
 	if err := desktopnetwork.LockContext(ctx, &capture.execution.mu); err != nil {
 		return nil, nil, err
 	}
-	matched := capture.execution.identity == capture.identity && capture.last.ValidateDesktopProjection(capture.execution.projection) == nil
+	matched := capture.execution.identity == capture.identity && capture.execution.lastCurrent(capture.last) == nil
 	capture.execution.mu.Unlock()
 	if !matched {
 		return nil, nil, bad
@@ -137,8 +137,8 @@ func (capture *desktopNodeChainExecutionRestore) newLaunchContext(ctx context.Co
 	if err := original.capture.current(ctx); err != nil {
 		return nil, nil, err
 	}
-	meta := original.policy.Metadata()
-	if target != meta.TargetOS || session == meta.SessionID {
+	meta, err := desktopNodeChainExecutionOriginalMetadata(original)
+	if err != nil || target != meta.TargetOS || session == meta.SessionID {
 		return nil, nil, bad
 	}
 	selection := original.selection
@@ -151,15 +151,24 @@ func (capture *desktopNodeChainExecutionRestore) newLaunchContext(ctx context.Co
 	if err != nil {
 		return nil, nil, err
 	}
-	prep, err := mobilemultihop.NewDesktopNodeChainExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), capture.last.JSON())
+	var prep *mobilemultihop.NodeChainExecutionPreparation
+	if execution.connectPhysical != nil {
+		prep, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionLastPreparation(launch.chain.connectPolicy, execution.preparation.Execution(), capture.last.JSON())
+	} else {
+		prep, err = mobilemultihop.NewDesktopNodeChainExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), capture.last.JSON())
+	}
 	if err != nil {
 		return nil, nil, err
 	}
-	physical, err := prep.DesktopPhysicalPolicy()
+	if execution.connectPhysical != nil {
+		execution.connectPhysical, err = prep.CONNECTDesktopPhysicalPolicy()
+	} else {
+		execution.physical, err = prep.DesktopPhysicalPolicy()
+	}
 	if err != nil {
 		return nil, nil, err
 	}
-	execution.preparation, execution.physical = prep, physical
+	execution.preparation = prep
 	if err := errors.Join(execution.validateSource(), original.capture.current(ctx)); err != nil {
 		return nil, nil, err
 	}
@@ -183,11 +192,25 @@ func closeDesktopNodeChainExecutionRestoreCapability(ctx context.Context, launch
 	if retained != nil {
 		return errors.Join(retained.closeForExecutionRestore(ctx, captured), ctx.Err())
 	}
-	if captured.original.policy.Metadata().TargetOS == "darwin" {
+	meta, err := desktopNodeChainExecutionOriginalMetadata(captured.original)
+	if err != nil {
+		return err
+	}
+	if meta.TargetOS == "darwin" {
 		return errors.New("Darwin execution restore requires its retained deny-baseline close owner")
 	}
 	if closeOriginal == nil {
 		return errors.New("execution restore has no original captured close")
 	}
 	return errors.Join(closeOriginal(ctx), ctx.Err())
+}
+
+func (e *desktopNodeChainExecutionLaunch) lastCurrent(last mobilemultihop.NodeChainExecutionLast) error {
+	if e.validateSource() != nil || e.projectionPhysicalCurrent(e.projection) != nil {
+		return errors.New("execution Last lost its original typed desktop projection")
+	}
+	if e.connectPhysical != nil {
+		return last.ValidateCONNECTDesktopProjection(e.projection)
+	}
+	return last.ValidateDesktopProjection(e.projection)
 }

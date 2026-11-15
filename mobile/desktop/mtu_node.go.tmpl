@@ -715,7 +715,7 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 		if err != nil {
 			return err
 		}
-		physicalPolicy, err = executionPreparation.DesktopPhysicalPolicy()
+		physicalPolicy, err = routerVPNDesktopExecutionPhysicalPolicy(executionPreparation)
 		if err != nil {
 			return err
 		}
@@ -782,6 +782,14 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 			return err
 		}
 		ctx = connectConstruction.ctx
+	}
+	var connectExecutionConstruction *routerVPNDesktopCONNECTExecutionConstruction
+	if _, ok := physicalPolicy.(*mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy); ok {
+		connectExecutionConstruction, err = routerVPNNewDesktopCONNECTExecutionConstruction(ctx, executionPreparation)
+		if err != nil {
+			return err
+		}
+		ctx = connectExecutionConstruction.ctx
 	}
 	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, raw)
 	if err != nil {
@@ -930,6 +938,8 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 			captured, prepareErr = instance.RouterVPNDesktopNodeChainPreparePhysicalOwned(policy)
 		case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
 			captured, prepareErr = instance.RouterVPNDesktopNodeChainExecutionPreparePhysicalOwned(policy)
+		case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
+			captured, prepareErr = instance.RouterVPNDesktopNodeChainCONNECTExecutionPreparePhysicalOwned(policy)
 		case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
 			captured, prepareErr = instance.RouterVPNDesktopCandidatePrefixPreparePhysicalOwned(policy)
 		default:
@@ -966,6 +976,8 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 			physical, err = instance.RouterVPNDesktopNodeChainActivatePhysical(policy)
 		case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
 			physical, err = instance.RouterVPNDesktopNodeChainExecutionActivatePhysical(policy)
+		case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
+			physical, err = instance.RouterVPNDesktopNodeChainCONNECTExecutionActivatePhysical(policy)
 		case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
 			physical, err = instance.RouterVPNDesktopCandidatePrefixActivatePhysical(policy)
 		default:
@@ -1021,6 +1033,11 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 			return transferErr
 		}
 		execution, err = routerVPNNewNodeChainExecutionRuntime(ctx, files, executionPreparation, transfer, instance, func(call context.Context) error {
+			if connectExecutionConstruction != nil {
+				if err := connectExecutionConstruction.current(call); err != nil {
+					return err
+				}
+			}
 			if stopped.Load() || parent.Err() != nil || ctx.Err() != nil || physical == nil {
 				return routerVPNExternalFailure
 			}

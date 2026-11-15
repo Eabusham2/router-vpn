@@ -289,3 +289,109 @@ func TestRouterVPNDesktopCONNECTConstructionRejectsReplacement(t *testing.T) {
 		})
 	}
 }
+
+func desktopCONNECTExecutionCommandPreparation(t *testing.T, target, execution string) *mobilemultihop.NodeChainExecutionPreparation {
+	t.Helper()
+	original := desktopCONNECTCommandPolicy(t, target, 1400)
+	prep, err := mobilemultihop.NewDesktopNodeChainCONNECTExecutionPreparation(original, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prep
+}
+
+// Actual native option registries are used. These are construction tests only;
+// no TUN, physical permission, encrypted peer or selected-path proof is modeled
+// as having succeeded by parsing the closed preparation graph.
+func TestRouterVPNDesktopCONNECTExecutionConstructionKeepsPrivateContext(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		for _, execution := range []string{"server", "auto"} {
+			t.Run(target+"/"+execution, func(t *testing.T) {
+				parent := desktopCONNECTCommandContext(context.Background())
+				registry := include.OutboundRegistry()
+				parent = service.ContextWith[adapter.OutboundRegistry](parent, registry)
+				parent = service.ContextWith[option.OutboundOptionsRegistry](parent, registry)
+				prep := desktopCONNECTExecutionCommandPreparation(t, target, execution)
+				first, err := routerVPNNewDesktopCONNECTExecutionConstruction(parent, prep)
+				if err != nil {
+					t.Fatal(err)
+				}
+				second, err := routerVPNNewDesktopCONNECTExecutionConstruction(parent, prep)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if first.registry == registry || first.registry == second.registry || first.capture == second.capture || first.ctx == second.ctx ||
+					service.FromContext[adapter.OutboundRegistry](parent) != registry || service.FromContext[option.OutboundOptionsRegistry](parent) != registry {
+					t.Fatal("execution construction replaced its parent's option registry")
+				}
+				for _, owner := range []*routerVPNDesktopCONNECTExecutionConstruction{first, second} {
+					original, sourceErr := prep.OriginalCONNECTSource()
+					if owner.current(context.Background()) != nil || sourceErr != nil || owner.preparation != prep || owner.source != original {
+						t.Fatal("execution construction changed the exact typed source")
+					}
+					parsed, err := SJ.UnmarshalExtendedContext[option.Options](owner.ctx, []byte(owner.config))
+					if err != nil || len(parsed.Inbounds) != 1 || parsed.Route == nil || parsed.Route.Final != mobilemultihop.NodeChainExecutionGateTag {
+						t.Fatal("execution construction lost its closed native option graph", err)
+					}
+					if _, err := box.RouterVPNNodeCONNECTContext(owner.ctx, owner.source, owner.capture); err == nil {
+						t.Fatal("execution context acquired ordinary Local ownership")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopCONNECTExecutionConstructionRefusesReplacement(t *testing.T) {
+	for _, fault := range []string{"copy", "preparation", "physical", "source", "policy", "context", "capture", "registry", "config", "receipt", "cancelled", "nil-caller"} {
+		t.Run(fault, func(t *testing.T) {
+			lifetime, cancel := context.WithCancel(desktopCONNECTCommandContext(context.Background()))
+			defer cancel()
+			prep := desktopCONNECTExecutionCommandPreparation(t, "linux", "auto")
+			owner, err := routerVPNNewDesktopCONNECTExecutionConstruction(lifetime, prep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := context.Background()
+			switch fault {
+			case "copy":
+				copied := *owner
+				owner = &copied
+			case "preparation":
+				owner.preparation, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionPreparation(prep.Source())
+			case "physical":
+				other := desktopCONNECTExecutionCommandPreparation(t, "linux", "auto")
+				owner.physical, err = other.CONNECTDesktopPhysicalPolicy()
+			case "source":
+				copied := *owner.source
+				owner.source = &copied
+			case "policy":
+				owner.policy = desktopCONNECTCommandPolicy(t, "linux", 1400)
+			case "context":
+				owner.ctx = lifetime
+			case "capture":
+				other, e := routerVPNNewDesktopCONNECTExecutionConstruction(lifetime, prep)
+				if e != nil {
+					t.Fatal(e)
+				}
+				owner.capture = other.capture
+			case "registry":
+				owner.registry = include.OutboundRegistry()
+			case "config":
+				owner.config += "\n"
+			case "receipt":
+				owner.metadata.SourceSHA256 = strings.Repeat("d", 64)
+			case "cancelled":
+				cancel()
+			case "nil-caller":
+				call = nil
+			}
+			if err != nil {
+				t.Fatal("replacement fixture failed before original-owner check", err)
+			}
+			if owner.current(call) == nil {
+				t.Fatal("execution child admitted a copied or replaced construction")
+			}
+		})
+	}
+}

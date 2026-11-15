@@ -79,7 +79,11 @@ func TestRouterVPNDesktopNodeChainExecutionSavedChoiceSkipsCompareFactory(t *tes
 				target = mobilemultihop.Targets[1]
 			}
 			last := desktopExecutionSavedChoice(t, f.owner.prep, f.engine.projection, winner, target)
-			original, _ := f.owner.physical.OriginalDesktopPolicy()
+			pairedPhysical, ok := f.owner.physical.(*mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy)
+			if !ok || pairedPhysical == nil {
+				t.Fatal("paired saved-choice fixture lost its original concrete physical owner")
+			}
+			original, _ := pairedPhysical.OriginalDesktopPolicy()
 			prep, err := mobilemultihop.NewDesktopNodeChainExecutionLastPreparation(original, "auto", last.JSON())
 			if err != nil {
 				t.Fatal(err)

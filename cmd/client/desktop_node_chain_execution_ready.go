@@ -48,15 +48,18 @@ func (e *desktopNodeChainExecutionLaunch) readReadyContext(ctx context.Context, 
 		if !fresh || e.ready != nil || e.adoption != "" {
 			return empty, errors.New("execution adoption preceded its original fresh native observation")
 		}
-		projection, identity, err = mobilemultihop.ParseDesktopNodeChainExecutionAdoptionRecord(raw, e.preparation, transfer)
+		if e.connectPhysical != nil {
+			projection, identity, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionAdoptionRecord(raw, e.preparation, transfer)
+		} else {
+			projection, identity, err = mobilemultihop.ParseDesktopNodeChainExecutionAdoptionRecord(raw, e.preparation, transfer)
+		}
 		if err != nil {
 			return empty, err
 		}
 	} else if string(raw) != e.adoption {
 		return empty, errors.New("execution adoption replaced its original captured proposal")
 	}
-	physical, err := projection.DesktopPhysicalPolicy()
-	if err != nil || physical != e.physical {
+	if err := e.projectionPhysicalCurrent(projection); err != nil {
 		return empty, errors.New("execution adoption replaced its retained preparation owner")
 	}
 	heartbeat, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-execution-ready.json", mobilemultihop.DesktopNodeChainExecutionReadyRecordLimit)
@@ -64,11 +67,25 @@ func (e *desktopNodeChainExecutionLaunch) readReadyContext(ctx context.Context, 
 		return empty, err
 	}
 	defer clear(heartbeat)
-	record, err := mobilemultihop.ParseDesktopNodeChainExecutionAdoptedReadyRecord(heartbeat, projection, identity, transfer)
+	// The common readback view is descriptive only. The distinct typed parser
+	// must validate CONNECT authority first; its Kind is never rewritten to the
+	// paired value and no generic parser is used as a fallback.
+	var record mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	if e.connectPhysical != nil {
+		var typed mobilemultihop.DesktopNodeChainCONNECTExecutionReadyRecord
+		typed, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionAdoptedReadyRecord(heartbeat, projection, identity, transfer)
+		record = mobilemultihop.DesktopNodeChainExecutionReadyRecord(typed)
+	} else {
+		record, err = mobilemultihop.ParseDesktopNodeChainExecutionAdoptedReadyRecord(heartbeat, projection, identity, transfer)
+	}
 	if err != nil {
 		return empty, err
 	}
-	if err := validateDesktopNodeChainExecutionReady(record, live, started, time.Now(), e.ready, fresh, e.original.policy.Metadata().TargetOS); err != nil {
+	meta, err := desktopNodeChainExecutionOriginalMetadata(e.original)
+	if err != nil {
+		return empty, err
+	}
+	if err := validateDesktopNodeChainExecutionReady(record, live, started, time.Now(), e.ready, fresh, meta.TargetOS); err != nil {
 		return empty, err
 	}
 	if !desktopMTUPathPattern.MatchString(live.Path) || e.mtuPath != "" && e.mtuPath != live.Path {
@@ -103,7 +120,7 @@ func validateDesktopNodeChainExecutionReady(record mobilemultihop.DesktopNodeCha
 		}
 		return nil
 	}
-	if record.Identity != captured.Identity || record.SourceSHA256 != captured.SourceSHA256 || record.TransferSHA256 != captured.TransferSHA256 ||
+	if record.Kind != captured.Kind || record.Schema != captured.Schema || record.Identity != captured.Identity || record.SourceSHA256 != captured.SourceSHA256 || record.TransferSHA256 != captured.TransferSHA256 ||
 		record.PreparationSourceSHA256 != captured.PreparationSourceSHA256 || record.PreparationConfigSHA256 != captured.PreparationConfigSHA256 ||
 		record.DNSConfigSHA256 != captured.DNSConfigSHA256 || record.ObservedAt < captured.ObservedAt || record.Reader < captured.Reader ||
 		record.Generation < captured.Generation || record.SelectionEpoch < captured.SelectionEpoch ||

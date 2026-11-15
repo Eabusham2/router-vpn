@@ -172,7 +172,7 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		if err != nil {
 			return err
 		}
-		policy, err = executionPreparation.DesktopPhysicalPolicy()
+		policy, err = routerVPNDesktopExecutionPhysicalPolicy(executionPreparation)
 		if err != nil {
 			return err
 		}
@@ -308,6 +308,14 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		}
 		graph = connectConstruction.ctx
 	}
+	var connectExecutionConstruction *routerVPNDesktopCONNECTExecutionConstruction
+	if _, ok := policy.(*mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy); ok {
+		connectExecutionConstruction, err = routerVPNNewDesktopCONNECTExecutionConstruction(graph, executionPreparation)
+		if err != nil {
+			return err
+		}
+		graph = connectExecutionConstruction.ctx
+	}
 	parsed, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(policy.Config()))
 	if err != nil {
 		return err
@@ -383,6 +391,12 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 			control.preparation = prepared
 		}
 		err = prepareErr
+	case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
+		prepared, prepareErr := instance.RouterVPNDesktopLinuxNodeChainCONNECTExecutionPreparePhysicalOwned(original)
+		if prepared != nil {
+			control.preparation = prepared
+		}
+		err = prepareErr
 	default:
 		return routerVPNExternalFailure
 	}
@@ -414,6 +428,8 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		physical, err = instance.RouterVPNDesktopLinuxNodeChainActivatePhysical(proof, original)
 	case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
 		physical, err = instance.RouterVPNDesktopLinuxNodeChainExecutionActivatePhysical(proof, original)
+	case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
+		physical, err = instance.RouterVPNDesktopLinuxNodeChainCONNECTExecutionActivatePhysical(proof, original)
 	case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
 		physical, err = instance.RouterVPNDesktopLinuxCandidatePrefixActivatePhysical(proof, original)
 	}
@@ -436,6 +452,8 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		cover, err = instance.RouterVPNDesktopLinuxNodeChainActivateCover(activation, original, physical)
 	case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
 		cover, err = instance.RouterVPNDesktopLinuxNodeChainExecutionActivateCover(activation, original, physical)
+	case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
+		cover, err = instance.RouterVPNDesktopLinuxNodeChainCONNECTExecutionActivateCover(activation, original, physical)
 	case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
 		cover, err = instance.RouterVPNDesktopLinuxCandidatePrefixActivateCover(activation, original, physical)
 	}
@@ -491,6 +509,11 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		execution, err = routerVPNNewNodeChainExecutionRuntime(graph, files, executionPreparation, control.selectionHash, instance, func(call context.Context) error {
 			if stopped.Load() || parent.Err() != nil || graph.Err() != nil || physical == nil {
 				return routerVPNExternalFailure
+			}
+			if connectExecutionConstruction != nil {
+				if err := connectExecutionConstruction.current(call); err != nil {
+					return err
+				}
 			}
 			// Never reenter cover.CurrentContext while the original physical
 			// MTU transaction intentionally holds its owner lock.

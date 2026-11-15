@@ -12,6 +12,7 @@ import (
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/macosprocess"
 	SJ "github.com/sagernet/sing/common/json"
@@ -142,6 +143,14 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 	if err != nil {
 		return err
 	}
+	var connectConstruction *routerVPNDesktopCONNECTExecutionConstruction
+	if control.connectPolicy != nil {
+		connectConstruction, err = routerVPNNewDesktopCONNECTExecutionConstruction(graph, control.prep)
+		if err != nil {
+			return err
+		}
+		graph = connectConstruction.ctx
+	}
 	parsed, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(control.prep.Config()))
 	if err != nil {
 		return err
@@ -189,7 +198,23 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 	if constructErr != nil {
 		return constructErr
 	}
-	prepared, err := instance.RouterVPNDesktopDarwinNodeChainExecutionPreparePhysicalOwned(policy)
+	var prepared routerVPNDarwinNodeChainSource
+	switch captured := policy.(type) {
+	case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
+		owned, e := instance.RouterVPNDesktopDarwinNodeChainExecutionPreparePhysicalOwned(captured)
+		err = e
+		if owned != nil {
+			prepared = owned
+		}
+	case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
+		owned, e := instance.RouterVPNDesktopDarwinNodeChainCONNECTExecutionPreparePhysicalOwned(captured)
+		err = e
+		if owned != nil {
+			prepared = owned
+		}
+	default:
+		return routerVPNExternalFailure
+	}
 	if prepared != nil {
 		native.source = prepared
 	}
@@ -221,13 +246,26 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		return err
 	}
 	stopAdmission()
-	physical, err := instance.RouterVPNDesktopDarwinNodeChainExecutionActivatePhysical(policy)
+	var physical *box.RouterVPNDesktopNodePhysical
+	switch captured := policy.(type) {
+	case *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy:
+		physical, err = instance.RouterVPNDesktopDarwinNodeChainExecutionActivatePhysical(captured)
+	case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
+		physical, err = instance.RouterVPNDesktopDarwinNodeChainCONNECTExecutionActivatePhysical(captured)
+	default:
+		return routerVPNExternalFailure
+	}
 	if err != nil {
 		return err
 	}
 	current := func(call context.Context) error {
 		if call == nil || call.Err() != nil || parent.Err() != nil || graph.Err() != nil || control.retiring.Load() {
 			return routerVPNExternalFailure
+		}
+		if connectConstruction != nil {
+			if err := connectConstruction.current(call); err != nil {
+				return err
+			}
 		}
 		if err := physical.CurrentContext(call); err != nil {
 			return err
@@ -237,6 +275,11 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 	execution, err := routerVPNNewNodeChainExecutionRuntime(graph, files, control.prep, control.transfer, instance, func(call context.Context) error {
 		if call == nil || call.Err() != nil || parent.Err() != nil || graph.Err() != nil || control.retiring.Load() {
 			return routerVPNExternalFailure
+		}
+		if connectConstruction != nil {
+			if err := connectConstruction.current(call); err != nil {
+				return err
+			}
 		}
 		// The engine observes its exact reader/selector epoch itself. Preserve
 		// source ownership while the physical MTU transaction detaches a reader.

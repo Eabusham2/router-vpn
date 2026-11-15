@@ -245,7 +245,7 @@ func (owner *routerVPNLinuxNodeControl) compileExecution(ctx context.Context, fi
 	if err != nil {
 		return nil, err
 	}
-	policy, err := prep.DesktopPhysicalPolicy()
+	policy, err := routerVPNDesktopExecutionPhysicalPolicy(prep)
 	if err != nil {
 		return nil, err
 	}

@@ -17,7 +17,7 @@ func (owner *RouterVPNDesktopNodePhysical) NodeChainExecutionSourceCurrentContex
 	if owner == nil || owner.instance == nil || preparation == nil {
 		return errRouterVPNExecutionOwner
 	}
-	policy, err := preparation.DesktopPhysicalPolicy()
+	policy, err := routerVPNNodeChainExecutionPhysicalPolicy(preparation)
 	if err != nil || policy == nil || owner.policy != policy {
 		return errors.Join(err, errRouterVPNExecutionOwner)
 	}
@@ -104,13 +104,25 @@ func (owner *RouterVPNDesktopNodePhysical) ConfirmExecutionDarwinMTUReader(ctx c
 	if owner == nil || preparation == nil || engine == nil || engine.prep != preparation || engine.instance != owner.instance || !binding.OwnsEngine(engine) {
 		return errRouterVPNExecutionOwner
 	}
-	policy, err := preparation.DesktopPhysicalPolicy()
+	policy, err := routerVPNNodeChainExecutionPhysicalPolicy(preparation)
 	if err != nil {
 		return err
 	}
 	return engine.confirmDarwinMTUReader(ctx, binding, previous, next, oldName, oldIndex, oldMTU, name, index, mtu, routerVPNReadExecutionMTU, func() error {
 		return owner.confirmTypedDarwinMTUReadback(ctx, policy, next, name, index, mtu)
 	})
+}
+
+// Both factories return sealed concrete policies. A schema discriminator alone
+// grants no authority, and typed validation failure never falls back families.
+func routerVPNNodeChainExecutionPhysicalPolicy(preparation *mobilemultihop.NodeChainExecutionPreparation) (mobilemultihop.DesktopPhysicalPolicy, error) {
+	if preparation == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	if preparation.RequiresCONNECTExecutionObserver() {
+		return preparation.CONNECTDesktopPhysicalPolicy()
+	}
+	return preparation.DesktopPhysicalPolicy()
 }
 
 // Only this private component boundary substitutes native readback in tests.

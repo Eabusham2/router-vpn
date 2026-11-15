@@ -7,3 +7,7 @@ import "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultiho
 func (n *NodeNetworkOwner) PrepareNodeChainCONNECTPhysicalPolicy(policy *mobilemultihop.DesktopNodeChainCONNECTPolicy) error {
 	return n.preparePhysicalPolicyWindows(policy)
 }
+
+func (n *NodeNetworkOwner) PrepareNodeChainCONNECTExecutionPhysicalPolicy(policy *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy) error {
+	return n.preparePhysicalPolicyWindows(policy)
+}

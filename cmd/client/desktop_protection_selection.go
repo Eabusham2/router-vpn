@@ -146,7 +146,7 @@ func (attempt *desktopNodeProtectionAttempt) selection() (desktopProtectionSelec
 	}
 	if attempt.execution != nil {
 		e := attempt.execution
-		if e.bound(attempt.launch) != nil || attempt.chain != e.original.policy || attempt.policy != nil || attempt.external != nil || attempt.imported != nil || attempt.socksChain != nil || attempt.connectChain != nil || attempt.candidatePrefix != nil {
+		if e.bound(attempt.launch) != nil || attempt.chain != e.original.policy || attempt.connectChain != e.original.connectPolicy || attempt.policy != nil || attempt.external != nil || attempt.imported != nil || attempt.socksChain != nil || attempt.candidatePrefix != nil {
 			return desktopProtectionSelection{}, errors.New("execution protection attempt replaced its captured native preparation")
 		}
 		return desktopNodeChainExecutionProtectionSelection(e)

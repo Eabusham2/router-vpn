@@ -14,17 +14,18 @@ import (
 // grants no process/TUN authority; Each supported platform retains its existing
 // native owners. The physical policy is the sealed preparation object itself.
 type desktopNodeChainExecutionLaunch struct {
-	original    *desktopNodeChainLaunch
-	operation   context.Context
-	preparation *mobilemultihop.NodeChainExecutionPreparation
-	physical    *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
-	mu          sync.Mutex
-	adoption    string
-	projection  *mobilemultihop.NodeChainExecutionProjection
-	identity    mobilemultihop.NodeChainIdentity
-	ready       *mobilemultihop.DesktopNodeChainExecutionReadyRecord
-	mtuPath     string
-	started     time.Time
+	original        *desktopNodeChainLaunch
+	operation       context.Context
+	preparation     *mobilemultihop.NodeChainExecutionPreparation
+	physical        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
+	mu              sync.Mutex
+	adoption        string
+	projection      *mobilemultihop.NodeChainExecutionProjection
+	identity        mobilemultihop.NodeChainIdentity
+	ready           *mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	mtuPath         string
+	started         time.Time
 }
 
 func desktopNodeChainLaunchExecution(launch *desktopNodeLaunch) *desktopNodeChainExecutionLaunch {
@@ -35,12 +36,27 @@ func desktopNodeChainLaunchExecution(launch *desktopNodeLaunch) *desktopNodeChai
 }
 
 func newDesktopNodeChainExecutionSource(original *desktopNodeChainLaunch, requested string) (*desktopNodeChainExecutionLaunch, error) {
-	if original == nil || original.policy == nil || original.socksPolicy != nil || original.preparation != nil || !original.originalPolicyCurrent() {
-		return nil, errors.New("execution preparation requires its complete original paired Local source")
+	if original == nil || original.socksPolicy != nil || original.preparation != nil || !original.originalPolicyCurrent() {
+		return nil, errors.New("execution preparation requires its complete original typed Local source")
 	}
-	meta := original.policy.Metadata()
+	meta, err := desktopNodeChainExecutionOriginalMetadata(original)
+	if err != nil {
+		return nil, err
+	}
 	if meta.TargetOS != "linux" && meta.TargetOS != "windows" && meta.TargetOS != "darwin" {
 		return nil, errors.New("execution host has no supported native target")
+	}
+	if original.connectPolicy != nil {
+		prep, err := mobilemultihop.NewDesktopNodeChainCONNECTExecutionPreparation(original.connectPolicy, requested)
+		if err != nil {
+			return nil, err
+		}
+		physical, err := prep.CONNECTDesktopPhysicalPolicy()
+		if err != nil {
+			return nil, err
+		}
+		result := &desktopNodeChainExecutionLaunch{original: original, preparation: prep, connectPhysical: physical}
+		return result, result.validateSource()
 	}
 	prep, err := mobilemultihop.NewDesktopNodeChainExecutionPreparation(original.policy, requested)
 	if err != nil {
@@ -56,7 +72,7 @@ func newDesktopNodeChainExecutionSource(original *desktopNodeChainLaunch, reques
 
 func (e *desktopNodeChainExecutionLaunch) validateSource() error {
 	bad := errors.New("execution launch changed its exact original source or physical preparation")
-	if e == nil || e.original == nil || e.preparation == nil || e.physical == nil || e.original.policy == nil ||
+	if e == nil || e.original == nil || e.preparation == nil || (e.physical == nil) == (e.connectPhysical == nil) ||
 		!e.original.hasPolicy() || e.original.socksPolicy != nil || e.original.preparation != nil || e.original.selection.Native == nil ||
 		e.original.selection.Native.chain == nil || e.original.selection.Native.validate(e.original.selection) != nil {
 		return bad
@@ -64,31 +80,104 @@ func (e *desktopNodeChainExecutionLaunch) validateSource() error {
 	if e.original.execution != nil && e.original.execution != e {
 		return bad
 	}
-	physical, err := e.preparation.DesktopPhysicalPolicy()
-	if err != nil || physical != e.physical {
-		return bad
+	selected := e.original.selection.Native.chain
+	if e.connectPhysical != nil {
+		if e.original.connectPolicy == nil || e.original.policy != nil || selected.connect == nil || selected.chain != nil || selected.socks != nil {
+			return bad
+		}
+		physical, err := e.preparation.CONNECTDesktopPhysicalPolicy()
+		if err != nil || physical != e.connectPhysical {
+			return bad
+		}
+		original, err := physical.OriginalDesktopCONNECTPolicy()
+		if err != nil || original != e.original.connectPolicy {
+			return bad
+		}
+		source, err := original.OriginalSource()
+		if err != nil || source != selected.connect.source {
+			return bad
+		}
+	} else {
+		if e.original.policy == nil || e.original.connectPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil {
+			return bad
+		}
+		physical, err := e.preparation.DesktopPhysicalPolicy()
+		if err != nil || physical != e.physical {
+			return bad
+		}
+		original, err := physical.OriginalDesktopPolicy()
+		if err != nil || original != e.original.policy || original.OriginalChain() != selected.chain {
+			return bad
+		}
 	}
-	original, err := physical.OriginalDesktopPolicy()
-	if err != nil || original != e.original.policy || original.OriginalChain() != e.original.selection.Native.chain.chain {
-		return bad
-	}
-	meta := original.Metadata()
-	if meta.TargetOS != "linux" && meta.TargetOS != "windows" && meta.TargetOS != "darwin" {
+	meta, err := desktopNodeChainExecutionOriginalMetadata(e.original)
+	if err != nil || meta.TargetOS != "linux" && meta.TargetOS != "windows" && meta.TargetOS != "darwin" {
 		return bad
 	}
 	return nil
 }
 
+// This descriptive view never substitutes for either sealed physical owner.
+// Read the retained Local policy directly to avoid recursing through execution.
+func desktopNodeChainExecutionOriginalMetadata(original *desktopNodeChainLaunch) (mobilemultihop.DesktopNodeChainMetadata, error) {
+	if original == nil || !original.hasPolicy() || original.socksPolicy != nil {
+		return mobilemultihop.DesktopNodeChainMetadata{}, errors.New("execution metadata lost its original typed policy")
+	}
+	if original.connectPolicy != nil {
+		_, meta, _, err := original.connectPolicy.ReadValidated()
+		return meta.DesktopNodeChainMetadata, err
+	}
+	_, meta, _, err := original.policy.ReadValidated()
+	return meta, err
+}
+
+func (e *desktopNodeChainExecutionLaunch) physicalPolicy() (mobilemultihop.DesktopPhysicalPolicy, error) {
+	if err := e.validateSource(); err != nil {
+		return nil, err
+	}
+	if e.connectPhysical != nil {
+		return e.connectPhysical, nil
+	}
+	return e.physical, nil
+}
+
+func (e *desktopNodeChainExecutionLaunch) projectionPhysicalCurrent(projection *mobilemultihop.NodeChainExecutionProjection) error {
+	if e.validateSource() != nil || projection == nil {
+		return errors.New("execution projection lost its original typed physical source")
+	}
+	if e.connectPhysical != nil {
+		physical, err := projection.CONNECTDesktopPhysicalPolicy()
+		if err != nil || physical != e.connectPhysical {
+			return errors.New("CONNECT execution replaced its original physical source")
+		}
+		return nil
+	}
+	physical, err := projection.DesktopPhysicalPolicy()
+	if err != nil || physical != e.physical {
+		return errors.New("paired execution replaced its original physical source")
+	}
+	return nil
+}
+
 // This is a descriptive view for the common ordered host's source comparisons.
-// Native policy admission must use e.physical, never this metadata value.
+// Native policy admission must use the original concrete physicalPolicy owner,
+// never this metadata value.
 func (e *desktopNodeChainExecutionLaunch) readPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, mobilemultihop.DesktopPhysicalCapture, error) {
 	if err := e.validateSource(); err != nil {
 		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, err
 	}
-	config, physical, capture, err := e.physical.PhysicalReadValidated()
-	meta := e.original.policy.Metadata()
-	if err != nil || physical.ConfigSHA256 != e.preparation.ConfigSHA256() || physical.SourceSHA256 != meta.SourceSHA256 ||
-		physical.SessionID != meta.SessionID || physical.TargetOS != meta.TargetOS || physical.Kind != "node-chain-execution" {
+	policy, err := e.physicalPolicy()
+	if err != nil {
+		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, err
+	}
+	config, physical, capture, err := policy.PhysicalReadValidated()
+	meta, metaErr := desktopNodeChainExecutionOriginalMetadata(e.original)
+	kind := "node-chain-execution"
+	if e.connectPhysical != nil {
+		kind = "node-chain-connect-execution"
+	}
+	if err != nil || metaErr != nil || physical.ConfigSHA256 != e.preparation.ConfigSHA256() || physical.SourceSHA256 != meta.SourceSHA256 ||
+		physical.SessionID != meta.SessionID || physical.TargetOS != meta.TargetOS || physical.Kind != kind {
 		return "", mobilemultihop.DesktopNodeChainMetadata{}, mobilemultihop.DesktopPhysicalCapture{}, errors.New("execution physical capture differs from its original desktop policy")
 	}
 	meta.ConfigSHA256, meta.FinalTag = physical.ConfigSHA256, mobilemultihop.SelectorTag
@@ -99,8 +188,9 @@ func (e *desktopNodeChainExecutionLaunch) bound(launch *desktopNodeLaunch) error
 	if err := e.validateSource(); err != nil {
 		return err
 	}
-	if launch == nil || launch.chain != e.original || launch.chain.execution != e || launch.configSHA256 != e.preparation.ConfigSHA256() ||
-		launch.mtuSession != e.original.policy.Metadata().SessionID || e.original.input != e.preparation.Source() {
+	meta, err := desktopNodeChainExecutionOriginalMetadata(e.original)
+	if err != nil || launch == nil || launch.chain != e.original || launch.chain.execution != e || launch.configSHA256 != e.preparation.ConfigSHA256() ||
+		launch.mtuSession != meta.SessionID || e.original.input != e.preparation.Source() {
 		return errors.New("execution observation lost its exact staged parent launch")
 	}
 	return nil

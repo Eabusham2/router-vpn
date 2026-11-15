@@ -206,6 +206,64 @@ class ExecutionAdmissionGate(unittest.TestCase):
                         NODE.execute_baseline_suite(baseline, suite)
 
 
+class CONNECTExecutionAdmissionGate(unittest.TestCase):
+    def output(self, names):
+        return "".join("=== RUN   " + name + "\n--- PASS: " + name + " (0.01s)\n" for name in names)
+
+    def test_both_typed_suites_are_additive_with_original_runtime_bounds(self):
+        self.assertEqual([len(suite[3]) for suite in NODE.CONNECT_EXECUTION_DESKTOP_SUITES], [20, 20])
+        for windows in (False, True):
+            for bootstrap in (False, True):
+                suites = NODE.baseline_suites(windows, bootstrap_only=bootstrap)
+                for suite in (*NODE.EXECUTION_DESKTOP_SUITES, *NODE.CONNECT_EXECUTION_DESKTOP_SUITES):
+                    self.assertEqual(suites.count(suite), 1)
+        for suite in NODE.CONNECT_EXECUTION_DESKTOP_SUITES:
+            baseline = Mock(); baseline.execute.return_value = (0, self.output(suite[3]))
+            with contextlib.redirect_stdout(io.StringIO()):
+                NODE.execute_baseline_suite(baseline, suite)
+            baseline.execute.assert_called_once_with(*suite[:3], 90)
+
+    def test_every_missing_extra_duplicate_or_failed_typed_verdict_rejects(self):
+        for suite in NODE.CONNECT_EXECUTION_DESKTOP_SUITES:
+            names = suite[3]
+            outputs = [self.output(tuple(name for name in names if name != missing)) for missing in names]
+            outputs += [self.output(names + (names[0],)), self.output(names + ("TestForeignTypedOwner",)),
+                        "testing: warning: no tests to run\nPASS\n"]
+            outputs += [self.output(names) + failure for failure in
+                        ("--- FAIL: foreign (0s)\n", "--- SKIP: foreign (0s)\n", "DATA RACE\n", "panic: test timed out\n")]
+            for output in outputs:
+                with self.subTest(suite=suite[0], output=output), contextlib.redirect_stdout(io.StringIO()):
+                    baseline = Mock(); baseline.execute.return_value = (0, output)
+                    with self.assertRaises(ValueError):
+                        NODE.execute_baseline_suite(baseline, suite)
+            for status in (1, 124):
+                baseline = Mock(); baseline.execute.return_value = (status, self.output(names))
+                with self.subTest(suite=suite[0], status=status), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                    NODE.execute_baseline_suite(baseline, suite)
+
+    def test_controls_modify_only_original_typed_construction_function(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            relative = "cmd/sing-box/routervpn_node_chain_connect_construction.go"
+            target = source / relative; target.parent.mkdir(parents=True)
+            original = (ROOT / "mobile/desktop/node_chain_connect_construction.go.tmpl").read_text()
+            target.write_text(original)
+            controls = NODE.connect_execution_construction_mutants(source)
+            self.assertEqual([control[0] for control in controls],
+                             ["connect-execution-original-construction", "connect-execution-original-physical"])
+            for label, path, package, root, leaf, witness, changed in controls:
+                self.assertEqual(path, relative)
+                self.assertEqual(package, "./cmd/sing-box")
+                self.assertIn(root + "/" + leaf, NODE.CONNECT_EXECUTION_CONSTRUCTION_VERDICTS)
+                self.assertNotEqual(changed, original)
+                self.assertIn("execution child admitted", witness)
+                self.assertEqual(changed.split("type routerVPNDesktopCONNECTExecutionConstruction")[0],
+                                 original.split("type routerVPNDesktopCONNECTExecutionConstruction")[0])
+            target.write_text(original.replace("c.self != c || ", ""))
+            with self.assertRaises(ValueError):
+                NODE.connect_execution_construction_mutants(source)
+
+
 class CandidateCommandVerdicts(unittest.TestCase):
     def test_complete_actual_owner_inventory_is_mandatory(self):
         self.assertEqual(len(NODE.CANDIDATE_COMMAND_VERDICTS), 12)

@@ -96,3 +96,80 @@ func TestRouterVPNDesktopNodeChainExecutionCommandRejectsSubstitution(t *testing
 		})
 	}
 }
+
+func TestRouterVPNDesktopCONNECTExecutionCommandExactTypedReplay(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		for _, execution := range []string{"server", "auto"} {
+			t.Run(target+"/"+execution, func(t *testing.T) {
+				prep := desktopCONNECTExecutionCommandPreparation(t, target, execution)
+				physical, err := prep.CONNECTDesktopPhysicalPolicy()
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, meta, _, err := physical.PhysicalReadValidated()
+				if err != nil {
+					t.Fatal(err)
+				}
+				files := desktopImportedCommandFiles(t, map[string]string{"node-chain-execution-source.json": prep.Source(), "sing-box.json": prep.Config()})
+				actual, err := routerVPNNodeChainExecutionCommandCapture(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256, prep.SourceSHA256(), target)
+				if err != nil || actual == nil || actual == prep || actual.Source() != prep.Source() || actual.Config() != prep.Config() || !actual.RequiresCONNECTExecutionObserver() {
+					t.Fatal("typed CONNECT execution could not replay its captured command", err)
+				}
+				if _, err := actual.DesktopPhysicalPolicy(); err == nil {
+					t.Fatal("CONNECT replay acquired ordinary paired physical authority")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopCONNECTExecutionCommandRefusesAmbiguousSource(t *testing.T) {
+	prep := desktopCONNECTExecutionCommandPreparation(t, "linux", "auto")
+	physical, _ := prep.CONNECTDesktopPhysicalPolicy()
+	_, meta, _, err := physical.PhysicalReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fault := range []string{"paired-parser", "local-connect", "duplicate-schema", "wrong-schema", "noncanonical-schema", "paired-source", "socks-source", "connect-source", "config", "source-digest", "physical-digest", "target"} {
+		t.Run(fault, func(t *testing.T) {
+			input, graph, source, physicalSource, target := prep.Source(), prep.Config(), prep.SourceSHA256(), meta.SourceSHA256, "linux"
+			extra := map[string]string{}
+			switch fault {
+			case "paired-parser":
+				other, _ := desktopExecutionCommandSource(t, "linux", "auto")
+				input = other.Source()
+			case "local-connect":
+				original, _ := physical.OriginalDesktopCONNECTPolicy()
+				input, err = original.LaunchInput()
+			case "duplicate-schema":
+				input = strings.Replace(input, "{", "{\"schema\":4,", 1)
+			case "wrong-schema":
+				input = strings.Replace(input, "\"schema\":4", "\"schema\":1", 1)
+			case "noncanonical-schema":
+				input = strings.Replace(input, "\"schema\":4", "\"schema\":4.0", 1)
+			case "paired-source":
+				extra["node-chain-source.json"] = "{}"
+			case "socks-source":
+				extra["node-chain-socks-source.json"] = "{}"
+			case "connect-source":
+				extra["node-chain-connect-source.json"] = "{}"
+			case "config":
+				graph += "\n"
+			case "source-digest":
+				source = strings.Repeat("e", 64)
+			case "physical-digest":
+				physicalSource = strings.Repeat("e", 64)
+			case "target":
+				target = "windows"
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			extra["node-chain-execution-source.json"], extra["sing-box.json"] = input, graph
+			files := desktopImportedCommandFiles(t, extra)
+			if _, err := routerVPNNodeChainExecutionCommandCapture(files, meta.SessionID, meta.ConfigSHA256, physicalSource, source, target); err == nil {
+				t.Fatal("CONNECT command admitted changed source or another authority")
+			}
+		})
+	}
+}

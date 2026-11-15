@@ -3022,3 +3022,85 @@ The two-file manifest SHA-256 is
 preimages, original-map causal result and complete executable evidence are
 in `darwin-execution-member-rows-validation`. No live PF configuration or
 private network was changed.
+
+## Desktop CONNECT execution retains concrete native host and child owners
+
+The previously published typed CONNECT execution preparation now reaches the
+actual desktop parent and generated child paths. The exact three-member
+WG/AWG -> HTTP(S) CONNECT -> paired Shadowsocks UoT-v2 graph retains its
+original source, credentials, selected DNS, preparation, physical policy,
+private workspace and owned process. The CONNECT execution wrapper remains
+a distinct concrete type; generic paired and Local CONNECT parsers do not
+acquire its authority. Entry Start Layers retain the existing supported
+capture; this execution family currently requires the final Start Layer Off.
+Longer CONNECT execution graphs remain outside this bounded unit.
+
+Linux and Windows now dispatch the concrete execution owner through their
+physical preparation and activation paths. Three parent integration guards
+previously assumed a paired policy: the Linux transaction, the Windows
+protection attempt selection, and the actual protection-begin transfer.
+Each now requires exactly one original paired or CONNECT policy and its
+exact retained pointer. Copied policies, omitted preparation, changed
+sources/processes, mixed families and cancelled admission still fail before
+they can acquire another owner's protection. The actual protection-begin
+regression also retains an ordinary paired positive case.
+
+The macOS parent and child retain their separately captured CONNECT
+execution owner through argv, inherited control, PF/utun preparation,
+readiness, restoration and retirement. Last restoration retains the proved
+Local/Server choice and original source instead of reranking Compare.
+Distinct typed adoption/Ready parsers and original physical-pointer checks
+remain required; descriptive metadata cannot replace native authority.
+The retained paired Last fixture uses an explicit concrete assertion after
+the common field became an interface, preserving its old assertions.
+
+Focused validation is complete for this unit:
+
+- 104 parent/protection run-and-pass records across eight bounded race
+  invocations, including all 36 target/base/protocol/execution combinations,
+  replacement refusals, Linux transaction ownership, Windows protection
+  selection/begin, and retained paired regressions. Windows/macOS target
+  fixtures here execute as source/ownership components on Linux.
+- 44 actual generated native-command race records passed: the 40 new typed
+  command/construction records plus four retained saved-choice records.
+  The new records are mandatory in two separate 90-second native gate
+  phases. The gate refuses omitted, duplicate, skipped and failed records.
+- Two compiled constructor mutations, removing the original construction
+  self check or original physical pointer check, each fail the intended
+  negative leaf. All 83 native-routing runner roots also pass.
+- The macOS integration passes 40 parent argv race records (20 new), 87
+  portable control records, eight compiled controls, the retained concrete
+  readiness-policy mutation, and 21 Python runner roots. Its mandatory
+  native lifecycle inventory now contains 261 command records and 45
+  controls, preserving the original deadlines and existing cases.
+- The actual generated Darwin ARM64 privileged controller and native child
+  cross-compile with the recorded tags. Their image SHA-256 values are
+  `3d164fa849b1a236f46f1fcaf9cf67f3b6f6a8d30792440b01888a792523da88`
+  and `1d2b68ce146c9782a252991ebcf8f4813dcfbdea72bf1c7413cd1f708fefaf4f`.
+
+The first aggregate parent run exceeded its 120-second alarm. The passing
+runs separate targets and ownership concerns without extending that alarm;
+the retained paired regression is explicitly selected in its own phase.
+The initial child compile exposed the old fixture accessor noted above;
+that failure and the corrected pass are separately recorded.
+
+The 45-file integration manifest SHA-256 is
+`5f2fb2539affc0a5fcccae74470d5a524c221ce5b66fa26d11ebaa8a18d95809`.
+The 29-file common host manifest is
+`39508fa1d853ac59043c0014dc262bbc5d4aa8672c40124837cb2880db53e383`;
+its complete validation receipt is
+`f33ac307b1972aa57dac478d4a22dd6896f9d1ff7c72f0afe1691c6ab525c1fe`.
+The separately frozen 16-file macOS manifest is
+`5d4be668eec2740a82c739e259e6b9b56d4678cc62a254f8a0deaf86c3a36db5`.
+Exact preimages, source overlays, attempt logs and receipts are preserved in
+`desktop-connect-execution-host-validation` and
+`connect-execution-darwin-validation`.
+
+These tests establish source integration and bounded component behavior.
+Canonical generated templates were projected over a retained prepared
+native dependency core; this is not a newly built whole bundle or an
+installed PF/WFP/utun/network acceptance claim. Public capability/UI/profile
+admission, actual installed encrypted CONNECT execution gates, exact-SHA
+native builds and release publication remain separate work. The current
+release's CONNECT server-peer readiness failure is under its own repair;
+this host unit does not claim that failure or the complete product is green.

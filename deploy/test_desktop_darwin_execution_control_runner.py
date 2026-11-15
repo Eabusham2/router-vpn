@@ -4,6 +4,7 @@ from pathlib import Path
 import importlib.util
 import json
 import unittest
+import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('execution_control',ROOT/'deploy/test_desktop_darwin_execution_control.py');G=importlib.util.module_from_spec(spec);spec.loader.exec_module(G)
 class ExecutionControlReceiptTests(unittest.TestCase):
@@ -17,7 +18,7 @@ class ExecutionControlReceiptTests(unittest.TestCase):
     def wire(self,rows):return '\n'.join(json.dumps(dict(Package=G.PACKAGE,**r))for r in rows)
     def test_actual_slash_name_has_no_fabricated_parent(self):
         self.assertEqual(G.require_pass(self.wire(self.rows),self.validator,self.cases),3)
-        self.assertEqual(sum(1+len(v)for v in G.CASES.values()),75)
+        self.assertEqual(sum(1+len(v)for v in G.CASES.values()),87)
     def test_omitted_duplicate_foreign_and_unjoined_events_refuse(self):
         for position in range(len(self.rows)):
             with self.subTest(missing=position),self.assertRaises(ValueError):G.require_pass(self.wire(self.rows[:position]+self.rows[position+1:]),self.validator,self.cases)
@@ -33,4 +34,20 @@ class ExecutionControlReceiptTests(unittest.TestCase):
             raw=(ROOT/'mobile/desktop'/(paths[name]+'.go.tmpl')).read_text()
             self.assertEqual(raw.count(before),1,label);self.assertNotEqual(before,after)
             root,leaf=witness.split('/',1);self.assertIn(leaf,G.CASES[root]);self.assertTrue(message)
+    def test_typed_source_projection_retains_actual_canonical_fixture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory=Path(temporary)/'actual'
+            records=G.prepare(directory)
+            fixture=(directory/'connect_policy_test.go').read_text()
+            shipping=(ROOT/'mobile/desktop/node_chain_connect_construction_test.go.tmpl').read_text()
+            for first,last in (('func desktopCONNECTCommandPolicy(', 'func TestRouterVPNDesktopCONNECTCommandExactSourceReplay'), ('func desktopCONNECTExecutionCommandPreparation(', '// Actual native option registries are used.')):
+                self.assertIn(G.project(G.section(shipping,first,last)),fixture)
+            self.assertEqual(records['mobile/desktop/node_chain_connect_construction_test.go.tmpl'],G.digest(ROOT/'mobile/desktop/node_chain_connect_construction_test.go.tmpl'))
+            self.assertEqual(records['mobile/desktop/external_test.go.tmpl'],G.digest(ROOT/'mobile/desktop/external_test.go.tmpl'))
+            self.assertIn('mobilemultihop.NewDesktopNodeChainCONNECTExecutionPreparation',fixture)
+            self.assertIn('nativecomposite.ValidateSSServiceCompanion',fixture)
+    def test_typed_controls_are_additive_and_exact(self):
+        self.assertEqual(len(G.CONTROLS),8)
+        selected=[control for control in G.CONTROLS if control[0].startswith('connect-')]
+        self.assertEqual({control[4] for control in selected},{'TestRouterVPNNodeChainCONNECTExecutionDarwinControl/foreign-prepare','TestRouterVPNNodeChainCONNECTExecutionDarwinControl/preparation'})
 if __name__=='__main__':unittest.main()

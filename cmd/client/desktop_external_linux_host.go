@@ -413,7 +413,7 @@ func newDesktopLinuxExternalTransactionWithStartup(startup context.Context, h *d
 }
 
 func (t *desktopLinuxNodeTransaction) validatePolicy() error {
-	if t.execution != nil && (t.chain == nil || t.socksChain != nil || t.connectChain != nil || t.candidatePrefix != nil || t.policy != nil || t.imported != nil || t.external != nil) {
+	if t.execution != nil && (desktopNodeChainConcretePolicyCount(t.chain, t.socksChain, t.connectChain) != 1 || t.socksChain != nil || t.candidatePrefix != nil || t.policy != nil || t.imported != nil || t.external != nil) {
 		return errors.New("Linux execution transaction mixed its original concrete source")
 	}
 	if t.candidatePrefix != nil {
@@ -439,7 +439,7 @@ func (t *desktopLinuxNodeTransaction) validatePolicy() error {
 		if t.execution != nil {
 			original = t.execution.original
 			if original == nil || original.platform == nil || original.platform.host == nil || original.capture == nil ||
-				original.capture.sources != t.chainSources || original.policy != t.chain || original.platform.host.process != t.process ||
+				original.capture.sources != t.chainSources || original.policy != t.chain || original.socksPolicy != t.socksChain || original.connectPolicy != t.connectChain || original.platform.host.process != t.process ||
 				t.execution.bound(original.platform.host.launch) != nil {
 				return errors.New("Linux execution transaction replaced its retained launch, process or source")
 			}
