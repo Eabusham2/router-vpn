@@ -222,6 +222,7 @@ func macOSControllerFixtureChild() error {
 	if handled, err := macOSCandidatePrefixNativeController(owned); handled {
 		return err
 	}
+	if handled, err := macOSImportedExecutionNativeController(owned); handled { return err }
 	if handled, err := macOSNodeChainNativeController(owned); handled {
 		return err
 	}

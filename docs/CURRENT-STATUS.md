@@ -26,8 +26,8 @@ with fresh ownership and proof. It does not run a new comparison. Existing
 paired execution remains covered by its original ownership tests. The longer
 Local Shadowsocks composition below remains separate: hostname imports,
 longer imported chains and other imported protocols do not acquire Server or
-Compare from this change. macOS public execution composition remains an open
-platform requirement.
+Compare from this change. The separate bounded macOS composition is described
+below; it does not widen these graph or source limits.
 
 The required native component gate checks adoption, physical-policy
 construction, restoration and altered-source refusals on supported Windows
@@ -38,6 +38,40 @@ using the shipping worker, independent SS2022 peers, selected DNS and joined
 retirement. Local race/source evidence, hosted kernel evidence, exact-SHA
 publication and physical-device acceptance remain distinct in the
 [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md).
+
+### macOS imported Shadowsocks Server/Compare
+
+The AppKit editor and public controller now have a separate capability for
+Server or Compare on an exact literal-address SS2022 trio: one paired WG,
+AWG Fast or AWG Strong entry, one imported middle and one independent paired
+SS2022 final. Both paired nodes must capture Start Layer Off or its empty
+default. The original imported protocol/method/key, endpoint, private node
+references and complete source remain mandatory. Broader paired Darwin
+execution, layered trios, hostname or longer Server paths and other imported
+families remain separate requirements.
+
+The AppKit Connect path rechecks current capabilities and the original profile
+tokens. Complete-profile Add/Update/Load keeps the execution choice and private
+node references without automatically connecting. The controller uses the
+existing retained Darwin execution preparation, inherited child, native policy
+owner and selected proof. Speed Lab restoration retains the already-proved
+Local or Server result with fresh process and reader ownership instead of
+running Compare again.
+
+Both Intel and Apple Silicon installed acceptance jobs are mandatory before
+release publication. Thirteen actual native cases cover Server and both
+Compare winners for WG/AWG, wrong imported public proof, wrong final proof,
+failed selected DNS and source replacement. They require encrypted provider
+counters, the intended proof boundary, retained-choice restoration and joined
+native/relay cleanup. The sealed bundle, private worker, generated relay IPC,
+controller, source and receipts must keep their exact identities. The test's
+HTTP administration and direct worker launcher are explicit fixture boundaries;
+these results cannot establish a private remote deployment.
+
+Portable source, AppKit and alias/peer ownership checks are distinct from the
+actual Darwin PF/utun results. Read the exact-commit installed receipts before
+claiming native acceptance. Physical-device networking, Apple signing and
+private deployment still require their own evidence.
 
 ### Longer Local imported Shadowsocks 2022 paths
 
@@ -59,8 +93,8 @@ Source identity, cancellation and restoration remain tied to the original
 connection owner.
 
 The shared engine's existing literal three-node Server/Compare and candidate
-capabilities remain separate. The subsequent bounded Windows/Linux admission
-is described above; this Local extension grants neither capability to
+capabilities remain separate. The separate bounded desktop admissions
+are described above; this Local extension grants neither capability to
 longer imports. Multiple imports, arbitrary
 imported positions and the other requested graph families remain unfinished.
 MTU/layer capacity must fit the actual captured path; admitting eight members

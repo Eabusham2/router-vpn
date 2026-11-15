@@ -37,20 +37,23 @@ def standalone_concurrency_group(source, *, event, ref, run):
 def workflow_inventory(consumer, wrapper):
     """Bound the two small checked-in workflows without an optional YAML parser."""
     for source in (consumer, wrapper):
-        if not isinstance(source, str) or len(source) > 16384 or re.search(r'^\s*(?:if|continue-on-error|inputs|workflow_run):', source, re.M):
+        if not isinstance(source, str) or len(source) > 16384 or re.search(r"^\s*(?:(?:if|continue-on-error|inputs|workflow_run)\s*:|[\'\"][^\n]*[\'\"]\s*:)", source, re.M):
             raise ValueError('Ordered native workflow became conditional or caller-replaceable')
         if source.count('jobs:\n') != 1 or source.count('  cancel-in-progress: true') != 1:
             raise ValueError('Ordered native workflow lost its exact job/concurrency boundary')
     if consumer.count('on:\n  workflow_call:\n') != 1 or re.search(r'^  (?:workflow_dispatch|push|pull_request):', consumer, re.M):
         raise ValueError('Ordered host consumer must use this caller run without optional inputs')
-    if re.findall(r'^  ([A-Za-z][\w-]*):', consumer.split('jobs:\n')[1], re.M) != ['host', 'paired-host']:
+    if re.findall(r'^  ([A-Za-z][\w-]*):', consumer.split('jobs:\n')[1], re.M) != ['host', 'paired-host', 'imported-execution-host']:
         raise ValueError('Ordered host consumer changed its complete job inventory')
     paired = G.load('ordered_paired_host_workflow', 'test_darwin_paired_host_workflow.py')
     try:
         paired.check(consumer, (ROOT/'.github/workflows/release-candidate.yml').read_text(),
                      (ROOT/'deploy/build-native-runtime.py').read_text())
+        imported = G.load('ordered_imported_execution_workflow', 'test_darwin_imported_execution_workflow.py')
+        imported.check(consumer, (ROOT/'.github/workflows/release-candidate.yml').read_text(),
+                       (ROOT/'deploy/build-native-runtime.py').read_text())
     except (AssertionError, ValueError, IndexError) as error:
-        raise ValueError('Installed paired host lost its own exact artifact and execution boundary') from error
+        raise ValueError('Installed host lost its own exact artifact and execution boundary') from error
     # Each job must satisfy its own architecture, bundle and native-command
     # boundaries. The paired job cannot supply a missing ordered-host token.
     consumer = consumer.split('\n  paired-host:\n', 1)[0] + '\n'
@@ -593,6 +596,9 @@ class OrderedNativeWorkflows(unittest.TestCase):
             ('      fail-fast: false', '      fail-fast: true'),
             ('  host:\n', '  host:\n    if: false\n'),
             ('  host:\n', '  host:\n    continue-on-error: true\n'),
+            ('  host:\n', "  host:\n    'if': false\n"),
+            ('  host:\n', '  host:\n    "continue-on-error": true\n'),
+            ('  host:\n', '  host:\n    "\\x69f": false\n'),
             ('  workflow_call:\n', '  workflow_call:\n    inputs:\n'),
             ('-${{ github.sha }}-${{ github.run_id }}', ''),
             ('          name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-${{ github.sha }}', '          name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-other'),
@@ -614,7 +620,9 @@ class OrderedNativeWorkflows(unittest.TestCase):
                 workflow_inventory(ordered.replace(before, after, 1)+'\n  paired-host:\n'+paired, self.wrapper)
 
     def test_paired_job_cannot_borrow_ordered_architecture_bundle_or_execution(self):
-        ordered, paired = self.consumer.split('\n  paired-host:\n', 1)
+        match = re.search(r'(?ms)^  paired-host:\n.*?(?=^  [A-Za-z][\w-]*:\n|\Z)', self.consumer)
+        self.assertIsNotNone(match)
+        paired = match[0]
         changes = (
             ('          - arch: arm64\n            runner: macos-15\n', ''),
             ('          path: ${{ runner.temp }}/paired-host-bundle',
@@ -625,8 +633,8 @@ class OrderedNativeWorkflows(unittest.TestCase):
         for before, after in changes:
             self.assertEqual(paired.count(before), 1)
             with self.subTest(change=before), self.assertRaises(ValueError):
-                workflow_inventory(ordered+'\n  paired-host:\n'+paired.replace(before, after, 1), self.wrapper)
-        for changed in (ordered+'\n', self.consumer+'\n  paired-host:\n'+paired):
+                workflow_inventory(self.consumer.replace(paired, paired.replace(before, after, 1), 1), self.wrapper)
+        for changed in (self.consumer.replace(paired, '', 1), self.consumer+'\n'+paired):
             with self.assertRaises(ValueError):
                 workflow_inventory(changed, self.wrapper)
 

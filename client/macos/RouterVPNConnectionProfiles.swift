@@ -38,6 +38,31 @@ enum RouterVPNOrderedNodes {
     static func importedMiddle(_ profile: [String: Any]) -> Bool {
         importedMiddleMode(profile) != nil
     }
+    // This is a presentation capability, never native source authority. The
+    // controller rechecks the original private members and preparation receipt.
+    static func importedExecutionTrio(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
+        guard rows.count == 3, prefixModes.contains(rows[0]["mode"] ?? ""),
+              rows[1]["mode"] == "shadowsocks", rows[2]["mode"] == "shadowsocks" else { return false }
+        var members = [[String: Any]]()
+        for row in rows {
+            let matches = profiles.filter { $0["id"] as? String == row["id"] }
+            guard matches.count == 1 else { return false }
+            members.append(matches[0])
+        }
+        // Darwin's independently proved execution carrier currently admits
+        // unlayered original paired entry/final members only.
+        for paired in [members[0], members[2]] {
+            if let raw = paired["start_layer"] {
+                guard let layer = raw as? String, ["", "off"].contains(layer) else { return false }
+            }
+        }
+        guard finalProfile(members[0], mode: "shadowsocks"), finalProfile(members[2], mode: "shadowsocks"),
+              importedMiddleMode(members[1]) == "shadowsocks",
+              let external = members[1]["external"] as? [String: Any],
+              let permitted = external["ordered_execution_middle_supported"] as? NSNumber,
+              CFGetTypeID(permitted) == CFBooleanGetTypeID(), permitted.boolValue else { return false }
+        return true
+    }
     static func modeName(_ mode: String) -> String {
         switch mode {
         case "wg": return "WireGuard"
@@ -87,7 +112,7 @@ enum RouterVPNOrderedNodes {
             let matches = profiles.filter { $0["id"] as? String == id }
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
-            guard importedMode == nil || selection.execution == "local" else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
+            guard importedMode == nil || selection.execution == "local" || importedExecutionTrio(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
             guard importedMode != nil ? importedPosition(importedMode!, position: position, count: rows.count) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!)) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 requires StartLayer Off.") }
@@ -127,6 +152,7 @@ struct RouterVPNOrderedNodeDraft {
     let candidates: [String]
     let importedIDs: Set<String>
     let importedModes: [String: String]
+    let capturedCatalog: [[String: Any]]
     let finalModes: [String]
     let execution: String
     private(set) var finalMode: String
@@ -135,6 +161,7 @@ struct RouterVPNOrderedNodeDraft {
 
     init(selection: RouterVPNConnectionProfileSelection, generation: UUID, catalog: [[String: Any]]) throws {
         control = selection.selectedNodeID; self.generation = generation
+        capturedCatalog = catalog
         execution = selection.orderedNodes.isEmpty && selection.execution.isEmpty ? "local" : selection.execution
         guard ["local", "server", "auto"].contains(execution) else { throw RouterVPNOrderedNodes.issue("Choose Local, Server or Compare for the complete ordered path.") }
         var names: [String: String] = [:], tokens: [String: String] = [:]
@@ -207,7 +234,7 @@ struct RouterVPNOrderedNodeDraft {
     }
     func selection() throws -> RouterVPNConnectionProfileSelection {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
-        guard execution == "local" || !prefixes.contains(where: importedIDs.contains) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
+        guard execution == "local" || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionTrio(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
             guard importedIDs.contains(id) ? RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("One imported Shadowsocks 2022, SOCKS5, CONNECT or OpenVPN node must immediately precede the Shadowsocks 2022 exit after one to six paired prefixes.") }
         }
@@ -298,13 +325,15 @@ extension ProductWindowController {
             defer { DispatchQueue.main.async { self.stopCapturedComparisonProgress(orderedProgressOwner) } }
             try self.requireMutationIdle("starting the captured ordered path")
             let capabilities = try self.api.json("/api/multihop/status", timeout: 5) as? [String: Any] ?? [:]
-            guard let enabled = capabilities["ordered_nodes_supported"] as? NSNumber,
-                  CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
-                  let executions = capabilities["ordered_executions"] as? [String], executions.contains(selection.execution) else {
-                throw RouterVPNOrderedNodes.issue("This controller has not enabled the selected ordered execution on this device.")
-            }
             let current = try self.api.json("/api/profiles", timeout: 5) as? [String: Any] ?? [:]
             let body = try RouterVPNOrderedNodes.connectBody(selection, current: current)
+            let importedTrio = RouterVPNOrderedNodes.importedExecutionTrio(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
+            let executionCapability = importedTrio && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions"
+            guard let enabled = capabilities["ordered_nodes_supported"] as? NSNumber,
+                  CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
+                  let executions = capabilities[executionCapability] as? [String], executions.contains(selection.execution) else {
+                throw RouterVPNOrderedNodes.issue("This controller has not enabled the selected ordered execution on this device.")
+            }
             guard DispatchQueue.main.sync(execute: {
                 self.connectionProfileSelectionGeneration == generation && self.captureConnectionProfileSelection() == selection
             }) else {

@@ -461,6 +461,16 @@ SWIFT_ORDERED = r'''
     fixtureDefaults.set(finalMode, forKey: macConnectionModeKey)
     return rows
 }
+@MainActor func chooseImportedExecution(_ requested: String, prefix: String = "wg") -> RouterVPNConnectionProfileSelection {
+    _ = chooseOrdered(3, prefixMode: prefix)
+    owner.profiles[1]["node_kind"] = "external"
+    owner.profiles[1]["external"] = ["protocol": "shadowsocks", "ordered_middle_supported": true, "ordered_execution_middle_supported": true]
+    owner.connectionProfileSelection?.orderedNodes[1]["mode"] = "shadowsocks"
+    owner.multihopExecutionPopup.selectItem(at: requested == "server" ? 1 : 2)
+    owner.api.orderedCapabilities = ["ordered_nodes_supported": true, "ordered_executions": ["local"], "ordered_imported_trio_executions": ["local", "server", "auto"]]
+    owner.api.orderedCurrent = ["selected_id": "ordered-2", "profiles": owner.profiles]
+    return owner.captureConnectionProfileSelection()
+}
 @MainActor func verifyOrderedSnapshot(_ body: [String: Any], rows: [[String: String]], updating: Bool, execution: String = "local") {
     var keys = Set(["expected_selected_node_id", "expected_profile_tokens", "name", "mode", "custom_layers", "multihop_enabled", "multihop_nodes", "multihop_execution"])
     if updating { keys.insert("id") }
@@ -707,6 +717,81 @@ rejects({ _ = try customDraft.selection() }, "custom source became physical entr
 customCatalog[1]["profile_token"] = String(repeating: "f", count: 64)
 rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["selected_id": customBase.selectedNodeID, "profiles": customCatalog]) }, "relinked custom middle retained permission")
 
+// Darwin has a separate exact-trio capability. Its generic paired capability
+// stays Local, and a changed catalog cannot borrow the earlier public hint.
+for requested in ["server", "auto"] { for prefix in ["wg", "awg2-fast", "awg2-strong"] {
+    let original = chooseImportedExecution(requested, prefix: prefix)
+    do {
+        let draft = try owner.makeOrderedNodeDraft()
+        check(try draft.selection() == original, "imported execution draft changed original trio or choice")
+    } catch { check(false, "imported execution draft lost exact native capability") }
+    let before = owner.api.calls.count
+    owner.connectMultihop()
+    check(!DispatchQueue.background.pending.isEmpty, "imported execution did not use separate exact-trio capability")
+    DispatchQueue.background.run()
+    check(owner.api.calls.count == before + 1 && owner.api.calls.last!.body["execution"] as? String == requested && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes,
+          "imported execution did not use separate exact-trio capability")
+    DispatchQueue.main.run(); DispatchQueue.clear()
+} }
+for capability in [NSNull(), false, 1, "true"] as [Any] {
+    let original = chooseImportedExecution("server")
+    var catalog = owner.profiles
+    var middle = catalog[1]["external"] as! [String: Any]
+    middle["ordered_execution_middle_supported"] = capability; catalog[1]["external"] = middle
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(original, current: ["selected_id": original.selectedNodeID, "profiles": catalog]) }, "imported execution accepted absent or nonboolean member capability")
+    rejects({ _ = try RouterVPNOrderedNodeDraft(selection: original, generation: UUID(), catalog: catalog) }, "imported execution draft accepted absent or nonboolean member capability")
+}
+for position in [0, 2] {
+    for layer in ["aes", "salamander", "OFF", true, NSNull()] as [Any] {
+        let original = chooseImportedExecution("auto")
+        var catalog = owner.profiles; catalog[position]["start_layer"] = layer
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(original, current: ["selected_id": original.selectedNodeID, "profiles": catalog]) }, "Darwin imported execution accepted layered or malformed paired member")
+        rejects({ _ = try RouterVPNOrderedNodeDraft(selection: original, generation: UUID(), catalog: catalog) }, "Darwin imported execution draft accepted layered or malformed paired member")
+    }
+    for layer in ["", "off"] {
+        let original = chooseImportedExecution("auto")
+        var catalog = owner.profiles; catalog[position]["start_layer"] = layer
+        check(try RouterVPNOrderedNodes.connectBody(original, current: ["selected_id": original.selectedNodeID, "profiles": catalog])["execution"] as? String == "auto", "Darwin imported execution lost original unlayered member")
+    }
+}
+for fault in ["missing", "wrong-type", "local-only", "paired-only", "stale-middle", "stale-token", "changed-owner"] {
+    _ = chooseImportedExecution("server")
+    if fault == "missing" { owner.api.orderedCapabilities.removeValue(forKey: "ordered_imported_trio_executions") }
+    if fault == "wrong-type" { owner.api.orderedCapabilities["ordered_imported_trio_executions"] = "server" }
+    if fault == "local-only" { owner.api.orderedCapabilities["ordered_imported_trio_executions"] = ["local"] }
+    if fault == "paired-only" { owner.api.orderedCapabilities.removeValue(forKey: "ordered_imported_trio_executions"); owner.api.orderedCapabilities["ordered_executions"] = ["local", "server", "auto"] }
+    if fault == "stale-middle" || fault == "stale-token" {
+        var changed = owner.profiles
+        if fault == "stale-middle" { var external = changed[1]["external"] as! [String: Any]; external["ordered_execution_middle_supported"] = false; changed[1]["external"] = external }
+        if fault == "stale-token" { changed[1]["profile_token"] = String(repeating: "f", count: 64) }
+        owner.api.orderedCurrent["profiles"] = changed
+    }
+    if fault == "changed-owner" { owner.api.afterOrderedSnapshot = { owner.connectionProfileSelectionGeneration = UUID() } }
+    let before = owner.api.calls.count
+    owner.connectMultihop(); DispatchQueue.background.run()
+    check(owner.api.calls.count == before, "imported execution dispatched after capability or owner change: " + fault)
+    DispatchQueue.clear()
+}
+for fault in ["paired", "long", "other-import", "entry-import", "final-import"] {
+    _ = chooseImportedExecution("auto")
+    if fault == "long" {
+        _ = chooseOrdered(4); owner.multihopExecutionPopup.selectItem(at: 2)
+        owner.connectionProfileSelection?.orderedNodes[2]["mode"] = "shadowsocks"
+        owner.profiles[2]["node_kind"] = "external"
+        owner.profiles[2]["external"] = ["protocol": "shadowsocks", "ordered_middle_supported": true, "ordered_execution_middle_supported": true]
+    }
+    if fault == "paired" { owner.profiles[1].removeValue(forKey: "external"); owner.profiles[1]["node_kind"] = "router-vpn"; owner.connectionProfileSelection?.orderedNodes[1]["mode"] = "wg" }
+    if fault == "other-import" { owner.connectionProfileSelection?.orderedNodes[1]["mode"] = "socks5"; owner.profiles[1]["external"] = ["protocol": "socks5", "ordered_middle_supported": true, "ordered_execution_middle_supported": true] }
+    if fault == "entry-import" || fault == "final-import" { let index = fault == "entry-import" ? 0 : 2; owner.profiles[index]["external"] = owner.profiles[1]["external"]; owner.profiles[index]["node_kind"] = "external" }
+    owner.api.orderedCapabilities = ["ordered_nodes_supported": true, "ordered_executions": ["local"], "ordered_imported_trio_executions": ["local", "server", "auto"]]
+    owner.api.orderedCurrent = ["selected_id": owner.captureConnectionProfileSelection().selectedNodeID, "profiles": owner.profiles]
+    let before = owner.api.calls.count
+    owner.connectMultihop()
+    if !DispatchQueue.background.pending.isEmpty { DispatchQueue.background.run() }
+    check(owner.api.calls.count == before, "imported execution capability escaped exact trio: " + fault)
+    DispatchQueue.clear()
+}
+
 // Typed imported-middle protocols remain distinct across editor and public
 // save/load receipts; the native schema and all credentials stay in the controller.
 for middleMode in ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"] { for prefixMode in ["wg", "awg2-fast", "awg2-strong"] {
@@ -880,6 +965,19 @@ SWIFT_SETUP = r'''
         else { _ = try settings.write(path: "/api/connection-profile/setup/" + operation, updating: operation == "update") }
     }
 }
+for manager in [true, false] { for requested in ["server", "auto"] { for prefix in ["wg", "awg2-fast", "awg2-strong"] { for operation in ["save", "update", "load"] {
+    _ = setupRows(3)
+    let original = chooseImportedExecution(requested, prefix: prefix), rows = original.orderedNodes
+    let api = manager ? owner.api : settings.api
+    api.loaded = setupLoaded(rows, tokens: original.profileTokens)
+    api.loaded["multihop_execution"] = requested
+    let before = api.calls.count
+    try setupAction(manager, operation)
+    check(api.calls.count == before + 1 && !api.calls.last!.path.contains("multihop/connect"), "imported complete-profile action auto-connected or duplicated request")
+    let restored = owner.captureConnectionProfileSelection()
+    check(restored.orderedNodes == rows && restored.execution == requested && restored.profileTokens == original.profileTokens, "imported complete-profile action changed captured source or execution")
+    if operation != "load" { verifyOrderedSnapshot(api.calls.last!.body, rows: rows, updating: operation == "update", execution: requested) }
+} } } }
 for manager in [true, false] {
     for finalMode in ["shadowsocks", "hysteria2"] { for count in [2, 3, 4, 8] { for operation in ["save", "update", "load"] {
         let rows = setupRows(count, finalMode: finalMode), original = owner.captureConnectionProfileSelection()
@@ -1321,11 +1419,20 @@ def macos(directory):
     }
     for name, (old, new, _) in connect_variants.items():
         variants[name] = replace_once(source, old, new)
+    imported_execution_variants = {
+        "imported-execution-layer": ('guard let layer = raw as? String, ["", "off"].contains(layer) else { return false }', 'guard let layer = raw as? String, !layer.isEmpty || layer.isEmpty else { return false }', "Darwin imported execution accepted layered or malformed paired member"),
+        "imported-execution-boolean": ('CFGetTypeID(permitted) == CFBooleanGetTypeID(), permitted.boolValue', 'permitted.boolValue', "imported execution accepted absent or nonboolean member capability"),
+        "imported-execution-live-capability": ('capabilities[executionCapability] as? [String]', 'capabilities["ordered_executions"] as? [String]', "imported execution did not use separate exact-trio capability"),
+        "imported-execution-draft": (' || RouterVPNOrderedNodes.importedExecutionTrio(ordered, profiles: capturedCatalog)', '', "imported execution draft lost exact native capability"),
+        "imported-execution-body": (' || importedExecutionTrio(rows, profiles: profiles)', '', "imported execution did not use separate exact-trio capability"),
+    }
+    for name, (old, new, _) in imported_execution_variants.items():
+        variants[name] = replace_once(source, old, new)
     for name, program in variants.items():
         path, binary = directory / (name + ".swift"), directory / name
         path.write_text(program, encoding="utf-8")
         run(["swiftc", "-swift-version", "6", "-module-cache-path", str(directory / "swift-module-cache"), str(path), "-o", str(binary)])
-        run([str(binary)], negative=name != "shipping", witness=(execution_variants.get(name) or setup_variants.get(name) or final_variants.get(name) or socks_variants.get(name) or connect_variants.get(name) or (None, None, None))[2])
+        run([str(binary)], negative=name != "shipping", witness=(execution_variants.get(name) or setup_variants.get(name) or final_variants.get(name) or socks_variants.get(name) or connect_variants.get(name) or imported_execution_variants.get(name) or (None, None, None))[2])
         if name != "shipping": print("PASS causal AppKit " + name, flush=True)
     print(f"AppKit capture, refresh ownership, relink and post-response idle negatives: {len(variants) - 1} rejected")
 

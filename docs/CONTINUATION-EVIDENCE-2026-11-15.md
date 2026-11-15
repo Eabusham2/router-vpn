@@ -2494,3 +2494,112 @@ claimed. Both hosted Linux architectures must execute the corrected matrix
 at the new published SHA. No production policy, transport or DNS code changed.
 The exact host logs, source/driver identities and causal evidence remain in
 `release-98dfdab7-audit` and `imported-server-lan-validation`.
+
+
+## Published LAN repair: actual ARM64 Server acceptance
+
+At published `e486f928f0608bf412349ed5ace1fbd0816646aa` (tree
+`3dee7dc4027a1ebc17f1592554c71661ce40675b`), authoritative job `132912356228`
+completed the actual ARM64 encrypted Server acceptance. Artifact `14175320305`
+retains all fourteen original cases and all eight imported cases. Independent
+verification matched the eight strict imported log blocks to their receipts
+and checked the five acceptance-source files against this exact published
+source. The downloaded artifact SHA-256 is
+`94d5df00ff973a13997b4dec9345c9c5d7ab15bac0cf6799481817e7e94efdc7`.
+
+The original positive reached Ready and selected DNS and transferred one
+private UDP packet/reply. The active-UDP cleanup case recorded two packets,
+one reply and joined both original processes. The LAN-Off case remained Ready
+with selected DNS but refused private UDP, with zero sink packets/replies.
+All five authentication/DNS negatives stayed unready and joined. This closes
+the recorded ARM64 fixture failure at that SHA. AMD64, desktop public Compare,
+other native hosts, publication and private networking remain independent
+questions. Logs, receipts and source verification are retained in
+`release-e486f928-audit`.
+
+
+## Bounded macOS imported-trio public Server and Compare
+
+This extends the original external-node/execution and complete-profile scope,
+without replacing the original requirement ledger. The source shape is the
+same literal schema-2 trio already admitted on Windows/Linux: one paired
+WG/AWG entry, an independently captured imported SS2022 middle and a paired
+SS2022 final. The new Darwin admission additionally requires Start Layer Off
+(or its empty default) on the two paired members. The broad paired-platform
+predicate remains unchanged. Hostnames, longer Server paths, layered Darwin
+trios and other imported execution families remain open requirements.
+
+The native capability is separate in the public status response. AppKit
+selects it only for that complete captured trio and rechecks fresh status,
+strict public booleans and original profile tokens at Connect. Saved-profile
+Add/Update/Load retains the execution choice and source references; loading
+does not initiate a connection. The actual shared controller prepares the
+retained Darwin execution owner before changing the running connection.
+Temporary Speed Lab restoration uses the captured winning execution with new
+process/reader ownership and does not run an unrelated comparison.
+
+The source gate executes the actual catalog, WG/AWG assets, SS2022 compiler,
+Darwin policy projection and retained preparation. All forty exact records
+passed on Linux AMD64 with the race detector, including eighteen mode/cipher/
+execution combinations, nineteen bounded-source refusals and actual public
+capability response. The 140.973-second invocation includes compilation;
+its source inputs stayed unchanged and its log SHA-256 is
+`24640ea0ec5869d812d59afa666452d33fb38532b64fd1cb5497cbc083fff09e`.
+This is source/policy execution, not a Darwin kernel test. All fifteen related
+shipping-audit roots passed; their changed-helper, original-source, distinct
+capability and mutation controls are structural evidence only.
+
+The actual Swift callback/model gate passed 8,463 checks and fifty causal
+controls. It preserves complete-profile transactions and fresh capability/
+token rejection. The alias gate compiles the original inventory, attempted
+mutation, context-aware lock and cleanup bodies with explicit interface and
+ifconfig adapters. Its fourteen exact run/pass records, five causal controls
+and eleven parser tests passed. Causal outputs must identify the exact
+selected root/leaf as well as their sole intended assertion. An initial
+no-tests positive was rejected by the completed strict inventory and is not
+counted as evidence. These portable gates claim no rendered AppKit, native
+aliases or actual PF/utun operation.
+
+The final privileged controller and peer compile for Darwin ARM64 with CGO
+disabled; this verifies types, not a native kernel. The controller image is
+`21841a447919f50dd9d34699ab89aa2fd169cc6715307365926a8bdff446e329`
+and the peer image is
+`ade48ff2b227a7d3e07b921d4acf3301da17524e45d46e1df794eb7059125a4a`.
+The Linux race peer also compiles, with image
+`13c2ed9de781bc6490b4c1463768b8ec71d1329b2671cec4d793b6646c9df9c6`.
+Peer compilation reuses the retained prepared SS core with two explicit,
+registered source overlays; it is not described as a fresh full preparation.
+The actual preparer writer/idempotence and fifteen strict host-runner roots
+passed. Extracted peer Close passed three positive cases and three causal controls,
+including retry after a bounded join and refusal of an absent joined receipt.
+The HTTP administration shutdown retains its original Serve outcome behind
+a closed channel. Repeated cleanup obeys the original context and cannot hang
+by consuming a one-shot result; an unexpected or missing outcome remains a
+failure on every attempt.
+Partial peer/controller startup retains original ownership before fallible
+handshakes; failed joins cannot authorize alias deletion.
+
+The mandatory installed workflow adds a third independent job for both native
+Darwin architectures; the original ordered and paired jobs remain intact.
+It consumes only this caller's exact-SHA sealed bundle and emits its own
+required receipt. Thirteen native cases preserve the original 240-second Go
+and 250-second process bounds, separately from compiler/source/cleanup stages.
+Positive and negative receipts require actual encrypted-provider counters,
+selected proof boundaries, public Connect, fresh-reader restoration where
+applicable, and joined controller/relay/alias retirement. The HTTP admin
+authentication and direct worker launch remain explicit test adapters; the
+original shipping lease method, Manager, IPC/sequence/Stop/rooted cleanup and
+portable encrypted worker execute behind them.
+
+All sixteen workflow-contract roots passed. Missing, duplicate, optional,
+foreign-architecture, cross-run artifact, filtered-native-command and missing
+receipt changes are rejected. Quoted or YAML-escaped optional keys cannot
+bypass these exact contracts. The native build input set includes the new
+controller/helper, both gates and runners, source projection and all four
+original router-agent source files; it also preserves the prior Windows/Linux
+controller gate. Hosted exact-SHA execution and release publication must still
+be checked after this change is pushed. No private router/server deployment,
+physical-device acceptance or Apple signing is established here. Frozen source
+and detailed receipts are in `darwin-imported-admission-validation`,
+`darwin-imported-appkit-validation`, `darwin-imported-execution-validation`
+and `macos-imported-alias-validation`.

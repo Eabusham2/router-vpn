@@ -32,6 +32,7 @@ MTU = load('prepare-mobile-mtu')
 STRATEGY = load('prepare-mobile-strategy')
 NODE_CHAIN = load('prepare-mobile-node-chain')
 CONNECT = load('prepare-mobile-connect')
+IMPORTED_EXECUTION_TEST = load('prepare-desktop-imported-execution-test')
 NODE_EXECUTION = tuple(load(name) for name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution', 'prepare-node-chain-execution-owner'))
 DAEMON_CAPTURE = load('prepare-mobile-node-chain-execution')
 DAEMON_CAPTURE_TEMPLATES = {
@@ -163,6 +164,7 @@ BOX_TEMPLATES = {
     'tor_plain_box_test.go.tmpl': 'routervpn_desktop_tor_plain_box_test.go',
 }
 PEER_TEMPLATES = {
+    'node_chain_imported_execution_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_execution_peer_test.go',
     'node_peer_network_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_network_test.go',
     'node_external_amnezia_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_amnezia_installed_test.go',
     'node_imported_router_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_router_entry_test.go',
@@ -335,7 +337,7 @@ def darwin_node_chain_peer_copies():
 
 
 def inputs():
-    files = [Path(__file__).resolve(), Path(DAEMON_CAPTURE.__file__).resolve(),
+    files = [Path(__file__).resolve(), Path(DAEMON_CAPTURE.__file__).resolve(), *IMPORTED_EXECUTION_TEST.inputs(),
              *(ROOT/'mobile/chain_execution'/name for name in DAEMON_CAPTURE_TEMPLATES),
              *(path for module in NODE_EXECUTION for path in module.inputs()), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *CONNECT.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
@@ -927,7 +929,9 @@ def copy_encrypted_peer_templates(vendor):
     for name, relative in PEER_TEMPLATES.items():
         path = ROOT/'mobile/desktop'/name
         prefix = b'package routervpnamnezia\n'
-        if name in ('node_peer_windows_test.go.tmpl', 'node_layer_peer_windows_test.go.tmpl', 'node_xray_peer_windows_test.go.tmpl', 'node_naive_peer_windows_test.go.tmpl', 'node_composite_peer_windows_test.go.tmpl'):
+        if name == 'node_chain_imported_execution_peer_test.go.tmpl':
+            prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_node_chain)\n\n' + prefix
+        elif name in ('node_peer_windows_test.go.tmpl', 'node_layer_peer_windows_test.go.tmpl', 'node_xray_peer_windows_test.go.tmpl', 'node_naive_peer_windows_test.go.tmpl', 'node_composite_peer_windows_test.go.tmpl'):
             prefix = b'//go:build windows && routervpn_windows_node_composition\n\n' + prefix
         elif name == 'node_naive_h3_literal_test.go.tmpl':
             prefix = b'//go:build with_naive_outbound\n\n' + prefix
@@ -961,6 +965,8 @@ def copy_encrypted_peer_templates(vendor):
             raise ValueError('Desktop encrypted peer test changed its test-only package or platform: ' + name)
         write(vendor, relative, raw)
 
+    for relative, raw in IMPORTED_EXECUTION_TEST.copies().items():
+        write(vendor, relative, raw)
     for relative, raw in darwin_node_chain_peer_copies().items():
         write(vendor, relative, raw)
 

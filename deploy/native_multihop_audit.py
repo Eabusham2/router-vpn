@@ -1081,12 +1081,14 @@ def native_multihop_execution_product(read) -> bool:
     This guard does not establish native execution. It keeps the actual public
     adapter, complete selection, pre-Stop preparation, child-selected proof and
     original retirement owner connected while native tests supply that evidence.
-    Ordinary Darwin admission cannot grant this separate capability.
+    Ordinary Darwin admission cannot grant this separate capability. Imported
+    Darwin trios have their own exact source and Start Layer admission.
     """
     if not callable(read):
         return False
     product_path = "cmd/client/desktop_node_chain_execution_product.go"
     imported_path = "cmd/client/desktop_node_chain_imported_execution.go"
+    platform_path = "cmd/client/desktop_node_chain_imported_execution_platform.go"
     product = _tokens(read(product_path))
     expected = (
         (imported_path, "func desktopNodeChainImportedExecutionMiddle(profile common.RouterProfile) bool", '''
@@ -1132,6 +1134,34 @@ if nativeDesktopOrderedExecutionPlatformSupported() {
     return []string{"local", "server", "auto"}
 }
 return []string{"local"}
+        '''),
+        (platform_path, "func nativeDesktopImportedTrioExecutionPlatformSupported() bool", '''
+return nativeDesktopOrderedExecutionPlatformSupported() ||
+    retainedNativeMultihopSelected() && runtime.GOOS == "darwin" &&
+        (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64")
+        '''),
+        (platform_path, "func desktopImportedTrioExecutionChoices() []string", '''
+if nativeDesktopImportedTrioExecutionPlatformSupported() {
+    return []string{"local", "server", "auto"}
+}
+return []string{"local"}
+        '''),
+        (platform_path, "func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", '''
+if requested != "server" && requested != "auto" || len(members) != 3 ||
+    !desktopNodeChainImportedExecutionMiddle(members[1].Profile) ||
+    desktopOrderedExecutionMembers(members, requested) != nil {
+    return false
+}
+for _, index := range []int{0, 2} {
+    layer := members[index].Profile.StartLayer
+    if layer != "" && layer != "off" { return false }
+}
+return true
+        '''),
+        (platform_path, "func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNodeChainMember, requested string) bool", '''
+if nativeDesktopOrderedExecutionPlatformSupported() { return true }
+return runtime.GOOS == "darwin" && nativeDesktopImportedTrioExecutionPlatformSupported() &&
+    desktopDarwinImportedTrioExecutionMembers(members, requested)
         '''),
         (product_path, "func validDesktopOrderedExecution(value string) bool", '''
 return value == "local" || value == "server" || value == "auto"
@@ -1225,6 +1255,18 @@ return ctx.Err()
         if _function(_tokens(read(path)), declaration) != _tokens(body):
             return False
 
+    status = _function(_tokens(read("cmd/client/multihop_native_routes.go")),
+        "func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request)")
+    if not _ordered_once(status,
+        '"ordered_executions": desktopOrderedExecutionChoices(),',
+        '"ordered_imported_trio_executions": desktopImportedTrioExecutionChoices(),'):
+        return False
+    public_profile = _function(_tokens(read("cmd/client/profile_public_view.go")),
+        "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile")
+    if not _ordered_once(public_profile,
+        'OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p),'):
+        return False
+
     handler = _function(_tokens(read("cmd/client/multihop_native_routes.go")),
         "func (a *app) nativeMultihopConnectOwned(w http.ResponseWriter, r *http.Request, driver nativeMultihopConnectRuntime)")
     if not _ordered_once(handler,
@@ -1255,7 +1297,7 @@ return }''',
         "driver := desktopOrderedExecutionRuntime{capture: captureNativeMultihopForAppContext, prepare: prepareDesktopOrderedExecutionSession}",
         "if modeled != nil { driver = *modeled }",
         "if driver.capture == nil || driver.prepare == nil { return nil, errors.New(\"ordered execution lost its concrete native adapter\") }",
-        '''if ctx == nil || a.checkCapturedConnectionOperation(ctx) != nil || !nativeDesktopOrderedExecutionPlatformSupported() || requested == "local" {
+        '''if ctx == nil || a.checkCapturedConnectionOperation(ctx) != nil || !nativeDesktopOrderedExecutionSelectionPlatformSupported(selection.Nodes, requested) || requested == "local" {
             return nil, errors.New("ordered execution has no original admitted connection operation")
         }''',
         "if err := desktopOrderedExecutionSelection(nodeChainSelectedReferences(selection.Nodes), requested); err != nil { return nil, err }",

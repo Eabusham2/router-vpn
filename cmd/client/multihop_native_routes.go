@@ -151,6 +151,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"ordered_prefix_modes":       []string{"wg", "awg2-fast", "awg2-strong"},
 		"ordered_exit_modes":         []string{"shadowsocks", "hysteria2"},
 		"ordered_executions":         desktopOrderedExecutionChoices(),
+		"ordered_imported_trio_executions": desktopImportedTrioExecutionChoices(),
 		"ordered_max_nodes":          common.MultihopMaximumNodes,
 		"entry_id":                   entryID,
 		"exit_id":                    exitID,

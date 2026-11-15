@@ -579,7 +579,7 @@ class NativeShippingAuditTests(unittest.TestCase):
         for before, after in (
             ("capture: captureNativeMultihopForAppContext", "capture: unownedNativeCapture"),
             ("prepare: prepareDesktopOrderedExecutionSession", "prepare: openAndStartDesktopOrderedExecutionSession"),
-            ("!nativeDesktopOrderedExecutionPlatformSupported()", "!nativeNodeChainPlatformSupported()"),
+            ("!nativeDesktopOrderedExecutionSelectionPlatformSupported(selection.Nodes, requested)", "!nativeNodeChainPlatformSupported()"),
             ("desktopOrderedExecutionMembers(selection.Nodes, requested)", "desktopOrderedExecutionMembers(selection.Nodes, \"local\")"),
             ("desktopOrderedExecutionMembers(selection.Nodes, requested)", "error(nil)"),
             ("desktopOrderedExecutionPreparations.Load(a)", "desktopOrderedExecutionPreparations.Load(other)"),
@@ -662,6 +662,58 @@ class NativeShippingAuditTests(unittest.TestCase):
         for declaration in (
             "func desktopNodeChainImportedExecutionMiddle(profile common.RouterProfile) bool",
             "func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error",
+        ):
+            with self.subTest(declaration=declaration):
+                self.changes.clear()
+                self.changes[path] = self.body(path) + "\n" + declaration + " {}\n"
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_execution_darwin_imported_capability_keeps_original_bounded_source(self):
+        path = "cmd/client/desktop_node_chain_imported_execution_platform.go"
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        for declaration, before, after in (
+            ("func nativeDesktopImportedTrioExecutionPlatformSupported() bool", 'retainedNativeMultihopSelected()', 'true'),
+            ("func nativeDesktopImportedTrioExecutionPlatformSupported() bool", 'runtime.GOOS == "darwin"', 'true'),
+            ("func nativeDesktopImportedTrioExecutionPlatformSupported() bool", '(runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64")', 'true'),
+            ("func desktopImportedTrioExecutionChoices() []string", 'nativeDesktopImportedTrioExecutionPlatformSupported()', 'nativeDesktopOrderedExecutionPlatformSupported()'),
+            ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'requested != "server" && requested != "auto"', 'false'),
+            ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'len(members) != 3', 'false'),
+            ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", '!desktopNodeChainImportedExecutionMiddle(members[1].Profile)', 'false'),
+            ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'desktopOrderedExecutionMembers(members, requested) != nil', 'false'),
+            ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", '[]int{0, 2}', '[]int{0}'),
+            ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'layer != "" && layer != "off"', 'false'),
+            ("func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNodeChainMember, requested string) bool", 'nativeDesktopOrderedExecutionPlatformSupported()', 'nativeNodeChainPlatformSupported()'),
+            ("func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNodeChainMember, requested string) bool", 'desktopDarwinImportedTrioExecutionMembers(members, requested)', 'true'),
+        ):
+            with self.subTest(declaration=declaration, before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_execution_imported_capability_cannot_replace_paired_status_or_source_hint(self):
+        status = "cmd/client/multihop_native_routes.go"
+        profile = "cmd/client/profile_public_view.go"
+        for path, declaration, before, after in (
+            (status, "func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request)", 'desktopOrderedExecutionChoices()', 'desktopImportedTrioExecutionChoices()'),
+            (status, "func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request)", 'desktopImportedTrioExecutionChoices()', 'desktopOrderedExecutionChoices()'),
+            (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'nativeDesktopImportedTrioExecutionPlatformSupported()', 'true'),
+            (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'desktopNodeChainImportedExecutionMiddle(p)', 'true'),
+        ):
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_execution_darwin_imported_helpers_require_unique_real_functions(self):
+        path = "cmd/client/desktop_node_chain_imported_execution_platform.go"
+        for declaration in (
+            "func nativeDesktopImportedTrioExecutionPlatformSupported() bool",
+            "func desktopImportedTrioExecutionChoices() []string",
+            "func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool",
+            "func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNodeChainMember, requested string) bool",
         ):
             with self.subTest(declaration=declaration):
                 self.changes.clear()

@@ -165,7 +165,7 @@ func (a *app) connectDesktopOrderedExecutionWithRuntime(ctx context.Context, sel
 	if driver.capture == nil || driver.prepare == nil {
 		return nil, errors.New("ordered execution lost its concrete native adapter")
 	}
-	if ctx == nil || a.checkCapturedConnectionOperation(ctx) != nil || !nativeDesktopOrderedExecutionPlatformSupported() || requested == "local" {
+	if ctx == nil || a.checkCapturedConnectionOperation(ctx) != nil || !nativeDesktopOrderedExecutionSelectionPlatformSupported(selection.Nodes, requested) || requested == "local" {
 		return nil, errors.New("ordered execution has no original admitted connection operation")
 	}
 	if err := desktopOrderedExecutionSelection(nodeChainSelectedReferences(selection.Nodes), requested); err != nil {

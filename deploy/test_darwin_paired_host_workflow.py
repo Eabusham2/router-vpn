@@ -27,7 +27,7 @@ def unique_job(source, name):
 
 def check(source, release, builder):
     job = unique_job(source, "paired-host")
-    if re.search(r"(?m)^\s+(?:if|continue-on-error):", job):
+    if re.search(r"(?m)^\s+(?:(?:if|continue-on-error)\s*:|[\'\"][^\n]*[\'\"]\s*:)", job):
         raise AssertionError("paired host cannot be conditional or nonblocking")
     header, steps = job.split("    steps:\n", 1)
     expected_matrix = """    runs-on: ${{ matrix.runner }}
@@ -77,7 +77,7 @@ def check(source, release, builder):
           retention-days: 14""":
         raise AssertionError("paired host receipt must be required and distinct from ordered evidence")
     call = unique_job(release, "darwin-ordered-host")
-    if "    needs: native-runtimes\n" not in call or "    uses: ./" + WORKFLOW not in call or re.search(r"(?m)^\s+(?:if|continue-on-error):", call):
+    if "    needs: native-runtimes\n" not in call or "    uses: ./" + WORKFLOW not in call or re.search(r"(?m)^\s+(?:(?:if|continue-on-error)\s*:|[\'\"][^\n]*[\'\"]\s*:)", call):
         raise AssertionError("paired host lost its authoritative current-run producer dependency")
     aggregate = unique_job(release, "aggregate")
     needs = re.search(r"(?m)^    needs: \[([^\n]+)\]$", aggregate)
@@ -104,8 +104,9 @@ class PairedHostWorkflowTests(unittest.TestCase):
             self.source.replace("  paired-host:\n", "  paired-host:\n    if: false\n", 1),
             self.source.replace("  paired-host:\n", "  paired-host:\n    continue-on-error: true\n", 1),
             self.source.replace("  paired-host:\n", "  paired-host:\n    runs-on: ubuntu-latest\n", 1),
-            self.source.rsplit("          - arch: arm64\n            runner: macos-15\n", 1)[0] +
-                self.source.rsplit("          - arch: arm64\n            runner: macos-15\n", 1)[1],
+            self.source.replace("  paired-host:\n" + unique_job(self.source, "paired-host"),
+                "  paired-host:\n" + unique_job(self.source, "paired-host").replace(
+                    "          - arch: arm64\n            runner: macos-15\n", "", 1), 1),
         ):
             with self.subTest(changed=changed[-200:]), self.assertRaises(AssertionError):
                 check(changed, self.release, self.builder)
@@ -132,6 +133,13 @@ class PairedHostWorkflowTests(unittest.TestCase):
             check(self.source, self.release.replace(marker, "    uses: ./" + WORKFLOW, 1), self.builder)
         with self.assertRaises(AssertionError):
             check(self.source, self.release.replace(", darwin-ordered-host,", ", omitted-host,", 1), self.builder)
+
+    def test_quoted_optional_keys_cannot_bypass_required_paired_host(self):
+        for key in ("'if'", '"continue-on-error"', '"\\x69f"'):
+            with self.subTest(key=key, location="native"), self.assertRaises(AssertionError):
+                check(self.source.replace("  paired-host:\n", "  paired-host:\n    " + key + ": false\n", 1), self.release, self.builder)
+            with self.subTest(key=key, location="caller"), self.assertRaises(AssertionError):
+                check(self.source, self.release.replace("  darwin-ordered-host:\n", "  darwin-ordered-host:\n    " + key + ": false\n", 1), self.builder)
 
 
 if __name__ == "__main__":
