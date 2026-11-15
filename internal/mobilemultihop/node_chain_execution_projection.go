@@ -101,7 +101,7 @@ func newNodeChainExecutionPreparationCaptured(localSource, execution string, des
 }
 
 func newNodeChainExecutionPreparationFamily(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, typedDesktop ...*nodeChainCONNECTExecutionDesktop) (*NodeChainExecutionPreparation, error) {
-	if socks != nil && (connect != nil || desktop != nil || mobile != nil || len(typedDesktop) != 0) {
+	if socks != nil && (connect != nil || desktop != nil || len(typedDesktop) != 0 || mobile != nil && (mobile.socks == nil || mobile.connect != nil)) {
 		return nil, nodeChainExecutionError
 	}
 	if len(typedDesktop) > 1 || len(typedDesktop) == 1 && (typedDesktop[0] == nil || connect == nil || desktop != nil || mobile != nil) {

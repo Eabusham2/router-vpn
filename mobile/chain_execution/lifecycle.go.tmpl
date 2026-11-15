@@ -46,6 +46,7 @@ type routerNodeChainExecutionControllerRef struct {
 type RouterNodeChainExecution struct {
 	prep           *mobilemultihop.NodeChainExecutionPreparation
 	connectServer  atomic.Pointer[routerNodeCONNECTExecutionServerOwner]
+	socksServer    atomic.Pointer[routerNodeSOCKSExecutionServerOwner]
 	mu             sync.Mutex
 	started        bool
 	retired        atomic.Bool
@@ -104,6 +105,9 @@ func (m *RouterNodeChainExecution) bindNativeContext(ctx context.Context, server
 	defer m.mu.Unlock()
 	if m.started || m.state.Load() != nil || m.native.Load() != nil {
 		return errRouterNodeChainExecution
+	}
+	if err := m.requireSOCKSServer(ctx, server); err != nil {
+		return err
 	}
 	if err := m.requireCONNECTServer(ctx, server); err != nil {
 		return err
@@ -226,7 +230,9 @@ func (m *RouterNodeChainExecution) runWithFactory(server *CommandServer, factory
 			return err
 		}
 		var original *mobilemultihop.NodeChainExecutionPolicy
-		if m.prep.RequiresCONNECTExecutionObserver() {
+		if m.prep.RequiresSOCKSExecutionObserver() {
+			original, err = m.restore.mobile.OriginalSOCKSPolicyContext(startup)
+		} else if m.prep.RequiresCONNECTExecutionObserver() {
 			original, err = m.restore.mobile.OriginalCONNECTPolicyContext(startup)
 		} else {
 			original, err = mobilemultihop.NewNodeChainExecutionPolicy(source)
@@ -376,6 +382,9 @@ func (m *RouterNodeChainExecution) nativeCurrent(ctx context.Context, state *rou
 		state.server == nil || state.server.ctx == nil || state.server.ctx.Err() != nil || state.service == nil || state.server.StartedService != state.service || state.instance == nil || state.box == nil || state.instance.Box() != state.box {
 		return errRouterNodeChainExecution
 	}
+	if err := m.requireSOCKSServer(ctx, state.server); err != nil {
+		return err
+	}
 	if err := m.requireCONNECTServer(ctx, state.server); err != nil {
 		return err
 	}
@@ -487,6 +496,9 @@ func (m *RouterNodeChainExecution) closeContext(ctx context.Context) error {
 		}
 	}
 	if state == nil {
+		if err := m.closeSOCKSCapture(ctx); err != nil {
+			return err
+		}
 		if err := m.closeCONNECTCapture(ctx); err != nil {
 			return err
 		}
@@ -524,6 +536,9 @@ func (m *RouterNodeChainExecution) closeContext(ctx context.Context) error {
 		if err := engine.value.RetireContext(ctx); err != nil {
 			return err
 		}
+	}
+	if err := m.closeSOCKSCapture(ctx); err != nil {
+		return err
 	}
 	if err := m.closeCONNECTCapture(ctx); err != nil {
 		return err

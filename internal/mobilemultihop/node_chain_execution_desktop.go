@@ -223,6 +223,9 @@ func (p *DesktopNodeChainExecutionPhysicalPolicy) PhysicalReadValidated() (strin
 }
 
 func (p *NodeChainExecutionPreparation) bindProjectedExecution(policy *NodeChainExecutionPolicy) (*NodeChainExecutionProjection, error) {
+	if p.mobile != nil && p.mobile.socks != nil {
+		return p.bindSOCKSMobileProjected(policy)
+	}
 	if p.mobile != nil && p.mobile.connect != nil {
 		return p.bindCONNECTMobileProjected(policy)
 	}

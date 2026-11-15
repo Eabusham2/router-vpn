@@ -31,6 +31,18 @@ class Runner(unittest.TestCase):
     def test_complete_exact_two_packages(self):
         self.assertEqual(len(self.check(self.events())),2*sum(map(len,G.inventory().values())))
 
+    def test_typed_socks_roots_and_factory_control_are_mandatory(self):
+        roots = {'TestRouterNodeChainExecutionBridgeSOCKS'+name for name in (
+            'OriginalSource', 'OriginalFactory', 'LastRetainsChoiceWithoutProof')}
+        self.assertTrue(roots.issubset(G.inventory()['experimental/libbox']))
+        self.assertEqual(sum(control[0] == 'typed original SOCKS construction'
+                             for control in G.CONTROLS), 1)
+        for root in roots:
+            events = [event for event in self.events()
+                      if event.get('Test', '').split('/')[0] != root]
+            with self.subTest(root=root), self.assertRaises(ValueError):
+                self.check(events)
+
     def test_execution_latency_bridge_roots_cannot_be_omitted(self):
         roots = {'TestRouterNodeChainExecutionBridgeLatency'+name for name in (
             'RequiresOriginalAssociation', 'RejectsUncapturedSharedService', 'CallerBounds',

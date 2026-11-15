@@ -25,6 +25,9 @@ func (m *nodeChainExecutionMobileProjection) config() string {
 	if m == nil || m.chain == nil {
 		return ""
 	}
+	if m.socks != nil {
+		return m.socks.config
+	}
 	if m.connect != nil {
 		return m.connect.config
 	}

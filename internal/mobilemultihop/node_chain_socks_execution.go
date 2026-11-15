@@ -47,7 +47,10 @@ func ParseNodeChainSOCKSExecutionPreparation(input string) (*NodeChainExecutionP
 	return p, nil
 }
 func (b *nodeChainSOCKSExecutionBinding) validate(p *NodeChainExecutionPreparation, local *NodeChain) error {
-	if b == nil || b.self != b || b.preparation != p || b.local != local || p == nil || p.socks != b || p.connect != nil || local == nil || b.source == nil || local.socksSource != b.source || local.connectSource != nil || len(local.nodes) != 3 || p.desktop != nil || p.mobile != nil || p.source.Schema != 3 || p.source.LocalSource != b.source.sourceJSON || p.source.Desktop != nil || p.source.DesktopCONNECT != nil || p.source.DesktopLast != "" || b.source.desktop != nil {
+	if b == nil || b.self != b || b.preparation != p || b.local != local || p == nil || p.socks != b || p.connect != nil || local == nil || b.source == nil || local.socksSource != b.source || local.connectSource != nil || len(local.nodes) != 3 || p.desktop != nil || p.source.Schema != 3 || p.source.LocalSource != b.source.sourceJSON || p.source.Desktop != nil || p.source.DesktopCONNECT != nil || p.source.DesktopLast != "" || b.source.desktop != nil {
+		return nodeChainExecutionError
+	}
+	if p.mobile != nil && (p.mobile.socks == nil || p.mobile.socks.validate(p) != nil) {
 		return nodeChainExecutionError
 	}
 	if _, _, err := b.source.ReadValidated(); err != nil || local.validateSOCKSSource() != nil {

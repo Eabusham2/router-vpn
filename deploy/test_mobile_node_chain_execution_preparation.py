@@ -70,6 +70,30 @@ class Preparation(unittest.TestCase):
                 self.prepare(vendor, '0'*40)
             self.assertFalse((vendor/P.OWNER).exists())
 
+    def test_socks_upgrade_requires_the_complete_owned_pair(self):
+        socks = {P.TEMPLATES[name] for name in ('socks.go.tmpl', 'socks_test.go.tmpl')}
+        connect = {P.TEMPLATES[name] for name in ('connect.go.tmpl', 'connect_test.go.tmpl')}
+        cases = ((socks, True), (socks | connect, True),
+                 ({sorted(socks)[0]}, False), ({sorted(socks)[1]}, False),
+                 (socks | {sorted(connect)[0]}, False))
+        for removed, accepted in cases:
+            with self.subTest(removed=removed), tempfile.TemporaryDirectory() as parent:
+                vendor = self.fixture(parent)
+                self.prepare(vendor)
+                record = json.loads((vendor/P.OWNER).read_bytes())
+                for relative in removed:
+                    del record['files'][relative]
+                    (vendor/relative).unlink()
+                (vendor/P.OWNER).write_text(json.dumps(record))
+                before = {str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
+                if accepted:
+                    self.prepare(vendor)
+                    self.assertEqual(set(json.loads((vendor/P.OWNER).read_bytes())['files']), set(P.TEMPLATES.values()))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'ownership inventory'):
+                        self.prepare(vendor)
+                    self.assertEqual(before, {str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
+
     def test_latency_upgrade_requires_both_owned_templates_and_original_bridge(self):
         latency = {'experimental/libbox/routervpn_node_chain_execution_latency.go',
                    'experimental/libbox/routervpn_node_chain_execution_latency_test.go'}

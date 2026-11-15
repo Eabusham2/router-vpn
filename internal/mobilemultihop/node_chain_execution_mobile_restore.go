@@ -14,10 +14,14 @@ type nodeChainExecutionMobileProjection struct {
 	executionSource string
 	readback        NodeChainExecutionTUNReadback
 	connect         *nodeChainCONNECTExecutionMobileRestore
+	socks           *nodeChainSOCKSExecutionMobileRestore
 }
 
 func (p *NodeChainExecutionPreparation) validateMobileCapture() error {
 	m := p.mobile
+	if m != nil && m.socks != nil {
+		return m.socks.validate(p)
+	}
 	if m != nil && m.connect != nil {
 		return m.connect.validate(p)
 	}
@@ -130,6 +134,9 @@ func (c NodeChainExecutionMobileRestoreCapture) NewPreparationContext(ctx contex
 		return nil, err
 	}
 	p := c.restore.projection
+	if p.preparation.socks != nil {
+		return c.newSOCKSPreparationContext(ctx)
+	}
 	if p.preparation.connect != nil {
 		return c.newCONNECTPreparationContext(ctx)
 	}

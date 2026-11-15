@@ -1,0 +1,186 @@
+package libbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	"github.com/sagernet/sing/service"
+)
+
+const routerNodeChainSOCKSExecutionLaunchKind = "routervpn-node-chain-socks-execution-preparation-input"
+
+type routerNodeSOCKSExecutionServerKey struct{}
+type routerNodeSOCKSExecutionServerOwner struct {
+	self        *routerNodeSOCKSExecutionServerOwner
+	plan        *RouterNodeChainExecution
+	preparation *mobilemultihop.NodeChainExecutionPreparation
+	source      *mobilemultihop.NodeChainSOCKSSource
+	capture     *ownedSOCKS.Capture
+	registry    *outbound.Registry
+	server      *CommandServer
+	started     *daemon.StartedService
+}
+
+// This distinct parser constructs the original typed source once. Generic
+// execution and generic NodeChain parsers continue to reject schema three.
+func NewRouterNodeChainSOCKSExecution(localSource, execution string) (*RouterNodeChainExecution, error) {
+	original, err := mobilemultihop.NewNodeChainSOCKSSource(localSource)
+	if err != nil {
+		return nil, err
+	}
+	prep, err := mobilemultihop.NewNodeChainSOCKSExecutionPreparation(original, execution)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterNodeChainExecution{prep: prep}, nil
+}
+func NewRouterNodeChainSOCKSExecutionLaunch(input string) (*RouterNodeChainExecution, error) {
+	if len(input) == 0 || len(input) > mobilemultihop.NodeChainInputLimit {
+		return nil, errRouterNodeChainExecution
+	}
+	var launch routerNodeChainExecutionLaunch
+	if json.Unmarshal([]byte(input), &launch) != nil || launch.Kind != routerNodeChainSOCKSExecutionLaunchKind || (launch.Schema != 1 && launch.Schema != 2) {
+		return nil, errRouterNodeChainExecution
+	}
+	prep, err := mobilemultihop.ParseNodeChainSOCKSExecutionPreparation(launch.Source)
+	if err != nil {
+		return nil, err
+	}
+	m := &RouterNodeChainExecution{prep: prep}
+	if m.SourceSHA256() != launch.SourceSHA256 || m.ConfigSHA256() != launch.ConfigSHA256 {
+		return nil, errRouterNodeChainExecution
+	}
+	if launch.Schema == 2 {
+		last, e := mobilemultihop.ParseNodeChainExecutionLast(launch.Last, prep)
+		if e != nil {
+			return nil, e
+		}
+		m.last = &last
+	} else if launch.Last != "" {
+		return nil, errRouterNodeChainExecution
+	}
+	canonical, err := m.LaunchInput()
+	if err != nil || canonical != input {
+		return nil, errRouterNodeChainExecution
+	}
+	return m, nil
+}
+func RouterNodeChainSOCKSExecutionFromLast(localSource, execution, lastJSON string) (*RouterNodeChainExecution, error) {
+	m, err := NewRouterNodeChainSOCKSExecution(localSource, execution)
+	if err != nil {
+		return nil, err
+	}
+	last, err := mobilemultihop.ParseNodeChainExecutionLast(lastJSON, m.prep)
+	if err != nil {
+		return nil, err
+	}
+	m.last = &last
+	return m, nil
+}
+
+// The typed execution plan creates the exact caller-local registry and binds
+// the preparation before the host receives an otherwise ordinary CommandServer.
+// The host must retain this returned handle, BindNative, then Start it.
+func (m *RouterNodeChainExecution) newSOCKSCommandServer(handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if m == nil || m.prep == nil || handler == nil || platform == nil || !m.prep.RequiresSOCKSExecutionObserver() {
+		return nil, errRouterNodeChainExecution
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	if m.retired.Load() || m.started || m.native.Load() != nil || m.state.Load() != nil || m.socksServer.Load() != nil || m.connectServer.Load() != nil {
+		return nil, errRouterNodeChainExecution
+	}
+	source, err := m.prep.OriginalSOCKSSource()
+	if err != nil {
+		return nil, err
+	}
+	native := baseContext(platform)
+	capture, err := ownedSOCKS.NewCapture(native, source)
+	if err != nil {
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = capture.CloseContext(ctx)
+		}
+	}()
+	registry := include.OutboundRegistry()
+	if err = capture.Register(registry); err != nil {
+		return nil, err
+	}
+	native = capture.Context()
+	native = service.ContextWith[option.OutboundOptionsRegistry](native, registry)
+	native = service.ContextWith[adapter.OutboundRegistry](native, registry)
+	native, err = box.RouterVPNNodeSOCKSExecutionContext(native, m.prep, capture)
+	if err != nil {
+		return nil, err
+	}
+	owner := &routerNodeSOCKSExecutionServerOwner{plan: m, preparation: m.prep, source: source, capture: capture, registry: registry}
+	owner.self = owner
+	native = context.WithValue(native, routerNodeSOCKSExecutionServerKey{}, owner)
+	server := newCommandServerWithContext(handler, platform, native)
+	owner.server, owner.started = server, server.StartedService
+	m.socksServer.Store(owner)
+	success = true
+	return server, nil
+}
+func RouterNodeChainSOCKSExecutionNewCommandServer(m *RouterNodeChainExecution, handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+	if m == nil {
+		return nil, errRouterNodeChainExecution
+	}
+	return m.newSOCKSCommandServer(handler, platform)
+}
+func (m *RouterNodeChainExecution) requireSOCKSServer(ctx context.Context, server *CommandServer) error {
+	if m == nil || ctx == nil || ctx.Err() != nil {
+		return errRouterNodeChainExecution
+	}
+	if m.prep == nil {
+		if m.socksServer.Load() != nil {
+			return errRouterNodeChainExecution
+		}
+		return nil // Existing untyped instance readback grants no preparation authority.
+	}
+	if !m.prep.RequiresSOCKSExecutionObserver() {
+		if m.socksServer.Load() != nil {
+			return errRouterNodeChainExecution
+		}
+		return nil
+	}
+	owner := m.socksServer.Load()
+	if owner == nil || owner.self != owner || owner.plan != m || owner.preparation != m.prep || server == nil || server.ctx == nil || owner.server != server || owner.started == nil || server.StartedService != owner.started || server.ctx.Value(routerNodeSOCKSExecutionServerKey{}) != owner || service.FromContext[adapter.OutboundRegistry](server.ctx) != owner.registry || service.FromContext[option.OutboundOptionsRegistry](server.ctx) != owner.registry {
+		return errRouterNodeChainExecution
+	}
+	original, err := m.prep.OriginalSOCKSSource()
+	if err != nil || original != owner.source {
+		return errors.Join(err, errRouterNodeChainExecution)
+	}
+	return owner.capture.RequireOriginalContext(server.ctx, original)
+}
+
+// Cleanup retains the captured owner after source/lifetime revocation. Failure
+// leaves the execution unjoined and permits only retry of this same capture.
+func (m *RouterNodeChainExecution) closeSOCKSCapture(ctx context.Context) error {
+	owner := m.socksServer.Load()
+	if owner == nil {
+		return ctx.Err()
+	}
+	if owner.self != owner || owner.plan != m || owner.preparation != m.prep || owner.capture == nil {
+		return errRouterNodeChainExecution
+	}
+	return owner.capture.CloseContext(ctx)
+}

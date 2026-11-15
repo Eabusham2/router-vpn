@@ -183,6 +183,13 @@ for header in headers:
         'FOUNDATION_EXPORT LibboxCommandServer* _Nullable LibboxRouterNodeChainCONNECTExecutionNewCommandServer(LibboxRouterNodeChainExecution* _Nullable m, id<LibboxCommandServerHandler> _Nullable handler, id<LibboxPlatformInterface> _Nullable platform, NSError* _Nullable* _Nullable error);',
     ):
         assert signature in content, 'CONNECT execution original-owner ABI changed: '+signature
+    for signature in (
+        'FOUNDATION_EXPORT LibboxRouterNodeChainExecution* _Nullable LibboxNewRouterNodeChainSOCKSExecution(NSString* _Nullable localSource, NSString* _Nullable execution, NSError* _Nullable* _Nullable error);',
+        'FOUNDATION_EXPORT LibboxRouterNodeChainExecution* _Nullable LibboxNewRouterNodeChainSOCKSExecutionLaunch(NSString* _Nullable input, NSError* _Nullable* _Nullable error);',
+        'FOUNDATION_EXPORT LibboxRouterNodeChainExecution* _Nullable LibboxRouterNodeChainSOCKSExecutionFromLast(NSString* _Nullable localSource, NSString* _Nullable execution, NSString* _Nullable lastJSON, NSError* _Nullable* _Nullable error);',
+        'FOUNDATION_EXPORT LibboxCommandServer* _Nullable LibboxRouterNodeChainSOCKSExecutionNewCommandServer(LibboxRouterNodeChainExecution* _Nullable m, id<LibboxCommandServerHandler> _Nullable handler, id<LibboxPlatformInterface> _Nullable platform, NSError* _Nullable* _Nullable error);',
+    ):
+        assert signature in content, 'SOCKS execution original-owner ABI changed: '+signature
     # PREFIX_PREPARATION_ABI_BEGIN
     for signature in (
         'FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxNewRouterNodeChainCandidatePreparation(NSString* _Nullable source, int32_t prefixPosition, NSString* _Nullable inventory, NSError* _Nullable* _Nullable error);',

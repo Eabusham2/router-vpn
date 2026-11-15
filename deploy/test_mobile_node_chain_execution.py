@@ -99,6 +99,7 @@ def verdict(raw, code, expected):
 
 
 CONTROLS = (
+    ('typed original SOCKS construction', 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go', '\tif err := m.requireSOCKSServer(ctx, server); err != nil {\n\t\treturn err\n\t}', '', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeSOCKSOriginalFactory/ordinary-server', 'ordinary service borrowed typed factory'),
     ('typed original CONNECT construction', 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go', '\tif err := m.requireCONNECTServer(ctx, server); err != nil {\n\t\treturn err\n\t}', '', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeCONNECTOriginalFactory/ordinary-server', 'ordinary service borrowed typed factory'),
     ('restore original Instance join', 'experimental/libbox/routervpn_node_chain_execution_restore.go', '\tif err := c.owner.nativeClosedContext(ctx); err != nil {\n\t\treturn err\n\t}', '\t// Original instance join intentionally omitted.', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeRestoreRequiresOriginalNativeJoin', 'restore used shared close without original native join'),
     ('exact Last capture controller', 'experimental/libbox/routervpn_node_chain_execution_last.go', ' || state.controller.Load() != controller', '', 'experimental/libbox', 'TestRouterNodeChainExecutionBridgeLastCaptureKeepsController/replacement', 'Last capture borrowed successor controller'),
