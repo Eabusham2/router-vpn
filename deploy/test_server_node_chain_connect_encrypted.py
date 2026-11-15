@@ -32,6 +32,30 @@ FAULTS=('original','wrong-middle-key','wrong-final-key','wrong-final-identity','
 CASES=tuple(protocol+'/'+fault for protocol in PROTOCOLS for fault in FAULTS)+('https-connect/wrong-proxy-name',)
 FIELDS={'case','protocol','capture_sha256','source_sha256','ready','selected_dns','middle_tcp','middle_udp','final_tcp','final_udp','retired','worker_joined','peer_joined','private_udp_refused','private_sink_packets','private_sink_replies','middle_auth','tls_refused'}
 
+PROVIDER='TestRouterVPNDesktopNodeChainCONNECTServerFinalUoT'
+def check_provider(output):
+    expected={PROVIDER,*(PROVIDER+'/'+protocol for protocol in PROTOCOLS)}
+    runs=set();passes=set();terminal=False
+    for line in output.splitlines():
+        text=line.strip()
+        if not text:continue
+        run=re.fullmatch(r'=== RUN\s+(\S+)',text)
+        passed=re.fullmatch(r'--- PASS: (\S+) \([0-9.]+s\)',text)
+        if run:
+            name=run[1]
+            if terminal or PROVIDER in passes or name not in expected or name in runs or name!=PROVIDER and PROVIDER not in runs:raise ValueError('Foreign/late provider run')
+            runs.add(name)
+        elif passed:
+            name=passed[1]
+            if terminal or name not in runs or name in passes or name==PROVIDER and passes!=expected-{PROVIDER}:raise ValueError('Unmatched provider pass')
+            passes.add(name)
+        elif text=='PASS':
+            if terminal or runs!=expected or passes!=expected:raise ValueError('Incomplete provider verdict')
+            terminal=True
+        else:raise ValueError('Unexpected provider output')
+    if not terminal or runs!=expected or passes!=expected:raise ValueError('Missing provider verdict')
+    return list(PROTOCOLS)
+
 def unique_object(rows):
     result={}
     for key,value in rows:
@@ -138,6 +162,8 @@ def execute(core,go='go',*,env=None,receipt=None,compile_only=False):
         BASE.run([compiler,'test','-c',*flags,'-o',driver,'./cmd/sing-box'],cwd=core,env=captured,timeout=600)
         images={role:BASE.image_identity(path) for role,path in (('driver',driver),('peer',peer),('worker',worker))}
         if checked_sources(core)[1]!=before:raise ValueError('CONNECT source changed during compilation')
+        provider=BASE.run([peer,'-test.run=^'+PROVIDER+'$','-test.v','-test.count=1','-test.timeout=30s'],cwd=core,env=captured,timeout=45)
+        provider_protocols=check_provider(provider);print(provider,end='')
         source=BASE.run([driver,'-test.run=^'+SOURCE+'$','-test.v','-test.count=1','-test.timeout=60s'],cwd=core,env=captured,timeout=75)
         check_verdict(source,source_only=True);print(source,end='')
         original_source=BASE.run([driver,'-test.run=^'+BASE.SOURCE+'$','-test.v','-test.count=1','-test.timeout=60s'],cwd=core,env=captured,timeout=75)
@@ -152,7 +178,7 @@ def execute(core,go='go',*,env=None,receipt=None,compile_only=False):
                 if sudo:command=[sudo,'-n','--preserve-env=ROUTERVPN_SERVER_CHAIN_OUTER_NETNS,ROUTERVPN_SERVER_CHAIN_CARRIER_MTU','--',*command]
                 output=BASE.run(command,cwd=workspace,env=native_env,timeout=125,sudo=sudo);verdicts.append(check_verdict(output,case));print(output,end='')
         if checked_sources(core)[1]!=before or any(BASE.image_identity(path)!=images[role] for role,path in (('driver',driver),('peer',peer),('worker',worker))):raise ValueError('CONNECT original image/source changed')
-        result={'schema':1,'gate':'connect-server-encrypted','scope':'compile-and-source-only' if compile_only else 'actual-connect-server-suffix','target':'linux/'+architecture,'source_files':before,'source_sha256':hashlib.sha256(json.dumps(before,sort_keys=True,separators=(',',':')).encode()).hexdigest(),'images':{role:{'sha256':v[-1],'bytes':v[2]} for role,v in images.items()},'required_cases':list(CASES),'cases':verdicts}
+        result={'schema':1,'gate':'connect-server-encrypted','scope':'compile-and-source-only' if compile_only else 'actual-connect-server-suffix','target':'linux/'+architecture,'source_files':before,'source_sha256':hashlib.sha256(json.dumps(before,sort_keys=True,separators=(',',':')).encode()).hexdigest(),'images':{role:{'sha256':v[-1],'bytes':v[2]} for role,v in images.items()},'required_cases':list(CASES),'cases':verdicts,'provider_protocols':provider_protocols,'provider_stdout_sha256':hashlib.sha256(provider.encode()).hexdigest()}
     if workspace.exists():raise ValueError('CONNECT original workspace retained')
     if receipt:
         with Path(receipt).open('x') as output:json.dump(result,output,indent=2,sort_keys=True);output.write('\n')

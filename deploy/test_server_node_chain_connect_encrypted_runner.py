@@ -55,6 +55,22 @@ class CONNECTServerGateTests(unittest.TestCase):
     def test_all_original_protocol_cases(self):
         for case in G.CASES:
             with self.subTest(case=case):self.assertEqual(G.check_verdict(transcript(case),case)['case'],case.split('/')[1])
+    def test_actual_provider_protocol_inventory(self):
+        raw='=== RUN   '+G.PROVIDER+'\n'
+        for protocol in G.PROTOCOLS:
+            raw+='=== RUN   '+G.PROVIDER+'/'+protocol+'\n--- PASS: '+G.PROVIDER+'/'+protocol+' (0.01s)\n'
+        raw+='--- PASS: '+G.PROVIDER+' (0.02s)\nPASS\n'
+        self.assertEqual(G.check_provider(raw),list(G.PROTOCOLS))
+        for bad in ('PASS\n',raw.replace('=== RUN   '+G.PROVIDER+'\n',''),raw.replace('/https-connect','/foreign'),raw+'WARNING: DATA RACE\n',raw+'PASS\n',raw.replace('--- PASS: '+G.PROVIDER+'/http-connect (0.01s)\n','')):
+            with self.assertRaises(ValueError):G.check_provider(bad)
+    def test_actual_provider_is_mandatory_before_namespace(self):
+        source=Path(G.__file__).read_text()
+        begin=source.index("        provider=BASE.run([peer,'-test.run=^'+PROVIDER+'$'")
+        check=source.index("        provider_protocols=check_provider(provider);print(provider,end='')",begin)
+        native=source.index('        if not compile_only:',check)
+        self.assertLess(begin,check);self.assertLess(check,native)
+        self.assertIn("'provider_protocols':provider_protocols",source)
+        self.assertIn("'provider_stdout_sha256':hashlib.sha256(provider.encode()).hexdigest()",source)
     def test_complete_source_inventory(self):
         self.assertEqual(G.check_verdict(transcript(None,True),source_only=True)['source_cases'],list(G.CASES))
         with self.assertRaises(ValueError):G.check_verdict(transcript(None,True).replace('=== RUN   '+G.SOURCE+'/'+G.CASES[-1]+'\n',''),source_only=True)

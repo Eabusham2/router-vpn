@@ -3104,3 +3104,51 @@ admission, actual installed encrypted CONNECT execution gates, exact-SHA
 native builds and release publication remain separate work. The current
 release's CONNECT server-peer readiness failure is under its own repair;
 this host unit does not claim that failure or the complete product is green.
+
+## Encrypted CONNECT server reference peer supplies its declared final UoT router
+
+At exact main `8b2b94c798290c2e7ea20fd9d843185316316f15`, authoritative
+run `43756365307` failed the new encrypted CONNECT server phase on both
+AMD64 (`132941318051`) and ARM64 (`132941318055`). Each reached the first
+HTTP/original namespace case, then reported that the imported suffix never
+proved ready; exceptional cleanup subsequently required an emergency kill.
+The preceding original 14 paired and eight imported server cases passed.
+Neither failed job produced the required two-receipt artifact.
+
+The actual CONNECT reference peer constructed its middle TCP/TLS proxy but
+omitted the final Shadowsocks UoT-v2 stream router required by the captured
+schema. Its working Local CONNECT counterpart already installs that router.
+The fixture now installs the same concrete final router. The inherited
+namespace peer and the new portable provider test share that actual peer
+constructor, so a simplified second implementation cannot hide this omission.
+Production readiness, policy validation, timeouts and retirement safeguards
+are unchanged.
+
+Both actual loopback protocol cases pass under the race detector: authenticated
+HTTP/HTTPS CONNECT, proxy TLS verification where selected, original SS2022
+ciphertext, UoT-v2 framing and the original selected DNS reply. Counters require
+one final DNS query and original TCP traversal, with no raw middle/final UDP
+bypass. Joined provider cleanup succeeds. The final pass uses the exact
+current provider dependency bytes and takes 1.131 seconds. Removing only the
+final router installation causes both protocol leaves to fail at the intended
+DNS EOF witness in 0.445 seconds, with no unrelated test failures. All 15
+runner controls pass, including missing/foreign/duplicate/race output refusal.
+
+The hosted gate now executes this provider component before namespace cases
+and binds `provider_protocols` and `provider_stdout_sha256` into its returned
+receipt. All original 17 CONNECT native cases and their deadlines remain
+required; the original 14-plus-eight server invocation is unchanged.
+
+The three-file manifest SHA-256 is
+`77b5b16480eab482bbc3a187d4a94edc62e2241fca8dfdc079e08a4d16d47a02`;
+the patch is
+`8102756c22b19b404d275aebb10c90fcee17955edbaf2fb93d7375141afe84f0`;
+the validation receipt is
+`bd0e3682e7b3db16f29f195eb462652057e7d13d2e8bd4106cd2816b9bace787`.
+Current and historical attempts, exact provider dependencies and actual
+positive/omission output are preserved in `connect-server-ready-validation`.
+
+This proves the repaired real provider boundary. It does not establish the
+complete installed remote worker, entry API, Manager, Compare, namespace or
+physical-host path. Both native architecture runs must pass again at the
+subsequent release SHA before that acceptance can be claimed.
