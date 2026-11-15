@@ -1256,3 +1256,29 @@ hashes and logs are retained in `macos-ordered-transport-validation`.
 These are portable Swift constructor/model results with the existing
 loopback task boundary. AppKit rendering, actual macOS controller/tunnel
 execution, and physical-device acceptance remain separate required gates.
+
+## Windows native peer assertions retain the actual owned UDP endpoint
+
+At published `44e6b98bfbcefe0bceb6e8089598237edac7d659`, the Windows
+candidate-prefix, SOCKS and CONNECT fixtures required their first peer to
+report port 51820. Their actual shared `desktopNodeWGBind.Open` instead
+requires a zero requested port, binds the captured physical IPv4 address with
+port zero, and returns the kernel-assigned listener through `bind.address()`.
+The Windows overlays change platform selection, not that port or reply.
+
+The three assertions now accept only a canonical literal IPv4 endpoint
+with the exact original physical address and a nonzero port. Every subsequent
+reply must retain that full original address/port tuple, which is also used
+unchanged in the captured WG/AWG source. Schema, original peer/key counts,
+protocol, TLS, UoT and certificate checks remain intact. No production
+listener, firewall permission, route or runtime policy changed.
+
+The already-required Windows CONNECT runner now compiles the actual three
+admission and retained-identity expressions in a portable Go fixture. It
+accepts owned ephemeral and fixed endpoints while rejecting zero ports,
+foreign addresses, noncanonical text, IPv4-mapped/ordinary IPv6, malformed
+tuples and any later tuple substitution. Restoring each old fixed-51820 guard
+independently fails the exact `owned ephemeral tuple rejected` witness.
+All ten runner tests passed. The frozen source hashes, patch and executable
+log are retained in `windows-peer-owned-tuple-validation`; these portable
+assertion results do not establish Windows peer, WFP or installed acceptance.

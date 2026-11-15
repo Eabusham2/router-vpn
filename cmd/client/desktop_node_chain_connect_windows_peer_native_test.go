@@ -6,7 +6,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -149,7 +149,9 @@ func windowsCONNECTPeerStart(t *testing.T, mode, protocol string) (*windowsPrefi
 	var first windowsCONNECTPeerReply
 	windowsPrefixRead(t, reader, &first)
 	peer.reply = first.windowsPrefixPeerReply
-	if peer.reply.Schema != 1 || peer.reply.Address != net.JoinHostPort(physical.Address, "51820") || len(peer.reply.Prefixes) != 1 || first.Middle.Method != protocol || first.Protocol != protocol || first.OpenStreams == nil || first.FinalUOTVersion != 2 || peer.reply.PublicCA == "" {
+	// The original peer binds port zero and returns its actual owned UDP tuple.
+	endpoint, endpointError := netip.ParseAddrPort(peer.reply.Address)
+	if peer.reply.Schema != 1 || endpointError != nil || !endpoint.Addr().Is4() || endpoint.Port() == 0 || endpoint.String() != peer.reply.Address || endpoint.Addr().String() != physical.Address || len(peer.reply.Prefixes) != 1 || first.Middle.Method != protocol || first.Protocol != protocol || first.OpenStreams == nil || first.FinalUOTVersion != 2 || peer.reply.PublicCA == "" {
 		t.Fatal("prefix peer changed original physical/key inventory")
 	}
 	if protocol == "https-connect" && (first.ConnectCA == "" || first.ConnectCA == first.PublicCA || first.ServerName != "speed.cloudflare.com") || protocol == "http-connect" && (first.ConnectCA != "" || first.ServerName != "") {

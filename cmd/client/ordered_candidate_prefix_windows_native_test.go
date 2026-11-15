@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -381,7 +382,9 @@ func windowsPrefixPeerStart(t *testing.T, modes []string) (*windowsPrefixPeer, f
 		t.Fatal(err)
 	}
 	windowsPrefixRead(t, reader, &peer.reply)
-	if peer.reply.Schema != 1 || peer.reply.Address != net.JoinHostPort(physical.Address, "51820") || len(peer.reply.Prefixes) != 2 || peer.reply.PublicCA == "" {
+	// The original peer binds port zero and returns its actual owned UDP tuple.
+	endpoint, endpointError := netip.ParseAddrPort(peer.reply.Address)
+	if peer.reply.Schema != 1 || endpointError != nil || !endpoint.Addr().Is4() || endpoint.Port() == 0 || endpoint.String() != peer.reply.Address || endpoint.Addr().String() != physical.Address || len(peer.reply.Prefixes) != 2 || peer.reply.PublicCA == "" {
 		t.Fatal("prefix peer changed original physical/key inventory")
 	}
 	return peer, func() windowsPrefixPeerReply {

@@ -5,6 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 import hashlib
 import importlib.util
+import os
+import re
+import shutil
+import tempfile
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -32,7 +36,111 @@ def original_receipt():
                 target=prefix['target'], bundle_sha256=prefix['bundle_sha256'], source_sha256=prefix['source_sha256'])
 
 
+
+def owned_tuple_source():
+    """Compile the actual three admission/retained-identity expressions.
+
+    Only their surrounding peer/process setup is modeled. This portable check
+    grants no native socket, process, WFP, or installed-path acceptance.
+    """
+    files = {
+        "CONNECT": "desktop_node_chain_connect_windows_peer_native_test.go",
+        "SOCKS": "desktop_node_chain_socks_windows_peer_native_test.go",
+        "Prefix": "ordered_candidate_prefix_windows_native_test.go",
+    }
+    result = []
+    for family, name in files.items():
+        text = (ROOT / "cmd/client" / name).read_text()
+        guards = re.findall(r'\t(endpoint, endpointError := netip.ParseAddrPort\(peer.reply.Address\))\n\tif (peer.reply.Schema[^\n]+) \{\n\t\tt.Fatal\("prefix peer changed original physical/key inventory"\)', text)
+        retained = re.findall(r'\t\tif (value.Address != peer.reply.Address[^\n]+) \{\n\t\t\tt.Fatal\("prefix peer replaced original identity"\)', text)
+        if len(guards) != 1 or len(retained) != 1:
+            raise ValueError("Original Windows peer tuple assertion changed: " + family)
+        declaration, condition = guards[0]
+        count = 2 if family == "Prefix" else 1
+        protocol = "socks5" if family == "SOCKS" else "http-connect"
+        setup = f'''physical := struct{{Address string}}{{host}}
+ peer := struct{{reply reply}}{{reply{{Schema:1,Address:address,Prefixes:make([]int,{count}),PublicCA:"original-ca"}}}}
+ first := reply{{Protocol:"{protocol}",FinalUOTVersion:2,OpenStreams:new(int),Associations:new(int)}}
+ first.Middle.Method = "{protocol}"
+ protocol := "{protocol}"
+ _ = first; _ = protocol
+'''
+        result.append(f'func admit{family}(host,address string)bool{{\n{setup}{declaration}\n_ = endpoint; _ = endpointError\nreturn !({condition})\n}}\n')
+        result.append(f'''func retain{family}(address,next string)bool{{
+ peer := struct{{reply reply}}{{reply{{Address:address,PublicCA:"original-ca"}}}}
+ first := reply{{Protocol:"{protocol}",FinalUOTVersion:2,OpenStreams:new(int),Associations:new(int)}}
+ value := first; value.Address=next; value.PublicCA=peer.reply.PublicCA
+ _ = first
+ return !({retained[0]})
+}}
+''')
+    return '\n'.join(result)
+
+
+OWNED_TUPLE_TEST = r'''package tuple
+import "testing"
+func TestActualOwnedTuple(t *testing.T){
+ for _,f:=range []struct{name string;admit func(string,string)bool;retain func(string,string)bool}{
+  {"CONNECT",admitCONNECT,retainCONNECT},{"SOCKS",admitSOCKS,retainSOCKS},{"Prefix",admitPrefix,retainPrefix},
+ }{t.Run(f.name,func(t *testing.T){
+  const host="192.168.50.10"
+  const original="192.168.50.10:49173"
+  if !f.admit(host,original){t.Fatal("owned ephemeral tuple rejected")}
+  if !f.admit(host,"192.168.50.10:51820"){t.Fatal("valid owned fixed tuple rejected")}
+  for _,bad:=range []string{"192.168.50.10:0","192.168.50.11:49173","192.168.50.10:049173","192.168.050.10:49173","[::ffff:192.168.50.10]:49173","[2001:db8::1]:49173","192.168.50.10","192.168.50.10:65536","host.invalid:49173","192.168.50.10:49173 ",""}{
+   if f.admit(host,bad){t.Fatalf("unowned or noncanonical tuple admitted: %q",bad)}
+  }
+  if f.admit("192.168.050.10",original){t.Fatal("changed physical capture admitted")}
+  if !f.retain(original,original){t.Fatal("original tuple was not retained")}
+  for _,next:=range []string{"192.168.50.10:49174","192.168.50.11:49173","192.168.50.10:049173",""}{
+   if f.retain(original,next){t.Fatal("changed tuple replaced original identity")}
+  }
+ })}
+}
+'''
+
+
+def execute_owned_tuple_guards():
+    compiler = shutil.which("go")
+    if compiler is None:
+        raise ValueError("Actual Go compiler required for Windows peer assertion regression")
+    source = owned_tuple_source()
+    header = '''package tuple
+import "net/netip"
+type reply struct{Schema int;Address,PublicCA,Protocol,ConnectCA,ServerName string;Prefixes []int;FinalUOTVersion int;OpenStreams,Associations *int;Middle struct{Method string}}
+'''
+    env = dict(os.environ, GOWORK="off", GOFLAGS="", GOTOOLCHAIN="local", GOMAXPROCS="1")
+    with tempfile.TemporaryDirectory(prefix="windows-peer-tuple-") as directory:
+        work = Path(directory)
+        (work / "go.mod").write_text("module tuple\n\ngo 1.25\n")
+        (work / "tuple_test.go").write_text(OWNED_TUPLE_TEST)
+        def run(body, imports=header):
+            (work / "tuple.go").write_text(imports + body)
+            return subprocess.run([compiler,"test","-count=1","-timeout=10s","-v","."], cwd=work,
+                                  env=env, capture_output=True, text=True, timeout=45)
+        good = run(source)
+        if good.returncode != 0:
+            raise AssertionError("Actual Windows tuple assertions failed:\n" + good.stdout + good.stderr)
+        print(good.stdout, end="")
+        guard = 'endpointError != nil || !endpoint.Addr().Is4() || endpoint.Port() == 0 || endpoint.String() != peer.reply.Address || endpoint.Addr().String() != physical.Address'
+        for family in ("CONNECT", "SOCKS", "Prefix"):
+            start = source.index("func admit" + family + "(")
+            end = source.index("\nfunc retain" + family + "(", start)
+            body = source[start:end]
+            if body.count(guard) != 1:
+                raise ValueError("Exact original tuple guard mutation anchor changed")
+            changed = source[:start] + body.replace(guard, 'peer.reply.Address != net.JoinHostPort(physical.Address, "51820")') + source[end:]
+            result = run(changed, header.replace('import "net/netip"', 'import("net";"net/netip")'))
+            output = result.stdout + result.stderr
+            if result.returncode != 1 or '--- FAIL: TestActualOwnedTuple/' + family not in output or 'owned ephemeral tuple rejected' not in output or 'build failed' in output or 'panic:' in output:
+                raise AssertionError("Original fixed-port causal control lost its exact failure:\n" + output)
+            print("rejected original fixed-port guard: " + family)
+
+
 class FullPathGate(unittest.TestCase):
+    def test_actual_original_peer_tuple_guards(self):
+        execute_owned_tuple_guards()
+
     def test_exact_http_https_and_packet_inventory(self):
         self.assertEqual(G.CASES, (
             'http-wg-connect', 'http-awg-fast-connect', 'http-awg-strong-connect',

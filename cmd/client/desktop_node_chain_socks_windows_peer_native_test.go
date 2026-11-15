@@ -6,7 +6,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,7 +112,9 @@ func windowsSOCKSPeerStart(t *testing.T, mode string) (*windowsPrefixPeer, strin
 	var first windowsSOCKSPeerReply
 	windowsPrefixRead(t, reader, &first)
 	peer.reply = first.windowsPrefixPeerReply
-	if peer.reply.Schema != 1 || peer.reply.Address != net.JoinHostPort(physical.Address, "51820") || len(peer.reply.Prefixes) != 1 || first.Middle.Method != "socks5" || first.Associations == nil || peer.reply.PublicCA == "" {
+	// The original peer binds port zero and returns its actual owned UDP tuple.
+	endpoint, endpointError := netip.ParseAddrPort(peer.reply.Address)
+	if peer.reply.Schema != 1 || endpointError != nil || !endpoint.Addr().Is4() || endpoint.Port() == 0 || endpoint.String() != peer.reply.Address || endpoint.Addr().String() != physical.Address || len(peer.reply.Prefixes) != 1 || first.Middle.Method != "socks5" || first.Associations == nil || peer.reply.PublicCA == "" {
 		t.Fatal("prefix peer changed original physical/key inventory")
 	}
 	return peer, middlePassword, func(action string) windowsSOCKSPeerReply {
