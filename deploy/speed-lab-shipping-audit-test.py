@@ -164,7 +164,9 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
                         "cmd/client/desktop_node_chain_policy_dispatch.go",
                         "cmd/client/desktop_node_chain_linux.go",
                         "cmd/client/desktop_node_chain_execution_launch.go",
-                        "cmd/client/desktop_node_chain_execution_graph.go")
+                        "cmd/client/desktop_node_chain_execution_graph.go",
+                        "internal/mobilemultihop/node_chain_execution_desktop.go",
+                        "internal/mobilemultihop/node_chain_connect_execution_desktop.go")
     sources = {path: (Path(__file__).resolve().parents[1]/path).read_text() for path in (
         "cmd/client/speed_lab_paths.go", "cmd/client/desktop_external_path.go",
         "cmd/client/speed_lab.go", "cmd/client/multihop_native_launch.go", *platform_sources)}
