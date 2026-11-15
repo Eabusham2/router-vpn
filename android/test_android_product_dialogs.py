@@ -81,7 +81,7 @@ final class AndroidNodeStore {
   // SHIPPING_PAIRED_IDENTITY
  }
  // SHIPPING_NODE_IDENTITY_HELPERS
- static final class ChainCapture {final List<ChainSource> members;final List<String> modes;ChainCapture(List<ChainSource>s,List<String>m){members=s;modes=m;}}
+ static final class ChainCapture {final List<ChainSource> members;final List<String> modes;final String execution;ChainCapture(List<ChainSource>s,List<String>m,String execution){members=s;modes=m;this.execution=execution;}}
  static final class ChainCatalog {
   final AndroidNodeStore owner;final String selectedId;final List<Node> nodes;
   ChainCatalog(AndroidNodeStore owner){this.owner=owner;selectedId=owner.selected;nodes=Collections.unmodifiableList(new ArrayList<>(owner.nodes));}
