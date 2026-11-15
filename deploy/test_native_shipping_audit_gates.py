@@ -433,6 +433,7 @@ class NativeShippingAuditTests(unittest.TestCase):
         admission = "cmd/client/desktop_node_chain_socks_admission.go"
         detector = "cmd/client/multihop_node_chain_socks_selection.go"
         connect_detector = "cmd/client/multihop_node_chain_connect_selection.go"
+        openvpn = "cmd/client/multihop_node_chain_openvpn.go"
         self.assert_multihop_chain(True)
         ordinary = "cmd/client/desktop_node_chain_public_admission.go"
         changes = (
@@ -473,6 +474,14 @@ class NativeShippingAuditTests(unittest.TestCase):
             (connect_detector, 'node.Mode == "http-connect" || node.Mode == "https-connect"', 'node.Mode == "http-connect"'),
             (connect_detector, 'node.Mode == "http-connect" || node.Mode == "https-connect"', 'node.Mode == "https-connect"'),
             (connect_detector, 'if node.Mode == "http-connect" || node.Mode == "https-connect" {\n\t\t\treturn true', 'if node.Mode == "http-connect" || node.Mode == "https-connect" {\n\t\t\treturn false'),
+            (route, "|| desktopNodeChainHasOpenVPN(q.Nodes) && !nativeNodeChainOpenVPNPlatformSupported()", ""),
+            (route, "desktopNodeChainHasOpenVPN(q.Nodes)", "desktopNodeChainHasOpenVPN(other.Nodes)"),
+            (route, "!nativeNodeChainOpenVPNPlatformSupported()", "false"),
+            (openvpn, "return nativeNodeChainPlatformSupported() &&", "return true &&"),
+            (openvpn, 'runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin"', "true"),
+            (openvpn, 'runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64"', "true"),
+            (openvpn, "for _, node := range nodes {", "for _, node := range nodes[:1] {"),
+            (openvpn, 'if node.Mode == "openvpn" {\n\t\t\treturn true', 'if node.Mode == "openvpn" {\n\t\t\treturn false'),
         )
         for path, before, after in changes:
             with self.subTest(path=path, before=before):
@@ -491,6 +500,8 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("cmd/client/desktop_node_chain_connect_admission.go", "func nativeNodeChainCONNECTHostSupported() bool { return true }"),
             (detector, "func desktopNodeChainHasSOCKS(nodes []common.MultihopNodeSelection) bool { return false }"),
             (connect_detector, "func desktopNodeChainHasCONNECT(nodes []common.MultihopNodeSelection) bool { return false }"),
+            (openvpn, "func nativeNodeChainOpenVPNPlatformSupported() bool { return true }"),
+            (openvpn, "func desktopNodeChainHasOpenVPN(nodes []common.MultihopNodeSelection) bool { return false }"),
         ):
             with self.subTest(duplicate=path):
                 self.changes.clear()
@@ -535,7 +546,8 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("func desktopOrderedExecutionChoices() []string", 'nativeDesktopOrderedExecutionPlatformSupported()', 'nativeNodeChainPlatformSupported()'),
             ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'common.ValidateMultihopNodes(nodes)', 'error(nil)'),
             ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks"', 'false'),
-            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes))', 'false'),
+            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes) || desktopNodeChainHasOpenVPN(nodes))', 'false'),
+            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", ' || desktopNodeChainHasOpenVPN(nodes)', ''),
         ):
             with self.subTest(declaration=declaration, before=before):
                 self.changes.clear()
@@ -714,7 +726,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("a.beginConnectionOperationContext(r.Context())", "a.beginConnectionOperationContext(context.Background())"),
             ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "decodeMultihopConnectRequest(r.Body)"),
             ("decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))", "decodeUncapturedRequest(http.MaxBytesReader(w, r.Body, 16<<10))"),
-            ("if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(q.Nodes) && !nativeNodeChainCONNECTPlatformSupported()) {", "if false {"),
+            ("if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(q.Nodes) && !nativeNodeChainCONNECTPlatformSupported() || desktopNodeChainHasOpenVPN(q.Nodes) && !nativeNodeChainOpenVPNPlatformSupported()) {", "if false {"),
             ("a.mu.Lock()\n\tsel, err := a.resolveNativeMultihopRequestLocked(q)\n\ta.mu.Unlock()", "sel, err := a.resolveNativeMultihopRequestLocked(q)"),
             ("a.resolveNativeMultihopRequestLocked(q)", "a.resolveNativeMultihopRequestLocked(other)"),
             ("errors.Is(err, errDesktopProfileSelectionChanged)", "false"),

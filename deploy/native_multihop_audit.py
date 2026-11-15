@@ -1109,7 +1109,7 @@ if err := common.ValidateMultihopNodes(nodes); err != nil { return err }
 if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" {
     return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
 }
-if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes)) {
+if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes) || desktopNodeChainHasOpenVPN(nodes)) {
     return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
 }
 return nil
@@ -1443,6 +1443,17 @@ def native_multihop_shipping_chain(source: str, read=None) -> bool:
         return false
     ''')):
         return False
+    openvpn = _tokens(read("cmd/client/multihop_node_chain_openvpn.go"))
+    if (_function(openvpn, "func nativeNodeChainOpenVPNPlatformSupported() bool") != _tokens('''
+        return nativeNodeChainPlatformSupported() && (runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin") &&
+            (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64")
+    ''') or _function(openvpn, "func desktopNodeChainHasOpenVPN(nodes []common.MultihopNodeSelection) bool") != _tokens('''
+        for _, node := range nodes {
+            if node.Mode == "openvpn" { return true }
+        }
+        return false
+    ''')):
+        return False
     tokens = _tokens(source)
     public = _function(tokens, "func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request)")
     expected = _tokens("""
@@ -1465,7 +1476,7 @@ def native_multihop_shipping_chain(source: str, read=None) -> bool:
             "q, err := decodeMultihopConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))",
             '''if err != nil { http.Error(w, "bad json", http.StatusBadRequest)
                 return }''',
-            '''if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(q.Nodes) && !nativeNodeChainCONNECTPlatformSupported()) {
+            '''if q.ordered() && (!nativeNodeChainPlatformSupported() || desktopNodeChainHasSOCKS(q.Nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(q.Nodes) && !nativeNodeChainCONNECTPlatformSupported() || desktopNodeChainHasOpenVPN(q.Nodes) && !nativeNodeChainOpenVPNPlatformSupported()) {
                 http.Error(w, "this platform has not enabled its protected ordered native host", http.StatusNotImplemented)
                 return
             }''',

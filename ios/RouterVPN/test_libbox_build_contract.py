@@ -329,6 +329,7 @@ class ApplePrefixPreparationBuildContract(unittest.TestCase):
     header = '''
 FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxNewRouterNodeChainCandidatePreparation(NSString* _Nullable source, int32_t prefixPosition, NSString* _Nullable inventory, NSError* _Nullable* _Nullable error);
 FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxRouterNodeChainCandidatePreparationLaunch(NSString* _Nullable input, NSError* _Nullable* _Nullable error);
+FOUNDATION_EXPORT NSString* _Nonnull LibboxRouterNodeChainImportedOpenVPNMemberInput(NSString* _Nullable config, NSString* _Nullable capture, NSError* _Nullable* _Nullable error);
 @interface LibboxRouterNodeChainCandidatePreparation : NSObject <goSeqRefInterface> {
 }
 - (NSString* _Nonnull)config;
@@ -366,6 +367,19 @@ FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxRou
             if line.startswith(('FOUNDATION_EXPORT','- (')):
                 with self.subTest(line=line):
                     self.assertNotEqual(self.check_header(self.header.replace(line,'',1)).returncode,0)
+
+    def test_openvpn_middle_requires_original_throwing_constructor(self):
+        signature = next(line for line in self.header.splitlines()
+                         if 'LibboxRouterNodeChainImportedOpenVPNMemberInput(' in line)
+        for before, after in (('NSString* _Nonnull', 'NSString* _Nullable'),
+                              ('_Nullable config', '_Nullable foreign'),
+                              ('_Nullable capture', '_Nullable replacement'),
+                              ('NSError* _Nullable* _Nullable error', 'NSError* _Nullable error')):
+            with self.subTest(before=before):
+                changed = self.header.replace(signature, signature.replace(before, after), 1)
+                result = self.check_header(changed)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('OpenVPN middle original-source constructor ABI changed', result.stderr)
 
     def test_foreign_owner_cannot_supply_missing_close(self):
         close='- (BOOL)close:(NSError* _Nullable* _Nullable)error;'
