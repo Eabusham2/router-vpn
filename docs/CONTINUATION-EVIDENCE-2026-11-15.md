@@ -1076,6 +1076,24 @@ three members. The complete longer-path engine and mobile/UI capture changes
 remain under development, so this prerequisite does not close requirement
 214–224 or establish delivery of all longer CONNECT paths.
 
+### Android usage fixture includes its current policy dependency
+
+Exact-`ef54aa45` Client apps run `43712239226`, Android job `132806120723`,
+failed Java compilation because the usage fixture's policy projection omitted
+`Captured` and `captureImportedEntry`, both referenced by the shipping node
+store. The same failure was reproduced locally with JDK 17. The fixture now
+extracts the shipping type, protocol guard and defensive-copy method. Its
+private native capture and OpenVPN compiler boundaries explicitly refuse;
+they do not fabricate a valid policy or a successful native connection.
+
+The complete gate passed 254 shipping usage/controller/store/Home/catalog
+checks, 51 imported-packet checks and 61 imported-SOCKS checks. All 21 original
+causal controls and two additional controls were retained and rejected their
+intended defects. The new controls reject a lost defensive source copy and a
+fabricated native-capture success. No production application code changed.
+This repairs the observed test-compilation blocker; Android APK, native
+transport and physical-device acceptance remain separate gates.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths

@@ -145,6 +145,21 @@ import android.content.*;import android.os.Bundle;import java.io.*;import java.n
 public final class NodeUsageTest{
  static int checks;static void check(boolean ok,String message){checks++;if(!ok)throw new AssertionError(message);}
  static void await(CountDownLatch latch,String message)throws Exception{check(latch.await(4,TimeUnit.SECONDS),message);}
+ static void importedCaptureBoundary()throws Exception{
+  boolean nativeRefused=false;try{io.nekohasekai.libbox.Libbox.routerNodeChainImportedOpenVPNMemberInput("","");}catch(AssertionError expected){nativeRefused="Usage fixture cannot compile a native OpenVPN member.".equals(expected.getMessage());}check(nativeRefused,"usage fixture fabricated a native OpenVPN member");
+  AndroidExternalPolicy.importedCaptureCalls=0;AndroidExternalPolicy.refusedImportedCapture=null;
+  for(String kind:List.of("null","unsupported")){
+   AndroidStandardExitStore.Entry entry=null;if(kind.equals("unsupported")){entry=new AndroidStandardExitStore.Entry();entry.protocol="tor";}
+   boolean refused=false;try{AndroidExternalPolicy.captureImportedEntry(entry);}catch(IllegalArgumentException expected){refused=true;}
+   check(refused&&AndroidExternalPolicy.importedCaptureCalls==0,"usage imported capture admitted malformed source: "+kind);
+  }
+  AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id="original-openvpn";entry.name="Original OpenVPN";entry.protocol="openvpn";entry.openVPNConfig="client\nproto udp\nremote 192.0.2.44 1194\n";
+  String original=AndroidStandardExitStore.snapshot(entry);boolean refused=false;
+  try{AndroidExternalPolicy.captureImportedEntry(entry);}catch(AssertionError expected){refused="Usage fixture has no native imported capture authority.".equals(expected.getMessage());}
+  check(refused&&AndroidExternalPolicy.importedCaptureCalls==1,"usage fixture fabricated native imported capture authority");
+  check(AndroidExternalPolicy.refusedImportedCapture!=entry&&original.equals(AndroidStandardExitStore.snapshot(AndroidExternalPolicy.refusedImportedCapture)),"usage imported capture omitted its original defensive source copy");
+  entry.openVPNConfig="changed source";check(original.equals(AndroidStandardExitStore.snapshot(AndroidExternalPolicy.refusedImportedCapture)),"usage imported capture followed replacement source");
+ }
  static void savedPolicyValidation()throws Exception{
   AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="hostname-policy";e.name="Original imported middle";e.protocol="shadowsocks";e.server="Middle.Example";e.serverPort=8388;e.expectedPublicIp="198.51.100.31";e.method="2022-blake3-aes-128-gcm";e.secret=java.util.Base64.getEncoder().encodeToString(new byte[16]);
   JSONObject original=new JSONObject().put("dns_mode","custom").put("dns_protocol","tcp").put("dns_host","192.0.2.53").put("dns_port",53).put("kill_switch",true).put("kill_switch_policy","always");e.policy=original;AndroidStandardExitStore.validate(e);check(e.server.equals("Middle.Example")&&e.policy==original,"saved hostname validation changed its original source");
@@ -366,7 +381,7 @@ public final class NodeUsageTest{
    AndroidHomeStateStore.advancePathGeneration(f.activity);check(f.activity.currentOrderedPresentation()==null,"ordered display survived a completed stop generation");f.activity.map();check(!f.activity.mapView.orderedLive,"ordered map animated a retired receipt");
   }
  }
- public static void main(String[] args)throws Exception{savedPolicyValidation();Path root=Path.of(args[0]);if(args.length>1){if(!List.of("imported-packet","imported-socks").contains(args[1]))throw new AssertionError("Unknown usage family");importedProtocols=args[1].equals("imported-socks")?List.of("socks5"):List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android "+args[1]+" entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);orderedIdentity(root);orderedUsage(root);orderedPresentation(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
+ public static void main(String[] args)throws Exception{importedCaptureBoundary();savedPolicyValidation();Path root=Path.of(args[0]);if(args.length>1){if(!List.of("imported-packet","imported-socks").contains(args[1]))throw new AssertionError("Unknown usage family");importedProtocols=args[1].equals("imported-socks")?List.of("socks5"):List.of("wireguard","amneziawg");importedExclusions(root);System.out.println("Android "+args[1]+" entry usage: "+checks+" shipping controller/store/Home checks PASS (native proof boundary controlled)");return;}externalMap(root);ordinary(root);excluded(root);importedExclusions(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);orderedIdentity(root);orderedUsage(root);orderedPresentation(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
 }
 '''
 
@@ -384,7 +399,8 @@ def sources():
     ui['android/system/StructStat.java'] = 'package android.system;public final class StructStat{public final int st_mode;public final long st_dev,st_ino,st_size;public StructStat(int m,long d,long i,long s){st_mode=m;st_dev=d;st_ino=i;st_size=s;}}'
     ui['com/wireguard/android/backend/Tunnel.java'] = 'package com.wireguard.android.backend;public interface Tunnel{enum State{UP,DOWN}}'
     ui['org/amnezia/awg/backend/Tunnel.java'] = 'package org.amnezia.awg.backend;public interface Tunnel{enum State{UP,DOWN}}'
-    ui['io/nekohasekai/libbox/Libbox.java'] = S.PRIVATE_JSON_JAVA
+    ui['io/nekohasekai/libbox/Libbox.java'] = S.PRIVATE_JSON_JAVA.replace('public final class Libbox {',
+        'public final class Libbox {public static String routerNodeChainImportedOpenVPNMemberInput(String source,String capture){throw new AssertionError("Usage fixture cannot compile a native OpenVPN member.");}')
     boundaries = P.BOUNDARIES
     # The actual saved-exit store validates hostname policy even in usage/UI
     # composition. Extract its shipping validator and complete pure dependency
@@ -393,7 +409,19 @@ def sources():
     constants = "\n".join(line for line in policy.splitlines() if 'static final int MAX_CAPTURE =' in line)
     start = policy.index('    private static final Set<String> POLICY =')
     constants += "\n" + policy[start:policy.index(';', start) + 1]
-    methods = "\n".join(S.block(policy, signature) for signature in ('    static void checkPolicy(', '    private static boolean bounded('))
+    methods = "\n".join(S.block(policy, signature) for signature in ('    static void checkPolicy(', '    private static boolean bounded(',
+        '    static final class Captured {', '    static Captured captureImportedEntry('))
+    # Imported capture's public validation and defensive copy are shipping
+    # code. This usage-only fixture still cannot compile or adopt a native
+    # transport; its private composition boundary must always refuse.
+    methods += r'''
+ static AndroidStandardExitStore.Entry refusedImportedCapture;static int importedCaptureCalls;
+ private static Captured capture(AndroidStandardExitStore.Entry entry,JSONObject predecessor,String mode,Object captured,String execution)throws Exception{
+  if(predecessor!=null||captured!=null||!"external".equals(mode)||!"local".equals(execution))throw new AssertionError("Usage imported capture changed its bounded composition request.");
+  importedCaptureCalls++;refusedImportedCapture=entry;
+  throw new AssertionError("Usage fixture has no native imported capture authority.");
+ }
+'''
     assert boundaries.count('final class AndroidExternalPolicy {') == 1
     boundaries = boundaries.replace('final class AndroidExternalPolicy {', 'final class AndroidExternalPolicy {' + constants + methods)
     # This fixture uses the actual checked-exception store API, while the
@@ -475,6 +503,8 @@ def main():
         subprocess.run([*run, "imported-packet"], check=True, timeout=60)
         subprocess.run([*run, "imported-socks"], check=True, timeout=60)
         controls = (
+            ('Boundaries.java', 'capture(AndroidStandardExitStore.copy(entry), null, "external", null, "local")', 'capture(entry, null, "external", null, "local")', 'usage imported capture omitted its original defensive source copy'),
+            ('Boundaries.java', 'throw new AssertionError("Usage fixture has no native imported capture authority.");', 'return new Captured("{}","{}");', 'usage fixture fabricated native imported capture authority'),
             ('Boundaries.java', '!POLICY.contains(keys.getString(i))', 'false', 'saved hostname policy accepted malformed unknown-field'),
             ('Boundaries.java', '!(policy.get("kill_switch") instanceof Boolean)', 'false', 'saved hostname policy accepted malformed protection-type'),
             ('AndroidNodeStore.java', '            source.requirePairedIdentity();', '            /* defect: omit original ordered identity source */', 'ordered capture accepted missing original WG companion: missing-wg'),
