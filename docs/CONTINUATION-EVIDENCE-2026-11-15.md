@@ -1594,3 +1594,24 @@ actor declarations, captured execution selection, restoration and callback
 contracts are unchanged. The exact patch, source hashes and complete gate log
 are retained in `ios-runtime-tail-validation`. This portable Swift 6.0.3 gate
 does not establish SDK packaging or physical-device acceptance.
+
+## Focused validator installs its pinned compiler before real Go controls
+
+Exact `43ec6092` authoritative desktop-child job `132842546995` passed its
+source-identity and child-inventory checks, then failed the actual Windows
+peer-tuple regression because it ran before the pinned Go setup step. The
+runner supplied Go 1.24.13 with `GOTOOLCHAIN=local`; the isolated regression
+module requires Go 1.25 or newer. No native execution had started.
+
+The existing Go 1.26.3 setup step now precedes validator controls, after both
+source checkouts. Its version, suite condition and captured dependency-cache
+path are unchanged. The original actual CONNECT, SOCKS and Prefix tuple
+assertions and all three compiled fixed-port negative controls pass. All
+eleven focused runner checks passed in 2.288 seconds. The added workflow
+regression rejects the original late ordering, missing or duplicate setup,
+an older compiler pin and exclusion of the actual desktop CONNECT suite.
+
+The frozen patch, exact source hashes, complete failing job log and positive
+receipt are retained in `focused-validator-go-order-validation`. Independent
+review confirmed that production admission, source guards, native inventories
+and deadlines remain unchanged. Hosted native execution remains required.

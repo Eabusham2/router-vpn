@@ -118,6 +118,12 @@ jobs:
       - name: Use the original canonical macOS temporary root
         if: inputs.suite == 'macos-profiles' || inputs.suite == 'darwin-hy2' || inputs.suite == 'ios-socks-host' || inputs.suite == 'ios-sdk'
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Install the pinned Go toolchain
+        if: inputs.suite != 'macos-profiles' && inputs.suite != 'windows-source-retirement' && inputs.suite != 'desktop-socks-editor'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache-dependency-path: candidate/go.sum
       - name: Verify source identity and required validator controls
         shell: bash
         run: |
@@ -225,12 +231,6 @@ jobs:
             --suite "$SUITE" --source "$GITHUB_WORKSPACE/candidate" \
             --source-sha "$SOURCE_SHA" --base-sha "$VALIDATOR_SHA" \
             --output "$GITHUB_WORKSPACE/validation-output/selection.json"
-      - name: Install the pinned Go toolchain
-        if: inputs.suite != 'macos-profiles' && inputs.suite != 'windows-source-retirement' && inputs.suite != 'desktop-socks-editor'
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.3'
-          cache-dependency-path: candidate/go.sum
       - name: Install the Java fixture toolchain
         if: inputs.suite == 'android-tor' || inputs.suite == 'android-prefix-owner' || inputs.suite == 'android-socks-host' || inputs.suite == 'android-sdk' || inputs.suite == 'android-policy-fixtures'
         uses: actions/setup-java@v4

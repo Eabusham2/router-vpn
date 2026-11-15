@@ -138,7 +138,42 @@ type reply struct{Schema int;Address,PublicCA,Protocol,ConnectCA,ServerName stri
             print("rejected original fixed-port guard: " + family)
 
 
+def require_validator_go_order(workflow):
+    """The actual compiler-backed controls cannot use the runner's ambient Go."""
+    job = re.split(r"\n  [A-Za-z][A-Za-z0-9_-]*:\n", workflow.split("  validate:\n", 1)[1], maxsplit=1)[0]
+    setup = "      - name: Install the pinned Go toolchain\n"
+    controls = "      - name: Verify source identity and required validator controls\n"
+    if job.count(setup) != 1 or job.count(controls) != 1:
+        raise ValueError("Exact validator compiler setup and controls are required")
+    start, check = job.index(setup), job.index(controls)
+    body = job[start:].split("      - name: ", 2)[1]
+    if start >= check or "uses: actions/setup-go@v5\n" not in body or "go-version: '1.26.3'\n" not in body:
+        raise ValueError("Pinned Go must precede the actual compiler-backed controls")
+    expected = "if: inputs.suite != 'macos-profiles' && inputs.suite != 'windows-source-retirement' && inputs.suite != 'desktop-socks-editor'\n"
+    if expected not in body or "cache-dependency-path: candidate/go.sum\n" not in body:
+        raise ValueError("Original compiler suite selection and captured dependency input changed")
+    if "python3 validator/deploy/test_windows_connect_node_chain_host_runner.py\n" not in job[check:]:
+        raise ValueError("Actual Windows tuple control invocation is required")
+
+
 class FullPathGate(unittest.TestCase):
+    def test_pinned_compiler_precedes_actual_validator_controls(self):
+        workflow = (ROOT / ".github/workflows/focused-source-validation.yml").read_text()
+        require_validator_go_order(workflow)
+        start = workflow.index("      - name: Install the pinned Go toolchain\n")
+        end = workflow.index("      - name: Verify source identity and required validator controls\n", start)
+        setup = workflow[start:end]
+        old = workflow[:start] + workflow[end:]
+        old = old.replace("      - name: Install the Java fixture toolchain\n", setup + "      - name: Install the Java fixture toolchain\n", 1)
+        for label, changed in (
+                ("old post-validator setup", old),
+                ("missing compiler", workflow.replace(setup, "", 1)),
+                ("duplicate compiler", workflow.replace(setup, setup + setup, 1)),
+                ("ambient old compiler", workflow.replace("go-version: '1.26.3'", "go-version: '1.24.13'", 1)),
+                ("excluded actual suite", workflow.replace("if: inputs.suite != 'macos-profiles'", "if: inputs.suite != 'desktop-connect-child' && inputs.suite != 'macos-profiles'", 1))):
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                require_validator_go_order(changed)
+
     def test_actual_original_peer_tuple_guards(self):
         execute_owned_tuple_guards()
 
