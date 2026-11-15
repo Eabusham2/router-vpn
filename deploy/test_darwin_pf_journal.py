@@ -20,6 +20,14 @@ FILES = ('modes/darwin_pf_baseline.py', 'modes/darwin_install_capability.py', 'm
          'modes/cleanup-private-runtime.py', 'modes/select-standard-engine.sh',
          'modes/tor-prelaunch-witness.py')
 MUTANTS = (
+    ('ordered strongest member applied policy', 'kill-switch-platform.py',
+     "        policy = node_chain_capture['policy']\n", '',
+     'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_node_chain_original_members_preserve_strongest_policy',
+     'ordered original aggregate did not reach native baseline'),
+    ('ordered unchanged original member policy', 'kill-switch-platform.py',
+     "_darwin_saved_member_policy(member) != row[3]", 'False',
+     'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_node_chain_member_changes_refused_before_mutation',
+     'changed original ordered member reached native mutation'),
     ('ordinary strongest member applied policy', 'kill-switch-platform.py',
      "        policy = external_capture['policy']\n", '',
      'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_external_aggregate_applies_original_members_and_preserves_final_lan',

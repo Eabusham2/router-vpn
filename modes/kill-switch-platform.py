@@ -378,9 +378,12 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
         policy = external_capture['policy']
     if node_chain_capture is not None:
         node_chain_capture = _darwin_node_chain_capture(node_chain_capture)
+        if node_chain_capture['schema'] == 2 and retained_state is None:
+            raise RuntimeError('legacy macOS ordered capture cannot acquire a new baseline')
         if retained_state is not None:
             _darwin_node_chain_state(retained_state, node_chain_capture)
-        _darwin_node_chain_profile(control_profile, runtime_id, control_id, node_chain_capture)
+        _darwin_node_chain_profile(control_profile, runtime_id, control_id, node_chain_capture, store)
+        policy = node_chain_capture['policy']
         if retained_state is None and store.get('selected_id') != node_chain_capture['profile_id']:
             raise RuntimeError('macOS ordered baseline changed its original selected Router control')
     if candidate_prefix_capture is not None:
@@ -813,8 +816,10 @@ _NODE_CHAIN_CAPTURE_FIELDS = ('schema', 'family', 'profile_id', 'session_id', 's
 
 
 def _darwin_node_chain_capture(value):
-    _darwin._baseline._fields(value, _NODE_CHAIN_CAPTURE_FIELDS)
-    if (type(value['schema']) is not int or value['schema'] != 2
+    schema = value.get('schema') if type(value) is dict else None
+    fields = _NODE_CHAIN_CAPTURE_FIELDS + (('members_json', 'members_sha256') if schema == 3 else ())
+    _darwin._baseline._fields(value, fields)
+    if (type(schema) is not int or schema not in (2, 3)
             or type(value['family']) is not str or value['family'] not in _NODE_CHAIN_FAMILIES
             or type(value['home_lan_access']) is not bool
             or value['policy'] not in ('off', 'on-connect', 'always')
@@ -823,17 +828,81 @@ def _darwin_node_chain_capture(value):
                    for key in ('source_sha256', 'config_sha256'))):
         raise RuntimeError('macOS ordered baseline lost its exact complete policy capture')
     _linux.validate_profile_id(value['profile_id'], 'native ordered control profile id')
-    return {key: value[key] for key in _NODE_CHAIN_CAPTURE_FIELDS}
+    if schema == 3:
+        _darwin_node_chain_rows(value)
+    return {key: value[key] for key in fields}
 
 
-def _darwin_node_chain_profile(profile, runtime_id, control_id, capture):
+def _darwin_node_chain_rows(capture):
+    fail = 'macOS ordered baseline lost its original member policy rows'
+    raw, digest = capture['members_json'], capture['members_sha256']
+    if (type(raw) is not str or not 0 < len(raw) <= 4096 or type(digest) is not str
+            or not re.fullmatch('[0-9a-f]{64}', digest)):
+        raise RuntimeError(fail)
+    try:
+        rows = json.loads(raw)
+    except (ValueError, TypeError) as error:
+        raise RuntimeError(fail) from error
+    if (type(rows) is not list or not 2 <= len(rows) <= 8
+            or json.dumps(rows, separators=(',', ':'), ensure_ascii=True) != raw
+            or hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode('utf-8')).hexdigest() != digest):
+        raise RuntimeError(fail)
+    seen, policy, lan = set(), 'off', True
+    for position, row in enumerate(rows):
+        if (type(row) is not list or len(row) != 6 or type(row[0]) is not str
+                or not re.fullmatch('[A-Za-z0-9_-]{1,64}', row[0]) or row[0] in seen
+                or type(row[1]) is not str or not re.fullmatch('[a-z0-9-]{1,64}', row[1])
+                or row[2] not in ('router-vpn', 'external') or row[3] not in ('off', 'on-connect', 'always')
+                or row[4] not in ('auto', 'on', 'off') or type(row[5]) is not bool):
+            raise RuntimeError(fail)
+        seen.add(row[0])
+        if row[2] == 'external':
+            middle = {'ordered-node-chain-v1': ('shadowsocks',),
+                      'ordered-node-chain-socks-v1': ('socks5',),
+                      'ordered-node-chain-connect-v1': ('http-connect', 'https-connect')}
+            if len(rows) != 3 or position != 1 or row[1] not in middle.get(capture['family'], ()) or rows[-1][1] != 'shadowsocks':
+                raise RuntimeError(fail)
+        elif position < len(rows)-1 and row[1] not in ('wg', 'awg2-fast', 'awg2-strong') or position == len(rows)-1 and row[1] not in ('shadowsocks', 'hysteria2'):
+            raise RuntimeError(fail)
+        if row[3] == 'always' or policy == 'off' and row[3] == 'on-connect':
+            policy = row[3]
+        lan = lan and row[5]
+    if rows[-1][0] != capture['profile_id'] or policy != capture['policy'] or lan is not capture['home_lan_access']:
+        raise RuntimeError(fail)
+    return rows
+
+
+def _darwin_node_chain_profile(profile, runtime_id, control_id, capture, store=None):
+    fail = 'macOS ordered baseline differs from the captured saved Router protection policy'
     if (runtime_id != control_id or runtime_id != capture['profile_id']
-            or profile.get('node_kind', '') not in ('', 'router-vpn') or profile.get('external') is not None
-            or _linux.policy_value(profile) != capture['policy']
-            or profile.get('home_lan_access', False) is not capture['home_lan_access']):
-        raise RuntimeError('macOS ordered baseline differs from the captured saved Router protection policy')
-    # This is an empty deny baseline for one complete captured graph. Only the
-    # original native guardian may add its exact owned socket tuples later.
+            or profile.get('node_kind', '') not in ('', 'router-vpn') or profile.get('external') is not None):
+        raise RuntimeError(fail)
+    if capture['schema'] == 2:
+        if (_linux.policy_value(profile) != capture['policy']
+                or profile.get('home_lan_access', False) is not capture['home_lan_access']):
+            raise RuntimeError(fail)
+    else:
+        if type(store) is not dict or type(store.get('profiles')) is not list:
+            raise RuntimeError(fail)
+        for row in _darwin_node_chain_rows(capture):
+            matches = [member for member in store['profiles'] if type(member) is dict and member.get('id') == row[0]]
+            if len(matches) != 1:
+                raise RuntimeError(fail)
+            member = matches[0]
+            kind = member.get('node_kind', '') or 'router-vpn'
+            if kind != row[2]:
+                raise RuntimeError(fail)
+            if kind == 'external':
+                if type(member.get('external')) is not dict or member['external'].get('protocol') != row[1]:
+                    raise RuntimeError(fail)
+            elif member.get('external') is not None:
+                raise RuntimeError(fail)
+            ipv6 = member.get('ipv6_mode', '') or 'on'
+            lan = member.get('home_lan_access', True)
+            if (_darwin_saved_member_policy(member) != row[3] or ipv6 != row[4]
+                    or type(lan) is not bool or lan is not row[5]):
+                raise RuntimeError(fail)
+    # Original guardians alone grant physical tuples after this empty baseline.
     if any(os.environ.get(key) for key in ('HOMEVPN_ENDPOINT', 'HOMEVPN_NATIVE_ENDPOINTS_JSON',
             'HOMEVPN_NATIVE_EGRESS_JSON', 'HOMEVPN_TOR_PHYSICAL_BROKER', 'HOMEVPN_TOR_SESSION',
             'HOMEVPN_TOR_SOURCE_SHA256', 'HOMEVPN_EXTERNAL_SESSION')):
@@ -845,7 +914,7 @@ def _darwin_node_chain_selected(root, capture):
     if store.get('selected_id') != capture['profile_id']:
         raise RuntimeError('macOS ordered baseline changed its original selected Router control')
     profile = _linux.required_profile(store, capture['profile_id'], 'ordered policy/control')
-    _darwin_node_chain_profile(profile, capture['profile_id'], capture['profile_id'], capture)
+    _darwin_node_chain_profile(profile, capture['profile_id'], capture['profile_id'], capture, store)
 
 
 def _darwin_node_chain_state(state, capture):
@@ -868,7 +937,7 @@ def _darwin_node_chain_state(state, capture):
 
 def _darwin_node_chain_receipt(value, capture):
     _darwin._baseline._fields(value, ('schema', 'capture', 'phase', 'pf_token', 'baseline'))
-    if (type(value['schema']) is not int or value['schema'] != 2
+    if (type(value['schema']) is not int or value['schema'] != capture['schema']
             or _darwin_node_chain_capture(value['capture']) != capture
             or value['phase'] not in ('active', 'held', 'retired')):
         raise RuntimeError('macOS ordered baseline receipt belongs to another original capture')
@@ -880,7 +949,7 @@ def _darwin_node_chain_receipt(value, capture):
 
 
 def _darwin_node_chain_result(capture, phase, token, baseline):
-    return _darwin_node_chain_receipt(dict(schema=2, capture=capture, phase=phase,
+    return _darwin_node_chain_receipt(dict(schema=capture['schema'], capture=capture, phase=phase,
                                           pf_token=token, baseline=baseline), capture)
 
 
@@ -914,8 +983,8 @@ def darwin_node_chain(action, value):
     root = _linux.root_dir()
     state = _linux.read_state(root)
     if action == 'apply':
-        if expected is not None:
-            raise RuntimeError('macOS ordered application cannot reuse a prior receipt')
+        if expected is not None or capture['schema'] != 3:
+            raise RuntimeError('macOS ordered application requires original member policy capture')
         _darwin_node_chain_selected(root, capture)
         os.environ['HOMEVPN_PROFILE_ID'] = capture['profile_id']
         os.environ['HOMEVPN_POLICY_PROFILE_ID'] = capture['profile_id']

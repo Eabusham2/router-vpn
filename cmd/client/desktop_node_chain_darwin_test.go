@@ -39,15 +39,17 @@ func desktopMacOSNodeChainRetirementFixtureWith(t *testing.T, makeLaunch func(*t
 	a.state.Mode, a.state.LogicalMode, a.state.RuntimeMode = "multihop", "multihop", launch.mode
 	a.state.RouterID, a.state.Base = launch.policyProfileID, launch.chain.selection.Base
 	parent := &desktopMacOSSessionCapture{app: a, controller: c, parent: p, session: s}
-	meta := launch.chain.policyMetadata()
+	selection, err := newDesktopMacOSNodeChainSelection(launch.chain)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runtime := &desktopNodeChainPlatformRuntime{registered: true}
 	h := &desktopMacOSNodeChainHost{parent: parent, runtime: runtime, launch: launch, policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy, connectPolicy: launch.chain.connectPolicy,
 		operation: operation, gate: make(chan struct{}, 1), entered: true, published: true, staged: true, baselineEntered: true,
-		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
-			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
+		selection: selection}
 	runtime.host, launch.chain.platform = h, runtime
 	h.gate <- struct{}{}
-	h.baseline = &desktopMacOSNodeChainReceipt{Schema: 2, Capture: h.selection, Phase: "active", Token: "417",
+	h.baseline = &desktopMacOSNodeChainReceipt{Schema: h.selection.Schema, Capture: h.selection, Phase: "active", Token: "417",
 		Baseline: desktopMacOSBaselineProof{Present: true, Rules: strings.Repeat("a", 64)}}
 	s.nodeChain = runtime
 	if err := s.Retain(context.Background(), h); err != nil {
@@ -441,7 +443,7 @@ func TestDesktopMacOSNodeChainStopRetriesEnteredBaselineWithoutReply(t *testing.
 			return nil, errors.New("partial baseline cleanup changed its captured authority")
 		}
 		actions++
-		return &desktopMacOSNodeChainReceipt{Schema: 2, Capture: selection, Phase: "retired", Token: "417"}, ctx.Err()
+		return &desktopMacOSNodeChainReceipt{Schema: selection.Schema, Capture: selection, Phase: "retired", Token: "417"}, ctx.Err()
 	}
 	h.parent.app.cmd, h.launch.command, h.bound, h.graph = nil, nil, nil, nil
 	nativeMultihopOwners.Delete(h.parent.app)

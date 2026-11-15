@@ -449,13 +449,20 @@ class OwnedDarwinPF(unittest.TestCase):
         self.selected['node_kind'] = 'router-vpn'
         self.selected.pop('external', None)
         self.selected['kill_switch_policy'] = policy
+        entry = dict(id='ordered-entry', node_kind='router-vpn', kill_switch_policy=policy,
+                     ipv6_mode='on', home_lan_access=False)
+        self.store['profiles'] = [p for p in self.store['profiles'] if p.get('id') != 'ordered-entry'] + [entry]
         self.private_json(self.root/'routers.json', self.store)
         self.stack.enter_context(patch.dict(os.environ, {
             'HOMEVPN_TOR_PHYSICAL_BROKER': '', 'HOMEVPN_TOR_SESSION': '',
             'HOMEVPN_TOR_SOURCE_SHA256': '', 'HOMEVPN_ENDPOINT': ''}))
-        return dict(schema=2, family=family, profile_id='direct-tor',
+        rows = [['ordered-entry', 'wg', 'router-vpn', policy, 'on', False],
+                ['direct-tor', 'shadowsocks', 'router-vpn', policy, 'on', False]]
+        raw = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
+        digest = hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest()
+        return dict(schema=3, family=family, profile_id='direct-tor',
                     session_id='c'*32, source_sha256='d'*64, config_sha256='e'*64,
-                    home_lan_access=False, policy=policy)
+                    home_lan_access=False, policy=policy, members_json=raw, members_sha256=digest)
 
 
     def test_socks_node_chain_uses_exact_family_through_native_retirement(self):
@@ -763,12 +770,100 @@ class OwnedDarwinPF(unittest.TestCase):
             self.assertEqual(self.commands, [])
             self.assertEqual(D._linux.read_state(self.root), {})
 
+    def test_node_chain_original_members_preserve_strongest_policy(self):
+        capture = self.node_chain_capture('off')
+        rows = json.loads(capture['members_json'])
+        rows[0][3] = 'always'
+        self.store['profiles'][-1]['kill_switch_policy'] = 'always'
+        # The explicit ordered draft remains independent of unrelated saved
+        # pair references. The exact captured IDs supply this operation.
+        self.selected['multihop_nodes'] = [{'id': 'unrelated', 'mode': 'wg'}]
+        self.private_json(self.root/'routers.json', self.store)
+        raw = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
+        capture.update(policy='always', members_json=raw,
+                       members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
+        try:
+            active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        except RuntimeError as error:
+            self.fail('ordered original aggregate did not reach native baseline: '+str(error))
+        self.assertEqual(self.saved()['policy'], 'always', 'ordered original aggregate did not reach native baseline')
+        self.assertTrue(active['baseline']['present'])
+        held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+        self.assertTrue(held['baseline']['present'])
+        self.assertEqual(D.darwin_reassert(), 0)
+        self.assertEqual(self.saved()['policy'], 'always')
+        retired = D.darwin_node_chain('release', dict(capture=capture, expected=held))
+        self.assertTrue(retired['baseline']['present'])
+
+    def test_node_chain_member_changes_refused_before_mutation(self):
+        import copy
+        capture = self.node_chain_capture('always')
+        original = copy.deepcopy(self.store)
+        for fault in ('missing', 'duplicate', 'policy', 'lan', 'ipv6', 'kind', 'source-kind'):
+            changed = copy.deepcopy(original)
+            entry = changed['profiles'][-1]
+            if fault == 'missing': changed['profiles'].pop()
+            elif fault == 'duplicate': changed['profiles'].append(copy.deepcopy(entry))
+            elif fault == 'policy': entry['kill_switch_policy'] = 'off'
+            elif fault == 'lan': entry['home_lan_access'] = True
+            elif fault == 'ipv6': entry['ipv6_mode'] = 'off'
+            elif fault == 'kind': entry['node_kind'] = 'external'
+            elif fault == 'source-kind': entry['external'] = {'protocol': 'shadowsocks'}
+            self.private_json(self.root/'routers.json', changed)
+            before = list(self.commands)
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError, msg='changed original ordered member reached native mutation'):
+                D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+            self.assertEqual(self.commands, before)
+        self.private_json(self.root/'routers.json', original)
+
+    def test_node_chain_legacy_readback_retirement_reassert_without_fresh_admission(self):
+        capture = self.node_chain_capture('always')
+        active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        legacy = {key: value for key, value in capture.items() if key not in ('members_json', 'members_sha256')}
+        legacy['schema'] = 2
+        state = self.saved()
+        state['native_node_chain_capture'] = legacy
+        self.private_json(self.root/'run/kill-switch.json', state)
+        receipt = dict(active, schema=2, capture=legacy)
+        self.assertEqual(D.darwin_node_chain('current', dict(capture=legacy, expected=receipt)), receipt)
+        self.assertEqual(D.darwin_reassert(), 0)
+        self.assertEqual(self.saved()['native_node_chain_capture'], legacy)
+        before = list(self.commands)
+        with self.assertRaises(RuntimeError):
+            D.darwin_node_chain('apply', dict(capture=dict(legacy, source_sha256='f'*64), expected=None))
+        self.assertEqual(self.commands, before)
+        held = D.darwin_node_chain('retire', dict(capture=legacy, expected=receipt))
+        self.assertTrue(held['baseline']['present'])
+        self.assertTrue(D.darwin_node_chain('release', dict(capture=legacy, expected=held))['baseline']['present'])
+
+    def test_node_chain_off_storage_rejects_changed_member_pin(self):
+        import copy
+        capture = self.node_chain_capture('off')
+        D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        original = self.saved()
+        self.assertTrue(D._linux._darwin_isolated_native_state(original))
+        for fault in ('missing', 'digest', 'policy', 'final', 'lan', 'duplicate'):
+            state = copy.deepcopy(original)
+            value = state['native_node_chain_capture']
+            rows = json.loads(value['members_json'])
+            if fault == 'missing': del value['members_json']
+            elif fault == 'digest': value['members_sha256'] = 'f'*64
+            else:
+                if fault == 'policy': rows[0][3] = 'always'
+                elif fault == 'final': rows[-1][0] = 'foreign'
+                elif fault == 'lan': rows[0][5] = rows[-1][5] = True
+                elif fault == 'duplicate': rows[0][0] = rows[-1][0]
+                value['members_json'] = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
+                value['members_sha256'] = hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+value['members_json']).encode()).hexdigest()
+            with self.subTest(fault=fault):
+                self.assertFalse(D._linux._darwin_isolated_native_state(state))
+
     def test_node_chain_uses_original_journal_and_exact_retirement(self):
         for policy in ('on-connect', 'always'):
             with self.subTest(policy=policy):
                 capture = self.node_chain_capture(policy)
                 active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
-                self.assertEqual(active['schema'], 2)
+                self.assertEqual(active['schema'], 3)
                 self.assertEqual(active['capture'], capture)
                 state = self.saved()
                 self.assertEqual(state['native_socket_family'], 'ordered-node-chain-v1')

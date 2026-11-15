@@ -10,14 +10,15 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md)
 records the recovered original requirements and newer published source through
-`dd9a608b`: macOS prefix-only candidate controls with purpose-safe dialog
+`f51b791a`: macOS prefix-only candidate controls with purpose-safe dialog
 ownership, atomic native descriptor transfer, the measured Compare test oracle,
 Linux/Windows ordinary OpenVPN-entry to independent SS2022-final hosts,
 macOS ordered Off ownership, the corrected macOS final-policy baseline ID,
 the Linux Off selection fixture, Darwin receive-flag normalization and cleanup
 retry, saved-prefix Off admission and the complete supported Darwin external
 protocol catalog, strongest original member protection and Darwin PF interface
-clause ordering.
+clause ordering, ordinary external all-Off native ownership and the two
+subsequent physical-fixture/native-selection audit repairs.
 Published `d41f4d4a` also adopts the bounded ordinary OpenVPN-entry/SS2022-final pair
 in the macOS retained host with independent entry and final proof fixtures.
 The OpenVPN addition is a bounded two-node Local path with one literal TCP or
@@ -52,7 +53,11 @@ binds each external member's original protection and every saved-prefix member's
 identity/mode/device policy before applying the existing aggregate. An Off final
 can retain a stronger entry; unchanged aggregate values cannot hide changed
 members. Old exact owners keep cleanup and Always reassertion, with fresh legacy
-admission closed. The ordered Off
+admission closed. The ordinary ordered Darwin baseline now also binds canonical
+original member rows, verifies each saved policy and applies the strongest
+whole-graph protection; an Always intermediate with an Off final keeps Always.
+Focused race, full journal/control and cross-build checks passed, while actual
+PF/utun mixed-policy acceptance remains a native obligation. The ordered Off
 path keeps ordinary host traffic open and
 retains the original engine guard until descriptor and guardian retirement are
 proved. Actual macOS packet/state/alias execution remains a native gate; this

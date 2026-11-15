@@ -131,12 +131,14 @@ func (capture *desktopNodeChainPlatformCapture) prepareForPurposeAndExecution(ct
 		return nil, "", err
 	}
 	launch.chain.capture = owner
-	meta := launch.chain.policyMetadata()
+	baselineSelection, err := newDesktopMacOSNodeChainSelection(launch.chain)
+	if err != nil {
+		return launch, "", err
+	}
 	runtime := &desktopNodeChainPlatformRuntime{capture: owner}
 	h := &desktopMacOSNodeChainHost{parent: capture.parent, runtime: runtime, launch: launch, policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy, connectPolicy: launch.chain.connectPolicy,
 		operation: operation, gate: make(chan struct{}, 1), baselineRun: runDesktopMacOSNodeChainBaseline,
-		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
-			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
+		selection: baselineSelection}
 	if launch.chain.execution != nil {
 		h.execution = launch.chain.execution
 		h.executionPreparation, h.executionPhysical = h.execution.preparation, h.execution.physical
@@ -201,9 +203,8 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 		return err
 	}
 	meta := h.launch.chain.policyMetadata()
-	expected := desktopMacOSNodeChainSelection{Schema: 2, Family: h.launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
-		Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}
-	if meta.TargetOS != "darwin" || h.selection != expected || !h.selection.valid() {
+	expected, err := newDesktopMacOSNodeChainSelection(h.launch.chain)
+	if err != nil || meta.TargetOS != "darwin" || h.selection != expected || !h.selection.valid() {
 		return errors.New("macOS ordered host changed its typed protection selection")
 	}
 	a := h.parent.app

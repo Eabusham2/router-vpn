@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -14,14 +16,16 @@ import (
 // the entire native graph; it cannot be presented as an ordinary exit proxy.
 // The Python journal verifies the saved Router control policy before mutation.
 type desktopMacOSNodeChainSelection struct {
-	Schema    int                 `json:"schema"`
-	Family    macosprocess.Family `json:"family"`
-	ProfileID string              `json:"profile_id"`
-	Session   string              `json:"session_id"`
-	Source    string              `json:"source_sha256"`
-	Config    string              `json:"config_sha256"`
-	HomeLAN   bool                `json:"home_lan_access"`
-	Policy    string              `json:"policy"`
+	Schema        int                 `json:"schema"`
+	Family        macosprocess.Family `json:"family"`
+	ProfileID     string              `json:"profile_id"`
+	Session       string              `json:"session_id"`
+	Source        string              `json:"source_sha256"`
+	Config        string              `json:"config_sha256"`
+	HomeLAN       bool                `json:"home_lan_access"`
+	Policy        string              `json:"policy"`
+	MembersJSON   string              `json:"members_json,omitempty"`
+	MembersSHA256 string              `json:"members_sha256,omitempty"`
 }
 
 type desktopMacOSNodeChainReceipt struct {
@@ -33,9 +37,57 @@ type desktopMacOSNodeChainReceipt struct {
 }
 
 func (s desktopMacOSNodeChainSelection) valid() bool {
-	return s.Schema == 2 && (s.Family == macosprocess.NodeChainFamily || s.Family == macosprocess.NodeChainSOCKSFamily || s.Family == macosprocess.NodeChainCONNECTFamily || s.Family == macosprocess.NodeChainExecutionFamily) && validProfileID(s.ProfileID) &&
+	return (s.Schema == 2 && s.MembersJSON == "" && s.MembersSHA256 == "" || s.Schema == 3 && s.validMembers()) && (s.Family == macosprocess.NodeChainFamily || s.Family == macosprocess.NodeChainSOCKSFamily || s.Family == macosprocess.NodeChainCONNECTFamily || s.Family == macosprocess.NodeChainExecutionFamily) && validProfileID(s.ProfileID) &&
 		desktopMacOSExternalShort.MatchString(s.Session) && desktopMacOSExternalLong.MatchString(s.Source) &&
 		desktopMacOSExternalLong.MatchString(s.Config) && (s.Policy == "off" || s.Policy == "on-connect" || s.Policy == "always")
+}
+
+func (s desktopMacOSNodeChainSelection) validMembers() bool {
+	if len(s.MembersJSON) == 0 || len(s.MembersJSON) > 4096 || !desktopMacOSExternalLong.MatchString(s.MembersSHA256) {
+		return false
+	}
+	var rows [][]any
+	if json.Unmarshal([]byte(s.MembersJSON), &rows) != nil || len(rows) < 2 || len(rows) > 8 {
+		return false
+	}
+	canonical, err := json.Marshal(rows)
+	if err != nil || string(canonical) != s.MembersJSON {
+		return false
+	}
+	digest := sha256.Sum256(append([]byte("routervpn-ordered-protection-members-v1\n"), canonical...))
+	if hex.EncodeToString(digest[:]) != s.MembersSHA256 {
+		return false
+	}
+	seen := map[string]bool{}
+	for i, row := range rows {
+		if len(row) != 6 {
+			return false
+		}
+		id, ok := row[0].(string)
+		if !ok || !validProfileID(id) || seen[id] {
+			return false
+		}
+		seen[id] = true
+		mode, ok := row[1].(string)
+		if !ok || mode == "" || len(mode) > 64 {
+			return false
+		}
+		for _, c := range mode {
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+		if row[2] != "router-vpn" && row[2] != "external" || row[3] != "off" && row[3] != "on-connect" && row[3] != "always" || row[4] != "on" && row[4] != "off" && row[4] != "auto" {
+			return false
+		}
+		if _, ok := row[5].(bool); !ok {
+			return false
+		}
+		if i == len(rows)-1 && id != s.ProfileID {
+			return false
+		}
+	}
+	return true
 }
 
 func exactDesktopMacOSNodeChainFields(object map[string]any, names ...string) bool {
@@ -61,7 +113,11 @@ func decodeDesktopMacOSNodeChainReceipt(raw []byte, capture desktopMacOSNodeChai
 		return value, failure
 	}
 	fields, ok := object["capture"].(map[string]any)
-	if !ok || !exactDesktopMacOSNodeChainFields(fields, "schema", "family", "profile_id", "session_id", "source_sha256", "config_sha256", "home_lan_access", "policy") {
+	names := []string{"schema", "family", "profile_id", "session_id", "source_sha256", "config_sha256", "home_lan_access", "policy"}
+	if capture.Schema == 3 {
+		names = append(names, "members_json", "members_sha256")
+	}
+	if !ok || !exactDesktopMacOSNodeChainFields(fields, names...) {
 		return value, failure
 	}
 	proof, ok := object["baseline"].(map[string]any)
@@ -70,7 +126,7 @@ func decodeDesktopMacOSNodeChainReceipt(raw []byte, capture desktopMacOSNodeChai
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&value) != nil || value.Schema != 2 || value.Capture != capture || value.Phase != phase ||
+	if decoder.Decode(&value) != nil || value.Schema != capture.Schema || value.Capture != capture || value.Phase != phase ||
 		!desktopMacOSExternalToken.MatchString(value.Token) || value.Baseline.Present != (phase == "active" || phase == "held" && capture.Policy != "off" || capture.Policy == "always") ||
 		value.Baseline.Present && !desktopMacOSExternalLong.MatchString(value.Baseline.Rules) || !value.Baseline.Present && value.Baseline.Rules != "" {
 		return desktopMacOSNodeChainReceipt{}, failure
@@ -83,7 +139,7 @@ func decodeDesktopMacOSNodeChainReceipt(raw []byte, capture desktopMacOSNodeChai
 
 func encodeDesktopMacOSNodeChainBaselineRequest(selection desktopMacOSNodeChainSelection, action string, expected *desktopMacOSNodeChainReceipt) ([]byte, error) {
 	if !selection.valid() || action != "apply" && action != "current" && action != "retire" && action != "release" ||
-		action == "apply" && expected != nil || action == "current" && (expected == nil || expected.Phase != "active") {
+		action == "apply" && (expected != nil || selection.Schema != 3) || action == "current" && (expected == nil || expected.Phase != "active") {
 		return nil, errors.New("macOS ordered baseline requires its original typed action")
 	}
 	if expected != nil {

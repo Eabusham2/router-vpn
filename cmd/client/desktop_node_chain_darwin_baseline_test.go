@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -91,7 +94,7 @@ func TestDesktopMacOSNodeChainBaselineExactReceiptAndRetirement(t *testing.T) {
 }
 
 func TestDesktopMacOSNodeChainBaselineOriginalRequest(t *testing.T) {
-	value := macOSNodeChainBaselineFixture("on-connect", "active")
+	value := macOSNodeChainBaselineMembersFixture("on-connect", "active")
 	for _, action := range []string{"apply", "current", "retire", "release"} {
 		var expected *desktopMacOSNodeChainReceipt
 		if action != "apply" {
@@ -131,5 +134,104 @@ func TestDesktopMacOSNodeChainBaselineOriginalRequest(t *testing.T) {
 		if _, err := encodeDesktopMacOSNodeChainBaselineRequest(value.Capture, action, nil); err != nil {
 			t.Fatal("ambiguous apply lost its original retained cleanup", err)
 		}
+	}
+}
+
+func macOSNodeChainBaselineMembersFixture(policy, phase string) desktopMacOSNodeChainReceipt {
+	value := macOSNodeChainBaselineFixture(policy, phase)
+	rows := [][]any{{"owned-first", "wg", "router-vpn", policy, "on", false}, {"owned-final", "shadowsocks", "router-vpn", policy, "on", false}}
+	raw, _ := json.Marshal(rows)
+	digest := sha256.Sum256(append([]byte("routervpn-ordered-protection-members-v1\n"), raw...))
+	value.Schema, value.Capture.Schema = 3, 3
+	value.Capture.MembersJSON, value.Capture.MembersSHA256 = string(raw), hex.EncodeToString(digest[:])
+	return value
+}
+
+func TestDesktopMacOSNodeChainBaselineLegacyCleanupOnly(t *testing.T) {
+	value := macOSNodeChainBaselineFixture("always", "held")
+	if _, err := encodeDesktopMacOSNodeChainBaselineRequest(value.Capture, "apply", nil); err == nil {
+		t.Fatal("legacy receipt acquired fresh authority")
+	}
+	for _, action := range []string{"current", "retire", "release"} {
+		actual := value
+		if action == "current" {
+			actual = macOSNodeChainBaselineFixture("always", "active")
+		}
+		if _, err := encodeDesktopMacOSNodeChainBaselineRequest(actual.Capture, action, &actual); err != nil {
+			t.Fatal("legacy exact ownership lost cleanup", action, err)
+		}
+	}
+}
+
+func TestDesktopMacOSNodeChainBaselineMemberReceiptRejectsMutation(t *testing.T) {
+	original := macOSNodeChainBaselineMembersFixture("always", "active")
+	raw, _ := json.Marshal(original)
+	if actual, err := decodeDesktopMacOSNodeChainReceipt(raw, original.Capture, "active"); err != nil || actual != original {
+		t.Fatal(err)
+	}
+	for _, fault := range []string{"digest", "rows", "unknown", "missing", "legacy", "policy", "reordered"} {
+		t.Run(fault, func(t *testing.T) {
+			changed := original
+			switch fault {
+			case "digest":
+				changed.Capture.MembersSHA256 = strings.Repeat("e", 64)
+			case "rows":
+				changed.Capture.MembersJSON = strings.ReplaceAll(changed.Capture.MembersJSON, "owned-first", "foreign")
+			case "unknown":
+				changed.Capture.MembersJSON = `[["owned-first","wg","router-vpn","always","on",false,"extra"]]`
+			case "missing":
+				changed.Capture.MembersJSON = ""
+			case "legacy":
+				changed.Capture.Schema = 2
+			case "policy":
+				changed.Capture.Policy = "off"
+			case "reordered":
+				changed.Capture.MembersJSON = `[["owned-final","shadowsocks","router-vpn","always","on",false],["owned-first","wg","router-vpn","always","on",false]]`
+			}
+			body, _ := json.Marshal(changed)
+			if _, err := decodeDesktopMacOSNodeChainReceipt(body, original.Capture, "active"); err == nil {
+				t.Fatal("different original member capture accepted")
+			}
+		})
+	}
+}
+
+func TestDesktopMacOSNodeChainBaselineCapturesEveryOriginalPolicy(t *testing.T) {
+	for _, strongest := range []string{"off", "on-connect", "always"} {
+		t.Run(strongest, func(t *testing.T) {
+			a, nodes := desktopNodeChainCaptureFixture(t, 3)
+			for i := range a.profiles.Profiles {
+				a.profiles.Profiles[i].KillSwitch = false
+				a.profiles.Profiles[i].KillSwitchPolicy = "off"
+				a.profiles.Profiles[i].HomeLANAccess = true
+			}
+			a.profiles.Profiles[0].KillSwitchPolicy = strongest
+			a.profiles.Profiles[1].HomeLANAccess = false
+			control := a.profiles.Profiles[2]
+			selected, err := resolveDesktopNodeChainSelection(control, a.profiles.Profiles, nodes, "local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected, err = captureNativeNodeChainSelection(context.Background(), clientRoot(a), selected, []string{"shadowsocks"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch, err := newDesktopNodeChainLaunch(selected, strings.Repeat("a", 32), "darwin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			capture, err := newDesktopMacOSNodeChainSelection(launch.chain)
+			if err != nil || capture.Schema != 3 || capture.Policy != strongest || capture.HomeLAN || capture.ProfileID != control.ID {
+				t.Fatal("first/middle policy did not reach actual Darwin parent capture", capture, err)
+			}
+			var rows [][]any
+			if json.Unmarshal([]byte(capture.MembersJSON), &rows) != nil || len(rows) != 3 || rows[0][0] != nodes[0].ID || rows[0][3] != strongest || rows[1][5] != false || rows[2][3] != "off" {
+				t.Fatal("original ordered source rows changed", rows)
+			}
+			launch.chain.selection.Nodes[0].Profile.KillSwitchPolicy = "changed"
+			if _, err := newDesktopMacOSNodeChainSelection(launch.chain); err == nil {
+				t.Fatal("baseline rederived authority from changed original member")
+			}
+		})
 	}
 }

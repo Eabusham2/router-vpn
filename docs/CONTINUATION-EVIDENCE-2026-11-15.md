@@ -95,10 +95,13 @@ back from the remote. There was no force push or live deployment.
 | `6026e9c5c4732796e45997f0ccdb380551f33a61` | The Darwin external validator recognizes all eight protocols already supported by its Go capture and retained native host, including SOCKS5, AmneziaWG and OpenVPN. | The actual dispatcher reproduced those three pre-native refusals before the correction. All 83 then-current dispatcher/journal tests passed afterward; unknown protocols and malformed aliases remain rejected. This catalog correction does not itself prove native protocol execution. |
 | `8282ed8ae9ee29697fbfde9e0f445eeb38e95de9` | Ordinary external paths preserve the strongest original entry/final protection through capture, restore and temporary tests; Darwin external and full saved-prefix journals bind the original individual members. | The race, cross-language, native-runner and canonical-source checks are detailed below. Both Darwin controller architectures cross-compiled; actual PF/utun and packaged acceptance remain required. |
 | `dd9a608b3065b2948b453604816814ea79ccec83` | The Darwin isolated PF renderer places an optional interface clause before the protocol clause, preserving the original UID, tuple, deny and no-state rules. | Both actual Mac architectures exposed the old syntax error in four native Off protocol cases at `6026e9c5`. All focused PF race tests passed in 1.062 seconds; restoring the old renderer fails the finite compiler witness. The original native acceptance cases remain mandatory. |
+| `3e5f0424ca8a840e7144a7d3d549a665b9d984cf` | Supported ordinary external all-Off connections retain the original native controller, isolated engine, captured policy and joined cleanup on Linux, Windows and macOS. | The focused race, canonical preparation, runner and cross-build results are recorded below. The added installed/kernel cases remain exact-SHA execution requirements. |
+| `7ebe9c2649d604d20b763a81968d8d53e157241c` | OpenVPN and SOCKS physical fixtures accept freshly captured Off while rejecting a separately valid replacement of an original Always capture with Off. | All 84 focused test verdicts passed with race instrumentation in 3.845 seconds against an isolated published-source copy. The old OpenVPN expectation caused four exact-`3e5f0424` workflow failures. Production ownership and validation were unchanged. |
+| `f51b791ab6644e92d09c512f760d86b04580b69f` | The preparation audit follows the actual retained native-family execution call as well as direct test selectors. | All 15 published-source preparation checks passed. Removing the real invocation while retaining its text in a comment fails the audit. This fixes the stale selector inspection without removing any native root. |
 
 The last named commit is the verified publication checkpoint preceding this
-evidence refresh. This change admits supported ordinary external all-Off
-connections through their retained native owners as described below; a document does not manufacture a
+evidence refresh. This change binds ordinary ordered Darwin baselines to every
+original member's device policy as described below; a document does not manufacture a
 publication receipt for itself. This is not a claim that `main` cannot
 advance. The complete release-orchestration source audit also passed in the
 working tree containing these repairs. That local working-tree result is not
@@ -126,8 +129,38 @@ captured-runtime-child cases passed in 21.35 and 7.82 seconds respectively,
 alongside supervisor, original-image/UID, AppKit shutdown and PF utility
 controls. These are actual native controller observations. The separate Off
 kernel, generated runtime, packaged app and complete release gates remain
-distinct; this does not report the following unpublished all-Off additions
+distinct; this does not report the subsequent all-Off additions
 as natively accepted.
+
+### Original member policy in ordinary macOS ordered connections
+
+The ordinary ordered host now supplies a schema-3 baseline capture containing
+canonical ordered rows of original profile ID, mode, node kind, protection,
+IPv6 and LAN policy. The rows come from the already sealed complete launch;
+they contain no transport credential or socket permission. Their bounded digest
+and the whole-graph source/config identities survive readback and cleanup.
+
+The Python saved-profile boundary checks each exact original member before
+applying the strongest captured protection and the whole-graph LAN conjunction.
+An Always entry with an Off final therefore keeps Always without changing the
+final's saved choice. A changed member is rejected even when the aggregate
+would stay the same. Explicit ordered drafts do not need to overwrite the
+control profile's saved ordered-selection preference. Missing or duplicate
+records, malformed rows, altered hashes and stale original policy remain
+refusals.
+
+Legacy schema-2 owners retain exact current/retire/release and Always-reassertion
+operations; they cannot acquire a fresh baseline. The durable all-Off state
+reader accepts only a bounded canonical schema-3 all-Off member capture, so
+recording Off cannot bypass the original source or cleanup authority.
+
+An isolated published-source-plus-unit copy passed the focused client baseline
+race tests in 2.395 seconds. Its complete Darwin AMD64 client test image
+cross-compiled with CGO disabled. The PF journal gate passed 20 primitives,
+97 owned-lifecycle cases and 41 causal controls, including removal of the
+applied aggregate and removal of exact saved-member comparison. These are
+controller/dispatcher and compile observations. Actual macOS PF/utun and
+packaged mixed-policy acceptance remain mandatory native gates.
 
 ### Linux connection with every member's kill switch Off
 

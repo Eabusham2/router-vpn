@@ -651,7 +651,7 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
         key, schemas = 'native_candidate_prefix_capture', (2, 3)
     elif family in ('ordered-node-chain-v1', 'ordered-node-chain-socks-v1',
                     'ordered-node-chain-connect-v1', 'ordered-node-chain-execution-v1'):
-        key, schemas = 'native_node_chain_capture', (2,)
+        key, schemas = 'native_node_chain_capture', (2, 3)
     else:
         return False
     if any(other in value for other in ('native_external_capture', 'native_candidate_prefix_capture', 'native_node_chain_capture') if other != key):
@@ -680,6 +680,32 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
                 return False
     if family == 'node-candidate-prefix-v1' and capture['schema'] == 3:
         if type(capture.get('members_sha256')) is not str or not re.fullmatch('[0-9a-f]{64}', capture['members_sha256']):
+            return False
+    if key == 'native_node_chain_capture' and capture['schema'] == 3:
+        raw, digest = capture.get('members_json'), capture.get('members_sha256')
+        if (type(raw) is not str or not 0 < len(raw) <= 4096 or type(digest) is not str
+                or not re.fullmatch('[0-9a-f]{64}', digest)):
+            return False
+        try:
+            rows = json.loads(raw)
+            if (type(rows) is not list or not 2 <= len(rows) <= 8
+                    or json.dumps(rows, separators=(',', ':'), ensure_ascii=True) != raw
+                    or hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode('utf-8')).hexdigest() != digest):
+                return False
+            seen = set()
+            lan = True
+            for row in rows:
+                if (type(row) is not list or len(row) != 6 or type(row[0]) is not str
+                        or not re.fullmatch('[A-Za-z0-9_-]{1,64}', row[0]) or row[0] in seen
+                        or type(row[1]) is not str or not re.fullmatch('[a-z0-9-]{1,64}', row[1])
+                        or row[2] not in ('router-vpn', 'external') or row[3] != 'off'
+                        or row[4] not in ('auto', 'on', 'off') or type(row[5]) is not bool):
+                    return False
+                seen.add(row[0])
+                lan = lan and row[5]
+            if rows[-1][0] != capture['profile_id'] or lan is not capture['home_lan_access']:
+                return False
+        except (ValueError, TypeError):
             return False
     journal = value.get('darwin_native_baseline')
     if type(journal) is not dict or type(journal.get('schema')) is not int or journal['schema'] != 1 or type(journal.get('complete')) is not bool:
