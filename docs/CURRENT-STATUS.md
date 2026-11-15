@@ -79,6 +79,18 @@ source controls pass; actual encrypted kernel acceptance remains a required
 hosted result. The published driver selects the actual pinned Linux compiler
 and checks the resulting image version before executing the suite.
 
+The required Windows CONNECT execution workflow covers AMD64 and ARM64
+against the exact same-run verified runtime bundle. Its fourteen cases use the
+protected controller, original token/TLS bootstrap, WFP/TUN owners, independent
+encrypted peer, saved Last and already-selected restoration. The physical
+interface aliases retain their LUID, creation timestamp and DAD readback;
+cleanup joins the original controller and relay before removing those entries.
+Partial startup retains cleanup before allocation and cannot discard a started
+command when process capture fails. The existing loopback alias helper remains
+separate. The original prefix8, SOCKS11 and Local CONNECT18 producer gates stay
+required. Portable ownership/cleanup controls and ARM64 cross-compilation pass;
+actual Windows native execution and AMD64 race evidence remain hosted gates.
+
 The Apple app now admits the exact CONNECT execution trio through its typed
 source and public Connect path. It retains the independent native factory in
 the existing PacketTunnel, waits for the original provider owner before

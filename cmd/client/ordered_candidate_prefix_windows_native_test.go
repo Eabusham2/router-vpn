@@ -112,7 +112,10 @@ func windowsPrefixController() error {
 		return err
 	}
 	defer releaseSOCKS()
-	releaseCONNECT, err := windowsCONNECTRegisterRoutes(mux, a, original)
+	execution, releaseCONNECT, err := windowsCONNECTExecutionRegisterRoutes(mux, a, original)
+	if err == nil && !execution {
+		releaseCONNECT, err = windowsCONNECTRegisterRoutes(mux, a, original)
+	}
 	if err != nil {
 		return err
 	}

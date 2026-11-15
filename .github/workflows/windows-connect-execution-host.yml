@@ -1,0 +1,88 @@
+name: Windows installed CONNECT Server and Compare acceptance
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-connect-execution-host-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: Actual CONNECT trio Server and Compare on ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: windows-latest
+            cgo: '1'
+          - arch: arm64
+            runner: windows-11-arm
+            cgo: '0'
+    env:
+      GOOS: windows
+      GOARCH: ${{ matrix.arch }}
+      CGO_ENABLED: ${{ matrix.cgo }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: ./.github/actions/go-windows-sockets
+      - name: Pinned compiler for native AMD64 race checks
+        if: matrix.arch == 'amd64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compilerLines = @(python deploy/install-desktop-windows-toolchain.py (Join-Path $env:RUNNER_TEMP 'routervpn-connect-execution-llvm'))
+          if ($LASTEXITCODE -ne 0 -or $compilerLines.Count -ne 1) { throw 'Pinned Windows CONNECT compiler installation failed' }
+          $compilerBin = [string]$compilerLines[0]
+          $compiler = Join-Path $compilerBin 'x86_64-w64-mingw32-clang.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Pinned Windows CONNECT C compiler is missing' }
+          "CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Require CONNECT execution inventory, cleanup controls and authoritative workflow
+        shell: pwsh
+        run: |
+          python deploy/test_windows_connect_execution_host_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows CONNECT execution inventory or cleanup controls failed' }
+          python deploy/test_windows_connect_execution_workflow.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows CONNECT execution workflow contract failed' }
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-native-runtime-windows-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/connect-execution-host-bundle
+      - name: Verify exact-source CONNECT execution runtime bundle
+        shell: pwsh
+        run: |
+          python deploy/native-runtime-bundle.py extract 'windows/${{ matrix.arch }}' "$env:RUNNER_TEMP/connect-execution-host-bundle/native-windows-${{ matrix.arch }}.tar.gz" "$env:RUNNER_TEMP/connect-execution-host-verified"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows CONNECT execution bundle verification failed' }
+      - name: Require real CONNECT Server, both Compare winners and retained restoration
+        timeout-minutes: 110
+        shell: pwsh
+        env:
+          ROUTERVPN_WINDOWS_CONNECT_EXECUTION_NATIVE: '1'
+          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
+          ROUTERVPN_CONNECT_EXECUTION_RECEIPT: ${{ runner.temp }}/windows-connect-trio-execution-${{ matrix.arch }}.json
+        run: |
+          python deploy/test_windows_connect_execution_host.py --bundle "$env:RUNNER_TEMP/connect-execution-host-verified" --go go --require-commit "$env:ROUTERVPN_EXPECTED_SOURCE" --receipt "$env:ROUTERVPN_CONNECT_EXECUTION_RECEIPT"
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows CONNECT Server or Compare failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Windows-connect-execution-host-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-connect-trio-execution-${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 14

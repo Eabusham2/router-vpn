@@ -3653,3 +3653,77 @@ UI, real tunnel/transition/leak acceptance, signing and deployment remain
 separate required evidence. Public generic paired/imported-SS Server/Compare
 admission is the next distinct Apple source unit. Other graph families and the
 full original requirement ledger are not closed by this CONNECT implementation.
+
+
+## Required installed Windows CONNECT execution and owned physical aliases
+
+This separate Windows gate consumes the successful current-run native runtime
+bundle before release aggregation. Both AMD64 and ARM64 are mandatory, with
+pinned Go, AMD64 native Clang/race compilation and ARM64 CGO-off compilation.
+No workflow inputs can substitute a historical source, architecture or case;
+receipt publication requires the exact architecture and source identity. The
+aggregate cannot publish without this gate. The existing required producer
+retains all eight prefix, eleven SOCKS and eighteen Local CONNECT cases.
+
+The fourteen new installed cases cover HTTP/HTTPS Server and Compare with WG,
+AWG Fast and AWG Strong entries, their captured Off/AES/AES+whitening choices,
+both retained winners, and wrong authentication, TLS identity, public identity,
+final key, selected DNS, replaced source and held-cleanup failures. The actual
+protected controller and inherited typed child retain original pipe/token/TLS,
+Job/process, native WFP, TUN, source, journal and Last owners. The independent
+relay uses a separately captured exact bundle-image copy with its own path;
+the client's AppID protection is not relaxed to accommodate the counterparty.
+Private HTTP administration and direct reference-worker launch remain explicit
+fixture adapters rather than physical-router acceptance.
+
+The fixture creates only its two nonpersistent /32 addresses on the captured
+physical interface. Their original LUID/index, creation timestamp, prefix,
+source-selection policy and DAD readback must remain valid. Source replacement
+revokes observation; it does not grant deletion rights over a replacement
+address. Cleanup joins original controller and relay ownership before retiring
+these entries. Both launchers retain their cleanup before allocation and retain
+a successfully started command even if subsequent process-handle capture fails.
+A failed join is returned and blocks alias deletion. The separately published
+loopback alias owner remains unchanged; the new physical adapter uses distinct
+windowsCONNECTPhysicalAlias symbols and does not substitute loopback proof.
+
+All nine strict runner roots pass. Portable controls execute the actual
+extracted alias predicate (20 records and three rejected omissions) and staged
+cleanup code (15 records and four rejected omissions), with kernel/process
+boundaries explicitly modeled. Original 05671f0b source cross-compiled both
+Windows ARM64 controller and encrypted peer; those receipts remain scoped to
+that source. The subsequent integrated workflow guard passes seven roots,
+all 26 aggregate roots pass, and the full artifact/workflow parity audit passes.
+The earlier ENOSPC peer attempt is retained as a resource failure. It is not
+compiler or native acceptance. Only reproducible old build cache was reclaimed;
+source, completed images and validation evidence were preserved.
+
+Frozen native12 manifest SHA-256:
+96c673f2b8627ae25e05d5de5b190a7eb54b4a7abbed7790987c85be15fa71c5.
+Its original bounded validation receipt SHA-256:
+fd08cafdb267daea863b58d7747a287435db84d7d30cf2593448f0e38a680105.
+Workflow2 manifest SHA-256:
+6fba678b02b291cdedb875ca46f11595d0746c20dacb75ec125ce651969a74ff.
+Current central4 manifest SHA-256:
+134c3e053a38c705b7c9f516178e5c5ed4c2ac3547c95fc13a47995aa8e27c2e.
+The final current composition also passes: the ARM64 controller compiled in
+77.377 seconds from 4b96c537, and every compiled Go source hash was verified
+unchanged at e1325e3d. The actual peer was rebuilt at e1325e3d with the concurrent
+SOCKS server sources and tracked CONNECT half-close fix, passing in 34.716
+seconds over 1126 canonical source records. Both compiler logs are empty.
+Controller image SHA-256:
+2548a3f861e67379f82992504adcee9ae3ce94ff6a84f917dcdfd7f10e1dcf7f.
+Peer image SHA-256:
+3d53d4f7befc3adfd690c28ab2c71d45513cf6bf348a6f8bbc1fa40b62af60f6.
+Current composition receipt SHA-256:
+143c19c396030d164dfd8f12e69f20b0d57eea7c727b65cc034c494771c07681.
+These cross-compilation results establish type/image closure, not execution of
+the Windows kernel or encrypted network cases.
+
+All eighteen preimages and frozen result hashes were checked at e1325e3d;
+Apple integration, current server ordering and the concurrent SOCKS server
+source/native gate were preserved. Actual installed WFP/TUN, encrypted network,
+permission and cleanup acceptance for all fourteen cases on both Windows
+architectures still requires the hosted native receipts. This unit is not a
+claim of physical-device, signed-distribution, private deployment or complete
+original-requirement acceptance.

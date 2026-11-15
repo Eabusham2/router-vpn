@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Strict Windows execution scheduling/receipt controls; no simulated native acceptance."""
+from pathlib import Path
+from contextlib import contextmanager,redirect_stdout
+from copy import deepcopy
+from types import SimpleNamespace
+import importlib.util,io,json,os,re,tempfile,unittest
+from unittest.mock import patch,Mock
+ROOT=Path(__file__).resolve().parents[1]
+spec=importlib.util.spec_from_file_location('windows_execution_gate',ROOT/'deploy/test_windows_connect_execution_host.py')
+G=importlib.util.module_from_spec(spec);spec.loader.exec_module(G)
+
+def counters(case):
+    value=dict(case=case,launches=1,entry_raw_udp=1,entry_tcp=1,entry_proofs=1,middle_raw_tcp=1,middle_tcp=1,middle_public=1,final_raw_tcp=1,final_tcp=1,final_proofs=1,dns=1,middle_raw_udp=0,final_raw_udp=0,auth_refusals=0,tls_refusals=0,open_streams=0,entry_layer=G.ENTRY_LAYERS[case],entry_layer_packets=0,entry_layer_ciphertext=0,entry_layer_auth=0,restore_launches=int(case in G.CASES[:6] and not case.endswith('auto-local')),comparison_trials=2 if '-auto-' in case else 0,native_joined=True,journal_settled=True,wfp_absent=True,tun_absent=True,aliases_removed=True)
+    if value['entry_layer']!='off':value.update(entry_layer_packets=1,entry_layer_ciphertext=1)
+    if case in ('http-wrong-auth','https-wrong-auth','https-tls-name'):
+        value.update(middle_tcp=0,middle_public=0,final_raw_tcp=0,final_tcp=0,final_proofs=0,dns=0)
+        value['tls_refusals' if case=='https-tls-name' else 'auth_refusals']=1
+    if case=='http-wrong-public':value.update(final_raw_tcp=0,final_tcp=0,final_proofs=0,dns=0)
+    if case=='https-wrong-final':value.update(final_tcp=0,final_proofs=0,dns=0)
+    return value
+
+def completed(case,value=None):
+    value=counters(case) if value is None else value
+    return ('=== RUN   '+G.TEST+'\n=== RUN   '+G.TEST+'/'+case+'\n'+
+            '    desktop_connect_execution_windows_native_test.go:200: WINDOWS_CONNECT_EXECUTION_COUNTERS '+json.dumps(value)+'\n'+
+            '    desktop_connect_execution_windows_native_test.go:201: '+G.receipt(case)+'\n'+
+            '--- PASS: '+G.TEST+' (0.01s)\n    --- PASS: '+G.TEST+'/'+case+' (0.01s)\nPASS\n')
+
+def source_completed():
+    names=[name for root,leaves in G.SOURCE_TESTS.items() for name in (root,*(root+'/'+leaf for leaf in leaves))]
+    return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\n' for name in names)+'PASS\n'
+
+class WindowsExecutionContract(unittest.TestCase):
+    def test_exact_source_inventory_and_real_boundaries(self):
+        self.assertEqual(G.case_inventory(),G.CASES)
+        self.assertEqual(len(G.CASES),14);self.assertEqual(len(set(G.CASES)),14)
+        self.assertEqual(len(G.source_verdict(source_completed())),31)
+        raw=(ROOT/'cmd/client/desktop_connect_execution_windows_aliases_test.go').read_text()
+        for boundary in ('CreateUnicastIpAddressEntry','GetUnicastIpAddressEntry','DeleteUnicastIpAddressEntry','CreationTimeStamp == current.CreationTimeStamp','if err := join(ctx); err != nil','!windowsCONNECTPhysicalAliasSame(original, current)','a.removed[i] = true'):
+            self.assertIn(boundary,raw)
+        source=(ROOT/'cmd/client/ordered_candidate_prefix_windows_native_test.go').read_text()
+        self.assertIn('if err == nil && !execution',source)
+        self.assertIn('releaseCONNECT, err = windowsCONNECTRegisterRoutes(mux, a, original)',source)
+        self.assertEqual(len(G.ORIGINAL.CASES),18)
+        self.assertEqual(len(G.ORIGINAL.SOCKS_GATE.CASES),11)
+        self.assertEqual(len(G.ORIGINAL.PREFIX_GATE.CASES),8)
+
+    def test_each_case_exact_verdict_and_retirement_required(self):
+        for case in G.CASES:
+            output=completed(case);G.check_verdict(output,case)
+            for line in output.splitlines(True):
+                for broken in (output.replace(line,'',1),output+line):
+                    with self.subTest(case=case,line=line),self.assertRaises(ValueError):G.check_verdict(broken,case)
+            for key in ('native_joined','journal_settled','wfp_absent','tun_absent','aliases_removed'):
+                for bad in (False,1,'true',None):
+                    value=counters(case);value[key]=bad
+                    with self.subTest(case=case,key=key,bad=bad),self.assertRaises(ValueError):G.check_verdict(completed(case,value),case)
+            for fault in ('--- FAIL:','--- SKIP:','WARNING: DATA RACE','panic:','fatal error:'):
+                with self.assertRaises(ValueError):G.check_verdict(output+fault,case)
+
+    def test_all_actual_transport_and_retained_choice_counters(self):
+        for case in G.CASES:
+            for key in ('launches','entry_raw_udp','entry_tcp','entry_proofs','middle_raw_tcp'):
+                value=counters(case);value[key]=0
+                with self.assertRaises(ValueError):G.check_verdict(completed(case,value),case)
+            for key in ('open_streams','middle_raw_udp','final_raw_udp','restore_launches','comparison_trials','entry_layer_auth'):
+                value=counters(case);value[key]+=1
+                with self.assertRaises(ValueError):G.check_verdict(completed(case,value),case)
+            for bad in (True,0.5,'1',-1):
+                value=counters(case);value['launches']=bad
+                with self.assertRaises(ValueError):G.check_verdict(completed(case,value),case)
+            original=completed(case)
+            with self.assertRaises(ValueError):G.check_verdict(original.replace('"launches": 1','"launches": 1, "launches": 1'),case)
+            records=[line for line in original.splitlines(True) if 'WINDOWS_CONNECT_EXECUTION_' in line]
+            for line in records:
+                with self.assertRaises(ValueError):G.check_verdict(line+original.replace(line,''),case)
+
+    def test_source_omission_duplicate_and_foreign_success_refused(self):
+        output=source_completed()
+        for line in output.splitlines(True):
+            for broken in (output.replace(line,'',1),output+line):
+                with self.assertRaises(ValueError):G.source_verdict(broken)
+
+    def test_host_and_optin_are_not_optional(self):
+        native=SimpleNamespace(shell32=SimpleNamespace(IsUserAnAdmin=lambda:True))
+        with patch.object(G.platform,'system',return_value='Windows'),patch.object(G.ctypes,'windll',native,create=True):
+            G.required_host({G.FLAG:'1'})
+            for env in ({},{G.FLAG:'0'},{G.FLAG:'1','HOMEVPN_MTU_BENCH_FAKE':'0'}):
+                with self.assertRaises(ValueError):G.required_host(env)
+            native.shell32.IsUserAnAdmin=lambda:False
+            with self.assertRaises(ValueError):G.required_host({G.FLAG:'1'})
+        with patch.object(G.platform,'system',return_value='Linux'):
+            with self.assertRaises(ValueError):G.required_host({G.FLAG:'1'})
+
+class WindowsExecutionScheduling(unittest.TestCase):
+    def exercise(self,target='windows/amd64',fail=None):
+        with tempfile.TemporaryDirectory(prefix='windows-execution-schedule-') as temporary:
+            work=Path(temporary);bundle=work/'bundle';bundle.mkdir();core=work/'core';core.mkdir()
+            names=('sing-box-routervpn.exe','libcronet.dll')
+            for name in names:(bundle/name).write_bytes(name.encode())
+            original=dict(policy_sha256='a'*64,files={name:dict(size=(bundle/name).stat().st_size,sha256=G.sha(bundle/name)) for name in names})
+            (bundle/'NATIVE-RUNTIME.json').write_text(json.dumps(original));calls=[]
+            owner=SimpleNamespace(retired=True)
+            @contextmanager
+            def workspace(prefix):
+                directory=work/'owned';directory.mkdir();yield directory
+            def run(command,*,cwd,env,timeout):
+                command=list(map(str,command));calls.append((command,Path(cwd),dict(env),timeout))
+                if fail==len(calls):return 1,'specific original command failure'
+                if command[0]=='captured-go':
+                    self.assertEqual(timeout,600);self.assertIn('-p=1',command)
+                    output=Path(command[command.index('-o')+1]);output.parent.mkdir(parents=True,exist_ok=True);output.write_bytes(('image:'+str(output)).encode());return 0,''
+                if '--' not in command:
+                    self.assertEqual(timeout,100);self.assertIn('-test.timeout=90s',command);return 0,source_completed()
+                self.assertEqual(timeout,250);self.assertIn('-test.timeout=240s',command)
+                self.assertEqual(env[G.FLAG],'1');self.assertNotEqual(Path(env['ROUTERVPN_WINDOWS_CONNECT_EXECUTION_WORKER']),work/'owned/installed/runtime/native/sing-box-routervpn.exe')
+                self.assertEqual(G.sha(env['ROUTERVPN_WINDOWS_CONNECT_EXECUTION_WORKER']),env['ROUTERVPN_WINDOWS_CONNECT_EXECUTION_WORKER_SHA256'])
+                return 0,completed(command[-1])
+            owner.workspace=workspace;owner.run=run
+            def scope(directory,image,workspace):
+                workspace.mkdir();p=workspace/'scope.json';p.write_text(json.dumps({'Replace':{}}));return p,{'same':'original'}
+            def peer(directory,workspace):
+                workspace.mkdir();p=workspace/'peer.json';p.write_text(json.dumps({'Replace':{}}));return p
+            with patch.object(G.BUILD,'reuse',return_value=deepcopy(original)),patch.object(G.BUILD,'digest',return_value='a'*64),patch.object(G.BUILD,'binary_name',return_value=names[0]),patch.object(G.BUILD,'tags',return_value=('shipping',)),patch.object(G.BUILD,'marker',return_value='original-marker'),patch.object(G,'sources',return_value=(core,{'captured':'source'})),patch.object(G.SCOPE,'overlay',side_effect=scope),patch.object(G.SCOPE,'peer_overlay',side_effect=peer),patch.object(G.ORIGINAL.SOCKS_GATE,'execute') as old_gate,redirect_stdout(io.StringIO()):
+                captured={'CGO_ENABLED':'1' if target.endswith('amd64') else '0'}
+                if fail:
+                    with self.assertRaisesRegex(ValueError,'failed'):G.execute_owned(bundle,core,'captured-go',captured,target,owner,'b'*40)
+                    self.assertEqual(len(calls),fail)
+                else:
+                    receipt=G.execute_owned(bundle,core,'captured-go',captured,target,owner,'b'*40)
+                    self.assertEqual(receipt['cases'],list(G.CASES));self.assertEqual(len(receipt['results']),14);self.assertEqual(receipt['target'],target)
+                    self.assertEqual(len(calls),18)
+                    self.assertEqual('-race' in calls[1][0],target.endswith('amd64'))
+                    self.assertEqual('-race' in calls[2][0],target.endswith('amd64'))
+                    self.assertEqual(receipt['worker_scope'],'separately-captured-original-delivered-image')
+                old_gate.assert_not_called()
+            return calls
+
+    def test_both_native_targets_same_images_exact_fourteen_separate_phases(self):
+        for target in ('windows/amd64','windows/arm64'):
+            with self.subTest(target=target):self.exercise(target)
+
+    def test_each_compile_source_and_native_failure_stops_before_successor(self):
+        for stage in (1,2,3,4,5,18):
+            with self.subTest(stage=stage):self.exercise(fail=stage)
+
+
+def actual_alias_source():
+    source=(ROOT/'cmd/client/desktop_connect_execution_windows_aliases_test.go').read_text()
+    def block(marker):
+        if source.count(marker)!=1:raise ValueError('Original alias boundary changed: '+marker)
+        start=source.index(marker);return source[start:source.index('\n}',start)+2]
+    bodies=[block(marker) for marker in ('type windowsCONNECTPhysicalAliasRow struct {','func windowsCONNECTPhysicalAliasAddress(', 'func windowsCONNECTPhysicalAliasIP(', 'func windowsCONNECTPhysicalAliasSame(', 'type windowsCONNECTExecutionAliases struct {','func (a *windowsCONNECTExecutionAliases) Close(', 'func TestWindowsCONNECTExecutionAliasOriginalCreation(')]
+    return '\n\n'.join(bodies).replace('syscall.Filetime','fixtureFiletime').replace('syscall.ERROR_NOT_FOUND','fixtureMissing')
+
+ALIAS_BOUNDARY=r'''
+type fixtureFiletime struct{LowDateTime,HighDateTime uint32}
+var fixtureMissing=errors.New("native address not found")
+type fixtureDLL struct{released int}
+func(d *fixtureDLL)Release()error{d.released++;return nil}
+type fixtureProc struct{call func(*windowsCONNECTPhysicalAliasRow)error}
+type windowsCONNECTPhysicalAliasAPI struct{dll *fixtureDLL;remove *fixtureProc;live map[netip.Addr]windowsCONNECTPhysicalAliasRow;deletes int;fail bool}
+func(a *windowsCONNECTPhysicalAliasAPI)current(row windowsCONNECTPhysicalAliasRow)(windowsCONNECTPhysicalAliasRow,error){value,ok:=a.live[windowsCONNECTPhysicalAliasIP(row)];if !ok{return windowsCONNECTPhysicalAliasRow{},fixtureMissing};return value,nil}
+func windowsCONNECTPhysicalAliasCall(p *fixtureProc,row *windowsCONNECTPhysicalAliasRow)error{return p.call(row)}
+func fixtureOwner()(*windowsCONNECTExecutionAliases,*windowsCONNECTPhysicalAliasAPI){
+ api:=&windowsCONNECTPhysicalAliasAPI{dll:&fixtureDLL{},live:map[netip.Addr]windowsCONNECTPhysicalAliasRow{}}
+ owner:=&windowsCONNECTExecutionAliases{api:api,created:[2]bool{true,true},captured:[2]bool{true,true}}
+ for i,address:=range []string{"10.78.0.1","10.78.0.2"}{row:=windowsCONNECTPhysicalAliasRow{InterfaceLuid:11,InterfaceIndex:7,CreationTimeStamp:fixtureFiletime{uint32(i+1),1},OnLinkPrefixLength:32,SkipAsSource:1,PrefixOrigin:1,SuffixOrigin:1};windowsCONNECTPhysicalAliasAddress(&row,netip.MustParseAddr(address));owner.rows[i]=row;api.live[netip.MustParseAddr(address)]=row}
+ api.remove=&fixtureProc{call:func(row *windowsCONNECTPhysicalAliasRow)error{if api.fail && windowsCONNECTPhysicalAliasIP(*row)==netip.MustParseAddr("10.78.0.2"){return errors.New("held native deletion")};api.deletes++;delete(api.live,windowsCONNECTPhysicalAliasIP(*row));return nil}}
+ return owner,api
+}
+func TestActualAliasRetirement(t *testing.T){
+ t.Run("failed-join-retry",func(t *testing.T){owner,api:=fixtureOwner();held:=errors.New("original child held");calls:=0
+ err:=owner.Close(context.Background(),func(context.Context)error{calls++;return held})
+ if !errors.Is(err,held)||api.deletes!=0||api.dll.released!=0||owner.closed{t.Fatal("failed original join released kernel aliases")}
+ if err=owner.Close(context.Background(),func(context.Context)error{calls++;return nil});err!=nil||api.deletes!=2||api.dll.released!=1||!owner.closed||calls!=2{t.Fatal("original retry did not join aliases",err)}
+ if err=owner.Close(context.Background(),func(context.Context)error{calls++;return nil});err!=nil||api.deletes!=2||calls!=2{t.Fatal("completed original cleanup was repeated")}
+ })
+ t.Run("foreign-recreation",func(t *testing.T){owner,api:=fixtureOwner();key:=netip.MustParseAddr("10.78.0.1");row:=api.live[key];row.CreationTimeStamp.LowDateTime++;api.live[key]=row
+ if owner.Close(context.Background(),func(context.Context)error{return nil})==nil||api.deletes!=0||owner.closed{t.Fatal("foreign replacement alias was deleted")}
+ })
+ t.Run("partial-native-delete-retry",func(t *testing.T){owner,api:=fixtureOwner();api.fail=true
+ if owner.Close(context.Background(),func(context.Context)error{return nil})==nil||api.deletes!=1||owner.closed{t.Fatal("partial retirement lost original state")};api.fail=false
+ if err:=owner.Close(context.Background(),func(context.Context)error{return nil});err!=nil||api.deletes!=2||!owner.closed{t.Fatal("partial retry repeated first deletion",err)}
+ })
+ t.Run("removed-tuple-reoccupied",func(t *testing.T){owner,api:=fixtureOwner();api.fail=true;_ =owner.Close(context.Background(),func(context.Context)error{return nil});api.fail=false;row:=owner.rows[0];row.CreationTimeStamp.LowDateTime++;api.live[windowsCONNECTPhysicalAliasIP(row)]=row
+ if owner.Close(context.Background(),func(context.Context)error{return nil})==nil||api.deletes!=1{t.Fatal("retired alias tuple replacement was adopted")}
+ })
+ t.Run("uncaptured-created-row",func(t *testing.T){owner,api:=fixtureOwner();owner.captured[0]=false
+ if owner.Close(context.Background(),func(context.Context)error{return nil})==nil||api.deletes!=0{t.Fatal("uncaptured creation authorized deletion")}
+ })
+ t.Run("cancelled",func(t *testing.T){owner,api:=fixtureOwner();ctx,cancel:=context.WithCancel(context.Background());cancel()
+ if !errors.Is(owner.Close(ctx,func(context.Context)error{t.Fatal("cancelled cleanup joined successor");return nil}),context.Canceled)||api.deletes!=0{t.Fatal("cancelled original cleanup deleted aliases")}
+ })
+}
+'''
+
+def execute_actual_alias_controls():
+    import shutil,subprocess
+    compiler=shutil.which('go')
+    if compiler is None:raise ValueError('Pinned actual Go is required for alias ownership controls')
+    source=actual_alias_source()
+    header='package alias\nimport("context";"errors";"net/netip";"sync";"syscall";"testing";"unsafe")\n'
+    environment=dict(os.environ,GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='',GOMAXPROCS='1')
+    with tempfile.TemporaryDirectory(prefix='windows-execution-alias-') as directory:
+        work=Path(directory);(work/'go.mod').write_text('module alias\n\ngo 1.25\n')
+        def run(body):
+            (work/'alias_test.go').write_text(header+body+ALIAS_BOUNDARY)
+            return subprocess.run([compiler,'test','-p=1','-count=1','-v','-timeout=15s','.'],cwd=work,env=environment,capture_output=True,text=True,timeout=60)
+        positive=run(source)
+        if positive.returncode:raise AssertionError('Actual alias owner controls failed:\n'+positive.stdout+positive.stderr)
+        print(positive.stdout,end='')
+        controls=(('original.CreationTimeStamp == current.CreationTimeStamp &&','', 'alias creation identity substituted original kernel owner'),
+                  ('if err := join(ctx); err != nil {','if err := error(nil); err != nil {','failed original join released kernel aliases'),
+                  ('err != nil || !windowsCONNECTPhysicalAliasSame(original, current)','err != nil','foreign replacement alias was deleted'))
+        for before,after,witness in controls:
+            if source.count(before)!=1:raise ValueError('Actual alias causal anchor changed: '+before)
+            result=run(source.replace(before,after));output=result.stdout+result.stderr
+            if result.returncode!=1 or witness not in output or 'build failed' in output or 'panic:' in output:raise AssertionError('Actual alias causal control failed to reach original witness:\n'+output)
+            print('rejected alias owner omission: '+witness)
+
+class WindowsAliasActualOwner(unittest.TestCase):
+    def test_actual_creation_and_joined_retirement_controls(self):
+        execute_actual_alias_controls()
+
+def actual_cleanup_source():
+    launcher=(ROOT/'cmd/client/desktop_connect_execution_windows_launcher_test.go').read_text()
+    assert launcher.index('*retained = closeOwner') < launcher.index('windowscontroller.NewPipe()')
+    assert launcher.index('go func() { waitErr = command.Wait(); close(done) }()') < launcher.index('windowscontroller.OpenProcess(')
+    assert launcher.index('defer func() {\n\t\tif err := peer.Process.Close()') < launcher.index('primary, err := process.Identity()')
+    body=launcher[launcher.index('\tcloseOwner := func('):launcher.index('\t*retained = closeOwner')]
+    controller='func capturedController(pipe,image,process,client *resource,done chan struct{},waitErr error)func(context.Context)error { var terminal error;var mu sync.Mutex;closed:=false;diagnostic:=new(strings.Builder)\n'+body+'return closeOwner\n}\n'
+    peer=(ROOT/'cmd/client/desktop_connect_execution_windows_peer_test.go').read_text()
+    assert peer.index('*retained = p') < peer.index('windowscontroller.PinImage(')
+    assert peer.index('go func() { p.waitErr = p.command.Wait(); close(p.done) }()') < peer.index('windowscontroller.OpenProcess(')
+    close=peer[peer.index('func (p *windowsCONNECTExecutionPeer) close('):peer.index('func windowsCONNECTExecutionStartPeer(')]
+    return controller+close
+
+CLEANUP_BOUNDARY=r'''
+type resource struct{count int;err error;verify int}
+func(r *resource)Close()error{r.count++;return r.err}
+func(r *resource)VerifyImage(image *resource)error{r.verify++;if image==nil{return errors.New("missing image")};return nil}
+type input struct{resource}
+func(i *input)Write(p []byte)(int,error){return len(p),nil}
+type windowsCONNECTExecutionPeer struct{
+ mu sync.Mutex;started,quit,joined,closed bool;terminal,waitErr error;done chan struct{}
+ input *input;output,image,process *resource;reader *bufio.Reader;diagnostic *strings.Builder
+}
+func TestCapturedControllerCleanup(t *testing.T){
+ for stage:=0;stage<5;stage++{t.Run(fmt.Sprint(stage),func(t *testing.T){
+  values:=[]*resource{nil,nil,nil,nil};for i:=0;i<stage;i++{values[i]=&resource{}}
+  close:=capturedController(values[0],values[1],values[2],values[3],nil,nil)
+  if err:=close(context.Background());err!=nil{t.Fatal(err)}
+  for _,v:=range values{if v!=nil&&v.count!=1{t.Fatal("partial startup resource leaked")}}
+  if err:=close(context.Background());err!=nil{t.Fatal(err)}
+  for _,v:=range values{if v!=nil&&v.count!=1{t.Fatal("original resource closed twice")}}
+ })}
+ t.Run("held-started-without-handle",func(t *testing.T){pipe,image:=&resource{},&resource{};done:=make(chan struct{});closeOwner:=capturedController(pipe,image,nil,nil,done,nil)
+  ctx,cancel:=context.WithCancel(context.Background());cancel()
+  if !errors.Is(closeOwner(ctx),context.Canceled)||image.count!=0{t.Fatal("unjoined original child released image")}
+  close(done);if err:=closeOwner(context.Background());err!=nil||image.count!=1{t.Fatal("original command retry was not joined",err)}
+ })
+ t.Run("pipe-error-still-joins",func(t *testing.T){broken:=errors.New("pipe close failure");pipe,image:=&resource{err:broken},&resource{};done:=make(chan struct{});close(done)
+  closeOwner:=capturedController(pipe,image,nil,nil,done,nil)
+  if !errors.Is(closeOwner(context.Background()),broken)||image.count!=1{t.Fatal("pipe failure abandoned original resources")}
+ })
+ t.Run("child-failure-stays-failure",func(t *testing.T){broken:=errors.New("child failed");image:=&resource{};done:=make(chan struct{});close(done);closeOwner:=capturedController(nil,image,nil,nil,done,broken)
+  if !errors.Is(closeOwner(context.Background()),broken)||image.count!=1||!errors.Is(closeOwner(context.Background()),broken){t.Fatal("failed original join became successful cleanup")}
+ })
+}
+func fixturePeer()*windowsCONNECTExecutionPeer{done:=make(chan struct{});close(done);return &windowsCONNECTExecutionPeer{started:true,done:done,input:&input{},output:&resource{},image:&resource{},process:&resource{},reader:bufio.NewReader(strings.NewReader("{\"joined\":true}\nPASS\n")),diagnostic:new(strings.Builder)}}
+func TestCapturedPeerCleanup(t *testing.T){
+ t.Run("before-start",func(t *testing.T){p:=fixturePeer();p.started=false;image,out,in:=p.image,p.output,p.input;if err:=p.close(context.Background());err!=nil||image.count!=1||out.count!=1||in.count!=1{t.Fatal("unstarted peer resources leaked",err)}})
+ t.Run("original-joined",func(t *testing.T){p:=fixturePeer();process:=p.process;if err:=p.close(context.Background());err!=nil||!p.joined||process.verify!=1||process.count!=1{t.Fatal("original joined peer proof missing",err)}})
+ t.Run("missing-process-held-command",func(t *testing.T){p:=fixturePeer();p.process=nil;p.done=make(chan struct{});image:=p.image;ctx,cancel:=context.WithCancel(context.Background());cancel()
+ if !errors.Is(p.close(ctx),context.Canceled)||image.count!=0{t.Fatal("uncaptured started peer was not joined")}
+ close(p.done);if p.close(context.Background())==nil||image.count!=1||p.joined{t.Fatal("missing process capture accepted or leaked original image")}
+ if p.close(context.Background())==nil{t.Fatal("failed peer cleanup became successful retry")}
+ })
+ t.Run("failed-command",func(t *testing.T){p:=fixturePeer();p.waitErr=errors.New("child failed");image:=p.image;if p.close(context.Background())==nil||image.count!=1||p.joined{t.Fatal("failed peer command escaped retirement")}})
+ t.Run("missing-manager-join",func(t *testing.T){p:=fixturePeer();p.reader=bufio.NewReader(strings.NewReader("PASS\n"));if p.close(context.Background())==nil||p.joined{t.Fatal("missing real manager join accepted")}})
+}
+'''
+
+class WindowsStagedCleanup(unittest.TestCase):
+    def test_actual_cleanup_partial_start_join_retry_and_failures(self):
+        import shutil,subprocess
+        compiler=shutil.which('go')
+        if compiler is None:raise ValueError('Actual Go is required for retained cleanup controls')
+        source=actual_cleanup_source()
+        header='package cleanup\nimport("bufio";"context";"encoding/json";"errors";"fmt";"io";"strings";"sync";"testing")\n'
+        env=dict(os.environ,GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='',GOMAXPROCS='1')
+        with tempfile.TemporaryDirectory(prefix='windows-execution-cleanup-') as directory:
+            work=Path(directory);(work/'go.mod').write_text('module cleanup\n\ngo 1.25\n')
+            def run(text):
+                (work/'cleanup_test.go').write_text(header+text+CLEANUP_BOUNDARY)
+                return subprocess.run([compiler,'test','-p=1','-count=1','-v','-timeout=15s','.'],cwd=work,env=env,capture_output=True,text=True,timeout=60)
+            result=run(source)
+            if result.returncode:raise AssertionError(result.stdout+result.stderr)
+            print(result.stdout,end='')
+            controls=(('if done != nil {','if false && done != nil {','unjoined original child released image'),('if image != nil {','if false && image != nil {','partial startup resource leaked'),('if p.started {','if false && p.started {','original joined peer proof missing'),('return p.terminal','return nil','failed peer cleanup became successful retry'))
+            for before,after,witness in controls:
+                if before not in source:raise ValueError('Missing captured cleanup control: '+before)
+                broken=run(source.replace(before,after,1));out=broken.stdout+broken.stderr
+                if broken.returncode!=1 or witness not in out or 'build failed' in out:raise AssertionError('Cleanup omission failed intended witness:\n'+out)
+                print('rejected actual cleanup omission: '+witness)
+
+if __name__=='__main__':unittest.main()
+
