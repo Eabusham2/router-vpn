@@ -1,0 +1,183 @@
+package libbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	ownedCONNECT "github.com/sagernet/sing-box/protocol/routervpnnodeconnect"
+	"github.com/sagernet/sing/service"
+)
+
+const routerNodeChainCONNECTExecutionLaunchKind = "routervpn-node-chain-connect-execution-preparation-input"
+
+type routerNodeCONNECTExecutionServerKey struct{}
+type routerNodeCONNECTExecutionServerOwner struct {
+	preparation *mobilemultihop.NodeChainExecutionPreparation
+	source      *mobilemultihop.NodeChainCONNECTSource
+	capture     *ownedCONNECT.Capture
+	registry    *outbound.Registry
+	server      *CommandServer
+	started     *daemon.StartedService
+}
+
+// This distinct parser constructs the original typed source once. Generic
+// execution and generic NodeChain parsers continue to reject schema four.
+func NewRouterNodeChainCONNECTExecution(localSource, execution string) (*RouterNodeChainExecution, error) {
+	original, err := mobilemultihop.NewNodeChainCONNECTSource(localSource)
+	if err != nil {
+		return nil, err
+	}
+	prep, err := mobilemultihop.NewNodeChainCONNECTExecutionPreparation(original, execution)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterNodeChainExecution{prep: prep}, nil
+}
+func NewRouterNodeChainCONNECTExecutionLaunch(input string) (*RouterNodeChainExecution, error) {
+	if len(input) == 0 || len(input) > mobilemultihop.NodeChainInputLimit {
+		return nil, errRouterNodeChainExecution
+	}
+	var launch routerNodeChainExecutionLaunch
+	if json.Unmarshal([]byte(input), &launch) != nil || launch.Kind != routerNodeChainCONNECTExecutionLaunchKind || (launch.Schema != 1 && launch.Schema != 2) {
+		return nil, errRouterNodeChainExecution
+	}
+	prep, err := mobilemultihop.ParseNodeChainCONNECTExecutionPreparation(launch.Source)
+	if err != nil {
+		return nil, err
+	}
+	m := &RouterNodeChainExecution{prep: prep}
+	if m.SourceSHA256() != launch.SourceSHA256 || m.ConfigSHA256() != launch.ConfigSHA256 {
+		return nil, errRouterNodeChainExecution
+	}
+	if launch.Schema == 2 {
+		last, e := mobilemultihop.ParseNodeChainExecutionLast(launch.Last, prep)
+		if e != nil {
+			return nil, e
+		}
+		m.last = &last
+	} else if launch.Last != "" {
+		return nil, errRouterNodeChainExecution
+	}
+	canonical, err := m.LaunchInput()
+	if err != nil || canonical != input {
+		return nil, errRouterNodeChainExecution
+	}
+	return m, nil
+}
+func RouterNodeChainCONNECTExecutionFromLast(localSource, execution, lastJSON string) (*RouterNodeChainExecution, error) {
+	m, err := NewRouterNodeChainCONNECTExecution(localSource, execution)
+	if err != nil {
+		return nil, err
+	}
+	last, err := mobilemultihop.ParseNodeChainExecutionLast(lastJSON, m.prep)
+	if err != nil {
+		return nil, err
+	}
+	m.last = &last
+	return m, nil
+}
+
+// The typed execution plan creates the exact caller-local registry and binds
+// the preparation before the host receives an otherwise ordinary CommandServer.
+// The host must retain this returned handle, BindNative, then Start it.
+func (m *RouterNodeChainExecution) NewCommandServer(handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if m == nil || m.prep == nil || handler == nil || platform == nil || !m.prep.RequiresCONNECTExecutionObserver() {
+		return nil, errRouterNodeChainExecution
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
+		return nil, err
+	}
+	defer m.mu.Unlock()
+	if m.retired.Load() || m.started || m.native.Load() != nil || m.state.Load() != nil || m.connectServer.Load() != nil {
+		return nil, errRouterNodeChainExecution
+	}
+	source, err := m.prep.OriginalCONNECTSource()
+	if err != nil {
+		return nil, err
+	}
+	native := baseContext(platform)
+	capture, err := ownedCONNECT.NewCapture(native, source)
+	if err != nil {
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = capture.CloseContext(ctx)
+		}
+	}()
+	registry := include.OutboundRegistry()
+	if err = capture.Register(registry); err != nil {
+		return nil, err
+	}
+	native = capture.Context()
+	native = service.ContextWith[option.OutboundOptionsRegistry](native, registry)
+	native = service.ContextWith[adapter.OutboundRegistry](native, registry)
+	native, err = box.RouterVPNNodeCONNECTExecutionContext(native, m.prep, capture)
+	if err != nil {
+		return nil, err
+	}
+	owner := &routerNodeCONNECTExecutionServerOwner{preparation: m.prep, source: source, capture: capture, registry: registry}
+	native = context.WithValue(native, routerNodeCONNECTExecutionServerKey{}, owner)
+	server := newCommandServerWithContext(handler, platform, native)
+	owner.server, owner.started = server, server.StartedService
+	m.connectServer.Store(owner)
+	success = true
+	return server, nil
+}
+func RouterNodeChainCONNECTExecutionNewCommandServer(m *RouterNodeChainExecution, handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+	if m == nil {
+		return nil, errRouterNodeChainExecution
+	}
+	return m.NewCommandServer(handler, platform)
+}
+func (m *RouterNodeChainExecution) requireCONNECTServer(ctx context.Context, server *CommandServer) error {
+	if m == nil || ctx == nil || ctx.Err() != nil {
+		return errRouterNodeChainExecution
+	}
+	if m.prep == nil {
+		if m.connectServer.Load() != nil {
+			return errRouterNodeChainExecution
+		}
+		return nil // Existing untyped instance readback grants no preparation authority.
+	}
+	if !m.prep.RequiresCONNECTExecutionObserver() {
+		if m.connectServer.Load() != nil {
+			return errRouterNodeChainExecution
+		}
+		return nil
+	}
+	owner := m.connectServer.Load()
+	if owner == nil || owner.preparation != m.prep || server == nil || server.ctx == nil || owner.server != server || owner.started == nil || server.StartedService != owner.started || server.ctx.Value(routerNodeCONNECTExecutionServerKey{}) != owner || service.FromContext[adapter.OutboundRegistry](server.ctx) != owner.registry || service.FromContext[option.OutboundOptionsRegistry](server.ctx) != owner.registry {
+		return errRouterNodeChainExecution
+	}
+	original, err := m.prep.OriginalCONNECTSource()
+	if err != nil || original != owner.source {
+		return errors.Join(err, errRouterNodeChainExecution)
+	}
+	return owner.capture.RequireOriginalContext(server.ctx, original)
+}
+
+// Cleanup retains the captured owner after source/lifetime revocation. Failure
+// leaves the execution unjoined and permits only retry of this same capture.
+func (m *RouterNodeChainExecution) closeCONNECTCapture(ctx context.Context) error {
+	owner := m.connectServer.Load()
+	if owner == nil {
+		return ctx.Err()
+	}
+	if owner.preparation != m.prep || owner.capture == nil {
+		return errRouterNodeChainExecution
+	}
+	return owner.capture.CloseContext(ctx)
+}

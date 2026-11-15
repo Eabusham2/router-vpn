@@ -1032,13 +1032,15 @@ def run_transport_fixture(work, src, classes, jar, env):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "general-stores", "fixture-transport"), default="all")
+    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "general-stores", "fixture-transport"), default="all")
     args = parser.parse_args()
     chain = None
     if args.case_family in ("all", "ordered-chain", "ordered-imported", "ordered-openvpn", "fixture-transport"):
         import test_android_node_chain_capture as chain
     if args.case_family == "ordered-execution":
         import test_android_node_chain_execution_capture as chain
+    if args.case_family == "ordered-connect-execution":
+        import test_android_connect_execution_capture as chain
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
         raise RuntimeError("Real Android JSON implementation required")
@@ -1096,7 +1098,7 @@ def main():
                 chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)
             else:
                 chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")
-            if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution"):
+            if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution"):
                 return
         # Each complete case family retains the original finite JVM budget.
         if args.case_family in ("all", "home-dns"):

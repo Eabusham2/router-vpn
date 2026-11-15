@@ -135,8 +135,11 @@ verify_aar() {
   for symbol in newRouterNodeChainExecution routerNodeChainExecutionFromLaunch newRouterNodeChainExecutionLaunch newRouterNodeChainExecutionRestore; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing ordered execution API $symbol" >&2; return 1; }
   done
+  for signature in 'io.nekohasekai.libbox.RouterNodeChainExecution newRouterNodeChainCONNECTExecution(java.lang.String, java.lang.String) throws java.lang.Exception;' 'io.nekohasekai.libbox.RouterNodeChainExecution newRouterNodeChainCONNECTExecutionLaunch(java.lang.String) throws java.lang.Exception;' 'io.nekohasekai.libbox.RouterNodeChainExecution routerNodeChainCONNECTExecutionFromLast(java.lang.String, java.lang.String, java.lang.String) throws java.lang.Exception;'; do
+    grep -Fq "$signature" "$api_list" || { echo "combined libbox AAR is missing typed CONNECT execution API: $signature" >&2; return 1; }
+  done
   javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainExecution >"$tmp/router-node-chain-execution.javap"
-  for signature in 'void bindNative(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'void run(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'boolean healthy();' 'java.lang.String execution();' 'void close() throws java.lang.Exception;' 'boolean nativeClosed();' 'boolean retainsServerCleanup(io.nekohasekai.libbox.CommandServer);' 'java.lang.String launchInput() throws java.lang.Exception;'; do
+  for signature in 'io.nekohasekai.libbox.CommandServer newCommandServer(io.nekohasekai.libbox.CommandServerHandler, io.nekohasekai.libbox.PlatformInterface) throws java.lang.Exception;' 'void bindNative(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'void run(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'boolean healthy();' 'java.lang.String execution();' 'void close() throws java.lang.Exception;' 'boolean nativeClosed();' 'boolean retainsServerCleanup(io.nekohasekai.libbox.CommandServer);' 'java.lang.String launchInput() throws java.lang.Exception;'; do
     grep -Fq "$signature" "$tmp/router-node-chain-execution.javap" || {
       echo 'combined libbox AAR ordered execution has the wrong original-owner API' >&2; return 1
     }
@@ -346,6 +349,7 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
   python3 "$ROOT/../deploy/test_hysteria2_deadlines_pinned.py" "$VENDOR"
   python3 "$ROOT/../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"
+  python3 "$ROOT/../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
   python3 "$ROOT/../deploy/test_node_chain_candidate_preparation_runner.py"
   python3 "$ROOT/../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
   go_retry test ./experimental/libbox/routervpn/...

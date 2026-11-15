@@ -546,7 +546,7 @@ final class AndroidNodeStore {
             for (int i=0;i<selected.length()-1;i++) {
                 String mode=selected.getJSONObject(i).getString("mode");
                 if (!java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(mode)
-                        && !(selected.length()==3 && i==1 && "shadowsocks".equals(mode)))
+                        && !(selected.length()==3 && i==1 && java.util.Arrays.asList("shadowsocks","http-connect","https-connect").contains(mode)))
                     throw new IllegalStateException("This ordered transport has no supported Server or Compare graph.");
             }
         }

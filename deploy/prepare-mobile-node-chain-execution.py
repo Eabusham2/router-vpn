@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-mobile-node-chain-execution-source.json'
 TEMPLATES = {
+    'connect_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_execution_mobile_test.go',
+    'connect.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_execution_mobile.go',
     'last.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_last.go',
     'last_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_last_test.go',
     'bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution.go',
@@ -136,10 +138,12 @@ def prepare(vendor):
         last = {'experimental/libbox/routervpn_node_chain_execution_last.go', 'experimental/libbox/routervpn_node_chain_execution_last_test.go'}
         restore_test = {'experimental/libbox/routervpn_node_chain_execution_restore_test.go'}
         latency = {'experimental/libbox/routervpn_node_chain_execution_latency.go', 'experimental/libbox/routervpn_node_chain_execution_latency_test.go'}
-        inventories = tuple(current-previous_last-previous_restore-previous_latency
+        connect = {TEMPLATES[name] for name in ('connect.go.tmpl', 'connect_test.go.tmpl')}
+        inventories = tuple(current-previous_last-previous_restore-previous_latency-previous_connect
                             for previous_last in (set(), last)
                             for previous_restore in (set(), restore_test)
-                            for previous_latency in (set(), latency))
+                            for previous_latency in (set(), latency)
+                            for previous_connect in (set(), connect))
         if not isinstance(record, dict) or set(record) != {'schema', 'core', 'files'} or record['schema'] != 1 or record['core'] != PIN or not isinstance(record['files'], dict) or set(record['files']) not in inventories:
             raise ValueError('invalid mobile execution ownership inventory')
         previous = record['files']

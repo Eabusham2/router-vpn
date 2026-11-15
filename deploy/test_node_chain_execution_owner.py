@@ -22,7 +22,7 @@ ROOTS = {
               'NativeOpenCannotFinishAfterRevoke', 'NativeDiscoveryKeepsLiteralOriginalEntry',
               'NativeRestoreRetainsOriginalFront', 'NativeRetiredSourceKeepsClosedReceipt',
               'NativeFailedAcquisitionRetainsSealedStop', 'NativeDuplicateBindKeepsOriginalOwner',
-              'NativeCloseReceipt', 'NativeLastUsesOriginalDiscovery', 'NativeLastRetainsPendingPlan',
+              'NativeCloseReceipt', 'NativeLastUsesOriginalDiscovery', 'NativeCONNECTLastUsesOriginalDiscovery', 'NativeLastRetainsPendingPlan',
               'NativeLastAdoptsFreshClosedGraph', 'NativeLastCleanupRetainsExactPlan',
               'NativeLastRejectsKindSubstitution', 'NativeLastRejectsForeignAdmission',
               'NativeLastRuntimeRejectsForeignEngine', 'NativeLastJoinsBeforeNativeAppend',
@@ -52,6 +52,7 @@ CHILDREN = {
     'NativeTUNReadbackRejectsAwayAndBack': ('name', 'index', 'mtu', 'invalid-mtu', 'source', 'read-error'),
     'NativeTUNReadbackRequiresJoinedClose': ('success', 'original-error'),
     'NativeLastUsesOriginalDiscovery': ('local', 'server'),
+    'NativeCONNECTLastUsesOriginalDiscovery': ('local', 'server'),
     'NativeCloseReceipt': ('success', 'original-error'),
     'NativeMTUUsesJoinedReader': ('candidate', 'rollback', 'unchanged', 'pending-close'),
     'NativeMTURejectsChangedOwnership': ('zero-binding', 'foreign-identity', 'foreign-engine', 'foreign-selector', 'open-gate', 'retired-source', 'invalid-fixed', 'above-bound', 'cancelled', 'foreign-reader'),
@@ -77,6 +78,7 @@ def load(name, filename):
 PREP = load('execution_owner_prep', 'prepare-node-chain-execution-owner.py')
 ADMISSION = load('execution_owner_admission', 'prepare-node-chain-execution.py')
 GATE = load('execution_owner_gate', 'prepare-node-chain-execution-gate.py')
+CONNECT = load('execution_owner_connect', 'prepare-mobile-connect.py')
 
 
 def expected(package):
@@ -144,10 +146,19 @@ def verify(core):
     for template, relative in GATE.TEMPLATES.items():
         if GATE.destination(core, relative).read_bytes() != (ROOT/'mobile/chain_gate'/template).read_bytes():
             raise ValueError('native owner lost original application gate')
-    return PREP.digest()
+    connect_sources = {}
+    for template, relative in CONNECT.TEMPLATES.items():
+        if template in CONNECT.DESKTOP_ONLY:
+            continue
+        original = (ROOT/'mobile/chain'/template).read_bytes()
+        if (core/relative).read_bytes() != original:
+            raise ValueError('native owner lost original typed CONNECT source')
+        connect_sources[relative] = hashlib.sha256(original).hexdigest()
+    return hashlib.sha256(json.dumps({'execution': PREP.digest(), 'connect': connect_sources}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 CONTROLS = (
+    ('typed Last original policy', 'routervpn_node_chain_execution_last.go', 'if e.prep.RequiresCONNECTExecutionObserver() {', 'if false {', '.', 'NativeCONNECTLastUsesOriginalDiscovery/local', 'typed native Last failed original discovery adoption'),
     ('unchanged actual MTU', 'routervpn_node_chain_execution_mtu.go', ' || actual.mtu != mtu', '', '.', 'NativeMTURejectsUnchangedSubstitution/actual-value', 'unchanged cleanup accepted changed native ownership or observation'),
     ('unchanged double native readback', 'routervpn_node_chain_execution_mtu.go', 'err != nil || confirmed != actual || e.reader.Load() != reader', 'err != nil || confirmed.name == "never" || e.reader.Load() != reader', '.', 'NativeMTURejectsUnchangedSubstitution/second-read', 'unchanged cleanup accepted changed native ownership or observation'),
     ('unchanged pending transaction ownership', 'routervpn_node_chain_execution_mtu.go', '!previous.joined || previous.result != reader', 'previous.result != reader', '.', 'NativeMTURejectsUnchangedSubstitution/pending-previous', 'unchanged cleanup accepted changed native ownership or observation'),

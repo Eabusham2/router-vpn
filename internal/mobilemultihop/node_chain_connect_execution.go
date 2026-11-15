@@ -54,7 +54,10 @@ func ParseNodeChainCONNECTExecutionPreparation(input string) (*NodeChainExecutio
 }
 
 func (b *nodeChainCONNECTExecutionBinding) validate(p *NodeChainExecutionPreparation, local *NodeChain) error {
-	if b == nil || b.self != b || b.preparation != p || b.local != local || local == nil || b.source == nil || local.connectSource != b.source || len(local.nodes) != 3 || p == nil || p.desktop != nil || p.mobile != nil || p.source.Schema != 4 || p.source.LocalSource != b.source.sourceJSON {
+	if b == nil || b.self != b || b.preparation != p || b.local != local || local == nil || b.source == nil || local.connectSource != b.source || len(local.nodes) != 3 || p == nil || p.desktop != nil || p.source.Schema != 4 || p.source.LocalSource != b.source.sourceJSON {
+		return nodeChainExecutionError
+	}
+	if p.mobile != nil && (b.desktop != nil || p.mobile.connect == nil || p.mobile.connect.validate(p) != nil) {
 		return nodeChainExecutionError
 	}
 	if b.desktop == nil {

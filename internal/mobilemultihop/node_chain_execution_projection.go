@@ -116,7 +116,7 @@ func newNodeChainExecutionPreparationCaptured(localSource, execution string, des
 		if desktop != nil || p.validateMobileCapture() != nil {
 			return nil, nodeChainExecutionError
 		}
-		config = mobile.chain.Config()
+		config = mobile.config()
 	}
 	if desktop != nil {
 		var meta DesktopNodeChainMetadata

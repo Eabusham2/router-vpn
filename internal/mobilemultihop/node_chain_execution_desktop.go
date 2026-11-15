@@ -209,6 +209,9 @@ func (p *DesktopNodeChainExecutionPhysicalPolicy) PhysicalReadValidated() (strin
 }
 
 func (p *NodeChainExecutionPreparation) bindProjectedExecution(policy *NodeChainExecutionPolicy) (*NodeChainExecutionProjection, error) {
+	if p.mobile != nil && p.mobile.connect != nil {
+		return p.bindCONNECTMobileProjected(policy)
+	}
 	// First retain the existing generic compiler's exact structural transition
 	// checks. A valid storage seal alone cannot authorize changed original rows.
 	generic, err := NewNodeChainExecutionPreparation(p.source.LocalSource, p.source.Execution)
@@ -219,6 +222,10 @@ func (p *NodeChainExecutionPreparation) bindProjectedExecution(policy *NodeChain
 	if err != nil {
 		return nil, err
 	}
+	return p.bindProjectedExecutionAddition(policy, addition)
+}
+
+func (p *NodeChainExecutionPreparation) bindProjectedExecutionAddition(policy *NodeChainExecutionPolicy, addition *NodeChainExecutionProjection) (*NodeChainExecutionProjection, error) {
 	transition, err := addition.Transition()
 	if err != nil {
 		return nil, err

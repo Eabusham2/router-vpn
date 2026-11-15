@@ -3224,3 +3224,68 @@ Positive output hash:
 Original, positive, profiled and omission evidence remains in
 `connect-policy-observation-validation` and `desktop-connect-product-validation`.
 No real-device or complete release acceptance is inferred from these tests.
+
+## Android typed CONNECT Server/Compare and original mobile restoration
+
+Android source, complete profiles and ProductActivity now admit the original
+exact schema-four trio: WG/AWG entry, literal HTTP or verified HTTPS CONNECT
+middle, independent paired SS2022/UoT-v2 final with its Start Layer Off.
+The ordinary Local source remains separately captured and is never parsed as
+an ordinary schema-two execution plan. Every original member, credential,
+selected DNS and device policy remains tied to the captured source.
+
+The native typed execution preparation creates and retains its own exact
+CommandServer registry, CONNECT capture and Box context. Android Session now
+selects this execution owner ahead of the otherwise retained Local CONNECT
+source for factory/bind/start, proof, progress, health, measurements, MTU,
+network changes and cleanup. It still uses one VpnService. Cleanup failure
+retains the original owner and requires its actual close receipt.
+
+The new private mobile restore capsule retains original source/policy/member
+pointers, joined native ownership and issued effective TUN readback. It derives
+only that captured interface MTU and preserves the already-proved Local/Server
+choice. Fresh discovery and selected proof do not rerun Compare. The actual
+Box Last capture and mobile restore lifecycle now use the typed constructor or
+the joined capsule's exact original policy; the ordinary parser stays strict.
+
+Validation includes 197 actual Java/shared-compiler source checks with two
+causal controls; 213 shipping Java host checks plus 24 effective-MTU/opaque
+restore checks with three controls; and the original 378 ordinary host checks
+with 18 controls. The actual prepared libbox source/factory and native Box Last
+roots pass 24 race records (19.524 and 4.828 seconds). Omitting the original
+factory requirement and the typed Last parser each fails the intended native
+leaf. Shared CONNECT restore passes Android and iOS-target cases in 38.498
+seconds; the original generic Android restore passes in 8.503 seconds. The iOS
+shared case is not Apple host adoption. Runner suites pass 15, seven and 13
+roots. Java OS/native handles and native Box TUN/transport boundaries remain
+explicit models; no Android device or full encrypted remote-lease path is claimed.
+
+The actual Android build now calls the strict native-owner driver with all
+37 original roots plus the new Last root and all original 28 causal controls
+plus the new Last control. The original 120-second Go bound is unchanged.
+The existing mobile gate discovers the new typed bridge roots and factory
+control. Both new Android source/host scripts are mandatory in runtime and
+push/PR workflow inventories. A separate shared typed restore phase preserves
+the original 180-second bound and exact-once full discovered inventory.
+Five workflow controls and all 11 partition controls pass.
+
+Review caught an accidental new factory signature in the unrelated Candidate
+ABI loop before publication. That signature was removed from Candidate only;
+its complete original inventory is now pinned. Scoped controls require the
+Execution factory and reject both omission and leakage into Candidate. All
+other original javap loops match the prior source. Shell syntax, mandatory
+native caller omission/no-race/conditional controls and nineteen actual
+preparation fixed points pass. Withdrawn preliminary ABI evidence is retained.
+
+The corrected 33-file manifest is
+`dcce57d5bbd900345c57568efbec2ea3f297596765a900de43d52782158e56a3`,
+the patch is `f95174830c74c88aabdf4729b1486cdb45bc2571b9d20b174c3312c5d17ae9d6`,
+and its receipt is
+`3929bb51770818a895d9d0ce917ea505434f71c897957ec1a5157bb1bdc63257`.
+The four-file workflow/status companion manifest is
+`8555c5303ab984ba0a248f0d74e98683484204a7da2e3c9b15e61321b69fc2a9`.
+The 708-record retained native overlay predates the separate desktop policy
+observation optimization; it is scoped dependency compilation, not a freshly
+built complete native bundle. Exact identities and outputs are retained in
+`android-connect-execution-validation`. Exact-current APK/ABI, real Android
+networking, Apple host adoption and full release publication remain separate.

@@ -6,6 +6,41 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 15: typed CONNECT execution and retained restoration
+
+The shared execution compiler and desktop native host now retain a distinct
+HTTP/HTTPS CONNECT owner for an exact three-member path: paired WireGuard or
+AWG entry, one literal-address imported CONNECT middle, and an independent
+paired Shadowsocks 2022 final with UoT-v2 and its Start Layer Off. The entry
+retains its supported captured Start Layer. Original credentials, TLS/SNI,
+node identities, selected DNS and device policy remain part of the source.
+The existing three-to-eight-member Local CONNECT path remains separate.
+
+Android now selects Server or Compare through this typed preparation and its
+own CommandServer factory inside the existing single VpnService. The complete
+saved profile, session proof, measurements, MTU, history and cleanup retain
+that execution owner. Last and temporary restoration require the original
+joined mobile capsule, original effective TUN readback and already-proved
+Local/Server choice; fresh discovery and proof do not rerun Compare. The
+ordinary local and execution paths keep their original checks.
+
+| Surface | Current source boundary | Evidence still required |
+|---|---|---|
+| Android | Typed source/profile, UI selection, native factory, Session and retained restore are implemented. | Exact-current APK/ABI build, actual encrypted Server/Compare networking and device acceptance. |
+| Windows, Linux and macOS | Distinct native execution/physical/Ready/Last owners are implemented. Public CONNECT execution editor/profile admission is being completed separately. | Published product admission, exact-current installed native acceptance and package verification. |
+| iPhone and iPad | The shared typed bridge and mobile restore capability exist. The Apple host adapter is being completed separately. | Actual PacketTunnel adoption, Xcode build, signing and device acceptance. |
+
+Source and actual native-object tests cover original factory ownership,
+wrong/foreign handles, fresh Last discovery, joined cleanup and restored MTU.
+Java host tests explicitly model the native/OS boundary. The Android build now
+requires the native owner inventory as well as the existing mobile bridge gate;
+the new shared restore matrix has its own mandatory phase under the unchanged
+180-second test bound. Source audit success and these tests do not close other
+graph families, longer Server paths, other imported positions, native packet
+acceptance or live deployment. See the
+[November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md) for exact
+source manifests, tests, failure controls and publication boundaries.
+
 ## November 15: original scope and bounded desktop additions
 
 ### Windows and Linux imported Shadowsocks Server/Compare

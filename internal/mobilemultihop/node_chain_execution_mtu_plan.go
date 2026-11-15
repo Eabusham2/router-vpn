@@ -23,11 +23,16 @@ func (p *NodeChainExecutionProjection) MTUPlan() (NodeChainMTUPlan, error) {
 		local = p.preparation.mobile.chain
 	}
 	bound, err := local.MTUPlan()
+	localConfig := local.config
+	if m := p.preparation.mobile; m != nil && m.connect != nil {
+		localConfig = m.config()
+		bound, err = nodeChainProjectedMTUPlan(localConfig, local.proofs, nodeChainProjection{TargetOS: m.readback.TargetOS, RestoredMTU: m.readback.MTU})
+	}
 	if err != nil {
 		return NodeChainMTUPlan{}, err
 	}
 	var actual, original map[string]any
-	if exactJSON([]byte(p.config), &actual, 4<<20) != nil || exactJSON([]byte(local.config), &original, 4<<20) != nil ||
+	if exactJSON([]byte(p.config), &actual, 4<<20) != nil || exactJSON([]byte(localConfig), &original, 4<<20) != nil ||
 		!reflect.DeepEqual(actual["inbounds"], original["inbounds"]) || bound.TUNTag != p.transition.TUNTag {
 		return NodeChainMTUPlan{}, nodeChainExecutionError
 	}

@@ -200,7 +200,7 @@ final class AndroidOrderedPathSelection {
         if(source.getBytes(StandardCharsets.UTF_8).length>AndroidNodeChainCapture.MAX_INPUT)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
         if(AndroidNodeChainCapture.sourceSchema(sources)==4) {
             AndroidNodeChainCONNECTCapture preview=AndroidNodeChainCONNECTCapture.compile(source,jsonStrings(inputs),jsonStrings(identities));
-            try { requireCurrent(); } finally { preview.close(); }
+            try { if(!"local".equals(execution))AndroidNodeChainCapture.validateCONNECTExecutionSource(preview.source,execution);requireCurrent(); } finally { preview.close(); }
         } else if(AndroidNodeChainCapture.sourceSchema(sources)==3) {
             AndroidNodeChainSOCKSCapture preview=AndroidNodeChainSOCKSCapture.compile(source,jsonStrings(inputs),jsonStrings(identities));
             try { requireCurrent(); } finally { preview.close(); }
@@ -240,8 +240,8 @@ final class AndroidOrderedPathSelection {
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();for(Member member:members)sources.add(member.source);
         int schema=AndroidNodeChainCapture.sourceSchema(sources);
         if(!"local".equals(execution)&&!members.isEmpty()) {
-            if(schema>=3||schema==2&&members.size()!=3||!"shadowsocks".equals(members.get(members.size()-1).mode))
-                throw new IllegalStateException("Server and Compare require paired packet prefixes or a three-node path with one literal Shadowsocks middle, with a Shadowsocks 2022 final. Longer imported paths use Local.");
+            if((schema>=3&&schema!=4)||(schema==2||schema==4)&&members.size()!=3||!"shadowsocks".equals(members.get(members.size()-1).mode))
+                throw new IllegalStateException("Server and Compare require paired packet prefixes or a three-node path with one literal Shadowsocks or HTTP/HTTPS CONNECT middle, with a Shadowsocks 2022 final. Longer imported paths use Local.");
             for(Member member:members)if(member.source.imported)
                 AndroidNumericAddress.parse(member.source.external().server);
         }

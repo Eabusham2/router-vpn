@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import subprocess
+import re
+import hashlib
 import sys
 
 ROOT = Path(__file__).resolve().parent
@@ -29,6 +31,55 @@ multihop_runtime = text("AndroidMultihopRuntime.java")
 main = text("MainActivity.java")
 gradle = (ROOT / "app" / "build.gradle").read_text(encoding="utf-8")
 combined_build = (ROOT / "build-sing-box-libbox.sh").read_text(encoding="utf-8")
+
+
+def require_original_native_execution_gate(build):
+    command = '  python3 "$ROOT/../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego'
+    original = '  python3 "$ROOT/../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"'
+    if build.count(command) != 1 or "\n"+command+"\n" not in build or build.count(original) != 1 or build.index(original) > build.index(command):
+        raise AssertionError("Android lost required original native execution owner gate")
+    return command
+
+
+required_owner_call = require_original_native_execution_gate(combined_build)
+for missing in (combined_build.replace(required_owner_call+"\n", ""), combined_build.replace(required_owner_call, required_owner_call.replace(" --race", "")), combined_build.replace(required_owner_call, "  false && "+required_owner_call.strip())):
+    try:
+        require_original_native_execution_gate(missing)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("Android native owner command omission control escaped")
+
+
+
+def require_execution_factory_abi(build):
+    loops = dict(re.findall(r'  javap -classpath "\$classes" io\.nekohasekai\.libbox\.(\w+) >[^\n]+\n  for signature in ([^\n]+)', build))
+    signature = "io.nekohasekai.libbox.CommandServer newCommandServer(io.nekohasekai.libbox.CommandServerHandler, io.nekohasekai.libbox.PlatformInterface) throws java.lang.Exception;"
+    candidate = loops.get("RouterNodeChainCandidatePreparation", "")
+    if hashlib.sha256(candidate.encode()).hexdigest() != '99d9ec6ad31b9de9078323442dc51c05b0d3de31f82aa867dcd74a6af6be0884' or signature in candidate:
+        raise AssertionError("Candidate preparation borrowed typed execution factory ABI")
+    for owner in ("RouterNodeChainCONNECT", "RouterNodeChainExecution"):
+        if loops.get(owner, "").count(signature) != 1:
+            raise AssertionError("Original typed owner lost its exact factory ABI: "+owner)
+    return signature
+
+
+required_factory_abi = require_execution_factory_abi(combined_build)
+execution_marker = '  javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainExecution >'
+candidate_marker = '  javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainCandidatePreparation >'
+for owner_marker, add in ((candidate_marker, True), (execution_marker, False)):
+    prefix, body = combined_build.split(owner_marker, 1)
+    if add:
+        body = body.replace("  for signature in ", "  for signature in '"+required_factory_abi+"' ", 1)
+    else:
+        body = body.replace("'"+required_factory_abi+"' ", "", 1)
+    try:
+        require_execution_factory_abi(prefix+owner_marker+body)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("Typed factory ABI ownership control escaped")
+
 awg_build = (ROOT / "build-awg-tunnel.sh").read_text(encoding="utf-8")
 bridge = (ROOT / "routervpn_xray_bridge.go").read_text(encoding="utf-8")
 manifest = (ROOT / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
@@ -317,7 +368,7 @@ for executable_contract in (
     "test_android_multihop_start_layer.py",
     "test_android_multihop_layers.py",
     "test_android_layered_service_compile.py",
-    "test_android_node_chain_execution_capture.py",
+    "test_android_node_chain_execution_capture.py", "test_android_connect_execution_capture.py", "test_android_connect_execution_runtime.py",
     "test_android_node_chain_runtime.py", "test_android_node_chain_openvpn_runtime.py", "test_android_node_chain_imported_runtime.py", "test_android_node_chain_socks_runtime.py", "test_android_ordered_latency.py", "test_android_ordinary_ordered_latency.py", "test_android_node_chain_connect_runtime.py", "test_android_connect_ordered_latency.py", "test_android_execution_ordered_latency.py", "test_android_execution_ordered_latency_data.py", "test_android_ordered_history_source_transaction.py", "test_android_node_candidate_preparation.py", "test_android_node_candidate_preparation_owner.py", "test_android_node_candidate_preparation_ui.py", "test_android_node_candidate_profile.py", "test_android_node_candidate_prefix_capture.py", "test_android_node_candidate_prefix_host.py", "test_android_node_candidate_prefix_owner.py", "test_android_node_chain_execution_runtime.py", "test_android_node_chain_execution_restore.py", "test_android_node_chain_mtu.py",
     "test_android_max_dns_owner.py",
     "test_android_max_fixture_composition.py",

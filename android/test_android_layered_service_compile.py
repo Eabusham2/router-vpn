@@ -109,7 +109,7 @@ STUBS[PKG.replace('.', '/') + '/RouterMTUState.java'] = '''package io.nekohaseka
  private String session="",path="",name="";private int mtu;public String getSession(){return session;}public void setSession(String v){session=v;}public String getPath(){return path;}public void setPath(String v){path=v;}
  public String getInterface(){return name;}public void setInterface(String v){name=v;}public int getMTU(){return mtu;}public void setMTU(int v){mtu=v;}
 }'''
-stub(PKG,'RouterNodeChainExecution','{}')
+stub(PKG,'RouterNodeChainExecution','{public CommandServer newCommandServer(CommandServerHandler h,PlatformInterface p)throws Exception{throw new IllegalStateException("No typed execution factory in type-only boundary");}}')
 stub(APP,'AndroidNodeChainExecutionCapture','''{final String config="",launchInput="",sourceSHA256="",configSHA256="",requested="";
  final AndroidNodeChainCapture local=null;final io.nekohasekai.libbox.RouterNodeChainExecution plan=null;
  static final class RestoreCapture{final String execution="";}

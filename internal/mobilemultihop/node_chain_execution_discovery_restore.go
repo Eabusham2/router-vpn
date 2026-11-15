@@ -25,7 +25,13 @@ func (o *NodeChainExecutionDiscoveryOwner) PlanOriginalContext(ctx context.Conte
 	if _, err := original.NewAttempt(raw); err != nil {
 		return nil, err
 	}
-	projection, err := o.prep.BindExecution(original)
+	var projection *NodeChainExecutionProjection
+	var err error
+	if o.prep.mobile != nil && o.prep.mobile.connect != nil {
+		projection, err = o.prep.bindCONNECTMobileOriginal(ctx, original)
+	} else {
+		projection, err = o.prep.BindExecution(original)
+	}
 	if err != nil {
 		return nil, err
 	}

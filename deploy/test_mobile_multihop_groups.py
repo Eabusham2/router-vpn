@@ -63,6 +63,9 @@ PHASES = (
     ('desktop node policies and ownership', r'^TestDesktop(?:Node(?!Chain|Ready)|LinuxNode|CompleteMAX)'),
     ('desktop execution and ownership', r'^TestDesktop(?!Predecessor|Node|LinuxNode|CompleteMAX)'),
     ('imported transports and ownership', r'^TestImported(?!Entry)'),
+    # The typed mobile restore owns a fresh native/MTU join; keep its complete
+    # matrix separate from the existing generic fallback at the same budget.
+    ('mobile CONNECT execution restore', r'^TestMobileNodeChainCONNECTExecutionRestore'),
 )
 # Explicit complete ownership keeps CI groups bounded without silently losing a
 # newly introduced phase. The default invocation still runs every group.
@@ -94,6 +97,7 @@ CI_GROUPS = {
         'desktop ordered physical graph matrix', 'desktop ordered execution authority',
         'desktop ordered policies', 'desktop ordered readiness', 'desktop node policies and ownership',
         'desktop execution and ownership', 'imported transports and ownership',
+        'mobile CONNECT execution restore',
         'controller, proof and remaining ownership',
     ),
 }
@@ -132,6 +136,7 @@ REQUIRED = frozenset((
     'TestDesktopNodeChainPolicyRejectsChangedOriginalAndPhysicalGraph',
     'TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor',
     'TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity',
+    'TestMobileNodeChainCONNECTExecutionRestoreKeepsOriginalOwnerMTUAndChoice',
 )) | EXECUTION_FIFTY_REQUIRED
 
 
@@ -367,6 +372,30 @@ class PartitionTests(unittest.TestCase):
         for prefix in ('^TestNodeChainExecution', '^TestNodeChainServer', '^TestDesktopNodeChainExecution'):
             with self.subTest(prefix=prefix), self.assertRaises(ValueError):
                 partition(self.names, PHASES+(('overlapping ordered boundary',prefix),))
+
+    def test_mobile_connect_restore_keeps_its_complete_bounded_phase(self):
+        root = 'TestMobileNodeChainCONNECTExecutionRestoreKeepsOriginalOwnerMTUAndChoice'
+        future = 'TestMobileNodeChainCONNECTExecutionRestoreFuture'
+        ordinary = 'TestMobileNodeChainExecutionRestoreFuture'
+        names = sorted(set(self.names) | {future, ordinary})
+        groups = partition(names)
+        selected = dict(groups)['mobile CONNECT execution restore']
+        self.assertEqual(set(selected), {root, future})
+        self.assertIn(ordinary, dict(groups)['controller, proof and remaining ownership'])
+        self.assertIn('-timeout=180s', command(selected))
+        self.assertIn(('mobile CONNECT execution restore', selected), select_ci_group(groups, 'runtime'))
+        with self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
+            inventory('\n'.join(name for name in names if name != root))
+        with self.assertRaises(ValueError):
+            partition(names, PHASES + (('duplicate mobile restore', r'^TestMobileNodeChainCONNECTExecutionRestore'),))
+        for fault in ('missing', 'duplicate'):
+            assignment = {key: list(value) for key, value in CI_GROUPS.items()}
+            if fault == 'missing':
+                assignment['runtime'].remove('mobile CONNECT execution restore')
+            else:
+                assignment['core'].append('mobile CONNECT execution restore')
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                select_ci_group(groups, 'runtime', assignment)
 
     def test_overlapping_predicates_reject(self):
         with self.assertRaises(ValueError):

@@ -27,24 +27,24 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
 
     static AndroidNodeChainExecutionCapture compile(AndroidNodeChainCapture local, String requested) throws Exception {
         requireRequested(requested);
-        if (local == null || local.socks != null || local.connect != null) throw new IllegalStateException("This execution requires an original ordinary ordered source.");
+        if (local == null || local.socks != null) throw new IllegalStateException("This execution requires an original ordinary ordered source.");
         local.requireCurrent();
         if (!requested.equals(local.selectionExecution)) throw new IllegalStateException("The execution differs from the complete original saved selection.");
-        RouterNodeChainExecution plan = Libbox.routerNodeChainExecutionFromLaunch(local.launchInput, requested);
+        RouterNodeChainExecution plan = local.connect != null ? Libbox.newRouterNodeChainCONNECTExecution(local.launchInput, requested) : Libbox.routerNodeChainExecutionFromLaunch(local.launchInput, requested);
         return adopt(local, requested, plan);
     }
 
     /** Pure source replay. The service still requires its process-owned session,
      * original Home epoch, current selection and exact private file inventory. */
     static AndroidNodeChainExecutionCapture reopen(AndroidNodeChainCapture local, String input) throws Exception {
-        if (local == null || local.socks != null || local.connect != null) throw new IllegalStateException("This execution requires an original ordinary ordered source.");
+        if (local == null || local.socks != null) throw new IllegalStateException("This execution requires an original ordinary ordered source.");
         local.requireCurrent();
         JSONObject record = privateJSON(input, AndroidNodeChainCapture.MAX_INPUT);
         if (record.getInt("schema") != 1 || record.has("last")) throw new IllegalStateException("Ordinary execution cannot replace an explicit saved Last choice.");
         JSONObject preparation = privateJSON(record.getString("source"), AndroidNodeChainCapture.MAX_INPUT);
         String requested = preparation.getString("execution");
         requireRequested(requested);
-        AndroidNodeChainExecutionCapture result = adopt(local, requested, Libbox.newRouterNodeChainExecutionLaunch(input));
+        AndroidNodeChainExecutionCapture result = adopt(local, requested, local.connect != null ? Libbox.newRouterNodeChainCONNECTExecutionLaunch(input) : Libbox.newRouterNodeChainExecutionLaunch(input));
         if (!input.equals(result.launchInput)) {
             try { result.close(); }
             catch (Exception cleanup) { throw new IllegalStateException("The altered execution source could not retire its native capture.", cleanup); }
@@ -57,7 +57,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
      * factory. It grants no current discovery, forwarding, cleanup or proof. */
     static AndroidNodeChainExecutionCapture fromLast(AndroidNodeChainCapture local, String requested, String record) throws Exception {
         requireRequested(requested);
-        if (local == null || local.socks != null || local.connect != null || !requested.equals(local.selectionExecution))
+        if (local == null || local.socks != null || !requested.equals(local.selectionExecution))
             throw new IllegalStateException("Last requires the complete original saved execution source.");
         local.requireCurrent();
         String raw=bounded(record,16*1024);
@@ -66,7 +66,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         if (!("local".equals(selected)||"server".equals(selected)) || !"auto".equals(requested)&&!requested.equals(selected)
                 || !requested.equals(saved.getString("setting")))
             throw new IllegalStateException("Last lost its original requested and selected execution.");
-        RouterNodeChainExecution plan=Libbox.routerNodeChainExecutionFromLast(local.launchInput,requested,raw);
+        RouterNodeChainExecution plan=local.connect != null ? Libbox.routerNodeChainCONNECTExecutionFromLast(local.launchInput,requested,raw) : Libbox.routerNodeChainExecutionFromLast(local.launchInput,requested,raw);
         if (plan == null) throw new IllegalStateException("Last returned no original native preparation.");
         try { return new AndroidNodeChainExecutionCapture(local,requested,plan,null,selected,raw); }
         catch (Exception invalid) { try { plan.close(); } catch (Exception cleanup) { invalid.addSuppressed(cleanup); } throw invalid; }
@@ -114,12 +114,12 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         sourceSHA256 = plan.sourceSHA256(); configSHA256 = plan.configSHA256();
         JSONObject preparation = privateJSON(source, AndroidNodeChainCapture.MAX_INPUT);
         JSONObject launch = privateJSON(launchInput, AndroidNodeChainCapture.MAX_INPUT);
-        if (preparation.length() != 3 || preparation.getInt("schema") != 1
+        if (preparation.length() != 3 || preparation.getInt("schema") != (local.connect != null ? 4 : 1)
                 || !requested.equals(preparation.getString("execution")) || !requested.equals(plan.requestedExecution())
                 || !local.sourceSHA256.equals(plan.localSourceSHA256())
                 || sourceSHA256 == null || !sourceSHA256.matches("[0-9a-f]{64}")
                 || configSHA256 == null || !configSHA256.equals(digest(config))
-                || launch.length() != (lastRecord == null ? 5 : 6) || !"routervpn-node-chain-execution-preparation-input".equals(launch.getString("kind"))
+                || launch.length() != (lastRecord == null ? 5 : 6) || !(local.connect != null ? "routervpn-node-chain-connect-execution-preparation-input" : "routervpn-node-chain-execution-preparation-input").equals(launch.getString("kind"))
                 || launch.getInt("schema") != (lastRecord == null ? 1 : 2)
                 || (lastRecord == null ? launch.has("last") : !lastRecord.equals(launch.getString("last"))) || !source.equals(launch.getString("source"))
                 || !sourceSHA256.equals(launch.getString("source_sha256")) || !configSHA256.equals(launch.getString("config_sha256"))) {
@@ -130,8 +130,8 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         // The embedded Local source uses schema two for an imported SS member.
         // This does not change the execution preparation/ordinary launch schema.
         int originalSchema = original.getInt("schema");
-        if (returned.length() != 4 || (originalSchema != 1 && originalSchema != 2)
-                || originalSchema == 2 && original.getJSONArray("nodes").length() != 3
+        if (returned.length() != 4 || (originalSchema != 1 && originalSchema != 2 && !(local.connect != null && originalSchema == 4))
+                || (originalSchema == 2 || originalSchema == 4) && original.getJSONArray("nodes").length() != 3
                 || returned.getInt("schema") != originalSchema
                 || !"local".equals(returned.getString("execution"))
                 || !sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))
@@ -217,7 +217,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
     }
 
     static AndroidNodeChainExecutionCapture restore(AndroidNodeChainCapture local, RestoreCapture captured) throws Exception {
-        if (captured == null || !captured.original.closed || local == null || local.socks != null || local.connect != null
+        if (captured == null || !captured.original.closed || local == null || local.socks != null
                 || !local.launchInput.equals(captured.original.local.launchInput))
             throw new IllegalStateException("Execution restore needs the complete original source and acknowledged native drain.");
         local.requireCurrent();

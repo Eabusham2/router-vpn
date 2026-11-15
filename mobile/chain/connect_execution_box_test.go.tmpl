@@ -528,3 +528,54 @@ func TestRouterVPNCONNECTExecutionNativeConstructionFamily(t *testing.T) {
 		}
 	})
 }
+
+func TestRouterVPNExecutionNativeCONNECTLastUsesOriginalDiscovery(t *testing.T) {
+	for _, execution := range []string{"local", "server"} {
+		t.Run(execution, func(t *testing.T) {
+			f, _, _ := newCONNECTExecutionNativeFixture(t, "wg", "https-connect", "auto")
+			last := executionLastRecord(t, f, execution)
+			e, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = e.AdoptLastContext(t.Context(), last); err == nil {
+				t.Fatal("saved Last record replaced fresh native discovery")
+			}
+			f.discovery(t)
+			if _, err = e.DiscoverContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			originalOwner, originalBox, originalInbound := e.discovery.Load(), e.instance, e.inbound
+			plan, err := e.AdoptLastContext(t.Context(), last)
+			if err != nil {
+				t.Fatal("typed native Last failed original discovery adoption", err)
+			}
+			projection, err := plan.Projection()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e.discovery.Load() != originalOwner || e.instance != originalBox || e.inbound != originalInbound || e.planned.Load() != projection {
+				t.Fatal("Last replaced its original discovery, Box, reader or projection")
+			}
+			if err = plan.RequireJoinedContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if open, err := e.ApplicationOpenContext(t.Context()); err != nil || open {
+				t.Fatal("saved Last record opened application traffic", err)
+			}
+			runtime, err := mobilemultihop.NewNodeChainExecutionLastRuntime(t.Context(), plan, e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.Progress().Ready || runtime.HealthyContext(t.Context()) == nil {
+				t.Fatal("native Last adoption fabricated live execution proof")
+			}
+			if _, err = mobilemultihop.NewNodeChainExecutionLastRuntime(t.Context(), plan, e); err == nil {
+				t.Fatal("one Last plan admitted another runtime")
+			}
+			if err = runtime.CloseContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

@@ -13,10 +13,14 @@ type nodeChainExecutionMobileProjection struct {
 	chain           *NodeChain
 	executionSource string
 	readback        NodeChainExecutionTUNReadback
+	connect         *nodeChainCONNECTExecutionMobileRestore
 }
 
 func (p *NodeChainExecutionPreparation) validateMobileCapture() error {
 	m := p.mobile
+	if m != nil && m.connect != nil {
+		return m.connect.validate(p)
+	}
 	if m == nil || m.chain == nil || m.chain.validateCapture() != nil || p.desktop != nil || p.source.Desktop != nil ||
 		m.chain.sourceJSON != p.source.LocalSource || m.chain.projection.TargetOS != m.readback.TargetOS ||
 		m.chain.projection.RestoredMTU != m.readback.MTU || m.readback.TargetOS != "android" && m.readback.TargetOS != "ios" ||
@@ -59,7 +63,7 @@ func (r *NodeChainExecutionRuntime) CaptureMobileRestoreContext(ctx context.Cont
 		return NodeChainExecutionMobileRestoreCapture{}, err
 	}
 	defer release()
-	if r.projection.preparation.desktop != nil {
+	if r.projection.preparation.desktop != nil || r.projection.preparation.source.DesktopCONNECT != nil {
 		return NodeChainExecutionMobileRestoreCapture{}, nodeChainExecutionError
 	}
 	restore, err := r.CaptureRestoreContext(ctx)
@@ -75,7 +79,7 @@ func (r *NodeChainExecutionRuntime) CaptureMobileRestoreContext(ctx context.Cont
 
 func (c NodeChainExecutionMobileRestoreCapture) validateRetiredContext(ctx context.Context) error {
 	if ctx == nil || c.engine == nil || c.restore.owner == nil || c.restore.projection.validateCapture() != nil ||
-		c.restore.projection.preparation.desktop != nil || c.readback.TargetOS != "android" && c.readback.TargetOS != "ios" ||
+		c.restore.projection.preparation.desktop != nil || c.restore.projection.preparation.source.DesktopCONNECT != nil || c.readback.TargetOS != "android" && c.readback.TargetOS != "ios" ||
 		c.restore.projection.validateTUNReadback(c.readback, c.restore.identity) != nil {
 		return nodeChainExecutionError
 	}
@@ -126,11 +130,14 @@ func (c NodeChainExecutionMobileRestoreCapture) NewPreparationContext(ctx contex
 		return nil, err
 	}
 	p := c.restore.projection
+	if p.preparation.connect != nil {
+		return c.newCONNECTPreparationContext(ctx)
+	}
 	chain, err := ProjectNodeChain(p.policy.local, c.readback.TargetOS, c.readback.MTU)
 	if err != nil {
 		return nil, err
 	}
-	mobile := &nodeChainExecutionMobileProjection{chain, p.Source(), c.readback}
+	mobile := &nodeChainExecutionMobileProjection{chain: chain, executionSource: p.Source(), readback: c.readback}
 	preparation, err := newNodeChainExecutionPreparationProjected(p.preparation.LocalSource(), p.Execution(), nil, mobile)
 	if err != nil {
 		return nil, err
