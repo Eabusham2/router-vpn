@@ -145,9 +145,13 @@ public func LibboxRouterCompileExternalPolicy(_ config:String,_ capture:String,_
 public func LibboxRouterValidateExternalTransport(_ config:String,_ capture:String,_ error:inout NSError?)->Bool {
  result(&error,["Op":"external-validate-transport","Config":config,"Policy":capture]) == "checked"
 }
-public func LibboxRouterNodeChainImportedMemberInput(_ config:String,_ capture:String,_ error:inout NSError?)->String? {
- let value=result(&error,["Op":"ordered-imported-source","Config":config,"Policy":capture])
- return error == nil && !value.isEmpty ? value:nil
+// Match the real generated nonnull NSString / NSErrorPointer ABI. Returning an
+// optional here would conceal invalid conditional binding in shipping Swift.
+public func LibboxRouterNodeChainImportedMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String {
+ var failure:NSError?
+ let value=result(&failure,["Op":"ordered-imported-source","Config":config,"Policy":capture])
+ error?.pointee=failure
+ return value
 }
 public func LibboxRouterNodeChainImportedOpenVPNMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String {
  var failure:NSError?

@@ -8,8 +8,9 @@ BOUNDARY=r'''
 @MainActor final class RouterVPNModel{
  var iosCandidateTesting=false
  var allNodeProfiles:[RouterProfile]{nodes.flatMap{ $0.routerProfiles }}
- var selectedNodeProfile:RouterProfile?{bundle.routerProfiles.first{ $0.id==bundle.selectedRouterID }}
- var nodes:[ClientBundle],bundle:ClientBundle,connected=true,activeSessionIdentity:IOSSessionIdentity?,iosConnectGeneration=UUID(),selectedMode="multihop",selectedLogicalMode="multihop",auto=false
+ var selectedNodeProfile:RouterProfile?{guard let bundle else{return nil};return bundle.routerProfiles.first{ $0.id==bundle.selectedRouterID }}
+ var nodes:[ClientBundle],bundle:ClientBundle?
+ var connected=true,activeSessionIdentity:IOSSessionIdentity?,iosConnectGeneration=UUID(),selectedMode="multihop",selectedLogicalMode="multihop",auto=false
  init(_ nodes:[ClientBundle],identity:IOSSessionIdentity){self.nodes=nodes;bundle=nodes.last!;activeSessionIdentity=identity}
  func iosNodeChainBundles(for bundle:ClientBundle)throws->[ClientBundle]{nodes}
  nonisolated static func iosStrategyDigest(_ data:Data)->String{let h=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",h),count:4)}
@@ -29,6 +30,9 @@ CASES=r'''
    try reject("fifty original app generation"){try fifty.require(model)}
    model.iosConnectGeneration=fifty.selection;model.connected=false
    try reject("fifty disconnected owner"){try fifty.require(model)}
+   model.connected=true;model.iosConnectGeneration=fifty.selection;model.bundle=nil
+   try reject("fifty absent selected bundle"){_ = try IOSOrderedLatencyCapture(model)}
+   try reject("fifty removed selected bundle"){try fifty.require(model)}
 '''
 def member(text,anchor):
     start=text.index(anchor);brace=text.index('{',start);depth=1;end=brace+1

@@ -161,9 +161,9 @@ enum IOSExternalExecution {
             let original = try IOSImportedShadowsocksSource.capture(profile)
             var failure: NSError?
             if IOSImportedShadowsocksSource.hasHostnameTransport(profile) {
-                guard IOSImportedShadowsocksSource.eligible(profile),
-                      let source = LibboxRouterNodeChainImportedMemberInput(original.config, original.capture, &failure),
-                      failure == nil, !source.isEmpty else { throw failure ?? issue() }
+                guard IOSImportedShadowsocksSource.eligible(profile) else { throw issue() }
+                let source = LibboxRouterNodeChainImportedMemberInput(original.config, original.capture, &failure)
+                guard failure == nil, !source.isEmpty else { throw failure ?? issue() }
                 return
             }
             let valid = LibboxRouterValidateExternalTransport(original.config, original.capture, &failure)

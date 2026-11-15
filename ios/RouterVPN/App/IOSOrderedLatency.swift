@@ -9,13 +9,14 @@ import Combine
     let ids: [String], kinds: [String]
     let mode: String, logicalMode: String, automatic: Bool
     static func bytes(_ model: RouterVPNModel) throws -> Data {
+        guard let bundle = model.bundle else { throw CancellationError() }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        return try encoder.encode([model.bundle] + model.iosNodeChainBundles(for: model.bundle))
+        return try encoder.encode([bundle] + model.iosNodeChainBundles(for: bundle))
     }
     init(_ model: RouterVPNModel) throws {
-        guard model.connected, let identity = model.activeSessionIdentity,
+        guard model.connected, let bundle = model.bundle, let identity = model.activeSessionIdentity,
               let active = identity.nodeChainSource, let path = IOSNodeChainPresentation.active(identity), (2...8).contains(path.count) else { throw CancellationError() }
-        let captured = try model.captureIOSOrderedRoute(model.bundle)
+        let captured = try model.captureIOSOrderedRoute(bundle)
         defer { try? captured.close() }
         switch captured {
         case .socks(let original):

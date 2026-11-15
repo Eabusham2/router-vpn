@@ -21,7 +21,8 @@ enum IOSOrderedRouteCapture{case socks(SOCKSCapture),connect(CONNECTCapture),ord
 struct Ownership{var active=false}
 @MainActor final class RouterVPNModel:ObservableObject{
  var connected=true,activeSessionIdentity:IOSSessionIdentity?=IOSSessionIdentity(nodeChainSource:Data("captured-source".utf8),connectedAt:Date(timeIntervalSince1970:1))
- var iosConnectGeneration=UUID(),bundle=ClientBundle(),selectedMode="wg",selectedLogicalMode="multihop",auto=false,iosSpeedLabOwnership=Ownership()
+ var bundle:ClientBundle?=ClientBundle()
+ var iosConnectGeneration=UUID(),selectedMode="wg",selectedLogicalMode="multihop",auto=false,iosSpeedLabOwnership=Ownership()
  func iosNodeChainBundles(for bundle:ClientBundle)throws->[ClientBundle]{[bundle]}
  func captureIOSOrderedRoute(_ bundle:ClientBundle)throws->IOSOrderedRouteCapture{boundaryTransport == "socks5" ? .socks(SOCKSCapture()):.connect(CONNECTCapture())}
  nonisolated static func iosStrategyDigest(_ data:Data)->String{let h=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",h),count:4)}
@@ -77,6 +78,11 @@ TESTS=r'''
   check("callback cleanup joined",!probe.running)
  }
  @MainActor static func main()async throws{
+  Fixture.reset();let absent=RouterVPNModel();absent.bundle=nil
+  do{_ = try IOSOrderedLatencyCapture(absent);fatalError("missing bundle accepted capture")}catch{}
+  do{_ = try IOSOrderedLatencyCapture.bytes(absent);fatalError("missing bundle accepted snapshot")}catch{}
+  let missing=IOSOrderedLatency();missing.load(absent)
+  check("missing bundle opens no native operation",missing.ids.isEmpty && Fixture.events.isEmpty)
   for position in 0..<3{
    Fixture.reset();let model=RouterVPNModel(),probe=IOSOrderedLatency();probe.load(model)
    check("visible captured three node path",probe.ids==["entry","middle","final"])
@@ -98,9 +104,15 @@ TESTS=r'''
   }
   for phase in ["ordered-latency-info","ordered-latency-open","ordered-latency-start","ordered-latency-close"]{
    Fixture.reset();let model=RouterVPNModel(),probe=IOSOrderedLatency();probe.load(model)
-   Fixture.hook={op in if op==phase{model.bundle.secret="changed private credential"}}
+   Fixture.hook={op in if op==phase{model.bundle?.secret="changed private credential"}}
    probe.start(model,position:1);await finish(probe)
    check("full source change refuses commit "+phase,IOSPrivateJSONStore.writes==0)
+  }
+  for phase in ["ordered-latency-open","ordered-latency-close"]{
+   Fixture.reset();let model=RouterVPNModel(),probe=IOSOrderedLatency();probe.load(model)
+   Fixture.hook={op in if op==phase{model.bundle=nil}}
+   probe.start(model,position:1);await finish(probe)
+   check("removed bundle refuses history and joins original owner "+phase,IOSPrivateJSONStore.writes==0 && Fixture.closed && !IOSMTUMeasurementGate.held)
   }
   Fixture.reset();let model=RouterVPNModel(),probe=IOSOrderedLatency();probe.load(model);Fixture.closeFailures=2
   Fixture.hook={op in if op=="ordered-latency-close"{check("failed close retains original lease",IOSMTUMeasurementGate.held && probe.running)}}

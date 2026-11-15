@@ -898,6 +898,28 @@ check before its ordinary-close branch. This proven fixture defect does not
 establish the cause of that particular native failure. Exact-SHA Windows
 execution still must rerun and pass.
 
+### Actual Apple SDK types in execution and ordered latency
+
+The retained native Xcode job `132766754949` in run `43699327478` completed
+with two application compile errors that remained in the current source.
+Imported-member validation conditionally bound a generated nonoptional
+`String`, and ordered latency passed the optional selected bundle to methods
+requiring a concrete bundle. Execution now checks the returned string and
+NSError directly. Latency captures a concrete selected bundle and refuses
+capture or a later result when that bundle is absent or removed.
+
+The executable fixtures now match those real generated API and model types,
+so restoring either original shipping body reproduces the native compiler
+errors, including the dependent key-path errors. The targeted portable Swift
+gates passed 64 callback checks, 133 ordinary checks across 35 positions,
+162 CONNECT checks using the real Go parser, and 756 external-device settings
+checks using real native policy validation. All seven existing causal controls
+passed. Missing and removed bundles open no replacement operation, commit no
+history and retain joined original cleanup. The earlier CONNECT fixture
+control-order failure was corrected without removing its original witness.
+These are actual-source portable compiler/parser results; corrected Xcode
+packaging, signing and device acceptance remain separate required evidence.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths
