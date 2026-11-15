@@ -2642,3 +2642,32 @@ consume its maximum simultaneously. The ES diagnostic and other workflow jobs
 are unchanged. The full failed job log remains in `release-e486f928-audit`;
 source manifest, focused results and causal evidence are in
 `darwin-controller-groups-validation`.
+
+
+## Captured router-agent inputs schedule imported native gates
+
+At `ac8058aac8b5f8d573bde57c6b58331de2fc67d1`, the imported packet
+REALITY workflow `43750525049`, job `132923232384`, failed its source-trigger
+closure before native execution. Four router-agent files newly captured by
+the macOS imported peer preparation were absent from its push path filter:
+`multihop_tor_process.go`, `multihop_node_chain_lease.go`,
+`multihop_node_chain_process.go` and `relay_root.go`. The same four omissions
+were verified in the existing SOCKS REALITY caller for XHTTP/H2 and the direct
+Naive H3 workflow.
+
+The repair adds those exact four paths to each affected workflow. All three
+retain their original events and byte-identical permissions/jobs bodies.
+Reusable XHTTP/H2 workflows do not acquire new push or pull-request events.
+The build-input fingerprints, thirty-six captured packet files and 351 native
+packet cases remain mandatory.
+
+Eighteen focused roots passed: the full nine packet runner tests, three XHTTP
+trigger tests, four H3 trigger tests, and the existing H2 and UDP trigger
+checks. Twelve individual omission controls prove each captured owner path is
+required. The original four packet failures were reproduced before repair.
+This is source-trigger validation, not network acceptance. Full companion
+XHTTP/H3 suites separately exposed an unchanged test namespace missing `tags`
+while executing the real builder stage; those failures are retained and require
+a distinct repair. Detailed logs, immutable source hashes and the scoped
+receipt are in `imported-trigger-closure-validation`. Current-SHA hosted
+native execution and release publication remain separately required.

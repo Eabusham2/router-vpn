@@ -23,19 +23,32 @@ class PacketReferenceInventory(unittest.TestCase):
     def events(self, expected):
         return '\n'.join(json.dumps({'Action':action,'Test':name}) for name in sorted(expected) for action in ('run','pass'))
 
-    def test_every_original_input_schedules_its_recorded_reference_workflow(self):
+    def check_original_input_triggers(self, text):
         workflow = ROOT/'.github/workflows/imported-packet-reality-native.yml'
         sources = set(gate.inputs())
         self.assertIn(workflow, sources)
-        paths = workflow.read_text().split('    paths:\n',1)[1].split('\npermissions:',1)[0]
+        paths = text.split('    paths:\n',1)[1].split('\npermissions:',1)[0]
         patterns = [ast.literal_eval(line.strip()[2:]) for line in paths.splitlines()
                     if line.strip().startswith('- ')]
         self.assertTrue(patterns)
-        for source in sources:
+        for source in sorted(sources):
             relative = source.relative_to(ROOT).as_posix()
-            with self.subTest(source=relative):
-                self.assertTrue(any(fnmatch.fnmatchcase(relative, pattern) for pattern in patterns),
-                                'Original packet source no longer schedules its native reference: '+relative)
+            self.assertTrue(any(fnmatch.fnmatchcase(relative, pattern) for pattern in patterns),
+                            'Original packet source no longer schedules its native reference: '+relative)
+
+    def test_every_original_input_schedules_its_recorded_reference_workflow(self):
+        self.check_original_input_triggers((ROOT/'.github/workflows/imported-packet-reality-native.yml').read_text())
+
+    def test_each_captured_router_owner_trigger_is_required(self):
+        text = (ROOT/'.github/workflows/imported-packet-reality-native.yml').read_text()
+        owners = sorted(path.relative_to(ROOT).as_posix() for path in gate.inputs()
+                        if path.parent == ROOT/'cmd/router-agent')
+        self.assertEqual(len(owners), 4)
+        for owner in owners:
+            line = "      - '"+owner+"'\n"
+            self.assertEqual(text.count(line), 1)
+            with self.subTest(owner=owner), self.assertRaisesRegex(AssertionError, owner):
+                self.check_original_input_triggers(text.replace(line, '', 1))
 
     def test_exact_original_capture_and_native_inventory(self):
         self.assertEqual(len(gate.CAPTURE.FILES),36)

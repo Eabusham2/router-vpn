@@ -480,6 +480,10 @@ class ImportedNaiveH3Workflow(unittest.TestCase):
             self.assertTrue(pattern == 'go.sum' or any(ROOT.glob(pattern)), 'Unowned H3 trigger path: '+pattern)
         required = (
             '.github/workflows/imported-naive-h3-native.yml', '.github/actions/go-windows-sockets/action.yml',
+            'cmd/router-agent/multihop_tor_process.go',
+            'cmd/router-agent/multihop_node_chain_lease.go',
+            'cmd/router-agent/multihop_node_chain_process.go',
+            'cmd/router-agent/relay_root.go',
             'go.mod', 'go.sum', 'internal/mobilemultihop/imported_entry.go', 'internal/mobiletor/desktop_socket_renewal.go',
             'internal/nativeopenvpn/remote.go', 'internal/hopmeasure/response.go',
             'mobile/routervpn_imported_naive_h3_native_test.go.tmpl',
@@ -525,6 +529,20 @@ class ImportedNaiveH3Workflow(unittest.TestCase):
             self.assertEqual(source.count(before), 1)
             with self.subTest(change=before), self.assertRaises(AssertionError):
                 self.check_direct_trigger(source.replace(before, after, 1))
+
+    def test_each_captured_router_owner_direct_trigger_is_required(self):
+        spec = importlib.util.spec_from_file_location('h3_captured_builder', BUILDER)
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        owners = sorted(path.relative_to(ROOT).as_posix() for path in builder.inputs()
+                        if path.parent == ROOT/'cmd/router-agent')
+        self.assertEqual(len(owners), 4)
+        source = NAIVE_H3_WORKFLOW.read_text()
+        for owner in owners:
+            line = "      - '"+owner+"'\n"
+            self.assertEqual(source.count(line), 1)
+            with self.subTest(owner=owner), self.assertRaisesRegex(AssertionError, owner):
+                self.check_direct_trigger(source.replace(line, '', 1))
 
     def check_concurrency(self, source):
         def group(workflow, event='push', ref='refs/heads/main', run='101'):

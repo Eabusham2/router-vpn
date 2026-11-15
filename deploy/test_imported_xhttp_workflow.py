@@ -281,6 +281,31 @@ class ImportedXHTTPWorkflow(unittest.TestCase):
                        '.github/workflows/imported-xhttp-native.yml'):
             self.assertTrue(any(fnmatch.fnmatchcase(source, pattern) for pattern in patterns), source)
 
+    def check_captured_router_owner_triggers(self, text):
+        spec = importlib.util.spec_from_file_location('xhttp_captured_builder', BUILDER)
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        owners = sorted(path.relative_to(ROOT).as_posix() for path in builder.inputs()
+                        if path.parent == ROOT/'cmd/router-agent')
+        self.assertEqual(len(owners), 4)
+        paths = text.split('    paths:\n', 1)[1].split('\npermissions:', 1)[0]
+        patterns = [ast.literal_eval(line.strip()[2:]) for line in paths.splitlines()
+                    if line.strip().startswith('- ')]
+        for owner in owners:
+            self.assertTrue(any(fnmatch.fnmatchcase(owner, pattern) for pattern in patterns), owner)
+        return owners
+
+    def test_captured_router_owners_schedule_the_existing_xhttp_and_h2_caller(self):
+        self.check_captured_router_owner_triggers(WORKFLOW.read_text())
+
+    def test_each_captured_router_owner_caller_trigger_is_required(self):
+        text = WORKFLOW.read_text()
+        for owner in self.check_captured_router_owner_triggers(text):
+            line = "      - '"+owner+"'\n"
+            self.assertEqual(text.count(line), 1)
+            with self.subTest(owner=owner), self.assertRaisesRegex(AssertionError, owner):
+                self.check_captured_router_owner_triggers(text.replace(line, '', 1))
+
     def test_release_still_requires_actual_linux_host_builds(self):
         release = (ROOT/'.github/workflows/release-candidate.yml').read_text()
         native = section(release, 'native-runtimes:', 2)
