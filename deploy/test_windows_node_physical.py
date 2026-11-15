@@ -93,10 +93,19 @@ EXTERNAL_OPENVPN_WITNESS_CASES = EXTERNAL_OPENVPN_CODEC_CASES + EXTERNAL_OPENVPN
 
 EXTERNAL_OPENVPN_MIXED_CONTROL = EXTERNAL_OPENVPN_ROOT + "/mixed/reject/control-key"
 EXTERNAL_OPENVPN_MIXED_LIFECYCLE = ("on-connect", "always", "successor-and-original-restore")
-EXTERNAL_OPENVPN_INVOCATIONS = ("alias", "witness", "tcp", "udp", "mixed-lifecycle", "mixed-refusals", "mixed-control-key")
+EXTERNAL_OPENVPN_ENTRY_ROOT = "TestRouterVPNDesktopExternalWindowsOpenVPNEntryWFP"
+EXTERNAL_OPENVPN_ENTRY_LIFECYCLE = ("on-connect", "always", "successor-and-original-restore")
+EXTERNAL_OPENVPN_ENTRY_REFUSALS = ("reconnect-rejects-proof", "reject/entry-key", "reject/final-key", "reject/dns", "foreign-predecessor", "commit-refused")
+EXTERNAL_OPENVPN_ENTRY_INVOCATIONS = tuple("entry-" + network + "-" + group for network in ("tcp", "udp") for group in ("lifecycle", "refusals"))
+EXTERNAL_OPENVPN_INVOCATIONS = ("alias", "witness", "tcp", "udp", "mixed-lifecycle", "mixed-refusals", "mixed-control-key", *EXTERNAL_OPENVPN_ENTRY_INVOCATIONS)
 
 
 def external_openvpn_cases(network):
+    if network in EXTERNAL_OPENVPN_ENTRY_INVOCATIONS:
+        _, carrier, group = network.split("-")
+        root = EXTERNAL_OPENVPN_ENTRY_ROOT + "/" + carrier
+        leaves = EXTERNAL_OPENVPN_ENTRY_LIFECYCLE if group == "lifecycle" else EXTERNAL_OPENVPN_ENTRY_REFUSALS
+        return (EXTERNAL_OPENVPN_ENTRY_ROOT, root, *(root + "/" + leaf for leaf in leaves))
     if network == "alias":
         return EXTERNAL_OPENVPN_ALIAS_CASES
     if network == "witness":
@@ -116,7 +125,11 @@ def external_openvpn_arguments(network):
     if network not in EXTERNAL_OPENVPN_INVOCATIONS:
         raise ValueError("Unknown mandatory OpenVPN invocation")
     exact_control = "/".join("^" + part + "$" for part in EXTERNAL_OPENVPN_MIXED_CONTROL.split("/"))
-    if network in ("mixed-lifecycle", "mixed-refusals"):
+    if network in EXTERNAL_OPENVPN_ENTRY_INVOCATIONS:
+        _, carrier, group = network.split("-")
+        names = EXTERNAL_OPENVPN_ENTRY_LIFECYCLE if group == "lifecycle" else ("reconnect-rejects-proof", "reject", "foreign-predecessor", "commit-refused")
+        expression = "^" + EXTERNAL_OPENVPN_ENTRY_ROOT + "$/^" + carrier + "$/^(" + "|".join(map(re.escape, names)) + ")$"
+    elif network in ("mixed-lifecycle", "mixed-refusals"):
         # ARM64 exhausted the remaining mixed batch while its final child was
         # only one second old. Preserve the 180s alarm for these disjoint groups.
         names = EXTERNAL_OPENVPN_MIXED_LIFECYCLE if network == "mixed-lifecycle" else ("reject", "cancelled-proof", "foreign-predecessor", "commit-refused")
@@ -334,7 +347,7 @@ def checked_sources(source):
     if packet.is_symlink() or not packet.is_file() or not packet.read_bytes().startswith(TAG):
         raise ValueError("Ordinary Windows packet endpoint escaped its explicit native test scope")
     records["external_packet"] = hashlib.sha256(packet.read_bytes()).hexdigest()
-    for name in ("alias", "openvpn"):
+    for name in ("alias", "openvpn", "openvpn_entry"):
         native = ROOT / ("mobile/desktop/external_box_windows_" + name + "_test.go.tmpl")
         if native.is_symlink() or not native.is_file() or not native.read_bytes().startswith(TAG):
             raise ValueError("Ordinary Windows OpenVPN escaped its explicit native test scope")
@@ -403,7 +416,7 @@ def external_overlay(source, directory, mutation=None):
     # scope the durable constructor used by the real external journal owner.
     # No socket, tunnel, proof, TLS or admission operation is replaced.
     scope_mutation = mutants(source)[2] if mutation == "ordinary-udp-deny" else None
-    if mutation not in (None, "ordinary-udp-deny", "missing-durable-intent", "missing-socks-release", "missing-socks-readback", "missing-socks-grant-removal") and mutation not in EXTERNAL_LEASE_CONTROLS:
+    if mutation not in (None, "ordinary-udp-deny", "missing-durable-intent", "missing-socks-release", "missing-socks-readback", "missing-socks-grant-removal", "missing-openvpn-entry-generation") and mutation not in EXTERNAL_LEASE_CONTROLS:
         raise ValueError("Unknown ordinary Hysteria2 native control")
     path = overlay(source, directory, scope_mutation)
     mapping = json.loads(path.read_text(encoding="utf-8"))["Replace"]
@@ -414,6 +427,13 @@ def external_overlay(source, directory, mutation=None):
     copied = directory / "external-durable-scope.go"
     copied.write_bytes(raw.encode("utf-8"))
     mapping[str(source / relative)] = str(copied)
+    if mutation == "missing-openvpn-entry-generation":
+        relative = "experimental/libbox/routervpn/mobilemultihop/external_openvpn_entry.go"
+        raw = BOOT.IDENTITY.replace_once((source / relative).read_text(encoding="utf-8"),
+            "if actual != *expected {", "if false && actual != *expected {")
+        copied = directory / "external-entry-generation.go"
+        copied.write_text(raw, encoding="utf-8")
+        mapping[str(source / relative)] = str(copied)
     if mutation == "missing-durable-intent":
         relative = "routervpn/desktoppt/external_physical_windows.go"
         raw = BOOT.IDENTITY.replace_once((source / relative).read_text(encoding="utf-8"),
@@ -778,6 +798,26 @@ def execute_external_openvpn(source, workspace, build, captured):
             raise ValueError("Actual OpenVPN MAC negative executable changed")
         print("Rejected actual OpenVPN MAC native control: " + label, flush=True)
 
+    # The native entry must retain its authenticated connected generation after
+    # a real transport reconnect. A timeout or unrelated failure is not evidence.
+    label = "missing-openvpn-entry-generation"
+    changed = workspace / ("external-openvpn-" + label)
+    changed.mkdir()
+    selected = OPENVPN_BOX.compose(source, changed, external_overlay(source, changed, label))
+    candidate = changed / "external-openvpn.test.exe"
+    status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", candidate, "."], cwd=source, env=captured, timeout=600)
+    if status:
+        raise ValueError("OpenVPN entry generation control did not compile:\n" + output[-16384:])
+    candidate_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    leaf = EXTERNAL_OPENVPN_ENTRY_ROOT + "/tcp/reconnect-rejects-proof"
+    expression = "/".join("^" + part + "$" for part in leaf.split("/"))
+    status, output = BOOT.IDENTITY.run([candidate, "-test.run=" + expression, "-test.count=1", "-test.timeout=60s", "-test.v"], cwd=source, env=captured, timeout=75)
+    if status == 0 or not exact_native_verdict(output, "FAIL", leaf) or "OpenVPN entry replacement reused original connected proof" not in output or socks_native_aborted(output):
+        raise ValueError("OpenVPN entry generation control missed its exact defect:\n" + output[-16384:])
+    if hashlib.sha256(candidate.read_bytes()).hexdigest() != candidate_digest:
+        raise ValueError("Actual ordinary OpenVPN negative executable changed")
+    print("Rejected actual OpenVPN entry generation control", flush=True)
+
 
 def report_external_ss_entry(status, output, network, group=None):
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
@@ -861,7 +901,7 @@ PHASE_TIMEOUTS = {
     "external-hysteria2": _PHASE_COMMON + 600 + 3 * 195 + 2 * (600 + 75),
     "external-socks": _PHASE_COMMON + 600 + 315 + 6 * (600 + 75),
     "external-packet": _PHASE_COMMON + 600 + 2 * 75 + (5 + len(EXTERNAL_SERVER_GROUPS)) * 195 + 2 * (600 + 4 * 75) + len(EXTERNAL_LEASE_CONTROLS) * (600 + 75),
-    "external-openvpn": _PHASE_COMMON + 600 + 2 * 75 + (len(EXTERNAL_OPENVPN_INVOCATIONS) - 2) * 195 + 5 * (600 + 75),
+    "external-openvpn": _PHASE_COMMON + 600 + 2 * 75 + (len(EXTERNAL_OPENVPN_INVOCATIONS) - 2) * 195 + 6 * (600 + 75),
 }
 _PHASE_IMAGES = {
     "external-ss-entry": tuple("external-ss-entry" + suffix + "/external-ss-entry.test.exe" for suffix in ("", "-ordinary-udp-deny", "-missing-durable-intent")),
@@ -876,7 +916,7 @@ _PHASE_IMAGES = {
     "external-packet": tuple("external-packet" + suffix + "/external-packet.test.exe" for suffix in
                             ("", "-ordinary-udp-deny", "-missing-durable-intent", *("-" + label for label in EXTERNAL_LEASE_CONTROLS))),
     "external-openvpn": tuple("external-openvpn" + suffix + "/external-openvpn.test.exe" for suffix in
-                             ("", "-ordinary-udp-deny", "-missing-durable-intent", "-missing-mac-callback", "-missing-session-correlation", "-missing-proof-read")),
+                             ("", "-ordinary-udp-deny", "-missing-durable-intent", "-missing-mac-callback", "-missing-session-correlation", "-missing-proof-read", "-missing-openvpn-entry-generation")),
 }
 
 

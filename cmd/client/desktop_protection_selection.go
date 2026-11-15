@@ -116,6 +116,11 @@ func desktopProtectionSelectionForConcretePurposesWithCONNECT(node *mobilemultih
 	paired := err == nil && validProfileID(capture.EntryID) && capture.EntryID != capture.ExitID &&
 		capture.EntryTag == "external-entry" && capture.EntryNodeID == "" && meta.RootType == entryKind && meta.RootTag == entryRoot &&
 		(layeredPair || capture.StartLayer == "" && capture.EntryStartLayer == "") && (capture.Protocol == "shadowsocks" || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2")
+	openvpnPair := err == nil && validProfileID(capture.EntryID) && capture.EntryID != capture.ExitID &&
+		capture.EntryTag == "external-entry" && capture.EntryNodeID == "" && capture.Protocol == "shadowsocks" &&
+		capture.EntryStartLayer == "" && capture.StartLayer == "" && capture.EntryMTU >= 1280 &&
+		meta.RootTag == capture.EntryTag && meta.RootType == "openvpn-client" &&
+		len(capture.PhysicalRoots) == 1 && len(capture.PhysicalRoots[0].Destinations) == 1
 	serverRoot := meta.RootTag == capture.EntryTag && meta.RootType == "wireguard"
 	if capture.EntryStartLayer != "" {
 		startup, startupErr := external.StartupSocketRequired("windows")
@@ -126,7 +131,7 @@ func desktopProtectionSelectionForConcretePurposesWithCONNECT(node *mobilemultih
 		serverRoot && capture.Protocol == "shadowsocks" &&
 		(capture.StartLayer == "" || multihoprelay.ValidLayerMode(capture.StartLayer)) && (capture.EntryStartLayer == "" || multihoprelay.ValidLayerMode(capture.EntryStartLayer))
 	if err != nil || meta.TargetOS != "windows" || !validProfileID(capture.ExitID) ||
-		!paired && !server && (capture.EntryID != "" || capture.EntryTag != "") || !server && (capture.PredecessorSHA256 != "" || capture.Execution != "") ||
+		!paired && !openvpnPair && !server && (capture.EntryID != "" || capture.EntryTag != "") || !server && (capture.PredecessorSHA256 != "" || capture.Execution != "") ||
 		!desktopExternalStartLayerSupported(capture.Protocol, capture.StartLayer) && !(paired && layeredPair) && !server || capture.EntryStartLayer != "" && !(paired && layeredPair) && !server || meta.SOCKSUDPAssociationRequired != (meta.Protocol == "socks5") ||
 		meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" ||
 		meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "socks5" && meta.Protocol != "wireguard" && meta.Protocol != "amneziawg" && meta.Protocol != "openvpn" {

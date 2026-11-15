@@ -5,7 +5,7 @@ import (
 	"router-vpn/internal/nativeopenvpn"
 )
 
-// Linux's retained parent and child admit only this ordinary Local pair. The
+// Linux and Windows retained hosts admit only this ordinary Local pair. The
 // shared native proof must retain the connected entry generation and capacity;
 // the source shape cannot bypass physical preparation or grant a socket itself.
 func desktopExternalOpenVPNEntryOwner(owner *desktopExternalRuntime) bool {

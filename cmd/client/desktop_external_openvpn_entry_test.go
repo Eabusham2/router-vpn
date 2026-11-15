@@ -29,11 +29,11 @@ func desktopExternalOpenVPNEntryFixture(t *testing.T, network string) (common.Ro
 	}
 	return final, entry, launch
 }
-func TestDesktopOpenVPNEntryRetainsBothSourcesAndLinuxScope(t *testing.T) {
+func TestDesktopOpenVPNEntryRetainsBothSourcesAndSupportedScope(t *testing.T) {
 	for _, network := range []string{"tcp", "udp"} {
 		t.Run(network, func(t *testing.T) {
 			profile, entry, launch := desktopExternalOpenVPNEntryFixture(t, network)
-			if !desktopExternalRetainedEntryForOS(launch.external, "linux") || desktopExternalRetainedEntryForOS(launch.external, "darwin") || desktopExternalRetainedEntryForOS(launch.external, "windows") {
+			if !desktopExternalRetainedEntryForOS(launch.external, "linux") || desktopExternalRetainedEntryForOS(launch.external, "darwin") || !desktopExternalRetainedEntryForOS(launch.external, "windows") {
 				t.Fatal("ordinary OpenVPN entry escaped its native target boundary")
 			}
 			if err := prepareDesktopExternalPhysicalCaptured(launch, "linux"); err != nil {

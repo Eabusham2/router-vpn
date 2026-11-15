@@ -6,7 +6,7 @@ import (
 )
 
 // Graph admission is deliberately narrower than an external final's shape.
-// Only this captured SS2022 entry pair gains the Windows retained host.
+// SS2022 and the bounded OpenVPN entry pair retain the same Windows host.
 func desktopWindowsExternalGraphEligible(profile, entry common.RouterProfile, direct bool, restored string) bool {
 	if !direct && desktopWindowsExternalRouterPairedGraph(profile, entry, restored) {
 		return true
@@ -17,7 +17,8 @@ func desktopWindowsExternalGraphEligible(profile, entry common.RouterProfile, di
 	if direct {
 		return entry.ID == ""
 	}
-	return desktopWindowsExternalSSEntryOwner(&desktopExternalRuntime{profile: profile, entry: entry, selection: "local"})
+	owner := &desktopExternalRuntime{profile: profile, entry: entry, selection: "local"}
+	return desktopWindowsExternalSSEntryOwner(owner) || desktopExternalOpenVPNEntryOwner(owner)
 }
 
 // app.mu is held. Compare the independently saved original entry, including

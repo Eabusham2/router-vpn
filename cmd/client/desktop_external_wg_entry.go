@@ -148,5 +148,5 @@ func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
 }
 
 func desktopExternalRetainedEntryForOS(owner *desktopExternalRuntime, target string) bool {
-	return target == "darwin" && (desktopExternalPacketEntryOwner(owner) || desktopExternalSSEntryOwner(owner)) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && (desktopWindowsExternalSSEntryOwner(owner) || desktopWindowsExternalRouterPairedOwner(owner))
+	return target == "darwin" && (desktopExternalPacketEntryOwner(owner) || desktopExternalSSEntryOwner(owner)) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && (desktopWindowsExternalSSEntryOwner(owner) || desktopWindowsExternalRouterPairedOwner(owner) || desktopExternalOpenVPNEntryOwner(owner))
 }
