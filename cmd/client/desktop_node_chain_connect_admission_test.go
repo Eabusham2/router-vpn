@@ -214,7 +214,7 @@ func TestDesktopCONNECTPublicHandlerReachesOriginalTypedCapture(t *testing.T) {
 func TestDesktopCONNECTRegisteredRouteRefusesChangedSourceAndGraph(t *testing.T) {
 	for _, protocol := range []string{"http-connect", "https-connect"} {
 		t.Run(protocol, func(t *testing.T) {
-			for _, fault := range []string{"stale-middle", "stale-final", "partial-capture", "cancelled", "server", "auto", "layer", "hostname", "first", "final", "wrong-protocol"} {
+			for _, fault := range []string{"stale-middle", "stale-final", "partial-capture", "cancelled", "server-final-layer", "auto-final-layer", "layer", "hostname", "first", "final", "wrong-protocol"} {
 				t.Run(fault, func(t *testing.T) {
 					a, nodes := desktopCONNECTPublicHandlerFixture(t, "wg", protocol, "password")
 					proxy := a.profiles.Profiles[1].External.HTTPConnect
@@ -226,6 +226,12 @@ func TestDesktopCONNECTRegisteredRouteRefusesChangedSourceAndGraph(t *testing.T)
 					}
 					if fault == "hostname" {
 						a.profiles.Profiles[1].Endpoint, proxy.Host = "middle.example.test", "middle.example.test"
+					}
+					if fault == "server-final-layer" || fault == "auto-final-layer" {
+						// Server/Compare now have a real typed trio compiler. Keep
+						// the rejection at its still-unsupported final layer and
+						// capture the matching token before sending the request.
+						a.profiles.Profiles[2].StartLayer = "aes-256-gcm"
 					}
 					q := orderedPublicRequest(t, a, nodes)
 					status := http.StatusBadRequest
@@ -243,8 +249,8 @@ func TestDesktopCONNECTRegisteredRouteRefusesChangedSourceAndGraph(t *testing.T)
 					case "cancelled":
 						cancel()
 						status = http.StatusConflict
-					case "server", "auto":
-						q.Execution = fault
+					case "server-final-layer", "auto-final-layer":
+						q.Execution = strings.TrimSuffix(fault, "-final-layer")
 					case "first":
 						q.Nodes[0], q.Nodes[1] = q.Nodes[1], q.Nodes[0]
 					case "final":
@@ -256,7 +262,7 @@ func TestDesktopCONNECTRegisteredRouteRefusesChangedSourceAndGraph(t *testing.T)
 							q.Nodes[1].Mode = "https-connect"
 						}
 					}
-					if !desktopCONNECTExpectedPublicHost() && fault != "cancelled" && fault != "partial-capture" && fault != "server" && fault != "auto" {
+					if !desktopCONNECTExpectedPublicHost() && fault != "cancelled" && fault != "partial-capture" && fault != "server-final-layer" && fault != "auto-final-layer" {
 						status = http.StatusNotImplemented
 					}
 					before := cloneRouterProfileStore(a.profiles)
@@ -275,6 +281,41 @@ func TestDesktopCONNECTRegisteredRouteRefusesChangedSourceAndGraph(t *testing.T)
 				})
 			}
 		})
+	}
+}
+
+func TestDesktopCONNECTRegisteredExecutionRequiresOriginalRuntime(t *testing.T) {
+	for _, protocol := range []string{"http-connect", "https-connect"} {
+		for _, execution := range []string{"server", "auto"} {
+			t.Run(protocol+"/"+execution, func(t *testing.T) {
+				a, nodes := desktopCONNECTPublicHandlerFixture(t, "wg", protocol, "password")
+				request := orderedPublicRequest(t, a, nodes)
+				request.Execution = execution
+				before := cloneRouterProfileStore(a.profiles)
+				raw, err := json.Marshal(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				mux := http.NewServeMux()
+				registerDesktopMultihopRoutes(mux, a)
+				response := httptest.NewRecorder()
+				mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/multihop/connect", bytes.NewReader(raw)))
+				_, graph := getActiveMultihopGraph(a)
+				status := http.StatusNotImplemented
+				if desktopCONNECTExpectedPublicHost() {
+					status = http.StatusBadGateway
+					// This source fixture deliberately has only an empty native
+					// receipt. The actual registered route must admit the typed
+					// shape, then refuse it at the unchanged native trust gate.
+					if !strings.Contains(response.Body.String(), "native runtime receipt differs from the required source, target or payload") {
+						t.Fatal("supported CONNECT execution did not retain the native runtime boundary", response.Code, response.Body.String())
+					}
+				}
+				if response.Code != status || a.cmd != nil || a.state.Connected || graph || !reflect.DeepEqual(before, a.profiles) {
+					t.Fatal("CONNECT execution bypassed original native admission", response.Code, response.Body.String())
+				}
+			})
+		}
 	}
 }
 
