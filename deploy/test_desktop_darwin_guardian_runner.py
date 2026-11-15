@@ -1110,5 +1110,99 @@ func TestShippingCreatorAdmission(t *testing.T){
                 print('Darwin creator admission: '+label+' verified', flush=True)
 
 
+class DarwinRecvmsgInputFlags(unittest.TestCase):
+    def test_shipping_receive_normalizes_input_and_preserves_output_refusals(self):
+        # Run the actual descriptor receiver and bounded frame parser over real
+        # Unix streams. Model only XNU's returned input flags and LOCAL_PEERPID;
+        # native DescriptorOwnership and controller gates retain kernel proof.
+        # XNU 11417.101.15 initializes msg_flags from recvmsg input and copies
+        # them back: apple-oss-distributions/xnu commit
+        # e3723e1f17661b24996789d8afc084c0c3303b26, uipc_syscalls.c:2416/2455.
+        descriptor = (ROOT/'internal/mobiletor/desktop_socket_darwin_descriptor.go').read_text()
+        descriptor = descriptor[descriptor.index('func desktopDarwinDescriptorCloseOnExec('):]
+        call = 'syscall.Recvmsg(int(fd), body, control, syscall.MSG_DONTWAIT)'
+        self.assertEqual(descriptor.count(call), 1)
+        descriptor = descriptor.replace(call, 'fixtureRecvmsg(int(fd), body, control, syscall.MSG_DONTWAIT)')
+        channel = (ROOT/'internal/mobiletor/desktop_socket_darwin_channel.go').read_text()
+        channel = channel[channel.index('type desktopDarwinFrameReceiver interface {'):]
+        peer = 'syscall.GetsockoptInt(int(fd), 0 /* SOL_LOCAL */, 2 /* LOCAL_PEERPID */)'
+        self.assertEqual(channel.count(peer), 1)
+        channel = channel.replace(peer, 'fixturePeerPID(int(fd))')
+        idle = (ROOT/'internal/mobiletor/desktop_socket_channel_timeout.go').read_text()
+        idle = idle[idle.index('func desktopSocketIdleReceive('):]
+        header = '''package recvflags
+import("bytes";"encoding/binary";"encoding/json";"errors";"fmt";"io";"net";"os";"syscall";"time")
+var desktopDarwinIdle = errors.New("idle")
+var fixtureFlags, fixtureCall, fixtureFaultCall, fixturePeerCalls int
+var fixtureEcho bool
+func fixtureRecvmsg(fd int, body, control []byte, input int)(int,int,int,syscall.Sockaddr,error){
+ n,oob,flags,peer,err:=syscall.Recvmsg(fd,body,control,input)
+ fixtureCall++
+ if input!=syscall.MSG_DONTWAIT{panic("shipping nonblocking receive changed")}
+ if fixtureEcho{flags|=input}
+ if fixtureCall==fixtureFaultCall{flags|=fixtureFlags}
+ return n,oob,flags,peer,err
+}
+func fixturePeerPID(int)(int,error){fixturePeerCalls++;return os.Getpid(),nil}
+'''
+        test = r'''package recvflags
+import("encoding/binary";"net";"os";"strings";"syscall";"testing";"time")
+func TestShippingXNURecvmsgFlags(t *testing.T){
+ for _,echo:=range []struct{name string;enabled bool}{{"echo",true},{"output-only",false}}{
+ for _,fault:=range []struct{name string;flags int}{{"valid",0},{"truncated",syscall.MSG_TRUNC},{"ancillary-truncated",syscall.MSG_CTRUNC},{"unknown",1<<27}}{
+  for _,fragment:=range []int{1,2}{t.Run(echo.name+"/"+fault.name+string(rune('0'+fragment)),func(t *testing.T){
+   pair,err:=desktopDarwinSocketPairCloseOnExec();if err!=nil{t.Fatal(err)}
+   wrap:=func(fd int)*net.UnixConn{f:=os.NewFile(uintptr(fd),"original-stream");c,err:=net.FileConn(f);f.Close();if err!=nil{t.Fatal(err)};return c.(*net.UnixConn)}
+   reader,writer:=wrap(pair[0]),wrap(pair[1]);defer reader.Close();defer writer.Close()
+   reader.SetReadDeadline(time.Now().Add(time.Second))
+   payload:=[]byte(`{"Operation":"bind"}`);frame:=make([]byte,4+len(payload));binary.BigEndian.PutUint32(frame,uint32(len(payload)));copy(frame[4:],payload)
+   if _,err:=writer.Write(frame);err!=nil{t.Fatal(err)}
+   fixtureEcho=echo.enabled
+   fixtureFlags,fixtureCall,fixtureFaultCall,fixturePeerCalls=fault.flags,0,fragment,0
+   var value struct{Operation string}
+   file,err:=desktopDarwinReceiveBounded(desktopDarwinCloexecFrame{reader},&value,uint32(os.Getpid()),0,time.Time{})
+   if file!=nil{file.Close();t.Fatal("frame invented descriptor ownership")}
+   if fault.flags==0{
+    if err!=nil||value.Operation!="bind"||fixturePeerCalls!=1{t.Fatal("XNU echoed input flag rejected a valid original frame",err)}
+   }else{
+    if err==nil||fixturePeerCalls!=0||value.Operation!=""{t.Fatal("native output flag acquired frame authority",err)}
+    witness:="bounded frame";if fragment==2{witness="truncated fragment"}
+    if !strings.Contains(err.Error(),witness){t.Fatal("output flag rejected outside original frame boundary",err)}
+   }
+  })}
+ }
+ }
+}
+'''
+        normalization = 'flags &^= syscall.MSG_DONTWAIT'
+        self.assertEqual(descriptor.count(normalization), 1)
+        variants = [('baseline', descriptor, None),
+                    ('unchanged-returned-flags', descriptor.replace(normalization, ''),
+                     'XNU echoed input flag rejected a valid original frame'),
+                    ('discarded-output-flags', descriptor.replace(normalization, 'flags = 0'),
+                     'native output flag acquired frame authority')]
+        compiler = shutil.which('go')
+        self.assertIsNotNone(compiler, 'Go is required for shipping recvmsg ABI regression')
+        with tempfile.TemporaryDirectory(prefix='darwin-recvmsg-flags-') as directory:
+            folder = Path(directory)
+            implementation, regression = folder/'receive.go', folder/'receive_test.go'
+            regression.write_text(test)
+            for label, selected, witness in variants:
+                implementation.write_text(header+selected+channel+idle)
+                result = subprocess.run([compiler, 'test', '-race', '-v', '-timeout=20s', str(implementation), str(regression)],
+                                        capture_output=True, text=True, timeout=120,
+                                        env=dict(os.environ, GOTOOLCHAIN='local'))
+                output = result.stdout+result.stderr
+                if witness is None:
+                    self.assertEqual(result.returncode, 0, output)
+                    self.assertEqual(output.count('--- PASS: TestShippingXNURecvmsgFlags/'), 16, output)
+                else:
+                    self.assertNotEqual(result.returncode, 0, output)
+                    self.assertIn(witness, output)
+                    for invalid in ('panic:', 'fatal error:', 'WARNING: DATA RACE', '[build failed]'):
+                        self.assertNotIn(invalid, output)
+                print('Darwin recvmsg flags: '+label+' verified', flush=True)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

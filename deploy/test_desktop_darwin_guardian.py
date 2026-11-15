@@ -909,6 +909,10 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('Off preserves unrelated original host state', 'OffStateCollisionPreservesHost', 'Darwin Off preparation removed unrelated original host state',
          'desktop_socket_darwin_pf.go', (
              ('if !options.HostProtectionOff {', 'if true {'),)),
+        ('descriptor receive normalizes only echoed input flag', 'DescriptorOwnership', 'actual descriptor transfer lost its bounded result',
+         'desktop_socket_darwin_descriptor.go', (
+             ('flags &^= syscall.MSG_DONTWAIT',
+              '// causal control: expose XNU echoed input flag unchanged'),)),
         ('descriptor close-on-exec installation', 'DescriptorOwnership', 'original descriptor is not close-on-exec',
          'desktop_socket_darwin_descriptor.go', (
              ('syscall.F_SETFD, syscall.FD_CLOEXEC)', 'syscall.F_SETFD, 0)'),)),

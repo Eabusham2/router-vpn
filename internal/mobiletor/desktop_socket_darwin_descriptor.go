@@ -76,6 +76,10 @@ func desktopDarwinReadMsgRawCloseOnExec(raw syscall.RawConn, body, control []byt
 				break
 			}
 		}
+		// XNU returns the supplied MSG_DONTWAIT in msg_flags. Remove only
+		// that input bit; truncation and every other output flag remain fatal
+		// to the bounded frame parser.
+		flags &^= syscall.MSG_DONTWAIT
 		if failure == syscall.EAGAIN || failure == syscall.EWOULDBLOCK {
 			n, oob, flags, failure = 0, 0, 0, nil
 			return false
