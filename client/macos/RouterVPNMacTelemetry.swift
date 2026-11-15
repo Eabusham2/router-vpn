@@ -388,9 +388,13 @@ extension ProductWindowController {
         controller.window?.center(); controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
     }
 
-    fileprivate func showOrderedPrefixCandidates(savedPath: Bool = false) {
-        if let existing = objc_getAssociatedObject(self,&telemetryOrderedCandidatesKey) as? RouterVPNMacOrderedCandidates, !existing.closed {existing.showWindow(nil); existing.window?.makeKeyAndOrderFront(nil);return}
-        let controller=RouterVPNMacOrderedCandidates(savedPath: savedPath);objc_setAssociatedObject(self,&telemetryOrderedCandidatesKey,controller,.OBJC_ASSOCIATION_RETAIN_NONATOMIC);controller.showWindow(nil)
+    fileprivate func showOrderedPrefixCandidates(savedPath: Bool = false, savedPrefix: Bool = false) {
+        if let existing = objc_getAssociatedObject(self,&telemetryOrderedCandidatesKey) as? RouterVPNMacOrderedCandidates, !existing.closed {
+            if existing.matchesPurpose(savedPath: savedPath, savedPrefix: savedPrefix) || !existing.closeForPurposeChange() {
+                existing.showWindow(nil); existing.window?.makeKeyAndOrderFront(nil); return
+            }
+        }
+        let controller=RouterVPNMacOrderedCandidates(savedPath: savedPath, savedPrefix: savedPrefix);objc_setAssociatedObject(self,&telemetryOrderedCandidatesKey,controller,.OBJC_ASSOCIATION_RETAIN_NONATOMIC);controller.showWindow(nil)
     }
     fileprivate func showPerformanceMTU() { showMTUPanel(retest: true) }
     fileprivate func showPerformanceExternalComparison() { openExternalComparison() }
@@ -548,7 +552,10 @@ private final class RouterVPNMacPerformanceController: NSWindowController, NSWin
         let candidates = NSButton(title: "Candidates through connected prefix", target: self, action: #selector(prefixCandidates))
         candidates.bezelStyle = .rounded; actions.append(candidates); stack.addArrangedSubview(candidates)
         let savedCandidates = NSButton(title: "Test saved Local path", target: self, action: #selector(savedPathCandidates))
-        savedCandidates.bezelStyle = .rounded; actions.append(savedCandidates); stack.addArrangedSubview(savedCandidates)
+        savedCandidates.bezelStyle = .rounded; actions.append(savedCandidates)
+        let prefixOnly = NSButton(title: "Test selected prefix only", target: self, action: #selector(savedPrefixCandidates))
+        prefixOnly.bezelStyle = .rounded; actions.append(prefixOnly)
+        let savedRow = NSStackView(views: [savedCandidates, prefixOnly]); savedRow.orientation = .horizontal; savedRow.spacing = 8; stack.addArrangedSubview(savedRow)
         let orderedLatency = NSButton(title: "50 responses per hop", target: self, action: #selector(measureOrderedLatency))
         orderedLatency.bezelStyle = .rounded; actions.append(orderedLatency); stack.addArrangedSubview(orderedLatency)
         cancelButton.target = self; cancelButton.action = #selector(cancelMeasurement); cancelButton.bezelStyle = .rounded
@@ -571,6 +578,7 @@ private final class RouterVPNMacPerformanceController: NSWindowController, NSWin
     }
     @objc private func prefixCandidates() { if !closed, !measurement.running {product?.showOrderedPrefixCandidates()} }
     @objc private func savedPathCandidates() { if !closed, !measurement.running {product?.showOrderedPrefixCandidates(savedPath: true)} }
+    @objc private func savedPrefixCandidates() { if !closed, !measurement.running {product?.showOrderedPrefixCandidates(savedPrefix: true)} }
     @objc private func measureOrderedLatency() { if !closed, !measurement.running { product?.showOrderedLatency() } }
     @objc private func compareExternal() { if !closed, !measurement.running { product?.showPerformanceExternalComparison() } }
     @objc private func cancelMeasurement() { measurement.cancel() }
@@ -973,6 +981,19 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     }
     required init?(coder:NSCoder){nil}
     deinit {timer?.invalidate();request?.cancel()}
+    fileprivate func matchesPurpose(savedPath: Bool, savedPrefix: Bool) -> Bool {
+        self.savedPath == (savedPath || savedPrefix) && self.savedPrefix == savedPrefix
+    }
+    fileprivate func closeForPurposeChange() -> Bool {
+        guard request == nil, !pendingDrain else {
+            status.stringValue = "Finish or cancel the current candidate test before opening a different test."
+            return false
+        }
+        controls()
+        guard editLease == nil, let window else { return false }
+        window.performClose(nil)
+        return closed
+    }
     func numberOfRows(in tableView:NSTableView)->Int {rows.count}
     func tableView(_ tableView:NSTableView,objectValueFor column:NSTableColumn?,row:Int)->Any? {
         guard rows.indices.contains(row) else{return nil};let value=rows[row];let id=value["id"] as? String ?? ""

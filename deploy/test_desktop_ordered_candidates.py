@@ -2,6 +2,7 @@
 """Execute shipping ordered-candidate controls; native toolkit boundaries explicit."""
 import argparse
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -15,6 +16,106 @@ def block(source, marker):
         i+=1
     return source[start:i]
 
+def swift_launcher(directory):
+    """Execute the shipping button bindings, delegates and dialog factory.
+
+    AppKit selector delivery, windows and the dialog constructor are explicit
+    boundaries here. The actual dialog's purpose/retirement methods are also
+    exercised by swift_form, and native AppKit compilation remains required.
+    """
+    original=(ROOT/'client/macos/RouterVPNMacTelemetry.swift').read_text()
+    controls=(
+        ('baseline',None,None,None),
+        ('factory-purpose','let controller=RouterVPNMacOrderedCandidates(savedPath: savedPath, savedPrefix: savedPrefix)',
+         'let controller=RouterVPNMacOrderedCandidates(savedPath: savedPath, savedPrefix: false)',
+         'prefix button did not open its captured prefix purpose'),
+        ('button-selector','action: #selector(savedPrefixCandidates)',
+         'action: #selector(savedPathCandidates)',
+         'prefix button did not open its captured prefix purpose'),
+        ('busy-owner','|| !existing.closeForPurposeChange()', '|| false',
+         'purpose change replaced an active candidate owner'),
+    )
+    for name,old,new,witness in controls:
+        source=original
+        if old is not None:
+            assert source.count(old)==1,(name,source.count(old))
+            source=source.replace(old,new,1)
+        launch=block(source,'func showOrderedPrefixCandidates(')
+        panel=block(source,'private final class RouterVPNMacPerformanceController:')
+        begin=panel.index('        let savedCandidates = NSButton(')
+        end=panel.index('        let orderedLatency = NSButton(',begin)
+        buttons=re.sub(r'#selector\((\w+)\)',r'"\1"',panel[begin:end])
+        delegates='\n'.join(block(panel,'func '+method+'(') for method in ('prefixCandidates','savedPathCandidates','savedPrefixCandidates'))
+        program=r'''
+import Foundation
+var retained:[ObjectIdentifier:Any]=[:]
+var telemetryOrderedCandidatesKey:UInt8=0
+enum Association {case OBJC_ASSOCIATION_RETAIN_NONATOMIC}
+func objc_getAssociatedObject(_ owner:AnyObject,_ key:UnsafeRawPointer)->Any? {retained[ObjectIdentifier(owner)]}
+func objc_setAssociatedObject(_ owner:AnyObject,_ key:UnsafeRawPointer,_ value:Any?,_ policy:Association){retained[ObjectIdentifier(owner)]=value}
+final class Window {var shown=0;func makeKeyAndOrderFront(_ sender:Any?){shown+=1}}
+final class RouterVPNMacOrderedCandidates {
+ static var made:[RouterVPNMacOrderedCandidates]=[]
+ let savedPath:Bool,savedPrefix:Bool;var closed=false,replaceAllowed=true;var closeRequests=0
+ let window:Window?=Window()
+ init(savedPath:Bool=false,savedPrefix:Bool=false){self.savedPath=savedPath||savedPrefix;self.savedPrefix=savedPrefix;Self.made.append(self)}
+ func matchesPurpose(savedPath:Bool,savedPrefix:Bool)->Bool{self.savedPath==(savedPath||savedPrefix)&&self.savedPrefix==savedPrefix}
+ func closeForPurposeChange()->Bool{closeRequests+=1;if replaceAllowed{closed=true};return replaceAllowed}
+ func showWindow(_ sender:Any?){window?.shown+=1}
+}
+final class ProductWindowController { LAUNCH }
+enum Bezel {case rounded}
+enum Orientation {case horizontal}
+final class NSButton {
+ let title:String;let target:Any?;let action:String;var bezelStyle:Bezel = .rounded
+ init(title:String,target:Any?,action:String){self.title=title;self.target=target;self.action=action}
+ func click(){guard let panel=target as? LaunchPanel else{fatalError("button lost its shipping target")};panel.fire(action)}
+}
+final class NSStackView {
+ var views:[Any];var orientation:Orientation = .horizontal;var spacing=0
+ init(views:[Any]=[]){self.views=views};func addArrangedSubview(_ view:Any){views.append(view)}
+}
+final class MeasurementBoundary {var running=false}
+final class LaunchPanel {
+ let product:ProductWindowController?;var closed=false;let measurement=MeasurementBoundary()
+ var actions:[NSButton]=[];let stack=NSStackView()
+ init(product:ProductWindowController){self.product=product;BUTTONS}
+ DELEGATES
+ func fire(_ action:String){switch action{case "savedPathCandidates":savedPathCandidates();case "savedPrefixCandidates":savedPrefixCandidates();default:fatalError("unknown shipping selector")}}
+}
+var checks=0
+func check(_ ok:Bool,_ message:String){checks+=1;if !ok{fatalError(message)}}
+let panel=LaunchPanel(product:ProductWindowController())
+let rows=panel.stack.views.compactMap{$0 as? NSStackView}
+check(rows.count==1&&rows[0].views.count==2,"saved candidate controls are not visible in their shared row")
+let prefix=panel.actions.first{$0.title=="Test selected prefix only"}!
+let saved=panel.actions.first{$0.title=="Test saved Local path"}!
+check(rows[0].views.contains{($0 as? NSButton)===prefix},"prefix control was never placed in the panel")
+prefix.click();let first=RouterVPNMacOrderedCandidates.made.last!
+check(first.savedPath&&first.savedPrefix,"prefix button did not open its captured prefix purpose")
+prefix.click();check(RouterVPNMacOrderedCandidates.made.count==1&&first.closeRequests==0,"same-purpose click replaced its original dialog")
+first.replaceAllowed=false;saved.click()
+check(RouterVPNMacOrderedCandidates.made.count==1&& !first.closed,"purpose change replaced an active candidate owner")
+first.replaceAllowed=true;saved.click();let second=RouterVPNMacOrderedCandidates.made.last!
+check(RouterVPNMacOrderedCandidates.made.count==2&&first.closed&&second.savedPath&& !second.savedPrefix,"idle dialog did not switch to the complete saved purpose")
+panel.prefixCandidates();let connected=RouterVPNMacOrderedCandidates.made.last!
+check(RouterVPNMacOrderedCandidates.made.count==3&& !connected.savedPath&& !connected.savedPrefix,"connected candidate purpose changed")
+panel.measurement.running=true;prefix.click();check(RouterVPNMacOrderedCandidates.made.count==3,"running Performance measurement launched a competing dialog")
+panel.measurement.running=false;panel.closed=true;prefix.click();check(RouterVPNMacOrderedCandidates.made.count==3,"closed Performance panel launched another dialog")
+print("Swift shipping candidate launcher: \(checks) checks PASS; AppKit/constructor boundaries explicit")
+'''
+        program=re.sub(r'\s*(&&|\|\|)\s*',r' \1 ',program).replace('LAUNCH',launch).replace('BUTTONS',buttons).replace('DELEGATES',delegates)
+        path=directory/'launcher.swift';path.write_text(program)
+        binary=directory/'launcher'
+        subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'launcher-cache'),str(path),'-o',str(binary)],check=True,timeout=120)
+        result=subprocess.run([str(binary)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=30)
+        if witness is None:
+            assert result.returncode==0,result.stdout
+            print(result.stdout.strip(),flush=True)
+        else:
+            assert result.returncode!=0 and witness in result.stdout,(name,result.stdout[-4000:])
+            print('Swift candidate launcher causal control rejected: '+name,flush=True)
+
 def swift_form(directory):
     source=(ROOT/'client/macos/RouterVPNMacTelemetry.swift').read_text()
     policy=block(source,'private enum RouterVPNOrderedCandidateDisplay {')
@@ -27,7 +128,7 @@ def swift_form(directory):
     policy+='\nprivate final class HomeForm {\n'+block(summary,'func formatHomeSummary(')+'\n}'
     owner=block(source,'private final class RouterVPNMacOrderedCandidates:')
     fields=owner[owner.index('{')+1:owner.index('    init(savedPath:')].replace('fileprivate private(set) ','').replace('private ','')
-    methods='\n'.join(block(owner,'func '+n+'(').replace('@objc ','') for n in ['controls','capture','measure','saveProfile','cancelTest','windowShouldClose','windowWillClose','tick','savedStatus','issue','send','receive','receiveSaved'])
+    methods='\n'.join(block(owner,'func '+n+'(').replace('@objc ','') for n in ['matchesPurpose','closeForPurposeChange','controls','capture','measure','saveProfile','cancelTest','windowShouldClose','windowWillClose','tick','savedStatus','issue','send','receive','receiveSaved'])
     # Extracted methods keep actual HTTP construction/start/cancel and delivery.
     # The transport and AppKit views are small explicit doubles here; the real
     # transport is separately compiled and constructor-tested below.
@@ -40,7 +141,7 @@ extension Int {static var zero:Int{0}}
 final class NSTableView {var selectedRow=0;var selectedRowIndexes=IndexSet(integer:0);func reloadData(){}}
 final class NSTextField {var stringValue="";init(){};init(wrappingLabelWithString:String){stringValue=wrappingLabelWithString}}
 final class NSButton {var isEnabled=false;init(title:String,target:Any?,action:Any?) {}}
-final class NSWindow {var closed=false;func close(){closed=true}}
+final class NSWindow {var closed=false;var onClose:(()->Void)?;func close(){closed=true;onClose?()};func performClose(_ sender:Any?){close()}}
 let routerVPNProductBaseURL=URL(string:"http://127.0.0.1:8080")!
 final class RouterVPNMacSpeedLabTransport {
  static var calls:[RouterVPNMacSpeedLabTransport]=[]
@@ -53,7 +154,7 @@ POLICY
 final class Form {
 FIELDS
 var window:NSWindow?=NSWindow()
-init(savedPath:Bool=false,savedPrefix:Bool=false){self.savedPath=savedPath || savedPrefix;self.savedPrefix=savedPrefix}
+init(savedPath:Bool=false,savedPrefix:Bool=false){self.savedPath=savedPath || savedPrefix;self.savedPrefix=savedPrefix;window?.onClose={[weak self] in self?.windowWillClose(Notification(name:Notification.Name("closed")))}}
 METHODS
 }
 var checks=0
@@ -66,6 +167,14 @@ check(RouterVPNOrderedCandidateDisplay.score(row(),now:now+120000)==nil,"poll re
 var invalid=row();invalid["measurement"]="icmp";check(RouterVPNOrderedCandidateDisplay.score(invalid)==nil,"ICMP became candidate score")
 let path:[[String:Any]]=[["id":"entry","mode":"wg"],["id":"custom","mode":"shadowsocks"],["id":"final","mode":"shadowsocks"]]
 let catalog:[String:Any]=["view_token":String(repeating:"a",count:64),"prefix_position":0,"expires_at":now+120000,"prefixes":[["position":0,"name":"Entry","mode":"wg"]],"candidates":[["id":"custom","name":"Original custom","proposed_path":path]]]
+let purpose=Form(savedPrefix:true)
+check(purpose.matchesPurpose(savedPath:false,savedPrefix:true) && purpose.matchesPurpose(savedPath:true,savedPrefix:true),"prefix purpose lost normalized saved ownership")
+check(!purpose.matchesPurpose(savedPath:true,savedPrefix:false) && !purpose.matchesPurpose(savedPath:false,savedPrefix:false),"another purpose reused a prefix dialog")
+purpose.pendingDrain=true;check(!purpose.closeForPurposeChange() && !purpose.closed && purpose.pendingDrain,"purpose change closed a retained native job")
+purpose.pendingDrain=false;check(purpose.closeForPurposeChange() && purpose.closed && purpose.window!.closed,"idle purpose change did not close its exact original window")
+let fetching=Form();fetching.capture();let pending=RouterVPNMacSpeedLabTransport.calls.last!
+check(!fetching.closeForPurposeChange() && !fetching.closed && fetching.request===pending && !pending.cancelled,"purpose change replaced an in-flight source request")
+pending.finish(catalog);settle();check(fetching.closeForPurposeChange() && fetching.closed,"completed source capture could not retire its dialog")
 let f=Form();f.capture();let first=RouterVPNMacSpeedLabTransport.calls.last!;check(first.started&&first.url.query=="prefix_position=0","catalog request did not start exact prefix")
 first.finish(catalog);settle();check(f.view != nil,"original catalog was not adopted")
 f.measure();let run=RouterVPNMacSpeedLabTransport.calls.last!;check(run.started&&run.body?["samples"] as? Int==50&&run.body?["candidate_ids"] as? [String]==["custom"]&&run.timeout==180,"actual test lost original inputs")
@@ -537,7 +646,7 @@ int main(int argc,char**argv){
 def main():
     p=argparse.ArgumentParser();p.add_argument('--platform',choices=['windows','darwin','linux'],required=True);p.add_argument('--shell',default='pwsh');args=p.parse_args()
     with tempfile.TemporaryDirectory(prefix='ordered-candidate-forms-') as d:
-        if args.platform=='darwin':swift_form(Path(d))
+        if args.platform=='darwin':swift_launcher(Path(d));swift_form(Path(d))
         elif args.platform=='linux':linux_actions(Path(d));linux_policy(Path(d));linux_form(Path(d))
         else:subprocess.run([args.shell,'-NoProfile','-File',str(ROOT/'client/test-windows-ordered-candidates.ps1'),'-Root',str(ROOT)],check=True,timeout=90)
 if __name__=='__main__':main()
