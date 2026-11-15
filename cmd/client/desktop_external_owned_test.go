@@ -96,6 +96,10 @@ func newDesktopWindowsExternalFixture(t *testing.T, policy string) *desktopWindo
 	controller := windowsprotection.Controller{PID: 101, StartTimeUTCTicks: 638000000000000000, SID: "S-1-5-21-100-200-300-1001", AuthenticationID: 123, SessionID: 2}
 	f.store = &desktopNodeJournalFixtureStore{head: windowsprotection.JournalRecord{Schema: 1, Kind: windowsprotection.JournalRecordKind, JournalID: strings.Repeat("a", 32), Sequence: 1, Controller: controller, Phase: "settled"}}
 	a, k := f.base.a, f.base.kernel
+	// The base fixture already owns its telemetry reader. Complete the saved
+	// profile fixture under the same lock used by that reader.
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.nodeProtection.journal = f.store
 	a.nodeProtection.backend.releaseWithBarrier = func(ctx context.Context, target mobiletor.DesktopWindowsProtectionTarget, barrier mobiletor.DesktopWindowsProtectionCommitBarrier) (desktopNodeProtectionRelease, error) {
 		if ctx.Err() != nil || barrier == nil || k.locked || k.target == nil || *k.target != target {
@@ -1192,6 +1196,19 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 				}
 				f := newDesktopWindowsExternalFixture(t, policy)
 				a := f.base.a
+				if policy == "off" {
+					// These cases exercise ordinary external Off succession. The
+					// paired Router uses its supported retained On-connect host;
+					// single-Router Off has a separate ordinary-host boundary.
+					a.mu.Lock()
+					f.base.profile.KillSwitch, f.base.profile.KillSwitchPolicy = true, "on-connect"
+					a.profiles.Profiles[0] = cloneRouterProfile(f.base.profile)
+					err := a.persistProfilesLocked()
+					a.mu.Unlock()
+					if err != nil || !desktopOwnedNodeModeEligible(f.base.profile, "wg") || f.profiles["https-connect"].KillSwitchPolicy != "off" {
+						t.Fatal("mixed restoration fixture lost its separate Router/external policies", err)
+					}
+				}
 				protocol := "https-connect"
 				if strings.Contains(direction, "hysteria2") {
 					protocol = "hysteria2"
@@ -1299,6 +1316,15 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 					t.Fatal("cancelled public test did not restore its original typed host", direction, response.Code, response.Body.String(), a.state, len(f.children))
 				}
 				trial, restored := f.children[1], f.children[2]
+				if policy == "off" {
+					originalPolicy, trialPolicy := "off", "on-connect"
+					if routerFirst {
+						originalPolicy, trialPolicy = trialPolicy, originalPolicy
+					}
+					if f.children[0].target.Policy != originalPolicy || trial.target.Policy != trialPolicy || restored.target.Policy != originalPolicy {
+						t.Fatal("temporary restoration substituted the captured mixed protection policies")
+					}
+				}
 				if restored.attempt.transfer.Predecessor == nil || *restored.attempt.transfer.Predecessor != trial.target || restored.launch.command == original.command || restored.Alive() != nil {
 					t.Fatal("restoration reused an old predecessor or child")
 				}
