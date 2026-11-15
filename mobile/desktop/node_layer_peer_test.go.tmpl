@@ -2258,6 +2258,7 @@ var desktopExternalInstalledWireGuardEntry func(*testing.T, *desktopNodeLayerSer
 var desktopExternalInstalledAmneziaEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest, tls.Certificate, string, string, uint16) desktopExternalInstalledPacketEntryPeer
 
 type desktopExternalInstalledPeerRequest struct {
+	OpenVPNSS2022Entry   bool                                  `json:"openvpn_ss2022_entry,omitempty"`
 	HysteriaFault        string                                `json:"hysteria_fault,omitempty"`
 	HTTPSFault           string                                `json:"https_fault,omitempty"`
 	SSEntryLayer         *desktopExternalInstalledLayerRequest `json:"ss_entry_layer,omitempty"`
@@ -2283,6 +2284,7 @@ type desktopExternalInstalledPeerRequest struct {
 type desktopExternalInstalledOpenVPNStats struct {
 	connections, streams, physicalUDP, packets, authFailures, fallbackAttempts int64
 	firstSequence, finalSequence                                               uint64
+	entryProofs                                                                uint32
 }
 type desktopExternalInstalledOpenVPNPeer struct {
 	entryRoutes                          []desktopReferenceRule
@@ -2291,12 +2293,16 @@ type desktopExternalInstalledOpenVPNPeer struct {
 	close                                func()
 }
 
+var desktopExternalInstalledOpenVPNSS2022Entry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, tls.Certificate, string) desktopExternalInstalledOpenVPNPeer
+
 var desktopExternalInstalledOpenVPNFinal func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, string, string) desktopExternalInstalledOpenVPNPeer
 var desktopExternalInstalledOpenVPNEntry func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, tls.Certificate, desktopExternalInstalledOpenVPNPeer) desktopExternalInstalledPacketEntryPeer
 
 var desktopExternalInstalledOpenVPN func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledPeerRequest, string, string) desktopExternalInstalledOpenVPNPeer
 
 type desktopExternalInstalledPeerReply struct {
+	OpenVPNEntryAddress     string                                      `json:"openvpn_entry_address,omitempty"`
+	OpenVPNEntryProofs      uint32                                      `json:"openvpn_entry_proofs,omitempty"`
 	TLSCertificateRefusals  uint32                                      `json:"tls_certificate_refusals,omitempty"`
 	SSEntryLayer            *desktopExternalInstalledSSReceipt          `json:"ss_entry_layer,omitempty"`
 	SSFinalLayer            *desktopExternalInstalledSSReceipt          `json:"ss_final_layer,omitempty"`
@@ -2333,17 +2339,17 @@ type desktopExternalInstalledPeerReply struct {
 // HTTPS responders. The native client must negotiate its real port; there is
 // no final-socket mapping or guessed UDP control-port permission.
 type desktopExternalInstalledSOCKSPeer struct {
-	server       *desktopNodeLayerServer
-	request      desktopExternalInstalledPeerRequest
-	authFailures *atomic.Uint32
-	mu           sync.Mutex
-	relays       []string
-	rejected     atomic.Uint32
-	joinFailed   atomic.Bool
-	bindHost     string
+	server            *desktopNodeLayerServer
+	request           desktopExternalInstalledPeerRequest
+	authFailures      *atomic.Uint32
+	mu                sync.Mutex
+	relays            []string
+	rejected          atomic.Uint32
+	joinFailed        atomic.Bool
+	bindHost          string
 	handshakeDeadline bool
-	controlOwnedUDP bool
-	entryRelay   func(net.Conn, net.PacketConn) (net.Addr, func(), error)
+	controlOwnedUDP   bool
+	entryRelay        func(net.Conn, net.PacketConn) (net.Addr, func(), error)
 }
 
 type desktopExternalInstalledSOCKSControl struct {
@@ -3108,8 +3114,11 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			t.Fatal("SS layer lost independently captured original pair")
 		}
 	}
-	if request.Protocol != "openvpn" && (request.OpenVPNNetwork != "" || request.OpenVPNFallback || request.OpenVPNClientAddress != "") {
+	if request.Protocol != "openvpn" && !request.OpenVPNSS2022Entry && (request.OpenVPNNetwork != "" || request.OpenVPNFallback || request.OpenVPNClientAddress != "") {
 		t.Fatal("ordinary external reference acquired uncaptured provider transport")
+	}
+	if request.OpenVPNSS2022Entry && (!latency || request.Protocol != "shadowsocks" || request.Layer != nil || request.SSEntryLayer != nil || request.SSFinalLayer != nil || request.ShadowsocksEntry != nil || request.WireGuardEntry != nil || request.AmneziaEntry != nil || request.OpenVPNFallback || request.OpenVPNClientAddress == "" || request.OpenVPNNetwork != "tcp" && request.OpenVPNNetwork != "udp" || desktopExternalInstalledOpenVPNSS2022Entry == nil) {
+		t.Fatal("OpenVPN entry requires its original bounded Darwin SS2022 final")
 	}
 	if request.OpenVPNClientAddress != "" && desktopExternalInstalledOpenVPN == nil {
 		t.Fatal("provider acquired an unowned client-interface observation")
@@ -3194,7 +3203,7 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	}
 	var benchmark *desktopExternalInstalledLatencyPeer
 	if latency {
-		benchmark = newDesktopExternalInstalledLatencyPeerWithMTU(t, cert, request.Protocol == "wireguard" || entryRequested && request.Protocol == "amneziawg")
+		benchmark = newDesktopExternalInstalledLatencyPeerWithMTU(t, cert, request.Protocol == "wireguard" || entryRequested && request.Protocol == "amneziawg" || request.OpenVPNSS2022Entry)
 	}
 	var dnsQueries, publicAttempts, publicReplies, authFailures, tlsCertificateRefusals atomic.Uint32
 	var failDNS atomic.Bool
@@ -3284,9 +3293,13 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 	var openvpnPeer desktopExternalInstalledOpenVPNPeer
 	var socksPeer *desktopExternalInstalledSOCKSPeer
 	var layerPeer desktopExternalInstalledLayerPeer
-	if request.ShadowsocksEntry != nil && request.Protocol == "shadowsocks" {
+	if (request.ShadowsocksEntry != nil || request.OpenVPNSS2022Entry) && request.Protocol == "shadowsocks" {
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
-		final := desktopStartSSProvider(t, server, request.ShadowsocksMethod, request.Password, netip.MustParseAddr("127.0.0.1"))
+		method := request.ShadowsocksMethod
+		if request.OpenVPNSS2022Entry {
+			method = "2022-blake3-aes-256-gcm"
+		}
+		final := desktopStartSSProvider(t, server, method, request.Password, netip.MustParseAddr("127.0.0.1"))
 		address, closeTransport, ssFinalStats = final.address, final.close, final.stats
 	} else if request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
@@ -3466,6 +3479,14 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 		address = netip.AddrPortFrom(netip.MustParseAddr("198.51.100.240"), finalPort).String()
 	}
+	if request.OpenVPNSS2022Entry {
+		openvpnPeer = desktopExternalInstalledOpenVPNSS2022Entry(t, server, request, cert, address)
+		if openvpnPeer.address == "" || openvpnPeer.profile == "" || openvpnPeer.close == nil || openvpnPeer.stats == nil {
+			t.Fatal("OpenVPN entry omitted its original provider")
+		}
+		openvpnProfile = openvpnPeer.profile
+		address = "198.51.100.240:8388"
+	}
 	if entryRequested {
 		exitNetwork := "tcp"
 		exitPort := uint16(8388)
@@ -3519,6 +3540,9 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		if ssEntryPeer.close != nil {
 			ssEntryPeer.close()
 		}
+		if request.OpenVPNSS2022Entry {
+			openvpnPeer.close()
+		}
 		closeTransport()
 		for _, connection := range connections {
 			_ = connection.Close()
@@ -3563,14 +3587,18 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 			value := layerPeer.stats()
 			reply.Layer, reply.PhysicalUDP = &value, value.Raw
 		}
-		if request.Protocol == "openvpn" {
+		if request.Protocol == "openvpn" || request.OpenVPNSS2022Entry {
 			reply.OpenVPNNetwork, reply.OpenVPNProfile = request.OpenVPNNetwork, openvpnProfile
+			if request.OpenVPNSS2022Entry {
+				reply.OpenVPNEntryAddress = openvpnPeer.address
+			}
 			if openvpnPeer.stats != nil {
 				observed := openvpnPeer.stats()
 				reply.Connections, reply.Streams, reply.PhysicalUDP, reply.Packets = observed.connections, observed.streams, observed.physicalUDP, observed.packets
-				reply.AuthFailures = uint32(observed.authFailures)
+				reply.AuthFailures += uint32(observed.authFailures)
 				reply.OpenVPNUsername, reply.OpenVPNPassword = openvpnPeer.username, openvpnPeer.password
 				reply.OpenVPNFallbackAttempts, reply.OpenVPNFirstSequence, reply.OpenVPNFinalSequence = observed.fallbackAttempts, observed.firstSequence, observed.finalSequence
+				reply.OpenVPNEntryProofs = observed.entryProofs
 			}
 		}
 		if socksPeer != nil {
@@ -3604,6 +3632,11 @@ func desktopExternalInstalledReferenceProcessWithLayer(t *testing.T, capturedAdd
 		}
 		switch string(line) {
 		case "stats\n":
+		case "close-openvpn-entry\n":
+			if !request.OpenVPNSS2022Entry || request.OpenVPNNetwork != "tcp" || openvpnPeer.close == nil {
+				t.Fatal("unowned OpenVPN provider loss control")
+			}
+			openvpnPeer.close()
 		case "hold-latency\n", "release-latency\n", "hold-mtu\n", "release-mtu\n":
 			if benchmark == nil {
 				t.Fatal("unselected latency responder")

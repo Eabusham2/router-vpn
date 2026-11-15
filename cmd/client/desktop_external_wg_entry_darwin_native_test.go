@@ -276,6 +276,9 @@ func macOSExternalNativePacketEntryRefused(t *testing.T, ctx context.Context, cl
 }
 
 func macOSExternalNativeEntryID(p *macOSExternalNativePeer) string {
+	if p.openvpnEntry {
+		return "installed-macos-openvpn-entry"
+	}
 	if p.ssEntry {
 		return "installed-macos-ss-entry"
 	}

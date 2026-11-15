@@ -10,9 +10,13 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md)
 records the recovered original requirements and newer published source through
-`3b90efe0`: macOS prefix-only candidate controls with purpose-safe dialog
+`09a9b781`: macOS prefix-only candidate controls with purpose-safe dialog
 ownership, atomic native descriptor transfer, the measured Compare test oracle,
-and Linux/Windows ordinary OpenVPN-entry to independent SS2022-final hosts.
+Linux/Windows ordinary OpenVPN-entry to independent SS2022-final hosts,
+macOS ordered Off ownership, the corrected macOS final-policy baseline ID,
+the Linux Off selection fixture and Darwin receive-flag normalization.
+This change also adopts the bounded ordinary OpenVPN-entry/SS2022-final pair
+in the macOS retained host with independent entry and final proof fixtures.
 The OpenVPN addition is a bounded two-node Local path with one literal TCP or
 UDP entry remote, both Start Layers Off and On-connect/Always protection. It
 preserves the separate existing imported-OpenVPN to paired-Router-final path.
@@ -23,6 +27,12 @@ Source checks, component builds and compiled native fixtures are identified
 separately from kernel execution. Linux's new encrypted entry cases could not
 execute locally because netlink access was denied; Windows's new WFP cases are
 cross-compiled and mandatory, with actual Windows execution still required.
+The Mac controller and generated peer cross-compiled for both architectures
+before the final observer regression was added; that correction passed against
+actual adapted policies with race detection. The twelve additional installed
+cases require actual macOS execution. The TCP
+provider-loss witness and shared generation checks do not establish native
+endpoint reconnect acceptance.
 This continuation's macOS Off source adds the captured isolated-UID owner to
 ordinary ordered and typed SOCKS/CONNECT paths, including execution preparation
 derived from the ordinary policy. Candidate-prefix and external baseline/receipt

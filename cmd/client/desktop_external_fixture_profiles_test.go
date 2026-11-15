@@ -34,6 +34,8 @@ func macOSExternalNativeFixtureProfiles(store common.RouterProfileStore) bool {
 		return entry.External.Protocol == "wireguard"
 	case "installed-macos-awg-entry":
 		return entry.External.Protocol == "amneziawg"
+	case "installed-macos-openvpn-entry":
+		return entry.External.Protocol == "openvpn" && exit.External.Protocol == "shadowsocks"
 	case "installed-macos-ss-entry":
 		return entry.External.Protocol == "shadowsocks"
 	}
@@ -51,13 +53,16 @@ func TestMacOSExternalNativeFixtureKeepsOriginalDirectAndPairedSources(t *testin
 		exit := &store.Profiles[0]
 		exit.MultihopEnabled, exit.MultihopExecution = true, "local"
 		exit.MultihopEntryID, exit.MultihopExitID = id, exit.ID
+		if protocol == "openvpn" {
+			exit.External.Protocol = "shadowsocks"
+		}
 		store.Profiles = append(store.Profiles, common.RouterProfile{ID: id, NodeKind: "external", External: &common.ExternalNodeConfig{Protocol: protocol}})
 		return store
 	}
 	if !macOSExternalNativeFixtureProfiles(direct()) {
 		t.Fatal("the original single external node was rejected")
 	}
-	for id, protocol := range map[string]string{"installed-macos-wg-entry": "wireguard", "installed-macos-awg-entry": "amneziawg", "installed-macos-ss-entry": "shadowsocks"} {
+	for id, protocol := range map[string]string{"installed-macos-wg-entry": "wireguard", "installed-macos-awg-entry": "amneziawg", "installed-macos-ss-entry": "shadowsocks", "installed-macos-openvpn-entry": "openvpn"} {
 		t.Run(protocol, func(t *testing.T) {
 			if !macOSExternalNativeFixtureProfiles(paired(id, protocol)) {
 				t.Fatal("the exact original entry and final pair was rejected")

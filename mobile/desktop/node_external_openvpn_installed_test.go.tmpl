@@ -9,9 +9,11 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/subtle"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -26,6 +28,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"net/netip"
 	"strings"
 	"sync"
@@ -111,6 +114,12 @@ func startDesktopInstalledOpenVPNProviderCaptured(t *testing.T, parent *desktopN
 		}
 		mtu = captured.MTU
 	}
+	if request.OpenVPNSS2022Entry {
+		if final || captured != nil || request.OpenVPNFallback || request.Protocol != "shadowsocks" || physical.IsLoopback() || clientAddress.IsLoopback() {
+			t.Fatal("OpenVPN entry lost physical-only source")
+		}
+		mtu = 1500
+	}
 	var err error
 	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -153,6 +162,11 @@ func startDesktopInstalledOpenVPNProviderCaptured(t *testing.T, parent *desktopN
 	services := []struct{ network, destination, target string }{{"udp", "203.0.113.53:5353", dnsAddress}, {"tcp", "1.1.1.1:443", publicAddress}}
 	if latency, ok := parent.route("tcp", "203.0.113.54:443"); ok {
 		services = append(services, struct{ network, destination, target string }{"tcp", "203.0.113.54:443", latency})
+	}
+	if request.OpenVPNSS2022Entry {
+		// DNS and final traffic require SS2022. The separate nonce-bound
+		// entry trace has a distinct responder and observed proof counter.
+		services = []struct{ network, destination, target string }{{"tcp", "198.51.100.240:8388", dnsAddress}, {"udp", "198.51.100.240:8388", dnsAddress}, {"tcp", "1.1.1.1:443", publicAddress}}
 	}
 	if captured != nil {
 		services = nil
@@ -656,4 +670,46 @@ func mustDesktopOpenVPNProviderPublic(t *testing.T, encoded string) []byte {
 		t.Fatal(e)
 	}
 	return key.PublicKey().Bytes()
+}
+
+// This physical imported entry exposes only the captured SS2022 TCP/UDP
+// destination and its separate entry proof. It cannot resolve DNS or serve the
+// final proof/benchmark directly; those require SS2022 authentication first.
+func startDesktopDarwinInstalledOpenVPNSS2022Entry(t *testing.T, parent *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, cert tls.Certificate, final string) desktopExternalInstalledOpenVPNPeer {
+	t.Helper()
+	target, err := netip.ParseAddrPort(final)
+	if err != nil || !target.Addr().IsLoopback() || target.Port() == 0 || !request.OpenVPNSS2022Entry {
+		t.Fatal("OpenVPN entry lost private SS2022 final")
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proofs atomic.Uint32
+	proof := &http.Server{ReadHeaderTimeout: 3 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		nonce, e := hex.DecodeString(q.URL.Query().Get("routervpn_proof"))
+		if q.Method != http.MethodGet || q.Host != "1.1.1.1" || q.URL.Path != "/cdn-cgi/trace" || len(q.URL.Query()) != 1 || e != nil || len(nonce) != 16 || q.Header.Get("Authorization") != "" {
+			http.Error(w, "unowned entry proof", http.StatusForbidden)
+			return
+		}
+		proofs.Add(1)
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, "ip=203.0.113.77\n")
+	})}
+	done := make(chan error, 1)
+	go func() {
+		done <- proof.Serve(tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}))
+	}()
+	var once sync.Once
+	closeProof := func() { once.Do(func() { _ = proof.Close(); _ = listener.Close(); <-done }) }
+	t.Cleanup(closeProof)
+	peer := startDesktopDarwinInstalledOpenVPN(t, parent, request, final, listener.Addr().String())
+	originalStats, originalClose := peer.stats, peer.close
+	peer.stats = func() desktopExternalInstalledOpenVPNStats {
+		value := originalStats()
+		value.entryProofs = proofs.Load()
+		return value
+	}
+	peer.close = func() { originalClose(); closeProof() }
+	return peer
 }

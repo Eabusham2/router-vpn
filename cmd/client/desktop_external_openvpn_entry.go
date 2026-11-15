@@ -5,7 +5,7 @@ import (
 	"router-vpn/internal/nativeopenvpn"
 )
 
-// Linux and Windows retained hosts admit only this ordinary Local pair. The
+// Linux, Windows and Darwin retained hosts admit only this ordinary Local pair. The
 // shared native proof must retain the connected entry generation and capacity;
 // the source shape cannot bypass physical preparation or grant a socket itself.
 func desktopExternalOpenVPNEntryOwner(owner *desktopExternalRuntime) bool {

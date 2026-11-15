@@ -148,8 +148,11 @@ func macOSExternalNativeAwaitAutomaticMTU(t *testing.T, ctx context.Context, cli
 	}
 }
 func macOSExternalNativeMTUResult(t *testing.T, status mobilemtu.Status, peer macOSExternalPeerReply) {
+	macOSExternalNativeMTUResultLimit(t, status, peer, 1420)
+}
+func macOSExternalNativeMTUResultLimit(t *testing.T, status mobilemtu.Status, peer macOSExternalPeerReply, maximum int) {
 	t.Helper()
-	if !status.Measured || !status.Complete || status.Running || status.Source != "measured-public-system-tun-transfer" || status.PathKey == "" || status.EffectiveMTU < 1280 || status.EffectiveMTU > 1420 || peer.Latency == nil || peer.Latency.MTUDownload < 256<<10 || peer.Latency.MTUUpload < 256<<10 {
+	if !status.Measured || !status.Complete || status.Running || status.Source != "measured-public-system-tun-transfer" || status.PathKey == "" || status.EffectiveMTU < 1280 || status.EffectiveMTU > maximum || peer.Latency == nil || peer.Latency.MTUDownload < 256<<10 || peer.Latency.MTUUpload < 256<<10 {
 		t.Fatal("WireGuard MTU omitted actual selected-path payload or committed provenance", status, peer.Latency)
 	}
 	changed := false
@@ -163,6 +166,9 @@ func macOSExternalNativeMTUResult(t *testing.T, status mobilemtu.Status, peer ma
 	}
 }
 func macOSExternalNativeWireGuardMTU(t *testing.T, parent context.Context, client *http.Client, peer *macOSExternalNativePeer, live macOSExternalNativeResult) {
+	macOSExternalNativeRetainedMTU(t, parent, client, peer, live, 1420)
+}
+func macOSExternalNativeRetainedMTU(t *testing.T, parent context.Context, client *http.Client, peer *macOSExternalNativePeer, live macOSExternalNativeResult, maximum int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, 150*time.Second)
 	defer cancel()
@@ -264,11 +270,13 @@ func macOSExternalNativeWireGuardMTU(t *testing.T, parent context.Context, clien
 	if err != nil || code != http.StatusOK || json.Unmarshal(body, &result) != nil || !result.OK {
 		t.Fatal("WireGuard native MTU Retest failed", code, err, string(body))
 	}
-	macOSExternalNativeMTUResult(t, result.Result, peer.stats(t))
+	macOSExternalNativeMTUResultLimit(t, result.Result, peer.stats(t), maximum)
 	code, body, err = macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/native-external-observation", "")
 	var current macOSExternalNativeResult
 	if err != nil || code != http.StatusOK || decodeRelayControlJSON(body, &current) != nil || current.Session != live.Session || current.ProcessID != live.ProcessID || current.Source != live.Source || current.Config != live.Config || current.Baseline == nil || current.Baseline.Token != live.Baseline.Token || int(current.Network.MTU) != result.Result.EffectiveMTU {
 		t.Fatal("MTU changed original runtime/source/PF identity or omitted native readback", code, err, string(body))
 	}
-	t.Log("actual sealed Darwin WireGuard MTU accepted: automatic changed utun, transferred bytes, original Cancel rollback joined, Retest committed and original runtime PF retained")
+	if !peer.openvpnEntry {
+		t.Log("actual sealed Darwin WireGuard MTU accepted: automatic changed utun, transferred bytes, original Cancel rollback joined, Retest committed and original runtime PF retained")
+	}
 }

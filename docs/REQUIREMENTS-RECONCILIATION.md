@@ -22,11 +22,12 @@ deployment acceptance.
 
 [The November 15 ledger](CONTINUATION-EVIDENCE-2026-11-15.md) records recovery
 of the complete historical 1–311 index, original August 11/13/14 user
-passages, published repairs and feature units through `3b90efe0`, current native
+passages, published repairs and feature units through `09a9b781`, current native
 failure evidence, Linux/Windows Off source, Android runtime/profile verification
 and macOS public prefix-candidate preparation and controls. The bounded
 Linux/Windows Local ordinary OpenVPN-entry to independent SS2022-final addition
-addresses the original August 13/14 custom-node request while preserving the
+and its explicit macOS adoption in this change address the original August 13/14
+custom-node request while preserving the
 separate existing imported-OpenVPN to paired-Router-final path. Other positions,
 finals, layers, remote inventories and execution/platform combinations remain
 accountable. This continuation's macOS Off source retains the captured native

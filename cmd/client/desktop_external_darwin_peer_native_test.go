@@ -38,6 +38,8 @@ type macOSExternalLayerReceipt struct {
 }
 
 type macOSExternalPeerReply struct {
+	OpenVPNEntryProofs      uint32                           `json:"openvpn_entry_proofs,omitempty"`
+	OpenVPNEntryAddress     string                           `json:"openvpn_entry_address,omitempty"`
 	SSEntryLayer            *macOSExternalSSEntryReceipt     `json:"ss_entry_layer,omitempty"`
 	SSFinalLayer            *macOSExternalSSEntryReceipt     `json:"ss_final_layer,omitempty"`
 	ShadowsocksEntry        *macOSExternalSSEntryReceipt     `json:"shadowsocks_entry,omitempty"`
@@ -69,6 +71,7 @@ type macOSExternalPeerReply struct {
 }
 
 type macOSExternalNativePeer struct {
+	openvpnEntry                                                     bool
 	ssEntryLayer, ssFinalLayer                                       macOSSSLayerSelection
 	ssEntry                                                          bool
 	ssEntryMethod, ssFinalMethod, ssEntryPassword                    string
@@ -155,7 +158,7 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 	}
 	address, err := netip.ParseAddrPort(reply.Address)
 	expectedAddress := p.physical
-	if p.packetEntry || p.ssEntry {
+	if p.packetEntry || p.ssEntry || p.openvpnEntry {
 		expectedAddress = netip.MustParseAddr("198.51.100.240")
 	}
 	pool := x509.NewCertPool()
@@ -174,7 +177,10 @@ func (p *macOSExternalNativePeer) read(t *testing.T) macOSExternalPeerReply {
 	macOSExternalNativePacketEntryRead(t, p, reply)
 	macOSSSLayerRead(t, p, reply)
 	macOSExternalNativeSSEntryRead(t, p, reply)
-	macOSExternalNativeOpenVPNRead(t, p, reply, address)
+	macOSExternalNativeOpenVPNSS2022Read(t, p, reply)
+	if !p.openvpnEntry {
+		macOSExternalNativeOpenVPNRead(t, p, reply, address)
+	}
 	p.address, p.ca = address, reply.CA
 	if p.layer == "" {
 		if reply.Layer != nil {
@@ -214,6 +220,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	}
 	protocol, layer, fault := macOSExternalNativeScenario(t, scenario)
 	p := &macOSExternalNativePeer{policy: "on-connect", name: scenario, protocol: protocol, layer: layer, fault: fault, physical: macOSExternalNativeAddress(t), joined: make(chan struct{})}
+	_, _, p.openvpnEntry = macOSExternalOpenVPNSS2022Scenario(scenario)
 	p.ssEntryMethod, p.ssFinalMethod, _, p.ssEntry = macOSExternalSSEntryScenario(scenario)
 	macOSSSLayerPrepare(t, p)
 	if method, _, _, found := macOSExternalSSCONNECTScenario(scenario); found {
@@ -264,19 +271,19 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	if wgFinal && wgVariant != "wireguard" {
 		p.entryProtocol, p.entryVariant = "amneziawg", wgVariant
 	}
-	if (p.packetEntry || p.ssEntry) && strings.HasSuffix(scenario, "-always") {
+	if (p.packetEntry || p.ssEntry || p.openvpnEntry) && strings.HasSuffix(scenario, "-always") {
 		p.policy = "always"
 	}
 	if scenario == "wireguard-always" || scenario == "socks5-always" || strings.HasPrefix(scenario, "amneziawg-") && strings.HasSuffix(scenario, "-always") {
 		p.policy = "always"
 	}
-	if protocol == "openvpn" {
+	if protocol == "openvpn" || p.openvpnEntry {
 		if !p.packetEntry {
 			p.openvpnClient = p.physical
 			p.physical = macOSExternalNativeOpenVPNAddress(t, p.physical)
 		}
 		p.openvpnNetwork = "tcp"
-		if strings.HasPrefix(scenario, "openvpn-udp") || strings.HasPrefix(scenario, "openvpn-mixed-fallback") || ovpnTransport == "udp" || ovpnTransport == "mixed-fallback" {
+		if strings.HasPrefix(scenario, "openvpn-entry-ss-udp") || strings.HasPrefix(scenario, "openvpn-udp") || strings.HasPrefix(scenario, "openvpn-mixed-fallback") || ovpnTransport == "udp" || ovpnTransport == "mixed-fallback" {
 			p.openvpnNetwork = "udp"
 		}
 		p.openvpnFallback = strings.Contains(scenario, "-fallback")
@@ -313,7 +320,7 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 	clear(key)
 	p.command = exec.Command(image, "-test.run=^TestRouterVPNDesktopDarwinExternalReferenceProcess$", "-test.count=1", "-test.timeout=300s")
 	p.command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_CHILD=1", "ROUTERVPN_DARWIN_EXTERNAL_REFERENCE_ADDRESS=" + p.physical.String()}
-	if protocol == "openvpn" && !p.packetEntry {
+	if (protocol == "openvpn" || p.openvpnEntry) && !p.packetEntry {
 		p.command.Env = append(p.command.Env, "ROUTERVPN_DARWIN_EXTERNAL_CLIENT_ADDRESS="+p.openvpnClient.String())
 	}
 	if layer != "" {
@@ -368,6 +375,9 @@ func macOSExternalNativePeerStart(t *testing.T, scenario string) *macOSExternalN
 		if !p.packetEntry {
 			request["openvpn_client_address"] = p.openvpnClient.String()
 		}
+	}
+	if p.openvpnEntry {
+		request["openvpn_ss2022_entry"], request["openvpn_network"], request["openvpn_client_address"] = true, p.openvpnNetwork, p.openvpnClient.String()
 	}
 	if protocol == "socks5" && (fault == "auth-downgrade" || fault == "relay-domain" || fault == "control-eof" || fault == "relay-route") {
 		request["socks_fault"] = fault
@@ -559,6 +569,9 @@ func macOSExternalNativeInstallProfile(t *testing.T, p *macOSExternalNativePeer)
 		t.Fatal("native fixture refused another protocol")
 	}
 	entry := macOSExternalNativePacketEntryProfile(t, p, &profile)
+	if p.openvpnEntry {
+		entry = macOSExternalNativeOpenVPNSS2022Profile(t, p, &profile)
+	}
 	if p.ssEntry {
 		if p.protocol == "shadowsocks" {
 			entry = macOSExternalNativeSSEntryProfile(t, p, &profile)
@@ -734,6 +747,9 @@ func macOSExternalNativeTrust(t *testing.T, p *macOSExternalNativePeer) {
 }
 
 func macOSExternalNativeScenario(t *testing.T, scenario string) (protocol, layer, fault string) {
+	if _, fault, ok := macOSExternalOpenVPNSS2022Scenario(scenario); ok {
+		return "shadowsocks", "", fault
+	}
 	if _, protocol, fault, found := macOSExternalSSHysteriaScenario(scenario); found {
 		return protocol, "", fault
 	}

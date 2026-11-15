@@ -41,8 +41,13 @@ TEST = 'TestMacOSRetainedExternalNativeSealedProtocols'
 MTU_RECEIPT = 'actual sealed Darwin WireGuard MTU accepted: automatic changed utun, transferred bytes, original Cancel rollback joined, Retest committed and original runtime PF retained'
 POSITIVE_CASES += ('ss-entry-aes256-ss-chacha-layers00-always', 'ss-entry-aes256-ss-chacha-layers01-always', 'ss-entry-aes256-ss-chacha-layers02-always', 'ss-entry-aes256-ss-chacha-layers10-always', 'ss-entry-aes256-ss-chacha-layers11-always', 'ss-entry-aes256-ss-chacha-layers12-always', 'ss-entry-aes256-ss-chacha-layers20-always', 'ss-entry-aes256-ss-chacha-layers21-always', 'ss-entry-aes256-ss-chacha-layers22-always')
 NEGATIVE_CASES += ('ss-entry-aes256-ss-chacha-layers22-wrong-entry-layer', 'ss-entry-aes256-ss-chacha-layers22-wrong-final-layer', 'ss-entry-aes256-ss-chacha-layers22-wrong-entry-whitening', 'ss-entry-aes256-ss-chacha-layers22-wrong-final-whitening', 'ss-entry-aes256-ss-chacha-layers22-wrong-entry-public', 'ss-entry-aes256-ss-chacha-layers22-wrong-dns', 'ss-entry-aes256-ss-chacha-layers22-wrong-exit', 'ss-entry-aes256-ss-chacha-layers22-wrong-trust')
+OPENVPN_ENTRY_POSITIVE = ('openvpn-entry-ss-tcp', 'openvpn-entry-ss-tcp-always', 'openvpn-entry-ss-udp', 'openvpn-entry-ss-udp-always')
+OPENVPN_ENTRY_NEGATIVE = ('openvpn-entry-ss-tcp-wrong-entry-public', 'openvpn-entry-ss-tcp-wrong-control', 'openvpn-entry-ss-udp-wrong-password', 'openvpn-entry-ss-tcp-wrong-provider-trust', 'openvpn-entry-ss-udp-wrong-final-key', 'openvpn-entry-ss-tcp-wrong-dns', 'openvpn-entry-ss-udp-wrong-trust', 'openvpn-entry-ss-tcp-wrong-exit')
+POSITIVE_CASES += OPENVPN_ENTRY_POSITIVE
+NEGATIVE_CASES += OPENVPN_ENTRY_NEGATIVE
 CASES = POSITIVE_CASES + NEGATIVE_CASES
 POLICY_TESTS = ('TestSpeedLabDirectLayeredHysteriaRestoreRejectsChangedCapturedLayer', 'TestSpeedLabExternalRestoreSealRetainsOriginalOwner', 'TestDesktopExternalPacketEntryHysteriaLayersRetainBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryHysteriaLayersRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryHysteriaLayersPreserveUnsupportedGraphs', 'TestDesktopMacOSHysteriaLayersRetainCompleteSavedPolicy', 'TestDesktopMacOSHysteriaLayersPreserveUnsupportedGraphBoundaries', 'TestDesktopMacOSWireGuardRetainsCapturedSourceAndGraphBoundary', 'TestDesktopMacOSSOCKSRetainsCapturedSourceAndGraphBoundary', 'TestDesktopMacOSAmneziaRetainsCapturedSourceAndGraphBoundary', 'TestDesktopMacOSOpenVPNSourceKeepsExactSavedImport', 'TestDesktopExternalWireGuardEntryRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalWireGuardEntryRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalAmneziaEntryRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalAmneziaEntryRestoreKeepsCompleteSourceAndNewSession', 'TestSpeedLabHTTPTestCancellationRestoresWholeProvedConnection', 'TestSpeedLabStaleRestoreCannotStopOrOverwriteReplacement', 'TestSpeedLabCleanupFailureRetainsOwnerAndNeverClaimsRestore', 'TestSpeedLabRestoreRequiresFreshProofAndNetwork', 'TestDesktopExternalPacketEntryCONNECTRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryCONNECTRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryHysteriaRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryHysteriaRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntrySOCKSRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntrySOCKSRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryWireGuardRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryWireGuardRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryWireGuardPreservesUnsupportedGraphs', 'TestDesktopExternalPacketEntryAmneziaRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryAmneziaRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryAmneziaPreservesUnsupportedGraphs')
+POLICY_TESTS += ('TestDesktopDarwinOpenVPNEntryRetainsOriginalPair', 'TestDesktopDarwinOpenVPNEntryRejectsUnsupportedCapture', 'TestDesktopOpenVPNEntryRetainsBothSourcesAndSupportedScope', 'TestDesktopDarwinExternalFallbackCannotBorrowWindowsEntry', 'TestMacOSExternalNativeFixtureKeepsOriginalDirectAndPairedSources', 'TestMacOSOpenVPNEntryObservationUsesActualDerivedPhysicalDetour')
 POLICY_TESTS += ('TestDesktopExternalPacketEntryOpenVPNRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalPacketEntryOpenVPNRestoreKeepsCompleteSourceAndNewSession', 'TestDesktopExternalPacketEntryOpenVPNPreservesUnsupportedGraphs')
 POLICY_TESTS += ('TestDesktopExternalSSEntryRetainsBothSourcesAndMeasurementOwner', 'TestDesktopExternalSSEntryRestoreRetainsOriginalCompleteGraph', 'TestDesktopExternalSSEntryPreservesUnsupportedGraphs')
 POLICY_TESTS += ('TestDesktopExternalSSCONNECTRetainsBothSourcesAndMeasurement', 'TestDesktopExternalSSCONNECTRestoreRetainsCompleteLocalGraph', 'TestDesktopExternalSSCONNECTPreservesUnavailableUDPAndUnsupportedGraphs')
@@ -81,7 +86,7 @@ def source_identity(core):
     core, owned = NODE.checked_sources(core)
     app = CONTROLLER.source_identity()
     for name in ('deploy/test_macos_external_host.py', 'deploy/test_macos_external_host_runner.py',
-                 'deploy/test_macos_external_baseline_identity.py', 'modes/test_darwin_owned_pf.py',
+                 'deploy/test_macos_external_baseline_identity.py', 'cmd/client/desktop_external_openvpn_ss2022_darwin_native_test.go', 'modes/test_darwin_owned_pf.py',
                  'deploy/seal-native-runtime.py', 'configs/client/modes.json',
                  'mobile/desktop/node_external_ss_connect_test.go.tmpl', 'mobile/desktop/node_external_ss_entry_test.go.tmpl', 'mobile/desktop/node_layer_peer_test.go.tmpl', 'mobile/desktop/node_darwin_external_peer_test.go.tmpl',
                  'mobile/desktop/node_external_hysteria_layer_installed_test.go.tmpl', 'mobile/desktop/node_external_wireguard_installed_test.go.tmpl', 'mobile/desktop/node_external_amnezia_installed_test.go.tmpl', 'mobile/desktop/node_external_openvpn_installed_test.go.tmpl'):
@@ -98,6 +103,8 @@ def success_receipt(case):
 
 
 def refusal_receipt(case):
+    if case.startswith("openvpn-entry-ss-"):
+        return "actual sealed Darwin OpenVPN SS2022 entry refused "+case+": original encrypted provider reached, independent entry or final boundary rejected, original PF and utun retired, controller joined"
     if case.startswith('ss-entry-') and ('-http' in case):
         return 'actual sealed Darwin SS CONNECT entry refused '+case+': original encrypted entry reached, expected entry or final boundary rejected, original TCP PF and utun retired, controller joined'
     if case.startswith('ss-entry-'):
@@ -113,6 +120,40 @@ def refusal_receipt(case):
     if case.startswith('wireguard-'):
         return 'actual sealed Darwin WireGuard refused '+case+': encrypted peer reached, expected proof boundary rejected, native PF reference and utun retired, original controller joined'
     return 'actual sealed Darwin layer refused '+case+': encrypted peer reached, no DNS or exit proof, native PF reference and utun retired, original controller joined'
+
+
+OPENVPN_ENTRY_GENERATION_TESTS = (
+    'TestExternalOpenVPNEntryRetainsGenerationCapacityAndProofOrder',
+    'TestExternalOpenVPNEntryRejectsWrongNativeStateBeforeTraffic',
+    'TestExternalOpenVPNEntryChangesDuringProofCannotSucceed',
+    'TestExternalOpenVPNEntryPendingAndHeldObserversKeepOriginalCaller',
+)
+
+
+def check_openvpn_entry_generation(output):
+    # These are shared in-process generation/capacity controls. They do not
+    # substitute for native channel-loss or claim endpoint reconnect evidence.
+    counts, package_pass = Counter(), 0
+    for line in output.splitlines():
+        event = json.loads(line)
+        if event.get('Package') != 'router-vpn/internal/mobilemultihop' or event.get('Action') in ('fail', 'skip'):
+            raise ValueError('OpenVPN entry generation controls failed or changed package')
+        if event.get('Action') == 'pass':
+            name = event.get('Test')
+            if name is None:
+                package_pass += 1
+            elif '/' not in name:
+                counts[name] += 1
+    if counts != Counter(OPENVPN_ENTRY_GENERATION_TESTS) or package_pass != 1:
+        raise ValueError('OpenVPN entry generation controls omitted or duplicated a required root')
+
+
+def verify_openvpn_entry_generation(compiler, environment):
+    command = [str(compiler), 'test', '-race', '-count=1', '-timeout=120s', '-json',
+               '-run=^('+('|'.join(OPENVPN_ENTRY_GENERATION_TESTS))+')$', './internal/mobilemultihop']
+    result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True,
+                            text=True, check=True, timeout=300)
+    check_openvpn_entry_generation(result.stdout)
 
 
 def check_verdict(output):
@@ -141,6 +182,14 @@ def check_verdict(output):
         receipt = 'actual sealed Darwin latency accepted '+case+': held TLS Cancel joined, foreign cancellation and replay refused, Retest50 actual responses, original session child PF and MTU retained'
         if receipts[receipt] != 1:
             raise ValueError('Native Darwin protocol has no exact retained measurement receipt: '+case)
+    for case in OPENVPN_ENTRY_POSITIVE:
+        receipt = 'actual sealed Darwin OpenVPN SS2022 MTU accepted '+case+': held payload Cancel restored original utun, Retest measured bytes, original source child PF retained'
+        if receipts[receipt] != 1:
+            raise ValueError('OpenVPN entry omitted exact native MTU/cancel receipt: '+case)
+    for case in ('openvpn-entry-ss-tcp', 'openvpn-entry-ss-tcp-always'):
+        receipt = 'actual sealed Darwin OpenVPN SS2022 loss accepted '+case+': original provider closed, stale proof and measurement refused, original child PF utun and controller joined'
+        if receipts[receipt] != 1:
+            raise ValueError('OpenVPN entry omitted native loss/refusal/join receipt: '+case)
     for case in NEGATIVE_CASES:
         if receipts[refusal_receipt(case)] != 1:
             raise ValueError('Native Darwin layer has no exact refusal and cleanup receipt: '+case)
@@ -203,6 +252,7 @@ def execute(bundle, source=None, go='go', environment=None):
         BUILD.reuse(signed, target, env=captured)
         signed_hash = sha(signed/'NATIVE-RUNTIME.json')
         race_compiler, race_environment = CONTROLLER.UID.RACE.capture(core, compiler, captured)
+        verify_openvpn_entry_generation(race_compiler, race_environment)
         controller, peer = work/'controller.test', work/'peer.test'
         commands = (
             ([str(race_compiler), 'test', '-race', '-c', '-mod=readonly', '-tags=routervpn_controller_privileged',

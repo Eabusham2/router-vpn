@@ -27,12 +27,7 @@ func TestDesktopExternalOpenVPNEntryExactSupportedScope(t *testing.T) {
 		original := externalDesktopCompile(t, graph, capture)
 		for _, target := range []string{"linux", "darwin", "windows"} {
 			p, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target)
-			if target == "darwin" {
-				if err == nil {
-					t.Fatal("entry acquired unimplemented target", target)
-				}
-				continue
-			}
+
 			if err != nil || p.Validate() != nil || target == "linux" && p.ValidateLinuxControlledAdmission() != nil {
 				t.Fatal("exact OpenVPN/SS pair rejected", err)
 			}
@@ -49,7 +44,7 @@ func TestDesktopExternalOpenVPNEntryExactSupportedScope(t *testing.T) {
 	for _, final := range []string{"http-connect", "https-connect", "hysteria2", "socks5"} {
 		graph, capture := desktopExternalOpenVPNEntryInput(t, "tcp", final)
 		original := externalDesktopCompile(t, graph, capture)
-		for _, target := range []string{"linux", "windows"} {
+		for _, target := range []string{"linux", "windows", "darwin"} {
 			if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil {
 				t.Fatal("unproved OpenVPN entry final admitted", target, final)
 			}
@@ -58,7 +53,7 @@ func TestDesktopExternalOpenVPNEntryExactSupportedScope(t *testing.T) {
 	graph, capture := externalTestFixture(t, "shadowsocks", "wireguard")
 	externalOpenVPNReplace(t, graph, capture, true, "tcp")
 	capture["profile"].(map[string]any)["kill_switch_policy"] = "always"
-	for _, target := range []string{"linux", "windows"} {
+	for _, target := range []string{"linux", "windows", "darwin"} {
 		if _, err := NewDesktopExternalPolicy(externalDesktopCompile(t, graph, capture), desktopExternalTestSession, target); err == nil {
 			t.Fatal("multi-remote entry crossed single-remote native gate", target)
 		}

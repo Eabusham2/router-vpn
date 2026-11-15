@@ -69,7 +69,7 @@ var desktopExternalPolicyError = errors.New("desktop external lower path require
 // It preserves selected DNS, all transport credentials/options and every device
 // rule. A SOCKS5 graph retains an explicit unsatisfied UDP-association requirement
 // until the native host proves that capability; it is not silently made TCP-only.
-// Linux and Windows retain a single-remote ordinary OpenVPN entry -> SS2022
+// Linux, Windows and Darwin retain a single-remote ordinary OpenVPN entry -> SS2022
 // final with both layers Off and bounded connected generation/capacity proof.
 // Windows additionally retains the explicitly captured paired Router WG entry
 // with an SS2022 final and Local/Server selector. Entry and final retain their
@@ -405,7 +405,7 @@ func desktopExternalEntryKind(original *ExternalPolicy, capture ExternalDesktopC
 		// native composition gates. Connected capacity/generation is mandatory
 		// in the retained shared proof; this shape alone supplies no authority.
 		final, _ := original.capture.Profile["external"].(map[string]any)
-		if (targetOS != "linux" && targetOS != "windows") || capture.Protocol != "shadowsocks" || !desktopExternalSS2022Import(final) || capture.EntryStartLayer != "" || capture.StartLayer != "" {
+		if (targetOS != "linux" && targetOS != "windows" && targetOS != "darwin") || capture.Protocol != "shadowsocks" || !desktopExternalSS2022Import(final) || capture.EntryStartLayer != "" || capture.StartLayer != "" {
 			return ""
 		}
 		transport, err := multihoprelay.ExternalTransport("openvpn", external)

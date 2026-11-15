@@ -84,10 +84,15 @@ back from the remote. There was no force push or live deployment.
 | `f819add86b261a79f774322517bce1ed60f9c885` | The ordinary external Compare fixture checks the minimum of its two actual valid measured scores and keeps subsequent observations relative to that captured winner. | Three race repetitions passed in 6.262 seconds; wrong-winner and wrong-formula production mutations were rejected. The production comparison formula, candidate validity, common external endpoint and deadlines were unchanged. |
 | `8a4e0ef45eedd07efdbc21adcb0ff15a5f65b1d3` | Linux retains a Local ordinary OpenVPN entry with one literal TCP/UDP remote and an independent ordinary SS2022 final, both Start Layers Off and On-connect/Always protection. Actual connected entry generation/capacity remains bound to proof, DNS, MTU, measurement and restoration. | Clean canonical preparation verified 2,593 source records; focused shared/controller race checks and the actual child-binding body passed. A generated component test image compiled. Five mandatory real encrypted/native-kernel cases could not execute locally because netlink access was denied. |
 | `3b90efe09d7cf31fd32d1245b05261d8ae1df931` | The same bounded ordinary OpenVPN-entry/SS2022-final graph enters the retained Windows host, original isolated WFP source, selected journal and restore path. | Clean-projection controller/shared checks and 29 runner/compiler/inventory tests passed; the Windows AMD64 native test image cross-compiled. Eighteen TCP/UDP WFP cases and the generation-substitution control remain mandatory native execution, not a reported Windows kernel pass. |
+| `1406aaa8ff5c9fcd0e0cb239d9cfdd47be4966ca` | macOS ordinary, SOCKS and CONNECT ordered paths admit aggregate Off while retaining the original isolated creator, socket, journal and cleanup ownership. The source also joins an admitted creation before deciding descriptor retirement. | Full NodeChain policy race tests passed; the three receipt families, 20 canonical baseline checks, 82 journal checks, 26 focused runner checks and 31 preparation checks passed. Darwin Intel/ARM and Windows AMD64 test images cross-compiled with CGO disabled. The eight new native Off leaves and five native causal controls still require actual macOS execution. |
+| `ea30b6cc7190b4fbc440e894c1a9eaa590dd29c2` | Three On-connect retirement mutations now anchor the current Off-aware surrounding condition while retaining the same deliberately removed protection-retention call. | Current CI had stopped at an absent source boundary. After the fixture correction, all 20 baseline tests, 82 journal tests and 33 deliberate-failure controls passed. No production behavior, validator, deadline or required control was weakened. |
+| `17267175f9f0f3f26fe29f33149cfb63c59a02c6` | The macOS retained external baseline names the captured final policy profile, matching the final protocol, protection and LAN settings. Mixed-node paths previously submitted the entry ID to that validator. | The compiled shipping capture reaches the actual Python saved-profile validator: eight valid captures reach an explicitly rejecting native-plan boundary, 24 saved-policy changes remain rejected, and restoring the old expression rejects all six composed captures. Fourteen runner checks passed. This verifies capture/validation behavior without fabricating PF success or native absence. |
+| `45ebde8c321f18640175d058a201a73f58ec56a6` | The Linux control-selection fixture treats supported Off as a valid captured choice and still rejects empty, uppercase and unknown policies. | The exact hosted source-audit failure was reproduced before the change. The complete Linux protection package then passed with race detection in 1.257 seconds. Production validation and control identity were unchanged. |
+| `09a9b781094b1f2473d56aced4b64b7da9a8ce57` | The Darwin descriptor receiver clears only its own supplied `MSG_DONTWAIT` input bit, which XNU returns in `msg_flags`, before strict frame validation. | Both native controller and generated-child jobs had rejected valid frames at `17267175`. Six focused tests passed, including sixteen real-stream frame cases and two causal controls; truncation, ancillary truncation and unknown flags remain rejected. The full runner passed 56 of 57 tests; the remaining existing control-lifetime test could not create an AF_UNIX listener in this executor. Actual Darwin acceptance remains required. |
 
 The last named commit is the verified publication checkpoint preceding this
-evidence refresh. This continuation's macOS Off source and its separate native
-acceptance boundary are described below; a document does not manufacture a
+evidence refresh. This change adds macOS adoption of the bounded ordinary
+OpenVPN-entry/SS2022-final pair described below; a document does not manufacture a
 publication receipt for itself. This is not a claim that `main` cannot
 advance. The complete release-orchestration source audit also passed in the
 working tree containing these repairs. That local working-tree result is not
@@ -148,7 +153,7 @@ Cross-compilation is recorded separately from execution on a Windows kernel.
 
 ### macOS captured connections with aggregate kill switch Off
 
-This continuation's macOS Off source admits the captured aggregate Off choice
+Published `1406aaa8` admits the captured aggregate Off choice
 for ordinary ordered chains and typed SOCKS/CONNECT chains, including execution
 preparation derived from the ordinary policy. Candidate-prefix and external-v1
 baseline/receipt and native adapter plumbing can represent a captured Off mode, with
@@ -253,8 +258,8 @@ original rejection and cleanup authority.
 This preserves the already implemented imported-OpenVPN to paired-Router-final
 path. It does not add ordinary OpenVPN intermediate positions, other ordinary
 final protocols, multiple entry remotes, entry/final transport layers,
-Server/Compare or Off protection to this new pair. macOS adoption of this pair
-remains open. Existing mobile OpenVPN subsets and other published desktop
+Server/Compare or Off protection to this new pair. This change adds the same
+bounded pair to the macOS retained host. Existing mobile OpenVPN subsets and other published desktop
 OpenVPN graphs keep their own evidence and must not be relabeled absent.
 
 The Linux clean source projection verified 2,593 generated shipping records.
@@ -280,8 +285,31 @@ identify that build evidence. The eighteen real WFP TCP/UDP cases and native
 generation-substitution control require a Windows host. Four additional public
 lifecycle tests stopped at HTTP 400, `native external preparation has no
 captured physical network`, as did the existing SS counterpart; those tests
-were not reported as passing. The Darwin eligibility tests independently keep
-the fallback direct-only, so Windows admission cannot grant macOS eligibility.
+were not reported as passing. The subsequently added Darwin admission is
+explicit and limited to this pair; Windows admission does not grant it implicitly.
+
+The macOS native fixture has an independent OpenVPN provider and SS2022 final.
+The entry's nonce-checked TLS public proof takes the actual entry route, while
+selected DNS, final public proof and latency use the separate SS2022 transport.
+Four positive TCP/UDP by On-connect/Always cases and eight authentication/proof
+negative cases join the mandatory installed inventory. Cancel/Retest fifty-sample
+measurements and MTU work retain the original PF, utun and controller owner.
+The TCP loss case closes the actual provider and rejects the old proof and
+measurement authority before original-owner retirement. This is a provider-loss
+witness, not proof of a successful native endpoint reconnect.
+
+The isolated source projection passed seventeen runner checks for the exact
+375 installed cases and 53 required policy roots, 31 canonical preparation
+checks, and focused shared/controller race tests. Before the final observation
+regression was added, the controller and generated peer cross-compiled for
+Darwin Intel and ARM with CGO disabled. The corrected observer passed against
+the actual adapted TCP/UDP policies under the race detector; restoring its old
+absent-detour assertion failed those positive witnesses. Four required shared
+generation/capacity roots also executed. Actual macOS PF/utun/provider execution
+and packaged-device acceptance remain mandatory native evidence. The current
+authoritative run at `17267175` failed in the separate controller socket frame
+reader before this addition was published. The source correction is published
+as `09a9b781`; a cross-compile does not close its native acceptance gate.
 
 ### Android runtime and profile verification
 

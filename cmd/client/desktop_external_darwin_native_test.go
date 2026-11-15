@@ -167,6 +167,11 @@ func macOSExternalNativeObservation(ctx context.Context, h *desktopMacOSExternal
 			return result, err
 		}
 	}
+	if desktopExternalOpenVPNEntryOwner(h.launch.external) {
+		if err := macOSExternalNativeOpenVPNSS2022Observation(h, &result); err != nil {
+			return result, err
+		}
+	}
 	root := capture.PhysicalRoots[0]
 	result.Layer, result.OuterTag, result.OuterType = capture.StartLayer, root.Tag, root.Type
 	if capture.EntryID != "" && (root.Type == "shadowsocks" || root.Type == "routervpn-aes-xor" && capture.EntryStartLayer == common.StartLayerAES256GCMXOR) && (capture.Protocol == "shadowsocks" || capture.Protocol == "hysteria2") {
@@ -308,7 +313,7 @@ func macOSExternalNativeHTTP(ctx context.Context, client *http.Client, method, p
 func TestMacOSRetainedExternalNativeSealedProtocols(t *testing.T) {
 	for _, protocol := range append(append(append(append([]string{"shadowsocks", "http-connect", "https-connect", "hysteria2",
 		"hysteria2-aes", "hysteria2-aes-xor", "hysteria2-aes-wrong-layer-key", "hysteria2-aes-wrong-inner-key",
-		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit", "openvpn-tcp", "openvpn-tcp-always", "openvpn-udp", "openvpn-udp-always", "openvpn-tcp-fallback", "openvpn-tcp-fallback-always", "openvpn-mixed-fallback", "openvpn-mixed-fallback-always", "openvpn-tcp-wrong-control", "openvpn-udp-wrong-control", "openvpn-tcp-wrong-provider-trust", "openvpn-udp-wrong-password", "openvpn-tcp-wrong-username", "openvpn-udp-wrong-dns", "openvpn-tcp-wrong-trust", "openvpn-udp-wrong-exit", "wg-entry-ss", "wg-entry-ss-always", "wg-entry-ss-wrong-entry-key", "wg-entry-ss-wrong-entry-public", "wg-entry-ss-wrong-exit-key", "wg-entry-ss-wrong-dns", "wg-entry-ss-wrong-trust", "wg-entry-ss-wrong-exit", "awg-entry-ss-fast", "awg-entry-ss-fast-always", "awg-entry-ss-strong", "awg-entry-ss-strong-always", "awg-entry-ss-fast-wrong-entry-key", "awg-entry-ss-strong-wrong-entry-psk", "awg-entry-ss-fast-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-public", "awg-entry-ss-strong-wrong-exit-key", "awg-entry-ss-strong-wrong-dns", "awg-entry-ss-strong-wrong-trust", "awg-entry-ss-strong-wrong-exit"}, macOSExternalConnectEntryCases...), macOSExternalHysteriaEntryCases...), macOSExternalSOCKSEntryCases...), append(append(macOSExternalHysteriaLayerEntryCases, macOSExternalWireGuardFinalCases...), append(append(macOSExternalAmneziaFinalCases, macOSExternalOpenVPNFinalCases...), append(append(append(macOSExternalSSEntryCases, macOSExternalSSLayerCases...), macOSExternalSSCONNECTCases...), macOSExternalSSHysteriaCases...)...)...)...) {
+		"hysteria2-aes-xor-wrong-layer-key", "hysteria2-aes-xor-wrong-inner-key", "hysteria2-aes-xor-wrong-whitening", "wireguard", "wireguard-always", "wireguard-auto", "wireguard-wrong-client-key", "wireguard-wrong-psk", "wireguard-wrong-dns", "wireguard-wrong-trust", "wireguard-wrong-exit", "socks5", "socks5-always", "socks5-wrong-password", "socks5-auth-downgrade", "socks5-relay-domain", "socks5-control-eof", "socks5-wrong-dns", "socks5-wrong-trust", "socks5-wrong-exit", "amneziawg-fast", "amneziawg-fast-always", "amneziawg-strong", "amneziawg-strong-always", "amneziawg-fast-wrong-client-key", "amneziawg-strong-wrong-psk", "amneziawg-fast-wrong-parameters", "amneziawg-strong-wrong-parameters", "amneziawg-strong-wrong-dns", "amneziawg-strong-wrong-trust", "amneziawg-strong-wrong-exit", "openvpn-tcp", "openvpn-tcp-always", "openvpn-udp", "openvpn-udp-always", "openvpn-tcp-fallback", "openvpn-tcp-fallback-always", "openvpn-mixed-fallback", "openvpn-mixed-fallback-always", "openvpn-tcp-wrong-control", "openvpn-udp-wrong-control", "openvpn-tcp-wrong-provider-trust", "openvpn-udp-wrong-password", "openvpn-tcp-wrong-username", "openvpn-udp-wrong-dns", "openvpn-tcp-wrong-trust", "openvpn-udp-wrong-exit", "wg-entry-ss", "wg-entry-ss-always", "wg-entry-ss-wrong-entry-key", "wg-entry-ss-wrong-entry-public", "wg-entry-ss-wrong-exit-key", "wg-entry-ss-wrong-dns", "wg-entry-ss-wrong-trust", "wg-entry-ss-wrong-exit", "awg-entry-ss-fast", "awg-entry-ss-fast-always", "awg-entry-ss-strong", "awg-entry-ss-strong-always", "awg-entry-ss-fast-wrong-entry-key", "awg-entry-ss-strong-wrong-entry-psk", "awg-entry-ss-fast-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-parameters", "awg-entry-ss-strong-wrong-entry-public", "awg-entry-ss-strong-wrong-exit-key", "awg-entry-ss-strong-wrong-dns", "awg-entry-ss-strong-wrong-trust", "awg-entry-ss-strong-wrong-exit"}, macOSExternalConnectEntryCases...), macOSExternalHysteriaEntryCases...), macOSExternalSOCKSEntryCases...), append(append(macOSExternalHysteriaLayerEntryCases, macOSExternalWireGuardFinalCases...), append(append(macOSExternalAmneziaFinalCases, macOSExternalOpenVPNFinalCases...), append(append(append(macOSExternalSSEntryCases, macOSExternalSSLayerCases...), macOSExternalSSCONNECTCases...), append(macOSExternalSSHysteriaCases, macOSExternalOpenVPNSS2022Cases...)...)...)...)...) {
 		t.Run(protocol, func(t *testing.T) { macOSExternalNativeCase(t, protocol) })
 	}
 }
@@ -379,12 +384,14 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	}, "actual external controller did not serve its authenticated original owner")
 	beforeTunnels := macOSExternalNativeTunnels(t)
 	connectRequest := `{"profile_id":"installed-macos-external","direct":true,"execution":"local"}`
-	if peer.packetEntry || peer.ssEntry {
+	if peer.packetEntry || peer.ssEntry || peer.openvpnEntry {
 		connectRequest = `{"profile_id":"installed-macos-external","entry_id":"` + macOSExternalNativeEntryID(peer) + `","direct":false,"execution":"local"}`
 	}
 	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/external-profile/connect", connectRequest)
 	if peer.fault != "" {
-		if peer.ssEntry {
+		if peer.openvpnEntry {
+			macOSExternalNativeOpenVPNSS2022Refused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
+		} else if peer.ssEntry {
 			if protocol == "shadowsocks" {
 				macOSExternalNativeSSEntryRefused(t, ctx, client, peer, status, raw, err, started.ProcessID, beforeTunnels)
 			} else if protocol == "hysteria2" {
@@ -413,7 +420,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		if receipt.ExitCode != 0 {
 			t.Fatal("rejected layer controller did not join original cleanup", receipt.ExitCode)
 		}
-		if peer.ssEntry {
+		if peer.openvpnEntry {
+			t.Logf("actual sealed Darwin OpenVPN SS2022 entry refused %s: original encrypted provider reached, independent entry or final boundary rejected, original PF and utun retired, controller joined", scenario)
+		} else if peer.ssEntry {
 			if protocol == "shadowsocks" || protocol == "hysteria2" {
 				t.Logf("actual sealed Darwin SS entry refused %s: original encrypted entry reached, expected entry or final boundary rejected, original TCP UDP PF and utun retired, controller joined", scenario)
 			} else {
@@ -449,7 +458,7 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/native-external-observation", "")
 	var live macOSExternalNativeResult
 	if err != nil || status != http.StatusOK || decodeRelayControlJSON(raw, &live) != nil || !live.Connected || live.Closed || live.ProcessID <= 0 || live.ProcessID == started.ProcessID || live.Protocol != protocol ||
-		!live.Proof.Healthy || !live.Proof.DNSProven || live.Proof.EntryProven != (peer.packetEntry || peer.ssEntry) || live.Network.TargetOS != "darwin" || !strings.HasPrefix(live.Network.Name, "utun") || (scenario != "wireguard-auto" && live.Network.MTU != configuredMTU || scenario == "wireguard-auto" && (live.Network.MTU < 1280 || live.Network.MTU > 1420)) ||
+		!live.Proof.Healthy || !live.Proof.DNSProven || live.Proof.EntryProven != (peer.packetEntry || peer.ssEntry || peer.openvpnEntry) || live.Network.TargetOS != "darwin" || !strings.HasPrefix(live.Network.Name, "utun") || (scenario != "wireguard-auto" && live.Network.MTU != configuredMTU || scenario == "wireguard-auto" && (live.Network.MTU < 1280 || live.Network.MTU > 1420)) ||
 		live.Baseline == nil || live.Baseline.Phase != "active" || !live.Baseline.Baseline.Present || live.Baseline.Capture.Session != live.Session {
 		t.Fatalf("actual Darwin external ownership/readiness receipt failed: status=%d error=%v response=%s", status, err, raw)
 	}
@@ -464,6 +473,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		}
 	}
 	observed := peer.stats(t)
+	if peer.openvpnEntry {
+		macOSExternalNativeOpenVPNSS2022Proved(t, peer, live, observed)
+	}
 	if peer.ssEntry {
 		if protocol == "shadowsocks" {
 			macOSExternalNativeSSEntryProved(t, peer, live, observed)
@@ -482,7 +494,7 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	if protocol == "socks5" && !peer.packetEntry {
 		macOSExternalNativeSOCKSProved(t, peer, live, observed)
 	}
-	if observed.DNSQueries < 1 || observed.PublicAttempts < 1 || observed.PublicReplies < 1 || observed.Streams < 1 || observed.AuthFailures != 0 || (protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg") && (observed.PhysicalUDP < 1 || observed.Packets < 1) || protocol != "hysteria2" && protocol != "wireguard" && protocol != "amneziawg" && protocol != "openvpn" && observed.Connections < 1 {
+	if observed.DNSQueries < 1 || observed.PublicAttempts < 1 || observed.PublicReplies < 1 || observed.Streams < 1 || observed.AuthFailures != 0 || (protocol == "hysteria2" || protocol == "wireguard" || protocol == "amneziawg") && (observed.PhysicalUDP < 1 || observed.Packets < 1) || protocol != "hysteria2" && protocol != "wireguard" && protocol != "amneziawg" && protocol != "openvpn" && !peer.openvpnEntry && observed.Connections < 1 {
 		t.Fatal("independent peer did not observe the selected native transport, DNS and actual exit proof", observed)
 	}
 	if peer.layer != "" && (observed.Layer == nil || observed.Layer.Authenticated < 1 || observed.Layer.Forwarded < 1 || observed.Layer.Rejected != 0) {
@@ -497,8 +509,15 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 		t.Fatal("completed public request lost its original retained native owner", status, err, string(raw))
 	}
 	macOSExternalNativeLatency(t, ctx, client, peer, live)
+	if peer.openvpnEntry {
+		macOSExternalNativeRetainedMTU(t, ctx, client, peer, live, 1500)
+		t.Logf("actual sealed Darwin OpenVPN SS2022 MTU accepted %s: held payload Cancel restored original utun, Retest measured bytes, original source child PF retained", scenario)
+	}
 	if scenario == "wireguard-auto" {
 		macOSExternalNativeWireGuardMTU(t, ctx, client, peer, live)
+	}
+	if peer.openvpnEntry && peer.openvpnNetwork == "tcp" {
+		macOSExternalNativeOpenVPNSS2022Loss(t, ctx, client, peer, live)
 	}
 	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/disconnect", "{}")
 	if err != nil || status != http.StatusOK || strings.TrimSpace(string(raw)) != `{"ok":true}` {
@@ -528,6 +547,9 @@ func macOSExternalNativeCase(t *testing.T, scenario string) {
 	}
 	if peer.policy == "always" {
 		macOSExternalNativeReleaseAlways(t, ctx, retired.Baseline, beforeTunnels)
+	}
+	if peer.openvpnEntry && peer.openvpnNetwork == "tcp" {
+		t.Logf("actual sealed Darwin OpenVPN SS2022 loss accepted %s: original provider closed, stale proof and measurement refused, original child PF utun and controller joined", scenario)
 	}
 	t.Logf("actual sealed Darwin ordinary host accepted %s: native child, selected DNS, exit proof, MTU%d, original PF retirement and controller join", scenario, configuredMTU)
 }
