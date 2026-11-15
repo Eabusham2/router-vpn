@@ -241,6 +241,36 @@ class NativeArtifactAggregate(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(ast.unparse(calls[0].value), "check_server_encrypted_workflow(read('.github/workflows/server-node-chain-encrypted.yml'))")
 
+    def test_both_server_runners_precede_connect_then_original_native_and_upload(self):
+        check = shipping_check("check_server_encrypted_workflow")
+        source = (ROOT / ".github/workflows/server-node-chain-encrypted.yml").read_text()
+        check(source)
+        lines = source.splitlines(keepends=True)
+        starts = [i for i, line in enumerate(lines) if line.startswith('      - ')]
+        prefix = ''.join(lines[:starts[0]])
+        blocks = [''.join(lines[a:b]) for a, b in zip(starts, starts[1:] + [len(lines)])]
+        markers = (
+            'run: python3 deploy/test_server_node_chain_encrypted_runner.py',
+            'run: python3 deploy/test_server_node_chain_connect_encrypted_runner.py',
+            'python3 deploy/test_server_node_chain_connect_encrypted.py --standalone',
+            'python3 deploy/test_server_node_chain_encrypted.py --standalone',
+            'uses: actions/upload-artifact@v4',
+        )
+        indices = []
+        for marker in markers:
+            matching = [i for i, block in enumerate(blocks) if marker in block]
+            self.assertEqual(len(matching), 1, marker)
+            indices.append(matching[0])
+        self.assertEqual(indices, sorted(indices))
+        # Every inversion of the five captured boundaries must fail, while
+        # preserving each complete original step, command, receipt and budget.
+        for position, first in enumerate(indices):
+            for second in indices[position + 1:]:
+                changed = list(blocks)
+                changed[first], changed[second] = changed[second], changed[first]
+                with self.subTest(first=first, second=second), self.assertRaisesRegex(AssertionError, "runners/native phases reordered"):
+                    check(prefix + ''.join(changed))
+
     def test_each_original_and_connect_server_invocation_is_independently_required(self):
         check = shipping_check("check_server_encrypted_workflow")
         source = (ROOT / ".github/workflows/server-node-chain-encrypted.yml").read_text()

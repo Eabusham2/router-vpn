@@ -3563,3 +3563,26 @@ No original Local case, native fourteen-case inventory, process/namespace
 ownership check, runtime deadline, compiler/image readback or release dependency
 was removed or weakened. The current published Linux files were retained;
 the earlier frozen snapshot was not restored over them.
+
+
+## Preserve both native server gates after prioritizing CONNECT diagnostics
+
+Concurrent published commit 9b789929 moved the independent CONNECT suffix
+acceptance before the original encrypted suffix, preserving both native gates
+and adding bounded failure counters. The release workflow audit still required
+the former interleaved order, so two existing aggregate tests rejected that
+current workflow. This follow-on updates the audit to require the exact current
+order: original runner, CONNECT runner, CONNECT native, original native, then
+receipt upload. Both source/cleanup inventories must succeed before native
+execution; both original 45-minute native bounds, exact-SHA commands, receipts,
+architecture inventory and failure checks remain mandatory.
+
+The two original audit failures were reproduced. All 25 aggregate test roots
+then passed, including ten new complete-step inversions which retain each
+command and receipt while proving every reordered boundary is rejected. This
+changes two audit/test files and this evidence record. It changes no native
+network implementation and does not establish that either encrypted suite has
+passed on a hosted runner. Frozen source manifest SHA-256:
+8fa91da3fcc9e4d67bab14274dc3266b23f1c70d5b1b706165305acd23be1ab3.
+Validation receipt SHA-256:
+df6bdf2d12f4eebd1d84125ab1aa04ce0cc5e68ef358d38ccc549524d694b363.

@@ -249,7 +249,7 @@ def check_server_encrypted_workflow(source: str) -> None:
             'encrypted Server lost or duplicated required invocation: ' + marker)
         return matches[0]
 
-    previous = -1
+    phases = {}
     for stem, variable, receipt in (
         ('test_server_node_chain_encrypted', 'ROUTERVPN_SERVER_RECEIPT', 'server-node-chain'),
         ('test_server_node_chain_connect_encrypted', 'ROUTERVPN_CONNECT_SERVER_RECEIPT', 'server-connect-node-chain'),
@@ -258,8 +258,7 @@ def check_server_encrypted_workflow(source: str) -> None:
         command = ('          python3 deploy/' + stem + '.py --standalone --require-commit '
                    '"$ROUTERVPN_EXPECTED_SOURCE" --receipt "$' + variable + '"')
         gate_index, step = step_for(command)
-        assert previous < runner_index < gate_index, 'encrypted Server runners/native phases reordered'
-        previous = gate_index
+        phases[stem] = (runner_index, gate_index)
         for marker in (
             '        timeout-minutes: 45', '        env:', '        run: |',
             '          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}',
@@ -268,7 +267,12 @@ def check_server_encrypted_workflow(source: str) -> None:
         ):
             assert step.count(marker) == 1, 'encrypted Server native phase lost its own SHA/receipt/bound: ' + marker
     upload_index, upload = step_for('      - uses: actions/upload-artifact@v4')
-    assert previous < upload_index, 'encrypted Server receipt uploaded before both native phases'
+    original_runner, original_gate = phases['test_server_node_chain_encrypted']
+    connect_runner, connect_gate = phases['test_server_node_chain_connect_encrypted']
+    # Both source/cleanup inventories must pass before the currently prioritized
+    # CONNECT suffix; the original native suite still precedes receipt upload.
+    assert original_runner < connect_runner < connect_gate < original_gate < upload_index, (
+        'encrypted Server runners/native phases reordered')
     path_index = upload.index('          path: |')
     path_end = next((i for i in range(path_index + 1, len(upload))
                      if upload[i].strip() and not upload[i].startswith('            ')), len(upload))
