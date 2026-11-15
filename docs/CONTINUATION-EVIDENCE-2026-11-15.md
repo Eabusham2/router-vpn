@@ -3184,3 +3184,43 @@ and the validation receipt is
 Exact failing/positive logs and source comparison are retained in
 `connect-host-audit-validation`. Exact-SHA hosted builds and publication
 must still be observed separately.
+
+## CONNECT desktop observations retain the constructor's exact derivation
+
+The actual public HTTP/server controller fixture failed with a context deadline
+after 84.60 seconds. Its captured image spent nearly the entire elapsed time on
+CPU; profiling attributed 30.22 cumulative seconds to repeated CONNECT policy
+derivation. The fixture retains explicit native-child/kernel models, so this
+is controller/source evidence rather than encrypted or physical acceptance.
+
+The full compiler still runs when constructing or reopening the typed policy.
+Later observations now retain that constructor's immutable physical capture,
+following the existing ordinary ordered-policy pattern. Every read requires
+the exact policy, original source, native source and desktop binding pointers,
+initial seals and inputs, current original/native integrity, and the retained
+capture's digest. A fresh decode prevents returned nested data from aliasing
+another reader or the constructor. This grants no live proof, process, network
+or protection authority. All original production and test deadlines remain.
+
+Focused verification passed 78 unique race records across the six existing
+policy roots, two new ownership/aliasing roots and one diagnostic observation
+root. It preserves original HTTP/HTTPS graphs, WG/AWG, target policies,
+launch/restore rejection and proof behavior. Removing only the exact policy
+owner guard makes the copied-policy case fail its intended witness; removing
+only the native integrity check makes the changed-config case fail its intended
+witness. Both controls compile and fail only their selected root/leaf.
+
+The same diagnostic 24 reads took 2.962 seconds before and 0.0297 seconds after;
+other compiler overlap is recorded, so these are diagnostic timings, not a
+network benchmark. Rebuilding the same public HTTP/server model case then
+passes in 18.78 seconds under the same 120-second test and 135-second outer
+bounds. Remaining public/native cases are verified in their own delivery units.
+
+The two-file manifest is
+`5048b6099be5bf80de8b43222c79905e67b71334375a6b52a39d55571757ff69`;
+the receipt is `14eb21fbbff9ae4c884931f8d36e461f71ecf9eedfb88552da5b897a26abf351`.
+Positive output hash:
+`a3d3a22b353c753fbcdfe76aa6f1df6ecc8b590f14808cc95e8607e61bb3b61a`.
+Original, positive, profiled and omission evidence remains in
+`connect-policy-observation-validation` and `desktop-connect-product-validation`.
+No real-device or complete release acceptance is inferred from these tests.

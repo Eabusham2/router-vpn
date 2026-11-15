@@ -15,11 +15,24 @@ type DesktopNodeChainCONNECTMetadata struct {
 }
 
 type DesktopNodeChainCONNECTPolicy struct {
-	original *NodeChainCONNECTSource
-	native   *NodeChainCONNECTSource
-	metadata DesktopNodeChainCONNECTMetadata
-	inputs   desktopNodePolicyInputs
-	seal     string
+	original   *NodeChainCONNECTSource
+	native     *NodeChainCONNECTSource
+	metadata   DesktopNodeChainCONNECTMetadata
+	inputs     desktopNodePolicyInputs
+	seal       string
+	derivation *desktopNodeChainCONNECTDerivation
+}
+
+// Retain only the complete constructor's immutable physical derivation. Every
+// observation still checks the exact original/native owners and their captured
+// inputs. This receipt grants no live proof, process or protection authority.
+type desktopNodeChainCONNECTDerivation struct {
+	owner                                *DesktopNodeChainCONNECTPolicy
+	original, native                     *NodeChainCONNECTSource
+	binding                              *nodeChainCONNECTDesktopBinding
+	inputs                               desktopNodePolicyInputs
+	originalSeal, nativeSeal, policySeal string
+	captureJSON, captureSHA256           string
 }
 
 // This private binding is created only by the typed desktop derivation.
@@ -175,6 +188,15 @@ func deriveDesktopNodeChainCONNECTPolicy(original *NodeChainCONNECTSource, input
 	}
 	policy := &DesktopNodeChainCONNECTPolicy{original: original, native: native, metadata: meta, inputs: inputs}
 	policy.seal = policy.currentSeal()
+	captureJSON, err := json.Marshal(capture)
+	if err != nil {
+		return bad()
+	}
+	policy.derivation = &desktopNodeChainCONNECTDerivation{
+		owner: policy, original: original, native: native, binding: binding, inputs: inputs,
+		originalSeal: original.seal, nativeSeal: native.seal, policySeal: policy.seal,
+		captureJSON: string(captureJSON), captureSHA256: externalDigest(captureJSON),
+	}
 	return policy, capture, nil
 }
 
@@ -236,13 +258,26 @@ func (p *DesktopNodeChainCONNECTPolicy) currentSeal() string {
 }
 
 func (p *DesktopNodeChainCONNECTPolicy) validatedCapture() (DesktopPhysicalCapture, error) {
-	if p == nil || p.original == nil || p.native == nil || p.seal == "" ||
-		p.currentSeal() != p.seal || p.native.validate() != nil || p.native.desktop == nil ||
-		p.native.desktop.original != p.original {
+	if p == nil || p.original == nil || p.native == nil || p.derivation == nil {
 		return DesktopPhysicalCapture{}, desktopNodeChainCONNECTPolicyError
 	}
-	derived, capture, err := deriveDesktopNodeChainCONNECTPolicy(p.original, p.inputs)
-	if err != nil || derived.seal != p.seal || derived.native.config != p.native.config {
+	d := p.derivation
+	// Constructor identities and initial seals reject copied policies, identical
+	// replacement sources and coherently re-sealed data. No reader can refresh
+	// this receipt; child launch parsing repeats the complete constructor.
+	if d.owner != p || d.original != p.original || d.native != p.native ||
+		d.binding == nil || d.binding != p.native.desktop || d.inputs != p.inputs ||
+		d.originalSeal == "" || d.originalSeal != p.original.seal ||
+		d.nativeSeal != p.native.seal || d.policySeal != p.seal || p.currentSeal() != p.seal ||
+		p.original.validate() != nil || p.native.validate() != nil ||
+		p.native.desktop.original != p.original ||
+		d.captureSHA256 == "" || externalDigest([]byte(d.captureJSON)) != d.captureSHA256 {
+		return DesktopPhysicalCapture{}, desktopNodeChainCONNECTPolicyError
+	}
+	// A fresh decode prevents nested DNS query pointers, destination slices and
+	// physical roots from aliasing either another reader or the retained result.
+	var capture DesktopPhysicalCapture
+	if json.Unmarshal([]byte(d.captureJSON), &capture) != nil {
 		return DesktopPhysicalCapture{}, desktopNodeChainCONNECTPolicyError
 	}
 	return capture, nil
