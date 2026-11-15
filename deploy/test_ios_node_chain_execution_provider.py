@@ -40,7 +40,7 @@ CAPTURE_TESTS=SOURCE.SWIFT.split('@main struct Tests {',1)[0]+r'''
    try saved.close()
    reject("provider mutated Last"){_ = try IOSNodeChainProviderCapture.reopenExecution(provider,lastRecord:record+" ")}
    reject("execution source reused Local provider"){_ = try IOSNodeChainProviderCapture.reopen(provider)}
-   for field in ["engine","mode","rawProfileID","modeCandidates","entryBundle","external_entry_bundle","external_entry_mode","tor_entry_bundle","tor_entry_mode","strategy","strategy_catalog","max_source_sha256",IOSNodeChainProviderCapture.key]{
+   for field in ["engine","mode","rawProfileID","modeCandidates","entryBundle","external_entry_bundle","external_entry_mode","tor_entry_bundle","tor_entry_mode","strategy","strategy_catalog","max_source_sha256",IOSNodeChainProviderCapture.key,"nodeChainSOCKSSource","nodeChainCONNECTSource"]{
     var changed=provider;changed[field]=field=="modeCandidates" ? ["wg"]:"foreign"
     reject("provider "+field){_ = try IOSNodeChainProviderCapture.reopenExecution(changed)}
    }
@@ -77,7 +77,9 @@ def source_gate(work):
         subprocess.run([str(binary),str(compiler)],check=True,timeout=180)
         text=source.read_text()
         for name,before,after,witness in (
-          ('dual-source','guard configuration[key] == nil,','guard true,','ACCEPTED provider nodeChainSource'),
+          ('dual-source','configuration[key] == nil,','true,','ACCEPTED provider nodeChainSource'),
+          ('socks-source','configuration["nodeChainSOCKSSource"] == nil,','true,','ACCEPTED provider nodeChainSOCKSSource'),
+          ('connect-source','configuration["nodeChainCONNECTSource"] == nil,','true,','ACCEPTED provider nodeChainCONNECTSource'),
           ('selected-assets','selectedFiles == originalFiles else {','!originalFiles.isEmpty else {','ACCEPTED provider assets'),
           ('mode-candidates','configuration["modeCandidates"] as? [String] == [final.mode],','true,','ACCEPTED provider modeCandidates'),
         ):
