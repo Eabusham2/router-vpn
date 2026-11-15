@@ -321,4 +321,84 @@ func TestActualCopyAndSnapshot(t *testing.T){
                 workflow_concurrency_cases(raw.replace(before, after, 1))
 
 
+class ImportedServerBoundaries(unittest.TestCase):
+    def sample(self, case='original'):
+        ready=case in ('original','joined-active-udp')
+        value=dict(case=case,capture_sha256='a'*64,source_sha256='b'*64,
+                   ready=ready,selected_dns=ready,middle_tcp=4,middle_udp=3 if ready else 0,
+                   final_tcp=2 if ready else 0,final_udp=1 if ready else 0,
+                   retired=True,worker_joined=True,peer_joined=True)
+        root=GATE.IMPORTED_NATIVE
+        return '\n'.join(('=== RUN   '+root,'=== RUN   '+root+'/'+case,
+            '    source.go:1: IMPORTED_SERVER_RECEIPT '+json.dumps(value),
+            '--- PASS: '+root+' (1.0s)','    --- PASS: '+root+'/'+case+' (1.0s)','PASS',''))
+
+    def test_exact_imported_native_receipts_and_refusals(self):
+        self.assertEqual(GATE.IMPORTED_CASES,('original','wrong-middle-key','wrong-final-key','wrong-final-identity','failed-selected-dns','wrong-public-identity','joined-active-udp'))
+        for case in GATE.IMPORTED_CASES:
+            text=self.sample(case)
+            self.assertEqual(GATE.check_imported_verdict(text,case)['case'],case)
+            for before,after in (('"worker_joined": true','"worker_joined": false'),
+                                 ('"peer_joined": true','"peer_joined": false'),
+                                 ('"retired": true','"retired": false'),
+                                 ('"middle_tcp": 4','"middle_tcp": 0'),
+                                 ('--- PASS:', '--- SKIP:')):
+                with self.subTest(case=case, mutation=before),self.assertRaises(ValueError):
+                    GATE.check_imported_verdict(text.replace(before,after,1),case)
+            with self.assertRaises(ValueError): GATE.check_imported_verdict(text+text,case)
+        for before,after in (('"selected_dns": true','"selected_dns": false'),('"final_udp": 1','"final_udp": 0'),('"capture_sha256": "'+'a'*64+'"','"capture_sha256": "bad"')):
+            with self.assertRaises(ValueError):GATE.check_imported_verdict(self.sample().replace(before,after), 'original')
+        with self.assertRaises(ValueError):GATE.check_imported_verdict(self.sample('wrong-middle-key').replace('"ready": false','"ready": true'),'wrong-middle-key')
+
+    def test_imported_source_inventory_cannot_substitute_native(self):
+        root=GATE.IMPORTED_SOURCE
+        text='\n'.join(['=== RUN   '+root]+['=== RUN   '+root+'/'+c for c in GATE.IMPORTED_CASES]+['--- PASS: '+root+' (1.0s)']+['    --- PASS: '+root+'/'+c+' (1.0s)' for c in GATE.IMPORTED_CASES]+['PASS'])
+        self.assertEqual(GATE.check_imported_verdict(text,None,source_only=True)['source_cases'],list(GATE.IMPORTED_CASES))
+        with self.assertRaises(ValueError):GATE.check_imported_verdict(text,'original')
+        with self.assertRaises(ValueError):GATE.check_imported_verdict(text.replace('=== RUN   '+root+'/wrong-final-key','=== RUN   foreign'),None,source_only=True)
+
+    def test_imported_namespace_keeps_original_owned_function_and_limits(self):
+        raw=(ROOT/'deploy/test_server_node_chain_encrypted.py').read_bytes()
+        program=GATE.namespace_program(hashlib.sha256(raw).hexdigest(),imported=True)
+        scope={'__name__':'test_only'};exec(compile(program,'captured-imported-namespace','exec'),scope)
+        self.assertEqual(scope['CASES'],GATE.IMPORTED_CASES);self.assertEqual(scope['NATIVE'],GATE.IMPORTED_NATIVE)
+        function=next(n for n in ast.parse(program).body if isinstance(n,ast.FunctionDef) and n.name=='inside_namespace')
+        original=next(n for n in ast.parse(raw).body if isinstance(n,ast.FunctionDef) and n.name=='inside_namespace')
+        self.assertEqual(ast.dump(function,include_attributes=False),ast.dump(original,include_attributes=False))
+        self.assertIn("'-test.timeout=90s'",program);self.assertIn('timeout=105',program)
+        with self.assertRaises(ValueError):GATE.namespace_program('0'*64,imported=True)
+
+    def test_imported_cases_are_mandatory_in_original_compiled_image(self):
+        tree=ast.parse((ROOT/'deploy/test_server_node_chain_encrypted.py').read_text())
+        execute=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='execute')
+        loops=[n for n in ast.walk(execute) if isinstance(n,ast.For) and isinstance(n.iter,ast.Name) and n.iter.id=='IMPORTED_CASES']
+        self.assertEqual(len(loops),1)
+        text=ast.unparse(loops[0])
+        for required in ("check_imported_verdict(output, case)","str(driver)","str(peer)","str(worker)","images['driver'][-1]","images['peer'][-1]","images['worker'][-1]","timeout=125"):
+            self.assertIn(required,text)
+        self.assertNotIn('continue',text);self.assertNotIn('break',text)
+        fixture=(ROOT/GATE.IMPORTED_TEMPLATE).read_text()
+        self.assertIn('worker.stop(t)',fixture);self.assertIn('p.original.process.join(t)',fixture)
+        self.assertIn('policy.NativeConfig(foreign)',fixture)
+        self.assertNotIn('InsecureSkipVerify',fixture)
+        prep=(ROOT/'deploy/prepare-desktop-external.py').read_text()
+        self.assertEqual(prep.count("'node_chain_imported_server_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_server_peer_test.go'"),1)
+        with tempfile.TemporaryDirectory() as temporary:
+            core=Path(temporary)
+            GATE.NODE.PREP.copy_encrypted_peer_templates(core)
+            target=core/'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_server_peer_test.go'
+            self.assertEqual(target.read_bytes(),(ROOT/'mobile/desktop/node_chain_imported_server_peer_test.go.tmpl').read_bytes())
+            GATE.NODE.PREP.copy_encrypted_peer_templates(core)
+            self.assertEqual(target.read_bytes(),(ROOT/'mobile/desktop/node_chain_imported_server_peer_test.go.tmpl').read_bytes())
+
+
+    def test_imported_generated_projection_retains_ownership(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            core=Path(temporary);target=core/GATE.IMPORTED_TARGET;target.parent.mkdir(parents=True)
+            with mock.patch.object(GATE.subprocess,'check_output',return_value=GATE.BUILD.PIN+'\n'):
+                GATE.install_imported_fixture(core);GATE.install_imported_fixture(core)
+                target.write_bytes(target.read_bytes()+b'\n// changed owner\n')
+                with self.assertRaisesRegex(ValueError,'generated fixture was changed'):GATE.install_imported_fixture(core)
+
+
 if __name__=='__main__': unittest.main()

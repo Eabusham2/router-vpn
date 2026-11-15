@@ -11,6 +11,11 @@ if($NegativeControl-ceq'connect-protocol'){
     if(([regex]::Matches($Settings,[regex]::Escape($before))).Count-ne1){throw 'Shipping CONNECT protocol guard changed.'}
     $Settings=$Settings.Replace($before,'($node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])-and$node.mode-cnotin@(''http-connect'',''https-connect''))')
 }
+if($NegativeControl-ceq'imported-execution-capability'){
+    $anchor='$executionMiddle-isnot[bool]-or-not$executionMiddle'
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Shipping imported execution capability guard changed.'}
+    $Settings=$Settings.Replace($anchor,'$false')
+}
 . ([ScriptBlock]::Create($Settings))
 $Unified=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-UnifiedShell.ps1'),[Text.Encoding]::UTF8)
 if($NegativeControl-ceq'summary-reset'){$Unified=$Unified.Replace("`$description.Text='Choose each intermediate transport and the final node.'",'')}
@@ -277,8 +282,27 @@ try{
     }
     $mixed=@([pscustomobject]@{id='prefix-0';mode='wg'},[pscustomobject]@{id='custom-middle';mode='shadowsocks'},[pscustomobject]@{id=$id;mode='hysteria2'})
     $rejected=$false;try{[void](Copy-RouterVPNOrderedNodes $mixed $id)}catch{$rejected=$true};Check $rejected 'imported schema two acquired Hysteria2 final authority'
+    # Actual Connect builder consumes a capability hint and original token set;
+    # native source/lease/proof admission remains the controller's authority.
+    foreach($executionChoice in @('server','auto')){
+        $executionNodes=@([pscustomobject]@{id='entry';mode='wg'},[pscustomobject]@{id='middle';mode='shadowsocks'},[pscustomobject]@{id='exit';mode='shadowsocks'})
+        $executionProfiles=@([pscustomobject]@{id='entry';node_kind='router-vpn';profile_token=('a'*64)},[pscustomobject]@{id='middle';node_kind='external';profile_token=('b'*64);external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_execution_middle_supported=$true}},[pscustomobject]@{id='exit';node_kind='router-vpn';profile_token=('c'*64)})
+        $executionStore=@{selected_id='exit';profiles=$executionProfiles}
+        $executionDraft=@{control_id='exit';nodes=$executionNodes;execution=$executionChoice;profile_tokens=@{entry=('a'*64);middle=('b'*64);exit=('c'*64)}}
+        $request=New-RouterVPNOrderedConnectPayload $executionDraft $executionStore
+        Check ($request.execution-ceq$executionChoice-and$request.nodes.Count-eq3-and$request.nodes[1].id-ceq'middle') 'literal imported execution changed original trio or purpose'
+        foreach($hint in @($false,$null,1,'true')){
+            $executionProfiles[1].external.ordered_execution_middle_supported=$hint
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'imported execution accepted absent or nonboolean native capability'
+        }
+        $executionProfiles[1].external.ordered_execution_middle_supported=$true
+        $executionProfiles[1].profile_token='d'*64
+        $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+        Check $refused 'imported execution borrowed changed original source token'
+    }
     if(-not$NegativeControl){
-        $controls=@{'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
+        $controls=@{'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
         foreach($key in $controls.Keys){
             $command="try { & '"+$PSCommandPath.Replace("'","''")+"' -Root '"+$Root.Replace("'","''")+"' -NegativeControl '"+$key+"' } catch { [Console]::Error.WriteLine(`$_.Exception.Message); exit 1 }"
             $child=New-Object Diagnostics.Process

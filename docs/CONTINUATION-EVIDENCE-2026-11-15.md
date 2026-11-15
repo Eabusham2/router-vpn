@@ -1114,7 +1114,7 @@ prove these behaviors merely because a filename or string is present.
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
 | 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and bounded Windows/Linux/macOS single paired Router hosts with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin paired source now includes actual installed parent/child composition; its new native gate has not yet passed at this cutoff. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
-| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT, SOCKS, schema-five OpenVPN and schema-two Shadowsocks additions below extend those separate families to 3–8 members with one penultimate import. Shadowsocks preserves its separately proved original literal-trio execution capabilities; longer and hostname forms remain Local-only. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
+| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT, SOCKS, schema-five OpenVPN and schema-two Shadowsocks additions below extend those separate families to 3–8 members with one penultimate import. Shadowsocks preserves its separately proved original literal-trio execution capabilities; the subsequent Windows/Linux public Server/Compare unit below admits that bounded original shape. Longer and hostname forms remain Local-only. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |
@@ -2164,8 +2164,9 @@ editor inserts another paired prefix before the imported member, preserving
 its position. The existing schema-two literal-trio Server/Compare machinery
 and its bounds remain intact. Longer or hostname forms cannot enter that
 execution path or the old candidate comparison constructor. The new per-hop
-measurement authority is separate from that constructor. Desktop public
-Server/Compare admission for imported trios remains a separately tracked gap.
+measurement authority is separate from that constructor. At this Local-extension checkpoint, desktop public Server/Compare admission
+for imported trios was a separately tracked gap. The subsequent Windows/Linux
+unit below closes that bounded product admission; macOS remains separate.
 Multiple imports, other imported positions, broader graph compositions and
 new execution families remain unfinished requirements, not rejected scope.
 
@@ -2266,3 +2267,130 @@ are preserved. Evidence and hashes remain in `desktop-ss-prefix-validation`,
 `ss-prefix-gates-validation` and `ss-prefix-integration-validation`.
 Native packages, image publication, exact-SHA release, signing, physical-device
 acceptance and private deployment remain distinct gates.
+
+
+## Windows/Linux public imported Shadowsocks trio execution
+
+The next bounded continuation of original requirements #214–224, addendum
+#336 and the later external/custom-node requirements connects desktop public
+Server/Compare to the original schema-two literal trio. It retains one paired
+WG/AWG entry, one imported SS2022 middle with its exact canonical key and
+literal IPv4/IPv6 endpoint, and an independent paired SS2022 final. The three
+existing SS2022 methods remain supported. This is a product admission and
+composition change, not a replacement shared execution API.
+
+The public predicate is an eligibility check, not execution authority. Original
+catalog tokens, captured source objects, proof identities, native preparation,
+selected DNS and leased owners still govern the running graph. Windows and
+GTK editors require both the explicit backend capability and the original
+three-member selection. Complete-profile Save/Load retains that graph and
+execution choice, and loading rechecks the restored imported credentials.
+No private credential is exposed by the new public capability boolean.
+
+Public Connect uses the retained execution child and native manager. Compare
+keeps its existing same-endpoint formula and valid-candidate rules. A retained
+choice restores with fresh ownership and proof without rerunning comparison.
+The longer Local SS paths, hostname imports, other imported protocols and
+nontrio compositions retain their separate restrictions; those broader
+requirements remain open. The public macOS execution composition is not
+admitted by this Windows/Linux unit.
+
+### Application and native component evidence
+
+Twelve actual preparation cases cover Windows/Linux, the three original
+methods and Server/Compare, including original physical-source authority and
+equal-byte replacement refusal. The application tests exercise public Connect,
+Status, exactly one retained child, both measured comparison winners, retained
+restoration, complete saved profiles, and omitted or foreign middle-node
+refusal before creating a process.
+
+All six new application roots pass under race detection with the original
+120-second per-invocation bound. The public Connect root passed in 104.871
+seconds; the remaining preparation, altered-source, profile and restoration
+roots passed individually. Both affected original paired publication/Stop
+and ownership roots passed under race detection. An earlier combined command
+hit its aggregate 120-second cap during the third public Connect case; that
+failed run is preserved and is not counted as acceptance. Whole roots were
+subsequently run separately, matching the existing mandatory source-group
+workflow, without changing a production deadline or splitting any test root.
+
+The native component inventory has eighteen records: six WG/AWG execution
+adoption and fresh-owner restoration cases, four Linux/Windows physical-policy
+cases, five changed-key/endpoint/DNS/entry-key/cancellation refusals and three
+root records. It uses actual managers, selectors, source gates and discovery
+transports. Encrypted prefix, privileged TUN and DNS I/O are declared fixture
+boundaries. The gate checks every original prepared copy, hashes the complete
+Go/module source closure, compiles a retained image and verifies source/image
+identity after execution. Race execution is required on supported hosts, with
+only the existing native Windows ARM64 compiler limitation selecting the
+explicit non-race mode.
+
+The final retained native race gate accepted all eighteen exact records. Its
+image SHA-256 is `239cc8861d92f5f19b0c6fe34bb44cb7002fed8786286c9753c30d87b1523384`
+and its captured source closure is
+`206de6c8cfb3bf60e32d04a44ae9cf4c0a6e2206bf045d28554f09d172ca8c25`.
+The final Windows editor passed 1,862 actual callback/source/persistence checks
+and all eleven causal controls with WPF unavailable. GTK source, model,
+serialization and persistence checks passed with all eleven controls; no
+rendered widget or physical-device claim is made.
+
+Initial review demonstrated that the draft verdict parser would accept a
+missing package-start event and a late race diagnostic. The final gate reuses
+the existing strict native verdict parser and its exact parent/child inventory,
+duplicate, late-event, race and foreign-owner checks. No partial or invented
+verdict is accepted. The required native builder invokes both this gate's
+runner controls and the actual component command on supported native hosts.
+
+Integration review also found that the required shipping source audit still
+expected the old blanket rejection of imported members. It now requires the
+actual new member gate before native preparation and checks the original
+literal endpoint, canonical credential, exact trio, distinct profile identities
+and independent paired proof identities. Its controls reject removal or
+substitution of those checks, duplicated helpers, a forged Local argument and
+an omitted member-gate call. Existing preparation, transition, publication,
+proof, Stop and owner controls remain required. This source audit supports
+call-path evidence; it is not counted as native traffic acceptance.
+
+### Independent encrypted Server-suffix evidence
+
+The separate shipping-worker fixture preserves all fourteen original
+schema-one native cases and fifteen original source records. It adds seven
+schema-two cases: original encrypted traffic, wrong imported key, wrong final
+key, wrong final identity, failed selected DNS, wrong public identity and
+retirement with active UDP. Each native invocation uses the same captured
+shipping worker, peer and driver images, authenticated fronts, independently
+owned SS2022 credentials, actual traffic counters and joined retirement. The
+existing 90-second Go, 105-second namespace and 125-second outer process
+bounds remain unchanged.
+
+All twenty-one runner roots passed. The eight new source records and fifteen
+original source records passed, and the shipping worker, peer and driver race
+images compiled. Eleven original shipping worker files match the retained
+prepared core. The first schema-two fixture request used the old schema/key
+layout and was rejected; the corrected fixture uses the existing schema-two
+request and original entry key position. That failure is retained separately,
+and no production validation changed.
+
+The local native attempt failed before traffic because the isolated namespace
+could not open the required netlink operation: `Operation not permitted` at
+`ip link set lo up`. Zero new encrypted native cases are accepted locally.
+All seven are unconditional additions to the existing required AMD64/ARM64
+Server encrypted workflow. Compilation and source fixtures do not substitute
+for those hosted native cases. This fixture establishes the Server suffix
+when it passes; it does not independently establish desktop Compare acquisition,
+a remote entry's administration API, physical devices or private deployment.
+
+Final integration and publication identities follow the retained manifests
+and receipts in `desktop-imported-trio-execution-validation`,
+`imported-server-encrypted-validation` and
+`imported-trio-release-wiring-validation`.
+
+Combined integration passed the preparation and profile audits, source-group
+runner, all eight native verdict-parser tests, all twenty-one encrypted-server
+runner tests, release dependency parity, and fourteen relevant native shipping
+execution/source-audit roots. The complete client input inventory contains
+4,061 paths, including the five new client-relevant dependencies. Server-only
+fixtures and gates retain their separate published-source identity checks.
+An optional full 59-root source-audit attempt hit the scratch 180-second
+wrapper and is not recorded as a complete pass; the required hosted full suite
+is unchanged. The targeted fourteen-root run passed in 37.774 seconds.

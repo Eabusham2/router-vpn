@@ -89,8 +89,8 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			return errors.New("saved ordered member differs from its selected position or source identity")
 		}
 		if captured.NodeKind == "external" {
-			if record.Prefs.MultihopExecution != "local" {
-				return errors.New("saved imported ordered execution lacks native Server or Compare admission")
+			if record.Prefs.MultihopExecution != "local" && (len(record.NodeChain) != 3 || i != 1 || captured.Mode != "shadowsocks" || !mobilemultihop.NodeChainPrefixMode(record.NodeChain[0].Mode) || record.NodeChain[2].Mode != "shadowsocks") {
+				return errors.New("saved imported execution requires its original literal SS2022 trio")
 			}
 			count, middle := len(record.NodeChain), 1
 			bounded := count == 3
@@ -169,6 +169,7 @@ func (a *app) snapshotConnectionNodeChainLocked(selected common.RouterProfile, p
 		return nil, err
 	}
 	var result []connectionProfileNodeChainCapture
+	var executionMembers []desktopNodeChainMember
 	for _, selection := range selected.MultihopNodes {
 		node, found := a.profileByIDLocked(selection.ID)
 		if !found {
@@ -187,6 +188,7 @@ func (a *app) snapshotConnectionNodeChainLocked(selected common.RouterProfile, p
 			if err != nil {
 				return nil, err
 			}
+			executionMembers = append(executionMembers, desktopNodeChainMember{Profile: restored, Mode: selection.Mode})
 			result = append(result, connectionProfileNodeChainCapture{ID: selection.ID, Mode: selection.Mode, NodeKind: "external", External: policy, ProfileToken: mtuProfileSnapshotToken(restored), Sources: sources})
 			continue
 		}
@@ -205,8 +207,12 @@ func (a *app) snapshotConnectionNodeChainLocked(selected common.RouterProfile, p
 		if err != nil {
 			return nil, err
 		}
+		executionMembers = append(executionMembers, desktopNodeChainMember{Profile: restored, Mode: selection.Mode})
 		result = append(result, connectionProfileNodeChainCapture{ID: selection.ID, Mode: selection.Mode, NodeProofID: node.NodeProofID,
 			ProfileToken: mtuProfileSnapshotToken(restored), Preferences: policy, Sources: sources})
+	}
+	if err := desktopOrderedExecutionMembers(executionMembers, selected.MultihopExecution); err != nil {
+		return nil, err
 	}
 	if err := validateSavedNodeChain(connectionProfileRecord{Prefs: prefs, NodeChain: result}); err != nil {
 		return nil, err
@@ -222,6 +228,7 @@ func (a *app) restoreConnectionNodeChainLocked(saved connectionProfileRecord, se
 		return nil, errors.New("saved ordered path differs from the requested restoration")
 	}
 	updates := make(map[string]common.RouterProfile, len(saved.NodeChain))
+	var executionMembers []desktopNodeChainMember
 	for _, captured := range saved.NodeChain {
 		node, found := a.profileByIDLocked(captured.ID)
 		if !found || node.NodeProofID != captured.NodeProofID {
@@ -245,6 +252,10 @@ func (a *app) restoreConnectionNodeChainLocked(saved connectionProfileRecord, se
 			return nil, errors.New("saved control policy differs from its ordered member capture")
 		}
 		updates[node.ID] = restored
+		executionMembers = append(executionMembers, desktopNodeChainMember{Profile: restored, Mode: captured.Mode})
+	}
+	if err := desktopOrderedExecutionMembers(executionMembers, selected.MultihopExecution); err != nil {
+		return nil, err
 	}
 	return updates, nil
 }

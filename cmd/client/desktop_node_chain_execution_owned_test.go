@@ -19,11 +19,12 @@ import (
 )
 
 type desktopExecutionOwnedModel struct {
-	winner        string
-	startErr      error
-	ready         mobilemultihop.DesktopNodeChainExecutionReadyRecord
-	beforePublish func()
-	afterPublish  func(int64, int64)
+	winner                 string
+	importedSourceOverride *string
+	startErr               error
+	ready                  mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	beforePublish          func()
+	afterPublish           func(int64, int64)
 }
 
 // This models authenticated child records and the Windows controller/kernel.
@@ -56,6 +57,12 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	}
 	proofs := launch.chain.policy.OriginalChain().ProofInventory()
 	serverInput := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode}
+	if local.Schema == 2 {
+		if len(local.Nodes) != 3 || local.IdentitySources[1] != "" || proofs[1].NodeKind != "external" || proofs[1].Mode != "shadowsocks" {
+			return nil, errors.New("modeled imported execution lost original trio")
+		}
+		serverInput.Schema = 2
+	}
 	for position := 1; position < len(local.Nodes); position++ {
 		input, identity, err := desktopExecutionServerNode(local.Nodes[position], local.IdentitySources[position], position)
 		if err != nil {
@@ -63,6 +70,12 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		}
 		serverInput.Nodes = append(serverInput.Nodes, input)
 		serverInput.IdentitySources = append(serverInput.IdentitySources, identity)
+	}
+	if m.importedSourceOverride != nil {
+		if serverInput.Schema != 2 || len(serverInput.Nodes) != 2 {
+			return nil, errors.New("imported source control requires original schema two")
+		}
+		serverInput.Nodes[0] = *m.importedSourceOverride
 	}
 	encoded, _ := json.Marshal(serverInput)
 	server, err := mobilemultihop.NewNodeChainServerPolicy(string(encoded))
@@ -90,8 +103,18 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	if err != nil {
 		return nil, err
 	}
-	request := multihoprelay.NodeChainRequest{Schema: 1, SessionID: strings.Repeat("7", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("8", 64), Peer: peer.Addr().String(), AcquireExpiresAt: time.Now().Add(10 * time.Second).Unix(), LocalPacketPublicKeys: []string{key}, Port: 32003, Users: []multihoprelay.NodeChainUser{{Position: 1, Username: strings.Repeat("9", 48), Password: strings.Repeat("a", 48)}}}
+	request := multihoprelay.NodeChainRequest{Schema: descriptor.Schema, SessionID: strings.Repeat("7", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("8", 64), Peer: peer.Addr().String(), AcquireExpiresAt: time.Now().Add(10 * time.Second).Unix(), LocalPacketPublicKeys: []string{key}, Port: 32003, Users: []multihoprelay.NodeChainUser{{Position: 1, Username: strings.Repeat("9", 48), Password: strings.Repeat("a", 48)}}}
+	if descriptor.Schema == 2 {
+		request.LocalPacketPositions = []int{0}
+	}
 	for position := 1; position+1 < len(local.Nodes); position++ {
+		if descriptor.Schema == 2 {
+			// Imported SS has no packet client; retain its original source and
+			// separate relay user without fabricating paired credentials.
+			request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,
+				Username: fmt.Sprintf("%048x", 256+position*2), Password: fmt.Sprintf("%048x", 257+position*2)})
+			continue
+		}
 		node, err := mobilemultihop.ParseNodeLaunchInput(local.Nodes[position])
 		if err != nil {
 			return nil, err
@@ -107,7 +130,7 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	if err := request.Validate(descriptor); err != nil {
 		return nil, fmt.Errorf("independent modeled server request: %w", err)
 	}
-	if len(local.Nodes) > 2 {
+	if local.Schema != 2 && len(local.Nodes) > 2 {
 		// Restoring the original faulty fixture must still be rejected by the
 		// actual shared validator: server and local packet clients are distinct.
 		bad := request.Clone()

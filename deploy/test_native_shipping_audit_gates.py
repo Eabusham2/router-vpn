@@ -580,7 +580,8 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("capture: captureNativeMultihopForAppContext", "capture: unownedNativeCapture"),
             ("prepare: prepareDesktopOrderedExecutionSession", "prepare: openAndStartDesktopOrderedExecutionSession"),
             ("!nativeDesktopOrderedExecutionPlatformSupported()", "!nativeNodeChainPlatformSupported()"),
-            ('member.Profile.NodeKind == "external" || member.Profile.External != nil', "false"),
+            ("desktopOrderedExecutionMembers(selection.Nodes, requested)", "desktopOrderedExecutionMembers(selection.Nodes, \"local\")"),
+            ("desktopOrderedExecutionMembers(selection.Nodes, requested)", "error(nil)"),
             ("desktopOrderedExecutionPreparations.Load(a)", "desktopOrderedExecutionPreparations.Load(other)"),
             ("driver.capture(ctx, a, selection, []string{selection.ExitMode})", "driver.capture(ctx, a, selection, []string{selection.EntryMode})"),
             ("s.launch.command != nil || s.graph != nil || s.native != nil", "false"),
@@ -605,6 +606,68 @@ class NativeShippingAuditTests(unittest.TestCase):
             "preflightRetainedNativeMultihop(ctx, image, launch, runDesktopExternalPreflightCommand)",
             "preflightRetainedNativeMultihop(context.Background(), image, launch, runDesktopExternalPreflightCommand)")
         self.assert_multihop_chain(False)
+
+    def test_execution_imported_middle_requires_original_literal_credentials(self):
+        path = "cmd/client/desktop_node_chain_imported_execution.go"
+        declaration = "func desktopNodeChainImportedExecutionMiddle(profile common.RouterProfile) bool"
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        for before, after in (
+            ('!desktopNodeChainImported(profile, "shadowsocks")', 'false'),
+            ("netip.ParseAddr(ss.Server)", 'netip.ParseAddr("192.0.2.1")'),
+            ('address.Zone() != ""', 'false'),
+            ("address.Is4In6()", "false"),
+            ("address.IsUnspecified()", "false"),
+            ("address.IsMulticast()", "false"),
+            ("address.String() != ss.Server", "false"),
+            ("profile.Endpoint != ss.Server", "false"),
+            ("base64.StdEncoding.Strict().DecodeString(ss.Password)", "base64.StdEncoding.DecodeString(ss.Password)"),
+            ("defer clear(key)", ""),
+            ("err == nil && base64.StdEncoding.EncodeToString(key) == ss.Password", "true"),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_execution_imported_members_requires_exact_trio_and_independent_identity(self):
+        path = "cmd/client/desktop_node_chain_imported_execution.go"
+        declaration = "func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error"
+        for before, after in (
+            ("!validDesktopOrderedExecution(requested)", "false"),
+            ('requested == "local"', 'true'),
+            ('member.Profile.NodeKind == "external" || member.Profile.External != nil', 'false'),
+            ("imported == 0", "true"),
+            ("imported != 1", "false"),
+            ("len(members) != 3", "false"),
+            ("!mobilemultihop.NodeChainPrefixMode(members[0].Mode)", "false"),
+            ('members[1].Mode != "shadowsocks"', 'false'),
+            ('members[2].Mode != "shadowsocks"', 'false'),
+            ("!desktopNodeChainImportedExecutionMiddle(members[1].Profile)", "false"),
+            ("!validProfileID(p.ID) || ids[p.ID]", "false"),
+            ("if i == 1", "if i >= 0"),
+            ('p.NodeKind != "" && p.NodeKind != "router-vpn"', 'false'),
+            ("p.External != nil", "false"),
+            ("!common.ValidNodeProofID(p.NodeProofID) || proofs[p.NodeProofID]", "false"),
+            ("proofs[p.NodeProofID] = true", "proofs[p.NodeProofID] = false"),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_execution_imported_helpers_require_unique_shipping_functions(self):
+        path = "cmd/client/desktop_node_chain_imported_execution.go"
+        for declaration in (
+            "func desktopNodeChainImportedExecutionMiddle(profile common.RouterProfile) bool",
+            "func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error",
+        ):
+            with self.subTest(declaration=declaration):
+                self.changes.clear()
+                self.changes[path] = self.body(path) + "\n" + declaration + " {}\n"
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
 
     def test_execution_publication_requires_child_winner_and_complete_usage(self):
         path = "cmd/client/desktop_node_chain_execution_product.go"

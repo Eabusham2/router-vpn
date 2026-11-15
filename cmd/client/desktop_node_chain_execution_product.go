@@ -171,11 +171,8 @@ func (a *app) connectDesktopOrderedExecutionWithRuntime(ctx context.Context, sel
 	if err := desktopOrderedExecutionSelection(nodeChainSelectedReferences(selection.Nodes), requested); err != nil {
 		return nil, err
 	}
-	// Imported Server admission is separate from the ordinary paired-node gate.
-	for _, member := range selection.Nodes {
-		if member.Profile.NodeKind == "external" || member.Profile.External != nil {
-			return nil, errors.New("ordered Server and Compare require admitted paired native nodes")
-		}
+	if err := desktopOrderedExecutionMembers(selection.Nodes, requested); err != nil {
+		return nil, err
 	}
 	if _, pending := desktopOrderedExecutionPreparations.Load(a); pending {
 		return nil, errors.New("ordered preparation cleanup must finish before another connection")

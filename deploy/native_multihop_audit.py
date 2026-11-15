@@ -1086,8 +1086,43 @@ def native_multihop_execution_product(read) -> bool:
     if not callable(read):
         return False
     product_path = "cmd/client/desktop_node_chain_execution_product.go"
+    imported_path = "cmd/client/desktop_node_chain_imported_execution.go"
     product = _tokens(read(product_path))
     expected = (
+        (imported_path, "func desktopNodeChainImportedExecutionMiddle(profile common.RouterProfile) bool", '''
+if !desktopNodeChainImported(profile, "shadowsocks") { return false }
+ss := profile.External.Shadowsocks
+address, err := netip.ParseAddr(ss.Server)
+if err != nil || address.Zone() != "" || address.Is4In6() || address.IsUnspecified() || address.IsMulticast() || address.String() != ss.Server || profile.Endpoint != ss.Server {
+    return false
+}
+key, err := base64.StdEncoding.Strict().DecodeString(ss.Password)
+defer clear(key)
+return err == nil && base64.StdEncoding.EncodeToString(key) == ss.Password
+        '''),
+        (imported_path, "func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error", '''
+bad := errors.New("ordered imported execution requires its original literal SS2022 trio")
+if !validDesktopOrderedExecution(requested) { return bad }
+if requested == "local" { return nil }
+imported := 0
+for _, member := range members {
+    if member.Profile.NodeKind == "external" || member.Profile.External != nil { imported++ }
+}
+if imported == 0 { return nil }
+if imported != 1 || len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[1].Mode != "shadowsocks" || members[2].Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(members[1].Profile) {
+    return bad
+}
+ids, proofs := map[string]bool{}, map[string]bool{}
+for i, member := range members {
+    p := member.Profile
+    if !validProfileID(p.ID) || ids[p.ID] { return bad }
+    ids[p.ID] = true
+    if i == 1 { continue }
+    if p.NodeKind != "" && p.NodeKind != "router-vpn" || p.External != nil || !common.ValidNodeProofID(p.NodeProofID) || proofs[p.NodeProofID] { return bad }
+    proofs[p.NodeProofID] = true
+}
+return nil
+        '''),
         (product_path, "func nativeDesktopOrderedExecutionPlatformSupported() bool", '''
 return retainedNativeMultihopSelected() && (runtime.GOOS == "linux" || runtime.GOOS == "windows") &&
     (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64")
@@ -1224,11 +1259,7 @@ return }''',
             return nil, errors.New("ordered execution has no original admitted connection operation")
         }''',
         "if err := desktopOrderedExecutionSelection(nodeChainSelectedReferences(selection.Nodes), requested); err != nil { return nil, err }",
-        '''for _, member := range selection.Nodes {
-            if member.Profile.NodeKind == "external" || member.Profile.External != nil {
-                return nil, errors.New("ordered Server and Compare require admitted paired native nodes")
-            }
-        }''',
+        "if err := desktopOrderedExecutionMembers(selection.Nodes, requested); err != nil { return nil, err }",
         '''if _, pending := desktopOrderedExecutionPreparations.Load(a); pending {
             return nil, errors.New("ordered preparation cleanup must finish before another connection")
         }''',

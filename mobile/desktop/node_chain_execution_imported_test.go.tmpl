@@ -1,0 +1,216 @@
+package box
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Source constructors and native managers are real. This fixture inherits the
+// existing explicit encrypted-prefix, privileged-TUN and DNS I/O doubles; its
+// assertions establish retained authority, not encrypted device acceptance.
+func desktopImportedExecutionSources(t *testing.T, mode, execution string) (*mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainServerPolicy) {
+	t.Helper()
+	paired, _ := executionNativeSources(t, execution)
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(paired.LocalSource()), &source) != nil || len(source.Nodes) != 3 {
+		t.Fatal("original complete paired source absent")
+	}
+	if mode != "wg" {
+		packet := chainNativeSourceModes(t, []string{mode})
+		launch, err := packet.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var original mobilemultihop.NodeChainSource
+		if json.Unmarshal([]byte(launch), &original) != nil {
+			t.Fatal("original packet source absent")
+		}
+		source.Nodes[0] = original.Nodes[0]
+	}
+	password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, 32))
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "endpoints": []any{}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": "203.0.113.24", "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "rules": []any{}, "auto_detect_interface": true}}
+	profile := map[string]any{"id": "native-imported-execution", "node_kind": "external", "endpoint": "203.0.113.24", "external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "shadowsocks": map[string]any{"server": "203.0.113.24", "port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "dns_mode": "home", "start_layer": "off", "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false, "kill_switch_policy": "always"}
+	capture := map[string]any{"schema": 1, "exit_id": "native-imported-execution", "protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "profile": profile}
+	middle, err := mobilemultihop.NodeChainImportedMemberInput(chainNativeJSON(t, graph), chainNativeJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Schema, source.Nodes[1], source.IdentitySources[1] = 2, middle, ""
+	local, err := mobilemultihop.NewNodeChain(chainNativeJSON(t, source))
+	if err != nil {
+		t.Fatal("actual literal imported trio", err)
+	}
+	proofs := local.ProofInventory()
+	server, err := mobilemultihop.NewNodeChainServerPolicy(chainNativeJSON(t, mobilemultihop.NodeChainServerSource{Schema: 2, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: mode, Nodes: append([]string(nil), source.Nodes[1:]...), IdentitySources: append([]string(nil), source.IdentitySources[1:]...)}))
+	if err != nil {
+		t.Fatal("actual imported server suffix", err)
+	}
+	prep, err := mobilemultihop.NewNodeChainExecutionPreparation(chainNativeJSON(t, source), execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prep, server
+}
+
+func TestRouterVPNDesktopImportedTrioExecutionNativeAdoptionAndRestore(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, requested := range []string{"server", "auto"} {
+			t.Run(mode+"/"+requested, func(t *testing.T) {
+				prep, server := desktopImportedExecutionSources(t, mode, requested)
+				first := newExecutionNativeFixtureWithSources(t, prep, server, nil)
+				before, err := adapter.RouterVPNInboundsContext(t.Context(), first.box.inbound)
+				if err != nil || len(before) != 1 {
+					t.Fatal(err)
+				}
+				projection := first.adopt(t)
+				original, err := first.engine.ObserveChainContext(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				after, err := adapter.RouterVPNInboundsContext(t.Context(), first.box.inbound)
+				if err != nil || len(after) != 1 || after[0] != before[0] || first.engine.instance != first.box || first.requests.Load() != 2 {
+					t.Fatal("imported adoption replaced original Box/TUN/authenticated discovery", err)
+				}
+				for _, proof := range prep.ProofInventory() {
+					actual, found, err := adapter.RouterVPNOutboundContext(t.Context(), first.box.outbound, proof.Tag)
+					if err != nil || !found || actual != first.prefixes[proof.Tag] {
+						t.Fatal("imported adoption replaced original native member", err)
+					}
+				}
+				if open, err := first.engine.ApplicationOpenContext(t.Context()); err != nil || open {
+					t.Fatal("adoption fabricated proof or opened application traffic", err)
+				}
+				policy, err := mobilemultihop.NewNodeChainExecutionPolicy(projection.Source())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := first.engine.RetireContext(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				second := newExecutionNativeFixtureWithSources(t, prep, server, nil)
+				engine, err := second.capture(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				second.discovery(t)
+				if _, err = engine.DiscoverContext(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				restored, err := engine.AdoptOriginalContext(t.Context(), policy)
+				if err != nil || restored.Source() != projection.Source() || restored.Config() != projection.Config() {
+					t.Fatal("imported restore changed original front/source", err)
+				}
+				if engine.instance == first.engine.instance || engine.inbound == first.engine.inbound || engine.gate == first.engine.gate {
+					t.Fatal("imported restore reused retired original native owner")
+				}
+				if open, err := engine.ApplicationOpenContext(t.Context()); err != nil || open {
+					t.Fatal("imported restore bypassed fresh selected proof", err)
+				}
+				localDNS, err := projection.DNSCapture("local")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if first.engine.OpenApplicationContext(t.Context(), original, localDNS.SelectedTag) == nil {
+					t.Fatal("retired original imported engine reopened replacement")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopImportedTrioExecutionPhysicalPolicy(t *testing.T) {
+	for _, target := range []string{"linux", "windows"} {
+		for _, requested := range []string{"server", "auto"} {
+			t.Run(target+"/"+requested, func(t *testing.T) {
+				generic, _ := desktopImportedExecutionSources(t, "wg", requested)
+				chain, err := mobilemultihop.NewNodeChain(generic.LocalSource())
+				if err != nil {
+					t.Fatal(err)
+				}
+				original, err := mobilemultihop.NewDesktopNodeChainPolicy(chain, strings.Repeat("a", 32), target, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prep, err := mobilemultihop.NewDesktopNodeChainExecutionPreparation(original, requested)
+				if err != nil {
+					t.Fatal(err)
+				}
+				physical, err := prep.DesktopPhysicalPolicy()
+				if err != nil {
+					t.Fatal(err)
+				}
+				captured, err := physical.OriginalDesktopPolicy()
+				if err != nil || captured != original || !routerVPNDesktopNodeChainExecutionPhysicalTarget(physical, target) {
+					t.Fatal("imported execution lost original physical policy", err)
+				}
+				if runtime.GOOS != target {
+					return
+				}
+				instance, tun := desktopChainPhysicalBox(t, physical, nil)
+				_, network, err := instance.routerVPNDesktopNodePhysical(physical)
+				if err != nil || network == nil || network.Current() || network.SocketCurrent() || tun.ready || tun.claimed {
+					t.Fatal("imported closed preparation fabricated physical admission", err)
+				}
+				if _, _, err := instance.routerVPNDesktopNodePhysical(original); err == nil {
+					t.Fatal("ordinary Local owner replaced original execution physical policy")
+				}
+				if err := instance.RouterVPNStrategyStart(); err == nil {
+					t.Fatal("imported unprepared native Box opened physical traffic")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopImportedTrioExecutionRejectsChangedNativeGraph(t *testing.T) {
+	for _, fault := range []string{"middle-key", "middle-endpoint", "selected-dns", "entry-key", "cancel"} {
+		t.Run(fault, func(t *testing.T) {
+			prep, server := desktopImportedExecutionSources(t, "wg", "auto")
+			middle := prep.ProofInventory()[1].Tag
+			f := newExecutionNativeFixtureWithSources(t, prep, server, func(graph map[string]any) {
+				if fault == "entry-key" {
+					graph["endpoints"].([]any)[0].(map[string]any)["private_key"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{99}, 32))
+				}
+				for _, raw := range graph["outbounds"].([]any) {
+					row := raw.(map[string]any)
+					if row["tag"] == middle {
+						if fault == "middle-key" {
+							row["password"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{99}, 32))
+						}
+						if fault == "middle-endpoint" {
+							row["server"] = "203.0.113.25"
+						}
+					}
+				}
+				if fault == "selected-dns" {
+					dns, err := prep.DNSCapture()
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
+						row := raw.(map[string]any)
+						if row["tag"] == dns.DNS.ResolverTag {
+							row["server"] = "192.168.50.134"
+						}
+					}
+				}
+			})
+			if fault == "cancel" {
+				f.current.Store(false)
+			}
+			if engine, err := f.capture(t.Context()); err == nil || engine != nil {
+				t.Fatal("changed imported native graph acquired original preparation", fault)
+			}
+			if f.requests.Load() != 0 {
+				t.Fatal("refused original source reached authenticated discovery")
+			}
+		})
+	}
+}

@@ -35,6 +35,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
 	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
 	"github.com/sagernet/sing-box/protocol/socks"
 	"github.com/sagernet/sing-box/route"
@@ -171,8 +172,15 @@ func executionNativeSources(t *testing.T, execution string) (*mobilemultihop.Nod
 
 func newExecutionNativeFixture(t *testing.T, execution string, edit func(map[string]any)) *executionNativeFixture {
 	t.Helper()
-	f := &executionNativeFixture{prefixes: map[string]*chainNativePrefix{}}
-	f.prep, f.server = executionNativeSources(t, execution)
+	prep, server := executionNativeSources(t, execution)
+	return newExecutionNativeFixtureWithSources(t, prep, server, edit)
+}
+
+// Source construction is separate from the original actual-manager lifecycle.
+// Imported fixtures reuse the same declared I/O boundaries and owner cleanup.
+func newExecutionNativeFixtureWithSources(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation, server *mobilemultihop.NodeChainServerPolicy, edit func(map[string]any)) *executionNativeFixture {
+	t.Helper()
+	f := &executionNativeFixture{prefixes: map[string]*chainNativePrefix{}, prep: prep, server: server}
 	f.current.Store(true)
 	insRegistry, outsRegistry, endsRegistry, dnsRegistry := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry(), dns.NewTransportRegistry()
 	group.RegisterSelector(outsRegistry)
@@ -188,6 +196,11 @@ func newExecutionNativeFixture(t *testing.T, execution string, edit func(map[str
 	})
 	endpoint.Register[option.WireGuardEndpointOptions](endsRegistry, C.TypeWireGuard, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
 		p := &chainNativePrefix{Adapter: outbound.NewAdapter(C.TypeWireGuard, tag, []string{"tcp", "udp"}, nil)}
+		f.prefixes[tag] = p
+		return p, nil
+	})
+	endpoint.Register[AWG.Options](endsRegistry, mobilemultihop.AmneziaType, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ AWG.Options) (adapter.Endpoint, error) {
+		p := &chainNativePrefix{Adapter: outbound.NewAdapter(mobilemultihop.AmneziaType, tag, []string{"tcp", "udp"}, nil)}
 		f.prefixes[tag] = p
 		return p, nil
 	})

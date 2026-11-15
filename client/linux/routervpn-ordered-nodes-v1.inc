@@ -113,8 +113,10 @@ static LinuxOrderedSelectionV1 *linux_ordered_selection_v1(const char *control, 
 
 static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, const char *execution) {
     if (selection == NULL || (g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
-    if (strcmp(execution, "local") != 0) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++)
-        if (!linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode"))) return FALSE;
+    if (strcmp(execution, "local") != 0) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++) {
+        const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
+        if (!linux_ordered_prefix_v1(mode) && !(json_array_get_length(selection->nodes) == 3 && i == 1 && strcmp(mode, "shadowsocks") == 0 && strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 2), "mode"), "shadowsocks") == 0)) return FALSE;
+    }
     char *copy = g_strdup(execution); g_free(selection->execution); selection->execution = copy; return TRUE;
 }
 
@@ -178,6 +180,9 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
         JsonObject *profile = external_source_profile_v24(catalog, id);
         const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
         gboolean imported = linux_ordered_imported_v1(profile);
+        if (imported && strcmp(selection->execution, "local") != 0 &&
+            (json_array_get_length(selection->nodes) != 3 || i != 1 || strcmp(mode, "shadowsocks") != 0 ||
+             !linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), "ordered_execution_middle_supported"))) return FALSE;
         gboolean admitted = imported ? linux_ordered_imported_position_v1(mode, i, json_array_get_length(selection->nodes)) && strcmp(mode, linux_ordered_imported_mode_v1(profile)) == 0 : linux_ordered_router_v1(profile) && (i + 1 == json_array_get_length(selection->nodes) || linux_ordered_prefix_v1(mode));
         if (!admitted || (i + 1 == json_array_get_length(selection->nodes) && !linux_ordered_final_profile_v1(profile, mode)) ||
             strcmp(linux_ordered_string_v1(profile, "profile_token"), linux_ordered_string_v1(selection->tokens, id)) != 0) return FALSE;

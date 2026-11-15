@@ -1,0 +1,85 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"github.com/sagernet/sing-tun"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"strings"
+	"testing"
+)
+
+func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_CHAIN_IMPORTED_SERVER_REFERENCE_CHILD") == "" {
+		t.Skip("isolated inherited custom reference only")
+	}
+	if os.Getenv("ROUTERVPN_NODE_CHAIN_IMPORTED_SERVER_REFERENCE_CHILD") != "1" {
+		t.Fatal("uncaptured custom reference")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, 32<<10+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 32<<10 {
+		t.Fatal("bounded custom reference request required")
+	}
+	var request desktopNodeChainImportedRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || desktopNodeChainImportedRequestValid(request) != nil {
+		t.Fatal("custom reference source changed")
+	}
+	local, remote := netip.MustParseAddr(request.Paired.Address), netip.MustParseAddr(request.Paired.ClientAddress)
+	interfaces, err := net.Interfaces()
+	found := false
+	for _, iface := range interfaces {
+		addresses, e := iface.Addrs()
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, value := range addresses {
+			prefix, e := netip.ParsePrefix(value.String())
+			found = found || e == nil && prefix.Addr() == local && iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0
+		}
+	}
+	if err != nil || !found {
+		t.Fatal("custom reference requires original physical namespace")
+	}
+	// Bind the original imported SS endpoint on the owned namespace address.
+	// The server worker reaches this exact captured literal; no compiled graph
+	// rewrite or fake outbound translates its physical destination.
+	peer := desktopNodeChainImportedPeerStartWithHooks(t, request, local, remote, nil, &desktopNodeChainImportedPeerHooks{
+		decorate: func(original *desktopNodeWGHandler) tun.Handler { return original },
+		middle: func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			return desktopStartSSProvider(t, owner, request.MiddleMethod, request.MiddlePassword, local)
+		},
+	})
+	respond := func() {
+		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": peer.snapshot(), "middle_address": peer.provider.address}) != nil {
+			t.Fatal("custom reply pipe failed")
+		}
+	}
+	respond()
+	for {
+		line, err = reader.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > 64 {
+			t.Fatal("custom control pipe failed")
+		}
+		command := strings.TrimSuffix(string(line), "\n")
+		if command == "quit" {
+			return
+		}
+		if peer.control(command) != nil {
+			t.Fatal("uncaptured custom control")
+		}
+		respond()
+	}
+}

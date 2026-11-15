@@ -126,6 +126,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_imported_runtime.py',
                              ROOT/'deploy/test_desktop_imported_packet_runtime.py',
                              ROOT/'deploy/test_desktop_imported_openvpn_runtime.py',
+                             ROOT/'deploy/test_desktop_imported_trio_execution.py',
+                             ROOT/'deploy/test_desktop_imported_trio_execution_runner.py',
                              ROOT/'deploy/test_desktop_imported_pq_runtime.py',
                              ROOT/'deploy/test_desktop_imported_xhttp_runtime.py',
                              ROOT/'deploy/test_desktop_imported_naive_h2_runtime.py',
@@ -1627,6 +1629,17 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 else:
                     run([sys.executable, ROOT/'deploy/test_desktop_node_physical.py', source],
                         env=env, timeout=3600)
+                # Imported literal-trio Server/Compare reuses the original
+                # native preparation and Box owners. Require its exact
+                # adoption/restore cases on each supported native host;
+                # encrypted server-suffix acceptance remains a separate gate.
+                run([sys.executable, ROOT/'deploy/test_desktop_imported_trio_execution_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                run([sys.executable, ROOT/'deploy/test_desktop_imported_trio_execution.py',
+                     '--core', source, '--tags='+','.join(tags(target)),
+                     '--receipt', temp/'imported-trio-execution.json',
+                     *(['--without-race'] if not race else [])],
+                    cwd=source, env=env, timeout=1200)
                 if target.startswith('linux/'):
                     # The desktop reference owns its two native builds and
                     # exact traffic matrix. Keep it outside the existing

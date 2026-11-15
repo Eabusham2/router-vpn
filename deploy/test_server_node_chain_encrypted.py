@@ -47,6 +47,14 @@ TARGET = 'cmd/sing-box/routervpn_server_chain_encrypted_linux_test.go'
 OWNER = 'routervpn-server-encrypted-test-source.json'
 NATIVE = 'TestServerChainEncryptedNative'
 SOURCE = 'TestServerChainEncryptedSourceInventory'
+IMPORTED_CASES = ('original', 'wrong-middle-key', 'wrong-final-key', 'wrong-final-identity',
+                  'failed-selected-dns', 'wrong-public-identity', 'joined-active-udp')
+IMPORTED_NATIVE = 'TestServerChainImportedEncryptedNative'
+IMPORTED_SOURCE = 'TestServerChainImportedEncryptedSource'
+IMPORTED_TEMPLATE = 'mobile/server_chain_acceptance/imported_linux_test.go.tmpl'
+IMPORTED_TARGET = 'cmd/sing-box/routervpn_server_chain_imported_linux_test.go'
+IMPORTED_OWNER = 'routervpn-server-imported-encrypted-test-source.json'
+
 RECEIPT_FIELDS = {'modes', 'case', 'capture_sha256', 'source_sha256', 'prefixes', 'ready', 'retired', 'selected_dns',
                   'final_tcp', 'final_udp', 'peer_joined', 'worker_joined', 'carrier_change_refused'}
 
@@ -94,6 +102,26 @@ def install_fixture(core):
     record.write_text(json.dumps({'schema': 1, 'target': TARGET, 'sha256': hashlib.sha256(raw).hexdigest()}, sort_keys=True)+'\n')
 
 
+def install_imported_fixture(core):
+    core = Path(core)
+    if core.is_symlink() or subprocess.check_output(['git', '-C', str(core), 'rev-parse', 'HEAD'], text=True).strip() != BUILD.PIN:
+        raise ValueError('Encrypted Server requires the original pinned core')
+    target, record, template = core/IMPORTED_TARGET, core/IMPORTED_OWNER, ROOT/IMPORTED_TEMPLATE
+    if any(path.is_symlink() for path in (template, target, record, target.parent)):
+        raise ValueError('Encrypted Server source contains a linked owner')
+    raw = template.read_bytes()
+    if not raw.startswith(b'//go:build linux && !android && routervpn_server_chain_acceptance\n\npackage main\n'):
+        raise ValueError('Encrypted Server fixture changed its native test selector')
+    if record.exists():
+        old = json.loads(record.read_text())
+        if old.get('schema') != 1 or old.get('target') != IMPORTED_TARGET or not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != old.get('sha256'):
+            raise ValueError('Encrypted Server generated fixture was changed')
+    elif target.exists() and target.read_bytes() != raw:
+        raise ValueError('Encrypted Server target is unowned')
+    target.write_bytes(raw)
+    record.write_text(json.dumps({'schema': 1, 'target': IMPORTED_TARGET, 'sha256': hashlib.sha256(raw).hexdigest()}, sort_keys=True)+'\n')
+
+
 def checked_sources(core):
     core, records = NODE.checked_sources(Path(core))
     WORKER.verify_sources(core)
@@ -103,14 +131,16 @@ def checked_sources(core):
         if (core/target).is_symlink() or (core/target).read_bytes() != raw:
             raise ValueError('Encrypted Server lost actual shipping worker bytes')
         records['generated/'+target] = hashlib.sha256(raw).hexdigest()
-    required = ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_imported_peer_linux_test.go.tmpl', 'node_chain_peer_linux_test.go.tmpl')
+    required = ('node_wg_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_imported_peer_linux_test.go.tmpl', 'node_chain_peer_linux_test.go.tmpl', 'node_chain_imported_test.go.tmpl', 'node_chain_imported_server_peer_test.go.tmpl')
     for name in required:
         destination = NODE.PREP.PEER_TEMPLATES[name]
         if (core/destination).read_bytes() != (ROOT/'mobile/desktop'/name).read_bytes():
             raise ValueError('Encrypted Server peer was projected or substituted')
     if (core/TARGET).is_symlink() or (core/TARGET).read_bytes() != (ROOT/TEMPLATE).read_bytes():
         raise ValueError('Encrypted Server native fixture is not the original source')
-    for name in (TEMPLATE, 'deploy/test_server_node_chain_encrypted.py', 'deploy/test_server_node_chain_encrypted_runner.py', '.github/workflows/server-node-chain-encrypted.yml'):
+    if (core/IMPORTED_TARGET).is_symlink() or (core/IMPORTED_TARGET).read_bytes() != (ROOT/IMPORTED_TEMPLATE).read_bytes():
+        raise ValueError('Imported Server native fixture is not the original source')
+    for name in (TEMPLATE, IMPORTED_TEMPLATE, 'deploy/test_server_node_chain_encrypted.py', 'deploy/test_server_node_chain_encrypted_runner.py', '.github/workflows/server-node-chain-encrypted.yml'):
         path = ROOT/name
         if path.is_symlink() or not path.is_file():
             raise ValueError('Encrypted Server lost required gate input')
@@ -183,7 +213,58 @@ def check_verdict(output, case, *, source_only=False):
 
 
 
-def namespace_program(source_sha256):
+def check_imported_verdict(output, case, *, source_only=False):
+    if not source_only and case not in IMPORTED_CASES:
+        raise ValueError('Unknown imported Server case')
+    root = IMPORTED_SOURCE if source_only else IMPORTED_NATIVE
+    expected = {root, *(root+'/'+name for name in (IMPORTED_CASES if source_only else (case,)))}
+    runs, passes, receipts = set(), set(), []
+    ended = False
+    for line in output.splitlines():
+        text = line.strip()
+        if any(marker in line for marker in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:')):
+            raise ValueError('Imported Server failed, skipped or raced')
+        match = re.fullmatch(r'=== RUN\s+(\S+)', text)
+        if match:
+            name = match[1]
+            if ended or name not in expected or name in runs or name != root and root not in runs:
+                raise ValueError('Imported Server unexpected or repeated work')
+            runs.add(name)
+        match = re.fullmatch(r'--- PASS: (\S+) \([0-9.]+s\)', text)
+        if match:
+            name = match[1]
+            if name not in runs or name in passes:
+                raise ValueError('Imported Server unmatched or repeated PASS')
+            if name == root:
+                if runs != expected or not source_only and len(receipts) != 1:
+                    raise ValueError('Imported Server passed before original retirement')
+                ended = True
+            passes.add(name)
+        if 'IMPORTED_SERVER_RECEIPT ' in line:
+            if source_only or ended or root+'/'+case not in runs or root+'/'+case in passes:
+                raise ValueError('Imported Server late or foreign receipt')
+            keys = []
+            value = json.loads(line.split('IMPORTED_SERVER_RECEIPT ', 1)[1], object_pairs_hook=lambda entries: keys.extend(k for k,v in entries) or dict(entries))
+            fields = {'case', 'capture_sha256', 'source_sha256', 'ready', 'selected_dns', 'middle_tcp', 'middle_udp', 'final_tcp', 'final_udp', 'retired', 'worker_joined', 'peer_joined'}
+            if set(value) != fields or len(keys) != len(set(keys)) or value['case'] != case:
+                raise ValueError('Imported Server receipt identity changed')
+            if any(value[k] is not True for k in ('retired','worker_joined','peer_joined')):
+                raise ValueError('Imported Server lost original joined retirement')
+            if any(not isinstance(value[k], str) or re.fullmatch('[0-9a-f]{64}', value[k]) is None for k in ('capture_sha256','source_sha256')):
+                raise ValueError('Imported Server source identity missing')
+            ready = case in ('original', 'joined-active-udp')
+            if value['ready'] is not ready or value['selected_dns'] is not ready:
+                raise ValueError('Imported Server success/refusal changed')
+            counters = ('middle_tcp','middle_udp','final_tcp','final_udp')
+            if any(type(value[k]) is not int or value[k] < 0 for k in counters) or value['middle_tcp'] <= 0 or ready and any(value[k] <= 0 for k in counters):
+                raise ValueError('Imported Server missing actual encrypted observations')
+            receipts.append(value)
+    if runs != expected or passes != expected or not ended or len(receipts) != (0 if source_only else 1) or not re.search(r'^PASS\r?$', output, re.M):
+        raise ValueError('Imported Server omitted exact required verdict')
+    return receipts[0] if receipts else {'source_cases': list(IMPORTED_CASES)}
+
+
+def namespace_program(source_sha256, *, imported=False):
     """Transfer only sealed stdlib namespace code across the private UID boundary.
 
     Namespace root maps to outer root, not the runner account. It must not
@@ -198,13 +279,17 @@ def namespace_program(source_sha256):
         raise ValueError('Encrypted Server namespace source changed after capture')
     tree = ast.parse(raw, filename=str(path))
     projected = ast.parse('from pathlib import Path\nimport hashlib\nimport os\nimport platform\nimport re\nimport stat\nimport subprocess\nimport sys\n').body
-    for name, captured in (('CASES', CASES), ('NATIVE', NATIVE)):
+    selections = (('IMPORTED_CASES', IMPORTED_CASES), ('IMPORTED_NATIVE', IMPORTED_NATIVE)) if imported else (('CASES', CASES), ('NATIVE', NATIVE))
+    for name, captured in selections:
         definitions = [node for node in tree.body if isinstance(node, ast.Assign)
                        and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
                        and node.targets[0].id == name]
         if len(definitions) != 1 or ast.literal_eval(definitions[0].value) != captured:
             raise ValueError('Encrypted Server namespace changed original case inventory')
-        projected.append(definitions[0])
+        definition = definitions[0]
+        if imported:
+            definition.targets[0].id = name.removeprefix('IMPORTED_')
+        projected.append(definition)
     for name in ('image_identity', 'inside_namespace'):
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
         if len(functions) != 1 or functions[0].decorator_list:
@@ -290,6 +375,7 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
         raise ValueError('Encrypted Server forbids cross-host or non-race acceptance')
     captured['CGO_ENABLED'] = '1'
     install_fixture(core)
+    install_imported_fixture(core)
     core, before = checked_sources(core)
     compiler, captured = UID.compiler_toolchain(core, go, captured)
     architecture = run([compiler, 'env', 'GOARCH'], cwd=core, env=captured).strip()
@@ -316,7 +402,10 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
         source_output = run([driver, '-test.run=^'+SOURCE+'$', '-test.v', '-test.count=1', '-test.timeout=60s'], cwd=core, env=captured, timeout=75)
         source_verdict = check_verdict(source_output, None, source_only=True)
         print(source_output, end='')
-        verdicts = []
+        imported_output = run([driver, '-test.run=^'+IMPORTED_SOURCE+'$', '-test.v', '-test.count=1', '-test.timeout=60s'], cwd=core, env=captured, timeout=75)
+        check_imported_verdict(imported_output, None, source_only=True)
+        print(imported_output, end='')
+        verdicts, imported_verdicts = [], []
         if not compile_only:
             sudo = UID.privilege_tool()
             original = os.stat('/proc/self/ns/net')
@@ -330,13 +419,22 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
                     command = [sudo, '-n', '--preserve-env=ROUTERVPN_SERVER_CHAIN_OUTER_NETNS,ROUTERVPN_SERVER_CHAIN_CARRIER_MTU', '--', *command]
                 output = run(command, cwd=workspace, env=native_env, timeout=125, sudo=sudo)
                 verdicts.append(check_verdict(output, case)); print(output, end='')
+            imported_program = namespace_program(before['acceptance/deploy/test_server_node_chain_encrypted.py'], imported=True)
+            for case in IMPORTED_CASES:
+                command = ['unshare', '--user', '--map-root-user', '--mount', '--net', '--pid', '--fork', '--mount-proc',
+                           sys.executable, '-I', '-c', imported_program, str(driver), str(peer), str(worker),
+                           images['driver'][-1], images['peer'][-1], images['worker'][-1], case]
+                if sudo:
+                    command = [sudo, '-n', '--preserve-env=ROUTERVPN_SERVER_CHAIN_OUTER_NETNS,ROUTERVPN_SERVER_CHAIN_CARRIER_MTU', '--', *command]
+                output = run(command, cwd=workspace, env=native_env, timeout=125, sudo=sudo)
+                imported_verdicts.append(check_imported_verdict(output, case)); print(output, end='')
         if checked_sources(core)[1] != before or any(image_identity(path) != images[role] for role, path in (('driver', driver), ('peer', peer), ('worker', worker))):
             raise ValueError('Encrypted Server original source/image changed during acceptance')
         result = {'schema': 1, 'gate': 'ordered-server-encrypted', 'scope': 'compile-and-source-only' if compile_only else 'actual-encrypted-server-worker',
                   'target': 'linux/'+architecture, 'pin': BUILD.PIN, 'source_files': before,
                   'source_sha256': hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                   'images': {role: {'sha256': identity[-1], 'bytes': identity[2]} for role, identity in images.items()},
-                  'required_cases': list(CASES), 'cases': verdicts}
+                  'required_cases': list(CASES), 'cases': verdicts, 'required_imported_cases': list(IMPORTED_CASES), 'imported_cases': imported_verdicts}
     if workspace.exists():
         raise ValueError('Encrypted Server compilation workspace did not retire')
     if receipt:

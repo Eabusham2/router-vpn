@@ -8,6 +8,37 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## November 15: original scope and bounded desktop additions
 
+### Windows and Linux imported Shadowsocks Server/Compare
+
+The desktop public connection and complete-profile flows now accept Server
+or Compare for the original three-member schema-2 shape: one paired WG/AWG
+entry, one literal-address imported Shadowsocks 2022 middle, and an independent
+paired Shadowsocks 2022 final. The Windows and GTK editors use the backend's
+specific imported-member capability as well as the current ordered selection.
+The original canonical method/key, private node references, source objects,
+selected DNS and native execution ownership remain mandatory. Saved-profile
+loading rechecks those same members and rejects replaced imported credentials.
+
+This path reaches the original retained execution preparation and native Box
+owners. Compare preserves the existing common external endpoint and two-probe
+average, and restoration retains the already-proved Local or Server choice
+with fresh ownership and proof. It does not run a new comparison. Existing
+paired execution remains covered by its original ownership tests. The longer
+Local Shadowsocks composition below remains separate: hostname imports,
+longer imported chains and other imported protocols do not acquire Server or
+Compare from this change. macOS public execution composition remains an open
+platform requirement.
+
+The required native component gate checks adoption, physical-policy
+construction, restoration and altered-source refusals on supported Windows
+and Linux native hosts. Its encrypted-prefix, privileged TUN and DNS-I/O
+fixtures are explicitly bounded. The separate required Linux encrypted Server
+gate preserves fourteen original cases and adds seven imported-suffix cases
+using the shipping worker, independent SS2022 peers, selected DNS and joined
+retirement. Local race/source evidence, hosted kernel evidence, exact-SHA
+publication and physical-device acceptance remain distinct in the
+[November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md).
+
 ### Longer Local imported Shadowsocks 2022 paths
 
 The schema-2 Local composition retains one to six original paired WireGuard,
@@ -28,9 +59,9 @@ Source identity, cancellation and restoration remain tied to the original
 connection owner.
 
 The shared engine's existing literal three-node Server/Compare and candidate
-capabilities remain separate. This extension grants neither capability to
-longer imports, and it does not grant imported Server/Compare to the desktop
-product flow that still requires paired nodes. Multiple imports, arbitrary
+capabilities remain separate. The subsequent bounded Windows/Linux admission
+is described above; this Local extension grants neither capability to
+longer imports. Multiple imports, arbitrary
 imported positions and the other requested graph families remain unfinished.
 MTU/layer capacity must fit the actual captured path; admitting eight members
 does not override an incompatible fixed MTU. The required source and encrypted

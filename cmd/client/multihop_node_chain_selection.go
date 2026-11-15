@@ -51,12 +51,8 @@ func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []c
 	if err != nil {
 		return multihopSelection{}, err
 	}
-	if execution != "local" {
-		for _, member := range members {
-			if member.Profile.NodeKind == "external" || member.Profile.External != nil {
-				return multihopSelection{}, errors.New("ordered Server or Compare requires admitted paired nodes")
-			}
-		}
+	if err := desktopOrderedExecutionMembers(members, execution); err != nil {
+		return multihopSelection{}, err
 	}
 	// The concrete physical policy has one final authenticated control source.
 	// A third profile cannot supply credentials or a weaker protection policy.
