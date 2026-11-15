@@ -320,7 +320,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
             'node-chain-hy2-wg-wg-final-dns-failure', 'node-chain-hy2-wg-wg-middle-source',
             'node-chain-hy2-wg-wg-prefix-lost')
         self.assertEqual(G.NODE_CHAIN_HYSTERIA_HOST_CASES, expected)
-        self.assertEqual(len(G.NODE_CHAIN_HOST_CASES), 38 + len(expected))
+        self.assertEqual(len(G.NODE_CHAIN_HOST_CASES), 40 + len(expected))
         fixture = InstalledLinuxHostVerdict()
         for case in expected:
             good = fixture.completed((case,))
@@ -356,9 +356,9 @@ class InstalledNodeChainHostGate(unittest.TestCase):
     def test_closed_prefix_requires_distinct_native_receipt_and_every_decision(self):
         expected = tuple(prefix + 'prefix-candidates-' + action
             for prefix in ('node-chain-3-', 'node-chain-3-awg-fast-wg-', 'node-chain-3-awg-strong-awg-fast-')
-            for action in ('save', 'cancel'))
+            for action in ('save', 'cancel')) + ('node-chain-3-prefix-candidates-off-save', 'node-chain-3-prefix-candidates-off-cancel')
         self.assertEqual(G.SAVED_PREFIX_HOST_CASES, expected)
-        self.assertEqual(len(set(expected)), 6)
+        self.assertEqual(len(set(expected)), 8)
         fixture = InstalledLinuxHostVerdict()
         for case in expected:
             good = fixture.completed((case,))

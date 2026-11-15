@@ -108,7 +108,7 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 		return bad()
 	}
 	capture, kill, lan, err := captureDesktopCandidatePrefix(derived, graph, configured)
-	if err != nil || kill != "on-connect" && kill != "always" {
+	if err != nil || kill != "off" && kill != "on-connect" && kill != "always" {
 		return bad()
 	}
 	prefix := derived.proofs[derived.position]

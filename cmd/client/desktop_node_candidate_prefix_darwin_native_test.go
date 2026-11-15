@@ -26,7 +26,7 @@ const macOSCandidatePrefixMarker = "fixture-node-candidate-prefix-host"
 const macOSCandidatePrefixCandidate = "installed-prefix-candidate"
 
 var macOSCandidatePrefixHostCases = []string{
-	"wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel",
+	"wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel", "wg-off-save", "wg-off-cancel",
 }
 
 func macOSCandidatePrefixModes(scenario string) ([]string, string, error) {
@@ -39,7 +39,7 @@ func macOSCandidatePrefixModes(scenario string) ([]string, string, error) {
 	}
 	action := scenario[strings.LastIndexByte(scenario, '-')+1:]
 	switch strings.TrimSuffix(scenario, "-"+action) {
-	case "wg":
+	case "wg", "wg-off":
 		return []string{"wg", "wg"}, action, nil
 	case "awg-fast":
 		return []string{"awg2-fast", "wg"}, action, nil
@@ -92,6 +92,12 @@ func macOSCandidatePrefixInstall(t *testing.T, peer *macOSNodeChainPeer, scenari
 		t.Fatal(err)
 	}
 	store, assets := macOSCandidatePrefixSources(t, peer)
+	if strings.Contains(scenario, "-off-") {
+		for i := range store.Profiles {
+			store.Profiles[i].KillSwitch = false
+			store.Profiles[i].KillSwitchPolicy = "off"
+		}
+	}
 	raw, err := json.Marshal(store)
 	if err != nil || os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "routers.json"), raw, 0600) != nil {
 		t.Fatal("prefix saved source unavailable", err)
@@ -171,11 +177,11 @@ func macOSCandidatePrefixNativeController(owned *ownedDesktopController) (bool, 
 }
 
 type macOSCandidatePrefixNativeResult struct {
-	Session, Source, Config, Transfer, Profile       string
-	ProcessID                                        int
-	NativeJoined, Closed, WorkspaceRetired, Observer bool
-	Baseline                                         *desktopMacOSCandidatePrefixReceipt
-	Proof                                            *mobilemultihop.DesktopNodeCandidatePreparationReadyRecord
+	Session, Source, Config, Transfer, Profile, Policy string
+	ProcessID                                          int
+	NativeJoined, Closed, WorkspaceRetired, Observer   bool
+	Baseline                                           *desktopMacOSCandidatePrefixReceipt
+	Proof                                              *mobilemultihop.DesktopNodeCandidatePreparationReadyRecord
 }
 
 func macOSCandidatePrefixObservation(ctx context.Context, a *app, captured *desktopMacOSSessionCapture) (macOSCandidatePrefixNativeResult, error) {
@@ -207,6 +213,10 @@ func macOSCandidatePrefixObservation(ctx context.Context, a *app, captured *desk
 		return result, errors.New("prefix observation changed original native identity")
 	}
 	meta := h.policy.Metadata()
+	result.Policy = meta.KillSwitchPolicy
+	if h.selection.Policy != meta.KillSwitchPolicy {
+		return result, errors.New("prefix native baseline changed captured protection")
+	}
 	result.Session, result.Source, result.Config, result.Profile = meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.PolicyProfileID
 	result.Transfer, _ = macosprocess.CandidatePrefixTransferSHA256(h.process.capture.Selection())
 	result.ProcessID = h.process.command.Process.Pid
@@ -423,6 +433,13 @@ func macOSCandidatePrefixNativeCase(t *testing.T, scenario string) {
 	}
 	observed := read()
 	proof := observed.Proof
+	wantPolicy := "on-connect"
+	if strings.Contains(scenario, "-off-") {
+		wantPolicy = "off"
+	}
+	if observed.Policy != wantPolicy {
+		t.Fatal("native prefix changed selected protection", observed.Policy)
+	}
 	if !observed.NativeJoined || !observed.Closed || !observed.WorkspaceRetired || !observed.Observer || observed.ProcessID == started.ProcessID || observed.Profile != store.SelectedID || observed.Baseline == nil || observed.Baseline.Phase != "retired" || observed.Baseline.Baseline.Present || proof == nil || !proof.Prepared || proof.ApplicationOpen || proof.DNSOpen || len(proof.Prefixes) != len(modes) || proof.Identity.SessionID != observed.Session || proof.InterfaceIndex == 0 || proof.InterfaceName == "" {
 		t.Fatal("prefix original PF/process/utun receipt incomplete", observed)
 	}
@@ -533,7 +550,7 @@ func macOSCandidatePrefixNativeCase(t *testing.T, scenario string) {
 }
 
 func TestDesktopDarwinInstalledPrefixCandidateFixtureKeepsClosedAuthority(t *testing.T) {
-	for _, scenario := range []string{"wg-save", "awg-fast-save", "awg-strong-save"} {
+	for _, scenario := range []string{"wg-save", "awg-fast-save", "awg-strong-save", "wg-off-save"} {
 		t.Run(strings.TrimSuffix(scenario, "-save"), func(t *testing.T) {
 			modes, _, err := macOSCandidatePrefixModes(scenario)
 			if err != nil {
@@ -543,6 +560,12 @@ func TestDesktopDarwinInstalledPrefixCandidateFixtureKeepsClosedAuthority(t *tes
 			macOSNodeChainSetModes(t, peer, modes)
 			peer.reply.Address = "192.168.210.2:51820"
 			store, assets := macOSCandidatePrefixSources(t, peer)
+			if strings.Contains(scenario, "-off-") {
+				for i := range store.Profiles {
+					store.Profiles[i].KillSwitch = false
+					store.Profiles[i].KillSwitchPolicy = "off"
+				}
+			}
 			root := t.TempDir()
 			for id, modes := range assets {
 				for mode, files := range modes {
@@ -585,6 +608,9 @@ func TestDesktopDarwinInstalledPrefixCandidateFixtureKeepsClosedAuthority(t *tes
 				t.Fatal(err)
 			}
 			meta := launch.candidatePrefix.policy.Metadata()
+			if strings.Contains(scenario, "-off-") && meta.KillSwitchPolicy != "off" {
+				t.Fatal("source changed explicit Off")
+			}
 			if meta.ApplicationOpen || meta.DNSOpen || len(meta.Prefixes) != 2 || meta.PolicyProfileID != store.SelectedID || meta.ProfileID == store.SelectedID || launch.chain != nil || launch.command != nil {
 				t.Fatal("prefix source fixture adopted old final as tested authority")
 			}

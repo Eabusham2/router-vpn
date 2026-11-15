@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -430,5 +431,94 @@ func TestDesktopCandidatePrefixOwnedAlwaysProtectionKeepsFullSavedControl(t *tes
 	off, err := slot.captureOff(context.Background(), f.selection.Control.ID, capture.revision, capture.resultRevision, capture.token)
 	if err != nil || off.profileID != f.selection.Control.ID || off.sourceRevision != desktopOwnedNodeProfileToken(f.selection.Control) {
 		t.Fatal("prefix Off capture used a different original profile", err)
+	}
+}
+
+func desktopCandidatePrefixAllOff(a *app) {
+	for i := range a.profiles.Profiles {
+		a.profiles.Profiles[i].KillSwitch = false
+		a.profiles.Profiles[i].KillSwitchPolicy = "off"
+	}
+}
+
+func TestDesktopCandidatePrefixOwnedOffOriginalRetirementAndReplacement(t *testing.T) {
+	for _, replacement := range []bool{false, true} {
+		t.Run(fmt.Sprint(replacement), func(t *testing.T) {
+			f := newDesktopCandidatePrefixOwnedFixture(t, "wg", 0, desktopCandidatePrefixAllOff)
+			before := cloneRouterProfileStore(f.a.profiles)
+			f.start(t)
+			selection, err := f.launch.ownedNode.attempt.selection()
+			if err != nil || selection.policy != "off" || selection.profileID != f.selection.Control.ID || f.kernel.target.Policy != "off" || f.a.state.Connected {
+				t.Fatal("Off prefix lost captured protection or gained full connection", err)
+			}
+			// A saved suffix change must invalidate the old prefix even though that
+			// suffix is never started; the original immutable owner still retires.
+			f.a.mu.Lock()
+			f.a.profiles.Profiles[len(f.a.profiles.Profiles)-2].KillSwitchPolicy = "always"
+			f.a.mu.Unlock()
+			if err := desktopOwnedCandidatePrefixCurrent(f.operation, f.a, f.launch); err == nil {
+				t.Fatal("Off prefix accepted changed full saved protection")
+			}
+			f.a.mu.Lock()
+			f.a.profiles = cloneRouterProfileStore(before)
+			f.a.mu.Unlock()
+			old := f.processes[0]
+			old.mu.Lock()
+			old.closeErr = errors.New("original Off source has not joined")
+			old.mu.Unlock()
+			if err := f.purpose.retireNative(context.Background()); err == nil || f.purpose.nativeDown || f.kernel.target == nil {
+				t.Fatal("Off falsely retired an unjoined original source")
+			}
+			old.mu.Lock()
+			old.closeErr = nil
+			old.mu.Unlock()
+			var command *exec.Cmd
+			var replacementState state
+			var replacementOperation context.Context
+			if replacement {
+				command = &exec.Cmd{}
+				f.a.mu.Lock()
+				f.a.cmd = command
+				var replacementCancel context.CancelFunc
+				replacementOperation, replacementCancel = context.WithCancel(context.Background())
+				defer replacementCancel()
+				f.a.connectionContext, f.a.connectionCancel = replacementOperation, replacementCancel
+				f.a.profiles.Profiles[0].KillSwitch, f.a.profiles.Profiles[0].KillSwitchPolicy = true, "always"
+				before = cloneRouterProfileStore(f.a.profiles)
+				f.a.state = state{Connected: true, Phase: "connected", RouterID: f.a.profiles.Profiles[0].ID, Mode: "wg"}
+				replacementState = f.a.state
+				f.a.mu.Unlock()
+			}
+			if err := f.purpose.retireNative(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !old.closed || !f.purpose.nativeDown || f.kernel.target != nil || !reflect.DeepEqual(before, f.a.profiles) {
+				t.Fatal("Off retirement lost original owner or saved controls")
+			}
+			if replacement && (f.a.cmd != command || f.a.state != replacementState || f.a.connectionContext != replacementOperation || replacementOperation.Err() != nil) {
+				t.Fatal("old Off prefix mutated replacement")
+			}
+		})
+	}
+}
+
+func TestDesktopCandidatePrefixOwnedOffCannotDisturbConnectedProtectedOriginal(t *testing.T) {
+	a, q := orderedPreparationFixture(t, "wg")
+	desktopCandidatePrefixAllOff(a)
+	q.Scope = "saved-prefix-local"
+	// The connected protected owner is independent of the selected idle saved graph.
+	protected := cloneRouterProfile(a.profiles.Profiles[0])
+	protected.ID, protected.KillSwitch, protected.KillSwitchPolicy = "original-protected-owner", true, "always"
+	a.profiles.Profiles = append(a.profiles.Profiles, protected)
+	originalCommand := &exec.Cmd{}
+	operation, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a.cmd, a.connectionContext, a.connectionCancel = originalCommand, operation, cancel
+	a.state = state{Connected: true, Phase: "connected", RouterID: "original-protected-owner", Mode: "wg"}
+	beforeState, beforeProfiles := a.state, cloneRouterProfileStore(a.profiles)
+	physicalRead := false
+	p, err := beginOrderedCandidatePreparationWithNetwork(context.Background(), a, q, func(ctx context.Context) (string, error) { physicalRead = true; return "unexpected", nil })
+	if err == nil || p != nil || physicalRead || a.cmd != originalCommand || a.connectionContext != operation || operation.Err() != nil || a.state != beforeState || !reflect.DeepEqual(a.profiles, beforeProfiles) || a.candidatePreparation != nil {
+		t.Fatal("Off prefix disturbed existing protected connection", err)
 	}
 }

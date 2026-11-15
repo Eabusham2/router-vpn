@@ -170,6 +170,50 @@ func TestDesktopNodeCandidatePreparationPolicyPreservesSavedRestrictions(t *test
 	}
 }
 
+func TestDesktopNodeCandidatePreparationOffRetainsCompleteSavedProtection(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+			for _, strong := range []string{"off", "on-connect", "always"} {
+				for member := 0; member < 3; member++ {
+					t.Run(fmt.Sprintf("%s/%s/%s/member-%d", target, mode, strong, member), func(t *testing.T) {
+						p := desktopCandidatePreparationFixture(t, mode, target, 0, 0, func(i int, profile map[string]any) {
+							profile["kill_switch"], profile["kill_switch_policy"] = false, "off"
+							if i == member {
+								profile["kill_switch"], profile["kill_switch_policy"] = strong != "off", strong
+							}
+						})
+						meta := p.Metadata()
+						_, physical, capture, err := p.PhysicalReadValidated()
+						if err != nil || meta.KillSwitchPolicy != strong || physical.KillSwitchPolicy != strong ||
+							meta.PolicyProfileID != p.original.original.proofs[2].ProfileID || meta.ProfileID == meta.PolicyProfileID ||
+							meta.ApplicationOpen || meta.DNSOpen || len(meta.Prefixes) != 1 || capture.SelectedDNS.Physical {
+							t.Fatal("prefix borrowed selected-member protection or opened full-path authority", err, meta)
+						}
+						graph := startObject(t, p.Config())
+						if graph["route"].(map[string]any)["final"] != NodeChainExecutionGateTag ||
+							!reflect.DeepEqual(externalTestFind(t, graph, SelectorTag)["outbounds"], []any{meta.Prefixes[0].Tag}) {
+							t.Fatal("Off changed closed application/DNS purpose or installed an unselected suffix")
+						}
+						for _, proof := range p.original.original.proofs[1:] {
+							if strings.Contains(p.Config(), proof.Tag) {
+								t.Fatal("Off constructed unselected original suffix")
+							}
+						}
+						reopened, err := ParseDesktopNodeCandidatePreparationPolicy(p.Source())
+						if err != nil || !reflect.DeepEqual(reopened.Metadata(), meta) || reopened.Config() != p.Config() {
+							t.Fatal("private child replay changed captured aggregate protection", err)
+						}
+						p.metadata.KillSwitchPolicy = map[bool]string{true: "always", false: "off"}[strong == "off"]
+						if p.Validate() == nil || p.Source() != "" {
+							t.Fatal("mutated protection acquired original prefix authority")
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestDesktopNodeCandidatePreparationPolicyRejectsWrongAdmissionAndMTU(t *testing.T) {
 	p := desktopCandidatePreparationFixture(t, "wg", "linux", 0, 0, nil)
 	for _, input := range []struct {

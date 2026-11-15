@@ -34,7 +34,7 @@ def receipts(digest):
              for name in ("policy", "transfer", "commit", "baseline", "status", "prepared", "probe", "observation")}
     scope["routervpn_candidate_prefix_scope_windows.go"] = "c" * 64
     original = {"schema": 1, "native": True, "target": "windows/amd64", "source_sha256": "a" * 64,
-                "bundle_sha256": digest, "cases": ["wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel"],
+                "bundle_sha256": digest, "cases": ["wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel", "wg-off-save", "wg-off-cancel"],
                 "unmodified_shipping_image": False, "test_scope": "captured-native-child-app-id",
                 "application_open": False, "dns_open": False, "samples_per_case": 50, "original_final_unreachable": True,
                 "native_down_before_review": True, "sources": {"actual": "b" * 64}, "scope_sources": scope,

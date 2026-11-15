@@ -13,17 +13,46 @@ GATE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(GATE)
 
 
-def receipt():
-    value = "\n".join("=== RUN   " + name for name in GATE.REQUIRED) + "\n"
-    value += "\n".join("verified installed Windows selected prefix: " + case for case in GATE.CASES) + "\n"
-    value += "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.REQUIRED) + "\nPASS\n"
+def receipt(off=False):
+    required = GATE.OFF_REQUIRED if off else GATE.REQUIRED
+    cases = GATE.OFF_CASES if off else GATE.PROTECTED_CASES
+    value = "\n".join("=== RUN   " + name for name in required) + "\n"
+    value += "\n".join("verified installed Windows selected prefix: " + case for case in cases) + "\n"
+    value += "\n".join("--- PASS: " + name + " (0.01s)" for name in required) + "\nPASS\n"
     return value
 
 
 class PrefixRunner(unittest.TestCase):
     def test_exact_inventory(self):
-        self.assertEqual(len(GATE.CASES), 6)
+        self.assertEqual(len(GATE.CASES), 8)
         GATE.require_verdicts(receipt())
+
+    def test_off_separate_exact_phase(self):
+        GATE.require_verdicts(receipt(True), off=True)
+        with self.assertRaises(ValueError): GATE.require_verdicts(receipt(True))
+        with self.assertRaises(ValueError): GATE.require_verdicts(receipt(), off=True)
+        for name in GATE.OFF_REQUIRED:
+            for text in ("=== RUN   " + name + "\n", "--- PASS: " + name + " (0.01s)\n"):
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    GATE.require_verdicts(receipt(True).replace(text, ""), off=True)
+        for case in GATE.OFF_CASES:
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                GATE.require_verdicts(receipt(True).replace("verified installed Windows selected prefix: " + case + "\n", ""), off=True)
+
+    def test_native_phases_preserve_bounds_and_cannot_skip_off(self):
+        calls = []
+        def run(command, **kwargs):
+            calls.append((command, kwargs))
+            return 0, receipt(len(calls) == 2)
+        GATE.execute_cases("original-controller", run, ROOT, {"captured": "environment"})
+        self.assertEqual([x[1]["timeout"] for x in calls], [720, 250])
+        self.assertIn("-test.timeout=700s", calls[0][0])
+        self.assertIn("-test.timeout=230s", calls[1][0])
+        self.assertIn("-test.run=^" + GATE.ROOT_TEST + "$", calls[0][0])
+        self.assertIn("-test.run=^" + GATE.OFF_ROOT_TEST + "$", calls[1][0])
+        for outputs in (((0, receipt()), (0, receipt())), ((0, receipt()), (1, receipt(True))), ((1, receipt()),)):
+            with self.subTest(outputs=outputs), self.assertRaises(ValueError):
+                GATE.execute_cases("original-controller", __import__("unittest.mock", fromlist=["Mock"]).Mock(side_effect=outputs), ROOT, {})
 
     def test_each_original_verdict_required(self):
         for name in GATE.REQUIRED:
@@ -35,7 +64,7 @@ class PrefixRunner(unittest.TestCase):
         with self.assertRaises(ValueError): GATE.require_verdicts(receipt() + "--- PASS: " + GATE.ROOT_TEST + " (0.01s)\n")
 
     def test_missing_lifecycle_refused(self):
-        for case in GATE.CASES:
+        for case in GATE.PROTECTED_CASES:
             with self.subTest(case=case):
                 with self.assertRaises(ValueError): GATE.require_verdicts(receipt().replace("verified installed Windows selected prefix: " + case + "\n", ""))
 
@@ -105,16 +134,17 @@ class PrefixRunner(unittest.TestCase):
                    "images":{"controller":"d"*64,"peer":"e"*64,"scoped_engine":"f"*64}}
             def invoke(record):
                 with patch.object(build.platform,"system",return_value="Windows"),patch.object(build,"native_host_target",return_value="windows/amd64"), \
-                     patch.object(build,"reuse",return_value=original),patch.object(build,"run",side_effect=["", "", "", "", "", "", GATE.PREFIX+json.dumps(record)]) as run, \
+                     patch.object(build,"reuse",return_value=original),patch.object(build,"run",side_effect=["", "", "", "", "", "", "", GATE.PREFIX+json.dumps(record)]) as run, \
                      patch.object(build,"verify_installed_windows_socks_receipt") as full_path, patch.object(build,"verify_installed_windows_connect_receipt") as connect_path:
                     build.verify_installed_windows_prefix(ROOT,bundle,"windows/amd64",{})
                     self.assertEqual(Path(run.call_args_list[0].args[0][1]).name,"test_windows_candidate_prefix_runner.py")
                     self.assertEqual(Path(run.call_args_list[1].args[0][1]).name,"test_windows_socks_node_chain_host_runner.py")
                     self.assertEqual(Path(run.call_args_list[2].args[0][1]).name,"test_windows_socks_release_receipt.py")
                     self.assertEqual(Path(run.call_args_list[3].args[0][1]).name,"test_desktop_connect_parent_runner.py")
-                    self.assertEqual(Path(run.call_args_list[4].args[0][1]).name,"test_windows_connect_node_chain_host_runner.py")
-                    self.assertEqual(Path(run.call_args_list[5].args[0][1]).name,"test_windows_connect_release_receipt.py")
-                    self.assertEqual(Path(run.call_args_list[6].args[0][1]).name,"test_windows_connect_node_chain_host.py")
+                    self.assertEqual(Path(run.call_args_list[4].args[0][1]).name,"test_desktop_connect_admission_runner.py")
+                    self.assertEqual(Path(run.call_args_list[5].args[0][1]).name,"test_windows_connect_node_chain_host_runner.py")
+                    self.assertEqual(Path(run.call_args_list[6].args[0][1]).name,"test_windows_connect_release_receipt.py")
+                    self.assertEqual(Path(run.call_args_list[7].args[0][1]).name,"test_windows_connect_node_chain_host.py")
                     connect_path.assert_called_once()
                     full_path.assert_called_once_with(GATE.PREFIX+json.dumps(record),"windows/amd64",original,value['bundle_sha256'],record)
             invoke(value)

@@ -184,6 +184,13 @@ func windowsPrefixInspect(ctx context.Context, a *app, original common.RouterPro
 	if !ok || process == nil || process.capture.ProfileID != original.SelectedID || launch.candidatePrefix.policy.Metadata().PolicyProfileID != original.SelectedID || launch.profileID == original.SelectedID {
 		return result, errors.New("prefix journal lost full saved control attribution")
 	}
+	wantPolicy := "on-connect"
+	if original.Profiles[0].KillSwitchPolicy == "off" {
+		wantPolicy = "off"
+	}
+	if launch.candidatePrefix.policy.Metadata().KillSwitchPolicy != wantPolicy || process.capture.Transfer.Policy != wantPolicy {
+		return result, errors.New("prefix native journal changed saved protection mode")
+	}
 	if result.Proof.Validate(launch.candidatePrefix.policy, launch.ownedNode.attempt.digest) != nil || result.Proof.Identity.SessionID != launch.mtuSession || result.Proof.Generation != 1 {
 		return result, errors.New("prefix review borrowed another native proof, transfer or session")
 	}
@@ -401,7 +408,9 @@ func windowsPrefixWrite(t *testing.T, path string, value any) {
 	}
 }
 
-func TestWindowsInstalledPrefixCandidates(t *testing.T) {
+func TestWindowsInstalledPrefixCandidates(t *testing.T)    { windowsInstalledPrefixCandidates(t, false) }
+func TestWindowsInstalledPrefixCandidatesOff(t *testing.T) { windowsInstalledPrefixCandidates(t, true) }
+func windowsInstalledPrefixCandidates(t *testing.T, off bool) {
 	identity, err := windowscontroller.CurrentIdentity()
 	if err != nil || !identity.Elevated || !identity.Administrator {
 		t.Fatal("installed prefix acceptance requires actual elevated Windows", err)
@@ -418,6 +427,14 @@ func TestWindowsInstalledPrefixCandidates(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"RouterVPN.exe", "router-vpn-client.exe"} {
+		if off {
+			original, readErr := os.ReadFile(image)
+			installed, installedErr := os.ReadFile(filepath.Join(root, name))
+			if readErr != nil || installedErr != nil || !bytes.Equal(original, installed) {
+				t.Fatal("Off phase lost original installed controller image", readErr, installedErr)
+			}
+			continue
+		}
 		input, err := os.Open(image)
 		if err != nil {
 			t.Fatal(err)
@@ -433,7 +450,11 @@ func TestWindowsInstalledPrefixCandidates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, scenario := range []string{"wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel"} {
+	cases := []string{"wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel"}
+	if off {
+		cases = []string{"wg-off-save", "wg-off-cancel"}
+	}
+	for _, scenario := range cases {
 		t.Run(scenario, func(t *testing.T) {
 			command := exec.Command(filepath.Join(root, "RouterVPN.exe"), "-test.v", "-test.run=^TestWindowsPrefixLauncher$", "-test.count=1", "-test.timeout=110s", "--", root, scenario)
 			output, err := command.CombinedOutput()
@@ -460,7 +481,7 @@ func TestWindowsPrefixLauncher(t *testing.T) {
 	root, scenario := arguments[0], arguments[1]
 	modes := []string{"wg", "wg"}
 	switch scenario {
-	case "wg-save", "wg-cancel":
+	case "wg-save", "wg-cancel", "wg-off-save", "wg-off-cancel":
 	case "awg-fast-save", "awg-fast-cancel":
 		modes = []string{"awg2-fast", "wg"}
 	case "awg-strong-save", "awg-strong-cancel":
@@ -470,6 +491,12 @@ func TestWindowsPrefixLauncher(t *testing.T) {
 	}
 	peer, observe := windowsPrefixPeerStart(t, modes)
 	profiles, assets := windowsPrefixPrefixCandidateSources(t, peer)
+	if strings.Contains(scenario, "-off-") {
+		for i := range profiles.Profiles {
+			profiles.Profiles[i].KillSwitch = false
+			profiles.Profiles[i].KillSwitchPolicy = "off"
+		}
+	}
 	if !strings.Contains(string(assets[profiles.SelectedID]["shadowsocks"]["sing-box.json"]), `"server_port":1`) ||
 		!strings.Contains(string(assets["installed-prefix-candidate"]["shadowsocks"]["sing-box.json"]), `"server_port":8388`) {
 		t.Fatal("prefix fixture lost deliberately unavailable original final or independent candidate endpoint")

@@ -23,7 +23,7 @@ def completed():
 
 
 def original_receipt():
-    prefix = dict(schema=1, native=True, cases=list(G.ORIGINAL_PREFIX_CASES), samples_per_case=50,
+    prefix = dict(schema=1, native=True, cases=list(G.REQUIRED_PREFIX_CASES), samples_per_case=50,
                   native_down_before_review=True, original_final_unreachable=True,
                   target='windows/amd64', bundle_sha256='a' * 64, source_sha256='b' * 64)
     return dict(schema=1, native=True, cases=list(G.ORIGINAL_SOCKS_CASES), typed_full_path=True,
@@ -71,6 +71,11 @@ class FullPathGate(unittest.TestCase):
             changed = deepcopy(good)
             changed['original_prefix_acceptance'][key] = ['foreign'] if key == 'cases' else 'foreign'
             with self.subTest(key=key), self.assertRaises(ValueError):
+                G.require_originals(changed)
+        for removed in G.PREFIX_OFF_CASES:
+            changed = deepcopy(good)
+            changed['original_prefix_acceptance']['cases'].remove(removed)
+            with self.subTest(off=removed), self.assertRaises(ValueError):
                 G.require_originals(changed)
         with patch.object(G.SOCKS_GATE, 'CASES', G.SOCKS_GATE.CASES[:-1]), self.assertRaises(ValueError):
             G.require_originals(good)

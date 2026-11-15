@@ -112,7 +112,7 @@ func linuxHostTUNPrefixCandidateParent(t *testing.T, installed, scenario, action
 	final := process.readNodeChain(t, scenario)
 	if final.Stage != "retired" || !final.Retired || final.Session != result.Session || final.Ready != nil || final.Proof != nil || !reflect.DeepEqual(final.PrefixProof, proof) ||
 		final.Prepared == nil || final.Prepared.RequestID != r.RequestID || final.Prepared.ViewToken != r.ViewToken || !final.Prepared.NativeDown || final.Prepared.Observer || !final.Prepared.Drained || !final.Prepared.ProfileSame ||
-		!reflect.DeepEqual(final.Prepared.Row, r.Row) || (final.Prepared.SavedID != "") != (action == "prefix-candidates-save") {
+		!reflect.DeepEqual(final.Prepared.Row, r.Row) || (final.Prepared.SavedID != "") != (action == "prefix-candidates-save" || action == "prefix-candidates-off-save") {
 		t.Fatal("installed prefix explicit decision lost its original closed proof or joined Save provenance", final)
 	}
 	select {
@@ -131,12 +131,18 @@ func TestDesktopLinuxInstalledPrefixCandidateFixtureKeepsClosedAuthority(t *test
 	for _, item := range []struct {
 		name  string
 		modes []string
-	}{{"wg", []string{"wg", "wg"}}, {"awg-fast", []string{"awg2-fast", "wg"}}, {"awg-strong", []string{"awg2-strong", "awg2-fast"}}} {
+	}{{"wg", []string{"wg", "wg"}}, {"awg-fast", []string{"awg2-fast", "wg"}}, {"awg-strong", []string{"awg2-strong", "awg2-fast"}}, {"wg-off", []string{"wg", "wg"}}} {
 		t.Run(item.name, func(t *testing.T) {
 			peer := linuxNodeChainPeerKeys(t, 3)
 			linuxNodeChainSetModes(t, peer, item.modes)
 			peer.reply.Address = "192.168.210.2:51820"
 			store, assets := linuxNodeChainPrefixCandidateSources(t, peer)
+			if item.name == "wg-off" {
+				for i := range store.Profiles {
+					store.Profiles[i].KillSwitch = false
+					store.Profiles[i].KillSwitchPolicy = "off"
+				}
+			}
 			root := t.TempDir()
 			for id, modes := range assets {
 				for mode, files := range modes {
@@ -172,6 +178,9 @@ func TestDesktopLinuxInstalledPrefixCandidateFixtureKeepsClosedAuthority(t *test
 				t.Fatal(err)
 			}
 			meta := launch.candidatePrefix.policy.Metadata()
+			if item.name == "wg-off" && meta.KillSwitchPolicy != "off" {
+				t.Fatal("source changed explicit Off")
+			}
 			if meta.ApplicationOpen || meta.DNSOpen || len(meta.Prefixes) != 2 || meta.PolicyProfileID != store.SelectedID || meta.ProfileID == store.SelectedID || launch.chain != nil || launch.command != nil || p.inventory.current(context.Background()) == nil {
 				t.Fatal("installed prefix source fixture manufactured ordinary or final authority")
 			}

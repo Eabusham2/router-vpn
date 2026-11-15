@@ -40,6 +40,8 @@ CONNECT_PUBLIC = load("windows_public_connect_source", "test_desktop_connect_adm
 COMMAND_OWNER = load("windows_socks_command_owner", "test_windows_node_max.py")
 ROOT_TEST = "TestWindowsInstalledCONNECTNodeChain"
 ORIGINAL_PREFIX_CASES = ("wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel")
+PREFIX_OFF_CASES = ("wg-off-save", "wg-off-cancel")
+REQUIRED_PREFIX_CASES = ORIGINAL_PREFIX_CASES + PREFIX_OFF_CASES
 ORIGINAL_SOCKS_CASES = ("wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off")
 CASES = ("http-wg-connect", "http-awg-fast-connect", "http-awg-strong-connect", "https-wg-connect", "https-awg-fast-connect", "https-awg-strong-connect", "https-wg-wrong-middle-key", "http-wg-wrong-middle-public", "https-wg-tls-name", "https-wg-tls-trust", "http-wg-final-dns-failure", "https-wg-final-node-failure", "https-wg-final-key", "https-wg-middle-source", "http-wg-connect-off", "https-wg-connect-off")
 REQUIRED = (ROOT_TEST, *(ROOT_TEST + "/" + case for case in CASES))
@@ -149,7 +151,7 @@ def owned_bindings(module, owner, *, workspace=False):
 
 
 def require_originals(receipt):
-    if tuple(PREFIX_GATE.CASES) != ORIGINAL_PREFIX_CASES or tuple(SOCKS_GATE.CASES) != ORIGINAL_SOCKS_CASES:
+    if tuple(PREFIX_GATE.PROTECTED_CASES) != ORIGINAL_PREFIX_CASES or tuple(PREFIX_GATE.OFF_CASES) != PREFIX_OFF_CASES or tuple(PREFIX_GATE.CASES) != REQUIRED_PREFIX_CASES or tuple(SOCKS_GATE.CASES) != ORIGINAL_SOCKS_CASES:
         raise ValueError("Original Windows prefix6/SOCKS8 authoritative inventory changed")
     if (not isinstance(receipt, dict) or receipt.get("schema") != 1 or receipt.get("native") is not True or
             tuple(receipt.get("cases", ())) != ORIGINAL_SOCKS_CASES or receipt.get("typed_full_path") is not True or
@@ -158,7 +160,7 @@ def require_originals(receipt):
         raise ValueError("Original installed SOCKS8 acceptance is missing or incomplete")
     prefix = receipt.get("original_prefix_acceptance")
     if (not isinstance(prefix, dict) or prefix.get("schema") != 1 or prefix.get("native") is not True or
-            tuple(prefix.get("cases", ())) != ORIGINAL_PREFIX_CASES or prefix.get("samples_per_case") != 50 or
+            tuple(prefix.get("cases", ())) != REQUIRED_PREFIX_CASES or prefix.get("samples_per_case") != 50 or
             prefix.get("native_down_before_review") is not True or prefix.get("original_final_unreachable") is not True or
             prefix.get("target") != receipt.get("target") or prefix.get("bundle_sha256") != receipt.get("bundle_sha256") or
             prefix.get("source_sha256") != receipt.get("source_sha256")):

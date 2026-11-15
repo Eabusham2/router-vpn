@@ -37,7 +37,12 @@ BUILD = load("windows_prefix_complete_bundle", "build-native-runtime.py")
 SOCKS_PARENT = load("windows_retained_socks_parent", "test_desktop_socks_parent.py")
 ROOT_TEST = "TestWindowsInstalledPrefixCandidates"
 CASES = ("wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel")
-REQUIRED = (ROOT_TEST, *(ROOT_TEST + "/" + case for case in CASES))
+OFF_ROOT_TEST = ROOT_TEST + "Off"
+OFF_CASES = ("wg-off-save", "wg-off-cancel")
+PROTECTED_CASES = CASES
+CASES += OFF_CASES
+REQUIRED = (ROOT_TEST, *(ROOT_TEST + "/" + case for case in PROTECTED_CASES))
+OFF_REQUIRED = (OFF_ROOT_TEST, *(OFF_ROOT_TEST + "/" + case for case in OFF_CASES))
 PREFIX = "Native Windows selected-prefix acceptance: "
 OWNED = ("deploy/test_desktop_socks_parent.py", "deploy/test_desktop_socks_parent_runner.py",
          "cmd/client/desktop_node_chain_socks_platform_test.go",
@@ -68,18 +73,32 @@ def sources(source):
     return source, records
 
 
-def require_verdicts(output):
+def require_verdicts(output, off=False):
+    required = OFF_REQUIRED if off else REQUIRED
+    cases = OFF_CASES if off else PROTECTED_CASES
     runs = re.findall(r"^\s*=== RUN\s+(\S+)\s*$", output, re.M)
     passes = re.findall(r"^\s*--- PASS:\s+(\S+)\s+\(", output, re.M)
     if "--- FAIL:" in output or "--- SKIP:" in output or "WARNING: DATA RACE" in output:
         raise ValueError("Installed prefix native gate failed, skipped or raced")
-    if len(runs) != len(REQUIRED) or set(runs) != set(REQUIRED) or len(passes) != len(REQUIRED) or set(passes) != set(REQUIRED):
+    if len(runs) != len(required) or set(runs) != set(required) or len(passes) != len(required) or set(passes) != set(required):
         raise ValueError("Installed prefix native gate omitted or duplicated an exact required verdict")
-    for case in CASES:
+    for case in cases:
         if output.count("verified installed Windows selected prefix: " + case + "\n") != 1:
             raise ValueError("Installed prefix native gate omitted its original lifecycle receipt: " + case)
     if not re.search(r"^PASS\s*$", output, re.M):
         raise ValueError("Installed prefix native gate omitted its successful process footer")
+
+
+def execute_cases(controller, run, cwd, env):
+    # Off has an independent aggregate budget. The protected phase and each
+    # original 110-second installed child keep their captured bounds.
+    for root, off, inner, outer in ((ROOT_TEST, False, 700, 720), (OFF_ROOT_TEST, True, 230, 250)):
+        status, output = run([controller, "-test.v", "-test.count=1", "-test.timeout=" + str(inner) + "s", "-test.run=^" + root + "$"],
+                             cwd=cwd, env=env, timeout=outer)
+        if status:
+            raise ValueError("Installed prefix actual native lifecycle failed:\n" + output[-65536:])
+        require_verdicts(output, off=off)
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
 
 
 def merge_overlays(paths, target):
@@ -167,17 +186,12 @@ def execute(source, bundle, go="go", *, env=None):
         # and do not constitute typed full-chain Connect acceptance.
         socks_parent_controls = SOCKS_PARENT.execute(controller, 'windows', run, ROOT, captured)
         child_env = dict(captured, ROUTERVPN_WINDOWS_PREFIX_ROOT=str(installed), ROUTERVPN_WINDOWS_PREFIX_PEER=str(peer))
-        status, output = run([controller, "-test.v", "-test.count=1", "-test.timeout=700s", "-test.run=^" + ROOT_TEST + "$"],
-                             cwd=ROOT, env=child_env, timeout=720)
-        if status:
-            raise ValueError("Installed prefix actual native lifecycle failed:\n" + output[-65536:])
-        require_verdicts(output)
+        execute_cases(controller, run, ROOT, child_env)
         if sources(source)[1] != before or BUILD.reuse(bundle, target, env=captured) != original:
             raise ValueError("Installed prefix original source/bundle changed during acceptance")
         if identities != {name: hashlib.sha256(path.read_bytes()).hexdigest()
                           for name, path in (("controller", controller), ("peer", peer), ("scoped_engine", child))}:
             raise ValueError("Installed prefix original executable changed during acceptance")
-        print(output, end="" if output.endswith("\n") else "\n", flush=True)
         receipt = {"schema": 1, "native": True, "target": target, "cases": list(CASES),
                    "bundle_sha256": original_manifest, "source_sha256": original["policy_sha256"],
                    "unmodified_shipping_image": False, "test_scope": "captured-native-child-app-id",

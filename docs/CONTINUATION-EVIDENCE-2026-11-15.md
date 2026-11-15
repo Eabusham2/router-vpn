@@ -89,10 +89,12 @@ back from the remote. There was no force push or live deployment.
 | `17267175f9f0f3f26fe29f33149cfb63c59a02c6` | The macOS retained external baseline names the captured final policy profile, matching the final protocol, protection and LAN settings. Mixed-node paths previously submitted the entry ID to that validator. | The compiled shipping capture reaches the actual Python saved-profile validator: eight valid captures reach an explicitly rejecting native-plan boundary, 24 saved-policy changes remain rejected, and restoring the old expression rejects all six composed captures. Fourteen runner checks passed. This verifies capture/validation behavior without fabricating PF success or native absence. |
 | `45ebde8c321f18640175d058a201a73f58ec56a6` | The Linux control-selection fixture treats supported Off as a valid captured choice and still rejects empty, uppercase and unknown policies. | The exact hosted source-audit failure was reproduced before the change. The complete Linux protection package then passed with race detection in 1.257 seconds. Production validation and control identity were unchanged. |
 | `09a9b781094b1f2473d56aced4b64b7da9a8ce57` | The Darwin descriptor receiver clears only its own supplied `MSG_DONTWAIT` input bit, which XNU returns in `msg_flags`, before strict frame validation. | Both native controller and generated-child jobs had rejected valid frames at `17267175`. Six focused tests passed, including sixteen real-stream frame cases and two causal controls; truncation, ancillary truncation and unknown flags remain rejected. The full runner passed 56 of 57 tests; the remaining existing control-lifetime test could not create an AF_UNIX listener in this executor. Actual Darwin acceptance remains required. |
+| `d41f4d4a41d314ca1fc2d812bbd2cf3c17d95f12` | The bounded ordinary OpenVPN-entry/independent SS2022-final pair enters the macOS retained host with separate entry and final authentication/proofs. | Seventeen runner checks require 375 installed cases and 53 policy roots. Final canonical preparation passed 31 checks; the corrected native observer passed against actual adapted TCP/UDP policies under race detection and its old-detour mutation failed. Earlier Intel/ARM controller and peer cross-compiles precede that final observer correction. Native PF/utun/provider acceptance remains required. |
+| `dcb221fca9b851f824dde02c84a5cc996c29fc3e` | Full Darwin PF close retains its exact cleanup state until the original native generation is absent, while standalone Off permission revocation retains its separate behavior. | Both real Mac architectures exposed the retained-reference retry failure at `09a9b781`. Six focused checks passed, including actual-method failure/retry/replacement cases, the old-helper causal control and the receive-flag regression. The native retained-reference test is unchanged; exact-current-SHA native acceptance remains pending. |
 
 The last named commit is the verified publication checkpoint preceding this
-evidence refresh. This change adds macOS adoption of the bounded ordinary
-OpenVPN-entry/SS2022-final pair described below; a document does not manufacture a
+evidence refresh. This change adds aggregate Off to saved-prefix preparation
+on the three desktop hosts described below; a document does not manufacture a
 publication receipt for itself. This is not a claim that `main` cannot
 advance. The complete release-orchestration source audit also passed in the
 working tree containing these repairs. That local working-tree result is not
@@ -160,9 +162,10 @@ baseline/receipt and native adapter plumbing can represent a captured Off mode, 
 all six journal/receipt families covered. This is lower-layer support:
 `cmd/client/desktop_external_physical.go` still rejects ordinary external Off,
 and the ordinary OpenVPN, packet-entry and SS-entry owner predicates still
-require On-connect/Always. The candidate-prefix constructor independently still
-requires On-connect/Always. No public candidate-prefix or ordinary direct/external
-Off connection is claimed from those adapter changes. Original session, source,
+require On-connect/Always. This change separately admits aggregate Off to the
+saved-prefix constructor and its Windows concrete selection arm, with dedicated
+native cases described below. Ordinary direct/external Off remains closed.
+Original session, source,
 selected DNS, MTU and stronger mixed-member aggregate choices remain bound to
 their existing owners. The direct legacy/Tor helper's Off behavior remains its
 previous no-baseline path; this addition does not claim new direct-Tor public
@@ -233,6 +236,41 @@ addresses the original August 19 through-selected-prefix measurement request
 and the historical 214–224/336 index; it does not broaden candidate protocols,
 turn TCP connection timing into ICMP or establish native visual acceptance.
 
+This change admits aggregate Off for saved-prefix preparation on Linux, Windows
+and macOS. The captured policy still includes every original saved member,
+including the unstarted suffix and final: Always overrides On-connect, which
+overrides Off. The saved control profile and tested-prefix profile retain their
+separate identities. Application and DNS authority remain closed throughout
+this measurement-only operation.
+
+The public saved-prefix operation remains idle-only. An existing protected
+connection is rejected before physical preparation and remains untouched. A
+failed original child join cannot produce a retired receipt; retry joins that
+same owner, while late cleanup preserves a newer connection and its cancellation
+context. Changing protection in the unstarted suffix invalidates old readiness.
+The full saved-profile and journal state remain bound through Save and Cancel.
+
+Each desktop gains required WG Off Save/Cancel native cases alongside the
+existing six protected WG/AWG cases. Windows executes the two Off cases in a
+separate bounded invocation, preserving the six original cases' aggregate and
+child budgets. CONNECT and SOCKS predecessor receipt consumers require the
+expanded exact inventory; an old six-case receipt cannot stand in for it.
+Focused policy and ownership race tests, generated command/runtime checks,
+runner checks and cross-compilation are recorded separately from the mandatory
+Linux kernel, Windows WFP and macOS PF/utun executions.
+
+The isolated policy matrix passed 81 combinations under race detection in
+42.546 seconds; owned-prefix cases passed in 42.113 seconds, generated command
+checks in 3.502 seconds and the Linux native-tagged source fixture in 0.405
+seconds. Windows AMD64 and Darwin ARM64 controller test images cross-compiled.
+Runner checks passed 18 Windows prefix, 75 Linux host, nine macOS prefix and
+21 composed Windows receipt tests. Restoring either old admission guard failed
+at its intended constructor or parent-selection witness. The generated command
+run used the pure-Go WG/gVisor/QUIC/uTLS/OpenVPN configuration; full native
+library linking is still a CI obligation. This all-Off addition does not close
+the separate Darwin saved-profile validator mismatch for stronger mixed-member
+captures, which can still fail closed before native admission.
+
 ### Ordinary OpenVPN entry and independent external final
 
 The direct user wording is the authority for this addition. On August 13,
@@ -259,7 +297,7 @@ This preserves the already implemented imported-OpenVPN to paired-Router-final
 path. It does not add ordinary OpenVPN intermediate positions, other ordinary
 final protocols, multiple entry remotes, entry/final transport layers,
 Server/Compare or Off protection to this new pair. This change adds the same
-bounded pair to the macOS retained host. Existing mobile OpenVPN subsets and other published desktop
+bounded pair to the macOS retained host in published `d41f4d4a`. Existing mobile OpenVPN subsets and other published desktop
 OpenVPN graphs keep their own evidence and must not be relabeled absent.
 
 The Linux clean source projection verified 2,593 generated shipping records.
@@ -348,8 +386,8 @@ prove these behaviors merely because a filename or string is present.
 | 149–159; 340; later graph additions | Mode catalog, shared graph compilers, SMART/AUTO rollback, MAX/ALL native witnesses | All requested graph/platform combinations remain accountable. Ordered paths currently have bounded family/placement/length and execution support; those bounds are not full delivery. |
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
-| 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; Linux/Windows Off source and this continuation's bounded macOS ordered Off source with mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. The macOS addition preserves its listed ordinary/SOCKS/CONNECT and derived execution boundaries; candidate-prefix/external baseline/receipt support does not enable their public Off connections, and no new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
-| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members; typed CONNECT uses a fixed three-member composition at this cutoff. macOS adoption of the new ordinary OpenVPN pair and broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
+| 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered desktop Off and the separately admitted saved-prefix Off path with mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Ordinary external public/physical Off admission remains closed; its baseline/receipt adapters alone do not establish support. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
+| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members; typed CONNECT uses a fixed three-member composition at this cutoff. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |

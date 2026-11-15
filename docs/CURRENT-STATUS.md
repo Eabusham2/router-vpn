@@ -10,12 +10,12 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md)
 records the recovered original requirements and newer published source through
-`09a9b781`: macOS prefix-only candidate controls with purpose-safe dialog
+`dcb221fc`: macOS prefix-only candidate controls with purpose-safe dialog
 ownership, atomic native descriptor transfer, the measured Compare test oracle,
 Linux/Windows ordinary OpenVPN-entry to independent SS2022-final hosts,
 macOS ordered Off ownership, the corrected macOS final-policy baseline ID,
 the Linux Off selection fixture and Darwin receive-flag normalization.
-This change also adopts the bounded ordinary OpenVPN-entry/SS2022-final pair
+Published `d41f4d4a` also adopts the bounded ordinary OpenVPN-entry/SS2022-final pair
 in the macOS retained host with independent entry and final proof fixtures.
 The OpenVPN addition is a bounded two-node Local path with one literal TCP or
 UDP entry remote, both Start Layers Off and On-connect/Always protection. It
@@ -35,10 +35,12 @@ provider-loss witness and shared generation checks do not establish native
 endpoint reconnect acceptance.
 This continuation's macOS Off source adds the captured isolated-UID owner to
 ordinary ordered and typed SOCKS/CONNECT paths, including execution preparation
-derived from the ordinary policy. Candidate-prefix and external baseline/receipt
-adapters can represent Off, but their independent public constructors/physical
-admission still require On-connect or Always; those adapters alone do not enable
-an Off connection. The ordered Off
+derived from the ordinary policy. This change separately admits aggregate Off
+for idle saved-prefix preparation on all three desktops, with full saved-graph
+protection aggregation, closed application/DNS authority and mandatory native
+Save/Cancel cases. An existing connected owner remains untouched. Ordinary
+external physical admission still requires On-connect or Always; its baseline
+adapters alone do not enable Off. The ordered Off
 path keeps ordinary host traffic open and
 retains the original engine guard until descriptor and guardian retirement are
 proved. Actual macOS packet/state/alias execution remains a native gate; this

@@ -77,9 +77,9 @@ class NativePrefixGate(unittest.TestCase):
         lines=['=== RUN   '+G.AUTHORITY_TEST]
         for child in G.AUTHORITY_CASES[1:]: lines+=['=== RUN   '+child,'    --- PASS: '+child+' (0.1s)']
         return '\n'.join(lines+['--- PASS: '+G.AUTHORITY_TEST+' (0.3s)','PASS'])+'\n'
-    def test_exact_six_cases_and_four_source_records(self):
+    def test_exact_protected_and_off_cases_and_five_source_records(self):
         self.assertEqual(G.case_inventory(),G.CASES)
-        self.assertEqual(len(G.CASES),6); self.assertEqual(len(G.AUTHORITY_CASES),4)
+        self.assertEqual(len(G.CASES),8); self.assertEqual(len(G.AUTHORITY_CASES),5)
         for case in G.CASES:G.check_verdict(self.output(case),case)
         G.check_authority_verdict(self.authority())
     def test_inventory_rejects_omission_duplication_reorder_and_computed_entry(self):

@@ -56,7 +56,7 @@ func desktopProtectionSelectionForConcretePurposesWithCONNECT(node *mobilemultih
 		_, meta, _, err := prefix.PhysicalReadValidated()
 		control, controlErr := mobilemultihop.ReadDesktopProtectionProfileID(prefix)
 		if err != nil || controlErr != nil || meta.TargetOS != "windows" || !validProfileID(meta.ProfileID) || !validProfileID(control) ||
-			meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
+			meta.KillSwitchPolicy != "off" && meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
 			return empty, errors.Join(err, controlErr, errors.New("prefix protection lost its sealed closed native policy"))
 		}
 		return desktopProtectionSelection{control, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil

@@ -36,6 +36,7 @@ import (
 
 var linuxNodeChainHostCases = append([]string{
 	"node-chain-3-prefix-candidates-save", "node-chain-3-prefix-candidates-cancel",
+	"node-chain-3-prefix-candidates-off-save", "node-chain-3-prefix-candidates-off-cancel",
 	"node-chain-3-awg-fast-wg-prefix-candidates-save", "node-chain-3-awg-fast-wg-prefix-candidates-cancel",
 	"node-chain-3-awg-strong-awg-fast-prefix-candidates-save", "node-chain-3-awg-strong-awg-fast-prefix-candidates-cancel",
 	"node-chain-3-connect", "node-chain-4-connect", "node-chain-3-wrong-middle-key", "node-chain-4-wrong-middle-proof",
@@ -462,6 +463,12 @@ func installLinuxNodeChainProfiles(t *testing.T, peer *linuxNodeChainPeer, fault
 	store, assets := linuxNodeChainInstalledSources(t, peer, fault)
 	if strings.HasPrefix(fault, "prefix-candidates-") {
 		store, assets = linuxNodeChainPrefixCandidateSources(t, peer)
+		if fault == "prefix-candidates-off-save" || fault == "prefix-candidates-off-cancel" {
+			for i := range store.Profiles {
+				store.Profiles[i].KillSwitch = false
+				store.Profiles[i].KillSwitchPolicy = "off"
+			}
+		}
 	}
 	raw, err := json.Marshal(store)
 	if err != nil || os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), raw, 0600) != nil {

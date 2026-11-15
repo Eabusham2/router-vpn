@@ -304,11 +304,22 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 		if p.prefixPreparation == nil || p.launch.chain != nil || p.launch.candidatePrefix == nil {
 			return errors.New("saved prefix result adopted a full graph")
 		}
+		wantPolicy := "on-connect"
+		if action == "prefix-candidates-off-save" || action == "prefix-candidates-off-cancel" {
+			wantPolicy = "off"
+		}
+		if p.launch.candidatePrefix.policy.Metadata().KillSwitchPolicy != wantPolicy {
+			return errors.New("prefix native owner changed captured protection")
+		}
+
 		platform, ok := p.launch.candidatePrefix.platform.(*desktopNodeCandidatePrefixPlatformRuntime)
 		if !ok || platform == nil {
 			return errors.New("saved prefix result lost original Linux platform")
 		}
 		h, session = platform.host, platform.session
+		if h.selection.Policy != wantPolicy {
+			return errors.New("prefix physical owner changed captured protection")
+		}
 		p.launch.candidatePrefix.mu.Lock()
 		prefixProof = p.launch.candidatePrefix.ready
 		p.launch.candidatePrefix.mu.Unlock()
@@ -387,7 +398,7 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 	if err != nil || response.Code != 409 {
 		return errors.Join(err, errors.New("installed saved Cancel accepted another view"))
 	}
-	if action == "candidates-save" || action == "prefix-candidates-save" {
+	if action == "candidates-save" || (action == "prefix-candidates-save" || action == "prefix-candidates-off-save") {
 		save := orderedCandidateSaveRequest{RequestID: id, ViewToken: catalog.Token, CandidateID: choice.ID, Name: "Explicit installed candidate draft", ProposedPath: choice.Proposal}
 		foreign := save
 		foreign.CandidateID = "uncaptured-candidate"
@@ -451,7 +462,7 @@ func linuxHostTUNPreparedCandidateFixture(ctx context.Context, a *app, controlle
 		cancelled.View != catalog.Token || cancelled.Saved != result.Prepared.SavedID || !cancelled.Drained || !cancelled.Down {
 		return errors.Join(err, errors.New("installed exact candidate Cancel lost original DOWN, saved identity or observer join"))
 	}
-	if action == "candidates-cancel" || action == "prefix-candidates-cancel" {
+	if action == "candidates-cancel" || (action == "prefix-candidates-cancel" || action == "prefix-candidates-off-cancel") {
 		after, err := os.ReadFile(connectionProfileStorePath(a))
 		if !bytes.Equal(after, storeBytes) || errors.Is(err, os.ErrNotExist) != errors.Is(storeErr, os.ErrNotExist) || err != nil && !errors.Is(err, os.ErrNotExist) {
 			return errors.New("review Cancel wrote or changed a connection profile")

@@ -22,19 +22,22 @@ deployment acceptance.
 
 [The November 15 ledger](CONTINUATION-EVIDENCE-2026-11-15.md) records recovery
 of the complete historical 1–311 index, original August 11/13/14 user
-passages, published repairs and feature units through `09a9b781`, current native
+passages, published repairs and feature units through `dcb221fc`, current native
 failure evidence, Linux/Windows Off source, Android runtime/profile verification
 and macOS public prefix-candidate preparation and controls. The bounded
 Linux/Windows Local ordinary OpenVPN-entry to independent SS2022-final addition
-and its explicit macOS adoption in this change address the original August 13/14
+and its published macOS adoption address the original August 13/14
 custom-node request while preserving the
 separate existing imported-OpenVPN to paired-Router-final path. Other positions,
 finals, layers, remote inventories and execution/platform combinations remain
 accountable. This continuation's macOS Off source retains the captured native
 owner across ordinary ordered and typed SOCKS/CONNECT paths, including execution
 preparation derived from the ordinary policy, without expanding their protocol
-shapes. Candidate-prefix and ordinary external public/physical Off admission
-remain closed despite their baseline/receipt adapters' mode support. The ledger preserves
+shapes. This change separately admits aggregate Off to idle saved-prefix
+preparation on the three desktops while retaining full saved-graph protection,
+closed application/DNS authority and original-owner retirement. Ordinary
+external public/physical Off admission remains closed despite its baseline
+adapters' mode support. The ledger preserves
 the original identifiers and separates source, native execution, publication
 and live acceptance. macOS Off kernel/packaged acceptance, broader requested
 graph integration, current release convergence and live acceptance remain

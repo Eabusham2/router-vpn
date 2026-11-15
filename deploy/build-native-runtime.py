@@ -1189,7 +1189,7 @@ def verify_installed_windows_prefix(source, bundle, target, env):
     scope_names.add('routervpn_candidate_prefix_scope_windows.go')
     if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or receipt.get('target') != target or
             receipt.get('source_sha256') != original['policy_sha256'] or receipt.get('bundle_sha256') != digest_before or
-            receipt.get('cases') != ['wg-save', 'wg-cancel', 'awg-fast-save', 'awg-fast-cancel', 'awg-strong-save', 'awg-strong-cancel'] or
+            receipt.get('cases') != ['wg-save', 'wg-cancel', 'awg-fast-save', 'awg-fast-cancel', 'awg-strong-save', 'awg-strong-cancel', 'wg-off-save', 'wg-off-cancel'] or
             receipt.get('unmodified_shipping_image') is not False or receipt.get('test_scope') != 'captured-native-child-app-id' or
             receipt.get('application_open') is not False or receipt.get('dns_open') is not False or type(receipt.get('samples_per_case')) is not int or receipt.get('samples_per_case') != 50 or
             receipt.get('original_final_unreachable') is not True or receipt.get('native_down_before_review') is not True or

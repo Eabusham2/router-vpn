@@ -233,7 +233,7 @@ SAVED_CANDIDATE_HOST_CASES = (
     'node-chain-3-awg-strong-awg-fast-candidates-save', 'node-chain-3-awg-strong-awg-fast-candidates-cancel')
 SAVED_PREFIX_HOST_CASES = tuple(prefix + 'prefix-candidates-' + action
     for prefix in ('node-chain-3-', 'node-chain-3-awg-fast-wg-', 'node-chain-3-awg-strong-awg-fast-')
-    for action in ('save', 'cancel'))
+    for action in ('save', 'cancel')) + ('node-chain-3-prefix-candidates-off-save', 'node-chain-3-prefix-candidates-off-cancel')
 NODE_CHAIN_HYSTERIA_HOST_CASES = (
     'node-chain-hy2-wg-wg-connect',
     'node-chain-hy2-awg-fast-awg-strong-connect',
