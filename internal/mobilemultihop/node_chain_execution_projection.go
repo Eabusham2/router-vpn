@@ -60,6 +60,7 @@ type NodeChainExecutionPreparation struct {
 	desktop                                        *DesktopNodeChainPolicy
 	desktopPhysical                                *DesktopNodeChainExecutionPhysicalPolicy
 	mobile                                         *nodeChainExecutionMobileProjection
+	connect                                        *nodeChainCONNECTExecutionBinding
 }
 
 // NewNodeChainExecutionPreparation keeps one complete original Local graph,
@@ -87,7 +88,19 @@ func newNodeChainExecutionPreparationProjected(localSource, execution string, de
 		len(original.IdentitySources) != len(local.nodes) {
 		return nil, nodeChainExecutionError
 	}
+	return newNodeChainExecutionPreparationCaptured(localSource, execution, desktop, mobile, local, nil)
+}
+
+// The distinct typed caller supplies its original private runtime and source.
+// Generic public constructors still pass only their validated schema1/2 graph.
+func newNodeChainExecutionPreparationCaptured(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource) (*NodeChainExecutionPreparation, error) {
+	var err error
 	p := &NodeChainExecutionPreparation{source: NodeChainExecutionPreparationSource{Schema: 1, Execution: execution, LocalSource: localSource}, local: local, desktop: desktop, mobile: mobile}
+	if connect != nil {
+		p.source.Schema = 4
+		p.connect = &nodeChainCONNECTExecutionBinding{source: connect, local: local, preparation: p}
+		p.connect.self = p.connect
+	}
 	config := local.Config()
 	if mobile != nil {
 		if desktop != nil || p.validateMobileCapture() != nil {
@@ -229,6 +242,9 @@ func (p *NodeChainExecutionPreparation) validateCapture() error {
 		p.discovery.Entry != p.local.proofs[0] || p.dns.DNS.SourceSHA256 != p.sourceSHA || p.dns.DNS.ConfigSHA256 != p.configSHA {
 		return nodeChainExecutionError
 	}
+	if p.validateCONNECTExecutionCapture() != nil {
+		return nodeChainExecutionError
+	}
 	if p.desktop == nil {
 		if p.source.Desktop != nil {
 			return nodeChainExecutionError
@@ -287,6 +303,9 @@ func (p *NodeChainExecutionPreparation) BindExecution(policy *NodeChainExecution
 	if p.validateCapture() != nil || policy.validateCapture() != nil || p.source.LocalSource != policy.source.LocalSource ||
 		p.source.Execution != policy.source.Execution || p.local.Config() != policy.local.Config() ||
 		!reflect.DeepEqual(p.physical, policy.physical) || p.dns.DNSPolicySHA256 != policy.source.Server.DNSPolicySHA256 {
+		return nil, nodeChainExecutionError
+	}
+	if p.connect != policy.connect {
 		return nil, nodeChainExecutionError
 	}
 	if p.mobile != nil && p.mobile.executionSource != policy.Source() {

@@ -733,7 +733,7 @@ def compiled_node_chain_source(raw, node, original=None):
         source_fields = {'schema', 'entry_id', 'entry_node_id', 'entry_mode', 'nodes', 'identity_sources'}
         if (not isinstance(captured, dict) or set(captured) != source_fields or
                 original is not None and captured != original or
-                type(captured.get('schema')) is not int or captured['schema'] not in (1, 2)):
+                type(captured.get('schema')) is not int or captured['schema'] not in (1, 2, 4)):
             raise bad
         if any(reference.get(key) != captured.get(key) for key in ('schema', 'entry_id', 'entry_node_id', 'entry_mode')) or captured['entry_node_id'] != node:
             raise bad
@@ -795,8 +795,10 @@ def compile_node_chain_plan(path, node):
         plan_snapshot = private_snapshot(path, 64 << 10)
         plan = decode(plan_snapshot[1])
         if (not isinstance(plan, dict) or set(plan) != {'schema', 'entry', 'members'} or
-                type(plan['schema']) is not int or plan['schema'] != 1 or
+                type(plan['schema']) is not int or plan['schema'] not in (1, 4) or
                 not isinstance(plan['members'], list) or not 1 <= len(plan['members']) <= 7):
+            raise bad
+        if plan['schema'] == 4 and len(plan['members']) != 2:
             raise bad
         snapshots = {plan_snapshot[0]: plan_snapshot}
         captured_bytes = len(plan_snapshot[1])
@@ -830,7 +832,7 @@ def compile_node_chain_plan(path, node):
                     result['dns_bootstrap'] = capture(value['dns_bootstrap_file'], 16384).decode('utf-8')
             return result
 
-        resolved = dict(schema=1, entry_node_id=node, entry=selection(plan['entry']), members=[])
+        resolved = dict(schema=plan['schema'], entry_node_id=node, entry=selection(plan['entry']), members=[])
         for member in plan['members']:
             if not isinstance(member, dict):
                 raise bad

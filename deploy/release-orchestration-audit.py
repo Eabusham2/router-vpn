@@ -204,6 +204,7 @@ for audit in (
     "deploy/native-artifact-workflow-parity-audit.py",
     "deploy/test_native_artifact_aggregate.py",
     "deploy/test_server_node_chain_encrypted_runner.py",
+    "deploy/test_server_node_chain_connect_encrypted_runner.py",
     "deploy/workflow-structure-audit.py",
     "deploy/reusable-workflow-concurrency-audit.py",
     "deploy/workflow-evidence-pipeline-audit.py",

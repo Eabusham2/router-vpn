@@ -51,9 +51,10 @@ import (
 // transport. They establish ownership, not encrypted device acceptance.
 type executionNativeDNS struct {
 	dns.TransportAdapter
-	calls  atomic.Int64
-	mu     sync.Mutex
-	during func()
+	calls    atomic.Int64
+	mu       sync.Mutex
+	during   func()
+	answerIP net.IP // Optional malformed-answer control; the normal A RDATA has four bytes.
 }
 
 func (*executionNativeDNS) Start(adapter.StartStage) error { return nil }
@@ -72,7 +73,11 @@ func (d *executionNativeDNS) Exchange(ctx context.Context, q *mdns.Msg) (*mdns.M
 	}
 	answer := new(mdns.Msg)
 	answer.SetReply(q)
-	answer.Answer = []mdns.RR{&mdns.A{Hdr: mdns.RR_Header{Name: q.Question[0].Name, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: 30}, A: net.IPv4(93, 184, 216, 34)}}
+	ip := d.answerIP
+	if ip == nil {
+		ip = net.IP{93, 184, 216, 34}
+	}
+	answer.Answer = []mdns.RR{&mdns.A{Hdr: mdns.RR_Header{Name: q.Question[0].Name, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: 30}, A: ip}}
 	return answer, nil
 }
 func (d *executionNativeDNS) ExchangeAsync(ctx context.Context, q *mdns.Msg, callback func(*mdns.Msg, error)) {
@@ -178,7 +183,15 @@ func newExecutionNativeFixture(t *testing.T, execution string, edit func(map[str
 
 // Source construction is separate from the original actual-manager lifecycle.
 // Imported fixtures reuse the same declared I/O boundaries and owner cleanup.
-func newExecutionNativeFixtureWithSources(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation, server *mobilemultihop.NodeChainServerPolicy, edit func(map[string]any)) *executionNativeFixture {
+type executionNativeConstructionHook struct {
+	parent   context.Context
+	registry func(*outbound.Registry) error
+	context  func(context.Context) (context.Context, error)
+	options  func(context.Context, option.Options) error
+	bind     func(*Box)
+}
+
+func newExecutionNativeFixtureWithSources(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation, server *mobilemultihop.NodeChainServerPolicy, edit func(map[string]any), hooks ...executionNativeConstructionHook) *executionNativeFixture {
 	t.Helper()
 	f := &executionNativeFixture{prefixes: map[string]*chainNativePrefix{}, prep: prep, server: server}
 	f.current.Store(true)
@@ -215,7 +228,28 @@ func newExecutionNativeFixtureWithSources(t *testing.T, prep *mobilemultihop.Nod
 		}
 		return p, nil
 	})
-	f.ctx = Context(t.Context(), insRegistry, outsRegistry, endsRegistry, dnsRegistry, boxService.NewRegistry(), certificate.NewRegistry())
+	parent := t.Context()
+	if len(hooks) > 1 {
+		t.Fatal("multiple native construction hooks")
+	}
+	if len(hooks) == 1 {
+		if hooks[0].parent != nil {
+			parent = hooks[0].parent
+		}
+		if hooks[0].registry != nil {
+			if err := hooks[0].registry(outsRegistry); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	f.ctx = Context(parent, insRegistry, outsRegistry, endsRegistry, dnsRegistry, boxService.NewRegistry(), certificate.NewRegistry())
+	if len(hooks) == 1 && hooks[0].context != nil {
+		var err error
+		f.ctx, err = hooks[0].context(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	factory := log.NewNOPFactory()
 	logger := factory.Logger()
 	var graph map[string]any
@@ -228,6 +262,11 @@ func newExecutionNativeFixtureWithSources(t *testing.T, prep *mobilemultihop.Nod
 	options, err := SJ.UnmarshalExtendedContext[option.Options](f.ctx, []byte(chainNativeJSON(t, graph)))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(hooks) == 1 && hooks[0].options != nil {
+		if err := hooks[0].options(f.ctx, options); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ends := endpoint.NewManager(logger, endsRegistry)
 	outs := outbound.NewManager(logger, outsRegistry, ends, options.Route.Final)
@@ -252,6 +291,9 @@ func newExecutionNativeFixtureWithSources(t *testing.T, prep *mobilemultihop.Nod
 	router := route.NewRouter(f.ctx, factory, *options.Route, *options.DNS)
 	service.MustRegister[adapter.Router](f.ctx, router)
 	f.box = &Box{ctx: f.ctx, done: make(chan struct{}), logger: logger, inbound: ins, outbound: outs, endpoint: ends, dnsTransport: transports, dnsRouter: dnsRouter, network: network, router: router, connection: connection, routerVPNNodeChainExecutionOptions: routerVPNNodeChainExecutionOptionsDigest(f.ctx, options)}
+	if len(hooks) == 1 && hooks[0].bind != nil {
+		hooks[0].bind(f.box)
+	}
 	for _, row := range options.Inbounds {
 		if err := ins.Create(f.ctx, router, logger, row.Tag, row.Type, row.Options); err != nil {
 			t.Fatal(err)

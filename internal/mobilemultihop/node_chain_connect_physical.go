@@ -138,3 +138,18 @@ func (s *nodeChainCONNECTProofScope) physicalEgress(config string, networks []st
 	}
 	return compiledPhysicalEgressWithCapturedTransports(config, networks, nil, proofTag, false, capture)
 }
+
+// Only a private original-source scope can authorize stream-carried UDP.
+// Local CONNECT and remote CONNECT suffixes retain distinct concrete owners.
+type nodeChainCapturedTransportProof interface {
+	validate(string) error
+	udpOverTCP(string, map[string]any) (bool, error)
+}
+type nodeChainCapturedTransportScope interface {
+	validate([]nodeChainGraphMember, []*externalPredecessor) error
+	captureTransport(string, []NodeChainProof) (nodeChainCapturedTransportProof, error)
+}
+
+func (s *nodeChainCONNECTProofScope) captureTransport(config string, proofs []NodeChainProof) (nodeChainCapturedTransportProof, error) {
+	return s.capturePhysical(config, proofs)
+}

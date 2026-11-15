@@ -8,6 +8,7 @@ on:
     paths:
       - 'mobile/server_chain/**'
       - 'mobile/server_chain_acceptance/**'
+      - 'mobile/chain/**'
       - 'mobile/desktop/**'
       - 'internal/mobilemultihop/**'
       - 'internal/multihoprelay/**'
@@ -20,6 +21,7 @@ on:
     paths:
       - 'mobile/server_chain/**'
       - 'mobile/server_chain_acceptance/**'
+      - 'mobile/chain/**'
       - 'mobile/desktop/**'
       - 'internal/mobilemultihop/**'
       - 'internal/multihoprelay/**'
@@ -39,9 +41,9 @@ concurrency:
 
 jobs:
   encrypted:
-    name: Actual WG/AWG and SS2022 Server on ${{ matrix.arch }}
+    name: Actual WG/AWG, CONNECT and SS2022 Server on ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 105
     strategy:
       fail-fast: false
       matrix:
@@ -75,9 +77,21 @@ jobs:
           CGO_ENABLED: '1'
         run: |
           python3 deploy/test_server_node_chain_encrypted.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_SERVER_RECEIPT"
+      - name: Require CONNECT verdict, source, authentication and cleanup inventory
+        run: python3 deploy/test_server_node_chain_connect_encrypted_runner.py
+      - name: Require actual HTTP and HTTPS CONNECT suffix and selected-path DNS
+        timeout-minutes: 45
+        env:
+          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
+          ROUTERVPN_CONNECT_SERVER_RECEIPT: ${{ runner.temp }}/server-connect-node-chain-${{ matrix.arch }}.json
+          CGO_ENABLED: '1'
+        run: |
+          python3 deploy/test_server_node_chain_connect_encrypted.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_CONNECT_SERVER_RECEIPT"
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Server-encrypted-${{ matrix.arch }}-${{ github.sha }}
-          path: ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json
+          path: |
+            ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json
+            ${{ runner.temp }}/server-connect-node-chain-${{ matrix.arch }}.json
           if-no-files-found: error
           retention-days: 14

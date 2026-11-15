@@ -34,15 +34,24 @@ type nodeChainPlanNode struct {
 // {bundle,profile_id}} or {imported:{config,capture}}. Imported strings are the
 // original captured bytes, never a reconstructed semantically similar source.
 func NewNodeChainServerPlan(input string) (*NodeChainServerPolicy, error) {
+	return newNodeChainServerPlanCaptured(input, false)
+}
+
+// NewNodeChainCONNECTServerPlan retains independently provisioned paired
+// identities and the exact original CONNECT import in a distinct plan family.
+func NewNodeChainCONNECTServerPlan(input string) (*NodeChainServerPolicy, error) {
+	return newNodeChainServerPlanCaptured(input, true)
+}
+func newNodeChainServerPlanCaptured(input string, connect bool) (*NodeChainServerPolicy, error) {
 	bad := nodeChainServerPlanError
 	var plan map[string]any
-	if exactJSON([]byte(input), &plan, NodeChainInputLimit) != nil || !nodeChainPlanKeys(plan, []string{"schema", "entry_node_id", "entry", "members"}, nil) || plan["schema"] != float64(1) {
+	if exactJSON([]byte(input), &plan, NodeChainInputLimit) != nil || !nodeChainPlanKeys(plan, []string{"schema", "entry_node_id", "entry", "members"}, nil) || (!connect && plan["schema"] != float64(1) || connect && plan["schema"] != float64(4)) {
 		return nil, bad
 	}
 	entryNode, ok := plan["entry_node_id"].(string)
 	entryRaw, entryOK := plan["entry"].(map[string]any)
 	rows, rowsOK := plan["members"].([]any)
-	if !ok || !proofID.MatchString(entryNode) || !entryOK || !rowsOK || len(rows) < 1 || len(rows) > multihoprelay.NodeChainMaximumMembers {
+	if !ok || !proofID.MatchString(entryNode) || !entryOK || !rowsOK || len(rows) < 1 || len(rows) > multihoprelay.NodeChainMaximumMembers || connect && len(rows) != 2 {
 		return nil, bad
 	}
 	entry, err := nodeChainPlanCapture(entryRaw)
@@ -81,11 +90,21 @@ func NewNodeChainServerPlan(input string) (*NodeChainServerPolicy, error) {
 			if !configOK || !captureOK {
 				return nil, bad
 			}
-			original, err := NodeChainImportedMemberInput(config, capture)
+
+			var original string
+			var err error
+			if connect {
+				original, err = NodeChainImportedCONNECTMemberInput(config, capture)
+			} else {
+				original, err = NodeChainImportedMemberInput(config, capture)
+			}
 			if err != nil {
 				return nil, bad
 			}
 			local.Schema, source.Schema = 2, 2
+			if connect {
+				local.Schema, source.Schema = 4, 4
+			}
 			local.Nodes, source.Nodes = append(local.Nodes, original), append(source.Nodes, original)
 			local.IdentitySources, source.IdentitySources = append(local.IdentitySources, ""), append(source.IdentitySources, "")
 			continue
@@ -157,7 +176,15 @@ func NewNodeChainServerPlan(input string) (*NodeChainServerPolicy, error) {
 		return nil, bad
 	}
 	defer clear(localJSON)
-	if _, err := NewNodeChain(string(localJSON)); err != nil {
+
+	if connect {
+		if local.Schema != 4 {
+			return nil, bad
+		}
+		if _, err := NewNodeChainCONNECTSource(string(localJSON)); err != nil {
+			return nil, bad
+		}
+	} else if _, err := NewNodeChain(string(localJSON)); err != nil {
 		return nil, bad
 	}
 	raw, err := json.Marshal(source)
@@ -165,7 +192,13 @@ func NewNodeChainServerPlan(input string) (*NodeChainServerPolicy, error) {
 		return nil, bad
 	}
 	defer clear(raw)
-	policy, err := NewNodeChainServerPolicy(string(raw))
+
+	var policy *NodeChainServerPolicy
+	if connect {
+		policy, err = NewNodeChainCONNECTServerPolicy(string(raw))
+	} else {
+		policy, err = NewNodeChainServerPolicy(string(raw))
+	}
 	if err != nil {
 		return nil, bad
 	}

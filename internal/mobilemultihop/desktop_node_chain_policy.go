@@ -249,7 +249,7 @@ func captureDesktopNodeChainGraphWithCONNECT(originalConfig, projectedConfig str
 	if err != nil {
 		return bad()
 	}
-	var connect *nodeChainCONNECTPhysicalProof
+	var connect nodeChainCapturedTransportProof
 	if original != nil {
 		if original.config != originalConfig || !reflect.DeepEqual(original.metadata.Proofs, proofs) {
 			return bad()

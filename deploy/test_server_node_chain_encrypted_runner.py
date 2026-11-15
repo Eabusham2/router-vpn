@@ -294,7 +294,7 @@ func TestActualCopyAndSnapshot(t *testing.T){
         for before,after in (('          - arch: arm64\n            runner: ubuntu-24.04-arm\n',''),
                             ('  workflow_call:\n','  workflow_call:\n    inputs: {}\n'),
                             ('  encrypted:\n','  encrypted:\n    if: false\n'),
-                            ('    timeout-minutes: 60','    continue-on-error: true\n    timeout-minutes: 60'),
+                            ('    timeout-minutes: 105','    continue-on-error: true\n    timeout-minutes: 105'),
                             (' || github.run_id }}',' || github.ref }}'), ('--standalone --require-commit','--compile-only --require-commit')):
             with self.subTest(before=before), self.assertRaises(ValueError): workflow(value.replace(before,after,1))
 

@@ -18,6 +18,8 @@ import (
 	"github.com/sagernet/sing/common/json"
 )
 
+// Shared construction marker keeps older typed families independent of later adapters.
+type routerVPNOrderedTypedConstructionKey struct{}
 type routerVPNNodeSOCKSContextKey struct{}
 type routerVPNNodeSOCKSConstruction struct {
 	source *mobilemultihop.NodeChainSOCKSSource
@@ -35,7 +37,7 @@ type routerVPNNodeSOCKSConstruction struct {
 func RouterVPNNodeSOCKSContext(ctx context.Context, source *mobilemultihop.NodeChainSOCKSSource,
 	capture *ownedSOCKS.Capture) (context.Context, error) {
 	if ctx == nil || ctx.Err() != nil || source == nil || capture == nil ||
-		ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil {
+		ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil || ctx.Value(routerVPNOrderedTypedConstructionKey{}) != nil {
 		return nil, errors.New("ordered SOCKS construction needs its one original context")
 	}
 	if err := capture.RequireOriginalContext(ctx, source); err != nil {
@@ -53,6 +55,7 @@ func RouterVPNNodeSOCKSContext(ctx context.Context, source *mobilemultihop.NodeC
 	if digest == "" || ctx.Err() != nil {
 		return nil, errors.New("ordered SOCKS construction lost its complete original graph")
 	}
+	ctx = context.WithValue(ctx, routerVPNOrderedTypedConstructionKey{}, true)
 	return context.WithValue(ctx, routerVPNNodeSOCKSContextKey{}, &routerVPNNodeSOCKSConstruction{
 		source: source, capture: capture, config: config, metadata: metadata, digest: digest,
 	}), nil

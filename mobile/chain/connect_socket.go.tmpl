@@ -478,7 +478,7 @@ func (s *operation) DialContext(ctx context.Context, network string, address M.S
 	}
 	s.mu.Unlock()
 	remote, err := netip.ParseAddrPort(address.String())
-	if !valid || err != nil || address.IsDomain() || !remote.IsValid() || remote.Port() == 0 || remote.Addr().IsUnspecified() || remote.Addr().IsMulticast() || remote.Addr().Is4In6() || remote.Addr().Zone() != "" || remote.Addr().Is6() && s.owner.capture.metadata.Devices[len(s.owner.capture.metadata.Devices)-2].IPv6Mode == "off" {
+	if !valid || err != nil || address.IsDomain() || !remote.IsValid() || remote.Port() == 0 || remote.Addr().IsUnspecified() || remote.Addr().IsMulticast() || remote.Addr().Is4In6() || remote.Addr().Zone() != "" || remote.Addr().Is6() && s.owner.capture.middleIPv6Off() {
 		return nil, errCapture
 	}
 	s.owner.mu.Lock()

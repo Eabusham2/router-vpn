@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise private ordered pairing with actual schema1/2 policy compilers.
+"""Exercise private ordered pairing with actual schema1/2/4 policy compilers.
 
 All filesystem transactions use the shipping pairer. --generate-fixtures writes
 a private source-bound host artifact; --installed --fixtures requires that exact
@@ -117,9 +117,9 @@ func TestRouterVPNOperatorPairingSources(t *testing.T) {
  add("wg/custom-dns", changed)
  type digestRow struct { Schema int `json:"schema"`; Text string `json:"text"`; Digest string `json:"digest"` }
  vectors := []digestRow{}
- for _, schema := range []int{1, 2} {
+ for _, schema := range []int{1, 2, 4} {
   for _, text := range []string{selected.Source(), "private<&>\\tail", "private\u2028line\u2029tail", "private-雪"} {
-   domain := "routervpn-server-node-chain-source-v1"; if schema == 2 { domain = "routervpn-server-node-chain-source-v2" }
+   domain := "routervpn-server-node-chain-source-v1"; if schema == 2 { domain = "routervpn-server-node-chain-source-v2" }; if schema == 4 { domain = "routervpn-server-node-chain-source-v4" }
    raw, err := json.Marshal([]string{domain, text}); if err != nil { t.Fatal(err) }
    vectors = append(vectors, digestRow{schema, text, externalDigest(raw)})
   }
@@ -144,6 +144,15 @@ func TestRouterVPNOperatorPairingSources(t *testing.T) {
  finalProfile["dns_server_name"], finalProfile["dns_path"] = "captured-query.example", "/original-query"
  finalSelection["dns_bootstrap"] = startJSON(t, map[string]any{"server": map[string]any{"type": "udp", "tag": "external-dns-bootstrap", "server": "9.9.9.9", "server_port": 5553, "detour": "proxy"}, "query": map[string]any{"server": "external-dns-bootstrap", "strategy": "ipv4_only", "disable_cache": true}})
  addPlan("wg/imported-bootstrap", plan)
+ for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+  for _, protocol := range []string{"http-connect", "https-connect"} {
+   original := connectServerPlanFixture(t, mode, protocol)
+   policy, err := NewNodeChainCONNECTServerPlan(startJSON(t, original)); if err != nil { t.Fatal("original typed CONNECT plan", err) }
+   name := "connect/"+mode+"/"+protocol
+   add(name, policy)
+   plans = append(plans, planRow{name, original, policy.Source(), policy.Descriptor()})
+  }
+ }
  encoded, err := json.Marshal(struct{ Rows []row `json:"rows"`; Digests []digestRow `json:"digests"`; Plans []planRow `json:"plans"` }{rows, vectors, plans}); if err != nil { t.Fatal(err) }
  if err = os.WriteFile(path, encoded, 0600); err != nil { t.Fatal(err) }
 }
@@ -169,12 +178,55 @@ func TestRouterVPNOperatorOrderedStagedRegistry(t *testing.T) {
 }
 '''
 
+READER = r'''package main
+import (
+ "encoding/json"
+ "os"
+ "path/filepath"
+ "testing"
+ "time"
+ "router-vpn/internal/mobilemultihop"
+ "router-vpn/internal/multihoprelay"
+)
+func TestRouterVPNOperatorOriginalPrivateReader(t *testing.T) {
+ raw, err := os.ReadFile(os.Getenv("ROUTERVPN_ORDERED_PAIRING_FIXTURES")); if err != nil { t.Fatal(err) }
+ var input struct { Rows []struct { Name string `json:"name"`; SourceJSON string `json:"source_json"`; Reference multihoprelay.NodeChainDescriptor `json:"reference"` } `json:"rows"` }
+ if json.Unmarshal(raw, &input) != nil || len(input.Rows) != 17 { t.Fatal("complete original source fixture inventory") }
+ directory := t.TempDir()
+ runner := &relayNodeChainExecRunner{sources:directory}
+ connect := 0
+ for _, row := range input.Rows {
+  t.Run(row.Name, func(t *testing.T) {
+   path := filepath.Join(directory, row.Reference.SourceSHA256+".json")
+   if atomicWritePrivilegedState(path, []byte(row.SourceJSON)) != nil { t.Fatal("private original source") }
+   policy, err := runner.source(row.Reference, row.Reference.EntryNodeID)
+   if err != nil || policy.Source() != row.SourceJSON { t.Fatal("installed reader did not retain original typed policy", err) }
+   capture, err := relayNodeChainValidationCapture(row.Reference, "10.77.0.1", "10.77.0.2", 26240, time.Now().UTC())
+   if err != nil { t.Fatal("original offline parser capture", err) }
+   if _, err = policy.NativeConfig(capture); err != nil { t.Fatal("original parser configuration", err) }
+   if row.Reference.Schema == 4 {
+    connect++
+    if _, err = mobilemultihop.NewNodeChainServerPolicy(row.SourceJSON); err == nil { t.Fatal("generic compiler admitted CONNECT") }
+    if len(capture.Request.LocalPacketPublicKeys) != 1 || len(capture.Request.LocalPacketPositions) != 1 || capture.Request.LocalPacketPositions[0] != 0 || policy.NativeCarrierRequired() { t.Fatal("CONNECT suffix invented packet authority") }
+    changed := row.Reference.Clone(); changed.Schema = 2
+    if _, err = runner.source(changed, changed.EntryNodeID); err == nil { t.Fatal("CONNECT source fell back to SS") }
+   }
+   if atomicWritePrivilegedState(path, []byte("{}")) != nil { t.Fatal("private replacement source") }
+   if _, err = runner.source(row.Reference, row.Reference.EntryNodeID); err == nil { t.Fatal("reader retained a changed source") }
+  })
+ }
+ if connect != 6 { t.Fatal("missing original CONNECT reader cases") }
+}
+'''
+
+CONNECT_NAMES = tuple('connect/'+mode+'/'+protocol for mode in ('wg', 'awg2-fast', 'awg2-strong')
+                      for protocol in ('http-connect', 'https-connect'))
 FIXTURE_NAMES = ('paired', 'wg/', 'wg/aes-256-gcm', 'wg/aes-256-gcm+xor-whitening',
                  'awg2-fast/', 'awg2-fast/aes-256-gcm', 'awg2-fast/aes-256-gcm+xor-whitening',
                  'awg2-strong/', 'awg2-strong/aes-256-gcm', 'awg2-strong/aes-256-gcm+xor-whitening',
-                 'wg/custom-dns')
+                 'wg/custom-dns', *CONNECT_NAMES)
 PLAN_NAMES = ('wg/paired', 'wg/imported', 'awg2-fast/paired', 'awg2-fast/imported',
-              'awg2-strong/paired', 'awg2-strong/imported', 'wg/imported-bootstrap')
+              'awg2-strong/paired', 'awg2-strong/imported', 'wg/imported-bootstrap', *CONNECT_NAMES)
 SOURCE_DIRECTORIES = ('cmd/router-agent', 'internal', 'server/scripts')
 SOURCE_FILES = ('go.mod', 'go.sum', 'deploy/router-agent.Dockerfile', 'deploy/test_server_node_chain_pairing.py')
 FIXTURE_BYTES_LIMIT = 16 << 20
@@ -221,7 +273,7 @@ def validate_fixture_inventory(value):
         if PAIR.node_chain_source_digest(row['source_json'], source.get('schema')) != reference.get('source_sha256'):
             raise AssertionError('fixture descriptor changed its exact source digest')
     vectors = value['digests']
-    if len(vectors) != 8 or [row.get('schema') for row in vectors if isinstance(row, dict)] != [1]*4+[2]*4:
+    if len(vectors) != 12 or [row.get('schema') for row in vectors if isinstance(row, dict)] != [1]*4+[2]*4+[4]*4:
         raise AssertionError('original Go digest vector inventory changed')
     for row in vectors:
         if set(row) != {'schema', 'text', 'digest'} or not isinstance(row['text'], str) or not isinstance(row['digest'], str) or not re.fullmatch('[0-9a-f]{64}', row['digest']):
@@ -311,6 +363,22 @@ class ServerNodeChainPairing(unittest.TestCase):
             output = root/'fixtures.json'
             generate_fixtures(output)
             generated = read_fixtures(output)
+            reader, overlay = root/'reader_test.go', root/'reader-overlay.json'
+            reader.write_text(READER)
+            overlay.write_text(json.dumps({'Replace': {str(ROOT/'cmd/router-agent/routervpn_operator_original_private_reader_test.go'): str(reader)}}))
+            checked = subprocess.run(['go', 'test', '-json', '-count=1', '-overlay='+str(overlay),
+                                      '-run=^TestRouterVPNOperatorOriginalPrivateReader$', './cmd/router-agent'],
+                                     cwd=ROOT, env=dict(os.environ, ROUTERVPN_ORDERED_PAIRING_FIXTURES=str(output)),
+                                     check=True, timeout=120, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            events = [json.loads(line) for line in checked.stdout.splitlines()]
+            required = {'TestRouterVPNOperatorOriginalPrivateReader',
+                        *('TestRouterVPNOperatorOriginalPrivateReader/'+name for name in FIXTURE_NAMES)}
+            for action in ('run', 'pass'):
+                observed = [event['Test'] for event in events if event.get('Action') == action and 'Test' in event]
+                if len(observed) != len(required) or set(observed) != required:
+                    raise AssertionError('actual private reader did not execute the exact original source inventory')
+            if any(event.get('Action') in ('fail', 'skip') for event in events):
+                raise AssertionError('actual private reader did not complete')
         cls.fixtures = {row['name']: row for row in generated['rows']}
         cls.plans = {row['name']: row for row in generated['plans']}
         cls.digest_vectors = generated['digests']
@@ -473,7 +541,7 @@ class ServerNodeChainPairing(unittest.TestCase):
                     selection['dns_bootstrap_file'] = put(label+'-bootstrap', value['dns_bootstrap'], text=True)
             return selection
 
-        plan = dict(schema=1, entry=select(original['entry'], 'entry'), members=[])
+        plan = dict(schema=original['schema'], entry=select(original['entry'], 'entry'), members=[])
         for position, member in enumerate(original['members']):
             if 'imported' in member:
                 plan['members'].append({'imported': {'capture_file': put(str(position)+'-imported', member['imported'])}})
@@ -634,10 +702,58 @@ class ServerNodeChainPairing(unittest.TestCase):
         self.assert_preserved()
 
     def test_source_digest_matches_actual_go_domains_and_string_encoding(self):
-        self.assertEqual(len(self.digest_vectors), 8)
+        self.assertEqual(len(self.digest_vectors), 12)
         for vector in self.digest_vectors:
             with self.subTest(schema=vector['schema'], text_length=len(vector['text'])):
                 self.assertEqual(PAIR.node_chain_source_digest(vector['text'], vector['schema']), vector['digest'])
+
+    def test_connect_source_family_and_original_authority_cannot_be_substituted(self):
+        for name in CONNECT_NAMES:
+            for fault in ('schema1', 'schema2', 'schema3', 'schema5', 'boolean-schema', 'ss-middle', 'fake-packet', 'changed-final'):
+                with self.subTest(name=name, fault=fault):
+                    source = copy.deepcopy(self.fixtures[name]['source'])
+                    if fault.startswith('schema'):
+                        source['schema'] = int(fault[-1])
+                    elif fault == 'boolean-schema':
+                        source['schema'] = True
+                    elif fault == 'ss-middle':
+                        source['nodes'][0] = self.fixtures['wg/']['source']['nodes'][0]
+                    elif fault == 'fake-packet':
+                        source['identity_sources'][0] = source['identity_sources'][1]
+                    else:
+                        source['nodes'][1] = source['nodes'][0]
+                    self.write(self.input, json.dumps(source).encode())
+                    with self.assertRaises(ValueError):
+                        self.run_pair()
+                    self.assert_preserved()
+        self.assertEqual(self.checks, 0)
+
+    def test_connect_plan_keeps_distinct_server_key_and_original_private_inodes(self):
+        for name in CONNECT_NAMES:
+            with self.subTest(name=name, fault='borrowed-key'):
+                path, plan, paths, row = self.write_plan(name)
+                paired = plan['members'][1]
+                paired['server_peer'] = dict(bundle_file=paired['paired']['bundle_file'], profile_id=paired['paired']['profile_id'])
+                self.write(path, json.dumps(plan).encode())
+                with self.assertRaises(ValueError):
+                    self.run_pair(selection=['--node-chain-plan', str(path)])
+                self.assert_preserved()
+        self.assertEqual(self.checks, 0)
+        name = 'connect/awg2-strong/https-connect'
+        _, _, originals, _ = self.write_plan(name)
+        for target in originals:
+            with self.subTest(input=target.name, fault='replaced-inode'):
+                path, _, _, row = self.write_plan(name)
+                def replace():
+                    inode = target.stat().st_ino
+                    self.write(target, target.read_bytes())
+                    self.assertNotEqual(target.stat().st_ino, inode)
+                self.on_check = replace
+                with self.assertRaisesRegex(ValueError, 'changed during native validation'):
+                    self.run_pair(selection=['--node-chain-plan', str(path)])
+                self.assert_preserved()
+                self.assertFalse((self.sources/(row['reference']['source_sha256']+'.json')).exists())
+        self.assertEqual(self.checks, len(originals))
 
     def test_ordered_only_registry_retains_empty_tor_position_and_absent_legacy_lists(self):
         for empty in ({}, {'exits': None, 'tor_exits': None, 'node_chains': None}):
@@ -950,6 +1066,8 @@ TEST_NAMES = (
     'test_bundle_plan_refuses_borrowed_server_keys_and_wrong_original_identity',
     'test_bundle_plan_requires_exact_private_files_and_original_imported_strings',
     'test_compiler_rejects_changed_entry_or_original_private_authority',
+    'test_connect_plan_keeps_distinct_server_key_and_original_private_inodes',
+    'test_connect_source_family_and_original_authority_cannot_be_substituted',
     'test_dry_run_contains_all_original_sources_without_live_writes',
     'test_duplicate_or_conflicting_digest_does_not_replace_saved_descriptor',
     'test_equal_byte_replacement_or_checker_refusal_cannot_publish',
@@ -979,10 +1097,10 @@ if __name__ == '__main__':
         if tuple(unittest.defaultTestLoader.getTestCaseNames(ServerNodeChainPairing)) != TEST_NAMES:
             raise SystemExit('original ordered pairing test inventory changed')
         result = unittest.main(exit=False).result
-        if not result.wasSuccessful() or result.testsRun != 27 or result.skipped:
-            raise SystemExit('ordered pairing acceptance requires all 20 original and seven bundle-plan tests with no skips')
+        if not result.wasSuccessful() or result.testsRun != 29 or result.skipped:
+            raise SystemExit('ordered pairing acceptance requires all 27 original and two CONNECT tests with no skips')
         print(json.dumps({'kind': 'routervpn-private-ordered-pairing-verdict', 'tests': result.testsRun,
-                          'source_fixtures': len(FIXTURE_NAMES), 'digest_vectors': 8, 'bundle_plans': len(PLAN_NAMES),
+                          'source_fixtures': len(FIXTURE_NAMES), 'digest_vectors': 12, 'bundle_plans': len(PLAN_NAMES),
                           'native_checks': ServerNodeChainPairing.native_checks,
                           'scope': 'installed-pairer-and-native-checker' if INSTALLED else ('actual-local-native-checker' if ServerNodeChainPairing.native_checker else 'actual-compiler-and-filesystem'),
                           'source_sha': os.environ.get('ROUTERVPN_ORDERED_PAIRING_SOURCE_SHA') if INSTALLED else None}, sort_keys=True))

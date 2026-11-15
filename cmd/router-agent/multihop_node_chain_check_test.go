@@ -15,12 +15,15 @@ import (
 func pairingOrderedDescriptor(t *testing.T, schema int) multihoprelay.NodeChainDescriptor {
 	t.Helper()
 	source := chainPipeCapture(t).Source.Clone()
-	if schema == 2 {
-		source.Schema = 2
+	if schema == 2 || schema == 4 {
+		source.Schema = schema
 		final := source.Members[0]
 		final.Position = 2
 		source.Members = []multihoprelay.NodeChainMember{{Position: 1, ProfileID: "original-imported-ss", Mode: "shadowsocks", StartLayer: "off",
 			NodeKind: "external", ProofKind: "public-path", SourceSHA256: strings.Repeat("a", 64), ExpectedPublicIP: "203.0.113.88"}, final}
+		if schema == 4 {
+			source.Members[0].ProfileID, source.Members[0].Mode = "original-imported-connect", "https-connect"
+		}
 	} else {
 		client, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{71}, 32))
 		if err != nil {
@@ -42,7 +45,7 @@ func pairingOrderedDescriptor(t *testing.T, schema int) multihoprelay.NodeChainD
 }
 
 func TestOrderedRegistryParserCaptureKeepsActualPacketPositions(t *testing.T) {
-	for _, schema := range []int{1, 2} {
+	for _, schema := range []int{1, 2, 4} {
 		source := pairingOrderedDescriptor(t, schema)
 		now := time.Unix(1794657600, 0).UTC()
 		first, err := relayNodeChainValidationCapture(source, "10.77.0.1", "10.77.0.2", 26240, now)
@@ -54,10 +57,10 @@ func TestOrderedRegistryParserCaptureKeepsActualPacketPositions(t *testing.T) {
 			t.Fatal("offline capture changed positional or envelope authority")
 		}
 		want := len(source.Members)
-		if schema == 2 {
+		if schema == 2 || schema == 4 {
 			want = 1
 			if !reflect.DeepEqual(first.Request.LocalPacketPositions, []int{0}) || first.Source.Members[0].NodeID != "" || first.Source.Members[0].ClientPublicKey != "" {
-				t.Fatal("imported SS acquired a fabricated packet or Router identity")
+				t.Fatal("imported proxy acquired a fabricated packet or Router identity")
 			}
 		} else if len(first.Request.LocalPacketPositions) != 0 {
 			t.Fatal("paired schema1 changed its original positional contract")

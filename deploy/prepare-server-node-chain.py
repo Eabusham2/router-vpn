@@ -7,6 +7,7 @@ This preparer owns only its named worker/Box files; it never starts a listener.
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 import json
 import subprocess
 
@@ -14,13 +15,17 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-server-node-chain-source.json'
 PREFIXES = ('cmd/sing-box/routervpn_server_chain_', 'routervpn_server_chain_')
+_connect_spec=importlib.util.spec_from_file_location("server_owned_connect",ROOT/"deploy/prepare-mobile-connect.py")
+CONNECT=importlib.util.module_from_spec(_connect_spec)
+_connect_spec.loader.exec_module(CONNECT)
+
 
 
 def inputs():
     return sorted([Path(__file__).resolve(), ROOT/'deploy/test_server_node_chain_preparation.py',
                    ROOT/'deploy/test_server_node_chain_native.py', ROOT/'deploy/test_server_node_chain_native_runner.py',
-                   *sorted((ROOT/'mobile/server_chain').glob('*.tmpl')),
-                   *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_server*.go')),
+                   *sorted((ROOT/'mobile/server_chain').glob('*.tmpl')), *CONNECT.server_inputs(),
+                   *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_server*.go')), *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_connect_server*.go')),
                    *sorted((ROOT/'internal/multihoprelay').glob('node_chain_*.go'))])
 
 
@@ -55,12 +60,13 @@ def copies():
                 'cmd/sing-box/routervpn_server_chain_resources_test.go'}
     if not required.issubset(content):
         raise ValueError('Incomplete ordered Server native owner')
+    content.update(CONNECT.server_copies())
     return content
 
 
 def destination(vendor, name):
     relative = Path(name)
-    if relative.is_absolute() or '..' in relative.parts or not name.startswith(PREFIXES):
+    if relative.is_absolute() or '..' in relative.parts or not (name.startswith(PREFIXES) or name in CONNECT.SERVER_TEMPLATES.values()):
         raise ValueError('Foreign ordered Server ownership path')
     path = vendor/relative
     current = vendor

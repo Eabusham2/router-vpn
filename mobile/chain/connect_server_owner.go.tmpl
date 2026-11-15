@@ -1,0 +1,167 @@
+package routervpnnodeconnect
+
+import (
+	"context"
+	"encoding/json"
+	"net"
+	"net/netip"
+	"os"
+	"reflect"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// The remote worker owns this literal TCP establishment. It is not a packet
+// endpoint and never borrows the client's entry identity or a registry detour.
+type serverCapture struct {
+	self    *serverCapture
+	policy  *mobilemultihop.NodeChainServerPolicy
+	capture multihoprelay.NodeChainCapture
+	proofs  []mobilemultihop.NodeChainProof
+	device  mobilemultihop.NodeChainCONNECTDevicePolicy
+	lower   atomic.Pointer[serverLiteralDialer]
+}
+type serverLiteralDialer struct {
+	owner    *Capture
+	original N.Dialer
+	remote   M.Socksaddr
+}
+
+func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServerPolicy, original multihoprelay.NodeChainCapture) (*Capture, error) {
+	if ctx == nil || ctx.Err() != nil || policy == nil || original.Validate() != nil || original.Source.Schema != 4 || policy.NativeCarrierRequired() {
+		return nil, errCapture
+	}
+	config, err := policy.NativeConfig(original)
+	if err != nil {
+		return nil, err
+	}
+	proofs := policy.ProofInventory()
+	if len(proofs) != 2 || proofs[0].Position != 1 || proofs[1].Position != 2 || proofs[0].NodeID != "" || proofs[0].NodeKind != "external" || proofs[0].Kind != "public-path" || (proofs[0].Mode != "http-connect" && proofs[0].Mode != "https-connect") || proofs[1].Mode != "shadowsocks" {
+		return nil, errCapture
+	}
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+		Endpoints []json.RawMessage `json:"endpoints"`
+		Inbounds  []json.RawMessage `json:"inbounds"`
+	}
+	if json.Unmarshal([]byte(config), &graph) != nil || len(graph.Endpoints) != 0 || len(graph.Inbounds) != 0 || len(graph.Outbounds) != 2 {
+		return nil, errCapture
+	}
+	c := &Capture{ctx: ctx, config: config, tag: proofs[0].Tag, shadowsocks: make(map[string]option.ShadowsocksOutboundOptions), ssClaimed: make(map[string]bool)}
+	for _, raw := range graph.Outbounds {
+		var identity struct {
+			Type string `json:"type"`
+			Tag  string `json:"tag"`
+		}
+		if json.Unmarshal(raw, &identity) != nil {
+			return nil, errCapture
+		}
+		switch identity.Tag {
+		case proofs[0].Tag:
+			if identity.Type != "http" || json.Unmarshal(raw, &c.options) != nil {
+				return nil, errCapture
+			}
+		case proofs[1].Tag:
+			var final option.ShadowsocksOutboundOptions
+			if identity.Type != "shadowsocks" || json.Unmarshal(raw, &final) != nil || final.Detour != c.tag || final.UDPOverTCP == nil || !final.UDPOverTCP.Enabled || final.UDPOverTCP.Version != 2 {
+				return nil, errCapture
+			}
+			c.shadowsocks[identity.Tag] = final
+		default:
+			return nil, errCapture
+		}
+	}
+	address, err := netip.ParseAddr(c.options.Server)
+	if err != nil || address.String() != c.options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || c.options.ServerPort == 0 || !reflect.DeepEqual(c.options.DialerOptions, option.DialerOptions{}) || (proofs[0].Mode == "https-connect") != (c.options.TLS != nil && c.options.TLS.Enabled) || (c.options.Username == "") != (c.options.Password == "") || len(c.options.Username) > 255 || len(c.options.Password) > 255 || len(c.shadowsocks) != 1 {
+		return nil, errCapture
+	}
+	c.server = &serverCapture{policy: policy, capture: original.Clone(), proofs: append([]mobilemultihop.NodeChainProof(nil), proofs...)}
+	c.server.device, err = policy.CONNECTServerDevice(original)
+	if err != nil {
+		return nil, err
+	}
+	c.server.self = c.server
+	c.self = c
+	if c.validate() != nil {
+		return nil, errCapture
+	}
+	return c, nil
+}
+
+func (c *Capture) validateServer() error {
+	s := c.server
+	if s == nil || s.self != s || c.source != nil || s.policy == nil || c.lowerTag != "" || c.lowerType != "" || len(s.proofs) != 2 {
+		return errCapture
+	}
+	device, deviceErr := s.policy.CONNECTServerDevice(s.capture)
+	if deviceErr != nil || device != s.device {
+		return errCapture
+	}
+	config, err := s.policy.NativeConfig(s.capture)
+	if err != nil || config != c.config || !reflect.DeepEqual(s.policy.ProofInventory(), s.proofs) {
+		return errCapture
+	}
+	return nil
+}
+func (c *Capture) finalTag() string {
+	if c.server != nil {
+		if len(c.server.proofs) != 2 {
+			return ""
+		}
+		return c.server.proofs[1].Tag
+	}
+	if len(c.metadata.Proofs) == 0 {
+		return ""
+	}
+	return c.metadata.Proofs[len(c.metadata.Proofs)-1].Tag
+}
+func (c *Capture) ObserveServerContext(ctx context.Context, policy *mobilemultihop.NodeChainServerPolicy, original multihoprelay.NodeChainCapture) error {
+	if c == nil || ctx == nil || ctx.Err() != nil || c.validate() != nil || c.server == nil || policy != c.server.policy || !reflect.DeepEqual(original, c.server.capture) {
+		return errCapture
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+		return err
+	}
+	middle := c.middle
+	c.mu.Unlock()
+	if middle == nil {
+		return errCapture
+	}
+	return middle.current(ctx)
+}
+func (d *serverLiteralDialer) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	if d == nil || ctx == nil || ctx.Err() != nil || d.owner == nil || d.owner.validate() != nil || d.owner.server == nil || d.owner.server.lower.Load() != d || d.original == nil || network != "tcp" || address != d.remote {
+		return nil, errCapture
+	}
+	return d.original.DialContext(ctx, network, address)
+}
+func (d *serverLiteralDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, os.ErrInvalid
+}
+
+func (c *Capture) middleIPv6Off() bool {
+	if c.server != nil {
+		return c.server.device.IPv6Mode == "off"
+	}
+	return len(c.metadata.Devices) < 3 || c.metadata.Devices[len(c.metadata.Devices)-2].IPv6Mode == "off"
+}
+
+// Called only from the original native outbound constructor, after Box has
+// installed its managers. A dormant scope cannot create a physical dialer.
+func (c *Capture) constructServerLower(ctx context.Context) (*serverLiteralDialer, error) {
+	if c.server == nil || c.server.lower.Load() != nil || ctx == nil || ctx.Value(captureKey{}) != c {
+		return nil, errCapture
+	}
+	original, err := dialer.New(ctx, option.DialerOptions{}, false)
+	if err != nil {
+		return nil, err
+	}
+	return &serverLiteralDialer{owner: c, original: original, remote: c.options.ServerOptions.Build()}, nil
+}

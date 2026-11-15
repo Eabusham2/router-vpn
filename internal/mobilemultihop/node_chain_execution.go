@@ -49,6 +49,7 @@ type NodeChainExecutionPolicy struct {
 	sourceJSON, sourceSHA, config, configSHA, seal string
 	source                                         NodeChainExecutionSource
 	local                                          *NodeChain
+	connect                                        *nodeChainCONNECTExecutionBinding
 	front                                          NodeChainExecutionFront
 	localProofs, serverProofs                      []NodeChainProof
 	dns                                            NodeChainDNSCapture
@@ -58,14 +59,33 @@ type NodeChainExecutionPolicy struct {
 var nodeChainExecutionError = errors.New("ordered execution lost its original path, discovery or listener proposal")
 
 func NewNodeChainExecutionPolicy(sourceJSON string) (*NodeChainExecutionPolicy, error) {
+	return newNodeChainExecutionPolicyCaptured(sourceJSON, nil)
+}
+
+func newNodeChainExecutionPolicyCaptured(sourceJSON string, connect *nodeChainCONNECTExecutionBinding) (*NodeChainExecutionPolicy, error) {
+	schema := 1
+	if connect != nil {
+		schema = 4
+	}
 	var source NodeChainExecutionSource
-	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || source.Schema != 1 ||
+	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || source.Schema != schema ||
 		source.Execution != "server" && source.Execution != "auto" || source.Request.Validate(source.Server) != nil ||
 		source.FirstPort < 1024 || source.LastPort > 65535 || source.LastPort < source.FirstPort || source.LastPort-source.FirstPort > 63 ||
 		source.Request.Port < source.FirstPort || source.Request.Port > source.LastPort {
 		return nil, nodeChainExecutionError
 	}
-	local, err := NewNodeChain(source.LocalSource)
+	var local *NodeChain
+	var err error
+	if connect == nil {
+		local, err = NewNodeChain(source.LocalSource)
+	} else {
+		if connect.preparation == nil || connect.preparation.validateCapture() != nil ||
+			connect.validate(connect.preparation, connect.local) != nil || source.LocalSource != connect.preparation.LocalSource() ||
+			source.Execution != connect.preparation.Execution() || source.Server.Schema != 4 {
+			return nil, nodeChainExecutionError
+		}
+		local = connect.local
+	}
 	if err != nil || local.validateCapture() != nil || local.openVPNMiddle != nil || local.importedMiddle != nil && len(local.nodes) != 3 || len(local.nodes) != len(source.Server.Members)+1 ||
 		local.importedMiddle != nil && local.importedMiddle.hostname != nil {
 		return nil, nodeChainExecutionError
@@ -91,13 +111,21 @@ func NewNodeChainExecutionPolicy(sourceJSON string) (*NodeChainExecutionPolicy, 
 	packetIndex := 0
 	for index, node := range local.nodes {
 		if node == nil {
-			if index != 1 || local.importedMiddle == nil || source.Server.Schema != 2 {
+			if index != 1 || len(local.nodes) != 3 {
 				return nil, nodeChainExecutionError
 			}
-			member, proof, middle := source.Server.Members[index-1], local.proofs[index], local.importedMiddle
+			var middleSource, publicIP string
+			if source.Server.Schema == 2 && local.importedMiddle != nil && connect == nil {
+				middleSource, publicIP = local.importedMiddle.source, local.importedMiddle.selection.ExpectedPublicIP
+			} else if source.Server.Schema == 4 && connect != nil && local.connectSource == connect.source {
+				middleSource, publicIP = connect.source.middle.source, connect.source.middle.selection.ExpectedPublicIP
+			} else {
+				return nil, nodeChainExecutionError
+			}
+			member, proof := source.Server.Members[index-1], local.proofs[index]
 			if member.Position != index || member.ProfileID != proof.ProfileID || member.NodeID != "" || member.Mode != proof.Mode ||
 				member.StartLayer != proof.StartLayer || member.NodeKind != proof.NodeKind || member.ProofKind != proof.Kind ||
-				member.SourceSHA256 != middle.source || member.SourceSHA256 != proof.SourceSHA256 || member.ExpectedPublicIP != middle.selection.ExpectedPublicIP {
+				member.SourceSHA256 != middleSource || member.SourceSHA256 != proof.SourceSHA256 || member.ExpectedPublicIP != publicIP {
 				return nil, nodeChainExecutionError
 			}
 			continue
@@ -105,7 +133,7 @@ func NewNodeChainExecutionPolicy(sourceJSON string) (*NodeChainExecutionPolicy, 
 		if index < len(local.nodes)-1 {
 			key, err := node.PacketClientPublicKey()
 			if err != nil || packetIndex >= len(source.Request.LocalPacketPublicKeys) || key != source.Request.LocalPacketPublicKeys[packetIndex] ||
-				source.Request.Schema == 2 && source.Request.LocalPacketPositions[packetIndex] != index {
+				source.Request.Schema != 1 && source.Request.LocalPacketPositions[packetIndex] != index {
 				return nil, nodeChainExecutionError
 			}
 			packetIndex++
@@ -166,8 +194,12 @@ func NewNodeChainExecutionPolicy(sourceJSON string) (*NodeChainExecutionPolicy, 
 	if err != nil || len(raw) > NodeChainInputLimit {
 		return nil, nodeChainExecutionError
 	}
-	p := &NodeChainExecutionPolicy{source: source, sourceJSON: string(raw), local: local}
-	digest, _ := json.Marshal([]string{"routervpn-node-chain-execution-source-v1", p.sourceJSON})
+	p := &NodeChainExecutionPolicy{source: source, sourceJSON: string(raw), local: local, connect: connect}
+	domain := "routervpn-node-chain-execution-source-v1"
+	if connect != nil {
+		domain = "routervpn-node-chain-connect-execution-source-v1"
+	}
+	digest, _ := json.Marshal([]string{domain, p.sourceJSON})
 	p.sourceSHA = externalDigest(digest)
 	clear(digest)
 	p.front = NodeChainExecutionFront{Host: host.String(), Peer: source.Request.Peer, Port: source.Request.Port,
@@ -266,7 +298,13 @@ func (p *NodeChainExecutionPolicy) compile() error {
 			}
 		}
 		encoded, _ := json.Marshal(branch)
-		physical, err := compiledPhysicalEgressWithDesktopProof(string(encoded), []string{"tcp", "udp"}, nil, entryTag)
+		var physical []PhysicalEgress
+		var err error
+		if p.connect == nil {
+			physical, err = compiledPhysicalEgressWithDesktopProof(string(encoded), []string{"tcp", "udp"}, nil, entryTag)
+		} else {
+			physical, err = p.connect.physicalEgress(string(encoded), entryTag)
+		}
 		if err != nil || !nodeChainSamePhysical(physical, expected) {
 			return nodeChainExecutionError
 		}
@@ -292,6 +330,13 @@ func (p *NodeChainExecutionPolicy) captureSeal() string {
 func (p *NodeChainExecutionPolicy) validateCapture() error {
 	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || p.local.validateCapture() != nil || p.local.openVPNMiddle != nil || p.local.importedMiddle != nil && len(p.local.nodes) != 3 ||
 		p.source.Request.Validate(p.source.Server) != nil || !reflect.DeepEqual(p.localProofs, p.local.ProofInventory()) {
+		return nodeChainExecutionError
+	}
+	if p.connect == nil {
+		if p.source.Schema != 1 || p.local.connectSource != nil || p.local.socksSource != nil {
+			return nodeChainExecutionError
+		}
+	} else if p.source.Schema != 4 || p.source.Server.Schema != 4 || p.connect.preparation.validateCapture() != nil || p.connect.validate(p.connect.preparation, p.local) != nil {
 		return nodeChainExecutionError
 	}
 	return nil
@@ -358,7 +403,7 @@ type nodeChainExecutionLaunch struct {
 }
 
 func (p *NodeChainExecutionPolicy) LaunchInput() (string, error) {
-	if p.validateCapture() != nil {
+	if p.validateCapture() != nil || p.connect != nil {
 		return "", nodeChainExecutionError
 	}
 	raw, err := json.Marshal(nodeChainExecutionLaunch{"native-node-chain-execution", p.source, p.sourceSHA, p.configSHA})

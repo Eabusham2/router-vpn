@@ -1,0 +1,110 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-tun"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"strings"
+	"testing"
+)
+
+func TestRouterVPNDesktopNodeChainCONNECTServerReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_CHAIN_CONNECT_SERVER_REFERENCE_CHILD") == "" {
+		t.Skip("isolated inherited custom reference only")
+	}
+	if os.Getenv("ROUTERVPN_NODE_CHAIN_CONNECT_SERVER_REFERENCE_CHILD") != "1" {
+		t.Fatal("uncaptured custom reference")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, 32<<10+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 32<<10 {
+		t.Fatal("bounded custom reference request required")
+	}
+	var request struct {
+		Schema   int                         `json:"schema"`
+		Paired   desktopNodeChainPeerRequest `json:"paired"`
+		Protocol string                      `json:"protocol"`
+		Username string                      `json:"username"`
+		Password string                      `json:"password"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || request.Schema != 1 || request.Protocol != "http-connect" && request.Protocol != "https-connect" || request.Username == "" || request.Password == "" {
+		t.Fatal("custom reference source changed")
+	}
+	// The existing peer topology helper carries an unused SS fixture marker;
+	// its imported provider is replaced below by the actual authenticated CONNECT
+	// endpoint. No SS marker enters the compiled client or worker source.
+	topology := desktopNodeChainImportedRequest{1, request.Paired, mobilemultihop.NativeStartLayerMethod, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, 32))}
+	if desktopNodeChainImportedRequestValid(topology) != nil {
+		t.Fatal("original paired topology invalid")
+	}
+	local, remote := netip.MustParseAddr(request.Paired.Address), netip.MustParseAddr(request.Paired.ClientAddress)
+	interfaces, err := net.Interfaces()
+	found := false
+	for _, iface := range interfaces {
+		addresses, e := iface.Addrs()
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, value := range addresses {
+			prefix, e := netip.ParsePrefix(value.String())
+			found = found || e == nil && prefix.Addr() == local && iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0
+		}
+	}
+	if err != nil || !found {
+		t.Fatal("custom reference requires original physical namespace")
+	}
+	// Bind the original captured CONNECT endpoint on the owned namespace
+	// address. Never rewrite a compiled physical tuple or substitute a dialer.
+	certificate, proxyCA := desktopNodeChainImportedCertificate(t)
+	var provider *desktopImportedCONNECTPeer
+	peer := desktopNodeChainImportedPeerStartWithHooks(t, topology, local, remote, nil, &desktopNodeChainImportedPeerHooks{
+		decorate: func(original *desktopNodeWGHandler) tun.Handler { return original },
+		middle: func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			owner.streamRouter = &nodeCONNECTRunMiddleRouter{server: owner}
+			var secured *tls.Certificate
+			if request.Protocol == "https-connect" {
+				secured = &certificate
+			} else {
+				proxyCA = ""
+			}
+			provider = desktopStartImportedCONNECTPeerAt(t, owner, request.Username, request.Password, secured, func() { t.Error("unowned cancellation") }, "", local)
+			return desktopExternalInstalledSSPeer{address: provider.address, close: provider.close}
+		},
+	})
+	respond := func() {
+		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": peer.snapshot(), "middle_address": peer.provider.address, "protocol": request.Protocol, "proxy_ca": proxyCA, "middle_auth": provider.auth.Load(), "tls_refused": provider.tlsRefused.Load()}) != nil {
+			t.Fatal("custom reply pipe failed")
+		}
+	}
+	respond()
+	for {
+		line, err = reader.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > 64 {
+			t.Fatal("custom control pipe failed")
+		}
+		command := strings.TrimSuffix(string(line), "\n")
+		if command == "quit" {
+			return
+		}
+		if peer.control(command) != nil {
+			t.Fatal("uncaptured custom control")
+		}
+		respond()
+	}
+}

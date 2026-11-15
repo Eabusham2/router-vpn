@@ -102,7 +102,12 @@ func (r *relayNodeChainExecRunner) source(source multihoprelay.NodeChainDescript
 		return nil, bad
 	}
 	defer clear(raw)
-	policy, err := mobilemultihop.NewNodeChainServerPolicy(string(raw))
+	var policy *mobilemultihop.NodeChainServerPolicy
+	if source.Schema == 4 {
+		policy, err = mobilemultihop.NewNodeChainCONNECTServerPolicy(string(raw))
+	} else {
+		policy, err = mobilemultihop.NewNodeChainServerPolicy(string(raw))
+	}
 	if err != nil {
 		return nil, bad
 	}

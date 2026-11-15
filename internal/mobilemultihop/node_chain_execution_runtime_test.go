@@ -434,13 +434,32 @@ func newNodeChainExecutionRuntimeFixture(t *testing.T, execution string) *nodeCh
 
 func newNodeChainExecutionRuntimeFixtureFromSource(t *testing.T, source NodeChainExecutionSource) *nodeChainExecutionRuntimeFixture {
 	t.Helper()
-	policy, err := NewNodeChainExecutionPolicy(startJSON(t, source))
-	if err != nil {
-		t.Fatal(err)
-	}
-	prep, err := NewNodeChainExecutionPreparation(source.LocalSource, source.Execution)
-	if err != nil {
-		t.Fatal(err)
+
+	var policy *NodeChainExecutionPolicy
+	var prep *NodeChainExecutionPreparation
+	var err error
+	if source.Schema == 4 {
+		original, parseErr := NewNodeChainCONNECTSource(source.LocalSource)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		prep, err = NewNodeChainCONNECTExecutionPreparation(original, source.Execution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy, err = NewNodeChainCONNECTExecutionPolicy(prep, startJSON(t, source))
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		policy, err = NewNodeChainExecutionPolicy(startJSON(t, source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		prep, err = NewNodeChainExecutionPreparation(source.LocalSource, source.Execution)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	projection, err := prep.BindExecution(policy)
 	if err != nil {
@@ -456,7 +475,7 @@ func newNodeChainExecutionRuntimeFixtureFromSource(t *testing.T, source NodeChai
 		t.Fatal(err)
 	}
 	for position, node := range policy.local.nodes {
-		if node == nil && position == 1 && policy.local.importedMiddle != nil {
+		if node == nil && position == 1 && policy.importedPublicMiddle() {
 			continue
 		}
 		api, _ := privateAPI(predecessorText(node.profile, "router_api"))
@@ -522,7 +541,7 @@ func newNodeChainExecutionRuntimeFixtureFromSource(t *testing.T, source NodeChai
 		_, _ = w.Write([]byte(body))
 	}))
 	e.publicPeer = public.Listener.Addr().String()
-	if policy.local.importedMiddle != nil {
+	if policy.importedPublicMiddle() {
 		e.peers[local[1].Tag+"/1.1.1.1:443"] = e.publicPeer
 		e.peers[serverProofs[1].Tag+"/1.1.1.1:443"] = e.publicPeer
 	}
@@ -944,7 +963,10 @@ func cloneNodeChainExecutionRuntimeEngine(e *nodeChainExecutionRuntimeEngine) *n
 }
 
 func TestNodeChainExecutionRuntimeRestoreKeepsWinnerAndFreshAttempt(t *testing.T) {
-	f := newNodeChainExecutionRuntimeFixture(t, "auto")
+	testNodeChainExecutionRestoreKeepsWinner(t, newNodeChainExecutionRuntimeFixture(t, "auto"))
+}
+func testNodeChainExecutionRestoreKeepsWinner(t *testing.T, f *nodeChainExecutionRuntimeFixture) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := f.runtime.Run(ctx); err != nil {
@@ -1012,7 +1034,15 @@ func TestNodeChainExecutionRuntimeRestoreKeepsWinnerAndFreshAttempt(t *testing.T
 			session = q.session
 		}
 	}
-	if puts != 1 {
+	expectedPuts := 0
+	switch capture.execution {
+	case "server":
+		expectedPuts = 1
+	case "local":
+	default:
+		t.Fatal("restoration lost selected execution", capture.execution)
+	}
+	if puts != expectedPuts {
 		t.Fatal("restoration created extra trials", after)
 	}
 	for _, q := range all {
@@ -1171,4 +1201,13 @@ func TestNodeChainExecutionRuntimeRetainsStopReturnedWithFactoryError(t *testing
 	if requests != 0 || stops != 0 || opens != 0 {
 		t.Fatal("unused late cleanup capability was lost or PUT ran before sealing", requests, stops, opens)
 	}
+}
+
+// This fixture observes source/pointer ownership only. Routing, encryption and
+// native registry readback remain explicit modeled boundaries in this file.
+func (e *nodeChainExecutionRuntimeEngine) ObserveCONNECTExecutionContext(ctx context.Context, original *NodeChainCONNECTSource) error {
+	if ctx == nil || ctx.Err() != nil || e.projection == nil || e.projection.preparation.connect == nil || original != e.projection.preparation.connect.source {
+		return nodeChainExecutionError
+	}
+	return original.validate()
 }

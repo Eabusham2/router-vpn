@@ -25,6 +25,20 @@ class ServerNodeChainPreparation(unittest.TestCase):
   for source in (ROOT/'mobile/server_chain').glob('*.tmpl'):
    self.assertIn(source,inputs)
    name=source.name.removesuffix('.tmpl');prefix='routervpn_server_chain_' if name.startswith('box') else 'cmd/sing-box/routervpn_server_chain_';expected[prefix+name]=source.read_bytes()
+  protocol = {
+   'connect_owner.go.tmpl':'protocol/routervpnnodeconnect/connect_owner.go',
+   'connect_server_owner.go.tmpl':'protocol/routervpnnodeconnect/connect_server_owner.go',
+   'connect_scope.go.tmpl':'protocol/routervpnnodeconnect/connect_scope.go',
+   'connect_socket.go.tmpl':'protocol/routervpnnodeconnect/connect_socket.go',
+   'connect_final_owner.go.tmpl':'protocol/routervpnnodeconnect/connect_final.go',
+   'connect_final.go.tmpl':'protocol/shadowsocks/routervpn_connect_final.go',
+  }
+  self.assertEqual(PREP.CONNECT.SERVER_TEMPLATES,protocol)
+  for name,target in protocol.items():
+   source=ROOT/'mobile/chain'/name
+   self.assertIn(source,inputs)
+   expected[target]=source.read_bytes()
+  self.assertIn(ROOT/'internal/mobilemultihop/node_chain_connect_server.go',inputs)
   self.assertEqual(content,expected)
   for package in ('mobilemultihop','multihoprelay'):
    for source in (ROOT/'internal'/package).glob('node_chain_server*.go' if package=='mobilemultihop' else 'node_chain_*.go'):
@@ -57,6 +71,15 @@ class ServerNodeChainPreparation(unittest.TestCase):
     root=self.checkout(d);outside=Path(d)/'outside';outside.write_text('foreign source\n');name=PREP.OWNER if owner else next(iter(PREP.copies()));p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.symlink_to(outside)
     with self.assertRaisesRegex(ValueError,'Linked ordered Server'):self.prepare(root)
     self.assertEqual(outside.read_text(),'foreign source\n')
+ def test_remote_protocol_cannot_grant_client_box_or_unowned_protocol_path(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=self.checkout(d);self.prepare(root)
+   for name in ('routervpn_node_chain_connect.go','experimental/libbox/routervpn_node_chain_connect.go','protocol/routervpnnodeconnect/foreign.go'):
+    with self.subTest(name=name),self.assertRaisesRegex(ValueError,'Foreign ordered Server ownership path'):
+     PREP.destination(root,name)
+   name='protocol/routervpnnodeconnect/connect_server_owner.go'
+   path=root/name;path.write_bytes(path.read_bytes()+b'\n// changed owner\n')
+   with self.assertRaisesRegex(ValueError,'Changed ordered Server generated source'):self.prepare(root)
  def test_wrong_core_refuses_before_any_write(self):
   with tempfile.TemporaryDirectory() as d:
    root=self.checkout(d)

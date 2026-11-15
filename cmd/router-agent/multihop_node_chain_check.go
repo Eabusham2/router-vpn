@@ -155,7 +155,7 @@ func relayNodeChainValidationCapture(source multihoprelay.NodeChainDescriptor, h
 		keys[member.ClientPublicKey], keys[member.ServerPublicKey] = true, true
 	}
 	count := len(source.Members)
-	if source.Schema == 2 {
+	if source.Schema == 2 || source.Schema == 4 {
 		count = 1
 		request.LocalPacketPositions = []int{0}
 	}

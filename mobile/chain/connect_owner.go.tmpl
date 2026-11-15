@@ -48,6 +48,7 @@ type Capture struct {
 	mu                       sync.Mutex
 	ctx                      context.Context
 	source                   *mobilemultihop.NodeChainCONNECTSource
+	server                   *serverCapture
 	config                   string
 	metadata                 mobilemultihop.NodeChainCONNECTSourceMetadata
 	tag, lowerTag, lowerType string
@@ -149,7 +150,13 @@ func (c *Capture) Register(registry *outbound.Registry) error {
 }
 
 func (c *Capture) validate() error {
-	if c == nil || c.self != c || c.retired.Load() || c.ctx == nil || c.ctx.Err() != nil || c.source == nil {
+	if c == nil || c.self != c || c.retired.Load() || c.ctx == nil || c.ctx.Err() != nil {
+		return errCapture
+	}
+	if c.server != nil {
+		return c.validateServer()
+	}
+	if c.source == nil {
 		return errCapture
 	}
 	config, meta, err := c.source.ReadValidated()
@@ -180,6 +187,14 @@ func (c *Capture) construct(ctx context.Context, _ adapter.Router, logger log.Co
 	if !c.registered || c.claimed || c.ctx.Err() != nil {
 		return nil, errCapture
 	}
+
+	if c.server != nil {
+		lower, err := c.constructServerLower(ctx)
+		if err != nil {
+			return nil, err
+		}
+		c.server.lower.Store(lower)
+	}
 	c.claimed = true
 	owner := &Outbound{
 		Adapter: outbound.NewAdapterWithDialerOptions("http", tag, []string{"tcp"}, options.DialerOptions),
@@ -204,7 +219,7 @@ type Outbound struct {
 	logger            log.ContextLogger
 	tlsConfig         tls.Config
 	control           M.Socksaddr
-	lower             adapter.Outbound
+	lower             N.Dialer
 	operations        map[*operation]struct{}
 	closed            bool
 	closeDeadline     time.Time
@@ -218,10 +233,18 @@ func (o *Outbound) Start(stage adapter.StartStage) error {
 	if o == nil || o.capture.validate() != nil || o.ctx.Err() != nil {
 		return errCapture
 	}
-	lower, found, err := adapter.RouterVPNOutboundContext(o.ctx, o.manager, o.capture.lowerTag)
-	if err != nil || !found || lower == nil || lower.Type() != o.capture.lowerType || lower.Tag() != o.capture.lowerTag {
-		return errors.Join(err, errCapture)
+
+	var lower N.Dialer
+	if o.capture.server != nil {
+		lower = o.capture.server.lower.Load()
+	} else {
+		original, found, err := adapter.RouterVPNOutboundContext(o.ctx, o.manager, o.capture.lowerTag)
+		if err != nil || !found || original == nil || original.Type() != o.capture.lowerType || original.Tag() != o.capture.lowerTag {
+			return errors.Join(err, errCapture)
+		}
+		lower = original
 	}
+
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.closed || o.lower != nil || len(o.operations) != 0 {
@@ -253,10 +276,18 @@ func (o *Outbound) current(ctx context.Context) error {
 	if err != nil || !found || actual != o {
 		return errors.Join(err, errCapture)
 	}
-	actual, found, err = adapter.RouterVPNOutboundContext(ctx, o.manager, o.capture.lowerTag)
-	if err != nil || !found || actual != lower {
-		return errors.Join(err, errCapture)
+
+	if o.capture.server != nil {
+		if lower != o.capture.server.lower.Load() {
+			return errCapture
+		}
+	} else {
+		actual, found, err = adapter.RouterVPNOutboundContext(ctx, o.manager, o.capture.lowerTag)
+		if err != nil || !found || actual != lower {
+			return errors.Join(err, errCapture)
+		}
 	}
+
 	return o.capture.observeFinal(ctx)
 }
 

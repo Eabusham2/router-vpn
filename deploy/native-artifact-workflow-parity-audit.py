@@ -180,7 +180,8 @@ def check_focused_native_release_workflow(source: str) -> None:
 
 
 def check_server_encrypted_workflow(source: str) -> None:
-    """Both native outcomes must use the caller SHA without configurable input."""
+    """Require both original and CONNECT suffix outcomes on each caller SHA."""
+    import re
     lines = source.splitlines()
     for marker in (
         "  workflow_call:",
@@ -192,19 +193,68 @@ def check_server_encrypted_workflow(source: str) -> None:
         "            runner: ubuntu-24.04-arm",
         "      - uses: actions/checkout@v4",
         "          persist-credentials: false",
-        "          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}",
-        "          ROUTERVPN_SERVER_RECEIPT: ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json",
-        '          python3 deploy/test_server_node_chain_encrypted.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_SERVER_RECEIPT"',
-        "        run: python3 deploy/test_server_node_chain_encrypted_runner.py",
+        "      - uses: actions/upload-artifact@v4",
         "          name: RouterVPN-Server-encrypted-${{ matrix.arch }}-${{ github.sha }}",
-        "          path: ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json",
+        "          path: |",
+        "            ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json",
+        "            ${{ runner.temp }}/server-connect-node-chain-${{ matrix.arch }}.json",
         "          if-no-files-found: error",
     ):
         assert lines.count(marker) == 1, ("encrypted Server lost required native platform/SHA/receipt: " + marker)
+    assert lines.count("          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}") == 2, (
+        "both encrypted Server invocations require the exact caller SHA")
+    # These owned contracts use literal mapping keys. Quoted or escaped keys
+    # must not hide conditional/native-failure suppression from this guard.
+    assert not any(re.match(r"^\s*[\"'].*[\"']\s*:", line) for line in lines), (
+        "encrypted Server workflow has a quoted mapping key")
     assert not any(line.lstrip().startswith(("if:", "continue-on-error:", "inputs:", "ref:")) for line in lines), (
         "encrypted Server native inventory/SHA became conditional or configurable")
     assert "--compile-only" not in source and "|| true" not in source, (
         "encrypted Server replaced required native acceptance with a nonblocking result")
+    starts = [i for i, line in enumerate(lines) if line.startswith('      - ')]
+    steps = [lines[a:b] for a, b in zip(starts, starts[1:] + [len(lines)])]
+
+    def step_for(marker):
+        matches = [(i, step) for i, step in enumerate(steps) if marker in step]
+        assert len(matches) == 1 and matches[0][1].count(marker) == 1, (
+            'encrypted Server lost or duplicated required invocation: ' + marker)
+        return matches[0]
+
+    previous = -1
+    for stem, variable, receipt in (
+        ('test_server_node_chain_encrypted', 'ROUTERVPN_SERVER_RECEIPT', 'server-node-chain'),
+        ('test_server_node_chain_connect_encrypted', 'ROUTERVPN_CONNECT_SERVER_RECEIPT', 'server-connect-node-chain'),
+    ):
+        runner_index, _ = step_for('        run: python3 deploy/' + stem + '_runner.py')
+        command = ('          python3 deploy/' + stem + '.py --standalone --require-commit '
+                   '"$ROUTERVPN_EXPECTED_SOURCE" --receipt "$' + variable + '"')
+        gate_index, step = step_for(command)
+        assert previous < runner_index < gate_index, 'encrypted Server runners/native phases reordered'
+        previous = gate_index
+        for marker in (
+            '        timeout-minutes: 45', '        env:', '        run: |',
+            '          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}',
+            '          ' + variable + ': ${{ runner.temp }}/' + receipt + '-${{ matrix.arch }}.json',
+            "          CGO_ENABLED: '1'",
+        ):
+            assert step.count(marker) == 1, 'encrypted Server native phase lost its own SHA/receipt/bound: ' + marker
+    upload_index, upload = step_for('      - uses: actions/upload-artifact@v4')
+    assert previous < upload_index, 'encrypted Server receipt uploaded before both native phases'
+    path_index = upload.index('          path: |')
+    path_end = next((i for i in range(path_index + 1, len(upload))
+                     if upload[i].strip() and not upload[i].startswith('            ')), len(upload))
+    assert upload[path_index + 1:path_end] == [
+        '            ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json',
+        '            ${{ runner.temp }}/server-connect-node-chain-${{ matrix.arch }}.json',
+    ], 'encrypted Server artifact must contain exactly both original receipt paths'
+    for marker in (
+        "          name: RouterVPN-Server-encrypted-${{ matrix.arch }}-${{ github.sha }}",
+        '          path: |',
+        '            ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json',
+        '            ${{ runner.temp }}/server-connect-node-chain-${{ matrix.arch }}.json',
+        '          if-no-files-found: error',
+    ):
+        assert upload.count(marker) == 1, 'encrypted Server upload lost an original receipt: ' + marker
 
 
 policy = load_policy()

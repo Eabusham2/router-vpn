@@ -106,7 +106,7 @@ func compiledPhysicalEgressWithCapturedNaive(configJSON string, networks []strin
 	return compiledPhysicalEgressWithCapturedTransports(configJSON, networks, desktop, proofTag, dormantNaiveDNS, nil)
 }
 
-func compiledPhysicalEgressWithCapturedTransports(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string, dormantNaiveDNS bool, connect *nodeChainCONNECTPhysicalProof) ([]PhysicalEgress, error) {
+func compiledPhysicalEgressWithCapturedTransports(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string, dormantNaiveDNS bool, connect nodeChainCapturedTransportProof) ([]PhysicalEgress, error) {
 	if connect != nil && connect.validate(configJSON) != nil {
 		return nil, nodePhysicalEgressError
 	}
@@ -176,7 +176,7 @@ type nodeEgressProjection struct {
 	tuples           map[PhysicalEgress]bool
 	desktop          *externalDesktopRecorder
 	dormantNaiveDNS  bool
-	connect          *nodeChainCONNECTPhysicalProof
+	connect          nodeChainCapturedTransportProof
 }
 
 func (p *nodeEgressProjection) add(host string, port any, network string) error {

@@ -38,7 +38,7 @@ func compileServerNodeChainSource(input io.Reader, output io.Writer) error {
 		return bad
 	}
 	defer clear(body)
-	policy, err := mobilemultihop.NewNodeChainServerPolicy(string(body))
+	policy, err := parsePrivateNodeChainServerSource(body)
 	if err != nil || policy.Descriptor().EntryNodeID != node {
 		return bad
 	}
@@ -52,11 +52,46 @@ func compileServerNodeChainPlan(input io.Reader, output io.Writer) error {
 		return bad
 	}
 	defer clear(raw)
-	policy, err := mobilemultihop.NewNodeChainServerPlan(string(raw))
+	connect, err := privateNodeChainCONNECTInput(raw)
+	if err != nil {
+		return bad
+	}
+	var policy *mobilemultihop.NodeChainServerPolicy
+	if connect {
+		policy, err = mobilemultihop.NewNodeChainCONNECTServerPlan(string(raw))
+	} else {
+		policy, err = mobilemultihop.NewNodeChainServerPlan(string(raw))
+	}
 	if err != nil {
 		return bad
 	}
 	return writeServerNodeChainSource(output, policy)
+}
+
+// Schema selects a distinct typed compiler; it grants no source or transport
+// authority itself. A rejected CONNECT source never falls back to the paired
+// or imported-SS compiler. The installed reader uses this same dispatch.
+func parsePrivateNodeChainServerSource(raw []byte) (*mobilemultihop.NodeChainServerPolicy, error) {
+	connect, err := privateNodeChainCONNECTInput(raw)
+	if err != nil {
+		return nil, err
+	}
+	if connect {
+		return mobilemultihop.NewNodeChainCONNECTServerPolicy(string(raw))
+	}
+	return mobilemultihop.NewNodeChainServerPolicy(string(raw))
+}
+
+func privateNodeChainCONNECTInput(raw []byte) (bool, error) {
+	var header struct {
+		Schema json.RawMessage `json:"schema"`
+	}
+	if len(raw) == 0 || len(raw) > mobilemultihop.NodeChainInputLimit || json.Unmarshal(raw, &header) != nil {
+		return false, errors.New("invalid private ordered server pairing source")
+	}
+	// Only select here. The original typed compiler still rejects duplicate,
+	// unknown and malformed fields under the full ordered-source byte bound.
+	return string(header.Schema) == "4", nil
 }
 
 func writeServerNodeChainSource(output io.Writer, policy *mobilemultihop.NodeChainServerPolicy) error {

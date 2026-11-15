@@ -53,6 +53,14 @@ func compileNodeChainClosures(nodes []nodeChainGraphMember, closures []*external
 }
 
 func compileNodeChainClosuresWithCONNECT(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect *nodeChainCONNECTProofScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+	var scope nodeChainCapturedTransportScope
+	if connect != nil {
+		scope = connect
+	}
+	return compileNodeChainClosuresWithTransport(nodes, closures, expected, scope)
+}
+
+func compileNodeChainClosuresWithTransport(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 	bad := errors.New("ordered chain lost a complete captured node closure")
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
@@ -170,9 +178,9 @@ func compileNodeChainClosuresWithCONNECT(nodes []nodeChainGraphMember, closures 
 	projection := predecessorCopy(graph)
 	projection["route"].(map[string]any)["final"] = finalTag
 	projected, _ := json.Marshal(projection)
-	var connectPhysical *nodeChainCONNECTPhysicalProof
+	var connectPhysical nodeChainCapturedTransportProof
 	if connect != nil {
-		connectPhysical, err = connect.capturePhysical(string(projected), proofs)
+		connectPhysical, err = connect.captureTransport(string(projected), proofs)
 		if err != nil {
 			return fail(err)
 		}
@@ -183,7 +191,7 @@ func compileNodeChainClosuresWithCONNECT(nodes []nodeChainGraphMember, closures 
 		if connect == nil {
 			physical, err = compiledPhysicalEgressWithDesktopProof(string(projected), networks, nil, proof.Tag)
 		} else {
-			physical, err = connect.physicalEgress(string(projected), networks, proof.Tag, connectPhysical)
+			physical, err = compiledPhysicalEgressWithCapturedTransports(string(projected), networks, nil, proof.Tag, false, connectPhysical)
 		}
 		if err != nil || !nodeChainSamePhysical(physical, expected) {
 			return fail(errors.New("ordered chain introduced physical egress outside its original first node"))

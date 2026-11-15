@@ -202,12 +202,10 @@ class NativeArtifactAggregate(unittest.TestCase):
         changes = (
             ("          - arch: arm64\n            runner: ubuntu-24.04-arm\n", ""),
             ("          - arch: amd64\n            runner: ubuntu-24.04\n", ""),
-            ("          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}", "          ROUTERVPN_EXPECTED_SOURCE: historical"),
             ("          persist-credentials: false", "          persist-credentials: false\n          ref: historical"),
             ("  workflow_call:\n", "  workflow_call:\n    inputs: {}\n"),
             ("  encrypted:\n", "  encrypted:\n    if: false\n"),
             ("  encrypted:\n", "  encrypted:\n    continue-on-error: true\n"),
-            ("--standalone --require-commit", "--compile-only --require-commit"),
             ("          if-no-files-found: error", "          if-no-files-found: ignore"),
         )
         for old, new in changes:
@@ -216,12 +214,55 @@ class NativeArtifactAggregate(unittest.TestCase):
                 check(source.replace(old, new, 1))
         caller = (ROOT / "deploy/release-orchestration-audit.py").read_text()
         self.assertEqual(caller.count('"deploy/test_server_node_chain_encrypted_runner.py"'), 1)
+        self.assertEqual(caller.count('"deploy/test_server_node_chain_connect_encrypted_runner.py"'), 1)
         tree = ast.parse(AUDIT.read_text())
         calls = [node for node in tree.body if isinstance(node, ast.Expr)
                  and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
                  and node.value.func.id == "check_server_encrypted_workflow"]
         self.assertEqual(len(calls), 1)
         self.assertEqual(ast.unparse(calls[0].value), "check_server_encrypted_workflow(read('.github/workflows/server-node-chain-encrypted.yml'))")
+
+    def test_each_original_and_connect_server_invocation_is_independently_required(self):
+        check = shipping_check("check_server_encrypted_workflow")
+        source = (ROOT / ".github/workflows/server-node-chain-encrypted.yml").read_text()
+        check(source)
+        for stem, variable, receipt in (
+            ('test_server_node_chain_encrypted', 'ROUTERVPN_SERVER_RECEIPT', 'server-node-chain'),
+            ('test_server_node_chain_connect_encrypted', 'ROUTERVPN_CONNECT_SERVER_RECEIPT', 'server-connect-node-chain'),
+        ):
+            command = ('          python3 deploy/' + stem + '.py --standalone --require-commit '
+                       '"$ROUTERVPN_EXPECTED_SOURCE" --receipt "$' + variable + '"')
+            at = source.index(command)
+            start = source.rfind('      - name:', 0, at)
+            end = source.index('      - ', at)
+            block = source[start:end]
+            changes = (
+                (block, ''), (block, block + block),
+                (block, block.replace('ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}', 'ROUTERVPN_EXPECTED_SOURCE: historical')),
+                (block, block.replace('        env:', '        if: false\n        env:')),
+                (block, block.replace('        env:', '        continue-on-error: true\n        env:')),
+                (block, block.replace('        env:', '        "if": false\n        env:')),
+                (block, block.replace('        env:', '        "\\x69f": false\n        env:')),
+                (block, block.replace('--standalone', '--compile-only')),
+                (block, block.replace(command, command + ' || true')),
+                (block, block.replace('timeout-minutes: 45', 'timeout-minutes: 1')),
+                (block, block.replace('--receipt "$' + variable + '"', '--receipt "$FOREIGN_RECEIPT"')),
+                ('        run: python3 deploy/' + stem + '_runner.py', '        run: echo omitted-runner'),
+                ('            ${{ runner.temp }}/' + receipt + '-${{ matrix.arch }}.json\n', ''),
+            )
+            for old, new in changes:
+                self.assertEqual(source.count(old), 1)
+                with self.subTest(stem=stem, mutation=new), self.assertRaises(AssertionError):
+                    check(source.replace(old, new, 1))
+        upload_path = '          path: |\n'
+        for extra in ('            foreign.json\n',
+                      '            ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json\n'):
+            with self.subTest(extra=extra), self.assertRaises(AssertionError):
+                check(source.replace(upload_path, upload_path + extra, 1))
+        marker = '  encrypted:\n'
+        for key in ('"if"', '"\\x69f"', "'continue-on-error'"):
+            with self.subTest(quoted=key), self.assertRaises(AssertionError):
+                check(source.replace(marker, marker + '    ' + key + ': true\n', 1))
 
     def test_removed_or_changed_darwin_child_workflow_fails(self):
         marker = "    uses: ./.github/workflows/darwin-node-child-tun.yml"

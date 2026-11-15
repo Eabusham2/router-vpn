@@ -339,10 +339,34 @@ The private capture file must contain exactly two strings, `config` and
 `capture`, from the original imported-node capture compiler. Keep their exact
 contents; an ordinary provider configuration alone lacks the captured policy
 and proof identity. A guided client export for that private capture remains
-separate unfinished work. Hostname imports, SOCKS and CONNECT middle nodes do
-not gain Server execution through this bounded plan format. Existing complete
+separate unfinished work. Hostname imports and SOCKS middle nodes do not gain
+Server execution through this bounded plan format. Existing complete
 server sources can alternatively be paired with `--node-chain-source FILE`;
 they use the same descriptor validation and publication transaction.
+
+An HTTP CONNECT or HTTPS CONNECT middle uses a **distinct schema-4 plan**.
+Set the outer `schema` to `4`, select the original paired WG/AWG entry, and
+provide exactly two members: the imported capture above and an independent
+paired Shadowsocks final with its separately provisioned server bundle. The
+middle must retain its original literal endpoint, authentication, TLS policy
+where applicable, public proof and device policy. It has no fabricated Router
+node ID or packet key. The final must retain its declared SS2022 UoT-v2 service
+and Start Layer Off. The same private-file, byte-bound, identity, staging and
+rollback rules apply to this plan.
+
+The agent dispatches schema 4 to the typed CONNECT plan/source compiler.
+Rejected CONNECT input cannot fall back to the paired or imported-Shadowsocks
+compiler. The installed registry reader and offline native checker use that
+same typed policy. The original entry packet identity authenticates the
+client lease; the remote CONNECT suffix opens only its captured TCP transport
+and does not create an artificial WireGuard lower. Existing schema-1 plans
+and schema-1/2 sources retain their own constructors and semantics.
+
+This operator format installs a private suffix policy. Client Server/Compare
+support requires the corresponding typed native client owner, authenticated
+discovery, original selected-path proofs and platform admission. Pairing
+success alone does not enable an unfinished client integration or establish
+network acceptance.
 
 To check an existing staging tree containing ordered sources, provide both
 source-directory positions, including a private empty Tor directory when no

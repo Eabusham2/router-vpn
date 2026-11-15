@@ -16,7 +16,9 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
+	ownedCONNECT "github.com/sagernet/sing-box/protocol/routervpnnodeconnect"
 	SJ "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
@@ -38,6 +40,7 @@ type routerVPNServerChain struct {
 	files                  map[string]routerVPNServerChainFile
 	capture                multihoprelay.NodeChainCapture
 	policy                 *mobilemultihop.NodeChainServerPolicy
+	connect                *ownedCONNECT.Capture
 	carrier                *mobilemultihop.NodeChainServerCarrier
 	carrierJoined          chan struct{}
 	binding                mobilemultihop.NodeChainServerBinding
@@ -105,7 +108,11 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 	if err != nil {
 		return result, bad
 	}
-	n.policy, err = mobilemultihop.NewNodeChainServerPolicy(string(raw))
+	if capture.Source.Schema == 4 {
+		n.policy, err = mobilemultihop.NewNodeChainCONNECTServerPolicy(string(raw))
+	} else {
+		n.policy, err = mobilemultihop.NewNodeChainServerPolicy(string(raw))
+	}
 	carrierAdmission := false
 	if err == nil && n.policy.NativeCarrierRequired() {
 		stage = "carrier"
@@ -150,6 +157,22 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 	n.dnsCapture, err = n.policy.DNSCapture(capture)
 	if err != nil || n.dnsCapture.Binding != n.binding {
 		return result, bad
+	}
+
+	if capture.Source.Schema == 4 {
+		stage = "connect-owner"
+		n.connect, err = ownedCONNECT.NewServerCapture(owned, n.policy, capture)
+		if err != nil {
+			return result, err
+		}
+		registry := include.OutboundRegistry()
+		if err = n.connect.Register(registry); err != nil {
+			return result, err
+		}
+		owned = n.connect.Context()
+		owned = service.ContextWith[option.OutboundOptionsRegistry](owned, registry)
+		owned = service.ContextWith[adapter.OutboundRegistry](owned, registry)
+		n.ctx = owned
 	}
 	stage = "options"
 	options, err := SJ.UnmarshalExtendedContext[option.Options](owned, []byte(config))
@@ -248,6 +271,16 @@ func (n *routerVPNServerChain) nativeCurrent(ctx context.Context) bool {
 		return false
 	}
 	if n.carrier != nil && n.carrier.AdmitContext(ctx) != nil || n.carrier == nil && n.policy != nil && n.policy.NativeCarrierRequired() {
+		n.cancel()
+		return false
+	}
+
+	if n.capture.Source.Schema == 4 {
+		if n.connect == nil || n.connect.ObserveServerContext(ctx, n.policy, n.capture) != nil {
+			n.cancel()
+			return false
+		}
+	} else if n.connect != nil {
 		n.cancel()
 		return false
 	}
@@ -559,6 +592,11 @@ func (n *routerVPNServerChain) Close(ctx context.Context) error {
 	}
 	if err := n.drainConnections(ctx); err != nil {
 		return err
+	}
+	if n.connect != nil {
+		if err := n.connect.CloseContext(ctx); err != nil {
+			return err
+		}
 	}
 	if n.box != nil {
 		n.boxOnce.Do(func() { go func() { n.boxError = n.box.Close(); close(n.boxDone) }() })

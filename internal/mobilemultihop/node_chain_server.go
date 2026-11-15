@@ -144,6 +144,8 @@ func (r NodeChainServerFrontRoute) AllowsResolvedDestination(network, original, 
 // opens no socket and proves no connectivity. The worker owns the separate
 // authenticated front and must not forward while proofs are pending.
 type NodeChainServerPolicy struct {
+	connect                                        *nodeChainCONNECTServerScope
+	connectMiddle                                  *nodeChainCONNECTMember
 	carrier                                        *NodeChainServerCarrier
 	sourceJSON, sourceSHA, config, configSHA, seal string
 	nodes                                          []*NodeProfile
@@ -163,13 +165,17 @@ func NewNodeChainServerPolicy(sourceJSON string) (*NodeChainServerPolicy, error)
 }
 
 func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier) (*NodeChainServerPolicy, error) {
+	return newNodeChainServerPolicyCaptured(sourceJSON, carrier, false)
+}
+
+func newNodeChainServerPolicyCaptured(sourceJSON string, carrier *NodeChainServerCarrier, connect bool) (*NodeChainServerPolicy, error) {
 	var source NodeChainServerSource
-	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || (source.Schema != 1 && source.Schema != 2) ||
+	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || (!connect && source.Schema != 1 && source.Schema != 2 || connect && (source.Schema != 4 || carrier != nil)) ||
 		!exactID.MatchString(source.EntryID) || !proofID.MatchString(source.EntryNodeID) || !NodeChainPrefixMode(source.EntryMode) ||
 		len(source.Nodes) < 1 || len(source.Nodes) > multihoprelay.NodeChainMaximumMembers || len(source.IdentitySources) != len(source.Nodes) {
 		return nil, nodeChainServerError
 	}
-	if source.Schema == 2 && (len(source.Nodes) != 2 || source.IdentitySources[0] != "" || source.IdentitySources[1] == "") {
+	if (source.Schema == 2 || source.Schema == 4) && (len(source.Nodes) != 2 || source.IdentitySources[0] != "" || source.IdentitySources[1] == "") {
 		return nil, nodeChainServerError
 	}
 	raw, err := json.Marshal(source)
@@ -180,6 +186,8 @@ func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier
 	domain := "routervpn-server-node-chain-source-v1"
 	if source.Schema == 2 {
 		domain = "routervpn-server-node-chain-source-v2"
+	} else if source.Schema == 4 {
+		domain = "routervpn-server-node-chain-source-v4"
 	}
 	digest, _ := json.Marshal([]string{domain, p.sourceJSON})
 	p.sourceSHA = externalDigest(digest)
@@ -190,6 +198,33 @@ func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier
 	closures := make([]*externalPredecessor, 0, len(source.Nodes))
 	blocked := map[string]bool{}
 	for index, launch := range source.Nodes {
+
+		if connect && index == 0 {
+			middle, err := parseNodeChainCONNECTMember(launch)
+			if err != nil {
+				return nil, nodeChainServerError
+			}
+			closure, err := middle.closure()
+			if err != nil {
+				return nil, err
+			}
+			ipv6, ranges, err := externalDevicePolicy(middle.selection.Profile)
+			if err != nil {
+				return nil, err
+			}
+			p.blockIPv6 = p.blockIPv6 || ipv6 == "off"
+			for _, value := range ranges {
+				blocked[value] = true
+			}
+			p.connectMiddle = middle
+			p.connect = &nodeChainCONNECTServerScope{policy: p, middle: middle}
+			p.connect.self = p.connect
+			p.nodes = append(p.nodes, nil)
+			p.descriptor.Members = append(p.descriptor.Members, multihoprelay.NodeChainMember{Position: 1, ProfileID: middle.selection.ExitID, Mode: middle.selection.Protocol, StartLayer: "off", NodeKind: "external", ProofKind: "public-path", SourceSHA256: middle.source, ExpectedPublicIP: middle.selection.ExpectedPublicIP})
+			members = append(members, nodeChainGraphMember{profile: middle.selection.Profile, source: middle.source, mode: middle.selection.Protocol, imported: true})
+			closures = append(closures, closure)
+			continue
+		}
 		if source.Schema == 2 && index == 0 {
 			middle, err := parseNodeChainImportedMember(launch)
 			// A saved hostname depends on the preceding Local packet resolver.
@@ -257,6 +292,13 @@ func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier
 				return nil, nodeChainServerError
 			}
 			member.ServerPublicKey = predecessorText(peer, "public_key")
+
+		} else if connect {
+			// The typed remote final retains its declared SS2022 UoT service. Start
+			// layers remain outside this first worker family; generic SS is unchanged.
+			if !nodeChainFinalClosure(node, closure) || closure.final["type"] != "shadowsocks" || layer != "off" {
+				return nil, nodeChainServerError
+			}
 		} else if closure.final["method"] != NativeStartLayerMethod ||
 			closure.final["type"] != "shadowsocks" && closure.final["type"] != "routervpn-aes-xor" {
 			return nil, nodeChainServerError
@@ -289,7 +331,15 @@ func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier
 		return nil, nodeChainServerError
 	}
 	var expected []PhysicalEgress
-	if p.importedMiddle != nil {
+	if p.connect != nil {
+		p.connect.final = p.nodes[1]
+		capability, captureErr := importedCONNECTCapture(closures[1].graph, closures[1].final, "", p.nodes[1].mode, p.nodes[1].profile, p.nodes[1].inputs.Files)
+		if captureErr != nil || capability != "uot-v2" {
+			return nil, nodeChainServerError
+		}
+		p.connect.closures = append([]*externalPredecessor(nil), closures...)
+		expected, err = p.connect.middle.policy.DirectPhysicalEgress([]string{"tcp"})
+	} else if p.importedMiddle != nil {
 		expected, err = p.importedMiddle.policy.DirectPhysicalEgress([]string{"tcp", "udp"})
 	} else {
 		expected, err = p.nodes[0].PhysicalEgress()
@@ -303,7 +353,11 @@ func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier
 		}
 		p.carrier = carrier
 	}
-	config, proofs, dns, _, err := compileNodeChainClosures(members, closures, expected)
+	var scope nodeChainCapturedTransportScope
+	if p.connect != nil {
+		scope = p.connect
+	}
+	config, proofs, dns, _, err := compileNodeChainClosuresWithTransport(members, closures, expected, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -337,6 +391,10 @@ func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier
 	for index, proof := range proofs {
 		proof.Position = index + 1
 		p.proofs = append(p.proofs, proof)
+		if p.connect != nil && index == 0 {
+			p.proofTargets = append(p.proofTargets, NodeChainServerProof{Proof: proof, Network: "tcp", Address: "1.1.1.1:443", ExpectedPublicIP: p.connect.middle.selection.ExpectedPublicIP})
+			continue
+		}
 		if p.importedMiddle != nil && index == 0 {
 			p.proofTargets = append(p.proofTargets, NodeChainServerProof{Proof: proof, Network: "tcp", Address: "1.1.1.1:443",
 				ExpectedPublicIP: p.importedMiddle.selection.ExpectedPublicIP})
@@ -401,8 +459,23 @@ func (p *NodeChainServerPolicy) validateCapture() error {
 		len(p.nodes) != len(p.proofs) || len(p.proofs) != len(p.proofTargets) {
 		return nodeChainServerError
 	}
+
+	if p.descriptor.Schema == 4 {
+		if !p.connect.original() {
+			return nodeChainServerError
+		}
+	} else if p.connect != nil {
+		return nodeChainServerError
+	}
 	for index, node := range p.nodes {
 		proof := p.proofs[index]
+		if p.connect != nil && index == 0 {
+			middle, target := p.connect.middle, p.proofTargets[index]
+			if node != nil || proof.Position != 1 || proof.SourceSHA256 != middle.source || proof.ProfileID != middle.selection.ExitID || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != middle.selection.Protocol || proof.StartLayer != "off" || target.API != "" || target.Token != "" || target.Network != "tcp" || target.Address != "1.1.1.1:443" || target.ExpectedPublicIP != middle.selection.ExpectedPublicIP {
+				return nodeChainServerError
+			}
+			continue
+		}
 		if p.importedMiddle != nil && index == 0 {
 			middle, target := p.importedMiddle, p.proofTargets[index]
 			if node != nil || middle.validate() != nil || proof.Position != 1 || proof.SourceSHA256 != middle.source ||

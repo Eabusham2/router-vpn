@@ -71,6 +71,11 @@ func NewNodeChainExecutionRuntime(projection *NodeChainExecutionProjection, engi
 	if projection.validateCapture() != nil || engine == nil {
 		return nil, nodeChainExecutionError
 	}
+	if projection.preparation.RequiresCONNECTExecutionObserver() {
+		if _, ok := engine.(NodeChainCONNECTExecutionObserver); !ok {
+			return nil, nodeChainExecutionError
+		}
+	}
 	if _, ok := engine.(NodeChainExecutionSelectionEpochEngine); !ok {
 		return nil, nodeChainExecutionError
 	}
@@ -90,6 +95,9 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 	r.mu.Unlock()
 	if !r.identityMatches(identity) || trial != nil && (active != trial || trial.lifetime.Err() != nil) {
 		return nodeChainExecutionError
+	}
+	if err := r.projection.preparation.observeCONNECTExecutionContext(ctx, r.engine); err != nil {
+		return err
 	}
 	observed, err := r.engine.ObserveChainContext(ctx)
 	if err != nil {

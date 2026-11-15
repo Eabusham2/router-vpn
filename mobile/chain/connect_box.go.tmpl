@@ -35,7 +35,8 @@ type routerVPNNodeCONNECTConstruction struct {
 func RouterVPNNodeCONNECTContext(ctx context.Context, source *mobilemultihop.NodeChainCONNECTSource,
 	capture *ownedCONNECT.Capture) (context.Context, error) {
 	if ctx == nil || ctx.Err() != nil || source == nil || capture == nil ||
-		ctx.Value(routerVPNNodeCONNECTContextKey{}) != nil || ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil {
+		ctx.Value(routerVPNNodeCONNECTContextKey{}) != nil || ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil ||
+		ctx.Value(routerVPNCONNECTExecutionKey{}) != nil || ctx.Value(routerVPNOrderedTypedConstructionKey{}) != nil {
 		return nil, errors.New("ordered CONNECT construction needs its one original context")
 	}
 	if err := capture.RequireOriginalContext(ctx, source); err != nil {
@@ -53,6 +54,7 @@ func RouterVPNNodeCONNECTContext(ctx context.Context, source *mobilemultihop.Nod
 	if digest == "" || ctx.Err() != nil {
 		return nil, errors.New("ordered CONNECT construction lost its complete original graph")
 	}
+	ctx = context.WithValue(ctx, routerVPNOrderedTypedConstructionKey{}, true)
 	return context.WithValue(ctx, routerVPNNodeCONNECTContextKey{}, &routerVPNNodeCONNECTConstruction{
 		source: source, capture: capture, config: config, metadata: metadata, digest: digest,
 	}), nil
@@ -81,6 +83,7 @@ func routerVPNNodeCONNECTBind(s *Box) *Box {
 	if s == nil || s.ctx == nil {
 		return s
 	}
+	routerVPNCONNECTExecutionBind(s)
 	value := s.ctx.Value(routerVPNNodeCONNECTContextKey{})
 	if value == nil {
 		return s
@@ -117,6 +120,9 @@ func (c *routerVPNNodeCONNECTConstruction) requireBox(ctx context.Context, s *Bo
 func routerVPNNodeCONNECTOptions(ctx context.Context, options option.Options) error {
 	if ctx == nil {
 		return nil
+	}
+	if err := routerVPNCONNECTExecutionOptions(ctx, options); err != nil {
+		return err
 	}
 	value := ctx.Value(routerVPNNodeCONNECTContextKey{})
 	if value == nil {
@@ -336,6 +342,16 @@ func (s *Box) RouterVPNCloseCONNECTMiddleContext(ctx context.Context) error {
 	}
 	if s.ctx == nil {
 		return nil
+	}
+	if value := s.ctx.Value(routerVPNCONNECTExecutionKey{}); value != nil {
+		if s.ctx.Value(routerVPNNodeCONNECTContextKey{}) != nil || s.ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil {
+			return errRouterVPNExecutionOwner
+		}
+		original, ok := value.(*routerVPNCONNECTExecutionConstruction)
+		if !ok || original == nil {
+			return errRouterVPNExecutionOwner
+		}
+		return original.closeOriginalContext(ctx, s)
 	}
 	value := s.ctx.Value(routerVPNNodeCONNECTContextKey{})
 	if value == nil {

@@ -1,0 +1,434 @@
+//go:build linux && !android && routervpn_server_chain_acceptance
+
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/common/uot"
+)
+
+// This witnesses the real schema4 CONNECT Server suffix. Entry lease acquisition and
+// desktop Compare selection are separate authorities; this fixture does not
+// synthesize an authenticated Router API request or report either as exercised.
+var serverChainCONNECTCases = []string{"original", "wrong-middle-key", "wrong-final-key", "wrong-final-identity", "failed-selected-dns", "wrong-public-identity", "joined-active-udp", "admission-restrictions", "wrong-proxy-name"}
+
+type serverChainCONNECTMiddleStats struct {
+	Method        string `json:"method"`
+	RawTCP        int64  `json:"raw_tcp"`
+	RawUDP        int64  `json:"raw_udp"`
+	TCP           int64  `json:"tcp"`
+	UDP           int64  `json:"udp"`
+	PublicQueries uint64 `json:"public_queries"`
+	DownloadBytes uint64 `json:"download_bytes"`
+	UploadBytes   uint64 `json:"upload_bytes"`
+}
+type serverChainCONNECTReply struct {
+	Protocol   string `json:"protocol"`
+	ProxyCA    string `json:"proxy_ca"`
+	MiddleAuth int64  `json:"middle_auth"`
+	TLSRefused int64  `json:"tls_refused"`
+	Peer       struct {
+		serverChainEncryptedStats
+		Middle serverChainCONNECTMiddleStats `json:"middle"`
+	} `json:"peer"`
+	MiddleAddress string `json:"middle_address"`
+}
+type serverChainCONNECTPeer struct {
+	original *serverChainEncryptedPeer
+	password string
+	protocol string
+	reply    serverChainCONNECTReply
+}
+
+func (p *serverChainCONNECTPeer) read(t *testing.T) serverChainCONNECTReply {
+	t.Helper()
+	var value serverChainCONNECTReply
+	decoder := json.NewDecoder(bytes.NewReader(p.original.process.line(t)))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF || value.Peer.Schema != 1 || len(value.Peer.Prefixes) != 1 || value.Peer.PublicCA == "" || value.Peer.Middle.Method != mobilemultihop.NativeStartLayerMethod || value.Protocol != p.protocol || (p.protocol == "https-connect") != (value.ProxyCA != "") {
+		t.Fatal("original imported Server peer receipt changed")
+	}
+	endpoint, err := netip.ParseAddrPort(value.MiddleAddress)
+	if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || value.Peer.Final.DirectQueries != 0 || value.Peer.Final.EntryPublicQueries != 0 || value.Peer.Prefixes[0].RawUDP != 0 {
+		t.Fatal("imported Server suffix acquired an unrelated packet carrier or bypass")
+	}
+	if p.reply.MiddleAddress != "" && (p.reply.MiddleAddress != value.MiddleAddress || p.reply.Peer.PublicCA != value.Peer.PublicCA || p.reply.ProxyCA != value.ProxyCA) {
+		t.Fatal("original imported Server endpoint or TLS identity replaced")
+	}
+	p.reply = value
+	p.original.stats = value.Peer.serverChainEncryptedStats
+	p.original.stats.PublicCA += value.ProxyCA
+	return value
+}
+func (p *serverChainCONNECTPeer) control(t *testing.T, command string) serverChainCONNECTReply {
+	t.Helper()
+	if _, err := io.WriteString(p.original.process.input, command+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	return p.read(t)
+}
+func serverChainCONNECTPeerStart(t *testing.T, protocol string) *serverChainCONNECTPeer {
+	t.Helper()
+	original := serverChainEncryptedKeys(t, "wg")
+	raw, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
+	p := &serverChainCONNECTPeer{original: original, password: base64.StdEncoding.EncodeToString(raw), protocol: protocol}
+	image := serverChainEncryptedImage(t, "ROUTERVPN_SERVER_CHAIN_PEER")
+	command := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "-test.run=^TestRouterVPNDesktopNodeChainCONNECTServerReferenceProcess$", "-test.count=1", "-test.timeout=100s")
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_CHAIN_CONNECT_SERVER_REFERENCE_CHILD=1"}
+	original.process = serverChainEncryptedStart(t, command)
+	paired := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": original.prefixes[:1], "final_password": original.password, "final_node_proof_id": serverChainEncryptedProof(original.finalServer), "final_api_token": "encrypted-server-final-token"}
+	request := map[string]any{"schema": 1, "paired": paired, "protocol": protocol, "username": "captured-native-user", "password": p.password}
+	if json.NewEncoder(original.process.input).Encode(request) != nil {
+		t.Fatal("original imported Server request failed")
+	}
+	p.read(t)
+	return p
+}
+func serverChainCONNECTSource(t *testing.T, p *serverChainCONNECTPeer, fault string) (*mobilemultihop.NodeChainServerPolicy, multihoprelay.NodeChainCapture) {
+	t.Helper()
+	// Reuse the exact original final paired source/key constructor. No packet
+	// member from this temporary source enters the registered schema4 suffix.
+	originalFault := ""
+	if fault == "wrong-final-key" {
+		originalFault = "wrong-ss-key"
+	}
+	original, _ := serverChainEncryptedSource(t, p.original, originalFault, serverChainEncryptedCarrierCapacity(t))
+	var source mobilemultihop.NodeChainServerSource
+	if json.Unmarshal([]byte(original.Source()), &source) != nil {
+		t.Fatal("original final source missing")
+	}
+	final, identity := source.Nodes[len(source.Nodes)-1], source.IdentitySources[len(source.IdentitySources)-1]
+	// This actual reference final already implements SS UoT-v2. Capture its
+	// original config/key declaration; an inline option is never authority.
+	var row struct {
+		Mode      string `json:"mode"`
+		Files     string `json:"files"`
+		Profile   string `json:"profile_json"`
+		Start     string `json:"start"`
+		Bootstrap string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(final), &row) != nil {
+		t.Fatal("original final source missing")
+	}
+	var assets map[string]string
+	var profileFinal map[string]any
+	if json.Unmarshal([]byte(row.Files), &assets) != nil || json.Unmarshal([]byte(row.Profile), &profileFinal) != nil {
+		t.Fatal("original final assets missing")
+	}
+	finalConfig, err := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finalGraph map[string]any
+	if json.Unmarshal(finalConfig, &finalGraph) != nil {
+		t.Fatal("original final graph missing")
+	}
+	originalFinal := finalGraph["outbounds"].([]any)[0].(map[string]any)
+	configHash, keyHash := sha256.Sum256(finalConfig), sha256.Sum256([]byte(originalFinal["password"].(string)))
+	declaration := map[string]any{"schema": 1, "node_id": profileFinal["node_proof_id"], "configured_image": nativecomposite.SSServiceImage, "uot_version": 2, "endpoint": originalFinal["server"], "port": originalFinal["server_port"], "method": originalFinal["method"], "source_sha256": hex.EncodeToString(configHash[:]), "key_sha256": hex.EncodeToString(keyHash[:])}
+	assets[nativecomposite.SSServiceAsset] = base64.StdEncoding.EncodeToString([]byte(serverChainEncryptedJSON(t, declaration)))
+	finalNode, err := mobilemultihop.NewNodeProfile(row.Mode, serverChainEncryptedJSON(t, assets), row.Profile, row.Start, row.Bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	final, err = finalNode.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := netip.ParseAddrPort(p.reply.MiddleAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := p.password
+	if fault == "wrong-middle-key" {
+		raw, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
+		password = base64.StdEncoding.EncodeToString(raw)
+	}
+	out := map[string]any{"type": "http", "tag": "custom-exit", "server": endpoint.Addr().String(), "server_port": endpoint.Port(), "username": "captured-native-user", "password": password}
+	transport := map[string]any{"host": endpoint.Addr().String(), "port": endpoint.Port(), "username": "captured-native-user", "password": password}
+	protocol := p.protocol
+	field := "http_connect"
+	if protocol == "https-connect" {
+		field = "https_connect"
+		name := "speed.cloudflare.com"
+		if fault == "wrong-proxy-name" {
+			name = "foreign-proxy.invalid"
+		}
+		transport["tls_server_name"] = name
+		out["tls"] = map[string]any{"enabled": true, "server_name": name}
+	}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{out}, "route": map[string]any{"final": "custom-exit", "rules": []any{}, "auto_detect_interface": true}}
+	profile := map[string]any{"id": "encrypted-connect-middle", "node_kind": "external", "external": map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88", field: transport}, "endpoint": endpoint.Addr().String(), "dns_mode": "home", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": fault != "admission-restrictions", "kill_switch_policy": "on-connect"}
+	capture := map[string]any{"schema": 1, "exit_id": "encrypted-connect-middle", "protocol": protocol, "expected_public_ip": "203.0.113.88", "profile": profile}
+	middle, err := mobilemultihop.NodeChainImportedCONNECTMemberInput(serverChainEncryptedJSON(t, graph), serverChainEncryptedJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Schema = 4
+	source.Nodes = []string{middle, final}
+	source.IdentitySources = []string{"", identity}
+	policy, err := mobilemultihop.NewNodeChainCONNECTServerPolicy(serverChainEncryptedJSON(t, source))
+	if err != nil {
+		t.Fatal("original CONNECT suffix compiler refused", err)
+	}
+	descriptor := policy.Descriptor()
+	digest, _ := descriptor.Digest()
+	request := multihoprelay.NodeChainRequest{Schema: descriptor.Schema, SessionID: serverChainEncryptedRandom(t, 16), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: serverChainEncryptedRandom(t, 32), Peer: "192.168.210.1", AcquireExpiresAt: time.Now().Add(30 * time.Second).Unix(), Port: 28440}
+	for i := range descriptor.Members {
+		key := serverChainEncryptedKey(t)
+		if i == 0 {
+			request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()))
+			request.LocalPacketPositions = append(request.LocalPacketPositions, 0)
+		}
+		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: serverChainEncryptedRandom(t, 24), Password: serverChainEncryptedRandom(t, 24)})
+	}
+	owned := multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: descriptor, RegistrySHA256: digest, OwnerID: serverChainEncryptedRandom(t, 32), Peer: request.Peer, Host: request.Peer, BootstrapDeadline: time.Now().Add(30 * time.Second).UTC()}
+	if err := owned.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return policy, owned
+}
+func serverChainCONNECTScenario(t *testing.T, protocol, name string) {
+	p := serverChainCONNECTPeerStart(t, protocol)
+	policy, capture := serverChainCONNECTSource(t, p, name)
+	switch name {
+	case "wrong-final-identity":
+		p.control(t, "wrong-node")
+	case "failed-selected-dns":
+		p.control(t, "fail-dns")
+	case "wrong-public-identity":
+		p.control(t, "wrong-middle-public")
+	}
+	worker := serverChainEncryptedWorkerStart(t, p.original, policy, capture, "")
+	pending := worker.call(t, "snapshot")
+	if !pending.OK || pending.Receipt == nil || pending.Receipt.TrafficAllowed || pending.Receipt.Phase != multihoprelay.NodeChainPending {
+		t.Fatal("imported suffix escaped closed pending gate")
+	}
+	final := capture.Request.Users[1]
+	worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+	if p.control(t, "stats").Peer.Middle.RawTCP != 0 {
+		t.Fatal("pending imported front forwarded")
+	}
+	if !worker.call(t, "bootstrap").OK {
+		t.Fatal("original imported bootstrap refused")
+	}
+	negative := strings.HasPrefix(name, "wrong-") || name == "failed-selected-dns"
+	ready, failed := false, false
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		reply := worker.call(t, "snapshot")
+		if !reply.OK {
+			failed = true
+			break
+		}
+		if reply.Receipt.Phase == multihoprelay.NodeChainReady {
+			ready = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	var active net.PacketConn
+	if negative {
+		if ready || !failed {
+			t.Fatal("invalid original imported suffix did not retire")
+		}
+		worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+	} else {
+		if !ready {
+			t.Fatal("actual imported suffix never proved ready")
+		}
+		targets, err := policy.ProofTargets(capture)
+		if err != nil || len(targets) != 2 || targets[0].Proof.NodeID != "" || targets[1].Proof.NodeID == "" {
+			t.Fatal("imported and paired identity authorities merged", err)
+		}
+		worker.health(t, final, targets[1].API, targets[1].Token, targets[1].Proof.NodeID)
+		worker.selectedDNS(t)
+		previous := p.control(t, "stats")
+		foreign := final
+		foreign.Password = serverChainEncryptedRandom(t, 24)
+		worker.refuse(t, foreign, M.ParseSocksaddr("10.77.0.1:8787"))
+		worker.refuse(t, capture.Request.Users[0], M.ParseSocksaddr("10.77.0.1:8787"))
+		worker.refuse(t, capture.Request.Users[0], uot.RequestDestination(2))
+		after := p.control(t, "stats")
+		if after.Peer.Final.RouterQueries != previous.Peer.Final.RouterQueries || after.Peer.Final.DNSQueries != previous.Peer.Final.DNSQueries {
+			t.Fatal("middle or foreign credentials reached final")
+		}
+		target := M.ParseSocksaddr("10.77.0.1:45999")
+		if name == "admission-restrictions" {
+			before := p.control(t, "stats")
+			denied := worker.packets(t, target)
+			_, _ = denied.WriteTo([]byte("original-imported-private-policy-refusal"), target)
+			_ = denied.SetReadDeadline(time.Now().Add(time.Second))
+			if _, _, err := denied.ReadFrom(make([]byte, 2048)); err == nil {
+				t.Fatal("captured imported LAN-off policy forwarded private final UDP")
+			}
+			_ = denied.Close()
+			after := p.control(t, "stats")
+			if after.Peer.Final.CoverPackets != before.Peer.Final.CoverPackets || after.Peer.Final.CoverReplies != before.Peer.Final.CoverReplies {
+				t.Fatal("imported LAN-off refusal reached original private sink")
+			}
+		} else {
+			active = worker.packets(t, target)
+			payload := []byte("original-imported-server-" + serverChainEncryptedRandom(t, 16))
+			if n, err := active.WriteTo(payload, target); err != nil || n != len(payload) {
+				t.Fatal("real imported UDP write", err)
+			}
+			buffer := make([]byte, 2048)
+			n, from, err := active.ReadFrom(buffer)
+			if err != nil || from.String() != target.String() || !bytes.Equal(buffer[:n], payload) {
+				t.Fatal("real imported UDP echo", err)
+			}
+			if name == "joined-active-udp" {
+				p.control(t, "drop-cover")
+				if _, err := active.WriteTo(payload, target); err != nil {
+					t.Fatal(err)
+				}
+				until := time.Now().Add(2 * time.Second)
+				for time.Now().Before(until) {
+					v := p.control(t, "stats")
+					if v.Peer.Final.CoverPackets > v.Peer.Final.CoverReplies {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				v := p.control(t, "stats")
+				if v.Peer.Final.CoverPackets <= v.Peer.Final.CoverReplies {
+					t.Fatal("no original pending UDP at retirement")
+				}
+			}
+		}
+	}
+	stats := p.control(t, "stats")
+	if stats.Peer.Middle.RawTCP == 0 {
+		t.Fatal("no actual imported encrypted peer observation")
+	}
+	if negative {
+		switch name {
+		case "wrong-proxy-name":
+			if stats.TLSRefused == 0 || stats.Peer.Middle.PublicQueries != 0 || stats.Peer.Final.RouterQueries != 0 {
+				t.Fatal("wrong CONNECT TLS name did not fail at original peer")
+			}
+		case "wrong-middle-key":
+			if stats.Peer.Middle.PublicQueries != 0 || stats.Peer.Final.RouterQueries != 0 {
+				t.Fatal("wrong imported key reached authenticated proof")
+			}
+		case "wrong-final-key":
+			if stats.Peer.Middle.PublicQueries == 0 || stats.Peer.Final.FinalRawTCP == 0 || stats.Peer.Final.RouterQueries != 0 {
+				t.Fatal("wrong final key bypassed encrypted final")
+			}
+		case "wrong-final-identity":
+			if stats.Peer.Middle.PublicQueries == 0 || stats.Peer.Final.RouterQueries == 0 {
+				t.Fatal("wrong paired identity was not observed at original final")
+			}
+		case "failed-selected-dns":
+			if stats.Peer.Final.RouterQueries == 0 || stats.Peer.Final.DNSQueries == 0 || stats.Peer.Final.FinalPublicQueries != 0 {
+				t.Fatal("failed selected DNS bypassed final resolver")
+			}
+		case "wrong-public-identity":
+			if stats.Peer.Middle.PublicQueries == 0 || stats.Peer.Final.RouterQueries != 0 {
+				t.Fatal("wrong imported public identity reached paired final")
+			}
+		}
+	}
+	if !negative && (stats.Peer.Middle.PublicQueries == 0 || stats.Peer.Middle.RawUDP != 0 || stats.Peer.Final.RouterQueries == 0 || stats.Peer.Final.DNSQueries == 0 || stats.Peer.Final.FinalPublicQueries == 0 || stats.Peer.Final.FinalRawTCP == 0 || stats.Peer.Final.FinalRawUDP != 0) {
+		t.Fatal("actual imported suffix proof/transport/DNS counters incomplete")
+	}
+	worker.stop(t)
+	if active != nil {
+		_ = active.SetReadDeadline(time.Now().Add(time.Second))
+		if _, _, err := active.ReadFrom(make([]byte, 2048)); err == nil {
+			t.Fatal("original UDP survived joined retirement")
+		}
+		_ = active.Close()
+	}
+	_ = p.original.process.input.Close()
+	p.original.process.join(t)
+	t.Log("CONNECT_SERVER_RECEIPT " + serverChainEncryptedJSON(t, map[string]any{"case": name, "protocol": protocol, "middle_auth": stats.MiddleAuth, "tls_refused": stats.TLSRefused, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "ready": ready, "selected_dns": ready, "middle_tcp": stats.Peer.Middle.RawTCP, "middle_udp": stats.Peer.Middle.RawUDP, "final_tcp": stats.Peer.Final.FinalRawTCP, "final_udp": stats.Peer.Final.FinalRawUDP, "retired": true, "worker_joined": true, "peer_joined": true, "private_udp_refused": name == "admission-restrictions", "private_sink_packets": stats.Peer.Final.CoverPackets, "private_sink_replies": stats.Peer.Final.CoverReplies}))
+}
+func TestServerChainCONNECTEncryptedNative(t *testing.T) {
+	if os.Getenv("ROUTERVPN_SERVER_CHAIN_NATIVE_NS") != "1" || os.Geteuid() != 0 {
+		t.Fatal("imported Server requires original isolated namespace")
+	}
+	info, err := os.Stat("/proc/self/ns/net")
+	if err != nil || os.Getenv("ROUTERVPN_SERVER_CHAIN_OUTER_NETNS") == "" || fmt.Sprintf("%d:%d", info.Sys().(*syscall.Stat_t).Dev, info.Sys().(*syscall.Stat_t).Ino) == os.Getenv("ROUTERVPN_SERVER_CHAIN_OUTER_NETNS") {
+		t.Fatal("imported Server retained outer network namespace")
+	}
+	for _, protocol := range []string{"http-connect", "https-connect"} {
+		for _, name := range serverChainCONNECTCases {
+			if protocol == "http-connect" && name == "wrong-proxy-name" {
+				continue
+			}
+			t.Run(protocol+"/"+name, func(t *testing.T) { serverChainCONNECTScenario(t, protocol, name) })
+		}
+	}
+}
+func TestServerChainCONNECTEncryptedSource(t *testing.T) {
+	for _, protocol := range []string{"http-connect", "https-connect"} {
+		for _, name := range serverChainCONNECTCases {
+			if protocol == "http-connect" && name == "wrong-proxy-name" {
+				continue
+			}
+			t.Run(protocol+"/"+name, func(t *testing.T) {
+				original := serverChainEncryptedKeys(t, "wg")
+				original.stats.Address = "192.168.210.2:51820"
+				raw, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
+				p := &serverChainCONNECTPeer{original: original, password: base64.StdEncoding.EncodeToString(raw), protocol: protocol}
+				p.reply.MiddleAddress = "192.168.210.2:38388"
+				policy, capture := serverChainCONNECTSource(t, p, name)
+				if policy.NativeCarrierRequired() {
+					t.Fatal("imported suffix manufactured packet carrier")
+				}
+				proofs := policy.ProofInventory()
+				if len(proofs) != 2 || proofs[0].NodeID != "" || proofs[0].Kind != "public-path" || proofs[1].NodeID != serverChainEncryptedProof(original.finalServer) {
+					t.Fatal("original imported/final identities merged")
+				}
+				routes, err := policy.FrontRoutes(capture)
+				if err != nil || len(routes) != 2 || routes[0].Final || !routes[1].Final || routes[1].UDPOverTCPVersion != 2 || routes[0].AllowsDestination("tcp", "10.77.0.1:8787") {
+					t.Fatal("positional source grants changed", err)
+				}
+				if routes[1].AllowsDestination("udp", "10.77.0.1:45999") != (name != "admission-restrictions") {
+					t.Fatal("imported original LAN policy changed private UDP admission")
+				}
+				if !routes[1].AllowsDestination("udp", "192.168.50.133:53") {
+					t.Fatal("imported LAN policy removed original selected DNS exception")
+				}
+				foreign := capture.Clone()
+				foreign.Request.SourceSHA256 = strings.Repeat("f", 64)
+				if _, err := policy.NativeConfig(foreign); err == nil {
+					t.Fatal("foreign captured source acquired native configuration")
+				}
+				if _, err := policy.FrontRoutes(foreign); err == nil {
+					t.Fatal("foreign captured source acquired authenticated fronts")
+				}
+				var changed mobilemultihop.NodeChainServerSource
+				if json.Unmarshal([]byte(policy.Source()), &changed) != nil {
+					t.Fatal("missing source")
+				}
+				changed.Nodes[0], changed.Nodes[1] = changed.Nodes[1], changed.Nodes[0]
+				if _, err := mobilemultihop.NewNodeChainCONNECTServerPolicy(serverChainEncryptedJSON(t, changed)); err == nil {
+					t.Fatal("reordered imported source accepted")
+				}
+			})
+		}
+	}
+
+}

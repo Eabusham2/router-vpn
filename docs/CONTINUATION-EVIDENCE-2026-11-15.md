@@ -2826,3 +2826,115 @@ This is execution of the real builder's scheduling and assertions with its
 existing compiler/subprocess boundaries modeled. It does not claim a new
 native application build, encrypted network run or full release. The pushed
 commit must pass the authoritative hosted build before those states advance.
+
+## CONNECT entry execution and private server pairing foundation
+
+This unit implements the shared execution and server foundation for an
+original three-member HTTP/HTTPS CONNECT graph: the paired WG/AWG entry,
+the independently captured imported CONNECT member and a paired Shadowsocks
+2022 final node. It preserves the original schema-four CONNECT source instead
+of converting it into a generic packet graph or substituting a synthetic
+WireGuard middle. Explicit typed constructors and observers retain the exact
+source pointer, original proxy credentials, HTTPS name, selected DNS and
+session owner. Generic schema-one/two constructors remain closed to this
+source family. The initial server suffix uses the final node's independent,
+key-bound UoT-v2 declaration and requires its final Start Layer to be Off;
+broader layer/graph combinations remain requirements to implement.
+
+Local/Server/Compare preparation uses the existing owned runtime, lease,
+measurement and proof lifecycle. Restoring a proved choice retains that
+choice and does not rerun Compare: Local performs no acquisition PUT, while
+Server acquires one fresh owned lease. The original observer and public-host
+measurement authority are retained. Native CONNECT construction, sockets,
+registry factories, half-close and teardown distinguish Local, Server and
+SOCKS owners. Pre-close validates the original source and instance, joins
+owned raw connections and refuses stale/mixed constructors. Removing the
+Local-on-execution guard fails the intended negative case.
+
+During integration, a real paired-path regression was found at the optional
+physical-proof call site: a typed nil pointer passed through the newly sealed
+interface became a non-nil interface and correctly failed validation. The
+call site now declares the sealed optional interface directly. No typed-nil
+exception was added to the validator. The original paired desktop test
+passed on the baseline, failed with the intermediate source, then passed
+with this correction. Those three observations and the retained original
+source are recorded separately.
+
+### Operator and generated runtime integration
+
+The router agent explicitly dispatches schema four through the typed CONNECT
+server compiler. Private registry readers still authenticate the original
+paired entry and reject foreign node/public-key identities; they do not
+borrow the imported proxy's credentials as the paired entry identity.
+The pairing script accepts the corresponding exact three-member plan with
+two suffix members and preserves canonical source digests, bounded private
+files, atomic staging, original inode checks and rollback. The operator
+instructions identify the literal proxy endpoint, HTTPS verification,
+independent final UoT-v2 declaration and current final-layer boundary.
+
+Shipping native preparation registers the actual CONNECT factories and
+server worker copies. The release workflow adds a distinct required
+17-case CONNECT native invocation on both AMD64 and ARM64. Each invocation
+has its own exact source SHA, receipt and unchanged 45-minute stage bound.
+The job budget is 105 minutes to accommodate the additional invocation;
+the original 14 plus eight encrypted-server cases and their commands remain
+unchanged. The single artifact must contain both independently named JSON
+receipts. Missing, duplicated, skipped, nonblocking, compile-only or
+wrong-source invocations/receipts are rejected by publication parity checks.
+
+### Focused executable evidence
+
+The shared source, native component and retained regression evidence is
+frozen in `connect-trio-execution-validation`, manifest SHA-256
+`c2a4841e23d3932eaaca6b80794187761f3c16925f600f6a6838dde1da47c737`.
+The original and CONNECT restore roots passed with the race detector in
+16.528 seconds; the original paired desktop case passed in 2.334 seconds.
+Actual native registry, outbound and Box-manager component tests passed
+32 leaves across four roots in 30.759 seconds, with packet/TUN/DNS and
+lease/worker boundaries explicitly modeled. Four public-host authority
+leaves, three reciprocal constructor-family leaves and the intended guard
+omission control also completed. The final relay preparation suite passed
+nine roots, and the new workflow runner passed thirteen roots including its
+exact case inventory and eleven malformed-workflow controls.
+
+The actual relay-only shipping command, race-instrumented peer and race
+instrumented driver compiled. Their SHA-256 identities are respectively
+`c75f863e71193ca483493025b18999d7b24defb5bde48f6e967f7b7fcd3a8acc`,
+`863f58e46aa997c4482d68371f98cb6efbb6852aaf94cf792651191a7d8f6ec0`
+and `fd1295382b848dec2c887ad961b28fd161cefc9f5ccfb57b2110dadddab55218`.
+The strict parser accepted all seventeen new source cases and the unchanged
+fourteen-case original source inventory. Actual encrypted namespace
+execution reached `ip link set lo up` and was blocked by the executor's
+netlink permission boundary. It is recorded as not accepted; source and
+compilation results are not used as an encrypted-network verdict.
+
+Final operator integration against the frozen core passed thirty actual
+compiler/private-reader race records in 24.364 seconds. All twenty-nine
+pairing roots passed in 77.837 seconds using seventeen generated sources,
+thirteen bundle plans, twelve digest vectors and the actual private reader.
+The exact dirty projection manifest is recorded, with no claim that its
+uncommitted source was a clean release. Native binary checking was not
+performed by this pairing suite. The retained server runner passed all
+twenty-two roots after selecting the pinned Go toolchain; the initial shell
+picked an unrelated `go` command and that failed attempt is retained.
+The new runner passed thirteen roots, the aggregate suite twenty-three,
+and the native-artifact parity audit and its nineteen child roots passed.
+The separate full release-orchestration attempt stopped in an unrelated
+Android check because the shell did not include the installed JDK; it is
+not counted as a complete audit. Hosted release verification remains required.
+
+The frozen publication-contract tests include twenty-six independent
+invocation mutations, three quoted-job-key controls and two extra/duplicate
+receipt controls. Operator integration/preimages are in
+`connect-server-dispatch-validation`; publication contract evidence is in
+`connect-server-parity-validation`.
+
+### Remaining host and delivery boundary
+
+This commit is a shared runtime, private server and required release-gate
+unit. It does not yet admit CONNECT Server/Compare in the desktop/mobile
+product UI. Typed desktop host/protection/restore integration and Android's
+owned CommandServer/bridge integration continue separately. All required
+native hosted encrypted execution, package publication, physical-device
+networking, Apple signing and deliberate private deployment retain their
+own evidence requirements. No private server/router deployment occurred.

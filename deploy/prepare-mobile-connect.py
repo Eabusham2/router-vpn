@@ -31,16 +31,31 @@ TEMPLATES = {
  "connect_close_test.go.tmpl": "protocol/routervpnnodeconnect/connect_close_test.go",
  "connect_bridge_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_test.go",
  "connect_native_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_native_test.go",
+ 'connect_server_owner.go.tmpl': 'protocol/routervpnnodeconnect/connect_server_owner.go',
  'connect_owner.go.tmpl': 'protocol/routervpnnodeconnect/connect_owner.go',
  'connect_scope.go.tmpl': 'protocol/routervpnnodeconnect/connect_scope.go',
  'connect_final_owner.go.tmpl': 'protocol/routervpnnodeconnect/connect_final.go',
  'connect_final.go.tmpl': 'protocol/shadowsocks/routervpn_connect_final.go',
+ 'connect_execution_box_test.go.tmpl': 'routervpn_node_chain_connect_execution_test.go',
+ 'connect_execution_box.go.tmpl': 'routervpn_node_chain_connect_execution.go',
  'connect_box.go.tmpl': 'routervpn_node_chain_connect.go',
  'connect_server.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_server.go',
  'connect_bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect.go',
  'connect_lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_lifecycle.go',
  'connect_measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_measurement.go',
 }
+
+# The portable remote worker needs the owned CONNECT protocol and actual SS
+# UoT readback, not a client TUN/Box/mobile launch context.
+SERVER_TEMPLATES = {
+ name: target for name,target in TEMPLATES.items()
+ if target.startswith("protocol/routervpnnodeconnect/") and not name.endswith("_test.go.tmpl")
+ or name == "connect_final.go.tmpl"
+}
+def server_copies():
+ return {target:(ROOT/"mobile/chain"/name).read_bytes() for name,target in SERVER_TEMPLATES.items()}
+def server_inputs():
+ return [Path(__file__).resolve(), *(ROOT/"mobile/chain"/name for name in sorted(SERVER_TEMPLATES))]
 
 def inputs():
  return [*CONNECT_BINDING.inputs(), Path(__file__).resolve(), ROOT/"deploy/test_connect_preparation.py", *(ROOT/'mobile/chain'/name for name in sorted(TEMPLATES))]

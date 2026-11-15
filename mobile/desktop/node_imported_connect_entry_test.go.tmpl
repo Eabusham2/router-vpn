@@ -189,7 +189,14 @@ func (p *desktopImportedCONNECTPeer) awaitCertificateRefusal(ctx context.Context
 
 func desktopStartImportedCONNECTPeer(t *testing.T, s *desktopNodeLayerServer, username, password string, cert *tls.Certificate, cancelOriginal context.CancelFunc, fault string) *desktopImportedCONNECTPeer {
 	t.Helper()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	return desktopStartImportedCONNECTPeerAt(t, s, username, password, cert, cancelOriginal, fault, netip.MustParseAddr("127.0.0.1"))
+}
+func desktopStartImportedCONNECTPeerAt(t *testing.T, s *desktopNodeLayerServer, username, password string, cert *tls.Certificate, cancelOriginal context.CancelFunc, fault string, bind netip.Addr) *desktopImportedCONNECTPeer {
+	t.Helper()
+	if !bind.Is4() || bind.Is4In6() || bind.IsUnspecified() || bind.Zone() != "" {
+		t.Fatal("original CONNECT peer bind is not captured IPv4")
+	}
+	listener, err := net.Listen("tcp4", net.JoinHostPort(bind.String(), "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
