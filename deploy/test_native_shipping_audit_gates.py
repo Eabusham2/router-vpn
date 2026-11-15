@@ -313,10 +313,10 @@ class NativeShippingAuditTests(unittest.TestCase):
             (launch, "e.original.execution != nil && e.original.execution != e", "false"),
             (launch, "physical != e.physical", "false"),
             (launch, "original != e.original.policy", "false"),
-            (launch, "original.OriginalChain() != e.original.selection.Native.chain.chain", "false"),
+            (launch, "original.OriginalChain() != selected.chain", "false"),
             (launch, "if err := e.validateSource(); err != nil {", "if err := error(nil); err != nil {"),
             (launch, "physical.ConfigSHA256 != e.preparation.ConfigSHA256()", "false"),
-            (launch, 'physical.Kind != "node-chain-execution"', "false"),
+            (launch, 'physical.Kind != kind', "false"),
             (launch, "launch.chain != e.original", "false"),
             (launch, "e.original.input != e.preparation.Source()", "false"),
             (graph, "desktopnetwork.LockContext(ctx, &e.mu)",
@@ -353,6 +353,44 @@ class NativeShippingAuditTests(unittest.TestCase):
                      "return errors.Join(/* exact original child */ proof.currentState(e, graph),\nctx.Err())")
         self.assert_backend_proof_admission(True)
         self.assert_multihop_scores(True)
+
+    def test_connect_execution_keeps_distinct_sealed_owner_and_original_graph(self):
+        launch = "cmd/client/desktop_node_chain_execution_launch.go"
+        graph = "cmd/client/desktop_node_chain_execution_graph.go"
+        policy = "cmd/client/desktop_node_chain_policy_dispatch.go"
+        changes = (
+            (policy, "(c.policy != nil || c.connectPolicy != nil)", "true"),
+            (launch, "(e.physical == nil) == (e.connectPhysical == nil)", "false"),
+            (launch, "e.original.connectPolicy == nil || e.original.policy != nil || selected.connect == nil || selected.chain != nil || selected.socks != nil", "false"),
+            (launch, "e.original.policy == nil || e.original.connectPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil", "false"),
+            (launch, "e.preparation.CONNECTDesktopPhysicalPolicy()", "other.CONNECTDesktopPhysicalPolicy()"),
+            (launch, "physical != e.connectPhysical", "false"),
+            (launch, "physical.OriginalDesktopCONNECTPolicy()", "other.OriginalDesktopCONNECTPolicy()"),
+            (launch, "original != e.original.connectPolicy", "false"),
+            (launch, "source != selected.connect.source", "false"),
+            (launch, "original == nil || !original.hasPolicy() || original.socksPolicy != nil", "original == nil"),
+            (launch, "_, meta, _, err := original.connectPolicy.ReadValidated()", "_, meta, _, err := other.ReadValidated()"),
+            (launch, "_, meta, _, err := original.policy.ReadValidated()", "_, meta, _, err := other.ReadValidated()"),
+            (launch, "return e.connectPhysical, nil", "return e.physical, nil"),
+            (launch, "policy, err := e.physicalPolicy()", "policy, err := other.physicalPolicy()"),
+            (launch, 'kind = "node-chain-connect-execution"', 'kind = "node-chain-execution"'),
+            (launch, "physical.SourceSHA256 != meta.SourceSHA256", "false"),
+            (launch, "physical.SessionID != meta.SessionID", "false"),
+            (launch, "physical.TargetOS != meta.TargetOS", "false"),
+            (launch, "launch.mtuSession != meta.SessionID", "false"),
+            (graph, "connectPhysical: e.connectPhysical", "connectPhysical: nil"),
+            (graph, "e.connectPhysical != proof.connectPhysical", "false"),
+        )
+        self.assert_backend_proof_admission(True)
+        self.assert_multihop_scores(True)
+        for path, before, after in changes:
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\nvar connectExecutionAuditDecoy = `" + before + "`\n"
+                self.assertFalse(_NATIVE.native_multihop_ordered_owner(self.body))
+                self.assert_backend_proof_admission(False)
+                self.assert_multihop_scores(False)
 
     def test_speedlab_retains_execution_proof_during_native_owner_adoption(self):
         path = "cmd/client/multihop_native_launch.go"

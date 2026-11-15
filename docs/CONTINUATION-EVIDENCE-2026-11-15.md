@@ -3152,3 +3152,35 @@ This proves the repaired real provider boundary. It does not establish the
 complete installed remote worker, entry API, Manager, Compare, namespace or
 physical-host path. Both native architecture runs must pass again at the
 subsequent release SHA before that acceptance can be claimed.
+
+## Native ownership audits retain the distinct CONNECT execution path
+
+At exact main `3201212b710255c939c923200c78d76b6c7dbb21`, Weighted release
+audit run `43759100815` / job `132949700672` failed 16 of its 62 roots.
+Exact-head release blockers run `43759100920` / job `132949698903` failed
+on the same Windows/macOS multihop source evidence. The local baseline
+reproduces the exact same 16 failing names.
+
+Six audit snapshots still described the earlier paired-only execution
+owner, while published shipping code now has a distinct CONNECT physical
+owner. The snapshots now require the exact exclusive sum, original typed
+source and selected native proof. The two newly called metadata/physical
+dispatch helpers are also pinned as actual unique function bodies. Existing
+causal controls retain equivalent current anchors, and 21 additional mutations
+must reject missing CONNECT identity, exclusivity, source, metadata, graph or
+physical-owner checks. No application source, scoring weight, readiness or
+cleanup rule changed in this unit.
+
+All original 62 roots plus the new causal root pass: 63 roots, zero failures,
+237.650 seconds. The backend transaction audit and the existing weighted and
+recovered source gates pass. Their separately recorded manual/live acceptance
+remains unearned; this source audit is not full product or device acceptance.
+
+The two-file manifest is
+`938037fd545f5f9e1aef86e83a7a81c667e535cdccf9a9d28a1917ee94cf631a`,
+the patch is `75bf2c8afd1b986fe08c83d1cd3c8f850b5c4b1e477aafa61d1cc63c96442191`,
+and the validation receipt is
+`2fb10b6ae1da90deac7561a1473aa03b0848cfb81ba0c4577eb3707878f1e684`.
+Exact failing/positive logs and source comparison are retained in
+`connect-host-audit-validation`. Exact-SHA hosted builds and publication
+must still be observed separately.
