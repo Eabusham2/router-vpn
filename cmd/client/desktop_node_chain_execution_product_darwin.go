@@ -122,7 +122,9 @@ func (h *desktopMacOSNodeChainHost) unpublishedExecutionProductCurrentLocked(ctx
 	if _, exists := desktopExternalRetainedLaunches.Load(a); exists {
 		return nil, bad
 	}
-	if _, exists := getActiveMultihopGraph(a); exists {
+	// A malformed or partially published graph still occupies this owner's
+	// registry. Display/readiness validation cannot prove its absence.
+	if _, exists := activeMultihopGraphs.Load(a); exists {
 		return nil, bad
 	}
 	if err := p.enter(ctx); err != nil {
@@ -294,7 +296,8 @@ func (h *desktopMacOSNodeChainHost) retiredExecutionProductCurrentLocked(ctx con
 	if _, exists := desktopExternalRetainedLaunches.Load(a); exists {
 		return nil, bad
 	}
-	if _, exists := getActiveMultihopGraph(a); exists {
+	// Preserve cleanup ownership even if the retained graph is incomplete.
+	if _, exists := activeMultihopGraphs.Load(a); exists {
 		return nil, bad
 	}
 	if err := p.enter(ctx); err != nil {

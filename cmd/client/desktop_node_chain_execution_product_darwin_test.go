@@ -349,7 +349,7 @@ func TestDesktopMacOSExecutionProductStopRetainsTerminalProtectionUntilDisconnec
 }
 
 func TestDesktopMacOSExecutionProductStopRejectsFalseTerminalAbsence(t *testing.T) {
-	for _, fault := range []string{"native-progress", "workspace-progress", "native-ack", "process-close", "process-join", "workspace-replacement", "baseline-progress", "baseline-phase", "baseline-capture", "controller", "command", "registry", "graph", "parent-slot", "parent-dependent"} {
+	for _, fault := range []string{"native-progress", "workspace-progress", "native-ack", "process-close", "process-join", "workspace-replacement", "baseline-progress", "baseline-phase", "baseline-capture", "controller", "command", "registry", "graph", "complete-graph", "foreign-graph", "nil-graph", "parent-slot", "parent-dependent"} {
 		t.Run(fault, func(t *testing.T) {
 			h, s, actions := macOSExecutionProductStopFixture(t)
 			if err := s.Close(context.Background()); err != nil {
@@ -399,6 +399,15 @@ func TestDesktopMacOSExecutionProductStopRejectsFalseTerminalAbsence(t *testing.
 				defer nativeMultihopOwners.Delete(s.app)
 			case "graph":
 				activeMultihopGraphs.Store(s.app, activeMultihopGraph{ChainNodes: 3})
+				defer activeMultihopGraphs.Delete(s.app)
+			case "complete-graph":
+				activeMultihopGraphs.Store(s.app, activeMultihopGraph{ChainNodes: 3, EntryID: "entry", ExitID: "exit"})
+				defer activeMultihopGraphs.Delete(s.app)
+			case "foreign-graph":
+				activeMultihopGraphs.Store(s.app, "foreign graph owner")
+				defer activeMultihopGraphs.Delete(s.app)
+			case "nil-graph":
+				activeMultihopGraphs.Store(s.app, nil)
 				defer activeMultihopGraphs.Delete(s.app)
 			case "parent-slot":
 				h.parent.session.nodeChain = &desktopNodeChainPlatformRuntime{}
