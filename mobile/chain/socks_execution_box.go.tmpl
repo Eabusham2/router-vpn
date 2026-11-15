@@ -1,0 +1,252 @@
+package box
+
+import (
+	"context"
+	"errors"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type routerVPNSOCKSExecutionKey struct{}
+type routerVPNSOCKSExecutionConstruction struct {
+	self      *routerVPNSOCKSExecutionConstruction
+	prep      *mobilemultihop.NodeChainExecutionPreparation
+	source    *mobilemultihop.NodeChainSOCKSSource
+	capture   *ownedSOCKS.Capture
+	digest    string
+	mu        sync.Mutex
+	attempted bool
+	instance  *Box
+}
+
+// The original typed SOCKS registry owns its unchanged UDP association; the
+// paired SS final retains that original detour. No CONNECT/UoT is introduced.
+// This separate construction seals the complete closed execution gate graph.
+func RouterVPNNodeSOCKSExecutionContext(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation, capture *ownedSOCKS.Capture) (context.Context, error) {
+	if ctx == nil || ctx.Err() != nil || prep == nil || capture == nil || ctx.Value(routerVPNSOCKSExecutionKey{}) != nil || ctx.Value(routerVPNNodeCONNECTContextKey{}) != nil || ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil || ctx.Value(routerVPNOrderedTypedConstructionKey{}) != nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	source, err := prep.OriginalSOCKSSource()
+	if err != nil {
+		return nil, err
+	}
+	if err = capture.RequireOriginalContext(ctx, source); err != nil {
+		return nil, err
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(prep.Config()))
+	if err != nil {
+		return nil, err
+	}
+	digest := routerVPNNodeChainExecutionOptionsDigest(ctx, options)
+	if digest == "" {
+		return nil, errRouterVPNExecutionOwner
+	}
+	ctx = context.WithValue(ctx, routerVPNOrderedTypedConstructionKey{}, true)
+	construction := &routerVPNSOCKSExecutionConstruction{prep: prep, source: source, capture: capture, digest: digest}
+	construction.self = construction
+	return context.WithValue(ctx, routerVPNSOCKSExecutionKey{}, construction), nil
+}
+func (c *routerVPNSOCKSExecutionConstruction) require(ctx, native context.Context, prep *mobilemultihop.NodeChainExecutionPreparation) error {
+	if c == nil || c.self != c || ctx == nil || ctx.Err() != nil || native == nil || native.Err() != nil || native.Value(routerVPNSOCKSExecutionKey{}) != c || prep != c.prep || c.capture == nil {
+		return errRouterVPNExecutionOwner
+	}
+	original, err := prep.OriginalSOCKSSource()
+	if err != nil || original != c.source {
+		return errRouterVPNExecutionOwner
+	}
+	return c.capture.RequireOriginalContext(native, original)
+}
+func routerVPNSOCKSExecutionOptions(ctx context.Context, options option.Options) error {
+	value := ctx.Value(routerVPNSOCKSExecutionKey{})
+	if value == nil {
+		return nil
+	}
+	c, ok := value.(*routerVPNSOCKSExecutionConstruction)
+	if !ok || c == nil || ctx.Value(routerVPNNodeCONNECTContextKey{}) != nil || ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil || c.require(ctx, ctx, c.prep) != nil || routerVPNNodeChainExecutionOptionsDigest(ctx, options) != c.digest {
+		return errRouterVPNExecutionOwner
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+		return err
+	}
+	defer c.mu.Unlock()
+	if c.attempted || ctx.Err() != nil {
+		return errRouterVPNExecutionOwner
+	}
+	c.attempted = true
+	return nil
+}
+func routerVPNSOCKSExecutionBind(s *Box) {
+	c, ok := s.ctx.Value(routerVPNSOCKSExecutionKey{}).(*routerVPNSOCKSExecutionConstruction)
+	if !ok || c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.attempted && c.instance == nil && c.require(s.ctx, s.ctx, c.prep) == nil {
+		c.instance = s
+		s.RouterVPNCaptureCloseReceipt()
+	}
+}
+func (e *RouterVPNNodeChainExecutionEngine) ObserveSOCKSExecutionContext(ctx context.Context, original *mobilemultihop.NodeChainSOCKSSource) error {
+	if e == nil || e.instance == nil || e.instance.ctx == nil || ctx == nil || original == nil {
+		return errRouterVPNExecutionOwner
+	}
+	c, ok := e.instance.ctx.Value(routerVPNSOCKSExecutionKey{}).(*routerVPNSOCKSExecutionConstruction)
+	if !ok || c == nil || c.source != original || c.require(ctx, e.instance.ctx, e.prep) != nil {
+		return errRouterVPNExecutionOwner
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+		return err
+	}
+	valid := c.attempted && c.instance == e.instance
+	c.mu.Unlock()
+	if !valid {
+		return errRouterVPNExecutionOwner
+	}
+	_, meta, err := original.ReadValidated()
+	if err != nil || len(meta.Proofs) != 3 {
+		return errRouterVPNExecutionOwner
+	}
+	actual, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.outbound, meta.Proofs[1].Tag)
+	if err != nil || !found {
+		return errRouterVPNExecutionOwner
+	}
+	middle, ok := actual.(*ownedSOCKS.Outbound)
+	if !ok {
+		return errRouterVPNExecutionOwner
+	}
+	return middle.ObserveContext(ctx, original)
+}
+func (e *RouterVPNNodeChainExecutionEngine) observeTypedSOCKS(ctx context.Context) error {
+	source, err := e.prep.OriginalSOCKSSource()
+	if err != nil {
+		if e.prep.RequiresSOCKSExecutionObserver() || e.instance.ctx.Value(routerVPNSOCKSExecutionKey{}) != nil {
+			return errRouterVPNExecutionOwner
+		}
+		// Generic preparations cannot return a typed source and have no typed
+		// construction. Their existing native ownership remains authoritative.
+		return nil
+	}
+	return e.ObserveSOCKSExecutionContext(ctx, source)
+}
+
+// Cleanup retains the acquired instance/capture even after its source context
+// is cancelled. No replacement manager or reconstructed source grants Close.
+func (c *routerVPNSOCKSExecutionConstruction) closeOriginalContext(ctx context.Context, instance *Box) error {
+	if c == nil || c.self != c || ctx == nil || instance == nil {
+		return errRouterVPNExecutionOwner
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+		return err
+	}
+	valid := c.attempted && c.instance == instance && c.capture != nil
+	capture := c.capture
+	c.mu.Unlock()
+	if !valid {
+		return errRouterVPNExecutionOwner
+	}
+	return capture.CloseContext(ctx)
+}
+
+// This joins the retained association owner, including pending original
+// sockets after source cancellation. It grants no Box-close or native DOWN
+// receipt; the existing original Box.Close still owns those boundaries.
+func (s *Box) RouterVPNCloseSOCKSExecutionContext(ctx context.Context) error {
+	if s == nil || s.ctx == nil || ctx == nil ||
+		s.ctx.Value(routerVPNNodeSOCKSContextKey{}) != nil || s.ctx.Value(routerVPNNodeCONNECTContextKey{}) != nil {
+		return errRouterVPNExecutionOwner
+	}
+	original, ok := s.ctx.Value(routerVPNSOCKSExecutionKey{}).(*routerVPNSOCKSExecutionConstruction)
+	if !ok || original == nil {
+		return errRouterVPNExecutionOwner
+	}
+	return original.closeOriginalContext(ctx, s)
+}
+
+// Only the typed original imported public measurement origin receives DNS
+// resolution. The selected application's existing resolver/selector owns it.
+func (e *RouterVPNNodeChainExecutionEngine) dialSOCKSPublicContext(ctx context.Context, state *routerVPNExecutionState, tag string) (net.Conn, error) {
+	original, err := e.prep.OriginalSOCKSSource()
+	if err != nil || state == nil || state.stage != 2 || state.projection == nil || e.instance.dnsRouter == nil || e.resolver == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	_, meta, err := original.ReadValidated()
+	if err != nil || len(meta.Devices) != 3 {
+		return nil, errRouterVPNExecutionOwner
+	}
+	execution := ""
+	selected := e.selector.Now()
+	epoch := e.selector.RouterVPNNodeChainSelectionEpoch()
+	if selected == state.local.Tag() {
+		execution = "local"
+	} else if selected == state.server.Tag() {
+		execution = "server"
+	} else {
+		return nil, errRouterVPNExecutionOwner
+	}
+	proofs, err := state.projection.ProofInventory(execution)
+	if err != nil || len(proofs) != 3 || proofs[1].Tag != tag || proofs[1].Kind != "public-path" || proofs[1].NodeKind != "external" {
+		return nil, errRouterVPNExecutionOwner
+	}
+	dns, err := state.projection.DNSCapture(execution)
+	if err != nil || dns.SelectedTag != selected || dns.DNS.ResolverTag != e.dnsCapture.DNS.ResolverTag {
+		return nil, errRouterVPNExecutionOwner
+	}
+	current := func() error {
+		observed, err := e.ObserveChainContext(ctx)
+		if err != nil || observed != state.identity || e.state.Load() != state || e.selector.Now() != selected || e.selector.RouterVPNNodeChainSelectionEpoch() != epoch {
+			return errRouterVPNExecutionOwner
+		}
+		return ctx.Err()
+	}
+	if err = current(); err != nil {
+		return nil, err
+	}
+	if execution == "server" {
+		// The remote authenticated prefix grants exactly this hostname. Its own
+		// retained selected resolver validates every resulting address; sending a
+		// client-resolved IP would bypass (and is rejected by) that front authority.
+		retained := state.prefixes[tag]
+		if retained == nil {
+			return nil, errRouterVPNExecutionOwner
+		}
+		conn, dialErr := retained.DialContext(ctx, "tcp", M.ParseSocksaddr(hopmeasure.PublicAddress))
+		if observed := current(); observed != nil || conn == nil {
+			return conn, errors.Join(dialErr, observed, errRouterVPNExecutionOwner)
+		}
+		return conn, dialErr
+	}
+	query, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	query = adapter.WithContext(query, &adapter.InboundContext{Inbound: dns.DNS.TUNTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
+	addresses, err := e.instance.dnsRouter.Lookup(query, hopmeasure.PublicHost, adapter.DNSQueryOptions{Transport: e.resolver, DisableCache: true, DisableOptimisticCache: true})
+	if observed := current(); err != nil || observed != nil {
+		return nil, errors.Join(err, observed)
+	}
+	for _, ip := range addresses {
+		if !ip.IsValid() || ip.Zone() != "" || ip.Is4In6() || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.Is6() && meta.Devices[1].IPv6Mode == "off" {
+			continue
+		}
+		conn, dialErr := e.Dial(ctx, tag, net.JoinHostPort(ip.String(), "443"))
+		if observed := current(); observed != nil {
+			return conn, errors.Join(dialErr, observed)
+		}
+		if dialErr == nil && conn != nil {
+			return conn, nil
+		}
+		if conn != nil {
+			return conn, dialErr
+		}
+	}
+	return nil, errRouterVPNExecutionOwner
+}

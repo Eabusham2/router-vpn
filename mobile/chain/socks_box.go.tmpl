@@ -85,6 +85,7 @@ func routerVPNNodeSOCKSBind(s *Box) *Box {
 	if s == nil || s.ctx == nil {
 		return s
 	}
+	routerVPNSOCKSExecutionBind(s)
 	original, ok := s.ctx.Value(routerVPNNodeSOCKSContextKey{}).(*routerVPNNodeSOCKSConstruction)
 	if !ok || original == nil {
 		return s
@@ -105,6 +106,11 @@ func routerVPNNodeSOCKSBind(s *Box) *Box {
 func (s *Box) RouterVPNCloseSOCKSMiddle() error {
 	if s == nil {
 		return errors.New("ordered SOCKS close has no original Box")
+	}
+	if s.ctx != nil && s.ctx.Value(routerVPNSOCKSExecutionKey{}) != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		return s.RouterVPNCloseSOCKSExecutionContext(ctx)
 	}
 	if s.ctx == nil || s.ctx.Value(routerVPNNodeSOCKSContextKey{}) == nil {
 		return nil
@@ -128,6 +134,9 @@ func (s *Box) RouterVPNCloseSOCKSMiddle() error {
 func routerVPNNodeSOCKSOptions(ctx context.Context, options option.Options) error {
 	if ctx == nil {
 		return nil
+	}
+	if err := routerVPNSOCKSExecutionOptions(ctx, options); err != nil {
+		return err
 	}
 	value := ctx.Value(routerVPNNodeSOCKSContextKey{})
 	if value == nil {

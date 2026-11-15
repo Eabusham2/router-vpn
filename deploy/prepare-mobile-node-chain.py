@@ -27,6 +27,8 @@ TEMPLATES = {
     'socks_owner_close_test.go.tmpl': 'protocol/routervpnnodesocks/socks_owner_close_test.go',
     'socks_scope.go.tmpl': 'protocol/routervpnnodesocks/socks_scope.go',
     'socks_box.go.tmpl': 'routervpn_node_chain_socks.go',
+    'socks_execution_box.go.tmpl': 'routervpn_node_chain_socks_execution.go',
+    'socks_execution_box_test.go.tmpl': 'routervpn_node_chain_socks_execution_test.go',
     'socks_mtu_box.go.tmpl': 'routervpn_node_chain_socks_mtu.go',
     'socks_mtu_box_test.go.tmpl': 'routervpn_node_chain_socks_mtu_test.go',
     'socks_server.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_server.go',

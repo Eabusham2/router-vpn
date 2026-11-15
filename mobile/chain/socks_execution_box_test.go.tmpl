@@ -1,0 +1,777 @@
+package box
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"io"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+// Actual typed SOCKS/SS factories and original execution managers run here.
+// TUN, packet-prefix I/O and DNS retain executionNativeFixture's explicit
+// component doubles. This is not encrypted or OS network acceptance.
+func socksExecutionNativeSources(t *testing.T, mode, execution string) (*mobilemultihop.NodeChainSOCKSSource, *mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainServerPolicy) {
+	t.Helper()
+	original := socksMTUSource(t)
+	input, err := original.Source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var local mobilemultihop.NodeChainSource
+	if err = json.Unmarshal([]byte(input), &local); err != nil {
+		t.Fatal(err)
+	}
+	// Change only the fixture's original packet-entry selection before creating
+	// the source. The identity key remains the independently paired original.
+	entryChain := chainNativeSourceModes(t, []string{mode, "wg"})
+	entryInput, err := entryChain.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entryLocal mobilemultihop.NodeChainSource
+	if err = json.Unmarshal([]byte(entryInput), &entryLocal); err != nil {
+		t.Fatal(err)
+	}
+	local.Nodes[0] = entryLocal.Nodes[0]
+	original, err = mobilemultihop.NewNodeChainSOCKSSource(chainNativeJSON(t, local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prep, err := mobilemultihop.NewNodeChainSOCKSExecutionPreparation(original, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, meta, err := original.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := mobilemultihop.NodeChainServerSource{Schema: 3, EntryID: meta.Proofs[0].ProfileID, EntryNodeID: meta.Proofs[0].NodeID, EntryMode: meta.Proofs[0].Mode, Nodes: local.Nodes[1:], IdentitySources: local.IdentitySources[1:]}
+	server, err := mobilemultihop.NewNodeChainSOCKSServerPolicy(chainNativeJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original, prep, server
+}
+func newSOCKSExecutionNativeFixture(t *testing.T, mode, execution string, parents ...context.Context) (*executionNativeFixture, *mobilemultihop.NodeChainSOCKSSource, *ownedSOCKS.Capture) {
+	t.Helper()
+	original, prep, server := socksExecutionNativeSources(t, mode, execution)
+	parent := t.Context()
+	if len(parents) > 0 {
+		parent = parents[0]
+	}
+	capture, err := ownedSOCKS.NewCapture(parent, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := capture.CloseContext(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	f := newExecutionNativeFixtureWithSources(t, prep, server, nil, executionNativeConstructionHook{
+		parent: capture.Context(), registry: func(registry *outbound.Registry) error {
+			shadowsocks.RegisterOutbound(registry)
+			return capture.Register(registry)
+		},
+		context: func(ctx context.Context) (context.Context, error) {
+			return RouterVPNNodeSOCKSExecutionContext(ctx, prep, capture)
+		},
+		options: routerVPNNodeSOCKSOptions, bind: func(s *Box) { routerVPNNodeSOCKSBind(s) },
+	})
+	return f, original, capture
+}
+func TestRouterVPNExecutionNativeSOCKSOriginalOwner(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, execution := range []string{"server", "auto"} {
+			t.Run(mode+"/"+execution, func(t *testing.T) {
+				f, original, _ := newSOCKSExecutionNativeFixture(t, mode, execution)
+				engine, err := f.capture(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = engine.ObserveSOCKSExecutionContext(t.Context(), original); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = engine.ObserveChainContext(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if open, err := engine.ApplicationOpenContext(t.Context()); err != nil || open {
+					t.Fatal("unproved preparation opened application", open, err)
+				}
+				_, meta, _ := original.ReadValidated()
+				final, found := f.box.outbound.Outbound(meta.Proofs[2].Tag)
+				if _, ok := final.(*shadowsocks.Outbound); !found || !ok {
+					t.Fatal("original paired final bypassed native SS constructor")
+				}
+				f.discovery(t)
+				if _, err = engine.DiscoverContext(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = engine.AdoptContext(t.Context(), f.server.SourceSHA256(), 32003); err != nil {
+					t.Fatal(err)
+				}
+				retained, found := f.box.outbound.Outbound(meta.Proofs[2].Tag)
+				if !found || retained != final {
+					t.Fatal("adoption replaced original paired final")
+				}
+				if _, err = engine.ObserveChainContext(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if open, err := engine.ApplicationOpenContext(t.Context()); err != nil || open {
+					t.Fatal("unproved adoption opened application", open, err)
+				}
+			})
+		}
+	}
+}
+func TestRouterVPNExecutionNativeSOCKSRefusesReplacement(t *testing.T) {
+	for _, fault := range []string{"equal-source", "foreign-preparation", "foreign-box", "missing-construction", "copied-construction", "retired-middle", "duplicate-options", "changed-options", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			f, original, capture := newSOCKSExecutionNativeFixture(t, "wg", "server")
+			engine, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			observed := original
+			ctx := t.Context()
+			switch fault {
+			case "equal-source":
+				input, _ := original.Source()
+				observed, err = mobilemultihop.NewNodeChainSOCKSSource(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "foreign-preparation":
+				other, err := mobilemultihop.NewNodeChainSOCKSExecutionPreparation(original, "server")
+				if err != nil {
+					t.Fatal(err)
+				}
+				old := engine.prep
+				engine.prep = other
+				defer func() { engine.prep = old }()
+			case "foreign-box":
+				c := f.ctx.Value(routerVPNSOCKSExecutionKey{}).(*routerVPNSOCKSExecutionConstruction)
+				old := c.instance
+				c.instance = &Box{}
+				defer func() { c.instance = old }()
+			case "missing-construction":
+				old := f.box.ctx
+				f.box.ctx = context.WithValue(old, routerVPNSOCKSExecutionKey{}, false)
+				defer func() { f.box.ctx = old }()
+			case "copied-construction":
+				original := f.ctx.Value(routerVPNSOCKSExecutionKey{}).(*routerVPNSOCKSExecutionConstruction)
+				copy := &routerVPNSOCKSExecutionConstruction{self: original, prep: original.prep, source: original.source, capture: original.capture, digest: original.digest, attempted: original.attempted, instance: original.instance}
+				old := f.box.ctx
+				f.box.ctx = context.WithValue(old, routerVPNSOCKSExecutionKey{}, copy)
+				defer func() { f.box.ctx = old }()
+				if f.box.RouterVPNCloseSOCKSExecutionContext(t.Context()) == nil {
+					t.Fatal("copied construction borrowed original cleanup authority")
+				}
+			case "retired-middle":
+				if err := capture.CloseContext(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			case "duplicate-options", "changed-options":
+				options, err := SJ.UnmarshalExtendedContext[option.Options](f.ctx, []byte(f.prep.Config()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if fault == "changed-options" {
+					options.Route.Final = "foreign-selector"
+					c := f.ctx.Value(routerVPNSOCKSExecutionKey{}).(*routerVPNSOCKSExecutionConstruction)
+					c.attempted = false
+					defer func() { c.attempted = true }()
+				}
+				if routerVPNNodeSOCKSOptions(f.ctx, options) == nil {
+					t.Fatal("foreign or repeated construction accepted")
+				}
+				return
+			case "cancelled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			if engine.ObserveSOCKSExecutionContext(ctx, observed) == nil {
+				t.Fatal("replacement typed native owner accepted")
+			}
+		})
+	}
+}
+
+type socksExecutionHeldConn struct {
+	net.Conn
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (c *socksExecutionHeldConn) CloseWrite() error {
+	return c.Conn.(interface{ CloseWrite() error }).CloseWrite()
+}
+func (c *socksExecutionHeldConn) Close() error {
+	c.once.Do(func() { close(c.entered) })
+	<-c.release
+	return c.Conn.Close()
+}
+
+// The packet predecessor is explicitly redirected to loopback peers. The
+// native SOCKS5 greeting, original password, CONNECT/UDP ASSOCIATE framing,
+// negotiated UDP socket and captured control lifetime are shipping code.
+func socksExecutionPipe(t *testing.T, f *executionNativeFixture, udp bool, reject bool) <-chan string {
+	t.Helper()
+	addresses := make(chan string, 2)
+	var calls atomic.Int32
+	var relay net.PacketConn
+	if udp {
+		var err error
+		relay, err = net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { relay.Close() })
+		go func() {
+			data := make([]byte, 65535)
+			for {
+				n, peer, err := relay.ReadFrom(data)
+				if err != nil {
+					return
+				}
+				_, _ = relay.WriteTo(data[:n], peer)
+			}
+		}()
+	}
+	f.prefixes[f.prep.ProofInventory()[0].Tag].dial = func(ctx context.Context) (net.Conn, error) {
+		if calls.Add(1) == 2 && udp {
+			return (&net.Dialer{}).DialContext(ctx, "udp", relay.LocalAddr().String())
+		}
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, err
+		}
+		client, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
+		if err != nil {
+			listener.Close()
+			return nil, err
+		}
+		peer, err := listener.Accept()
+		listener.Close()
+		if err != nil {
+			client.Close()
+			return nil, err
+		}
+		t.Cleanup(func() { peer.Close() })
+		go func() {
+			defer peer.Close()
+			reader := bufio.NewReader(peer)
+			greeting, err := socks5.ReadAuthRequest(reader)
+			if err != nil || len(greeting.Methods) != 1 || greeting.Methods[0] != socks5.AuthTypeUsernamePassword {
+				return
+			}
+			if socks5.WriteAuthResponse(peer, socks5.AuthResponse{Method: socks5.AuthTypeUsernamePassword}) != nil {
+				return
+			}
+			credentials, err := socks5.ReadUsernamePasswordAuthRequest(reader)
+			if err != nil || credentials.Username != "original-user" || credentials.Password != "original-password" {
+				return
+			}
+			if reject {
+				_ = socks5.WriteUsernamePasswordAuthResponse(peer, socks5.UsernamePasswordAuthResponse{Status: 1})
+				return
+			}
+			if socks5.WriteUsernamePasswordAuthResponse(peer, socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusSuccess}) != nil {
+				return
+			}
+			request, err := socks5.ReadRequest(reader)
+			if err != nil {
+				return
+			}
+			command := byte(socks5.CommandConnect)
+			bind := M.ParseSocksaddr("127.0.0.1:1234")
+			if udp {
+				command = socks5.CommandUDPAssociate
+				bind = M.ParseSocksaddr(relay.LocalAddr().String())
+			}
+			if request.Command != command {
+				return
+			}
+			addresses <- request.Destination.String()
+			if socks5.WriteResponse(peer, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: bind}) != nil {
+				return
+			}
+			_, _ = io.Copy(io.Discard, reader)
+		}()
+		return client, nil
+	}
+	return addresses
+}
+func TestRouterVPNExecutionNativeSOCKSPrecloseOriginal(t *testing.T) {
+	for _, fault := range []string{"original", "source-cancelled", "cancelled-wait", "foreign-instance", "held-join"} {
+		t.Run(fault, func(t *testing.T) {
+			parent, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			f, original, _ := newSOCKSExecutionNativeFixture(t, "wg", "server", parent)
+			engine, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var held *socksExecutionHeldConn
+			if fault == "held-join" {
+				entry := f.prefixes[f.prep.ProofInventory()[0].Tag]
+				addresses := socksExecutionPipe(t, f, false, false)
+				underlying := entry.dial
+				entry.dial = func(ctx context.Context) (net.Conn, error) {
+					conn, err := underlying(ctx)
+					if err != nil {
+						return conn, err
+					}
+					held = &socksExecutionHeldConn{Conn: conn, entered: make(chan struct{}), release: make(chan struct{})}
+					return held, nil
+				}
+				_, meta, _ := original.ReadValidated()
+				// Dial the actual retained middle directly: no application/Ready is granted.
+				middle, _ := f.box.outbound.Outbound(meta.Proofs[1].Tag)
+				conn, err := middle.(*ownedSOCKS.Outbound).DialContext(t.Context(), "tcp", M.ParseSocksaddr("93.184.216.34:443"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = conn
+				select {
+				case <-addresses:
+				case <-time.After(time.Second):
+					t.Fatal("missing original SOCKS5 exchange")
+				}
+				budget, stop := context.WithCancel(t.Context())
+				result := make(chan error, 1)
+				go func() { result <- f.box.RouterVPNCloseSOCKSExecutionContext(budget) }()
+				select {
+				case <-held.entered:
+				case <-time.After(time.Second):
+					stop()
+					close(held.release)
+					t.Fatal("original raw Close never entered")
+				}
+				stop()
+				if err := <-result; !errors.Is(err, context.Canceled) {
+					close(held.release)
+					t.Fatal("held original socket falsely joined", err)
+				}
+
+				close(held.release)
+			}
+			if fault == "source-cancelled" {
+				cancel()
+			}
+			if fault == "cancelled-wait" {
+				ctx, stop := context.WithCancel(t.Context())
+				stop()
+				if f.box.RouterVPNCloseSOCKSExecutionContext(ctx) == nil {
+					t.Fatal("cancelled preclose accepted")
+				}
+			}
+			if fault == "foreign-instance" {
+				c := f.ctx.Value(routerVPNSOCKSExecutionKey{}).(*routerVPNSOCKSExecutionConstruction)
+				c.instance = &Box{}
+				if f.box.RouterVPNCloseSOCKSExecutionContext(t.Context()) == nil {
+					t.Fatal("foreign instance preclose accepted")
+				}
+				c.instance = f.box
+			}
+			joined, stop := context.WithTimeout(t.Context(), time.Second)
+			defer stop()
+			if err := f.box.RouterVPNCloseSOCKSExecutionContext(joined); err != nil {
+				t.Fatal("original preclose join", err)
+			}
+			if err := f.box.RouterVPNCloseSOCKSExecutionContext(joined); err != nil {
+				t.Fatal("idempotent original join", err)
+			}
+			if engine.ObserveSOCKSExecutionContext(t.Context(), original) == nil {
+				t.Fatal("retired middle still observable")
+			}
+		})
+	}
+}
+func TestRouterVPNExecutionNativeSOCKSPublicDNS(t *testing.T) {
+	for _, fault := range []string{"original", "foreign-tag", "foreign-address", "changed-owner", "changed-selector", "mapped-answer", "private-answer"} {
+		t.Run(fault, func(t *testing.T) {
+			f, _, _ := newSOCKSExecutionNativeFixture(t, "wg", "auto")
+			projection := f.adopt(t)
+			engine := f.engine
+			proofs, err := projection.ProofInventory("local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			addresses := socksExecutionPipe(t, f, false, false)
+			tag, address := proofs[1].Tag, hopmeasure.PublicAddress
+			switch fault {
+			case "foreign-tag":
+				tag = proofs[2].Tag
+			case "foreign-address":
+				address = "foreign.example:443"
+			case "changed-owner":
+				f.dns.during = func() { f.current.Store(false) }
+				defer f.current.Store(true)
+			case "mapped-answer":
+				f.dns.answerIP = net.IPv4(93, 184, 216, 34)
+			case "private-answer":
+				f.dns.answerIP = net.IP{10, 77, 0, 1}
+			case "changed-selector":
+				f.dns.during = func() { _ = engine.SelectContext(t.Context(), engine.state.Load().server.Tag()) }
+			}
+			before := f.dns.calls.Load()
+			conn, err := engine.Dial(t.Context(), tag, address)
+			if fault != "original" {
+				if conn != nil {
+					_ = conn.Close()
+				}
+				if err == nil {
+					t.Fatal("foreign DNS/selection accepted")
+				}
+				if (fault == "foreign-tag" || fault == "foreign-address") && f.dns.calls.Load() != before {
+					t.Fatal("foreign target invoked DNS")
+				}
+				return
+			}
+			if err != nil || conn == nil {
+				t.Fatal("original selected DNS/public SOCKS", err, "dnsCalls", f.dns.calls.Load()-before, "selected", engine.selector.Now(), "middle", proofs[1].Tag)
+			}
+			if f.dns.calls.Load() <= before {
+				t.Fatal("public origin bypassed original resolver")
+			}
+			select {
+			case got := <-addresses:
+				if got != "93.184.216.34:443" {
+					t.Fatal("wrong resolved SOCKS tuple", got)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("missing resolved SOCKS5 request")
+			}
+			if err := conn.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// The native client SOCKS implementation reaches a modeled authenticated
+// remote front. This pins its original credentials and hostname framing;
+// actual remote resolution/encryption is required by the separate suffix gate.
+func TestRouterVPNExecutionNativeSOCKSServerPublicAuthority(t *testing.T) {
+	for _, fault := range []string{"original", "away-and-back", "foreign-tag", "foreign-address"} {
+		t.Run(fault, func(t *testing.T) {
+			f, _, _ := newSOCKSExecutionNativeFixture(t, "wg", "server")
+			projection := f.adopt(t)
+			engine := f.engine
+			proofs, err := projection.ProofInventory("server")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var source mobilemultihop.NodeChainExecutionSource
+			if json.Unmarshal([]byte(projection.Source()), &source) != nil {
+				t.Fatal("missing original request")
+			}
+			target, user := proofs[1].Tag, source.Request.Users[0]
+			address := hopmeasure.PublicAddress
+			if fault == "foreign-tag" {
+				target = proofs[2].Tag
+			}
+			if fault == "foreign-address" {
+				address = "foreign.example:443"
+			}
+			observed := make(chan error, 1)
+			entry := f.prefixes[f.prep.ProofInventory()[0].Tag]
+			entry.dial = func(ctx context.Context) (net.Conn, error) {
+				client, peer := net.Pipe()
+				t.Cleanup(func() { peer.Close() })
+				go func() {
+					defer peer.Close()
+					reader := bufio.NewReader(peer)
+					greeting, err := socks5.ReadAuthRequest(reader)
+					if err != nil || len(greeting.Methods) != 1 || greeting.Methods[0] != socks5.AuthTypeUsernamePassword {
+						observed <- fmt.Errorf("original front authentication method: %v", err)
+						return
+					}
+					if err = socks5.WriteAuthResponse(peer, socks5.AuthResponse{Method: socks5.AuthTypeUsernamePassword}); err != nil {
+						observed <- err
+						return
+					}
+					credentials, err := socks5.ReadUsernamePasswordAuthRequest(reader)
+					if err != nil || credentials.Username != user.Username || credentials.Password != user.Password {
+						observed <- fmt.Errorf("original prefix credentials changed: %v", err)
+						return
+					}
+					if err = socks5.WriteUsernamePasswordAuthResponse(peer, socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusSuccess}); err != nil {
+						observed <- err
+						return
+					}
+					request, err := socks5.ReadRequest(reader)
+					if err != nil || request.Command != socks5.CommandConnect || request.Destination.String() != hopmeasure.PublicAddress {
+						observed <- fmt.Errorf("original hostname front scope changed: %v", err)
+						return
+					}
+					if fault == "away-and-back" {
+						if !engine.selector.SelectOutbound(engine.state.Load().local.Tag()) || !engine.selector.SelectOutbound(engine.state.Load().server.Tag()) {
+							observed <- errors.New("fixture selector change failed")
+							return
+						}
+					}
+					err = socks5.WriteResponse(peer, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: M.ParseSocksaddr("127.0.0.1:1234")})
+					observed <- err
+					if err == nil {
+						_, _ = io.Copy(io.Discard, peer)
+					}
+				}()
+				return client, nil
+			}
+			before := f.dns.calls.Load()
+			conn, err := engine.Dial(t.Context(), target, address)
+			if conn != nil {
+				defer conn.Close()
+			}
+			if fault == "original" && (err != nil || conn == nil) {
+				t.Fatal("original remote hostname authority", err)
+			}
+			if fault != "original" && err == nil {
+				t.Fatal("foreign remote hostname/selection accepted")
+			}
+			if f.dns.calls.Load() != before {
+				t.Fatal("client replaced remote selected DNS authority")
+			}
+			if fault == "original" || fault == "away-and-back" {
+				select {
+				case err := <-observed:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("native original SOCKS5 exchange missing")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeSOCKSUDPAssociationAndOriginalClose(t *testing.T) {
+	for _, fault := range []string{"original", "source-cancelled", "wrong-credentials"} {
+		t.Run(fault, func(t *testing.T) {
+			parent, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			f, original, _ := newSOCKSExecutionNativeFixture(t, "wg", "auto", parent)
+			engine, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests := socksExecutionPipe(t, f, true, fault == "wrong-credentials")
+			_, meta, _ := original.ReadValidated()
+			middle, _ := f.box.outbound.Outbound(meta.Proofs[1].Tag)
+			ctx, stop := context.WithTimeout(t.Context(), 3*time.Second)
+			defer stop()
+			conn, err := middle.(*ownedSOCKS.Outbound).DialContext(ctx, "udp", M.ParseSocksaddr("93.184.216.34:443"))
+			if fault == "wrong-credentials" {
+				if conn != nil {
+					_ = conn.Close()
+				}
+				if err == nil {
+					t.Fatal("wrong original credentials acquired a UDP association")
+				}
+				if open, err := engine.ApplicationOpenContext(t.Context()); err != nil || open {
+					t.Fatal("failed password opened application", open, err)
+				}
+				return
+			}
+			if err != nil || conn == nil {
+				t.Fatal("original native UDP association", err)
+			}
+			defer conn.Close()
+			if err = conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			payload := []byte("original-socks-execution-udp")
+			if _, err = conn.Write(payload); err != nil {
+				t.Fatal(err)
+			}
+			actual := make([]byte, 128)
+			n, err := conn.Read(actual)
+			if err != nil || string(actual[:n]) != string(payload) {
+				t.Fatal("negotiated UDP relay lost original payload", err)
+			}
+			select {
+			case <-requests:
+			case <-time.After(time.Second):
+				t.Fatal("missing UDP ASSOCIATE request")
+			}
+			if fault == "source-cancelled" {
+				cancel()
+			}
+			if err := f.box.RouterVPNCloseSOCKSExecutionContext(ctx); err != nil {
+				t.Fatal("original UDP/control close did not join", err)
+			}
+			if _, err := conn.Write(payload); err == nil {
+				t.Fatal("joined original association remained writable")
+			}
+			if err := f.box.RouterVPNCloseSOCKSExecutionContext(ctx); err != nil {
+				t.Fatal("joined original cleanup changed result", err)
+			}
+			if engine.ObserveSOCKSExecutionContext(t.Context(), original) == nil {
+				t.Fatal("retired original association remained observable")
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeSOCKSLastUsesOriginalDiscovery(t *testing.T) {
+	for _, execution := range []string{"local", "server"} {
+		t.Run(execution, func(t *testing.T) {
+			f, _, _ := newSOCKSExecutionNativeFixture(t, "wg", "auto")
+			last := executionLastRecord(t, f, execution)
+			engine, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = engine.AdoptLastContext(t.Context(), last); err == nil {
+				t.Fatal("Last record replaced fresh authenticated discovery")
+			}
+			f.discovery(t)
+			if _, err = engine.DiscoverContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			owner, instance, inbound := engine.discovery.Load(), engine.instance, engine.inbound
+			plan, err := engine.AdoptLastContext(t.Context(), last)
+			if err != nil {
+				t.Fatal("typed original Last adoption", err)
+			}
+			projection, err := plan.Projection()
+			if err != nil || engine.planned.Load() != projection || engine.discovery.Load() != owner || engine.instance != instance || engine.inbound != inbound {
+				t.Fatal("Last replaced original native owners", err)
+			}
+			if err := plan.RequireJoinedContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if open, err := engine.ApplicationOpenContext(t.Context()); err != nil || open {
+				t.Fatal("unproved Last opened application", open, err)
+			}
+			runtime, err := mobilemultihop.NewNodeChainExecutionLastRuntime(t.Context(), plan, engine)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.Progress().Ready || runtime.HealthyContext(t.Context()) == nil {
+				t.Fatal("Last adoption fabricated live proof")
+			}
+			if _, err := mobilemultihop.NewNodeChainExecutionLastRuntime(t.Context(), plan, engine); err == nil {
+				t.Fatal("original Last admitted another runtime")
+			}
+			if err := runtime.CloseContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExecutionNativeSOCKSLastRetainsCancelledPlan(t *testing.T) {
+	f, _, _ := newSOCKSExecutionNativeFixture(t, "wg", "auto")
+	last := executionLastRecord(t, f, "local")
+	engine, err := f.capture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.discovery(t)
+	if _, err = engine.DiscoverContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	owner := engine.discovery.Load()
+	plan, err := owner.PlanLastContext(t.Context(), last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := plan.Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := &routerVPNExecutionLast{raw: last.JSON(), owner: owner, plan: plan}
+	engine.last = retained
+	engine.planned.Store(projection)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err = engine.AdoptLastContext(ctx, last); err == nil {
+		t.Fatal("cancelled Last adopted the original native graph")
+	}
+	if engine.last != retained || engine.planned.Load() != projection {
+		t.Fatal("cancelled Last discarded original pending plan")
+	}
+	if _, err = engine.AdoptLastContext(t.Context(), executionLastRecord(t, f, "server")); err == nil {
+		t.Fatal("retry replaced original Last choice")
+	}
+	if _, err = engine.AdoptContext(t.Context(), f.server.SourceSHA256(), 32003); err == nil {
+		t.Fatal("ordinary adoption borrowed original Last plan")
+	}
+	joined, err := engine.AdoptLastContext(t.Context(), last)
+	if err != nil {
+		t.Fatal("original cancelled Last did not resume", err)
+	}
+	actual, err := joined.Projection()
+	if err != nil || actual != projection || engine.discovery.Load() != owner {
+		t.Fatal("retry reconstructed original Last ownership", err)
+	}
+	if err := joined.RequireJoinedContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if open, err := engine.ApplicationOpenContext(t.Context()); err != nil || open {
+		t.Fatal("Last retry opened unproved traffic", open, err)
+	}
+}
+
+type socksExecutionUnconstructedContext struct{ context.Context }
+
+func (c socksExecutionUnconstructedContext) Value(key any) any {
+	switch key.(type) {
+	case routerVPNSOCKSExecutionKey, routerVPNOrderedTypedConstructionKey:
+		return nil
+	}
+	return c.Context.Value(key)
+}
+func TestRouterVPNExecutionNativeSOCKSConstructionFamily(t *testing.T) {
+	f, original, capture := newSOCKSExecutionNativeFixture(t, "wg", "server")
+	if _, err := RouterVPNNodeSOCKSContext(f.ctx, original, capture); err == nil {
+		t.Fatal("local construction borrowed execution authority")
+	}
+	clean := socksExecutionUnconstructedContext{f.ctx}
+	local, err := RouterVPNNodeSOCKSContext(clean, original, capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RouterVPNNodeSOCKSExecutionContext(local, f.prep, capture); err == nil {
+		t.Fatal("execution borrowed local construction")
+	}
+	if _, err := RouterVPNNodeSOCKSExecutionContext(f.ctx, f.prep, capture); err == nil {
+		t.Fatal("execution wrapped its original construction again")
+	}
+	input, _ := original.Source()
+	foreign, err := mobilemultihop.NewNodeChainSOCKSSource(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := mobilemultihop.NewNodeChainSOCKSExecutionPreparation(foreign, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RouterVPNNodeSOCKSExecutionContext(clean, other, capture); err == nil {
+		t.Fatal("equal-content source borrowed original capture")
+	}
+}
