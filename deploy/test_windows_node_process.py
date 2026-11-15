@@ -17,6 +17,7 @@ compiler, private staging and HTTP proof parser. Their native child/BFE boundary
 and transport are modeled; passing them is not physical network acceptance.
 """
 from pathlib import Path
+from collections import Counter
 import argparse
 import ctypes
 import hashlib
@@ -711,9 +712,15 @@ def invalid_execution(output):
 
 
 def check_baseline(status, output, expected=EXPECTED):
+    # Scan each anchored verdict once. Keep the original exact " (" name
+    # boundary, including literal spaces/parentheses in a requested name;
+    # substring PASS text and log-prefixed records never enter this inventory.
+    passes = Counter()
+    for row in re.finditer(r"(?m)^[ \t]*--- PASS: ([^\n]*)", output):
+        for boundary in re.finditer(r" \(", row[1]):
+            passes[row[1][:boundary.start()]] += 1
     if (status or invalid_execution(output) or "--- FAIL:" in output or
-            any(len(re.findall(r"(?m)^[ \t]*--- PASS: " + re.escape(name) + r" \(", output)) != 1
-                for name in expected)):
+            any(passes[name] != 1 for name in expected)):
         raise ValueError("Native Node process gate did not execute every required ownership case:\n" + output[-32768:])
 
 

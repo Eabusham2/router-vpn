@@ -21,6 +21,54 @@ SPEC.loader.exec_module(GATE)
 
 
 class NodeProcessRunner(unittest.TestCase):
+    def test_anchored_baseline_inventory_matches_the_original_parser(self):
+        def original(status, output, expected):
+            return not (status or GATE.invalid_execution(output) or "--- FAIL:" in output or
+                        any(len(re.findall(r"(?m)^[ \t]*--- PASS: " + re.escape(name) + r" \(", output)) != 1
+                            for name in expected))
+
+        def optimized(status, output, expected):
+            try:
+                GATE.check_baseline(status, output, expected)
+            except ValueError:
+                return False
+            return True
+
+        # Literal regex punctuation, name prefixes and embedded delimiters may
+        # not change the old exact-name boundary or cardinality semantics.
+        expected = ("TestParent", "TestParent/http-connect", "TestParent/http-connect#01",
+                    "TestLiteral[.+?]", "TestName with spaces", "TestName (literal)")
+        rows = ["--- PASS: " + name + " (0.01s)" for name in expected]
+        valid = "\n".join(rows)
+        cases = [(0, valid, expected), (0, valid + "\nPASS\n", expected),
+                 (0, "\n".join(reversed(rows)), expected),
+                 (0, "=== RUN   unrelated\n" + valid, expected),
+                 (0, "\r\n".join(rows), expected), (0, valid, ()),
+                 (0, "", ()), (0, "PASS\n", expected), (1, valid, expected),
+                 (0, valid + "\n--- PASS: TestUnrequired (0.01s)", expected)]
+        for row in rows:
+            cases.extend(((0, valid.replace(row, ""), expected),
+                          (0, valid + "\n" + row, expected)))
+            for replacement in ("logged: " + row, "2026-11-15 " + row,
+                                "\x1b[0m" + row, "\v" + row, "\f" + row,
+                                row.replace(" (", "\t(", 1), row.replace(" (", "  (", 1),
+                                row.replace("--- PASS:", "--- PASS :", 1),
+                                row.replace(" (0.01s)", "Suffix (0.01s)"),
+                                row.replace(" (0.01s)", "")):
+                cases.append((0, valid.replace(row, replacement), expected))
+            for prefix in (" ", "\t", " \t  "):
+                cases.append((0, valid.replace(row, prefix + row), expected))
+        for marker in ("--- SKIP:", "DATA RACE", "panic:", "fatal error:", "[build failed]", "--- FAIL:"):
+            cases.append((0, valid + "\nlogged " + marker, expected))
+        for suffix in (" trailing (other)", "\r", " PASS", "\nPASS\nPASS"):
+            cases.append((0, valid + suffix, expected))
+        for status, output, names in cases:
+            with self.subTest(status=status, output=output, expected=names):
+                self.assertEqual(optimized(status, output, names), original(status, output, names))
+        complete = "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.EXPECTED)
+        self.assertTrue(original(0, complete, GATE.EXPECTED))
+        self.assertTrue(optimized(0, complete, GATE.EXPECTED))
+
     def test_actual_entry_publication_refuses_the_original_partial_marker(self):
         filename = "cmd/client/desktop_node_process_entry_fixture_test.go"
         source = (ROOT / filename).read_text()
