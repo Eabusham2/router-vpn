@@ -131,6 +131,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         // This does not change the execution preparation/ordinary launch schema.
         int originalSchema = original.getInt("schema");
         if (returned.length() != 4 || (originalSchema != 1 && originalSchema != 2)
+                || originalSchema == 2 && original.getJSONArray("nodes").length() != 3
                 || returned.getInt("schema") != originalSchema
                 || !"local".equals(returned.getString("execution"))
                 || !sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))

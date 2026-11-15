@@ -409,7 +409,7 @@ final class AndroidNodeStore {
             if (source == null || !proofs.add(source.identityKey())) throw new IllegalStateException("An ordered member is missing or shares another node's paired identity.");
             String mode = reference.getString("mode");
             if(source.imported) {
-                boolean variablePrefix="socks5".equals(mode)||"http-connect".equals(mode)||"https-connect".equals(mode)||"openvpn".equals(mode);
+                boolean variablePrefix="shadowsocks".equals(mode)||"socks5".equals(mode)||"http-connect".equals(mode)||"https-connect".equals(mode)||"openvpn".equals(mode);
                 if(selected.length()<3||selected.length()>8||i!=selected.length()-2||!variablePrefix&&selected.length()!=3||!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("A custom ordered node requires its supported penultimate position before the paired final node.");
                 ChainSource.requireImported(source.external());
             } else {

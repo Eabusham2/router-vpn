@@ -77,6 +77,16 @@ public final class NodeChainExecutionCaptureHarness {
   editor.addPrefix(custom.id,"shadowsocks");editor.setExecution(requested);return AndroidNodeChainCapture.compile(editor.save());
  }
  static void importedSource(Path root)throws Exception{
+  for(String fixture:List.of("3/","7/")) {
+   var original=new NodeChainCaptureHarness.Fixture(root,fixture);var exits=new AndroidStandardExitStore(original.context);
+   var custom=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");custom.server="198.51.100.76";exits.save(custom);
+   var editor=new AndroidOrderedPathSelection(original.nodes,original.profiles);editor.addPrefix(custom.id,"shadowsocks");
+   for(String requested:List.of("server","auto"))reject(()->editor.setExecution(requested),"long imported editor escaped Local purpose");
+   try(var local=AndroidNodeChainCapture.compile(editor.save())) {
+    for(String requested:List.of("server","auto"))reject(()->AndroidNodeChainCapture.validateExecutionPlan(local.plan,requested),"long imported source entered native execution preview");
+   }
+  }
+
   for(String first:List.of("","awg-fast","awg-strong"))for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"))for(String requested:List.of("server","auto")){
    try(var local=importedLocal(root,first,method,requested)){
     AndroidNodeChainExecutionCapture captured;

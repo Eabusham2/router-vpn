@@ -712,7 +712,7 @@ rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["s
 for middleMode in ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"] { for prefixMode in ["wg", "awg2-fast", "awg2-strong"] {
     let connectMiddle = ["http-connect", "https-connect"].contains(middleMode)
     let otherMiddle = middleMode == "http-connect" ? "https-connect" : middleMode == "https-connect" ? "http-connect" : middleMode == "socks5" ? "shadowsocks" : "socks5"
-    for count in (connectMiddle || middleMode == "socks5" || middleMode == "openvpn" ? Array(3...8) : [3]) {
+    for count in 3...8 {
     let middle = count - 2
     _ = chooseOrdered(count, prefixMode: prefixMode)
     let paired = owner.captureConnectionProfileSelection()
@@ -801,7 +801,7 @@ for unsupported in ["SOCKS5", "socks", "HTTP-CONNECT", "HTTPS-CONNECT", "http-co
     check(RouterVPNOrderedNodes.importedMiddleMode(profile) == nil, "SOCKS catalog normalized an unsupported protocol")
 }
 let invalidSOCKSCapabilities: [Any] = [1, "true", false, NSNull()]
-for protocolName in ["socks5", "http-connect", "https-connect", "openvpn"] { for capability in invalidSOCKSCapabilities {
+for protocolName in ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"] { for capability in invalidSOCKSCapabilities {
     var profile = socksCatalog[1]
     profile["external"] = ["protocol": protocolName, "ordered_middle_supported": capability]
     check(RouterVPNOrderedNodes.importedMiddleMode(profile) == nil, "SOCKS imported capability accepted non-boolean authority")

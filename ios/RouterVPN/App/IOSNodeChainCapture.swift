@@ -73,11 +73,11 @@ struct IOSNodeChainCapture {
             if profile["node_kind"] as? String == "external" {
                 let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: nativeProfile))
                 let openVPN = typed.external?.protocolName == "openvpn"
-                guard (!openVPN || selectionExecution == "local"), IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: bundles.count), !imported,
+                guard (selectionExecution == "local" || !openVPN && bundles.count == 3), IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: bundles.count), !imported,
                       openVPN ? IOSImportedOpenVPNSource.eligible(typed) : IOSImportedShadowsocksSource.eligible(typed),
                       selection[position]["id"] as? String == selected,
                       selection[position]["mode"] as? String == (openVPN ? "openvpn" : "shadowsocks") else {
-                    throw issue("One original imported OpenVPN node may follow the paired prefixes before the paired final. Imported Shadowsocks 2022 retains its three-node path.")
+                    throw issue("One original imported Shadowsocks 2022 or OpenVPN node may follow the paired prefixes before the paired final. Longer imported paths require Local execution.")
                 }
                 let original = try openVPN ? IOSImportedOpenVPNSource.capture(typed) : IOSImportedShadowsocksSource.capture(typed)
                 var failure: NSError?
@@ -161,7 +161,7 @@ struct IOSNodeChainCapture {
               let nodes = root["nodes"] as? [String], (2...8).contains(nodes.count),
               let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,
               identitySources.allSatisfy({ $0.utf8.count <= 16 * 1024 * 1024 }),
-              let schema = root["schema"] as? Int, schema == 1 || schema == 2 && nodes.count == 3 || schema == 5 && nodes.count >= 3 else {
+              let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5) && nodes.count >= 3 else {
             throw Self.issue("The native chain returned another source or platform owner.")
         }
         var members: [Member] = [], strict = false, lan = true
@@ -170,7 +170,7 @@ struct IOSNodeChainCapture {
             let mode: String, profileJSON: String, filesJSON: String, profile: [String: Any]
             if node["kind"] as? String == "routervpn-node-chain-imported-member" || node["kind"] as? String == "routervpn-node-chain-openvpn-member" {
                 let openVPN = node["kind"] as? String == "routervpn-node-chain-openvpn-member"
-                guard schema == (openVPN ? 5 : 2), (!openVPN || selectionExecution == "local"), IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: nodes.count), identitySources[position].isEmpty,
+                guard schema == (openVPN ? 5 : 2), (selectionExecution == "local" || !openVPN && nodes.count == 3), IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: nodes.count), identitySources[position].isEmpty,
                       let config = node["config"] as? String, let capture = node["capture"] as? String,
                       let saved = try Self.object(Data(capture.utf8), maximum: 8 * 1024 * 1024)["profile"] as? [String: Any] else {
                     throw Self.issue("The imported intermediate source lost its original external capture.")
@@ -180,7 +180,7 @@ struct IOSNodeChainCapture {
                 guard openVPN ? IOSImportedOpenVPNSource.eligible(typed) : IOSImportedShadowsocksSource.eligible(typed) else { throw Self.issue("The imported member cannot claim a paired Router identity.") }
                 mode = openVPN ? "openvpn" : "shadowsocks"; filesJSON = config; profile = saved
             } else {
-                guard !identitySources[position].isEmpty, !(schema == 2 && position == 1 || schema == 5 && position == nodes.count - 2),
+                guard !identitySources[position].isEmpty, !((schema == 2 || schema == 5) && position == nodes.count - 2),
                       let nativeMode = node["mode"] as? String, let saved = node["profile_json"] as? String,
                       let files = node["files"] as? String else { throw Self.issue("A complete native member source is missing.") }
                 mode = nativeMode; profileJSON = saved; filesJSON = files

@@ -1114,7 +1114,7 @@ prove these behaviors merely because a filename or string is present.
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
 | 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and bounded Windows/Linux/macOS single paired Router hosts with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin paired source now includes actual installed parent/child composition; its new native gate has not yet passed at this cutoff. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
-| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT and SOCKS additions and the schema-five OpenVPN addition below extend those separate families to 3–8 members with one penultimate import. Imported Shadowsocks retains its existing trio bounds and its separately proved execution capabilities. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
+| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT, SOCKS, schema-five OpenVPN and schema-two Shadowsocks additions below extend those separate families to 3–8 members with one penultimate import. Shadowsocks preserves its separately proved original literal-trio execution capabilities; longer and hostname forms remain Local-only. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |
@@ -2132,3 +2132,137 @@ Linux source-fixture results do not establish a Darwin kernel or hosted
 release pass. The failing hosted log and exact final source/test receipts
 are retained in `darwin-parent-race-stages-validation` and
 `release-5f35b648-audit`.
+
+
+## Longer Local imported Shadowsocks paths retain the original owners
+
+This unit continues original requirements #214–224, addendum #336 and the
+later external/custom-node requirements. Schema two now captures one through
+six original paired WireGuard/AWG Fast/AWG Strong prefixes, one penultimate
+imported SS2022 member, and the original paired SS2022 final: three through
+eight members. The three existing SS2022 methods retain canonical independent
+keys. Literal IPv4/IPv6 endpoints and the existing authenticated hostname form
+remain distinct. Imported Start Layer remains Off; each paired member retains
+its own AES/AES-plus-XOR selection and complete policy. No invalid fixed MTU
+is replaced by a default or admitted beyond the complete packet envelope.
+
+The imported transport and its captured hostname resolver detour through the
+last paired prefix. The hostname form requires the original explicit Custom
+TCP resolver with a literal address; it cannot resolve through ambient host
+DNS. The independent paired final owns selected application DNS and its
+private/public proofs. Only the first paired prefix has physical egress.
+All original source identities, canonical private-key identities, policies,
+proof positions and interface owners remain captured. A private receipt binds
+the original chain, imported policy/hostname and every paired object pointer;
+equivalent replacement objects do not inherit ownership. Both existing exact
+NodeChain field inventories retain their old checks and include this receipt.
+
+Desktop/mobile capture, private stores, complete connection-profile Add/Load/
+Update/Delete, startup/Last restoration, native preparation and measured
+history now use the actual penultimate and final positions. The Android/iOS
+editor inserts another paired prefix before the imported member, preserving
+its position. The existing schema-two literal-trio Server/Compare machinery
+and its bounds remain intact. Longer or hostname forms cannot enter that
+execution path or the old candidate comparison constructor. The new per-hop
+measurement authority is separate from that constructor. Desktop public
+Server/Compare admission for imported trios remains a separately tracked gap.
+Multiple imports, other imported positions, broader graph compositions and
+new execution families remain unfinished requirements, not rejected scope.
+
+### Source and component evidence
+
+The shared constructor matrix covers all three paired modes, both endpoint
+forms, all three methods and lengths three through eight: 108 source vectors,
+with actual native projections and all three desktop policy targets. Additional
+tests retain original pointer/authority, malformed-source, purpose, lifecycle,
+measurement and fixed-MTU refusals. Tests of the existing literal trio,
+hostname form, Server/Compare, Last and proof/cancellation behavior remain.
+
+The actual compound gate accepted all sixteen attempts in 649.576 seconds:
+306 positive records (301 distinct names) and twelve exact original-pointer
+control failures. Repeated roots in mode-specific runs are not extra product
+requirements. All 2,793 compiled Go/module files remained unchanged afterward;
+only the subsequently verified workflow-condition checker was refined.
+This plain-copy local execution does not satisfy the separate published-source
+and validator identity gate required in hosted CI.
+
+The final desktop race image passed 74 distinct old/new records, including
+22 new longer-path, complete saved-profile and paired Start Layer records.
+Actual Windows callbacks passed 1,849 checks plus ten controls. AppKit
+callbacks passed 8,135 checks and 45 controls; the final explanatory-string
+change was recompiled and all 8,135 checks passed again. GTK shipping
+include/model/persistence checks passed 4,047 cumulative checks and ten
+controls. These portable runs use declared widget/OS seams; no physical
+WPF/AppKit/GTK rendering is inferred. Darwin's actual dispatcher/journal
+passed 20 and 107 roots with 48 causal controls against an explicit PF
+backend double, preserving the original candidate-prefix trio restriction.
+
+The frozen mobile source passed nine finite commands. New iOS source/latency
+checks passed 537 cases plus four controls; actual saved-profile operations
+passed 372 plus three. Existing generic and execution captures passed 1,624
+plus seven and 752 plus eight respectively. Android literal/hostname capture
+passed 357 and 570 checks plus four controls; execution passed 411 checks,
+33 actual shared-runtime Last checks and nine controls. The new Android
+lifecycle/MTU/restore composition passed 159 checks and its proof-drain
+omission control. Required workflow inventory and profile boundaries passed.
+These are shipping Java/Swift/shared-runtime source fixtures, with native/OS
+doubles explicitly identified; APK/Xcode, device VPN and kernel acceptance
+remain separate.
+
+The same retained encrypted race image passed a four-member WG literal
+measurement group, an eight-member AWG Fast literal deep-prefix group, and
+an eight-member AWG Strong hostname public/final group. Every selected
+position completed fifty actual responses, exact per-position counters and
+saved-history validation after complete original proof and selected-DNS
+checks. The original trio smoke and all six maximum-depth wrong-key,
+omitted-prefix, wrong-imported-key, wrong-final-identity, selected-DNS and
+transport-DNS refusals passed. This is a finite representative local set;
+the complete 36 positive groups and six refusal processes are mandatory in
+the hosted gate. The same image/source identity is retained throughout.
+
+All 93 old/new native Box records passed on the same retained image. These
+checks exercise original outbound/resolver/selector/reader
+ownership, MTU candidate application/rollback, cancellation and stale-owner
+refusal. The desktop physical factory admits the sealed three-through-eight
+member shapes on its three policy targets. Restoring its exact published
+trio-only condition causes all six longer OS/count cases to fail at the
+required witness, with the failed root also required. These component tests
+do not claim installed host/kernel or real-device acceptance.
+
+The common Box test also compiled and passed in the retained canonical
+mobile-only composition with its actual registered source overlay, without
+the desktop factory. This independently closes the mobile compilation seam;
+a successful desktop-prepared image alone cannot supply that evidence.
+
+### Required release evidence
+
+The additive `ss-prefix-native` reusable workflow retains the original
+installed SS traffic and MTU phases and their existing time bounds. It adds
+six mode/endpoint units, all four/eight-member measurement positions, six
+maximum-depth refusals, shared/desktop source contracts, original-pointer
+causal checks and Box MTU/physical-factory controls. Source and validator
+must identify the same published commit. Every unit retains the actual
+compiled image hash, native source closure and exact required verdicts;
+aggregation refuses missing, duplicated, foreign or partial evidence.
+
+The release dependency inventory includes the new workflow as an unconditional
+blocking producer. Review found that the first draft checker would have
+accepted conditional skips on accepting jobs or commands even though the
+actual YAML was unconditional. The corrected checker permits only the exact
+non-accepting diagnostic upload condition and rejects those demonstrated
+job/command substitutions. No production deadline or negative native
+acceptance case was relaxed.
+
+Final combined integration passed all 18 preparation tests, all 21 source
+identity tests, all 22 release-aggregate tests, the profile-settings audit,
+workflow structure and full native parity audit. The final encrypted/workflow
+and source/native runners passed 15 and six roots. All twelve new relevant
+workflow/gate/template/owner dependencies occur in the actual native input
+inventory of 4053 paths. All 76 feature-owned files match their frozen
+hashes and original preimages on published `42a2cf28`; the 77th changed file
+is this ledger. Both recent OpenVPN parity and Darwin parent compiler repairs
+are preserved. Evidence and hashes remain in `desktop-ss-prefix-validation`,
+`mobile-ss-prefix-validation`, `imported-ss-prefix-validation`,
+`ss-prefix-gates-validation` and `ss-prefix-integration-validation`.
+Native packages, image publication, exact-SHA release, signing, physical-device
+acceptance and private deployment remain distinct gates.

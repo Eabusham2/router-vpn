@@ -262,29 +262,36 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
 
   try hostnameMiddle()
 
+  for count in [3,4,8] { let middlePosition=count-2,finalPosition=count-1
   for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
-  var imported = try sources(3)
-  var middle = try object(imported[1]), custom = try profile(imported[1])
+  var imported = try sources(count)
+  var middle = try object(imported[middlePosition]), custom = try profile(imported[middlePosition])
   custom["id"]="original-custom-middle";custom["name"]="Original custom middle";custom["node_kind"]="external";custom.removeValue(forKey:"node_proof_id")
   for key in ["router_api","api_token","adguard_ipv6","socks_host","socks_username","socks_password"] { custom[key]="" }
   custom["socks_port"]=0
   custom["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":method,"password":Data(repeating:0,count:keySize).base64EncodedString()]]
   middle["selectedRouterID"]="original-custom-middle";middle["routerProfiles"]=[custom];middle["profiles"]=[String:[String:String]]()
-  imported[1]=try data(middle)
-  imported[2]=try editProfile(imported[2]) { final in var refs=final["multihop_nodes"] as! [[String:Any]];refs[1]=["id":"original-custom-middle","mode":"shadowsocks"];final["multihop_nodes"]=refs }
+  imported[middlePosition]=try data(middle)
+  imported[finalPosition]=try editProfile(imported[finalPosition]) { final in var refs=final["multihop_nodes"] as! [[String:Any]];refs[middlePosition]=["id":"original-custom-middle","mode":"shadowsocks"];final["multihop_nodes"]=refs }
   let complete = try IOSNodeChainCapture.compile(bundles:imported);defer{try? complete.plan.close()}
   let receipt=try object(Data(complete.launchInput.utf8))
-  try check("custom middle keeps external source and empty paired identity",receipt["schema"] as? Int == 2 && (receipt["identity_sources"] as? [String])?[1] == "" && complete.members[1].profile["node_kind"] as? String == "external" && complete.members[1].profile["node_proof_id"] == nil)
-  let reopened = try IOSNodeChainCapture.reopen(complete.launchInput,selectedProfile:profile(imported[2]));defer{try? reopened.plan.close()}
+  try check("custom middle keeps external source and empty paired identity",receipt["schema"] as? Int == 2 && (receipt["identity_sources"] as? [String])?[middlePosition] == "" && complete.members[middlePosition].profile["node_kind"] as? String == "external" && complete.members[middlePosition].profile["node_proof_id"] == nil)
+  if count>3 {
+   for purpose in ["server","auto"] {
+    var requested=imported;requested[finalPosition]=try editProfile(requested[finalPosition]){$0["multihop_execution"]=purpose}
+    try reject("long SS cannot borrow execution "+purpose){_ = try IOSNodeChainCapture.compileOriginalForExecution(bundles:requested,requested:purpose)}
+   }
+  }
+  let reopened = try IOSNodeChainCapture.reopen(complete.launchInput,selectedProfile:profile(imported[finalPosition]));defer{try? reopened.plan.close()}
   try check("typed external original source replays",reopened.launchInput == complete.launchInput)
-  let actualExternal=complete.members[1].profile["external"] as! [String:Any], actualSS=actualExternal["shadowsocks"] as! [String:Any]
+  let actualExternal=complete.members[middlePosition].profile["external"] as! [String:Any], actualSS=actualExternal["shadowsocks"] as! [String:Any]
   try check("native source retains exact cipher and original PSK",actualSS["method"] as? String == method && actualSS["password"] as? String == Data(repeating:0,count:keySize).base64EncodedString())
   var wrongFinal=imported
-  wrongFinal[2]=try editProfile(wrongFinal[2]) { p in var refs=p["multihop_nodes"] as! [[String:Any]];refs[2]["mode"]="hysteria2";p["multihop_nodes"]=refs }
+  wrongFinal[finalPosition]=try editProfile(wrongFinal[finalPosition]) { p in var refs=p["multihop_nodes"] as! [[String:Any]];refs[finalPosition]["mode"]="hysteria2";p["multihop_nodes"]=refs }
   try reject("imported schema2 retains SS-only final"){_ = try IOSNodeChainCapture.compile(bundles:wrongFinal)}
   for fault in ["private-token","proof","hostname","legacy","layer"] {
    var changed=imported
-   changed[1]=try editProfile(changed[1]) { p in
+   changed[middlePosition]=try editProfile(changed[middlePosition]) { p in
     if fault=="private-token" {p["api_token"]="borrowed-private-token"}
     if fault=="proof" {p["node_proof_id"]=String(repeating:"a",count:64)}
     if fault=="layer" {p["start_layer"]="aes-256-gcm"}
@@ -308,6 +315,7 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
    var changed=typed;changed.external?.shadowsocks?.server=host
    try check("valid literal source offered \(host)",IOSImportedShadowsocksSource.eligible(changed))
    try check("valid literal cannot become hostname transport \(host)",!IOSImportedShadowsocksSource.hasHostnameTransport(changed))
+  }
   }
   }
   for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
@@ -483,9 +491,10 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
   }}
  }
  static func hostnameMiddle()throws {
+  for count in [3,4,8] { let middlePosition=count-2,finalPosition=count-1
   for mode in ["wg","awg2-fast","awg2-strong"] {
    for (method,keySize) in [("2022-blake3-aes-128-gcm",16),("2022-blake3-aes-256-gcm",32),("2022-blake3-chacha20-poly1305",32)] {
-    var bundles=try sources(3),middle=try profile(bundles[1])
+    var bundles=try sources(count),middle=try profile(bundles[middlePosition])
     let host="Middle.Example.Test",secret=Data(repeating:79,count:keySize).base64EncodedString()
     middle["id"]="original-hostname-middle";middle["name"]="Saved hostname middle";middle["node_kind"]="external";middle["endpoint"]=host
     middle.removeValue(forKey:"node_proof_id")
@@ -493,9 +502,9 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
     middle["socks_port"]=0;middle["start_layer"]="off";middle["dns_mode"]="custom";middle["dns_protocol"]="tcp";middle["dns_host"]="10.81.0.53";middle["dns_port"]=5353
     middle["home_lan_access"]=false;middle["ipv6_mode"]="off";middle["kill_switch_policy"]="always"
     middle["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":host,"port":8388,"method":method,"password":secret]]
-    bundles[1]=try data(["selectedRouterID":"original-hostname-middle","routerProfiles":[middle],"profiles":[String:[String:String]]()])
-    bundles[2]=try editProfile(bundles[2]) { p in
-     var nodes=p["multihop_nodes"] as! [[String:Any]];nodes[0]["mode"]=mode;nodes[1]=["id":"original-hostname-middle","mode":"shadowsocks"];p["multihop_nodes"]=nodes
+    bundles[middlePosition]=try data(["selectedRouterID":"original-hostname-middle","routerProfiles":[middle],"profiles":[String:[String:String]]()])
+    bundles[finalPosition]=try editProfile(bundles[finalPosition]) { p in
+     var nodes=p["multihop_nodes"] as! [[String:Any]];for prefix in 0..<middlePosition { nodes[prefix]["mode"]=mode };nodes[middlePosition]=["id":"original-hostname-middle","mode":"shadowsocks"];p["multihop_nodes"]=nodes
     }
     let original=bundles,typed=try JSONDecoder().decode(RouterProfile.self,from:data(middle))
     try check("saved hostname middle eligible "+mode+"/"+method,IOSImportedShadowsocksSource.eligible(typed))
@@ -504,19 +513,21 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
     try check("original hostname survives all typed source copies",(capture["profile"] as? [String:Any])?["endpoint"] as? String==host && ((source["outbounds"] as? [[String:Any]])?.first?["server"] as? String)==host)
     try reject("hostname cannot become ordinary physical authority"){_ = try LibboxTestOrdinarySource(raw.config,raw.capture)}
     let chain=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? chain.plan.close()}
-    let replay=try IOSNodeChainCapture.reopen(chain.launchInput,selectedProfile:profile(bundles[2]));defer{try? replay.plan.close()}
+    let replay=try IOSNodeChainCapture.reopen(chain.launchInput,selectedProfile:profile(bundles[finalPosition]));defer{try? replay.plan.close()}
     try check("hostname exact source replay",replay.launchInput==chain.launchInput && bundles==original)
     let graph=try object(Data(chain.config.utf8)),outs=graph["outbounds"] as! [[String:Any]],dns=graph["dns"] as! [String:Any],servers=dns["servers"] as! [[String:Any]]
     let transport=outs.first{$0["server"] as? String==host}!,query=transport["domain_resolver"] as! [String:Any]
     let resolver=servers.first{$0["tag"] as? String==query["server"] as? String}!,selected=servers.first{$0["tag"] as? String==dns["final"] as? String}!
+    let endpointTags=(graph["endpoints"] as! [[String:Any]]).map{$0["tag"] as! String}
+    try check("hostname uses exact original last packet prefix",transport["detour"] as? String==endpointTags[middlePosition-1])
     try check("hostname lookup follows preceding transport",resolver["type"] as? String=="tcp" && resolver["server"] as? String=="10.81.0.53" && resolver["server_port"] as? Int==5353 && resolver["detour"] as? String==transport["detour"] as? String)
-    let final=try profile(bundles[2]),selector=outs.first{$0["tag"] as? String==((graph["route"] as? [String:Any])?["final"] as? String)}!
+    let final=try profile(bundles[finalPosition]),selector=outs.first{$0["tag"] as? String==((graph["route"] as? [String:Any])?["final"] as? String)}!
     try check("final selector retains one captured member",selector["type"] as? String=="selector" && selector["outbounds"] as? [String]==[selector["default"] as! String])
     try check("final Home resolver remains separate",selected["tag"] as? String != resolver["tag"] as? String && selected["server"] as? String==final["adguard_ipv4"] as? String && selected["detour"] as? String==selector["default"] as? String)
     try check("hostname device restrictions remain captured",chain.strict && !chain.homeLANAccess)
     for fault in ["home","rescue","udp","tls","zero-port","missing-port","resolver-name","noncanonical-resolver","bootstrap","tls-name","dns-path","endpoint-case","credential","private-token","first-position"] {
      var changed=bundles
-     changed[1]=try editProfile(changed[1]) { p in
+     changed[middlePosition]=try editProfile(changed[middlePosition]) { p in
       switch fault {
       case "home","rescue":p["dns_mode"]=fault
       case "udp","tls":p["dns_protocol"]=fault
@@ -533,10 +544,11 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
       default:break
       }
      }
-     if fault=="first-position" { changed.swapAt(0,1) }
+     if fault=="first-position" { changed.swapAt(0,middlePosition) }
      try reject("hostname middle rejects "+fault){_ = try IOSNodeChainCapture.compile(bundles:changed)}
     }
    }
+  }
   }
  }
 }

@@ -116,7 +116,7 @@ func (c *NodeChain) importedMiddlePosition() int {
 	if c == nil || !c.hasImportedMiddle() {
 		return -1
 	}
-	if c.connectSource != nil || c.socksSource != nil || c.openVPNMiddle != nil {
+	if c.connectSource != nil || c.socksSource != nil || c.openVPNMiddle != nil || c.importedMiddle != nil {
 		return len(c.nodes) - 2
 	}
 	return 1

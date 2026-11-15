@@ -47,6 +47,10 @@ const desktopImportedHostnameDNS = "10.78.0.53:5353"
 // that WG/AWG endpoint, followed by the real independently keyed SS2022 middle.
 // No TUN, OS route/firewall or installed native-host acceptance is claimed here.
 func desktopImportedHostnameOwners(t *testing.T, ctx context.Context, chain *mobilemultihop.NodeChain, physical string) ([]adapter.Outbound, *D.Router, *D.TransportManager) {
+	out, router, manager, _ := desktopImportedHostnameOwnersOwned(t, ctx, chain, physical, nil)
+	return out, router, manager
+}
+func desktopImportedHostnameOwnersOwned(t *testing.T, ctx context.Context, chain *mobilemultihop.NodeChain, physical string, mutate func(int, map[string]any)) ([]adapter.Outbound, *D.Router, *D.TransportManager, func() error) {
 	t.Helper()
 	var graph map[string]any
 	if json.Unmarshal([]byte(chain.Config()), &graph) != nil {
@@ -86,7 +90,7 @@ func desktopImportedHostnameOwners(t *testing.T, ctx context.Context, chain *mob
 			t.Fatal(err)
 		}
 	}
-	outbounds := desktopNodeChainPeerOutbounds(t, ctx, chain, physical, nil)
+	outbounds, closeOutbounds := desktopNodeChainPeerOutboundsOwned(t, ctx, chain, physical, mutate)
 	for i, tag := range chain.PrefixTags() {
 		owners.owners[tag] = outbounds[i]
 	}
@@ -98,15 +102,18 @@ func desktopImportedHostnameOwners(t *testing.T, ctx context.Context, chain *mob
 			t.Fatal(err)
 		}
 	}
+	var once sync.Once
+	var closeErr error
+	closeOwned := func() error {
+		once.Do(func() { closeErr = errors.Join(router.Close(), manager.Close(), closeOutbounds()) })
+		return closeErr
+	}
 	t.Cleanup(func() {
-		if err := router.Close(); err != nil {
-			t.Error(err)
-		}
-		if err := manager.Close(); err != nil {
+		if err := closeOwned(); err != nil {
 			t.Error(err)
 		}
 	})
-	return outbounds, router, manager
+	return outbounds, router, manager, closeOwned
 }
 
 type desktopImportedHostnameFixture struct {

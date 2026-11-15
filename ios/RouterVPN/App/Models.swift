@@ -628,7 +628,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     static func supportsImportedMiddle(_ mode: String, position: Int, count: Int) -> Bool {
         guard (3...maximumNodes).contains(count), position == count - 2 else { return false }
         if ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode) { return true }
-        return count == 3 && mode == "shadowsocks"
+        return mode == "shadowsocks"
     }
 
     static func transportName(_ mode: String) -> String {

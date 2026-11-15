@@ -21,20 +21,24 @@ func installDesktopOrderedImported(t *testing.T, a *app, nodes []common.Multihop
 
 func installDesktopOrderedImportedCipher(t *testing.T, a *app, nodes []common.MultihopNodeSelection, method string, keyBytes int) {
 	t.Helper()
+	middle := len(nodes) - 2
+	if middle < 1 || middle > 6 {
+		t.Fatal("imported SS fixture lost its bounded original paired prefixes")
+	}
 	q := createRequestFor("shadowsocks")
 	q.Method, q.Secret = method, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("m", keyBytes)))
 	p, err := externalProfileFromCreateRequest(q)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.ID, p.Name, p.StartLayer = nodes[1].ID, "Original custom middle", "off"
+	p.ID, p.Name, p.StartLayer = nodes[middle].ID, "Original custom middle", "off"
 	p.MTUPolicy, p.ManualMTU, p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort = "manual", 1380, "custom", "udp", "9.9.9.9", 5353
 	if err := common.NormalizeRouterProfile(&p); err != nil {
 		t.Fatal(err)
 	}
-	a.profiles.Profiles[1] = p
-	nodes[1].Mode = "shadowsocks"
-	a.profiles.Profiles[2].MultihopNodes = append([]common.MultihopNodeSelection(nil), nodes...)
+	a.profiles.Profiles[middle] = p
+	nodes[middle].Mode = "shadowsocks"
+	a.profiles.Profiles[middle+1].MultihopNodes = append([]common.MultihopNodeSelection(nil), nodes...)
 }
 
 func TestDesktopOrderedImportedOriginalSourceCapture(t *testing.T) {

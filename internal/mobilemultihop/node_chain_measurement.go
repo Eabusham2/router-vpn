@@ -69,7 +69,7 @@ func (c *NodeChain) NewHopMeasurementContext(ctx context.Context, owner NodeChai
 		return hopmeasure.NewOrderedOpenVPNPrefixContext(ctx, engine, hops)
 	}
 	if c.hasImportedMiddle() {
-		return hopmeasure.NewOrderedImportedMiddleContext(ctx, engine, hops)
+		return hopmeasure.NewOrderedImportedSSPrefixContext(ctx, engine, hops)
 	}
 	return hopmeasure.NewOrderedContext(ctx, engine, hops)
 }

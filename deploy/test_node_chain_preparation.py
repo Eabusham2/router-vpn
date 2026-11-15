@@ -457,5 +457,35 @@ class OpenVPNPrefixProjection(unittest.TestCase):
         self.assertIn('for position := group * 2; position < group*2+2; position++', new)
 
 
+class ImportedSSPrefixProjection(unittest.TestCase):
+    def test_exact_mobile_desktop_and_peer_ownership(self):
+        common = 'imported_prefix_box_test.go.tmpl'
+        common_target = 'routervpn_node_chain_imported_prefix_test.go'
+        self.assertEqual(PREP.TEMPLATES.get(common), common_target)
+        spec = importlib.util.spec_from_file_location('ss_prefix_desktop_prep', ROOT/'deploy/prepare-desktop-external.py')
+        desktop = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(desktop)
+        physical = 'node_chain_imported_prefix_physical_test.go.tmpl'
+        physical_target = 'routervpn_desktop_node_chain_imported_prefix_physical_test.go'
+        self.assertNotIn(physical, PREP.TEMPLATES)
+        self.assertEqual(desktop.BOX_TEMPLATES.get(physical), physical_target)
+        self.assertNotIn('routerVPNDesktopNodeChainPhysicalTarget', (ROOT/'mobile/chain'/common).read_text())
+        self.assertIn('TestRouterVPNNodeChainImportedSSPrefixMTUOriginalOwners', (ROOT/'mobile/chain'/common).read_text())
+        peer = 'node_chain_imported_prefix_test.go.tmpl'
+        target = 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_prefix_test.go'
+        self.assertEqual(desktop.PEER_TEMPLATES.get(peer), target)
+        self.assertEqual(list(desktop.PEER_TEMPLATES.values()).count(target), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            desktop.copy_encrypted_peer_templates(destination)
+            self.assertEqual((destination/target).read_bytes(), (ROOT/'mobile/desktop'/peer).read_bytes())
+        source = (ROOT/'mobile/desktop'/peer).read_text()
+        self.assertIn('count, 170*time.Second)', source)
+        self.assertIn('fault, 6, 12*time.Second)', source)
+        self.assertIn('context.WithTimeout(f.ctx, 5*time.Second)', source)
+        self.assertIn('for position := group * 2; position < group*2+2; position++', source)
+        self.assertNotIn('OpenVPNMiddleStateContext', source)
+
+
 if __name__ == '__main__':
     unittest.main()

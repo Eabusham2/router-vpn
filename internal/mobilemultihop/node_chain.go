@@ -84,6 +84,7 @@ type NodeChain struct {
 	sourceJSON, sourceSHA, config, metadata, seal string
 	nodes                                         []*NodeProfile
 	importedMiddle                                *nodeChainImportedMember
+	importedOwners                                *nodeChainImportedOwners
 	openVPNMiddle                                 *nodeChainOpenVPNMember
 	openVPNOwners                                 *nodeChainOpenVPNOwners
 	socksSource                                   *NodeChainSOCKSSource
@@ -105,10 +106,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		len(source.Nodes) < 2 || len(source.Nodes) > NodeChainMaximumNodes {
 		return nil, nodeChainError
 	}
-	if source.Schema == 2 && (len(source.Nodes) != 3 || len(source.IdentitySources) != 3 || source.IdentitySources[0] == "" || source.IdentitySources[1] != "" || source.IdentitySources[2] == "") {
-		return nil, nodeChainError
-	}
-	if source.Schema == 5 {
+	if source.Schema == 2 || source.Schema == 5 {
 		if len(source.Nodes) < 3 || len(source.IdentitySources) != len(source.Nodes) {
 			return nil, nodeChainError
 		}
@@ -141,7 +139,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			c.nodes = append(c.nodes, nil)
 			continue
 		}
-		if source.Schema == 2 && position == 1 {
+		if source.Schema == 2 && position == len(source.Nodes)-2 {
 			middle, err := parseNodeChainImportedMember(input)
 			if err != nil {
 				return nil, err
@@ -210,6 +208,9 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		return nil, err
 	}
 	c.seal = c.captureSeal()
+	if c.importedMiddle != nil {
+		c.importedOwners = &nodeChainImportedOwners{owner: c, middle: c.importedMiddle, policy: c.importedMiddle.policy, hostname: c.importedMiddle.hostname, nodes: append([]*NodeProfile(nil), c.nodes...)}
+	}
 	if c.openVPNMiddle != nil {
 		c.openVPNOwners = &nodeChainOpenVPNOwners{owner: c, middle: c.openVPNMiddle, nodes: append([]*NodeProfile(nil), c.nodes...)}
 	}
@@ -316,6 +317,12 @@ func (c *NodeChain) validateCapture() error {
 			return nodeChainError
 		}
 	}
+	if c.importedMiddle != nil {
+		var source NodeChainSource
+		if c.openVPNMiddle != nil || c.socksSource != nil || c.connectSource != nil || exactJSON([]byte(c.sourceJSON), &source, NodeChainInputLimit) != nil || source.Schema != 2 || len(source.Nodes) < 3 || len(source.Nodes) > NodeChainMaximumNodes || len(source.Nodes) != len(c.nodes) || source.Nodes[len(source.Nodes)-2] != c.importedMiddle.input || !c.importedOwners.current(c) {
+			return nodeChainError
+		}
+	}
 	for position, node := range c.nodes {
 		proof := c.proofs[position]
 		if (c.socksSource != nil || c.connectSource != nil) && position == len(c.nodes)-2 {
@@ -328,9 +335,9 @@ func (c *NodeChain) validateCapture() error {
 			}
 			continue
 		}
-		if position == 1 && c.importedMiddle != nil {
+		if position == len(c.nodes)-2 && c.importedMiddle != nil {
 			m := c.importedMiddle
-			if node != nil || m.validate() != nil || proof.Position != 1 || proof.ProfileID != m.id() || proof.SourceSHA256 != m.source || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "shadowsocks" || proof.StartLayer != "off" {
+			if node != nil || m.validate() != nil || proof.Position != position || proof.ProfileID != m.id() || proof.SourceSHA256 != m.source || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "shadowsocks" || proof.StartLayer != "off" {
 				return nodeChainError
 			}
 			continue

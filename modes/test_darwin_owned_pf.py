@@ -937,7 +937,7 @@ class OwnedDarwinPF(unittest.TestCase):
     def test_imported_complete_prefix_keeps_original_member_baseline(self):
         # Exercise the actual saved-store dispatcher and journal lifecycle.
         # The existing explicit PF backend remains the only native double.
-        for protocol in ('socks5', 'openvpn'):
+        for protocol in ('socks5', 'openvpn', 'shadowsocks'):
             for count in (3, 4, 8):
                 with self.subTest(protocol=protocol, count=count):
                     capture, rows = self.imported_prefix_capture(count, protocol)
@@ -962,10 +962,10 @@ class OwnedDarwinPF(unittest.TestCase):
 
     def test_imported_prefix_rows_preserve_exact_family_and_position(self):
         import copy
-        for protocol in ('socks5', 'openvpn'):
+        for protocol in ('socks5', 'openvpn', 'shadowsocks'):
             capture, rows = self.imported_prefix_capture(8, protocol)
             for fault in ('too-short', 'too-long', 'wrong-position', 'second-external', 'wrong-prefix',
-                          'wrong-final', 'wrong-family', 'ss-trio-only', 'duplicate-prefix',
+                          'wrong-final', 'wrong-family', 'unsupported-imported', 'duplicate-prefix',
                           'digest', 'canonical', 'control', 'aggregate-policy', 'aggregate-lan'):
                 changed, modified = copy.deepcopy(capture), copy.deepcopy(rows)
                 if fault == 'too-short': modified = modified[-2:]
@@ -978,8 +978,8 @@ class OwnedDarwinPF(unittest.TestCase):
                 elif fault == 'wrong-final': modified[-1][1] = 'hysteria2'
                 elif fault == 'wrong-family':
                     changed['family'] = 'ordered-node-chain-connect-v1'
-                elif fault == 'ss-trio-only':
-                    changed['family'] = 'ordered-node-chain-v1'; modified[-2][1] = 'shadowsocks'
+                elif fault == 'unsupported-imported':
+                    changed['family'] = 'ordered-node-chain-v1'; modified[-2][1] = 'naive-h2'
                 elif fault == 'duplicate-prefix': modified[1][0] = modified[0][0]
                 elif fault == 'control': changed['profile_id'] = 'another-control'
                 elif fault == 'aggregate-policy': changed['policy'] = 'always'
@@ -995,7 +995,7 @@ class OwnedDarwinPF(unittest.TestCase):
 
     def test_imported_prefix_checks_every_original_saved_member(self):
         import copy
-        for protocol in ('socks5', 'openvpn'):
+        for protocol in ('socks5', 'openvpn', 'shadowsocks'):
             capture, rows = self.imported_prefix_capture(8, protocol)
             original = copy.deepcopy(self.store)
             for row in rows:
@@ -1032,7 +1032,7 @@ class OwnedDarwinPF(unittest.TestCase):
             elif fault == 'wrong-prefix': modified[0][1] = 'hysteria2'
             elif fault == 'wrong-final': modified[-1][1] = 'hysteria2'
             elif fault == 'ordinary-family':
-                changed['family'] = 'ordered-node-chain-v1'; modified[-2][1] = 'shadowsocks'
+                changed['family'] = 'ordered-node-chain-v1'  # Keep the original CONNECT transport.
             elif fault == 'socks-family':
                 changed['family'] = 'ordered-node-chain-socks-v1'
             elif fault == 'execution-family': changed['family'] = 'ordered-node-chain-execution-v1'

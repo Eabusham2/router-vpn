@@ -57,7 +57,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(without + decoy)
 
     def test_duplicate_aggregate_or_imported_family_job_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", *TYPED_NATIVE):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", "ss-prefix-native", *TYPED_NATIVE):
             with self.subTest(job=job), self.assertRaisesRegex(AssertionError, "missing or duplicate"):
                 self.check(self.source + "\n  " + job + ":\n    runs-on: ubuntu-24.04\n")
 
@@ -69,7 +69,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_condition_or_nonblocking_gate_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", *TYPED_NATIVE):
+        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", "ss-prefix-native", *TYPED_NATIVE):
             for bypass in ("    if: ${{ false }}\n", "    if: ${{ always() }}\n", "    continue-on-error: true\n"):
                 with self.subTest(job=job, bypass=bypass):
                     with self.assertRaisesRegex(AssertionError, "conditional or nonblocking"):
@@ -179,6 +179,17 @@ class NativeArtifactAggregate(unittest.TestCase):
         for replacement in ("    uses: ./.github/workflows/server-node-chain-encrypted.yml",
                             "    runs-on: ubuntu-24.04", marker + "\n" + marker):
             with self.subTest(replacement=replacement), self.assertRaisesRegex(AssertionError, "actual encrypted OpenVPN prefix"):
+                self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
+        for inputs in ("      source_sha: historical", "      mode: wg", "      network: tcp"):
+            with self.subTest(inputs=inputs), self.assertRaisesRegex(AssertionError, "no-input same-SHA"):
+                self.check(self.source.replace(marker, marker + "\n    with:\n" + inputs, 1))
+
+    def test_ss_prefix_requires_actual_same_sha_workflow(self):
+        marker = "    uses: ./.github/workflows/ss-node-chain-prefix.yml"
+        self.assertEqual(self.source.count(marker), 1)
+        for replacement in ("    uses: ./.github/workflows/server-node-chain-encrypted.yml",
+                            "    runs-on: ubuntu-24.04", marker + "\n" + marker):
+            with self.subTest(replacement=replacement), self.assertRaisesRegex(AssertionError, "actual encrypted SS prefix"):
                 self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
         for inputs in ("      source_sha: historical", "      mode: wg", "      network: tcp"):
             with self.subTest(inputs=inputs), self.assertRaisesRegex(AssertionError, "no-input same-SHA"):

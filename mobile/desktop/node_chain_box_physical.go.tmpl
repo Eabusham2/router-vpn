@@ -37,7 +37,7 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 	for position, prefix := range meta.Prefixes {
 		if publicTag != "" && position == len(meta.Prefixes)-2 {
 			openVPN := middle.Tag != "" && middle.Tag == publicTag && prefix.Mode == "openvpn" && prefix.SourceSHA256 == middle.SourceSHA256
-			importedSS := middle.Tag == "" && len(meta.Prefixes) == 3 && position == 1 && prefix.Mode == "shadowsocks"
+			importedSS := middle.Tag == "" && len(meta.Prefixes) >= 3 && prefix.Mode == "shadowsocks"
 			if (!openVPN && !importedSS) || meta.Prefixes[len(meta.Prefixes)-1].Mode != "shadowsocks" ||
 				prefix.Tag != publicTag || prefix.SourceSHA256 != captured[position].SourceSHA256 || prefix.Position != position ||
 				prefix.StartLayer != "off" || prefix.Kind != "public-path" || prefix.NodeKind != "external" || prefix.NodeID != "" {

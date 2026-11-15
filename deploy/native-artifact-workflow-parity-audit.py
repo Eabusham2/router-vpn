@@ -47,7 +47,7 @@ def check_release_aggregate_gates(source: str) -> None:
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
                 "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "server-ordered-encrypted",
-                "openvpn-prefix-native", "typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
+                "openvpn-prefix-native", "ss-prefix-native", "typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
     pq = job("imported-pq-reality")
@@ -76,6 +76,12 @@ def check_release_aggregate_gates(source: str) -> None:
         "native release lost its actual encrypted OpenVPN prefix workflow")
     assert not any(line.startswith("    with:") for line in openvpn_prefix), (
         "native OpenVPN prefixes must retain their no-input same-SHA workflow")
+    ss_prefix = job("ss-prefix-native")
+    assert [line for line in ss_prefix if line.startswith("    uses:")] == [
+        "    uses: ./.github/workflows/ss-node-chain-prefix.yml"], (
+        "native release lost its actual encrypted SS prefix workflow")
+    assert not any(line.startswith("    with:") for line in ss_prefix), (
+        "native SS prefixes must retain their no-input same-SHA workflow")
     darwin_host = job("darwin-ordered-host")
     assert "    uses: ./.github/workflows/darwin-node-host-tun.yml" in darwin_host, (
         "native release lost its actual installed ordered Darwin host workflow")
@@ -110,7 +116,7 @@ def check_release_aggregate_gates(source: str) -> None:
                         ("darwin-ordered-child", darwin_child), ("darwin-ordered-host", darwin_host),
                         ("darwin-prefix-host", darwin_prefix),
                         ("native-runtimes", runtimes), ("server-ordered-encrypted", server_encrypted),
-                        ("openvpn-prefix-native", openvpn_prefix), *focused):
+                        ("openvpn-prefix-native", openvpn_prefix), ("ss-prefix-native", ss_prefix), *focused):
         assert not any(line.startswith(("    if:", "    continue-on-error:")) for line in lines), (
             f"native release {name} gate became conditional or nonblocking")
 

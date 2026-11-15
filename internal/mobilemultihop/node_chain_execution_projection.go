@@ -81,7 +81,7 @@ func newNodeChainExecutionPreparationProjected(localSource, execution string, de
 	}
 	local, err := NewNodeChain(localSource)
 	var original NodeChainSource
-	if err != nil || local.validateCapture() != nil || local.openVPNMiddle != nil || local.importedMiddle != nil && local.importedMiddle.hostname != nil ||
+	if err != nil || local.validateCapture() != nil || local.openVPNMiddle != nil || local.importedMiddle != nil && len(local.nodes) != 3 || local.importedMiddle != nil && local.importedMiddle.hostname != nil ||
 		local.nodes[len(local.nodes)-1].mode != "shadowsocks" ||
 		exactJSON([]byte(localSource), &original, NodeChainInputLimit) != nil || (original.Schema != 1 && original.Schema != 2) ||
 		len(original.IdentitySources) != len(local.nodes) {
@@ -225,7 +225,7 @@ func (p *NodeChainExecutionPreparation) captureSeal() string {
 }
 
 func (p *NodeChainExecutionPreparation) validateCapture() error {
-	if p == nil || p.seal == "" || p.captureSeal() != p.seal || p.local == nil || p.local.validateCapture() != nil || p.local.openVPNMiddle != nil ||
+	if p == nil || p.seal == "" || p.captureSeal() != p.seal || p.local == nil || p.local.validateCapture() != nil || p.local.openVPNMiddle != nil || p.local.importedMiddle != nil && len(p.local.nodes) != 3 ||
 		p.discovery.Entry != p.local.proofs[0] || p.dns.DNS.SourceSHA256 != p.sourceSHA || p.dns.DNS.ConfigSHA256 != p.configSHA {
 		return nodeChainExecutionError
 	}

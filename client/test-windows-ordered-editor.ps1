@@ -207,7 +207,7 @@ try{
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $socksSaved $store)}catch{$rejected=$true};Check $rejected 'SOCKS relinking retained old draft authority'
     # Run the real Add/Apply and request-source guard for both original CONNECT
     # protocols. Capability remains explicit and no native admission is invented.
-    foreach($protocol in @('http-connect','https-connect','openvpn','socks5')){foreach($packet in @('wg','awg2-fast','awg2-strong')){
+    foreach($protocol in @('http-connect','https-connect','openvpn','socks5','shadowsocks')){foreach($packet in @('wg','awg2-fast','awg2-strong')){
         foreach($count in @(3..8)){
         $middle=$count-2
         $rows.Clear();$finalMode.SelectedIndex=0
@@ -233,7 +233,7 @@ try{
         $roundTrip=$serialized|ConvertFrom-Json
         Check (($roundTrip.nodes.mode-join',')-ceq((@($packet)*$middle+@($protocol,'shadowsocks'))-join',')) 'CONNECT JSON transport changed protocol'
         $other=if($protocol-ceq'http-connect'){'https-connect'}else{'http-connect'}
-        foreach($foreign in @($other,'shadowsocks',$protocol.ToUpperInvariant(),($protocol+' '))){
+        foreach($foreign in @($other,$(if($protocol-ceq'shadowsocks'){'socks5'}else{'shadowsocks'}),$protocol.ToUpperInvariant(),($protocol+' '))){
             $connect.external.protocol=$foreign;$rejected=$false
             try{[void](New-RouterVPNOrderedConnectPayload $connectSaved $store)}catch{$rejected=$true}
             Check $rejected 'CONNECT request borrowed a different saved protocol'

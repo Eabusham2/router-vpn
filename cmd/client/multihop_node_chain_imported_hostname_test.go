@@ -18,7 +18,7 @@ import (
 func installDesktopOrderedHostname(t *testing.T, a *app, nodes []common.MultihopNodeSelection) {
 	t.Helper()
 	installDesktopOrderedImported(t, a, nodes)
-	p := &a.profiles.Profiles[1]
+	p := &a.profiles.Profiles[len(nodes)-2]
 	p.Endpoint = "middle.example.test"
 	p.External.Shadowsocks.Server = p.Endpoint
 	p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort = "custom", "tcp", "10.81.0.53", 5353

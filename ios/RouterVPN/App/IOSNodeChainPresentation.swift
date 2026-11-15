@@ -102,7 +102,7 @@ enum IOSNodeChainPresentation {
               bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
               let control = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }),
               let launch = try? JSONDecoder().decode(Launch.self, from: source),
-              (launch.schema == 1 || launch.schema == 2 && launch.nodes.count == 3 || launch.schema == 5 && launch.nodes.count >= 3), launch.kind == "routervpn-node-chain-launch-input", launch.execution == "local",
+              (launch.schema == 1 || (launch.schema == 2 || launch.schema == 5) && launch.nodes.count >= 3), launch.kind == "routervpn-node-chain-launch-input", launch.execution == "local",
               launch.target_os == nil, launch.projection_kind == nil, launch.session_id == nil, launch.restored_mtu == nil,
               launch.source_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
               launch.config_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
@@ -120,7 +120,7 @@ enum IOSNodeChainPresentation {
                       let source=try? JSONDecoder().decode(RouterProfile.self,from:data), (openVPN ? IOSImportedOpenVPNSource.eligible(source) : IOSImportedShadowsocksSource.eligible(source)) else { return nil }
                 profile=source; mode=openVPN ? "openvpn" : "shadowsocks"
             } else {
-                guard member.kind == "routervpn-node-launch-input", !(launch.schema == 2 && position == 1 || launch.schema == 5 && position == launch.nodes.count - 2),
+                guard member.kind == "routervpn-node-launch-input", !((launch.schema == 2 || launch.schema == 5) && position == launch.nodes.count - 2),
                       let raw=member.profile_json, !raw.isEmpty, raw.utf8.count<=256*1024, let transport=member.mode,
                       let source=try? JSONDecoder().decode(RouterProfile.self,from:Data(raw.utf8)) else { return nil }
                 profile=source;mode=transport

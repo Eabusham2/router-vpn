@@ -99,11 +99,8 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 		imported := found && desktopNodeChainImported(profile, selected.Mode) || openVPN
 		paired := found && (profile.NodeKind == "" || profile.NodeKind == "router-vpn") && profile.External == nil && common.ValidNodeProofID(profile.NodeProofID)
 		if imported {
-			middle, bounded := 1, len(nodes) == 3
-			if openVPN {
-				middle = len(nodes) - 2
-				bounded = len(nodes) >= 3 && len(nodes) <= common.MultihopMaximumNodes
-			}
+			middle := len(nodes) - 2
+			bounded := len(nodes) >= 3 && len(nodes) <= common.MultihopMaximumNodes
 			if !bounded || i != middle || nodes[len(nodes)-1].Mode != "shadowsocks" {
 				return nil, errors.New("imported ordered member requires its captured placement before a paired SS2022 final")
 			}

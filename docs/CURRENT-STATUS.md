@@ -8,6 +8,53 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## November 15: original scope and bounded desktop additions
 
+### Longer Local imported Shadowsocks 2022 paths
+
+The schema-2 Local composition retains one to six original paired WireGuard,
+AWG Fast or AWG Strong prefixes, one imported Shadowsocks 2022 penultimate
+member, and an independent paired Shadowsocks 2022 final. That particular
+path contains three to eight nodes. The imported member retains its exact
+AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305 SS2022 method and canonical key;
+it does not borrow a paired node's identity or Start Layer. Every original
+prefix remains represented in the source, policy, native owner and proof.
+
+Literal IPv4/IPv6 endpoints and the separately captured hostname form retain
+their existing rules. Hostname resolution uses the imported profile's explicit
+Custom TCP resolver through the last paired prefix. It does not use ordinary
+network bootstrap. Application DNS remains the independent final node's
+selected policy. Android, iOS/iPadOS and the desktop capture, editors, complete
+saved profiles and measurement positions retain the same complete Local path.
+Source identity, cancellation and restoration remain tied to the original
+connection owner.
+
+The shared engine's existing literal three-node Server/Compare and candidate
+capabilities remain separate. This extension grants neither capability to
+longer imports, and it does not grant imported Server/Compare to the desktop
+product flow that still requires paired nodes. Multiple imports, arbitrary
+imported positions and the other requested graph families remain unfinished.
+MTU/layer capacity must fit the actual captured path; admitting eight members
+does not override an incompatible fixed MTU. The required source and encrypted
+native gates, their negative cases and their exact-source receipts are indexed
+in the [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md).
+
+### Longer Local imported OpenVPN paths
+
+Published `81af4c3e` extended the schema-5 Local path to one to six paired
+WG/AWG prefixes, one penultimate imported OpenVPN member and one paired
+Shadowsocks 2022 final. The three-to-eight-member capture retains the bounded
+single literal TCP or UDP remote, original OpenVPN credentials and Start Layer
+Off on that import. Paired prefixes keep their independent modes, keys,
+layers and device policies. Native Android, Apple and desktop composition,
+complete profile restoration and per-hop measurement retain the full path.
+
+The mandatory release workflow covers all six WG/AWG and TCP/UDP units,
+complete native measurements, original-owner refusals, MTU/cancellation and
+source/Box contracts. The release-audit inventory correction at `5f35b648`
+keeps that workflow a required same-SHA prerequisite. These source changes
+do not establish a fully published current release, signed mobile delivery,
+physical networking or private deployment. Broader OpenVPN profile, position
+and execution combinations remain accountable to the original requirements.
+
 ### Longer Local SOCKS5 paths
 
 The schema-3 SOCKS5 composition retains one to six original paired
@@ -27,8 +74,8 @@ and the actual penultimate/final positions. MTU continuation accounts for
 the captured prefixes and layers. Existing capacity checks still reject a
 configured entry that cannot carry the required nested dual-stack packet;
 an eight-node selection is not a promise that every saved MTU/layer combination
-fits. Imported Shadowsocks and OpenVPN middles retain their existing trio
-bounds. Server/Compare, other imported positions and multiple imported members
+fits. The separate Shadowsocks and OpenVPN extensions are described above.
+SOCKS5 Server/Compare, other imported positions and multiple imported members
 remain separately unfinished.
 
 The required source, encrypted Run, native MTU and installed desktop gates
@@ -49,8 +96,8 @@ that specific Local path from three to eight total nodes. The shared source,
 native owner and physical projection retain every original paired identity,
 credential, device/DNS policy and proof. The imported CONNECT member remains
 TCP-only; the original final owns the UoT-v2 transport. The separate SOCKS5
-composition is described above; imported Shadowsocks and OpenVPN middles keep
-their existing bounds. This change does not admit Server, Compare, arbitrary
+composition and separate Shadowsocks/OpenVPN extensions are described above.
+This CONNECT change does not admit Server, Compare, arbitrary
 imported positions, or multiple imported members.
 
 Android and iOS capture, editors, complete saved profiles, startup, session

@@ -548,25 +548,27 @@ public final class NodeChainCaptureHarness {
  }
 
  static void importedMiddle(Path root)throws Exception{
-  for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305")){
+  for(String fixture:List.of("2/","2/awg-fast","2/awg-strong","3/","7/"))for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305")){
   int keySize=method.equals("2022-blake3-aes-128-gcm")?16:32;
-  Fixture f=new Fixture(root,"2/");AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);
+  Fixture f=new Fixture(root,fixture);AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);
   AndroidStandardExitStore.Entry custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Original custom middle";custom.protocol="shadowsocks";custom.server="198.51.100.76";custom.serverPort=443;custom.expectedPublicIp="203.0.113.76";custom.method=method;custom.secret=Base64.getEncoder().encodeToString(new byte[keySize]);custom.policy.put("dns_mode","rescue").put("start_layer","off");exits.save(custom);
   AndroidOrderedPathSelection editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+  int middlePosition=editor.members().size()-1,total=editor.members().size()+1;
   check(editor.prefixModes(custom.id).equals(List.of("shadowsocks")),"original imported middle not offered by editor");editor.addPrefix(custom.id,"shadowsocks");
-  reject(()->editor.movePrefix(1,0),"imported source moved into physical first position");
-  AndroidNodeStore.ChainCapture saved=editor.save();check(saved.members.size()==3&&saved.members.get(1).imported&&saved.members.get(1).proofId.isEmpty(),"custom member borrowed paired identity");
+  reject(()->editor.movePrefix(middlePosition,0),"imported source moved into physical first position");
+  if(total>3)for(String execution:List.of("server","auto"))reject(()->editor.setExecution(execution),"long imported source borrowed execution");
+  AndroidNodeStore.ChainCapture saved=editor.save();check(saved.members.size()==total&&saved.members.get(middlePosition).imported&&saved.members.get(middlePosition).proofId.isEmpty(),"custom member borrowed paired identity");
   try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(saved)){
-   JSONObject launch=new JSONObject(capture.launchInput),middle=new JSONObject(capture.memberInputs.get(1));
+   JSONObject launch=new JSONObject(capture.launchInput),middle=new JSONObject(capture.memberInputs.get(middlePosition));
    JSONObject profile=new JSONObject(middle.getString("capture")).getJSONObject("profile");
    JSONObject ss=profile.getJSONObject("external").getJSONObject("shadowsocks");
    check(ss.getString("method").equals(method)&&ss.getString("password").equals(custom.secret),"custom cipher or original PSK changed during native compilation");
-   check(launch.getInt("schema")==2&&capture.identityInputs.get(1).isEmpty()&&middle.getString("kind").equals("routervpn-node-chain-imported-member"),"custom source did not retain typed schema2");
+   check(launch.getInt("schema")==2&&capture.identityInputs.get(middlePosition).isEmpty()&&middle.getString("kind").equals("routervpn-node-chain-imported-member"),"custom source did not retain typed schema2");
    check(profile.getString("id").equals(custom.id)&&profile.getString("node_kind").equals("external")&&!profile.has("node_proof_id")&&!profile.has("api_token")&&!profile.has("router_api"),"custom source forged private Router authority");
    try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(capture.launchInput,saved)){check(replay.launchInput.equals(capture.launchInput),"custom middle replay changed original source");}
   }
   var row=f.profiles.add("Original custom middle route");String serialized=Files.readString(f.rows);check(!serialized.contains(custom.secret)&&!serialized.contains("api_token"),"saved custom route copied credentials");
-  f.profiles.load(row.id);check(f.profiles.currentOrderedPath().members.get(1).imported&&f.profiles.currentOrderedPath().members.get(1).external().method.equals(method),"saved profile lost imported member or selected cipher");
+  f.profiles.load(row.id);check(f.profiles.currentOrderedPath().members.get(middlePosition).imported&&f.profiles.currentOrderedPath().members.get(middlePosition).external().method.equals(method),"saved profile lost imported member or selected cipher");
   AndroidNodeStore.ChainCapture live=f.profiles.currentOrderedPath();AndroidOrderedPathSelection stale=new AndroidOrderedPathSelection(f.nodes,f.profiles);
   String original=custom.name;custom.name="Replaced";exits.save(custom);custom.name=original;exits.save(custom);
   reject(live::requireCurrent,"imported change-away/back revived old native source");reject(stale::save,"imported change-away/back revived old editor");
@@ -596,18 +598,19 @@ public final class NodeChainCaptureHarness {
   check(found!=null,"native graph lost captured DNS or transport tag");return found;
  }
  static void hostnameMiddle(Path root)throws Exception{
-  for(String fixture:List.of("2/","2/awg-fast","2/awg-strong"))for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305")){
+  for(String fixture:List.of("2/","2/awg-fast","2/awg-strong","3/","7/"))for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305")){
    Fixture f=new Fixture(root,fixture);AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);var custom=hostnameEntry(method);
    var unsaved=AndroidStandardExitStore.copy(custom);unsaved.policy=new JSONObject();AndroidStandardExitStore.validateForPolicyEditor(unsaved);
    check(unsaved.server.equals(custom.server),"transport editor normalized the exact saved hostname");
    reject(()->exits.save(unsaved),"transport-only hostname escaped final saved-policy validation");
    AndroidExternalPolicy.validateDraft(custom);exits.save(custom);String original=AndroidStandardExitStore.snapshot(exits.get(custom.id));
    AndroidOrderedPathSelection editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+   int middlePosition=editor.members().size()-1,total=editor.members().size()+1;
    check(editor.prefixModes(custom.id).equals(List.of("shadowsocks")),"hostname middle omitted from actual editor");editor.addPrefix(custom.id,"shadowsocks");
-   reject(()->editor.movePrefix(1,0),"hostname middle acquired physical first position");var saved=editor.save();
-   check(saved.members.size()==3&&saved.members.get(1).imported&&saved.members.get(1).proofId.isEmpty(),"hostname middle borrowed paired Router identity");
+   reject(()->editor.movePrefix(middlePosition,0),"hostname middle acquired physical first position");var saved=editor.save();
+   check(saved.members.size()==total&&saved.members.get(middlePosition).imported&&saved.members.get(middlePosition).proofId.isEmpty(),"hostname middle borrowed paired Router identity");
    try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(saved)){
-    JSONObject member=new JSONObject(capture.memberInputs.get(1)),selection=new JSONObject(member.getString("capture")),p=selection.getJSONObject("profile");
+    JSONObject member=new JSONObject(capture.memberInputs.get(middlePosition)),selection=new JSONObject(member.getString("capture")),p=selection.getJSONObject("profile");
     JSONObject source=new JSONObject(member.getString("config"));
     check(p.getString("endpoint").equals(custom.server)&&p.getJSONObject("external").getJSONObject("shadowsocks").getString("server").equals(custom.server)
       &&source.getJSONArray("outbounds").getJSONObject(0).getString("server").equals(custom.server),"hostname capture replaced an original endpoint copy");
@@ -616,13 +619,13 @@ public final class NodeChainCaptureHarness {
     JSONObject graph=new JSONObject(capture.config),middle=null;JSONArray outs=graph.getJSONArray("outbounds");
     for(int i=0;i<outs.length();i++)if(custom.server.equals(outs.getJSONObject(i).optString("server")))middle=outs.getJSONObject(i);
     check(middle!=null&&middle.getString("password").equals(custom.secret)&&middle.getString("method").equals(method),"hostname graph replaced exact transport credentials");
-    String prefix=graph.getJSONArray("endpoints").getJSONObject(0).getString("tag"),finalTag=tagged(outs,graph.getJSONObject("route").getString("final")).getString("default");
+    String prefix=graph.getJSONArray("endpoints").getJSONObject(middlePosition-1).getString("tag"),finalTag=tagged(outs,graph.getJSONObject("route").getString("final")).getString("default");
     JSONObject dns=graph.getJSONObject("dns"),query=middle.getJSONObject("domain_resolver"),transport=tagged(dns.getJSONArray("servers"),query.getString("server")),application=tagged(dns.getJSONArray("servers"),dns.getString("final"));
     check(middle.getString("detour").equals(prefix)&&query.getString("strategy").equals("ipv4_only")&&transport.getString("detour").equals(prefix)
       &&transport.getString("type").equals("tcp")&&transport.getString("server").equals("10.81.0.53")&&transport.getInt("server_port")==5353,"hostname resolver escaped original preceding packet prefix");
     check(!transport.getString("tag").equals(application.getString("tag"))&&application.getString("detour").equals(finalTag)
-      &&application.getString("type").equals("udp")&&application.getString("server").equals(profile(f.original.get(1)).getString("adguard_ipv4")),"hostname resolver replaced final Home application DNS");
-    check(capture.identityInputs.get(1).isEmpty()&&new JSONObject(capture.launchInput).getInt("schema")==2,"hostname source borrowed native identity authority");
+      &&application.getString("type").equals("udp")&&application.getString("server").equals(profile(f.original.get(f.original.size()-1)).getString("adguard_ipv4")),"hostname resolver replaced final Home application DNS");
+    check(capture.identityInputs.get(middlePosition).isEmpty()&&new JSONObject(capture.launchInput).getInt("schema")==2,"hostname source borrowed native identity authority");
     try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(capture.launchInput,saved)){check(replay.launchInput.equals(capture.launchInput)&&replay.config.equals(capture.config),"hostname replay changed original source or DNS route");}
     for(String fault:List.of("profile-endpoint","external-endpoint","outbound-endpoint","resolver-port")){
      JSONObject altered=new JSONObject(member.getString("capture")),config=new JSONObject(member.getString("config"));

@@ -126,14 +126,15 @@ func profile(_ value:Data)throws->[String:Any]{try (object(value)["routerProfile
 func edit(_ value:Data,_ change:(inout [String:Any])->Void)throws->Data{var root=try object(value);change(&root);return try data(root)}
 func editProfile(_ value:Data,_ change:(inout [String:Any])->Void)throws->Data{var root=try object(value);var p=(root["routerProfiles"] as! [[String:Any]])[0];change(&p);root["routerProfiles"]=[p];return try data(root)}
 func fixture(_ count:Int,_ layer:String,_ requested:String,_ awg:Bool)throws->[Data]{let raw=try awg ? LibboxTestAWGFixture(count,layer):LibboxTestFixture(count,layer);var bundles=try (JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)};bundles[count-1]=try editProfile(bundles[count-1]){$0["multihop_execution"]=requested};return bundles}
-func importedFixture(_ requested:String,_ first:String,_ method:String)throws->[Data]{
- var bundles=try fixture(3,"off",requested,false),middle=try object(bundles[1]),custom=try profile(bundles[1])
+func importedFixture(_ requested:String,_ first:String,_ method:String,_ count:Int=3)throws->[Data]{
+ let middlePosition=count-2,finalPosition=count-1
+ var bundles=try fixture(count,"off",requested,false),middle=try object(bundles[middlePosition]),custom=try profile(bundles[middlePosition])
  let id="original-execution-middle",keySize=method=="2022-blake3-aes-128-gcm" ? 16:32
  custom["id"]=id;custom["name"]="Original execution middle";custom["node_kind"]="external";custom.removeValue(forKey:"node_proof_id")
  for key in ["router_api","api_token","adguard_ipv6","socks_host","socks_username","socks_password"]{custom[key]=""};custom["socks_port"]=0
  custom["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.76","shadowsocks":["server":"198.51.100.76","port":443,"method":method,"password":Data(repeating:0,count:keySize).base64EncodedString()]]
- middle["selectedRouterID"]=id;middle["routerProfiles"]=[custom];middle["profiles"]=[String:[String:String]]();bundles[1]=try data(middle)
- bundles[2]=try editProfile(bundles[2]){final in var refs=final["multihop_nodes"] as! [[String:Any]];refs[0]["mode"]=first;refs[1]=["id":id,"mode":"shadowsocks"];final["multihop_nodes"]=refs}
+ middle["selectedRouterID"]=id;middle["routerProfiles"]=[custom];middle["profiles"]=[String:[String:String]]();bundles[middlePosition]=try data(middle)
+ bundles[finalPosition]=try editProfile(bundles[finalPosition]){final in var refs=final["multihop_nodes"] as! [[String:Any]];refs[0]["mode"]=first;refs[middlePosition]=["id":id,"mode":"shadowsocks"];final["multihop_nodes"]=refs}
  return bundles
 }
 @main struct Tests {
@@ -142,6 +143,10 @@ func importedFixture(_ requested:String,_ first:String,_ method:String)throws->[
  @MainActor static func reject(_ name:String,_ action:()throws->Void){do{try action();fatalError("ACCEPTED "+name)}catch{checks+=1}}
  @MainActor static func main()throws{
   defer{LibboxTestClose()}
+  for count in [4,8] {for requested in ["server","auto"] {
+   let long=try importedFixture(requested,"wg","2022-blake3-aes-256-gcm",count)
+   reject("long imported source cannot enter execution capture"){_ = try IOSNodeChainExecutionCapture.compile(bundles:long,requested:requested)}
+  }}
   for count in [2,3,4,8]{for requested in ["server","auto"]{for awg in [false,true]{for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"]{
    let bundles=try fixture(count,layer,requested,awg)
    let capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)

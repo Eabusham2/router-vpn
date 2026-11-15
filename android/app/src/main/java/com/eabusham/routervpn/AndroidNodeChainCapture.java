@@ -134,6 +134,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     private static List<String> memberInputs(AndroidNodeStore.ChainCapture original) throws Exception {
         if (original == null) throw new IllegalStateException("The original selected ordered source is missing.");
         original.requireCurrent();
+        if (!"local".equals(original.execution) && sourceSchema(original.members)==2 && original.members.size()!=3)
+            throw new IllegalStateException("Longer imported Shadowsocks paths require Local execution.");
         JSONArray selected = AndroidNodeStore.orderedSelection(original.control.profile());
         if (selected.length() != original.members.size() || selected.length() != original.modes.size()) throw new IllegalStateException("The original ordered capture is incomplete.");
         List<String> inputs = new ArrayList<>();
@@ -164,6 +166,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if (!java.util.Arrays.asList("server","auto").contains(execution) || members==null || modes==null
                 || members.size()!=modes.size() || members.size()<2 || members.size()>8)
             throw new IllegalStateException("The ordered execution preview lost its complete original graph.");
+        if (sourceSchema(members)==2 && members.size()!=3)
+            throw new IllegalStateException("Longer imported Shadowsocks paths require Local execution.");
         JSONObject control=members.get(members.size()-1).profile();
         JSONArray selected=AndroidNodeStore.orderedSelection(control);
         if (!execution.equals(control.getString("multihop_execution")) || selected.length()!=members.size())
@@ -186,6 +190,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static void validateExecutionPlan(RouterNodeChain local,String execution) throws Exception {
         if(local==null || !java.util.Arrays.asList("server","auto").contains(execution))
             throw new IllegalStateException("Choose the original ordered Server or Compare graph.");
+        JSONObject original=new JSONObject(local.launchInput());
+        if(original.getInt("schema")==2 && original.getJSONArray("nodes").length()!=3)
+            throw new IllegalStateException("Longer imported Shadowsocks paths require Local execution.");
         RouterNodeChainExecution preview=Libbox.routerNodeChainExecutionFromLaunch(local.launchInput(),execution);
         if(preview==null)throw new IllegalStateException("The native compiler returned no ordered execution preparation.");
         try {
@@ -222,7 +229,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static int sourceSchema(List<AndroidNodeStore.ChainSource> members) throws Exception {
         int imported=0,middle=-1;for(int i=0;i<members.size();i++)if(members.get(i).imported){
             imported++;middle=i;String protocol=AndroidExternalPolicy.protocol(members.get(i).external().protocol);
-            boolean variablePrefix="socks5".equals(protocol)||"http-connect".equals(protocol)||"https-connect".equals(protocol)||"openvpn".equals(protocol);
+            boolean variablePrefix="shadowsocks".equals(protocol)||"socks5".equals(protocol)||"http-connect".equals(protocol)||"https-connect".equals(protocol)||"openvpn".equals(protocol);
             if(members.size()<3||members.size()>8||i!=members.size()-2||!variablePrefix&&members.size()!=3)throw new IllegalStateException("A custom node requires its supported penultimate position before the paired final node.");
         }
         if(imported>1)throw new IllegalStateException("This custom path supports one imported intermediate node.");

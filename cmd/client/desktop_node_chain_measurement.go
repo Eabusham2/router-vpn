@@ -116,11 +116,8 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 		kind := "private-node"
 		imported := desktopNodeChainOpenVPNMiddle(p, members[i].Mode) || desktopNodeChainImported(p, members[i].Mode) || desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode)
 		if imported {
-			middle, bounded := 1, len(members) == 3
-			if desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode) || desktopNodeChainOpenVPNMiddle(p, members[i].Mode) {
-				middle = len(members) - 2
-				bounded = len(members) >= 3 && len(members) <= 8
-			}
+			middle := len(members) - 2
+			bounded := len(members) >= 3 && len(members) <= 8
 			if !bounded || i != middle {
 				return nil, bad
 			}
