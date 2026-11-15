@@ -712,7 +712,7 @@ rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["s
 for middleMode in ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"] { for prefixMode in ["wg", "awg2-fast", "awg2-strong"] {
     let connectMiddle = ["http-connect", "https-connect"].contains(middleMode)
     let otherMiddle = middleMode == "http-connect" ? "https-connect" : middleMode == "https-connect" ? "http-connect" : middleMode == "socks5" ? "shadowsocks" : "socks5"
-    for count in (connectMiddle ? Array(3...8) : [3]) {
+    for count in (connectMiddle || middleMode == "socks5" ? Array(3...8) : [3]) {
     let middle = count - 2
     _ = chooseOrdered(count, prefixMode: prefixMode)
     let paired = owner.captureConnectionProfileSelection()

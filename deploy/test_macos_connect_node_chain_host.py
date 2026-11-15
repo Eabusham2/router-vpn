@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Installed CONNECT host gate; original37 and SOCKS8 precede22 actual HTTP(S) cases."""
+"""Installed CONNECT host gate; original37 and SOCKS10 precede22 actual HTTP(S) cases."""
 from pathlib import Path
 import argparse
 import hashlib
@@ -100,8 +100,8 @@ def case_inventory():
         raise ValueError('Installed CONNECT source lost its exact24 cases')
     BASE.case_inventory()
     SOCKS.case_inventory()
-    if len(BASE.CASES) != 37 or len(SOCKS.CASES) != 8 or len(set(CASES)) != 24 or not set(CASES).isdisjoint((*BASE.CASES, *SOCKS.CASES)):
-        raise ValueError('Installed CONNECT gate lost original37, SOCKS8 or typed24')
+    if len(BASE.CASES) != 37 or len(SOCKS.CASES) != 10 or len(set(CASES)) != 24 or not set(CASES).isdisjoint((*BASE.CASES, *SOCKS.CASES)):
+        raise ValueError('Installed CONNECT gate lost original37, SOCKS10 or typed24')
     return CASES
 
 
@@ -149,7 +149,7 @@ def require_public_receipt(value):
     controls = value.get('public_source_controls', {})
     if (type(value.get('schema')) is not int or value['schema'] != 2 or
             value.get('gate') != 'installed-darwin-ordered-connect-host' or
-            value.get('scope') != 'installed-public-controller-actual-connect-and-original37-socks8-preservation' or
+            value.get('scope') != 'installed-public-controller-actual-connect-and-original37-socks10-preservation' or
             value.get('public_darwin_admission') != 'enabled' or
             value.get('target') not in ('darwin/amd64', 'darwin/arm64') or value.get('native') is not True or
             value.get('public_entrypoint') != 'nativeMultihopConnectOwned' or
@@ -303,7 +303,7 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
             raise ValueError('Native ordered acceptance changed its captured signed copy')
         if repository_identity(required_commit) != repository:
             raise ValueError('Native ordered acceptance changed its exact source commit or tree')
-        receipt_value = dict(schema=2, gate='installed-darwin-ordered-connect-host', scope='installed-public-controller-actual-connect-and-original37-socks8-preservation', public_darwin_admission='enabled',
+        receipt_value = dict(schema=2, gate='installed-darwin-ordered-connect-host', scope='installed-public-controller-actual-connect-and-original37-socks10-preservation', public_darwin_admission='enabled',
                              public_entrypoint='nativeMultihopConnectOwned', public_status_entrypoint='nativeMultihopStatus', public_cases=list(cases), public_source_controls=public_controls,
                              target=target, validation_toolchain=CONTROLLER.UID.RACE.TOOLCHAIN, repository=repository, source_sha256=policy, bundle_sha256=original_hash,
                              sealed_bundle_sha256=signed_hash, images=identities, cases=list(CASES), original_cases=list(BASE.CASES), socks_cases=list(SOCKS.CASES), completed=list(completed),

@@ -8,6 +8,38 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## November 15: original scope and bounded desktop additions
 
+### Longer Local SOCKS5 paths
+
+The schema-3 SOCKS5 composition retains one to six original paired
+WireGuard/AWG prefixes, one imported SOCKS5 penultimate member with its
+captured authentication choice, and an independent paired Shadowsocks 2022
+final. That specific Local path
+can contain three to eight total nodes. Its permanent TCP control connection
+and negotiated UDP relay stay inside the same captured last-prefix endpoint;
+only the first prefix receives physical egress. Every prefix retains its own
+keys, device/DNS policy, proof and cleanup owner. The final continues to use
+the SOCKS5 UDP association; it does not acquire the CONNECT family's UoT-v2
+transport authority.
+
+Android, iOS/iPadOS, Windows, AppKit and GTK capture and editors, complete
+connection profiles, startup and ordered measurements retain the full path
+and the actual penultimate/final positions. MTU continuation accounts for
+the captured prefixes and layers. Existing capacity checks still reject a
+configured entry that cannot carry the required nested dual-stack packet;
+an eight-node selection is not a promise that every saved MTU/layer combination
+fits. Imported Shadowsocks and OpenVPN middles retain their existing trio
+bounds. Server/Compare, other imported positions and multiple imported members
+remain separately unfinished.
+
+The required source, encrypted Run, native MTU and installed desktop gates
+retain their original cases and add four- and eight-node cases. Encrypted
+measurement groups require fifty actual samples per position and cover all
+positions across WG, AWG Fast and AWG Strong. Installed desktop cases require
+the captured penultimate and final measurements and durable receipts. Local
+source/model checks and cross-compilation are recorded separately from actual
+hosted kernel execution, packages, physical devices and deployment in the
+[November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md).
+
 ### Longer Local CONNECT paths
 
 The schema-4 CONNECT composition now retains one to six original paired
@@ -16,9 +48,10 @@ member, and an independent paired Shadowsocks 2022 UoT-v2 final. This extends
 that specific Local path from three to eight total nodes. The shared source,
 native owner and physical projection retain every original paired identity,
 credential, device/DNS policy and proof. The imported CONNECT member remains
-TCP-only; the original final owns the UoT-v2 transport. Other imported-middle
-families keep their existing bounds, and this change does not admit Server,
-Compare, arbitrary imported positions, or multiple imported members.
+TCP-only; the original final owns the UoT-v2 transport. The separate SOCKS5
+composition is described above; imported Shadowsocks and OpenVPN middles keep
+their existing bounds. This change does not admit Server, Compare, arbitrary
+imported positions, or multiple imported members.
 
 Android and iOS capture, editors, complete saved profiles, startup, session
 identity and ordered measurement history adopt the same bounded graph.

@@ -39,6 +39,7 @@ ALLOWLISTS = {
         "mobile/chain/socks_owner.go.tmpl",
         "mobile/chain_execution/instance_capture.go.tmpl",
         "mobile/chain_execution/instance_close.go.tmpl",
+        "mobile/chain/socks_prefix_policy_test.go.tmpl",
     }),
     "connect-source": frozenset({
         "internal/mobilemultihop/node_chain_imported_connect.go",
@@ -198,6 +199,7 @@ ALLOWLISTS = {
         'mobile/desktop/node_pq_peer_windows_test.go.tmpl',
         'modes/kill-switch-platform.py',
         'modes/test_darwin_owned_pf.py',
+        "cmd/client/multihop_node_chain_socks_prefix_test.go",
     }),
     "android-policy-fixtures": frozenset({
         "android/test_android_tor_form.py",
@@ -378,6 +380,7 @@ ALLOWLISTS = {
         "cmd/client/multihop_node_chain_selection.go",
         "cmd/client/multihop_node_chain_socks_capture.go",
         "cmd/client/multihop_node_chain_socks_capture_test.go",
+        "cmd/client/multihop_node_chain_socks_prefix_test.go",
         "cmd/client/multihop_node_chain_socks_selection.go",
         "cmd/client/multihop_node_chain_socks_selection_test.go",
         "cmd/client/multihop_startup.go",
@@ -419,6 +422,8 @@ ALLOWLISTS = {
     "desktop-socks-capture": frozenset({
         "cmd/client/multihop_node_chain_socks_capture.go",
         "cmd/client/multihop_node_chain_socks_capture_test.go",
+        "cmd/client/multihop_node_chain_socks_prefix_test.go",
+        "internal/mobilemultihop/desktop_node_chain_socks_policy.go",
     }),
     "ios-sdk": frozenset({
         "mobile/chain/openvpn_box.go.tmpl",
@@ -433,6 +438,7 @@ ALLOWLISTS = {
         "deploy/test_ios_node_chain_launch.py",
         "deploy/test_ios_node_chain_profiles.py",
         "deploy/test_ios_node_chain_socks_capture.py",
+        "deploy/test_ios_ordered_latency_socks_capture.py",
         "deploy/test_ios_node_chain_socks_host.py",
         "deploy/test_ios_node_chain_socks_profiles.py",
         "deploy/test_ios_node_chain_startup.py",
@@ -477,6 +483,9 @@ ALLOWLISTS = {
         "mobile/chain/socks_server.go.tmpl",
         "mobile/desktop/node_chain_socks_middle_test.go.tmpl",
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
+        "mobile/chain/socks_prefix_run_test.go.tmpl",
+        "mobile/chain/socks_prefix_mtu_test.go.tmpl",
+        "mobile/chain/socks_prefix_policy_test.go.tmpl",
     }),
     "ordered-clock": frozenset({
         "internal/mobilemultihop/node_chain_execution_proof.go",
@@ -504,6 +513,7 @@ ALLOWLISTS = {
         "deploy/test_ios_node_chain_launch.py",
         "deploy/test_ios_node_chain_profiles.py",
         "deploy/test_ios_node_chain_socks_capture.py",
+        "deploy/test_ios_ordered_latency_socks_capture.py",
         "deploy/test_ios_node_chain_socks_host.py",
         "deploy/test_ios_node_chain_socks_profiles.py",
         "deploy/test_ios_node_chain_startup.py",
@@ -586,6 +596,8 @@ ALLOWLISTS = {
         "mobile/chain/socks_server.go.tmpl",
         "mobile/desktop/node_chain_socks_middle_test.go.tmpl",
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
+        "mobile/chain/socks_prefix_mtu_test.go.tmpl",
+        "mobile/chain/socks_prefix_policy_test.go.tmpl",
     }),
     "android-sdk": frozenset({
         "mobile/chain/openvpn_box.go.tmpl",
@@ -640,6 +652,9 @@ ALLOWLISTS = {
         "mobile/chain/socks_server.go.tmpl",
         "mobile/desktop/node_chain_socks_middle_test.go.tmpl",
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
+        "mobile/chain/socks_prefix_run_test.go.tmpl",
+        "mobile/chain/socks_prefix_mtu_test.go.tmpl",
+        "mobile/chain/socks_prefix_policy_test.go.tmpl",
     }),
     "socks-run": frozenset({
         "mobile/chain/openvpn_box.go.tmpl",
@@ -681,6 +696,9 @@ ALLOWLISTS = {
         "mobile/desktop/node_chain_socks_middle_test.go.tmpl",
         "mobile/desktop/node_chain_socks_process_test.go.tmpl",
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
+        "mobile/chain/socks_prefix_run_test.go.tmpl",
+        "mobile/chain/socks_prefix_mtu_test.go.tmpl",
+        "mobile/chain/socks_prefix_policy_test.go.tmpl",
     }),
     "socks-bridge": frozenset({
         "mobile/chain/openvpn_box.go.tmpl",
@@ -745,6 +763,7 @@ ALLOWLISTS = {
         "internal/mobilemultihop/node_chain_imported_socks.go",
         "internal/mobilemultihop/node_chain_socks_source.go",
         "internal/mobilemultihop/node_chain_socks_source_test.go",
+        "internal/mobilemultihop/node_chain_socks_prefix_test.go",
     }),
     "linux-hy2": frozenset({
         "mobile/desktop/node_chain_peer_linux_test.go.tmpl",

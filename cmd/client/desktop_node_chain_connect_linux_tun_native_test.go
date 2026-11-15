@@ -58,7 +58,7 @@ var linuxNodeChainCONNECTHostCases = []string{
 	"node-chain-connect-http-wg-four-connect", "node-chain-connect-https-wg-eight-connect",
 }
 
-// Only the two additional installed long-path scenarios get a separate test
+// Only the explicit installed long-path scenarios get a separate test
 // envelope. Observed encrypted public/final fifty work took 130.13 seconds;
 // production probe/worker deadlines and every original installed case stay fixed.
 type linuxCONNECTInstalledBudgets struct {
@@ -67,7 +67,8 @@ type linuxCONNECTInstalledBudgets struct {
 
 func linuxCONNECTInstalledBudget(scenario string) linuxCONNECTInstalledBudgets {
 	switch scenario {
-	case "node-chain-connect-http-wg-four-connect", "node-chain-connect-https-wg-eight-connect":
+	case "node-chain-connect-http-wg-four-connect", "node-chain-connect-https-wg-eight-connect",
+		"node-chain-socks-wg-four-connect", "node-chain-socks-wg-eight-connect":
 		return linuxCONNECTInstalledBudgets{210 * time.Second, 220 * time.Second, 230 * time.Second, 240 * time.Second, 245 * time.Second}
 	default:
 		return linuxCONNECTInstalledBudgets{65 * time.Second, 75 * time.Second, 85 * time.Second, 115 * time.Second, 120 * time.Second}

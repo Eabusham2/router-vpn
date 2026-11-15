@@ -114,12 +114,16 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
  static func run()async throws {
-  do {
-   let nodes=try sources(3,false,"",true),capture=try IOSNodeChainSOCKSCapture.compile(bundles:nodes.map{try bundleData($0)})
+  for count in [3,4,8] {
+   var nodes=try sources(count),custom=try sources(3,false,"",true)[1]
+   custom.selectedRouterID="custom-socks";custom.routerProfiles[0].id=custom.selectedRouterID
+   nodes[count-2]=custom
+   nodes[count-1].routerProfiles[0].multihopNodes=nodes.enumerated().map{.init(id:$0.element.selectedRouterID,mode:$0.offset==count-2 ? "socks5":$0.offset==count-1 ? "shadowsocks":"wg")}
+   let capture=try IOSNodeChainSOCKSCapture.compile(bundles:nodes.map{try bundleData($0)})
    defer{try? capture.plan.close()}
    let final=try bundleData(nodes.last!),source=Data(capture.source.utf8)
    let identity=try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:final,configuration:["nodeChainSOCKSSource":capture.source])
-   try check("typed SOCKS active map keeps original middle",IOSNodeChainPresentation.active(identity)?.map(\.mode)==["wg","socks5","shadowsocks"])
+   try check("typed SOCKS active map keeps original middle",IOSNodeChainPresentation.active(identity)?.map(\.mode)==Array(repeating:"wg",count:count-2)+["socks5","shadowsocks"])
    var changed=nodes.last!;changed.routerProfiles[0].apiToken="relinked-final"
    try check("typed SOCKS map rejects replaced final source",IOSNodeChainPresentation.captured(source:source,bundleData:bundleData(changed))==nil)
   }

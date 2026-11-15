@@ -12,15 +12,15 @@ import (
 func routerVPNDesktopNodeChainSOCKSPhysicalTarget(policy *mobilemultihop.DesktopNodeChainSOCKSPolicy, target string) bool {
  if policy == nil { return false }
  _, meta, capture, err := policy.ReadValidated()
- if err != nil || meta.Kind != "routervpn-desktop-node-chain-socks" || meta.TargetOS != target || len(meta.Prefixes) != 3 { return false }
+ if err != nil || meta.Kind != "routervpn-desktop-node-chain-socks" || meta.TargetOS != target || len(meta.Prefixes) < 3 || len(meta.Prefixes) > mobilemultihop.NodeChainMaximumNodes { return false }
  for position, prefix := range meta.Prefixes {
   if prefix.Position != position { return false }
-  switch position {
-  case 0:
+  switch {
+  case position < len(meta.Prefixes)-2:
    if !mobilemultihop.NodeChainPrefixMode(prefix.Mode) || !mobilemultihop.DesktopNodePhysicalGraphSupported(prefix.Mode, prefix.StartLayer) { return false }
-  case 1:
+  case position == len(meta.Prefixes)-2:
    if prefix.Mode != "socks5" || prefix.NodeKind != "external" || prefix.Kind != "public-path" || prefix.StartLayer != "off" { return false }
-  case 2:
+  case position == len(meta.Prefixes)-1:
    if prefix.Mode != "shadowsocks" || !mobilemultihop.DesktopNodePhysicalGraphSupported(prefix.Mode, prefix.StartLayer) { return false }
   }
  }

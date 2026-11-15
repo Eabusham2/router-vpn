@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+ "fmt"
 	"io"
 	"net"
 	"os"
@@ -45,7 +46,7 @@ func socksPrecloseAssociation(t *testing.T, f *socksBridgeNativeFixture) (*socks
 	t.Helper()
 	_, meta, err := f.owner.source.ReadValidated()
 	if err != nil { t.Fatal(err) }
-	raw, found := f.box.Outbound().Outbound(meta.Proofs[1].Tag)
+	raw, found := f.box.Outbound().Outbound(meta.Proofs[len(meta.Proofs)-2].Tag)
 	middle, ok := raw.(*ownedSOCKS.Outbound)
 	if !found || !ok || middle == nil { t.Fatal("original constructed SOCKS owner absent") }
 	client, server := net.Pipe()
@@ -123,12 +124,21 @@ func socksPrecloseAssociation(t *testing.T, f *socksBridgeNativeFixture) (*socks
 }
 
 func TestRouterNodeChainSOCKSPrecloseBeforeNativeRetirement(t *testing.T) {
+ socksPrecloseBeforeNativeRetirement(t,1)
+}
+func TestRouterNodeChainSOCKSPrefixPrecloseBeforeNativeRetirement(t *testing.T){
+ for _,count:=range []int{2,6}{t.Run(fmt.Sprint(count),func(t *testing.T){socksPrecloseBeforeNativeRetirement(t,count)})}
+}
+func socksPrecloseBeforeNativeRetirement(t *testing.T,count int){
 	for _, route := range []string{"box","instance"} {
 		for _, failure := range []bool{false,true} {
 			name := route+"-joined"
 			if failure { name=route+"-failed" }
 			t.Run(name,func(t *testing.T){
-				f:=socksBridgeStarted(t,socksBridgeOwner(t,"wg"))
+                source:=socksBridgeSourcePrefixes(t,count,"wg")
+                raw,err:=source.Source();if err!=nil{t.Fatal(err)}
+                owner,err:=NewRouterNodeChainSOCKS(raw);if err!=nil{t.Fatal(err)}
+                f:=socksBridgeStarted(t,owner)
 				control,release:=socksPrecloseAssociation(t,f)
 				sentinel:=errors.New("original captured control close failure")
 				if failure { control.failure=sentinel;f.expectedClose=sentinel

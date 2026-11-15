@@ -41,6 +41,7 @@ type nodeSOCKSRunRequest struct {
  Mode string `json:"mode"`
  Fault string `json:"fault"`
  Native bool `json:"native,omitempty"`
+ Prefixes int `json:"prefixes,omitempty"`
 }
 type nodeSOCKSRunReply struct {
  Schema int `json:"schema"`
@@ -55,6 +56,8 @@ type nodeSOCKSRunReply struct {
  FinalAuth uint64 `json:"final_auth"`
  HeldProofs uint64 `json:"held_proofs"`
  Associations int `json:"associations"`
+ Samples []uint64 `json:"samples,omitempty"`
+ MiddleAuth uint32 `json:"middle_auth,omitempty"`
 }
 type nodeSOCKSRunPrefix struct {
  *nodeSOCKSPrefixHandler
@@ -282,8 +285,10 @@ func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
  t.Cleanup(func(){if !t.Failed(){fmt.Fprintln(os.Stdout,"SOCKS_RUN_PEER_JOINED")}})
  physical,err:=nodeSOCKSRunPhysical(input.Native)
  if err!=nil{t.Fatal(err)}
- request,clients:=desktopNodeChainPeerFixture(t,1)
- desktopNodeChainSetModes(t,&request,[]string{input.Mode})
+ prefixCount:=input.Prefixes;if prefixCount==0{prefixCount=1}
+ if prefixCount<1||prefixCount>6{t.Fatal("SOCKS prefix count outside captured bound")}
+ request,clients:=desktopNodeChainPeerFixture(t,prefixCount)
+ modes:=make([]string,prefixCount);for i:=range modes{modes[i]=input.Mode};desktopNodeChainSetModes(t,&request,modes)
  finalKey,err:=ecdh.X25519().GenerateKey(rand.Reader);if err!=nil{t.Fatal(err)}
  finalPublic:=base64.StdEncoding.EncodeToString(finalKey.PublicKey().Bytes())
  proof:=sha256.Sum256([]byte("router-vpn-node-proof-v1\n"+finalPublic))
@@ -294,6 +299,7 @@ func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
  const password="captured-socks-run-password"
  var handler *nodeSOCKSRunPrefix
  var relays *desktopImportedSOCKSLayerRoutes
+ var middleAuth func() uint32
  hooks:=&desktopNodeChainImportedPeerHooks{
   decorate:func(original *desktopNodeWGHandler)tun.Handler{
    handler=&nodeSOCKSRunPrefix{nodeSOCKSPrefixHandler:&nodeSOCKSPrefixHandler{original:original,control:control},first:"10.78.0.1:8787"}
@@ -301,6 +307,7 @@ func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
   },
   middle:func(middle *desktopNodeLayerServer)desktopExternalInstalledSSPeer{
    provider,socks:=desktopStartImportedSOCKSProvider(t,middle,password,"")
+   middleAuth=func()uint32{return provider.stats().AuthTCP}
    ctx,cancel:=context.WithCancel(context.Background())
    relays=&desktopImportedSOCKSLayerRoutes{parent:ctx,control:provider.address,private:"10.79.0.1",leases:map[string]*desktopImportedSOCKSRelayLease{},physical:map[string]string{}}
    socks.mu.Lock();socks.entryRelay=relays.relay;socks.mu.Unlock()
@@ -312,10 +319,22 @@ func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
   },
  }
  middleKey:=base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73},32))
- fixtureRequest:=desktopNodeChainImportedRequest{1,request,mobilemultihop.NativeStartLayerMethod,middleKey}
+ lastRequest:=request
+ lastRequest.Prefixes=append([]desktopNodeChainPrefixRequest(nil),request.Prefixes[prefixCount-1:]...)
+ fixtureRequest:=desktopNodeChainImportedRequest{1,lastRequest,mobilemultihop.NativeStartLayerMethod,middleKey}
  loopback:=netip.MustParseAddr("127.0.0.1")
  if input.Native{loopback=physical}
  peer:=desktopNodeChainImportedPeerStartWithHooks(t,fixtureRequest,loopback,loopback,nil,hooks)
+ var complete *desktopNodeChainPeer
+ if prefixCount>1{
+  ipcs,err:=desktopNodeChainPeerIdentityBounds(request,1,6);if err!=nil{t.Fatal(err)}
+  complete=&desktopNodeChainPeer{prefixes:make([]*desktopNodeChainPrefixPeer,prefixCount),final:peer.paired}
+  complete.prefixes[prefixCount-1]=peer.prefix
+  desktopNodeChainStartCapturedPrefixes(t,request,loopback,loopback,complete,ipcs,prefixCount-2)
+  clear(ipcs)
+ }
+ physicalAddress:=peer.paired.address;if complete!=nil{physicalAddress=complete.prefixes[0].bind.address()}
+
  // No obsolete SS-middle route is admitted by this captured SOCKS handler.
  delete(peer.paired.entry.rules,"tcp/10.79.0.1:8388")
  delete(peer.paired.entry.rules,"udp/10.79.0.1:8388")
@@ -384,13 +403,42 @@ func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
  // resolver. The original middle HTTPS responder still checks its TLS/Host.
  if mustSOCKSRunRoute(t,peer.middle,"tcp","1.1.1.1:443")!=mustSOCKSRunRoute(t,peer.middle,"tcp","speed.cloudflare.com:443"){t.Fatal("public literal and TLS hostname escaped original middle responder")}
  if input.Fault=="middle-public"{peer.wrongPublic.Store(true)}
- socket:=netip.MustParseAddrPort(peer.paired.address)
+ socket:=netip.MustParseAddrPort(physicalAddress)
  sourceRequest:=request
  if input.Fault=="final-token"{sourceRequest.FinalAPIToken="different-final-private-token"}
- base:=desktopNodeChainImportedSource(t,sourceRequest,clients,net.JoinHostPort(request.Address,strconv.Itoa(int(socket.Port()))),mobilemultihop.NativeStartLayerMethod,middleKey,identity)
+ var base *mobilemultihop.NodeChain
+ if prefixCount==1{
+  base=desktopNodeChainImportedSource(t,sourceRequest,clients,net.JoinHostPort(request.Address,strconv.Itoa(int(socket.Port()))),mobilemultihop.NativeStartLayerMethod,middleKey,identity)
+ }else{
+  base=desktopNodeChainPeerSource(t,sourceRequest,clients,net.JoinHostPort(request.Address,strconv.Itoa(int(socket.Port()))))
+ }
  launch,err:=base.LaunchInput();if err!=nil{t.Fatal(err)}
  var source mobilemultihop.NodeChainSource
  if json.Unmarshal([]byte(launch),&source)!=nil{t.Fatal("original captured source vanished")}
+ if prefixCount>1 {
+	source.IdentitySources = make([]string, len(source.Nodes)+1)
+	for i, prefix := range request.Prefixes {
+		private, err := base64.StdEncoding.DecodeString(prefix.PrivateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, err := ecdh.X25519().NewPrivateKey(private)
+		clear(private)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, client := desktopNodeChainInner(i, prefixCount)
+		target := desktopNodeChainNext(i)
+		if i == 0 {
+			target = net.JoinHostPort(request.Address, strconv.Itoa(int(socket.Port())))
+		}
+		text := fmt.Sprintf("[Interface]\nAddress=%s/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", client, clients[i], base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()), prefix.PreSharedKey, target)
+		source.IdentitySources[i] = desktopNodeChainJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(text))})
+	}
+	source.IdentitySources[prefixCount+1] = identity
+	source.Nodes = append(append(append([]string(nil), source.Nodes[:prefixCount]...), ""), source.Nodes[prefixCount])
+
+ }
  secret:=password;if input.Fault=="middle-password"{secret+="-wrong"}
  memberConfig:=map[string]any{
   "inbounds":[]any{map[string]any{"type":"tun","tag":"tun-in","interface_name":"router-vpn","address":[]string{"172.29.91.1/30","fd29:91::1/126"},"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}},
@@ -400,16 +448,24 @@ func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
   "endpoint":"10.79.0.1","dns_mode":"home","mtu_policy":"auto","ipv6_mode":"on","home_lan_access":false,"kill_switch_policy":"on-connect"}
  capture:=map[string]any{"schema":1,"exit_id":"captured-socks-middle","protocol":"socks5","expected_public_ip":"203.0.113.88","profile":profile}
  middle,err:=mobilemultihop.NodeChainImportedSOCKSMemberInput(desktopNodeChainJSON(t,memberConfig),desktopNodeChainJSON(t,capture));if err!=nil{t.Fatal("original SOCKS member",err)}
- source.Schema,source.Nodes[1]=3,middle
+ source.Schema,source.Nodes[prefixCount]=3,middle
  sealed,err:=mobilemultihop.NewNodeChainSOCKSSource(desktopNodeChainJSON(t,source));if err!=nil{t.Fatal("original typed Run source",err)}
  _,meta,err:=sealed.ReadValidated();if err!=nil{t.Fatal(err)}
  original,err:=sealed.Source();if err!=nil{t.Fatal(err)}
  if meta.NativeAdmission!="closed"||len(meta.Physical)!=1||meta.DNS.ResolverTag==""{t.Fatal("peer source widened native admission")}
  respond:=func(include bool){
   relays.mu.Lock();associations:=len(relays.all);relays.mu.Unlock()
-  peerReply:=peer.snapshot();peerReply.Middle.Method="socks5"
-  reply:=nodeSOCKSRunReply{Schema:1,SourceSHA256:meta.SourceSHA256,ConfigSHA256:meta.ConfigSHA256,Address:peer.paired.address,
+  peerReply:=peer.snapshot();if complete!=nil{peerReply.Prefixes=complete.snapshot().Prefixes};peerReply.Middle.Method="socks5"
+  reply:=nodeSOCKSRunReply{Schema:1,SourceSHA256:meta.SourceSHA256,ConfigSHA256:meta.ConfigSHA256,Address:physicalAddress,
    Peer:peerReply,DNS:selectedQueries.Load(),PublicDNS:publicQueries.Load(),FinalAuth:finalAuth.Load(),HeldProofs:heldProofs.Load(),Associations:associations}
+  if prefixCount>1{
+   if middleAuth==nil{t.Fatal("original SOCKS authentication observation absent")};reply.MiddleAuth=middleAuth()
+   reply.Samples=make([]uint64,prefixCount+2)
+   for i:=0;i<prefixCount-1;i++{reply.Samples[i]=complete.prefixes[i].measuredHealth.Load()}
+   reply.Samples[prefixCount-1]=peer.measuredFirstHealth.Load()
+   reply.Samples[prefixCount]=peerReply.Middle.DownloadBytes
+   reply.Samples[prefixCount+1]=peer.paired.measuredHealth.Load()
+  }
   if include{reply.Source=original;reply.PublicCA=peer.paired.ca}
   if json.NewEncoder(os.Stdout).Encode(reply)!=nil{t.Fatal("original SOCKS Run response pipe")}
  }

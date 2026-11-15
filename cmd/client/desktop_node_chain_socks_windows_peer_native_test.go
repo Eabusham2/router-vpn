@@ -31,12 +31,29 @@ type windowsSOCKSPeerReply struct {
 	Associations *int `json:"associations"`
 }
 
-func windowsSOCKSPeerStart(t *testing.T, mode string) (*windowsPrefixPeer, string, func(string) windowsSOCKSPeerReply) {
+func windowsSOCKSPeerStart(t *testing.T, mode string, prefixes int) (*windowsPrefixPeer, string, func(string) windowsSOCKSPeerReply) {
 	t.Helper()
+	if prefixes < 1 || prefixes > 6 {
+		t.Fatal("original SOCKS prefix count required")
+	}
 	peer := windowsPrefixPeerKeys(t, 3)
-	middlePassword := peer.requests[1].PreSharedKey
-	peer.requests, peer.clients = peer.requests[:1], peer.clients[:1]
-	windowsPrefixSetModes(t, peer, []string{mode})
+	for len(peer.requests) < prefixes+1 {
+		extra := windowsPrefixPeerKeys(t, 3)
+		peer.requests = append(peer.requests, extra.requests...)
+		peer.clients = append(peer.clients, extra.clients...)
+	}
+	if prefixes > 1 {
+		for i := range peer.requests {
+			peer.requests[i].APIToken = "installed-socks-prefix-" + peer.requests[i].NodeProofID
+		}
+	}
+	middlePassword := peer.requests[prefixes].PreSharedKey
+	peer.requests, peer.clients = peer.requests[:prefixes], peer.clients[:prefixes]
+	modes := make([]string, prefixes)
+	for i := range modes {
+		modes[i] = mode
+	}
+	windowsPrefixSetModes(t, peer, modes)
 	image := os.Getenv("ROUTERVPN_WINDOWS_PREFIX_PEER")
 	if !filepath.IsAbs(image) {
 		t.Fatal("prefix peer requires original compiled image")
@@ -50,7 +67,13 @@ func windowsSOCKSPeerStart(t *testing.T, mode string) (*windowsPrefixPeer, strin
 			t.Error(err)
 		}
 	})
-	command := exec.Command(imageCapture.Path(), "-test.run=^TestRouterVPNDesktopWindowsSOCKSReferenceProcess$", "-test.count=1", "-test.timeout=100s")
+	peerTimeout := "-test.timeout=100s"
+	if prefixes > 1 {
+		// The longer cases retain the same bounded installed operation envelope
+		// as the existing CONNECT prefix cases; the original trio stays 100s.
+		peerTimeout = "-test.timeout=240s"
+	}
+	command := exec.Command(imageCapture.Path(), "-test.run=^TestRouterVPNDesktopWindowsSOCKSReferenceProcess$", "-test.count=1", peerTimeout)
 	command.Env = append(os.Environ(), "ROUTERVPN_WINDOWS_PREFIX_REFERENCE=1", "ROUTERVPN_SOCKS_INSTALLED_REFERENCE=1")
 	input, err := command.StdinPipe()
 	if err != nil {
@@ -114,7 +137,7 @@ func windowsSOCKSPeerStart(t *testing.T, mode string) (*windowsPrefixPeer, strin
 	peer.reply = first.windowsPrefixPeerReply
 	// The original peer binds port zero and returns its actual owned UDP tuple.
 	endpoint, endpointError := netip.ParseAddrPort(peer.reply.Address)
-	if peer.reply.Schema != 1 || endpointError != nil || !endpoint.Addr().Is4() || endpoint.Port() == 0 || endpoint.String() != peer.reply.Address || endpoint.Addr().String() != physical.Address || len(peer.reply.Prefixes) != 1 || first.Middle.Method != "socks5" || first.Associations == nil || peer.reply.PublicCA == "" {
+	if peer.reply.Schema != 1 || endpointError != nil || !endpoint.Addr().Is4() || endpoint.Port() == 0 || endpoint.String() != peer.reply.Address || endpoint.Addr().String() != physical.Address || len(peer.reply.Prefixes) != prefixes || first.Middle.Method != "socks5" || first.Associations == nil || peer.reply.PublicCA == "" {
 		t.Fatal("prefix peer changed original physical/key inventory")
 	}
 	return peer, middlePassword, func(action string) windowsSOCKSPeerReply {

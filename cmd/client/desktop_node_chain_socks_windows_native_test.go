@@ -45,11 +45,11 @@ func windowsOrderedOffStatusAdapter(t *testing.T, ctx context.Context, root stri
 	}
 }
 
-var windowsSOCKSHostCases = []string{"wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off"}
+var windowsSOCKSHostCases = []string{"wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off", "wg-four-connect", "wg-eight-connect"}
 
 func windowsSOCKSInstalledSources(t *testing.T, peer *windowsPrefixPeer, password, fault string) (common.RouterProfileStore, map[string]map[string]map[string][]byte) {
 	t.Helper()
-	if len(peer.requests) != 1 || password == "" {
+	if len(peer.requests) < 1 || len(peer.requests) > 6 || password == "" {
 		t.Fatal("typed installed source lost original independent first and middle")
 	}
 	store, assets := windowsPrefixInstalledSources(t, peer, "")
@@ -62,15 +62,19 @@ func windowsSOCKSInstalledSources(t *testing.T, peer *windowsPrefixPeer, passwor
 	if err := common.NormalizeRouterProfile(&middle); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.Profiles) != 2 || len(assets) != 2 {
+	if len(store.Profiles) != len(peer.requests)+1 || len(assets) != len(peer.requests)+1 {
 		t.Fatal("typed fixture changed original paired source inventory")
 	}
-	first, final := store.Profiles[0], store.Profiles[1]
-	final.MultihopNodes = []common.MultihopNodeSelection{{ID: first.ID, Mode: peer.requests[0].Mode}, {ID: middle.ID, Mode: "socks5"}, {ID: final.ID, Mode: "shadowsocks"}}
+	final := store.Profiles[len(store.Profiles)-1]
+	final.MultihopNodes = nil
+	for position, request := range peer.requests {
+		final.MultihopNodes = append(final.MultihopNodes, common.MultihopNodeSelection{ID: store.Profiles[position].ID, Mode: request.Mode})
+	}
+	final.MultihopNodes = append(final.MultihopNodes, common.MultihopNodeSelection{ID: middle.ID, Mode: "socks5"}, common.MultihopNodeSelection{ID: final.ID, Mode: "shadowsocks"})
 	if err := common.NormalizeRouterProfile(&final); err != nil {
 		t.Fatal(err)
 	}
-	store.Profiles = []common.RouterProfile{first, middle, final}
+	store.Profiles = append(store.Profiles[:len(store.Profiles)-1], middle, final)
 	return store, assets
 }
 
@@ -183,9 +187,19 @@ func TestWindowsSOCKSLauncher(t *testing.T) {
 	if mode == "" {
 		t.Fatal("unknown typed installed scenario")
 	}
+	prefixes := 1
+	if strings.HasPrefix(action, "four-") {
+		prefixes = 2
+		action = strings.TrimPrefix(action, "four-")
+	}
+	if strings.HasPrefix(action, "eight-") {
+		prefixes = 6
+		action = strings.TrimPrefix(action, "eight-")
+	}
+	count := prefixes + 2
 	off := strings.HasSuffix(action, "-off")
 	action = strings.TrimSuffix(action, "-off")
-	peer, password, observe := windowsSOCKSPeerStart(t, mode)
+	peer, password, observe := windowsSOCKSPeerStart(t, mode, prefixes)
 	windowsSOCKSTrust(t, peer.reply.PublicCA)
 	profiles, assets := windowsSOCKSInstalledSources(t, peer, password, action)
 	if off {
@@ -254,7 +268,7 @@ func TestWindowsSOCKSLauncher(t *testing.T) {
 	var ready windowsSOCKSInspection
 	if !negative {
 		response = call("GET", "/api/native-socks/inspect", nil)
-		if response.Status != 200 || json.Unmarshal(response.Body, &ready) != nil || off && ready.KillSwitchPolicy != "off" || !ready.Connected || !ready.OriginalSources || ready.MeasurementRows != 3 || ready.Proof == nil || ready.Proof.Kind != "routervpn-node-chain-socks-ready-v1" {
+		if response.Status != 200 || json.Unmarshal(response.Body, &ready) != nil || off && ready.KillSwitchPolicy != "off" || !ready.Connected || !ready.OriginalSources || ready.MeasurementRows != count || ready.Proof == nil || ready.Proof.Kind != "routervpn-node-chain-socks-ready-v1" {
 			t.Fatal("typed actual proof/measurement", response.Status, string(response.Body))
 		}
 	}
@@ -263,21 +277,34 @@ func TestWindowsSOCKSLauncher(t *testing.T) {
 			windowsOrderedOffStatusAdapter(t, ctx, root)
 		}
 		beforeFifty := observe("stats")
-		receipts, err := desktopOrderedLatencyNativeRoundTrip(ctx, func(callCtx context.Context, method, path string, body []byte) (int, []byte, error) {
+		var positions []int
+		measuredCount := count
+		if count > 3 {
+			positions = []int{count - 2, count - 1}
+			measuredCount = 2
+		}
+		receipts, err := desktopOrderedLatencyNativeRoundTripPositions(ctx, func(callCtx context.Context, method, path string, body []byte) (int, []byte, error) {
 			response, err := client.Request(callCtx, method, path, body, 1<<20)
 			return response.Status, response.Body, err
-		})
-		if err != nil || len(receipts) != 3 {
+		}, positions)
+		if err != nil || len(receipts) != measuredCount {
 			t.Fatal("installed Windows ordered fifty", err)
 		}
 		afterFifty := observe("stats")
-		if len(beforeFifty.Prefixes) != 1 || len(afterFifty.Prefixes) != 1 || afterFifty.Prefixes[0].ProofQueries < beforeFifty.Prefixes[0].ProofQueries+50 || afterFifty.Middle.PublicQueries < beforeFifty.Middle.PublicQueries+50 || afterFifty.Final.RouterQueries < beforeFifty.Final.RouterQueries+50 || afterFifty.Final.DirectQueries != 0 {
+		if len(beforeFifty.Prefixes) != prefixes || len(afterFifty.Prefixes) != prefixes || (prefixes == 1 && afterFifty.Prefixes[0].ProofQueries < beforeFifty.Prefixes[0].ProofQueries+50) || afterFifty.Middle.PublicQueries < beforeFifty.Middle.PublicQueries+50 || afterFifty.Final.RouterQueries < beforeFifty.Final.RouterQueries+50 || afterFifty.Final.DirectQueries != 0 {
 			t.Fatal("ordered fifty omitted independently routed original prefix responses", beforeFifty, afterFifty)
 		}
 	}
 	before := observe("stats")
-	if len(before.Prefixes) != 1 || before.Prefixes[0].Mode != mode || before.Prefixes[0].RawUDP == 0 || before.Prefixes[0].ProofQueries == 0 || before.Middle.Method != "socks5" {
+	if len(before.Prefixes) != prefixes || before.Prefixes[0].Mode != mode || before.Prefixes[0].RawUDP == 0 || before.Prefixes[0].ProofQueries == 0 || before.Middle.Method != "socks5" {
 		t.Fatal("typed path did not reach original independently encrypted first", before)
+	}
+	if !negative {
+		for position, prefix := range before.Prefixes {
+			if prefix.Mode != peer.requests[position].Mode || prefix.RawUDP == 0 || prefix.TCP == 0 || prefix.UDP == 0 || prefix.ProofQueries == 0 || prefix.AuthRefusals != 0 {
+				t.Fatal("SOCKS omitted original encrypted prefix/control/UDP ownership", position, prefix)
+			}
+		}
 	}
 	switch action {
 	case "wrong-middle-key":

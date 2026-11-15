@@ -32,6 +32,7 @@ def completed(case):
     if case in gate.MEASUREMENT_CASES:lines.append("    desktop_node_chain_darwin_native_test.go:1: "+V.BASE.public_status_receipt(case))
     if case in V.BASE.MTU_CASES:lines.append("    desktop_node_chain_darwin_native_test.go:2: "+V.BASE.MTU_RECEIPT)
     if case in gate.MEASUREMENT_CASES:lines.append("    desktop_node_chain_darwin_native_test.go:3: "+V.BASE.MEASUREMENT_RECEIPT)
+    if case in V.TYPED and case in T.MEASUREMENT_CASES:lines.append("    desktop_node_chain_socks_darwin_native_test.go:3: "+(T.LONG_FIFTY_RECEIPT if case in T.LONG_CASES else T.FIFTY_RECEIPT))
     lines+=["    desktop_node_chain_darwin_native_test.go:4: "+joined_receipt(case),
             "--- PASS: "+gate.TEST+" (0.2s)","    --- PASS: "+gate.TEST+"/"+case+" (0.1s)","PASS",""]
     return "\n".join(lines)
@@ -66,10 +67,10 @@ def command(case):
             "-test.v","-test.count=1","-test.timeout=240s"]
 
 class InstalledBoundary(unittest.TestCase):
-    def test_exact_original37_and_typed8_actual_parser_receipts(self):
+    def test_exact_original37_and_typed10_actual_parser_receipts(self):
         with tempfile.TemporaryDirectory() as directory:
             args=envelope(Path(directory));checked(*args)
-            self.assertEqual((len(V.ORIGINAL),len(V.TYPED)),(37,8))
+            self.assertEqual((len(V.ORIGINAL),len(V.TYPED)),(37,10))
 
     def test_each_original_case_must_prove_its_own_join_measurement_and_verdict(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -141,7 +142,7 @@ class InstalledBoundary(unittest.TestCase):
                 for case in (*V.ORIGINAL,*V.TYPED):
                     cmd=command(case);self.assertEqual(gate.CONTROLLER.reported_run(cmd,timeout=270,sudo="/usr/bin/sudo"),completed(case))
                     self.assertIs(calls[-1][0],cmd);self.assertEqual(calls[-1][1],{"timeout":270,"sudo":"/usr/bin/sudo"})
-            self.assertEqual(len(outputs),45);self.assertEqual(len(list(root.glob("*.log"))),45)
+            self.assertEqual(len(outputs),47);self.assertEqual(len(list(root.glob("*.log"))),47)
             self.assertEqual(observations["signed_bundle"],V.sha(bundle/"NATIVE-RUNTIME.json"))
             self.assertIs(gate.CONTROLLER.reported_run,run);self.assertIs(gate.BUILD.reuse,reuse)
 
@@ -299,7 +300,7 @@ class InstalledBoundary(unittest.TestCase):
         self.assertIn("inputs.suite != 'darwin-socks-child' && inputs.suite != 'darwin-socks-installed'",text)
         self.assertIn("  darwin-socks-child:",text)
 
-    def test_allowlist_is_exact133_and_native_acceptance_remains_separate(self):
+    def test_allowlist_is_exact134_and_native_acceptance_remains_separate(self):
         paths=V.IDENTITY.ALLOWLISTS["darwin-socks-installed"]
         expected=(V.IDENTITY.ALLOWLISTS["desktop-socks-parent"]|V.IDENTITY.ALLOWLISTS["darwin-socks-child"]|{
             "cmd/client/desktop_node_chain_darwin_native_test.go","cmd/client/desktop_node_chain_darwin_peer_native_test.go",
@@ -309,7 +310,7 @@ class InstalledBoundary(unittest.TestCase):
             "deploy/test_desktop_connection_profile_modes.py",
             "cmd/client/desktop_node_chain_public_admission.go","cmd/client/desktop_node_chain_public_admission_test.go",
             "cmd/client/desktop_node_chain_socks_admission.go","cmd/client/desktop_node_chain_socks_admission_test.go"})
-        self.assertEqual(paths,expected);self.assertEqual(len(paths),133)
+        self.assertEqual(paths,expected);self.assertEqual(len(paths),134)
         self.assertNotIn(".github/workflows/focused-source-validation.yml",paths)
         self.assertNotIn("deploy/validate-darwin-socks-installed.py",paths)
         source=(V.ROOT/"deploy/validate-darwin-socks-installed.py").read_text()

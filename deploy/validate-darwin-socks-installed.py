@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require the exact complete Darwin bundle and original37 plus typed8 installed cases."""
+"""Require the exact complete Darwin bundle and original37 plus typed10 installed cases."""
 from pathlib import Path
 from contextlib import contextmanager
 import argparse
@@ -20,11 +20,11 @@ HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
 TEST = "TestMacOSRetainedNodeChainSOCKSNativeHost"
 AUTHORITY = "TestDesktopDarwinInstalledSOCKSNodeChainFixtureKeepsOriginalSources"
-AUTHORITY_CASES = (AUTHORITY, *(AUTHORITY+"/"+mode for mode in ("wg","awg2-fast","awg2-strong")))
+AUTHORITY_CASES = (AUTHORITY, *(AUTHORITY+"/"+mode for mode in ("wg","awg2-fast","awg2-strong","wg-four","wg-eight")))
 TYPED = ("node-chain-socks-wg-connect","node-chain-socks-awg-fast-connect","node-chain-socks-awg-strong-connect",
          "node-chain-socks-wg-wrong-middle-key","node-chain-socks-wg-wrong-middle-public",
          "node-chain-socks-wg-final-dns-failure","node-chain-socks-wg-final-node-failure",
-         "node-chain-socks-wg-middle-source")
+         "node-chain-socks-wg-middle-source","node-chain-socks-wg-four-connect","node-chain-socks-wg-eight-connect")
 FLAG = "ROUTERVPN_DARWIN_SOCKS_NODE_CHAIN_HOST_ACCEPTANCE"
 SOURCE_CONTROL = "installed source changed original SOCKS credential or invented paired assets"
 BUILD_SECONDS, TOOLCHAIN_SECONDS = 3600, 2400
@@ -109,7 +109,7 @@ def apply_toolchain(raw,target,env):
 
 def require_gate(gate):
     if tuple(gate.BASE.CASES)!=ORIGINAL or len(ORIGINAL)!=37 or tuple(gate.CASES)!=TYPED or gate.TEST!=TEST or tuple(gate.AUTHORITY_CASES)!=AUTHORITY_CASES:
-        raise ValueError("Installed native gate changed original37 or typed8 inventory")
+        raise ValueError("Installed native gate changed original37 or typed10 inventory")
 
 @contextmanager
 def capture_cases(gate,output,outputs,observations):
@@ -125,7 +125,7 @@ def capture_cases(gate,output,outputs,observations):
         return result
     def observed(command,**kwargs):
         index=len(outputs)
-        if index>=45 or kwargs.get("timeout")!=270:
+        if index>=47 or kwargs.get("timeout")!=270:
             raise ValueError("Installed native invocation count or original bound changed")
         case=(*ORIGINAL,*TYPED)[index]
         root=TEST if case in TYPED else BASE.TEST
@@ -163,11 +163,11 @@ def require_receipt(value,target,metadata,policy,bundle_hash,signed_hash,outputs
         raise ValueError("Installed native receipt borrowed a different source")
     if value.get("source_sha256")!=policy or value.get("bundle_sha256")!=bundle_hash or value.get("sealed_bundle_sha256")!=signed_hash:
         raise ValueError("Installed native receipt borrowed a different complete bundle")
-    if value.get("cases")!=list(TYPED) or value.get("original_cases")!=list(ORIGINAL) or value.get("completed")!=list((*ORIGINAL,*TYPED)) or len(outputs)!=45:
+    if value.get("cases")!=list(TYPED) or value.get("original_cases")!=list(ORIGINAL) or value.get("completed")!=list((*ORIGINAL,*TYPED)) or len(outputs)!=47:
         raise ValueError("Installed native receipt omitted an original native case")
     for key in ("authority_cases","hysteria_authority_cases","typed_authority_cases"):
         wanted={"authority_cases":BASE.AUTHORITY_CASES,"hysteria_authority_cases":BASE.HYSTERIA_AUTHORITY_CASES,"typed_authority_cases":AUTHORITY_CASES}[key]
-        if value.get(key)!=list(wanted) or len(wanted)!=4:
+        if value.get(key)!=list(wanted) or len(wanted)!=(6 if key=="typed_authority_cases" else 4):
             raise ValueError("Installed native receipt omitted original source authority")
     if value.get("parent_cases") != list(PARENT_CASES):
         raise ValueError("Installed native receipt omitted its original parent or public capability cases")
@@ -211,7 +211,7 @@ def validate(source,source_sha,output,go="go"):
                  public_darwin_admission="enabled",source_files=len(before),swift_editor_accepted=False,
                  generated_fifty_and_mtu_rollback_accepted=False,
                  entrypoint="shipping public nativeMultihopConnectOwned and nativeMultihopStatus; original source/native/measurement/retirement gates",
-                 required_native_acceptance="all37 original plus8 typed cases must prove exact public routes and original installed native ownership")
+                 required_native_acceptance="all37 original plus10 typed cases must prove exact public routes and original installed native ownership")
     workspace=None;work=source;joined=True;complete=False
     def save():
         (output/"manifest.json").write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")

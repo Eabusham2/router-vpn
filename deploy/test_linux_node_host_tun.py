@@ -249,7 +249,12 @@ NODE_CHAIN_HOST_CASES += SAVED_CANDIDATE_HOST_CASES + SAVED_PREFIX_HOST_CASES + 
 NODE_CHAIN_SOCKS_HOST_CASES = (
     'node-chain-socks-wg-connect', 'node-chain-socks-awg-fast-connect', 'node-chain-socks-awg-strong-connect',
     'node-chain-socks-wg-wrong-middle-key', 'node-chain-socks-wg-wrong-middle-public',
-    'node-chain-socks-wg-final-dns-failure', 'node-chain-socks-wg-final-node-failure', 'node-chain-socks-wg-middle-source')
+    'node-chain-socks-wg-final-dns-failure', 'node-chain-socks-wg-final-node-failure', 'node-chain-socks-wg-middle-source',
+    'node-chain-socks-wg-four-connect', 'node-chain-socks-wg-eight-connect')
+NODE_CHAIN_SOCKS_LONG_CASES = NODE_CHAIN_SOCKS_HOST_CASES[-2:]
+NODE_CHAIN_SOCKS_FIFTY_CASES = (*NODE_CHAIN_SOCKS_HOST_CASES[:3], NODE_CHAIN_SOCKS_HOST_CASES[7], *NODE_CHAIN_SOCKS_LONG_CASES)
+SOCKS_FIFTY_RECEIPT = 'actual installed Linux SOCKS fifty: all three original members returned fifty samples and retained exact durable receipts'
+SOCKS_LONG_FIFTY_RECEIPT = 'actual installed Linux SOCKS long path fifty: captured penultimate public and final private members retained exact durable receipts'
 CASES += NODE_CHAIN_HOST_CASES + NODE_CHAIN_SOCKS_HOST_CASES
 NODE_CHAIN_CONNECT_HOST_CASES = (
     'node-chain-connect-http-wg-connect', 'node-chain-connect-http-awg-fast-connect', 'node-chain-connect-http-awg-strong-connect',
@@ -278,7 +283,7 @@ NODE_CHAIN_HOST_AUTHORITY_CASES = (NODE_CHAIN_HOST_AUTHORITY_ROOT,
 
 NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledSOCKSNodeChainFixtureKeepsOriginalSources'
 NODE_CHAIN_HOST_AUTHORITY_CASES += (NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT,
-    *(NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg2-fast', 'awg2-strong')))
+    *(NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg2-fast', 'awg2-strong', 'wg-four', 'wg-eight')))
 NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT = 'TestDesktopLinuxInstalledCONNECTNodeChainFixtureKeepsOriginalSources'
 NODE_CHAIN_HOST_AUTHORITY_CASES += (NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT,
     *(NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT + '/' + protocol + '/' + mode
@@ -780,6 +785,11 @@ def check_verdict(output, case=None):
         ('WIREGUARD_CASES', WIREGUARD_CASES),
         ('WIREGUARD_LAYER_CASES', WIREGUARD_LAYER_CASES),
     )}
+    fifty = [match[1] for line in output.splitlines() if (match := re.match(r'^\s+[^ ]+\.go:[0-9]+: (actual installed Linux SOCKS .*)$', line))]
+    if (fifty.count(SOCKS_FIFTY_RECEIPT) != sum(case in NODE_CHAIN_SOCKS_FIFTY_CASES and case not in NODE_CHAIN_SOCKS_LONG_CASES for case in cases) or
+            fifty.count(SOCKS_LONG_FIFTY_RECEIPT) != sum(case in NODE_CHAIN_SOCKS_LONG_CASES for case in cases) or
+            any(marker not in (SOCKS_FIFTY_RECEIPT, SOCKS_LONG_FIFTY_RECEIPT) for marker in fifty)):
+        raise ValueError('Installed Linux SOCKS omitted or borrowed actual fifty-sample receipt')
     for value in cases:
         if value in membership['NODE_CHAIN_SOCKS_HOST_CASES']:
             if (suffix_receipts['verified installed host typed SOCKS association joined: ' + value] != 1 or
@@ -907,7 +917,8 @@ def check_verdict(output, case=None):
 
 def installed_case_timeout(case):
     return 280 if case in ('node-chain-connect-http-wg-four-connect',
-                           'node-chain-connect-https-wg-eight-connect') else 150
+                           'node-chain-connect-https-wg-eight-connect',
+                           'node-chain-socks-wg-four-connect', 'node-chain-socks-wg-eight-connect') else 150
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None):

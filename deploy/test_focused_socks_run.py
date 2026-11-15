@@ -33,6 +33,21 @@ UDP_REUSE=module("socks_udp_dns_reuse",UDP_REUSE_PATH)
 BASE.SUITE=SUITE
 CASE_ROOT="TestRouterNodeChainSOCKSEncryptedRun"
 CASES=("wg","awg2-fast","awg2-strong","middle-password","final-token","selected-dns","middle-public","hold-prefix")
+PREFIX_ROOT="TestRouterNodeChainSOCKSEncryptedPrefixes"
+# Each invocation proves the complete graph. Mandatory two-position groups
+# cover every fifty-sample result at the first extended and maximum depths,
+# without extending the original peer/session bounds. Source/host editors
+# separately exercise every admitted length.
+PREFIX_CASES=tuple(f"{mode}/{count}/{group}" for mode in ("wg","awg2-fast","awg2-strong") for count in (2,6)
+                   for group in range((count+2)//2))
+PREFIX_REFUSAL_ROOT="TestRouterNodeChainSOCKSPrefixEncryptedRefusal"
+PREFIX_REFUSALS=("middle-password","final-token","selected-dns","middle-public","hold-prefix")
+PREFIX_POLICY_ROOT="TestRouterNodeChainSOCKSPrefixIPv6Ownership"
+PREFIX_POLICY_CASES=(PREFIX_POLICY_ROOT,PREFIX_POLICY_ROOT+"/off",PREFIX_POLICY_ROOT+"/on")
+PREFIX_PROJECTIONS={
+    "socks_prefix_run_test.go.tmpl":"experimental/libbox/routervpn_node_chain_socks_prefix_run_test.go",
+    "socks_prefix_policy_test.go.tmpl":"experimental/libbox/routervpn_node_chain_socks_prefix_policy_test.go",
+}
 PEER_ROOT="TestRouterVPNDesktopNodeChainSOCKSRunReference"
 PEER_TEMPLATE="mobile/desktop/node_chain_socks_process_test.go.tmpl"
 PEER_PROJECTION="protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_process_test.go"
@@ -81,6 +96,7 @@ def sources(source,mobile,mobile_xray,owner,owner_xray):
     for original,projected,root,table in (
         (RUN_TEMPLATE,RUN_PROJECTION,mobile,mobile_prep.TEMPLATES),
         (PEER_TEMPLATE,PEER_PROJECTION,owner,desktop.PEER_TEMPLATES),
+        *(("mobile/chain/"+name,projected,mobile,mobile_prep.TEMPLATES) for name,projected in PREFIX_PROJECTIONS.items()),
         *((original,projected,mobile,mobile_prep.TEMPLATES) for original,projected in MTU_PROJECTIONS)):
         a,b=source/original,root/projected
         if table.get(Path(original).name)!=projected or a.is_symlink() or b.is_symlink() or a.read_bytes()!=b.read_bytes():
@@ -94,6 +110,24 @@ def native_events(raw,status,case,control=None):
     names=case_names(case)
     actual=dict(control,cases=names) if control else None
     return BASE.require_events(raw,status,BASE.LIBBOX,names,actual)
+
+def prefix_names(case,refusal=False):
+    inventory,root=(PREFIX_REFUSALS,PREFIX_REFUSAL_ROOT) if refusal else (PREFIX_CASES,PREFIX_ROOT)
+    if case not in inventory:raise ValueError("Uncaptured complete SOCKS prefix case")
+    return (root,root+"/"+case.replace("/","-"))
+
+def prefix_events(raw,status,case,refusal=False):
+    return BASE.require_events(raw,status,BASE.LIBBOX,prefix_names(case,refusal))
+
+def prefix_environment(env,peer,case=None,refusal=False):
+    selected={key:value for key,value in env.items() if key not in (
+        "ROUTERVPN_SOCKS_RUN_CASE","ROUTERVPN_SOCKS_PREFIX_CASE",
+        "ROUTERVPN_SOCKS_PREFIX_REFUSAL","ROUTERVPN_SOCKS_FIFTY_CASE")}
+    selected.update(ROUTERVPN_SOCKS_RUN_PEER=str(peer),GODEBUG="x509usefallbackroots=1")
+    if case is not None:
+        prefix_names(case,refusal)
+        selected["ROUTERVPN_SOCKS_PREFIX_REFUSAL" if refusal else "ROUTERVPN_SOCKS_PREFIX_CASE"]=case
+    return selected
 
 def require_private_diagnostic(record):
     for path_key,hash_key in (("source","source_sha256"),("replacement","replacement_sha256"),("overlay","overlay_sha256")):
@@ -134,6 +168,7 @@ def validate(source,source_sha,output,go="go"):
         boundaries=["loopback mapping of one captured physical UDP tuple","TUN reader and OS interface monitor","isolated TLS root"],
         installed_native_accepted=False,public_native_admission=False,native_mtu_continuation_accepted=False,
         native_mtu_constructor_accepted=False,
+        complete_socks_prefix_native_run_accepted=False,
         original_external_final_fifty_scope_unchanged=True,go_version=version,compiler=compiler,
         resource_limits=dict(parallel_packages=1,GOMAXPROCS=2,GOGC=100,GOMEMLIMIT="2GiB"),
         trusted_bridge_sha256=hashlib.sha256(BASE_PATH.read_bytes()).hexdigest(),
@@ -214,6 +249,22 @@ def validate(source,source_sha,output,go="go"):
                     mutation_sha256=hashlib.sha256(changed.encode()).hexdigest(),
                     **native_events(raw,status,control["case"],control)))
             receipt.update(FIFTY.validate_compiled(BASE,run,compiler,mobile,peer,client,work,flags,env,diagnostic,private_control_overlay))
+            prefix_records=[]
+            prefix_refusals=[]
+            for refusal,inventory,destination in ((False,PREFIX_CASES,prefix_records),(True,PREFIX_REFUSALS,prefix_refusals)):
+                for case in inventory:
+                    root=prefix_names(case,refusal)[0]
+                    selected=prefix_environment(env,peer,case,refusal)
+                    name=("prefix-refusal-" if refusal else "prefix-run-")+case.replace("/","-")
+                    status,raw=run(name,[compiler,"tool","test2json","-t","-p",BASE.LIBBOX,client,
+                        "-test.run=^"+root+"$","-test.count=1","-test.timeout=180s","-test.v"],mobile,190,selected)
+                    destination.append(dict(case=case,**prefix_events(raw,status,case,refusal)))
+                    if BASE.COMMON.image_identity(peer)!=peer_identity or BASE.COMMON.image_identity(client)!=client_identity:
+                        raise ValueError("Original complete SOCKS prefix executable changed")
+            status,raw=run("prefix-ipv6-policy",[compiler,"tool","test2json","-t","-p",BASE.LIBBOX,client,
+                "-test.run=^"+PREFIX_POLICY_ROOT+"$","-test.count=1","-test.timeout=90s","-test.v"],mobile,100,
+                prefix_environment(env,peer))
+            prefix_policy=BASE.require_events(raw,status,BASE.LIBBOX,PREFIX_POLICY_CASES)
             if sources(source,mobile,mobile_xray,owner,owner_xray)!=native_before or BASE.CORE.snapshot(source)!=before:
                 raise ValueError("Original encrypted native/candidate source changed")
             if BASE.COMMON.git(source,"status","--porcelain","--untracked-files=all"):
@@ -223,6 +274,9 @@ def validate(source,source_sha,output,go="go"):
             if BASE.COMMON.image_identity(peer)!=peer_identity or BASE.COMMON.image_identity(client)!=client_identity:
                 raise ValueError("Original compiled encrypted image changed")
             receipt.update(status="passed",cases=list(CASES),case_records=records,original_cases=list(ORIGINAL),controls=controls,
+                prefix_cases=list(PREFIX_CASES),prefix_records=prefix_records,
+                prefix_refusal_cases=list(PREFIX_REFUSALS),prefix_refusal_records=prefix_refusals,
+                prefix_ipv6_policy=prefix_policy,complete_socks_prefix_native_run_accepted=True,
                 peer_image=list(peer_identity),client_image=list(client_identity),successful_run_accepted=True,ordered_measurement_accepted=True,native_mtu_constructor_accepted=True)
             (output/"receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
     except BaseException as error:

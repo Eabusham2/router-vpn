@@ -135,9 +135,9 @@ enum IOSNodeChainPresentation {
         guard !source.isEmpty, source.count <= 40 * 1024 * 1024, !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024,
               let root = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
               Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]), root["schema"] as? Int == 3,
-              root["execution"] as? String == "local", let inputs = root["nodes"] as? [String], inputs.count == 3,
-              let identities = root["identity_sources"] as? [String], identities.count == 3,
-              !identities[0].isEmpty, identities[1].isEmpty, !identities[2].isEmpty,
+              root["execution"] as? String == "local", let inputs = root["nodes"] as? [String], (3...8).contains(inputs.count),
+              let identities = root["identity_sources"] as? [String], identities.count == inputs.count,
+              identities.enumerated().allSatisfy({ $0.offset == inputs.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }),
               let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
               bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
               let control = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) else { return nil }
@@ -145,7 +145,7 @@ enum IOSNodeChainPresentation {
         for (position, input) in inputs.enumerated() {
             guard let member = try? JSONDecoder().decode(Member.self, from: Data(input.utf8)), member.schema == 1 else { return nil }
             let profile: RouterProfile, mode: String
-            if position == 1 {
+            if position == inputs.count - 2 {
                 guard member.kind == "routervpn-node-chain-socks-member", let raw = member.capture,
                       let capture = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
                       let saved = capture["profile"], let data = try? JSONSerialization.data(withJSONObject: saved),

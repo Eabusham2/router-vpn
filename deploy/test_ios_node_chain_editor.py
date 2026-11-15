@@ -96,16 +96,22 @@ TESTS = r'''
  }
  static func run()throws {
   try runOriginal()
-  do {
+  for count in [3,4,8] {
    IOSNodeBundleStore.shared.records=[:]
-   let nodes=try sources(3,false,"",true),model=RouterVPNModel();model.bundle=nodes.last!
+   var nodes=try sources(count),custom=try sources(3,false,"",true)[1]
+   custom.selectedRouterID="custom-socks";custom.routerProfiles[0].id=custom.selectedRouterID;nodes[count-2]=custom
+   nodes[count-1].routerProfiles[0].multihopNodes=nodes.enumerated().map{.init(id:$0.element.selectedRouterID,mode:$0.offset==count-2 ? "socks5":$0.offset==count-1 ? "shadowsocks":"wg")}
+   let model=RouterVPNModel();model.bundle=nodes.last!
    for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
    let owner=try model.captureIOSNodeChainEditorOwner(),selection=model.selectedNodeProfile!.multihopNodes!
    try model.saveIOSNodeChain(selection,owner:owner)
    let capture=try model.captureIOSOrderedRoute(model.bundle!);defer{try? capture.close()}
-   try check("typed SOCKS editor saves original three member source",model.writes==1 && capture.members[1].mode=="socks5" && capture.providerKey==IOSNodeChainSOCKSCapture.providerKey)
+   try check("typed SOCKS editor saves original bounded member source",model.writes==1 && capture.members.count==count && capture.members[count-2].mode=="socks5" && capture.providerKey==IOSNodeChainSOCKSCapture.providerKey)
    let stale=try model.captureIOSNodeChainEditorOwner()
-   try editMiddle{$0.routerProfiles[0].external?.socks5?.password="relinked-password"}
+   var replaced=try JSONDecoder().decode(ClientBundle.self,from:IOSNodeBundleStore.shared.records["custom-socks"]!);replaced.routerProfiles[0].external?.socks5?.password="relinked-password";IOSNodeBundleStore.shared.records["custom-socks"]=try JSONEncoder().encode(replaced)
+   var draft=IOSNodeChainDraft(saved:selection,finalID:selection.last!.id)
+   if count<8 {try draft.append();try check("SOCKS append preserves imported penultimate and captured final",draft.nodes[draft.nodes.count-2]==selection[count-2] && draft.nodes.last==selection.last)}
+   else {try reject("SOCKS editor keeps maximum bound"){try draft.append()}}
    try reject("typed SOCKS editor cannot reuse relinked private source"){try model.saveIOSNodeChain(selection,owner:stale)}
   }
   try visibleSOCKS()
@@ -163,7 +169,7 @@ TESTS = r'''
    var firstRole=selection;firstRole[1].id="other-middle";firstRole[0].id=middle.id
    try check("visible SOCKS excludes first "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:firstRole,position:0).isEmpty)
    var four=selection;four.insert(.init(id:"other-prefix",mode:"wg"),at:1)
-   try check("visible SOCKS excludes longer path "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:four,position:2).isEmpty)
+   try check("visible SOCKS preserves eligible longer path "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:four,position:2).contains(where:{$0.id==middle.id})==eligible)
    var duplicate=selection;duplicate[0].id=middle.id
    try check("visible SOCKS excludes reused selected source "+label,IOSNodeChainEditorVisible.candidates([middle],nodes:duplicate,position:1).isEmpty)
    try check("visible SOCKS unique original source "+label,IOSNodeChainEditorVisible.unique([middle,middle]).isEmpty)

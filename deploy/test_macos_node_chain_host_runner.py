@@ -129,7 +129,7 @@ class OrderedNativeVerdicts(unittest.TestCase):
         source = (ROOT/'cmd/client/desktop_node_chain_darwin_native_test.go').read_text()
         self.assertTrue(G.require_public_entrypoints(source))
         fragments = ('if public == nil {', 'public.Store(true)', 'a.nativeMultihopConnectOwned(w, r, driver)',
-                     'if len(modes) >= 2 && ((len(modes) == 2 && modes[1] == "socks5") || modes[len(modes)-1] == "http-connect" || modes[len(modes)-1] == "https-connect") {',
+                     'if len(modes) >= 2 && (modes[len(modes)-1] == "socks5" || modes[len(modes)-1] == "http-connect" || modes[len(modes)-1] == "https-connect") {',
                      'middle, found := a.profileByIDLocked(control.MultihopNodes[len(control.MultihopNodes)-2].ID)',
                      'macOSNodeChainNativeConnect(a, w, r, driver, &publicConnect)',
                      'a.nativeMultihopStatus(w, r)', 'publicConnect.Load(), publicStatus.Load()',
@@ -148,13 +148,13 @@ class OrderedNativeVerdicts(unittest.TestCase):
 
     def test_connect_prefix_public_capability_keeps_exact_family_and_member(self):
         source = (ROOT/'cmd/client/desktop_node_chain_darwin_native_test.go').read_text()
-        current = 'if len(modes) >= 2 && ((len(modes) == 2 && modes[1] == "socks5") || modes[len(modes)-1] == "http-connect" || modes[len(modes)-1] == "https-connect") {'
+        current = 'if len(modes) >= 2 && (modes[len(modes)-1] == "socks5" || modes[len(modes)-1] == "http-connect" || modes[len(modes)-1] == "https-connect") {'
         mutations = (
             ('old-three-node-rule', current,
              'if len(modes) == 2 && (modes[1] == "socks5" || modes[1] == "http-connect" || modes[1] == "https-connect") {'),
             ('first-http-member', 'modes[len(modes)-1] == "http-connect"', 'modes[1] == "http-connect"'),
             ('first-https-member', 'modes[len(modes)-1] == "https-connect"', 'modes[1] == "https-connect"'),
-            ('broadened-socks', '(len(modes) == 2 && modes[1] == "socks5")', 'modes[len(modes)-1] == "socks5"'),
+            ('first-socks-member', 'modes[len(modes)-1] == "socks5"', 'modes[1] == "socks5"'),
             ('missing-minimum', 'len(modes) >= 2 && ', ''),
             ('wrong-captured-member',
              'middle, found := a.profileByIDLocked(control.MultihopNodes[len(control.MultihopNodes)-2].ID)',

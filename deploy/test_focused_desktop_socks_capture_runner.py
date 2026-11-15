@@ -33,7 +33,7 @@ def encoded(case, *, omission=None, wrong_witness=None):
 class DesktopSOCKSCaptureGateTests(unittest.TestCase):
     def test_exact_inventory(self):
         cases = G.cases()
-        self.assertEqual([len(case.expected) for case in cases], [54, 8, 9, 3, 1])
+        self.assertEqual([len(case.expected) for case in cases], [54, 8, 9, 3, 1, 29, 16])
         self.assertEqual(len(cases[0].expected), len(set(cases[0].expected)))
         self.assertEqual(G.CORE.PACKAGE, "router-vpn/cmd/client")
         for case in cases:
@@ -47,7 +47,7 @@ class DesktopSOCKSCaptureGateTests(unittest.TestCase):
                 self.assertFalse(result["accepted"], (case.name, name))
 
     def test_every_control_requires_its_original_leaf_witness(self):
-        for case in G.cases()[2:]:
+        for case in (case for case in G.cases() if case.mutation):
             for name in case.witness_tests:
                 result = G.CORE.verdict(encoded(case, wrong_witness=name), case, 1)
                 self.assertFalse(result["accepted"], name)
@@ -102,7 +102,7 @@ class DesktopSOCKSCaptureGateTests(unittest.TestCase):
         source += "\t\tif !matches {\n"
         source += "\t\tif err := mobilemtu.LockContext(ctx, &a.mu); err != nil {\n"
         source += "\t\t\treturn common.RouterProfile{}, nil, err\n\t\t}\n"
-        for case in G.cases()[2:]:
+        for case in G.cases()[2:5]:
             changed = G.mutation_source(case, source)
             self.assertNotEqual(source, changed)
             for wrong in ("", source + source):
@@ -110,6 +110,16 @@ class DesktopSOCKSCaptureGateTests(unittest.TestCase):
                     G.mutation_source(case, wrong)
 
 
+
+    def test_final_receipt_control_preserves_every_original_guard(self):
+        case = next(case for case in G.cases() if case.mutation == "misplaced-final-proof")
+        source = (Path(__file__).resolve().parents[1] / G.MUTATION_PATHS[case.mutation]).read_text()
+        guard = "final := originalMeta.Proofs[len(originalMeta.Proofs)-1]"
+        changed = G.mutation_source(case, source)
+        self.assertEqual(changed, source.replace(guard, "final := originalMeta.Proofs[2]", 1))
+        for wrong in (source.replace(guard, ""), source + guard):
+            with self.assertRaisesRegex(ValueError, "one exact original guard"):
+                G.mutation_source(case, wrong)
 
     def test_unbounded_wait_requires_and_removes_only_its_unused_import(self):
         case = next(case for case in G.cases() if case.mutation == "unbounded-catalog-wait")

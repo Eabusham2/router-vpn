@@ -37,7 +37,7 @@ BUILD = load("windows_prefix_complete_bundle", "build-native-runtime.py")
 SOCKS_PARENT = load("windows_retained_socks_parent", "test_desktop_socks_parent.py")
 COMMAND_OWNER = load("windows_socks_command_owner", "test_windows_node_max.py")
 ROOT_TEST = "TestWindowsInstalledSOCKSNodeChain"
-CASES = ("wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off")
+CASES = ("wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off", "wg-four-connect", "wg-eight-connect")
 REQUIRED = (ROOT_TEST, *(ROOT_TEST + "/" + case for case in CASES))
 PREFIX = "Native Windows typed SOCKS full-path acceptance: "
 OWNED = ("client/Private-RouterVPN-Protection.ps1", "cmd/client/windows_protection_utility_windows.go",
@@ -248,6 +248,9 @@ def execute_typed(source, bundle, go, env, before, original_prefix_receipt, owne
                    "unmodified_shipping_image": False, "test_scope": "captured-native-child-app-id",
                    "typed_full_path": True, "positive_application_and_selected_dns_proved": True,
                    "measurement_bytes_per_direction_per_hop": 8 << 20, "measurement_hops": 3,
+                   "ordered_latency_samples_per_hop": 50,
+                   "ordered_prefix_measurements": [dict(case="wg-four-connect", nodes=4, positions=[2,3], samples=50),
+                                                   dict(case="wg-eight-connect", nodes=8, positions=[6,7], samples=50)],
                    "native_joined": True, "remote_associations_after_retirement": 0,
                    "command_job_joined": owner.retired, "tun_absent_all_outcomes": True,
                    "public_admission": "enabled", "public_connect_path": "/api/multihop/connect",

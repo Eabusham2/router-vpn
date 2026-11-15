@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Installed typed SOCKS host gate; original 37 cases precede the exact eight additions."""
+"""Installed typed SOCKS host gate; original 37 cases precede the exact ten additions."""
 from pathlib import Path
 import argparse
 import hashlib
@@ -20,15 +20,19 @@ PEER_TAGS = BASE.PEER_TAGS
 TEST = 'TestMacOSRetainedNodeChainSOCKSNativeHost'
 FLAG = 'ROUTERVPN_DARWIN_SOCKS_NODE_CHAIN_HOST_ACCEPTANCE'
 AUTHORITY_TEST = 'TestDesktopDarwinInstalledSOCKSNodeChainFixtureKeepsOriginalSources'
-AUTHORITY_CASES = (AUTHORITY_TEST, *(AUTHORITY_TEST+'/'+name for name in ('wg','awg2-fast','awg2-strong')))
+AUTHORITY_CASES = (AUTHORITY_TEST, *(AUTHORITY_TEST+'/'+name for name in ('wg','awg2-fast','awg2-strong','wg-four','wg-eight')))
 AUTHORITY_SOURCE = 'cmd/client/desktop_node_chain_socks_darwin_native_test.go'
 SOURCE_CONTROL = 'installed source changed original SOCKS credential or invented paired assets'
 CASES = (
     'node-chain-socks-wg-connect', 'node-chain-socks-awg-fast-connect', 'node-chain-socks-awg-strong-connect',
     'node-chain-socks-wg-wrong-middle-key', 'node-chain-socks-wg-wrong-middle-public',
     'node-chain-socks-wg-final-dns-failure', 'node-chain-socks-wg-final-node-failure', 'node-chain-socks-wg-middle-source',
+    'node-chain-socks-wg-four-connect', 'node-chain-socks-wg-eight-connect',
 )
-MEASUREMENT_CASES = (*CASES[:3], CASES[-1])
+LONG_CASES = CASES[-2:]
+MEASUREMENT_CASES = (*CASES[:3], CASES[7], *LONG_CASES)
+FIFTY_RECEIPT = 'actual installed Darwin SOCKS fifty: all three original members returned fifty samples and retained exact durable receipts'
+LONG_FIFTY_RECEIPT = 'actual installed Darwin SOCKS long path fifty: captured penultimate public and final private members retained exact durable receipts'
 SOURCES = (
     'cmd/client/desktop_node_chain_public_admission.go', 'cmd/client/desktop_node_chain_public_admission_test.go',
     'cmd/client/desktop_node_chain_socks_admission.go', 'cmd/client/desktop_node_chain_socks_admission_test.go',
@@ -69,10 +73,10 @@ def case_inventory():
     source = (ROOT/AUTHORITY_SOURCE).read_text()
     match = re.search(r'var macOSNodeChainSOCKSHostCases = \[\]string\{([^}]+)\}', source)
     if match is None or tuple(re.findall(r'"([a-z0-9-]+)"', match[1])) != CASES or re.sub(r'"[a-z0-9-]+"|\s|,', '', match[1]):
-        raise ValueError('Installed SOCKS source lost its exact eight cases')
+        raise ValueError('Installed SOCKS source lost its exact ten cases')
     BASE.case_inventory()
-    if len(BASE.CASES) != 37 or len(set(CASES)) != 8:
-        raise ValueError('Installed SOCKS gate lost original 37 plus typed eight')
+    if len(BASE.CASES) != 37 or len(set(CASES)) != 10:
+        raise ValueError('Installed SOCKS gate lost original 37 plus typed ten')
     return CASES
 
 
@@ -91,6 +95,11 @@ def source_identity(core):
 
 def check_verdict(output, case):
     BASE.check_verdict(output, case, test=TEST, cases=CASES, mtu_cases=(), measurement_cases=MEASUREMENT_CASES, public_cases=CASES)
+    receipts = [match[1] for line in output.splitlines() if (match := re.match(r'^\s+[^ ]+\.go:[0-9]+: (.*)$', line))]
+    if receipts.count(FIFTY_RECEIPT) != (1 if case in MEASUREMENT_CASES and case not in LONG_CASES else 0) or receipts.count(LONG_FIFTY_RECEIPT) != (1 if case in LONG_CASES else 0):
+        raise ValueError('Installed SOCKS case lost actual captured fifty-sample receipt')
+    if any(value.startswith('actual installed Darwin SOCKS ') and value not in (FIFTY_RECEIPT, LONG_FIFTY_RECEIPT) for value in receipts):
+        raise ValueError('Installed SOCKS case borrowed another native fifty receipt')
 
 
 def check_authority_verdict(output):

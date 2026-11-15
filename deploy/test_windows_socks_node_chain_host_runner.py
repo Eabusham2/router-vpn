@@ -19,7 +19,7 @@ def completed():
 
 class FullPathGate(unittest.TestCase):
     def test_exact_inventory(self):
-        self.assertEqual(G.CASES,('wg-connect','awg-fast-connect','awg-strong-connect','wg-wrong-middle-key','wg-wrong-middle-public','wg-final-dns-failure','wg-final-node-failure','wg-middle-source', 'wg-connect-off'))
+        self.assertEqual(G.CASES,('wg-connect','awg-fast-connect','awg-strong-connect','wg-wrong-middle-key','wg-wrong-middle-public','wg-final-dns-failure','wg-final-node-failure','wg-middle-source', 'wg-connect-off', 'wg-four-connect', 'wg-eight-connect'))
         G.require_verdicts(completed())
         with self.assertRaises(ValueError):G.require_verdicts('PASS\n')
         original=''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\n' for name in G.PREFIX_GATE.REQUIRED)+'PASS\n'

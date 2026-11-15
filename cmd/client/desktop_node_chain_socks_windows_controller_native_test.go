@@ -34,10 +34,10 @@ func windowsSOCKSRegisterRoutes(mux *http.ServeMux, a *app, original common.Rout
 	if !found || !desktopNodeChainHasSOCKS(selected.MultihopNodes) {
 		return func() {}, nil
 	}
-	if !nativeNodeChainSOCKSPlatformSupported() || len(original.Profiles) != 3 {
+	if !nativeNodeChainSOCKSPlatformSupported() || (len(original.Profiles) < 3 || len(original.Profiles) > 8) {
 		return nil, errors.New("installed SOCKS gate requires public Connect admission")
 	}
-	middle := publicProfileFor(original.Profiles[1])
+	middle := publicProfileFor(original.Profiles[len(original.Profiles)-2])
 	if middle.External == nil || !middle.External.OrderedMiddle {
 		return nil, errors.New("original SOCKS middle has no public capability")
 	}
@@ -100,11 +100,11 @@ func windowsSOCKSRegisterRoutes(mux *http.ServeMux, a *app, original common.Rout
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if len(a.profiles.Profiles) != 3 || a.profiles.Profiles[1].External == nil || a.profiles.Profiles[1].External.SOCKS5 == nil {
+		if len(a.profiles.Profiles) < 3 || len(a.profiles.Profiles) > 8 || a.profiles.Profiles[len(a.profiles.Profiles)-2].External == nil || a.profiles.Profiles[len(a.profiles.Profiles)-2].External.SOCKS5 == nil {
 			http.Error(w, "original imported middle unavailable", 409)
 			return
 		}
-		a.profiles.Profiles[1].External.SOCKS5.Password += "-replaced-after-admission"
+		a.profiles.Profiles[len(a.profiles.Profiles)-2].External.SOCKS5.Password += "-replaced-after-admission"
 		w.WriteHeader(204)
 	})
 	mux.HandleFunc("/api/native-socks/inspect", func(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +163,7 @@ func windowsSOCKSInspect(ctx context.Context, a *app, launch *desktopNodeLaunch,
 		}
 		graph, found := getActiveMultihopGraph(a)
 		runtime, err := capturedNativeMultihopRuntimeContext(ctx, a, launch.command, graph)
-		if err != nil || !found || runtime == nil || runtime.launch != launch || graph.ChainNodes != 3 {
+		if err != nil || !found || runtime == nil || runtime.launch != launch || graph.ChainNodes != len(original.Profiles) {
 			return result, errors.Join(err, errors.New("typed native activation lost full original graph"))
 		}
 		finish, err := beginDesktopNodeChainMeasurementHold(ctx, a, launch)
@@ -176,7 +176,7 @@ func windowsSOCKSInspect(ctx context.Context, a *app, launch *desktopNodeLaunch,
 			return result, err
 		}
 		rows, err := desktopNodeChainMeasurementRows(status, runtime.selection.Nodes, 8<<20)
-		if err != nil || len(rows) != 3 {
+		if err != nil || len(rows) != len(original.Profiles) {
 			return result, errors.Join(err, errors.New("typed native measurement omitted original prefix"))
 		}
 		result.MeasurementRows = len(rows)

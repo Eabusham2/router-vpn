@@ -39,14 +39,15 @@ func linuxNodeChainPeerForModes(t *testing.T, modes []string) *linuxNodeChainPee
 	t.Helper()
 	middle := len(modes) - 1
 	connect := len(modes) >= 2 && len(modes) <= 7 && (modes[middle] == "http-connect" || modes[middle] == "https-connect")
+	socks := len(modes) >= 2 && len(modes) <= 7 && modes[middle] == "socks5"
 	count := len(modes) + 1
-	if connect {
+	if connect || socks {
 		count = 3
 	}
 	peer := linuxNodeChainPeerKeys(t, count)
-	if connect {
+	if connect || socks {
 		// Extend only this typed fixture using separately generated original keys.
-		// The existing generic key helper and all non-CONNECT bounds stay intact.
+		// The generic key helper and other imported-family bounds stay intact.
 		for len(peer.requests) < len(modes) {
 			extra := linuxNodeChainPeerKeys(t, 3)
 			peer.requests = append(peer.requests, extra.requests...)
@@ -56,10 +57,13 @@ func linuxNodeChainPeerForModes(t *testing.T, modes []string) *linuxNodeChainPee
 		if len(modes) > 2 {
 			for i := range peer.requests {
 				peer.requests[i].APIToken = "installed-connect-prefix-" + peer.requests[i].NodeProofID
+				if socks {
+					peer.requests[i].APIToken = "installed-socks-prefix-" + peer.requests[i].NodeProofID
+				}
 			}
 		}
 	}
-	if connect || len(modes) == 2 && (modes[1] == "shadowsocks" || modes[middle] == "socks5") {
+	if connect || socks || len(modes) == 2 && modes[1] == "shadowsocks" {
 		// Keep the original paired first and final keys. The custom middle receives
 		// only its own independent SS2022 PSK, never a synthetic WG/API identity.
 		peer.middlePassword = peer.requests[middle].PreSharedKey

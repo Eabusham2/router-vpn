@@ -21,9 +21,9 @@ class NativeSOCKSMTUValidator(unittest.TestCase):
         value.validator=V.validate
         return value
     def test_exact_native_wrapper_original_and_control_inventory(self):
-        self.assertEqual((len(V.NATIVE_ROOTS),len(V.NATIVE_CASES),len(V.WRAPPER_ROOTS),len(V.WRAPPER_CASES)),(8,18,7,13))
+        self.assertEqual((len(V.NATIVE_ROOTS),len(V.NATIVE_CASES),len(V.WRAPPER_ROOTS),len(V.WRAPPER_CASES)),(10,32,8,24))
         self.assertEqual((len(V.ORIGINAL_TYPED),len(V.ORIGINAL_BOX),len(V.ORIGINAL_CONTROLS)),(51,27,6))
-        self.assertEqual((len(V.BASE.VERDICTS),len(V.BASE.ORIGINAL_BOX),len(V.BASE.CONTROLS)),(64,45,19))
+        self.assertEqual((len(V.BASE.VERDICTS),len(V.BASE.ORIGINAL_BOX),len(V.BASE.CONTROLS)),(75,59,19))
         self.assertIn("TestRouterNodeChainSOCKSExportedFactoryRetainsTypedOwner", V.ORIGINAL_TYPED)
         for names in (V.NATIVE_CASES,V.WRAPPER_CASES,V.BASE.VERDICTS,V.BASE.ORIGINAL_BOX):
             self.assertEqual(len(names),len(set(names)))
@@ -42,6 +42,9 @@ class NativeSOCKSMTUValidator(unittest.TestCase):
                 self.assertFalse(receipt[key],key)
             self.assertEqual(receipt["native_mtu_cases"],list(V.NATIVE_CASES))
             self.assertEqual(receipt["libbox_mtu_cases"],list(V.WRAPPER_CASES))
+            self.assertEqual(receipt["prefix_socks_mtu_cases"],list(V.PREFIX_NATIVE_CASES))
+            self.assertEqual(receipt["prefix_socks_close_cases"],list(V.PREFIX_WRAPPER_CASES))
+            self.assertTrue(receipt["native_socks_prefix_mtu_component_accepted"])
             self.assertEqual(json.loads((f.output/"receipt.json").read_text()),receipt)
             calls={name:(cmd,bound) for name,cmd,bound in f.calls}
             for control in V.BASE.CONTROLS:
@@ -73,6 +76,17 @@ class NativeSOCKSMTUValidator(unittest.TestCase):
                     dropped=[r for r in rows if not(r.get("Test")==name and r.get("Action")=="pass")]
                     with self.assertRaises(ValueError):V.BASE.require_events(FIXTURE.encoded(dropped),0,package,names)
                 with self.assertRaises(ValueError):V.BASE.require_events(FIXTURE.encoded(rows+rows[-1:]),0,package,names)
+    def test_complete_prefix_reader_lower_and_preclose_are_fixed_mandatory_inventory(self):
+        self.assertEqual(len(V.PREFIX_NATIVE_CASES),14)
+        self.assertEqual(len(V.PREFIX_WRAPPER_CASES),11)
+        self.assertEqual(V.DATA["projections"]["socks_prefix_mtu_test.go.tmpl"],"routervpn_node_chain_socks_prefix_mtu_test.go")
+        for count in (2,6):
+            for scenario in ("candidate","rollback","unchanged","foreign-operation","retired-source"):
+                self.assertIn(V.PREFIX_MTU_ROOT+f"/{count}-{scenario}",V.PREFIX_NATIVE_CASES)
+            self.assertIn(V.PREFIX_LOWER_ROOT+"/"+str(count),V.PREFIX_NATIVE_CASES)
+            for scenario in ("box-joined","box-failed","instance-joined","instance-failed"):
+                self.assertIn(V.PREFIX_CLOSE_ROOT+f"/{count}/{scenario}",V.PREFIX_WRAPPER_CASES)
+
     def test_only_two_known_compiled_package_targets_are_admitted(self):
         self.assertEqual(V.BASE.control_target({}),(V.BASE.LIBBOX,"./experimental/libbox"))
         self.assertEqual(V.BASE.control_target({"package":V.BASE.BOX}),(V.BASE.BOX,"."))

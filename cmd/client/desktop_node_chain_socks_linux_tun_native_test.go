@@ -18,14 +18,20 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
+const linuxNodeChainSOCKSFiftyReceipt = "actual installed Linux SOCKS fifty: all three original members returned fifty samples and retained exact durable receipts"
+const linuxNodeChainSOCKSLongFiftyReceipt = "actual installed Linux SOCKS long path fifty: captured penultimate public and final private members retained exact durable receipts"
+
 var linuxNodeChainSOCKSHostCases = []string{
 	"node-chain-socks-wg-connect", "node-chain-socks-awg-fast-connect", "node-chain-socks-awg-strong-connect",
 	"node-chain-socks-wg-wrong-middle-key", "node-chain-socks-wg-wrong-middle-public",
 	"node-chain-socks-wg-final-dns-failure", "node-chain-socks-wg-final-node-failure", "node-chain-socks-wg-middle-source",
+	"node-chain-socks-wg-four-connect", "node-chain-socks-wg-eight-connect",
 }
 
 func linuxNodeChainSOCKSCipherCases() []linuxNodeChainCipherCase {
 	return []linuxNodeChainCipherCase{
+		{"wg-four", "node-chain-socks-wg-four-", []string{"wg", "wg", "socks5"}},
+		{"wg-eight", "node-chain-socks-wg-eight-", []string{"wg", "wg", "wg", "wg", "wg", "wg", "socks5"}},
 		{"wg", "node-chain-socks-wg-", []string{"wg", "socks5"}},
 		{"awg2-fast", "node-chain-socks-awg-fast-", []string{"awg2-fast", "socks5"}},
 		{"awg2-strong", "node-chain-socks-awg-strong-", []string{"awg2-strong", "socks5"}},
@@ -70,8 +76,9 @@ func TestDesktopLinuxInstalledSOCKSNodeChainFixtureKeepsOriginalSources(t *testi
 			peer := linuxNodeChainPeerForModes(t, scenario.modes)
 			peer.reply.Address = net.JoinHostPort("192.168.210.2", "51820")
 			profiles, assets := linuxNodeChainInstalledSources(t, peer, "")
-			middle := profiles.Profiles[1]
-			if len(profiles.Profiles) != 3 || len(peer.requests) != 1 || middle.NodeKind != "external" || middle.NodeProofID != "" || middle.APIToken != "" || middle.RouterAPI != "" || assets[middle.ID] != nil || middle.External == nil || middle.External.Protocol != "socks5" || middle.External.SOCKS5 == nil || middle.External.SOCKS5.Password != peer.middlePassword || middle.External.SOCKS5.Username != "captured-native-user" {
+			middlePosition, count := len(scenario.modes)-1, len(scenario.modes)+1
+			middle := profiles.Profiles[middlePosition]
+			if len(profiles.Profiles) != count || len(peer.requests) != middlePosition || middle.NodeKind != "external" || middle.NodeProofID != "" || middle.APIToken != "" || middle.RouterAPI != "" || assets[middle.ID] != nil || middle.External == nil || middle.External.Protocol != "socks5" || middle.External.SOCKS5 == nil || middle.External.SOCKS5.Password != peer.middlePassword || middle.External.SOCKS5.Username != "captured-native-user" {
 				t.Fatal("installed source changed original SOCKS credential or invented paired assets")
 			}
 			root := t.TempDir()
@@ -88,7 +95,7 @@ func TestDesktopLinuxInstalledSOCKSNodeChainFixtureKeepsOriginalSources(t *testi
 					}
 				}
 			}
-			control := profiles.Profiles[2]
+			control := profiles.Profiles[count-1]
 			selection, err := resolveDesktopNodeChainSelection(control, profiles.Profiles, control.MultihopNodes, "local")
 			if err != nil {
 				t.Fatal(err)
@@ -105,12 +112,18 @@ func TestDesktopLinuxInstalledSOCKSNodeChainFixtureKeepsOriginalSources(t *testi
 				t.Fatal("installed typed source acquired generic chain authority")
 			}
 			_, meta, physical, err := launch.chain.readPolicy()
-			if err != nil || len(meta.Prefixes) != 3 || meta.Prefixes[0].Mode != scenario.modes[0] || meta.Prefixes[1].NodeID != "" || meta.Prefixes[1].Kind != "public-path" || meta.Prefixes[1].ProfileID != middle.ID || meta.Prefixes[2].NodeID != control.NodeProofID || len(physical.PhysicalRoots) != 1 || physical.PhysicalRoots[0].Destinations[0].Host != "192.168.210.2" {
+			if err != nil || len(meta.Prefixes) != count || meta.Prefixes[0].Mode != scenario.modes[0] || meta.Prefixes[middlePosition].NodeID != "" || meta.Prefixes[middlePosition].Kind != "public-path" || meta.Prefixes[middlePosition].ProfileID != middle.ID || meta.Prefixes[count-1].NodeID != control.NodeProofID || meta.ProfileID != control.ID || meta.NodeID != control.NodeProofID || meta.FinalTag != meta.Prefixes[count-1].Tag || len(physical.PhysicalRoots) != 1 || physical.PhysicalRoots[0].Destinations[0].Host != "192.168.210.2" {
 				t.Fatal("installed typed source lost original proof or physical identity", err)
 			}
 			var source mobilemultihop.NodeChainSource
-			if json.Unmarshal([]byte(selection.Native.chain.socks.original.input), &source) != nil || source.Schema != 3 || source.IdentitySources[1] != "" {
+			if json.Unmarshal([]byte(selection.Native.chain.socks.original.input), &source) != nil || source.Schema != 3 || len(source.Nodes) != count || len(source.IdentitySources) != count || source.IdentitySources[middlePosition] != "" {
 				t.Fatal("typed original source acquired paired middle identity")
+			}
+			for position := 0; position < middlePosition; position++ {
+				original := profiles.Profiles[position]
+				if source.IdentitySources[position] == "" || meta.Prefixes[position].ProfileID != original.ID || meta.Prefixes[position].NodeID != original.NodeProofID || meta.Prefixes[position].Mode != scenario.modes[position] {
+					t.Fatal("SOCKS replaced an original paired prefix", position)
+				}
 			}
 			var envelope struct {
 				Config  string `json:"config"`
@@ -119,7 +132,7 @@ func TestDesktopLinuxInstalledSOCKSNodeChainFixtureKeepsOriginalSources(t *testi
 			var captured struct {
 				Profile common.RouterProfile `json:"profile"`
 			}
-			if json.Unmarshal([]byte(source.Nodes[1]), &envelope) != nil || json.Unmarshal([]byte(envelope.Capture), &captured) != nil || !reflect.DeepEqual(captured.Profile, middle) {
+			if json.Unmarshal([]byte(source.Nodes[middlePosition]), &envelope) != nil || json.Unmarshal([]byte(envelope.Capture), &captured) != nil || !reflect.DeepEqual(captured.Profile, middle) {
 				t.Fatal("installed typed source changed original complete imported policy")
 			}
 			for _, action := range []string{"connect", "wrong-middle-key", "wrong-middle-public", "final-dns-failure", "final-node-failure", "middle-source"} {
@@ -144,12 +157,12 @@ func linuxNodeChainNativeConnect(a *app, w http.ResponseWriter, r *http.Request,
 		return
 	}
 	a.mu.Lock()
-	if len(a.profiles.Profiles) != 3 {
+	if len(a.profiles.Profiles) < 3 || len(a.profiles.Profiles) > 8 {
 		a.mu.Unlock()
-		http.Error(w, "original three-member SOCKS graph is unavailable", http.StatusBadRequest)
+		http.Error(w, "original bounded SOCKS graph is unavailable", http.StatusBadRequest)
 		return
 	}
-	middle := publicProfileFor(a.profiles.Profiles[1])
+	middle := publicProfileFor(a.profiles.Profiles[len(a.profiles.Profiles)-2])
 	a.mu.Unlock()
 	if middle.External == nil || !middle.External.OrderedMiddle {
 		http.Error(w, "original SOCKS middle has no public capability", http.StatusBadRequest)

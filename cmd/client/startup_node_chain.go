@@ -148,13 +148,13 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	refs := make([]common.MultihopNodeSelection, len(capture.Nodes))
 	proofs := make(map[string]bool, len(capture.Nodes))
 	middle := 1
-	if capture.Schema == 4 {
+	if capture.Schema == 3 || capture.Schema == 4 {
 		middle = len(capture.Nodes) - 2
 	}
 	for i, member := range capture.Nodes {
 		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
 		if member.NodeKind == "external" {
-			if (capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5) || (capture.Schema != 4 && len(capture.Nodes) != 3 || capture.Schema == 4 && len(capture.Nodes) < 3) || i != middle || (capture.Schema == 2 && member.Mode != "shadowsocks" || capture.Schema == 3 && member.Mode != "socks5" || capture.Schema == 4 && member.Mode != "http-connect" && member.Mode != "https-connect" || capture.Schema == 5 && member.Mode != "openvpn") || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-"+member.Mode || !savedNodeChainDigest(member.Sources[0].SHA256) {
+			if (capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5) || (capture.Schema != 3 && capture.Schema != 4 && len(capture.Nodes) != 3 || (capture.Schema == 3 || capture.Schema == 4) && len(capture.Nodes) < 3) || i != middle || (capture.Schema == 2 && member.Mode != "shadowsocks" || capture.Schema == 3 && member.Mode != "socks5" || capture.Schema == 4 && member.Mode != "http-connect" && member.Mode != "https-connect" || capture.Schema == 5 && member.Mode != "openvpn") || member.NodeProofID != "" || !savedNodeChainDigest(member.ProfileToken) || len(member.Sources) != 1 || member.Sources[0].Mode != "external-"+member.Mode || !savedNodeChainDigest(member.Sources[0].SHA256) {
 				return bad
 			}
 			continue
@@ -525,7 +525,7 @@ func (a *app) saveNodeChainStartupSelection(ctx context.Context, launch *desktop
 		// also retains the original imported credential digest, never secrets.
 		capture.assets = append([]viaEntryAsset(nil), capture.assets...)
 		middlePosition := 1
-		if selection.Native.chain.connect != nil {
+		if selection.Native.chain.socks != nil || selection.Native.chain.connect != nil {
 			middlePosition = len(selection.Nodes) - 2
 		}
 		middle := selection.Nodes[middlePosition]

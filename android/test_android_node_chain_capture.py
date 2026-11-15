@@ -471,28 +471,31 @@ public final class NodeChainCaptureHarness {
   }
  }
 
- static void socksMiddle(Path root)throws Exception{
+ static void socksMiddle(Path root)throws Exception{socksMiddle(root,false);}
+ static void socksMiddle(Path root,boolean extended)throws Exception{
   int before=checks;
-  for(String key:List.of("2/","2/awg-fast","3/aes-256-gcm","4/mixed-awg"))for(boolean auth:List.of(false,true)){
+  for(String key:(extended?List.of("3/","7/"):List.of("2/","2/awg-fast","3/aes-256-gcm","4/mixed-awg")))for(boolean auth:List.of(false,true)){
    Fixture f=new Fixture(root,key);AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);
    AndroidStandardExitStore.Entry custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Original SOCKS middle";custom.protocol="socks5";custom.server="198.51.100.76";custom.serverPort=1080;custom.expectedPublicIp="203.0.113.76";custom.username=auth?"original-proxy-user":"";custom.password=auth?"private-original-proxy-password":"";custom.policy.put("dns_mode","rescue").put("start_layer","off").put("home_lan_access",false).put("kill_switch_policy","always");exits.save(custom);
-   // The typed source is exactly paired first -> imported middle -> paired final.
+   // Preserve the selected original paired prefixes before the imported middle.
    AndroidOrderedPathSelection editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
-   while(editor.members().size()>2)editor.removePrefix(1);
+   if(!extended)while(editor.members().size()>2)editor.removePrefix(1);
+   int middlePosition=editor.members().size()-1,total=editor.members().size()+1;
    check(editor.prefixModes(custom.id).equals(List.of("socks5")),"original SOCKS middle was not offered with its exact mode");editor.addPrefix(custom.id,"socks5");
-   reject(()->editor.movePrefix(1,0),"SOCKS middle moved into physical first position");
+   reject(()->editor.movePrefix(middlePosition,0),"SOCKS middle moved into physical first position");
    AndroidNodeStore.ChainCapture saved=editor.save();
    try(AndroidNodeChainCapture captured=AndroidNodeChainCapture.compile(saved)){
     check(captured.plan==null&&captured.socks!=null,"typed SOCKS capture borrowed generic chain authority");
-    JSONObject source=new JSONObject(captured.launchInput),member=new JSONObject(captured.memberInputs.get(1));
-    check(source.getInt("schema")==3&&!source.has("kind")&&member.getString("kind").equals("routervpn-node-chain-socks-member")&&captured.identityInputs.get(1).isEmpty(),"typed SOCKS source lost its exact schema or borrowed paired identity");
+    check(captured.memberInputs.size()==total&&captured.identityInputs.size()==total,"typed SOCKS lost original full prefix inventory");
+    JSONObject source=new JSONObject(captured.launchInput),member=new JSONObject(captured.memberInputs.get(middlePosition));
+    check(source.getInt("schema")==3&&!source.has("kind")&&member.getString("kind").equals("routervpn-node-chain-socks-member")&&captured.identityInputs.get(middlePosition).isEmpty(),"typed SOCKS source lost its exact schema or borrowed paired identity");
     JSONObject transport=new JSONObject(member.getString("capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("socks5");
     check(transport.optString("username","").equals(custom.username)&&transport.optString("password","").equals(custom.password),"typed SOCKS source changed original credentials");
     try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(captured.launchInput,saved)){check(replay.launchInput.equals(captured.launchInput)&&replay.config.equals(captured.config),"typed SOCKS canonical replay changed original graph");}
     String changed=new JSONObject(source.toString()).put("schema",2).toString();reject(()->AndroidNodeChainCapture.reopen(changed,saved),"typed SOCKS accepted generic replay source");
    }
    var row=f.profiles.add("Original SOCKS ordered route");String serialized=Files.readString(f.rows);check(!serialized.contains("private-original-proxy-password")&&!serialized.contains("original-proxy-user")&&!serialized.contains("api_token"),"saved typed SOCKS profile duplicated credentials");
-   f.profiles.load(row.id);check(f.profiles.currentOrderedPath().modes.get(1).equals("socks5")&&f.profiles.currentOrderedPath().members.get(1).external().password.equals(custom.password),"saved typed SOCKS profile changed exact source reference");
+   f.profiles.load(row.id);check(f.profiles.currentOrderedPath().modes.get(middlePosition).equals("socks5")&&f.profiles.currentOrderedPath().members.get(middlePosition).external().password.equals(custom.password),"saved typed SOCKS profile changed exact source reference");
    var live=f.profiles.currentOrderedPath();custom.password=auth?"replacement-password":"";custom.name="Changed source";exits.save(custom);reject(live::requireCurrent,"typed SOCKS source replacement revived old proof");
   }
   System.out.println("Android ordered SOCKS source: "+(checks-before)+" checks; actual shared compiler and saved profile ownership passed");
@@ -717,6 +720,7 @@ public final class NodeChainCaptureHarness {
   if(family.equals("native-identity")){nativeIdentityReceipt(root);return;}
   if(family.equals("identity-compiler")){identityCompilerAdmission(root);return;}
   if(family.equals("socks")){socksMiddle(root);return;}
+  if(family.equals("socks-prefixes")){socksMiddle(root,true);return;}
   if(family.equals("connect")){connectMiddle(root);return;}
   if(family.equals("connect-prefixes")){connectMiddle(root,true);return;}
   if(family.equals("editor-mixed")){editorMixed(root);return;}
@@ -819,6 +823,7 @@ def run(root, work, app, classes, jar, env, imported_only=False, openvpn_only=Fa
     if not imported_only:
         subprocess.run(command + ["connect"], env=env, check=True, timeout=180)
         subprocess.run(command + ["connect-prefixes"], env=env, check=True, timeout=180)
+        subprocess.run(command + ["socks-prefixes"], env=env, check=True, timeout=180)
         subprocess.run(command + ["openvpn"], env=env, check=True, timeout=180)
         subprocess.run(command + ["hysteria-final"], env=env, check=True, timeout=180)
     node = (app / "AndroidNodeStore.java").read_text()

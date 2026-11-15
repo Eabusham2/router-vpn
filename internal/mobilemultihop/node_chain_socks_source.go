@@ -37,57 +37,50 @@ type NodeChainSOCKSSourceMetadata struct {
 	Devices         []NodeChainSOCKSDevicePolicy `json:"devices"`
 }
 
-// NewNodeChainSOCKSSource validates the two original paired nodes using the
-// existing constructor, then uses the same ordered closure compiler, physical
-// traversal, final-DNS policy and per-prefix MTU projection as shipping paths.
+// NewNodeChainSOCKSSource retains one to six original paired packet prefixes,
+// one SOCKS member, and the paired SS final. The paired constructor still
+// validates every original member and identity before any closure is composed.
 func NewNodeChainSOCKSSource(input string) (*NodeChainSOCKSSource, error) {
 	var source NodeChainSource
 	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil ||
-		source.Schema != 3 || source.Execution != "local" || len(source.Nodes) != 3 ||
-		len(source.IdentitySources) != 3 || source.IdentitySources[0] == "" ||
-		source.IdentitySources[1] != "" || source.IdentitySources[2] == "" {
+		source.Schema != 3 || source.Execution != "local" || len(source.Nodes) < 3 || len(source.Nodes) > NodeChainMaximumNodes ||
+		len(source.IdentitySources) != len(source.Nodes) {
 		return nil, nodeChainSOCKSSourceError
 	}
-	middle, err := parseNodeChainSOCKSMember(source.Nodes[1])
+	middlePosition := len(source.Nodes) - 2
+	for i, identity := range source.IdentitySources {
+		if (i == middlePosition) != (identity == "") {
+			return nil, nodeChainSOCKSSourceError
+		}
+	}
+	middle, err := parseNodeChainSOCKSMember(source.Nodes[middlePosition])
 	if err != nil {
 		return nil, err
 	}
-	paired := NodeChainSource{Schema: 1, Execution: "local",
-		Nodes:           []string{source.Nodes[0], source.Nodes[2]},
-		IdentitySources: []string{source.IdentitySources[0], source.IdentitySources[2]}}
+	paired := NodeChainSource{Schema: 1, Execution: "local"}
+	for i := range source.Nodes {
+		if i == middlePosition {
+			continue
+		}
+		paired.Nodes = append(paired.Nodes, source.Nodes[i])
+		paired.IdentitySources = append(paired.IdentitySources, source.IdentitySources[i])
+	}
 	pairJSON, err := json.Marshal(paired)
 	if err != nil {
 		return nil, nodeChainSOCKSSourceError
 	}
 	pair, err := NewNodeChain(string(pairJSON))
-	if err != nil || len(pair.nodes) != 2 || !NodeChainPrefixMode(pair.nodes[0].mode) ||
-		pair.nodes[1].mode != "shadowsocks" ||
-		middle.selection.ExitID == predecessorText(pair.nodes[0].profile, "id") ||
-		middle.selection.ExitID == predecessorText(pair.nodes[1].profile, "id") {
-		return nil, nodeChainSOCKSSourceError
-	}
-	first, err := nodeMultihopPredecessor(pair.nodes[0])
 	if err != nil {
 		return nil, nodeChainSOCKSSourceError
 	}
-	custom, err := middle.closure()
+	members, closures, err := nodeChainSOCKSMembers(pair, middle)
 	if err != nil {
 		return nil, err
 	}
-	final, err := nodeMultihopPredecessor(pair.nodes[1])
-	if err != nil {
-		return nil, nodeChainSOCKSSourceError
-	}
-	closures := []*externalPredecessor{first, custom, final}
 	for _, closure := range closures {
 		if services, _ := closure.graph["services"].([]any); len(services) != 0 {
 			return nil, nodeChainSOCKSSourceError
 		}
-	}
-	members := []nodeChainGraphMember{
-		{profile: pair.nodes[0].profile, source: pair.nodes[0].source, mode: pair.nodes[0].mode},
-		{profile: middle.selection.Profile, source: middle.source, mode: "socks5", imported: true},
-		{profile: pair.nodes[1].profile, source: pair.nodes[1].source, mode: "shadowsocks"},
 	}
 	physical, err := pair.nodes[0].PhysicalEgress()
 	if err != nil {
@@ -118,12 +111,12 @@ func NewNodeChainSOCKSSource(input string) (*NodeChainSOCKSSource, error) {
 	}
 	for position := range members {
 		var device nodeChainImportedDevicePolicy
-		if position == 1 {
+		if position == middlePosition {
 			device, err = middle.devicePolicy()
 		} else {
-			index := 0
-			if position == 2 {
-				index = 1
+			index := position
+			if position > middlePosition {
+				index--
 			}
 			var captured NodeDesktopCapture
 			captured, err = pair.nodes[index].DesktopCapture()
@@ -202,4 +195,36 @@ func (p *NodeChainSOCKSSource) ReadValidated() (string, NodeChainSOCKSSourceMeta
 	meta.MTU.Prefixes = append([]NodeChainMTUBound(nil), meta.MTU.Prefixes...)
 	meta.Devices = append([]NodeChainSOCKSDevicePolicy(nil), meta.Devices...)
 	return p.config, meta, nil
+}
+
+// Every paired prefix and final retains its own original authenticated source.
+func nodeChainSOCKSMembers(pair *NodeChain, middle *nodeChainSOCKSMember) ([]nodeChainGraphMember, []*externalPredecessor, error) {
+	if pair == nil || pair.validateCapture() != nil || len(pair.nodes) < 2 || len(pair.nodes) >= NodeChainMaximumNodes ||
+		pair.importedMiddle != nil || pair.openVPNMiddle != nil || pair.socksSource != nil || pair.connectSource != nil || middle == nil || middle.validate() != nil {
+		return nil, nil, nodeChainSOCKSSourceError
+	}
+	members := make([]nodeChainGraphMember, 0, len(pair.nodes)+1)
+	closures := make([]*externalPredecessor, 0, len(pair.nodes)+1)
+	for i, node := range pair.nodes {
+		final := i == len(pair.nodes)-1
+		if node == nil || (!final && !NodeChainPrefixMode(node.mode)) || (final && node.mode != "shadowsocks") ||
+			middle.selection.ExitID == predecessorText(node.profile, "id") {
+			return nil, nil, nodeChainSOCKSSourceError
+		}
+		if final {
+			closure, err := middle.closure()
+			if err != nil {
+				return nil, nil, err
+			}
+			members = append(members, nodeChainGraphMember{profile: middle.selection.Profile, source: middle.source, mode: middle.selection.Protocol, imported: true})
+			closures = append(closures, closure)
+		}
+		closure, err := nodeMultihopPredecessor(node)
+		if err != nil {
+			return nil, nil, err
+		}
+		members = append(members, nodeChainGraphMember{profile: node.profile, source: node.source, mode: node.mode})
+		closures = append(closures, closure)
+	}
+	return members, closures, nil
 }

@@ -14,30 +14,30 @@ import test_ios_node_chain_capture as C
 import test_ios_node_chain_launch as L
 
 TYPED=r'''
- static func setupTyped()throws->(RouterVPNModel,[String]) {
-  _ = try setup(3)
+ static func setupTyped(_ count:Int=3)throws->(RouterVPNModel,[String]) {
+  _ = try setup(count)
   let store=IOSNodeBundleStore.shared;store.records=[:]
-  let roots=try JSONSerialization.jsonObject(with:Data(LibboxTestAWGFixture(3,"off").utf8)) as! [[String:Any]]
+  let roots=try JSONSerialization.jsonObject(with:Data(LibboxTestAWGFixture(count,"off").utf8)) as! [[String:Any]]
   var bundles=try roots.map{original -> ClientBundle in
    var root=original,profiles=root["routerProfiles"] as! [[String:Any]],profile=profiles[0]
-   profile["name"]=profile["id"];profile["adguard_ipv6"]="";profile["socks_host"]="";profile["socks_port"]=0;profile["socks_username"]="";profile["socks_password"]=""
+   profile["kill_switch"]=(profile["kill_switch_policy"] as? String) != "off";profile["name"]=profile["id"];profile["adguard_ipv6"]="";profile["socks_host"]="";profile["socks_port"]=0;profile["socks_username"]="";profile["socks_password"]=""
    profiles[0]=profile;root["routerProfiles"]=profiles
    return try JSONDecoder().decode(ClientBundle.self,from:JSONSerialization.data(withJSONObject:root))
   }
   let ids=bundles.map{"rvpn-"+String($0.routerProfiles[0].nodeProofID!.prefix(16))}
   for position in bundles.indices {
    bundles[position].selectedRouterID=ids[position];bundles[position].routerProfiles[0].id=ids[position]
-   if position==2 {bundles[position].routerProfiles[0].multihopNodes=ids.enumerated().map{.init(id:$0.element,mode:$0.offset==2 ? "shadowsocks":"wg")}}
+   if position==count-1 {bundles[position].routerProfiles[0].multihopNodes=ids.enumerated().map{.init(id:$0.element,mode:$0.offset==count-1 ? "shadowsocks":"wg")}}
    bundles[position].routerProfiles[0]=try IOSConnectionProfileStore.fixtureCanonicalProfile(bundles[position].routerProfiles[0])
    try store.save(bundles[position])
   }
-  let model=RouterVPNModel();model.bundle=try stored(ids[2]);return(model,ids)
+  let model=RouterVPNModel();model.bundle=try stored(ids[count-1]);return(model,ids)
  }
 
  static func socksRoundtrip()throws {
-  for mode in ["wg","awg2-fast","awg2-strong"] {for host in ["198.51.100.76","2001:db8::76"] {for authenticated in [false,true] {
-   let(model,ids)=try setupTyped(),store=IOSNodeBundleStore.shared
-   var middle=try stored(ids[1]),profile=middle.routerProfiles[0]
+  for count in [3,4,8] {for mode in ["wg","awg2-fast","awg2-strong"] {for host in ["198.51.100.76","2001:db8::76"] {for authenticated in [false,true] {
+   let(model,ids)=try setupTyped(count),store=IOSNodeBundleStore.shared
+   var middle=try stored(ids[count-2]),profile=middle.routerProfiles[0]
    profile.nodeKind="external";profile.nodeProofID=nil;profile.routerAPI="";profile.apiToken="";profile.startLayer="off";profile.endpoint=host
    profile.homeLANAccess=false;profile.killSwitchPolicy="always";profile.dnsMode="custom";profile.dnsProtocol="tcp";profile.dnsHost="10.81.0.53";profile.dnsPort=5353
    var socks:[String:Any]=["host":host,"port":1080]
@@ -45,13 +45,13 @@ TYPED=r'''
    let original:[String:Any]=["protocol":"socks5","expected_public_ip":"203.0.113.76","socks5":socks]
    profile.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:JSONSerialization.data(withJSONObject:original))
    middle.routerProfiles=[profile];middle.profiles=[:];try store.save(middle)
-   var final=model.bundle!;final.routerProfiles[0].multihopNodes![0].mode=mode;final.routerProfiles[0].multihopNodes![1].mode="socks5";try store.save(final);model.bundle=try stored(ids.last!)
+   var final=model.bundle!;for prefix in 0..<count-2 {final.routerProfiles[0].multihopNodes![prefix].mode=mode};final.routerProfiles[0].multihopNodes![count-2].mode="socks5";try store.save(final);model.bundle=try stored(ids.last!)
    let beforeSource=try IOSNodeChainSOCKSCapture.compile(bundles:try model.iosNodeChainBundles(for:model.bundle!).map{try encoded($0)});defer{try? beforeSource.plan.close()}
    let actions=TypedProfileActions(model);actions.name="Typed SOCKS original route";actions.add()
    guard let saved=IOSConnectionProfileStore.all().first(where:{$0.id==actions.selectedID}) else{throw failure("actual typed Add callback did not persist")}
    try check("actual Add callback selects saved profile",actions.status.hasPrefix("Added "))
-   try check("typed profile stores exact three positions",saved.preferences?.multihopNodes?.map(\.mode)==[mode,"socks5","shadowsocks"] && saved.chainPolicies?.map(\.nodeID)==ids)
-   try check("typed profile retains external authority",saved.chainPolicies?[1].nodeKind=="external" && saved.chainPolicies?[1].externalProtocol=="socks5" && saved.chainPolicies?[1].nodeProofID==nil && saved.chainPolicies?[1].externalPublicIP=="203.0.113.76")
+   try check("typed profile stores every original ordered position",saved.preferences?.multihopNodes?.map(\.mode)==Array(repeating:mode,count:count-2)+["socks5","shadowsocks"] && saved.chainPolicies?.map(\.nodeID)==ids)
+   try check("typed profile retains external authority",saved.chainPolicies?[count-2].nodeKind=="external" && saved.chainPolicies?[count-2].externalProtocol=="socks5" && saved.chainPolicies?[count-2].nodeProofID==nil && saved.chainPolicies?[count-2].externalPublicIP=="203.0.113.76")
    let visible=String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self)
    try check("typed profile omits username",!visible.contains("PRIVATE-SOCKS-USER"))
    try check("typed profile omits password",!visible.contains("PRIVATE-SOCKS-PASSWORD"))
@@ -60,10 +60,10 @@ TYPED=r'''
    actions.load()
    try check("actual Load callback keeps Connect separate",actions.status.hasPrefix("Loaded ") && actions.status.contains("Connect separately") && !actions.status.contains("Older profile"))
    let captured=try model.iosNodeChainBundles(for:model.bundle!)
-   try check("typed profile loads all original independent records",captured.count==3 && captured[1].selectedRouterID==ids[1] && captured[2].selectedRouterID==ids[2])
-   try check("typed profile Load keeps literal and private credentials",try encoded(captured[1].routerProfiles[0].external!)==originalBytes && captured[1].routerProfiles[0].endpoint==host)
+   try check("typed profile loads all original independent records",captured.count==count && captured[count-2].selectedRouterID==ids[count-2] && captured[count-1].selectedRouterID==ids[count-1])
+   try check("typed profile Load keeps literal and private credentials",try encoded(captured[count-2].routerProfiles[0].external!)==originalBytes && captured[count-2].routerProfiles[0].endpoint==host)
    try check("typed profile Load keeps paired final assets",model.bundle!.profiles==originalAssets)
-   try check("typed profile Load keeps middle protection and selected TCP resolver",captured[1].routerProfiles[0].homeLANAccess==false && captured[1].routerProfiles[0].killSwitchPolicy=="always" && captured[1].routerProfiles[0].dnsProtocol=="tcp" && captured[1].routerProfiles[0].dnsHost=="10.81.0.53" && captured[1].routerProfiles[0].dnsPort==5353)
+   try check("typed profile Load keeps middle protection and selected TCP resolver",captured[count-2].routerProfiles[0].homeLANAccess==false && captured[count-2].routerProfiles[0].killSwitchPolicy=="always" && captured[count-2].routerProfiles[0].dnsProtocol=="tcp" && captured[count-2].routerProfiles[0].dnsHost=="10.81.0.53" && captured[count-2].routerProfiles[0].dnsPort==5353)
    let afterSource=try IOSNodeChainSOCKSCapture.compile(bundles:try captured.map{try encoded($0)});defer{try? afterSource.plan.close()}
    try check("typed profile Load reopens exact native source and config",afterSource.source==beforeSource.source && afterSource.config==beforeSource.config)
    let round=try IOSConnectionProfileStore.snapshot(model:model,name:saved.name,id:saved.id)
@@ -75,12 +75,12 @@ TYPED=r'''
    let beforeRaceWrites=store.writes,beforeRaceImports=model.imports
    IOSDNSRuntimePolicy.onPrepare={
     IOSDNSRuntimePolicy.onPrepare=nil
-    try! replaceRaw(ids[1]){$0.routerProfiles[0].external?.socks5?.username="relinked-user";$0.routerProfiles[0].external?.socks5?.password="relinked-valid-password"}
+    try! replaceRaw(ids[count-2]){$0.routerProfiles[0].external?.socks5?.username="relinked-user";$0.routerProfiles[0].external?.socks5?.password="relinked-valid-password"}
    }
    actions.load()
    try check("typed Load rejects private source changed during atomic preparation",!actions.status.hasPrefix("Loaded ") && store.writes==beforeRaceWrites && model.imports==beforeRaceImports)
-   try check("typed Load refusal retains newer private credential source",try stored(ids[1]).routerProfiles[0].external?.socks5?.password=="relinked-valid-password")
-   try replaceRaw(ids[1]){$0.routerProfiles[0].external?.expectedPublicIP="203.0.113.77"}
+   try check("typed Load refusal retains newer private credential source",try stored(ids[count-2]).routerProfiles[0].external?.socks5?.password=="relinked-valid-password")
+   try replaceRaw(ids[count-2]){$0.routerProfiles[0].external?.expectedPublicIP="203.0.113.77"}
    let records=store.records,writes=store.writes,imports=model.imports
    try reject("typed profile replaced middle public identity"){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
    try check("typed failed Load preserves all private records",store.records==records && store.writes==writes)
@@ -90,7 +90,7 @@ TYPED=r'''
    actions.delete()
    try check("actual Delete callback clears only saved selection",actions.selectedID==nil && actions.status=="Deleted saved connection profile.")
    try check("typed Delete removes only saved preference record",!IOSConnectionProfileStore.all().contains(where:{$0.id==saved.id}) && store.records==records && model.imports==imports)
-  }}}
+  }}}}
  }
 '''
 

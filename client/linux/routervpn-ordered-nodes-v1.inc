@@ -49,7 +49,7 @@ static gboolean linux_ordered_prefix_v1(const char *mode) {
 }
 
 static gboolean linux_ordered_imported_position_v1(const char *mode, guint position, guint count) {
-    if (g_strcmp0(mode, "http-connect") == 0 || g_strcmp0(mode, "https-connect") == 0)
+    if (g_strcmp0(mode, "socks5") == 0 || g_strcmp0(mode, "http-connect") == 0 || g_strcmp0(mode, "https-connect") == 0)
         return count >= 3 && count <= 8 && position == count - 2;
     return count == 3 && position == 1;
 }
@@ -634,7 +634,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     g_signal_connect(editor.dialog, "destroy", G_CALLBACK(linux_ordered_closed_v1), &editor);
     gtk_window_set_default_size(GTK_WINDOW(editor.dialog), 660, 480);
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(editor.dialog)); gtk_container_set_border_width(GTK_CONTAINER(box), 12);
-    GtkWidget *note = gtk_label_new("Choose the entry and each intermediate hop in order. Use paired WireGuard or AWG2 prefixes and choose Shadowsocks 2022 or unlayered Hysteria2 for the paired final. An HTTP(S) CONNECT middle follows one to six paired WireGuard or AWG2 prefixes and precedes a paired Shadowsocks 2022 final. Imported Shadowsocks 2022, SOCKS5 and OpenVPN middles require a three-node path with a Shadowsocks 2022 final. Apply retains choices; Connect proves the path separately.");
+    GtkWidget *note = gtk_label_new("Choose the entry and each intermediate hop in order. Use paired WireGuard or AWG2 prefixes and choose Shadowsocks 2022 or unlayered Hysteria2 for the paired final. A SOCKS5 or HTTP(S) CONNECT middle follows one to six paired WireGuard or AWG2 prefixes and precedes a paired Shadowsocks 2022 final. Imported Shadowsocks 2022 and OpenVPN middles require a three-node path with a Shadowsocks 2022 final. Apply retains choices; Connect proves the path separately.");
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE); gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 6);
     GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL); gtk_widget_set_size_request(scroll, -1, 190);
     editor.list = gtk_list_box_new(); gtk_container_add(GTK_CONTAINER(scroll), editor.list); gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 6);

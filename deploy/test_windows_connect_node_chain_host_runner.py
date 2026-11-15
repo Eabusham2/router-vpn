@@ -34,6 +34,7 @@ def original_receipt():
     return dict(schema=2, native=True, cases=list(G.ORIGINAL_SOCKS_CASES), typed_full_path=True,
                 native_joined=True, command_job_joined=True, remote_associations_after_retirement=0,
                 positive_application_and_selected_dns_proved=True, original_prefix_acceptance=prefix,
+                ordered_latency_samples_per_hop=50, ordered_prefix_measurements=[dict(case="wg-four-connect",nodes=4,positions=[2,3],samples=50),dict(case="wg-eight-connect",nodes=8,positions=[6,7],samples=50)],
                 target=prefix['target'], bundle_sha256=prefix['bundle_sha256'], source_sha256=prefix['source_sha256'])
 
 
@@ -192,6 +193,25 @@ class FullPathGate(unittest.TestCase):
             with self.assertRaises(ValueError):
                 G.require_verdicts(original)
 
+    def test_inherited_socks_schema_and_long_measurements_are_exact(self):
+        good=original_receipt();G.require_originals(good)
+        for value in (1,True,2.0,None,"2"):
+            broken=deepcopy(good);broken['schema']=value
+            with self.assertRaises(ValueError):G.require_originals(broken)
+        for value in (49,50.0,True,None):
+            broken=deepcopy(good);broken['ordered_latency_samples_per_hop']=value
+            with self.assertRaises(ValueError):G.require_originals(broken)
+        rows=good['ordered_prefix_measurements']
+        variants=[[],rows[:1],list(reversed(rows)),rows+[deepcopy(rows[0])]]
+        for index in range(2):
+            for field,value in [('case','foreign'),('nodes',float(rows[index]['nodes'])),('positions',[0,1]),('positions',[float(p) for p in rows[index]['positions']]),('samples',50.0),('samples',True)]:
+                changed=deepcopy(rows);changed[index][field]=value;variants.append(changed)
+            for field in rows[index]:
+                changed=deepcopy(rows);del changed[index][field];variants.append(changed)
+        for changed in variants:
+            broken=deepcopy(good);broken['ordered_prefix_measurements']=changed
+            with self.assertRaises(ValueError):G.require_originals(broken)
+
     def test_every_verdict_and_native_receipt_required_once(self):
         good = completed()
         for line in good.splitlines(True):
@@ -202,7 +222,7 @@ class FullPathGate(unittest.TestCase):
             with self.assertRaises(ValueError):
                 G.require_verdicts(good + failure)
 
-    def test_original_prefix6_and_socks8_receipts_cannot_be_substituted(self):
+    def test_original_prefix8_and_socks11_receipts_cannot_be_substituted(self):
         good = original_receipt()
         self.assertIs(G.require_originals(good), good)
         for parent, original in ((False, good), (True, good['original_prefix_acceptance'])):
@@ -248,6 +268,7 @@ class FullPathGate(unittest.TestCase):
             changed['schema'] = obsolete
             with self.subTest(schema=obsolete), self.assertRaises(ValueError):
                 G.require_originals(changed)
+
 
     def test_real_connect_peer_projection_changes_only_test_selector(self):
         values, original = G.SCOPE.peer_sources(), G.SCOPE.BASE.peer_sources()

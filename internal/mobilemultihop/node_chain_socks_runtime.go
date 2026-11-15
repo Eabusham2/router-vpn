@@ -38,7 +38,7 @@ func NewNodeChainSOCKSRuntime(source *NodeChainSOCKSSource) (*NodeChainSOCKSRunt
 	}
 	chain := &NodeChain{
 		sourceJSON: source.sourceJSON, sourceSHA: meta.SourceSHA256, config: config,
-		nodes:       []*NodeProfile{source.pair.nodes[0], nil, source.pair.nodes[1]},
+		nodes:       source.runtimeNodes(),
 		socksSource: source, proofs: meta.Proofs, dns: meta.DNS, physical: meta.Physical,
 		originalConfigSHA: source.originalConfigSHA256(), projection: source.runtimeProjection(),
 	}
@@ -52,6 +52,16 @@ func NewNodeChainSOCKSRuntime(source *NodeChainSOCKSSource) (*NodeChainSOCKSRunt
 	return &NodeChainSOCKSRuntime{source: source, chain: chain}, nil
 }
 
+// runtimeNodes preserves every original paired pointer and one empty imported
+// position. The runtime never reconstructs a same-content substitute owner.
+func (s *NodeChainSOCKSSource) runtimeNodes() []*NodeProfile {
+	if s == nil || s.pair == nil || len(s.pair.nodes) < 2 {
+		return nil
+	}
+	nodes := append([]*NodeProfile(nil), s.pair.nodes[:len(s.pair.nodes)-1]...)
+	return append(nodes, nil, s.pair.nodes[len(s.pair.nodes)-1])
+}
+
 func (c *NodeChain) validateSOCKSSource() error {
 	if c == nil || c.socksSource == nil || c.importedMiddle != nil || c.openVPNMiddle != nil || c.connectSource != nil {
 		return nodeChainSOCKSSourceError
@@ -62,9 +72,13 @@ func (c *NodeChain) validateSOCKSSource() error {
 		c.config != config || c.originalConfigSHA != source.originalConfigSHA256() ||
 		c.projection != source.runtimeProjection() || c.dns != meta.DNS ||
 		!reflect.DeepEqual(c.proofs, meta.Proofs) || !reflect.DeepEqual(c.physical, meta.Physical) ||
-		len(c.nodes) != 3 || c.nodes[0] != source.pair.nodes[0] ||
-		c.nodes[1] != nil || c.nodes[2] != source.pair.nodes[1] {
+		len(c.nodes) != len(source.pair.nodes)+1 {
 		return nodeChainSOCKSSourceError
+	}
+	for i, node := range source.runtimeNodes() {
+		if c.nodes[i] != node {
+			return nodeChainSOCKSSourceError
+		}
 	}
 	return nil
 }
@@ -86,6 +100,9 @@ func (c *NodeChain) observeSOCKSMiddleContext(ctx context.Context, engine NodeCh
 	if err := owned.ObserveSOCKSMiddleContext(ctx, c.socksSource); err != nil {
 		return err
 	}
+	if err := c.validateCapture(); err != nil {
+		return err
+	}
 	return ctx.Err()
 }
 
@@ -93,13 +110,13 @@ func (c *NodeChain) hasImportedMiddle() bool {
 	return c != nil && (c.importedMiddle != nil || c.openVPNMiddle != nil || c.socksSource != nil || c.connectSource != nil)
 }
 
-// The CONNECT source alone admits a variable-length packet prefix. Other
+// Typed SOCKS and CONNECT sources admit a retained packet prefix. Other
 // imported families retain their existing single-middle position.
 func (c *NodeChain) importedMiddlePosition() int {
 	if c == nil || !c.hasImportedMiddle() {
 		return -1
 	}
-	if c.connectSource != nil {
+	if c.connectSource != nil || c.socksSource != nil {
 		return len(c.nodes) - 2
 	}
 	return 1

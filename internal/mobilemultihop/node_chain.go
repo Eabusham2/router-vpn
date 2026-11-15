@@ -304,7 +304,7 @@ func (c *NodeChain) validateCapture() error {
 	}
 	for position, node := range c.nodes {
 		proof := c.proofs[position]
-		if (position == 1 && c.socksSource != nil) || (c.connectSource != nil && position == len(c.nodes)-2) {
+		if (c.socksSource != nil || c.connectSource != nil) && position == len(c.nodes)-2 {
 			continue // The exact source, nil middle and complete proof inventory were validated above.
 		}
 		if position == 1 && c.openVPNMiddle != nil {

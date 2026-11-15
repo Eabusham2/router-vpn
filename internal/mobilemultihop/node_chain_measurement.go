@@ -62,6 +62,9 @@ func (c *NodeChain) NewHopMeasurementContext(ctx context.Context, owner NodeChai
 	if c.connectSource != nil {
 		return hopmeasure.NewOrderedCONNECTPrefixContext(ctx, engine, hops)
 	}
+	if c.socksSource != nil {
+		return hopmeasure.NewOrderedSOCKSPrefixContext(ctx, engine, hops)
+	}
 	if c.hasImportedMiddle() {
 		return hopmeasure.NewOrderedImportedMiddleContext(ctx, engine, hops)
 	}

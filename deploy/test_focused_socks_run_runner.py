@@ -22,6 +22,13 @@ def events(case,control=None):
     rows.extend(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX,Test=x) for x in (leaf,root))
     rows.append(dict(Action="fail" if control else "pass",Package=V.BASE.LIBBOX))
     return rows
+def prefix_rows(case=None,refusal=False):
+    names=V.PREFIX_POLICY_CASES if case is None else V.prefix_names(case,refusal)
+    rows=[dict(Action="start",Package=V.BASE.LIBBOX),dict(Action="run",Package=V.BASE.LIBBOX,Test=names[0])]
+    for name in names[1:]:
+        rows.extend((dict(Action="run",Package=V.BASE.LIBBOX,Test=name),dict(Action="pass",Package=V.BASE.LIBBOX,Test=name)))
+    rows.extend((dict(Action="pass",Package=V.BASE.LIBBOX,Test=names[0]),dict(Action="pass",Package=V.BASE.LIBBOX)))
+    return rows
 def fifty_events(mode,control=None):
     names=V.FIFTY.names(mode);rows=[dict(Action="start",Package=V.BASE.LIBBOX)]
     rows.extend(dict(Action="run",Package=V.BASE.LIBBOX,Test=x) for x in names)
@@ -141,6 +148,26 @@ class Composition:
             raw=("".join("=== RUN   "+x+"\n" for x in V.FIFTY.PROOF_CONTROL_NAMES)+
                  "".join(V.FIFTY.PROOF_WITNESS+"\n--- FAIL: "+x+" (0.01s)\n" for x in V.FIFTY.PROOF_CONTROL_NAMES[1:])+
                  "--- FAIL: "+V.FIFTY.PROOF_ROOT+" (0.02s)\nFAIL\n").encode();status=1
+        elif name.startswith("prefix-"):
+            assert cwd==self.roles["mobile"][0] and Path(env["ROUTERVPN_SOCKS_RUN_PEER"])==self.images[0]
+            assert "ROUTERVPN_SOCKS_RUN_CASE" not in env and "ROUTERVPN_SOCKS_FIFTY_CASE" not in env
+            assert env["GODEBUG"]=="x509usefallbackroots=1"
+            if name=="prefix-ipv6-policy":
+                assert "ROUTERVPN_SOCKS_PREFIX_CASE" not in env and "ROUTERVPN_SOCKS_PREFIX_REFUSAL" not in env
+                raw=encoded(prefix_rows())
+            else:
+                refusal=name.startswith("prefix-refusal-")
+                selected="ROUTERVPN_SOCKS_PREFIX_REFUSAL" if refusal else "ROUTERVPN_SOCKS_PREFIX_CASE"
+                excluded="ROUTERVPN_SOCKS_PREFIX_CASE" if refusal else "ROUTERVPN_SOCKS_PREFIX_REFUSAL"
+                assert excluded not in env
+                case=env[selected];V.prefix_names(case,refusal)
+                assert name==("prefix-refusal-" if refusal else "prefix-run-")+case.replace("/","-")
+                raw=encoded(prefix_rows(case,refusal))
+            if self.fault==("prefix-terminal",name):raw=encoded([json.loads(row) for row in raw.splitlines()][:-1])
+            if self.fault==("prefix-failed",name):status=1
+            if self.fault==("prefix-skipped",name):raw=raw.replace(b'"pass"',b'"skip"')
+            if self.fault=="prefix-image-changed":self.images[0].write_bytes(b"foreign prefix executable")
+            if self.fault=="prefix-source-changed":(cwd/"original.go").write_text("foreign prefix source")
         elif name.startswith("fifty-"):
             mode=env["ROUTERVPN_SOCKS_FIFTY_CASE"];assert mode in V.FIFTY.MODES
             assert cwd==self.roles["mobile"][0] and Path(env["ROUTERVPN_SOCKS_RUN_PEER"])==self.images[0]
@@ -205,6 +232,8 @@ class Composition:
         log.write_bytes(raw)
         timed_out=(self.fault=="timeout" and name=="run-wg") or (self.fault=="udp-timeout" and name=="udp-dns-reuse-positive")
         unjoined=(self.fault=="unjoined" and name=="run-wg") or (self.fault=="udp-unjoined" and name==V.UDP_REUSE.CONTROLS[0]["name"])
+        timed_out=timed_out or self.fault==("prefix-timeout",name)
+        unjoined=unjoined or self.fault==("prefix-unjoined",name)
         return status,timed_out,not unjoined
     def run(self):
         with patch.object(V.BASE.COMMON,"git",side_effect=self.git),patch.object(V.BASE.CORE,"snapshot",side_effect=self.snapshot),\
@@ -226,8 +255,8 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
         self.assertEqual(len(V.CONTROLS),4)
         with tempfile.TemporaryDirectory() as directory:
             c=Composition(Path(directory));receipt=c.run()
-            self.assertEqual(len(c.calls),37)
-            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,*([600]*5),40,600,30,600,40,600,*([190]*8),*([600]*4),*([190]*3),*([600]*5)])
+            self.assertEqual(len(c.calls),61)
+            self.assertEqual([x[4] for x in c.calls],[60,600,600,600,600,100,*([600]*5),40,600,30,600,40,600,*([190]*8),*([600]*4),*([190]*3),*([600]*5),*([190]*23),100])
             self.assertEqual([x[0] for x in c.calls[6:11]],["udp-dns-reuse-positive",*(control["name"] for control in V.UDP_REUSE.CONTROLS)])
             self.assertEqual(c.original,[V.ORIGINAL,V.UDP_REUSE.NAMES,V.REFERENCE.NAMES,(V.REFERENCE.IDLE_ROOT,),V.FIFTY.PROOF_NAMES])
             self.assertEqual([x["case"] for x in receipt["case_records"]],list(V.CASES))
@@ -253,6 +282,13 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
             self.assertFalse(receipt["public_native_admission"]);self.assertFalse(receipt["installed_native_accepted"])
             self.assertFalse(receipt["native_mtu_continuation_accepted"])
             self.assertTrue(receipt["native_mtu_constructor_accepted"])
+            self.assertEqual([x[0] for x in c.calls[37:]],
+                ["prefix-run-"+case.replace("/","-") for case in V.PREFIX_CASES]+
+                ["prefix-refusal-"+case for case in V.PREFIX_REFUSALS]+["prefix-ipv6-policy"])
+            self.assertEqual([row["case"] for row in receipt["prefix_records"]],list(V.PREFIX_CASES))
+            self.assertEqual([row["case"] for row in receipt["prefix_refusal_records"]],list(V.PREFIX_REFUSALS))
+            self.assertTrue(receipt["prefix_ipv6_policy"]["accepted"])
+            self.assertTrue(receipt["complete_socks_prefix_native_run_accepted"])
             self.assertEqual(json.loads((c.output/"receipt.json").read_text()),receipt)
             for name,command,_,_,_ in c.calls:
                 if name.endswith("-build") or name in {v["name"] for v in V.CONTROLS}:
@@ -265,6 +301,40 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
                     self.assertIn("-race",command);self.assertIn("-p=1",command);self.assertIn("-timeout=30s",command)
                 if name.startswith("udp-dns-reuse-"):
                     self.assertIn("-race",command);self.assertIn("-p=1",command);self.assertIn("-timeout=30s",command)
+    def test_complete_prefix_inventory_and_retained_selection_are_exact(self):
+        self.assertEqual((len(V.PREFIX_CASES),len(set(V.PREFIX_CASES)),len(V.PREFIX_REFUSALS)),(18,18,5))
+        for mode in ("wg","awg2-fast","awg2-strong"):
+            for count in (2,6):
+                self.assertEqual({case.rsplit("/",1)[1] for case in V.PREFIX_CASES
+                    if case.startswith(f"{mode}/{count}/")},
+                    {str(group) for group in range((count+2)//2)})
+        self.assertEqual(V.PREFIX_REFUSALS,V.CASES[3:])
+        for refusal,inventory in ((False,V.PREFIX_CASES),(True,V.PREFIX_REFUSALS)):
+            for case in inventory:
+                rows=prefix_rows(case,refusal)
+                self.assertTrue(V.prefix_events(encoded(rows),0,case,refusal)["accepted"])
+                for bad in (rows[:-1],rows+rows,list(reversed(rows))):
+                    with self.assertRaises(ValueError):V.prefix_events(encoded(bad),0,case,refusal)
+                for status in (1,-9,124):
+                    with self.assertRaises(ValueError):V.prefix_events(encoded(rows),status,case,refusal)
+                env=V.prefix_environment({"ROUTERVPN_SOCKS_RUN_CASE":"old","ROUTERVPN_SOCKS_PREFIX_CASE":"old",
+                    "ROUTERVPN_SOCKS_PREFIX_REFUSAL":"old","ROUTERVPN_SOCKS_FIFTY_CASE":"old"},"/original/peer",case,refusal)
+                self.assertNotIn("ROUTERVPN_SOCKS_RUN_CASE",env);self.assertNotIn("ROUTERVPN_SOCKS_FIFTY_CASE",env)
+                self.assertEqual(env["ROUTERVPN_SOCKS_PREFIX_REFUSAL" if refusal else "ROUTERVPN_SOCKS_PREFIX_CASE"],case)
+                self.assertNotIn("ROUTERVPN_SOCKS_PREFIX_CASE" if refusal else "ROUTERVPN_SOCKS_PREFIX_REFUSAL",env)
+            with self.assertRaises(ValueError):V.prefix_names("foreign",refusal)
+    def test_every_complete_prefix_phase_requires_joined_original_terminal(self):
+        phases=["prefix-run-"+case.replace("/","-") for case in V.PREFIX_CASES]
+        phases += ["prefix-refusal-"+case for case in V.PREFIX_REFUSALS]+["prefix-ipv6-policy"]
+        faults=[("prefix-terminal",phase) for phase in phases]
+        faults += [(fault,phases[0]) for fault in ("prefix-failed","prefix-skipped","prefix-timeout","prefix-unjoined")]
+        faults += ["prefix-image-changed","prefix-source-changed"]
+        for fault in faults:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
+                c=Composition(Path(directory),fault)
+                with self.assertRaises((ValueError,RuntimeError)):c.run()
+                self.assertFalse((c.output/"receipt.json").exists())
+                self.assertEqual(json.loads((c.output/"progress.json").read_text())["status"],"failed")
     def test_udp_controls_require_original_case_witness_and_exact_anchor(self):
         self.assertEqual(len(V.UDP_REUSE.NAMES),11);self.assertEqual(len(V.UDP_REUSE.CONTROLS),4)
         for control in V.UDP_REUSE.CONTROLS:
@@ -415,19 +485,21 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
 
     def test_both_template_maps_and_original_peer_source_are_bound(self):
         mtu_faults=tuple("mtu-"+str(i)+"-"+kind for i in range(len(V.MTU_PROJECTIONS)) for kind in ("map","bytes","symlink"))
-        for fault in (None,"mobile-map","peer-map","mobile-bytes","peer-bytes","old-peer","mobile-closure","owner-closure",*mtu_faults):
+        prefix_faults=tuple("prefix-"+str(i)+"-"+kind for i in range(len(V.PREFIX_PROJECTIONS)) for kind in ("map","bytes","symlink"))
+        for fault in (None,"mobile-map","peer-map","mobile-bytes","peer-bytes","old-peer","mobile-closure","owner-closure",*mtu_faults,*prefix_faults):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:
                 work=Path(directory);source=work/"candidate";mobile=work/"mobile";owner=work/"owner";mx=work/"mx";ox=work/"ox"
                 for p in (source,mobile,owner,mx,ox):p.mkdir()
                 for template,projection,root in ((V.RUN_TEMPLATE,V.RUN_PROJECTION,mobile),(V.PEER_TEMPLATE,V.PEER_PROJECTION,owner),
                     ("mobile/desktop/node_chain_imported_test.go.tmpl","protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go",owner),
                     *((original,projected,mobile) for original,projected in V.MTU_PROJECTIONS),
+                    *(("mobile/chain/"+original,projected,mobile) for original,projected in V.PREFIX_PROJECTIONS.items()),
                     *(("mobile/chain/"+original,projected,mobile) for original,projected in V.FIFTY.PROJECTIONS)):
                     a,b=source/template,root/projection;a.parent.mkdir(parents=True,exist_ok=True);b.parent.mkdir(parents=True,exist_ok=True)
                     a.write_text("original "+template);b.write_bytes(a.read_bytes())
                 mp=types.SimpleNamespace(TEMPLATES={Path(V.RUN_TEMPLATE).name:V.RUN_PROJECTION,
                     **{Path(original).name:projected for original,projected in V.MTU_PROJECTIONS},
-                    **dict(V.FIFTY.PROJECTIONS)})
+                    **dict(V.FIFTY.PROJECTIONS),**V.PREFIX_PROJECTIONS})
                 dp=types.SimpleNamespace(PEER_TEMPLATES={Path(V.PEER_TEMPLATE).name:V.PEER_PROJECTION})
                 if fault=="mobile-map":mp.TEMPLATES.clear()
                 elif fault=="peer-map":dp.PEER_TEMPLATES.clear()
@@ -440,6 +512,12 @@ class EncryptedSOCKSRunValidator(unittest.TestCase):
                     elif kind=="bytes":(mobile/projected).write_text("foreign")
                     else:
                         (mobile/projected).unlink();(mobile/projected).symlink_to(source/original)
+                if fault and fault.startswith("prefix-"):
+                    _,number,kind=fault.split("-");original,projected=tuple(V.PREFIX_PROJECTIONS.items())[int(number)]
+                    if kind=="map":mp.TEMPLATES.pop(original)
+                    elif kind=="bytes":(mobile/projected).write_text("foreign")
+                    else:
+                        (mobile/projected).unlink();(mobile/projected).symlink_to(source/"mobile/chain"/original)
                 def checked_mobile(*args):
                     if fault=="mobile-closure":raise ValueError("mobile closure changed")
                     return {"mobile":"original"}

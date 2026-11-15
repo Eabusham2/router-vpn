@@ -84,7 +84,7 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 22 {
 		return true, errors.New("ordered native test lost actual mode catalog")
 	}
-	if len(modes) >= 2 && ((len(modes) == 2 && modes[1] == "socks5") || modes[len(modes)-1] == "http-connect" || modes[len(modes)-1] == "https-connect") {
+	if len(modes) >= 2 && (modes[len(modes)-1] == "socks5" || modes[len(modes)-1] == "http-connect" || modes[len(modes)-1] == "https-connect") {
 		middle, found := a.profileByIDLocked(control.MultihopNodes[len(control.MultihopNodes)-2].ID)
 		public := publicProfileFor(middle)
 		if !found || public.External == nil || !public.External.OrderedMiddle {
@@ -213,7 +213,7 @@ func macOSNodeChainNativeController(owned *ownedDesktopController) (bool, error)
 		}
 		a.mu.Lock()
 		middlePosition := 1
-		if desktopNodeChainHasCONNECT(control.MultihopNodes) {
+		if desktopNodeChainHasCONNECT(control.MultihopNodes) || desktopNodeChainHasSOCKS(control.MultihopNodes) {
 			middlePosition = len(control.MultihopNodes) - 2
 		}
 		middle := &a.profiles.Profiles[middlePosition]
@@ -508,6 +508,13 @@ func macOSNodeChainNativeCase(t *testing.T, scenario string) {
 			afterFifty := peer.observe(t, "stats")
 			if len(beforeFifty.Prefixes) != len(peer.requests) || len(afterFifty.Prefixes) != len(peer.requests) || beforeFifty.Middle == nil || afterFifty.Middle == nil || (len(peer.requests) == 1 && afterFifty.Prefixes[0].ProofQueries < beforeFifty.Prefixes[0].ProofQueries+50) || afterFifty.Middle.PublicQueries < beforeFifty.Middle.PublicQueries+50 || afterFifty.Final.RouterQueries < beforeFifty.Final.RouterQueries+50 || afterFifty.Final.DirectQueries != 0 {
 				t.Fatal("ordered fifty omitted original encrypted prefix responses", beforeFifty, afterFifty)
+			}
+			if peer.middleSOCKS {
+				if len(peer.requests) == 1 {
+					t.Log(macOSNodeChainSOCKSFiftyReceipt)
+				} else {
+					t.Log(macOSNodeChainSOCKSLongFiftyReceipt)
+				}
 			}
 			if peer.middleCONNECT != "" {
 				if len(peer.requests) == 1 {

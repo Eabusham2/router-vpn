@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Installed Windows typed CONNECT acceptance after original prefix6 and SOCKS8.
+"""Installed Windows typed CONNECT acceptance after original prefix8 and SOCKS11.
 
 The full-path gate requires an encrypted packet prefix, authenticated TCP CONNECT, final SS UoT-v2,
 selected DNS and authenticated exit proof, complete measurement and joined native
@@ -42,7 +42,7 @@ ROOT_TEST = "TestWindowsInstalledCONNECTNodeChain"
 ORIGINAL_PREFIX_CASES = ("wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel")
 PREFIX_OFF_CASES = ("wg-off-save", "wg-off-cancel")
 REQUIRED_PREFIX_CASES = ORIGINAL_PREFIX_CASES + PREFIX_OFF_CASES
-ORIGINAL_SOCKS_CASES = ("wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off")
+ORIGINAL_SOCKS_CASES = ("wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off", "wg-four-connect", "wg-eight-connect")
 CASES = ("http-wg-connect", "http-awg-fast-connect", "http-awg-strong-connect", "https-wg-connect", "https-awg-fast-connect", "https-awg-strong-connect", "https-wg-wrong-middle-key", "http-wg-wrong-middle-public", "https-wg-tls-name", "https-wg-tls-trust", "http-wg-final-dns-failure", "https-wg-final-node-failure", "https-wg-final-key", "https-wg-middle-source", "http-wg-connect-off", "https-wg-connect-off")
 CASES += ("http-wg-four-connect", "https-wg-eight-connect")
 ORDERED_PREFIX_MEASUREMENTS = [{"case": "http-wg-four-connect", "nodes": 4, "positions": [2, 3], "samples": 50}, {"case": "https-wg-eight-connect", "nodes": 8, "positions": [6, 7], "samples": 50}]
@@ -154,12 +154,21 @@ def owned_bindings(module, owner, *, workspace=False):
 
 def require_originals(receipt):
     if tuple(PREFIX_GATE.PROTECTED_CASES) != ORIGINAL_PREFIX_CASES or tuple(PREFIX_GATE.OFF_CASES) != PREFIX_OFF_CASES or tuple(PREFIX_GATE.CASES) != REQUIRED_PREFIX_CASES or tuple(SOCKS_GATE.CASES) != ORIGINAL_SOCKS_CASES:
-        raise ValueError("Original Windows prefix6/SOCKS8 authoritative inventory changed")
+        raise ValueError("Original Windows prefix8/SOCKS11 authoritative inventory changed")
     if (not isinstance(receipt, dict) or type(receipt.get("schema")) is not int or receipt.get("schema") != 2 or receipt.get("native") is not True or
             tuple(receipt.get("cases", ())) != ORIGINAL_SOCKS_CASES or receipt.get("typed_full_path") is not True or
             receipt.get("native_joined") is not True or receipt.get("command_job_joined") is not True or
             receipt.get("remote_associations_after_retirement") != 0 or receipt.get("positive_application_and_selected_dns_proved") is not True):
-        raise ValueError("Original installed SOCKS8 acceptance is missing or incomplete")
+        raise ValueError("Original installed SOCKS11 acceptance is missing or incomplete")
+    expected = [dict(case="wg-four-connect", nodes=4, positions=[2,3], samples=50),
+                dict(case="wg-eight-connect", nodes=8, positions=[6,7], samples=50)]
+    rows = receipt.get("ordered_prefix_measurements")
+    if (type(receipt.get("ordered_latency_samples_per_hop")) is not int or receipt["ordered_latency_samples_per_hop"] != 50 or
+            type(rows) is not list or rows != expected or any(type(row) is not dict or set(row) != set(wanted) or
+                type(row.get("nodes")) is not int or type(row.get("samples")) is not int or
+                type(row.get("positions")) is not list or any(type(position) is not int for position in row["positions"])
+                for row,wanted in zip(rows,expected))):
+        raise ValueError("Original SOCKS eleven-case receipt lost its exact long-path fifty measurements")
     prefix = receipt.get("original_prefix_acceptance")
     if (not isinstance(prefix, dict) or prefix.get("schema") != 1 or prefix.get("native") is not True or
             tuple(prefix.get("cases", ())) != REQUIRED_PREFIX_CASES or prefix.get("samples_per_case") != 50 or
@@ -182,7 +191,7 @@ def execute(source, bundle, go="go", *, env=None):
 
 def execute_typed(source, bundle, go, env, before, original_socks_receipt, owner):
     if sources(source)[1] != before:
-        raise ValueError("Typed full-path source changed during original prefix6/SOCKS8 preservation")
+        raise ValueError("Typed full-path source changed during original prefix8/SOCKS11 preservation")
     compiler, captured, architecture = CONTROLLER.NATIVE.selected_compiler(go, ROOT, dict(os.environ if env is None else env))
     captured["CGO_ENABLED"] = "1"
     target = "windows/" + architecture
@@ -192,7 +201,7 @@ def execute_typed(source, bundle, go, env, before, original_socks_receipt, owner
     require_originals(original_socks_receipt)
     if (original_socks_receipt["target"] != target or original_socks_receipt["bundle_sha256"] != original_manifest or
             original_socks_receipt["source_sha256"] != original["policy_sha256"]):
-        raise ValueError("CONNECT acceptance changed the original prefix6/SOCKS8 bundle")
+        raise ValueError("CONNECT acceptance changed the original prefix8/SOCKS11 bundle")
     race = ["-race"] if architecture == "amd64" else []
     run = CONTROLLER.NATIVE.run
     with owner.workspace(prefix="routervpn-windows-connect-") as temporary:

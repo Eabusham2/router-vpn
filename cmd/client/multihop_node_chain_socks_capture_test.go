@@ -18,8 +18,24 @@ import (
 
 func desktopSOCKSCaptureFixture(t *testing.T, mode, authentication, layer string) (*app, []common.MultihopNodeSelection) {
 	t.Helper()
-	a, nodes := desktopNodeChainCaptureFixture(t, 3)
-	installOrderedAWGAssets(t, a, nodes, []string{mode, "wg", "shadowsocks"}, layer)
+	return desktopSOCKSPrefixCaptureFixture(t, 1, mode, authentication, layer)
+}
+
+func desktopSOCKSPrefixCaptureFixture(t *testing.T, prefixes int, mode, authentication, layer string) (*app, []common.MultihopNodeSelection) {
+	t.Helper()
+	if prefixes < 1 || prefixes > 6 {
+		t.Fatal("invalid SOCKS fixture prefix count")
+	}
+	a, nodes := desktopNodeChainCaptureFixture(t, prefixes+2)
+	modes := make([]string, prefixes+2)
+	for i := range modes {
+		modes[i] = "wg"
+		if i < prefixes {
+			modes[i] = mode
+		}
+	}
+	modes[prefixes+1] = "shadowsocks"
+	installOrderedAWGAssets(t, a, nodes, modes, layer)
 	q := createRequestFor("socks5")
 	if authentication == "none" {
 		q.Username, q.Password = "", ""
@@ -28,16 +44,16 @@ func desktopSOCKSCaptureFixture(t *testing.T, mode, authentication, layer string
 	if err != nil {
 		t.Fatal(err)
 	}
-	middle.ID, middle.Name, middle.StartLayer = nodes[1].ID, "Original literal SOCKS middle", "off"
+	middle.ID, middle.Name, middle.StartLayer = nodes[prefixes].ID, "Original literal SOCKS middle", "off"
 	middle.MTUPolicy, middle.ManualMTU = "manual", 1380
 	middle.DNSMode, middle.DNSProtocol, middle.DNSHost, middle.DNSPort = "custom", "tcp", "9.9.9.9", 5353
 	middle.KillSwitchPolicy, middle.IPv6Mode, middle.HomeLANAccess = "always", "off", false
 	if err := common.NormalizeRouterProfile(&middle); err != nil {
 		t.Fatal(err)
 	}
-	a.profiles.Profiles[1] = middle
-	nodes[1].Mode = "socks5"
-	a.profiles.Profiles[2].MultihopNodes = append([]common.MultihopNodeSelection(nil), nodes...)
+	a.profiles.Profiles[prefixes] = middle
+	nodes[prefixes].Mode = "socks5"
+	a.profiles.Profiles[prefixes+1].MultihopNodes = append([]common.MultihopNodeSelection(nil), nodes...)
 	// This original imported source owns no paired asset directory.
 	if err := os.RemoveAll(filepath.Join(clientRoot(a), "generated", middle.ID)); err != nil {
 		t.Fatal(err)
@@ -80,7 +96,7 @@ func TestDesktopNodeChainSOCKSCaptureOriginalSources(t *testing.T) {
 					t.Fatal("typed source lost original paired identity or lent it to SOCKS")
 				}
 				var middle struct {
-					Config string `json:"config"`
+					Config  string `json:"config"`
 					Capture string `json:"capture"`
 				}
 				var captured struct {
@@ -249,7 +265,10 @@ func TestDesktopNodeChainSOCKSCaptureRejectsUnsupportedSource(t *testing.T) {
 			}
 			calls := 0
 			if _, err := captureDesktopNodeChainSOCKS(context.Background(), clientRoot(a), control, a.profiles.Profiles, nodes, execution,
-				func(context.Context, string) ([]netip.Addr, error) { calls++; return nil, errors.New("forbidden lookup") }); err == nil || calls != 0 {
+				func(context.Context, string) ([]netip.Addr, error) {
+					calls++
+					return nil, errors.New("forbidden lookup")
+				}); err == nil || calls != 0 {
 				t.Fatal("unsupported SOCKS graph reached source capture or physical lookup", err, calls)
 			}
 		})

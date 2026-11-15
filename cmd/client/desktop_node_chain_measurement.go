@@ -117,7 +117,7 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 		imported := desktopNodeChainOpenVPNMiddle(p, members[i].Mode) || desktopNodeChainImported(p, members[i].Mode) || desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode)
 		if imported {
 			middle, bounded := 1, len(members) == 3
-			if desktopNodeChainCONNECTMiddle(p, members[i].Mode) {
+			if desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode) {
 				middle = len(members) - 2
 				bounded = len(members) >= 3 && len(members) <= 8
 			}
@@ -138,7 +138,7 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 		if imported {
 			label += " to the public benchmark"
 			latencyProof = label + " through the original imported SS2022 transport"
-			if desktopNodeChainCONNECTMiddle(p, members[i].Mode) {
+			if desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode) {
 				latencyProof = label + " through the original " + members[i].Mode + " transport"
 			}
 			speedProof = label + " transferred exact public benchmark bytes"

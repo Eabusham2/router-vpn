@@ -57,7 +57,7 @@ final class LibboxRouterNodeChainSOCKS {
 }
 final class IOSNodeChainSOCKSCapture:@unchecked Sendable {
  struct Member{let id:String}
- let members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]
+ let members:[Member]
  let plan=LibboxRouterNodeChainSOCKS(),config="exact-preparation"
  private let lock=NSLock()
  var runGate:DispatchSemaphore?,healthGate:DispatchSemaphore?,healthEntered=DispatchSemaphore(value:0)
@@ -66,7 +66,7 @@ final class IOSNodeChainSOCKSCapture:@unchecked Sendable {
  var bindHook:(()->Void)?
  private var closed=false,cancelled=false,nativeReceipt=false,ran=false,reserved=false
  private(set) var server:LibboxCommandServer?
- init(){plan.owner=self}
+ init(_ count:Int=3){members=(0..<count).map{Member(id:$0==count-1 ? "final":$0==count-2 ? "middle":"entry-\($0)")};plan.owner=self}
  func requireCurrent()throws{lock.lock();let good = !closed;lock.unlock();if !good{throw failure("closed capture")}}
  func bindNative(_ server:LibboxCommandServer)throws{
   bindHook?()
@@ -100,7 +100,8 @@ final class IOSNodeChainSOCKSCapture:@unchecked Sendable {
  func nativeClosed()->Bool{lock.lock();defer{lock.unlock()};Trace.shared.add("native-receipt");return closed && nativeReceipt}
 }
 final class MTU:@unchecked Sendable {
- func request(operation:String,request:String,session:String)->Data?{nil}
+ var status:Data?
+ func request(operation:String,request:String,session:String)->Data?{status}
  var proofObservationToken:UUID?=UUID(),isChanging=false,optimizerRunning=false,failDrain=0,activateFailure=false,activated=false
  func observeNodeChainExecutionMeasurement(_ token:UUID,_ action:()throws->Void)throws->Bool{guard !optimizerRunning,proofObservationToken==token else{return false};try action();return true}
  func drainForNodeChainExecutionCleanup()throws{Trace.shared.add("mtu-drain");if failDrain>0{failDrain-=1;throw failure("optimizer join pending")}}
@@ -282,6 +283,17 @@ extension RouterVPNNodeChainSOCKSHost { func fixtureHealth(){checkHealth()}; fun
    try RouterVPNNodeChainSOCKSHost.requireAvailable();check(server.released,"retirement original retry failed")
   }
   check(scenarios==21,"original host scenario inventory changed")
+  for count in [4,8] {scenario()
+   Factory.shared.reset();let capture=IOSNodeChainSOCKSCapture(count),request=RouterVPNOrderedLatencyRequest(operation:"ordered-latency-info",request:String(repeating:"a",count:32),session:"",owner:String(repeating:"b",count:32),lease:"",source:"",config:"",node:"")
+   let (host,server,platform)=try start(capture);_ = run(host);try host.activateMTU()
+   platform.mtu.status=try JSONSerialization.data(withJSONObject:["session_id":UUID().uuidString])
+   let response=try host.latencyInfo(request,session:UUID().uuidString)!,value=try JSONSerialization.jsonObject(with:response) as! [String:Any],nodes=value["nodes"] as! [[String:Any]]
+   check(nodes.count==count && nodes.enumerated().allSatisfy{$0.element["position"] as? Int==$0.offset && $0.element["node_id"] as? String==capture.members[$0.offset].id},"long SOCKS host lost original member inventory")
+   check(nodes.enumerated().allSatisfy{$0.element["kind"] as? String==($0.offset==count-2 ? "public-path":"private-node")},"long SOCKS public position must be penultimate")
+   check(server.capture===capture && capture.plan.owner===capture && platform.mtu.activated,"long SOCKS MTU replaced original native owner")
+   try host.close();check(server.released && platform.resets==1 && host.progress()==nil,"long SOCKS joined cleanup lost original owner")
+  }
+  check(scenarios==23,"extended host scenario inventory changed")
   print("PASS Apple typed SOCKS host: \(scenarios) ownership scenarios; native/OS boundaries doubled")
  }
 }
@@ -298,6 +310,7 @@ def main():
             return subprocess.run([str(binary)],capture_output=True,text=True,timeout=35)
         result=run(text);assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip())
         for name,before,after,witness in (
+          ('public-position','position == capture.members.count - 2 ? "public-path" : "private-node"','position == 1 ? "public-path" : "private-node"','long SOCKS public position must be penultimate'),
           ('shared-before-box','            if let failure { throw failure }','            _ = failure','pending original cleanup closed native owner'),
           ('native-receipt','            guard capture.plan.nativeClosed() else {','            guard capture.plan.nativeClosed() || true else {','missing original instance receipt accepted'),
           ('construction-join','let pending = constructing || factoryEntered || runEntered || observations != 0','let pending = runEntered || observations != 0','bound construction prematurely joined'),

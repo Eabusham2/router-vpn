@@ -9,8 +9,26 @@ import (
 
 func nodeChainSOCKSFixture(t *testing.T, mode, layer, authentication string) NodeChainSource {
 	t.Helper()
-	nodes := nodeChainModeFixtureNodes(t, []string{mode, "wg", "shadowsocks"}, []string{layer, "", layer})
-	identities := nodeChainModeFixtureNodes(t, []string{"wg", "wg", "wg"}, []string{"", "", ""})
+	return nodeChainSOCKSPrefixFixture(t, 1, mode, layer, authentication)
+}
+
+func nodeChainSOCKSPrefixFixture(t *testing.T, prefixes int, mode, layer, authentication string) NodeChainSource {
+	t.Helper()
+	if prefixes < 1 || prefixes > 6 {
+		t.Fatal("fixture prefix count outside original chain bound")
+	}
+	count := prefixes + 2
+	modes, layers, identityModes := make([]string, count), make([]string, count), make([]string, count)
+	for i := range modes {
+		modes[i], identityModes[i] = "wg", "wg"
+		if i < prefixes {
+			modes[i] = mode
+			layers[i] = layer
+		}
+	}
+	modes[count-1], layers[count-1] = "shadowsocks", layer
+	nodes := nodeChainModeFixtureNodes(t, modes, layers)
+	identities := nodeChainModeFixtureNodes(t, identityModes, make([]string, count))
 	graph, capture := externalTestFixture(t, "socks5", "")
 	profile := capture["profile"].(map[string]any)
 	profile["dns_mode"], profile["kill_switch_policy"] = "home", "always"
@@ -28,10 +46,16 @@ func nodeChainSOCKSFixture(t *testing.T, mode, layer, authentication string) Nod
 		t.Fatal("original SOCKS source capture", err)
 	}
 	source := nodeChainFixtureSource(t, nodes)
-	source.Schema, source.Nodes[1] = 3, member
-	source.IdentitySources = []string{identities[0].inputs.Files, "", identities[2].inputs.Files}
-	if mode == "wg" {
-		source.IdentitySources[0] = nodes[0].inputs.Files
+	source.Schema, source.Nodes[prefixes] = 3, member
+	source.IdentitySources = make([]string, count)
+	for i := range nodes {
+		if i == prefixes {
+			continue
+		}
+		source.IdentitySources[i] = identities[i].inputs.Files
+		if i < prefixes && mode == "wg" {
+			source.IdentitySources[i] = nodes[i].inputs.Files
+		}
 	}
 	return source
 }

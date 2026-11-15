@@ -53,6 +53,8 @@ type socksRunReply struct {
  FinalAuth uint64 `json:"final_auth"`
  HeldProofs uint64 `json:"held_proofs"`
  Associations int `json:"associations"`
+ Samples []uint64 `json:"samples,omitempty"`
+ MiddleAuth uint32 `json:"middle_auth,omitempty"`
 }
 type socksRunPeer struct{
  command *exec.Cmd
@@ -67,7 +69,11 @@ type socksRunPeer struct{
  original socksRunReply
 }
 func socksRunStartPeer(t *testing.T,mode,fault string)*socksRunPeer{
+ t.Helper();return socksRunStartPeerPrefixes(t,mode,fault,1)
+}
+func socksRunStartPeerPrefixes(t *testing.T,mode,fault string,prefixes int)*socksRunPeer{
  t.Helper()
+ if prefixes<1||prefixes>6{t.Fatal("uncaptured SOCKS prefix count") }
  image:=os.Getenv("ROUTERVPN_SOCKS_RUN_PEER")
  if !filepath.IsAbs(image){t.Fatal("original separately compiled peer image missing")}
  // Cover the original proof (40s), measurement (90s), drain (5s), and
@@ -94,7 +100,7 @@ func socksRunStartPeer(t *testing.T,mode,fault string)*socksRunPeer{
  _=writer.Close()
  go func(){p.waitErr=p.command.Wait();close(p.done)}()
  t.Cleanup(func(){if err:=p.close();err!=nil{t.Error("original encrypted peer did not join",err)}})
- if err=json.NewEncoder(input).Encode(map[string]any{"schema":1,"mode":mode,"fault":fault});err!=nil{t.Fatal(err)}
+ if err=json.NewEncoder(input).Encode(map[string]any{"schema":1,"mode":mode,"fault":fault,"prefixes":prefixes});err!=nil{t.Fatal(err)}
  p.original=p.reply(t)
  address,err:=netip.ParseAddrPort(p.original.Address)
  if err!=nil||!address.Addr().Is4()||address.Addr()!=netip.MustParseAddr("127.0.0.1")||address.Port()==0||
@@ -182,7 +188,7 @@ func socksRunNative(t *testing.T,p *socksRunPeer)(*socksBridgeNativeFixture,*soc
  if os.Getenv("GODEBUG")!="x509usefallbackroots=1"{t.Fatal("isolated TLS root process contract missing")}
  x509.SetFallbackRoots(roots)
  f:=socksBridgeNativeReserved(t,owner)
- _,meta,err:=owner.source.ReadValidated();if err!=nil||len(meta.Physical)!=1||len(meta.Proofs)!=3{t.Fatal("complete typed source missing",err)}
+ _,meta,err:=owner.source.ReadValidated();if err!=nil||len(meta.Physical)!=1||len(meta.Proofs)<3||len(meta.Proofs)>mobilemultihop.NodeChainMaximumNodes{t.Fatal("complete typed source missing",err)}
  physical:=meta.Physical[0]
  lower:=&socksRunPhysical{virtual:net.JoinHostPort(physical.Host,strconv.Itoa(physical.Port)),original:p.original.Address}
  ends,ok:=service.FromContext[adapter.EndpointRegistry](f.server.ctx).(*endpoint.Registry);if !ok{t.Fatal("original endpoint registry missing")}
@@ -203,16 +209,44 @@ func socksRunNative(t *testing.T,p *socksRunPeer)(*socksBridgeNativeFixture,*soc
   }
   return &socksRunEndpoint{native},nil
  }
- endpoint.Register[option.WireGuardEndpointOptions](ends,C.TypeWireGuard,func(ctx context.Context,r adapter.Router,l log.ContextLogger,tag string,o option.WireGuardEndpointOptions)(adapter.Endpoint,error){
-  ctx,err:=contextFor(ctx,tag);if err!=nil{return nil,err}
-  if o.Detour!=""{return nil,errors.New("first endpoint acquired a detour")}
-  o.Detour="captured-socks-run-physical";return capture(WG.NewEndpoint(ctx,r,l,tag,o))
- })
- endpoint.Register[AWG.Options](ends,mobilemultihop.AmneziaType,func(ctx context.Context,r adapter.Router,l log.ContextLogger,tag string,o AWG.Options)(adapter.Endpoint,error){
-  ctx,err:=contextFor(ctx,tag);if err!=nil{return nil,err}
-  if o.Detour!=""{return nil,errors.New("first AWG endpoint acquired a detour")}
-  o.Detour="captured-socks-run-physical";return capture(AWG.NewEndpoint(ctx,r,l,tag,o))
- })
+	endpoint.Register[option.WireGuardEndpointOptions](ends, C.TypeWireGuard, func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
+		if tag != meta.Proofs[0].Tag {
+			for i := 1; i < len(meta.Proofs)-2; i++ {
+				if tag == meta.Proofs[i].Tag && o.Detour == meta.Proofs[i-1].Tag {
+					return WG.NewEndpoint(ctx, r, l, tag, o)
+				}
+			}
+			return nil, errors.New("uncaptured additional WG prefix")
+		}
+		ctx, err := contextFor(ctx, tag)
+		if err != nil {
+			return nil, err
+		}
+		if o.Detour != "" {
+			return nil, errors.New("first endpoint acquired a detour")
+		}
+		o.Detour = "captured-socks-run-physical"
+		return capture(WG.NewEndpoint(ctx, r, l, tag, o))
+	})
+	endpoint.Register[AWG.Options](ends, mobilemultihop.AmneziaType, func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o AWG.Options) (adapter.Endpoint, error) {
+		if tag != meta.Proofs[0].Tag {
+			for i := 1; i < len(meta.Proofs)-2; i++ {
+				if tag == meta.Proofs[i].Tag && o.Detour == meta.Proofs[i-1].Tag {
+					return AWG.NewEndpoint(ctx, r, l, tag, o)
+				}
+			}
+			return nil, errors.New("uncaptured additional AWG prefix")
+		}
+		ctx, err := contextFor(ctx, tag)
+		if err != nil {
+			return nil, err
+		}
+		if o.Detour != "" {
+			return nil, errors.New("first AWG endpoint acquired a detour")
+		}
+		o.Detour = "captured-socks-run-physical"
+		return capture(AWG.NewEndpoint(ctx, r, l, tag, o))
+	})
  // Replace the object-only resolver boundary with the original UDP transport:
  // all selected DNS packets now traverse final SS, SOCKS UDP and WG/AWG.
  DNST.RegisterUDP(resolvers)

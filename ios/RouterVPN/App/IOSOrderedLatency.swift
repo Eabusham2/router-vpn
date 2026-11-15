@@ -20,7 +20,7 @@ import Combine
         defer { try? captured.close() }
         switch captured {
         case .socks(let original):
-            guard path[1].mode == "socks5", Data(original.source.utf8) == active else { throw CancellationError() }
+            guard path.count >= 3, path[path.count - 2].mode == "socks5", Data(original.source.utf8) == active else { throw CancellationError() }
             source = original.plan.sourceSHA256(); config = original.plan.configSHA256(); ids = original.members.map(\.id)
         case .connect(let original):
             guard path.count >= 3, ["http-connect", "https-connect"].contains(path[path.count - 2].mode), Data(original.source.utf8) == active else { throw CancellationError() }

@@ -18,9 +18,23 @@ class TypedInstalledGate(unittest.TestCase):
             lines.append('    desktop_node_chain_darwin_native_test.go:656: '+G.BASE.public_status_receipt(case))
         if case in G.MEASUREMENT_CASES:
             lines.append('    desktop_node_chain_darwin_native_test.go:657: '+G.BASE.MEASUREMENT_RECEIPT)
+        if case in G.MEASUREMENT_CASES:
+            lines.append('    desktop_node_chain_socks_darwin_native_test.go:658: '+(G.LONG_FIFTY_RECEIPT if case in G.LONG_CASES else G.FIFTY_RECEIPT))
         lines += ['    desktop_node_chain_darwin_native_test.go:570: actual sealed Darwin ordered host verified '+case+': original native transaction and intended proof boundary, complete captured identities, stopped acknowledgment, PF and utun retirement, controller join',
                   '--- PASS: '+G.TEST+' (2.00s)', '    --- PASS: '+G.TEST+'/'+case+' (2.00s)', 'PASS']
         return '\n'.join(lines)+'\n'
+
+    def test_fifty_receipts_are_exact_and_bound_to_original_case(self):
+        for case in G.CASES:
+            valid=self.completed(case)
+            expected=G.LONG_FIFTY_RECEIPT if case in G.LONG_CASES else G.FIFTY_RECEIPT
+            line='    desktop_node_chain_socks_darwin_native_test.go:658: '+expected
+            if case in G.MEASUREMENT_CASES:
+                faults=(valid.replace(line,'',1),valid.replace(line,line+'\n'+line,1),valid.replace(expected,G.FIFTY_RECEIPT if case in G.LONG_CASES else G.LONG_FIFTY_RECEIPT),valid.replace(expected,expected+' foreign'))
+            else:
+                faults=(valid+line+'\n',valid+line.replace(expected,G.LONG_FIFTY_RECEIPT)+'\n')
+            for changed in faults:
+                with self.subTest(case=case),self.assertRaises(ValueError):G.check_verdict(changed,case)
 
     def authority(self, fail=False):
         root=G.AUTHORITY_TEST
@@ -37,9 +51,9 @@ class TypedInstalledGate(unittest.TestCase):
     def test_original_and_typed_inventory(self):
         self.assertEqual(G.case_inventory(), G.CASES)
         self.assertEqual(len(G.BASE.case_inventory()),37)
-        self.assertEqual(len(G.CASES),8)
+        self.assertEqual(len(G.CASES),10)
         self.assertTrue(set(G.BASE.CASES).isdisjoint(G.CASES))
-        self.assertEqual(len(G.AUTHORITY_CASES),4)
+        self.assertEqual(len(G.AUTHORITY_CASES),6)
         self.assertTrue(all((ROOT/name).is_file() for name in G.SOURCES))
 
     def test_each_complete_native_verdict(self):

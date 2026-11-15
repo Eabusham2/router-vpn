@@ -276,7 +276,8 @@ class InstalledNodeChainHostGate(unittest.TestCase):
     def test_typed_socks_requires_exact_native_cases_and_joined_associations(self):
         expected = ('node-chain-socks-wg-connect', 'node-chain-socks-awg-fast-connect', 'node-chain-socks-awg-strong-connect',
             'node-chain-socks-wg-wrong-middle-key', 'node-chain-socks-wg-wrong-middle-public',
-            'node-chain-socks-wg-final-dns-failure', 'node-chain-socks-wg-final-node-failure', 'node-chain-socks-wg-middle-source')
+            'node-chain-socks-wg-final-dns-failure', 'node-chain-socks-wg-final-node-failure', 'node-chain-socks-wg-middle-source',
+    'node-chain-socks-wg-four-connect', 'node-chain-socks-wg-eight-connect')
         self.assertEqual(G.NODE_CHAIN_SOCKS_HOST_CASES, expected)
         self.assertEqual(G.CASES[:-len(G.EXTERNAL_ALL_OFF_CASES)][-len(expected)-len(G.NODE_CHAIN_CONNECT_HOST_CASES):-len(G.NODE_CHAIN_CONNECT_HOST_CASES)], expected)
         self.assertFalse(set(expected) & set(G.NODE_CHAIN_HOST_CASES))
@@ -296,6 +297,17 @@ class InstalledNodeChainHostGate(unittest.TestCase):
         self.assertIn('a.nativeMultihopConnectOwned(w, r, driver)',bridge)
         self.assertIn('!nativeNodeChainSOCKSPlatformSupported()',bridge)
         self.assertIn('!middle.External.OrderedMiddle',bridge)
+
+    def test_typed_socks_fifty_receipts_cannot_be_omitted_or_borrowed(self):
+        for case in G.NODE_CHAIN_SOCKS_HOST_CASES:
+            valid=InstalledLinuxHostVerdict().completed((case,))
+            marker=G.SOCKS_LONG_FIFTY_RECEIPT if case in G.NODE_CHAIN_SOCKS_LONG_CASES else G.SOCKS_FIFTY_RECEIPT
+            if case in G.NODE_CHAIN_SOCKS_FIFTY_CASES:
+                line=next(line for line in valid.splitlines(True) if marker in line)
+                faults=(valid.replace(line,'',1),valid+line,valid.replace(marker,G.SOCKS_FIFTY_RECEIPT if case in G.NODE_CHAIN_SOCKS_LONG_CASES else G.SOCKS_LONG_FIFTY_RECEIPT),valid.replace(marker,marker+' foreign'))
+            else: faults=(valid+'    native_test.go:41: '+marker+'\n', valid+'    native_test.go:41: '+G.SOCKS_LONG_FIFTY_RECEIPT+'\n')
+            for changed in faults:
+                with self.subTest(case=case),self.assertRaises(ValueError):G.check_verdict(changed,case)
 
     def test_typed_connect_requires_both_protocols_original_ciphers_and_joined_streams(self):
         expected = tuple('node-chain-connect-' + protocol + '-' + mode + '-connect'
@@ -396,7 +408,7 @@ class InstalledNodeChainHostGate(unittest.TestCase):
                 '3-nodes', '4-nodes', 'awg-fast-wg-3-nodes', 'wg-awg-strong-3-nodes',
                 'awg-strong-awg-fast-3-nodes', 'wg-awg-fast-awg-strong-4-nodes',
                 'awg-fast-awg-strong-wg-4-nodes', 'awg-strong-wg-awg-fast-4-nodes')),
-            G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT, *(G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg2-fast', 'awg2-strong')),
+            G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT, *(G.NODE_CHAIN_SOCKS_HOST_AUTHORITY_ROOT + '/' + name for name in ('wg', 'awg2-fast', 'awg2-strong', 'wg-four', 'wg-eight')),
             G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT, *(G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT + '/' + protocol + '/' + mode for protocol in ('http', 'https') for mode in ('wg', 'awg2-fast', 'awg2-strong')),
             *(G.NODE_CHAIN_CONNECT_HOST_AUTHORITY_ROOT+'/'+name for name in ('http/wg-four','https/wg-eight')),
             G.NODE_CHAIN_IMPORTED_HOST_AUTHORITY_ROOT,
@@ -634,6 +646,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:34: verified installed host ordered independent prefixes and final: ' + case for case in cases if case in (*G.NODE_CHAIN_HOST_CASES, *G.NODE_CHAIN_SOCKS_HOST_CASES, *G.NODE_CHAIN_CONNECT_HOST_CASES) and case not in G.SAVED_PREFIX_HOST_CASES),
                           *('    native_test.go:36: verified installed host closed selected prefix fifty samples final unopened native DOWN and explicit decision: ' + case for case in cases if case in G.SAVED_PREFIX_HOST_CASES),
                           *('    native_test.go:38: verified installed host typed SOCKS association joined: ' + case for case in cases if case in G.NODE_CHAIN_SOCKS_HOST_CASES),
+                          *('    native_test.go:41: '+(G.SOCKS_LONG_FIFTY_RECEIPT if case in G.NODE_CHAIN_SOCKS_LONG_CASES else G.SOCKS_FIFTY_RECEIPT) for case in cases if case in G.NODE_CHAIN_SOCKS_FIFTY_CASES),
                           *('    native_test.go:40: verified installed Linux public SOCKS /api/multihop/connect: ' + case for case in cases if case in G.NODE_CHAIN_SOCKS_HOST_CASES),
                           *('    native_test.go:39: verified installed host typed CONNECT UoT2 streams joined: ' + case for case in cases if case in G.NODE_CHAIN_CONNECT_HOST_CASES),
                           *('    native_test.go:40: verified installed host public CONNECT route and capability: ' + case for case in cases if case in G.NODE_CHAIN_CONNECT_HOST_CASES),
@@ -1555,7 +1568,7 @@ class InstalledLinuxWarmReuse(unittest.TestCase):
 
 
 class InstalledCONNECTLongEnvelope(unittest.TestCase):
-    CASES = ('node-chain-connect-http-wg-four-connect', 'node-chain-connect-https-wg-eight-connect')
+    CASES = ('node-chain-connect-http-wg-four-connect', 'node-chain-connect-https-wg-eight-connect', 'node-chain-socks-wg-four-connect', 'node-chain-socks-wg-eight-connect')
 
     def test_only_exact_additional_cases_receive_outer_and_namespace_envelopes(self):
         for case in (*G.CASES, *G.REVERSE_CASES, '', 'node-chain-connect-http-wg-five-connect', 'node-chain-connect-https-wg-eight-wrong-middle-key'):
@@ -1596,18 +1609,22 @@ import("testing";"time")
 func TestCapturedEnvelope(t *testing.T){
  old:=linuxCONNECTInstalledBudgets{65*time.Second,75*time.Second,85*time.Second,115*time.Second,120*time.Second}
  long:=linuxCONNECTInstalledBudgets{210*time.Second,220*time.Second,230*time.Second,240*time.Second,245*time.Second}
- for _,s:=range []string{"node-chain-connect-http-wg-four-connect","node-chain-connect-https-wg-eight-connect"}{if linuxCONNECTInstalledBudget(s)!=long{t.Fatal("original long envelope changed",s)}}
- for _,s:=range []string{"","node-chain-connect-http-wg-connect","node-chain-connect-https-wg-connect","node-chain-connect-http-wg-four-wrong-middle-key","node-chain-connect-https-wg-eight-connect-off","node-chain-connect-http-wg-eight-connect","node-chain-connect-https-wg-four-connect"}{if linuxCONNECTInstalledBudget(s)!=old{t.Fatal("old or foreign envelope changed",s)}}
+ for _,s:=range []string{"node-chain-connect-http-wg-four-connect","node-chain-connect-https-wg-eight-connect","node-chain-socks-wg-four-connect","node-chain-socks-wg-eight-connect"}{if linuxCONNECTInstalledBudget(s)!=long{t.Fatal("original long envelope changed",s)}}
+ for _,s:=range []string{"","node-chain-connect-http-wg-connect","node-chain-connect-https-wg-connect","node-chain-connect-http-wg-four-wrong-middle-key","node-chain-connect-https-wg-eight-connect-off","node-chain-connect-http-wg-eight-connect","node-chain-connect-https-wg-four-connect","node-chain-socks-wg-connect","node-chain-socks-wg-four-wrong-middle-key","node-chain-socks-wg-eight-connect-off","node-chain-socks-awg-fast-four-connect","node-chain-socks-wg-six-connect"}{if linuxCONNECTInstalledBudget(s)!=old{t.Fatal("old or foreign envelope changed",s)}}
 }
 '''
         with tempfile.TemporaryDirectory(prefix='installed-connect-envelope-') as directory:
             work=Path(directory);(work/'go.mod').write_text('module envelope\n\ngo 1.25\n');(work/'envelope_test.go').write_text(test)
-            environment=dict(os.environ,GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='',GOMAXPROCS='1')
+            environment=dict(os.environ,GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='-p=1',GOMAXPROCS='1')
             def execute(value):
                 (work/'envelope.go').write_text('package envelope\nimport "time"\n'+value)
                 return subprocess.run([compiler,'test','-count=1','-timeout=10s','-v','.'],cwd=work,env=environment,capture_output=True,text=True,timeout=45)
             positive=execute(body)
             self.assertEqual(positive.returncode,0,positive.stdout+positive.stderr)
+            for name in ('node-chain-socks-wg-four-connect','node-chain-socks-wg-eight-connect'):
+                self.assertEqual(body.count('"'+name+'"'),1)
+                result=execute(body.replace('"'+name+'"','"'+name+'-foreign"',1));output=result.stdout+result.stderr
+                self.assertEqual(result.returncode,1,output);self.assertIn('original long envelope changed',output);self.assertNotIn('build failed',output)
             for current,old in ((210,65),(220,75),(230,85),(240,115),(245,120)):
                 anchor=str(current)+' * time.Second';self.assertEqual(body.count(anchor),1)
                 result=execute(body.replace(anchor,str(old)+' * time.Second',1));output=result.stdout+result.stderr

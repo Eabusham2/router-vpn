@@ -232,7 +232,7 @@ static int model_only(void) {
 }
 
 static void connect_model_only(void) {
-    const char *protocols[]={"http-connect","https-connect","openvpn"}, *prefixes[]={"wg","awg2-fast","awg2-strong"};
+    const char *protocols[]={"http-connect","https-connect","openvpn","socks5"}, *prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint p=0;p<G_N_ELEMENTS(protocols);p++)for(guint prefix=0;prefix<G_N_ELEMENTS(prefixes);prefix++){
         for(guint count=3;count<=(p==2?3:8);count++){
         guint middle_index=count-2;
@@ -252,7 +252,7 @@ static void connect_model_only(void) {
         JsonNode *catalog_root=json_node_new(JSON_NODE_OBJECT);json_node_take_object(catalog_root,store);
         LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
         check(selection&&linux_ordered_current_v1(selection,store),"CONNECT source model refused original typed graph");
-        const char *title=p==0?"HTTP CONNECT":p==1?"HTTPS CONNECT":"OpenVPN";check(strcmp(linux_ordered_mode_name_v1(protocols[p]),title)==0,"CONNECT model concealed exact transport title");
+        const char *title=p==0?"HTTP CONNECT":p==1?"HTTPS CONNECT":p==2?"OpenVPN":"SOCKS5";check(strcmp(linux_ordered_mode_name_v1(protocols[p]),title)==0,"CONNECT model concealed exact transport title");
         LinuxOrderedEditorV1 editor={.catalog=catalog_root,.control="exit",.modes=g_ptr_array_new_with_free_func(g_free)};
         for(guint i=0;i<middle_index;i++)g_ptr_array_add(editor.modes,g_strdup(prefixes[(prefix+i)%G_N_ELEMENTS(prefixes)]));g_ptr_array_add(editor.modes,g_strdup(protocols[p]));
         check(linux_ordered_editor_final_allowed_v1(&editor,"shadowsocks"),"CONNECT final chooser refused original paired final");
@@ -274,10 +274,10 @@ static void connect_model_only(void) {
         json_object_set_string_member(last,"mode","hysteria2");check(!linux_ordered_rows_v1(nodes,"exit"),"CONNECT source model granted unsupported final");json_object_set_string_member(last,"mode","shadowsocks");
         if(count>3){
             JsonObject *typed=json_array_get_object_element(nodes,middle_index);
-            const char *bounded[]={"shadowsocks","socks5","openvpn"};
+            const char *bounded[]={"shadowsocks","openvpn"};
             for(guint j=0;j<G_N_ELEMENTS(bounded);j++){
                 json_object_set_string_member(typed,"mode",bounded[j]);
-                check(!linux_ordered_rows_v1(nodes,"exit"),"non-CONNECT imported family retained exact three-node bound");
+                check(!linux_ordered_rows_v1(nodes,"exit"),"SS/OpenVPN imported family retained exact three-node bound");
             }
             json_object_set_string_member(typed,"mode",protocols[p]);
         }
@@ -345,7 +345,7 @@ int main(int argc,char **argv) {
     json_object_set_string_member(socks_entry,"mode","socks5");check(!linux_ordered_rows_v1(owned->selection->nodes,"exit"),"SOCKS middle became physical entry");
     json_object_set_string_member(socks_entry,"mode",socks_entry_mode);g_free(socks_entry_mode);
     g_free(socks_saved);
-    const char *connect_protocols[]={"http-connect","https-connect","openvpn"}, *connect_prefixes[]={"wg","awg2-fast","awg2-strong"};
+    const char *connect_protocols[]={"http-connect","https-connect","openvpn","socks5"}, *connect_prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint protocol_index=0;protocol_index<G_N_ELEMENTS(connect_protocols);protocol_index++)for(guint prefix_index=0;prefix_index<G_N_ELEMENTS(connect_prefixes);prefix_index++){
         for(connect_editor_count=3;connect_editor_count<=(protocol_index==2?3:8);connect_editor_count++){
         connect_editor_protocol=connect_protocols[protocol_index];connect_editor_prefix=connect_prefixes[prefix_index];

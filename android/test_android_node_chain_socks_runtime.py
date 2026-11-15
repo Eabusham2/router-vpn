@@ -19,12 +19,12 @@ APP,NATIVE=R.APP,R.NATIVE
 SOURCES=dict(R.SOURCES)
 SOURCES.pop(APP+'AndroidNodeChainSOCKSCapture.java')
 SOURCES[NATIVE+'CommandServer.java']=SOURCES[NATIVE+'CommandServer.java'].replace('public void start(){}','public boolean typed,bound;public void start(){if(typed&&!bound)throw new IllegalStateException("typed server started before binding");}')
-SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('selected.add(i==count-1?finalMode:prefixMode);','selected.add(i==count-1?finalMode:i==1?"socks5":prefixMode);')
+SOURCES[APP+'AndroidNodeStore.java']=SOURCES[APP+'AndroidNodeStore.java'].replace('selected.add(i==count-1?finalMode:prefixMode);','selected.add(i==count-1?finalMode:i==count-2?"socks5":prefixMode);')
 SOURCES[APP+'AndroidNodeChainCapture.java']=r'''package com.eabusham.routervpn;final class AndroidNodeChainCapture {
  static final int MAX_INPUT=40*1024*1024;static final String SESSION_FILE="routervpn-node-chain.json";
  final AndroidNodeStore.ChainCapture source;final io.nekohasekai.libbox.RouterNodeChain plan=null;final AndroidNodeChainSOCKSCapture socks;final String sourceSHA256="a".repeat(64);final String configSHA256;final String config,launchInput;final boolean strict;final AndroidNodeChainCONNECTCapture connect=null;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source)throws Exception{
-  this.source=source;strict=source.strict;java.util.List<String> nodes=java.util.List.of("original-first","private-socks-credentials","original-final"),ids=java.util.List.of("first-paired-identity","","final-paired-identity");
+  this.source=source;strict=source.strict;java.util.List<String> nodes=new java.util.ArrayList<>(),ids=new java.util.ArrayList<>();for(int i=0;i<source.members.size();i++){nodes.add("original-member-"+i);ids.add(i==source.members.size()-2?"":"original-paired-identity-"+i);}
   String input=new org.json.JSONObject().put("schema",3).put("execution","local").put("nodes",new org.json.JSONArray(nodes)).put("identity_sources",new org.json.JSONArray(ids)).toString();
   socks=AndroidNodeChainSOCKSCapture.compile(input,nodes,ids);config=socks.config;configSHA256=socks.configSHA256;launchInput=socks.source;
  }
@@ -48,8 +48,9 @@ SOURCES[NATIVE+'RouterNodeChainSOCKS.java']=r'''package io.nekohasekai.libbox;pu
 }'''
 SOURCES[NATIVE+'Libbox.java']=SOURCES[NATIVE+'Libbox.java'].replace('throw new IllegalStateException("No typed measurement in ordinary host fixture");','if(!plan.healthy()||plan.server!=server)throw new IllegalStateException("unproved typed measurement");plan.hopCalls++;return new RouterHopMeasurement();').replace('throw new IllegalStateException("No typed MTU in ordinary host fixture");','if(!plan.healthy()||plan.server!=server)throw new IllegalStateException("unproved typed MTU");plan.mtuCalls++;plan.mtuPlatform=platform;return new RouterMTU();')[:-1]+'''public static RouterNodeChainSOCKS newRouterNodeChainSOCKS(String input){return new RouterNodeChainSOCKS(input);}}'''
 HARNESS=R.HARNESS[:R.HARNESS.index(' static void success()')].replace('check(done.await(5,TimeUnit.SECONDS),"ordered callback did not finish");','boolean finished=done.await(5,TimeUnit.SECONDS);check(RouterNodeChainSOCKS.latest==null||RouterNodeChainSOCKS.latest.factories==1,"typed factory was bypassed");check(finished||RouterNodeChainSOCKS.latest.bound,"typed native construction was not bound");check(finished,"ordered callback did not finish");').replace('public final class OrderedRuntimeTest','public final class TypedSOCKSHostTest').replace('RouterNodeChain.configured=null','RouterNodeChainSOCKS.configured=null').replace('value.capture.plan.failCloses=0;','value.capture.socks.plan.failClose=false;value.capture.socks.plan.missingReceipt=false;')+r'''
- static void success()throws Exception{for(String prefix:List.of("wg","awg2-fast","awg2-strong"))try(Fixture f=new Fixture(3,prefix,"shadowsocks")){
+ static void success()throws Exception{for(int count:List.of(3,4,8))for(String prefix:List.of("wg","awg2-fast","awg2-strong"))try(Fixture f=new Fixture(count,prefix,"shadowsocks")){
   f.connected();AndroidNodeChainSession owner=f.owner();RouterNodeChainSOCKS plan=owner.capture.socks.plan;CommandServer server=(CommandServer)get(f.service,"commandServer");
+  check(new org.json.JSONObject(plan.input).getJSONArray("nodes").length()==count&&owner.source.modes.get(count-2).equals("socks5")&&owner.source.modes.get(count-1).equals("shadowsocks"),"typed host lost captured long source inventory");
   check(plan.factories==1&&plan.binds==1&&plan.runs==1&&plan.server==server&&server.typed,"typed source did not own factory, bind and proof");
   check(owner.capture.plan==null&&plan.hopCalls==1&&plan.mtuCalls==1&&plan.mtuPlatform instanceof AndroidNodeChainMTUPlatform,"typed measurement or MTU borrowed generic native authority");
   check(Files.readString(owner.directory.toPath().resolve(AndroidNodeChainCapture.SESSION_FILE)).equals(plan.source()),"typed private source was replaced by generic launch");

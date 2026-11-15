@@ -305,7 +305,7 @@ function global:Get-RouterVPNOrderedModeTitle {
 
 function global:Test-RouterVPNOrderedImportedPosition {
     param([string]$Mode,[int]$Position,[int]$Count)
-    if($Mode-cin@('http-connect','https-connect')){return $Count-ge3-and$Count-le8-and$Position-eq($Count-2)}
+    if($Mode-cin@('socks5','http-connect','https-connect')){return $Count-ge3-and$Count-le8-and$Position-eq($Count-2)}
     return $Count-eq3-and$Position-eq1
 }
 
@@ -317,7 +317,7 @@ function global:Copy-RouterVPNOrderedNodes {
     for($i=0;$i-lt$Nodes.Count;$i++){
         $id=Get-RouterVPNOrderedValue $Nodes[$i] 'id';$mode=Get-RouterVPNOrderedValue $Nodes[$i] 'mode'
         if($id-isnot[string]-or$id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or-not$seen.Add($id)){throw 'Ordered nodes require distinct linked node IDs.'}
-        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode)-and-not((Test-RouterVPNOrderedImportedPosition $mode $i $Nodes.Count)-and$mode-cin@('shadowsocks','socks5','http-connect','https-connect','openvpn')-and(Get-RouterVPNOrderedValue $Nodes[-1] 'mode')-ceq'shadowsocks'))-or($i-eq$Nodes.Count-1-and-not(Test-RouterVPNOrderedFinalMode $mode))){throw 'Choose paired WireGuard or AmneziaWG prefixes and a paired Shadowsocks 2022 or unlayered Hysteria2 exit. An imported CONNECT node follows one to six paired prefixes and precedes the Shadowsocks 2022 exit. Other imported middles require three nodes.'}
+        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode)-and-not((Test-RouterVPNOrderedImportedPosition $mode $i $Nodes.Count)-and$mode-cin@('shadowsocks','socks5','http-connect','https-connect','openvpn')-and(Get-RouterVPNOrderedValue $Nodes[-1] 'mode')-ceq'shadowsocks'))-or($i-eq$Nodes.Count-1-and-not(Test-RouterVPNOrderedFinalMode $mode))){throw 'Choose paired WireGuard or AmneziaWG prefixes and a paired Shadowsocks 2022 or unlayered Hysteria2 exit. An imported SOCKS5 or CONNECT node follows one to six paired prefixes and precedes the Shadowsocks 2022 exit. Other imported middles require three nodes.'}
         [void]$copy.Add([pscustomobject]@{id=$id;mode=$mode})
     }
     if([string]::IsNullOrEmpty($ControlID)-or$copy[$copy.Count-1].id-cne$ControlID){throw 'The final ordered node must be the selected exit node.'}

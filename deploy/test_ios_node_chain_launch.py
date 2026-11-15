@@ -141,12 +141,16 @@ TESTS = r'''
   catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}
  }
  static func run()async throws {
-  do {
-   reset();let nodes=try sources(3,false,"",true),model=RouterVPNModel(),manager=NETunnelProviderManager(),selected=nodes.last!
+  for count in [3,4,8] {
+   reset();var nodes=try sources(count),custom=try sources(3,false,"",true)[1]
+   custom.selectedRouterID="custom-socks";custom.routerProfiles[0].id=custom.selectedRouterID;nodes[count-2]=custom
+   nodes[count-1].routerProfiles[0].multihopNodes=nodes.enumerated().map{.init(id:$0.element.selectedRouterID,mode:$0.offset==count-2 ? "socks5":$0.offset==count-1 ? "shadowsocks":"wg")}
+   let model=RouterVPNModel(),manager=NETunnelProviderManager(),selected=nodes.last!
    model.bundle=selected
    for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
    let capture=try model.captureIOSOrderedRoute(selected);defer{try? capture.close()}
    let selection=try IOSRuntimeSelector.selectNodeChain(capture)
+   try check("typed SOCKS launch retains original final protocol",selection.rawProfileID=="shadowsocks" && capture.members.count==count)
    _ = try await model.launch(manager,selected,selection)
    let configuration=(manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
    try check("typed SOCKS reaches one original manager and separate provider source",NETunnelProviderManager.starts==1 && configuration[IOSNodeChainSOCKSCapture.providerKey] as? String==capture.launchInput && configuration[IOSNodeChainProviderCapture.key]==nil)
@@ -335,6 +339,14 @@ def main():
         failed = subprocess.run([str(binary), str(compiler)], capture_output=True, text=True, timeout=180)
         assert failed.returncode != 0 and 'HY2 runtime selector preserves exact final mode' in failed.stdout + failed.stderr, failed.stdout + failed.stderr
         print('Rejected ordered app launch defect mutation: hysteria-final-raw-mode')
+        needle='rawProfileID: original.members[original.members.count - 1].mode,'
+        assert original.count(needle)==2
+        mutation.write_text(original.replace(needle,'rawProfileID: original.members[2].mode,',1))
+        subprocess.run(mutated_command + [str(code), '-o', str(binary)], check=True, timeout=120)
+        failed=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
+        assert failed.returncode==1 and 'typed SOCKS launch retains original final protocol' in failed.stdout+failed.stderr,failed.stdout+failed.stderr
+        print('Rejected ordered app launch defect mutation: socks-original-final')
+
 
 
 if __name__ == '__main__':

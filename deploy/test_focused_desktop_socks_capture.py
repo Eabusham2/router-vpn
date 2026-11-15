@@ -29,7 +29,12 @@ CORE.PACKAGE = "router-vpn/cmd/client"
 SUITE = "desktop-socks-capture"
 PREFIX = "TestDesktopNodeChainSOCKSCapture"
 SOURCE = "cmd/client/multihop_node_chain_socks_capture.go"
-SOURCE_PATHS = (SOURCE, "cmd/client/multihop_node_chain_socks_capture_test.go")
+SOURCE_PATHS = (SOURCE, "cmd/client/multihop_node_chain_socks_capture_test.go",
+                "cmd/client/multihop_node_chain_socks_prefix_test.go",
+                "internal/mobilemultihop/desktop_node_chain_socks_policy.go")
+PREFIX_ROOTS = ("TestDesktopNodeChainSOCKSCapturedPacketPrefixes",
+                "TestDesktopNodeChainSOCKSPrefixSavedAndMeasuredPositions",
+                "TestDesktopNodeChainSOCKSPrefixStartLayers")
 ROOT_SUFFIXES = (
     "OriginalSources", "KeepsIndependentPairedLayers", "RejectsUnsupportedSource",
     "RetiresChangedOriginal", "CatalogWaitUsesOriginalDeadline",
@@ -54,6 +59,7 @@ ORIGINAL_ROOTS = (
     "TestDesktopOrderedHostnameCaptureUsesSavedResolverWithoutPhysicalBootstrap",
 )
 MUTATION_PATHS = dict.fromkeys(("omitted-catalog-retirement", "omitted-asset-identity", "unbounded-catalog-wait"), SOURCE)
+MUTATION_PATHS["misplaced-final-proof"] = "internal/mobilemultihop/desktop_node_chain_socks_policy.go"
 
 
 def cases(suite: str = SUITE) -> tuple[Case, ...]:
@@ -71,8 +77,17 @@ def cases(suite: str = SUITE) -> tuple[Case, ...]:
     retired, waiting = PREFIX + "RetiresChangedOriginal", PREFIX + "CatalogWaitUsesOriginalDeadline"
     catalog = frozenset(retired + "/" + fault for fault in CATALOG_FAULTS)
     assets = frozenset(retired + "/" + fault for fault in ("entry-asset", "final-asset"))
+    prefix_expected = set(PREFIX_ROOTS)
+    prefix_expected.update(PREFIX_ROOTS[0] + "/" + mode + "/" + str(count)
+                           for mode in ("wg", "awg2-fast", "awg2-strong") for count in range(1, 7))
+    prefix_expected.update(PREFIX_ROOTS[1] + "/" + str(count) for count in (2, 6))
+    prefix_expected.update(PREFIX_ROOTS[2] + "/" + mode + "/" + layer
+                           for mode in ("wg", "awg2-fast", "awg2-strong")
+                           for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening"))
+    final_faults = frozenset(PREFIX_ROOTS[0] + "/" + mode + "/" + str(count)
+                            for mode in ("wg", "awg2-fast", "awg2-strong") for count in range(2, 7))
     return (
-        Case("typed-desktop-source", "^" + PREFIX, frozenset(expected), 120, 600),
+        Case("typed-desktop-source", "^(" + "|".join(PREFIX + suffix for suffix in ROOT_SUFFIXES) + ")$", frozenset(expected), 120, 600),
         Case("preserved-desktop-sources", "^(" + "|".join(ORIGINAL_ROOTS) + ")$", frozenset(original), 120, 600),
         Case("omitted-catalog-retirement", "^" + retired + "$/^(" + "|".join(CATALOG_FAULTS) + ")$",
              catalog | {retired}, 120, 600, "omitted-catalog-retirement",
@@ -83,6 +98,11 @@ def cases(suite: str = SUITE) -> tuple[Case, ...]:
         Case("unbounded-catalog-wait", "^" + waiting + "$", frozenset((waiting,)),
              120, 600, "unbounded-catalog-wait",
              "held catalog stranded original SOCKS capture caller", frozenset((waiting,))),
+        Case("captured-desktop-prefixes", "^(" + "|".join(PREFIX_ROOTS) + ")$",
+             frozenset(prefix_expected), 120, 600),
+        Case("misplaced-final-proof", "^" + PREFIX_ROOTS[0] + "$/^(wg|awg2-fast|awg2-strong)$/^[2-6]$",
+             final_faults | {PREFIX_ROOTS[0]}, 120, 600, "misplaced-final-proof",
+             "target lost middle protection", final_faults),
     )
 
 
@@ -100,6 +120,8 @@ def mutation_source(case: Case, source: str) -> str:
                   "\t\t\treturn common.RouterProfile{}, nil, err\n\t\t}\n",
                   "\t\ta.mu.Lock()\n"),
                  ('\t"router-vpn/internal/mobilemtu"\n', ""),)
+    elif case.mutation == "misplaced-final-proof":
+        edits = (("final := originalMeta.Proofs[len(originalMeta.Proofs)-1]", "final := originalMeta.Proofs[2]"),)
     else:
         raise ValueError("unknown desktop SOCKS source control")
     for old, new in edits:

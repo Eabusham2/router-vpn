@@ -14,8 +14,8 @@ P=module('connect_mtu_projection_test',ROOT/'deploy/prepare-mobile-connect.py')
 class NativeCONNECTMTUValidator(unittest.TestCase):
  def test_exact_inventory_preserves_original_mtu(self):
   self.assertEqual((len(V.NATIVE_ROOTS),len(V.NATIVE_CASES),len(V.WRAPPER_ROOTS),len(V.WRAPPER_CASES)),(9,21,7,13))
-  self.assertEqual((len(V.PRESERVED_TYPED),len(V.PRESERVED_BOX),len(V.PRESERVED_CONTROLS)),(64,45,19))
-  self.assertEqual((len(V.BASE.VERDICTS),len(V.BASE.ORIGINAL_BOX),len(V.BASE.CONTROLS)),(77,77,34))
+  self.assertEqual((len(V.PRESERVED_TYPED),len(V.PRESERVED_BOX),len(V.PRESERVED_CONTROLS)),(75,59,19))
+  self.assertEqual((len(V.BASE.VERDICTS),len(V.BASE.ORIGINAL_BOX),len(V.BASE.CONTROLS)),(88,91,34))
   self.assertEqual(len(V.PREFIX_CASES),11)
   self.assertEqual(P.TEMPLATES[V.PREFIX_TEMPLATE],V.PREFIX_PROJECTION)
   self.assertIn("TestRouterNodeChainSOCKSExportedFactoryRetainsTypedOwner", V.PRESERVED_TYPED)

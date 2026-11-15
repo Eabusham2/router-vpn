@@ -1,0 +1,119 @@
+package box
+
+import (
+	"fmt"
+	"github.com/sagernet/sing-box/adapter"
+	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	M "github.com/sagernet/sing/common/metadata"
+	"testing"
+)
+
+// The actual Box/manager/continuation owns every captured prefix. Kernel TUN
+// and physical-source observations remain the explicit existing component
+// boundaries; full proof and real encrypted transport are separate gates.
+func TestRouterVPNNodeChainSOCKSPrefixMTUOriginalContinuation(t *testing.T) {
+	for _, count := range []int{2, 6} {
+		for _, scenario := range []string{"candidate", "rollback", "unchanged", "foreign-operation", "retired-source"} {
+			t.Run(fmt.Sprintf("%d-%s", count, scenario), func(t *testing.T) {
+				source := socksMTUSourcePrefixes(t, count)
+				f := newSOCKSMTUFixtureSource(t, source)
+				ctx, p, m := socksMTUBegin(t, f)
+				candidate, rollback := socksMTUNewReader("prefix-candidate", 73, 1300), socksMTUNewReader("prefix-rollback", 74, 1280)
+				candidate.startFailure.Store(scenario == "rollback")
+				target := 1300
+				if scenario == "unchanged" {
+					target = 1280
+				}
+				attempts := 0
+				if scenario == "foreign-operation" {
+					foreign, _ := socksMTUOperation(t)
+					if _, err := m.changeContext(foreign, f.tun, target, socksMTUAcquire(f, candidate, rollback, &attempts)); err == nil || attempts != 0 {
+						t.Fatal("long SOCKS path lost original MTU operation")
+					}
+				}
+				value, err := m.changeContext(ctx, f.tun, target, socksMTUAcquire(f, candidate, rollback, &attempts))
+				if scenario == "rollback" {
+					if err == nil || value != rollback {
+						t.Fatal("long SOCKS rollback lost native owner", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if m.step == nil || !m.step.joined || m.Current() != value {
+					t.Fatal("long SOCKS path lost joined native reader")
+				}
+				if scenario == "retired-source" {
+					f.current.Store(false)
+					if _, err = m.ResumeContext(ctx, f.observe); err == nil {
+						t.Fatal("long SOCKS retired source issued a proof continuation")
+					}
+					f.current.Store(true)
+				}
+				next, err := m.ResumeContext(ctx, f.observe)
+				if err != nil || next == nil {
+					t.Fatal("long SOCKS path failed original reproof handoff", err)
+				}
+				p.engine = next
+				if _, err = next.ObserveChainContext(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = f.engine.ObserveChainContext(ctx); err == nil {
+					t.Fatal("long SOCKS stale engine retained proof authority")
+				}
+				if err = m.FinishContext(ctx); err != nil || m.RetainsCleanup() {
+					t.Fatal("long SOCKS path lost original joined cleanup", err)
+				}
+			})
+		}
+	}
+}
+
+// Actual registry/owner pointer observations, with original packet I/O explicitly
+// refusing in the existing Box fixture. No native transport acceptance claim.
+func TestRouterVPNNodeChainSOCKSPrefixRetainsOriginalLower(t *testing.T) {
+	for _, count := range []int{2, 6} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			f := newSOCKSMTUFixtureSource(t, socksMTUSourcePrefixes(t, count))
+			_, meta, err := f.source.ReadValidated()
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, ok := f.box.outbound.Outbound(meta.Proofs[count].Tag)
+			if !ok {
+				t.Fatal("missing original SOCKS middle")
+			}
+			middle := raw.(*ownedSOCKS.Outbound)
+			lower := chainNativeField[adapter.Outbound](t, middle, "lower")
+			expected, ok := f.box.outbound.Outbound(meta.Proofs[count-1].Tag)
+			if !ok || *lower != expected || middle.ObserveContext(t.Context(), f.source) != nil {
+				t.Fatal("middle lost original last-prefix owner")
+			}
+			earlier, ok := f.box.outbound.Outbound(meta.Proofs[0].Tag)
+			if !ok || earlier == expected {
+				t.Fatal("missing distinct earlier prefix")
+			}
+			old := *lower
+			*lower = earlier
+			if middle.ObserveContext(t.Context(), f.source) == nil {
+				t.Fatal("middle adopted earlier prefix instead of retained lower")
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				if c, err := middle.DialContext(t.Context(), network, M.ParseSocksaddr("198.51.100.24:8388")); c != nil || err == nil {
+					if c != nil {
+						c.Close()
+					}
+					t.Fatal("replaced lower acquired control or relay", network)
+				}
+			}
+			copy := *expected.(*chainNativePrefix)
+			*lower = &copy
+			if middle.ObserveContext(t.Context(), f.source) == nil {
+				t.Fatal("same-content replacement acquired original lower authority")
+			}
+			*lower = old
+			if middle.ObserveContext(t.Context(), f.source) != nil {
+				t.Fatal("refused substitution erased original lower")
+			}
+		})
+	}
+}

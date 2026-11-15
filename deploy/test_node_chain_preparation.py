@@ -305,6 +305,9 @@ class NodeChainPreparation(unittest.TestCase):
         expected = {
             'socks_mtu_box.go.tmpl': 'routervpn_node_chain_socks_mtu.go',
             'socks_mtu_box_test.go.tmpl': 'routervpn_node_chain_socks_mtu_test.go',
+            'socks_prefix_mtu_test.go.tmpl': 'routervpn_node_chain_socks_prefix_mtu_test.go',
+            'socks_prefix_run_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_prefix_run_test.go',
+            'socks_prefix_policy_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_prefix_policy_test.go',
             'socks_mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_mtu.go',
             'socks_mtu_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_mtu_test.go',
         }

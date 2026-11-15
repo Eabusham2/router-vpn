@@ -42,7 +42,7 @@ class TypedInstalledGate(unittest.TestCase):
     def test_original_and_typed_inventory(self):
         self.assertEqual(G.case_inventory(), G.CASES)
         self.assertEqual(len(G.BASE.case_inventory()),37)
-        self.assertEqual(len(G.SOCKS.case_inventory()),8)
+        self.assertEqual(len(G.SOCKS.case_inventory()),10)
         self.assertEqual(len(G.CASES),24)
         self.assertTrue(set(G.BASE.CASES).isdisjoint(G.CASES))
         self.assertEqual(len(G.AUTHORITY_CASES),9)
@@ -157,7 +157,7 @@ class TypedInstalledGate(unittest.TestCase):
 
     def public_receipt(self):
         return dict(schema=2, gate='installed-darwin-ordered-connect-host',
-                    scope='installed-public-controller-actual-connect-and-original37-socks8-preservation',
+                    scope='installed-public-controller-actual-connect-and-original37-socks10-preservation',
                     public_darwin_admission='enabled', target='darwin/arm64', native=True,
                     public_entrypoint='nativeMultihopConnectOwned', public_status_entrypoint='nativeMultihopStatus',
                     cases=list(G.CASES), original_cases=list(G.BASE.CASES), socks_cases=list(G.SOCKS.CASES),

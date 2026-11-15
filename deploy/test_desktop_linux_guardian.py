@@ -377,7 +377,8 @@ def wait_for_fixture_carriers():
 def namespace_test_execution(executable, selector, case, environment):
     # A finite additional installed fixture, never a caller-selected timeout.
     extended = case in ('NodeHostTUN/node-chain-connect-http-wg-four-connect',
-                        'NodeHostTUN/node-chain-connect-https-wg-eight-connect')
+                        'NodeHostTUN/node-chain-connect-https-wg-eight-connect',
+                        'NodeHostTUN/node-chain-socks-wg-four-connect', 'NodeHostTUN/node-chain-socks-wg-eight-connect')
     seconds, timeout = (250, 265) if extended else (120, 135)
     return subprocess.run([str(executable), '-test.run=' + selector,
                            '-test.count=1', '-test.timeout=' + str(seconds) + 's', '-test.v'],

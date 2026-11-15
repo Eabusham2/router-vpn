@@ -17,10 +17,14 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
+const macOSNodeChainSOCKSFiftyReceipt = "actual installed Darwin SOCKS fifty: all three original members returned fifty samples and retained exact durable receipts"
+const macOSNodeChainSOCKSLongFiftyReceipt = "actual installed Darwin SOCKS long path fifty: captured penultimate public and final private members retained exact durable receipts"
+
 var macOSNodeChainSOCKSHostCases = []string{
 	"node-chain-socks-wg-connect", "node-chain-socks-awg-fast-connect", "node-chain-socks-awg-strong-connect",
 	"node-chain-socks-wg-wrong-middle-key", "node-chain-socks-wg-wrong-middle-public",
 	"node-chain-socks-wg-final-dns-failure", "node-chain-socks-wg-final-node-failure", "node-chain-socks-wg-middle-source",
+	"node-chain-socks-wg-four-connect", "node-chain-socks-wg-eight-connect",
 }
 
 func macOSNodeChainSOCKSCipherCases() []macOSNodeChainCipherCase {
@@ -28,6 +32,8 @@ func macOSNodeChainSOCKSCipherCases() []macOSNodeChainCipherCase {
 		{"wg", "node-chain-socks-wg-", []string{"wg", "socks5"}},
 		{"awg2-fast", "node-chain-socks-awg-fast-", []string{"awg2-fast", "socks5"}},
 		{"awg2-strong", "node-chain-socks-awg-strong-", []string{"awg2-strong", "socks5"}},
+		{"wg-four", "node-chain-socks-wg-four-", []string{"wg", "wg", "socks5"}},
+		{"wg-eight", "node-chain-socks-wg-eight-", []string{"wg", "wg", "wg", "wg", "wg", "wg", "socks5"}},
 	}
 }
 func (peer *macOSNodeChainPeer) observedMiddleMethod() string {
@@ -78,8 +84,9 @@ func TestDesktopDarwinInstalledSOCKSNodeChainFixtureKeepsOriginalSources(t *test
 			peer := macOSNodeChainPeerForModes(t, scenario.modes)
 			peer.reply.Address = net.JoinHostPort("192.168.210.2", "51820")
 			profiles, assets := macOSNodeChainInstalledSources(t, peer, "")
-			middle := profiles.Profiles[1]
-			if len(profiles.Profiles) != 3 || len(peer.requests) != 1 || middle.NodeKind != "external" || middle.NodeProofID != "" || middle.APIToken != "" || middle.RouterAPI != "" || assets[middle.ID] != nil || middle.External == nil || middle.External.Protocol != "socks5" || middle.External.SOCKS5 == nil || middle.External.SOCKS5.Password != peer.middlePassword || middle.External.SOCKS5.Username != "captured-native-user" {
+			middlePosition, count := len(scenario.modes)-1, len(scenario.modes)+1
+			middle := profiles.Profiles[middlePosition]
+			if len(profiles.Profiles) != count || len(peer.requests) != middlePosition || middle.NodeKind != "external" || middle.NodeProofID != "" || middle.APIToken != "" || middle.RouterAPI != "" || assets[middle.ID] != nil || middle.External == nil || middle.External.Protocol != "socks5" || middle.External.SOCKS5 == nil || middle.External.SOCKS5.Password != peer.middlePassword || middle.External.SOCKS5.Username != "captured-native-user" {
 				t.Fatal("installed source changed original SOCKS credential or invented paired assets")
 			}
 			root := t.TempDir()
@@ -96,7 +103,7 @@ func TestDesktopDarwinInstalledSOCKSNodeChainFixtureKeepsOriginalSources(t *test
 					}
 				}
 			}
-			control := profiles.Profiles[2]
+			control := profiles.Profiles[count-1]
 			selection, err := resolveDesktopNodeChainSelection(control, profiles.Profiles, control.MultihopNodes, "local")
 			if err != nil {
 				t.Fatal(err)
@@ -113,12 +120,18 @@ func TestDesktopDarwinInstalledSOCKSNodeChainFixtureKeepsOriginalSources(t *test
 				t.Fatal("installed typed source acquired generic chain authority")
 			}
 			_, meta, physical, err := launch.chain.readPolicy()
-			if err != nil || len(meta.Prefixes) != 3 || meta.Prefixes[0].Mode != scenario.modes[0] || meta.Prefixes[1].NodeID != "" || meta.Prefixes[1].Kind != "public-path" || meta.Prefixes[1].ProfileID != middle.ID || meta.Prefixes[2].NodeID != control.NodeProofID || len(physical.PhysicalRoots) != 1 || physical.PhysicalRoots[0].Destinations[0].Host != "192.168.210.2" {
+			if err != nil || len(meta.Prefixes) != count || meta.Prefixes[0].Mode != scenario.modes[0] || meta.Prefixes[middlePosition].NodeID != "" || meta.Prefixes[middlePosition].Kind != "public-path" || meta.Prefixes[middlePosition].ProfileID != middle.ID || meta.Prefixes[count-1].NodeID != control.NodeProofID || meta.ProfileID != control.ID || meta.NodeID != control.NodeProofID || meta.FinalTag != meta.Prefixes[count-1].Tag || len(physical.PhysicalRoots) != 1 || physical.PhysicalRoots[0].Destinations[0].Host != "192.168.210.2" {
 				t.Fatal("installed typed source lost original proof or physical identity", err)
 			}
 			var source mobilemultihop.NodeChainSource
-			if json.Unmarshal([]byte(selection.Native.chain.socks.original.input), &source) != nil || source.Schema != 3 || source.IdentitySources[1] != "" {
+			if json.Unmarshal([]byte(selection.Native.chain.socks.original.input), &source) != nil || source.Schema != 3 || len(source.Nodes) != count || len(source.IdentitySources) != count || source.IdentitySources[middlePosition] != "" {
 				t.Fatal("typed original source acquired paired middle identity")
+			}
+			for position := 0; position < middlePosition; position++ {
+				original := profiles.Profiles[position]
+				if source.IdentitySources[position] == "" || meta.Prefixes[position].ProfileID != original.ID || meta.Prefixes[position].NodeID != original.NodeProofID || meta.Prefixes[position].Mode != scenario.modes[position] {
+					t.Fatal("SOCKS replaced an original paired prefix", position)
+				}
 			}
 			var envelope struct {
 				Config  string `json:"config"`
@@ -127,7 +140,7 @@ func TestDesktopDarwinInstalledSOCKSNodeChainFixtureKeepsOriginalSources(t *test
 			var captured struct {
 				Profile common.RouterProfile `json:"profile"`
 			}
-			if json.Unmarshal([]byte(source.Nodes[1]), &envelope) != nil || json.Unmarshal([]byte(envelope.Capture), &captured) != nil || !reflect.DeepEqual(captured.Profile, middle) {
+			if json.Unmarshal([]byte(source.Nodes[middlePosition]), &envelope) != nil || json.Unmarshal([]byte(envelope.Capture), &captured) != nil || !reflect.DeepEqual(captured.Profile, middle) {
 				t.Fatal("installed typed source changed original complete imported policy")
 			}
 			for _, action := range []string{"connect", "wrong-middle-key", "wrong-middle-public", "final-dns-failure", "final-node-failure", "middle-source"} {

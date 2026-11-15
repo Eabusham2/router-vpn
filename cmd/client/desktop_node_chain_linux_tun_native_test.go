@@ -611,11 +611,18 @@ func linuxHostTUNNodeChainParent(t *testing.T, installed, scenario string) {
 			}
 			for position, saved := range result.FiftyReceipts {
 				expectedPosition := position
-				if peer.middleCONNECT != "" && count > 3 {
+				if count > 3 {
 					expectedPosition = count - 2 + position
 				}
 				if saved.Position != expectedPosition || validateDesktopOrderedReceipt(saved, time.Now()) != nil {
 					t.Fatal("installed typed fifty returned invalid saved prefix", position)
+				}
+			}
+			if peer.middleSOCKS {
+				if count == 3 {
+					t.Log(linuxNodeChainSOCKSFiftyReceipt)
+				} else {
+					t.Log(linuxNodeChainSOCKSLongFiftyReceipt)
 				}
 			}
 		}
@@ -843,18 +850,22 @@ func linuxHostTUNNodeChainFixture(controller *ownedDesktopController, scenario s
 		}
 		if action == "middle-source" {
 			a.mu.Lock()
-			if a.profiles.Profiles[1].NodeKind == "external" {
-				if a.profiles.Profiles[1].External.SOCKS5 != nil {
-					a.profiles.Profiles[1].External.SOCKS5.Password += "-replaced-after-admission"
-				} else if a.profiles.Profiles[1].External.HTTPConnect != nil {
-					a.profiles.Profiles[1].External.HTTPConnect.Password += "-replaced-after-admission"
-				} else if a.profiles.Profiles[1].External.HTTPSConnect != nil {
-					a.profiles.Profiles[1].External.HTTPSConnect.Password += "-replaced-after-admission"
+			middlePosition := 1
+			if h.socksChain != nil || h.connectChain != nil {
+				middlePosition = count - 2
+			}
+			if a.profiles.Profiles[middlePosition].NodeKind == "external" {
+				if a.profiles.Profiles[middlePosition].External.SOCKS5 != nil {
+					a.profiles.Profiles[middlePosition].External.SOCKS5.Password += "-replaced-after-admission"
+				} else if a.profiles.Profiles[middlePosition].External.HTTPConnect != nil {
+					a.profiles.Profiles[middlePosition].External.HTTPConnect.Password += "-replaced-after-admission"
+				} else if a.profiles.Profiles[middlePosition].External.HTTPSConnect != nil {
+					a.profiles.Profiles[middlePosition].External.HTTPSConnect.Password += "-replaced-after-admission"
 				} else {
-					a.profiles.Profiles[1].External.Shadowsocks.Password = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32)))
+					a.profiles.Profiles[middlePosition].External.Shadowsocks.Password = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("r", 32)))
 				}
 			} else {
-				a.profiles.Profiles[1].APIToken += "-replaced-after-admission"
+				a.profiles.Profiles[middlePosition].APIToken += "-replaced-after-admission"
 			}
 			a.mu.Unlock()
 		}

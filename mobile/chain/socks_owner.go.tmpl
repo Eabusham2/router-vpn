@@ -57,9 +57,9 @@ func NewCapture(ctx context.Context, source *mobilemultihop.NodeChainSOCKSSource
 	}
 	config, meta, err := source.ReadValidated()
 	if err != nil || meta.Kind != "routervpn-node-chain-socks-source" || meta.Schema != 1 ||
-		meta.NativeAdmission != "closed" || len(meta.Proofs) != 3 || len(meta.Devices) != 3 ||
-		meta.Proofs[1].Position != 1 || meta.Proofs[1].Mode != "socks5" ||
-		meta.Proofs[1].ProfileID == "" || meta.Proofs[1].SourceSHA256 == "" {
+		meta.NativeAdmission != "closed" || len(meta.Proofs) < 3 || len(meta.Proofs) > mobilemultihop.NodeChainMaximumNodes || len(meta.Devices) != len(meta.Proofs) ||
+		meta.Proofs[len(meta.Proofs)-2].Position != len(meta.Proofs)-2 || meta.Proofs[len(meta.Proofs)-2].Mode != "socks5" ||
+		meta.Proofs[len(meta.Proofs)-2].ProfileID == "" || meta.Proofs[len(meta.Proofs)-2].SourceSHA256 == "" {
 		return nil, errCapture
 	}
 	var graph struct {
@@ -70,7 +70,7 @@ func NewCapture(ctx context.Context, source *mobilemultihop.NodeChainSOCKSSource
 		return nil, errCapture
 	}
 	capture := &Capture{ctx: ctx, source: source, config: config, metadata: meta,
-		tag: meta.Proofs[1].Tag, lowerTag: meta.Proofs[0].Tag}
+		tag: meta.Proofs[len(meta.Proofs)-2].Tag, lowerTag: meta.Proofs[len(meta.Proofs)-3].Tag}
 	var selected, lower int
 	for _, raw := range append(graph.Outbounds, graph.Endpoints...) {
 		var identity struct { Type string `json:"type"`; Tag string `json:"tag"` }
@@ -464,7 +464,7 @@ func (s *operation) DialContext(ctx context.Context, network string, address M.S
 	remote, err := netip.ParseAddrPort(address.String())
 	if !valid || err != nil || address.IsDomain() || !remote.IsValid() || remote.Port() == 0 ||
 		remote.Addr().IsUnspecified() || remote.Addr().IsMulticast() || remote.Addr().Is4In6() || remote.Addr().Zone() != "" ||
-		remote.Addr().Is6() && s.owner.capture.metadata.Devices[1].IPv6Mode == "off" {
+		remote.Addr().Is6() && s.owner.capture.metadata.Devices[len(s.owner.capture.metadata.Devices)-2].IPv6Mode == "off" {
 		return nil, errCapture
 	}
 	// Both the permanent control and its one authenticated negotiated relay

@@ -38,6 +38,8 @@ SOURCE_PATHS = (
     COMPILER,
     "internal/mobilemultihop/node_chain_socks_source_test.go",
     *FORMAT_PATHS[1:],
+    "internal/mobilemultihop/node_chain_socks_prefix_test.go",
+    "internal/mobilemultihop/node_chain_socks_prefix_runtime_test.go",
 )
 PRESERVATION_ROOTS = (
     "TestNodeChainCompleteCapturedPaths",
@@ -134,7 +136,32 @@ INTEGRITY_CASES = frozenset((
     "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/seal",
     "TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/removed",
 ))
+PREFIX_ROOTS = (
+    "TestNodeChainSOCKSCompletePacketPrefixes",
+    "TestNodeChainSOCKSPrefixIntegrityAndSourceRefusal",
+    "TestNodeChainSOCKSPrefixPreservesNativeMTUCeiling",
+    "TestNodeChainSOCKSPrefixEveryOriginalOwner",
+)
+PREFIX_FAULTS = (
+    "foreign-prefix-owner", "prefix-order", "prefix-omission", "prefix-credential",
+    "foreign-middle-owner", "foreign-final-owner", "wrong-final-key", "metadata-order", "runtime-pointer",
+    "too-short", "too-long", "nonlocal", "middle-first", "middle-not-penultimate", "middle-identity",
+    "missing-prefix-identity", "duplicate-prefix", "wrong-final-mode",
+)
+PREFIX_CASES = frozenset((*PREFIX_ROOTS,
+    *(PREFIX_ROOTS[0]+f"/{mode}/{auth}/{count}" for mode in ("wg", "awg2-fast", "awg2-strong")
+      for auth in ("password", "none") for count in range(1,7)),
+    *(PREFIX_ROOTS[1]+"/"+fault for fault in PREFIX_FAULTS),
+    *(PREFIX_ROOTS[3]+"/"+str(position) for position in range(7))))
+PREFIX_RUNTIME_ROOT = "TestNodeChainSOCKSPrefixRuntimeRetainsEveryProof"
+PREFIX_RUNTIME_CASES = frozenset((PREFIX_RUNTIME_ROOT,
+    *(PREFIX_RUNTIME_ROOT+f"/{auth}/{count}" for auth in ("password", "none") for count in (2,6)),
+    *(PREFIX_RUNTIME_ROOT+"/refuse-prefix-"+str(position) for position in range(6))))
+
 CONTROL_MUTATIONS = {
+    "original-prefix-pointer": [
+        INTEGRITY, "node != old.nodes[i] || ", ""
+    ],
     "omitted-source-seal": [
         "internal/mobilemultihop/node_chain_socks_integrity.go",
         "p.config != saved.config || ",
@@ -204,6 +231,12 @@ def cases(suite: str = SUITE) -> tuple[Case, ...]:
         Case("aliased-imported-policy", "^TestNodeChainSOCKSIntegrityRejectsChangedInputs$/^policy-profile$", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedInputs","TestNodeChainSOCKSIntegrityRejectsChangedInputs/policy-profile"]), 120, 600, "aliased-imported-policy", "changed captured input retained integrity authority", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedInputs/policy-profile"])),
         Case("borrowed-source-receipt", "^TestNodeChainSOCKSIntegrityRejectsChangedInputs$/^copied-source$", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedInputs","TestNodeChainSOCKSIntegrityRejectsChangedInputs/copied-source"]), 120, 600, "borrowed-source-receipt", "copied source borrowed original integrity owner", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedInputs/copied-source"])),
         Case("omitted-original-desktop-source", "^TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding$/^original-source$", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding","TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/original-source"]), 120, 600, "omitted-original-desktop-source", "changed desktop binding retained integrity authority", frozenset(["TestNodeChainSOCKSIntegrityRejectsChangedDesktopBinding/original-source"])),
+        Case("complete-packet-prefix-source", "^("+"|".join(PREFIX_ROOTS)+")$", PREFIX_CASES, 120, 600),
+        Case("complete-packet-prefix-runtime", "^"+PREFIX_RUNTIME_ROOT+"$", PREFIX_RUNTIME_CASES, 120, 600),
+        Case("original-prefix-pointer", "^"+PREFIX_ROOTS[3]+"$",
+             frozenset((PREFIX_ROOTS[3], *(PREFIX_ROOTS[3]+"/"+str(position) for position in range(7)))),
+             120, 600, "original-prefix-pointer", "same-content member replaced original captured owner",
+             frozenset(PREFIX_ROOTS[3]+"/"+str(position) for position in range(7))),
     )
 
 

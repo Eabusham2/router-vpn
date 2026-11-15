@@ -41,9 +41,11 @@ def receipts(digest):
                 "images": {"controller": "d" * 64, "peer": "e" * 64, "scoped_engine": "f" * 64}}
     typed = {"schema": 2, "native": True, "target": "windows/amd64", "source_sha256": "a" * 64,
              "bundle_sha256": digest,
-             "cases": ["wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off"],
+             "cases": ["wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off", "wg-four-connect", "wg-eight-connect"],
              "unmodified_shipping_image": False, "test_scope": "captured-native-child-app-id",
              "typed_full_path": True, "positive_application_and_selected_dns_proved": True,
+             "ordered_latency_samples_per_hop": 50,
+             "ordered_prefix_measurements": [dict(case="wg-four-connect", nodes=4, positions=[2,3], samples=50),dict(case="wg-eight-connect", nodes=8, positions=[6,7], samples=50)],
              "measurement_bytes_per_direction_per_hop": 8 << 20, "measurement_hops": 3,
              "native_joined": True, "command_job_joined": True, "tun_absent_all_outcomes": True,
              "remote_associations_after_retirement": 0, "public_admission": "enabled", "public_connect_path": "/api/multihop/connect",
@@ -94,6 +96,22 @@ class WindowsSOCKSReleaseReceipt(unittest.TestCase):
             broken["cases"].remove(case)
             with self.subTest(case=case), self.assertRaises(ValueError):
                 self.verify(broken, original)
+
+    def test_long_positions_samples_and_types_are_required(self):
+        original,typed=receipts("7"*64)
+        for replacement in (None,49,50.0,True):
+            broken=copy.deepcopy(typed);broken['ordered_latency_samples_per_hop']=replacement
+            with self.assertRaises(ValueError):self.verify(broken,original)
+        values=typed['ordered_prefix_measurements']
+        faults=[[],values[:1],list(reversed(values)),values+[copy.deepcopy(values[0])]]
+        for index in range(2):
+            for key,value in [('case','foreign'),('nodes',float(values[index]['nodes'])),('nodes',True),('positions',[0,1]),('positions',[float(x) for x in values[index]['positions']]),('samples',49),('samples',50.0),('samples',True)]:
+                changed=copy.deepcopy(values);changed[index][key]=value;faults.append(changed)
+            for key in values[index]:
+                changed=copy.deepcopy(values);del changed[index][key];faults.append(changed)
+        for changed in faults:
+            broken=copy.deepcopy(typed);broken['ordered_prefix_measurements']=changed
+            with self.assertRaises(ValueError):self.verify(broken,original)
 
     def test_parent_models_cannot_replace_native_or_drop_controls(self):
         original, typed = receipts("7" * 64)

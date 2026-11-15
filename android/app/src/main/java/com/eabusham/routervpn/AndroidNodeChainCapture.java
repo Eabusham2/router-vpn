@@ -222,8 +222,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static int sourceSchema(List<AndroidNodeStore.ChainSource> members) throws Exception {
         int imported=0,middle=-1;for(int i=0;i<members.size();i++)if(members.get(i).imported){
             imported++;middle=i;String protocol=AndroidExternalPolicy.protocol(members.get(i).external().protocol);
-            boolean connect="http-connect".equals(protocol)||"https-connect".equals(protocol);
-            if(members.size()<3||members.size()>8||i!=members.size()-2||!connect&&members.size()!=3)throw new IllegalStateException("A custom node requires its supported penultimate position before the paired final node.");
+            boolean variablePrefix="socks5".equals(protocol)||"http-connect".equals(protocol)||"https-connect".equals(protocol);
+            if(members.size()<3||members.size()>8||i!=members.size()-2||!variablePrefix&&members.size()!=3)throw new IllegalStateException("A custom node requires its supported penultimate position before the paired final node.");
         }
         if(imported>1)throw new IllegalStateException("This custom path supports one imported intermediate node.");
         if(imported==0)return 1;

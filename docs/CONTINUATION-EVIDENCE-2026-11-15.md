@@ -1114,7 +1114,7 @@ prove these behaviors merely because a filename or string is present.
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
 | 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and bounded Windows/Linux/macOS single paired Router hosts with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin paired source now includes actual installed parent/child composition; its new native gate has not yet passed at this cutoff. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
-| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT addition below extends that typed family to 3–8 members with one penultimate CONNECT node; other imported families retain their existing bounds. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
+| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT and SOCKS additions below extend those separate typed families to 3–8 members with one penultimate import; imported Shadowsocks and OpenVPN retain their existing trio bounds. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |
@@ -1692,3 +1692,112 @@ exit status one and no unrelated timeout, panic or race failure. The source,
 positive and causal-control evidence are retained in
 `candidate-save-ci-validation`. Native release and device acceptance remain
 separate requirements.
+
+## Longer Local SOCKS5 paths retain every original paired prefix
+
+This source unit addresses the still-open ordered-hop requirements in original
+#214–224, addendum #336 and the later external/custom-node corrections. It
+extends the existing schema-3 Local composition from one paired prefix to
+one through six original paired WG/AWG prefixes, followed by one SOCKS5
+penultimate with its captured authentication choice and one independent paired SS2022 final: three through
+eight total members. It retains the original trio and does not broaden the
+separate imported Shadowsocks/OpenVPN families, imported positions, number
+of imported members, final protocols, Server or Compare. Those broader
+requested combinations remain source work, not merely device acceptance.
+
+The captured shared and native path retains every original paired pointer,
+private identity, proof, policy and MTU plan. Both the permanent SOCKS control
+connection and its negotiated UDP relay use the exact captured last-prefix
+endpoint. Only the first prefix obtains physical egress. The distinct SOCKS
+measurement context retains the public penultimate and all private paired
+positions; it does not borrow CONNECT's TCP/UoT transport authority. The
+original final controls its selected DNS, public status and private proof.
+
+Android and iOS/iPadOS capture, editor/store, saved-profile reopening,
+provider/launch/session identity and ordered history use the captured dynamic
+middle and final. Windows, AppKit and GTK selection, complete profiles,
+startup/Last restoration and measured history do the same. The installed
+reference peers preserve the full prefix and final-source identities, and
+prefix-loss controls retire the original first bind. Source and native
+capacity checks still reject an insufficient configured envelope: the
+captured eight-member AWG Fast plus AES fixture has a 1,360-byte entry,
+150-byte overhead and aligned 1,200-byte inner capacity, below the unchanged
+1,280-byte dual-stack minimum. No MTU default was raised to admit that case.
+
+### Local source and component evidence
+
+- All twelve actual shared source-gate attempts passed their strict verdicts:
+  240 positive records and 21 intended failures across seven causal controls.
+  They preserve the original nine attempts and add the complete prefix source,
+  retained proof runtime and original-pointer substitution control. These
+  counts describe test records, not requirement completion.
+- All seven actual desktop capture attempts passed, including the original
+  source/deadline/cleanup controls, saved longer graphs, complete prefix
+  capture and deliberately misbound final proofs. The combined desktop race
+  run also includes the actual installed Linux source fixture.
+- Shipping Windows callbacks passed 1,222 model checks with their original
+  controls. AppKit callbacks passed 7,516 checks and 45 causal variants.
+  The GTK include/model/persistence checks passed 3,228 checks and ten
+  controls. Their local OS/widget boundaries remain explicit; they are not
+  physical windows, visual acceptance or kernel execution.
+- Android's complete store/source runner retained the original inventories
+  and 29 causal controls and added the longer SOCKS vectors. Its typed host
+  passed 204 assertions and six controls. Actual Swift/shared-Go capture,
+  complete profiles, launch, editor, presentation and fifty-capture suites
+  passed; the iOS typed host includes all original 21 scenarios plus four-
+  and eight-member scenarios, with ten causal controls. Native handles and
+  OS permissions are doubled in these portable source/host tests.
+- The pinned native peer composition compiled with race instrumentation.
+  Actual Box MTU, original-lower continuation/preclose and IPv6-owner
+  components passed 28 records. Windows AMD64/ARM64 and Darwin AMD64/ARM64
+  controller fixtures cross-compiled with the new installed cases; the
+  CGO-disabled cross-builds do not establish WFP/PF/TUN execution.
+- The gate unit passed 250 runner checks and ten unchanged dependent runtime
+  checks. A separate review of all native/mobile/gate source hashes found no
+  remaining fixed third-node consumer in the expanded SOCKS call paths.
+
+The final combined main-tree projection also passed all 21 source-identity
+validator self-tests in 5.690 seconds and the cross-platform profile-settings
+audit. All 106 manifest-selected files matched their frozen hashes; the
+107th changed file is this evidence ledger. No unrelated files or pending
+changes were included.
+
+### Encrypted reference and required native release evidence
+
+All eleven selected encrypted reference invocations were accepted: the
+original WG trio; both four-member WG measurement groups; maximum-depth WG
+positions 0/1, AWG Fast positions 4/5 and AWG Strong positions 6/7; and five
+maximum-depth refusal cases. Every positive group retained fifty actual
+samples at each selected position, exact counters/history and original joined
+cleanup. The refusals exercised wrong SOCKS password, wrong final token,
+failed selected DNS, wrong middle public proof and held-prefix cancellation.
+
+The maximum-depth canonical WG, AWG Fast and AWG Strong groups completed in
+87.99, 87.46 and 104.15 seconds respectively. Initial local one-worker trials
+that lacked a complete fifty-sample receipt remain preserved and disqualified.
+The same original WG images passed after the local runner used the existing
+release gate settings: two workers, GOGC 100 and a 2-GiB memory limit. Source,
+peer lifetime, request/measurement deadlines and proof/cleanup bounds were
+unchanged. The successful four-member first group under the earlier local
+one-worker setting remains separately identified in the native receipt.
+
+The required encrypted gate retains its original 37 phases and adds eighteen
+position-grouped positive invocations, five longer refusal invocations and
+the IPv6 contrast, for 61 phases. The grouped matrix covers all positions of
+four- and eight-member paths for WG, AWG Fast and AWG Strong, with fifty actual
+samples per position. Local representative execution does not replace the
+full exact-SHA matrix. The native MTU and original-owner continuations also
+remain required. Installed macOS and Linux require ten SOCKS cases each;
+Windows requires eleven, including actual four/eight-member public Connect,
+measured penultimate/final receipts, native policy, source identity and joined
+cleanup. All original installed cases and relevant deadlines remain.
+
+The root, mobile, native and gate source manifests were reconciled against
+`2d15ca89973ad522323d73d8eb6418b879cf7181`, preserving its Save fixture repair
+and the preceding Windows schema-2 receipt correction. Exact component logs,
+source hashes and preimage checks are retained in
+`desktop-socks-prefix-validation`, `mobile-socks-prefix-validation`,
+`socks-prefix-validation`, `socks-prefix-gates-validation` and
+`socks-prefix-independent-review`. Publication of this source does not by
+itself establish a green final release, native packages, physical devices,
+signing or private deployment. Those remain distinct requirements.

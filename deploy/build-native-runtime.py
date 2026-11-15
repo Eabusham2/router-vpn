@@ -60,8 +60,9 @@ WINDOWS_SYSTEM_DLLS = frozenset((
     'userenv.dll', 'winhttp.dll', 'winmm.dll', 'ws2_32.dll',
 ))
 MAX_BUILD_DIAGNOSTIC = 64*1024
-# One composed invocation preserves prefix6 (3000s) and SOCKS8 (4200s),
-# then adds the distinct HTTP/HTTPS CONNECT14 stage (4200s, including builds).
+# One composed invocation preserves the original prefix and SOCKS stages
+# (3000s and 4200s), including their additional bounded Local prefix cases,
+# then executes the distinct HTTP/HTTPS CONNECT stage (4200s, including builds).
 # The inner compiler, native case, proof and retirement deadlines are unchanged.
 WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT = 3000 + 4200 + 4200
 
@@ -1185,8 +1186,8 @@ def verify_installed_windows_prefix(source, bundle, target, env):
     run([sys.executable, ROOT/'deploy/test_desktop_connect_admission_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_windows_connect_node_chain_host_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_windows_connect_release_receipt.py'], cwd=ROOT, env=env, timeout=60)
-    # The composed gate executes original prefix6 and SOCKS9 exactly once,
-    # then proves the distinct authenticated HTTP/HTTPS CONNECT16 carrier.
+    # The composed gate executes every original prefix and SOCKS case exactly
+    # once, their bounded longer paths, and the distinct HTTP/HTTPS carrier.
     # All three receipts are mandatory for fresh and reused publication.
     output = run([sys.executable, ROOT/'deploy/test_windows_connect_node_chain_host.py', source, '--bundle', bundle],
                  cwd=ROOT, env=env, timeout=WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT)
@@ -1230,7 +1231,8 @@ def verify_installed_windows_socks_receipt(output, target, original, digest_befo
                isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest) for name, digest in values.items()) for values in mappings):
         raise ValueError('Installed Windows SOCKS omitted its exact source/image hash maps')
     cases = ['wg-connect', 'awg-fast-connect', 'awg-strong-connect', 'wg-wrong-middle-key',
-             'wg-wrong-middle-public', 'wg-final-dns-failure', 'wg-final-node-failure', 'wg-middle-source', 'wg-connect-off']
+             'wg-wrong-middle-public', 'wg-final-dns-failure', 'wg-final-node-failure', 'wg-middle-source', 'wg-connect-off',
+             'wg-four-connect', 'wg-eight-connect']
     if (type(receipt.get('schema')) is not int or receipt.get('schema') != 2 or receipt.get('native') is not True or
             receipt.get('target') != target or receipt.get('source_sha256') != original['policy_sha256'] or
             receipt.get('bundle_sha256') != digest_before or receipt.get('cases') != cases or
@@ -1238,6 +1240,7 @@ def verify_installed_windows_socks_receipt(output, target, original, digest_befo
             receipt.get('typed_full_path') is not True or receipt.get('positive_application_and_selected_dns_proved') is not True or
             type(receipt.get('measurement_bytes_per_direction_per_hop')) is not int or receipt.get('measurement_bytes_per_direction_per_hop') != 8 << 20 or
             type(receipt.get('measurement_hops')) is not int or receipt.get('measurement_hops') != 3 or
+            type(receipt.get('ordered_latency_samples_per_hop')) is not int or receipt.get('ordered_latency_samples_per_hop') != 50 or
             receipt.get('native_joined') is not True or receipt.get('command_job_joined') is not True or
             receipt.get('tun_absent_all_outcomes') is not True or type(receipt.get('remote_associations_after_retirement')) is not int or
             receipt.get('remote_associations_after_retirement') != 0 or receipt.get('public_admission') != 'enabled' or
@@ -1246,6 +1249,18 @@ def verify_installed_windows_socks_receipt(output, target, original, digest_befo
             set(receipt['scope_sources']) != set(prefix_receipt['scope_sources']) or
             set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
         raise ValueError('Installed Windows SOCKS lost its complete native path, joined retirement or original prefix evidence')
+    prefix_measurements = receipt.get('ordered_prefix_measurements')
+    expected_prefix_measurements = [
+        {'case': 'wg-four-connect', 'nodes': 4, 'positions': [2, 3], 'samples': 50},
+        {'case': 'wg-eight-connect', 'nodes': 8, 'positions': [6, 7], 'samples': 50},
+    ]
+    if (prefix_measurements != expected_prefix_measurements or
+            not isinstance(prefix_measurements, list) or
+            any(not isinstance(row, dict) or set(row) != {'case', 'nodes', 'positions', 'samples'} or
+                type(row['nodes']) is not int or type(row['samples']) is not int or
+                not isinstance(row['positions'], list) or any(type(position) is not int for position in row['positions'])
+                for row in prefix_measurements)):
+        raise ValueError('Installed Windows SOCKS lost its exact four/eight-node measured positions')
     roots = {
         'TestDesktopSOCKSOwnedParentRetainsStartProofAndJoinedRetirement': ('wg', 'awg2-fast', 'awg2-strong'),
         'TestDesktopSOCKSProtectionRejectsForeignAndMixedOwners': ('foreign-policy', 'ordinary-policy', 'foreign-source', 'foreign-attempt', 'foreign-launch', 'wrong-command'),

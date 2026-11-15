@@ -74,6 +74,22 @@ Physical iPhone/iPad permission, route-lockdown, reconnect/network change, DNS/I
 
 ## Graph boundaries
 
+Ordered Local paths with one imported middle support one to six captured
+paired WG/AWG prefixes, one SOCKS5 or HTTP(S) CONNECT penultimate member with
+its captured proxy credentials, and an independent paired Shadowsocks 2022 final: three to eight nodes
+in total. SOCKS5 keeps its permanent control connection and negotiated UDP
+relay on the same exact last-prefix endpoint. CONNECT is TCP-only and uses
+the final's separate UoT-v2 transport. Only the first prefix obtains physical
+egress. All five native editor families, complete profiles and startup retain
+the full ordered path, selected DNS and per-member identity, policy and
+measurement ownership. Original MTU capacity checks still apply to the
+captured modes and layers. Imported Shadowsocks and OpenVPN middles retain
+their existing three-node bounds. Broader imported positions, multiple
+imported members and ordered Server/Compare execution remain unfinished.
+The exact source, encrypted-runtime and installed-host results for these
+compositions are tracked separately in
+[CURRENT-STATUS.md](CURRENT-STATUS.md) and the continuation evidence ledger.
+
 The packaged desktop Router VPN node-to-node API composes a WG/AWG entry with Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2, Naive H3, WireGuard, AWG Fast, AWG Strong, SS-V2Ray, Split or MAX composite exits. Windows, macOS and Linux selectors, complete connection profiles and Speed Lab preserve these exact transport IDs and Local/Server/Compare choices; invalid saved choices cannot silently become Shadowsocks. A legacy Linux installation without the verified native runtime retains its narrower Shadowsocks/Hysteria2 capability catalog. It captures both nodes, their Start Layers, policy and the proved Local/Server execution. The desktop external-node API separately supports the broader captured Router-entry mode set and ordinary imported entry/exit protocols. Mobile node-to-node graphs also have broader supported families. A graph accepted by one API is not evidence that another API or platform supports it. Broader Router entry modes and other requested node-to-node compositions remain unfinished.
 
 The desktop WG/AWG exit is its exact native packet endpoint in Local execution; Fast and Strong retain all eleven captured AWG parameters and the keys belonging to each node. Server execution removes that local exit endpoint and uses an authenticated isolated relay with an independently paired WG/AWG client identity. The updated agent validates the captured public-key pin on acquisition and renewal; the client rechecks capabilities on renewal and retains the same pin when Speed Lab restores a proved Server choice. Both sides compare canonical X25519 public identities, so alternate encodings of the same private key cannot authorize independent peers. Entry/exit Start Layers, selected DNS and protection remain captured. Nested packet MTU includes IPv4/IPv6 framing, AWG S4 transport padding and the selected Start Layer envelope before alignment. Incompatible fixed values and an entry too small for the minimum nested packet fail rather than being replaced with defaults; see the explicit capacity example in the execution guide. See [MULTIHOP-EXECUTION.md](MULTIHOP-EXECUTION.md) for pairing and version boundaries. Native package and physical-device acceptance remain separate evidence.

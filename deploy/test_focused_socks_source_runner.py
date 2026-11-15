@@ -116,7 +116,7 @@ class RunnerTests(unittest.TestCase):
                 yield args, source, output, calls
 
     def test_exact_new_and_preserved_inventory(self):
-        self.assertEqual([len(case.expected) for case in D.cases()], [70, 44, 2, 3, 50, 2, 2, 2, 2])
+        self.assertEqual([len(case.expected) for case in D.cases()], [70, 44, 2, 3, 50, 2, 2, 2, 2, 65, 11, 8])
         self.assertEqual((len(D.MEMBER_FAULTS), len(D.ORDER_FAULTS), len(D.SEAL_FAULTS)), (29, 17, 9))
         self.assertEqual(len(D.SCHEMA2_FAULTS), 22)
         self.assertEqual(len(D.PRESERVATION_ROOTS), 4)
@@ -148,10 +148,10 @@ class RunnerTests(unittest.TestCase):
             D.mutation_source(D.cases()[0], "anything")
 
     def test_fixed_per_control_source_and_replacement(self):
-        self.assertEqual(len(D.SOURCE_PATHS), 6)
-        self.assertEqual(len(set(D.SOURCE_PATHS)), 6)
+        self.assertEqual(len(D.SOURCE_PATHS), 8)
+        self.assertEqual(len(set(D.SOURCE_PATHS)), 8)
         controls = [case for case in D.cases() if case.mutation]
-        self.assertEqual(len(controls), 6)
+        self.assertEqual(len(controls), 7)
         for case in controls:
             path, anchor, replacement = D.CONTROL_MUTATIONS[case.mutation]
             expected = D.COMPILER if case.mutation == "omitted-local-only" else D.INTEGRITY
@@ -218,11 +218,30 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(record=removed):
                 raw = b"\n".join(json.dumps(row).encode() for row in original if row.get("Test") != removed)
                 self.assertFalse(D.CORE.verdict(raw, case, 0)["accepted"])
-        for case in D.cases()[5:]:
+        for case in (c for c in D.cases()[5:] if c.mutation):
             for code, timed, joined in ((0, False, True), (1, True, True), (1, False, False), (-9, False, True)):
                 with self.subTest(control=case.name, code=code, timed=timed, joined=joined):
                     self.assertFalse(D.CORE.verdict(events(case), case, code, timed_out=timed,
                                                    process_group_joined=joined)["accepted"])
+
+    def test_every_complete_prefix_source_runtime_and_original_pointer_is_mandatory(self):
+        self.assertEqual(len(D.PREFIX_CASES),65)
+        self.assertEqual(len(D.PREFIX_RUNTIME_CASES),11)
+        for mode in ("wg","awg2-fast","awg2-strong"):
+            for auth in ("password","none"):
+                for count in range(1,7):
+                    self.assertIn(D.PREFIX_ROOTS[0]+f"/{mode}/{auth}/{count}",D.PREFIX_CASES)
+        for case in D.cases()[9:]:
+            original=[json.loads(row) for row in events(case).splitlines()]
+            code=1 if case.mutation else 0
+            self.assertTrue(D.CORE.verdict(events(case),case,code)["accepted"])
+            for removed in case.expected:
+                with self.subTest(case=case.name,removed=removed):
+                    raw=b"\n".join(json.dumps(row).encode() for row in original if row.get("Test")!=removed)
+                    self.assertFalse(D.CORE.verdict(raw,case,code)["accepted"])
+        control=D.cases()[-1]
+        self.assertEqual(control.mutation,"original-prefix-pointer")
+        self.assertEqual(control.witness_tests,frozenset(D.PREFIX_ROOTS[3]+"/"+str(i) for i in range(7)))
 
     def test_build_timeout_unjoined_signal_not_controls(self):
         case = D.cases()[2]
@@ -262,7 +281,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(manifest["tree_sha"], TREE)
             self.assertEqual(manifest["trusted_executor_sha256"], hashlib.sha256(D.CORE_PATH.read_bytes()).hexdigest())
             self.assertEqual(manifest["validator_sha256"], hashlib.sha256(DRIVER_PATH.read_bytes()).hexdigest())
-            self.assertEqual(len(calls), 9)
+            self.assertEqual(len(calls), 12)
             self.assertTrue(manifest["formatting"]["diff_present"])
             self.assertTrue(manifest["formatting"]["process_group_joined"])
             self.assertNotIn("-w", manifest["formatting"]["command"])

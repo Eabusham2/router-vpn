@@ -21,19 +21,19 @@ import (
 // separate pinned-native owner gate.
 type nodeChainSOCKSTestEngine struct {
 	*nodeChainTestEngine
-	ownerMu                                      sync.Mutex
-	source                                       *NodeChainSOCKSSource
-	config                                       string
-	meta                                         NodeChainSOCKSSourceMetadata
-	manager, middle, lower                       *int
+	ownerMu                                        sync.Mutex
+	source                                         *NodeChainSOCKSSource
+	config                                         string
+	meta                                           NodeChainSOCKSSourceMetadata
+	manager, middle, lower                         *int
 	originalManager, originalMiddle, originalLower *int
-	retired                                      bool
-	middlePeer                                   string
-	middleCalls                                  atomic.Int32
-	dialCalls                                    atomic.Int32
-	observer                                     func(context.Context) error
-	dialHook                                     func(context.Context, string, string) (net.Conn, error, bool)
-	nativeClosed                                 atomic.Bool
+	retired                                        bool
+	middlePeer                                     string
+	middleCalls                                    atomic.Int32
+	dialCalls                                      atomic.Int32
+	observer                                       func(context.Context) error
+	dialHook                                       func(context.Context, string, string) (net.Conn, error, bool)
+	nativeClosed                                   atomic.Bool
 }
 
 func newNodeChainSOCKSRuntimeFixture(t *testing.T, mode string) (*NodeChainSOCKSRuntime, *nodeChainSOCKSTestEngine) {
@@ -42,6 +42,11 @@ func newNodeChainSOCKSRuntimeFixture(t *testing.T, mode string) (*NodeChainSOCKS
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newNodeChainSOCKSRuntimeSourceFixture(t, source)
+}
+
+func newNodeChainSOCKSRuntimeSourceFixture(t *testing.T, source *NodeChainSOCKSSource) (*NodeChainSOCKSRuntime, *nodeChainSOCKSTestEngine) {
+	t.Helper()
 	runtime, err := NewNodeChainSOCKSRuntime(source)
 	if err != nil {
 		t.Fatal(err)
@@ -108,12 +113,12 @@ func (e *nodeChainSOCKSTestEngine) Dial(ctx context.Context, tag, address string
 			return conn, err
 		}
 	}
-	if tag == e.chain.proofs[1].Tag {
+	if tag == e.chain.proofs[len(e.chain.proofs)-2].Tag {
 		if address != "1.1.1.1:443" && address != hopmeasure.PublicAddress {
 			return nil, errors.New("SOCKS middle cannot adopt a private proof target")
 		}
 		e.mu.Lock()
-		dead := e.dead == 1
+		dead := e.dead == len(e.chain.proofs)-2
 		e.mu.Unlock()
 		if dead {
 			return nil, errors.New("original SOCKS middle route stopped")

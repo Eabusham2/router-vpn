@@ -207,7 +207,7 @@ try{
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $socksSaved $store)}catch{$rejected=$true};Check $rejected 'SOCKS relinking retained old draft authority'
     # Run the real Add/Apply and request-source guard for both original CONNECT
     # protocols. Capability remains explicit and no native admission is invented.
-    foreach($protocol in @('http-connect','https-connect','openvpn')){foreach($packet in @('wg','awg2-fast','awg2-strong')){
+    foreach($protocol in @('http-connect','https-connect','openvpn','socks5')){foreach($packet in @('wg','awg2-fast','awg2-strong')){
         foreach($count in $(if($protocol-ceq'openvpn'){@(3)}else{@(3..8)})){
         $middle=$count-2
         $rows.Clear();$finalMode.SelectedIndex=0
