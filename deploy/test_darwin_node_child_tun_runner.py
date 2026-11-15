@@ -91,6 +91,7 @@ def workflow_inventory(raw):
     checks = [
         'python3 deploy/test_darwin_node_child_tun_runner.py',
         'python3 deploy/test_darwin_paired_node_child_runner.py',
+        'python3 deploy/test_darwin_ordered_mtu_reader_runner.py',
         'python3 deploy/test_darwin_paired_node_platform.py --go go',
         "go test -race -p=1 ./internal/mobilemultihop -run '^TestDesktopNodeReadyRecordBindsDarwinOriginalSelection$' -count=1",
     ]
@@ -374,11 +375,16 @@ class CompilationDiagnostics(unittest.TestCase):
                         cases=list(G.PAIRED.CASES),phases=['command','box'],
                         source_sha256=G.PAIRED.source_digest(before),command_sha256=identities[child][-1],
                         box_sha256=identities[box][-1],output_sha256='c'*64)
+        def ordinary(source,before,compiler,captured,child,identities,work):
+            return dict(schema=1,scope='ordinary-ordered-mtu-component-boundaries',cases=list(G.ORDERED_MTU.CASES),
+                        source_sha256=G.PAIRED.source_digest(before),command_sha256=identities[child][-1],
+                        box_sha256=identities[work/'paired-node-box.test'][-1],output_sha256='e'*64)
         source=Path('/captured/source');before={'original':'a'*64}
         inventory=[(source,before),(source,{'changed':'b'*64})] if source_changed else None
-        with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID.RACE,'verify_image',side_effect=ValueError('wrong native compiler') if wrong_image_compiler else None) as image_readback, patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run), patch.object(G,'native_output',side_effect=run), patch.object(G,'execute_paired_boundaries',side_effect=paired) as paired_run:
+        with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID.RACE,'verify_image',side_effect=ValueError('wrong native compiler') if wrong_image_compiler else None) as image_readback, patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run), patch.object(G,'native_output',side_effect=run), patch.object(G,'execute_paired_boundaries',side_effect=paired) as paired_run, patch.object(G,'execute_ordered_mtu_boundaries',side_effect=ordinary) as ordinary_run:
             result=G.execute(source,environment={},compile_only=compile_only,preflight_only=preflight_only,diagnostic_original_case=diagnostic_original_case)
         self.assertEqual(paired_run.call_count,0 if compile_only or preflight_only or diagnostic_original_case else 1)
+        self.assertEqual(ordinary_run.call_count,paired_run.call_count)
         self.assertEqual(image_readback.call_count,2)
         self.assertEqual(result['toolchain'],'go1.26.5')
         for index,(command,kwargs) in enumerate(calls[:2]):
@@ -1502,6 +1508,7 @@ class RequiredWorkflowInventory(unittest.TestCase):
     def test_missing_architecture_or_weakened_invocation_cannot_pass(self):
         raw = (ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text()
         changes = (
+            ('missing-ordinary-mtu-controls', '          python3 deploy/test_darwin_ordered_mtu_reader_runner.py\n', ''),
             ('missing-amd64', '          - arch: amd64\n            runner: macos-15-intel\n', ''),
             ('missing-arm64', '          - arch: arm64\n            runner: macos-15\n', ''),
             ('wrong-runner', 'runner: macos-15-intel', 'runner: ubuntu-latest'),

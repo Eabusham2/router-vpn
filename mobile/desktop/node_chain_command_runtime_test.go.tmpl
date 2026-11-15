@@ -941,3 +941,95 @@ func TestRouterVPNDesktopNodeChainOpenVPNOriginalGenerationAcrossMTU(t *testing.
 		})
 	}
 }
+
+// Only the native confirmation is modeled. Original command/proof join,
+// reader adoption, identity reproof and rollback run through shipping methods.
+type desktopOrderedDarwinMTUEngine struct {
+	*desktopNodeMTUEngineFixture
+	policy *mobilemultihop.DesktopNodeChainPolicy
+	calls  int
+	refuse bool
+}
+
+func (e *desktopOrderedDarwinMTUEngine) validateOrderedDarwinMTUReader(ctx context.Context, policy *mobilemultihop.DesktopNodeChainPolicy, next adapter.Inbound, before routerVPNNodeMTURecord, name string, index, mtu int) error {
+	e.calls++
+	reader, ok := next.(*desktopMTUTUNFixture)
+	if e.refuse || policy != e.policy || !ok || next != e.current || reader.name != name || reader.index != index || reader.mtu != mtu || before.Config != policy.Metadata().ConfigSHA256 {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+func TestRouterVPNDesktopNodeChainDarwinMTUOriginalSuccession(t *testing.T) {
+	for _, fault := range []string{"same-alias", "renamed", "missing-capability", "refused-capability", "foreign-policy", "same-index", "same-reader", "missing-state", "unjoined-state", "unrevoked-state", "foreign-predecessor", "cancelled", "mixed-prefix", "mixed-openvpn"} {
+		t.Run(fault, func(t *testing.T) {
+			policy := desktopNodeChainCommandPolicy(t, 3, "darwin", 1420)
+			f := desktopNodeChainRuntimeFixtureWithPolicy(t, policy)
+			f.mtu.inbound.(*desktopMTUTUNFixture).name = "utun91"
+			f.mtu.record.Interface = "utun91"
+			engine := &desktopOrderedDarwinMTUEngine{desktopNodeMTUEngineFixture: f.native, policy: policy}
+			f.mtu.engine = engine
+			f.start(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			change := f.native.change
+			f.native.change = func(call context.Context, old adapter.Inbound, mtu int) (adapter.Inbound, error) {
+				next, err := change(call, old, mtu)
+				if fault == "renamed" {
+					next.(*desktopMTUTUNFixture).name = "utun92"
+				}
+				switch fault {
+				case "same-index":
+					next.(*desktopMTUTUNFixture).index = old.(*desktopMTUTUNFixture).index
+				case "same-reader":
+					next = old
+					f.native.current = old
+				case "missing-state":
+					f.runtime.state.Store(nil)
+				case "unjoined-state":
+					f.runtime.state.Load().joined = false
+				case "unrevoked-state":
+					f.runtime.state.Load().revoked.Store(false)
+				case "foreign-predecessor":
+					f.runtime.state.Load().inbound = next
+				case "cancelled":
+					cancel()
+				case "mixed-prefix":
+					f.mtu.prefix = &routerVPNNodeCandidatePrefixRuntime{}
+				case "mixed-openvpn":
+					f.mtu.openVPN = &routerVPNImportedOpenVPN{}
+				}
+				return next, err
+			}
+			if fault == "missing-capability" {
+				f.mtu.engine = f.native
+			}
+			if fault == "refused-capability" {
+				engine.refuse = true
+			}
+			if fault == "foreign-policy" {
+				engine.policy = desktopNodeChainCommandPolicy(t, 3, "darwin", 1420)
+			}
+			before := f.mtu.record
+			err := f.mtu.changeBeforeContext(ctx, 1360, time.Time{})
+			success := fault == "same-alias" || fault == "renamed"
+			if (err == nil) != success {
+				t.Fatal("ordered original reader verdict changed", fault, err)
+			}
+			if !success {
+				if f.runtime.heartbeat(context.Background(), f.mtu.record) == nil {
+					t.Fatal("unproved ordered successor published readiness")
+				}
+				return
+			}
+			if engine.calls != 1 || len(f.proofs) != 2 || f.mtu.record.Index == before.Index || f.mtu.record.Reader != before.Reader+1 || f.runtime.current(ctx) != nil {
+				t.Fatal("ordered succession omitted original confirmation or reproof")
+			}
+			if err := f.mtu.changeBeforeContext(ctx, before.MTU, time.Time{}); err != nil {
+				t.Fatal("ordered original rollback refused", err)
+			}
+			if engine.calls != 2 || len(f.proofs) != 3 || f.mtu.record.Reader != before.Reader+2 || f.mtu.record.MTU != before.MTU || f.runtime.current(ctx) != nil {
+				t.Fatal("ordered rollback lost original fresh proof")
+			}
+		})
+	}
+}

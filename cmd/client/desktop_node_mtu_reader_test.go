@@ -33,11 +33,13 @@ func desktopNodeMTUReaderFixture(t *testing.T, policy *mobilemultihop.DesktopNod
 
 func TestDesktopNodeMTUDarwinReaderMailboxLifecycle(t *testing.T) {
 	_, sealed := desktopNodeChainLaunchFixture(t, 3, "darwin")
-	for _, ending := range []string{"commit", "restore", "close"} {
+	for _, ending := range []string{"commit", "restore", "close", "same-alias-restore"} {
 		t.Run(ending, func(t *testing.T) {
 			fixture := desktopNodeMTUReaderFixture(t, sealed.chain.policy)
 			commands := startDesktopNodeMTUFixtureChild(t, fixture, func(_ desktopNodeMTUCommand, next *desktopNodeMTURecord) {
-				next.Interface = fmt.Sprintf("utun%d", 990+next.Reader)
+				if ending != "same-alias-restore" {
+					next.Interface = fmt.Sprintf("utun%d", 990+next.Reader)
+				}
 			})
 			type marker struct{}
 			ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), marker{}, ending), 3*time.Second)
@@ -62,7 +64,7 @@ func TestDesktopNodeMTUDarwinReaderMailboxLifecycle(t *testing.T) {
 				if !bounded || bound.After(deadline) || call.Value(marker{}) != ending || call.Err() != nil ||
 					previous != owner.record || owner.pending == nil || next.Request != owner.pending.Request ||
 					next.Generation != owner.pending.Generation || next.Reader != previous.Reader+1 ||
-					next.Interface == previous.Interface || next.Index == previous.Index {
+					(ending != "same-alias-restore" && next.Interface == previous.Interface) || next.Index == previous.Index {
 					return errors.New("reader proof lost the original caller, pending nonce or predecessor")
 				}
 				if _, err := readDesktopRuntimeFileContext(call, fixture.launch, "node-mtu-request.json", 4096); !errors.Is(err, os.ErrNotExist) {
@@ -80,16 +82,16 @@ func TestDesktopNodeMTUDarwinReaderMailboxLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			next, err := owner.ChangeContext(ctx, before, 1380)
-			if err != nil || next.Interface != "utun992" || next.Identity == before.Identity || proofs != 1 {
+			if err != nil || next.Interface != map[bool]string{true: "utun991", false: "utun992"}[ending == "same-alias-restore"] || next.Identity == before.Identity || proofs != 1 {
 				t.Fatal("proved native utun successor was not adopted", next, proofs, err)
 			}
 			if ending == "commit" {
 				if err := owner.CommitContext(ctx); err != nil {
 					t.Fatal(err)
 				}
-			} else if ending == "restore" {
+			} else if ending == "restore" || ending == "same-alias-restore" {
 				restored, err := owner.RestoreContext(ctx)
-				if err != nil || restored.Interface != "utun993" || restored.MTU != before.MTU || proofs != 2 {
+				if err != nil || restored.Interface != map[bool]string{true: "utun991", false: "utun993"}[ending == "same-alias-restore"] || restored.MTU != before.MTU || proofs != 2 {
 					t.Fatal("rollback did not prove its own new utun reader", restored, proofs, err)
 				}
 			}
@@ -104,7 +106,7 @@ func TestDesktopNodeMTUDarwinReaderMailboxLifecycle(t *testing.T) {
 				t.Fatal("final reader ownership or lifecycle changed", owner.record, proofs)
 			}
 			if state, restored := owner.CleanupRestored(); restored != (ending != "commit") ||
-				restored && (state.Interface != "utun993" || state.MTU != before.MTU) {
+				restored && (state.Interface != map[bool]string{true: "utun991", false: "utun993"}[ending == "same-alias-restore"] || state.MTU != before.MTU) {
 				t.Fatal("cleanup lost the exact proved rollback reader", state, restored)
 			}
 			finalAction := "rollback"

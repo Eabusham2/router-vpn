@@ -272,6 +272,8 @@ def inputs():
                              ROOT/'deploy/test_darwin_paired_node_child_runner.py',
                              ROOT/'deploy/test_darwin_paired_node_platform.py',
                              ROOT/'deploy/test_darwin_paired_mtu_reader.py',
+                             ROOT/'deploy/test_darwin_ordered_mtu_reader.py',
+                             ROOT/'deploy/test_darwin_ordered_mtu_reader_runner.py',
                              ROOT/'.github/workflows/darwin-node-child-tun.yml',
                              ROOT/'deploy/test_desktop_darwin_observation.py',
                              ROOT/'deploy/darwin_race_toolchain.py',

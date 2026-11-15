@@ -21,12 +21,12 @@ import (
 // original descriptor transfer, never a real utun or a PF acceptance receipt.
 type desktopNodeDarwinControlSource struct {
 	*desktopExternalBoxSource
-	box          *Box
-	tag          string
-	controlMu    sync.Mutex
-	files        []*os.File
-	nameOnly     int
-	rejectFile   bool
+	box        *Box
+	tag        string
+	controlMu  sync.Mutex
+	files      []*os.File
+	nameOnly   int
+	rejectFile bool
 }
 
 func (s *desktopNodeDarwinControlSource) BindTunnel(context.Context, mobiletor.DesktopSocketCapture, string, uint32) error {
@@ -341,5 +341,63 @@ func TestRouterVPNDesktopNodeChainDarwinPreparationKeepsOriginalCleanup(t *testi
 	}
 	if err := prepared.CloseSource(t.Context()); err != nil {
 		t.Fatal("original cleanup retry lost its retained source", err)
+	}
+}
+
+func TestRouterVPNDesktopNodeChainDarwinMTUReader(t *testing.T) {
+	for _, fault := range []string{"original", "equal-policy-pointer", "foreign-box", "foreign-reader", "nil-policy", "detached", "fixed-alias", "session", "config", "name", "index", "mtu", "readback", "source", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopNodeDarwinControlFixture(t, 0)
+			owner, err := f.box.RouterVPNDesktopDarwinNodeChainActivatePhysical(f.policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			policy, instance, reader := f.policy, f.box, owner.inbound
+			meta := policy.Metadata()
+			session, config := meta.SessionID, meta.ConfigSHA256
+			name, index, mtu := owner.name, owner.index, owner.mtu
+			switch fault {
+			case "equal-policy-pointer":
+				policy, err = mobilemultihop.NewDesktopNodeChainPolicy(policy.OriginalChain(), meta.SessionID, "darwin", 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if policy.Metadata().SourceSHA256 != f.policy.Metadata().SourceSHA256 || policy.Config() != f.policy.Config() {
+					t.Fatal("foreign pointer fixture lost equal capture")
+				}
+			case "foreign-box":
+				instance = &Box{}
+			case "foreign-reader":
+				reader = &desktopTorBoxTUN{}
+			case "nil-policy":
+				policy = nil
+			case "detached":
+				owner.detached = true
+			case "fixed-alias":
+				owner.interfaceName = name
+			case "session":
+				session += "foreign"
+			case "config":
+				config += "foreign"
+			case "name":
+				name += "1"
+			case "index":
+				index++
+			case "mtu":
+				mtu++
+			case "readback":
+				owner.index++
+			case "source":
+				f.network.CancelAdmission()
+			case "cancelled":
+				cancel()
+			}
+			err = owner.ConfirmOrderedDarwinMTUReader(ctx, instance, policy, reader, session, config, name, index, mtu)
+			if (err == nil) != (fault == "original") {
+				t.Fatal("ordered actual Box confirmation verdict changed", fault, err)
+			}
+		})
 	}
 }

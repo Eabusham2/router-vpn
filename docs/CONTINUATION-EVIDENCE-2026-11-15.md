@@ -946,6 +946,41 @@ portable test. Two existing mutation-inventory/source-order checks also passed.
 The corrected broader Intel/ARM64 kernel tests and final exact-SHA release
 still need to pass.
 
+### Ordinary ordered macOS MTU reader succession
+
+The ordinary ordered child previously refused a renamed Darwin TUN after the
+native manager had retired its predecessor and allocated a valid replacement.
+For a reused alias, the parent also skipped an independent retirement check.
+The new ordinary-chain capability requires the original concrete sealed policy
+pointer, Box, physical source, joined revoked predecessor proof and exact
+already-adopted reader. Every actual replacement requires a fresh kernel index.
+The parent checks the full native acknowledgement, absence of the old index
+under any name, and exact successor name/index/MTU/up state. Full original-chain
+reproof remains mandatory before publication. Successful explicit rollback is
+preserved. A failed or canceled native mutation remains revoked and proceeds
+to joined teardown; this change does not report an unproved restoration.
+
+The generated command passed all 14 transition leaves under the race detector;
+four focused client roots also passed under race. Exact Box and parent source
+methods passed 13 and 22 cases respectively, with five and three causal
+mutations. Native OS/source observations in those portable tests are explicit
+models. The ordinary runner passed six tests, the original paired runner eight,
+and canonical preparation 31. Two initial strict workflow expectations were
+updated for the new mandatory gate; all 13 affected child-runner checks passed.
+Darwin ARM64 Box and privileged-client images compiled with CGO disabled and
+were not executed locally.
+
+Generated checks used a retained pinned core plus the registered current
+writer overlays. All 616 critical generated/shared dependencies compared
+byte-for-byte with the current project and this change; this is not a claim
+that a fresh complete native bundle was built locally. CI now requires a
+separate 31-verdict ordinary component receipt on its original compiled child
+and Box images. The paired 105 verdicts, actual native child cases, installed
+Auto/Retest/Cancel cases and original deadlines are retained. Real macOS
+PF/utun/encrypted-traffic acceptance remains pending. Typed SOCKS/CONNECT and
+Local/Server execution succession is a distinct follow-up and is not granted
+this ordinary-policy capability.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths

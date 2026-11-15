@@ -375,7 +375,8 @@ func (owner *desktopMacOSNodeMTUOwner) verifyReaderChangeLocked(ctx context.Cont
 	if err := owner.originalLocked(); err != nil {
 		return err
 	}
-	if !sameDesktopMacOSMTUReadback(old, owner.native.record) || old.Interface == next.Interface ||
+	if !sameDesktopMacOSMTUReadback(old, owner.native.record) ||
+		(owner.host.policy == nil || owner.host.execution != nil) && old.Interface == next.Interface ||
 		next.Reader <= old.Reader || old.Session != next.Session || old.Config != next.Config || old.Path != next.Path {
 		return errors.New("macOS MTU reader callback replaced its original predecessor")
 	}
@@ -392,7 +393,11 @@ func (owner *desktopMacOSNodeMTUOwner) verifyReaderChangeLocked(ctx context.Cont
 	}
 	previous := &mobilemultihop.DesktopNodeChainReadyRecord{Reader: old.Reader,
 		InterfaceName: old.Interface, InterfaceIndex: uint32(old.Index)}
-	if err := validateDesktopMacOSNodeChainReaderRetirement(previous, next, interfaces); err != nil {
+	verify := validateDesktopMacOSNodeChainReaderRetirement
+	if owner.host.policy != nil && owner.host.execution == nil {
+		verify = validateDesktopMacOSOrdinaryReaderRetirement
+	}
+	if err := verify(previous, next, interfaces); err != nil {
 		return err
 	}
 	return ctx.Err()

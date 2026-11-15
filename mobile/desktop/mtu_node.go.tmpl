@@ -145,6 +145,15 @@ func (engine *routerVPNNodeMTUBox) validatePairedDarwinMTUReader(ctx context.Con
 		before.Session, before.Config, name, index, mtu)
 }
 
+func (engine *routerVPNNodeMTUBox) validateOrderedDarwinMTUReader(ctx context.Context, policy *mobilemultihop.DesktopNodeChainPolicy,
+	next adapter.Inbound, before routerVPNNodeMTURecord, name string, index, mtu int) error {
+	if engine == nil || engine.instance == nil || engine.physical == nil || next == nil || next.Tag() != engine.tag {
+		return routerVPNExternalFailure
+	}
+	return engine.physical.ConfirmOrderedDarwinMTUReader(ctx, engine.instance, policy, next,
+		before.Session, before.Config, name, index, mtu)
+}
+
 func (engine *routerVPNNodeMTUBox) ClaimTUN(guard func() bool) (string, int, int, error) {
 	if engine.physical != nil {
 		return engine.physical.ClaimTUN(guard)
@@ -371,7 +380,21 @@ func (owner *routerVPNNodeMTU) changeBeforeContext(parent context.Context, value
 	if err != nil || index < 1 || mtu < 1280 || mtu > 9000 {
 		return routerVPNExternalFailure
 	}
-	if name != before.Interface {
+	if owner.chain != nil && owner.chain.policy != nil && owner.chain.policy.Metadata().TargetOS == "darwin" {
+		// The actual original ordered Box, not the target string, grants this
+		// authority. Check reused aliases too: every replacement is a fresh
+		// reader/index, after the original proof has joined.
+		state := owner.chain.state.Load()
+		retained, ok := owner.engine.(interface {
+			validateOrderedDarwinMTUReader(context.Context, *mobilemultihop.DesktopNodeChainPolicy, adapter.Inbound, routerVPNNodeMTURecord, string, int, int) error
+		})
+		if !ok || owner.execution != nil || owner.prefix != nil || owner.openVPN != nil ||
+			owner.chain.mtu != owner || state == nil || !state.revoked.Load() || !state.joined ||
+			state.inbound != previous || next == previous || index == before.Index ||
+			retained.validateOrderedDarwinMTUReader(observe, owner.chain.policy, next, before, name, index, mtu) != nil {
+			return routerVPNExternalFailure
+		}
+	} else if name != before.Interface {
 		retained, ok := owner.engine.(interface {
 			validatePairedDarwinMTUReader(context.Context, adapter.Inbound, routerVPNNodeMTURecord, string, int, int) error
 		})
