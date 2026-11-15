@@ -23,6 +23,13 @@ func desktopDarwinOffKernelPolicy(t *testing.T, network string, remote netip.Add
 	options.HostProtectionOff = true
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
+	// Compare kernel readback with the independent system parser's complete
+	// rendering, not the shorter source spelling (for example "out" vs "out all").
+	// Capture this before preparation consumes the original bounded context.
+	expectedBaseline, err := desktopDarwinPFCanonical(ctx, desktopPFIsolatedBaseline(capture.SessionID))
+	if err != nil || expectedBaseline == "" {
+		t.Fatal("Darwin Off independent baseline did not compile", err)
+	}
 	if err := desktopDarwinPFLoad(ctx, desktopDarwinPFNamespace, desktopDarwinPFBaseline(capture, options)); err != nil {
 		t.Fatal(err)
 	}
@@ -39,9 +46,10 @@ func desktopDarwinOffKernelPolicy(t *testing.T, network string, remote netip.Add
 	if err != nil {
 		t.Fatal("actual Darwin Off guardian preparation", err)
 	}
-	if !policy.options.HostProtectionOff || policy.pf.Baseline != strings.TrimSpace(desktopPFIsolatedBaseline(capture.SessionID)) ||
+	if !policy.options.HostProtectionOff || policy.pf.Baseline != expectedBaseline ||
 		!policy.pf.pointerValid() || !strings.Contains(policy.pf.Pointer, "block drop out quick") {
-		t.Fatal("Darwin Off baseline lost its dispatch-only root and independent UID deny")
+		t.Fatalf("Darwin Off baseline lost its dispatch-only root and independent UID deny: off=%t pointer=%t deny=%t expected=%.1024q actual=%.1024q",
+			policy.options.HostProtectionOff, policy.pf.pointerValid(), strings.Contains(policy.pf.Pointer, "block drop out quick"), expectedBaseline, policy.pf.Baseline)
 	}
 	return policy
 }

@@ -961,6 +961,94 @@ class DarwinOffAdmissionJoin(unittest.TestCase):
         regression.execute(ROOT)
 
 
+class DarwinOffBaselineReadback(unittest.TestCase):
+    def test_actual_native_fixture_compares_independent_canonical_baseline(self):
+        source = (ROOT/'internal/mobiletor/desktop_socket_darwin_off_test.go').read_text()
+        start = source.index('func desktopDarwinOffKernelPolicy(')
+        helper = source[start:source.index('\nfunc desktopDarwinOffHostExchange(', start)]
+        seam = 'policy.pf.Baseline != expectedBaseline'
+        self.assertEqual(helper.count(seam), 1)
+        old = helper.replace('func desktopDarwinOffKernelPolicy(', 'func oldRawBaselinePolicy(', 1).replace(
+            seam, 'policy.pf.Baseline != strings.TrimSpace(desktopPFIsolatedBaseline(capture.SessionID))', 1)
+        header = r'''package baseline
+import("context";"errors";"net/netip";"os";"strings";"testing";"time")
+type DesktopSocketCapture struct{SessionID string}
+type DesktopDarwinSocketDestination struct{Network string;Address netip.AddrPort}
+type DesktopDarwinSocketOptions struct{HostProtectionOff bool}
+type pfBoundary struct{Baseline,Pointer string;valid bool}
+func(p *pfBoundary)pointerValid()bool{return p.valid}
+type DesktopDarwinSocketPolicy struct{options DesktopDarwinSocketOptions;pf *pfBoundary}
+func(*DesktopDarwinSocketPolicy)Close(context.Context)error{return nil}
+var desktopDarwinPFNamespace="original-namespace"
+var events []string
+func desktopSocketFixtureCapture()DesktopSocketCapture{return DesktopSocketCapture{"original"}}
+func desktopDarwinKernelOptions(*testing.T,[]DesktopDarwinSocketDestination)DesktopDarwinSocketOptions{return DesktopDarwinSocketOptions{}}
+func desktopPFIsolatedBaseline(session string)string{return "anchor \"p"+session+"\" out\n"}
+func desktopDarwinPFBaseline(c DesktopSocketCapture,o DesktopDarwinSocketOptions)string{return desktopPFIsolatedBaseline(c.SessionID)}
+func desktopDarwinPFCanonical(ctx context.Context,source string)(string,error){
+ events=append(events,"canonical")
+ if source!=desktopPFIsolatedBaseline("original"){return "",errors.New("foreign parser source")}
+ if _,ok:=ctx.Deadline();!ok{return "",errors.New("lost original bounded context")}
+ switch os.Getenv("ROUTERVPN_BASELINE_VARIANT"){case "parser-error":return "",errors.New("original parser refused");case "empty-parser":return "",nil}
+ return "anchor \"poriginal\" out all",nil
+}
+func desktopDarwinPFLoad(ctx context.Context,namespace,source string)error{
+ if strings.Join(events,",")!="canonical"||namespace!=desktopDarwinPFNamespace||source!=desktopPFIsolatedBaseline("original"){return errors.New("load preceded original independent parser")}
+ events=append(events,"load");return nil
+}
+func NewDesktopDarwinSocketPolicy(_ context.Context,c DesktopSocketCapture,o DesktopDarwinSocketOptions)(*DesktopDarwinSocketPolicy,error){
+ if strings.Join(events,",")!="canonical,load"{return nil,errors.New("preparation preceded original expected capture")}
+ events=append(events,"prepare")
+ p:=&DesktopDarwinSocketPolicy{o,&pfBoundary{"anchor \"poriginal\" out all","block drop out quick proto tcp user 1073741825",true}}
+ switch os.Getenv("ROUTERVPN_BASELINE_VARIANT"){
+ case "foreign-baseline":p.pf.Baseline="anchor \"pforeign\" out all"
+ case "extra-filter":p.pf.Baseline+="\npass out all"
+ case "off-lost":p.options.HostProtectionOff=false
+ case "pointer-lost":p.pf.valid=false
+ case "deny-lost":p.pf.Pointer="anchor \"/original-generation\" out all"
+ }
+ return p,nil
+}
+'''
+        regression = r'''package baseline
+import("net/netip";"os";"testing")
+func TestOriginalOffBaselineReadback(t *testing.T){
+ remote:=netip.MustParseAddrPort("192.0.2.1:443")
+ if os.Getenv("ROUTERVPN_BASELINE_VARIANT")=="old-raw-source"{oldRawBaselinePolicy(t,"tcp4",remote)}else{desktopDarwinOffKernelPolicy(t,"tcp4",remote)}
+}
+'''
+        compiler = shutil.which('go')
+        self.assertIsNotNone(compiler, 'Go is required for actual Off fixture readback regression')
+        with tempfile.TemporaryDirectory(prefix='darwin-off-baseline-') as directory:
+            folder = Path(directory)
+            implementation, test = folder/'baseline.go', folder/'baseline_test.go'
+            implementation.write_text(header+helper+old)
+            test.write_text(regression)
+            binary = folder/('baseline.test.exe' if os.name == 'nt' else 'baseline.test')
+            result = subprocess.run([compiler,'test','-c','-o',str(binary),str(implementation),str(test)],
+                                    capture_output=True,text=True,timeout=120,
+                                    env=dict(os.environ,GOTOOLCHAIN='local'))
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            for variant in ('original','old-raw-source','parser-error','empty-parser','foreign-baseline','extra-filter','off-lost','pointer-lost','deny-lost'):
+                with self.subTest(variant=variant):
+                    result = subprocess.run([str(binary),'-test.run=^TestOriginalOffBaselineReadback$','-test.v','-test.timeout=5s'],
+                                            capture_output=True,text=True,timeout=10,
+                                            env=dict(os.environ,ROUTERVPN_BASELINE_VARIANT=variant))
+                    output = result.stdout+result.stderr
+                    if variant == 'original':
+                        self.assertEqual(result.returncode,0,output)
+                        self.assertIn('--- PASS: TestOriginalOffBaselineReadback (',output)
+                    else:
+                        self.assertNotEqual(result.returncode,0,output)
+                        message = ('independent baseline did not compile' if variant in ('parser-error','empty-parser')
+                                   else 'baseline lost its dispatch-only root and independent UID deny')
+                        self.assertIn(message,output)
+                        self.assertIn('--- FAIL: TestOriginalOffBaselineReadback (',output)
+                        for invalid in ('panic:','fatal error:','[build failed]','test timed out'):
+                            self.assertNotIn(invalid,output)
+                    print('Darwin Off baseline readback: '+variant+' verified',flush=True)
+
+
 class DarwinSOCKSCleanupOwnership(unittest.TestCase):
     def test_actual_registration_reaches_bounded_owner_before_blocked_connection_close(self):
         source = (ROOT/'internal/mobiletor/desktop_socket_darwin_guardian_test.go').read_text()

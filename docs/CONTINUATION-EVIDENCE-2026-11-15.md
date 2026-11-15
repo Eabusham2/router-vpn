@@ -920,6 +920,32 @@ control-order failure was corrected without removing its original witness.
 These are actual-source portable compiler/parser results; corrected Xcode
 packaging, signing and device acceptance remain separate required evidence.
 
+### Independent canonical PF baseline in the native Off fixture
+
+At `43b3f5d3`, the actual single-filter PF lifecycle gates passed on Intel
+(`132784074156`) and ARM64 (`132784073958`) in run `43705000957`. The broader
+Intel socket/utun job `132784074130` then failed all four Off transport cases
+at its baseline assertion, before broker traffic. That log did not print the
+actual baseline. Source inspection showed that the production constructor
+stores kernel readback after independently canonicalizing and verifying the
+complete baseline; the fixture compared that value with the shorter raw
+`anchor` source spelling.
+
+The fixture now obtains its independent expected canonical baseline before
+initial loading and policy preparation, under the existing four-second bound.
+It retains the Off flag, complete baseline equality, exact pointer validation
+and independent UID-deny assertion. A future failure prints bounded expected
+and actual baseline values and the individual predicates. No production
+firewall, native transport case or deadline was changed.
+
+The extracted actual fixture passed one positive and eight rejection variants,
+including restoration of the old raw comparison, parser error/empty output,
+foreign or extra baseline rules, a lost Off flag, invalid pointer and missing
+UID deny. Parser and native-policy boundaries are explicitly modeled in that
+portable test. Two existing mutation-inventory/source-order checks also passed.
+The corrected broader Intel/ARM64 kernel tests and final exact-SHA release
+still need to pass.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths
@@ -971,8 +997,10 @@ prove these behaviors merely because a filename or string is present.
    mandatory old-option mutation run before this case installs an Off slot.
    Actual-method race controls, readback controls, native gate inventory checks
    and the Darwin ARM64 guardian package compile passed. These are bounded
-   source/component/compiler results; the corrected Intel/ARM64 kernel gates
-   still need to pass. The older grant-expiry observation remains a historical
+   source/component/compiler results. The single-filter lifecycle gates later
+   passed on both Intel and ARM64; the broader socket/utun gates still need to
+   pass with the corrected baseline fixture described above. The older
+   grant-expiry observation remains a historical
    lead to assess from those reruns, not the cause of this ordering failure.
 2. **Deep ordinary encrypted startup, locally repaired:** a retained trace
    proved that the next endpoint wrote its first handshake about 1.76 ms
