@@ -1518,3 +1518,24 @@ Exact hashes and original, positive and causal logs are retained in
 `darwin-ready-fixture-validation`. This changes only tests and their required
 gate; production validation, timeouts, native admission and installed-host
 acceptance requirements remain unchanged.
+
+## Apple editor placement control targets the shared captured rule
+
+The remaining required iOS runtime-contract commands were executed locally
+after the earlier original-identity gate had stopped the hosted sequence.
+The ordered provider, launch and startup checks passed. The editor gate then
+exposed another stale deliberate-defect anchor: it still searched for the
+former fixed-three-member expression after shipping code had adopted
+`IOSMultihopNodeSelection.supportsImportedMiddle`.
+
+The single-line test correction removes that actual helper call in the
+deliberately broken variant while preserving the final Shadowsocks condition.
+The original first-position SOCKS rejection remains the required causal
+witness. All 274 shipping Swift/shared-Go editor checks and all ten original
+causal controls pass; the complete execution took 143.214 seconds. No editor
+implementation, placement rule, saved-profile validation or other production
+code changed. The remaining runtime-contract commands continue independently.
+
+The frozen patch, source hashes and complete log are retained under
+`ios-runtime-tail-validation`. These checks use explicit native/store doubles
+and do not establish Xcode packaging, physical UI or live tunnel acceptance.
