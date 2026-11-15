@@ -47,7 +47,13 @@ def check_provider(output):
             runs.add(name)
         elif passed:
             name=passed[1]
-            if terminal or name not in runs or name in passes or name==PROVIDER and passes!=expected-{PROVIDER}:raise ValueError('Unmatched provider pass')
+            if terminal or name not in runs or name in passes:raise ValueError('Unmatched provider pass')
+            # Go flushes the completed parent before its indented subtest
+            # verdicts. Require all original runs before that parent verdict,
+            # then every protocol's own pass before accepting terminal PASS.
+            if name==PROVIDER:
+                if runs!=expected or passes:raise ValueError('Premature provider root pass')
+            elif PROVIDER not in passes:raise ValueError('Provider leaf passed before root')
             passes.add(name)
         elif text=='PASS':
             if terminal or runs!=expected or passes!=expected:raise ValueError('Incomplete provider verdict')
@@ -163,7 +169,7 @@ def execute(core,go='go',*,env=None,receipt=None,compile_only=False):
         images={role:BASE.image_identity(path) for role,path in (('driver',driver),('peer',peer),('worker',worker))}
         if checked_sources(core)[1]!=before:raise ValueError('CONNECT source changed during compilation')
         provider=BASE.run([peer,'-test.run=^'+PROVIDER+'$','-test.v','-test.count=1','-test.timeout=30s'],cwd=core,env=captured,timeout=45)
-        provider_protocols=check_provider(provider);print(provider,end='')
+        print(provider,end='',flush=True);provider_protocols=check_provider(provider)
         source=BASE.run([driver,'-test.run=^'+SOURCE+'$','-test.v','-test.count=1','-test.timeout=60s'],cwd=core,env=captured,timeout=75)
         check_verdict(source,source_only=True);print(source,end='')
         original_source=BASE.run([driver,'-test.run=^'+BASE.SOURCE+'$','-test.v','-test.count=1','-test.timeout=60s'],cwd=core,env=captured,timeout=75)
