@@ -21,11 +21,13 @@ deployment acceptance.
 ## November 15 continuation evidence
 
 [The November 15 ledger](CONTINUATION-EVIDENCE-2026-11-15.md) records recovery
-of the complete historical 1–311 index and the original August 11 user
-passage, eleven published repairs through `9fe62718`, current native failure
-evidence, and the ordered desktop All-Off implementation gap. It preserves
+of the complete historical 1–311 index, original August 11/13/14 user
+passages, published repairs and feature units through `538f50ba`, current native
+failure evidence, Linux/Windows Off source, Android runtime/profile verification
+and macOS public prefix-candidate preparation. It preserves
 the original identifiers and separates source, native execution, publication
-and live acceptance. It does not claim a complete current release.
+and live acceptance. Complete macOS Off, broader requested graph integration,
+current release convergence and live acceptance remain separately accountable.
 
 ## November 12 current evidence refresh
 

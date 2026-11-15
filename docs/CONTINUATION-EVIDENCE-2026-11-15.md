@@ -34,12 +34,19 @@ addition to personal/project context and live GitHub:
 - `Pasted text(20261019-065229).txt`: the October comparison correction.
   Preserve the actual user formula and the same external endpoint for both
   candidates; distinguish the surrounding assistant interpretation.
+- `Resume Router VPN.md`, line 6659: the August 13, 20:50:57 user request
+  for custom standard WireGuard/SOCKS/OpenVPN/Shadowsocks nodes and exits.
+  `New chat (1).md`, lines 7613–7616: the August 14, 01:39:44 request adds
+  OpenVPN support on custom nodes/hops/exits and non-platform imports.
 
 No complete verbatim collection of every original historical message is
 claimed. The above recovered index, direct user passages, existing source
-reconciliation, and later corrections are used together. No numerical maximum
-for the later repeated-hop request was recovered, and an implementation cap
-does not become a user-approved scope reduction.
+reconciliation, and later corrections are used together. Explicit personal-memory
+retrieval was unavailable; this does not erase requirements from inaccessible
+messages. This recovery has not located an original instruction establishing
+unlimited same-node repetition or a new numerical maximum. Assistant shorthand
+cannot establish either requirement, and an implementation cap does not become
+a user-approved scope reduction.
 
 ## Source baseline and published repairs
 
@@ -66,9 +73,15 @@ back from the remote. There was no force push or live deployment.
 | `216a893a99afb804a9c66a77b79493dbb9b90078` | Pinned WireGuard endpoint startup joins the original device/peer Up transition after hostname resolver installation and before returning to dependent endpoints. | The original source fails both literal and hostname readiness controls. The corrected actual ClientBind race suite and twenty fresh encrypted eight-node/fifty-sample replays passed with the original reference peer. The five-second proof deadline and ordinary retry timer are unchanged. |
 | `ad7c8edea47c824cd512e98b516a87223f471b01` | Expired Darwin native command observations distinguish the fixed PF query category and queue/path/Start/Wait durations from total elapsed time. | Actual shipping-adapter baseline and eight causal/control outcomes passed; output remains nonblocking and bounded to 512 bytes. This is diagnostic evidence, not a claim that the native PF refusal is repaired. |
 | `b16b0f1180f2fbcb4c5cdf59ddff1d49c7a73f84` | Darwin read-only native commands with no captured input use null-device EOF instead of an empty input pipe and copy goroutine. Explicit empty and nonempty input retain their original pipe lifecycle. | The actual adapter and child verify stdin kind, binary bytes, EOF, cancellation and joined ownership; all twelve baseline/control outcomes passed. No native deadline, PF proof, command inventory or slot limit changed. Darwin performance acceptance remains required. |
+| `d5834d250086fa91b16e1c2203962d4820dea153` | Linux ordered Off preserves ordinary host traffic and retains exact isolated engine-UID, socket, journal and recovery ownership. | Four affected packages passed focused race tests in a clean snapshot. Canonical generated preparation and the shipping desktop command compiled; actual privileged kernel cases remain mandatory in CI. See the detailed scope below. |
+| `a9d7cd5dc520ba33a3c82616fc5a3dfe61f4fd9e` | Independent PF primitives compile a retained creator-UID slot guard and inspect exact local socket collisions in native PF state output. | Pure compiler/parser race checks, canonical preparation, native gate controls and both Darwin cross-compiles passed. UDP4/UDP6 collision and unrelated-host traffic cases are required natively. This primitive unit does not itself admit macOS Off. |
+| `25b350df7b7cf20a32c8dd43f234556be5116e5b` | Android mutation controls target the original connection-capture validator without altering the separate matching history guards. | Five capture families and all 29 causal controls passed. The full connection-profile suite subsequently passed, including private-store concurrency and complete rollback. Production guards were unchanged. |
+| `f76c8354104bc26ed8d89d62ceca970c328b4c9e` | Windows ordered Off uses four persistent WFP denies scoped to the original isolated local-account SID, with exact socket grants, retained journals and native status/PowerShell adapters. | A clean snapshot passed focused shared/controller/protection tests and 22 runner tests; actual installed-client and WFP/traffic test images cross-compiled. WFP and PowerShell execution remain exact-SHA native gates. |
+| `c5122351235551b45d1d45a048f2c402192a39a1` | The controlled Linux external child admits the existing WG/Shadowsocks entry shapes that its retained parent already supports. | The original body rejected eight supported shapes. The repaired actual binding body and constructor matrix passed, retaining source/hash/authentication/ownership refusal cases. A focused generated command executable compiled; complete PQ/Cronet linking and privileged installed execution remain native gates. |
+| `538f50ba25b016ab704ed7bba73c795fff5e998c` | macOS saved-prefix candidate preparation enters the shipping public catalog and Start routes on Intel and Apple Silicon. The six-case native fixture no longer duplicates private admission. | Focused preparation/cancellation/source roots and nine strict runner tests passed; both privileged Darwin images cross-compiled. Every native case now requires the public route, exact fifty handshakes, closed application/DNS purpose, original retirement and Save/Cancel. Actual native execution remains pending. |
 
-The last row is the verified publication checkpoint preceding the Linux Off
-implementation accompanying this update, not a claim that `main` cannot
+The last row is the verified publication checkpoint preceding this evidence
+refresh, not a claim that `main` cannot
 advance. The complete release-orchestration source audit also passed in the
 working tree containing these repairs. That local working-tree result is not
 relabeled as an exact-SHA hosted release.
@@ -80,7 +93,7 @@ publication have not yet been certified together.
 
 ### Linux connection with every member's kill switch Off
 
-The accompanying source change admits the captured Off choice for Linux
+Published `d5834d25` admits the captured Off choice for Linux
 ordered, typed SOCKS and typed CONNECT paths. It selects an accepting host
 chain while retaining an exact isolated engine-UID deny behind the four
 expiring tuple permits and ahead of baseline exemptions. The selected mode,
@@ -109,6 +122,52 @@ group remains unchanged. Missing, repeated, renamed, skipped or failed child
 verdicts are rejected. The local executor denies netlink; these kernel cases
 are compiled and mandatory in CI, not reported as locally accepted.
 
+### Windows connection with every member's kill switch Off
+
+Published `f76c8354` preserves ordinary host traffic while restricting the
+original isolated engine account to owned socket grants. The exact canonical
+account SID is part of the captured baseline, native filter readback, prepared
+transfer and retained journal. Protected modes retain their prior representation.
+The existing native endpoint-absence proof still prevents removing the original
+guard while a duplicated socket survives. The native status reports managed
+Off objects as active ownership; it does not pretend that retained objects have
+already disappeared.
+
+The installed SOCKS and HTTP/HTTPS CONNECT cases include the captured Off choice
+and exercise the actual native utility and PowerShell parser. Mandatory WFP
+cases cover ordinary-host traffic, ungranted and granted engine traffic, held
+duplicates, successor refusal, original retirement and policy transitions.
+Cross-compilation is recorded separately from execution on a Windows kernel.
+
+### macOS saved-prefix candidate preparation
+
+Published `538f50ba` removes the fixture-only catalog and Start handlers. The
+six installed native scenarios now use `registerOrderedCandidatePreparedRoutes`
+and its real view capture, admission, worker handoff, polling, Save and Cancel.
+Replaced views, foreign tokens, wrong sample counts, mismatched scopes and replayed
+requests remain rejected. The native receipt binds the exact public route and
+source inventory, alongside the original encrypted prefix, fifty TCP handshakes,
+unopened saved final, closed application/DNS authority and joined PF/utun cleanup.
+Older private-route results cannot stand in for this new public-route gate.
+
+### Android runtime and profile verification
+
+The original runtime-contract inventory was completed in recorded resumptions
+after a compiler was killed under local memory pressure and the later stale
+capture-fixture assertion was repaired. No original executable family or causal
+control was removed. The complete profile suite passed separately after the
+repair, covering ordered captures, Home/DNS, measured rates, preferences,
+transactional apply/rollback, imported packet/proxy families, Tor, OpenVPN and
+independent-Activity private-store concurrency.
+
+The final fourteen runtime scripts and five pinned/generated contracts also
+passed. Examples include 70 strategy scenarios/442 checks, 3,165 external Speed
+Lab checks, 4,883 restoration checks, original winner ownership and cancellation
+controls, and the generated Shadowsocks private-store/capture witness. These
+are working-tree executable results with each suite's documented Android/native
+boundary doubles. They are not relabeled as one uninterrupted exact-SHA APK
+build, a physical-device network test or a published release.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths
@@ -128,8 +187,8 @@ prove these behaviors merely because a filename or string is present.
 | 149–159; 340; later graph additions | Mode catalog, shared graph compilers, SMART/AUTO rollback, MAX/ALL native witnesses | All requested graph/platform combinations remain accountable. Ordered paths currently have bounded family/placement/length and execution support; those bounds are not full delivery. |
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
-| 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; the Linux Off source path and mandatory native gate described above | Linux exact-SHA kernel/packaged acceptance remains required. Windows/macOS Off paths are in progress and are not closed by the Linux implementation. Physical leak checks remain distinct. |
-| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses | Generic ordered source accepts 2–8 members; typed CONNECT uses a fixed three-member composition at this cutoff. Broader requested positions/protocols/execution choices remain open. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. |
+| 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; Linux and Windows Off source paths and mandatory native gates described above | Linux and Windows exact-SHA kernel/packaged acceptance remains required. Complete macOS Off is still in progress; independent PF primitives are not that feature. Physical leak checks remain distinct. |
+| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair and macOS public candidate preparation above | Generic ordered source accepts 2–8 members; typed CONNECT uses a fixed three-member composition at this cutoff. Ordinary external OpenVPN entry integration and broader requested positions/protocols/execution choices remain open. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |
@@ -163,12 +222,12 @@ prove these behaviors merely because a filename or string is present.
    six required bounded families against the same retained compiled image.
    This retains every applicable test and rejects unexpected skips; actual
    full native matrix execution remains required.
-4. **All-Off ordered desktop:** the Linux source implementation now retains
-   separate nonblocking host behavior and original engine-UID expiry,
-   descriptor, journal and recovery authority. Its actual native gate is
-   still required. Windows/macOS need the corresponding complete platform
-   implementations, including preservation of unrelated host traffic and
-   joined original socket retirement. Removing a validator is insufficient.
+4. **All-Off ordered desktop:** the published Linux and Windows implementations
+   retain separate nonblocking host behavior and original engine-UID/SID,
+   descriptor, journal and recovery authority. Their actual native gates are
+   still required. Complete macOS Off remains in progress, including preservation
+   of unrelated host traffic, existing PF state and joined original socket
+   retirement. Removing a validator is insufficient.
 
 Use `docs/LIVE-RELEASE-EVIDENCE.md` for physical/private acceptance after an
 actually green exact-SHA release. No source test, unsigned IPA, generated
