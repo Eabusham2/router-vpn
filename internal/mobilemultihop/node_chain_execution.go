@@ -50,6 +50,7 @@ type NodeChainExecutionPolicy struct {
 	source                                         NodeChainExecutionSource
 	local                                          *NodeChain
 	connect                                        *nodeChainCONNECTExecutionBinding
+	socks                                          *nodeChainSOCKSExecutionBinding
 	front                                          NodeChainExecutionFront
 	localProofs, serverProofs                      []NodeChainProof
 	dns                                            NodeChainDNSCapture
@@ -63,7 +64,17 @@ func NewNodeChainExecutionPolicy(sourceJSON string) (*NodeChainExecutionPolicy, 
 }
 
 func newNodeChainExecutionPolicyCaptured(sourceJSON string, connect *nodeChainCONNECTExecutionBinding) (*NodeChainExecutionPolicy, error) {
+	return newNodeChainExecutionPolicyFamily(sourceJSON, connect, nil)
+}
+
+func newNodeChainExecutionPolicyFamily(sourceJSON string, connect *nodeChainCONNECTExecutionBinding, socks *nodeChainSOCKSExecutionBinding) (*NodeChainExecutionPolicy, error) {
+	if connect != nil && socks != nil {
+		return nil, nodeChainExecutionError
+	}
 	schema := 1
+	if socks != nil {
+		schema = 3
+	}
 	if connect != nil {
 		schema = 4
 	}
@@ -76,8 +87,13 @@ func newNodeChainExecutionPolicyCaptured(sourceJSON string, connect *nodeChainCO
 	}
 	var local *NodeChain
 	var err error
-	if connect == nil {
+	if connect == nil && socks == nil {
 		local, err = NewNodeChain(source.LocalSource)
+	} else if socks != nil {
+		if socks.preparation == nil || socks.preparation.validateCapture() != nil || socks.validate(socks.preparation, socks.local) != nil || source.LocalSource != socks.preparation.LocalSource() || source.Execution != socks.preparation.Execution() || source.Server.Schema != 3 {
+			return nil, nodeChainExecutionError
+		}
+		local = socks.local
 	} else {
 		if connect.preparation == nil || connect.preparation.validateCapture() != nil ||
 			connect.validate(connect.preparation, connect.local) != nil || source.LocalSource != connect.preparation.LocalSource() ||
@@ -115,8 +131,10 @@ func newNodeChainExecutionPolicyCaptured(sourceJSON string, connect *nodeChainCO
 				return nil, nodeChainExecutionError
 			}
 			var middleSource, publicIP string
-			if source.Server.Schema == 2 && local.importedMiddle != nil && connect == nil {
+			if source.Server.Schema == 2 && local.importedMiddle != nil && connect == nil && socks == nil {
 				middleSource, publicIP = local.importedMiddle.source, local.importedMiddle.selection.ExpectedPublicIP
+			} else if source.Server.Schema == 3 && socks != nil && local.socksSource == socks.source {
+				middleSource, publicIP = socks.source.middle.source, socks.source.middle.selection.ExpectedPublicIP
 			} else if source.Server.Schema == 4 && connect != nil && local.connectSource == connect.source {
 				middleSource, publicIP = connect.source.middle.source, connect.source.middle.selection.ExpectedPublicIP
 			} else {
@@ -194,8 +212,11 @@ func newNodeChainExecutionPolicyCaptured(sourceJSON string, connect *nodeChainCO
 	if err != nil || len(raw) > NodeChainInputLimit {
 		return nil, nodeChainExecutionError
 	}
-	p := &NodeChainExecutionPolicy{source: source, sourceJSON: string(raw), local: local, connect: connect}
+	p := &NodeChainExecutionPolicy{source: source, sourceJSON: string(raw), local: local, connect: connect, socks: socks}
 	domain := "routervpn-node-chain-execution-source-v1"
+	if socks != nil {
+		domain = "routervpn-node-chain-socks-execution-source-v1"
+	}
 	if connect != nil {
 		domain = "routervpn-node-chain-connect-execution-source-v1"
 	}
@@ -332,7 +353,11 @@ func (p *NodeChainExecutionPolicy) validateCapture() error {
 		p.source.Request.Validate(p.source.Server) != nil || !reflect.DeepEqual(p.localProofs, p.local.ProofInventory()) {
 		return nodeChainExecutionError
 	}
-	if p.connect == nil {
+	if p.socks != nil {
+		if p.connect != nil || p.source.Schema != 3 || p.source.Server.Schema != 3 || p.socks.preparation == nil || p.socks.preparation.validateCapture() != nil || p.socks.validate(p.socks.preparation, p.local) != nil {
+			return nodeChainExecutionError
+		}
+	} else if p.connect == nil {
 		if p.source.Schema != 1 || p.local.connectSource != nil || p.local.socksSource != nil {
 			return nodeChainExecutionError
 		}
@@ -403,7 +428,7 @@ type nodeChainExecutionLaunch struct {
 }
 
 func (p *NodeChainExecutionPolicy) LaunchInput() (string, error) {
-	if p.validateCapture() != nil || p.connect != nil {
+	if p.validateCapture() != nil || p.connect != nil || p.socks != nil {
 		return "", nodeChainExecutionError
 	}
 	raw, err := json.Marshal(nodeChainExecutionLaunch{"native-node-chain-execution", p.source, p.sourceSHA, p.configSHA})

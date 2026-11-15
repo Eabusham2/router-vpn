@@ -166,6 +166,9 @@ func (p *NodeChainExecutionPolicy) importedPublicMiddle() bool {
 	if p == nil || p.local == nil || len(p.local.nodes) != 3 || p.local.nodes[1] != nil {
 		return false
 	}
+	if p.socks != nil {
+		return p.connect == nil && p.source.Schema == 3 && p.local.socksSource == p.socks.source && p.socks.local == p.local && p.socks.source != nil
+	}
 	if p.connect != nil {
 		return p.source.Schema == 4 && p.local.connectSource == p.connect.source && p.connect.local == p.local && p.connect.source != nil
 	}
@@ -174,6 +177,9 @@ func (p *NodeChainExecutionPolicy) importedPublicMiddle() bool {
 func (p *NodeChainExecutionPolicy) importedExpectedPublicIP() string {
 	if !p.importedPublicMiddle() {
 		return ""
+	}
+	if p.socks != nil {
+		return p.socks.source.middle.selection.ExpectedPublicIP
 	}
 	if p.connect != nil {
 		return p.connect.source.middle.selection.ExpectedPublicIP

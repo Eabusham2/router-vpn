@@ -19,7 +19,8 @@ type NodeChainSOCKSEngine interface {
 
 // NodeChainSOCKSRuntime invokes the existing NodeChain controller through one
 // distinct typed boundary. Its private chain cannot lend generic launch,
-// projection, candidate, Server/Compare or public platform admission.
+// projection, candidate or public platform admission. A distinct typed
+// execution preparation retains this same original source for Server/Compare.
 type NodeChainSOCKSRuntime struct {
 	source *NodeChainSOCKSSource
 	chain  *NodeChain

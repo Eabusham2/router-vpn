@@ -34,6 +34,11 @@ func NewNodeChainExecutionDiscoveryOwner(prep *NodeChainExecutionPreparation, en
 	if prep.validateCapture() != nil || engine == nil {
 		return nil, nodeChainExecutionError
 	}
+	if prep.RequiresSOCKSExecutionObserver() {
+		if _, ok := engine.(NodeChainSOCKSExecutionObserver); !ok {
+			return nil, nodeChainExecutionError
+		}
+	}
 	if prep.RequiresCONNECTExecutionObserver() {
 		if _, ok := engine.(NodeChainCONNECTExecutionObserver); !ok {
 			return nil, nodeChainExecutionError
@@ -54,6 +59,9 @@ func NewNodeChainExecutionDiscoveryOwner(prep *NodeChainExecutionPreparation, en
 func (o *NodeChainExecutionDiscoveryOwner) current(ctx context.Context) error {
 	if o == nil || ctx == nil || ctx.Err() != nil || o.io.closed.Load() || o.prep.validateCapture() != nil {
 		return nodeChainExecutionError
+	}
+	if err := o.prep.observeSOCKSExecutionContext(ctx, o.engine); err != nil {
+		return err
 	}
 	if err := o.prep.observeCONNECTExecutionContext(ctx, o.engine); err != nil {
 		return err
@@ -225,7 +233,7 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 	}
 	for position, node := range p.local.nodes[:len(p.local.nodes)-1] {
 		if node == nil {
-			if position != 1 || !(p.local.importedMiddle != nil && descriptor.Schema == 2 && p.connect == nil || p.connect != nil && p.local.connectSource == p.connect.source && descriptor.Schema == 4) {
+			if position != 1 || !(p.local.importedMiddle != nil && descriptor.Schema == 2 && p.connect == nil && p.socks == nil || p.socks != nil && p.local.socksSource == p.socks.source && descriptor.Schema == 3 || p.connect != nil && p.local.connectSource == p.connect.source && descriptor.Schema == 4) {
 				return nil, nodeChainExecutionError
 			}
 			continue
@@ -235,7 +243,7 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 			return nil, err
 		}
 		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, key)
-		if descriptor.Schema == 2 || descriptor.Schema == 4 {
+		if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 {
 			request.LocalPacketPositions = append(request.LocalPacketPositions, position)
 		}
 	}
@@ -252,6 +260,9 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 	}
 	source := NodeChainExecutionSource{Schema: 1, Execution: p.source.Execution, LocalSource: p.source.LocalSource,
 		Server: descriptor.Clone(), Request: request, FirstPort: discovery.FirstPort, LastPort: discovery.LastPort}
+	if p.socks != nil {
+		source.Schema = 3
+	}
 	raw, err := json.Marshal(source)
 	if err != nil {
 		return nil, err
@@ -263,7 +274,7 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 			return nil, err
 		}
 	}
-	policy, err := newNodeChainExecutionPolicyCaptured(string(raw), p.connect)
+	policy, err := newNodeChainExecutionPolicyFamily(string(raw), p.connect, p.socks)
 	if err != nil || !reflect.DeepEqual(policy.Descriptor(), descriptor) {
 		return nil, nodeChainExecutionError
 	}

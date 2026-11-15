@@ -62,6 +62,7 @@ type NodeChainExecutionPreparation struct {
 	desktopPhysical                                *DesktopNodeChainExecutionPhysicalPolicy
 	mobile                                         *nodeChainExecutionMobileProjection
 	connect                                        *nodeChainCONNECTExecutionBinding
+	socks                                          *nodeChainSOCKSExecutionBinding
 }
 
 // NewNodeChainExecutionPreparation keeps one complete original Local graph,
@@ -95,6 +96,13 @@ func newNodeChainExecutionPreparationProjected(localSource, execution string, de
 // The distinct typed caller supplies its original private runtime and source.
 // Generic public constructors still pass only their validated schema1/2 graph.
 func newNodeChainExecutionPreparationCaptured(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, typedDesktop ...*nodeChainCONNECTExecutionDesktop) (*NodeChainExecutionPreparation, error) {
+	return newNodeChainExecutionPreparationFamily(localSource, execution, desktop, mobile, local, connect, nil, typedDesktop...)
+}
+
+func newNodeChainExecutionPreparationFamily(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, typedDesktop ...*nodeChainCONNECTExecutionDesktop) (*NodeChainExecutionPreparation, error) {
+	if socks != nil && (connect != nil || desktop != nil || mobile != nil || len(typedDesktop) != 0) {
+		return nil, nodeChainExecutionError
+	}
 	if len(typedDesktop) > 1 || len(typedDesktop) == 1 && (typedDesktop[0] == nil || connect == nil || desktop != nil || mobile != nil) {
 		return nil, nodeChainExecutionError
 	}
@@ -110,6 +118,11 @@ func newNodeChainExecutionPreparationCaptured(localSource, execution string, des
 				return nil, err
 			}
 		}
+	}
+	if socks != nil {
+		p.source.Schema = 3
+		p.socks = &nodeChainSOCKSExecutionBinding{source: socks, local: local, preparation: p}
+		p.socks.self = p.socks
 	}
 	config := local.Config()
 	if mobile != nil {
@@ -252,7 +265,11 @@ func (p *NodeChainExecutionPreparation) validateCapture() error {
 		p.discovery.Entry != p.local.proofs[0] || p.dns.DNS.SourceSHA256 != p.sourceSHA || p.dns.DNS.ConfigSHA256 != p.configSHA {
 		return nodeChainExecutionError
 	}
-	if p.validateCONNECTExecutionCapture() != nil {
+	if p.socks != nil {
+		if p.socks.validate(p, p.local) != nil {
+			return nodeChainExecutionError
+		}
+	} else if p.validateCONNECTExecutionCapture() != nil {
 		return nodeChainExecutionError
 	}
 	if p.desktop == nil {
@@ -315,7 +332,7 @@ func (p *NodeChainExecutionPreparation) BindExecution(policy *NodeChainExecution
 		!reflect.DeepEqual(p.physical, policy.physical) || p.dns.DNSPolicySHA256 != policy.source.Server.DNSPolicySHA256 {
 		return nil, nodeChainExecutionError
 	}
-	if p.connect != policy.connect {
+	if p.connect != policy.connect || p.socks != policy.socks {
 		return nil, nodeChainExecutionError
 	}
 	if p.mobile != nil && p.mobile.executionSource != policy.Source() {

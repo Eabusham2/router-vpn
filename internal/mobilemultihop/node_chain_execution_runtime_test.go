@@ -438,7 +438,20 @@ func newNodeChainExecutionRuntimeFixtureFromSource(t *testing.T, source NodeChai
 	var policy *NodeChainExecutionPolicy
 	var prep *NodeChainExecutionPreparation
 	var err error
-	if source.Schema == 4 {
+	if source.Schema == 3 {
+		original, parseErr := NewNodeChainSOCKSSource(source.LocalSource)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		prep, err = NewNodeChainSOCKSExecutionPreparation(original, source.Execution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy, err = NewNodeChainSOCKSExecutionPolicy(prep, startJSON(t, source))
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if source.Schema == 4 {
 		original, parseErr := NewNodeChainCONNECTSource(source.LocalSource)
 		if parseErr != nil {
 			t.Fatal(parseErr)
