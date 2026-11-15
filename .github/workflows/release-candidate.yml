@@ -124,6 +124,7 @@ jobs:
           python3 deploy/test_native_runtime_delivery.py
           python3 deploy/test_linux_runtime_install.py
           python3 deploy/test_desktop_native_toolchain.py
+          python3 deploy/test_desktop_native_root_phases_runner.py
           python3 deploy/test_desktop_stop_retry.py --contracts-only
           python3 -m unittest deploy.test_desktop_imported_runtime deploy.test_desktop_imported_packet_runtime deploy.test_desktop_imported_openvpn_runtime deploy.test_desktop_imported_pq_runtime deploy.test_desktop_imported_xhttp_runtime deploy.test_desktop_imported_naive_h2_runtime deploy.test_desktop_imported_naive_h3_runtime
           python3 deploy/test_windows_imported_naive_h3_runner.py

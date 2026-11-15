@@ -29,6 +29,8 @@ spec.loader.exec_module(N)
 PHYSICAL = N.load('desktop_native_windows_physical_test', 'test_windows_node_physical.py')
 NODE = N.load('desktop_native_windows_source_test', 'test_desktop_node_physical.py')
 DARWIN_LIFECYCLE = N.load('desktop_native_darwin_lifecycle_test', 'test_desktop_darwin_node_chain_lifecycle.py')
+BOX_PHASES = N.load('desktop_native_box_family_test', 'test_desktop_native_root_phases.py')
+BOX_ROOTS = tuple('TestRouterVPN' + suffix + 'Original' for suffix in ('DesktopTor', 'DesktopExternal', 'DesktopNodeChain', 'NodeChainCandidatePreparation', 'NodeChain', 'Execution'))
 PT = N.load('desktop_native_pt_inventory_test', 'test_desktop_pt_inventory.py')
 
 
@@ -131,7 +133,13 @@ class NativeSocketUIDGate(unittest.TestCase):
                 with self.subTest(phase=phase, failure=failure.__name__):
                     self.check_matching_hosts(darwin_lifecycle_failure=(phase, failure))
 
-    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None, socks_reference_failure=None, proxy_reference_failure=None, connect_reference_failure=None, packet_reference_failure=None, dns_reference_failure=None, desktop_pt_failure=None, source_phase_failure=None, darwin_lifecycle_failure=None):
+    def test_failed_timed_out_or_incomplete_box_family_blocks_packaging(self):
+        for family in (0, len(BOX_ROOTS)-1):
+            for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
+                with self.subTest(family=family, failure=failure.__name__):
+                    self.check_matching_hosts(box_phase_failure=(family, failure))
+
+    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None, socks_reference_failure=None, proxy_reference_failure=None, connect_reference_failure=None, packet_reference_failure=None, dns_reference_failure=None, desktop_pt_failure=None, source_phase_failure=None, darwin_lifecycle_failure=None, box_phase_failure=None):
         class CompilerBoundary(Exception):
             pass
 
@@ -160,6 +168,9 @@ class NativeSocketUIDGate(unittest.TestCase):
                 openvpn_errors = []
                 darwin_route_errors = []
                 darwin_lifecycle_errors = []
+                box_phase_errors = []
+                box_images = []
+                box_runs = []
                 physical_errors = []
                 command_retirement_errors = []
                 socks_reference_errors = []
@@ -584,6 +595,36 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs, {'cwd': source.resolve(),
                             'env': {**env, 'ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_OBSERVATION': '1'}, 'timeout': 300})
                         return imported_native_output(openvpn_roots, openvpn_names)
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_native_root_phases_runner.py'):
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs, {'cwd': ROOT, 'env': env, 'timeout': 120})
+                        return ''
+                    if args[:3] == ['go', 'test', '-c'] and args[-1] == '.':
+                        self.assertEqual(args[3:-3], ([] if target == 'windows/arm64' else ['-race']) +
+                                         ['-mod=readonly', '-tags='+','.join(N.tags(target)), '-ldflags=-checklinkname=0'])
+                        self.assertEqual(kwargs, {'cwd': source.resolve(), 'env': env, 'timeout': 600})
+                        self.assertEqual(args[-3], '-o')
+                        Path(args[-2]).write_bytes(b'modeled original native test executable')
+                        box_images.append(args[-2])
+                        return ''
+                    if len(args) == 2 and args[1].startswith('-test.list='):
+                        self.assertEqual(args[0], box_images[0])
+                        return '\n'.join(BOX_ROOTS + (() if args[1] == '-test.list='+BOX_PHASES.SELECTION else ('TestUnrelated',)))
+                    if args[:3] == ['go', 'tool', 'test2json']:
+                        self.assertEqual(args[:7], ['go', 'tool', 'test2json', '-p', BOX_PHASES.PACKAGE, '-t', box_images[0]])
+                        self.assertEqual(kwargs, {'cwd': source.resolve(), 'env': env, 'timeout': 600})
+                        self.assertEqual(args[7:], ['-test.v', '-test.run=^('+BOX_ROOTS[len(box_runs)]+')$', '-test.count=1',
+                                                  '-test.timeout=180s' if system == 'linux' else '-test.timeout=120s'])
+                        box_runs.append(args)
+                        if box_phase_failure and len(box_runs)-1 == box_phase_failure[0]:
+                            failure = box_phase_failure[1]
+                            if failure is ValueError: return 'PASS'
+                            error = (failure(47, args) if failure is subprocess.CalledProcessError else failure(args, kwargs['timeout']))
+                            box_phase_errors.append(error)
+                            raise error
+                        name = BOX_ROOTS[len(box_runs)-1]
+                        return '\n'.join(json.dumps(dict(Package=BOX_PHASES.PACKAGE, **row)) for row in (
+                            {'Action':'start'}, {'Action':'run','Test':name}, {'Action':'pass','Test':name}, {'Action':'pass'}))
                     if args[:2] in (['go', 'test'], ['go', 'mod']):
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_hysteria2_deadlines_pinned.py'):
@@ -624,8 +665,8 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertEqual(options, {'compiled': None, 'env': env})
                     self.assertIs(options['env'], env)
                     previous = calls[-1]
-                    self.assertEqual(previous[:2], ['go', 'test'])
-                    self.assertEqual(previous[previous.index('-run')+1], '^TestRouterVPN(Desktop(Tor|External|NodeChain)|NodeChain|Execution)')
+                    self.assertEqual(previous[:3], ['go', 'tool', 'test2json'])
+                    self.assertEqual(len(box_runs), len(BOX_ROOTS))
                     dnssec_destination = Path(destination)
                     self.assertFalse(dnssec_destination.exists())
                     # These bytes model the producer boundary; they are never
@@ -639,11 +680,12 @@ class NativeSocketUIDGate(unittest.TestCase):
                 # Python 3.12. Keep every original boundary and reverse cleanup
                 # order without exceeding that interpreter's nesting limit.
                 with contextlib.ExitStack() as boundaries:
-                    boundaries.enter_context(patch.object(N, 'load', side_effect=lambda name, path: PHYSICAL if path == 'test_windows_node_physical.py' else NODE if path == 'test_desktop_node_physical.py' else DARWIN_LIFECYCLE if path == 'test_desktop_darwin_node_chain_lifecycle.py' else original_load(name, path)))
+                    boundaries.enter_context(patch.object(N, 'load', side_effect=lambda name, path: PHYSICAL if path == 'test_windows_node_physical.py' else NODE if path == 'test_desktop_node_physical.py' else DARWIN_LIFECYCLE if path == 'test_desktop_darwin_node_chain_lifecycle.py' else BOX_PHASES if path == 'test_desktop_native_root_phases.py' else original_load(name, path)))
                     boundaries.enter_context(patch.object(PHYSICAL, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})))
                     boundaries.enter_context(patch.object(NODE, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})))
                     boundaries.enter_context(patch.object(NODE, 'source_phase_inventory', return_value=(source_names, source_images)))
                     boundaries.enter_context(patch.object(DARWIN_LIFECYCLE, 'checked_source', return_value='a'*64))
+                    boundaries.enter_context(patch.object(BOX_PHASES, 'source_digest', return_value='a'*64))
                     boundaries.enter_context(patch.object(N, 'environment', return_value=env))
                     boundaries.enter_context(patch.object(N, 'run', side_effect=run))
                     go_sockets = boundaries.enter_context(patch.object(N.GO_SOCKETS, 'environment', side_effect=lambda **options: options['env']))
@@ -659,7 +701,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                     boundaries.enter_context(patch.object(N.POLICY.AMNEZIA, 'verify'))
                     dnssec = boundaries.enter_context(patch.object(N.DNSSEC, 'build', side_effect=build_dnssec))
                     boundaries.enter_context(patch.object(N, 'stage_cronet', side_effect=stage_cronet))
-                    expected_error = (darwin_lifecycle_failure[1] if darwin_lifecycle_failure else None) or desktop_pt_failure or source_phase_failure or physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or socks_reference_failure or proxy_reference_failure or connect_reference_failure or packet_reference_failure or dns_reference_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
+                    expected_error = (box_phase_failure[1] if box_phase_failure else None) or (darwin_lifecycle_failure[1] if darwin_lifecycle_failure else None) or desktop_pt_failure or source_phase_failure or physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or socks_reference_failure or proxy_reference_failure or connect_reference_failure or packet_reference_failure or dns_reference_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
@@ -668,6 +710,14 @@ class NativeSocketUIDGate(unittest.TestCase):
                     dnssec.assert_called_once_with(target, dnssec_destination, compiled=None, env=env)
                 else:
                     dnssec.assert_not_called()
+                if box_phase_failure:
+                    self.assertEqual(len(box_runs), box_phase_failure[0]+1)
+                    self.assertEqual(len(box_images), 1)
+                    self.assertFalse(any(args[:2] == ['go', 'build'] for args in calls))
+                    dnssec.assert_not_called()
+                    if box_phase_errors:
+                        self.assertIs(caught.exception, box_phase_errors[0])
+                    continue
                 if darwin_lifecycle_failure:
                     phases = [args[5] for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle.py')]
                     self.assertEqual(phases, ['baselines'] if darwin_lifecycle_failure[0] == 'baselines' else list(DARWIN_LIFECYCLE.SOURCE_PHASES))
@@ -819,11 +869,14 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertEqual(calls[-1], gate[0], 'Failed route ownership reached a later gate or compiler')
                     self.assertFalse(any(len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py') for args in calls))
                     continue
-                box = [args for args in calls if args[:2] == ['go', 'test'] and '.' in args and
-                       '-run' in args and args[args.index('-run')+1] == '^TestRouterVPN(Desktop(Tor|External|NodeChain)|NodeChain|Execution)']
-                self.assertEqual(len(box), 1, 'Native build omitted the complete Box family suite')
-                self.assertEqual([arg for arg in box[0] if arg.startswith('-timeout=')],
-                                 ['-timeout=180s' if system == 'linux' else '-timeout=120s'])
+                box = [args for args in calls if args[:3] == ['go', 'tool', 'test2json']]
+                self.assertEqual(len(box), len(BOX_ROOTS), 'Native build omitted an original Box family')
+                self.assertEqual(len(box_images), 1)
+                self.assertEqual([args[6] for args in box], box_images * len(BOX_ROOTS))
+                self.assertEqual([args[-1] for args in box],
+                                 ['-test.timeout=180s' if system == 'linux' else '-test.timeout=120s'] * len(BOX_ROOTS))
+                for name in ('test_desktop_native_root_phases.py', 'test_desktop_native_root_phases_runner.py'):
+                    self.assertIn(ROOT/'deploy'/name, N.inputs())
                 dnssec_gates = [args for args in calls if len(args) > 1 and args[1] in (
                     str(ROOT/'deploy/test_desktop_dnssec_namespace.py'),
                     str(ROOT/'deploy/test_desktop_dnssec_command.py'))]
@@ -831,12 +884,12 @@ class NativeSocketUIDGate(unittest.TestCase):
                     str(ROOT/'deploy/test_desktop_dnssec_namespace.py'),
                     str(ROOT/'deploy/test_desktop_dnssec_command.py')] if system == 'linux' else [])
                 if dnssec_gates:
-                    self.assertEqual(calls.index(dnssec_gates[0]), calls.index(box[0])+1)
+                    self.assertEqual(calls.index(dnssec_gates[0]), calls.index(box[-1])+1)
                     self.assertEqual(calls.index(dnssec_gates[1]), calls.index(dnssec_gates[0])+1)
                     self.assertEqual(calls[-3:-1], dnssec_gates)
                     self.assertEqual(calls[-1][:2], ['go', 'build'])
                 for args in calls:
-                    if args[:2] == ['go', 'test'] and args != box[0]:
+                    if args[:2] == ['go', 'test']:
                         self.assertNotIn('-timeout=180s', args, 'Box aggregate budget changed another native gate')
                 uid = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_socket_uid.py')]
                 self.assertEqual(len(uid), 0 if system == 'windows' else 1)

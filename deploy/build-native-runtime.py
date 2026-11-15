@@ -176,6 +176,8 @@ def inputs():
                              ROOT/'cmd/client/ordered_candidate_prefix_windows_sources_native_test.go',
                              ROOT/'deploy/test_desktop_node_physical.py',
                              ROOT/'deploy/test_desktop_node_phases.py',
+                             ROOT/'deploy/test_desktop_native_root_phases.py',
+                             ROOT/'deploy/test_desktop_native_root_phases_runner.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_proxy_xray.py',
@@ -1732,10 +1734,14 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                  '-ldflags=-checklinkname=0', './protocol/routervpnchaingate', './protocol/group',
                  './protocol/tun', './adapter/outbound', '-run', '^TestRouterVPN(Execution|ChainGate)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
-            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', '.', '-run', '^TestRouterVPN(Desktop(Tor|External|NodeChain)|NodeChain|Execution)',
-                 '-count=1', '-timeout=180s' if target.startswith('linux/') else '-timeout=120s'],
-                cwd=source, env=env, timeout=600)
+            # Candidate preparation now includes three original fifty-sample
+            # matrices. Keep the complete root inventory on one compiled image,
+            # with each family retaining the existing target's test deadline.
+            # Packaging requires every source/image-bound phase to pass.
+            run([sys.executable, ROOT/'deploy/test_desktop_native_root_phases_runner.py'],
+                cwd=ROOT, env=env, timeout=120)
+            root_phases = load('desktop_native_root_phases', 'test_desktop_native_root_phases.py')
+            root_phases.execute(source, target, ','.join(tags(target)), env, run)
         if target.startswith('linux/'):
             validator = DNSSEC.build(target, temp/'dnssec-bundle', compiled=dnssec_compiled, env=env)
             for name in DNSSEC.names(target):
