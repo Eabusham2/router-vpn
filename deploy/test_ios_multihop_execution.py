@@ -21,7 +21,7 @@ SWIFT = r'''
  static var checks=0
  static func check(_ text:String,_ value:@autoclosure()->Bool){guard value()else{fatalError("FAIL: "+text)};checks+=1}
  static func reject(_ text:String,_ action:()throws->Void){do{try action();fatalError("FAIL: "+text)}catch{checks+=1}}
- static func digest(_ data:Data)->String{let hash=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",hash),count:4)}
+ nonisolated static func digest(_ data:Data)->String{let hash=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",hash),count:4)}
  static func importedRouter()throws {
   var config=try source("local","shadowsocks","shadowsocks")
   var root=try JSONSerialization.jsonObject(with:config["bundle"] as! Data) as! [String:Any]

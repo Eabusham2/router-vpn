@@ -1578,3 +1578,19 @@ not simulate successful typed execution or change shipping app behavior.
 The frozen patch, source hashes and complete log are retained in
 `ios-runtime-tail-validation`. Native SDK, encrypted runtime and physical
 acceptance remain separate gates.
+
+## Apple winner-receipt fixture uses a pure nonisolated digest helper
+
+The required iOS runtime-contract continuation reached the multihop execution
+fixture and exposed a Swift 6 actor mismatch: its pure digest helper inherited
+the test container's main-actor isolation, while the shipping digest callback
+is synchronous and nonisolated. The helper reads only its argument and local
+values; it does not access the fixture's counters or other shared state.
+
+The one-word test correction explicitly marks that helper `nonisolated`.
+All 2,047 shipping Swift winner-receipt checks pass in 5.685 seconds, retaining
+the original transaction, execution pinning and rollback cases. Production
+actor declarations, captured execution selection, restoration and callback
+contracts are unchanged. The exact patch, source hashes and complete gate log
+are retained in `ios-runtime-tail-validation`. This portable Swift 6.0.3 gate
+does not establish SDK packaging or physical-device acceptance.
