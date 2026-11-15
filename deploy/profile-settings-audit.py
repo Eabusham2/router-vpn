@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 errors: list[str] = []
@@ -37,7 +38,7 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
     scopes = (
         ("profiles", "schema", None, None, ("iosConnectionProfilesSchemaVersion = 8", "var multihopNodes: [IOSMultihopNodeSelection]?", "var chainPolicies: [IOSConnectionEntryCapture]?")),
         ("models", "ordered selection", "struct IOSMultihopNodeSelection:", "struct RouterProfile:", (
-            "static let maximumNodes = 8", '(2...maximumNodes).contains(nodes.count), execution == "local"',
+            "static let maximumNodes = 8",
             '[entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" })',
             "seen.insert(node.id).inserted", "nodes.last?.id != controlID")),
         ("models", "bounded imported position", "static func supportsImportedMiddle(", "static func transportName(", (
@@ -78,6 +79,26 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
         for marker in markers:
             if marker not in body:
                 problems.append(f"iOS ordered profile {label}: missing {marker!r}")
+    # Compare the actual predicate bodies, not a bag of tokens that could also
+    # occur in comments or an unrelated branch. This is a source contract; the
+    # separate Swift/compiler gates execute the complete private admission.
+    selection = sources["models"].split("struct IOSMultihopNodeSelection:", 1)[-1].split("struct RouterProfile:", 1)[0]
+    selection = re.sub(r"//[^\n]*|/\*.*?\*/", "", selection, flags=re.S)
+    compact = lambda value: re.sub(r"\s+", "", value)
+    predicates = (
+        ("paired prefix modes", r'static let nativePrefixModes\s*=\s*(\[[^\n]+\])',
+         '["wg", "awg2-fast", "awg2-strong"]'),
+        ("paired prefix predicate", r'static func supportsNativePrefix\([^\n]+\) -> Bool\s*\{([^{}]*)\}',
+         'nativePrefixModes.contains(mode)'),
+        ("CONNECT execution shape", r'static func supportsCONNECTExecution\([^\n]+\) -> Bool\s*\{([^{}]*)\}',
+         'nodes.count == 3 && supportsNativePrefix(nodes[0].mode) && ["http-connect", "https-connect"].contains(nodes[1].mode) && nodes[2].mode == "shadowsocks"'),
+        ("execution selection guard", r'static func validate\([^{}]+\) throws\s*\{\s*guard\s+(.*?)\s+else\s*\{',
+         '(2...maximumNodes).contains(nodes.count), execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsCONNECTExecution(nodes), [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" })'),
+    )
+    for label, pattern, expected in predicates:
+        found = re.findall(pattern, selection, flags=re.S)
+        if len(found) != 1 or compact(found[0]) != compact(expected):
+            problems.append(f"iOS ordered profile {label}: actual admission predicate changed")
     return problems
 
 
@@ -330,6 +351,13 @@ if not ordered_issues:
         ("models", "guard (3...maximumNodes).contains(count), position == count - 2 else { return false }", "guard count >= 3 else { return false }"),
         ("models", 'if ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode) { return true }', 'if mode != "" { return true }'),
         ("models", 'return mode == "shadowsocks"', 'return true'),
+        ("models", '(2...maximumNodes).contains(nodes.count)', '(1...maximumNodes).contains(nodes.count)'),
+        ("models", '["server", "auto"].contains(execution ?? "") && supportsCONNECTExecution(nodes)', '["server", "auto"].contains(execution ?? "")'),
+        ("models", '["server", "auto"].contains(execution ?? "")', '["server", "auto", "invalid"].contains(execution ?? "")'),
+        ("models", 'nodes.count == 3 && supportsNativePrefix(nodes[0].mode)', 'nodes.count >= 3 && supportsNativePrefix(nodes[0].mode)'),
+        ("models", 'nativePrefixModes.contains(mode)', 'true /* nativePrefixModes.contains(mode) */'),
+        ("models", '["http-connect", "https-connect"].contains(nodes[1].mode)', '["http-connect", "https-connect", "socks5"].contains(nodes[1].mode)'),
+        ("models", 'nodes[2].mode == "shadowsocks"', 'nodes[2].mode != ""'),
         ("capture", "IOSImportedShadowsocksSource.eligible(profile)", "true"),
         ("store", "replacement.updated.profiles == original.profiles", "true"),
         ("store", "guard records == originalRecords", "guard true"),

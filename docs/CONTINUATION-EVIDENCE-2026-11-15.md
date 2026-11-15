@@ -3727,3 +3727,23 @@ permission and cleanup acceptance for all fourteen cases on both Windows
 architectures still requires the hosted native receipts. This unit is not a
 claim of physical-device, signed-distribution, private deployment or complete
 original-requirement acceptance.
+
+## Current Apple execution profile audit repair
+
+The exact `4e7d6312` map-first job `132981329069` and native UI job
+`132981327445` failed because the profile audit still required the obsolete
+Local-only selection literal. The shipping model already admits Local or the
+exact three-node CONNECT Server/Compare shape. This repair compares the actual
+comment-stripped predicate bodies and execution guard, preserving the paired
+WG/AWG prefix, HTTP/HTTPS middle, Shadowsocks final, independent identifiers,
+and two-to-eight-node Local selection constraints. It changes no application
+admission or runtime behavior.
+
+The actual complete profile audit passes. All 13 previous causal omissions
+remain, and seven additional controls reject changed execution choice, prefix,
+count, middle or final predicates, including a forged permissive expression
+with the original text left only in a comment. Frozen one-file manifest SHA256:
+`10fd4bf8c29e8b1cb2657ec01a7713d503b62222eff5077ecbb5a1b013547a1b`.
+The concurrent typed SOCKS source work in `74f6f3db` is preserved. These are
+source-contract results; hosted native acceptance and release publication
+remain separate requirements.
