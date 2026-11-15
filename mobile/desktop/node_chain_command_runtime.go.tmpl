@@ -9,6 +9,7 @@ import (
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 )
 
 type routerVPNNodeChainProof interface {
@@ -33,6 +34,8 @@ type routerVPNNodeChainRuntime struct {
 	mtu                   *routerVPNNodeMTU
 	state                 atomic.Pointer[routerVPNNodeChainProofState]
 	identity              mobilemultihop.NodeChainIdentity
+	openVPN               mobilemultihop.NodeChainOpenVPNCapture
+	openVPNState          atomic.Pointer[nativeopenvpn.PacketObservation]
 	generation            uint64
 	measurement           *routerVPNNodeChainMeasurement
 	measurementGeneration uint64
@@ -84,8 +87,12 @@ func routerVPNNewNodeChainRuntimeFactory(ctx context.Context, files *routerVPNEx
 	if err != nil {
 		return nil, err
 	}
+	captured, err := chain.OpenVPNMiddleCapture()
+	if err != nil {
+		return nil, err
+	}
 	return &routerVPNNodeChainRuntime{ctx: ctx, files: files, policy: policy, input: input, transfer: transfer,
-		ceiling: plan.Ceiling, factory: factory}, nil
+		ceiling: plan.Ceiling, factory: factory, openVPN: captured}, nil
 }
 
 // The engine callback observes only the original native owner and this exact
@@ -161,6 +168,11 @@ func (owner *routerVPNNodeChainRuntime) resume(ctx context.Context) error {
 		state.proof = proof
 	}
 	state.engine = engine
+	// MTU proof replacement may replace the TUN reader, never the original
+	// OpenVPN connected generation or packet capacity. Check before new proof.
+	if err == nil && owner.openVPNState.Load() != nil {
+		err = owner.observeOpenVPN(ctx, state, false)
+	}
 	if err == nil && (proof == nil || engine == nil) {
 		err = routerVPNExternalFailure
 	}
@@ -181,6 +193,9 @@ func (owner *routerVPNNodeChainRuntime) resume(ctx context.Context) error {
 	}
 	if err == nil {
 		err = proof.HealthyContext(ctx)
+	}
+	if err == nil {
+		err = owner.observeOpenVPN(ctx, state, true)
 	}
 	if err == nil {
 		err = owner.nativeCurrent(ctx, state)
@@ -210,6 +225,9 @@ func (owner *routerVPNNodeChainRuntime) current(ctx context.Context) error {
 		return routerVPNExternalFailure
 	}
 	if err := state.proof.HealthyContext(ctx); err != nil {
+		return err
+	}
+	if err := owner.observeOpenVPN(ctx, state, false); err != nil {
 		return err
 	}
 	identity, err := state.engine.ObserveChainContext(ctx)
@@ -298,4 +316,40 @@ func (owner *routerVPNNodeChainRuntime) heartbeat(ctx context.Context, record ro
 		return errors.Join(routerVPNExternalFailure, owner.files.remove("node-chain-ready.json"))
 	}
 	return nil
+}
+
+// This lifetime-wide pin survives proof suspension and TUN MTU generations.
+// It is obtained only from the actual engine after authenticated proof, never
+// from staged profile bytes or a parent-supplied readiness record.
+func (owner *routerVPNNodeChainRuntime) observeOpenVPN(ctx context.Context, state *routerVPNNodeChainProofState, initial bool) error {
+	if owner.openVPN.Tag == "" {
+		if owner.openVPNState.Load() != nil {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}
+	if owner.nativeCurrent(ctx, state) != nil {
+		return routerVPNExternalFailure
+	}
+	engine, ok := state.engine.(mobilemultihop.NodeChainOpenVPNEngine)
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	actual, err := engine.OpenVPNMiddleStateContext(ctx, owner.openVPN.Tag)
+	if err != nil {
+		return err
+	}
+	if actual.Validate() != nil || actual.Remote.Remote != owner.openVPN.Remote ||
+		actual.MTU < uint32(owner.openVPN.ConfiguredMTU) || owner.nativeCurrent(ctx, state) != nil {
+		return routerVPNExternalFailure
+	}
+	expected := owner.openVPNState.Load()
+	if expected == nil && initial {
+		owner.openVPNState.CompareAndSwap(nil, &actual)
+		expected = owner.openVPNState.Load()
+	}
+	if expected == nil || *expected != actual {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
 }

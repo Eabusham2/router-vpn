@@ -315,7 +315,7 @@ public sealed class ProfileModeOwner {
     $Owner.Controls['UnifiedOrdered']=$ordered;$Owner.Controls['UnifiedNodeChainButton']=$chainButton;$Owner.Controls['UnifiedNodeCombo']=$RouterCombo
     $script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true;ordered_executions=@('local','server','auto')}
     $orderedCases=@()
-    foreach($importedMode in @('http-connect','https-connect')){foreach($prefixMode in @('wg','awg2-fast','awg2-strong')){
+    foreach($importedMode in @('http-connect','https-connect','openvpn')){foreach($prefixMode in @('wg','awg2-fast','awg2-strong')){
         $orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$false;count=3;imported=$importedMode;prefix=$prefixMode}
     }}
     foreach($finalMode in @('shadowsocks','hysteria2')){foreach($mixed in @($false,$true)){foreach($nodeCount in @(2,3,4,8)){

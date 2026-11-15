@@ -101,13 +101,13 @@ TYPED=r'''
  }
 '''
 
-def main():
+def main(label="typed CONNECT", roundtrip="connectRoundtrip"):
     anchor=' static func main(){do{'
     assert P.BOUNDARIES.count(anchor)==1
     P.BOUNDARIES=P.BOUNDARIES.replace(anchor,TYPED+'\n'+anchor,1)
     anchor='try hysteriaRoundtrip();print('
     assert P.BOUNDARIES.count(anchor)==1
-    P.BOUNDARIES=P.BOUNDARIES.replace(anchor,'try hysteriaRoundtrip();try connectRoundtrip();print(',1)
+    P.BOUNDARIES=P.BOUNDARIES.replace(anchor,'try hysteriaRoundtrip();try '+roundtrip+'();print(',1)
     P.BOUNDARIES='import Libbox\n'+P.BOUNDARIES
     P.BOUNDARIES += '\nextension IOSConnectionProfileStore { static func fixtureCanonicalProfile(_ value:RouterProfile)throws->RouterProfile { applying(try capturePreferences(value),to:value) } }\n'
     P.BOUNDARIES=P.BOUNDARIES.replace('static func main(){do{','static func main(){defer{LibboxTestClose()};do{',1)
@@ -126,6 +126,6 @@ def main():
         lib=work/'Libbox.swift';lib.write_text(C.LIBBOX)
         library=work/('libLibbox.dylib' if platform.system()=='Darwin' else 'libLibbox.so')
         subprocess.run(['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules'),'-emit-module','-emit-library','-module-name','Libbox',str(lib),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(library)],check=True,timeout=90)
-        P.main(extra_sources=[P.APP/name for name in ('IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift')],extra_flags=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)],binary_args=[compiler])
-    print('Apple typed CONNECT profile composition: original persistence and controls completed')
+        P.main(extra_sources=[P.APP/name for name in ('IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift')],extra_flags=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)],binary_args=[compiler])
+    print('Apple '+label+' profile composition: original persistence and controls completed')
 if __name__=='__main__':main()

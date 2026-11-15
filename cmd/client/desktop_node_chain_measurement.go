@@ -114,7 +114,7 @@ func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktop
 		}
 		p := members[i].Profile
 		kind := "private-node"
-		imported := desktopNodeChainImported(p, members[i].Mode) || desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode)
+		imported := desktopNodeChainOpenVPNMiddle(p, members[i].Mode) || desktopNodeChainImported(p, members[i].Mode) || desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode)
 		if imported {
 			if len(members) != 3 || i != 1 {
 				return nil, bad

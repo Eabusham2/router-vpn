@@ -329,7 +329,7 @@ def main(selected_mutations=None):
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(lib), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift')]
+        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift')]
         binary = work / 'tests'
         command += [str(shipping), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)
@@ -342,7 +342,7 @@ def main(selected_mutations=None):
             ('original-fingerprints', editor.replace('try iosNodeChainEditorFingerprint(node.id) == expected', '!expected.isEmpty', 1), 'ACCEPTED stale editor middle-token'),
             ('late-source-owner', editor[:editor.rindex(late)] + editor[editor.rindex(late):].replace(late, '        // Lost final editor ownership check', 1), 'ACCEPTED source changed during compile preparation middle-token'),
             ('compile-before-save', editor.replace(compile_source, '        _ = value', 1), 'ACCEPTED invalid draft prefix-mode'),
-            ('visible-connect-eligibility', editor.replace('IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile) || IOSImportedCONNECTSource.eligible(profile)\n    }','IOSImportedShadowsocksSource.eligible(profile)\n    }',1), 'visible CONNECT eligibility auth'),
+            ('visible-connect-eligibility', editor.replace('IOSImportedShadowsocksSource.eligible(profile) || IOSImportedSOCKSSource.eligible(profile) || (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))\n    }','IOSImportedShadowsocksSource.eligible(profile)\n    }',1), 'visible CONNECT eligibility auth'),
             ('visible-connect-mode', editor.replace('return [profile.external?.protocolName ?? ""]','return ["shadowsocks"]',1), 'visible CONNECT mode auth'),
             ('visible-middle-position', editor.replace('nodes.count == 3 && position == 1 && nodes.last?.mode == "shadowsocks") &&','true) &&',1), 'visible CONNECT excludes first auth'),
             ('visible-source-admission', editor.replace('actualHash == expectedHash else','!expectedHash.isEmpty else',1), 'visible CONNECT original source admission auth'),

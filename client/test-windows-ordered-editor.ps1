@@ -85,7 +85,7 @@ try{
         $found=@($EditorAST.FindAll({param($n)$n-is[Management.Automation.Language.AssignmentStatementAst]-and$n.Left.Extent.Text-ceq$name},$true))
         if($found.Count-ne1){throw ('Shipping mode initialization missing: '+$name)};. ([ScriptBlock]::Create($found[0].Extent.Text))
     }
-    Check (($prefixMode.ItemsSource.id-join',')-ceq'wg,awg2-fast,awg2-strong,shadowsocks,socks5,http-connect,https-connect') 'mode picker offered an unsupported or normalized transport'
+    Check (($prefixMode.ItemsSource.id-join',')-ceq'wg,awg2-fast,awg2-strong,shadowsocks,socks5,http-connect,https-connect,openvpn') 'mode picker offered an unsupported or normalized transport'
     foreach($invalid in @('WG','AWG2-FAST','awg','awg2-pq','wg-pq','shadowsocks','socks5','http-connect','https-connect',' awg2-fast','awg2-strong ',$null,1)){
         $refused=$false;try{[void](Copy-RouterVPNOrderedNodes @([pscustomobject]@{id='prefix-0';mode=$invalid},[pscustomobject]@{id=$id;mode='shadowsocks'}) $id)}catch{$refused=$true}
         Check $refused 'raw ordered mode whitelist admitted an alias or unsupported transport'
@@ -207,7 +207,7 @@ try{
     $rejected=$false;try{[void](New-RouterVPNOrderedConnectPayload $socksSaved $store)}catch{$rejected=$true};Check $rejected 'SOCKS relinking retained old draft authority'
     # Run the real Add/Apply and request-source guard for both original CONNECT
     # protocols. Capability remains explicit and no native admission is invented.
-    foreach($protocol in @('http-connect','https-connect')){foreach($packet in @('wg','awg2-fast','awg2-strong')){
+    foreach($protocol in @('http-connect','https-connect','openvpn')){foreach($packet in @('wg','awg2-fast','awg2-strong')){
         $rows.Clear();$finalMode.SelectedIndex=0
         $middleID='connect-'+$protocol+'-'+$packet
         $connect=[pscustomobject]@{id=$middleID;name=('Original '+$protocol);node_kind='external';profile_token=('b'*64);external=[pscustomobject]@{protocol=$protocol;ordered_middle_supported=$true}}

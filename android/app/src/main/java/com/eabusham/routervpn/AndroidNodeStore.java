@@ -89,9 +89,15 @@ final class AndroidNodeStore {
             if(importedGeneration!=AndroidStandardExitStore.publicationGeneration())throw new IllegalStateException("The imported node changed during capture.");
         }
         static void requireImported(AndroidStandardExitStore.Entry entry) throws Exception {
-            if(entry==null||!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect").contains(AndroidExternalPolicy.protocol(entry.protocol))
-                    ||entry.startLayer!=null||entry.policy!=null&&!"off".equals(entry.policy.optString("start_layer","off")))throw new IllegalStateException("This ordered custom position requires an original Shadowsocks 2022, SOCKS5 or CONNECT node with Start Layer Off.");
+            if(entry==null||!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(AndroidExternalPolicy.protocol(entry.protocol))
+                    ||entry.startLayer!=null||entry.policy!=null&&!"off".equals(entry.policy.optString("start_layer","off")))throw new IllegalStateException("This ordered custom position requires an original Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN node with Start Layer Off.");
             AndroidStandardExitStore.validate(entry);
+            if("openvpn".equals(entry.protocol)) {
+                AndroidExternalPolicy.Captured original=AndroidExternalPolicy.captureImportedEntry(entry);
+                String member=io.nekohasekai.libbox.Libbox.routerNodeChainImportedOpenVPNMemberInput(original.source,original.capture);
+                if(member==null||member.isEmpty())throw new IllegalStateException("The OpenVPN middle requires one original literal TCP or UDP remote.");
+                return;
+            }
             if(!"shadowsocks".equals(entry.protocol))return;
             int expected;
             switch(entry.method) {

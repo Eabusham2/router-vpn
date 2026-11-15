@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
 
 BOUNDARIES = r'''
+// Native OpenVPN source admission is outside this persistence/picker fixture.
+enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -> Bool { false } }
+
 @MainActor enum UserDefaults {
  static let suite="RouterVPN.ChainProfiles.Test."+UUID().uuidString
  static let standard=Foundation.UserDefaults(suiteName:suite)!
@@ -281,7 +284,10 @@ def main(*, extra_sources=(), extra_flags=(), binary_args=()):
     dns = (APP / 'IOSDNSRuntimePolicy.swift').read_text()
     selected = dns[dns.index('    static func selectedProfile('):dns.index('    static func resolve(')]
     modes = next(line for line in dns.splitlines() if 'static let modeIDs =' in line)
-    body = BOUNDARIES.replace(' // SHIPPING_NODE_STORE', node[node.index('    func link('):node.index('    private func storeDirectory(')])
+    boundaries = BOUNDARIES
+    if any(Path(path).name == 'IOSImportedOpenVPNSource.swift' for path in extra_sources):
+        boundaries = boundaries.replace('enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -> Bool { false } }', '')
+    body = boundaries.replace(' // SHIPPING_NODE_STORE', node[node.index('    func link('):node.index('    private func storeDirectory(')])
     body = body.replace(' // SHIPPING_SELECTED_PROFILE', modes + '\n' + selected)
     body = body.replace(' // SHIPPING_RESTORE', model[model.index('    func restoreConnectionProfile('):model.index('    /// Measurement commits')])
     body = body.replace(' // SHIPPING_CHAIN_CAPTURE', multihop[multihop.index('    func iosNodeChainBundles('):multihop.index('    static let ordinaryExternalHopProtocols')])

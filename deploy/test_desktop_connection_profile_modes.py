@@ -525,7 +525,9 @@ for requested in ["server", "auto"] { for count in [2, 3, 8] {
     DispatchQueue.main.run(); DispatchQueue.clear()
 } }
 for invalid in [[String: Any](), ["ordered_nodes_supported": false], ["ordered_nodes_supported": "true"], ["ordered_nodes_supported": 1]] {
-    _ = chooseOrdered(); owner.api.orderedCapabilities = invalid; let before = owner.api.calls.count
+    _ = chooseOrdered(); owner.api.orderedCapabilities = invalid
+    owner.api.orderedCapabilities["ordered_executions"] = ["local", "server", "auto"]
+    let before = owner.api.calls.count
     owner.connectMultihop(); DispatchQueue.background.run()
     check(owner.api.calls.count == before, "an older or malformed controller silently accepted the ordered request")
 }
@@ -707,7 +709,7 @@ rejects({ _ = try RouterVPNOrderedNodes.connectBody(customCaptured, current: ["s
 
 // Typed imported-middle protocols remain distinct across editor and public
 // save/load receipts; the native schema and all credentials stay in the controller.
-for middleMode in ["shadowsocks", "socks5", "http-connect", "https-connect"] { for prefixMode in ["wg", "awg2-fast", "awg2-strong"] {
+for middleMode in ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"] { for prefixMode in ["wg", "awg2-fast", "awg2-strong"] {
     let connectMiddle = ["http-connect", "https-connect"].contains(middleMode)
     let otherMiddle = middleMode == "http-connect" ? "https-connect" : middleMode == "https-connect" ? "http-connect" : middleMode == "socks5" ? "shadowsocks" : "socks5"
     _ = chooseOrdered(3, prefixMode: prefixMode)
@@ -723,6 +725,7 @@ for middleMode in ["shadowsocks", "socks5", "http-connect", "https-connect"] { f
     let draft = try owner.makeOrderedNodeDraft()
     check(draft.allowedModes(at: 1) == [middleMode] && draft.nodes == captured.orderedNodes,
           "typed imported editor substituted the saved middle protocol")
+    if middleMode == "openvpn" { check(RouterVPNOrderedNodes.modeName(middleMode) == "OpenVPN", "OpenVPN editor concealed its transport") }
     if connectMiddle {
         check(RouterVPNOrderedNodes.modeName(middleMode) == (middleMode == "http-connect" ? "HTTP CONNECT" : "HTTPS CONNECT"), "CONNECT editor mislabeled the exact imported protocol")
     }
@@ -796,12 +799,12 @@ for unsupported in ["SOCKS5", "socks", "HTTP-CONNECT", "HTTPS-CONNECT", "http-co
     check(RouterVPNOrderedNodes.importedMiddleMode(profile) == nil, "SOCKS catalog normalized an unsupported protocol")
 }
 let invalidSOCKSCapabilities: [Any] = [1, "true", false, NSNull()]
-for protocolName in ["socks5", "http-connect", "https-connect"] { for capability in invalidSOCKSCapabilities {
+for protocolName in ["socks5", "http-connect", "https-connect", "openvpn"] { for capability in invalidSOCKSCapabilities {
     var profile = socksCatalog[1]
     profile["external"] = ["protocol": protocolName, "ordered_middle_supported": capability]
     check(RouterVPNOrderedNodes.importedMiddleMode(profile) == nil, "SOCKS imported capability accepted non-boolean authority")
 } }
-for protocolName in ["socks5", "http-connect", "https-connect"] { for invalidRows in [
+for protocolName in ["socks5", "http-connect", "https-connect", "openvpn"] { for invalidRows in [
     [["id":"ordered-0","mode":"socks5"],["id":"ordered-2","mode":"shadowsocks"]],
     [["id":"ordered-0","mode":"wg"],["id":"ordered-2","mode":"socks5"]],
     [["id":"ordered-0","mode":"wg"],["id":"ordered-1","mode":"socks5"],["id":"ordered-2","mode":"hysteria2"]],
@@ -1294,7 +1297,7 @@ def macos(directory):
         "ordered-final-apply": ('let mode = selection.orderedNodes.last!["mode"]!\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', 'let mode = "shadowsocks"\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', "ordered Apply displayed a different final transport"),
         "ordered-final-widget": ('transport.isEnabled = !modes.isEmpty', 'transport.isEnabled = draft.prefixes.indices.contains(index)', "ordered editor did not expose the supported final transport"),
         "ordered-final-layer": ('return layer.isEmpty || layer == "off"', 'return true', "Hysteria2 accepted a non-Off final source"),
-        "ordered-imported-final": ('["shadowsocks", "socks5", "http-connect", "https-connect"].contains(mode) && rows.last?["mode"] == "shadowsocks")', '["shadowsocks", "socks5", "http-connect", "https-connect"].contains(mode))', "imported middle references acquired a Hysteria2 final"),
+        "ordered-imported-final": ('["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks")', '["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode))', "imported middle references acquired a Hysteria2 final"),
         "ordered-imported-choice": ('return finalModes.filter { $0 == "shadowsocks" || importedIDs.isDisjoint(with: prefixes) }', 'return finalModes', "imported middle editor offered a Hysteria2 final"),
         "ordered-loaded-final": ('fromCatalog || (stored?["mode"] as? String == selection.orderedNodes.last?["mode"] && payload["mode"] as? String == selection.orderedNodes.last?["mode"])', 'true', "Hysteria2 Load accepted inconsistent final metadata: stored-mode"),
     }

@@ -633,6 +633,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         case "socks5": return "SOCKS5"
         case "http-connect": return "HTTP CONNECT"
         case "https-connect": return "HTTPS CONNECT"
+        case "openvpn": return "OpenVPN"
         case "hysteria2": return "Hysteria2"
         default: return "Saved transport: \(mode)"
         }

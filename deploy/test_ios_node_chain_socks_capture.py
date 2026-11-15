@@ -23,7 +23,7 @@ def main():
         library=work/('libLibbox.dylib' if platform.system()=='Darwin' else 'libLibbox.so')
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(lib),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(library)],check=True,timeout=90)
         command=options+['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
-        command += [str(APP/name) for name in ('Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSNodeChainProviderCapture.swift')]
+        command += [str(APP/name) for name in ('Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainProviderCapture.swift')]
         original=(APP/'IOSNodeChainSOCKSCapture.swift').read_text();source=work/'TypedCapture.swift';binary=work/'tests'
         def run(value):
             source.write_text(value)

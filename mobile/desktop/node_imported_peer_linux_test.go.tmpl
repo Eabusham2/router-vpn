@@ -148,6 +148,7 @@ type desktopImportedWGSSPeer struct {
 	wrongNode, wrongPublic, failedDNS, dropCover           atomic.Bool
 	entryPublic, finalPublic, health, dns, mtu, mtuReplies atomic.Uint64
 	cover, coverReplies, download, upload                  atomic.Uint64
+	measuredHealth                                        atomic.Uint64
 	coverMaximum                                           atomic.Uint32
 }
 
@@ -298,6 +299,11 @@ func desktopImportedWGSSStartWithFactory(t *testing.T, request desktopImportedWG
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/health" && r.URL.RawQuery == "" && r.ContentLength == 0 && len(r.TransferEncoding) == 0 {
 			p.health.Add(1)
+			// Measurement and periodic proof have different captured cache
+			// policies. Count the actual measurement requests independently.
+			if r.Header.Get("Cache-Control") == "no-store, no-transform" {
+				p.measuredHealth.Add(1)
+			}
 			node := request.NodeProofID
 			if p.wrongNode.Load() {
 				node = strings.Repeat("f", 64)

@@ -49,6 +49,9 @@ ALLOWLISTS = {
         "internal/mobilemultihop/node_chain_connect_source_test.go",
     }),
     "connect-runtime": frozenset({
+        "internal/mobilemultihop/node_chain_imported_openvpn.go",
+        "internal/mobilemultihop/node_chain_openvpn_runtime.go",
+        "internal/mobilemultihop/node_chain_openvpn_test.go",
         'internal/mobilemultihop/desktop_egress.go',
         'internal/mobilemultihop/node_chain.go',
         'internal/mobilemultihop/node_chain_connect_physical.go',
@@ -418,6 +421,8 @@ ALLOWLISTS = {
         "cmd/client/multihop_node_chain_socks_capture_test.go",
     }),
     "ios-sdk": frozenset({
+        "mobile/chain/openvpn_box.go.tmpl",
+        "mobile/chain/openvpn_box_test.go.tmpl",
         "android/build-sing-box-libbox.sh",
         "deploy/prepare-desktop-external.py",
         "deploy/prepare-mobile-node-chain.py",
@@ -490,6 +495,9 @@ ALLOWLISTS = {
         "deploy/test_desktop_connection_profile_modes.py",
     }),
     "ios-socks-host": frozenset({
+        "deploy/test_ios_node_chain_openvpn_profiles.py",
+        "ios/RouterVPN/App/IOSImportedOpenVPNSource.swift",
+        "deploy/test_ios_node_chain_openvpn_capture.py",
         "deploy/test_ios_external_connection_profiles.py",
         "deploy/test_ios_node_chain_editor.py",
         "deploy/test_ios_node_chain_identity.py",
@@ -521,6 +529,8 @@ ALLOWLISTS = {
         "ios/RouterVPN/PacketTunnel/RouterVPNNodeChainSOCKSHost.swift",
     }),
     "android-socks-host": frozenset({
+        "android/test_android_node_chain_openvpn_runtime.py",
+        "android/app/src/main/java/com/eabusham/routervpn/AndroidExternalPolicy.java",
         "android/test_android_ordered_history_source_transaction.py",
         "android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencySourceTransaction.java",
         "android/test_android_execution_ordered_latency.py",
@@ -550,6 +560,8 @@ ALLOWLISTS = {
         "deploy/test_android_multihop_workflow.py",
     }),
     "socks-native-mtu": frozenset({
+        "mobile/chain/openvpn_box.go.tmpl",
+        "mobile/chain/openvpn_box_test.go.tmpl",
         "android/build-sing-box-libbox.sh",
         "deploy/prepare-desktop-external.py",
         "deploy/prepare-mobile-node-chain.py",
@@ -576,6 +588,9 @@ ALLOWLISTS = {
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
     }),
     "android-sdk": frozenset({
+        "mobile/chain/openvpn_box.go.tmpl",
+        "mobile/chain/openvpn_box_test.go.tmpl",
+        "android/test_android_node_chain_openvpn_runtime.py",
         "android/test_android_ordered_history_source_transaction.py",
         "android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencySourceTransaction.java",
         "android/test_android_execution_ordered_latency.py",
@@ -627,6 +642,8 @@ ALLOWLISTS = {
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
     }),
     "socks-run": frozenset({
+        "mobile/chain/openvpn_box.go.tmpl",
+        "mobile/chain/openvpn_box_test.go.tmpl",
         "android/build-sing-box-libbox.sh",
         "deploy/prepare-desktop-external.py",
         "deploy/prepare-mobile-external-policy.py",
@@ -666,6 +683,8 @@ ALLOWLISTS = {
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
     }),
     "socks-bridge": frozenset({
+        "mobile/chain/openvpn_box.go.tmpl",
+        "mobile/chain/openvpn_box_test.go.tmpl",
         "android/build-sing-box-libbox.sh",
         "deploy/prepare-desktop-external.py",
         "deploy/prepare-mobile-node-chain.py",
@@ -688,6 +707,9 @@ ALLOWLISTS = {
         "mobile/desktop/node_imported_peer_linux_test.go.tmpl",
     }),
     "socks-runtime": frozenset({
+        "internal/mobilemultihop/node_chain_imported_openvpn.go",
+        "internal/mobilemultihop/node_chain_openvpn_runtime.go",
+        "internal/mobilemultihop/node_chain_openvpn_test.go",
         "internal/mobilemultihop/node_chain_socks_runtime.go",
         "internal/mobilemultihop/node_chain_socks_runtime_test.go",
         "internal/mobilemultihop/node_chain.go",

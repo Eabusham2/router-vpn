@@ -55,7 +55,7 @@ func NewNodeChainCONNECTRuntime(source *NodeChainCONNECTSource) (*NodeChainCONNE
 }
 
 func (c *NodeChain) validateCONNECTSource() error {
-	if c == nil || c.connectSource == nil || c.importedMiddle != nil || c.socksSource != nil {
+	if c == nil || c.connectSource == nil || c.importedMiddle != nil || c.openVPNMiddle != nil || c.socksSource != nil {
 		return nodeChainCONNECTSourceError
 	}
 	source := c.connectSource

@@ -53,7 +53,7 @@ func NewNodeChainSOCKSRuntime(source *NodeChainSOCKSSource) (*NodeChainSOCKSRunt
 }
 
 func (c *NodeChain) validateSOCKSSource() error {
-	if c == nil || c.socksSource == nil || c.importedMiddle != nil || c.connectSource != nil {
+	if c == nil || c.socksSource == nil || c.importedMiddle != nil || c.openVPNMiddle != nil || c.connectSource != nil {
 		return nodeChainSOCKSSourceError
 	}
 	source := c.socksSource
@@ -90,10 +90,13 @@ func (c *NodeChain) observeSOCKSMiddleContext(ctx context.Context, engine NodeCh
 }
 
 func (c *NodeChain) hasImportedMiddle() bool {
-	return c != nil && (c.importedMiddle != nil || c.socksSource != nil || c.connectSource != nil)
+	return c != nil && (c.importedMiddle != nil || c.openVPNMiddle != nil || c.socksSource != nil || c.connectSource != nil)
 }
 
 func (c *NodeChain) importedMiddlePublicIP() string {
+	if c.openVPNMiddle != nil {
+		return c.openVPNMiddle.selection.ExpectedPublicIP
+	}
 	if c.connectSource != nil {
 		return c.connectSource.middle.selection.ExpectedPublicIP
 	}

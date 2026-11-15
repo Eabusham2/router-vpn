@@ -326,7 +326,7 @@ def main(selected_mutations=None):
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(lib), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        command += [str(APP / name) for name in ('Models.swift', 'IOSSessionIdentity.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift')]
+        command += [str(APP / name) for name in ('Models.swift', 'IOSSessionIdentity.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift')]
         binary = work / 'tests'; command += [str(source), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)

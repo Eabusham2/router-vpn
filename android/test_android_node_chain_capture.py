@@ -434,6 +434,43 @@ public final class NodeChainCaptureHarness {
  }
 
 
+ static void openVPNMiddle(Path root)throws Exception{
+  for(String key:List.of("2/","2/awg-fast","2/awg-strong"))for(String network:List.of("tcp","udp")){
+   Fixture f=new Fixture(root,key);AndroidStandardExitStore exits=new AndroidStandardExitStore(f.context);
+   var custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Original OpenVPN middle";custom.protocol="openvpn";
+   custom.server="203.0.113.20";custom.serverPort=1194;custom.expectedPublicIp="203.0.113.88";custom.username=" exact user ";custom.password=" exact secret ";
+   custom.openVPNConfig="client\ndev tun\nproto "+network+"\nremote 203.0.113.20 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+"ab".repeat(32)+"\ntun-mtu 1400\ndata-ciphers AES-256-GCM:AES-128-GCM\n";
+   custom.policy.put("dns_mode","rescue").put("start_layer","off").put("home_lan_access",false).put("kill_switch_policy","always");AndroidNodeStore.ChainSource.requireImported(custom);exits.save(custom);
+   AndroidOrderedPathSelection editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+   check(editor.prefixModes(custom.id).equals(List.of("openvpn")),"original OpenVPN source not offered with exact mode");editor.addPrefix(custom.id,"openvpn");
+   reject(()->editor.movePrefix(1,0),"OpenVPN middle became physical first");
+   AndroidNodeStore.ChainCapture saved=editor.save();
+   try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(saved)){
+    JSONObject launch=new JSONObject(capture.launchInput),member=new JSONObject(capture.memberInputs.get(1));
+    check(capture.plan!=null&&capture.socks==null&&capture.connect==null&&launch.getInt("schema")==5,"OpenVPN lost schema5 original generic owner");
+    check(member.getString("kind").equals("routervpn-node-chain-openvpn-member")&&capture.identityInputs.get(1).isEmpty(),"OpenVPN borrowed paired identity");
+    JSONObject original=new JSONObject(member.getString("capture")).getJSONObject("profile").getJSONObject("external").getJSONObject("openvpn");
+    check(original.getString("config").equals(custom.openVPNConfig)&&original.getString("username").equals(custom.username)&&original.getString("password").equals(custom.password),"OpenVPN changed original credentials or config");
+    check(capture.strict&&!capture.homeLANAccess,"OpenVPN changed aggregate saved policy");
+    try(AndroidNodeChainCapture replay=AndroidNodeChainCapture.reopen(capture.launchInput,saved)){check(replay.config.equals(capture.config)&&replay.launchInput.equals(capture.launchInput),"OpenVPN replay changed original source");}
+    String foreign=new JSONObject(launch.toString()).put("schema",2).toString();reject(()->AndroidNodeChainCapture.reopen(foreign,saved),"OpenVPN borrowed SS source schema");
+   }
+   var row=f.profiles.add("Original OpenVPN ordered route");String serialized=Files.readString(f.rows);
+   check(!serialized.contains(" exact secret ")&&!serialized.contains("peer-fingerprint"),"OpenVPN saved profile duplicated private source");
+   f.profiles.load(row.id);check(f.profiles.currentOrderedPath().modes.get(1).equals("openvpn")&&f.profiles.currentOrderedPath().members.get(1).external().openVPNConfig.equals(custom.openVPNConfig),"OpenVPN saved route replaced original import");
+   for(String fault:List.of("remote-count","hostname","private-remote","layer")){
+    var changed=AndroidStandardExitStore.copy(custom);
+    if(fault.equals("remote-count"))changed.openVPNConfig+="remote 203.0.113.21 443\n";
+    if(fault.equals("hostname"))changed.openVPNConfig=changed.openVPNConfig.replace("203.0.113.20","provider.example.test");
+    if(fault.equals("private-remote")){changed.openVPNConfig=changed.openVPNConfig.replace("203.0.113.20","10.42.0.1");changed.server="10.42.0.1";}
+    if(fault.equals("layer"))changed.policy.put("start_layer","aes-256-gcm");
+    reject(()->AndroidNodeStore.ChainSource.requireImported(changed),"OpenVPN unsupported middle admitted: "+fault);
+   }
+   var changed=AndroidStandardExitStore.copy(custom);changed.password="replacement-private-source";exits.save(changed);
+   reject(saved::requireCurrent,"OpenVPN replaced credentials retained old source ownership");
+  }
+ }
+
  static void socksMiddle(Path root)throws Exception{
   int before=checks;
   for(String key:List.of("2/","2/awg-fast","3/aes-256-gcm","4/mixed-awg"))for(boolean auth:List.of(false,true)){
@@ -658,6 +695,7 @@ public final class NodeChainCaptureHarness {
  }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";
+  if(family.equals("openvpn")){openVPNMiddle(root);System.out.println("Android OpenVPN middle sources: "+checks+" shipping Java/shared Go checks passed; native/device separate");return;}
   if(family.equals("hysteria-final")){hysteriaFinalBoundaries(root);hysteriaFinal(root);System.out.println("Android paired HY2 final sources: "+checks+" shipping Java/shared Go checks passed; native crypto separate");return;}
   if(family.equals("hostname")){hostnamePolicyControls(root);hostnameMiddle(root);System.out.println("Android hostname ordered sources: "+checks+" shipping Java/shared Go checks passed; no native execution");return;}
   if(family.equals("imported")){importedMiddle(root);System.out.println("Android imported ordered methods: "+checks+" shipping Java/shared Go checks passed");return;}
@@ -757,7 +795,7 @@ public static String routerNodeChainImportedCONNECTMemberInput(String config,Str
     boundaries.write_text(source)
 
 
-def run(root, work, app, classes, jar, env, imported_only=False):
+def run(root, work, app, classes, jar, env, imported_only=False, openvpn_only=False):
     generator = work / "android_chain_fixture_test.go"
     generator.write_text(GENERATOR)
     overlay = work / "chain-fixture-overlay.json"
@@ -768,10 +806,14 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     data = work / "ordered-data"
     data.mkdir()
     command = ["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.NodeChainCaptureHarness", str(data)]
+    if openvpn_only:
+        subprocess.run(command + ["openvpn"], env=env, check=True, timeout=180)
+        return
     subprocess.run(command + (["imported"] if imported_only else []), env=env, check=True, timeout=180)
     subprocess.run(command + ["hostname"], env=env, check=True, timeout=180)
     if not imported_only:
         subprocess.run(command + ["connect"], env=env, check=True, timeout=180)
+        subprocess.run(command + ["openvpn"], env=env, check=True, timeout=180)
         subprocess.run(command + ["hysteria-final"], env=env, check=True, timeout=180)
     node = (app / "AndroidNodeStore.java").read_text()
     store = (app / "AndroidConnectionProfileStore.java").read_text()

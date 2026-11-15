@@ -1,0 +1,151 @@
+package box
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// Real parsed managers and Box identity are retained. Only transport, privileged
+// TUN and the connected-capacity reader are fixtures; crypto is a separate gate.
+type chainNativeOpenVPN struct {
+	chainNativePrefix
+	state nativeopenvpn.PacketObservation
+}
+
+func (p *chainNativeOpenVPN) RouterVPNConnectedCapacityContext(ctx context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+	return p.state.Remote, p.state.MTU, ctx.Err()
+}
+
+func chainNativeOpenVPNSource(t *testing.T) *mobilemultihop.NodeChain {
+	t.Helper()
+	pair := chainNativeSource(t)
+	launch, err := pair.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &source) != nil {
+		t.Fatal("source")
+	}
+	var first map[string]any
+	if json.Unmarshal([]byte(source.Nodes[0]), &first) != nil {
+		t.Fatal("first")
+	}
+	client, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{22}, 32))
+	server, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{72}, 32))
+	files := map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24\nPrivateKey=%s\n[Peer]\nPublicKey=%s\nEndpoint=198.51.100.22:51820\nAllowedIPs=0.0.0.0/0,::/0\n", base64.StdEncoding.EncodeToString(client.Bytes()), base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()))))}
+	config := "client\ndev tun\nproto udp\nremote 203.0.113.24 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint " + strings.Repeat("ab", 32) + "\ntun-mtu 1280\ndata-ciphers AES-256-GCM\n"
+	native, err := nativeopenvpn.CompileEndpoint(config, "original-user", "original-password", mobilemultihop.ExternalFinalTag, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ep any
+	if json.Unmarshal([]byte(native), &ep) != nil {
+		t.Fatal("endpoint")
+	}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "stack": "system", "auto_route": true, "strict_route": true}}, "endpoints": []any{ep}, "outbounds": []any{}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "rules": []any{}}}
+	profile := map[string]any{"id": "native-openvpn-middle", "node_kind": "external", "endpoint": "203.0.113.24", "dns_mode": "rescue", "ipv6_mode": "off", "home_lan_access": false, "kill_switch_policy": "always", "mtu_policy": "auto", "external": map[string]any{"protocol": "openvpn", "expected_public_ip": "203.0.113.88", "openvpn": map[string]any{"config": config, "username": "original-user", "password": "original-password"}}}
+	capture := map[string]any{"schema": 1, "exit_id": "native-openvpn-middle", "protocol": "openvpn", "expected_public_ip": "203.0.113.88", "profile": profile}
+	if _, err := mobilemultihop.NewExternalPolicy(chainNativeJSON(t, graph), chainNativeJSON(t, capture)); err != nil {
+		t.Fatal("standalone OpenVPN fixture", err)
+	}
+	member, err := mobilemultihop.NodeChainImportedOpenVPNMemberInput(chainNativeJSON(t, graph), chainNativeJSON(t, capture))
+	if err != nil {
+		t.Fatal("OpenVPN member fixture", err)
+	}
+	source.Schema = 5
+	source.Nodes[1] = member
+	source.IdentitySources = []string{first["files"].(string), "", chainNativeJSON(t, files)}
+	result, err := mobilemultihop.NewNodeChain(chainNativeJSON(t, source))
+	if err != nil {
+		t.Fatal("OpenVPN ordered fixture", err)
+	}
+	return result
+}
+
+func TestRouterVPNNodeChainOpenVPNNativeOriginalBox(t *testing.T) {
+	chain := chainNativeOpenVPNSource(t)
+	capture, err := chain.OpenVPNMiddleCapture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var native *chainNativeOpenVPN
+	f := newChainNativeFixtureSource(t, chain, nil, func(reg *endpoint.Registry) {
+		endpoint.Register[option.OpenVPNClientEndpointOptions](reg, "openvpn-client", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.OpenVPNClientEndpointOptions) (adapter.Endpoint, error) {
+			native = &chainNativeOpenVPN{chainNativePrefix: chainNativePrefix{Adapter: outbound.NewAdapter("openvpn-client", tag, []string{"tcp", "udp"}, nil)}, state: nativeopenvpn.PacketObservation{Remote: nativeopenvpn.RemoteReceipt{Remote: capture.Remote, Generation: 7, ConnectedAt: 1}, MTU: uint32(capture.ConfiguredMTU)}}
+			return native, nil
+		})
+	})
+	ctx := context.Background()
+	first, err := f.capture(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := first.OpenVPNMiddleStateContext(ctx, capture.Tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := f.capture(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := fresh.OpenVPNMiddleStateContext(ctx, capture.Tag); err != nil || again != receipt {
+		t.Fatal("original Box reproof refused", err)
+	}
+	native.state.Remote.Generation++
+	fresh, err = f.capture(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.OpenVPNMiddleStateContext(ctx, capture.Tag); err == nil {
+		t.Fatal("fresh proof adopted replacement OpenVPN generation")
+	}
+	native.state = receipt
+	f.box.routerVPNNodeChainOpenVPN.mu.Lock()
+	bounded, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	_, err = first.OpenVPNMiddleStateContext(bounded, capture.Tag)
+	cancel()
+	f.box.routerVPNNodeChainOpenVPN.mu.Unlock()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("held receipt lock lost original deadline", err)
+	}
+	// A newly observed object cannot borrow the original Box session receipt,
+	// even after the original graph's manager has accepted its replacement.
+	replacement := &chainNativeOpenVPN{chainNativePrefix: native.chainNativePrefix, state: receipt}
+	mu := chainNativeField[sync.Mutex](t, f.box.endpoint, "access")
+	mu.Lock()
+	(*chainNativeField[map[string]adapter.Endpoint](t, f.box.endpoint, "endpointByTag"))[capture.Tag] = replacement
+	rows := chainNativeField[[]adapter.Endpoint](t, f.box.endpoint, "endpoints")
+	for i, owner := range *rows {
+		if owner == native {
+			(*rows)[i] = replacement
+		}
+	}
+	mu.Unlock()
+	if _, err := first.OpenVPNMiddleStateContext(ctx, capture.Tag); err == nil {
+		t.Fatal("old engine accepted replaced manager endpoint")
+	}
+	fresh, err = f.capture(ctx)
+	if err != nil {
+		t.Fatal("fresh actual manager capture", err)
+	}
+	if _, err := fresh.OpenVPNMiddleStateContext(ctx, capture.Tag); err == nil {
+		t.Fatal("replacement endpoint borrowed original receipt")
+	}
+}

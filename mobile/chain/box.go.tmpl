@@ -64,6 +64,7 @@ type routerVPNNodeChainObservation struct {
 // A private observation core is shared by separately typed source adapters.
 // It retains no generic NodeChain and grants no source/parser authority.
 type RouterVPNNodeChainEngine struct {
+	openVPN     mobilemultihop.NodeChainOpenVPNCapture
 	observation *routerVPNNodeChainObservation
 	publicTag   string
 	ipv6        bool
@@ -103,7 +104,11 @@ func (s *Box) RouterVPNNewNodeChainEngine(ctx context.Context, chain *mobilemult
 	if err != nil {
 		return nil, err
 	}
-	return &RouterVPNNodeChainEngine{observation: original, publicTag: publicTag, ipv6: ipv6}, nil
+	capture, err := chain.OpenVPNMiddleCapture()
+	if err != nil {
+		return nil, err
+	}
+	return &RouterVPNNodeChainEngine{observation: original, publicTag: publicTag, ipv6: ipv6, openVPN: capture}, nil
 }
 
 func (s *Box) routerVPNNewNodeChainObservation(ctx context.Context, config string,

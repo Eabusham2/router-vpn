@@ -29,7 +29,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         List<String> inputs = memberInputs(original);
         List<String> identities = identityInputs(original);
         String source = sourceInput(original, inputs, identities);
-        if (sourceSchema(original.members) >= 3) return new AndroidNodeChainCapture(original, inputs, identities, source);
+        if ((sourceSchema(original.members) == 3 || sourceSchema(original.members) == 4)) return new AndroidNodeChainCapture(original, inputs, identities, source);
         RouterNodeChain plan = Libbox.newRouterNodeChain(source);
         try { return new AndroidNodeChainCapture(original, inputs, identities, source, plan); }
         catch (Exception failure) { try { plan.close(); } catch (Exception close) { failure.addSuppressed(close); } throw failure; }
@@ -38,7 +38,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static AndroidNodeChainCapture reopen(String input, AndroidNodeStore.ChainCapture original) throws Exception {
         List<String> inputs = memberInputs(original);
         List<String> identities = identityInputs(original);
-        if (sourceSchema(original.members) >= 3) {
+        if ((sourceSchema(original.members) == 3 || sourceSchema(original.members) == 4)) {
             AndroidNodeChainCapture captured = compile(original);
             if (!input.equals(captured.launchInput)) { captured.close(); throw new IllegalStateException("The typed private source differs from its original complete capture."); }
             return captured;
@@ -202,6 +202,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             AndroidExternalPolicy.Captured captured=AndroidExternalPolicy.captureImportedEntry(member.external());
             return bounded("socks5".equals(mode)?Libbox.routerNodeChainImportedSOCKSMemberInput(captured.source,captured.capture)
                     :("http-connect".equals(mode)||"https-connect".equals(mode))?Libbox.routerNodeChainImportedCONNECTMemberInput(captured.source,captured.capture)
+                    :"openvpn".equals(mode)?Libbox.routerNodeChainImportedOpenVPNMemberInput(captured.source,captured.capture)
                     :Libbox.routerNodeChainImportedMemberInput(captured.source,captured.capture),MAX_INPUT);
         }
         member.requirePairedIdentity();
@@ -223,7 +224,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if(imported>1)throw new IllegalStateException("This custom path supports one imported intermediate node.");
         if(imported==0)return 1;
         String protocol=AndroidExternalPolicy.protocol(members.get(1).external().protocol);
-        return "socks5".equals(protocol)?3:("http-connect".equals(protocol)||"https-connect".equals(protocol))?4:2;
+        return "openvpn".equals(protocol)?5:"socks5".equals(protocol)?3:("http-connect".equals(protocol)||"https-connect".equals(protocol))?4:2;
     }
 
     JSONObject controlProfile() throws Exception { return original.control.profile(); }

@@ -43,6 +43,8 @@ TEMPLATES = {
     'candidate_preparation.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation.go',
     'candidate_preparation_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation_test.go',
     'box.go.tmpl': 'routervpn_node_chain.go',
+    'openvpn_box.go.tmpl': 'routervpn_node_chain_openvpn.go',
+    'openvpn_box_test.go.tmpl': 'routervpn_node_chain_openvpn_test.go',
     'box_test.go.tmpl': 'routervpn_node_chain_test.go',
     'network_context.go.tmpl': 'route/routervpn_node_chain.go',
     'network_context_test.go.tmpl': 'route/routervpn_node_chain_test.go',
@@ -131,6 +133,23 @@ def box_source(source):
                 raise ValueError('ordered native graph snapshot moved outside its construction boundary')
         else:
             source = replace_owned(source, before, before+added)
+    # Keep the original OpenVPN endpoint/session receipt on this Box across
+    # TUN reproof. A new proof controller cannot repin a reconnected endpoint.
+    session_anchor = '\trouterVPNNodeChainOptions string\n'
+    session_field = '\trouterVPNNodeChainOpenVPN routerVPNNodeChainOpenVPNSession\n'
+    execution_field = '\trouterVPNNodeChainExecutionOptions string\n'
+    execution_fields = execution_field + '\trouterVPNNativeClose routerVPNNativeCloseState\n'
+    if execution_field in source:
+        if source.count(session_anchor + execution_fields) != 1:
+            raise ValueError('ordered OpenVPN session lost its original execution neighbor')
+        session_anchor += execution_fields
+    if session_field in source:
+        if source.count(session_field) != 1 or source.count(session_anchor + session_field) != 1:
+            raise ValueError('ordered OpenVPN session moved outside its original Box')
+    else:
+        if 'routerVPNNodeChainOpenVPN' in source or source.count(session_anchor) != 1:
+            raise ValueError('ordered OpenVPN session has foreign or duplicated authority')
+        source = source.replace(session_anchor, session_anchor + session_field, 1)
     guard_before = '\tchainOptionsDigest := routerVPNNodeChainOptionsDigest(options.Context, options.Options)\n'
     guard = ('\tif err := routerVPNNodeSOCKSOptions(options.Context, options.Options); err != nil {\n'
              '\t\treturn nil, err\n\t}\n')

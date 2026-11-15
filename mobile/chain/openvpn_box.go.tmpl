@@ -1,0 +1,77 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"sync"
+)
+
+// This receipt belongs to the original Box, not a replaceable proof controller.
+// MTU reproof must not adopt a reconnect or a replacement endpoint object.
+type routerVPNNodeChainOpenVPNSession struct {
+	mu          sync.Mutex
+	source, tag string
+	endpoint    adapter.Outbound
+	state       *nativeopenvpn.PacketObservation
+}
+
+func (e *RouterVPNNodeChainEngine) OpenVPNMiddleStateContext(ctx context.Context, tag string) (nativeopenvpn.PacketObservation, error) {
+	empty := nativeopenvpn.PacketObservation{}
+	if e == nil || e.observation == nil || e.openVPN.Tag == "" || tag != e.openVPN.Tag {
+		return empty, errors.New("ordered OpenVPN endpoint is not captured")
+	}
+	original := e.observation
+	if _, err := original.ObserveChainContext(ctx); err != nil {
+		return empty, err
+	}
+	owner := original.prefixes[tag]
+	native, ok := owner.(interface {
+		RouterVPNConnectedCapacityContext(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error)
+	})
+	if !ok {
+		return empty, errors.New("ordered OpenVPN endpoint has no native capacity reader")
+	}
+	session := &original.instance.routerVPNNodeChainOpenVPN
+	if err := adapter.RouterVPNLockContext(ctx, &session.mu); err != nil {
+		return empty, err
+	}
+	if session.endpoint == nil {
+		session.endpoint = owner
+		session.source = e.openVPN.SourceSHA256
+		session.tag = tag
+	}
+	valid := session.endpoint == owner && session.source == e.openVPN.SourceSHA256 && session.tag == tag
+	session.mu.Unlock()
+	if !valid {
+		return empty, errors.New("ordered OpenVPN original endpoint replaced")
+	}
+	remote, mtu, err := native.RouterVPNConnectedCapacityContext(ctx)
+	if err != nil {
+		return empty, err
+	}
+	if _, err = original.ObserveChainContext(ctx); err != nil {
+		return empty, err
+	}
+	state := nativeopenvpn.PacketObservation{Remote: remote, MTU: mtu}
+	if state.Validate() != nil || state.Remote.Remote != e.openVPN.Remote || state.MTU < uint32(e.openVPN.ConfiguredMTU) {
+		return empty, errors.New("ordered OpenVPN native receipt differs from capture")
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &session.mu); err != nil {
+		return empty, err
+	}
+	if session.state == nil {
+		copy := state
+		session.state = &copy
+	}
+	valid = session.endpoint == owner && session.source == e.openVPN.SourceSHA256 && session.tag == tag && *session.state == state
+	session.mu.Unlock()
+	if !valid {
+		return empty, errors.New("ordered OpenVPN original connected generation changed")
+	}
+	return state, ctx.Err()
+}
+
+var _ mobilemultihop.NodeChainOpenVPNEngine = (*RouterVPNNodeChainEngine)(nil)

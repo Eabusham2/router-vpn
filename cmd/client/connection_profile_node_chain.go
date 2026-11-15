@@ -93,7 +93,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 				return errors.New("saved imported ordered execution lacks native Server or Compare admission")
 			}
 			if len(record.NodeChain) != 3 || i != 1 || record.NodeChain[len(record.NodeChain)-1].Mode != "shadowsocks" ||
-				(captured.Mode != "shadowsocks" && captured.Mode != "socks5" && captured.Mode != "http-connect" && captured.Mode != "https-connect") ||
+				(captured.Mode != "openvpn" && captured.Mode != "shadowsocks" && captured.Mode != "socks5" && captured.Mode != "http-connect" && captured.Mode != "https-connect") ||
 				captured.NodeProofID != "" || captured.Preferences != nil || captured.External == nil || captured.External.Protocol != captured.Mode || captured.External.validate() != nil || captured.External.StartLayer != "" && captured.External.StartLayer != "off" || len(captured.Sources) != 1 || captured.Sources[0].Mode != "external-"+captured.Mode || !savedNodeChainDigest(captured.Sources[0].SHA256) {
 				return errors.New("saved imported middle lost its original external policy or source")
 			}
@@ -119,7 +119,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 }
 
 func captureSavedNodeChainSources(root string, node common.RouterProfile, mode string) ([]connectionProfileNodeSource, error) {
-	if desktopNodeChainImported(node, mode) || desktopNodeChainSOCKSMiddle(node, mode) || desktopNodeChainCONNECTMiddle(node, mode) {
+	if desktopNodeChainOpenVPNMiddle(node, mode) || desktopNodeChainImported(node, mode) || desktopNodeChainSOCKSMiddle(node, mode) || desktopNodeChainCONNECTMiddle(node, mode) {
 		raw, err := json.Marshal(node.External)
 		if err != nil {
 			return nil, err

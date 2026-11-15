@@ -65,7 +65,7 @@ extension IOSRuntimeSelector {
               (2...IOSMultihopNodeSelection.maximumNodes).contains(capture.members.count),
               capture.members.dropLast().enumerated().allSatisfy({ position, member in
                   IOSMultihopNodeSelection.supportsNativePrefix(member.mode) && member.profile["node_kind"] as? String == "router-vpn" ||
-                  capture.members.count == 3 && position == 1 && member.mode == "shadowsocks" && member.profile["node_kind"] as? String == "external"
+                  capture.members.count == 3 && position == 1 && ["shadowsocks", "openvpn"].contains(member.mode) && member.profile["node_kind"] as? String == "external"
               }),
               let final = capture.members.last, final.profile["node_kind"] as? String == "router-vpn",
               final.mode == "shadowsocks" || final.mode == "hysteria2" &&

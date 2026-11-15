@@ -95,7 +95,7 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 	var result []desktopNodeChainMember
 	for i, selected := range nodes {
 		profile, found := byID[selected.ID]
-		imported := found && desktopNodeChainImported(profile, selected.Mode)
+		imported := found && (desktopNodeChainImported(profile, selected.Mode) || desktopNodeChainOpenVPNMiddle(profile, selected.Mode))
 		paired := found && (profile.NodeKind == "" || profile.NodeKind == "router-vpn") && profile.External == nil && common.ValidNodeProofID(profile.NodeProofID)
 		if imported {
 			if len(nodes) != 3 || i != 1 || nodes[len(nodes)-1].Mode != "shadowsocks" {
@@ -134,6 +134,9 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 	for i, member := range members {
 		if member.Profile.NodeKind == "external" {
 			source.Schema = 2
+			if member.Mode == "openvpn" {
+				source.Schema = 5
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -177,6 +180,14 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 
 func (capture *desktopNodeChainCapture) compileMember(ctx context.Context, member desktopNodeChainMember, total *int, lookup applexray.Lookup) (string, string, string, error) {
 	if member.Profile.NodeKind == "external" {
+		if desktopNodeChainOpenVPNMiddle(member.Profile, member.Mode) {
+			input, endpoint, err := desktopNodeChainOpenVPNInput(ctx, member.Profile)
+			*total += len(input)
+			if *total > mobilemultihop.NodeChainInputLimit {
+				return "", "", "", errors.New("ordered OpenVPN source exceeds aggregate capture bound")
+			}
+			return input, endpoint, "", err
+		}
 		if !desktopNodeChainImported(member.Profile, member.Mode) {
 			return "", "", "", errors.New("ordered imported source changed kind or transport")
 		}

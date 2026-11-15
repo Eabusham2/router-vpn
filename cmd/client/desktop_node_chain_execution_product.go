@@ -44,7 +44,7 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" {
 		return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
 	}
-	if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes)) {
+	if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes) || desktopNodeChainHasOpenVPN(nodes)) {
 		return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
 	}
 	return nil

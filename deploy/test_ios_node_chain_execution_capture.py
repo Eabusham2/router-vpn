@@ -224,7 +224,7 @@ def main():
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(work/'Libbox.swift'),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(work/('libLibbox'+suffix))],check=True,timeout=90)
         link=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
         subprocess.run(options+link+['-emit-module','-emit-library','-module-name','CryptoKit',str(work/'CryptoKit.swift'),'-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/('libCryptoKit'+suffix))],check=True,timeout=90)
-        command=options+link+['-lCryptoKit',str(APP/'Models.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSNodeChainCapture.swift')]
+        command=options+link+['-lCryptoKit',str(APP/'Models.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSNodeChainCapture.swift'),str(APP/'IOSImportedOpenVPNSource.swift')]
         source=APP/'IOSNodeChainExecutionCapture.swift';tests=work/'Tests.swift';binary=work/'tests'
         subprocess.run(command+[str(source),str(tests),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary),str(compiler)],check=True,timeout=180)

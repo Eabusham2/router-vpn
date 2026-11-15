@@ -137,7 +137,7 @@ def run_fixture(swift=SWIFT, files=None, controls=CONTROLS):
             subprocess.run(options+['-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/'libCryptoKit.so')],check=True,timeout=90)
             options+=['-lCryptoKit']
         command=options+['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
-        files=files or ['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidatePrefixCapture.swift']
+        files=files or ['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidatePrefixCapture.swift']
         binary=work/'test'
         def exercise(replacements=None,witness=None):
             replacements=replacements or {}

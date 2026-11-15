@@ -106,6 +106,21 @@ class NodeChainPreparation(unittest.TestCase):
             self.prepare(vendor, mobile=False)
             self.assertEqual((vendor/'experimental/libbox/routervpn_node_chain.go').read_bytes(), bridge)
 
+    def test_openvpn_session_stays_on_the_original_box_across_repreparation(self):
+        source = PREP.box_source(BOX).decode()
+        anchor = '\trouterVPNNodeChainOptions string\n'
+        field = '\trouterVPNNodeChainOpenVPN routerVPNNodeChainOpenVPNSession\n'
+        self.assertEqual(source.count(anchor + field), 1)
+        self.assertEqual(PREP.box_source(source).decode(), source)
+        # Upgrade only the exact preceding owned shape, without allocating a
+        # second native session or editing another owner's constructor.
+        self.assertEqual(PREP.box_source(source.replace(field, '', 1)).decode(), source)
+        for changed in (source + field,
+                        source.replace(anchor + field, field + anchor, 1),
+                        source.replace(field, '\trouterVPNNodeChainOpenVPN foreignSession\n', 1)):
+            with self.assertRaises(ValueError):
+                PREP.box_source(changed)
+
     def test_later_native_snapshot_neighbors_preserve_exact_repreparation(self):
         source = PREP.box_source(BOX).decode()
         for anchor, owned in (

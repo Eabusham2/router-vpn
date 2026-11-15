@@ -66,7 +66,7 @@ func NewNodeChainExecutionPolicy(sourceJSON string) (*NodeChainExecutionPolicy, 
 		return nil, nodeChainExecutionError
 	}
 	local, err := NewNodeChain(source.LocalSource)
-	if err != nil || local.validateCapture() != nil || len(local.nodes) != len(source.Server.Members)+1 ||
+	if err != nil || local.validateCapture() != nil || local.openVPNMiddle != nil || len(local.nodes) != len(source.Server.Members)+1 ||
 		local.importedMiddle != nil && local.importedMiddle.hostname != nil {
 		return nil, nodeChainExecutionError
 	}
@@ -290,7 +290,7 @@ func (p *NodeChainExecutionPolicy) captureSeal() string {
 }
 
 func (p *NodeChainExecutionPolicy) validateCapture() error {
-	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || p.local.validateCapture() != nil ||
+	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || p.local.validateCapture() != nil || p.local.openVPNMiddle != nil ||
 		p.source.Request.Validate(p.source.Server) != nil || !reflect.DeepEqual(p.localProofs, p.local.ProofInventory()) {
 		return nodeChainExecutionError
 	}

@@ -204,6 +204,8 @@ func captureDesktopNodeChain(base, projected *NodeChain) (DesktopPhysicalCapture
 		var err error
 		if position == 1 && base.importedMiddle != nil {
 			capture, err = base.importedMiddle.devicePolicy()
+		} else if position == 1 && base.openVPNMiddle != nil {
+			capture, err = base.openVPNMiddle.devicePolicy()
 		} else {
 			var paired NodeDesktopCapture
 			paired, err = node.DesktopCapture()

@@ -17,7 +17,7 @@ APP = ROOT / 'ios/RouterVPN/App'
 spec = importlib.util.spec_from_file_location('chain_policy_boundary', ROOT / 'deploy/test_ios_pq_selection.py')
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
 
-GO = P.GO.replace('"crypto/sha256"', '"crypto/sha256";"crypto/ecdh";"crypto/ed25519";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"strconv";"time";"router-vpn/internal/nativecomposite"', 1)
+GO = P.GO.replace('"crypto/sha256"', '"crypto/sha256";"crypto/ecdh";"crypto/ed25519";"crypto/rand";"crypto/x509";"crypto/x509/pkix";"encoding/pem";"math/big";"strconv";"time";"router-vpn/internal/nativecomposite";"router-vpn/internal/nativeopenvpn"', 1)
 anchor = ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)'
 assert GO.count(anchor) == 1
 GO = GO.replace(anchor, r'''
@@ -29,6 +29,8 @@ GO = GO.replace(anchor, r'''
  case "chain-hysteria-fixture":var count int;count,err=strconv.Atoi(r.Node);if err==nil{value,err=chainHysteriaFixture(count,r.Mode,r.Policy)}
  case "chain-execution":_,err=mobilemultihop.NewNodeChainExecutionPreparation(r.Source,r.Mode)
  case "chain-candidate-supported":value=strconv.FormatBool(mobilemultihop.NodeChainCandidateInputSupported(r.Source))
+ case "chain-openvpn-endpoint":value,err=nativeopenvpn.CompileEndpoint(r.Source,r.Files,r.Node,r.Mode,"")
+ case "chain-openvpn-imported":value,err=mobilemultihop.NodeChainImportedOpenVPNMemberInput(r.Source,r.Policy)
  case "chain-imported":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Source,r.Policy)
  case "chain-socks-imported":value,err=mobilemultihop.NodeChainImportedSOCKSMemberInput(r.Source,r.Policy)
  case "chain-socks-new":
@@ -141,6 +143,12 @@ func chainFixtureModes(count int,layer string,mixed bool)(string,error){
 
 LIBBOX = P.SWIFT[:P.SWIFT.index('func compile(')]
 LIBBOX += r'''
+public func LibboxRouterOpenVPNEndpoint(_ config:String,_ user:String,_ password:String,_ tag:String,_ detour:String,_ error:UnsafeMutablePointer<NSError?>?)->String{
+ api(error){try bridge(["Op":"chain-openvpn-endpoint","Source":config,"Files":user,"Node":password,"Mode":tag])} ?? ""
+}
+public func LibboxRouterNodeChainImportedOpenVPNMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String{
+ api(error){try bridge(["Op":"chain-openvpn-imported","Source":config,"Policy":capture])} ?? ""
+}
 public final class LibboxRouterNodeChain {
  private let receipt:[String:String]
  init(_ receipt:[String:String]){self.receipt=receipt}
@@ -546,7 +554,7 @@ def main():
         options = ['swiftc', '-j', '1', '-swift-version', '6', '-module-cache-path', str(work / 'modules')]
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(stub), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
-        command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopStartLayer.swift'), str(APP / 'Models.swift'), str(APP / 'IOSNodeChainSOCKSCapture.swift')]
+        command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSMultihopStartLayer.swift'), str(APP / 'Models.swift'), str(APP / 'IOSImportedOpenVPNSource.swift'), str(APP / 'IOSNodeChainSOCKSCapture.swift')]
         provider = APP / 'IOSNodeChainProviderCapture.swift'
         source = APP / 'IOSNodeChainCapture.swift'
         binary = work / 'tests'

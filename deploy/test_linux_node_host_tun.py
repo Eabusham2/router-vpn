@@ -37,6 +37,7 @@ CHILD = load('linux_installed_host_child', 'test_linux_node_child_tun.py')
 TRANSACTION = load('linux_installed_host_transaction', 'test_linux_node_transaction.py')
 HOSTNAME = load('linux_hostname_native_preflight', 'test_desktop_node_imported_hostname.py')
 HYSTERIA_FINAL = load('linux_hysteria_final_native_preflight', 'test_desktop_node_chain_hysteria_final.py')
+OPENVPN_MIDDLE = load('linux_openvpn_middle_native_preflight', 'test_desktop_node_chain_openvpn_middle.py')
 SOCKS_PARENT = load('linux_installed_socks_parent', 'test_desktop_socks_parent.py')
 CONNECT_PARENT = load('linux_installed_connect_parent', 'test_desktop_connect_parent.py')
 CONNECT_PUBLIC = load('linux_public_connect_source', 'test_desktop_connect_admission.py')
@@ -330,7 +331,10 @@ def checked_sources(source):
         raise ValueError('Installed typed CONNECT host lost its original independent TCP and final UoT peer')
     if HYSTERIA_FINAL.NATIVE_TEMPLATE not in native:
         raise ValueError('Ordered Hysteria2 native preflight lost its original encrypted peer source')
+    if OPENVPN_MIDDLE.NATIVE_TEMPLATE not in native:
+        raise ValueError('Ordered OpenVPN native preflight lost its original encrypted peer source')
     for name in ('test_desktop_node_chain_hysteria_final.py', 'test_desktop_node_chain_hysteria_final_runner.py',
+                 'test_desktop_node_chain_openvpn_middle.py', 'test_desktop_node_chain_openvpn_middle_runner.py',
                  'test_desktop_socks_parent.py', 'test_desktop_socks_parent_runner.py',
                  'test_desktop_connect_parent.py', 'test_desktop_connect_parent_runner.py',
                  'test_desktop_connect_admission.py', 'test_desktop_connect_admission_runner.py'):
@@ -1215,6 +1219,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
         node_chain_imported_output = execute_node_chain_imported_peer(peer, source, captured)
         node_chain_hostname_output = HOSTNAME.execute_peer(peer, source, captured)
         node_chain_hysteria_final_output = HYSTERIA_FINAL.execute_peer(peer, source, captured)
+        node_chain_openvpn_middle_output = OPENVPN_MIDDLE.execute_peer(peer, source, captured)
         node_chain_imported_mtu_output = execute_node_chain_imported_mtu(peer, source, captured)
         node_chain_candidate_output = execute_node_chain_candidates(peer, source, captured)
         node_chain_connect_candidate_output = execute_node_chain_connect_candidates(peer, source, captured)
@@ -1280,6 +1285,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'node_chain_imported_mtu_cases': list(NODE_CHAIN_IMPORTED_MTU_VERDICTS), 'node_chain_imported_mtu_output_sha256': hashlib.sha256(node_chain_imported_mtu_output.encode()).hexdigest(),
                   'node_chain_imported_cases': list(NODE_CHAIN_IMPORTED_VERDICTS), 'node_chain_imported_output_sha256': hashlib.sha256(node_chain_imported_output.encode()).hexdigest(),
                   'node_chain_hysteria_final_cases': list(HYSTERIA_FINAL.VERDICTS), 'node_chain_hysteria_final_output_sha256': hashlib.sha256(node_chain_hysteria_final_output.encode()).hexdigest(),
+                  'node_chain_openvpn_middle_cases': list(OPENVPN_MIDDLE.VERDICTS), 'node_chain_openvpn_middle_output_sha256': hashlib.sha256(node_chain_openvpn_middle_output.encode()).hexdigest(),
                   'node_chain_hostname_transport_cases': list(HOSTNAME.VERDICTS), 'node_chain_hostname_transport_output_sha256': hashlib.sha256(node_chain_hostname_output.encode()).hexdigest(),
                   'node_chain_peer_cases': list(NODE_CHAIN_PEER_CASES), 'node_chain_peer_output_sha256': hashlib.sha256(node_chain_peer_output.encode()).hexdigest(),
                   'cases': list(CASES), 'reverse_cases': list(REVERSE_CASES), 'compiled_negative_controls': [defect, private_defect, ds_defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}

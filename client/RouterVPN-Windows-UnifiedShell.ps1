@@ -888,7 +888,7 @@ function ShowUnifiedOrderedNodes {
         $rows=New-Object 'Collections.Generic.List[object]';foreach($node in $initial|Select-Object -SkipLast 1){[void]$rows.Add([pscustomobject]@{id=$node.id;mode=$node.mode})}
         $available=$dialog.FindName('Available');$list=$dialog.FindName('Order');$status=$dialog.FindName('Status');$prefixMode=$dialog.FindName('PrefixMode');$finalMode=$dialog.FindName('FinalMode')
         $finalMode.Tag=if($initial.Count){$initial[-1].mode}else{'shadowsocks'}
-        $prefixMode.ItemsSource=@('wg','awg2-fast','awg2-strong','shadowsocks','socks5','http-connect','https-connect'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}});$prefixMode.SelectedIndex=0
+        $prefixMode.ItemsSource=@('wg','awg2-fast','awg2-strong','shadowsocks','socks5','http-connect','https-connect','openvpn'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}});$prefixMode.SelectedIndex=0
         $dialog.FindName('Final').Text='Final exit: '+[string]$selected[0].name+' · execution follows the main Local / Server / Compare choice'
         $refresh={
             $chosenFinal=[string]$finalMode.SelectedValue;if(-not$chosenFinal){$chosenFinal=[string]$finalMode.Tag};if(-not$chosenFinal){$chosenFinal='shadowsocks'}

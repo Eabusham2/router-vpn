@@ -20,6 +20,10 @@ FILES = ('modes/darwin_pf_baseline.py', 'modes/darwin_install_capability.py', 'm
          'modes/cleanup-private-runtime.py', 'modes/select-standard-engine.sh',
          'modes/tor-prelaunch-witness.py')
 MUTANTS = (
+    ('ordered OpenVPN original member admission', 'kill-switch-platform.py',
+     "'ordered-node-chain-v1': ('shadowsocks', 'openvpn'),", "'ordered-node-chain-v1': ('shadowsocks',),",
+     'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_node_chain_openvpn_middle_keeps_original_policy_rows',
+     'ordered OpenVPN middle lost original policy binding'),
     ('ordered strongest member applied policy', 'kill-switch-platform.py',
      "        policy = node_chain_capture['policy']\n", '',
      'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_node_chain_original_members_preserve_strongest_policy',

@@ -9,7 +9,7 @@ private let macConnectionMultihopEnabledKey = "routervpn.unified.multihop-enable
 enum RouterVPNOrderedNodes {
     static let prefixModes = ["wg", "awg2-fast", "awg2-strong"]
     static let finalModes = ["shadowsocks", "hysteria2"]
-    static let editorModes = prefixModes + finalModes + ["socks5", "http-connect", "https-connect"]
+    static let editorModes = prefixModes + finalModes + ["socks5", "http-connect", "https-connect", "openvpn"]
     static func finalProfile(_ profile: [String: Any], mode: String) -> Bool {
         guard finalModes.contains(mode), profile["external"] == nil else { return false }
         if let kind = profile["node_kind"] {
@@ -26,7 +26,7 @@ enum RouterVPNOrderedNodes {
               let value = external["ordered_middle_supported"] as? NSNumber,
               CFGetTypeID(value) == CFBooleanGetTypeID(), value.boolValue,
               let mode = external["protocol"] as? String,
-              ["shadowsocks", "socks5", "http-connect", "https-connect"].contains(mode) else { return nil }
+              ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) else { return nil }
         return mode
     }
     static func importedMiddle(_ profile: [String: Any]) -> Bool {
@@ -42,6 +42,7 @@ enum RouterVPNOrderedNodes {
         case "http-connect": return "HTTP CONNECT"
         case "https-connect": return "HTTPS CONNECT"
         case "hysteria2": return "Hysteria2"
+        case "openvpn": return "OpenVPN"
         default: return "Unknown saved transport"
         }
     }
@@ -58,8 +59,8 @@ enum RouterVPNOrderedNodes {
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
                   seen.insert(id).inserted,
                   let mode = row["mode"],
-                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || (rows.count == 3 && position == 1 && ["shadowsocks", "socks5", "http-connect", "https-connect"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
-                throw issue("Choose paired WireGuard or AWG2 prefixes and a paired Shadowsocks 2022 or unlayered Hysteria2 exit. An imported SS2022, SOCKS5 or HTTP(S) CONNECT middle requires a three-node path ending in Shadowsocks 2022.")
+                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || (rows.count == 3 && position == 1 && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
+                throw issue("Choose paired WireGuard or AWG2 prefixes and a paired Shadowsocks 2022 or unlayered Hysteria2 exit. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a three-node path ending in Shadowsocks 2022.")
             }
         }
         guard !control.isEmpty, rows.last?["id"] == control else {
@@ -202,7 +203,7 @@ struct RouterVPNOrderedNodeDraft {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
         guard execution == "local" || !prefixes.contains(where: importedIDs.contains) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
-            guard importedIDs.contains(id) ? ordered.count == 3 && index == 1 && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("An imported SS2022, SOCKS5 or HTTP(S) CONNECT member requires one middle position between a paired entry and final.") }
+            guard importedIDs.contains(id) ? ordered.count == 3 && index == 1 && modes[index] == importedModes[id] && finalMode == "shadowsocks" : RouterVPNOrderedNodes.prefixModes.contains(modes[index]) else { throw RouterVPNOrderedNodes.issue("An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN member requires one middle position between a paired entry and final.") }
         }
         return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
             execution: execution, profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
@@ -886,7 +887,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController {
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 requires StartLayer Off. An imported SS2022, SOCKS5 or HTTP(S) CONNECT middle requires a Shadowsocks 2022 final. Each node keeps its own linked credentials and settings.")
+        let note = NSTextField(wrappingLabelWithString: "Choose one to seven entry and hop nodes, each with WireGuard, AWG2 Fast or AWG2 Strong. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 requires StartLayer Off. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. Each node keeps its own linked credentials and settings.")
         root.addArrangedSubview(note)
         path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
         transport.setAccessibilityLabel("Selected node transport")

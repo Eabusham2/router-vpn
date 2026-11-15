@@ -26,6 +26,9 @@ public struct IPv6Address {
 }
 '''
 BOUNDARIES = r'''
+// Native OpenVPN source admission is outside this persistence/picker fixture.
+enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -> Bool { false } }
+
 @MainActor enum IOSPrivateJSONStore {
  static var bytes: Data?, failRead=false, failWrite=false, writes=0
  static func read(_ filename:String,maximumBytes:Int)throws->Data? { if failRead{throw TestFailure.error};return bytes }

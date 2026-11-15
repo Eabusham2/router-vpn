@@ -98,10 +98,15 @@ back from the remote. There was no force push or live deployment.
 | `3e5f0424ca8a840e7144a7d3d549a665b9d984cf` | Supported ordinary external all-Off connections retain the original native controller, isolated engine, captured policy and joined cleanup on Linux, Windows and macOS. | The focused race, canonical preparation, runner and cross-build results are recorded below. The added installed/kernel cases remain exact-SHA execution requirements. |
 | `7ebe9c2649d604d20b763a81968d8d53e157241c` | OpenVPN and SOCKS physical fixtures accept freshly captured Off while rejecting a separately valid replacement of an original Always capture with Off. | All 84 focused test verdicts passed with race instrumentation in 3.845 seconds against an isolated published-source copy. The old OpenVPN expectation caused four exact-`3e5f0424` workflow failures. Production ownership and validation were unchanged. |
 | `f51b791ab6644e92d09c512f760d86b04580b69f` | The preparation audit follows the actual retained native-family execution call as well as direct test selectors. | All 15 published-source preparation checks passed. Removing the real invocation while retaining its text in a comment fails the audit. This fixes the stale selector inspection without removing any native root. |
+| `fa311abd6995ba7e4aeb1cbaf4eaf1ee9dccd896` | Ordinary macOS ordered baselines bind every original member's saved device policy and retain the strongest captured protection. | Focused client baseline race tests, the complete Darwin AMD64 client cross-compile, 20 PF primitives, 97 lifecycle checks and 41 causal controls passed. Actual native PF/utun and mixed-policy package acceptance remain separate. |
+| `52f4cf0e0fd896f9d8a582e5eae82200f85484d0` | The Windows external fixture acknowledges the original durable release barrier for Off as well as On-connect, preserving Always. | Eleven durable-release roots passed with race detection. The exact-SHA hosted multihop job `132755573124` then passed all 39 external Connect/Disconnect leaves; its separate two Off Speed Lab fixtures still failed. Production acknowledgment requirements were unchanged. |
+| `b482e6062f212693ff8f08ce75b9cd9acbdc3d8d` | The Windows receipt audit includes the already-required Off native witnesses in its exact counts. | All eight focused runner checks passed, retaining missing and substituted receipt rejection. No native case was removed. |
+| `09522604698b7acfe63211f32e8bcb118fe1ec7b` | The two external-Off Speed Lab fixtures use a supported On-connect paired Router and explicitly verify original, trial and restored protection policies in both directions. | All 26 restoration leaves and the public lifecycle/retirement roots passed with race detection and an explicitly local physical-inventory boundary double. This did not implement single-Router Off or report a real Windows network test. |
+| `cd3d8b14559c7ebebc1b3d66bace36563f86e9e7` | Imported-layer fixture construction and persistence mutation acquire the application lock already used by live telemetry. | The actual race was observed before correction. All eight persistence variants then passed with race detection in 3.958 seconds, without the network-inventory overlay. Production source and credential-refusal assertions were unchanged. |
 
 The last named commit is the verified publication checkpoint preceding this
-evidence refresh. This change binds ordinary ordered Darwin baselines to every
-original member's device policy as described below; a document does not manufacture a
+evidence refresh. The new bounded OpenVPN middle source is described below;
+a document does not manufacture a
 publication receipt for itself. This is not a claim that `main` cannot
 advance. The complete release-orchestration source audit also passed in the
 working tree containing these repairs. That local working-tree result is not
@@ -570,6 +575,67 @@ and packaged-device acceptance remain mandatory native evidence. The current
 authoritative run at `17267175` failed in the separate controller socket frame
 reader before this addition was published. The source correction is published
 as `09a9b781`; a cross-compile does not close its native acceptance gate.
+
+### Imported OpenVPN middle with original native connection ownership
+
+The ordered compiler now has a bounded Local composition with exactly three
+members: a paired WireGuard/AWG Fast/AWG Strong entry, one imported OpenVPN
+middle with one literal TCP or UDP remote and Start Layer Off, and an
+independent paired SS2022 final. Schema 5 preserves each original source and
+credential reference. The imported member supplies public-path evidence;
+it cannot acquire a paired Router identity or an independent physical socket.
+The final node retains the selected application DNS policy. Temporary
+standalone resolver settings used while validating the literal import are
+removed before the ordered graph is compiled; they do not replace final DNS.
+
+The real Box pins the original OpenVPN endpoint object, remote, connected
+generation, connection timestamp and observed native packet capacity. Proof,
+measurement and MTU replacement continue to check that original ownership.
+A fresh proof controller cannot adopt a replacement endpoint or reconnect
+generation. A configured MTU is only a bound, never a measured connected
+capacity. The existing generic ordered lifecycle owns cancellation and joined
+cleanup. Server/Compare, candidate selection, other placements, additional
+members and broader OpenVPN profiles remain separate requirements.
+
+Android and Apple capture, native bridge calls, ordered editors, saved-profile
+operations and startup use the shared constructor. Windows, AppKit and GTK
+editors and the desktop capture/restore paths carry the same original source.
+The complete graph remains in one system VPN/engine owner. The Android
+compiler/editor/Save/Load witness passed 90 checks, its lifecycle witness 53,
+and the existing external-policy suite 1,311. Apple source capture passed 114
+checks and the actual saved-profile operations 284 checks plus three causal
+controls. Desktop controller coverage passed 18 race-instrumented roots;
+PowerShell callbacks passed 4,650 profile and 310 editor checks with their
+21 and 10 causal controls. The extracted shipping Swift callbacks passed
+6,586 checks and rejected all 45 controls. These are the named source and
+component boundaries, not APK, Xcode, AppKit rendering or device acceptance.
+
+The actual generated Box endpoint-pinning root passed with race detection.
+The compiled desktop command passed the new original-generation root and all
+eight leaves in 9.67 seconds. Its full required 45-verdict group did not pass
+locally: 19 existing runtime/Stop leaves failed with `create netlink socket:
+operation not permitted`, along with their five ancestors. Those gates remain
+mandatory and unchanged in hosted CI; no success receipt was substituted.
+
+The encrypted reference gate requires all WG/AWG entry modes, both actual
+OpenVPN transports, the real SS2022 final, selected DNS, reconnect rejection,
+50 real responses at each of the three positions, saved-history ownership,
+joined stream cleanup, and fourteen authentication/path/DNS refusals. Its
+four bounded phases use one compiled image and reject missing, foreign,
+skipped or changed source/image evidence. The test's outer engine identity,
+private reference CA and measurement host are explicit component boundaries.
+The final race-instrumented run passed all 48 unique verdicts, with 50
+executed verdicts because the traffic parent is repeated in each of its three
+mode phases. All six complete 150-response/history/reconnect paths and all
+fourteen refusal leaves passed. The retained image SHA-256 was
+`7f9abff3dc3dd97e0396bf039a42f87c39f0742e63991a3976ed7047ea1b77d1`;
+the complete output SHA-256 was
+`5b72ba5cd0ade328fececa5d0f7737d5a59026bf2fff5bb827b94ab35086d76a`.
+Background five-second proofs remain enabled and are counted separately from
+the 50 measurement requests. The persistent captured TCP reference uses the
+existing reciprocal stream owner under the original fixture deadline; the
+shared ordinary 30-second reference deadline is unchanged. This witness does
+not establish installed TUN/firewall or physical-device acceptance.
 
 ### Android runtime and profile verification
 

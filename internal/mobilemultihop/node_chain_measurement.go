@@ -160,12 +160,17 @@ func (c *NodeChain) PublicMeasurementCapture() (tag string, ipv6 bool, err error
 	if c.validateCapture() != nil || c.socksSource != nil || c.connectSource != nil {
 		return "", false, nodeChainError
 	}
-	if c.importedMiddle == nil {
+	if c.importedMiddle == nil && c.openVPNMiddle == nil {
 		return "", false, nil
 	}
 	ipv6 = true
 	for position, node := range c.nodes {
-		profile := c.importedMiddle.selection.Profile
+		var profile map[string]any
+		if c.openVPNMiddle != nil {
+			profile = c.openVPNMiddle.selection.Profile
+		} else {
+			profile = c.importedMiddle.selection.Profile
+		}
 		if position != 1 {
 			profile = node.profile
 		}

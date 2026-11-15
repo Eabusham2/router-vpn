@@ -114,6 +114,9 @@ verify_aar() {
   grep -Fq 'io.nekohasekai.libbox.RouterNodeChainCandidatePreparation routerNodeChainCandidatePreparationLaunch(java.lang.String) throws java.lang.Exception;' "$api_list" || {
     echo 'combined libbox AAR is missing the strict private prefix launch parser' >&2; return 1
   }
+  grep -Fq 'java.lang.String routerNodeChainImportedOpenVPNMemberInput(java.lang.String, java.lang.String) throws java.lang.Exception;' "$api_list" || {
+    echo 'combined libbox AAR is missing the exact original OpenVPN middle constructor API' >&2; return 1
+  }
   javap -classpath "$classes" io.nekohasekai.libbox.RouterNodeChainCandidatePreparation >"$tmp/router-node-chain-candidate-preparation.javap"
   for signature in 'void bindNative(io.nekohasekai.libbox.CommandServer) throws java.lang.Exception;' 'boolean nativeClosed();' 'void run(io.nekohasekai.libbox.CommandServer, io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;' 'java.lang.String config();' 'java.lang.String launchInput();' 'java.lang.String sourceSHA256();' 'java.lang.String configSHA256();' 'java.lang.String originalSourceSHA256();' 'java.lang.String captureSHA256();' 'java.lang.String metadata();' 'java.lang.String progressJSON();' 'boolean healthy();' 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void networkChanged();' 'void close() throws java.lang.Exception;'; do
     grep -Fq "$signature" "$tmp/router-node-chain-candidate-preparation.javap" || {

@@ -111,6 +111,7 @@ type desktopNodeChainImportedPeer struct {
 	benchmark                *desktopNodeChainBenchmark
 	prefix                   *desktopNodeChainPrefixPeer
 	public, download, upload atomic.Uint64
+	measuredFirstHealth      atomic.Uint64
 	wrongPublic              atomic.Bool
 }
 
@@ -276,6 +277,11 @@ func desktopNodeChainImportedPeerStartWithHooks(t *testing.T, request desktopNod
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/health" {
 			p.prefix.proof.Add(1)
+			// Keep measurement requests distinct from the live five-second
+			// prefix proof observer; both still reach the same real API.
+			if r.Header.Get("Cache-Control") == "no-store, no-transform" {
+				p.measuredFirstHealth.Add(1)
+			}
 			_ = json.NewEncoder(w).Encode(desktopImportedWGSSHealthReply{true, prefix.NodeProofID, "router-vpn-private-agent-v1"})
 			return
 		}

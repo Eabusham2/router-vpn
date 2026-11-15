@@ -181,6 +181,8 @@ for header in headers:
         'FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxRouterNodeChainCandidatePreparationLaunch(NSString* _Nullable input, NSError* _Nullable* _Nullable error);',
     ):
         assert signature in content, 'Prefix preparation constructor ABI changed: '+signature
+    signature = 'FOUNDATION_EXPORT NSString* _Nonnull LibboxRouterNodeChainImportedOpenVPNMemberInput(NSString* _Nullable config, NSString* _Nullable capture, NSError* _Nullable* _Nullable error);'
+    assert signature in content, 'OpenVPN middle original-source constructor ABI changed: '+signature
     preparation=re.search(r'@interface LibboxRouterNodeChainCandidatePreparation : NSObject .*?\n(.*?)@end',content,re.S)
     assert preparation, 'Missing separate native prefix preparation owner'
     for signature in (

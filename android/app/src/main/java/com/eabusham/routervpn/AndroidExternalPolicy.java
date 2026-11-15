@@ -123,6 +123,7 @@ final class AndroidExternalPolicy {
                 // Capture the original inline profile, including its complete
                 // remote/TLS list. The shared compiler revalidates the exact
                 // native endpoint; credentials retain intentional whitespace.
+                policy.put("endpoint", exit.server);
                 ext.put("openvpn", new JSONObject().put("config", exit.openVPNConfig)
                         .put("username", exit.username).put("password", exit.password)); break;
             default: throw new IllegalArgumentException("Unowned external transport.");

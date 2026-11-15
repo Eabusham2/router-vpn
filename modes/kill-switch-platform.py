@@ -857,7 +857,7 @@ def _darwin_node_chain_rows(capture):
             raise RuntimeError(fail)
         seen.add(row[0])
         if row[2] == 'external':
-            middle = {'ordered-node-chain-v1': ('shadowsocks',),
+            middle = {'ordered-node-chain-v1': ('shadowsocks', 'openvpn'),
                       'ordered-node-chain-socks-v1': ('socks5',),
                       'ordered-node-chain-connect-v1': ('http-connect', 'https-connect')}
             if len(rows) != 3 or position != 1 or row[1] not in middle.get(capture['family'], ()) or rows[-1][1] != 'shadowsocks':

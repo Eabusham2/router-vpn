@@ -30,6 +30,9 @@ def block(source, anchor):
 
 
 TESTS = r'''
+// Native OpenVPN source admission is outside this persistence/picker fixture.
+enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -> Bool { false } }
+
 @MainActor @main struct Tests {
  static var checks = 0
  static func check(_ label: String, _ value: @autoclosure () -> Bool) throws {

@@ -128,7 +128,7 @@ static gboolean drive_editor(gpointer data) {
         check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),connect_editor_protocol)==0,"CONNECT Add substituted its exact saved transport");
         GtkListBoxRow *middle_row=gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),1);
         GtkWidget *middle_label=find_type(GTK_WIDGET(middle_row),GTK_TYPE_LABEL);
-        const char *title=strcmp(connect_editor_protocol,"https-connect")==0?"HTTPS CONNECT":"HTTP CONNECT";
+        const char *title=strcmp(connect_editor_protocol,"openvpn")==0?"OpenVPN":strcmp(connect_editor_protocol,"https-connect")==0?"HTTPS CONNECT":"HTTP CONNECT";
         check(middle_label&&strstr(gtk_label_get_text(GTK_LABEL(middle_label)),title),"CONNECT row concealed its saved transport");
         const char *other=strcmp(connect_editor_protocol,"https-connect")==0?"http-connect":"https-connect";
         choose(transport,other);check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),connect_editor_protocol)==0,"CONNECT Change mode substituted its saved protocol");
@@ -228,7 +228,7 @@ static int model_only(void) {
 }
 
 static void connect_model_only(void) {
-    const char *protocols[]={"http-connect","https-connect"}, *prefixes[]={"wg","awg2-fast","awg2-strong"};
+    const char *protocols[]={"http-connect","https-connect","openvpn"}, *prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint p=0;p<G_N_ELEMENTS(protocols);p++)for(guint prefix=0;prefix<G_N_ELEMENTS(prefixes);prefix++){
         JsonArray *nodes=json_array_new(), *profiles=json_array_new();JsonObject *store=json_object_new(), *tokens=json_object_new();
         const char *ids[]={"entry","middle","exit"}, *modes[]={prefixes[prefix],protocols[p],"shadowsocks"};
@@ -244,7 +244,7 @@ static void connect_model_only(void) {
         JsonNode *catalog_root=json_node_new(JSON_NODE_OBJECT);json_node_take_object(catalog_root,store);
         LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
         check(selection&&linux_ordered_current_v1(selection,store),"CONNECT source model refused original typed graph");
-        const char *title=p==0?"HTTP CONNECT":"HTTPS CONNECT";check(strcmp(linux_ordered_mode_name_v1(protocols[p]),title)==0,"CONNECT model concealed exact transport title");
+        const char *title=p==0?"HTTP CONNECT":p==1?"HTTPS CONNECT":"OpenVPN";check(strcmp(linux_ordered_mode_name_v1(protocols[p]),title)==0,"CONNECT model concealed exact transport title");
         LinuxOrderedEditorV1 editor={.catalog=catalog_root,.control="exit",.modes=g_ptr_array_new_with_free_func(g_free)};
         g_ptr_array_add(editor.modes,g_strdup(prefixes[prefix]));g_ptr_array_add(editor.modes,g_strdup(protocols[p]));
         check(linux_ordered_editor_final_allowed_v1(&editor,"shadowsocks"),"CONNECT final chooser refused original paired final");
@@ -255,7 +255,7 @@ static void connect_model_only(void) {
         check(json_object_get_size(linux_ordered_object_v1(q,"expected_profile_tokens"))==3&&strstr(body,"connect-model-secret")==NULL,"CONNECT source model lost references or copied credentials");
         JsonObject *value=linux_ordered_value_v1(selection);char *raw=linux_ordered_json_v1(value);JsonNode *disk=parse_json(raw);LinuxOrderedSelectionV1 *reopened=linux_ordered_decode_v1(json_node_get_object(disk));
         check(reopened&&linux_ordered_current_v1(reopened,store),"CONNECT source model lost exact roundtrip");
-        json_object_set_string_member(external,"protocol",protocols[1-p]);check(!linux_ordered_current_v1(selection,store),"CONNECT selection borrowed a different saved protocol");json_object_set_string_member(external,"protocol",protocols[p]);
+        json_object_set_string_member(external,"protocol",protocols[(p+1)%G_N_ELEMENTS(protocols)]);check(!linux_ordered_current_v1(selection,store),"CONNECT selection borrowed a different saved protocol");json_object_set_string_member(external,"protocol",protocols[p]);
         json_object_set_boolean_member(external,"ordered_middle_supported",FALSE);check(!linux_ordered_current_v1(selection,store),"CONNECT source model accepted false capability");
         json_object_set_int_member(external,"ordered_middle_supported",1);check(!linux_ordered_current_v1(selection,store),"CONNECT source model accepted numeric capability");
         json_object_set_string_member(external,"ordered_middle_supported","true");check(!linux_ordered_current_v1(selection,store),"CONNECT source model accepted string capability");
@@ -327,7 +327,7 @@ int main(int argc,char **argv) {
     json_object_set_string_member(socks_entry,"mode","socks5");check(!linux_ordered_rows_v1(owned->selection->nodes,"exit"),"SOCKS middle became physical entry");
     json_object_set_string_member(socks_entry,"mode",socks_entry_mode);g_free(socks_entry_mode);
     g_free(socks_saved);
-    const char *connect_protocols[]={"http-connect","https-connect"}, *connect_prefixes[]={"wg","awg2-fast","awg2-strong"};
+    const char *connect_protocols[]={"http-connect","https-connect","openvpn"}, *connect_prefixes[]={"wg","awg2-fast","awg2-strong"};
     for(guint protocol_index=0;protocol_index<G_N_ELEMENTS(connect_protocols);protocol_index++)for(guint prefix_index=0;prefix_index<G_N_ELEMENTS(connect_prefixes);prefix_index++){
         connect_editor_protocol=connect_protocols[protocol_index];connect_editor_prefix=connect_prefixes[prefix_index];
         json_object_set_string_member(external,"protocol",connect_editor_protocol);json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);
@@ -341,7 +341,7 @@ int main(int argc,char **argv) {
         check(strstr(last_body,"password")==NULL&&strstr(last_body,"api_token")==NULL,"CONNECT request copied credentials");json_node_free(request);
         char *connect_saved=snapshot();profiles(0);linux_ordered_store_v1(owned,NULL,FALSE);profiles(1);after=snapshot();
         check(strcmp(connect_saved,after)==0,"CONNECT Add Load Update replaced original typed selection");g_free(after);g_free(connect_saved);
-        const char *changed_protocols[]={connect_protocols[1-protocol_index],"shadowsocks","HTTP-CONNECT","HTTPS-CONNECT","http-connect ","https-connect "};
+        const char *changed_protocols[]={connect_protocols[(protocol_index+1)%G_N_ELEMENTS(connect_protocols)],"shadowsocks","HTTP-CONNECT","HTTPS-CONNECT","http-connect ","https-connect "};
         for(guint i=0;i<G_N_ELEMENTS(changed_protocols);i++){
             json_object_set_string_member(external,"protocol",changed_protocols[i]);
             check(!linux_ordered_current_v1(owned->selection,json_node_get_object(catalog)),"CONNECT selection borrowed a different saved protocol");

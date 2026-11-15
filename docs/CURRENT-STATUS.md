@@ -10,15 +10,29 @@ completion of the current commit's packages, physical devices or deployment.
 
 The [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md)
 records the recovered original requirements and newer published source through
-`f51b791a`: macOS prefix-only candidate controls with purpose-safe dialog
+`cd3d8b14`: macOS prefix-only candidate controls with purpose-safe dialog
 ownership, atomic native descriptor transfer, the measured Compare test oracle,
 Linux/Windows ordinary OpenVPN-entry to independent SS2022-final hosts,
 macOS ordered Off ownership, the corrected macOS final-policy baseline ID,
 the Linux Off selection fixture, Darwin receive-flag normalization and cleanup
 retry, saved-prefix Off admission and the complete supported Darwin external
 protocol catalog, strongest original member protection and Darwin PF interface
-clause ordering, ordinary external all-Off native ownership and the two
-subsequent physical-fixture/native-selection audit repairs.
+clause ordering, ordinary external all-Off native ownership, exact original
+member policy in ordinary macOS ordered baselines, and subsequent Windows
+durable-release, receipt-inventory, mixed-policy restoration and fixture-race
+repairs.
+
+The new source adds one imported OpenVPN middle between a paired WG/AWG
+entry and an independent paired SS2022 final, with Local execution and one
+literal TCP/UDP OpenVPN remote. Shared and native capture, connected-generation
+and capacity ownership, original DNS/proof/MTU/measurement, all five native
+editor families, saved profiles and startup are wired through the same captured
+graph. The evidence ledger records the exact executable boundaries and broader
+placements, profiles and execution choices that remain open. A source pass or
+encrypted component witness does not establish installed kernel, SDK package,
+device or complete release acceptance. The separate single paired Router
+Darwin retained host remains unfinished; opening an Off policy guard alone
+cannot supply its captured parent/process, PF baseline and native lifecycle.
 Published `d41f4d4a` also adopts the bounded ordinary OpenVPN-entry/SS2022-final pair
 in the macOS retained host with independent entry and final proof fixtures.
 The OpenVPN addition is a bounded two-node Local path with one literal TCP or

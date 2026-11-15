@@ -55,7 +55,7 @@ struct IOSNodeChainCapture {
             throw issue("The final node lost its exact captured chain selection.")
         }
         var inputs: [String] = [], identitySources: [String] = []
-        var imported = false
+        var imported = false, importedOpenVPN = false
         for (position, data) in bundles.enumerated() {
             guard !data.isEmpty, data.count <= 32 * 1024 * 1024,
                   let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -72,17 +72,20 @@ struct IOSNodeChainCapture {
             let nativeProfile = selectionExecution == "local" ? profile : executionProfile(profile)
             if profile["node_kind"] as? String == "external" {
                 let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: nativeProfile))
-                guard bundles.count == 3, position == 1, !imported, IOSImportedShadowsocksSource.eligible(typed),
-                      selection[position]["id"] as? String == selected, selection[position]["mode"] as? String == "shadowsocks" else {
-                    throw issue("One original imported Shadowsocks 2022 node may sit between the paired first and final nodes.")
+                let openVPN = typed.external?.protocolName == "openvpn"
+                guard (!openVPN || selectionExecution == "local"), bundles.count == 3, position == 1, !imported,
+                      openVPN ? IOSImportedOpenVPNSource.eligible(typed) : IOSImportedShadowsocksSource.eligible(typed),
+                      selection[position]["id"] as? String == selected,
+                      selection[position]["mode"] as? String == (openVPN ? "openvpn" : "shadowsocks") else {
+                    throw issue("One original imported Shadowsocks 2022 or OpenVPN node may sit between the paired first and final nodes.")
                 }
-                let original = try IOSImportedShadowsocksSource.capture(typed)
+                let original = try openVPN ? IOSImportedOpenVPNSource.capture(typed) : IOSImportedShadowsocksSource.capture(typed)
                 var failure: NSError?
-                let input: String? = LibboxRouterNodeChainImportedMemberInput(original.config, original.capture, &failure)
+                let input: String? = openVPN ? LibboxRouterNodeChainImportedOpenVPNMemberInput(original.config, original.capture, &failure) : LibboxRouterNodeChainImportedMemberInput(original.config, original.capture, &failure)
                 guard let input, failure == nil, !input.isEmpty else {
                     throw failure ?? issue("The imported intermediate source could not be captured.")
                 }
-                inputs.append(input); identitySources.append(""); imported = true; continue
+                inputs.append(input); identitySources.append(""); imported = true; importedOpenVPN = openVPN; continue
             }
             guard selection[position]["id"] as? String == selected,
                   let mode = selection[position]["mode"] as? String,
@@ -112,7 +115,7 @@ struct IOSNodeChainCapture {
             }
             inputs.append(input)
         }
-        let source = try json(["schema": imported ? 2 : 1, "execution": "local", "nodes": inputs,
+        let source = try json(["schema": importedOpenVPN ? 5 : imported ? 2 : 1, "execution": "local", "nodes": inputs,
                                "identity_sources": identitySources], maximum: maximumInputBytes)
         var failure: NSError?
         guard let plan = LibboxNewRouterNodeChain(source, &failure), failure == nil else {
@@ -158,25 +161,26 @@ struct IOSNodeChainCapture {
               let nodes = root["nodes"] as? [String], (2...8).contains(nodes.count),
               let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,
               identitySources.allSatisfy({ $0.utf8.count <= 16 * 1024 * 1024 }),
-              let schema = root["schema"] as? Int, schema == 1 || schema == 2 && nodes.count == 3 else {
+              let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5) && nodes.count == 3 else {
             throw Self.issue("The native chain returned another source or platform owner.")
         }
         var members: [Member] = [], strict = false, lan = true
         for (position, input) in nodes.enumerated() {
             let node = try Self.object(Data(input.utf8), maximum: Self.maximumInputBytes)
             let mode: String, profileJSON: String, filesJSON: String, profile: [String: Any]
-            if node["kind"] as? String == "routervpn-node-chain-imported-member" {
-                guard schema == 2, position == 1, nodes.count == 3, identitySources[position].isEmpty,
+            if node["kind"] as? String == "routervpn-node-chain-imported-member" || node["kind"] as? String == "routervpn-node-chain-openvpn-member" {
+                let openVPN = node["kind"] as? String == "routervpn-node-chain-openvpn-member"
+                guard schema == (openVPN ? 5 : 2), (!openVPN || selectionExecution == "local"), position == 1, nodes.count == 3, identitySources[position].isEmpty,
                       let config = node["config"] as? String, let capture = node["capture"] as? String,
                       let saved = try Self.object(Data(capture.utf8), maximum: 8 * 1024 * 1024)["profile"] as? [String: Any] else {
                     throw Self.issue("The imported intermediate source lost its original external capture.")
                 }
                 profileJSON = try Self.json(saved, maximum: 256 * 1024)
                 let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(profileJSON.utf8))
-                guard IOSImportedShadowsocksSource.eligible(typed) else { throw Self.issue("The imported member cannot claim a paired Router identity.") }
-                mode = "shadowsocks"; filesJSON = config; profile = saved
+                guard openVPN ? IOSImportedOpenVPNSource.eligible(typed) : IOSImportedShadowsocksSource.eligible(typed) else { throw Self.issue("The imported member cannot claim a paired Router identity.") }
+                mode = openVPN ? "openvpn" : "shadowsocks"; filesJSON = config; profile = saved
             } else {
-                guard !identitySources[position].isEmpty, !(schema == 2 && position == 1),
+                guard !identitySources[position].isEmpty, !((schema == 2 || schema == 5) && position == 1),
                       let nativeMode = node["mode"] as? String, let saved = node["profile_json"] as? String,
                       let files = node["files"] as? String else { throw Self.issue("A complete native member source is missing.") }
                 mode = nativeMode; profileJSON = saved; filesJSON = files

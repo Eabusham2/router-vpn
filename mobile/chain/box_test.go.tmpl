@@ -173,7 +173,11 @@ func newChainNativeFixture(t *testing.T, edit func(map[string]any)) *chainNative
 }
 func newChainNativeFixtureModes(t *testing.T, modes []string, edit func(map[string]any)) *chainNativeFixture {
 	t.Helper()
-	f := &chainNativeFixture{chain: chainNativeSourceModes(t, modes), prefixes: map[string]*chainNativePrefix{}}
+	return newChainNativeFixtureSource(t, chainNativeSourceModes(t, modes), edit, nil)
+}
+func newChainNativeFixtureSource(t *testing.T, chain *mobilemultihop.NodeChain, edit func(map[string]any), register func(*endpoint.Registry)) *chainNativeFixture {
+	t.Helper()
+	f := &chainNativeFixture{chain: chain, prefixes: map[string]*chainNativePrefix{}}
 	f.current.Store(true)
 	f.registry = outbound.NewRegistry()
 	group.RegisterSelector(f.registry)
@@ -197,6 +201,9 @@ func newChainNativeFixtureModes(t *testing.T, modes []string, edit func(map[stri
 		f.prefixes[tag] = p
 		return p, nil
 	})
+	if register != nil {
+		register(endpointRegistry)
+	}
 	f.dnsRegistry = dns.NewTransportRegistry()
 	dns.RegisterTransport[option.RemoteDNSServerOptions](f.dnsRegistry, C.DNSTypeUDP, func(_ context.Context, _ log.ContextLogger, tag string, _ option.RemoteDNSServerOptions) (adapter.DNSTransport, error) {
 		return &chainNativeDNS{TransportAdapter: dns.NewTransportAdapter(C.DNSTypeUDP, tag, nil)}, nil

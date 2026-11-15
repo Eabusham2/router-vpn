@@ -74,7 +74,7 @@ enum IOSNodeChainPresentation {
                    (position == nodes.count - 1 ? node.mode == "shadowsocks" || node.mode == "hysteria2" &&
                     ["", "off"].contains(profile.startLayer ?? "") &&
                     points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode)) ||
-                   nodes.count == 3 && position == 1 && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && IOSImportedCONNECTSource.eligible(profile))) else { return nil }
+                   nodes.count == 3 && position == 1 && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile)))) else { return nil }
             points.append(IOSNodePathPoint(profile, mode: node.mode))
         }
         return points
@@ -102,7 +102,7 @@ enum IOSNodeChainPresentation {
               bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
               let control = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }),
               let launch = try? JSONDecoder().decode(Launch.self, from: source),
-              (launch.schema == 1 || launch.schema == 2 && launch.nodes.count == 3), launch.kind == "routervpn-node-chain-launch-input", launch.execution == "local",
+              (launch.schema == 1 || (launch.schema == 2 || launch.schema == 5) && launch.nodes.count == 3), launch.kind == "routervpn-node-chain-launch-input", launch.execution == "local",
               launch.target_os == nil, launch.projection_kind == nil, launch.session_id == nil, launch.restored_mtu == nil,
               launch.source_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
               launch.config_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
@@ -111,15 +111,16 @@ enum IOSNodeChainPresentation {
         for (position,raw) in launch.nodes.enumerated() {
             guard let member = try? JSONDecoder().decode(Member.self, from: Data(raw.utf8)), member.schema == 1 else { return nil }
             let profile: RouterProfile, mode: String
-            if member.kind == "routervpn-node-chain-imported-member" {
-                guard launch.schema == 2, position == 1, launch.nodes.count == 3,
+            if member.kind == "routervpn-node-chain-imported-member" || member.kind == "routervpn-node-chain-openvpn-member" {
+                let openVPN = member.kind == "routervpn-node-chain-openvpn-member"
+                guard launch.schema == (openVPN ? 5 : 2), position == 1, launch.nodes.count == 3,
                       let raw=member.capture, raw.utf8.count<=8*1024*1024,
                       let capture=(try? JSONSerialization.jsonObject(with:Data(raw.utf8))) as? [String:Any],
                       let saved=capture["profile"], let data=try? JSONSerialization.data(withJSONObject:saved),
-                      let source=try? JSONDecoder().decode(RouterProfile.self,from:data), IOSImportedShadowsocksSource.eligible(source) else { return nil }
-                profile=source; mode="shadowsocks"
+                      let source=try? JSONDecoder().decode(RouterProfile.self,from:data), (openVPN ? IOSImportedOpenVPNSource.eligible(source) : IOSImportedShadowsocksSource.eligible(source)) else { return nil }
+                profile=source; mode=openVPN ? "openvpn" : "shadowsocks"
             } else {
-                guard member.kind == "routervpn-node-launch-input", !(launch.schema == 2 && position == 1),
+                guard member.kind == "routervpn-node-launch-input", !((launch.schema == 2 || launch.schema == 5) && position == 1),
                       let raw=member.profile_json, !raw.isEmpty, raw.utf8.count<=256*1024, let transport=member.mode,
                       let source=try? JSONDecoder().decode(RouterProfile.self,from:Data(raw.utf8)) else { return nil }
                 profile=source;mode=transport

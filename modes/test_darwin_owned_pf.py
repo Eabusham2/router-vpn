@@ -770,6 +770,46 @@ class OwnedDarwinPF(unittest.TestCase):
             self.assertEqual(self.commands, [])
             self.assertEqual(D._linux.read_state(self.root), {})
 
+    def test_node_chain_openvpn_middle_keeps_original_policy_rows(self):
+        import copy
+        capture = self.node_chain_capture('off')
+        middle = dict(id='ordered-openvpn', node_kind='external', endpoint='203.0.113.20',
+                      external={'protocol': 'openvpn'}, kill_switch_policy='always',
+                      ipv6_mode='on', home_lan_access=False)
+        self.store['profiles'].append(middle)
+        self.private_json(self.root/'routers.json', self.store)
+        rows = json.loads(capture['members_json'])
+        rows.insert(1, ['ordered-openvpn', 'openvpn', 'external', 'always', 'on', False])
+        raw = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
+        capture.update(policy='always', members_json=raw,
+                       members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
+        try:
+            active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+        except RuntimeError as error:
+            self.fail('ordered OpenVPN middle lost original policy binding: '+str(error))
+        self.assertEqual(self.saved()['policy'], 'always')
+        self.assertEqual(active['capture'], capture)
+        held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+        self.assertTrue(held['baseline']['present'])
+        D.darwin_node_chain('release', dict(capture=capture, expected=held))
+        for fault in ('first', 'final', 'four-members', 'paired', 'protocol', 'policy'):
+            changed = copy.deepcopy(capture)
+            mutated = copy.deepcopy(rows)
+            if fault == 'first': mutated[0], mutated[1] = mutated[1], mutated[0]
+            elif fault == 'final': mutated[1], mutated[2] = mutated[2], mutated[1]
+            elif fault == 'four-members': mutated.insert(2, ['extra', 'wg', 'router-vpn', 'off', 'on', False])
+            elif fault == 'paired': mutated[1][2] = 'router-vpn'
+            elif fault == 'protocol': middle['external']['protocol'] = 'shadowsocks'
+            elif fault == 'policy': middle['kill_switch_policy'] = 'off'
+            self.private_json(self.root/'routers.json', self.store)
+            changed['members_json'] = json.dumps(mutated, separators=(',', ':'), ensure_ascii=True)
+            changed['members_sha256'] = hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+changed['members_json']).encode()).hexdigest()
+            before = list(self.commands)
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError):
+                D.darwin_node_chain('apply', dict(capture=changed, expected=None))
+            self.assertEqual(self.commands, before)
+            middle['external']['protocol'], middle['kill_switch_policy'] = 'openvpn', 'always'
+
     def test_node_chain_original_members_preserve_strongest_policy(self):
         capture = self.node_chain_capture('off')
         rows = json.loads(capture['members_json'])

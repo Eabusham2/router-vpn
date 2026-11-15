@@ -19,7 +19,7 @@ JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
 
 GO = r'''package main
 import("encoding/json";"fmt";"io";"os";"router-vpn/internal/mobilemultihop";"router-vpn/mobile")
-func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var result string;if err==nil{switch {case len(args)==2:result,err=mobilemultihop.CompileAmneziaProfile(args[0],args[1]);case len(args)==1:err=libbox.RouterValidatePrivateNodeJSON(args[0]);case len(args)==3&&args[0]=="chain-connect-member":result,err=mobilemultihop.NodeChainImportedCONNECTMemberInput(args[1],args[2]);case len(args)==3&&args[0]=="chain-socks-member":result,err=mobilemultihop.NodeChainImportedSOCKSMemberInput(args[1],args[2]);case len(args)==3&&args[0]=="chain-imported":result,err=mobilemultihop.NodeChainImportedMemberInput(args[1],args[2]);case len(args)==3&&args[0]=="external-transport":err=mobilemultihop.ValidateExternalTransport(args[1],args[2]);case len(args)==3&&args[0]=="external-dns":err=mobilemultihop.ValidateExternalDNS(args[1],args[2]);case len(args)==3&&args[0]=="external-response":err=mobilemultihop.ValidateExternalResponseProbe(args[1],args[2]);case len(args)==3&&args[0]=="external-compile":result,err=mobilemultihop.CompileExternalPolicy(args[1],args[2]);case len(args)==3&&args[0]=="original-wg":result,err=mobilemultihop.CompileWireGuardProfile(args[1],args[2]);case len(args)==6&&args[0]=="openvpn-endpoint":result,err=libbox.RouterOpenVPNEndpoint(args[1],args[2],args[3],args[4],args[5]);case len(args)==3&&args[0]=="openvpn-pairing":err=libbox.RouterValidateExternalOpenVPNPairing(args[1],args[2]);case len(args)==3&&args[0]=="openvpn-probes":err=libbox.RouterValidateExternalOpenVPNResponseProbes(args[1],args[2]);case len(args)==5&&args[0]=="openvpn-layers":err=libbox.RouterValidateExternalOpenVPNStartLayers(args[1],args[2],args[3],args[4]);default:panic("invalid fixture request")}};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(result)}'''
+func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var result string;if err==nil{switch {case len(args)==2:result,err=mobilemultihop.CompileAmneziaProfile(args[0],args[1]);case len(args)==1:err=libbox.RouterValidatePrivateNodeJSON(args[0]);case len(args)==3&&args[0]=="chain-openvpn-member":result,err=mobilemultihop.NodeChainImportedOpenVPNMemberInput(args[1],args[2]);case len(args)==3&&args[0]=="chain-connect-member":result,err=mobilemultihop.NodeChainImportedCONNECTMemberInput(args[1],args[2]);case len(args)==3&&args[0]=="chain-socks-member":result,err=mobilemultihop.NodeChainImportedSOCKSMemberInput(args[1],args[2]);case len(args)==3&&args[0]=="chain-imported":result,err=mobilemultihop.NodeChainImportedMemberInput(args[1],args[2]);case len(args)==3&&args[0]=="external-transport":err=mobilemultihop.ValidateExternalTransport(args[1],args[2]);case len(args)==3&&args[0]=="external-dns":err=mobilemultihop.ValidateExternalDNS(args[1],args[2]);case len(args)==3&&args[0]=="external-response":err=mobilemultihop.ValidateExternalResponseProbe(args[1],args[2]);case len(args)==3&&args[0]=="external-compile":result,err=mobilemultihop.CompileExternalPolicy(args[1],args[2]);case len(args)==3&&args[0]=="original-wg":result,err=mobilemultihop.CompileWireGuardProfile(args[1],args[2]);case len(args)==6&&args[0]=="openvpn-endpoint":result,err=libbox.RouterOpenVPNEndpoint(args[1],args[2],args[3],args[4],args[5]);case len(args)==3&&args[0]=="openvpn-pairing":err=libbox.RouterValidateExternalOpenVPNPairing(args[1],args[2]);case len(args)==3&&args[0]=="openvpn-probes":err=libbox.RouterValidateExternalOpenVPNResponseProbes(args[1],args[2]);case len(args)==5&&args[0]=="openvpn-layers":err=libbox.RouterValidateExternalOpenVPNStartLayers(args[1],args[2],args[3],args[4]);default:panic("invalid fixture request")}};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(result)}'''
 
 
 def method(name, signature):
@@ -67,6 +67,7 @@ public final class Libbox {public static String routerCompileAmneziaProfile(Stri
 public static void routerValidatePrivateNodeJSON(String source)throws Exception{call(source);}
 public static String version(){return "1.14.1";}
 public static String routerNodeChainImportedMemberInput(String config,String capture)throws Exception{return call("chain-imported",config,capture);}
+public static String routerNodeChainImportedOpenVPNMemberInput(String config,String capture)throws Exception{return call("chain-openvpn-member",config,capture);}
 public static String routerNodeChainImportedSOCKSMemberInput(String config,String capture)throws Exception{return call("chain-socks-member",config,capture);}
 public static void routerValidateExternalTransport(String config,String capture)throws Exception{call("external-transport",config,capture);}
 public static void routerValidateExternalDNS(String profile,String entry)throws Exception{call("external-dns",profile,entry);}
@@ -1031,10 +1032,10 @@ def run_transport_fixture(work, src, classes, jar, env):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-execution", "general-stores", "fixture-transport"), default="all")
+    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "general-stores", "fixture-transport"), default="all")
     args = parser.parse_args()
     chain = None
-    if args.case_family in ("all", "ordered-chain", "ordered-imported", "fixture-transport"):
+    if args.case_family in ("all", "ordered-chain", "ordered-imported", "ordered-openvpn", "fixture-transport"):
         import test_android_node_chain_capture as chain
     if args.case_family == "ordered-execution":
         import test_android_node_chain_execution_capture as chain
@@ -1091,8 +1092,11 @@ def main():
             if args.case_family == "fixture-transport":
                 return
         if chain:
-            chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")
-            if args.case_family in ("ordered-chain", "ordered-imported", "ordered-execution"):
+            if args.case_family == "ordered-openvpn":
+                chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)
+            else:
+                chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")
+            if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution"):
                 return
         # Each complete case family retains the original finite JVM budget.
         if args.case_family in ("all", "home-dns"):

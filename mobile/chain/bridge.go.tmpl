@@ -54,3 +54,7 @@ func (m *RouterNodeChain) ProgressJSON() string {
 	value, _ := json.Marshal(chain.Progress())
 	return string(value)
 }
+
+func RouterNodeChainImportedOpenVPNMemberInput(config, capture string) (string, error) {
+	return mobilemultihop.NodeChainImportedOpenVPNMemberInput(config, capture)
+}

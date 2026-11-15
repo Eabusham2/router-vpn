@@ -119,6 +119,6 @@ def main():
         lib=work/'Libbox.swift';lib.write_text(C.LIBBOX)
         library=work/('libLibbox.dylib' if platform.system()=='Darwin' else 'libLibbox.so')
         subprocess.run(['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules'),'-emit-module','-emit-library','-module-name','Libbox',str(lib),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(library)],check=True,timeout=90)
-        P.main(extra_sources=[P.APP/name for name in ('IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift')],extra_flags=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)],binary_args=[compiler])
+        P.main(extra_sources=[P.APP/name for name in ('IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift')],extra_flags=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)],binary_args=[compiler])
     print('Apple typed SOCKS profile composition: original persistence and controls completed')
 if __name__=='__main__':main()

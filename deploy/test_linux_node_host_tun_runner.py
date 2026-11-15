@@ -61,6 +61,22 @@ class InstalledNodeChainPeerPreflight(unittest.TestCase):
         self.assertIn("'node_chain_peer_cases': list(NODE_CHAIN_PEER_CASES)", body)
 
 
+class EncryptedOpenVPNMiddlePreflight(unittest.TestCase):
+    def test_original_composition_gate_precedes_installed_cases_and_is_receipted(self):
+        # The encrypted component does not replace any installed namespace
+        # scenario. Both evidence families remain separately mandatory.
+        body = inspect.getsource(G.execute)
+        call = 'OPENVPN_MIDDLE.execute_peer(peer, source, captured)'
+        self.assertEqual(body.count(call), 1)
+        self.assertLess(body.index(call), body.index('for case in (*CASES, *REVERSE_CASES)'))
+        self.assertIn("'node_chain_openvpn_middle_cases': list(OPENVPN_MIDDLE.VERDICTS)", body)
+        self.assertIn("'node_chain_openvpn_middle_output_sha256': hashlib.sha256(node_chain_openvpn_middle_output.encode()).hexdigest()", body)
+        captured = inspect.getsource(G.checked_sources)
+        self.assertIn('OPENVPN_MIDDLE.NATIVE_TEMPLATE not in native', captured)
+        self.assertIn('test_desktop_node_chain_openvpn_middle_runner.py', captured)
+        self.assertEqual(len(G.OPENVPN_MIDDLE.VERDICTS), 48)
+
+
 class EncryptedPrefixCandidatePreflight(unittest.TestCase):
     def completed(self):
         return ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n'

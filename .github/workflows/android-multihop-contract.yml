@@ -39,6 +39,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidSessionRevalidator.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java'
       - 'android/test_android_node_chain_runtime.py'
+      - 'android/test_android_node_chain_openvpn_runtime.py'
       - 'android/test_android_node_chain_socks_runtime.py'
       - 'android/test_android_ordered_latency.py'
       - 'android/test_android_ordinary_ordered_latency.py'
@@ -127,6 +128,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidSessionRevalidator.java'
       - 'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java'
       - 'android/test_android_node_chain_runtime.py'
+      - 'android/test_android_node_chain_openvpn_runtime.py'
       - 'android/test_android_node_chain_socks_runtime.py'
       - 'android/test_android_ordered_latency.py'
       - 'android/test_android_ordinary_ordered_latency.py'
@@ -216,6 +218,7 @@ jobs:
           python3 android/test_android_node_candidate_prefix_owner.py
           python3 android/test_android_ordered_presentation.py
           python3 android/test_android_node_chain_runtime.py
+          python3 android/test_android_node_chain_openvpn_runtime.py
           python3 android/test_android_node_chain_socks_runtime.py
           python3 android/test_android_ordered_latency.py
           python3 android/test_android_ordinary_ordered_latency.py

@@ -50,7 +50,7 @@ def main():
         lib=d/'Libbox.swift';lib.write_text(S.C.LIBBOX);library=d/('libLibbox.dylib' if platform.system()=='Darwin' else 'libLibbox.so');options=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(d/'modules')]
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(lib),'-emit-module-path',str(d/'Libbox.swiftmodule'),'-o',str(library)],check=True,timeout=90)
         code=d/'Tests.swift';code.write_text(tests);fixture=d/'Capture.swift';binary=d/'tests';command=options+['-I',str(d),'-L',str(d),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(d)]
-        command += [str(APP/x) for x in ['Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSSessionIdentity.swift','IOSNodeChainPresentation.swift']]
+        command += [str(APP/x) for x in ['Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSSessionIdentity.swift','IOSNodeChainPresentation.swift']]
         def run(value):
             fixture.write_text(enum+model+value);subprocess.run(command+[str(fixture),str(code),'-o',str(binary)],check=True,timeout=90)
             return subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/inbound"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -73,9 +75,12 @@ func (proof *desktopNodeChainProofFixture) CloseContext(ctx context.Context) err
 }
 
 type desktopNodeChainEngineFixture struct {
-	identity mobilemultihop.NodeChainIdentity
-	current  func(context.Context) error
-	final    string
+	identity     mobilemultihop.NodeChainIdentity
+	current      func(context.Context) error
+	final        string
+	openVPNTag   string
+	openVPN      nativeopenvpn.PacketObservation
+	openVPNError error
 }
 
 func (engine *desktopNodeChainEngineFixture) ObserveChainContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
@@ -83,6 +88,12 @@ func (engine *desktopNodeChainEngineFixture) ObserveChainContext(ctx context.Con
 		return mobilemultihop.NodeChainIdentity{}, err
 	}
 	return engine.identity, nil
+}
+func (engine *desktopNodeChainEngineFixture) OpenVPNMiddleStateContext(ctx context.Context, tag string) (nativeopenvpn.PacketObservation, error) {
+	if tag != engine.openVPNTag || engine.current(ctx) != nil {
+		return nativeopenvpn.PacketObservation{}, routerVPNExternalFailure
+	}
+	return engine.openVPN, engine.openVPNError
 }
 func (*desktopNodeChainEngineFixture) Dial(context.Context, string, string) (net.Conn, error) {
 	return nil, errors.New("fixture cannot prove encrypted prefix traffic")
@@ -112,10 +123,23 @@ type desktopNodeChainCommandRuntimeFixture struct {
 
 func desktopNodeChainRuntimeFixture(t *testing.T) *desktopNodeChainCommandRuntimeFixture {
 	t.Helper()
-	policy := desktopNodeChainCommandPolicy(t, 3, "linux", 1420)
+	return desktopNodeChainRuntimeFixtureWithPolicy(t, desktopNodeChainCommandPolicy(t, 3, "linux", 1420))
+}
+func desktopNodeChainRuntimeFixtureWithPolicy(t *testing.T, policy *mobilemultihop.DesktopNodeChainPolicy) *desktopNodeChainCommandRuntimeFixture {
+	t.Helper()
 	input, _ := policy.NodeChain().LaunchInput()
 	files := desktopImportedCommandFiles(t, map[string]string{"node-chain-source.json": input, "sing-box.json": policy.Config()})
 	mtu, engine, _ := desktopNodeMTUFixture(t)
+	plan, planErr := policy.NodeChain().MTUPlan()
+	if planErr != nil {
+		t.Fatal(planErr)
+	}
+	actualMTU := min(mtu.record.MTU, plan.Ceiling)
+	if policy.Metadata().RestoredMTU != 0 {
+		actualMTU = policy.Metadata().RestoredMTU
+	}
+	engine.current.(*desktopMTUTUNFixture).mtu = actualMTU
+	mtu.record.MTU = actualMTU
 	mtu.record.Session, mtu.record.Config = policy.Metadata().SessionID, policy.Metadata().ConfigSHA256
 	mtu.inbound.(*desktopMTUTUNFixture).tag = policy.NodeChain().DNSCapture().TUNTag
 	f := &desktopNodeChainCommandRuntimeFixture{mtu: mtu, native: engine}
@@ -526,12 +550,13 @@ func TestRouterVPNDesktopNodeChainActualLoopRequiresCurrentProofAndReader(t *tes
 // owners. The actual Box, retained TUN reader and common command loop run here;
 // this component fixture does not establish encrypted or installed ownership.
 type desktopObservationalCompleteFixture struct {
-	start func(context.Context) error
-	current func(context.Context) error
+	start           func(context.Context) error
+	current         func(context.Context) error
 	session, config string
-	observe func(context.Context) context.Context
-	raw *routerVPNNodeMTU
+	observe         func(context.Context) context.Context
+	raw             *routerVPNNodeMTU
 }
+
 func (f *desktopObservationalCompleteFixture) run(ctx context.Context) error {
 	return f.start(ctx)
 }
@@ -608,7 +633,9 @@ func TestRouterVPNDesktopNodeChainObservationalStopOwnership(t *testing.T) {
 						complete = &desktopObservationalCompleteFixture{start: f.owner.run, current: current, observe: observe, session: session, config: config}
 						captureRetained = func() func() bool {
 							state := f.owner.state.Load()
-							return func() bool { return state != nil && f.owner.state.Load() == state && !f.owner.closed.Load() && f.proof.closed.Load() == 0 }
+							return func() bool {
+								return state != nil && f.owner.state.Load() == state && !f.owner.closed.Load() && f.proof.closed.Load() == 0
+							}
 						}
 						joined = func() bool { return f.owner.closed.Load() && f.proof.closed.Load() == 1 }
 					case "connect":
@@ -619,7 +646,9 @@ func TestRouterVPNDesktopNodeChainObservationalStopOwnership(t *testing.T) {
 						complete = &desktopObservationalCompleteFixture{start: f.owner.run, current: current, observe: observe, session: session, config: config}
 						captureRetained = func() func() bool {
 							state := f.owner.state.Load()
-							return func() bool { return state != nil && f.owner.state.Load() == state && !f.owner.closed.Load() && f.proof.closed.Load() == 0 }
+							return func() bool {
+								return state != nil && f.owner.state.Load() == state && !f.owner.closed.Load() && f.proof.closed.Load() == 0
+							}
 						}
 						joined = func() bool { return f.owner.closed.Load() && f.proof.closed.Load() == 1 }
 					case "execution":
@@ -792,6 +821,122 @@ func TestRouterVPNDesktopNodeChainObservationalStopOwnership(t *testing.T) {
 						t.Fatal("original observation owner did not join before Box close", err)
 					}
 				})
+			}
+		})
+	}
+}
+
+// Build the source through the original compiler and schema-five constructor.
+// Only the native engine/packet observer is modeled in the runtime controls.
+func desktopNodeChainOpenVPNCommandPolicy(t *testing.T) *mobilemultihop.DesktopNodeChainPolicy {
+	t.Helper()
+	original := desktopNodeChainCommandPolicyWithIdentity(t, 3, "linux", 1420, true).OriginalChain()
+	raw, err := original.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(raw), &source) != nil {
+		t.Fatal("original source")
+	}
+	config := "client\ndev tun\nproto udp\nremote 203.0.113.20 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint " + strings.Repeat("ab", 32) + "\ntun-mtu 1500\n"
+	endpoint, err := nativeopenvpn.CompileEndpoint(config, "original-user", "original-password", mobilemultihop.ExternalFinalTag, "")
+	var compiled map[string]any
+	if err != nil || json.Unmarshal([]byte(endpoint), &compiled) != nil {
+		t.Fatal(err)
+	}
+	var graph, capture map[string]any
+	if json.Unmarshal([]byte(desktopPhysicalCommandSource), &graph) != nil || json.Unmarshal([]byte(desktopPhysicalCommandCapture), &capture) != nil {
+		t.Fatal("external original source")
+	}
+	graph["outbounds"], graph["endpoints"] = []any{}, []any{compiled}
+	capture["protocol"] = "openvpn"
+	profile := capture["profile"].(map[string]any)
+	profile["endpoint"], profile["dns_mode"] = "203.0.113.20", "rescue"
+	profile["external"] = map[string]any{"protocol": "openvpn", "expected_public_ip": "203.0.113.88", "openvpn": map[string]any{"config": config, "username": "original-user", "password": "original-password"}}
+	configJSON, _ := json.Marshal(graph)
+	captureJSON, _ := json.Marshal(capture)
+	middle, err := mobilemultihop.NodeChainImportedOpenVPNMemberInput(string(configJSON), string(captureJSON))
+	if err != nil {
+		t.Fatal("original OpenVPN member", err)
+	}
+	source.Schema, source.Nodes[1], source.IdentitySources[1] = 5, middle, ""
+	rawJSON, _ := json.Marshal(source)
+	chain, err := mobilemultihop.NewNodeChain(string(rawJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodeChainPolicy(chain, desktopExternalSession, "linux", 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func TestRouterVPNDesktopNodeChainOpenVPNOriginalGenerationAcrossMTU(t *testing.T) {
+	for _, fault := range []string{"retained", "generation", "connected-at", "capacity", "remote", "missing", "pending", "cancelled"} {
+		t.Run(fault, func(t *testing.T) {
+			f := desktopNodeChainRuntimeFixtureWithPolicy(t, desktopNodeChainOpenVPNCommandPolicy(t))
+			captured := f.runtime.openVPN
+			original := nativeopenvpn.PacketObservation{Remote: nativeopenvpn.RemoteReceipt{Remote: captured.Remote, Generation: 7, ConnectedAt: time.Now().UnixMilli()}, MTU: uint32(captured.ConfiguredMTU)}
+			f.create = func(_ int, _ *desktopNodeChainProofFixture, engine *desktopNodeChainEngineFixture) {
+				engine.openVPNTag, engine.openVPN = captured.Tag, original
+			}
+			f.start(t)
+			if pin := f.runtime.openVPNState.Load(); pin == nil || *pin != original {
+				t.Fatal("original authenticated packet observation not retained")
+			}
+			ctx := context.Background()
+			if fault == "cancelled" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+				if f.runtime.current(ctx) == nil {
+					t.Fatal("cancelled native read accepted")
+				}
+				return
+			}
+			mutate := func(engine *desktopNodeChainEngineFixture) {
+				engine.openVPNTag, engine.openVPN = captured.Tag, original
+				switch fault {
+				case "generation":
+					engine.openVPN.Remote.Generation++
+				case "connected-at":
+					engine.openVPN.Remote.ConnectedAt++
+				case "capacity":
+					engine.openVPN.MTU++
+				case "remote":
+					engine.openVPN.Remote.Port++
+				case "missing":
+					engine.openVPN = nativeopenvpn.PacketObservation{}
+				case "pending":
+					engine.openVPNError = nativeopenvpn.ErrRemotePending
+				}
+			}
+			mutate(f.engines[0])
+			if fault != "retained" && (f.runtime.current(ctx) == nil || f.runtime.heartbeat(ctx, f.mtu.record) == nil) {
+				t.Fatal("live current or heartbeat accepted changed OpenVPN observation")
+			}
+			f.engines[0].openVPN, f.engines[0].openVPNError = original, nil
+			if err := f.runtime.beforeChange(ctx, 1280); err != nil {
+				t.Fatal("original proof suspension", err)
+			}
+			f.create = func(_ int, _ *desktopNodeChainProofFixture, engine *desktopNodeChainEngineFixture) { mutate(engine) }
+			err := f.runtime.resume(ctx)
+			if fault == "retained" {
+				if err != nil || f.runtime.current(ctx) != nil {
+					t.Fatal("original generation refused on proof resume", err)
+				}
+			} else {
+				if err == nil || f.runtime.current(ctx) == nil {
+					t.Fatal("proof resume adopted replacement native observation")
+				}
+				if len(f.proofs) != 2 || f.proofs[1].ready {
+					t.Fatal("replacement reached proof before original receipt validation")
+				}
+			}
+			if pin := f.runtime.openVPNState.Load(); pin == nil || *pin != original {
+				t.Fatal("failed resume replaced original cleanup observation")
 			}
 		})
 	}
