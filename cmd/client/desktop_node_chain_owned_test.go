@@ -102,6 +102,20 @@ func newDesktopNodeChainOwnedFixtureWith(t *testing.T, a *app, selection multiho
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		// The retained watcher has its own lifetime. Its watch-loop receipt
+		// precedes any Stop it initiated under operationMu, so join both before
+		// releasing the fixture's files or deleting its application owners.
+		cleanup, finishCleanup := context.WithTimeout(context.Background(), 15*time.Second)
+		defer finishCleanup()
+		watchDone := desktopOwnedNodeMonitorDone(f.launch)
+		if err := stopDesktopOwnedNodeMonitor(cleanup, f.launch); err != nil {
+			t.Error("ordered fixture watcher did not join", err)
+		}
+		if watchDone != nil {
+			if err := joinDesktopOwnedNodeMonitorStop(cleanup, a, watchDone); err != nil {
+				t.Error("ordered fixture watcher Stop did not join", err)
+			}
+		}
 		cancel()
 		if f.pulseDone != nil {
 			<-f.pulseDone
