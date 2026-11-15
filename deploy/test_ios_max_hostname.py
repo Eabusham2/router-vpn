@@ -192,7 +192,7 @@ func fixture(_ base:[String:Any],_ mode:String,_ layer:String,_ hostname:String?
  let data=try json(["selectedRouterID":"home","nodeProofId":policy["node_id"]!,"routerProfiles":[p],"profiles":[mode:files]])
  return ["engine":"libbox","bundle":data,"rawProfileID":mode]
 }
-final class Outcome: @unchecked Sendable {let done=DispatchSemaphore(value:0);private let lock=NSLock();private var value:Error?;private var calls=0;func receive(_ error:Error?){lock.lock();value=error;calls+=1;lock.unlock();done.signal()};func result()->(Int,Bool){lock.lock();defer{lock.unlock()};return(calls,value==nil)}}
+final class Outcome: @unchecked Sendable {let done=DispatchSemaphore(value:0);private let lock=NSLock();private var value:Error?;private var calls=0;func receive(_ error:Error?){lock.lock();value=error;calls+=1;lock.unlock();done.signal()};func result()->(Int,Bool){lock.lock();defer{lock.unlock()};return(calls,value==nil)};func failure()->String?{lock.lock();defer{lock.unlock()};return value?.localizedDescription}}
 func changedBundle(_ provider:[String:Any],_ edit:(inout [String:Any],inout [String:Any])throws->Void)throws->[String:Any]{var p=provider,root=try object(provider["bundle"] as! Data),node=try IOSMAXSourceSelection.profile(root);try edit(&root,&node);root["routerProfiles"]=[node];p["bundle"]=try json(root);return p}
 func renamed(_ provider:[String:Any],_ identity:String)throws->[String:Any]{try changedBundle(provider){root,node in root["selectedRouterID"]=identity;node["id"]=identity}}
 func capturedRoutes(_ fixtures:[String:Any])throws->[[String:Any]]{
@@ -315,6 +315,7 @@ final class PrestartForwarding {func invalidate(){}}
 final class PrestartEngine {let trace:PrestartTrace;var ownsNodeChain:Bool{false};init(_ trace:PrestartTrace){self.trace=trace};func stop(){trace.stopped()};func pause(){};func stopCheckedForStrategy()throws{fatalError("MAX prestart must not fabricate Tor comparison cleanup")}}
 typealias RouterVPNLibboxEngine=PrestartEngine
 struct IOSNodeChainCapture {static func issue(_ text:String)->NSError{NSError(domain:"SeparateOrderedSourceBoundary",code:1,userInfo:[NSLocalizedDescriptionKey:text])}}
+__TYPED_CAPTURE_BOUNDARIES__
 enum IOSNodeChainProviderCapture {
  static let executionKey="nodeChainExecutionSource"
  static func requested(_ provider:[String:Any],profile:[String:Any])->Bool{provider["nodeChainSource"] != nil || profile["multihop_nodes"] != nil}
@@ -390,6 +391,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
  private func startLibbox(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any],strict:Bool,completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
  private func startMultihop(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any],completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
  private func startNodeChain(_ capture:IOSNodeChainCapture,generation:UUID,completionHandler:@escaping(Error?)->Void)throws{throw IOSNodeChainCapture.issue("Ordered startup must not fabricate MAX proof")}
+ private func startNodeChainCONNECT(_ capture:IOSNodeChainCONNECTCapture,generation:UUID,completionHandler:@escaping(Error?)->Void)throws{throw IOSNodeChainCONNECTCapture.issue()}
+ private func startNodeChainSOCKS(_ capture:IOSNodeChainSOCKSCapture,generation:UUID,completionHandler:@escaping(Error?)->Void)throws{throw IOSNodeChainSOCKSCapture.issue()}
  private func startCandidatePrefix(_ capture:IOSNodeCandidatePrefixProviderCapture,generation:UUID,completionHandler:@escaping(Error?)->Void)throws{throw IOSNodeCandidatePrefixCapture.issue()}
  private func startOrderedExecution(_ capture:IOSNodeChainExecutionCapture,generation:UUID,restored:RouterVPNNodeChainExecutionRegistry.Restored?=nil,completionHandler:@escaping(Error?)->Void)throws{throw IOSNodeChainCapture.issue("Ordered execution cannot grant MAX startup proof")}
  private func startExternalLibbox(provider:[String:Any],selectedProfile:[String:Any],strict:Bool,completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
@@ -400,6 +403,12 @@ __PRODUCTION__
 @MainActor func providerPrestartTests(good:[String:Any],fixtures:[String:Any])throws->Int{
  var checks=0
  func check(_ name:String,_ value:@autoclosure ()throws->Bool)throws{guard try value() else{fatalError(name)};checks+=1}
+ for key in [IOSNodeChainCONNECTCapture.providerKey,IOSNodeChainSOCKSCapture.providerKey] {
+  var input=good;input[key]="separate-typed-source"
+  let p=PacketTunnelProvider(),outcome=Outcome(),queries=DNSSDTest.shared.counts().0,captures=NetworkTest.shared.counts().0
+  p.configure(input);p.startTunnel{outcome.receive($0)}
+  try check("typed source rejects before MAX DNS or native startup: "+key,outcome.done.wait(timeout:.now()+3) == .success && outcome.result().0==1 && !outcome.result().1 && outcome.failure()=="Separate typed source cannot grant MAX startup proof: "+key && p.trace.counts().0==0 && DNSSDTest.shared.counts().0==queries && NetworkTest.shared.counts().0==captures)
+ }
  for draining in [false,true] {
   let p=PacketTunnelProvider(),outcome=Outcome(),queries=DNSSDTest.shared.counts().0
   p.configure(good);p.captureForeignComparison(draining:draining);p.startTunnel{outcome.receive($0)}
@@ -542,7 +551,16 @@ def prestart_source():
         section('    private func selectedRouterProfile(', '    private func wireGuardLikeProfile('),
         section('    private func strictKillSwitchRequested(', '    private func suppliedNodeProof('),
     ]
-    return PRESTART_BOUNDARY.replace('__PRODUCTION__', '\n'.join(parts))
+    typed = []
+    for family in ('CONNECT', 'SOCKS'):
+        name = 'IOSNodeChain' + family + 'Capture'
+        source_lines = (APP / (name + '.swift')).read_text().splitlines()
+        keys = [line.strip() for line in source_lines if line.strip().startswith('static let providerKey = ')]
+        assert len(keys) == 1, name + ': shipping provider key must remain unique'
+        typed.append('final class ' + name + ' { private init(){}; ' + keys[0] + '\n'
+                     + 'static func issue()->NSError { IOSNodeChainCapture.issue("Separate typed source cannot grant MAX startup proof: "+providerKey) }\n'
+                     + 'static func reopenProvider(_ provider:[String:Any])throws->' + name + '{throw issue()} }')
+    return PRESTART_BOUNDARY.replace('__TYPED_CAPTURE_BOUNDARIES__', '\n'.join(typed)).replace('__PRODUCTION__', '\n'.join(parts))
 
 
 def run(command, **kwargs):

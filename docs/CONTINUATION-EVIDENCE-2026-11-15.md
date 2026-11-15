@@ -1557,3 +1557,24 @@ broken guard are unchanged. The eighteen positive checks and exact mutation
 witness pass in 17.914 seconds. The frozen patch and complete log are retained
 in `ios-runtime-tail-validation`; actual SDK and device acceptance remain
 separate requirements.
+
+## Apple MAX prestart harness retains explicit typed-family refusals
+
+The required iOS runtime-contract continuation found that the MAX hostname
+harness copied the current shipping `startTunnel` method but lacked its
+separate typed SOCKS/CONNECT capture and start declarations. The MAX-specific
+harness already rejects unrelated generic ordered and execution paths; it
+now provides the same explicit rejecting boundary for those typed families.
+Their provider keys are extracted verbatim from the unique shipping
+declarations, and the stub captures cannot be constructed or return success.
+
+Two checks enter the actual copied `startTunnel` with the separate typed keys.
+Each requires exactly one completion with its unique refusal message and no
+additional DNS query, physical-path capture or native-start side effect.
+The original 280 MAX source/DNS/lifetime checks remain; the full gate passes
+282 checks and twenty-four real Go launch graphs in 14.397 seconds. This does
+not simulate successful typed execution or change shipping app behavior.
+
+The frozen patch, source hashes and complete log are retained in
+`ios-runtime-tail-validation`. Native SDK, encrypted runtime and physical
+acceptance remain separate gates.
