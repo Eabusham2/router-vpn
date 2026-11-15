@@ -1485,3 +1485,36 @@ checks. Logs and exact file hashes are retained in
 `macos-public-entry-audit-validation`. Production code, native scenarios,
 workflow execution, timeouts and required receipts are unchanged; these source
 gate results do not establish installed PF/utun or physical-device acceptance.
+
+## Darwin readiness fixtures preserve separate ordinary and ordered owners
+
+The exact `2a9e594d7016fd6f9a00b89f5e9ce4ab54fbcac2` recovered-requirements
+job `132827227456` failed only
+`TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy/ordinary-policy`.
+That older test constructed a valid ordinary single-paired policy and matching
+receipt, then expected rejection even though the retained Darwin host now
+supports that policy. The full log contains no additional failed test leaf,
+panic or race warning.
+
+The same required test leaf now verifies the valid ordinary canonical
+roundtrip and rejects receipt exchange in both directions between ordinary
+and ordered policies. Session, transfer, interface and MTU fields match, so
+incidental differences cannot mask the captured source/configuration checks.
+Separate source and configuration substitutions remain rejected. A genuine
+typed SOCKS physical policy with its own matching metadata, DNS and MTU also
+cannot acquire the ordinary readiness contract.
+
+The existing native concrete-policy control now anchors the complete current
+type switch, including the admitted ordinary policy, and must expose that
+foreign-family refusal when the type boundary is deliberately bypassed.
+The thirty-three required shared verdicts and forty-three native controls are
+retained. The original failure reproduced in 1.200 seconds; all five focused
+Darwin readiness roots passed with race detection in 6.888 seconds. Three
+separately compiled controls that omit source equality, omit configuration
+equality, or bypass concrete policy admission each failed at its intended
+witness. Two focused inventory/anchor checks also passed.
+
+Exact hashes and original, positive and causal logs are retained in
+`darwin-ready-fixture-validation`. This changes only tests and their required
+gate; production validation, timeouts, native admission and installed-host
+acceptance requirements remain unchanged.

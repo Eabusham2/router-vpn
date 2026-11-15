@@ -233,6 +233,8 @@ MUTATIONS = (
      "preexisting ordered measurement mailbox reached native preparation"),
     ("ordinary-darwin-policy", "experimental/libbox/routervpn/mobilemultihop", "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready.go",
      '''switch original := policy.(type) {
+		case *DesktopNodePolicy:
+			interfaceValid = original != nil && DesktopLinuxNodePhysicalGraphSupported(meta.Mode, meta.StartLayer) && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
 		case *DesktopNodeChainPolicy:
 			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
 		case *DesktopNodeChainExecutionPhysicalPolicy:
@@ -240,7 +242,7 @@ MUTATIONS = (
 		}''',
      'interfaceValid = desktopNodeChainReadyInterface("darwin", r.InterfaceName)',
      "TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy/ordinary-policy",
-     "ordinary Darwin policy acquired ordered selected-DNS readiness"),
+     "foreign typed Darwin policy acquired ordinary readiness"),
     ("foreign-ready-target", "experimental/libbox/routervpn/mobilemultihop", "experimental/libbox/routervpn/mobilemultihop/desktop_node_ready.go",
      'if meta.TargetOS == "darwin" {', 'if true {',
      "TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy/windows-utun",

@@ -45,9 +45,59 @@ func TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy(t *testing.T) {
 	t.Run("ordinary-policy", func(t *testing.T) {
 		policy, transfer, record := desktopNodeReadyFixtureFor(t, 1392, "darwin")
 		record.InterfaceName = "utun771"
-		if record.Validate(policy, transfer) == nil {
-			t.Fatal("ordinary Darwin policy acquired ordered selected-DNS readiness")
+		// A retained single paired Router now owns Darwin readiness too. Its
+		// receipt must stay bound to that policy, never an ordered graph.
+		raw, err := CanonicalDesktopNodeReadyRecord(record, policy, transfer)
+		if err != nil {
+			t.Fatal("original ordinary Darwin policy lost its own readiness", err)
 		}
+		actual, err := ParseDesktopNodeReadyRecord(raw, policy, transfer)
+		if err != nil || actual != record {
+			t.Fatal("ordinary Darwin readiness changed its original receipt", err)
+		}
+		ordered, orderedTransfer, orderedRecord := desktopDarwinChainDNSReady(t, "darwin", 1392)
+		orderedRaw, err := CanonicalDesktopNodeReadyRecord(orderedRecord, ordered, orderedTransfer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Equal incidental fields make the captured source/config the relevant
+		// distinction; a different interface or session cannot mask this test.
+		if transfer != orderedTransfer || record.SessionID != orderedRecord.SessionID ||
+			record.InterfaceName != orderedRecord.InterfaceName || record.InterfaceIndex != orderedRecord.InterfaceIndex ||
+			record.MTU != orderedRecord.MTU || record.SourceSHA256 == orderedRecord.SourceSHA256 ||
+			record.ConfigSHA256 == orderedRecord.ConfigSHA256 {
+			t.Fatal("cross-policy readiness fixture lost its original comparable owners")
+		}
+		if _, err := ParseDesktopNodeReadyRecord(raw, ordered, orderedTransfer); err == nil {
+			t.Fatal("ordinary Darwin receipt acquired ordered policy readiness")
+		}
+		if _, err := ParseDesktopNodeReadyRecord(orderedRaw, policy, transfer); err == nil {
+			t.Fatal("ordered Darwin receipt acquired ordinary policy readiness")
+		}
+		for _, field := range []string{"source", "config"} {
+			changed := record
+			if field == "source" {
+				changed.SourceSHA256 = orderedRecord.SourceSHA256
+			} else {
+				changed.ConfigSHA256 = orderedRecord.ConfigSHA256
+			}
+			if changed.Validate(policy, transfer) == nil {
+				t.Fatal("ordinary Darwin receipt borrowed ordered captured field", field)
+			}
+		}
+		_, typed := desktopSOCKSPolicyFixture(t, "wg", "", "darwin", 1392)
+		_, typedMeta, typedCapture, err := ReadDesktopPhysicalPolicy(typed)
+		if err != nil {
+			t.Fatal("foreign-family fixture lost its valid physical capture", err)
+		}
+		foreign := record
+		foreign.SessionID, foreign.SourceSHA256, foreign.ConfigSHA256 = typedMeta.SessionID, typedMeta.SourceSHA256, typedMeta.ConfigSHA256
+		foreign.DNSConfigSHA256 = typedCapture.SelectedDNS.ConfigSHA256
+		foreign.MTU = typedMeta.RestoredMTU
+		if foreign.Validate(typed, transfer) == nil {
+			t.Fatal("foreign typed Darwin policy acquired ordinary readiness")
+		}
+
 	})
 	for _, target := range []string{"windows", "linux"} {
 		t.Run(target+"-utun", func(t *testing.T) {

@@ -44,6 +44,18 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
         self.assertEqual(len(RUNNER.MUTATIONS), 43)
 
+    def test_concrete_ready_policy_control_matches_current_source_and_real_foreign_capture(self):
+        control, = [value for value in RUNNER.MUTATIONS if value[0] == "ordinary-darwin-policy"]
+        source = (ROOT / "internal/mobilemultihop/desktop_node_ready.go").read_text()
+        fixture = (ROOT / "internal/mobilemultihop/desktop_node_ready_darwin_chain_test.go").read_text()
+        self.assertEqual(source.count(control[3]), 1)
+        self.assertIn("case *DesktopNodePolicy:", control[3])
+        self.assertEqual(control[5], "TestDesktopNodeReadyDarwinRequiresExactOrderedPolicy/ordinary-policy")
+        self.assertIn(control[6], fixture)
+        self.assertIn('desktopSOCKSPolicyFixture(t, "wg", "", "darwin", 1392)', fixture)
+        self.assertIn("ReadDesktopPhysicalPolicy(typed)", fixture)
+        self.assertIn("foreign.Validate(typed, transfer)", fixture)
+
     def test_each_measurement_mailbox_has_original_refusal_and_causal_omission(self):
         cases = RUNNER.PHASES["cmd/sing-box"]["TestRouterVPNNodeChainDarwinMeasurementStartup"]
         self.assertEqual(set(cases), {"absent"} | {
