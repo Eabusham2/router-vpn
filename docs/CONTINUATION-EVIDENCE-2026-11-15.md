@@ -1642,3 +1642,27 @@ remaining iOS continuation commands also completed without another failure;
 scripts and logs. Their real-SDK telemetry and forwarding portions explicitly
 remain for native Apple CI. No device or complete release claim follows from
 these portable source and Swift checks.
+
+## Windows CONNECT consumes the actual SOCKS receipt schema
+
+The exact `9363845c` source exposed a release-chain contract mismatch: the
+installed SOCKS gate emits schema 2, and the release builder already requires
+schema 2, but the subsequent CONNECT gate still required schema 1. Replaying
+its actual receipt validator with the emitted schema reproduced the refusal
+before any CONNECT native case could begin. This is a source-level blocker
+identified during continued native-release inspection, not a claim that a
+Windows device run was performed locally.
+
+The consumer now requires the integer schema 2. Its regression reads the
+actual SOCKS emitter's syntax tree, retains the independently nested prefix
+schema 1, and rejects the obsolete schema, booleans, strings, floats and null.
+All twelve CONNECT runner checks passed, including the real compiled owned
+endpoint tuples and all three original fixed-port negative controls. The six
+unchanged SOCKS release-contract checks passed. Two additional mutations
+confirmed that the regression catches both the obsolete schema and coercion
+of a floating-point schema. All existing case inventories, source/bundle
+identity checks, native joins and time bounds are unchanged.
+
+The original reproduced refusal, complete runner output, causal-control
+receipt and exact patch are retained in `windows-socks-schema-validation`.
+This repair does not establish native release publication or device acceptance.

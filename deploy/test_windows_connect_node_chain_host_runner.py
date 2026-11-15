@@ -3,6 +3,7 @@
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+import ast
 import hashlib
 import importlib.util
 import os
@@ -30,7 +31,7 @@ def original_receipt():
     prefix = dict(schema=1, native=True, cases=list(G.REQUIRED_PREFIX_CASES), samples_per_case=50,
                   native_down_before_review=True, original_final_unreachable=True,
                   target='windows/amd64', bundle_sha256='a' * 64, source_sha256='b' * 64)
-    return dict(schema=1, native=True, cases=list(G.ORIGINAL_SOCKS_CASES), typed_full_path=True,
+    return dict(schema=2, native=True, cases=list(G.ORIGINAL_SOCKS_CASES), typed_full_path=True,
                 native_joined=True, command_job_joined=True, remote_associations_after_retirement=0,
                 positive_application_and_selected_dns_proved=True, original_prefix_acceptance=prefix,
                 target=prefix['target'], bundle_sha256=prefix['bundle_sha256'], source_sha256=prefix['source_sha256'])
@@ -225,6 +226,28 @@ class FullPathGate(unittest.TestCase):
             G.require_originals(good)
         with patch.object(G.PREFIX_GATE, 'CASES', G.PREFIX_GATE.CASES[:-1]), self.assertRaises(ValueError):
             G.require_originals(good)
+
+    def test_original_socks_schema_matches_actual_emitter(self):
+        tree = ast.parse(Path(G.SOCKS_GATE.__file__).read_text())
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'execute_typed']
+        self.assertEqual(len(functions), 1)
+        receipts = [node.value for node in ast.walk(functions[0])
+                    if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict) and
+                    any(isinstance(target, ast.Name) and target.id == 'receipt' for target in node.targets)]
+        self.assertEqual(len(receipts), 1)
+        schemas = [value.value for key, value in zip(receipts[0].keys, receipts[0].values)
+                   if isinstance(key, ast.Constant) and key.value == 'schema' and isinstance(value, ast.Constant)]
+        self.assertEqual(schemas, [2])
+        self.assertIs(type(schemas[0]), int)
+        good = original_receipt()
+        good['schema'] = schemas[0]
+        self.assertIs(G.require_originals(good), good)
+        self.assertEqual(good['original_prefix_acceptance']['schema'], 1)
+        for obsolete in (1, True, False, '2', 2.0, None):
+            changed = deepcopy(good)
+            changed['schema'] = obsolete
+            with self.subTest(schema=obsolete), self.assertRaises(ValueError):
+                G.require_originals(changed)
 
     def test_real_connect_peer_projection_changes_only_test_selector(self):
         values, original = G.SCOPE.peer_sources(), G.SCOPE.BASE.peer_sources()

@@ -155,7 +155,7 @@ def owned_bindings(module, owner, *, workspace=False):
 def require_originals(receipt):
     if tuple(PREFIX_GATE.PROTECTED_CASES) != ORIGINAL_PREFIX_CASES or tuple(PREFIX_GATE.OFF_CASES) != PREFIX_OFF_CASES or tuple(PREFIX_GATE.CASES) != REQUIRED_PREFIX_CASES or tuple(SOCKS_GATE.CASES) != ORIGINAL_SOCKS_CASES:
         raise ValueError("Original Windows prefix6/SOCKS8 authoritative inventory changed")
-    if (not isinstance(receipt, dict) or receipt.get("schema") != 1 or receipt.get("native") is not True or
+    if (not isinstance(receipt, dict) or type(receipt.get("schema")) is not int or receipt.get("schema") != 2 or receipt.get("native") is not True or
             tuple(receipt.get("cases", ())) != ORIGINAL_SOCKS_CASES or receipt.get("typed_full_path") is not True or
             receipt.get("native_joined") is not True or receipt.get("command_job_joined") is not True or
             receipt.get("remote_associations_after_retirement") != 0 or receipt.get("positive_application_and_selected_dns_proved") is not True):
