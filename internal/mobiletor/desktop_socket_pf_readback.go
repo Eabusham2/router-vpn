@@ -2,6 +2,7 @@ package mobiletor
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -241,4 +242,58 @@ schedule:
 	close(next)
 	joined.Wait()
 	return errors.Join(ctx.Err(), errors.Join(results...))
+}
+
+// Diagnostic only: compare already captured rule text after exact readback has
+// refused it. Quoted labels/paths are represented by length and digest, never
+// copied to the error. Each structural excerpt is bounded independently.
+func desktopPFRuleDifference(expected, actual string) error {
+	if expected == actual {
+		return nil
+	}
+	expectedLines, actualLines := strings.Split(expected, "\n"), strings.Split(actual, "\n")
+	line := 0
+	for line < len(expectedLines) && line < len(actualLines) && expectedLines[line] == actualLines[line] {
+		line++
+	}
+	structural := func(lines []string) string {
+		if line >= len(lines) {
+			return "<absent>"
+		}
+		source := lines[line]
+		var out strings.Builder
+		for len(source) != 0 && out.Len() < 240 {
+			if source[0] == '"' {
+				// A backslash quotes the next byte, including another backslash.
+				// Never treat an escaped quote as the end of a captured label.
+				end := 1
+				for end < len(source) && source[end] != '"' {
+					if source[end] == '\\' {
+						end++
+					}
+					end++
+				}
+				if end >= len(source) {
+					out.WriteString("<unclosed-quoted>")
+					break
+				}
+				value := source[1:end]
+				digest := sha256.Sum256([]byte(value))
+				fmt.Fprintf(&out, "<quoted:%d:%x>", len(value), digest[:4])
+				source = source[end+1:]
+			} else {
+				out.WriteByte(source[0])
+				source = source[1:]
+			}
+		}
+		result := out.String()
+		if len(result) > 240 {
+			result = result[:240]
+		}
+		if source != "" {
+			result += "<truncated>"
+		}
+		return result
+	}
+	return fmt.Errorf("Darwin PF rule difference expected_bytes=%d actual_bytes=%d first_line=%d expected=%q actual=%q", len(expected), len(actual), line+1, structural(expectedLines), structural(actualLines))
 }

@@ -416,3 +416,43 @@ func TestDesktopPFReadbackDeadlineAndInvalidCapture(t *testing.T) {
 		}
 	}
 }
+
+func TestDesktopPFRuleDifferenceIsBoundedAndObservational(t *testing.T) {
+	original := "pass out proto tcp user 1073741825 tag \"captured-label\" no state\nanchor \"/captured/generation\" out all"
+	if err := desktopPFRuleDifference(original, original); err != nil {
+		t.Fatal("equal original rules emitted a mismatch", err)
+	}
+	changed := strings.Replace(original, "1073741825", "1073741826", 1)
+	failure := desktopPFRuleDifference(original, changed)
+	if failure == nil || !strings.Contains(failure.Error(), "first_line=1") || !strings.Contains(failure.Error(), "1073741826") || strings.Contains(failure.Error(), "captured-label") {
+		t.Fatal("mismatch lost bounded structural evidence or exposed quoted data", failure)
+	}
+	for _, changed := range []string{"", original + "\nblock drop out quick all", strings.Repeat("x", 100000), `pass out tag "private-unclosed`} {
+		failure := desktopPFRuleDifference(original, changed)
+		if failure == nil || len(failure.Error()) > 700 || strings.Contains(failure.Error(), "private-unclosed") || strings.Contains(failure.Error(), "/captured/generation") {
+			t.Fatal("mismatch became unbounded or copied quoted fields", failure)
+		}
+	}
+}
+
+func TestDesktopPFRuleDifferenceRedactsEscapedQuotedFields(t *testing.T) {
+	original := "pass out all no state\nanchor \"/captured/generation\" out all"
+	for _, quoted := range []string{
+		`"first\"private-after-escaped-quote"`,
+		`"first\\private-after-backslash"`,
+		`"first\\\"private-after-both"`,
+		`"first\"private-unclosed`,
+		`"first\`,
+	} {
+		changed := "pass out all no state\nanchor " + quoted + " out all"
+		failure := desktopPFRuleDifference(original, changed)
+		if failure == nil || !strings.Contains(failure.Error(), "first_line=2") || strings.Contains(failure.Error(), "private-") || strings.Contains(failure.Error(), "/captured/generation") {
+			t.Fatal("quoted escape leaked captured data or changed first differing line", failure)
+		}
+	}
+	changed := "pass out all no state\nanchor \"first\\\\private-one\" label \"second\\\"private-two\""
+	failure := desktopPFRuleDifference(original, changed)
+	if failure == nil || strings.Contains(failure.Error(), "private-") {
+		t.Fatal("later quoted field escaped redaction", failure)
+	}
+}

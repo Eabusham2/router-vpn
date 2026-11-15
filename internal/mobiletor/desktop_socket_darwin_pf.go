@@ -392,7 +392,7 @@ func (p *desktopDarwinPF) verify(ctx context.Context, complete bool) error {
 		func(captured context.Context) error {
 			pointer, err := desktopDarwinPFRead(captured, p.Slot)
 			if err != nil || pointer != p.Pointer {
-				return errors.Join(err, errors.New("Darwin PF slot changed its network owner"))
+				return errors.Join(err, errors.New("Darwin PF slot changed its network owner"), desktopPFRuleDifference(p.Pointer, pointer))
 			}
 			return nil
 		},
