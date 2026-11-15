@@ -62,6 +62,9 @@ func validateDesktopRetainedExternalSourcesLocked(profile, entry common.RouterPr
 	if owner.physical == nil || !desktopExternalRetainedEntryForOS(owner, owner.physical.Metadata().TargetOS) || profile.ID != launch.policyProfileID || entry.ID != launch.profileID || profile.ID != owner.profile.ID || entry.ID != owner.entry.ID {
 		return errors.New("retained external entry changed its two original saved identities")
 	}
+	if desktopExternalOpenVPNEntryOwner(owner) && profile.MultihopExecution != "" && profile.MultihopExecution != "local" {
+		return errors.New("retained OpenVPN entry changed its captured Local execution")
+	}
 	selected, err := externalRuntimePolicy(profile)
 	if err == nil {
 		selected, err = externalDNSPolicyForPath(selected, entry, false)
@@ -129,7 +132,7 @@ func desktopExternalPathProfileID(launch *desktopNodeLaunch) string {
 func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
 	// A retained SS2022 entry carries SS2022, HTTP(S) CONNECT or plain HY2 finals.
 	// The original graph determines TCP-only CONNECT and its final-routed DNS.
-	if desktopExternalSSEntryOwner(owner) {
+	if desktopExternalSSEntryOwner(owner) || desktopExternalOpenVPNEntryOwner(owner) {
 		return true
 	}
 	if !desktopExternalPacketEntryOwner(owner) || owner.entry.External.Protocol != "wireguard" {
@@ -145,5 +148,5 @@ func desktopExternalLinuxEntryOwner(owner *desktopExternalRuntime) bool {
 }
 
 func desktopExternalRetainedEntryForOS(owner *desktopExternalRuntime, target string) bool {
-	return target == "darwin" && desktopExternalRetainedEntryOwner(owner) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && (desktopWindowsExternalSSEntryOwner(owner) || desktopWindowsExternalRouterPairedOwner(owner))
+	return target == "darwin" && (desktopExternalPacketEntryOwner(owner) || desktopExternalSSEntryOwner(owner)) || target == "linux" && desktopExternalLinuxEntryOwner(owner) || target == "windows" && (desktopWindowsExternalSSEntryOwner(owner) || desktopWindowsExternalRouterPairedOwner(owner))
 }

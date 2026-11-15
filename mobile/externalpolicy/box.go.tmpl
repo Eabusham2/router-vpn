@@ -316,6 +316,48 @@ func (e *routerVPNExternalNativeEngine) OpenVPNRemoteContext(ctx context.Context
 	return receipt, nil
 }
 
+// Read only the original captured entry endpoint; neither a caller tag nor a
+// reconnect may substitute a new native generation for a retained proof.
+func (e *routerVPNExternalNativeEngine) OpenVPNEntryStateContext(ctx context.Context, tag string) (nativeopenvpn.PacketObservation, error) {
+	var empty nativeopenvpn.PacketObservation
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return empty, err
+	}
+	if tag == "" || tag != e.entryTag || tag == mobilemultihop.ExternalFinalTag {
+		return empty, errors.New("OpenVPN entry is not captured")
+	}
+	owner := e.routes[tag]
+	endpoint, ok := owner.(interface {
+		RouterVPNConnectedCapacityContext(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error)
+	})
+	if !ok {
+		return empty, errors.New("OpenVPN entry has no bounded native capacity observation")
+	}
+	current, found, err := adapter.RouterVPNOutboundContext(ctx, e.box.outbound, tag)
+	if err != nil {
+		return empty, err
+	}
+	if !found || current != owner {
+		return empty, errors.New("OpenVPN entry owner changed before observation")
+	}
+	remote, mtu, err := endpoint.RouterVPNConnectedCapacityContext(ctx)
+	if err != nil {
+		return empty, err
+	}
+	current, found, err = adapter.RouterVPNOutboundContext(ctx, e.box.outbound, tag)
+	if err != nil {
+		return empty, err
+	}
+	if !found || current != owner {
+		return empty, errors.New("OpenVPN entry owner changed during observation")
+	}
+	if _, err := e.IdentityContext(ctx); err != nil {
+		return empty, err
+	}
+	state := nativeopenvpn.PacketObservation{Remote: remote, MTU: mtu}
+	return state, state.Validate()
+}
+
 func (s *Box) routerVPNExternalEngine(entryTag, tunTag string, compiled option.Options) (*routerVPNExternalNativeEngine, error) {
 	return s.routerVPNCapturedEngine(entryTag, tunTag, mobilemultihop.ExternalFinalTag, mobilemultihop.ExternalDNSTag, compiled)
 }

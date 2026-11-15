@@ -79,6 +79,7 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'node_linux_source_join.go.tmpl', 'node_linux_source_join_test.go.tmpl',
                 'node_physical_windows.go.tmpl', 'node_physical_windows_test.go.tmpl', 'node_physical_other.go.tmpl')
 BOX_TEMPLATES = {
+    'external_box_openvpn_entry_test.go.tmpl': 'routervpn_desktop_external_box_openvpn_entry_test.go',
     'external_hysteria_layer_peer_test.go.tmpl': 'routervpn_desktop_external_hysteria_layer_peer_test.go',
     'external_box_windows_hysteria2_layer_test.go.tmpl': 'routervpn_desktop_external_box_windows_hysteria2_layer_test.go',
     'network_box.go.tmpl': 'routervpn_desktop_network_box.go',
@@ -463,6 +464,7 @@ def pt_copies():
                   'external_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
                   'external_box_darwin_control_test.go.tmpl': b'//go:build darwin\n\n',
                   'external_box_openvpn_test.go.tmpl': b'//go:build linux\n\n',
+                  'external_box_openvpn_entry_test.go.tmpl': b'//go:build linux\n\n',
                   'external_box_windows_packet_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
                   'external_box_windows_server_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
                   'external_box_windows_compare_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',

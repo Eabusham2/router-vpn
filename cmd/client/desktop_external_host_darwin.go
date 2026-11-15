@@ -49,10 +49,10 @@ type desktopMacOSExternalHost struct {
 }
 
 func desktopMacOSExternalEligible(launch *desktopNodeLaunch) bool {
-	if launch != nil && launch.ownedNode == nil && launch.tor == nil && desktopExternalRetainedEntryOwner(launch.external) {
+	if launch != nil && launch.ownedNode == nil && launch.tor == nil && desktopExternalRetainedEntryForOS(launch.external, "darwin") {
 		return launch.profileID == launch.external.entry.ID && launch.policyProfileID == launch.external.profile.ID
 	}
-	if !desktopWindowsExternalEligible(launch) {
+	if !desktopWindowsExternalEligible(launch) || !launch.external.direct {
 		return false
 	}
 	switch launch.external.profile.External.Protocol {

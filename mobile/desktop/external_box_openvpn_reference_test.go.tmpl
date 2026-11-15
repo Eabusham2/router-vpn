@@ -2,6 +2,7 @@ package box
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -10,6 +11,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -48,6 +50,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	DIRECT "github.com/sagernet/sing-box/protocol/direct"
 	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	DESKTOP "github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	SJ "github.com/sagernet/sing/common/json"
@@ -98,6 +101,7 @@ func desktopOpenVPNCompositionControlKey() string {
 }
 
 type desktopOpenVPNCompositionPeerInput struct {
+	SS2022Final       bool   `json:"ss2022_final,omitempty"`
 	Schema            int    `json:"schema"`
 	Network           string `json:"network"`
 	Control           string `json:"control"`
@@ -128,6 +132,7 @@ type desktopOpenVPNCompositionPeerReply struct {
 func desktopOpenVPNCompositionProviderBox(ctx context.Context, graph map[string]any) (*Box, error) {
 	ins, outs, endpoints := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
 	DIRECT.RegisterOutbound(outs)
+	SS.RegisterInbound(ins)
 	OVPN.RegisterEndpoint(endpoints)
 	transports := dns.NewTransportRegistry()
 	DNST.RegisterUDP(transports)
@@ -426,6 +431,15 @@ func desktopOpenVPNReferenceServeOwned(address string, appID []byte, unavailable
 				rule("udp", "192.168.50.53", 5353, peer.packet.LocalAddr().(*net.UDPAddr).Port),
 				rule("tcp", "1.1.1.1", 443, peer.listener.Addr().(*net.TCPAddr).Port),
 				rule("tcp", "93.184.216.34", 443, latency.Addr().(*net.TCPAddr).Port), map[string]any{"action": "reject"}}}}
+		if request.SS2022Final {
+			// The client can reach this final only as a packet destination inside
+			// the authenticated OpenVPN session. The final decrypts real SS2022
+			// TCP/UoT before the original selected DNS and HTTPS services.
+			graph["inbounds"] = []any{map[string]any{"type": "shadowsocks", "tag": "independent-final", "listen": address, "listen_port": 8388,
+				"method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))}}
+			route := graph["route"].(map[string]any)
+			route["rules"] = append([]any{rule("tcp", "203.0.113.55", 8388, 8388), rule("udp", "203.0.113.55", 8388, 8388)}, route["rules"].([]any)...)
+		}
 		provider, err = desktopOpenVPNCompositionProviderBox(ctx, graph)
 		if err != nil {
 			return fail("native-provider-build", err)
@@ -552,44 +566,71 @@ func (p *desktopOpenVPNCompositionProcess) readReply() (desktopOpenVPNCompositio
  return reply, nil
 }
 func (p *desktopOpenVPNCompositionProcess) exchange(ctx context.Context, request any) (desktopOpenVPNCompositionPeerReply, error) {
- var zero desktopOpenVPNCompositionPeerReply
- if ctx == nil { return zero, errors.New("OpenVPN IPC requires a bounded caller") }
- if _, ok := ctx.Deadline(); !ok { return zero, errors.New("OpenVPN IPC requires a bounded caller") }
- select {
- case <-ctx.Done(): return zero, ctx.Err()
- case <-p.permit:
- }
- defer func() { p.permit <- struct{}{} }()
- if err := ctx.Err(); err != nil { return zero, err }
- p.mu.Lock()
- if p.stopped { p.mu.Unlock(); return zero, net.ErrClosed }
- if err := ctx.Err(); err != nil { p.mu.Unlock(); return zero, err }
- worker := make(chan struct{})
- p.worker = worker
- p.mu.Unlock()
- type result struct { reply desktopOpenVPNCompositionPeerReply; err error }
- finished := make(chan result, 1)
- go func() {
-  defer close(worker)
-  if err := json.NewEncoder(p.input).Encode(request); err != nil {
-   finished <- result{err: errors.New("OpenVPN original IPC write failed")}
-   return
-  }
-  reply, err := p.readReply()
-  finished <- result{reply: reply, err: err}
- }()
- select {
- case value := <-finished:
-  select { case <-worker: case <-ctx.Done(): return zero, p.failed(ctx.Err()) }
-  if err := ctx.Err(); err != nil { return zero, p.failed(err) }
-  p.mu.Lock()
-  stopped := p.stopped
-  p.mu.Unlock()
-  if stopped { return zero, p.failed(net.ErrClosed) }
-  if value.err != nil { return zero, p.failed(value.err) }
-  return value.reply, nil
- case <-ctx.Done(): return zero, p.failed(ctx.Err())
- }
+	var zero desktopOpenVPNCompositionPeerReply
+	if ctx == nil {
+		return zero, errors.New("OpenVPN IPC requires a bounded caller")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return zero, errors.New("OpenVPN IPC requires a bounded caller")
+	}
+	select {
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	case <-p.permit:
+	}
+	defer func() { p.permit <- struct{}{} }()
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+	p.mu.Lock()
+	if p.stopped {
+		p.mu.Unlock()
+		return zero, net.ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		p.mu.Unlock()
+		return zero, err
+	}
+	worker := make(chan struct{})
+	p.worker = worker
+	p.mu.Unlock()
+	type result struct {
+		reply desktopOpenVPNCompositionPeerReply
+		err   error
+	}
+	finished := make(chan result, 1)
+	go func() {
+		defer close(worker)
+		if err := json.NewEncoder(p.input).Encode(request); err != nil {
+			finished <- result{err: errors.New("OpenVPN original IPC write failed")}
+			return
+		}
+		reply, err := p.readReply()
+		finished <- result{reply: reply, err: err}
+	}()
+	select {
+	case value := <-finished:
+		select {
+		case <-worker:
+		case <-ctx.Done():
+			return zero, p.failed(ctx.Err())
+		}
+		if err := ctx.Err(); err != nil {
+			return zero, p.failed(err)
+		}
+		p.mu.Lock()
+		stopped := p.stopped
+		p.mu.Unlock()
+		if stopped {
+			return zero, p.failed(net.ErrClosed)
+		}
+		if value.err != nil {
+			return zero, p.failed(value.err)
+		}
+		return value.reply, nil
+	case <-ctx.Done():
+		return zero, p.failed(ctx.Err())
+	}
 }
 func (p *desktopOpenVPNCompositionProcess) observeContext(ctx context.Context, action string) (desktopOpenVPNCompositionPeerReply, error) {
  if action != "stats" && action != "release" { return desktopOpenVPNCompositionPeerReply{}, errors.New("unowned provider observation") }
@@ -724,7 +765,7 @@ func desktopOpenVPNCompositionProfile(pki desktopOpenVPNCompositionPKI, remotes 
 	return nativeopenvpn.Profile{Config: config}
 }
 
-func desktopOpenVPNReferenceNew(t *testing.T, process *desktopOpenVPNCompositionProcess, profile nativeopenvpn.Profile, remotes []nativeopenvpn.Remote, session, target string, address netip.Addr, iface net.Interface) *desktopOpenVPNCompositionFixture {
+func desktopOpenVPNReferenceNew(t *testing.T, process *desktopOpenVPNCompositionProcess, profile nativeopenvpn.Profile, remotes []nativeopenvpn.Remote, session, target string, address netip.Addr, iface net.Interface, entryPassword ...string) *desktopOpenVPNCompositionFixture {
 	t.Helper()
 	observed, err := net.InterfaceByIndex(iface.Index)
 	if err != nil || observed.Name != iface.Name || observed.Flags&net.FlagUp == 0 || observed.Flags&net.FlagLoopback != 0 {
@@ -756,7 +797,14 @@ func desktopOpenVPNReferenceNew(t *testing.T, process *desktopOpenVPNComposition
 	for _, remote := range remotes {
 		f.kernel.tuples = append(f.kernel.tuples, desktopExternalIntegrationTuple{network: remote.Network, remote: netip.AddrPortFrom(netip.MustParseAddr(remote.Host), uint16(remote.Port))})
 	}
-	native, err := nativeopenvpn.CompileProfile(profile, mobilemultihop.ExternalFinalTag, "")
+	endpointTag := mobilemultihop.ExternalFinalTag
+	if len(entryPassword) > 1 || len(entryPassword) == 1 && (entryPassword[0] == "" || target != "linux" || len(remotes) != 1) {
+		t.Fatal("OpenVPN entry fixture lost its exact bounded composition")
+	}
+	if len(entryPassword) == 1 {
+		endpointTag = "external-entry"
+	}
+	native, err := nativeopenvpn.CompileProfile(profile, endpointTag, "")
 	if err != nil {
 		cancel()
 		t.Fatal("complete inline provider import", err)
@@ -766,6 +814,14 @@ func desktopOpenVPNReferenceNew(t *testing.T, process *desktopOpenVPNComposition
 	capture := map[string]any{"schema": 1, "exit_id": selection["id"], "protocol": "openvpn", "expected_public_ip": desktopExternalIntegrationIP, "profile": selection}
 	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}},
 		"endpoints": []any{native}, "outbounds": []any{}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
+	if len(entryPassword) == 1 {
+		entry := map[string]any{"id": "selected-openvpn-entry", "node_kind": "external", "external": selection["external"], "mtu_policy": "fixed", "manual_mtu": 1500}
+		selection["external"] = map[string]any{"protocol": "shadowsocks", "expected_public_ip": desktopExternalIntegrationIP,
+			"shadowsocks": map[string]any{"server": "203.0.113.55", "port": 8388, "method": "2022-blake3-aes-256-gcm", "password": entryPassword[0]}}
+		capture["protocol"], capture["entry"], capture["entry_tag"] = "shadowsocks", entry, endpointTag
+		graph["outbounds"] = []any{map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": "203.0.113.55", "server_port": 8388,
+			"method": "2022-blake3-aes-256-gcm", "password": entryPassword[0], "detour": endpointTag}}
+	}
 	raw, _ := json.Marshal(graph)
 	captured, _ := json.Marshal(capture)
 	f.originalSource, f.originalCapture = string(raw), string(captured)
@@ -788,6 +844,7 @@ func desktopOpenVPNReferenceNew(t *testing.T, process *desktopOpenVPNComposition
 	})
 	outs := outbound.NewRegistry()
 	DESKTOP.RegisterExternalPhysicalOutbound(outs)
+	SS.RegisterOutbound(outs)
 	endpoints := endpoint.NewRegistry()
 	OVPN.RegisterEndpoint(endpoints)
 	transports := dns.NewTransportRegistry()
@@ -839,7 +896,7 @@ func desktopOpenVPNReferenceNew(t *testing.T, process *desktopOpenVPNComposition
 	if err = f.box.RouterVPNStrategyStart(); err != nil {
 		t.Fatal("actual provider native startup", err)
 	}
-	value, ok := f.box.endpoint.Get(mobilemultihop.ExternalFinalTag)
+	value, ok := f.box.endpoint.Get(endpointTag)
 	if !ok {
 		t.Fatal("actual captured provider endpoint missing")
 	}
@@ -882,7 +939,8 @@ func (f *desktopOpenVPNCompositionFixture) close() error {
 func (f *desktopOpenVPNCompositionFixture) assertCapture(t *testing.T) {
 	t.Helper()
 	capture, err := f.policy.Capture()
-	if err != nil || capture.Protocol != "openvpn" || capture.EntryID != "" || capture.Execution != "" || capture.StartLayer != "" ||
+	entry := capture.EntryID != ""
+	if err != nil || (!entry && capture.Protocol != "openvpn" || entry && (capture.Protocol != "shadowsocks" || capture.EntryID != "selected-openvpn-entry" || capture.EntryTag != "external-entry")) || capture.Execution != "" || capture.StartLayer != "" ||
 		len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Family != "endpoints" || capture.PhysicalRoots[0].Type != "openvpn-client" ||
 		capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Host != "192.168.50.53" || capture.SelectedDNS.Port != 5353 || capture.SelectedDNS.Physical ||
 		capture.SelectedDNS.Detour != mobilemultihop.ExternalFinalTag || capture.KillSwitchPolicy != "always" {
@@ -983,7 +1041,7 @@ func (f *desktopOpenVPNCompositionFixture) prove(t *testing.T) nativeopenvpn.Rem
 	}
 	meta := f.policy.Metadata()
 	if result.Schema != 1 || result.SessionID != meta.SessionID || result.SourceSHA256 != meta.OriginalSourceSHA256 || result.ConfigSHA256 != meta.OriginalConfigSHA256 ||
-		result.ExitID != "selected-external-native" || result.IP != desktopExternalIntegrationIP || !result.DNSProven || result.EntryProven || result.CheckedAt <= 0 || !f.proof.Healthy() || !f.network.Current() {
+		result.ExitID != "selected-external-native" || result.IP != desktopExternalIntegrationIP || !result.DNSProven || result.EntryProven != (f.policy.Metadata().Protocol == "shadowsocks") || result.CheckedAt <= 0 || !f.proof.Healthy() || !f.network.Current() {
 		t.Fatal("real provider proof changed source authority")
 	}
 	stats := f.process.observe(t, "stats")
@@ -1042,7 +1100,7 @@ func (f *desktopOpenVPNCompositionFixture) mtu(t *testing.T, connected nativeope
 	if err = mobilemultihop.ProveExternalPublicIP(context.Background(), f.proof.engine.Dial, mobilemultihop.ExternalFinalTag, desktopExternalIntegrationIP); err != nil {
 		t.Fatal("provider rollback lost real public HTTPS proof", err)
 	}
-	if f.receipt(t) != connected || f.process.observe(t, "stats").PublicRequests != 2 {
+	if f.receipt(t) != connected || f.process.observe(t, "stats").PublicRequests != map[bool]int32{false: 2, true: 3}[f.policy.Metadata().Protocol == "shadowsocks"] {
 		t.Fatal("provider rollback changed native transport or reused an old proof")
 	}
 	called := false

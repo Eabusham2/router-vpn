@@ -59,11 +59,13 @@ type ExternalProofRequest struct {
 	runMu     sync.Mutex
 	runDone   chan struct{}
 	// Unexported test seams exercise the lifecycle without public networking.
-	public           func(context.Context, string, string) error
-	private          func(context.Context) error
-	execution        *Controller
-	openvpnTransport map[string]any
-	openvpnRemote    atomic.Pointer[nativeopenvpn.RemoteReceipt]
+	public                func(context.Context, string, string) error
+	private               func(context.Context) error
+	execution             *Controller
+	openvpnEntryTransport map[string]any
+	openvpnEntryState     atomic.Pointer[nativeopenvpn.PacketObservation]
+	openvpnTransport      map[string]any
+	openvpnRemote         atomic.Pointer[nativeopenvpn.RemoteReceipt]
 }
 
 func NewExternalProofRequest(parent context.Context, policy *ExternalPolicy, session string, engine ExternalProofEngine) (*ExternalProofRequest, error) {
@@ -124,6 +126,10 @@ func NewExternalProofRequestContext(caller, parent context.Context, policy *Exte
 			cancel()
 			return nil, err
 		}
+	}
+	if err := r.prepareOpenVPNEntry(); err != nil {
+		cancel()
+		return nil, err
 	}
 	r.public = r.provePublic
 	r.private = r.provePrivateEntry
@@ -186,6 +192,9 @@ func (r *ExternalProofRequest) localOpenVPNHealthy() bool {
 }
 
 func (r *ExternalProofRequest) captureLocalOpenVPNRemote(ctx context.Context) error {
+	if err := r.captureOpenVPNEntry(ctx); err != nil {
+		return err
+	}
 	if r.openvpnTransport == nil {
 		return nil
 	}

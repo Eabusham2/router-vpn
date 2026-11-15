@@ -101,6 +101,9 @@ func (r *ExternalProofRequest) currentContext(ctx context.Context) error {
 }
 
 func (r *ExternalProofRequest) localOpenVPNHealthyContext(ctx context.Context) error {
+	if err := r.openVPNEntryHealthyContext(ctx); err != nil {
+		return err
+	}
 	if r.openvpnTransport != nil {
 		expected := r.openvpnRemote.Load()
 		if expected == nil {

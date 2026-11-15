@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 const (
@@ -94,7 +95,7 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 			supportedFinal := capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2"
 			supportedSSPair := entryKind == "shadowsocks" &&
 				(capture.Protocol == "shadowsocks" && desktopExternalSS2022Import(final) || capture.Protocol == "http-connect" || capture.Protocol == "https-connect" || capture.Protocol == "hysteria2")
-			if !supportedSSPair && (entryKind != "wireguard" || !supportedFinal) {
+			if !supportedSSPair && entryKind != "openvpn-client" && (entryKind != "wireguard" || !supportedFinal) {
 				entryKind = ""
 			}
 		}
@@ -396,6 +397,24 @@ func desktopExternalEntryKind(original *ExternalPolicy, capture ExternalDesktopC
 		return ""
 	}
 	switch external["protocol"] {
+	case "openvpn":
+		// One ordinary imported packet entry and one independent SS2022 final.
+		// Other remote inventories, finals, targets and layers keep their own
+		// native composition gates. Connected capacity/generation is mandatory
+		// in the retained shared proof; this shape alone supplies no authority.
+		final, _ := original.capture.Profile["external"].(map[string]any)
+		if targetOS != "linux" || capture.Protocol != "shadowsocks" || !desktopExternalSS2022Import(final) || capture.EntryStartLayer != "" || capture.StartLayer != "" {
+			return ""
+		}
+		transport, err := multihoprelay.ExternalTransport("openvpn", external)
+		if err != nil {
+			return ""
+		}
+		remotes, err := nativeopenvpn.Remotes(transport)
+		if err != nil || len(remotes) != 1 || remotes[0].Validate() != nil {
+			return ""
+		}
+		return "openvpn-client"
 	case "wireguard", "amneziawg":
 		if capture.EntryStartLayer != "" || capture.StartLayer != "" && (capture.Protocol != "hysteria2" || !multihoprelay.ValidLayerMode(capture.StartLayer)) {
 			return ""
@@ -574,7 +593,7 @@ func (p *DesktopExternalPolicy) ValidateLinuxControlledAdmission() error {
 		return nil
 	}
 	switch desktopExternalEntryKind(p.original, capture, "linux") {
-	case "wireguard", "shadowsocks":
+	case "wireguard", "shadowsocks", "openvpn-client":
 		// Validate above reconstructs the complete Linux lower graph, including its
 		// bounded finals, original private credentials and independent layer owners.
 		return nil

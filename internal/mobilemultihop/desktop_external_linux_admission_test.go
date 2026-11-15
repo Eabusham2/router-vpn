@@ -70,6 +70,10 @@ func TestDesktopExternalLinuxControlledAdmission(t *testing.T) {
 			fixtures["linux-ss-layers-"+entryMode+"-"+finalMode] = fixture{externalTestJSON(t, graph), externalTestJSON(t, capture), "linux", true}
 		}
 	}
+	for _, network := range []string{"tcp", "udp"} {
+		graph, capture := desktopExternalOpenVPNEntryInput(t, network, "shadowsocks")
+		fixtures["linux-openvpn-"+network+"-shadowsocks"] = fixture{externalTestJSON(t, graph), externalTestJSON(t, capture), "linux", true}
+	}
 	if (*DesktopExternalPolicy)(nil).ValidateLinuxControlledAdmission() == nil {
 		t.Fatal("nil policy admitted")
 	}

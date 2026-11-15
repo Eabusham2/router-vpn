@@ -18,13 +18,14 @@ G = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(G)
 
 
-def completed():
-    return ["--- PASS: " + G.PARENT + " (1.00s)",
-            *("    --- PASS: " + G.PARENT + "/" + name + " (0.10s)" for name in G.CASES)]
+def completed(entry=False):
+    parent, cases = (G.ENTRY_PARENT, G.ENTRY_CASES) if entry else (G.PARENT, G.CASES)
+    return ["--- PASS: " + parent + " (1.00s)",
+            *("    --- PASS: " + parent + "/" + name + " (0.10s)" for name in cases)]
 
 
-def success_output():
-    return "\n".join(completed()) + "\n"
+def success_output(entry=False):
+    return "\n".join(completed(entry)) + "\n"
 
 
 class Execution:
@@ -40,6 +41,7 @@ class Execution:
         self.identity = identity or {"GOOS": "linux", "GOHOSTOS": "linux", "GOARCH": arch, "GOHOSTARCH": arch, "CGO_ENABLED": "1"}
         self.calls, self.source_checks, self.pq_checks = [], 0, 0
         self.compiled, self.executed = False, False
+        self.phases = []
         self.exception = RuntimeError("actual controlled boundary refusal")
         self.binary = None
         self.output = io.StringIO()
@@ -104,6 +106,10 @@ class Execution:
                     "--namespace-test-sha256", hashlib.sha256(b"original compiled native image").hexdigest()]
         if self.sudo is not None:
             expected = [self.sudo, "-n", "--", *expected]
+        entry = "--entry" in args
+        if entry:
+            expected.append("--entry")
+        self.phases.append(entry)
         self.test.assertEqual(args, expected)
         self.test.assertEqual(kwargs["cwd"], G.ROOT)
         self.test.assertEqual(kwargs["timeout"], 150)
@@ -126,7 +132,7 @@ class Execution:
             original = self.binary.with_suffix(".original")
             self.binary.rename(original)
             self.binary.symlink_to(original)
-        return success_output() if self.fault != "execute-verdict" else "\n".join(completed()[:-1]) + "\n"
+        return success_output(entry) if self.fault != "execute-verdict" else "\n".join(completed(entry)[:-1]) + "\n"
 
     def execute(self):
         with ExitStack() as stack:
@@ -217,6 +223,21 @@ class LinuxExternalOpenVPNRunner(unittest.TestCase):
                         G.checked_sources(source)
                     records[name] = original
 
+    def test_entry_requires_its_disjoint_complete_inventory(self):
+        self.assertEqual(len(G.ENTRY_CASES), 5)
+        G.check_verdict(success_output(True), entry=True)
+        for index in range(len(completed(True))):
+            rows = completed(True)
+            for changed in (rows[:index] + rows[index+1:], rows + [rows[index]]):
+                with self.subTest(index=index), self.assertRaises(ValueError):
+                    G.check_verdict("\n".join(changed)+"\n", entry=True)
+        for output in (success_output(), success_output(True)+"--- FAIL: native final (1s)\n"):
+            with self.assertRaises(ValueError):
+                G.check_verdict(output, entry=True)
+        with patch.object(G.GUARD, "namespace_test", return_value=23) as enter:
+            self.assertEqual(G.namespace_test(Path("/original"), "a"*64, entry=True),23)
+            enter.assert_called_once_with(Path("/original"), "ExternalOpenVPNEntry", "a"*64)
+
     def test_matching_host_uses_exact_pq_compiler_and_namespace(self):
         for arch in ("amd64", "arm64"):
             for sudo in (None, "/owned/sudo"):
@@ -224,8 +245,9 @@ class LinuxExternalOpenVPNRunner(unittest.TestCase):
                     case = Execution(self, Path(temporary).resolve(), arch=arch, sudo=sudo)
                     case.execute()
                     self.assertTrue(case.compiled and case.executed)
-                    self.assertEqual((case.source_checks, case.pq_checks), (3, 3))
-                    self.assertEqual(len(case.calls), 3)
+                    self.assertEqual((case.source_checks, case.pq_checks), (4, 4))
+                    self.assertEqual(len(case.calls), 4)
+                    self.assertEqual(case.phases, [False, True])
                     self.assertIn("installed-device acceptance remain separate", case.output.getvalue())
 
     def test_foreign_host_architecture_or_cgo_never_compiles(self):
@@ -289,7 +311,7 @@ class LinuxExternalOpenVPNRunner(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 G.main(["--namespace-test-binary", "/native-image", "--namespace-test-sha256", "b" * 64])
         self.assertEqual(caught.exception.code, 23)
-        enter.assert_called_once_with(Path("/native-image"), "b" * 64)
+        enter.assert_called_once_with(Path("/native-image"), "b" * 64, entry=False)
         execute.assert_not_called()
         for args in (["/source"], ["--pq", "/pq"], ["--namespace-test-binary", "/image"],
                      ["/source", "--pq", "/pq", "--namespace-test-binary", "/image", "--namespace-test-sha256", "b" * 64]):

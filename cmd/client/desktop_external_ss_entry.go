@@ -5,7 +5,7 @@ import "router-vpn/internal/common"
 // A stream entry still owns its complete captured graph, independent source,
 // native lower and entry proof. This shape alone grants no physical permission.
 func desktopExternalRetainedEntryOwner(owner *desktopExternalRuntime) bool {
-	return desktopExternalPacketEntryOwner(owner) || desktopExternalSSEntryOwner(owner)
+	return desktopExternalPacketEntryOwner(owner) || desktopExternalSSEntryOwner(owner) || desktopExternalOpenVPNEntryOwner(owner)
 }
 func desktopExternalSSEntryOwner(owner *desktopExternalRuntime) bool {
 	return desktopExternalSSEntryOwnerWithFinal(owner, desktopExternalSSEntryFinalProfile)

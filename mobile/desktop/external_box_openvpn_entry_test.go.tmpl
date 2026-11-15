@@ -1,0 +1,105 @@
+//go:build linux
+
+package box
+
+import (
+	"bytes"
+	"context"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+)
+
+// Separate mandatory namespace phase: the original direct-provider group keeps
+// its existing deadline and inventory. These are real OpenVPN data-channel and
+// independent SS2022 decryptions; kernel/TUN and installed-host gates stay separate.
+func TestDesktopLinuxGuardianKernelExternalOpenVPNEntry(t *testing.T) {
+	if os.Geteuid() != 0 || os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" {
+		t.Fatal("OpenVPN entry requires its original namespace carrier")
+	}
+	iface, err := net.InterfaceByName("rvpn-test")
+	if err != nil || iface.Flags&net.FlagUp == 0 {
+		t.Fatal("entry lost original physical interface", err)
+	}
+	ca := newDesktopExternalIntegrationCA(t)
+	directory := t.TempDir()
+	rootPath := filepath.Join(directory, "public-proof-ca.pem")
+	if err = os.WriteFile(rootPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", rootPath)
+	t.Setenv("SSL_CERT_DIR", directory)
+	for _, name := range []string{"tcp-proof-mtu-latency50", "udp-proof-mtu-latency50", "reconnect-rejects-proof", "wrong-final-key", "selected-dns-failure"} {
+		t.Run(name, func(t *testing.T) {
+			network := "tcp"
+			if strings.HasPrefix(name, "udp-") {
+				network = "udp"
+			}
+			pki := desktopOpenVPNCompositionCertificates(t)
+			certificate := ca.certificate(t, true)
+			private, err := x509.MarshalPKCS8PrivateKey(certificate.PrivateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fault := ""
+			if name == "selected-dns-failure" {
+				fault = "dns"
+			}
+			process := desktopOpenVPNCompositionStartPeer(t, desktopOpenVPNCompositionPeerInput{Schema: 1, Network: network, Control: "tls-auth", ControlKey: desktopOpenVPNCompositionControlKey(), CA: pki.ca,
+				Certificate: pki.provider, Key: pki.providerKey, PublicCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Certificate[0]})), PublicKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private})), Fault: fault, SS2022Final: true})
+			remote, err := nativeopenvpn.ParseRemote(process.initial.Remote, network)
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := desktopOpenVPNCompositionProfile(pki, []nativeopenvpn.Remote{remote}, "tls-auth", "")
+			key := byte(7)
+			if name == "wrong-final-key" {
+				key = 8
+			}
+			f := desktopOpenVPNReferenceNew(t, process, profile, []nativeopenvpn.Remote{remote}, desktopTorBoxSession, "linux", netip.MustParseAddr(desktopOpenVPNCompositionClientAddress), *iface, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{key}, 32)))
+			if name == "wrong-final-key" || name == "selected-dns-failure" {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if _, err = f.proof.RunContext(ctx, nil); err == nil || f.proof.Healthy() {
+					t.Fatal("independent final authentication/DNS failure acquired completed proof")
+				}
+				stats := process.observe(t, "stats")
+				if stats.PublicRequests != 1 {
+					t.Fatal("negative final never proved exactly the captured OpenVPN entry", stats)
+				}
+				if name == "wrong-final-key" && stats.DNS != 0 {
+					t.Fatal("wrong final key bypassed real SS2022 decryption", stats)
+				}
+				if lease, err := f.box.RouterVPNExternalClaimMTU(f.proof, f.originalSource, f.originalCapture); err == nil || lease != nil {
+					t.Fatal("failed final acquired an MTU lease")
+				}
+				return
+			}
+			receipt := f.prove(t)
+			capture, err := f.policy.Capture()
+			observed, capacity, observeErr := f.endpoint.RouterVPNConnectedCapacityContext(context.Background())
+			if err != nil || observeErr != nil || observed != receipt || int(capacity) != capture.EntryMTU {
+				t.Fatal("native entry capacity differs from original selected packet owner", err, observeErr, capacity, capture.EntryMTU)
+			}
+			if name == "reconnect-rejects-proof" {
+				f.endpoint.InterfaceUpdated(context.Background())
+				current := f.awaitRemote(t, receipt.Generation)
+				if current.Generation == receipt.Generation || f.proof.VerifyCurrentPath() == nil || f.proof.Healthy() {
+					t.Fatal("new entry transport generation reused original composed proof")
+				}
+				return
+			}
+			f.mtu(t, receipt)
+			f.latency(t, receipt)
+		})
+	}
+}
