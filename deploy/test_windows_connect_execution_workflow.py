@@ -13,7 +13,10 @@ INPUTS = (WORKFLOW, 'deploy/test_windows_connect_execution_host.py',
           'deploy/test_windows_connect_execution_workflow.py',
           'deploy/windows_connect_execution_overlay.py',
           'deploy/fixtures/windows-connect-execution/peer.go',
-          'deploy/fixtures/windows-connect-execution/physical.go')
+          'deploy/fixtures/windows-connect-execution/physical.go',
+          'deploy/fixtures/windows-connect-execution/security.go',
+          'deploy/fixtures/windows-connect-execution/security_test.go',
+          'deploy/windows_connect_execution_worker_controls.py')
 PREFIX = """name: Windows installed CONNECT Server and Compare acceptance
 
 on:

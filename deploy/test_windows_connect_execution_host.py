@@ -4,7 +4,8 @@
 This does not bypass or repeat the original prefix8/SOCKS11/LocalCONNECT18 gates.
 Actual protected controller, inherited typed child, WFP/TUN and encrypted relay
 are required. Private HTTP administration and direct counterparty worker launch
-are explicit fixture adapters. The worker is a separately captured bundle copy.
+are explicit fixture adapters. The worker is a separately captured source build with only the explicit Windows
+private-path adapter; the delivered bundle is preserved.
 """
 from pathlib import Path
 import argparse,ctypes,hashlib,importlib.util,json,os,platform,re,shutil
@@ -16,6 +17,7 @@ ORIGINAL=load('windows_execution_local','test_windows_connect_node_chain_host.py
 SCOPE=load('windows_execution_projection','windows_connect_execution_overlay.py')
 BUILD,CONTROLLER,NODE=ORIGINAL.BUILD,ORIGINAL.CONTROLLER,ORIGINAL.NODE
 IDENTITY=load('windows_execution_identity','focused_source_identity.py')
+WORKER=load('windows_execution_worker_controls','windows_connect_execution_worker_controls.py')
 FLAG='ROUTERVPN_WINDOWS_CONNECT_EXECUTION_NATIVE'
 TEST='TestWindowsInstalledCONNECTExecution'
 CASES = ('http-wg-server', 'http-awg-fast-auto-local', 'http-awg-strong-auto-server', 'https-awg-strong-server', 'https-wg-auto-local', 'https-awg-fast-auto-server', 'http-wrong-auth', 'https-wrong-auth', 'https-tls-name', 'http-wrong-public', 'https-wrong-final', 'https-failed-dns', 'http-replaced-source', 'https-held-cleanup')
@@ -126,7 +128,8 @@ OWNED=(
  'deploy/test_windows_connect_execution_host.py',
  'deploy/test_windows_connect_execution_host_runner.py',
  'deploy/windows_connect_execution_overlay.py',
- *SCOPE.EXTRA,*SCOPE.PLATFORM_FILES,*SCOPE.PROJECTOR.SOURCES,
+ 'deploy/windows_connect_execution_worker_controls.py',
+ *SCOPE.EXTRA,*SCOPE.PLATFORM_FILES,*SCOPE.PRIVATE,*SCOPE.WORKER,*SCOPE.PROJECTOR.SOURCES,
  'mobile/desktop/node_imported_connect_entry_test.go.tmpl',
  'deploy/prepare-desktop-imported-execution-test.py',
  'cmd/client/desktop_node_chain_connect_execution_product_test.go',
@@ -160,6 +163,8 @@ def sources(core):
         if path.is_symlink() or not path.is_file():raise ValueError('Windows execution original source missing: '+name)
         records['execution/'+name]=sha(path)
     for name,raw in SCOPE.peer_sources().items():records['execution-peer/'+name]=hashlib.sha256(raw).hexdigest()
+    for name,raw in SCOPE.worker_sources(core).items():records['execution-worker/'+name]=hashlib.sha256(raw).hexdigest()
+    for name,raw in WORKER.sources().items():records['execution-worker-control/'+name]=hashlib.sha256(raw).hexdigest()
     return core,records
 
 def required_host(environment):
@@ -185,6 +190,18 @@ def source_verdict(output):
     if sorted(runs)!=sorted(required) or sorted(passes)!=sorted(required) or len(re.findall(r'^PASS\s*$',output,re.M))!=1 or any(token in output for token in ('--- FAIL:','--- SKIP:','WARNING: DATA RACE','panic:','fatal error:')):
         raise ValueError('Windows execution lost actual public and alias-ownership source verdicts')
     return required
+
+WORKER_CASES=('private','original-posix-modes','public-input','null-input','unknown-input','public-code-writer','public-code-reader','hardlink-input','replaced-input','worker-environment')
+
+def worker_verdict(output):
+    root='TestRouterVPNWindowsExecutionPrivateWorker'
+    required=[root,*(root+'/'+case for case in WORKER_CASES)]
+    runs=re.findall(r'^\s*=== RUN\s+(\S+)\s*$',output,re.M)
+    passes=re.findall(r'^\s*--- PASS:\s+(\S+)\s+\([0-9.]+s\)$',output,re.M)
+    if sorted(runs)!=sorted(required) or sorted(passes)!=sorted(required) or len(re.findall(r'^PASS\s*$',output,re.M))!=1 or any(token in output for token in ('--- FAIL:','--- SKIP:','WARNING: DATA RACE','panic:','fatal error:')):
+        raise ValueError('Windows worker lost actual private permission/source controls')
+    return required
+
 
 def execute(bundle,source=None,go='go',environment=None,*,required_commit=None,receipt_file=None):
     environment=dict(os.environ if environment is None else environment)
@@ -219,13 +236,14 @@ def execute_owned(bundle,source,compiler,captured,target,owner,commit):
         core,before=sources(core)
         installed=work/'installed';native=installed/'runtime/native';native.mkdir(parents=True)
         (installed/'client').mkdir();shutil.copyfile(ROOT/'client/Private-RouterVPN-Protection.ps1',installed/'client/Private-RouterVPN-Protection.ps1')
-        # The counterparty is original delivered bytes at a separate peer-owned
-        # path. It must not inherit the native child's test-only WFP AppID scope.
+        # This separate test worker uses original protocol/IPC bodies and the
+        # explicit Windows private-path projection. It must not inherit the
+        # native child's test-only WFP AppID scope.
         worker_bundle=work/'original-counterparty';worker_bundle.mkdir()
         for name in original['files']:
             shutil.copyfile(bundle/name,native/name);shutil.copyfile(bundle/name,worker_bundle/name)
         shutil.copyfile(bundle/'NATIVE-RUNTIME.json',worker_bundle/'NATIVE-RUNTIME.json')
-        worker=worker_bundle/BUILD.binary_name(target);worker_sha=sha(worker)
+        worker=worker_bundle/BUILD.binary_name(target)
         if BUILD.reuse(worker_bundle,target,env=captured)!=original:raise ValueError('Original independent worker copy changed')
         child=native/BUILD.binary_name(target)
         native_scope,native_records=SCOPE.overlay(core/'routervpn/mobiletor',child,work/'native-scope')
@@ -239,6 +257,7 @@ def execute_owned(bundle,source,compiler,captured,target,owner,commit):
             overlay=work/'loader.json';overlay.write_text(json.dumps({'Replace':{str(loader):str(addition)}}))
             native_scope=ORIGINAL.merge_overlays([native_scope,overlay],work/'native-overlay.json')
         peer_overlay=SCOPE.peer_overlay(core/'protocol/routervpnamnezia',work/'peer-source')
+        worker_overlay=SCOPE.worker_overlay(core,work/'worker-source')
         native_tags=(*BUILD.tags(target),SCOPE.TAG)
         flags=('-checklinkname=0 -X github.com/sagernet/sing-box/constant.Version='+BUILD.marker(original['policy_sha256'])+
                ' -X main.routerVPNCronetSHA='+original['files']['libcronet.dll']['sha256']+
@@ -246,6 +265,7 @@ def execute_owned(bundle,source,compiler,captured,target,owner,commit):
         peer,controller=work/'execution-peer.test.exe',work/'execution-controller.test.exe'
         commands=(
           ([compiler,'build','-p=1','-mod=readonly','-trimpath','-buildvcs=false','-overlay='+str(native_scope),'-tags='+','.join(native_tags),'-ldflags='+flags,'-o',child,'./cmd/sing-box'],core),
+          ([compiler,'build','-p=1','-mod=readonly','-trimpath','-buildvcs=false','-overlay='+str(worker_overlay),'-tags='+','.join(native_tags),'-ldflags='+flags,'-o',worker,'./cmd/sing-box'],core),
           ([compiler,'test','-c','-p=1','-mod=readonly',*race,'-overlay='+str(peer_overlay),'-tags='+','.join((*NODE.TAGS,SCOPE.TAG)),'-ldflags=-checklinkname=0','-o',peer,'./protocol/routervpnamnezia'],core),
           ([compiler,'test','-c','-p=1','-mod=readonly',*race,'-overlay='+str(app_scope),'-tags='+SCOPE.TAG,'-o',controller,'./cmd/client'],ROOT))
         for command,cwd in commands:
@@ -253,6 +273,9 @@ def execute_owned(bundle,source,compiler,captured,target,owner,commit):
             if status:raise ValueError('Original Windows execution image compilation failed:\n'+output[-32768:])
         scoped=json.loads(json.dumps(original));payload=dict(size=child.stat().st_size,sha256=sha(child));scoped.update(payload);scoped['files'][child.name]=payload
         (native/'NATIVE-RUNTIME.json').write_text(json.dumps(scoped,sort_keys=True,indent=2)+'\n');BUILD.reuse(native,target,env=captured)
+        worker_manifest=json.loads(json.dumps(original));payload=dict(size=worker.stat().st_size,sha256=sha(worker));worker_manifest.update(payload);worker_manifest['files'][worker.name]=payload
+        (worker_bundle/'NATIVE-RUNTIME.json').write_text(json.dumps(worker_manifest,sort_keys=True,indent=2)+'\n');BUILD.reuse(worker_bundle,target,env=captured)
+        worker_sha=sha(worker)
         for name in ('RouterVPN.exe','router-vpn-client.exe'):shutil.copyfile(controller,installed/name)
         paths=dict(controller=controller,peer=peer,scoped_engine=child,worker=worker,launcher=installed/'RouterVPN.exe',protected_controller=installed/'router-vpn-client.exe')
         images={key:sha(path) for key,path in paths.items()}
@@ -260,6 +283,11 @@ def execute_owned(bundle,source,compiler,captured,target,owner,commit):
         status,output=owner.run([controller,'-test.v','-test.count=1','-test.timeout=90s','-test.run=^('+'|'.join(SOURCE_TESTS)+')$'],cwd=ROOT,env=captured,timeout=100)
         if status:raise ValueError('Actual Windows public source controls failed:\n'+output[-32768:])
         source_records=source_verdict(output);source_log=hashlib.sha256(output.encode()).hexdigest()
+        status,output=owner.run([peer,'-test.v','-test.count=1','-test.timeout=90s','-test.run=^TestRouterVPNWindowsExecutionPrivateWorker$'],cwd=ROOT,env=captured,timeout=100)
+        print(output,end='' if output.endswith('\n') else '\n',flush=True)
+        if status:raise ValueError('Actual Windows private worker controls failed:\n'+output[-32768:])
+        worker_records=worker_verdict(output);worker_log=hashlib.sha256(output.encode()).hexdigest()
+        worker_controls=WORKER.execute(compiler,captured,target,owner)
         results=[]
         child_env=dict(captured,ROUTERVPN_WINDOWS_CONNECT_EXECUTION_NATIVE='1',ROUTERVPN_WINDOWS_PREFIX_PEER=str(peer),ROUTERVPN_WINDOWS_CONNECT_EXECUTION_WORKER=str(worker),ROUTERVPN_WINDOWS_CONNECT_EXECUTION_WORKER_SHA256=worker_sha)
         for case in CASES:
@@ -269,8 +297,8 @@ def execute_owned(bundle,source,compiler,captured,target,owner,commit):
             check_verdict(output,case)
             results.append(dict(case=case,output_sha256=hashlib.sha256(output.encode()).hexdigest()))
             if images!={key:sha(path) for key,path in paths.items()} or sources(core)[1]!=before:raise ValueError('Original Windows source/images changed during native acceptance')
-        if BUILD.reuse(bundle,target,env=captured)!=original or sha(bundle/'NATIVE-RUNTIME.json')!=original_manifest or BUILD.reuse(worker_bundle,target,env=captured)!=original or BUILD.digest()!=policy:raise ValueError('Original delivered bundle or independent worker changed')
-        return dict(schema=1,scope='windows-connect-trio-execution',native=True,target=target,commit=commit,source_sha256=policy,bundle_sha256=original_manifest,cases=list(CASES),results=results,images=images,sources=before,scope_sources=native_records,public_source_records=source_records,public_source_output_sha256=source_log,unmodified_shipping_image=False,test_scope='captured-native-child-app-id',worker_scope='separately-captured-original-delivered-image',native_joined=True,journal_settled=True,wfp_absent=True,tun_absent=True,aliases_retired=True,remote_connect_streams_after_retirement=0,public_route='/api/multihop/connect',fixture_boundaries=['private authenticated HTTP administration','direct original counterparty worker launch'])
+        if BUILD.reuse(bundle,target,env=captured)!=original or sha(bundle/'NATIVE-RUNTIME.json')!=original_manifest or BUILD.reuse(worker_bundle,target,env=captured)!=worker_manifest or BUILD.digest()!=policy:raise ValueError('Original delivered bundle or independent worker changed')
+        return dict(schema=1,scope='windows-connect-trio-execution',native=True,target=target,commit=commit,source_sha256=policy,bundle_sha256=original_manifest,cases=list(CASES),results=results,images=images,sources=before,scope_sources=native_records,public_source_records=source_records,public_source_output_sha256=source_log,unmodified_shipping_image=False,test_scope='captured-native-child-app-id',worker_scope='separately-captured-windows-private-path-projection',worker_private_records=worker_records,worker_causal_controls=worker_controls,worker_private_output_sha256=worker_log,native_joined=True,journal_settled=True,wfp_absent=True,tun_absent=True,aliases_retired=True,remote_connect_streams_after_retirement=0,public_route='/api/multihop/connect',fixture_boundaries=['private authenticated HTTP administration','direct original counterparty worker launch','Windows private-runtime DACL and captured machine environment projection'])
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

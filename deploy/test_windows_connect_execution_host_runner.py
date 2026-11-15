@@ -27,6 +27,11 @@ def completed(case,value=None):
             '    desktop_connect_execution_windows_native_test.go:201: '+G.receipt(case)+'\n'+
             '--- PASS: '+G.TEST+' (0.01s)\n    --- PASS: '+G.TEST+'/'+case+' (0.01s)\nPASS\n')
 
+def worker_completed():
+    root='TestRouterVPNWindowsExecutionPrivateWorker'
+    names=[root,*(root+'/'+case for case in G.WORKER_CASES)]
+    return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\n' for name in names)+'PASS\n'
+
 def source_completed():
     names=[name for root,leaves in G.SOURCE_TESTS.items() for name in (root,*(root+'/'+leaf for leaf in leaves))]
     return ''.join('=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\n' for name in names)+'PASS\n'
@@ -82,6 +87,61 @@ class WindowsExecutionContract(unittest.TestCase):
             for broken in (output.replace(line,'',1),output+line):
                 with self.assertRaises(ValueError):G.source_verdict(broken)
 
+    def test_private_worker_inventory_cannot_be_omitted(self):
+        output=worker_completed()
+        self.assertEqual(len(G.worker_verdict(output)),11)
+        for line in output.splitlines(True):
+            for broken in (output.replace(line,'',1),output+line):
+                with self.assertRaises(ValueError):G.worker_verdict(broken)
+        for fault in ('--- FAIL:','--- SKIP:','WARNING: DATA RACE','panic:','fatal error:'):
+            with self.assertRaises(ValueError):G.worker_verdict(output+fault)
+
+    def test_windows_projection_keeps_posix_original_and_real_dacl_bodies(self):
+        files=G.SCOPE.peer_sources()
+        projected=files['routervpn_windows_imported_execution_process_test.go'].decode()
+        original=(ROOT/'cmd/router-agent/multihop_node_chain_process.go').read_text()
+        self.assertIn('before.Mode().Perm()&0111 == 0',original)
+        self.assertNotIn('before.Mode().Perm()&0111 == 0',projected)
+        self.assertIn('windowsCONNECTExecutionCodePermissions(file, actual) != nil',projected)
+        native=(ROOT/G.SCOPE.PRIVATE[1]).read_text().replace('//go:build windows\n\n','').replace('package main\n','package routervpnamnezia\n')
+        self.assertEqual(files['routervpn_windows_execution_private_dacl_test.go'],(G.SCOPE.HEADER+native).encode())
+        for stem in ('command','native'):
+            original=(ROOT/('mobile/server_chain/'+stem+'.go.tmpl')).read_text()
+            projected=G.SCOPE.worker_text(stem)
+            self.assertIn('Mode().Perm() != 0700',original)
+            self.assertIn('Mode().Perm() != 0600',original)
+            self.assertNotIn('Mode().Perm() != 0700',projected)
+            self.assertNotIn('Mode().Perm() != 0600',projected)
+            self.assertEqual(projected.count('validatePrivateRuntimePathPermissions('),2)
+        with tempfile.TemporaryDirectory(prefix='windows-worker-source-') as temporary:
+            core=Path(temporary)
+            for stem in ('command','native'):
+                target=core/('cmd/sing-box/routervpn_server_chain_'+stem+'.go')
+                target.parent.mkdir(parents=True,exist_ok=True)
+                target.write_bytes((ROOT/('mobile/server_chain/'+stem+'.go.tmpl')).read_bytes())
+            values=G.SCOPE.worker_sources(core)
+            self.assertEqual(values['cmd/sing-box/routervpn_native_library.go'],(ROOT/'mobile/desktop/native_library.go.tmpl').read_bytes())
+            target=core/'cmd/sing-box/routervpn_native_library.go'
+            target.write_bytes(b'foreign library authority')
+            with self.assertRaises(ValueError):G.SCOPE.worker_sources(core)
+        for mode in (0o444,0o666):
+            self.assertTrue(mode&0o111==0)
+            self.assertNotEqual(mode,0o600)
+            self.assertNotEqual(mode|0o111,0o700)
+
+    def test_private_worker_controls_preserve_originals_and_require_exact_causal_failures(self):
+        worker=G.WORKER
+        files=worker.sources()
+        output=worker_completed()
+        self.assertEqual(len(worker.verdict(output)),11)
+        for name,file,before,after,case,witness in worker.MUTANTS:
+            self.assertEqual(files[file].decode().count(before),1,name)
+            failed=('=== RUN   '+worker.TEST+'\n=== RUN   '+worker.TEST+'/'+case+'\n'+witness+'\n--- FAIL: '+worker.TEST+' (0.01s)\n    --- FAIL: '+worker.TEST+'/'+case+' (0.01s)\nFAIL\n')
+            worker.verdict(failed,(case,),failed=witness)
+            for broken in (failed.replace(witness,'unrelated build error'),failed.replace('--- FAIL:','--- PASS:',1),failed+'--- SKIP: stray (0.01s)\n',failed.replace('=== RUN   '+worker.TEST+'/'+case+'\n','')):
+                with self.assertRaises(ValueError):worker.verdict(broken,(case,),failed=witness)
+        self.assertEqual(worker.sources(),files)
+
     def test_host_and_optin_are_not_optional(self):
         native=SimpleNamespace(shell32=SimpleNamespace(IsUserAnAdmin=lambda:True))
         with patch.object(G.platform,'system',return_value='Windows'),patch.object(G.ctypes,'windll',native,create=True):
@@ -112,7 +172,7 @@ class WindowsExecutionScheduling(unittest.TestCase):
                     self.assertEqual(timeout,600);self.assertIn('-p=1',command)
                     output=Path(command[command.index('-o')+1]);output.parent.mkdir(parents=True,exist_ok=True);output.write_bytes(('image:'+str(output)).encode());return 0,''
                 if '--' not in command:
-                    self.assertEqual(timeout,100);self.assertIn('-test.timeout=90s',command);return 0,source_completed()
+                    self.assertEqual(timeout,100);self.assertIn('-test.timeout=90s',command);return 0,(worker_completed() if 'execution-peer.test.exe' in command[0] else source_completed())
                 self.assertEqual(timeout,250);self.assertIn('-test.timeout=240s',command)
                 self.assertEqual(env[G.FLAG],'1');self.assertNotEqual(Path(env['ROUTERVPN_WINDOWS_CONNECT_EXECUTION_WORKER']),work/'owned/installed/runtime/native/sing-box-routervpn.exe')
                 self.assertEqual(G.sha(env['ROUTERVPN_WINDOWS_CONNECT_EXECUTION_WORKER']),env['ROUTERVPN_WINDOWS_CONNECT_EXECUTION_WORKER_SHA256'])
@@ -122,7 +182,7 @@ class WindowsExecutionScheduling(unittest.TestCase):
                 workspace.mkdir();p=workspace/'scope.json';p.write_text(json.dumps({'Replace':{}}));return p,{'same':'original'}
             def peer(directory,workspace):
                 workspace.mkdir();p=workspace/'peer.json';p.write_text(json.dumps({'Replace':{}}));return p
-            with patch.object(G.BUILD,'reuse',return_value=deepcopy(original)),patch.object(G.BUILD,'digest',return_value='a'*64),patch.object(G.BUILD,'binary_name',return_value=names[0]),patch.object(G.BUILD,'tags',return_value=('shipping',)),patch.object(G.BUILD,'marker',return_value='original-marker'),patch.object(G,'sources',return_value=(core,{'captured':'source'})),patch.object(G.SCOPE,'overlay',side_effect=scope),patch.object(G.SCOPE,'peer_overlay',side_effect=peer),patch.object(G.ORIGINAL.SOCKS_GATE,'execute') as old_gate,redirect_stdout(io.StringIO()):
+            with patch.object(G.BUILD,'reuse',side_effect=lambda path,*a,**k: json.loads((Path(path)/'NATIVE-RUNTIME.json').read_text())),patch.object(G.BUILD,'digest',return_value='a'*64),patch.object(G.BUILD,'binary_name',return_value=names[0]),patch.object(G.BUILD,'tags',return_value=('shipping',)),patch.object(G.BUILD,'marker',return_value='original-marker'),patch.object(G,'sources',return_value=(core,{'captured':'source'})),patch.object(G.SCOPE,'overlay',side_effect=scope),patch.object(G.SCOPE,'peer_overlay',side_effect=peer),patch.object(G.SCOPE,'worker_overlay',side_effect=peer),patch.object(G.WORKER,'execute',return_value={'native':True}),patch.object(G.ORIGINAL.SOCKS_GATE,'execute') as old_gate,redirect_stdout(io.StringIO()):
                 captured={'CGO_ENABLED':'1' if target.endswith('amd64') else '0'}
                 if fail:
                     with self.assertRaisesRegex(ValueError,'failed'):G.execute_owned(bundle,core,'captured-go',captured,target,owner,'b'*40)
@@ -130,10 +190,10 @@ class WindowsExecutionScheduling(unittest.TestCase):
                 else:
                     receipt=G.execute_owned(bundle,core,'captured-go',captured,target,owner,'b'*40)
                     self.assertEqual(receipt['cases'],list(G.CASES));self.assertEqual(len(receipt['results']),14);self.assertEqual(receipt['target'],target)
-                    self.assertEqual(len(calls),18)
-                    self.assertEqual('-race' in calls[1][0],target.endswith('amd64'))
+                    self.assertEqual(len(calls),20)
                     self.assertEqual('-race' in calls[2][0],target.endswith('amd64'))
-                    self.assertEqual(receipt['worker_scope'],'separately-captured-original-delivered-image')
+                    self.assertEqual('-race' in calls[3][0],target.endswith('amd64'))
+                    self.assertEqual(receipt['worker_scope'],'separately-captured-windows-private-path-projection')
                 old_gate.assert_not_called()
             return calls
 
@@ -142,7 +202,7 @@ class WindowsExecutionScheduling(unittest.TestCase):
             with self.subTest(target=target):self.exercise(target)
 
     def test_each_compile_source_and_native_failure_stops_before_successor(self):
-        for stage in (1,2,3,4,5,18):
+        for stage in (1,2,3,4,5,6,7,20):
             with self.subTest(stage=stage):self.exercise(fail=stage)
 
 
