@@ -127,9 +127,15 @@ func TestActualOrdinaryParentReader(t *testing.T){for _,alias:=range []string{"s
      else:self.assertNotEqual(result.returncode,0,result.stdout);self.assertIn('ordinary parent original reader verdict changed',result.stdout)
 
 class ParentVariantStages(unittest.TestCase):
- def exercise(self,fault=None):
+ def exercise(self,fault=None,symlink_root=False):
   with tempfile.TemporaryDirectory(prefix='parent-mtu-stage-') as d:
-   work=Path(d);source=work/'parent.go';source.write_text('package parent\n')
+   supplied=Path(d)
+   if symlink_root:
+    original=supplied/'owned';original.mkdir()
+    alias=supplied/'alias';alias.symlink_to(original,target_is_directory=True);supplied=alias
+   work=supplied.resolve(strict=True)
+   if symlink_root:self.assertNotEqual(supplied,work)
+   source=work/'parent.go';source.write_text('package parent\n')
    image=work/'parent-original.test';calls=[]
    def run(command,**options):
     calls.append((command,options))
@@ -145,7 +151,7 @@ class ParentVariantStages(unittest.TestCase):
     return 'original executed witness\n'
    selected={'GOROOT':'/captured/compiler','GOTOOLCHAIN':'local'}
    with patch.object(G.UID.RACE,'command',side_effect=lambda command,*_:([Path('/captured/compiler/bin/go'),*command[1:]],selected)) as compiler,patch.object(G.UID,'run',side_effect=run):
-    result=M.execute_parent_variant(G,work,'original',go='/selected/go',environment={'ORIGINAL':'only'})
+    result=M.execute_parent_variant(G,supplied,'original',go='/selected/go',environment={'ORIGINAL':'only'})
    self.assertEqual(compiler.call_count,1)
    self.assertEqual(calls[0][0],[Path('/captured/compiler/bin/go'),'test','-c','-race','-p=1','-o',image,'.'])
    self.assertEqual(calls[0][1],dict(cwd=work,env=selected,timeout=600))
@@ -156,6 +162,10 @@ class ParentVariantStages(unittest.TestCase):
   self.assertEqual(self.exercise().stdout,'original executed witness\n')
  def test_compiled_negative_is_preserved_for_original_causal_oracle(self):
   result=self.exercise('negative');self.assertEqual(result.returncode,1);self.assertEqual(result.stdout,'original negative witness\n')
+ def test_real_symlink_root_retains_original_canonical_image_and_limits(self):
+  self.assertEqual(self.exercise(symlink_root=True).stdout,'original executed witness\n')
+  result=self.exercise('negative',symlink_root=True)
+  self.assertEqual(result.returncode,1);self.assertEqual(result.stdout,'original negative witness\n')
  def test_source_or_image_replacement_cannot_complete(self):
   for fault in ('compile-source','run-source','run-image'):
    with self.subTest(fault=fault),self.assertRaises(ValueError):self.exercise(fault)

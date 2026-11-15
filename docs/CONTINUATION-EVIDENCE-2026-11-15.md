@@ -2394,3 +2394,23 @@ fixtures and gates retain their separate published-source identity checks.
 An optional full 59-root source-audit attempt hit the scratch 180-second
 wrapper and is not recorded as a complete pass; the required hosted full suite
 is unchanged. The targeted fourteen-root run passed in 37.774 seconds.
+
+
+## Darwin compiler-stage fixture retains canonical file identity
+
+At published `39454fbb`, authoritative Darwin AMD64 job `132898655214`
+completed the original ordinary-method compiler/execution stage, then failed
+two command-expectation assertions: the actual helper resolved macOS `/var`
+to `/private/var`, while the fixture expected the unresolved temporary path.
+The test now resolves its expected owned workspace and still passes the
+original supplied path to the real helper. A real directory-symlink case
+checks both success and the original negative exit/witness. Restoring the old
+expectation fails the actual compiled-command identity assertion.
+
+All seven affected stage-runner roots pass, including the integrated rerun.
+The production helper, compiler's 600-second bound, original 30-second Go
+alarm, 120-second execution bound, source/image substitution refusals and
+negative/timeout diagnostics are unchanged. This is a test-fixture repair;
+local compiler/process doubles do not establish Darwin kernel acceptance.
+The exact failing log, frozen source and causal evidence are retained in
+`release-39454fbb-audit` and `darwin-parent-path-validation`.
