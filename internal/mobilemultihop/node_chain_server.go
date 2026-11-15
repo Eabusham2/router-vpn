@@ -189,7 +189,10 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		len(source.Nodes) < 1 || len(source.Nodes) > multihoprelay.NodeChainMaximumMembers || len(source.IdentitySources) != len(source.Nodes) {
 		return nil, nodeChainServerError
 	}
-	if (source.Schema == 2 || source.Schema == 3 || source.Schema == 4) && (len(source.Nodes) != 2 || source.IdentitySources[0] != "" || source.IdentitySources[1] == "") {
+	if source.Schema == 2 && (len(source.Nodes) < 2 || source.IdentitySources[len(source.Nodes)-2] != "" || source.IdentitySources[len(source.Nodes)-1] == "") {
+		return nil, nodeChainServerError
+	}
+	if (source.Schema == 3 || source.Schema == 4) && (len(source.Nodes) != 2 || source.IdentitySources[0] != "" || source.IdentitySources[1] == "") {
 		return nil, nodeChainServerError
 	}
 	raw, err := json.Marshal(source)
@@ -267,10 +270,10 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 			closures = append(closures, closure)
 			continue
 		}
-		if source.Schema == 2 && index == 0 {
+		if source.Schema == 2 && index == len(source.Nodes)-2 {
 			middle, err := parseNodeChainImportedMember(launch)
-			// A saved hostname depends on the preceding Local packet resolver.
-			// This server suffix has no such preceding owner or ambient DNS grant.
+			// A saved hostname requires a separately captured resolver owner.
+			// This literal Server family grants no ambient DNS authority.
 			if err != nil || middle == nil || middle.hostname != nil || middle.validate() != nil {
 				return nil, nodeChainServerError
 			}
@@ -289,7 +292,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 			p.importedMiddle = middle
 			p.nodes = append(p.nodes, nil)
 			p.descriptor.Members = append(p.descriptor.Members, multihoprelay.NodeChainMember{
-				Position: 1, ProfileID: middle.id(), Mode: "shadowsocks", StartLayer: "off", NodeKind: "external", ProofKind: "public-path",
+				Position: index + 1, ProfileID: middle.id(), Mode: "shadowsocks", StartLayer: "off", NodeKind: "external", ProofKind: "public-path",
 				SourceSHA256: middle.source, ExpectedPublicIP: middle.selection.ExpectedPublicIP})
 			members = append(members, nodeChainGraphMember{profile: middle.selection.Profile, source: middle.source, mode: "shadowsocks", imported: true})
 			closures = append(closures, closure)
@@ -393,7 +396,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		}
 		p.connect.closures = append([]*externalPredecessor(nil), closures...)
 		expected, err = p.connect.middle.policy.DirectPhysicalEgress([]string{"tcp"})
-	} else if p.importedMiddle != nil {
+	} else if p.importedMiddle != nil && p.nodes[0] == nil {
 		expected, err = p.importedMiddle.policy.DirectPhysicalEgress([]string{"tcp", "udp"})
 	} else {
 		expected, err = p.nodes[0].PhysicalEgress()
@@ -455,7 +458,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 			p.proofTargets = append(p.proofTargets, NodeChainServerProof{Proof: proof, Network: "tcp", Address: "1.1.1.1:443", ExpectedPublicIP: p.connect.middle.selection.ExpectedPublicIP})
 			continue
 		}
-		if p.importedMiddle != nil && index == 0 {
+		if p.importedMiddle != nil && index == len(p.nodes)-2 {
 			p.proofTargets = append(p.proofTargets, NodeChainServerProof{Proof: proof, Network: "tcp", Address: "1.1.1.1:443",
 				ExpectedPublicIP: p.importedMiddle.selection.ExpectedPublicIP})
 			continue
@@ -550,9 +553,9 @@ func (p *NodeChainServerPolicy) validateCapture() error {
 			}
 			continue
 		}
-		if p.importedMiddle != nil && index == 0 {
+		if p.importedMiddle != nil && index == len(p.nodes)-2 {
 			middle, target := p.importedMiddle, p.proofTargets[index]
-			if node != nil || middle.validate() != nil || proof.Position != 1 || proof.SourceSHA256 != middle.source ||
+			if node != nil || middle.validate() != nil || proof.Position != index+1 || proof.SourceSHA256 != middle.source ||
 				proof.ProfileID != middle.id() || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" ||
 				proof.Mode != "shadowsocks" || proof.StartLayer != "off" || target.API != "" || target.Token != "" ||
 				target.Network != "tcp" || target.Address != "1.1.1.1:443" || target.ExpectedPublicIP != middle.selection.ExpectedPublicIP {

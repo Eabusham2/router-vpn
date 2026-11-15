@@ -96,7 +96,7 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 		}
 		if nodeChainPlanKeys(member, []string{"imported"}, nil) {
 			imported, ok := member["imported"].(map[string]any)
-			if !ok || position != 0 || len(rows) != 2 || !nodeChainPlanKeys(imported, []string{"config", "capture"}, nil) {
+			if !ok || position != len(rows)-2 || family != 0 && len(rows) != 2 || !nodeChainPlanKeys(imported, []string{"config", "capture"}, nil) {
 				return nil, bad
 			}
 			config, configOK := imported["config"].(string)

@@ -5,8 +5,10 @@ package routervpnamnezia
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/sagernet/sing-tun"
 	"io"
 	"net"
@@ -31,7 +33,7 @@ func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 	var request desktopNodeChainImportedRequest
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || desktopNodeChainImportedRequestValid(request) != nil {
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || desktopNodeChainImportedServerRequestValid(request) != nil {
 		t.Fatal("custom reference source changed")
 	}
 	local, remote := netip.MustParseAddr(request.Paired.Address), netip.MustParseAddr(request.Paired.ClientAddress)
@@ -53,14 +55,26 @@ func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 	// Bind the original imported SS endpoint on the owned namespace address.
 	// The server worker reaches this exact captured literal; no compiled graph
 	// rewrite or fake outbound translates its physical destination.
-	peer := desktopNodeChainImportedPeerStartWithHooks(t, request, local, remote, nil, &desktopNodeChainImportedPeerHooks{
-		decorate: func(original *desktopNodeWGHandler) tun.Handler { return original },
-		middle: func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
-			return desktopStartSSProvider(t, owner, request.MiddleMethod, request.MiddlePassword, local)
-		},
-	})
+	var peer *desktopNodeChainImportedPeer
+	var chain *desktopNodeChainPeer
+	if request.Schema == 2 {
+		peer, chain = desktopNodeChainImportedServerPrefixes(t, request, local, remote)
+	} else {
+		peer = desktopNodeChainImportedPeerStartWithHooks(t, request, local, remote, nil, &desktopNodeChainImportedPeerHooks{
+			decorate: func(original *desktopNodeWGHandler) tun.Handler { return original },
+			middle: func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+				return desktopStartSSProvider(t, owner, request.MiddleMethod, request.MiddlePassword, local)
+			},
+		})
+	}
 	respond := func() {
-		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": peer.snapshot(), "middle_address": peer.provider.address}) != nil {
+		snapshot, middle := peer.snapshot(), peer.provider.address
+		if chain != nil {
+			actual := chain.snapshot()
+			snapshot.Address, snapshot.Prefixes = actual.Address, actual.Prefixes
+			middle = "10.79.0.1:8388"
+		}
+		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": snapshot, "middle_address": middle}) != nil {
 			t.Fatal("custom reply pipe failed")
 		}
 	}
@@ -81,5 +95,107 @@ func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 			t.Fatal("uncaptured custom control")
 		}
 		respond()
+	}
+}
+
+// Schema 2 belongs only to this Server reference envelope. The product schema2
+// descriptor is independently captured by the shipping worker and never read
+// from this peer request.
+func desktopNodeChainImportedServerRequestValid(request desktopNodeChainImportedRequest) error {
+	if request.Schema == 1 {
+		return desktopNodeChainImportedRequestValid(request)
+	}
+	if request.Schema != 2 {
+		return errors.New("uncaptured imported Server reference family")
+	}
+	if _, err := desktopNodeChainPeerIdentityBounds(request.Paired, 1, 5); err != nil {
+		return err
+	}
+	request.Schema = 1
+	request.Paired.Prefixes = request.Paired.Prefixes[len(request.Paired.Prefixes)-1:]
+	return desktopNodeChainImportedRequestValid(request)
+}
+
+func desktopNodeChainImportedServerPrefixes(t *testing.T, request desktopNodeChainImportedRequest, local, remote netip.Addr) (*desktopNodeChainImportedPeer, *desktopNodeChainPeer) {
+	t.Helper()
+	if request.Schema != 2 || desktopNodeChainImportedServerRequestValid(request) != nil {
+		t.Fatal("invalid imported Server prefix source")
+	}
+	// The last actual packet owner forwards only its private proof and the
+	// imported literal. Earlier owners retain only next-packet UDP grants.
+	count := len(request.Paired.Prefixes)
+	ipcs, err := desktopNodeChainPeerIdentityBounds(request.Paired, 1, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := request
+	last.Schema = 1
+	last.Paired.Prefixes = request.Paired.Prefixes[count-1:]
+	loopback := netip.MustParseAddr("127.0.0.1")
+	bindLocal, bindRemote := loopback, loopback
+	if count == 1 {
+		bindLocal, bindRemote = local, remote
+	}
+	peer := desktopNodeChainImportedPeerStart(t, last, bindLocal, bindRemote)
+	chain := &desktopNodeChainPeer{prefixes: make([]*desktopNodeChainPrefixPeer, count), final: peer.paired}
+	chain.prefixes[count-1] = peer.prefix
+	desktopNodeChainStartCapturedPrefixes(t, request.Paired, local, remote, chain, ipcs, count-1)
+	clear(ipcs)
+	return peer, chain
+}
+
+func TestRouterVPNDesktopNodeChainImportedServerPrefixCapture(t *testing.T) {
+	for count := 1; count <= 5; count++ {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			paired, _ := desktopNodeChainPeerFixture(t, count)
+			modes := make([]string, count)
+			for i := range modes {
+				modes[i] = []string{"wg", "awg2-fast", "awg2-strong"}[i%3]
+			}
+			desktopNodeChainSetModes(t, &paired, modes)
+			request := desktopNodeChainImportedRequest{Schema: 2, Paired: paired, MiddleMethod: "2022-blake3-aes-256-gcm", MiddlePassword: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{91}, 32))}
+			if err := desktopNodeChainImportedServerRequestValid(request); err != nil {
+				t.Fatal(err)
+			}
+			changed := request
+			changed.Schema = 1
+			if count > 1 && desktopNodeChainImportedServerRequestValid(changed) == nil {
+				t.Fatal("longer source entered original trio envelope")
+			}
+			if count > 1 {
+				changed = request
+				changed.Paired.Prefixes = append([]desktopNodeChainPrefixRequest(nil), request.Paired.Prefixes...)
+				changed.Paired.Prefixes[0].ClientPublicKey = changed.Paired.Prefixes[1].ClientPublicKey
+				if desktopNodeChainImportedServerRequestValid(changed) == nil {
+					t.Fatal("earlier independent packet identity lost")
+				}
+			}
+			loopback := netip.MustParseAddr("127.0.0.1")
+			peer, chain := desktopNodeChainImportedServerPrefixes(t, request, loopback, loopback)
+			snapshot := chain.snapshot()
+			if len(snapshot.Prefixes) != count || chain.prefixes[count-1] != peer.prefix {
+				t.Fatal("actual encrypted prefix owner lost")
+			}
+			for i, prefix := range chain.prefixes {
+				if snapshot.Prefixes[i].Mode != modes[i] {
+					t.Fatal("actual encrypted prefix family changed")
+				}
+				if i < count-1 {
+					next := desktopNodeChainNext(i + 1)
+					if len(prefix.handler.rules) != 2 || prefix.handler.rules["udp/"+next].Target != chain.prefixes[i+1].bind.address() {
+						t.Fatal("prefix acquired a bypass")
+					}
+				} else {
+					for _, network := range []string{"tcp", "udp"} {
+						if prefix.handler.rules[network+"/10.79.0.1:8388"].Target != peer.provider.address {
+							t.Fatal("import bypassed actual last packet owner")
+						}
+					}
+					if _, ok := prefix.handler.rules["tcp/10.77.0.1:8388"]; ok {
+						t.Fatal("final bypassed original import")
+					}
+				}
+			}
+		})
 	}
 }

@@ -323,33 +323,65 @@ func TestActualCopyAndSnapshot(t *testing.T){
 
 class ImportedServerBoundaries(unittest.TestCase):
     def sample(self, case='original'):
-        ready=case in ('original','joined-active-udp','admission-restrictions')
-        value=dict(case=case,capture_sha256='a'*64,source_sha256='b'*64,
-                   ready=ready,selected_dns=ready,middle_tcp=4,middle_udp=3 if ready else 0,
+        original=case.removeprefix('prefix-')
+        ready=original in ('original','joined-active-udp','admission-restrictions','wg-one','awg-fast','awg-strong','max-five')
+        packet_fault=original in ('wrong-first-packet-key','wrong-later-packet-key')
+        modes=None
+        if case.startswith('prefix-'):
+            modes={'wg-one':['wg'],'awg-fast':['wg','awg2-fast'],'awg-strong':['awg2-strong','wg'],
+                   'max-five':['wg','awg2-fast','awg2-strong','wg','awg2-fast']}.get(original,['wg','wg'])
+        packets=[4 if not packet_fault or original=='wrong-first-packet-key' and i==0 or original=='wrong-later-packet-key' and i<=1 else 0 for i in range(len(modes))] if modes else None
+        proofs=[3 if not packet_fault or original=='wrong-later-packet-key' and i==0 else 0 for i in range(len(modes))] if modes else None
+        value=dict(case=case,prefix_modes=modes,prefix_packets=packets,prefix_proofs=proofs,capture_sha256='a'*64,source_sha256='b'*64,
+                   ready=ready,selected_dns=ready,middle_tcp=0 if packet_fault else 4,middle_udp=3 if ready else 0,
                    final_tcp=2 if ready else 0,final_udp=1 if ready else 0,
-                   retired=True,worker_joined=True,peer_joined=True,private_udp_refused=case=='admission-restrictions',
-                   private_sink_packets=0 if case=='admission-restrictions' else 1, private_sink_replies=0 if case=='admission-restrictions' else 1)
+                   retired=True,worker_joined=True,peer_joined=True,private_udp_refused=original=='admission-restrictions',
+                   private_sink_packets=0 if original=='admission-restrictions' else 1, private_sink_replies=0 if original=='admission-restrictions' else 1)
         root=GATE.IMPORTED_NATIVE
         return '\n'.join(('=== RUN   '+root,'=== RUN   '+root+'/'+case,
             '    source.go:1: IMPORTED_SERVER_RECEIPT '+json.dumps(value),
             '--- PASS: '+root+' (1.0s)','    --- PASS: '+root+'/'+case+' (1.0s)','PASS',''))
 
     def test_exact_imported_native_receipts_and_refusals(self):
-        self.assertEqual(GATE.IMPORTED_CASES,('original','wrong-middle-key','wrong-final-key','wrong-final-identity','failed-selected-dns','wrong-public-identity','joined-active-udp','admission-restrictions'))
+        self.assertEqual(GATE.IMPORTED_CASES[:8],('original','wrong-middle-key','wrong-final-key','wrong-final-identity','failed-selected-dns','wrong-public-identity','joined-active-udp','admission-restrictions'))
         for case in GATE.IMPORTED_CASES:
             text=self.sample(case)
             self.assertEqual(GATE.check_imported_verdict(text,case)['case'],case)
             for before,after in (('"worker_joined": true','"worker_joined": false'),
                                  ('"peer_joined": true','"peer_joined": false'),
                                  ('"retired": true','"retired": false'),
-                                 ('"middle_tcp": 4','"middle_tcp": 0'),
+                                 (('"middle_tcp": 0','"middle_tcp": 1') if case in ('prefix-wrong-first-packet-key','prefix-wrong-later-packet-key') else ('"middle_tcp": 4','"middle_tcp": 0')),
                                  ('--- PASS:', '--- SKIP:')):
+                self.assertIn(before,text)
                 with self.subTest(case=case, mutation=before),self.assertRaises(ValueError):
                     GATE.check_imported_verdict(text.replace(before,after,1),case)
             with self.assertRaises(ValueError): GATE.check_imported_verdict(text+text,case)
         for before,after in (('"selected_dns": true','"selected_dns": false'),('"final_udp": 1','"final_udp": 0'),('"capture_sha256": "'+'a'*64+'"','"capture_sha256": "bad"')):
             with self.assertRaises(ValueError):GATE.check_imported_verdict(self.sample().replace(before,after), 'original')
         with self.assertRaises(ValueError):GATE.check_imported_verdict(self.sample('wrong-middle-key').replace('"ready": false','"ready": true'),'wrong-middle-key')
+
+    def test_longer_imported_packet_receipts_are_causal_and_mandatory(self):
+        expected = ('prefix-original','prefix-wrong-middle-key','prefix-wrong-final-key','prefix-wrong-final-identity',
+                    'prefix-failed-selected-dns','prefix-wrong-public-identity','prefix-joined-active-udp','prefix-admission-restrictions',
+                    'prefix-wg-one','prefix-awg-fast','prefix-awg-strong','prefix-max-five',
+                    'prefix-wrong-first-packet-key','prefix-wrong-later-packet-key')
+        self.assertEqual(GATE.IMPORTED_CASES[8:], expected)
+        for case in expected:
+            text = self.sample(case)
+            for field in ('prefix_modes','prefix_packets','prefix_proofs'):
+                value = json.loads(text.split('IMPORTED_SERVER_RECEIPT ',1)[1].splitlines()[0])
+                value[field] = value[field][:-1]
+                changed = re.sub(r'IMPORTED_SERVER_RECEIPT [^\n]+', 'IMPORTED_SERVER_RECEIPT '+json.dumps(value), text)
+                with self.subTest(case=case,field=field), self.assertRaises(ValueError):
+                    GATE.check_imported_verdict(changed,case)
+        for case, field, index, count in (('prefix-original','prefix_proofs',1,0),
+                                         ('prefix-wrong-first-packet-key','prefix_packets',1,1),
+                                         ('prefix-wrong-later-packet-key','prefix_proofs',1,1)):
+            text=self.sample(case)
+            value=json.loads(text.split('IMPORTED_SERVER_RECEIPT ',1)[1].splitlines()[0])
+            value[field][index]=count
+            changed=re.sub(r'IMPORTED_SERVER_RECEIPT [^\n]+','IMPORTED_SERVER_RECEIPT '+json.dumps(value),text)
+            with self.assertRaises(ValueError):GATE.check_imported_verdict(changed,case)
 
     def test_imported_lan_policy_receipt_cannot_be_omitted_or_relabelled(self):
         text=self.sample('admission-restrictions')

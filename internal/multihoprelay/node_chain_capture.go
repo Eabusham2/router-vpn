@@ -134,11 +134,12 @@ func (s NodeChainDescriptor) Validate() error {
 		!proofID.MatchString(s.SourceSHA256) || !proofID.MatchString(s.DNSPolicySHA256) || len(s.Members) < 1 || len(s.Members) > NodeChainMaximumMembers {
 		return nodeChainCaptureError
 	}
-	// Imported families remain distinct: original paired entry, one unlayered
-	// SS2022 (schema 2), SOCKS5 (schema 3), or HTTP(S) CONNECT (schema 4), and paired SS final.
+	// Schema 2 preserves every original paired packet prefix, one unlayered
+	// penultimate SS2022 import, and a paired SS final. SOCKS5 (schema 3) and
+	// HTTP(S) CONNECT (schema 4) retain their distinct three-member families.
 	// These descriptors contain no native lower/socket authority. Only the
 	// operator's separately captured typed suffix can open its first transport.
-	if (s.Schema == 2 || s.Schema == 3 || s.Schema == 4) && len(s.Members) != 2 {
+	if s.Schema == 2 && len(s.Members) < 2 || (s.Schema == 3 || s.Schema == 4) && len(s.Members) != 2 {
 		return nodeChainCaptureError
 	}
 	ids, nodes := map[string]bool{s.EntryID: true}, map[string]bool{s.EntryNodeID: true}
@@ -149,7 +150,7 @@ func (s NodeChainDescriptor) Validate() error {
 			return nodeChainCaptureError
 		}
 		ids[member.ProfileID] = true
-		if (s.Schema == 2 || s.Schema == 3 || s.Schema == 4) && index == 0 {
+		if s.Schema == 2 && index == len(s.Members)-2 || (s.Schema == 3 || s.Schema == 4) && index == 0 {
 			modeOK := s.Schema == 2 && member.Mode == "shadowsocks" || s.Schema == 3 && member.Mode == "socks5" ||
 				s.Schema == 4 && (member.Mode == "http-connect" || member.Mode == "https-connect")
 			if member.NodeKind != "external" || member.ProofKind != "public-path" || !proofID.MatchString(member.SourceSHA256) ||
@@ -213,6 +214,15 @@ func (q NodeChainRequest) validateShape() error {
 	if q.Schema == 1 {
 		if len(q.LocalPacketPublicKeys) != len(q.Users) || len(q.LocalPacketPositions) != 0 {
 			return nodeChainCaptureError
+		}
+	} else if q.Schema == 2 {
+		if len(q.Users) < 2 || len(q.LocalPacketPublicKeys) != len(q.Users)-1 || len(q.LocalPacketPositions) != len(q.LocalPacketPublicKeys) {
+			return nodeChainCaptureError
+		}
+		for index, position := range q.LocalPacketPositions {
+			if position != index {
+				return nodeChainCaptureError
+			}
 		}
 	} else if len(q.Users) != 2 || len(q.LocalPacketPublicKeys) != 1 || len(q.LocalPacketPositions) != 1 || q.LocalPacketPositions[0] != 0 {
 		return nodeChainCaptureError

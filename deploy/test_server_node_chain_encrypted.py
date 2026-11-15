@@ -48,7 +48,11 @@ OWNER = 'routervpn-server-encrypted-test-source.json'
 NATIVE = 'TestServerChainEncryptedNative'
 SOURCE = 'TestServerChainEncryptedSourceInventory'
 IMPORTED_CASES = ('original', 'wrong-middle-key', 'wrong-final-key', 'wrong-final-identity',
-                  'failed-selected-dns', 'wrong-public-identity', 'joined-active-udp', 'admission-restrictions')
+                  'failed-selected-dns', 'wrong-public-identity', 'joined-active-udp', 'admission-restrictions',
+                  'prefix-original', 'prefix-wrong-middle-key', 'prefix-wrong-final-key', 'prefix-wrong-final-identity',
+                  'prefix-failed-selected-dns', 'prefix-wrong-public-identity', 'prefix-joined-active-udp', 'prefix-admission-restrictions',
+                  'prefix-wg-one', 'prefix-awg-fast', 'prefix-awg-strong', 'prefix-max-five',
+                  'prefix-wrong-first-packet-key', 'prefix-wrong-later-packet-key')
 IMPORTED_NATIVE = 'TestServerChainImportedEncryptedNative'
 IMPORTED_SOURCE = 'TestServerChainImportedEncryptedSource'
 IMPORTED_TEMPLATE = 'mobile/server_chain_acceptance/imported_linux_test.go.tmpl'
@@ -245,23 +249,46 @@ def check_imported_verdict(output, case, *, source_only=False):
                 raise ValueError('Imported Server late or foreign receipt')
             keys = []
             value = json.loads(line.split('IMPORTED_SERVER_RECEIPT ', 1)[1], object_pairs_hook=lambda entries: keys.extend(k for k,v in entries) or dict(entries))
-            fields = {'case', 'capture_sha256', 'source_sha256', 'ready', 'selected_dns', 'middle_tcp', 'middle_udp', 'final_tcp', 'final_udp', 'retired', 'worker_joined', 'peer_joined', 'private_udp_refused', 'private_sink_packets', 'private_sink_replies'}
+            fields = {'case', 'prefix_modes', 'prefix_packets', 'prefix_proofs', 'capture_sha256', 'source_sha256', 'ready', 'selected_dns', 'middle_tcp', 'middle_udp', 'final_tcp', 'final_udp', 'retired', 'worker_joined', 'peer_joined', 'private_udp_refused', 'private_sink_packets', 'private_sink_replies'}
             if set(value) != fields or len(keys) != len(set(keys)) or value['case'] != case:
                 raise ValueError('Imported Server receipt identity changed')
             if any(value[k] is not True for k in ('retired','worker_joined','peer_joined')):
                 raise ValueError('Imported Server lost original joined retirement')
             if any(not isinstance(value[k], str) or re.fullmatch('[0-9a-f]{64}', value[k]) is None for k in ('capture_sha256','source_sha256')):
                 raise ValueError('Imported Server source identity missing')
-            ready = case in ('original', 'joined-active-udp', 'admission-restrictions')
+            original = case.removeprefix('prefix-')
+            ready = original in ('original', 'joined-active-udp', 'admission-restrictions', 'wg-one', 'awg-fast', 'awg-strong', 'max-five')
+            modes = []
+            if case.startswith('prefix-'):
+                modes = {'wg-one': ['wg'], 'awg-fast': ['wg', 'awg2-fast'], 'awg-strong': ['awg2-strong', 'wg'],
+                         'max-five': ['wg', 'awg2-fast', 'awg2-strong', 'wg', 'awg2-fast']}.get(original, ['wg', 'wg'])
+            if value['prefix_modes'] != (modes or None):
+                raise ValueError('Imported Server changed actual packet inventory')
+            packet_fault = original in ('wrong-first-packet-key', 'wrong-later-packet-key')
+            for field in ('prefix_packets', 'prefix_proofs'):
+                counts = value[field]
+                if not modes:
+                    if counts is not None:
+                        raise ValueError('Imported Server trio manufactured packet observations')
+                    continue
+                if not isinstance(counts, list) or len(counts) != len(modes) or any(type(n) is not int or n < 0 for n in counts):
+                    raise ValueError('Imported Server omitted actual packet observations')
+                for position, count in enumerate(counts):
+                    if field == 'prefix_packets':
+                        observed = not packet_fault or original == 'wrong-first-packet-key' and position == 0 or original == 'wrong-later-packet-key' and position <= 1
+                    else:
+                        observed = not packet_fault or original == 'wrong-later-packet-key' and position == 0
+                    if (count > 0) is not observed:
+                        raise ValueError('Imported Server packet proof boundary changed')
             if value['ready'] is not ready or value['selected_dns'] is not ready:
                 raise ValueError('Imported Server success/refusal changed')
             counters = ('middle_tcp','middle_udp','final_tcp','final_udp')
-            if any(type(value[k]) is not int or value[k] < 0 for k in counters) or value['middle_tcp'] <= 0 or ready and any(value[k] <= 0 for k in counters):
+            if any(type(value[k]) is not int or value[k] < 0 for k in counters) or not packet_fault and value['middle_tcp'] <= 0 or packet_fault and any(value[k] != 0 for k in counters) or ready and any(value[k] <= 0 for k in counters):
                 raise ValueError('Imported Server missing actual encrypted observations')
-            restricted = case == 'admission-restrictions'
+            restricted = original == 'admission-restrictions'
             if value['private_udp_refused'] is not restricted or any(type(value[k]) is not int or value[k] < 0 for k in ('private_sink_packets','private_sink_replies')):
                 raise ValueError('Imported Server omitted original private policy observation')
-            if restricted and (value['private_sink_packets'] != 0 or value['private_sink_replies'] != 0) or case in ('original','joined-active-udp') and (value['private_sink_packets'] <= 0 or value['private_sink_replies'] <= 0):
+            if restricted and (value['private_sink_packets'] != 0 or value['private_sink_replies'] != 0) or ready and not restricted and (value['private_sink_packets'] <= 0 or value['private_sink_replies'] <= 0):
                 raise ValueError('Imported Server private policy observation contradicts its original source')
             receipts.append(value)
     if runs != expected or passes != expected or not ended or len(receipts) != (0 if source_only else 1) or not re.search(r'^PASS\r?$', output, re.M):
