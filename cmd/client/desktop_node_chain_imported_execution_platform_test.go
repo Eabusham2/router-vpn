@@ -87,9 +87,9 @@ func TestDesktopDarwinImportedTrioExecutionBoundedSource(t *testing.T) {
 				members[1].Profile = cloneRouterProfile(members[0].Profile)
 				members[1].Profile.ID = "independent-paired-middle"
 			case "entry-layer", "entry-whitening", "entry-unknown-layer":
-				members[0].Profile.StartLayer = map[string]string{"entry-layer": "aes-256-gcm", "entry-whitening": "aes-256-gcm+xor-whitening", "entry-unknown-layer": "unknown"}[fault]
+				members[0].Profile.StartLayer = map[string]string{"entry-layer": "aes-256-gcm ", "entry-whitening": "AES-256-GCM+XOR-WHITENING", "entry-unknown-layer": "unknown"}[fault]
 			case "exit-layer", "exit-whitening", "exit-unknown-layer":
-				members[2].Profile.StartLayer = map[string]string{"exit-layer": "aes-256-gcm", "exit-whitening": "aes-256-gcm+xor-whitening", "exit-unknown-layer": "unknown"}[fault]
+				members[2].Profile.StartLayer = map[string]string{"exit-layer": "aes-256-gcm ", "exit-whitening": "AES-256-GCM+XOR-WHITENING", "exit-unknown-layer": "unknown"}[fault]
 			case "middle-layer":
 				members[1].Profile.StartLayer = "aes-256-gcm"
 			case "hostname":

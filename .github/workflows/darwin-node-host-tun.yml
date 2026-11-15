@@ -171,3 +171,57 @@ jobs:
           path: ${{ runner.temp }}/darwin-imported-execution-host-${{ matrix.arch }}.json
           if-no-files-found: error
           retention-days: 14
+
+  imported-execution-layers-host:
+    name: Actual independent paired Start Layers with Server and Compare on ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    # Fourteen layer cases keep separate native and compiler budgets.
+    # The original thirteen unlayered cases remain in the preceding job.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: ./.github/actions/go-windows-sockets
+      - name: Require independent paired layers, cleanup controls and authoritative workflow
+        run: |
+          python3 deploy/test_macos_imported_execution_host_runner.py
+          python3 deploy/test_macos_imported_execution_layers_host_runner.py
+          python3 deploy/test_macos_imported_execution_alias_runner.py
+          python3 deploy/test_darwin_imported_execution_layers_workflow.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/imported-execution-layers-host-bundle
+      - name: Verify exact-source independent layer runtime bundle
+        run: python3 deploy/native-runtime-bundle.py extract 'darwin/${{ matrix.arch }}' "$RUNNER_TEMP/imported-execution-layers-host-bundle/native-darwin-${{ matrix.arch }}.tar.gz" "$RUNNER_TEMP/imported-execution-layers-host-verified"
+      - name: Require real independent entry and exit layers and wrong-key refusal
+        timeout-minutes: 110
+        env:
+          ROUTERVPN_DARWIN_IMPORTED_EXECUTION_LAYERS_HOST_ACCEPTANCE: '1'
+          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
+          ROUTERVPN_IMPORTED_EXECUTION_LAYERS_RECEIPT: ${{ runner.temp }}/darwin-imported-execution-layers-host-${{ matrix.arch }}.json
+          CGO_ENABLED: '1'
+        run: |
+          python3 deploy/test_macos_imported_execution_layers_host.py --bundle "$RUNNER_TEMP/imported-execution-layers-host-verified" --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_IMPORTED_EXECUTION_LAYERS_RECEIPT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Darwin-imported-execution-layers-host-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/darwin-imported-execution-layers-host-${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 14

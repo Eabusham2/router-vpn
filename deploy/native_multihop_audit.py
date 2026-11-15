@@ -1154,7 +1154,7 @@ if requested != "server" && requested != "auto" || len(members) != 3 ||
 }
 for _, index := range []int{0, 2} {
     layer := members[index].Profile.StartLayer
-    if layer != "" && layer != "off" { return false }
+    if layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" { return false }
 }
 return true
         '''),

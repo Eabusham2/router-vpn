@@ -2671,3 +2671,73 @@ while executing the real builder stage; those failures are retained and require
 a distinct repair. Detailed logs, immutable source hashes and the scoped
 receipt are in `imported-trigger-closure-validation`. Current-SHA hosted
 native execution and release publication remain separately required.
+
+
+## Independent paired Start Layers on the macOS imported trio
+
+This continuation extends the bounded macOS Server/Compare composition above.
+The paired entry and final retain independent Off, AES-256-GCM and
+AES-256-GCM with XOR-whitening selections. Their actual canonical source
+compilers still own transport, key and layer compatibility. The imported
+SS2022 middle remains Off, and the exact literal trio, original node
+identities, selected DNS, fresh capability and profile tokens remain required.
+The broad paired Darwin admission is unchanged. Hostname/longer Server paths
+and other imported execution families remain unfinished.
+
+The shared source gate executed all 54 entry-mode/layer-pair/execution vectors
+plus their root with the race detector. The original forty admission/refusal
+records also passed; old layer-rejection fixtures now use invalid padded or
+uppercase values while preserving all nineteen refusal positions. The new
+source log SHA-256 is
+`89191bd5e1cfed84ba8069914185d291b9b82a1b9084e336265789dd10a2d25a`.
+This is actual source/policy execution on Linux, not Darwin kernel evidence.
+
+Actual portable Swift callback/model execution passed 11,073 checks and
+fifty-three causal controls. It covers fifty-four UI layer choices and 324
+complete-profile transactions, rejects replaced entry/final tokens, and keeps
+the three canonical layer strings distinct. The old fifty controls remain;
+three new controls reject the old Off-only guard and either missing paired
+layer guard. The log SHA-256 is
+`2b7e1fc48a000909b196ffe6b072d71f28d193002df8cec148152ec4f9ddfbbb`.
+This does not claim rendered AppKit or physical UI acceptance.
+
+The mandatory installed workflow adds a fourth independent job for Intel and
+Apple Silicon. The three original jobs remain intact. The new job requires
+its own caller's exact-source sealed bundle, fourteen encrypted native cases,
+twenty-eight exact run/pass records and a separate source-bound receipt.
+Eight positives cover every additional entry/final layer pair; six negatives
+separately corrupt entry/final AES keys or whitening keys. The original
+240-second Go and 250-second owned-process bounds remain unchanged. The
+workflow has its own finite stage/job budgets, with no optional native step.
+Missing, duplicated, foreign-architecture, cross-run, filtered and optional
+admissions are rejected by the workflow controls.
+
+The encrypted fixture uses the original SS2022 AES-256 service for the final
+AES layer. XOR selects its actual whitening transport and exact route; it
+does not stack a fabricated second SS wrapper. Entry AES/XOR uses its own
+captured key and UDP wrapper. Wrong AES keys preserve the original whitening
+key, and wrong-whitening cases change only that key. Positive receipts require
+ciphertext/decryption counters, entry/imported/final proofs, selected DNS and
+fresh-owner restoration of the already-proved winner. Negative receipts
+require a real authentication failure and absence of downstream proof/DNS.
+Controller, relay, listener and alias retirement must all join before success.
+HTTP administration and direct worker launch remain explicit test adapters.
+
+The privileged Darwin ARM64 client compiled with CGO disabled, image SHA-256
+`5bbc358a19dbc15bbdedcdfa0aa7f58089654c990f7b185a15553012342b7d2c`.
+The generated Darwin ARM64 peer also compiled, image
+`53f9e6723a75786736b8b509b4be873bd98c18a4d62ba6925c776666d86c728f`,
+and the Linux race peer compiled, image
+`4a29b60b24139f927d435a44b60d0f0d088934a9734e48a073fcd82b89409397`.
+Peer compilation uses the retained prepared core and registered current-source
+overlays. These are composition checks, not actual Darwin PF/utun or remote
+server networking. Eleven new strict runner tests, fifteen original runner
+tests, twenty-one workflow-contract roots and three affected shipping-audit
+roots passed in their frozen projections. Exact source/preimage hashes and
+receipts are in `darwin-imported-layers-validation` and
+`darwin-imported-layers-product-validation`; guarded integration evidence is
+in `darwin-imported-layers-integration-validation`.
+
+Hosted native execution at the published SHA, full release publication,
+physical-device networking, signing and private deployment remain distinct
+requirements. No local fixture or compile result is substituted for them.

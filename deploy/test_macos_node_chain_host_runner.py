@@ -43,7 +43,7 @@ def workflow_inventory(consumer, wrapper):
             raise ValueError('Ordered native workflow lost its exact job/concurrency boundary')
     if consumer.count('on:\n  workflow_call:\n') != 1 or re.search(r'^  (?:workflow_dispatch|push|pull_request):', consumer, re.M):
         raise ValueError('Ordered host consumer must use this caller run without optional inputs')
-    if re.findall(r'^  ([A-Za-z][\w-]*):', consumer.split('jobs:\n')[1], re.M) != ['host', 'paired-host', 'imported-execution-host']:
+    if re.findall(r'^  ([A-Za-z][\w-]*):', consumer.split('jobs:\n')[1], re.M) != ['host', 'paired-host', 'imported-execution-host', 'imported-execution-layers-host']:
         raise ValueError('Ordered host consumer changed its complete job inventory')
     paired = G.load('ordered_paired_host_workflow', 'test_darwin_paired_host_workflow.py')
     try:
@@ -52,6 +52,9 @@ def workflow_inventory(consumer, wrapper):
         imported = G.load('ordered_imported_execution_workflow', 'test_darwin_imported_execution_workflow.py')
         imported.check(consumer, (ROOT/'.github/workflows/release-candidate.yml').read_text(),
                        (ROOT/'deploy/build-native-runtime.py').read_text())
+        layered = G.load('ordered_imported_execution_layers_workflow', 'test_darwin_imported_execution_layers_workflow.py')
+        layered.check(consumer, (ROOT/'.github/workflows/release-candidate.yml').read_text(),
+                      (ROOT/'deploy/build-native-runtime.py').read_text())
     except (AssertionError, ValueError, IndexError) as error:
         raise ValueError('Installed host lost its own exact artifact and execution boundary') from error
     # Each job must satisfy its own architecture, bundle and native-command

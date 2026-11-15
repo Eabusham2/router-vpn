@@ -682,7 +682,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", '!desktopNodeChainImportedExecutionMiddle(members[1].Profile)', 'false'),
             ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'desktopOrderedExecutionMembers(members, requested) != nil', 'false'),
             ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", '[]int{0, 2}', '[]int{0}'),
-            ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'layer != "" && layer != "off"', 'false'),
+            ("func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", 'layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening"', 'false'),
             ("func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNodeChainMember, requested string) bool", 'nativeDesktopOrderedExecutionPlatformSupported()', 'nativeNodeChainPlatformSupported()'),
             ("func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNodeChainMember, requested string) bool", 'desktopDarwinImportedTrioExecutionMembers(members, requested)', 'true'),
         ):

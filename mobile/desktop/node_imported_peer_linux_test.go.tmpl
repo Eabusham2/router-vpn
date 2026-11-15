@@ -40,8 +40,8 @@ import (
 	"github.com/sagernet/sing-box/option"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
-	"github.com/sagernet/sing-tun"
 	wg "github.com/sagernet/sing-box/transport/wireguard"
+	"github.com/sagernet/sing-tun"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
@@ -148,7 +148,7 @@ type desktopImportedWGSSPeer struct {
 	wrongNode, wrongPublic, failedDNS, dropCover           atomic.Bool
 	entryPublic, finalPublic, health, dns, mtu, mtuReplies atomic.Uint64
 	cover, coverReplies, download, upload                  atomic.Uint64
-	measuredHealth                                        atomic.Uint64
+	measuredHealth                                         atomic.Uint64
 	coverMaximum                                           atomic.Uint32
 }
 
@@ -253,6 +253,13 @@ func desktopImportedWGSSStart(t *testing.T, request desktopImportedWGSSRequest, 
 // AWG prefixes reuse only its fixed final service and owned lifetime, supplying
 // their independently validated Amnezia factory; keys and bind remain checked.
 func desktopImportedWGSSStartWithFactory(t *testing.T, request desktopImportedWGSSRequest, local, remote netip.Addr, start desktopNodeUDPReferenceFactory, decorate ...func(*desktopNodeWGHandler) tun.Handler) *desktopImportedWGSSPeer {
+	t.Helper()
+	return desktopImportedWGSSStartWithFinal(t, request, local, remote, start, nil, decorate...)
+}
+
+// The optional provider preserves the original paired final handler, keys and
+// exact routes. Existing callers retain their original unwrapped SS provider.
+func desktopImportedWGSSStartWithFinal(t *testing.T, request desktopImportedWGSSRequest, local, remote netip.Addr, start desktopNodeUDPReferenceFactory, finalProvider func(*desktopNodeLayerServer) desktopExternalInstalledSSPeer, decorate ...func(*desktopNodeWGHandler) tun.Handler) *desktopImportedWGSSPeer {
 	t.Helper()
 	if start == nil {
 		t.Fatal("imported reference requires its captured native constructor")
@@ -430,7 +437,15 @@ func desktopImportedWGSSStartWithFactory(t *testing.T, request desktopImportedWG
 		{Network: "tcp", Destination: desktopNodeRouterHealthTarget, Physical: health}, {Network: "udp", Destination: "192.168.50.133:53", Physical: dnsPacket.LocalAddr().String()},
 		{Network: "tcp", Destination: "1.1.1.1:443", Physical: finalPublic}, {Network: "udp", Destination: desktopNodeRouterCoverTarget, Physical: sink.LocalAddr().String()},
 	}}
-	final := desktopStartSSProvider(t, p.final, mobilemultihop.NativeStartLayerMethod, request.FinalPassword, netip.MustParseAddr("127.0.0.1"))
+	var final desktopExternalInstalledSSPeer
+	if finalProvider == nil {
+		final = desktopStartSSProvider(t, p.final, mobilemultihop.NativeStartLayerMethod, request.FinalPassword, netip.MustParseAddr("127.0.0.1"))
+	} else {
+		final = finalProvider(p.final)
+		if final.address == "" || final.close == nil {
+			t.Fatal("original paired final provider lost its captured owner")
+		}
+	}
 	rules := map[string]desktopReferenceRule{}
 	for _, route := range []desktopReferenceRule{{Network: "tcp", Address: "10.77.0.1", Port: 8388, Target: final.address}, {Network: "udp", Address: "10.77.0.1", Port: 8388, Target: final.address}, {Network: "tcp", Address: "1.1.1.1", Port: 443, Target: entryPublic}} {
 		rules[route.Network+"/"+net.JoinHostPort(route.Address, strconv.Itoa(route.Port))] = route

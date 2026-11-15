@@ -26,7 +26,7 @@ func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember,
 	}
 	for _, index := range []int{0, 2} {
 		layer := members[index].Profile.StartLayer
-		if layer != "" && layer != "off" {
+		if layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
 			return false
 		}
 	}

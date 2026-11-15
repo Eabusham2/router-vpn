@@ -44,10 +44,13 @@ publication and physical-device acceptance remain distinct in the
 The AppKit editor and public controller now have a separate capability for
 Server or Compare on an exact literal-address SS2022 trio: one paired WG,
 AWG Fast or AWG Strong entry, one imported middle and one independent paired
-SS2022 final. Both paired nodes must capture Start Layer Off or its empty
-default. The original imported protocol/method/key, endpoint, private node
+SS2022 final. Each paired node independently retains its captured Start Layer:
+Off (including its empty default), AES-256-GCM or AES-256-GCM with XOR whitening.
+The original compiler must admit that layer with the node's exact transport
+and credentials; the imported middle stays Off. The original imported
+protocol/method/key, endpoint, private node
 references and complete source remain mandatory. Broader paired Darwin
-execution, layered trios, hostname or longer Server paths and other imported
+execution, hostname or longer Server paths and other imported
 families remain separate requirements.
 
 The AppKit Connect path rechecks current capabilities and the original profile
@@ -63,7 +66,12 @@ release publication. Thirteen actual native cases cover Server and both
 Compare winners for WG/AWG, wrong imported public proof, wrong final proof,
 failed selected DNS and source replacement. They require encrypted provider
 counters, the intended proof boundary, retained-choice restoration and joined
-native/relay cleanup. The sealed bundle, private worker, generated relay IPC,
+native/relay cleanup. A separate mandatory job adds fourteen layer cases on
+each architecture: the eight additional independent entry/final layer pairs
+and six wrong-key or wrong-whitening refusals. It preserves the original
+thirteen cases and their per-process deadlines. Entry and final failures must
+stop at their actual authentication boundary, before final proof or selected
+DNS can report success. The sealed bundle, private worker, generated relay IPC,
 controller, source and receipts must keep their exact identities. The test's
 HTTP administration and direct worker launcher are explicit fixture boundaries;
 these results cannot establish a private remote deployment.

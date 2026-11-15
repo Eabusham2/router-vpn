@@ -228,6 +228,7 @@ type importedExecutionPeerRequest struct {
 	Peer     desktopNodeChainImportedRequest `json:"peer"`
 	Image    string                          `json:"image"`
 	ImageSHA string                          `json:"image_sha256"`
+	Layers   *importedExecutionLayers        `json:"layers,omitempty"`
 }
 
 func importedExecutionRead(reader *bufio.Reader, limit int, output any) error {
@@ -273,7 +274,7 @@ func TestRouterVPNDesktopImportedExecutionReferenceProcess(t *testing.T) {
 	}
 	reader := bufio.NewReaderSize(os.Stdin, mobilemultihop.NodeChainInputLimit+1)
 	var request importedExecutionPeerRequest
-	if importedExecutionRead(reader, 32<<10, &request) != nil || request.Schema != 1 || desktopNodeChainImportedRequestValid(request.Peer) != nil {
+	if importedExecutionRead(reader, 32<<10, &request) != nil || request.Schema != 1 || desktopNodeChainImportedRequestValid(request.Peer) != nil || request.Layers.validate(request.Peer) != nil {
 		t.Fatal("original imported execution peer request refused")
 	}
 	image, info, digest, err := captureImportedExecutionImage(request.Image)
@@ -286,17 +287,20 @@ func TestRouterVPNDesktopImportedExecutionReferenceProcess(t *testing.T) {
 		t.Fatal("Darwin fixture requires captured same-host physical peer")
 	}
 	var forward *importedExecutionForward
+	layers := &importedExecutionLayerPeers{}
 	peer := desktopNodeChainImportedPeerStartWithHooks(t, request.Peer, local, remote, nil, &desktopNodeChainImportedPeerHooks{
 		decorate: func(original *desktopNodeWGHandler) tun.Handler {
 			forward = &importedExecutionForward{desktopNodeWGHandler: original}
 			return forward
 		},
+		final: layers.finalProvider(t, request),
 		middle: func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
 			return desktopStartSSProvider(t, owner, request.Peer.MiddleMethod, request.Peer.MiddlePassword, local)
 		},
 	})
 	endpoint := peer.provider.address
 	forward.middle.Store(&endpoint)
+	layers.entryProvider(t, request, peer, local)
 	endpointHost, endpointPort, endpointErr := net.SplitHostPort(endpoint)
 	endpointNumber, numberErr := strconv.Atoi(endpointPort)
 	if endpointErr != nil || numberErr != nil || endpointHost != local.String() {
@@ -312,7 +316,7 @@ func TestRouterVPNDesktopImportedExecutionReferenceProcess(t *testing.T) {
 			t.Fatal("original imported execution output closed")
 		}
 	}
-	send(map[string]any{"peer": peer.snapshot(), "middle_address": endpoint})
+	send(map[string]any{"peer": peer.snapshot(), "middle_address": endpoint, "layers": layers.snapshot()})
 	var configure struct {
 		LocalSource string `json:"local_source"`
 		Winner      string `json:"winner"`
@@ -410,6 +414,7 @@ func TestRouterVPNDesktopImportedExecutionReferenceProcess(t *testing.T) {
 		if err := importedExecutionJoinHTTP(ctx, done, &serveError); err != nil {
 			return err
 		}
+		layers.close()
 		closed = true
 		return nil
 	}
@@ -449,6 +454,6 @@ func TestRouterVPNDesktopImportedExecutionReferenceProcess(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		send(map[string]any{"peer": peer.snapshot(), "launches": runner.launches.Load(), "workers_joined": runner.joined()})
+		send(map[string]any{"peer": peer.snapshot(), "launches": runner.launches.Load(), "workers_joined": runner.joined(), "layers": layers.snapshot()})
 	}
 }

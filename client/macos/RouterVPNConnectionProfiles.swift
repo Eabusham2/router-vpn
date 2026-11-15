@@ -49,11 +49,11 @@ enum RouterVPNOrderedNodes {
             guard matches.count == 1 else { return false }
             members.append(matches[0])
         }
-        // Darwin's independently proved execution carrier currently admits
-        // unlayered original paired entry/final members only.
+        // Each paired source retains its independent canonical Start Layer.
+        // The native compiler and original tokens authorize keys and transport.
         for paired in [members[0], members[2]] {
             if let raw = paired["start_layer"] {
-                guard let layer = raw as? String, ["", "off"].contains(layer) else { return false }
+                guard let layer = raw as? String, ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer) else { return false }
             }
         }
         guard finalProfile(members[0], mode: "shadowsocks"), finalProfile(members[2], mode: "shadowsocks"),

@@ -5,7 +5,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -37,6 +39,9 @@ var macOSImportedExecutionCases = []string{
 }
 
 func macOSImportedExecutionScenario(value string) (mode, requested, winner, fault string, err error) {
+	if layered, found := macOSImportedExecutionLayerScenario(value); found {
+		return layered.Mode, layered.Requested, layered.Winner, layered.Fault, nil
+	}
 	found := false
 	for _, candidate := range macOSImportedExecutionCases {
 		found = found || candidate == value
@@ -257,11 +262,14 @@ func macOSImportedExecutionNativeController(owned *ownedDesktopController) (bool
 }
 
 type macOSImportedExecutionPeer struct {
-	peer          *macOSNodeChainPeer
-	middle        string
-	joined        bool
-	started       bool
-	quitAttempted bool
+	layers           *macOSImportedExecutionLayerCase
+	entryPassword    string
+	layerObservation macOSImportedExecutionLayerObservation
+	peer             *macOSNodeChainPeer
+	middle           string
+	joined           bool
+	started          bool
+	quitAttempted    bool
 }
 
 func (p *macOSImportedExecutionPeer) exchange(t *testing.T, value any) map[string]json.RawMessage {
@@ -354,7 +362,14 @@ func startMacOSImportedExecutionPeer(t *testing.T, p *macOSImportedExecutionPeer
 	outputWrite.Close()
 	go func() { peer.failure = peer.command.Wait(); close(peer.done) }()
 	paired := map[string]any{"schema": 1, "address": peer.physical.String(), "client_address": peer.physical.String(), "prefixes": peer.requests, "final_password": peer.password, "final_node_proof_id": macOSNodeChainProofID(peer.finalServer), "final_api_token": "installed-ordered-final-token", "benchmark_port": 45998}
-	reply := p.exchange(t, map[string]any{"schema": 1, "peer": map[string]any{"schema": 1, "paired": paired, "middle_method": peer.middleMethod, "middle_password": peer.middlePassword}, "image": worker, "image_sha256": hex.EncodeToString(workerHash[:])})
+	wire := map[string]any{"schema": 1, "peer": map[string]any{"schema": 1, "paired": paired, "middle_method": peer.middleMethod, "middle_password": peer.middlePassword}, "image": worker, "image_sha256": hex.EncodeToString(workerHash[:])}
+	if p.layers != nil {
+		wire["layers"] = map[string]string{"entry": p.layers.Entry, "final": p.layers.Final, "entry_password": p.entryPassword, "fault": p.layers.Fault}
+	}
+	reply := p.exchange(t, wire)
+	if p.layers != nil && json.Unmarshal(reply["layers"], &p.layerObservation) != nil {
+		t.Fatal("original independent provider layers missing")
+	}
 	if json.Unmarshal(reply["peer"], &peer.reply) != nil || json.Unmarshal(reply["middle_address"], &p.middle) != nil || p.middle == "" || peer.reply.PublicCA == "" {
 		t.Fatal("original imported peer identity missing")
 	}
@@ -394,9 +409,21 @@ func macOSImportedExecutionNativeCase(t *testing.T, scenario string) {
 		t.Fatal(err)
 	}
 	peer = &macOSImportedExecutionPeer{}
+	if layered, found := macOSImportedExecutionLayerScenario(scenario); found {
+		peer.layers = &layered
+		if layered.Entry != "off" {
+			var key [32]byte
+			if _, err := rand.Read(key[:]); err != nil {
+				t.Fatal(err)
+			}
+			peer.entryPassword = base64.StdEncoding.EncodeToString(key[:])
+			clear(key[:])
+		}
+	}
 	startMacOSImportedExecutionPeer(t, peer, mode)
 	macOSExternalNativeTrust(t, &macOSExternalNativePeer{ca: peer.peer.reply.PublicCA})
 	store := installMacOSNodeChainProfiles(t, peer.peer, "")
+	macOSImportedExecutionInstallLayers(t, peer, &store)
 	host, port, err := net.SplitHostPort(peer.middle)
 	n, numberErr := strconv.Atoi(port)
 	if err != nil || numberErr != nil || host != peer.peer.physical.String() {
@@ -467,7 +494,7 @@ func macOSImportedExecutionNativeCase(t *testing.T, scenario string) {
 		t.Fatal("original execution request unavailable")
 	}
 	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/connect", string(request))
-	negative := commands[fault] != ""
+	negative := commands[fault] != "" || peer.layers != nil && peer.layers.Fault != ""
 	if err != nil || negative && status == 200 || !negative && status != 200 {
 		t.Fatal("actual Darwin public execution verdict", status, err, string(raw))
 	}
@@ -514,19 +541,23 @@ func macOSImportedExecutionNativeCase(t *testing.T, scenario string) {
 	if string(stats["workers_joined"]) != "true" || json.Unmarshal(stats["peer"], &observed) != nil || json.Unmarshal(stats["launches"], &launches) != nil {
 		t.Fatal("original relay worker survived public Disconnect or lost its counters")
 	}
-	if launches == 0 || observed.Schema != 1 || observed.Address != peer.peer.reply.Address || observed.PublicCA != peer.peer.reply.PublicCA || len(observed.Prefixes) != 1 || observed.Prefixes[0].Mode != mode || observed.Prefixes[0].RawUDP == 0 || observed.Prefixes[0].TCP == 0 || observed.Prefixes[0].ProofQueries == 0 || observed.Middle == nil || observed.Middle.Method != peer.peer.middleMethod || observed.Middle.RawTCP == 0 || observed.Middle.TCP == 0 || observed.Middle.PublicQueries == 0 {
-		t.Fatal("native execution failed before its original encrypted entry, suffix worker or public middle proof")
-	}
-	switch fault {
-	case "wrong-public":
-		macOSNodeChainImportedNegativeCounters(t, observed, "wrong-middle-public")
-	case "wrong-final":
-		if observed.Final.FinalRawTCP == 0 || observed.Final.FinalTCP == 0 || observed.Final.RouterQueries == 0 || observed.Final.DNSQueries != 0 {
-			t.Fatal("wrong final identity failed outside its original paired proof")
+	if peer.layers != nil {
+		macOSImportedExecutionCheckLayers(t, peer, observed, launches, stats["layers"])
+	} else {
+		if launches == 0 || observed.Schema != 1 || observed.Address != peer.peer.reply.Address || observed.PublicCA != peer.peer.reply.PublicCA || len(observed.Prefixes) != 1 || observed.Prefixes[0].Mode != mode || observed.Prefixes[0].RawUDP == 0 || observed.Prefixes[0].TCP == 0 || observed.Prefixes[0].ProofQueries == 0 || observed.Middle == nil || observed.Middle.Method != peer.peer.middleMethod || observed.Middle.RawTCP == 0 || observed.Middle.TCP == 0 || observed.Middle.PublicQueries == 0 {
+			t.Fatal("native execution failed before its original encrypted entry, suffix worker or public middle proof")
 		}
-	default:
-		if observed.Final.FinalRawTCP == 0 || observed.Final.FinalTCP == 0 || observed.Final.RouterQueries == 0 || observed.Final.DNSQueries == 0 {
-			t.Fatal("native execution omitted original final proof or selected DNS traffic")
+		switch fault {
+		case "wrong-public":
+			macOSNodeChainImportedNegativeCounters(t, observed, "wrong-middle-public")
+		case "wrong-final":
+			if observed.Final.FinalRawTCP == 0 || observed.Final.FinalTCP == 0 || observed.Final.RouterQueries == 0 || observed.Final.DNSQueries != 0 {
+				t.Fatal("wrong final identity failed outside its original paired proof")
+			}
+		default:
+			if observed.Final.FinalRawTCP == 0 || observed.Final.FinalTCP == 0 || observed.Final.RouterQueries == 0 || observed.Final.DNSQueries == 0 {
+				t.Fatal("native execution omitted original final proof or selected DNS traffic")
+			}
 		}
 	}
 	if negative {
@@ -536,11 +567,13 @@ func macOSImportedExecutionNativeCase(t *testing.T, scenario string) {
 			t.Fatal("refused execution published Connected")
 		}
 	}
-	counters, err := json.Marshal(map[string]any{"case": scenario, "launches": launches, "entry_raw_udp": observed.Prefixes[0].RawUDP, "entry_tcp": observed.Prefixes[0].TCP, "entry_proofs": observed.Prefixes[0].ProofQueries, "middle_raw_tcp": observed.Middle.RawTCP, "middle_tcp": observed.Middle.TCP, "middle_public": observed.Middle.PublicQueries, "final_raw_tcp": observed.Final.FinalRawTCP, "final_tcp": observed.Final.FinalTCP, "final_proofs": observed.Final.RouterQueries, "dns": observed.Final.DNSQueries})
-	if err != nil {
-		t.Fatal(err)
+	if peer.layers == nil {
+		counters, err := json.Marshal(map[string]any{"case": scenario, "launches": launches, "entry_raw_udp": observed.Prefixes[0].RawUDP, "entry_tcp": observed.Prefixes[0].TCP, "entry_proofs": observed.Prefixes[0].ProofQueries, "middle_raw_tcp": observed.Middle.RawTCP, "middle_tcp": observed.Middle.TCP, "middle_public": observed.Middle.PublicQueries, "final_raw_tcp": observed.Final.FinalRawTCP, "final_tcp": observed.Final.FinalTCP, "final_proofs": observed.Final.RouterQueries, "dns": observed.Final.DNSQueries})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("DARWIN_IMPORTED_EXECUTION_COUNTERS %s", counters)
 	}
-	t.Logf("DARWIN_IMPORTED_EXECUTION_COUNTERS %s", counters)
 	if err = connection.CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
