@@ -2070,3 +2070,23 @@ only these two exact NodeChain inventories. This separate test-only change
 follows the fourteen source attempts; their selected test bodies and all
 production source remain unchanged. Its source and execution evidence are
 retained in `openvpn-field-inventory-validation`.
+
+
+## Required OpenVPN release gate inventory — November 15, 2026
+
+Exact-source release-blocker run `43738205948`, job `132885388965`, failed at
+published `81af4c3ed9bd172aa48ddd5bfd22c5f48478af92` because the aggregate
+parity audit's explicit dependency inventory omitted the newly mandatory
+`openvpn-prefix-native` job. The same failure was reproduced locally before
+editing. The reusable workflow itself was already required and is unchanged.
+
+The audit now includes that job in its exact 25-job inventory and checks its
+actual OpenVPN workflow producer, no-input same-SHA contract, and unconditional
+blocking status. Existing omission, substitution, duplicate, conditional,
+comment-decoy and nonblocking controls remain. New causal cases reject the
+wrong producer, duplicate uses and foreign workflow inputs. The full parity
+audit passed with its embedded 10/5/4 test groups; all 21 aggregate runner
+tests passed. Frozen source hashes, before/after logs and the observed hosted
+failure are retained in `release-openvpn-parity-validation`. This is a narrow
+release-audit repair, not evidence that native release or live acceptance has
+finished for the successor commit.
