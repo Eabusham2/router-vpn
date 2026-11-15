@@ -36,7 +36,8 @@ final class IOSNodeChainSOCKSCapture {
                 let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(json(profile).utf8))
                 guard mode == "socks5", IOSImportedSOCKSSource.eligible(typed) else { throw issue() }
                 let original = try IOSImportedSOCKSSource.capture(typed)
-                guard let input: String = LibboxRouterNodeChainImportedSOCKSMemberInput(original.config, original.capture, &failure), failure == nil else { throw failure ?? issue() }
+                let input: String? = LibboxRouterNodeChainImportedSOCKSMemberInput(original.config, original.capture, &failure)
+                guard let input, failure == nil, !input.isEmpty else { throw failure ?? issue() }
                 inputs.append(input); identities.append("")
             } else {
                 guard profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
@@ -50,7 +51,8 @@ final class IOSNodeChainSOCKSCapture {
                     start = try json(captured)
                 }
                 let bootstrap = try profile["dns_bootstrap"].map { try json($0) } ?? ""
-                guard let input: String = LibboxRouterNodeChainMemberInput(mode, try json(files), try json(profile), start, bootstrap, &failure), failure == nil else { throw failure ?? issue() }
+                let input: String? = LibboxRouterNodeChainMemberInput(mode, try json(files), try json(profile), start, bootstrap, &failure)
+                guard let input, failure == nil, !input.isEmpty else { throw failure ?? issue() }
                 inputs.append(input); identities.append(try json(identity))
             }
         }

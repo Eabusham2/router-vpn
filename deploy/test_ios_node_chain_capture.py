@@ -164,8 +164,10 @@ public func LibboxTestLaunchFailure(_ failed:Bool){NativeLaunchFault.shared.set(
 func api<T>(_ error:UnsafeMutablePointer<NSError?>?,_ action:()throws->T)->T?{
  do{return try action()}catch let caught{error?.pointee=caught as NSError;return nil}
 }
-public func LibboxRouterNodeChainImportedMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
- api(error){try bridge(["Op":"chain-imported","Source":config,"Policy":capture])}
+// Generated Go string/error helpers return nonnull NSString and report failure
+// through NSErrorPointer. Match that ABI so shipping optional-binding errors fail.
+public func LibboxRouterNodeChainImportedMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String{
+ api(error){try bridge(["Op":"chain-imported","Source":config,"Policy":capture])} ?? ""
 }
 public final class LibboxRouterNodeChainSOCKS {
  private let receipt:[String:String]
@@ -177,8 +179,8 @@ public final class LibboxRouterNodeChainSOCKS {
  public func metadata()->String{receipt["metadata"]!}
  public func close()throws{}
 }
-public func LibboxRouterNodeChainImportedSOCKSMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
- api(error){try bridge(["Op":"chain-socks-imported","Source":config,"Policy":capture])}
+public func LibboxRouterNodeChainImportedSOCKSMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String{
+ api(error){try bridge(["Op":"chain-socks-imported","Source":config,"Policy":capture])} ?? ""
 }
 public func LibboxNewRouterNodeChainSOCKS(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainSOCKS?{
  api(error){let raw=try bridge(["Op":"chain-socks-new","Source":source]);return LibboxRouterNodeChainSOCKS(try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:String])}
@@ -193,14 +195,14 @@ public final class LibboxRouterNodeChainCONNECT {
  public func metadata()->String{receipt["metadata"]!}
  public func close()throws{}
 }
-public func LibboxRouterNodeChainImportedCONNECTMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
- api(error){try bridge(["Op":"chain-connect-imported","Source":config,"Policy":capture])}
+public func LibboxRouterNodeChainImportedCONNECTMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String{
+ api(error){try bridge(["Op":"chain-connect-imported","Source":config,"Policy":capture])} ?? ""
 }
 public func LibboxNewRouterNodeChainCONNECT(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainCONNECT?{
  api(error){let raw=try bridge(["Op":"chain-connect-new","Source":source]);return LibboxRouterNodeChainCONNECT(try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:String])}
 }
-public func LibboxRouterNodeChainMemberInput(_ mode:String,_ files:String,_ profile:String,_ start:String,_ bootstrap:String,_ error:UnsafeMutablePointer<NSError?>?)->String?{
- api(error){try bridge(["Op":"chain-member","Mode":mode,"Files":files,"Policy":profile,"Source":start,"Node":bootstrap])}
+public func LibboxRouterNodeChainMemberInput(_ mode:String,_ files:String,_ profile:String,_ start:String,_ bootstrap:String,_ error:UnsafeMutablePointer<NSError?>?)->String{
+ api(error){try bridge(["Op":"chain-member","Mode":mode,"Files":files,"Policy":profile,"Source":start,"Node":bootstrap])} ?? ""
 }
 func make(_ operation:String,_ source:String)throws->LibboxRouterNodeChain{
  let response=try bridge(["Op":operation,"Source":source])

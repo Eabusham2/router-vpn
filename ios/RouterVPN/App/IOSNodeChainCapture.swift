@@ -78,7 +78,8 @@ struct IOSNodeChainCapture {
                 }
                 let original = try IOSImportedShadowsocksSource.capture(typed)
                 var failure: NSError?
-                guard let input: String = LibboxRouterNodeChainImportedMemberInput(original.config, original.capture, &failure), failure == nil else {
+                let input: String? = LibboxRouterNodeChainImportedMemberInput(original.config, original.capture, &failure)
+                guard let input, failure == nil, !input.isEmpty else {
                     throw failure ?? issue("The imported intermediate source could not be captured.")
                 }
                 inputs.append(input); identitySources.append(""); imported = true; continue
