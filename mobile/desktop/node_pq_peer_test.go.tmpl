@@ -670,7 +670,12 @@ func (f *nodePQFixture) close() error {
 		// unentered, so the exact original source may be joined on retry.
 		if f.cancel == nil { return errors.New("captured Windows Node cleanup lost its original Box lifetime") }
 		f.cancel()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		// This aggregate fixture budget includes complete captured-policy
+		// validation before native retirement. NodeNetworkOwner.CloseContext
+		// still gives the original source at most three seconds to join, and
+		// preserves any shorter caller deadline. Do not charge validation to
+		// that native join budget or permit Box.Close after an unjoined source.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		started := time.Now()
 		var err error
 		if f.independentSourceRetirement {

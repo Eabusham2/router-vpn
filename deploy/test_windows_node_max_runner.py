@@ -448,6 +448,65 @@ func TestCapturedSourceRetirement(t *testing.T){
 }
 '''
 
+SOURCE_JOIN_BUDGET_HARNESS = r'''package nativefixture
+import("context";"errors";"fmt";"runtime";"sync";"testing";"time")
+type DesktopPhysicalMetadata struct{TargetOS,SessionID,SourceSHA256 string}
+type capturedPolicy struct{meta DesktopPhysicalMetadata;delay time.Duration;invalid bool;reads int}
+type DesktopPhysicalPolicy = *capturedPolicy
+func ReadDesktopPhysicalPolicy(p DesktopPhysicalPolicy)(any,DesktopPhysicalMetadata,any,error){
+ p.reads++;time.Sleep(p.delay)
+ if p.invalid{return nil,DesktopPhysicalMetadata{},nil,errors.New("complete original policy invalid")}
+ return nil,p.meta,nil,nil
+}
+func RouterVPNLockContext(ctx context.Context,mu *sync.Mutex)error{if err:=ctx.Err();err!=nil{return err};mu.Lock();return nil}
+type nativeSource struct{hold,closed bool;calls int;remaining time.Duration}
+func(s *nativeSource)Close(ctx context.Context)error{
+ s.calls++;deadline,ok:=ctx.Deadline();if !ok{return errors.New("unbounded native source")};s.remaining=time.Until(deadline)
+ if s.hold{<-ctx.Done();return ctx.Err()};s.closed=true;return nil
+}
+type NodeNetworkOwner struct{mu sync.Mutex;ctx context.Context;capture DesktopPhysicalMetadata;policy DesktopPhysicalPolicy;factory any;preparing chan struct{};retired,closed bool;broker,source *nativeSource;retireCalls int}
+func(n *NodeNetworkOwner)retire(){n.retireCalls++}
+type preparation struct{network *NodeNetworkOwner;policy DesktopPhysicalPolicy}
+func(p *preparation)CloseSourceContext(ctx context.Context)error{return p.network.CloseCapturedPhysicalSourceContext(ctx,p.policy)}
+type nativeBox struct{network *NodeNetworkOwner;calls int}
+func(b *nativeBox)Close()error{b.calls++;if !b.network.closed||!b.network.source.closed{return errors.New("Box closed before original source joined")};return nil}
+type nodePQFixture struct{closeMu sync.Mutex;closeOnce sync.Once;boxClosed bool;preparation *preparation;independentSourceRetirement bool;network *NodeNetworkOwner;policy DesktopPhysicalPolicy;box *nativeBox;cancel context.CancelFunc;closeErr error}
+func budgetFixture()*nodePQFixture{
+ p:=&capturedPolicy{meta:DesktopPhysicalMetadata{"windows","original-session","original-source"}}
+ n:=&NodeNetworkOwner{ctx:context.Background(),capture:p.meta,policy:p,source:&nativeSource{}}
+ return &nodePQFixture{preparation:&preparation{n,p},independentSourceRetirement:true,network:n,policy:p,box:&nativeBox{network:n},cancel:func(){}}
+}
+func TestOriginalSourceJoinBudgets(t *testing.T){
+ t.Run("complete-validation-before-native-budget",func(t *testing.T){
+  f:=budgetFixture();f.policy.delay=3100*time.Millisecond
+  if err:=f.close();err!=nil{t.Fatal("aggregate fixture deadline consumed by complete validation",err)}
+  if f.policy.reads!=1||f.network.source.calls!=1||f.box.calls!=1||!f.network.retired{t.Fatal("lost complete original validation or joined original source")}
+  if d:=f.network.source.remaining;d<2500*time.Millisecond||d>3*time.Second{t.Fatal("native join did not retain its own three-second cap",d)}
+ })
+ t.Run("held-native-source-still-fails",func(t *testing.T){
+  f:=budgetFixture();f.network.source.hold=true;started:=time.Now();err:=f.close()
+  if !errors.Is(err,context.DeadlineExceeded)||f.box.calls!=0||f.network.closed||f.network.source.closed{t.Fatal("pending native source authorized irreversible Box close",err)}
+  if elapsed:=time.Since(started);elapsed<2500*time.Millisecond||elapsed>5*time.Second{t.Fatal("native three-second cap changed",elapsed)}
+  f.network.source.hold=false
+  if err:=f.close();err!=nil||f.network.source.calls!=2||f.policy.reads!=2||f.box.calls!=1{t.Fatal("retry lost original source or complete revalidation",err)}
+ })
+ t.Run("invalid-complete-policy-cannot-retire",func(t *testing.T){
+  f:=budgetFixture();f.policy.invalid=true
+  if err:=f.close();err==nil||f.policy.reads!=1||f.network.retireCalls!=0||f.network.source.calls!=0||f.box.calls!=0{t.Fatal("invalid complete capture acquired cleanup authority",err)}
+ })
+ t.Run("foreign-capture-cannot-retire",func(t *testing.T){
+  f:=budgetFixture();foreign:=*f.policy;foreign.meta.SourceSHA256="foreign-source";f.policy=&foreign
+  if err:=f.close();err==nil||f.policy.reads!=1||f.network.retireCalls!=0||f.network.source.calls!=0||f.box.calls!=0{t.Fatal("foreign policy retired original source",err)}
+ })
+ t.Run("shorter-caller-budget-still-wins",func(t *testing.T){
+  f:=budgetFixture();f.network.source.hold=true;ctx,cancel:=context.WithTimeout(context.Background(),30*time.Millisecond);defer cancel()
+  err:=f.network.CloseCapturedPhysicalSourceContext(ctx,f.policy)
+  if !errors.Is(err,context.DeadlineExceeded)||f.network.source.remaining>30*time.Millisecond||f.network.closed||f.box.calls!=0{t.Fatal("native join extended original caller budget",err)}
+ })
+}
+'''
+
+
 REJECTED_OBSERVER_HARNESS = r'''package nativefixture
 import("context";"errors";"reflect";"sync";"testing")
 type DesktopSocketCapture struct{SessionID,SourceSHA256 string}
@@ -517,6 +576,22 @@ class RejectedSourceRetirement(unittest.TestCase):
         source = (ROOT / 'mobile/desktop/node_pq_peer_test.go.tmpl').read_text()
         helper = source[source.index('func nodePQRetirementFailure('):source.index('func newNodePQFixture(')]
         self.run_extracted(REJECTED_SOURCE_HARNESS + '\n' + helper, 'TestCapturedSourceRetirement', 7)
+
+    def test_aggregate_validation_budget_preserves_native_join_and_original_authority(self):
+        fixture = (ROOT / 'mobile/desktop/node_pq_peer_test.go.tmpl').read_text()
+        helper = fixture[fixture.index('func nodePQRetirementFailure('):fixture.index('func newNodePQFixture(')]
+        network = (ROOT / 'mobile/desktop/node_network.go.tmpl').read_text()
+        # Execute the original complete-policy admission and native join bodies;
+        # model only the expensive policy reader and platform source boundary.
+        begin = network.index('func (n *NodeNetworkOwner) CloseContext(')
+        end = network.index('// CloseCapturedPhysicalSourceWithProtectionContext', begin)
+        native = network[begin:end]
+        begin = network.index('func (n *NodeNetworkOwner) sourceRetirementMetadata(')
+        end = network.index('// RetainedPhysicalProtection', begin)
+        native += network[begin:end]
+        native = native.replace('mobilemultihop.', '').replace('adapter.', '')
+        self.run_extracted(SOURCE_JOIN_BUDGET_HARNESS + '\n' + helper + '\n' + native,
+                           'TestOriginalSourceJoinBudgets', 5)
 
     def test_rejection_readback_requires_exact_joined_source_without_mutation(self):
         source = (ROOT / 'deploy/fixtures/windows-node-physical/kernel_observer.go').read_text()
@@ -2254,7 +2329,7 @@ class MAXRetirementTiming(unittest.TestCase):
         self.assertEqual(restored, policy)
         self.assertEqual(observed.replace('\n\tdefer desktopMAXRetirementEnumeration(e, sublayer)()', ''), native)
         self.assertEqual(timed.count('timing.call('), 5)
-        self.assertIn('context.WithTimeout(context.Background(), 3*time.Second)',
+        self.assertIn('context.WithTimeout(context.Background(), 10*time.Second)',
                       (ROOT / 'mobile/desktop/node_pq_peer_test.go.tmpl').read_text())
         baseline = (ROOT / 'internal/mobiletor/desktop_socket_windows_baseline.go').read_text()
         self.assertIn('if err := p.baselineEngine.Abort(); err != nil {\n\t\treturn err\n\t}\n\tif err := p.assertBaselineLock(); err != nil {', baseline)
