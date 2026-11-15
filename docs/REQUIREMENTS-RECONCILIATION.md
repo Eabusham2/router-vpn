@@ -18,6 +18,15 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
+## November 15 continuation evidence
+
+[The November 15 ledger](CONTINUATION-EVIDENCE-2026-11-15.md) records recovery
+of the complete historical 1–311 index and the original August 11 user
+passage, eleven published repairs through `9fe62718`, current native failure
+evidence, and the ordered desktop All-Off implementation gap. It preserves
+the original identifiers and separates source, native execution, publication
+and live acceptance. It does not claim a complete current release.
+
 ## November 12 current evidence refresh
 
 The current [November 12 ledger](CONTINUATION-EVIDENCE-2026-11-12.md#current-evidence-refresh)
