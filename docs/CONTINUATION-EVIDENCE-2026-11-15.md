@@ -2090,3 +2090,45 @@ tests passed. Frozen source hashes, before/after logs and the observed hosted
 failure are retained in `release-openvpn-parity-validation`. This is a narrow
 release-audit repair, not evidence that native release or live acceptance has
 finished for the successor commit.
+
+
+## Darwin parent MTU source tests separate compilation from execution
+
+At published `5f35b6486435a82624aa314769819bd4c53feb9c`, authoritative run
+`43738859351`, Intel child job `132887492459`, failed its ordinary parent
+MTU prerequisite: a combined `go test -race` process exceeded 120 seconds.
+The traceback discarded its partial output and variant identity. Earlier
+actual Go fixtures in that job were built without race detection; their
+mocked compiler assertions do not establish a warm native race cache. The
+failing fixture was the first actual race compilation of its shared dependency
+closure. Its extracted 22-case test body uses synchronous modeled ACK/interface
+observations without network, process or sleep operations. Cold compilation
+is a supported explanation, but the lost output prevents proving which phase
+consumed the historical timeout. No native PF acceptance ran in that job.
+
+Ordinary and typed parent variants now compile fresh retained race images
+with a finite 600-second compiler bound, separately from execution. The
+original 30-second Go test deadline and 120-second outer execution bound
+remain unchanged. Compilation and execution use the existing owned-process
+runner, including its pinned native Darwin validation compiler and process
+group cleanup. Source and image readbacks reject substitutions between the
+two phases; diagnostic failures preserve the variant, stage and original
+partial output. Compiler failure cannot satisfy a negative test oracle.
+
+The component callers invoke the same original unittest method in-process
+with an explicit captured compiler/environment. They no longer wrap four
+bounded compilation/execution variants inside a second Python process's
+single 120-second execution cap. The fixed four variants and their original
+causal assertions remain; no global environment mutation is needed.
+
+The final ordinary runner passed 12 roots in 8.077 seconds, the typed runner
+passed six in 8.443 seconds, and actual ordinary/typed component calls passed
+in 14.445 seconds. Both contexts preserve the same 44 positive leaf cases
+and six causal controls; repeated execution is not additional requirements.
+Six orchestration controls cover source/image replacement, original negative
+status/output, phase diagnostics and propagation through the exact original
+method. All seven existing Darwin toolchain controls passed. These local
+Linux source-fixture results do not establish a Darwin kernel or hosted
+release pass. The failing hosted log and exact final source/test receipts
+are retained in `darwin-parent-race-stages-validation` and
+`release-5f35b648-audit`.

@@ -28,6 +28,64 @@ def load(root,name):
     spec=importlib.util.spec_from_file_location(name,root/'deploy'/name)
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 
+def execute_parent_variant(gate,work,label,go='go',environment=None):
+    """Separate cold race compilation from the original parent-method clock."""
+    work=Path(work).resolve(strict=True)
+    image=work/('parent-'+label+'.test')
+    if image.exists() or image.is_symlink():
+        raise ValueError('parent MTU variant cannot reuse an earlier image')
+    def sources():
+        paths=sorted({*work.rglob('*.go'),*(p for p in (work/'go.mod',work/'go.sum') if p.exists())})
+        if any(p.is_symlink() or not p.is_file() for p in paths):
+            raise ValueError('parent MTU variant lost its original source files')
+        return {str(p.relative_to(work)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+    before=sources()
+    command=[go,'test','-c','-race','-p=1','-o',image,'.']
+    command,captured=gate.UID.RACE.command(command,work,dict(os.environ if environment is None else environment))
+    print('Parent MTU '+label+': compiling original race image',flush=True)
+    try:
+        gate.UID.run(command,cwd=work,env=captured,timeout=600)
+    except Exception as error:
+        output=getattr(error,'output',b'') or b''
+        if isinstance(output,bytes):output=output.decode('utf-8',errors='replace')
+        raise AssertionError('Parent MTU '+label+' compilation failed: '+str(error)+'\n'+output[-8192:]) from error
+    identity=gate.image_identity(image)
+    if sources()!=before:
+        raise ValueError('parent MTU source changed during compilation')
+    command=[image,'-test.count=1','-test.timeout=30s','-test.v']
+    print('Parent MTU '+label+': executing original 30-second test deadline',flush=True)
+    try:
+        output=gate.UID.run(command,cwd=work,env=captured,timeout=120)
+        code=0
+    except subprocess.CalledProcessError as error:
+        output=error.output or b''
+        if isinstance(output,bytes):output=output.decode('utf-8',errors='replace')
+        code=error.returncode
+    except Exception as error:
+        raise AssertionError('Parent MTU '+label+' execution failed: '+str(error)) from error
+    if sources()!=before or gate.image_identity(image)!=identity:
+        raise ValueError('parent MTU original image or source changed during execution')
+    return subprocess.CompletedProcess(command,code,output)
+
+def execute_parent_source(root,go,environment,kind):
+    # Execute the same original unittest method in this process. A second
+    # Python timeout must not wrap four bounded compiler/test stages inside
+    # one of the individual test execution budgets.
+    cases={
+        'ordinary':('test_darwin_ordered_mtu_reader_runner.py','OrderedMTUBoundaries',
+                    'test_actual_ordinary_parent_requires_ack_retirement_and_readback'),
+        'typed':('test_darwin_typed_mtu_reader_runner.py','TypedMTUBoundaries',
+                 'test_actual_typed_parent_requires_ack_retirement_and_readback'),
+    }
+    if kind not in cases:
+        raise ValueError('unknown original parent MTU source family')
+    filename,owner,method=cases[kind]
+    module=load(root,filename)
+    case=getattr(module,owner)(method)
+    case.parent_go=str(go)
+    case.parent_environment=dict(environment)
+    case.debug()
+
 def execute_source(root=ROOT,go='go',environment=None):
     captured=dict(os.environ if environment is None else environment,GOTOOLCHAIN='local')
     paired=load(root,'test_darwin_paired_mtu_reader.py')
@@ -90,10 +148,7 @@ func TestActualOrderedConfirmation(t *testing.T){
             elif result.returncode==0 or 'ordered original confirmation verdict changed' not in output:raise AssertionError(label+'\n'+output)
             print('Ordered original Box source control: '+label+' verified',flush=True)
 
-    parent=subprocess.run([sys.executable,str(root/'deploy/test_darwin_ordered_mtu_reader_runner.py'),
-                           'OrderedMTUBoundaries.test_actual_ordinary_parent_requires_ack_retirement_and_readback'],
-                          cwd=root,env=dict(captured,GO=str(go)),capture_output=True,text=True,timeout=120)
-    if parent.returncode:raise AssertionError(parent.stdout+parent.stderr)
+    execute_parent_source(root,go,captured,'ordinary')
     print('Ordered original parent method: 22 cases and 3 causal controls verified',flush=True)
 
 

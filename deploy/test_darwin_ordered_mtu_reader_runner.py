@@ -119,10 +119,66 @@ func TestActualOrdinaryParentReader(t *testing.T){for _,alias:=range []string{"s
    (w/'go.mod').write_text('module router-vpn/ordinary-parent-fixture\n\ngo 1.26.3\nrequire router-vpn v0.0.0\nreplace router-vpn => '+str(ROOT)+'\n');(w/'parent_test.go').write_text(test)
    for label,(actual,retirement) in [('original',(method,validator)),*controls.items()]:
     (w/'parent.go').write_text('\n'.join((header,record,name,compare,retirement,actual)))
-    result=subprocess.run([os.environ.get('GO','go'),'test','-race','-p=1','-count=1','-timeout=30s','-v','.'],cwd=w,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
+    result=M.execute_parent_variant(G,w,label,go=getattr(self,'parent_go',os.environ.get('GO','go')),
+                                    environment=getattr(self,'parent_environment',None))
     with self.subTest(variant=label):
      self.assertNotIn('[build failed]',result.stdout);self.assertNotIn('DATA RACE',result.stdout);self.assertNotIn('panic:',result.stdout)
      if label=='original':self.assertEqual(result.returncode,0,result.stdout);self.assertEqual(result.stdout.count('--- PASS: TestActualOrdinaryParentReader/'),22)
      else:self.assertNotEqual(result.returncode,0,result.stdout);self.assertIn('ordinary parent original reader verdict changed',result.stdout)
+
+class ParentVariantStages(unittest.TestCase):
+ def exercise(self,fault=None):
+  with tempfile.TemporaryDirectory(prefix='parent-mtu-stage-') as d:
+   work=Path(d);source=work/'parent.go';source.write_text('package parent\n')
+   image=work/'parent-original.test';calls=[]
+   def run(command,**options):
+    calls.append((command,options))
+    if len(calls)==1:
+     if fault=='compile-timeout':raise RuntimeError('owned compiler group joined after timeout; original partial compiler output')
+     image.write_bytes(b'original compiled image');image.chmod(0o755)
+     if fault=='compile-source':source.write_text('package foreign\n')
+     return ''
+    if fault=='run-timeout':raise RuntimeError('owned test group joined after timeout; original partial test output')
+    if fault=='run-source':source.write_text('package foreign\n')
+    if fault=='run-image':image.write_bytes(b'foreign compiled image')
+    if fault=='negative':raise subprocess.CalledProcessError(1,command,output=b'original negative witness\n')
+    return 'original executed witness\n'
+   selected={'GOROOT':'/captured/compiler','GOTOOLCHAIN':'local'}
+   with patch.object(G.UID.RACE,'command',side_effect=lambda command,*_:([Path('/captured/compiler/bin/go'),*command[1:]],selected)) as compiler,patch.object(G.UID,'run',side_effect=run):
+    result=M.execute_parent_variant(G,work,'original',go='/selected/go',environment={'ORIGINAL':'only'})
+   self.assertEqual(compiler.call_count,1)
+   self.assertEqual(calls[0][0],[Path('/captured/compiler/bin/go'),'test','-c','-race','-p=1','-o',image,'.'])
+   self.assertEqual(calls[0][1],dict(cwd=work,env=selected,timeout=600))
+   self.assertEqual(calls[1][0],[image,'-test.count=1','-test.timeout=30s','-test.v'])
+   self.assertEqual(calls[1][1],dict(cwd=work,env=selected,timeout=120))
+   return result
+ def test_compiler_and_original_execution_have_distinct_bounded_stages(self):
+  self.assertEqual(self.exercise().stdout,'original executed witness\n')
+ def test_compiled_negative_is_preserved_for_original_causal_oracle(self):
+  result=self.exercise('negative');self.assertEqual(result.returncode,1);self.assertEqual(result.stdout,'original negative witness\n')
+ def test_source_or_image_replacement_cannot_complete(self):
+  for fault in ('compile-source','run-source','run-image'):
+   with self.subTest(fault=fault),self.assertRaises(ValueError):self.exercise(fault)
+ def test_timeout_keeps_stage_and_original_partial_output(self):
+  for fault,stage,partial in (('compile-timeout','compilation failed','partial compiler output'),('run-timeout','execution failed','partial test output')):
+   with self.subTest(fault=fault),self.assertRaisesRegex(AssertionError,stage+'.*'+partial):self.exercise(fault)
+ def test_component_invokes_original_parent_method_with_captured_environment(self):
+  for kind,owner,method in (('ordinary','OrderedMTUBoundaries','test_actual_ordinary_parent_requires_ack_retirement_and_readback'),
+                            ('typed','TypedMTUBoundaries','test_actual_typed_parent_requires_ack_retirement_and_readback')):
+   calls=[]
+   class OriginalCase:
+    def __init__(self,selected):calls.append(selected)
+    def debug(self):calls.append((self.parent_go,self.parent_environment))
+   captured={'GOROOT':'/captured/compiler','GOTOOLCHAIN':'local'}
+   with patch.object(M,'load',return_value=SimpleNamespace(**{owner:OriginalCase})),patch.object(M.subprocess,'run',side_effect=AssertionError('nested Python execution cap reintroduced')):
+    M.execute_parent_source(ROOT,'/captured/compiler/bin/go',captured,kind)
+   self.assertEqual(calls,[method,('/captured/compiler/bin/go',captured)])
+   self.assertIsNot(calls[1][1],captured)
+ def test_component_does_not_swallow_original_assertion(self):
+  class RefusedCase:
+   def __init__(self,_):pass
+   def debug(self):raise AssertionError('original parent causal oracle refused')
+  with patch.object(M,'load',return_value=SimpleNamespace(OrderedMTUBoundaries=RefusedCase)),self.assertRaisesRegex(AssertionError,'original parent causal oracle refused'):
+   M.execute_parent_source(ROOT,'/captured/go',{},'ordinary')
 
 if __name__=='__main__':unittest.main()

@@ -83,10 +83,7 @@ func TestActualTypedPhysicalConfirmation(t *testing.T){
             elif result.returncode==0 or 'typed physical confirmation verdict changed' not in output:raise AssertionError(label+'\n'+output)
             print('Typed physical source control: '+label+' verified',flush=True)
 
-    parent=subprocess.run([sys.executable,str(root/'deploy/test_darwin_typed_mtu_reader_runner.py'),
-                           'TypedMTUBoundaries.test_actual_typed_parent_requires_ack_retirement_and_readback'],
-                          cwd=root,env=dict(captured,GO=str(go)),capture_output=True,text=True,timeout=120)
-    if parent.returncode:raise AssertionError(parent.stdout+parent.stderr)
+    load(root,'test_darwin_ordered_mtu_reader.py').execute_parent_source(root,go,captured,'typed')
     print('Typed original parent method: 22 cases and 3 causal controls verified',flush=True)
 
 
