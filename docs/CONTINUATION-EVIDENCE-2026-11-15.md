@@ -2741,3 +2741,30 @@ in `darwin-imported-layers-integration-validation`.
 Hosted native execution at the published SHA, full release publication,
 physical-device networking, signing and private deployment remain distinct
 requirements. No local fixture or compile result is substituted for them.
+
+
+## Imported builder-stage fixtures retain their real namespace
+
+The complete XHTTP and H3 workflow runner suites exposed seven errors each
+when their shared fixture reached the current imported-trio builder stages.
+The fixture omitted `tags`, the captured temporary workspace and the original
+`race` selection. This happened before executing the modeled native command;
+it is not a tunnel or production-engine failure.
+
+The single shared runner now uses the shipping builder's actual `tags()`
+function, executes its unique original race-assignment AST and supplies an
+explicit captured workspace. It still executes the original selected builder
+statements. Subprocess and Windows source-loader boundaries remain modeled;
+no successful native result is fabricated or counted by these tests.
+
+All 89 roots across the seven direct callers passed: SOCKS22, XHTTP11, H2 9,
+H3 19, PQ9, proxy11 and UDP8. New checks compare exact commands, target tags,
+race selection, workspace, receipt paths, ordering and unchanged deadlines
+on six targets. Sixteen supported-target failure controls stop subsequent
+native work. Three causal controls remove the newly captured names and prove
+the intended phase fails before its native command. Existing gate selectors,
+production source and per-stage timeouts remain unchanged. The full original
+failure logs and frozen repaired evidence are retained in
+`imported-trigger-closure-validation` and
+`imported-stage-namespace-validation`. Exact-SHA hosted native acceptance and
+release publication remain separate requirements.

@@ -31,8 +31,20 @@ def native_stage_namespace(*, target, source, pq, env, run):
         return SimpleNamespace(execute_partitioned=phases)
 
     loader = mock.Mock(side_effect=original_loader)
+    # Execute the shipping tag and race selection rather than substituting a
+    # successful imported-trio gate. Only subprocesses and the Windows source
+    # phase loader remain explicit boundaries in these caller fixtures.
+    builder = gate.module('imported_stage_captured_builder', 'build-native-runtime.py')
+    tree = ast.parse((ROOT/'deploy/build-native-runtime.py').read_text())
+    races = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+             and any(isinstance(item, ast.Name) and item.id == 'race' for item in node.targets)]
+    if len(races) != 1:
+        raise AssertionError('Native builder race selection is missing or duplicated')
     namespace = dict(ROOT=ROOT, sys=sys, target=target, source=source, pq=pq,
-                     cache=None, env=env, run=run, load=loader)
+                     cache=None, env=env, run=run, load=loader, tags=builder.tags,
+                     temp=Path('captured-native-build-workspace'))
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[copy.deepcopy(races[0])],
+                 type_ignores=[])), str(ROOT/'deploy/build-native-runtime.py'), 'exec'), namespace)
     return namespace, loader, phases
 
 
@@ -375,6 +387,94 @@ class ScopedSOCKSRealitySourceContext(unittest.TestCase):
         locate(tree, [])
         self.assertIn("target == host", ancestors)
         return path, selected, tree
+
+    def captured_imported_stage(self, target, *, failure=None, omit=None):
+        path, selected, _ = self.native_stage()
+        stage = ast.fix_missing_locations(ast.Module(body=[copy.deepcopy(selected)], type_ignores=[]))
+        calls = []
+
+        def capture(command, **options):
+            calls.append((list(map(str, command)), options))
+            if len(command) > 1 and Path(command[1]).name == failure:
+                raise RuntimeError('original imported gate failed: '+failure)
+
+        namespace, loader, phases = native_stage_namespace(target=target, source=Path('original-core'),
+            pq=Path('original-pq'), env={'ORIGINAL_ENV': '1'}, run=capture)
+        if omit is not None:
+            del namespace[omit]
+        error = None
+        try:
+            exec(compile(stage, str(path), 'exec'), namespace)
+        except (RuntimeError, NameError) as caught:
+            error = caught
+        require_native_stage_phases(namespace, loader, phases)
+        return calls, namespace, error
+
+    def test_actual_imported_stages_keep_captured_tags_race_workspace_and_bounds(self):
+        builder = gate.module('imported_stage_expected_builder', 'build-native-runtime.py')
+        names = ('test_desktop_imported_trio_execution_runner.py',
+                 'test_desktop_imported_trio_execution.py',
+                 'test_desktop_imported_trio_controller_runner.py',
+                 'test_desktop_imported_trio_controller.py')
+        for target in ('linux/amd64', 'linux/arm64', 'windows/amd64', 'windows/arm64',
+                       'darwin/amd64', 'darwin/arm64'):
+            with self.subTest(target=target):
+                calls, namespace, error = self.captured_imported_stage(target)
+                self.assertIsNone(error)
+                selected = [(i, command, options) for i, (command, options) in enumerate(calls)
+                            if len(command) > 1 and Path(command[1]).name in names]
+                if target.startswith('darwin/'):
+                    self.assertEqual(selected, [])
+                    continue
+                self.assertEqual([Path(command[1]).name for _, command, _ in selected], list(names))
+                race = [] if target == 'windows/arm64' else ['-race']
+                self.assertEqual(namespace['race'], race)
+                self.assertEqual(namespace['tags'](target), builder.tags(target))
+                option = [] if race else ['--without-race']
+                temp = namespace['temp']
+                expected = (
+                    ([sys.executable, str(ROOT/'deploy'/names[0])], ROOT, 60),
+                    ([sys.executable, str(ROOT/'deploy'/names[1]), '--core', 'original-core',
+                      '--tags='+','.join(builder.tags(target)), '--receipt',
+                      str(temp/'imported-trio-execution.json'), *option], Path('original-core'), 1200),
+                    ([sys.executable, str(ROOT/'deploy'/names[2])], ROOT, 60),
+                    ([sys.executable, str(ROOT/'deploy'/names[3]), '--receipt',
+                      str(temp/'imported-trio-controller.json'), *option], ROOT, 1200),
+                )
+                for (_, command, options), (wanted, cwd, timeout) in zip(selected, expected):
+                    self.assertEqual(command, wanted)
+                    self.assertEqual(options, {'cwd': cwd, 'env': {'ORIGINAL_ENV': '1'}, 'timeout': timeout})
+                node_checks = [i for i, (command, _) in enumerate(calls)
+                               if len(command) > 1 and Path(command[1]).name in
+                               ('test_desktop_node_physical.py', 'test_desktop_node_phases.py')]
+                self.assertEqual(len(node_checks), 1)
+                self.assertLess(node_checks[0], selected[0][0])
+
+    def test_actual_imported_stage_failures_stop_later_native_work(self):
+        names = ('test_desktop_imported_trio_execution_runner.py',
+                 'test_desktop_imported_trio_execution.py',
+                 'test_desktop_imported_trio_controller_runner.py',
+                 'test_desktop_imported_trio_controller.py')
+        for target in ('linux/amd64', 'linux/arm64', 'windows/amd64', 'windows/arm64'):
+            original, _, error = self.captured_imported_stage(target)
+            self.assertIsNone(error)
+            for name in names:
+                with self.subTest(target=target, failure=name):
+                    calls, _, error = self.captured_imported_stage(target, failure=name)
+                    self.assertIsInstance(error, RuntimeError)
+                    self.assertEqual(str(error), 'original imported gate failed: '+name)
+                    self.assertEqual(calls, original[:len(calls)])
+                    self.assertEqual(Path(calls[-1][0][1]).name, name)
+                    self.assertLess(len(calls), len(original))
+
+    def test_actual_imported_stage_requires_each_captured_namespace_dependency(self):
+        for missing in ('tags', 'temp', 'race'):
+            with self.subTest(missing=missing):
+                calls, _, error = self.captured_imported_stage('linux/amd64', omit=missing)
+                self.assertIsInstance(error, NameError)
+                self.assertIn(missing, str(error))
+                self.assertFalse(any(Path(command[1]).name == 'test_desktop_imported_trio_execution.py'
+                                     for command, _ in calls if len(command) > 1))
 
     def test_actual_build_stage_keeps_reference_separate_and_linux_only(self):
         path, selected, tree = self.native_stage()
