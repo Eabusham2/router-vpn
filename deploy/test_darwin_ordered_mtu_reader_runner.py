@@ -61,9 +61,10 @@ class OrderedMTUBoundaries(unittest.TestCase):
               source_sha256=receipt['source_sha256'],command_sha256=receipt['command_sha256'],box_sha256=receipt['box_sha256'],output_sha256='f'*64)
   result=dict(gate='generated-darwin-ordered-child',source_sha256=receipt['source_sha256'],paired_node_boundaries=paired,ordinary_mtu_boundaries=receipt,
               artifacts={'generated-child-test':{'sha256':receipt['command_sha256']},'paired-node-box':{'sha256':receipt['box_sha256']}})
+  result['typed_mtu_boundaries']=dict(receipt,scope='typed-execution-mtu-component-boundaries',cases=list(G.TYPED_MTU.CASES))
   with tempfile.TemporaryDirectory() as d:
    gone=Path(d)/'retired';G.publish_receipt(None,result,gone)
-   for key in ('ordinary_mtu_boundaries','paired_node_boundaries'):
+   for key in ('ordinary_mtu_boundaries','paired_node_boundaries','typed_mtu_boundaries'):
     missing=dict(result);del missing[key]
     with self.subTest(missing=key),self.assertRaises(ValueError):G.publish_receipt(None,missing,gone)
 
@@ -92,7 +93,7 @@ type rawOwner struct{record desktopNodeMTURecord}
 func(o *desktopMacOSNodeMTUOwner)originalLocked()error{if o.foreign{return errors.New("foreign original")};return nil}
 func validateDesktopMacOSMTUSnapshotLocked(h *desktopMacOSNodeChainHost,_ int)error{if h.refused{return errors.New("original captured proof refused")};return nil}
 func readDesktopMacOSMTURecordLocked(ctx context.Context,h *desktopMacOSNodeChainHost)(desktopNodeMTURecord,error){h.reads++;return h.ack,ctx.Err()}
-func validateDesktopMacOSNodeChainReaderRetirement(*mobilemultihop.DesktopNodeChainReadyRecord,desktopNodeMTURecord,[]net.Interface)error{return errors.New("other typed family refuses modeled authority")}
+func validateDesktopMacOSTypedReaderRetirement(*mobilemultihop.DesktopNodeChainReadyRecord,desktopNodeMTURecord,[]net.Interface)error{return errors.New("other typed family refuses modeled authority")}
 '''
   test='''package parentreader
 import("context";"net";"testing";"router-vpn/ordinary-parent-fixture/desktopnetwork")

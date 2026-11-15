@@ -978,8 +978,8 @@ separate 31-verdict ordinary component receipt on its original compiled child
 and Box images. The paired 105 verdicts, actual native child cases, installed
 Auto/Retest/Cancel cases and original deadlines are retained. Real macOS
 PF/utun/encrypted-traffic acceptance remains pending. Typed SOCKS/CONNECT and
-Local/Server execution succession is a distinct follow-up and is not granted
-this ordinary-policy capability.
+Local/Server execution succession use the distinct capability described below;
+they are not granted this ordinary-policy capability.
 
 ### Paired Darwin source-close failure reaches its real retry boundary
 
@@ -1007,6 +1007,50 @@ boundaries remain explicit models. The original four Box leaves, nineteen
 paired MTU leaves and complete 105-verdict paired inventory remain mandatory
 in actual Darwin CI. The earlier draft that assumed exactly two raw closer
 calls was corrected before publication and is not acceptance evidence.
+
+### Typed and execution Darwin MTU reader succession
+
+The bounded native TUN manager can retire and replace a CONNECT, SOCKS or
+Local/Server execution reader with a different utun name or a reused name and
+fresh kernel index. The raw command previously rejected a renamed typed reader;
+the parent did not independently check retirement when the name was reused.
+Each family now grants a separate capability tied to its original concrete
+policy, Box, physical source, paused native continuation and adopted reader.
+Execution also retains the original operation context and selector epoch.
+Confirmation rechecks the exact transition after physical readback, without
+holding the continuation lock while acquiring the physical-source lock.
+
+Every actual replacement needs a fresh index and proof that the old index is
+absent under any name. An unchanged rollback may retain the same native reader
+while advancing the command's readback epoch. The complete original native ACK
+is checked before that exception. Foreign operation contexts, substituted
+continuations, mixed connection families and stale/future ACKs are rejected.
+Full original-path reproof remains mandatory; restoring Local/Server does not
+run Compare again. Cancellation can use only the original cleanup allowance.
+
+The actual Box component passed 56 transition leaves under race detection;
+the two cleanup leaves also passed after explicitly cancelling original work.
+The raw command passed ten boundary cases, and the parent/controller passed
+24 retirement and mailbox leaves under race. Seventy composed runner tests,
+nine physical-source cases with four causal controls, and 22 actual parent
+method cases with three causal controls passed. Five focused receipt and
+inventory checks passed again after integration into main. Native OS/readback
+boundaries in these local component tests remain explicitly modeled.
+
+Fresh canonical preparation validated 2,625 shipping source records. All 620
+critical generated files matched; comparison of all 5,385 compiled-core files
+found only an equivalent absolute Xray module path and preparation-receipt
+metadata differences, and all 1,020 Xray files matched. The 23 changed project
+paths were reconciled with `1c86e15e`; all 5,623 other tracked files matched.
+Darwin ARM64 Box, generated command and controller images compiled but were
+not executed locally. The final privileged-controller check is recorded
+separately from the earlier controller typecheck.
+
+CI now requires all 72 typed/execution component verdicts on its original
+compiled command and Box images, alongside the existing 31 ordinary and 105
+paired verdicts. Original phase bounds, native PF/utun/encrypted traffic and
+installed Auto/Retest/Cancel gates remain mandatory. This source repair does
+not establish native kernel acceptance, package publication or device tests.
 
 ## Requirement-to-evidence ledger
 

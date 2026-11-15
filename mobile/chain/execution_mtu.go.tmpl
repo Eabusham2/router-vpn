@@ -26,6 +26,7 @@ type routerVPNExecutionMTUReadback struct {
 }
 
 type routerVPNExecutionMTUTransition struct {
+	operation          context.Context
 	binding            mobilemultihop.NodeChainExecutionMTUResumeBinding
 	before, result     *routerVPNExecutionReader
 	transaction        *inbound.RouterVPNTunTransaction
@@ -151,7 +152,7 @@ func (e *RouterVPNNodeChainExecutionEngine) retainUnchangedExecutionMTUContext(c
 		reader.ingress.Current(ctx) != nil || e.closedMTUContext(ctx, binding, epoch) != nil {
 		return errors.Join(err, errRouterVPNExecutionOwner)
 	}
-	retained := &routerVPNExecutionMTUTransition{binding: binding, before: reader, result: reader,
+	retained := &routerVPNExecutionMTUTransition{operation: ctx, binding: binding, before: reader, result: reader,
 		original: actual, observed: actual, requested: mtu, epoch: epoch, joined: true}
 	if !e.mtu.CompareAndSwap(previous, retained) {
 		return errRouterVPNExecutionOwner
@@ -210,7 +211,7 @@ func (e *RouterVPNNodeChainExecutionEngine) changeExecutionMTUContext(ctx contex
 	if err != nil || actual.mtu > plan.Ceiling {
 		return expected, errors.Join(err, errRouterVPNExecutionOwner)
 	}
-	op := &routerVPNExecutionMTUTransition{binding: binding, before: reader, original: actual, requested: mtu, epoch: epoch}
+	op := &routerVPNExecutionMTUTransition{operation: ctx, binding: binding, before: reader, original: actual, requested: mtu, epoch: epoch}
 	e.mtu.Store(op)
 	if actual.mtu == mtu {
 		// Even an unchanged interface needs fresh native readback and this exact

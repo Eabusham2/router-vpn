@@ -354,3 +354,21 @@ func (w *routerVPNDesktopExecutionMTU) afterChange(ctx context.Context, raw *rou
 	}
 	return errors.Join(runErr, runtime.CloseContext(cleanup))
 }
+
+func (w *routerVPNDesktopExecutionMTU) confirmDarwinMTUReader(ctx context.Context, raw *routerVPNNodeMTU,
+	previous, next adapter.Inbound, before routerVPNNodeMTURecord, name string, index, mtu int) (bool, error) {
+	if !w.owns(raw) {
+		return true, routerVPNExternalFailure
+	}
+	if w.owner.meta.TargetOS != "darwin" {
+		return false, nil
+	}
+	pause := w.pause.Load()
+	if pause == nil || pause.activity == nil || pause.activity != w.owner.activity.Load() ||
+		pause.controller != w.state.controller.Load() || previous != raw.inbound || !sameDesktopExecutionMTURecord(before, raw.record) ||
+		w.owner.nativeCurrent(ctx, w.state) != nil {
+		return true, routerVPNExternalFailure
+	}
+	return true, w.base.physical.ConfirmExecutionDarwinMTUReader(ctx, w.owner.prep, w.native, pause.binding,
+		previous, next, before.Interface, before.Index, before.MTU, name, index, mtu)
+}

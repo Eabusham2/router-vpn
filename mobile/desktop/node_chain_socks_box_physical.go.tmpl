@@ -80,3 +80,63 @@ func (owner *RouterVPNDesktopNodePhysical) RetainUnchangedNodeChainSOCKSMTUConte
  if err!=nil||owner.inbound!=expected||name!=afterName||index!=afterIndex||mtu!=afterMTU{return errors.Join(err,errors.New("ordered SOCKS unchanged trial lost original readback"))}
  return ctx.Err()
 }
+
+// ConfirmSOCKSDarwinMTUReader observes the original joined continuation and
+// already-adopted physical reader. It grants no resumed proof or traffic.
+func (owner *RouterVPNDesktopNodePhysical) ConfirmSOCKSDarwinMTUReader(ctx context.Context,
+	policy *mobilemultihop.DesktopNodeChainSOCKSPolicy, operation *RouterVPNNodeChainSOCKSMTU,
+	previous, next adapter.Inbound, oldName string, oldIndex, oldMTU int, name string, index, mtu int) error {
+	if owner == nil || policy == nil || operation == nil || operation.original == nil || operation.original.observation == nil ||
+		operation.original.observation.instance != owner.instance || !routerVPNDesktopNodeChainSOCKSPhysicalTarget(policy, "darwin") {
+		return errors.New("SOCKS Darwin MTU lost its original typed owner")
+	}
+	source, err := policy.NativeSource()
+	if err != nil || source != operation.original.source {
+		return errors.Join(err, errors.New("SOCKS Darwin MTU replaced its original source"))
+	}
+	return operation.confirmDarwinMTUReader(ctx,previous,next,oldName,oldIndex,oldMTU,name,index,mtu,func()error{
+  return owner.confirmTypedDarwinMTUReadback(ctx,policy,next,name,index,mtu)
+ })
+}
+
+// The private callback is the original physical readback above. Native component
+// tests can reject/hold that boundary without claiming a kernel handoff.
+func (operation *RouterVPNNodeChainSOCKSMTU) confirmDarwinMTUReader(ctx context.Context,
+ previous,next adapter.Inbound,oldName string,oldIndex,oldMTU int,name string,index,mtu int,physical func()error)error{
+ if physical==nil{return errors.New("typed Darwin MTU lost physical confirmation")}
+	var originalStep *routerVPNSOCKSMTUStep
+	confirm := func() error {
+		if err := operation.accepted(ctx); err != nil {
+			return err
+		}
+		if err := adapter.RouterVPNLockContext(ctx, &operation.mu); err != nil {
+			return err
+		}
+		defer operation.mu.Unlock()
+		step := operation.step
+		if originalStep != nil && step != originalStep { return errors.New("typed Darwin MTU replaced its pending receipt during physical observation") }
+		if operation.phase.Load() != routerVPNSOCKSMTUPaused || step == nil || !step.joined || step.before == nil || step.result == nil ||
+			step.before.inbound != previous || step.before.name != oldName || step.before.index != oldIndex || step.before.mtu != oldMTU ||
+			step.result.inbound != next || step.result.name != name || step.result.index != index || step.result.mtu != mtu || operation.reader.Load() != step.result {
+			return errors.New("SOCKS Darwin MTU lacks its exact joined returned reader")
+		}
+		if previous == next {
+			if name != oldName || index != oldIndex || mtu != oldMTU {
+				return errors.New("SOCKS Darwin unchanged MTU reader changed")
+			}
+		} else if step.transaction == nil || step.transaction.Current() != next || index == oldIndex {
+			return errors.New("SOCKS Darwin replacement lacks its fresh transaction reader")
+		}
+		originalStep = step
+		return operation.readCurrent(ctx, step.result)
+	}
+	// Never hold continuation.mu while acquiring physical.mu: replacement takes
+	// the opposite order. The original command activity excludes another trial.
+	if err := confirm(); err != nil {
+		return err
+	}
+	if err := physical(); err != nil {
+		return err
+	}
+	return confirm()
+}

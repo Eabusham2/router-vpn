@@ -392,10 +392,14 @@ func (owner *desktopNodeMTUOwner) verifyReaderChangeContext(ctx context.Context,
 	launch := owner.launch
 	ordinaryDarwin := launch != nil && launch.chain != nil && launch.chain.policy != nil && launch.chain.execution == nil &&
 		launch.chain.policy.Metadata().TargetOS == "darwin"
-	if next.Interface == previous.Interface && (!ordinaryDarwin || next.Index == previous.Index && next.Reader == previous.Reader) {
+	typedDarwin := launch != nil && launch.chain != nil && launch.chain.hasPolicy() &&
+		launch.chain.policyMetadata().TargetOS == "darwin" && !ordinaryDarwin
+	if next.Interface == previous.Interface && ((!ordinaryDarwin && !typedDarwin) ||
+		ordinaryDarwin && next.Index == previous.Index && next.Reader == previous.Reader ||
+		typedDarwin && next.Index == previous.Index && next.MTU == previous.MTU) {
 		return nil
 	}
-	if ordinaryDarwin && next.Index == previous.Index {
+	if (ordinaryDarwin || typedDarwin) && next.Index == previous.Index {
 		return errors.New("native ordered MTU acknowledgement reused its original kernel index")
 	}
 	if owner.verifyReaderChange == nil || launch == nil || launch.chain == nil || launch.chain.platform == nil ||

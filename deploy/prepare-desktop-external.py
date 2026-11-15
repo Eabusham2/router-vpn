@@ -95,6 +95,7 @@ BOX_TEMPLATES = {
     'node_chain_connect_box_physical.go.tmpl': 'routervpn_desktop_node_chain_connect_box_physical.go',
     'node_chain_socks_box_physical_test.go.tmpl': 'routervpn_desktop_node_chain_socks_box_physical_test.go',
     'node_chain_connect_box_physical_test.go.tmpl': 'routervpn_desktop_node_chain_connect_box_physical_test.go',
+    'node_typed_mtu_reader_test.go.tmpl': 'routervpn_desktop_node_typed_mtu_reader_test.go',
     'node_chain_socks_box_linux.go.tmpl': 'routervpn_desktop_node_chain_socks_box_linux.go',
     'node_chain_connect_box_linux.go.tmpl': 'routervpn_desktop_node_chain_connect_box_linux.go',
     'node_chain_socks_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_socks_box_darwin.go',

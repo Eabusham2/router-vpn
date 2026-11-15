@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
@@ -61,4 +62,107 @@ func (owner *RouterVPNDesktopNodePhysical) RetainUnchangedNodeChainExecutionMTUC
 		return errors.Join(err, errRouterVPNExecutionOwner)
 	}
 	return ctx.Err()
+}
+
+// Only the exact original concrete typed policy may use this readback helper.
+// Callers prove their separate native continuation before and after this lock.
+func (owner *RouterVPNDesktopNodePhysical) confirmTypedDarwinMTUReadback(ctx context.Context,
+	expected mobilemultihop.DesktopPhysicalPolicy, next adapter.Inbound, name string, index, mtu int) error {
+	if owner == nil || ctx == nil || ctx.Err() != nil || expected == nil || next == nil || len(name) < 5 || len(name) > 15 || name[:4] != "utun" || index < 1 || uint64(index) > 1<<32-1 || mtu < 1280 || mtu > 9000 {
+		return errors.New("typed Darwin MTU has invalid original readback")
+	}
+	for _, digit := range []byte(name[4:]) {
+		if digit < '0' || digit > '9' {
+			return errors.New("typed Darwin MTU has another interface kind")
+		}
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &owner.mu); err != nil {
+		return err
+	}
+	defer owner.mu.Unlock()
+	if owner.policy != expected || owner.instance == nil || owner.inbound != next || owner.detached || owner.interfaceName != "" {
+		return errors.New("typed Darwin MTU substituted its physical owner")
+	}
+	_, meta, _, err := mobilemultihop.ReadDesktopPhysicalPolicy(expected)
+	if err != nil || meta.TargetOS != "darwin" {
+		return errors.Join(err, errors.New("typed Darwin MTU changed platform"))
+	}
+	if err := owner.network.MatchesContext(ctx, meta.SessionID, meta.SourceSHA256); err != nil {
+		return err
+	}
+	actualName, actualIndex, actualMTU, err := owner.readbackContext(ctx)
+	if err != nil || actualName != name || actualIndex != index || actualMTU != mtu {
+		return errors.Join(err, errors.New("typed Darwin MTU differs from adopted native reader"))
+	}
+	return ctx.Err()
+}
+
+func (owner *RouterVPNDesktopNodePhysical) ConfirmExecutionDarwinMTUReader(ctx context.Context,
+	preparation *mobilemultihop.NodeChainExecutionPreparation, engine *RouterVPNNodeChainExecutionEngine,
+	binding mobilemultihop.NodeChainExecutionMTUResumeBinding, previous, next adapter.Inbound,
+	oldName string, oldIndex, oldMTU int, name string, index, mtu int) error {
+	if owner == nil || preparation == nil || engine == nil || engine.prep != preparation || engine.instance != owner.instance || !binding.OwnsEngine(engine) {
+		return errRouterVPNExecutionOwner
+	}
+	policy, err := preparation.DesktopPhysicalPolicy()
+	if err != nil {
+		return err
+	}
+	return engine.confirmDarwinMTUReader(ctx, binding, previous, next, oldName, oldIndex, oldMTU, name, index, mtu, routerVPNReadExecutionMTU, func() error {
+		return owner.confirmTypedDarwinMTUReadback(ctx, policy, next, name, index, mtu)
+	})
+}
+
+// Only this private component boundary substitutes native readback in tests.
+// The public confirmation always supplies the actual native TUN reader.
+func (engine *RouterVPNNodeChainExecutionEngine) confirmDarwinMTUReader(ctx context.Context,
+	binding mobilemultihop.NodeChainExecutionMTUResumeBinding, previous, next adapter.Inbound,
+	oldName string, oldIndex, oldMTU int, name string, index, mtu int,
+	read func(context.Context, adapter.Inbound) (routerVPNExecutionMTUReadback, error), physical func() error) error {
+	if engine == nil || physical == nil || read == nil {
+		return errRouterVPNExecutionOwner
+	}
+	var originalTransition *routerVPNExecutionMTUTransition
+	confirm := func() error {
+		if ctx == nil || ctx.Err() != nil || !engine.busy.CompareAndSwap(false, true) {
+			return errRouterVPNExecutionOwner
+		}
+		defer engine.busy.Store(false)
+		transition := engine.mtu.Load()
+		if originalTransition != nil && transition != originalTransition {
+			return errRouterVPNExecutionOwner
+		}
+		reader := engine.reader.Load()
+		if transition == nil || !mobilemtu.SameOperationContext(transition.operation, ctx) || !transition.joined || transition.admitted || transition.before == nil || transition.result == nil || reader != transition.result ||
+			transition.binding != binding || transition.before.inbound != previous || transition.result.inbound != next ||
+			transition.original != (routerVPNExecutionMTUReadback{oldName, oldIndex, oldMTU}) || transition.observed != (routerVPNExecutionMTUReadback{name, index, mtu}) {
+			return errRouterVPNExecutionOwner
+		}
+		if previous == next {
+			if name != oldName || index != oldIndex || mtu != oldMTU {
+				return errRouterVPNExecutionOwner
+			}
+		} else if transition.transaction == nil || transition.transaction.Current() != next || index == oldIndex {
+			return errRouterVPNExecutionOwner
+		}
+		if err := binding.ValidateTransitionContext(ctx); err != nil {
+			return err
+		}
+		if err := engine.closedMTUContext(ctx, binding, transition.epoch); err != nil {
+			return err
+		}
+		actual, err := read(ctx, next)
+		if err != nil || actual != transition.observed || reader.ingress == nil || reader.ingress.Current(ctx) != nil {
+			return errors.Join(err, errRouterVPNExecutionOwner)
+		}
+		originalTransition = transition
+		return ctx.Err()
+	}
+	if err := confirm(); err != nil {
+		return err
+	}
+	if err := physical(); err != nil {
+		return err
+	}
+	return confirm()
 }

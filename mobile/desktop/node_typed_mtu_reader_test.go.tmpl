@@ -1,0 +1,293 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"testing"
+	"time"
+)
+
+// Actual Box, native manager transaction, paused continuation and source are
+// retained. TUN readers and the physical confirmation callback are explicit
+// component boundaries; no PF/utun or native network acceptance is claimed.
+
+func TestRouterVPNDesktopCONNECTDarwinMTUContinuation(t *testing.T) {
+	for _, scenario := range []string{"renamed", "same-alias", "unchanged", "rollback", "foreign-before", "foreign-result", "same-index", "unjoined", "receipt-replaced", "physical-refused", "source-changed", "cancelled", "late-cancel"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newCONNECTMTUFixture(t)
+			ctx, _, m := connectMTUBegin(t, f)
+			candidate, rollback := connectMTUNewReader("utun72", 73, 1300), connectMTUNewReader("utun74", 74, 1280)
+			if scenario == "same-alias" {
+				candidate.name = f.tun.name
+			}
+			candidate.startFailure.Store(scenario == "rollback")
+			target := 1300
+			if scenario == "unchanged" {
+				target = 1280
+			}
+			count := 0
+			next, changeErr := m.changeContext(ctx, f.tun, target, connectMTUAcquire(f, candidate, rollback, &count))
+			if changeErr != nil && scenario != "rollback" {
+				t.Fatal(changeErr)
+			}
+			if next == nil || m.step == nil || !m.step.joined {
+				t.Fatal("fixture lost actual joined native transition")
+			}
+			actual := m.step.result
+			old := m.step.before
+			previous := adapter.Inbound(f.tun)
+			name, index, mtu := actual.name, actual.index, actual.mtu
+			call, cancel := context.WithCancel(ctx)
+			defer cancel()
+			physicalCalls := 0
+			physical := func() error {
+				physicalCalls++
+				switch scenario {
+				case "receipt-replaced":
+					copy := *m.step
+					m.step = &copy
+				case "physical-refused":
+					return errors.New("original physical readback refused")
+				case "source-changed":
+					f.current.Store(false)
+				case "late-cancel":
+					cancel()
+				}
+				return call.Err()
+			}
+			switch scenario {
+			case "foreign-before":
+				previous = rollback
+			case "foreign-result":
+				next = rollback
+			case "same-index":
+				actual.index = old.index
+				next.(*connectMTUReader).index = old.index
+				index = old.index
+			case "unjoined":
+				m.step.joined = false
+			case "cancelled":
+				cancel()
+			}
+			err := m.confirmDarwinMTUReader(call, previous, next, old.name, old.index, old.mtu, name, index, mtu, physical)
+			good := scenario == "renamed" || scenario == "same-alias" || scenario == "unchanged" || scenario == "rollback"
+			if (err == nil) != good {
+				t.Fatal("typed original continuation verdict changed", scenario, err)
+			}
+			if good && physicalCalls != 1 {
+				t.Fatal("original physical confirmation omitted")
+			}
+			if m.phase.Load() != routerVPNCONNECTMTUPaused {
+				t.Fatal("confirmation resumed traffic or proof")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopSOCKSDarwinMTUContinuation(t *testing.T) {
+	for _, scenario := range []string{"renamed", "same-alias", "unchanged", "rollback", "foreign-before", "foreign-result", "same-index", "unjoined", "receipt-replaced", "physical-refused", "source-changed", "cancelled", "late-cancel"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newSOCKSMTUFixture(t)
+			ctx, _, m := socksMTUBegin(t, f)
+			candidate, rollback := socksMTUNewReader("utun72", 73, 1300), socksMTUNewReader("utun74", 74, 1280)
+			if scenario == "same-alias" {
+				candidate.name = f.tun.name
+			}
+			candidate.startFailure.Store(scenario == "rollback")
+			target := 1300
+			if scenario == "unchanged" {
+				target = 1280
+			}
+			count := 0
+			next, changeErr := m.changeContext(ctx, f.tun, target, socksMTUAcquire(f, candidate, rollback, &count))
+			if changeErr != nil && scenario != "rollback" {
+				t.Fatal(changeErr)
+			}
+			if next == nil || m.step == nil || !m.step.joined {
+				t.Fatal("fixture lost actual joined native transition")
+			}
+			actual := m.step.result
+			old := m.step.before
+			previous := adapter.Inbound(f.tun)
+			name, index, mtu := actual.name, actual.index, actual.mtu
+			call, cancel := context.WithCancel(ctx)
+			defer cancel()
+			physicalCalls := 0
+			physical := func() error {
+				physicalCalls++
+				switch scenario {
+				case "receipt-replaced":
+					copy := *m.step
+					m.step = &copy
+				case "physical-refused":
+					return errors.New("original physical readback refused")
+				case "source-changed":
+					f.current.Store(false)
+				case "late-cancel":
+					cancel()
+				}
+				return call.Err()
+			}
+			switch scenario {
+			case "foreign-before":
+				previous = rollback
+			case "foreign-result":
+				next = rollback
+			case "same-index":
+				actual.index = old.index
+				next.(*socksMTUReader).index = old.index
+				index = old.index
+			case "unjoined":
+				m.step.joined = false
+			case "cancelled":
+				cancel()
+			}
+			err := m.confirmDarwinMTUReader(call, previous, next, old.name, old.index, old.mtu, name, index, mtu, physical)
+			good := scenario == "renamed" || scenario == "same-alias" || scenario == "unchanged" || scenario == "rollback"
+			if (err == nil) != good {
+				t.Fatal("typed original continuation verdict changed", scenario, err)
+			}
+			if good && physicalCalls != 1 {
+				t.Fatal("original physical confirmation omitted")
+			}
+			if m.phase.Load() != routerVPNSOCKSMTUPaused {
+				t.Fatal("confirmation resumed traffic or proof")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExecutionDarwinMTUContinuation(t *testing.T) {
+	for _, selected := range []string{"local", "server"} {
+		t.Run(selected, func(t *testing.T) {
+			for _, scenario := range []string{"renamed", "same-alias", "unchanged", "rollback", "foreign-before", "foreign-result", "same-index", "unjoined", "receipt-replaced", "physical-refused", "source-changed", "cancelled", "late-cancel", "foreign-operation", "cleanup-unchanged"} {
+				t.Run(scenario, func(t *testing.T) {
+					mode := selected
+					if mode == "local" {
+						mode = "auto"
+					}
+					f := newExecutionNativeFixture(t, mode, nil)
+					p := f.adopt(t)
+					e := f.engine
+					capture, err := p.DNSCapture(selected)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := e.SelectContext(t.Context(), capture.SelectedTag); err != nil {
+						t.Fatal(err)
+					}
+					for _, stage := range adapter.ListStartStages {
+						if err := f.box.inbound.Start(stage); err != nil {
+							t.Fatal(err)
+						}
+					}
+					binding := executionMTUBinding(t, f, p)
+					before := e.reader.Load()
+					candidate, rollback := executionMTUReader(), executionMTUReader()
+					candidate.failStart.Store(scenario == "rollback")
+					workParent, cancelWork := context.WithCancel(t.Context())
+					defer cancelWork()
+					work, finish, workErr := mobilemtu.WithOperationContext(workParent, 5*time.Second, 3*time.Second)
+					if workErr != nil {
+						t.Fatal(workErr)
+					}
+					defer finish()
+					name := "utun72"
+					if scenario == "same-alias" {
+						name = "utun71"
+					}
+					records := map[adapter.Inbound]routerVPNExecutionMTUReadback{before.inbound: {"utun71", 71, 1400}, candidate: {name, 72, 1300}, rollback: {"utun73", 73, 1400}}
+					read := func(ctx context.Context, r adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+						v, ok := records[r]
+						if !ok {
+							return v, errRouterVPNExecutionOwner
+						}
+						return v, ctx.Err()
+					}
+					acquire := func(ctx context.Context, r adapter.Inbound, value int) (*inbound.RouterVPNTunTransaction, error) {
+						return f.box.inbound.RouterVPNReplaceTunOwned(ctx, r, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+					}
+					value := 1300
+					if scenario == "unchanged" || scenario == "cleanup-unchanged" {
+						value = 1400
+					}
+					next, changeErr := e.changeExecutionMTUContext(work, binding, before.inbound, value, acquire, read)
+					if changeErr != nil && scenario != "rollback" {
+						t.Fatal(changeErr)
+					}
+					transition := e.mtu.Load()
+					if transition == nil || !transition.joined {
+						t.Fatal("fixture lost actual native transaction")
+					}
+					old, actual := transition.original, transition.observed
+					previous := before.inbound
+					call, cancel := context.WithCancel(work)
+					defer cancel()
+					if scenario == "foreign-operation" {
+						fresh, finishFresh, freshErr := mobilemtu.WithOperationContext(t.Context(), 5*time.Second, 3*time.Second)
+						if freshErr != nil {
+							t.Fatal(freshErr)
+						}
+						defer finishFresh()
+						call = fresh
+					}
+					if scenario == "cleanup-unchanged" {
+						cancelWork()
+						if work.Err() == nil {
+							t.Fatal("cleanup fixture failed to cancel original work")
+						}
+						cleanup, cleanupErr := mobilemtu.OperationCleanupContext(work)
+						if cleanupErr != nil {
+							t.Fatal(cleanupErr)
+						}
+						call = cleanup
+					}
+					physicalCalls := 0
+					physical := func() error {
+						physicalCalls++
+						switch scenario {
+						case "receipt-replaced":
+							copy := *e.mtu.Load()
+							e.mtu.Store(&copy)
+						case "physical-refused":
+							return errors.New("original physical readback refused")
+						case "source-changed":
+							e.revoked.Store(false)
+						case "late-cancel":
+							cancel()
+						}
+						return call.Err()
+					}
+					switch scenario {
+					case "foreign-before":
+						previous = rollback
+					case "foreign-result":
+						next = rollback
+					case "same-index":
+						actual.index = old.index
+						transition.observed = actual
+						records[next] = actual
+					case "unjoined":
+						transition.joined = false
+					case "cancelled":
+						cancel()
+					}
+					err = e.confirmDarwinMTUReader(call, binding, previous, next, old.name, old.index, old.mtu, actual.name, actual.index, actual.mtu, read, physical)
+					good := scenario == "renamed" || scenario == "same-alias" || scenario == "unchanged" || scenario == "rollback" || scenario == "cleanup-unchanged"
+					if (err == nil) != good {
+						t.Fatal("execution original continuation verdict changed", scenario, err)
+					}
+					if good && physicalCalls != 1 {
+						t.Fatal("original execution physical confirmation omitted")
+					}
+					if e.mtu.Load().admitted {
+						t.Fatal("confirmation admitted execution without full proof")
+					}
+				})
+			}
+		})
+	}
+}

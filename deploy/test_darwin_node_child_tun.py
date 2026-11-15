@@ -55,6 +55,7 @@ UID = load('darwin_child_native_uid', 'test_desktop_socket_uid.py')
 BUILD = load('darwin_child_native_build', 'build-native-runtime.py')
 PAIRED = load('darwin_paired_child_boundaries', 'test_darwin_paired_node_child.py')
 ORDERED_MTU = load('darwin_ordered_mtu_boundaries', 'test_darwin_ordered_mtu_reader.py')
+TYPED_MTU = load('darwin_typed_mtu_boundaries', 'test_darwin_typed_mtu_reader.py')
 NATIVE_STAGE_STARTED = time.monotonic()
 
 
@@ -125,6 +126,8 @@ def checked_sources(source):
         'routervpn_desktop_node_box_paired_mtu_darwin_test.go',
         'routervpn_desktop_node_box_tunnel_control_darwin_test.go',
         'cmd/sing-box/routervpn_node_chain_command_runtime_test.go',
+        'cmd/sing-box/routervpn_node_typed_mtu_command_test.go',
+        'routervpn_desktop_node_typed_mtu_reader_test.go',
         'routervpn/desktoppt/node_paired_physical_darwin.go',
         'routervpn/macosprocess/node_transfer.go',
         'routervpn/macosprocess/node_policy_input.go',
@@ -146,7 +149,7 @@ def checked_sources(source):
     }
     if not required.issubset(records):
         raise ValueError('Darwin child omitted an actual generated owner or independent encrypted peer')
-    for name in ('test_darwin_node_child_tun.py', 'test_darwin_node_child_tun_runner.py', 'test_darwin_paired_node_child.py', 'test_darwin_paired_node_child_runner.py', 'test_darwin_paired_node_platform.py', 'test_darwin_paired_mtu_reader.py', 'test_darwin_ordered_mtu_reader.py', 'test_darwin_ordered_mtu_reader_runner.py', 'darwin_race_toolchain.py'):
+    for name in ('test_darwin_node_child_tun.py', 'test_darwin_node_child_tun_runner.py', 'test_darwin_paired_node_child.py', 'test_darwin_paired_node_child_runner.py', 'test_darwin_paired_node_platform.py', 'test_darwin_paired_mtu_reader.py', 'test_darwin_ordered_mtu_reader.py', 'test_darwin_ordered_mtu_reader_runner.py', 'test_darwin_typed_mtu_reader.py', 'test_darwin_typed_mtu_reader_runner.py', 'darwin_race_toolchain.py'):
         records['gate/'+name] = digest(ROOT/'deploy'/name)
     for name in ('desktop_node_mtu.go', 'desktop_node_mtu_darwin.go', 'desktop_node_ordered_reader.go',
                  'desktop_node_chain_launch.go', 'desktop_node_chain_darwin.go'):
@@ -324,6 +327,9 @@ def publish_receipt(path, result, workspace):
         ORDERED_MTU.validate_receipt(result.get('ordinary_mtu_boundaries'), result.get('source_sha256'),
                                      result.get('artifacts', {}).get('generated-child-test', {}).get('sha256'),
                                      result.get('artifacts', {}).get('paired-node-box', {}).get('sha256', ''))
+        TYPED_MTU.validate_receipt(result.get('typed_mtu_boundaries'), result.get('source_sha256'),
+                                   result.get('artifacts', {}).get('generated-child-test', {}).get('sha256'),
+                                   result.get('artifacts', {}).get('paired-node-box', {}).get('sha256', ''))
     if workspace.exists() or workspace.is_symlink():
         raise ValueError('Darwin native build workspace did not retire')
     if path is not None:
@@ -349,6 +355,11 @@ def execute_paired_boundaries(source, before, compiler, captured, child, identit
 def execute_ordered_mtu_boundaries(source, before, compiler, captured, child, identities, work):
     gate = SimpleNamespace(UID=UID, NODE=NODE, image_identity=image_identity, checked_sources=checked_sources)
     return ORDERED_MTU.execute(gate, source, before, compiler, captured, child, identities, work)
+
+
+def execute_typed_mtu_boundaries(source, before, compiler, captured, child, identities, work):
+    gate = SimpleNamespace(UID=UID, NODE=NODE, image_identity=image_identity, checked_sources=checked_sources)
+    return TYPED_MTU.execute(gate, source, before, compiler, captured, child, identities, work)
 
 
 def execute(source, go='go', *, environment=None, compile_only=False, preflight_only=False, diagnostic_original_case=False):
@@ -392,9 +403,11 @@ def execute(source, go='go', *, environment=None, compile_only=False, preflight_
         else:
             paired = execute_paired_boundaries(source, before, compiler, captured, child, identities, work)
             ordered_mtu = execute_ordered_mtu_boundaries(source, before, compiler, captured, child, identities, work)
+            typed_mtu = execute_typed_mtu_boundaries(source, before, compiler, captured, child, identities, work)
             result = execute_native_images(source, before, captured, sudo, arch, uid, child, peer, identities)
             result['paired_node_boundaries'] = paired
             result['ordinary_mtu_boundaries'] = ordered_mtu
+            result['typed_mtu_boundaries'] = typed_mtu
             box_identity = identities[work/'paired-node-box.test']
             result['artifacts']['paired-node-box'] = {'bytes': box_identity[2], 'sha256': box_identity[-1]}
             PAIRED.validate_receipt(paired, result['source_sha256'], identities[child][-1])

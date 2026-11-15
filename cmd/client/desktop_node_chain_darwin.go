@@ -649,7 +649,7 @@ func (h *desktopMacOSNodeChainHost) readReadyLocked(ctx context.Context, fresh b
 		return err
 	}
 	ordinary := h.policy != nil && h.execution == nil
-	if previousName != "" && (previousName != live.Interface || ordinary && (previousIndex != live.Index || previousReader != live.Reader)) {
+	if previousName != "" && (previousName != live.Interface || previousIndex != live.Index || ordinary && previousReader != live.Reader) {
 		inventory, err := desktopnetwork.InterfacesContext(ctx)
 		if err != nil {
 			return err
@@ -659,8 +659,11 @@ func (h *desktopMacOSNodeChainHost) readReadyLocked(ctx context.Context, fresh b
 			if err := validateDesktopMacOSOrdinaryReaderRetirement(previous, live, inventory); err != nil {
 				return err
 			}
-		} else if err := validateDesktopMacOSReaderRetirement(previousName, previousIndex, previousReader, live, inventory); err != nil {
-			return err
+		} else {
+			previous := &mobilemultihop.DesktopNodeChainReadyRecord{InterfaceName: previousName, InterfaceIndex: uint32(previousIndex), Reader: previousReader}
+			if err := validateDesktopMacOSTypedReaderRetirement(previous, live, inventory); err != nil {
+				return err
+			}
 		}
 	}
 	if err := readDesktopNodeChainNativeReadyContext(ctx, h.launch, transfer, h.started, fresh, live); err != nil {

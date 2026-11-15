@@ -1,0 +1,107 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"testing"
+	"time"
+)
+
+// The separate Box continuation suite exercises real manager receipts. This
+// command fixture models only that capability and checks actual raw ordering.
+type desktopTypedDarwinMTUCompanion struct {
+	engine                                            *desktopNodeMTUEngineFixture
+	original                                          *routerVPNNodeMTU
+	confirms, reproofs                                int
+	refused, reproofFailure, unchanged, otherPlatform bool
+}
+
+func (c *desktopTypedDarwinMTUCompanion) currentCommand(ctx context.Context, o *routerVPNNodeMTU, _ routerVPNNodeMTUCommand) error {
+	return ctx.Err()
+}
+func (c *desktopTypedDarwinMTUCompanion) beforeChange(ctx context.Context, o *routerVPNNodeMTU, _ int) (func(), error) {
+	if c.original != o {
+		return nil, routerVPNExternalFailure
+	}
+	return func() {}, ctx.Err()
+}
+func (c *desktopTypedDarwinMTUCompanion) change(ctx context.Context, o *routerVPNNodeMTU, previous adapter.Inbound, value int) (adapter.Inbound, error) {
+	if c.unchanged {
+		return previous, ctx.Err()
+	}
+	return c.engine.Change(ctx, previous, value)
+}
+func (c *desktopTypedDarwinMTUCompanion) afterChange(ctx context.Context, o *routerVPNNodeMTU) error {
+	c.reproofs++
+	if c.refused || c.reproofFailure || !c.otherPlatform && c.confirms != 1 {
+		return errors.New("unconfirmed typed reproof")
+	}
+	return ctx.Err()
+}
+func (c *desktopTypedDarwinMTUCompanion) confirmDarwinMTUReader(ctx context.Context, o *routerVPNNodeMTU, previous, next adapter.Inbound, before routerVPNNodeMTURecord, name string, index, mtu int) (bool, error) {
+	if c.otherPlatform {
+		return false, nil
+	}
+	c.confirms++
+	if c.refused || o != c.original || o.inbound != previous || o.record != before || c.engine.current != next {
+		return true, routerVPNExternalFailure
+	}
+	return true, ctx.Err()
+}
+
+type desktopTypedDarwinMissingCapability struct{ routerVPNNodeMTUExecution }
+
+func TestRouterVPNDesktopTypedDarwinMTURawContinuation(t *testing.T) {
+	for _, scenario := range []string{"renamed", "same-alias", "unchanged", "refused", "missing-capability", "other-platform", "reproof-failed", "cancelled", "mixed-prefix", "mixed-openvpn"} {
+		t.Run(scenario, func(t *testing.T) {
+			raw, engine, _ := desktopNodeMTUFixture(t)
+			old := raw.inbound.(*desktopMTUTUNFixture)
+			old.name = "utun71"
+			raw.record.Interface = old.name
+			companion := &desktopTypedDarwinMTUCompanion{engine: engine, original: raw, unchanged: scenario == "unchanged", refused: scenario == "refused", reproofFailure: scenario == "reproof-failed", otherPlatform: scenario == "other-platform"}
+			raw.execution = companion
+			if scenario == "missing-capability" {
+				raw.execution = &desktopTypedDarwinMissingCapability{companion}
+			}
+			engine.change = func(ctx context.Context, previous adapter.Inbound, value int) (adapter.Inbound, error) {
+				name := "utun72"
+				if scenario == "same-alias" {
+					name = old.name
+				}
+				next := &desktopMTUTUNFixture{name: name, index: old.index + 1, mtu: value, guard: old.guard, guardContext: old.guardContext}
+				engine.current = next
+				return next, ctx.Err()
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if scenario == "cancelled" {
+				cancel()
+			}
+			if scenario == "mixed-prefix" {
+				raw.prefix = &routerVPNNodeCandidatePrefixRuntime{}
+			}
+			if scenario == "mixed-openvpn" {
+				raw.openVPN = &routerVPNImportedOpenVPN{}
+			}
+			before := raw.record
+			value := 1380
+			if companion.unchanged {
+				value = before.MTU
+			}
+			err := raw.changeBeforeContext(ctx, value, time.Time{})
+			good := scenario == "renamed" || scenario == "same-alias" || scenario == "unchanged"
+			if (err == nil) != good {
+				t.Fatal("raw typed continuation verdict changed", scenario, err)
+			}
+			if good && (companion.confirms != 1 || companion.reproofs != 1 || raw.record.Reader != before.Reader+1) {
+				t.Fatal("typed reader adoption skipped original confirmation or proof")
+			}
+			if scenario == "refused" || scenario == "missing-capability" || scenario == "other-platform" || (scenario == "cancelled" || scenario == "mixed-prefix" || scenario == "mixed-openvpn") {
+				if companion.reproofs != 0 || raw.record != before {
+					t.Fatal("unconfirmed reader mutated raw owner or reached proof")
+				}
+			}
+		})
+	}
+}

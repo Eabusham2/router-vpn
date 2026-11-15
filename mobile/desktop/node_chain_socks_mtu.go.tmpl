@@ -174,3 +174,22 @@ func (w *routerVPNDesktopSOCKSMTU) closeContext(ctx context.Context)error{
  }
  return ctx.Err()
 }
+
+func (w *routerVPNDesktopSOCKSMTU) confirmDarwinMTUReader(ctx context.Context, raw *routerVPNNodeMTU,
+	previous, next adapter.Inbound, before routerVPNNodeMTURecord, name string, index, mtu int) (bool, error) {
+	if !w.owns(raw) {
+		return true, routerVPNExternalFailure
+	}
+	if w.owner.meta.TargetOS != "darwin" {
+		return false, nil
+	}
+	operation := w.pending.Load()
+	if operation == nil || operation.native == nil || operation.activity != w.owner.activity.Load() ||
+		!mobilemtu.SameOperationContext(operation.operation, ctx) || operation.state.Load() != w.owner.state.Load() ||
+		previous != raw.inbound || !sameDesktopExecutionMTURecord(before, raw.record) || w.owner.construction == nil ||
+		w.owner.construction.current(ctx) != nil {
+		return true, routerVPNExternalFailure
+	}
+	return true, w.base.physical.ConfirmSOCKSDarwinMTUReader(ctx, w.owner.construction.policy, operation.native,
+		previous, next, before.Interface, before.Index, before.MTU, name, index, mtu)
+}

@@ -66,6 +66,7 @@ jobs:
           python3 deploy/test_darwin_node_child_tun_runner.py
           python3 deploy/test_darwin_paired_node_child_runner.py
           python3 deploy/test_darwin_ordered_mtu_reader_runner.py
+          python3 deploy/test_darwin_typed_mtu_reader_runner.py
           python3 deploy/test_darwin_paired_node_platform.py --go go
           go test -race -p=1 ./internal/mobilemultihop -run '^TestDesktopNodeReadyRecordBindsDarwinOriginalSelection$' -count=1
       - name: Compile and authenticate original child before changing host networking
