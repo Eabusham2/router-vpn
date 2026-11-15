@@ -46,7 +46,7 @@ func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []c
 		members, err = resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, execution)
 	}
 	if desktopNodeChainHasCONNECT(nodes) {
-		members, err = resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, execution)
+		members, err = resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, "local")
 	}
 	if err != nil {
 		return multihopSelection{}, err

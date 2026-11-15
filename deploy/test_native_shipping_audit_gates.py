@@ -584,12 +584,70 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("func desktopOrderedExecutionChoices() []string", 'nativeDesktopOrderedExecutionPlatformSupported()', 'nativeNodeChainPlatformSupported()'),
             ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'common.ValidateMultihopNodes(nodes)', 'error(nil)'),
             ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks"', 'false'),
-            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes) || desktopNodeChainHasOpenVPN(nodes))', 'false'),
+            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasOpenVPN(nodes))', 'false'),
             ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", ' || desktopNodeChainHasOpenVPN(nodes)', ''),
         ):
             with self.subTest(declaration=declaration, before=before):
                 self.changes.clear()
                 self.replace_execution_function(path, declaration, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_connect_execution_product_retains_exact_trio_credentials_and_local_capture(self):
+        imported = "cmd/client/desktop_node_chain_imported_execution.go"
+        platform = "cmd/client/desktop_node_chain_imported_execution_platform.go"
+        middle = "cmd/client/multihop_node_chain_connect_capture.go"
+        selection = "cmd/client/multihop_node_chain_selection.go"
+        product = "cmd/client/desktop_node_chain_execution_product.go"
+        changes = (
+            (imported, "len(members) != 3", "false"),
+            (imported, "!mobilemultihop.NodeChainPrefixMode(members[0].Mode)", "false"),
+            (imported, 'members[2].Mode != "shadowsocks"', "false"),
+            (imported, "!desktopNodeChainCONNECTMiddle(members[1].Profile, members[1].Mode)", "false"),
+            (imported, '(final == "" || final == "off")', "true"),
+            (imported, '(entry == "" || entry == "off" || entry == "aes-256-gcm" || entry == "aes-256-gcm+xor-whitening")', "true"),
+            (imported, '(requested == "server" || requested == "auto")', "true"),
+            (imported, "desktopOrderedExecutionMembers(members, requested) == nil", "true"),
+            (middle, 'profile.External.Protocol != mode', "false"),
+            (middle, 'profile.NodeProofID != "" || profile.APIToken != "" || profile.RouterAPI != ""', "false"),
+            (middle, 'profile.StartLayer != "" && profile.StartLayer != "off"', "false"),
+            (middle, '(proxy.Username == "") != (proxy.Password == "")', "false"),
+            (middle, 'len(proxy.Username) > 4096 || len(proxy.Password) > 4096 || len(proxy.TLSServerName) > 4096', "false"),
+            (middle, 'proxy.TLSServerName == ""', "false"),
+            (middle, 'proxy.TLSServerName != ""', "false"),
+            (middle, 'netip.ParseAddr(proxy.Host)', 'netip.ParseAddr("192.0.2.1")'),
+            (middle, 'address.Zone() == ""', "true"),
+            (middle, '!address.Is4In6()', "true"),
+            (middle, '!address.IsUnspecified()', "true"),
+            (middle, '!address.IsMulticast()', "true"),
+            (middle, 'proxy.Host == profile.Endpoint', "true"),
+            (middle, 'proxy.Port >= 1 && proxy.Port <= 65535', "true"),
+            (selection, 'resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, "local")', 'resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, execution)'),
+            (selection, 'desktopOrderedExecutionMembers(members, execution)', 'desktopOrderedExecutionMembers(members, "local")'),
+            (selection, 'liveMeasurementProfileToken(control) != liveMeasurementProfileToken(final.Profile)', "false"),
+            (product, '(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) ||', '(false ||'),
+            (product, '(nodes[1].Mode != "http-connect" && nodes[1].Mode != "https-connect")', "false"),
+            (platform, 'desktopCONNECTTrioExecutionMembers(members, requested)', "true"),
+            ("cmd/client/multihop_native_routes.go", '"ordered_connect_trio_executions":  desktopCONNECTTrioExecutionChoices(),', '"ordered_connect_trio_executions":  desktopOrderedExecutionChoices(),'),
+            ("cmd/client/profile_public_view.go", 'OrderedCONNECTExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")),', 'OrderedCONNECTExecutionMiddle: true,'),
+        )
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        for path, before, after in changes:
+            with self.subTest(path=path,before=before):
+                self.changes.clear()
+                self.replace(path,before,after)
+                self.changes[path] += "\n// " + before + "\nvar connectProductAuditDecoy = `" + before + "`\n"
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+        for path,declaration in (
+            (imported,"func desktopNodeChainCONNECTExecutionShape(members []desktopNodeChainMember) bool"),
+            (imported,"func desktopCONNECTTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool"),
+            (platform,"func desktopCONNECTTrioExecutionChoices() []string"),
+            (middle,"func desktopNodeChainCONNECTMiddle(profile common.RouterProfile, mode string) bool"),
+        ):
+            with self.subTest(duplicate=declaration):
+                self.changes.clear()
+                self.changes[path] = self.body(path)+"\n"+declaration+" { return true }\n"
                 self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
                 self.assert_multihop_chain(False)
 
@@ -679,9 +737,9 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("imported != 1", "false"),
             ("len(members) != 3", "false"),
             ("!mobilemultihop.NodeChainPrefixMode(members[0].Mode)", "false"),
-            ('members[1].Mode != "shadowsocks"', 'false'),
+            ('members[1].Mode == "shadowsocks"', 'true'),
             ('members[2].Mode != "shadowsocks"', 'false'),
-            ("!desktopNodeChainImportedExecutionMiddle(members[1].Profile)", "false"),
+            ("desktopNodeChainImportedExecutionMiddle(members[1].Profile)", "true"),
             ("!validProfileID(p.ID) || ids[p.ID]", "false"),
             ("if i == 1", "if i >= 0"),
             ('p.NodeKind != "" && p.NodeKind != "router-vpn"', 'false'),
@@ -736,7 +794,7 @@ class NativeShippingAuditTests(unittest.TestCase):
         for path, declaration, before, after in (
             (status, "func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request)", 'desktopOrderedExecutionChoices()', 'desktopImportedTrioExecutionChoices()'),
             (status, "func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request)", 'desktopImportedTrioExecutionChoices()', 'desktopOrderedExecutionChoices()'),
-            (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'nativeDesktopImportedTrioExecutionPlatformSupported()', 'true'),
+            (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported()', 'OrderedExecutionMiddle: true'),
             (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'desktopNodeChainImportedExecutionMiddle(p)', 'true'),
         ):
             with self.subTest(path=path, before=before):

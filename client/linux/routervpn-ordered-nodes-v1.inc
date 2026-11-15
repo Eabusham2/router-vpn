@@ -115,7 +115,7 @@ static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, c
     if (selection == NULL || (g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
     if (strcmp(execution, "local") != 0) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++) {
         const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
-        if (!linux_ordered_prefix_v1(mode) && !(json_array_get_length(selection->nodes) == 3 && i == 1 && strcmp(mode, "shadowsocks") == 0 && strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 2), "mode"), "shadowsocks") == 0)) return FALSE;
+        if (!linux_ordered_prefix_v1(mode) && !(json_array_get_length(selection->nodes) == 3 && i == 1 && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0) && strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 2), "mode"), "shadowsocks") == 0)) return FALSE;
     }
     char *copy = g_strdup(execution); g_free(selection->execution); selection->execution = copy; return TRUE;
 }
@@ -180,9 +180,22 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
         JsonObject *profile = external_source_profile_v24(catalog, id);
         const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
         gboolean imported = linux_ordered_imported_v1(profile);
-        if (imported && strcmp(selection->execution, "local") != 0 &&
-            (json_array_get_length(selection->nodes) != 3 || i != 1 || strcmp(mode, "shadowsocks") != 0 ||
-             !linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), "ordered_execution_middle_supported"))) return FALSE;
+        gboolean connect_execution = strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0;
+        if (imported && strcmp(selection->execution, "local") != 0) {
+            const char *capability = connect_execution ? "ordered_connect_execution_middle_supported" : "ordered_execution_middle_supported";
+            if (json_array_get_length(selection->nodes) != 3 || i != 1 || (!connect_execution && strcmp(mode, "shadowsocks") != 0) ||
+                !linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), capability)) return FALSE;
+            if (connect_execution) {
+                const char *final_id = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 2), "id");
+                JsonObject *final_profile = external_source_profile_v24(catalog, final_id);
+                if (final_profile != NULL && json_object_has_member(final_profile, "start_layer")) {
+                    JsonNode *raw_layer = json_object_get_member(final_profile, "start_layer");
+                    if (!JSON_NODE_HOLDS_VALUE(raw_layer) || json_node_get_value_type(raw_layer) != G_TYPE_STRING) return FALSE;
+                }
+                const char *layer = linux_ordered_string_v1(final_profile, "start_layer");
+                if (strcmp(layer, "") != 0 && strcmp(layer, "off") != 0) return FALSE;
+            }
+        }
         gboolean admitted = imported ? linux_ordered_imported_position_v1(mode, i, json_array_get_length(selection->nodes)) && strcmp(mode, linux_ordered_imported_mode_v1(profile)) == 0 : linux_ordered_router_v1(profile) && (i + 1 == json_array_get_length(selection->nodes) || linux_ordered_prefix_v1(mode));
         if (!admitted || (i + 1 == json_array_get_length(selection->nodes) && !linux_ordered_final_profile_v1(profile, mode)) ||
             strcmp(linux_ordered_string_v1(profile, "profile_token"), linux_ordered_string_v1(selection->tokens, id)) != 0) return FALSE;
@@ -416,6 +429,14 @@ static gboolean linux_ordered_same_path_v1(const LinuxOrderedSelectionV1 *commit
     return TRUE;
 }
 
+static const char *linux_ordered_execution_capability_v1(const LinuxOrderedSelectionV1 *selection) {
+    if (strcmp(selection->execution, "local") != 0 && json_array_get_length(selection->nodes) == 3) {
+        const char *middle = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 1), "mode");
+        if (strcmp(middle, "http-connect") == 0 || strcmp(middle, "https-connect") == 0) return "ordered_connect_trio_executions";
+    }
+    return "ordered_executions";
+}
+
 static gboolean linux_ordered_connect_v1(LinuxUnifiedV8 *unified) {
     LinuxOrderedStateV1 *owned = linux_ordered_state_v1(unified);
     if (owned->selection == NULL && !owned->invalid) return FALSE;
@@ -427,7 +448,7 @@ static gboolean linux_ordered_connect_v1(LinuxUnifiedV8 *unified) {
         linux_ordered_owns_v1(owned, generation, selection->control);
     JsonNode *capabilities = valid ? linux_ordered_read_v1("/api/multihop/status") : NULL;
     valid = valid && capabilities != NULL && linux_ordered_flag_v1(json_node_get_object(capabilities), "ordered_nodes_supported");
-    JsonArray *executions = valid ? linux_ordered_array_v1(json_node_get_object(capabilities), "ordered_executions") : NULL;
+    JsonArray *executions = valid ? linux_ordered_array_v1(json_node_get_object(capabilities), linux_ordered_execution_capability_v1(selection)) : NULL;
     gboolean admitted = FALSE;
     for (guint i = 0; executions != NULL && i < json_array_get_length(executions); i++) {
         JsonNode *value = json_array_get_element(executions, i);
@@ -672,7 +693,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor.execution), "auto", "Compare in the native child");
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(editor.execution), !fresh && owned->selection != NULL ? owned->selection->execution : "local");
     gtk_box_pack_start(GTK_BOX(box), editor.execution, FALSE, FALSE, 6);
-    editor.status = gtk_label_new("Final exit is pinned to the original selected node; Server and Compare require paired native nodes"); gtk_label_set_line_wrap(GTK_LABEL(editor.status), TRUE); gtk_box_pack_start(GTK_BOX(box), editor.status, FALSE, FALSE, 6);
+    editor.status = gtk_label_new("Final exit stays pinned; Server and Compare require a supported paired path or an original Shadowsocks/CONNECT trio"); gtk_label_set_line_wrap(GTK_LABEL(editor.status), TRUE); gtk_box_pack_start(GTK_BOX(box), editor.status, FALSE, FALSE, 6);
     g_signal_connect(editor.list, "row-selected", G_CALLBACK(linux_ordered_selected_v1), &editor);
     g_signal_connect(editor.transport, "changed", G_CALLBACK(linux_ordered_mode_v1), &editor);
     linux_ordered_render_v1(&editor, 0); gtk_widget_show_all(editor.dialog);

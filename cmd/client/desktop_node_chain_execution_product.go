@@ -12,6 +12,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // Execution requires its own installed native lifecycle capability. Ordinary
@@ -44,8 +45,13 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" {
 		return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
 	}
-	if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes) || desktopNodeChainHasOpenVPN(nodes)) {
+	if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasOpenVPN(nodes)) {
 		return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
+	}
+	if requested != "local" && desktopNodeChainHasCONNECT(nodes) &&
+		(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) ||
+			(nodes[1].Mode != "http-connect" && nodes[1].Mode != "https-connect")) {
+		return errors.New("CONNECT Server and Compare require their original exact trio")
 	}
 	return nil
 }

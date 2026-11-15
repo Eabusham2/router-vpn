@@ -151,8 +151,25 @@ func TestDesktopOrderedExecutionChoicesKeepProxyNativeAdmissionClosed(t *testing
 		for _, mode := range []string{"socks5", "http-connect", "https-connect"} {
 			proxy := []common.MultihopNodeSelection{nodes[0], {ID: "middle", Mode: mode}, nodes[1]}
 			err := desktopOrderedExecutionSelection(proxy, requested)
-			if (err == nil) != (requested == "local") {
-				t.Fatal("proxy execution admission changed", mode, requested, err)
+			allowed := requested == "local" || mode == "http-connect" || mode == "https-connect"
+			if (err == nil) != allowed {
+				t.Fatal("typed proxy execution admission changed", mode, requested, err)
+			}
+			if requested != "local" && mode != "socks5" {
+				for _, fault := range []string{"long", "wrong-prefix", "wrong-final"} {
+					changed := append([]common.MultihopNodeSelection(nil), proxy...)
+					switch fault {
+					case "long":
+						changed = append([]common.MultihopNodeSelection{{ID: "earlier", Mode: "wg"}}, changed...)
+					case "wrong-prefix":
+						changed[0].Mode = "shadowsocks"
+					case "wrong-final":
+						changed[2].Mode = "hysteria2"
+					}
+					if desktopOrderedExecutionSelection(changed, requested) == nil {
+						t.Fatal("typed CONNECT execution admitted unsupported path", mode, requested, fault)
+					}
+				}
 			}
 		}
 	}

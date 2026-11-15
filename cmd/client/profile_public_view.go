@@ -9,13 +9,14 @@ import (
 )
 
 type publicExternalNode struct {
-	OrderedExecutionMiddle bool   `json:"ordered_execution_middle_supported"`
-	OrderedMiddle          bool   `json:"ordered_middle_supported"`
-	Protocol               string `json:"protocol"`
-	ExpectedPublicIP       string `json:"expected_public_ip,omitempty"`
-	HasResponseProbe       bool   `json:"has_response_probe"`
-	HasServerPeer          bool   `json:"has_server_peer"`
-	HasOpenVPNPairing      bool   `json:"has_openvpn_pairing"`
+	OrderedCONNECTExecutionMiddle bool   `json:"ordered_connect_execution_middle_supported"`
+	OrderedExecutionMiddle        bool   `json:"ordered_execution_middle_supported"`
+	OrderedMiddle                 bool   `json:"ordered_middle_supported"`
+	Protocol                      string `json:"protocol"`
+	ExpectedPublicIP              string `json:"expected_public_ip,omitempty"`
+	HasResponseProbe              bool   `json:"has_response_probe"`
+	HasServerPeer                 bool   `json:"has_server_peer"`
+	HasOpenVPNPairing             bool   `json:"has_openvpn_pairing"`
 }
 
 type publicProfile struct {
@@ -149,7 +150,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 		RuntimeImplemented: true, RuntimeSupported: true, Editable: kind == "router-vpn",
 	}
 	if kind == "external" && p.External != nil {
-		out.External = &publicExternalNode{OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p), OrderedMiddle: nativeNodeChainOpenVPNPlatformSupported() && desktopNodeChainOpenVPNMiddle(p, "openvpn") || desktopNodeChainImported(p, "shadowsocks") || nativeNodeChainSOCKSPlatformSupported() && desktopNodeChainSOCKSMiddle(p, "socks5") || nativeNodeChainCONNECTPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")), Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HasResponseProbe: p.External.ResponseProbe != nil || len(p.External.OpenVPNResponseProbes) != 0, HasServerPeer: p.External.ServerPeer != nil, HasOpenVPNPairing: p.External.OpenVPNPairing != nil}
+		out.External = &publicExternalNode{OrderedCONNECTExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")), OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p), OrderedMiddle: nativeNodeChainOpenVPNPlatformSupported() && desktopNodeChainOpenVPNMiddle(p, "openvpn") || desktopNodeChainImported(p, "shadowsocks") || nativeNodeChainSOCKSPlatformSupported() && desktopNodeChainSOCKSMiddle(p, "socks5") || nativeNodeChainCONNECTPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")), Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HasResponseProbe: p.External.ResponseProbe != nil || len(p.External.OpenVPNResponseProbes) != 0, HasServerPeer: p.External.ServerPeer != nil, HasOpenVPNPairing: p.External.OpenVPNPairing != nil}
 		out.RouterAPI = ""
 		out.AdGuardIPv4 = ""
 		out.AdGuardIPv6 = ""

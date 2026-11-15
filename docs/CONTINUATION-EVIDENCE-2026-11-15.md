@@ -3333,3 +3333,57 @@ unchanged. Final output and the exact failing CI log are retained in
 also retained: a saved-editor refusal did not exercise the compiler, and a
 fresh draft's selection does not call Save. Neither is counted as the final
 compiler-refusal evidence. No application or native engine code changed.
+
+## Desktop CONNECT Server/Compare product admission and complete profiles
+
+Windows, Linux and macOS now expose a separate CONNECT-trio capability and
+original imported-middle hint. Their real editors, complete-profile validation
+and public controller admit only the existing typed path: paired WG/AWG entry,
+literal HTTP/HTTPS CONNECT middle and independent paired SS2022/UoT-v2 final
+with its Start Layer Off. Supported entry layers remain captured independently.
+The source resolver explicitly captures the original Local CONNECT source
+before its separate execution preparation; it does not relax the Local parser
+or manufacture an ordinary packet middle. Existing SS capability hints,
+SOCKS/OpenVPN exclusions, identity checks and profile secret references remain.
+
+The final race image passes all 28 distinct new product records: six public
+Server/Compare leaves, both retained-choice restores, twelve selection leaves
+and four complete-profile leaves, with their parent records. The reconciled
+original admission root also passes. Actual handler/status/source code uses
+explicit process, native reader and kernel doubles. A direct locked receipt
+check refuses the exact busy error; the actual HTTP handler refuses while its
+owner is held and returns success after release. The public positive test joins
+only its captured fixture watcher before synchronous observation, and registry
+cleanup runs after the original watcher/process join. Production guards and
+all deadlines are unchanged.
+
+Actual AppKit callbacks pass 11,241 checks and 56 controls; Windows callbacks
+pass 1,896 checks and 13 controls; GTK source/persistence checks total 4,239
+with 14 controls. Widgets/window transport are modeled in those portable tests;
+WPF/GTK window rendering and real installed networking are not claimed. The
+shipping source audit preserves all prior families and pins the exact CONNECT
+helpers, credentials, capabilities and Local source. Its 64 roots are covered
+by the retained complete run plus the repaired exact SS-hint negative; the
+new product root includes 30 causal mutations and four duplicate-function
+controls. The integrated new source guard, both platform scorers and original
+SS-hint guard also pass independently before publication.
+
+An independent existing regression remains open. All three eight-node paired
+public choices fail selected-proof publication in the tested one-worker race
+environment. The exact published `d219fdf1` baseline reproduces the same
+eight-node Server failure under the original four-second Result bound, so it
+is not attributed to this CONNECT addition. Its 46.52-second run consumed
+45.71 user and 1.11 system CPU seconds; a separate compiler overlapped and is
+explicitly recorded. The profile identifies repeated immutable source/policy
+validation. Six original two/three-node public leaves and retained-intent,
+SS restore and foreign/missing-owner controls pass; the failed eight-node and
+overlapped SS public observations are retained and not counted as successes.
+The baseline performance correction and exact-current release remain pending.
+
+The product source manifest is
+`29d5ef9eec33b75ac5e27c3e2bac5c2943a798a7073a6aa5bb2e30403a39a6f5`;
+its patch is `7666d85ec4b4ff5fdccf9ff685d8701a992398a4b1c76f969308959a4fc8fedf`.
+The source-audit companion manifest is
+`95a8c6e0aa50d6f8d62e010eae595b813632e20e03556f11b5ca28f309610160`.
+Exact observations, profile images, UI logs and finite case inventories remain
+in `desktop-connect-product-validation` and `connect-product-audit-validation`.

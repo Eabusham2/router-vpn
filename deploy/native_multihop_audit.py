@@ -1154,27 +1154,118 @@ defer clear(key)
 return err == nil && base64.StdEncoding.EncodeToString(key) == ss.Password
         '''),
         (imported_path, "func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error", '''
-bad := errors.New("ordered imported execution requires its original literal SS2022 trio")
-if !validDesktopOrderedExecution(requested) { return bad }
-if requested == "local" { return nil }
-imported := 0
-for _, member := range members {
-    if member.Profile.NodeKind == "external" || member.Profile.External != nil { imported++ }
-}
-if imported == 0 { return nil }
-if imported != 1 || len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[1].Mode != "shadowsocks" || members[2].Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(members[1].Profile) {
-    return bad
-}
-ids, proofs := map[string]bool{}, map[string]bool{}
-for i, member := range members {
-    p := member.Profile
-    if !validProfileID(p.ID) || ids[p.ID] { return bad }
-    ids[p.ID] = true
-    if i == 1 { continue }
-    if p.NodeKind != "" && p.NodeKind != "router-vpn" || p.External != nil || !common.ValidNodeProofID(p.NodeProofID) || proofs[p.NodeProofID] { return bad }
-    proofs[p.NodeProofID] = true
-}
-return nil
+	bad := errors.New("ordered imported execution requires its original literal SS2022 or typed CONNECT trio")
+	if !validDesktopOrderedExecution(requested) {
+		return bad
+	}
+	if requested == "local" {
+		return nil
+	}
+	imported := 0
+	for _, member := range members {
+		if member.Profile.NodeKind == "external" || member.Profile.External != nil {
+			imported++
+		}
+	}
+	if imported == 0 {
+		return nil
+	}
+	if imported != 1 || len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[2].Mode != "shadowsocks" || !(members[1].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(members[1].Profile) || desktopNodeChainCONNECTExecutionShape(members)) {
+		return bad
+	}
+	ids, proofs := map[string]bool{}, map[string]bool{}
+	for i, member := range members {
+		p := member.Profile
+		if !validProfileID(p.ID) || ids[p.ID] {
+			return bad
+		}
+		ids[p.ID] = true
+		if i == 1 {
+			continue
+		}
+		if p.NodeKind != "" && p.NodeKind != "router-vpn" || p.External != nil || !common.ValidNodeProofID(p.NodeProofID) || proofs[p.NodeProofID] {
+			return bad
+		}
+		proofs[p.NodeProofID] = true
+	}
+	return nil
+        '''),
+        ('cmd/client/desktop_node_chain_imported_execution.go', 'func desktopNodeChainCONNECTExecutionShape(members []desktopNodeChainMember) bool', r'''
+	if len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[2].Mode != "shadowsocks" ||
+		!desktopNodeChainCONNECTMiddle(members[1].Profile, members[1].Mode) {
+		return false
+	}
+	final := members[2].Profile.StartLayer
+	entry := members[0].Profile.StartLayer
+	return (final == "" || final == "off") && (entry == "" || entry == "off" || entry == "aes-256-gcm" || entry == "aes-256-gcm+xor-whitening")
+        '''),
+        ('cmd/client/desktop_node_chain_imported_execution.go', 'func desktopCONNECTTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool', r'''
+	return (requested == "server" || requested == "auto") && desktopNodeChainCONNECTExecutionShape(members) && desktopOrderedExecutionMembers(members, requested) == nil
+        '''),
+        ('cmd/client/desktop_node_chain_imported_execution_platform.go', 'func desktopCONNECTTrioExecutionChoices() []string', r'''
+	if nativeDesktopImportedTrioExecutionPlatformSupported() {
+		return []string{"local", "server", "auto"}
+	}
+	return []string{"local"}
+        '''),
+        ('cmd/client/multihop_node_chain_connect_capture.go', 'func desktopNodeChainCONNECTMiddle(profile common.RouterProfile, mode string) bool', r'''
+	if (mode != "http-connect" && mode != "https-connect") || profile.NodeKind != "external" || profile.External == nil ||
+		profile.External.Protocol != mode || profile.NodeProofID != "" || profile.APIToken != "" || profile.RouterAPI != "" ||
+		profile.StartLayer != "" && profile.StartLayer != "off" {
+		return false
+	}
+	proxy := profile.External.HTTPConnect
+	if mode == "https-connect" {
+		if profile.External.HTTPConnect != nil {
+			return false
+		}
+		proxy = profile.External.HTTPSConnect
+	} else if profile.External.HTTPSConnect != nil {
+		return false
+	}
+	if proxy == nil || (proxy.Username == "") != (proxy.Password == "") ||
+		len(proxy.Username) > 4096 || len(proxy.Password) > 4096 || len(proxy.TLSServerName) > 4096 {
+		return false
+	}
+	if mode == "https-connect" {
+		if proxy.TLSServerName == "" || strings.ContainsAny(proxy.TLSServerName, " /\\?#@") {
+			return false
+		}
+	} else if proxy.TLSServerName != "" {
+		return false
+	}
+	address, err := netip.ParseAddr(proxy.Host)
+	return err == nil && address.Zone() == "" && !address.Is4In6() && !address.IsUnspecified() && !address.IsMulticast() &&
+		proxy.Host == profile.Endpoint && proxy.Port >= 1 && proxy.Port <= 65535
+        '''),
+        ('cmd/client/multihop_node_chain_selection.go', 'func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []common.RouterProfile, nodes []common.MultihopNodeSelection, execution string) (multihopSelection, error)', r'''
+	if err := desktopOrderedExecutionSelection(nodes, execution); err != nil {
+		return multihopSelection{}, err
+	}
+	// The immutable graph describes the same full Local source. Execution is
+	// a separate child-owned derivation; never rewrite saved member preferences.
+	members, err := resolveDesktopNodeChainMembers(control, profiles, nodes, "local")
+	if desktopNodeChainHasSOCKS(nodes) {
+		members, err = resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, execution)
+	}
+	if desktopNodeChainHasCONNECT(nodes) {
+		members, err = resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, "local")
+	}
+	if err != nil {
+		return multihopSelection{}, err
+	}
+	if err := desktopOrderedExecutionMembers(members, execution); err != nil {
+		return multihopSelection{}, err
+	}
+	// The concrete physical policy has one final authenticated control source.
+	// A third profile cannot supply credentials or a weaker protection policy.
+	final := members[len(members)-1]
+	if control.ID != final.Profile.ID || liveMeasurementProfileToken(control) != liveMeasurementProfileToken(final.Profile) {
+		return multihopSelection{}, errors.New("ordered native control must be its exact final selected node")
+	}
+	return multihopSelection{Control: common.CloneRouterProfile(control), Entry: common.CloneRouterProfile(members[0].Profile),
+		Exit: common.CloneRouterProfile(final.Profile), Base: desktopExternalEntryBase(members[0].Mode), EntryMode: members[0].Mode, ExitMode: final.Mode,
+		Nodes: cloneDesktopNodeChainMembers(members)}, nil
         '''),
         (product_path, "func nativeDesktopOrderedExecutionPlatformSupported() bool", '''
 return retainedNativeMultihopSelected() && (runtime.GOOS == "linux" || runtime.GOOS == "windows") &&
@@ -1210,25 +1301,34 @@ for _, index := range []int{0, 2} {
 return true
         '''),
         (platform_path, "func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNodeChainMember, requested string) bool", '''
-if nativeDesktopOrderedExecutionPlatformSupported() { return true }
-return runtime.GOOS == "darwin" && nativeDesktopImportedTrioExecutionPlatformSupported() &&
-    desktopDarwinImportedTrioExecutionMembers(members, requested)
+	if nativeDesktopOrderedExecutionPlatformSupported() {
+		return true
+	}
+	return runtime.GOOS == "darwin" && nativeDesktopImportedTrioExecutionPlatformSupported() &&
+		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested))
         '''),
         (product_path, "func validDesktopOrderedExecution(value string) bool", '''
 return value == "local" || value == "server" || value == "auto"
         '''),
         (product_path, "func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", '''
-if !validDesktopOrderedExecution(requested) {
-    return errors.New("ordered execution requires an explicit Local, Server or Compare choice")
-}
-if err := common.ValidateMultihopNodes(nodes); err != nil { return err }
-if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" {
-    return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
-}
-if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasCONNECT(nodes) || desktopNodeChainHasOpenVPN(nodes)) {
-    return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
-}
-return nil
+	if !validDesktopOrderedExecution(requested) {
+		return errors.New("ordered execution requires an explicit Local, Server or Compare choice")
+	}
+	if err := common.ValidateMultihopNodes(nodes); err != nil {
+		return err
+	}
+	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" {
+		return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
+	}
+	if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasOpenVPN(nodes)) {
+		return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
+	}
+	if requested != "local" && desktopNodeChainHasCONNECT(nodes) &&
+		(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) ||
+			(nodes[1].Mode != "http-connect" && nodes[1].Mode != "https-connect")) {
+		return errors.New("CONNECT Server and Compare require their original exact trio")
+	}
+	return nil
         '''),
         (product_path, "func prepareDesktopOrderedExecutionSession(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeChainExecutionSession, error)", '''
 launch, image, err := prepareDesktopNodeChainExecutionHost(ctx, a, selection, requested)
@@ -1310,11 +1410,13 @@ return ctx.Err()
         "func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request)")
     if not _ordered_once(status,
         '"ordered_executions": desktopOrderedExecutionChoices(),',
-        '"ordered_imported_trio_executions": desktopImportedTrioExecutionChoices(),'):
+        '"ordered_imported_trio_executions": desktopImportedTrioExecutionChoices(),',
+        '"ordered_connect_trio_executions": desktopCONNECTTrioExecutionChoices(),'):
         return False
     public_profile = _function(_tokens(read("cmd/client/profile_public_view.go")),
         "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile")
     if not _ordered_once(public_profile,
+        'OrderedCONNECTExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")),',
         'OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p),'):
         return False
 

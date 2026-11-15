@@ -38,5 +38,12 @@ func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNo
 		return true
 	}
 	return runtime.GOOS == "darwin" && nativeDesktopImportedTrioExecutionPlatformSupported() &&
-		desktopDarwinImportedTrioExecutionMembers(members, requested)
+		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested))
+}
+
+func desktopCONNECTTrioExecutionChoices() []string {
+	if nativeDesktopImportedTrioExecutionPlatformSupported() {
+		return []string{"local", "server", "auto"}
+	}
+	return []string{"local"}
 }

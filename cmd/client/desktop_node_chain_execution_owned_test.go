@@ -40,7 +40,12 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	if err != nil {
 		return nil, err
 	}
-	prep, err := mobilemultihop.ParseDesktopNodeChainExecutionPreparation(string(raw))
+	var prep *mobilemultihop.NodeChainExecutionPreparation
+	if launch.chain.execution.connectPhysical != nil {
+		prep, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionPreparation(string(raw))
+	} else {
+		prep, err = mobilemultihop.ParseDesktopNodeChainExecutionPreparation(string(raw))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -55,13 +60,32 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	if err != nil {
 		return nil, err
 	}
-	proofs := launch.chain.policy.OriginalChain().ProofInventory()
+	var proofs []mobilemultihop.NodeChainProof
+	if local.Schema == 4 {
+		original, sourceErr := prep.OriginalCONNECTSource()
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		_, metadata, sourceErr := original.ReadValidated()
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		proofs = metadata.Proofs
+	} else {
+		proofs = launch.chain.policy.OriginalChain().ProofInventory()
+	}
 	serverInput := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode}
 	if local.Schema == 2 {
 		if len(local.Nodes) != 3 || local.IdentitySources[1] != "" || proofs[1].NodeKind != "external" || proofs[1].Mode != "shadowsocks" {
 			return nil, errors.New("modeled imported execution lost original trio")
 		}
 		serverInput.Schema = 2
+	}
+	if local.Schema == 4 {
+		if len(local.Nodes) != 3 || local.IdentitySources[1] != "" || proofs[1].NodeKind != "external" || (proofs[1].Mode != "http-connect" && proofs[1].Mode != "https-connect") {
+			return nil, errors.New("modeled CONNECT execution lost original typed trio")
+		}
+		serverInput.Schema = 4
 	}
 	for position := 1; position < len(local.Nodes); position++ {
 		input, identity, err := desktopExecutionServerNode(local.Nodes[position], local.IdentitySources[position], position)
@@ -78,7 +102,12 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		serverInput.Nodes[0] = *m.importedSourceOverride
 	}
 	encoded, _ := json.Marshal(serverInput)
-	server, err := mobilemultihop.NewNodeChainServerPolicy(string(encoded))
+	var server *mobilemultihop.NodeChainServerPolicy
+	if local.Schema == 4 {
+		server, err = mobilemultihop.NewNodeChainCONNECTServerPolicy(string(encoded))
+	} else {
+		server, err = mobilemultihop.NewNodeChainServerPolicy(string(encoded))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -104,11 +133,11 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, err
 	}
 	request := multihoprelay.NodeChainRequest{Schema: descriptor.Schema, SessionID: strings.Repeat("7", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("8", 64), Peer: peer.Addr().String(), AcquireExpiresAt: time.Now().Add(10 * time.Second).Unix(), LocalPacketPublicKeys: []string{key}, Port: 32003, Users: []multihoprelay.NodeChainUser{{Position: 1, Username: strings.Repeat("9", 48), Password: strings.Repeat("a", 48)}}}
-	if descriptor.Schema == 2 {
+	if descriptor.Schema == 2 || descriptor.Schema == 4 {
 		request.LocalPacketPositions = []int{0}
 	}
 	for position := 1; position+1 < len(local.Nodes); position++ {
-		if descriptor.Schema == 2 {
+		if descriptor.Schema == 2 || descriptor.Schema == 4 {
 			// Imported SS has no packet client; retain its original source and
 			// separate relay user without fabricating paired credentials.
 			request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,
@@ -130,7 +159,7 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	if err := request.Validate(descriptor); err != nil {
 		return nil, fmt.Errorf("independent modeled server request: %w", err)
 	}
-	if local.Schema != 2 && len(local.Nodes) > 2 {
+	if local.Schema == 1 && len(local.Nodes) > 2 {
 		// Restoring the original faulty fixture must still be rejected by the
 		// actual shared validator: server and local packet clients are distinct.
 		bad := request.Clone()
@@ -140,8 +169,16 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		}
 	}
 	source := mobilemultihop.NodeChainExecutionSource{Schema: 1, Execution: prep.Execution(), LocalSource: prep.LocalSource(), Server: descriptor, Request: request, FirstPort: 32000, LastPort: 32007}
+	if local.Schema == 4 {
+		source.Schema = 4
+	}
 	encoded, _ = json.Marshal(source)
-	policy, err := mobilemultihop.NewNodeChainExecutionPolicy(string(encoded))
+	var policy *mobilemultihop.NodeChainExecutionPolicy
+	if local.Schema == 4 {
+		policy, err = mobilemultihop.NewNodeChainCONNECTExecutionPolicy(prep, string(encoded))
+	} else {
+		policy, err = mobilemultihop.NewNodeChainExecutionPolicy(string(encoded))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +191,12 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, err
 	}
 	identity := mobilemultihop.NodeChainIdentity{EngineID: "original-execution-engine", SessionID: meta.SessionID, NetworkID: "original-execution-network", SourceSHA256: projection.SourceSHA256(), ConfigSHA256: projection.ConfigSHA256()}
-	adoption, err := mobilemultihop.NewDesktopNodeChainExecutionAdoptionRecord(projection, identity, owned.attempt.digest)
+	var adoption any
+	if local.Schema == 4 {
+		adoption, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionAdoptionRecord(projection, identity, owned.attempt.digest)
+	} else {
+		adoption, err = mobilemultihop.NewDesktopNodeChainExecutionAdoptionRecord(projection, identity, owned.attempt.digest)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +230,13 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		mtu = meta.RestoredMTU
 	}
 	m.ready = mobilemultihop.DesktopNodeChainExecutionReadyRecord{Schema: 1, Kind: "routervpn-node-chain-execution-ready-v1", SourceSHA256: meta.SourceSHA256, PreparationSourceSHA256: prep.SourceSHA256(), PreparationConfigSHA256: prep.ConfigSHA256(), TransferSHA256: owned.attempt.digest, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, Identity: identity, SelectionEpoch: 1, Generation: 1, Reader: 1, InterfaceName: "router-vpn", InterfaceIndex: 91, MTU: mtu, ObservedAt: time.Now().UnixMilli(), Progress: progress}
-	if err := m.ready.Validate(projection, owned.attempt.digest); err != nil {
+	if local.Schema == 4 {
+		m.ready.Kind = "routervpn-node-chain-connect-execution-ready-v1"
+		err = mobilemultihop.DesktopNodeChainCONNECTExecutionReadyRecord(m.ready).Validate(projection, owned.attempt.digest)
+	} else {
+		err = m.ready.Validate(projection, owned.attempt.digest)
+	}
+	if err != nil {
 		return nil, err
 	}
 	base := mobilemultihop.DesktopNodeReadyRecord{Schema: 1, Kind: "routervpn-node-ready-v1", SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, TransferSHA256: owned.attempt.digest, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, InterfaceName: m.ready.InterfaceName, InterfaceIndex: m.ready.InterfaceIndex, MTU: m.ready.MTU, ProvedAt: time.Now().UnixMilli(), DNSMilliseconds: 1}

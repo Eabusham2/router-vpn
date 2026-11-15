@@ -421,6 +421,7 @@ check(!disabledSettings.enabled && disabledSettings.entry.isEmpty && disabledSet
 RACE_TESTS
 ORDERED_TESTS
 SETUP_TESTS
+CONNECT_EXECUTION_TESTS
 print("Actual AppKit profiles, deferred catalogs and Settings Add/Load/Update callbacks: \(checks) checks PASS")
 '''
 
@@ -1271,6 +1272,44 @@ for manager in [true, false] {
         owner.api.busy = false; api.failLoad = false; api.malformedLoad = false
     }
 }
+
+DispatchQueue.clear()
+'''
+
+
+SWIFT_CONNECT_EXECUTION = r'''
+// CONNECT uses a distinct typed exact-trio hint and global capability.
+for protocolName in ["http-connect", "https-connect"] { for requested in ["server", "auto"] {
+  for entryLayer in ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] {
+    _ = chooseImportedExecution(requested, entryLayer: entryLayer, finalLayer: "off")
+    owner.profiles[1]["external"] = ["protocol": protocolName, "ordered_middle_supported": true, "ordered_connect_execution_middle_supported": true]
+    owner.connectionProfileSelection?.orderedNodes[1]["mode"] = protocolName
+    owner.api.orderedCurrent = ["selected_id": "ordered-2", "profiles": owner.profiles]
+    owner.api.orderedCapabilities = ["ordered_nodes_supported": true, "ordered_executions": ["local"], "ordered_connect_trio_executions": ["local", "server", "auto"]]
+    let original = owner.captureConnectionProfileSelection()
+    do { let draft = try owner.makeOrderedNodeDraft(); check(try draft.selection() == original, "CONNECT execution draft lost original exact trio") }
+    catch { check(false, "CONNECT execution draft lost original exact trio") }
+    let before = owner.api.calls.count
+    owner.connectMultihop(); check(!DispatchQueue.background.pending.isEmpty, "CONNECT execution did not use its distinct native capability"); DispatchQueue.background.run()
+    check(owner.api.calls.count == before + 1 && owner.api.calls.last!.body["execution"] as? String == requested && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes, "CONNECT execution did not use its distinct native capability")
+    DispatchQueue.main.run(); DispatchQueue.clear()
+    for fault in ["hint", "numeric-hint", "final-layer", "long", "wrong-protocol"] {
+        var catalog = owner.profiles, rows = original.orderedNodes
+        if fault == "hint" || fault == "numeric-hint" { var ext = catalog[1]["external"] as! [String:Any]; ext["ordered_connect_execution_middle_supported"] = fault == "hint" ? false : 1; catalog[1]["external"] = ext }
+        if fault == "final-layer" { catalog[2]["start_layer"] = "aes-256-gcm" }
+        if fault == "long" { rows.insert(["id":"extra", "mode":"wg"], at:0) }
+        if fault == "wrong-protocol" { rows[1]["mode"] = protocolName == "http-connect" ? "https-connect" : "http-connect" }
+        check(!RouterVPNOrderedNodes.connectExecutionTrio(rows, profiles:catalog), "CONNECT execution accepted changed typed trio: " + fault)
+    }
+    owner.api.orderedCapabilities.removeValue(forKey:"ordered_connect_trio_executions")
+    owner.api.orderedCapabilities["ordered_imported_trio_executions"] = ["local", "server", "auto"]
+    owner.api.orderedCapabilities["ordered_executions"] = ["local", "server", "auto"]
+    let blocked = owner.api.calls.count
+    owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+    check(owner.api.calls.count == blocked, "CONNECT execution borrowed unrelated native capability")
+  }
+} }
+
 DispatchQueue.clear()
 '''
 
@@ -1330,7 +1369,7 @@ def swift_source():
     methods = methods.replace("@objc ", "").replace("private func ", "func ")
     # Rename only the queue boundary so Swift does not apply its special
     # DispatchQueue.global inference to the deterministic value-only scheduler.
-    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
+    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
 
 
 def replace_once(source, old, new):
@@ -1443,6 +1482,11 @@ def macos(directory):
         "imported-execution-draft": (' || RouterVPNOrderedNodes.importedExecutionTrio(ordered, profiles: capturedCatalog)', '', "imported execution draft lost independent paired layers or exact native capability"),
         "imported-execution-body": (' || importedExecutionTrio(rows, profiles: profiles)', '', "imported execution did not use separate exact-trio capability"),
     }
+    imported_execution_variants.update({
+        "connect-execution-final-layer": ('guard ["", "off"].contains(members[2]["start_layer"] as? String ?? "") else { return false }', 'guard true else { return false }', "CONNECT execution accepted changed typed trio: final-layer"),
+        "connect-execution-boolean": ('CFGetTypeID(hint) == CFBooleanGetTypeID(), hint.boolValue', 'hint.boolValue', "CONNECT execution accepted changed typed trio: numeric-hint"),
+        "connect-execution-capability": ('"ordered_connect_trio_executions" : (importedTrio', '"ordered_imported_trio_executions" : (importedTrio', "CONNECT execution did not use its distinct native capability"),
+    })
     for name, (old, new, _) in imported_execution_variants.items():
         variants[name] = replace_once(source, old, new)
     for name, program in variants.items():

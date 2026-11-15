@@ -252,6 +252,26 @@ static void connect_model_only(void) {
         JsonNode *catalog_root=json_node_new(JSON_NODE_OBJECT);json_node_take_object(catalog_root,store);
         LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
         check(selection&&linux_ordered_current_v1(selection,store),"CONNECT source model refused original typed graph");
+        if(p<2) {
+            json_object_set_boolean_member(external,"ordered_connect_execution_middle_supported",TRUE);
+            const char *choices[]={"server","auto"};
+            for(guint choice=0;choice<2;choice++) {
+                gboolean allowed=linux_ordered_execution_v1(selection,choices[choice]);
+                check(allowed==(count==3),"CONNECT execution escaped exact trio length");
+                if(count==3) {
+                    check(linux_ordered_current_v1(selection,store),"CONNECT execution lost original native hint");
+                    check(strcmp(linux_ordered_execution_capability_v1(selection),"ordered_connect_trio_executions")==0,"CONNECT execution borrowed unrelated global capability");
+                    json_object_set_boolean_member(external,"ordered_connect_execution_middle_supported",FALSE);
+                    check(!linux_ordered_current_v1(selection,store),"CONNECT execution accepted false native hint");
+                    json_object_set_boolean_member(external,"ordered_connect_execution_middle_supported",TRUE);
+                    JsonObject *final=json_array_get_object_element(profiles,2);
+                    json_object_set_string_member(final,"start_layer","aes-256-gcm");
+                    check(!linux_ordered_current_v1(selection,store),"CONNECT execution accepted layered final");
+                    json_object_set_string_member(final,"start_layer","off");
+                }
+                check(linux_ordered_execution_v1(selection,"local"),"CONNECT original Local choice lost");
+            }
+        }
         const char *titles[]={"HTTP CONNECT","HTTPS CONNECT","OpenVPN","SOCKS5","Shadowsocks 2022"};const char *title=titles[p];check(strcmp(linux_ordered_mode_name_v1(protocols[p]),title)==0,"CONNECT model concealed exact transport title");
         LinuxOrderedEditorV1 editor={.catalog=catalog_root,.control="exit",.modes=g_ptr_array_new_with_free_func(g_free)};
         for(guint i=0;i<middle_index;i++)g_ptr_array_add(editor.modes,g_strdup(prefixes[(prefix+i)%G_N_ELEMENTS(prefixes)]));g_ptr_array_add(editor.modes,g_strdup(protocols[p]));

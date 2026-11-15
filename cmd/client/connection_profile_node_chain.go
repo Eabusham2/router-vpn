@@ -89,8 +89,17 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			return errors.New("saved ordered member differs from its selected position or source identity")
 		}
 		if captured.NodeKind == "external" {
-			if record.Prefs.MultihopExecution != "local" && (len(record.NodeChain) != 3 || i != 1 || captured.Mode != "shadowsocks" || !mobilemultihop.NodeChainPrefixMode(record.NodeChain[0].Mode) || record.NodeChain[2].Mode != "shadowsocks") {
-				return errors.New("saved imported execution requires its original literal SS2022 trio")
+			if record.Prefs.MultihopExecution != "local" {
+				connect := captured.Mode == "http-connect" || captured.Mode == "https-connect"
+				if len(record.NodeChain) != 3 || i != 1 || (!connect && captured.Mode != "shadowsocks") || !mobilemultihop.NodeChainPrefixMode(record.NodeChain[0].Mode) || record.NodeChain[2].Mode != "shadowsocks" {
+					return errors.New("saved imported execution requires its original literal SS2022 or typed CONNECT trio")
+				}
+				if connect {
+					final := record.NodeChain[2].Preferences
+					if final == nil || final.StartLayer != "" && final.StartLayer != "off" {
+						return errors.New("saved CONNECT execution requires its original unlayered SS final")
+					}
+				}
 			}
 			count, middle := len(record.NodeChain), 1
 			bounded := count == 3

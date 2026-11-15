@@ -27,9 +27,9 @@ func desktopNodeChainImportedExecutionMiddle(profile common.RouterProfile) bool 
 }
 
 // Paired execution retains its existing source bounds. Only the original
-// literal schema-two trio can add one imported member to that separate host.
+// literal schema-two trio or separately typed CONNECT trio can add one imported member.
 func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error {
-	bad := errors.New("ordered imported execution requires its original literal SS2022 trio")
+	bad := errors.New("ordered imported execution requires its original literal SS2022 or typed CONNECT trio")
 	if !validDesktopOrderedExecution(requested) {
 		return bad
 	}
@@ -45,7 +45,7 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 	if imported == 0 {
 		return nil
 	}
-	if imported != 1 || len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[1].Mode != "shadowsocks" || members[2].Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(members[1].Profile) {
+	if imported != 1 || len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[2].Mode != "shadowsocks" || !(members[1].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(members[1].Profile) || desktopNodeChainCONNECTExecutionShape(members)) {
 		return bad
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
@@ -64,4 +64,20 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 		proofs[p.NodeProofID] = true
 	}
 	return nil
+}
+
+// Presentation/source-shape only. The original typed Local compiler and the
+// separate execution preparation still validate every credential and owner.
+func desktopNodeChainCONNECTExecutionShape(members []desktopNodeChainMember) bool {
+	if len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[2].Mode != "shadowsocks" ||
+		!desktopNodeChainCONNECTMiddle(members[1].Profile, members[1].Mode) {
+		return false
+	}
+	final := members[2].Profile.StartLayer
+	entry := members[0].Profile.StartLayer
+	return (final == "" || final == "off") && (entry == "" || entry == "off" || entry == "aes-256-gcm" || entry == "aes-256-gcm+xor-whitening")
+}
+
+func desktopCONNECTTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool {
+	return (requested == "server" || requested == "auto") && desktopNodeChainCONNECTExecutionShape(members) && desktopOrderedExecutionMembers(members, requested) == nil
 }

@@ -16,12 +16,36 @@ func desktopExecutionParentSavedChoice(t *testing.T, prep *mobilemultihop.NodeCh
 	if json.Unmarshal([]byte(projection.Source()), &source) != nil {
 		t.Fatal("source fixture")
 	}
-	policy, err := mobilemultihop.NewNodeChainExecutionPolicy(projection.Source())
+	var policy *mobilemultihop.NodeChainExecutionPolicy
+	var err error
+	if source.Schema == 4 {
+		policy, err = mobilemultihop.NewNodeChainCONNECTExecutionPolicy(prep, projection.Source())
+	} else {
+		policy, err = mobilemultihop.NewNodeChainExecutionPolicy(projection.Source())
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	physical, _ := prep.DesktopPhysicalPolicy()
-	_, meta, _, _ := physical.PhysicalReadValidated()
+	var meta mobilemultihop.DesktopPhysicalMetadata
+	if source.Schema == 4 {
+		physical, err := prep.CONNECTDesktopPhysicalPolicy()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, meta, _, err = physical.PhysicalReadValidated()
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		physical, err := prep.DesktopPhysicalPolicy()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, meta, _, err = physical.PhysicalReadValidated()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	descriptor, _ := source.Server.Digest()
 	input := sha256.Sum256([]byte(prep.LocalSource()))
 	target := mobilemultihop.Targets[0]

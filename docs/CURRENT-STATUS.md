@@ -27,7 +27,7 @@ ordinary local and execution paths keep their original checks.
 | Surface | Current source boundary | Evidence still required |
 |---|---|---|
 | Android | Typed source/profile, UI selection, native factory, Session and retained restore are implemented. | Exact-current APK/ABI build, actual encrypted Server/Compare networking and device acceptance. |
-| Windows, Linux and macOS | Distinct native execution/physical/Ready/Last owners are implemented. Public CONNECT execution editor/profile admission is being completed separately. | Published product admission, exact-current installed native acceptance and package verification. |
+| Windows, Linux and macOS | Public CONNECT Server/Compare selection, complete profiles and distinct native execution/physical/Ready/Last owners are implemented. | Exact-current installed native acceptance and package verification; the existing eight-node paired Result deadline is under correction. |
 | iPhone and iPad | The shared typed bridge and mobile restore capability exist. The Apple host adapter is being completed separately. | Actual PacketTunnel adoption, Xcode build, signing and device acceptance. |
 
 Source and actual native-object tests cover original factory ownership,
@@ -40,6 +40,17 @@ graph families, longer Server paths, other imported positions, native packet
 acceptance or live deployment. See the
 [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md) for exact
 source manifests, tests, failure controls and publication boundaries.
+
+The three desktop editors use separate CONNECT trio capabilities and recheck
+the original captured sources before connection or profile restoration. The
+public controller retains the original HTTP/HTTPS compiler and its already
+proved Local/Server choice. Actual controller code with explicit process and
+kernel models passes all six CONNECT public choices, both retained restores,
+source bounds and profile cases. Native widget and installed network acceptance
+remain separate. An older eight-node paired-path test also fails on the exact
+published baseline while reading the selected result under its original
+four-second bound. Its profile identifies repeated source validation; this
+remaining issue is not counted as a successful regression or complete release.
 
 ## November 15: original scope and bounded desktop additions
 

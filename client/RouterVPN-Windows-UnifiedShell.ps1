@@ -600,7 +600,8 @@ function UnifiedConnect{
             if($Supported-isnot[bool]-or-not$Supported){throw 'This controller has not enabled the ordered native host. The complete path is retained; update the app before connecting it.'}
             $Store=Api '/api/profiles' -Timeout 5
             $RequestedExecution=[string]$Ordered.multihop_execution
-            if(@(Get-RouterVPNOrderedValue $Capability 'ordered_executions' @())-cnotcontains$RequestedExecution){throw 'This native controller has not enabled the selected ordered execution. Your complete path is retained.'}
+            $ExecutionCapability=Get-RouterVPNOrderedExecutionCapability $Ordered.multihop_nodes $RequestedExecution
+            if(@(Get-RouterVPNOrderedValue $Capability $ExecutionCapability @())-cnotcontains$RequestedExecution){throw 'This native controller has not enabled the selected ordered execution. Your complete path is retained.'}
             $Draft=[pscustomobject]@{control_id=[string]$P.id;nodes=$Ordered.multihop_nodes;execution=$RequestedExecution;profile_tokens=(Get-RouterVPNOrderedValue (Control 'UnifiedNodeChainButton').Tag 'profile_tokens')}
             $Body=New-RouterVPNOrderedConnectPayload $Draft $Store
             $Path='/api/multihop/connect';$Timeout=380;$Label='Connecting ordered nodes…'
