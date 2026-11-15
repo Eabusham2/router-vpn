@@ -3387,3 +3387,47 @@ The source-audit companion manifest is
 `95a8c6e0aa50d6f8d62e010eae595b813632e20e03556f11b5ca28f309610160`.
 Exact observations, profile images, UI logs and finite case inventories remain
 in `desktop-connect-product-validation` and `connect-product-audit-validation`.
+
+
+## Required installed macOS CONNECT execution gate after 99000bd7
+
+The coherent ten-file gate adds an independent fourteen-case CONNECT execution
+job to the required Darwin ordered-host workflow, on both AMD64 and ARM64.
+It consumes the exact same-run, exact-source verified native bundle and retains
+the original Local, imported and layer acceptance jobs. The authoritative
+release already requires this workflow and its aggregate; the native source
+inventory and unconditional workflow-parity gate include this new suite.
+
+Six positive HTTP/HTTPS cases cover Server and both valid Compare winners with
+WG, AWG Fast and AWG Strong, and the captured Off/AES/AES+XOR entry layers.
+Eight fault cases cover wrong authentication, TLS name, public identity, final
+identity, DNS, replaced source and held cleanup. The suite checks the actual
+public controller, original selected DNS and ciphertext counters, native PF and
+utun, exact common-endpoint comparison formula and captured ownership. Last
+requires a fresh owner and proof with the original winner and no reranking.
+Held cleanup retains the exact owner until its original join completes.
+
+A pre-start cleanup callback also handles partial controller startup: it checks
+the same captured root, joins only its supervisor and peers, restores the
+original buffered join receipt, then acquires/releases the original three
+locks. Installation-alias retirement remains forbidden until that join proof
+exists. The strict runner requires the actual callback and pre-start wiring.
+
+Local evidence is deliberately bounded. The final privileged Darwin ARM64
+controller composition cross-compiled in 99.187 seconds, image SHA-256
+b6cf067cfc7f9f91e85669c74ec60ae860de4114648a9589e2d289cfd18f03c8.
+The canonical current native peer overlay cross-compiled in 55.009 seconds,
+image d4d45d13e93f4a9ea4b263f252903458eb9af211cf725ad035de28a0908e947d.
+These are CGO-disabled cross-compiles, not observed installed macOS networking.
+The runner passes all 23 roots and the mandatory workflow guard all six roots.
+The installed fourteen cases and their 38 required source records must still
+pass on the hosted macOS runners; no physical-device result is inferred.
+
+Frozen native-six manifest SHA-256:
+6e3b37ea2f5586f0e65b289f4e1480ea8e4a1612d2d2448ed5acea2c24d69729.
+Frozen central-four manifest:
+996d133aa045a21681cdd9d4e7186ab45ecd2fe827f1fcc3e8f48b6aa64d3c28.
+Final native receipt:
+3a2051a722b7de2c07444b5cdf6dc3f6f4a4d51b2e88819999d0523fc44f470b.
+All ten preimages were checked against published 99000bd7 before integration;
+original gate deadlines and production proof protections are unchanged.

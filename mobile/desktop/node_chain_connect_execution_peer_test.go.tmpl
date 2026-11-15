@@ -1,0 +1,317 @@
+//go:build (linux && !android) || (darwin && routervpn_darwin_node_chain)
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	UOT "github.com/sagernet/sing-box/common/uot"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-tun"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+)
+
+type connectExecutionPeerRequest struct {
+	Schema   int                             `json:"schema"`
+	Peer     desktopNodeChainImportedRequest `json:"peer"`
+	Protocol string                          `json:"protocol"`
+	Username string                          `json:"username"`
+	Password string                          `json:"password"`
+	Fault    string                          `json:"fault"`
+	Layers   *importedExecutionLayers        `json:"layers"`
+	Image    string                          `json:"image"`
+	ImageSHA string                          `json:"image_sha256"`
+}
+type connectExecutionProxyCapture struct {
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	TLSServerName string `json:"tls_server_name"`
+}
+
+func TestRouterVPNDesktopCONNECTExecutionReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_CONNECT_EXECUTION_REFERENCE") == "" {
+		t.Skip("explicit original imported execution peer only")
+	}
+	if os.Getenv("ROUTERVPN_CONNECT_EXECUTION_REFERENCE") != "1" {
+		t.Fatal("uncaptured imported execution peer")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, mobilemultihop.NodeChainInputLimit+1)
+	var request connectExecutionPeerRequest
+	if importedExecutionRead(reader, 32<<10, &request) != nil || request.Schema != 1 || desktopNodeChainImportedRequestValid(request.Peer) != nil || len(request.Peer.Paired.Prefixes) != 1 || request.Protocol != "http-connect" && request.Protocol != "https-connect" || request.Username == "" || request.Password == "" {
+		t.Fatal("original imported execution peer request refused")
+	}
+	switch request.Fault {
+	case "", "wrong-auth", "tls-name", "wrong-public", "wrong-final", "failed-dns", "replaced-source", "held-cleanup":
+	default:
+		t.Fatal("uncaptured CONNECT execution fault")
+	}
+	if request.Fault == "tls-name" && request.Protocol != "https-connect" {
+		t.Fatal("HTTP cannot acquire TLS fault authority")
+	}
+	image, info, digest, err := captureImportedExecutionImage(request.Image)
+	if err != nil || digest != request.ImageSHA || !filepath.IsAbs(request.Image) {
+		t.Fatal("original imported execution image changed", err)
+	}
+	_ = image.Close()
+	local, remote := netip.MustParseAddr(request.Peer.Paired.Address), netip.MustParseAddr(request.Peer.Paired.ClientAddress)
+	if local != remote {
+		t.Fatal("Darwin fixture requires captured same-host physical peer")
+	}
+	if request.Layers == nil || request.Layers.validate(request.Peer) != nil || request.Layers.Final != "off" || request.Layers.Fault != "" {
+		t.Fatal("CONNECT execution requires captured entry layer and unlayered final")
+	}
+	layers := &importedExecutionLayerPeers{}
+	var forward *importedExecutionForward
+	certificate, proxyCA := desktopNodeChainImportedCertificate(t)
+	serverName := "speed.cloudflare.com"
+	if request.Protocol == "http-connect" {
+		proxyCA, serverName = "", ""
+	}
+	var provider *desktopImportedCONNECTPeer
+	var router *nodeCONNECTInstalledMiddleRouter
+	providerRequest := request.Peer
+	if request.Fault == "wrong-final" {
+		providerRequest.Paired.FinalPassword = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{91}, 32))
+	}
+	layerRequest := importedExecutionPeerRequest{Schema: 1, Peer: providerRequest, Layers: request.Layers, Image: request.Image, ImageSHA: request.ImageSHA}
+	peer := desktopNodeChainImportedPeerStartWithHooks(t, providerRequest, local, remote, nil, &desktopNodeChainImportedPeerHooks{
+		final: layers.finalProvider(t, layerRequest),
+		decorate: func(original *desktopNodeWGHandler) tun.Handler {
+			forward = &importedExecutionForward{desktopNodeWGHandler: original}
+			return forward
+		},
+		middle: func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			var routes []desktopNodeLayerRoute
+			for _, route := range owner.routes {
+				if route.Network == "tcp" {
+					routes = append(routes, route)
+				}
+			}
+			owner.routes = routes
+			router = &nodeCONNECTInstalledMiddleRouter{nodeCONNECTRunMiddleRouter: &nodeCONNECTRunMiddleRouter{server: owner}}
+			owner.streamRouter = router
+			var secured *tls.Certificate
+			if request.Protocol == "https-connect" {
+				secured = &certificate
+			}
+			password := request.Password
+			if request.Fault == "wrong-auth" {
+				password += "-wrong-original-provider"
+			}
+			provider = desktopStartImportedCONNECTPeerAt(t, owner, request.Username, password, secured, func() { t.Error("unowned CONNECT execution cancellation") }, "", local)
+			return desktopExternalInstalledSSPeer{address: provider.address, close: provider.close}
+		},
+	})
+	peer.paired.final.streamRouter = UOT.NewRouter(&desktopImportedCONNECTRouter{server: peer.paired.final}, log.NewNOPFactory().Logger())
+	snapshot := func() nodeCONNECTInstalledReply {
+		original := peer.snapshot()
+		original.Middle.Method = request.Protocol
+		if original.Middle.RawUDP != 0 || original.Middle.UDP != 0 || original.Final.FinalRawUDP != 0 {
+			t.Fatal("CONNECT execution acquired raw UDP middle/final authority")
+		}
+		return nodeCONNECTInstalledReply{desktopNodeChainImportedReply: original, ConnectProtocol: request.Protocol, ConnectCA: proxyCA, ConnectServerName: serverName,
+			ConnectAuthRefusals: provider.auth.Load(), ConnectTargetRefusals: provider.denied.Load(), ConnectTLSRefusals: provider.tlsRefused.Load(), OpenConnectStreams: router.streams.Load(), FinalUoTVersion: 2}
+	}
+	layers.entryProvider(t, layerRequest, peer, local)
+	endpoint := peer.provider.address
+	forward.middle.Store(&endpoint)
+	endpointHost, endpointPort, endpointErr := net.SplitHostPort(endpoint)
+	endpointNumber, numberErr := strconv.Atoi(endpointPort)
+	if endpointErr != nil || numberErr != nil || endpointHost != local.String() {
+		t.Fatal("original bound imported endpoint changed")
+	}
+	// Construction occurs before the first reply or any client launch. There is
+	// no live map mutation: only the exact original provider tuple is added.
+	for _, network := range []string{"tcp"} {
+		forward.rules[network+"/"+endpoint] = desktopReferenceRule{Network: network, Address: endpointHost, Port: endpointNumber, Target: endpoint}
+	}
+	send := func(value any) {
+		if json.NewEncoder(os.Stdout).Encode(value) != nil {
+			t.Fatal("original imported execution output closed")
+		}
+	}
+	send(map[string]any{"peer": snapshot(), "middle_address": endpoint, "layers": layers.snapshot()})
+	var configure struct {
+		LocalSource string `json:"local_source"`
+		Winner      string `json:"winner"`
+	}
+	if importedExecutionRead(reader, mobilemultihop.NodeChainInputLimit, &configure) != nil {
+		t.Fatal("missing original complete local source")
+	}
+	chain, err := mobilemultihop.NewNodeChainCONNECTSource(configure.LocalSource)
+	var source mobilemultihop.NodeChainSource
+	if err != nil || json.Unmarshal([]byte(configure.LocalSource), &source) != nil || source.Schema != 4 || len(source.Nodes) != 3 || len(source.IdentitySources) != 3 {
+		t.Fatal("original literal trio source refused", err)
+	}
+	_, metadata, err := chain.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofs := metadata.Proofs
+	first := request.Peer.Paired.Prefixes[0]
+	if err != nil || len(proofs) != 3 || proofs[0].NodeID != first.NodeProofID || proofs[2].NodeID != request.Peer.Paired.FinalNodeProofID || proofs[1].Mode != request.Protocol || proofs[1].NodeID != "" || proofs[2].Mode != "shadowsocks" {
+		t.Fatal("imported/final identity separation lost", err)
+	}
+	var imported struct {
+		Config  string `json:"config"`
+		Capture string `json:"capture"`
+	}
+	var selected struct {
+		Protocol         string `json:"protocol"`
+		ExpectedPublicIP string `json:"expected_public_ip"`
+		Profile          struct {
+			External struct {
+				HTTP  *connectExecutionProxyCapture `json:"http_connect"`
+				HTTPS *connectExecutionProxyCapture `json:"https_connect"`
+			} `json:"external"`
+		} `json:"profile"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[1]), &imported) != nil || json.Unmarshal([]byte(imported.Capture), &selected) != nil {
+		t.Fatal("original CONNECT envelope changed")
+	}
+	proxyCapture := selected.Profile.External.HTTP
+	if request.Protocol == "https-connect" {
+		proxyCapture = selected.Profile.External.HTTPS
+	}
+	if proxyCapture == nil || selected.Protocol != request.Protocol || selected.ExpectedPublicIP != "203.0.113.88" || proxyCapture.Username != request.Username || proxyCapture.Password != request.Password || net.JoinHostPort(proxyCapture.Host, strconv.Itoa(proxyCapture.Port)) != endpoint {
+		t.Fatal("original CONNECT endpoint/credentials changed")
+	}
+	expectedName := serverName
+	if request.Fault == "tls-name" {
+		expectedName = "wrong-original-connect.routervpn.test"
+	}
+	if proxyCapture.TLSServerName != expectedName {
+		t.Fatal("original CONNECT TLS identity changed")
+	}
+	suffix := mobilemultihop.NodeChainServerSource{Schema: 4, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode, Nodes: source.Nodes[1:], IdentitySources: source.IdentitySources[1:]}
+	suffixRaw, _ := json.Marshal(suffix)
+	policy, err := mobilemultihop.NewNodeChainCONNECTServerPolicy(string(suffixRaw))
+	if err != nil || policy.NativeCarrierRequired() {
+		t.Fatal("portable suffix authority refused", err)
+	}
+	runtimeDir := t.TempDir()
+	if os.Chmod(runtimeDir, 0700) != nil {
+		t.Fatal("private worker root unavailable")
+	}
+	runner := &importedExecutionRunner{policy: policy, image: request.Image, imageSHA: digest, imageInfo: info, runtime: runtimeDir}
+	manager, err := multihoprelay.New(multihoprelay.Config{ListenIP: "10.78.0.1", FirstPort: 28440, LastPort: 28447, TTLSeconds: 300, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, first.NodeProofID, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := &importedExecutionAdmin{relay: manager, token: first.APIToken}
+	admin.cfg.NodeID = first.NodeProofID
+	health := peer.paired.entry.rules["tcp/10.78.0.1:8787"].Target
+	original, _ := url.Parse("http://" + health)
+	proxy := httputil.NewSingleHostReverseProxy(original)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := admin.authorized(r); err != nil {
+			http.Error(w, "original peer refused", 403)
+			return
+		}
+		if r.URL.Path == "/api/multihop/chain/lease" {
+			admin.multihopNodeChainLease(w, r)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	})
+	listener, err := net.Listen("tcp4", "10.78.0.1:8787")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 2 * time.Second}
+	done := make(chan struct{})
+	var serveError error
+	go func() { serveError = server.Serve(listener); close(done) }()
+	closed := false
+	closeAll := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := manager.Close(ctx); err != nil {
+			return err
+		}
+		if !runner.joined() {
+			return errors.New("original relay workers did not join")
+		}
+		if err := server.Shutdown(ctx); err != nil {
+			return err
+		}
+		if err := importedExecutionJoinHTTP(ctx, done, &serveError); err != nil {
+			return err
+		}
+		provider.close()
+		layers.close()
+		if router.streams.Load() != 0 {
+			return errors.New("original CONNECT streams did not join")
+		}
+		closed = true
+		return nil
+	}
+	t.Cleanup(func() {
+		if !closed {
+			if err := closeAll(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	switch configure.Winner {
+	case "server":
+		forward.localDelay.Store(int64(75 * time.Millisecond))
+	case "local":
+		forward.serverDelay.Store(int64(75 * time.Millisecond))
+	case "":
+	default:
+		t.Fatal("unknown captured comparison timing arm")
+	}
+	send(map[string]any{"ready": true, "source_sha256": policy.Descriptor().SourceSHA256})
+	for {
+		var control struct {
+			Command string `json:"command"`
+		}
+		if err := importedExecutionRead(reader, 128, &control); err != nil {
+			t.Fatal(err)
+		}
+		if control.Command == "quit" {
+			if err := closeAll(); err != nil {
+				t.Fatal(err)
+			}
+			send(map[string]any{"joined": true, "launches": runner.launches.Load()})
+			return
+		}
+		if control.Command == "tls-refused" {
+			if request.Protocol != "https-connect" {
+				t.Fatal("HTTP has no TLS refusal authority")
+			}
+			ctx, cancel := context.WithTimeout(peer.middle.ctx, 5*time.Second)
+			err := provider.awaitCertificateRefusal(ctx)
+			cancel()
+			if err != nil {
+				t.Fatal("original HTTPS peer did not receive its certificate refusal", err)
+			}
+			control.Command = "stats"
+		}
+		if control.Command != "stats" {
+			if err := peer.control(control.Command); err != nil {
+				t.Fatal(err)
+			}
+		}
+		send(map[string]any{"peer": snapshot(), "launches": runner.launches.Load(), "workers_joined": runner.joined(), "layers": layers.snapshot()})
+	}
+}

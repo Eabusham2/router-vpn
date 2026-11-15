@@ -52,6 +52,17 @@ published baseline while reading the selected result under its original
 four-second bound. Its profile identifies repeated source validation; this
 remaining issue is not counted as a successful regression or complete release.
 
+The required macOS ordered-host workflow now also runs a separate installed
+CONNECT execution suite on Intel and Apple Silicon, using the exact same-run
+verified native bundle. Its fourteen cases exercise encrypted HTTP/HTTPS
+Server and Compare, the captured entry Start Layers, original DNS, native
+PF/utun ownership, retained Last without reranking, and authentication,
+source-replacement and cleanup failures. Partial controller startup must join
+the captured supervisor and peers and release the original locks before an
+installation alias may retire. The final Darwin controller and peer source
+compositions cross-compile; the strict runner and workflow controls pass.
+Actual macOS execution of this new suite remains required CI evidence.
+
 ## November 15: original scope and bounded desktop additions
 
 ### Windows and Linux imported Shadowsocks Server/Compare
