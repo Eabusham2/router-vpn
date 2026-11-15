@@ -28,6 +28,7 @@ N = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(N)
 PHYSICAL = N.load('desktop_native_windows_physical_test', 'test_windows_node_physical.py')
 NODE = N.load('desktop_native_windows_source_test', 'test_desktop_node_physical.py')
+DARWIN_LIFECYCLE = N.load('desktop_native_darwin_lifecycle_test', 'test_desktop_darwin_node_chain_lifecycle.py')
 PT = N.load('desktop_native_pt_inventory_test', 'test_desktop_pt_inventory.py')
 
 
@@ -124,14 +125,20 @@ class NativeSocketUIDGate(unittest.TestCase):
             with self.subTest(failure=failure.__name__):
                 self.check_matching_hosts(source_phase_failure=failure)
 
-    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None, socks_reference_failure=None, proxy_reference_failure=None, connect_reference_failure=None, packet_reference_failure=None, dns_reference_failure=None, desktop_pt_failure=None, source_phase_failure=None):
+    def test_failed_timed_out_or_missing_darwin_lifecycle_phase_blocks_packaging(self):
+        for phase in DARWIN_LIFECYCLE.SOURCE_PHASES:
+            for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
+                with self.subTest(phase=phase, failure=failure.__name__):
+                    self.check_matching_hosts(darwin_lifecycle_failure=(phase, failure))
+
+    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None, physical_failure=None, command_retirement_failure=None, socks_reference_failure=None, proxy_reference_failure=None, connect_reference_failure=None, packet_reference_failure=None, dns_reference_failure=None, desktop_pt_failure=None, source_phase_failure=None, darwin_lifecycle_failure=None):
         class CompilerBoundary(Exception):
             pass
 
         targets = ('linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64')
         if physical_failure is not None or source_phase_failure is not None:
             targets = tuple(target for target in targets if target.startswith('windows/'))
-        if darwin_route_failure is not None:
+        if darwin_route_failure is not None or darwin_lifecycle_failure is not None:
             targets = tuple(target for target in targets if target.startswith('darwin/'))
         if command_retirement_failure is not None:
             targets = tuple(target for target in targets if target.startswith('linux/'))
@@ -152,6 +159,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 forwarder_errors = []
                 openvpn_errors = []
                 darwin_route_errors = []
+                darwin_lifecycle_errors = []
                 physical_errors = []
                 command_retirement_errors = []
                 socks_reference_errors = []
@@ -373,7 +381,30 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(args[2:], [])
                         self.assertEqual(kwargs, {'env': env, 'timeout': 120})
                         return ''
-                    if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle.py'), str(ROOT/'deploy/test_desktop_darwin_retirement.py')):
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle.py'):
+                        self.assertEqual(system, 'darwin')
+                        self.assertEqual(args[2:5], [str(source.resolve()), '--tags='+','.join(N.tags(target)), '--phase'])
+                        self.assertEqual(args[6], '--receipt')
+                        self.assertEqual(len(args), 8)
+                        self.assertEqual(kwargs, {'env': env, 'timeout': 1800})
+                        phase = args[5]
+                        if darwin_lifecycle_failure and phase == darwin_lifecycle_failure[0]:
+                            failure = darwin_lifecycle_failure[1]
+                            if failure is ValueError:
+                                return ''
+                            error = (failure(45, args) if failure is subprocess.CalledProcessError else
+                                     failure(args, kwargs['timeout']))
+                            darwin_lifecycle_errors.append(error)
+                            raise error
+                        names = DARWIN_LIFECYCLE.phase_inventory()[phase]
+                        receipt = {'format': 'routervpn-darwin-lifecycle-phase-v1', 'phase': phase,
+                                   'source_sha256': 'a'*64, 'architecture': arch, 'tags': ','.join(N.tags(target)),
+                                   'completed': names, 'images': {name: 'b'*64 for name in names},
+                                   'verdicts': ({package: sum(1 + len(leaves) for leaves in cases.values())
+                                                for package, cases in DARWIN_LIFECYCLE.PHASES.items()} if phase == 'baselines' else {})}
+                        Path(args[7]).write_text(json.dumps(receipt))
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_retirement.py'):
                         self.assertEqual(system, 'darwin')
                         self.assertEqual(args[2:], [str(source.resolve()), '--tags='+','.join(N.tags(target))])
                         self.assertEqual(kwargs, {'env': env, 'timeout': 1800})
@@ -608,10 +639,11 @@ class NativeSocketUIDGate(unittest.TestCase):
                 # Python 3.12. Keep every original boundary and reverse cleanup
                 # order without exceeding that interpreter's nesting limit.
                 with contextlib.ExitStack() as boundaries:
-                    boundaries.enter_context(patch.object(N, 'load', side_effect=lambda name, path: PHYSICAL if path == 'test_windows_node_physical.py' else NODE if path == 'test_desktop_node_physical.py' else original_load(name, path)))
+                    boundaries.enter_context(patch.object(N, 'load', side_effect=lambda name, path: PHYSICAL if path == 'test_windows_node_physical.py' else NODE if path == 'test_desktop_node_physical.py' else DARWIN_LIFECYCLE if path == 'test_desktop_darwin_node_chain_lifecycle.py' else original_load(name, path)))
                     boundaries.enter_context(patch.object(PHYSICAL, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})))
                     boundaries.enter_context(patch.object(NODE, 'checked_sources', side_effect=lambda value: (value, {'modeled-source': 'a'*64})))
                     boundaries.enter_context(patch.object(NODE, 'source_phase_inventory', return_value=(source_names, source_images)))
+                    boundaries.enter_context(patch.object(DARWIN_LIFECYCLE, 'checked_source', return_value='a'*64))
                     boundaries.enter_context(patch.object(N, 'environment', return_value=env))
                     boundaries.enter_context(patch.object(N, 'run', side_effect=run))
                     go_sockets = boundaries.enter_context(patch.object(N.GO_SOCKETS, 'environment', side_effect=lambda **options: options['env']))
@@ -627,7 +659,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                     boundaries.enter_context(patch.object(N.POLICY.AMNEZIA, 'verify'))
                     dnssec = boundaries.enter_context(patch.object(N.DNSSEC, 'build', side_effect=build_dnssec))
                     boundaries.enter_context(patch.object(N, 'stage_cronet', side_effect=stage_cronet))
-                    expected_error = desktop_pt_failure or source_phase_failure or physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or socks_reference_failure or proxy_reference_failure or connect_reference_failure or packet_reference_failure or dns_reference_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
+                    expected_error = (darwin_lifecycle_failure[1] if darwin_lifecycle_failure else None) or desktop_pt_failure or source_phase_failure or physical_failure or command_retirement_failure or darwin_route_failure or forwarder_failure or socks_reference_failure or proxy_reference_failure or connect_reference_failure or packet_reference_failure or dns_reference_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
@@ -636,6 +668,14 @@ class NativeSocketUIDGate(unittest.TestCase):
                     dnssec.assert_called_once_with(target, dnssec_destination, compiled=None, env=env)
                 else:
                     dnssec.assert_not_called()
+                if darwin_lifecycle_failure:
+                    phases = [args[5] for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle.py')]
+                    self.assertEqual(phases, ['baselines'] if darwin_lifecycle_failure[0] == 'baselines' else list(DARWIN_LIFECYCLE.SOURCE_PHASES))
+                    self.assertFalse(any(args[:2] == ['go', 'build'] for args in calls))
+                    self.assertFalse(any(len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_retirement_runner.py') for args in calls))
+                    if darwin_lifecycle_errors:
+                        self.assertIs(caught.exception, darwin_lifecycle_errors[0])
+                    continue
                 if desktop_pt_errors:
                     self.assertEqual(len(desktop_pt_errors), 1)
                     self.assertIs(caught.exception, desktop_pt_errors[0])
@@ -1013,11 +1053,12 @@ class NativeSocketUIDGate(unittest.TestCase):
                     str(ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle.py'),
                     str(ROOT/'deploy/test_desktop_darwin_retirement_runner.py'),
                     str(ROOT/'deploy/test_desktop_darwin_retirement.py'))]
-                self.assertEqual(len(early_darwin), 4 if system == 'darwin' else 0)
+                self.assertEqual(len(early_darwin), 5 if system == 'darwin' else 0)
                 if early_darwin:
                     self.assertEqual([args[1] for args in early_darwin], [str(ROOT/'deploy'/name) for name in (
                         'test_desktop_darwin_node_chain_lifecycle_runner.py', 'test_desktop_darwin_node_chain_lifecycle.py',
-                        'test_desktop_darwin_retirement_runner.py', 'test_desktop_darwin_retirement.py')])
+                        'test_desktop_darwin_node_chain_lifecycle.py', 'test_desktop_darwin_retirement_runner.py', 'test_desktop_darwin_retirement.py')])
+                    self.assertEqual([args[5] for args in early_darwin[1:3]], list(DARWIN_LIFECYCLE.SOURCE_PHASES))
                     self.assertLess(calls.index(early_darwin[-1]), calls.index(timers[0]))
                 for name in ('test_desktop_darwin_guardian_runner.py', 'test_desktop_darwin_observation.py'):
                     self.assertIn(ROOT/'deploy'/name, N.inputs())

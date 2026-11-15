@@ -8,11 +8,16 @@ import json
 import os
 import platform
 import re
+import stat
+import sys
+import time
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_TIMEOUT = "120s"
 PROCESS_TIMEOUT = 600
+SOURCE_PHASES = ("baselines", "controls")
+SOURCE_PHASE_TIMEOUT = 1800
 PHASES = {
     "protocol/tun": {
         "TestRouterVPNDarwinNodeChainInboundRetirement": (
@@ -413,13 +418,78 @@ def require_control(label, package, code, output, witness, message):
         raise ValueError("Darwin lifecycle causal control failed: " + label + ": " + str(error)) from error
 
 
-def check(source, tags=""):
+def phase_inventory():
+    names = {"baselines": list(PHASES), "controls": [item[0] for item in MUTATIONS]}
+    for values in names.values():
+        if not values or len(values) != len(set(values)):
+            raise ValueError("Darwin lifecycle phase inventory is empty or duplicated")
+    return names
+
+
+def validate_phase(value, phase, source_hash, architecture, tags):
+    names = phase_inventory()
+    if (phase not in SOURCE_PHASES or not isinstance(value, dict) or
+            set(value) != {"format", "phase", "source_sha256", "architecture", "tags", "completed", "images", "verdicts"} or
+            value["format"] != "routervpn-darwin-lifecycle-phase-v1" or value["phase"] != phase or
+            value["source_sha256"] != source_hash or not re.fullmatch(r"[0-9a-f]{64}", source_hash) or
+            value["architecture"] != architecture or architecture not in ("amd64", "arm64") or
+            value["tags"] != tags or value["completed"] != names[phase]):
+        raise ValueError("Darwin lifecycle phase lost its exact source, target or inventory")
+    images = value["images"]
+    if (not isinstance(images, dict) or set(images) != set(names[phase]) or
+            any(not isinstance(item, str) or not re.fullmatch(r"[0-9a-f]{64}", item) for item in images.values())):
+        raise ValueError("Darwin lifecycle phase lost its original compiled images")
+    expected = ({package: sum(1 + len(leaves) for leaves in cases.values())
+                 for package, cases in PHASES.items()} if phase == "baselines" else {})
+    if value["verdicts"] != expected:
+        raise ValueError("Darwin lifecycle phase omitted its complete original verdicts")
+
+
+def execute_partitioned(source, tags, env, runner):
+    """Require both serial phases with the existing parent and child bounds."""
+    source = source.resolve()
+    source_hash = checked_source(source, env)
+    architecture = env.get("GOARCH")
+    results = []
+    with tempfile.TemporaryDirectory(prefix="routervpn-darwin-lifecycle-receipts-") as directory:
+        for phase in SOURCE_PHASES:
+            if checked_source(source, env) != source_hash:
+                raise ValueError("Darwin lifecycle source changed between phases")
+            path = Path(directory) / (phase + ".json")
+            output = runner([sys.executable, Path(__file__).resolve(), source,
+                             "--tags=" + tags, "--phase", phase, "--receipt", path],
+                            env=env, timeout=SOURCE_PHASE_TIMEOUT)
+            print(output, flush=True)
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("Darwin lifecycle phase has no bounded regular receipt")
+            record = path.stat()
+            if not stat.S_ISREG(record.st_mode) or record.st_size > 65536:
+                raise ValueError("Darwin lifecycle phase has no bounded regular receipt")
+            value = json.loads(path.read_text(encoding="utf-8"))
+            validate_phase(value, phase, source_hash, architecture, tags)
+            if checked_source(source, env) != source_hash:
+                raise ValueError("Darwin lifecycle source changed during its original phase")
+            results.append(value)
+    if [value["phase"] for value in results] != list(SOURCE_PHASES):
+        raise ValueError("Darwin lifecycle requires both complete original phases")
+    print("Darwin ordered component lifecycle: all baseline and control phases passed", flush=True)
+    return results
+
+
+def check(source, tags="", *, phase="complete", receipt_path=None):
+    if (phase not in ("complete", *SOURCE_PHASES) or
+            (phase == "complete") != (receipt_path is None)):
+        raise ValueError("Darwin lifecycle cannot publish a partial complete receipt")
+    if receipt_path is not None and (receipt_path.exists() or receipt_path.is_symlink()):
+        raise ValueError("Darwin lifecycle receipt must be a fresh owned path")
     source, env = source.resolve(), os.environ.copy()
     source_hash = checked_source(source, env)
-    verdicts, images = {}, {}
+    verdicts, images, control_images = {}, {}, {}
     with tempfile.TemporaryDirectory(prefix="routervpn-darwin-lifecycle-") as directory:
         directory = Path(directory)
-        for package, cases in PHASES.items():
+        for package, cases in (PHASES.items() if phase != "controls" else ()):
+            started = time.monotonic()
+            print("Darwin lifecycle baseline start: " + package, flush=True)
             image = directory / (package.replace("/", "-") + ".test")
             compile_image(source, package, image, tags, env)
             selector = "^(" + "|".join(cases) + ")$"
@@ -427,14 +497,17 @@ def check(source, tags=""):
             _, listing = validator.run([image, "-test.list=" + selector], cwd=source, env=env)
             discover(listing, cases)
             verdicts[package] = 0
-            for phase in phase_groups(package, cases):
-                selector = "^(" + "|".join(phase) + ")$"
+            for group in phase_groups(package, cases):
+                selector = "^(" + "|".join(group) + ")$"
                 code, output = execute(source, package, image, selector, env)
                 if code != 0:
                     raise ValueError("Darwin lifecycle baseline did not exit successfully")
-                verdicts[package] += validator.require_pass(output, phase)
+                verdicts[package] += validator.require_pass(output, group)
             images[package] = hashlib.sha256(image.read_bytes()).hexdigest()
-        for label, package, relative, before, after, witness, message in MUTATIONS:
+            print("Darwin lifecycle baseline passed: " + package + " (%.3fs)" % (time.monotonic() - started), flush=True)
+        for label, package, relative, before, after, witness, message in (MUTATIONS if phase != "baselines" else ()):
+            started = time.monotonic()
+            print("Darwin lifecycle control start: " + label, flush=True)
             target = source / relative
             original = target.read_bytes()
             raw = original.decode("utf-8")
@@ -447,11 +520,22 @@ def check(source, tags=""):
                 selector = "/".join("^" + re.escape(part) + "$" for part in witness.split("/"))
                 code, output = execute(source, package, image, selector, env, failure=True)
                 require_control(label, package, code, output, witness, message)
-                print("Rejected Darwin lifecycle control: " + label, flush=True)
+                control_images[label] = hashlib.sha256(image.read_bytes()).hexdigest()
+                print("Rejected Darwin lifecycle control: " + label + " (%.3fs)" % (time.monotonic() - started), flush=True)
             finally:
                 target.write_bytes(original)
         if checked_source(source, env) != source_hash:
             raise ValueError("Darwin lifecycle failed to restore its original source")
+    if phase != "complete":
+        retained = images if phase == "baselines" else control_images
+        value = {"format": "routervpn-darwin-lifecycle-phase-v1", "phase": phase,
+                 "source_sha256": source_hash, "architecture": env.get("GOARCH"), "tags": tags,
+                 "completed": list(retained), "images": retained, "verdicts": verdicts}
+        validate_phase(value, phase, source_hash, env.get("GOARCH"), tags)
+        with receipt_path.open("x", encoding="utf-8") as output:
+            json.dump(value, output, sort_keys=True)
+        print("Darwin lifecycle phase passed: " + phase, flush=True)
+        return value
     print("Darwin ordered component lifecycle: " + json.dumps({
         "schema": 1, "kind": "darwin-ordered-component-lifecycle-v1",
         "source_sha256": source_hash, "race_image_sha256": images,
@@ -464,5 +548,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--tags", default="")
+    parser.add_argument("--phase", choices=("complete", *SOURCE_PHASES), default="complete")
+    parser.add_argument("--receipt", type=Path)
     arguments = parser.parse_args()
-    check(arguments.source, arguments.tags)
+    check(arguments.source, arguments.tags, phase=arguments.phase, receipt_path=arguments.receipt)

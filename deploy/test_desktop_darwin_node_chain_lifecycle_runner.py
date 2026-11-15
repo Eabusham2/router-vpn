@@ -3,6 +3,11 @@
 from pathlib import Path
 import importlib.util
 import json
+import contextlib
+import io
+import os
+import tempfile
+from unittest.mock import patch
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -169,6 +174,134 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
         self.assertIn("exact_failures=True", diagnostic)
         self.assertIn("witness_message=False", diagnostic)
         self.assertNotIn(raw, diagnostic)
+
+
+class DarwinLifecyclePhases(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="darwin-lifecycle-phases-")
+        self.addCleanup(temporary.cleanup)
+        self.source = Path(temporary.name)
+        self.digest = "a" * 64
+        self.calls = []
+
+    def phase_receipt(self, phase):
+        names = RUNNER.phase_inventory()[phase]
+        return {"format": "routervpn-darwin-lifecycle-phase-v1", "phase": phase,
+                "source_sha256": self.digest, "architecture": "amd64", "tags": "original-tags",
+                "completed": list(names), "images": {name: "b" * 64 for name in names},
+                "verdicts": ({package: sum(1 + len(leaves) for leaves in cases.values())
+                              for package, cases in RUNNER.PHASES.items()} if phase == "baselines" else {})}
+
+    def orchestrate(self, fault=None, target="baselines"):
+        original = self.digest
+        def child(command, *, env, timeout):
+            self.assertEqual(timeout, 1800)
+            self.assertEqual(env, {"GOARCH": "amd64", "original": "environment"})
+            self.assertEqual(command[2:4], [self.source, "--tags=original-tags"])
+            phase = command[5]
+            self.assertEqual(phase, RUNNER.SOURCE_PHASES[len(self.calls)])
+            self.assertEqual(command[4], "--phase")
+            self.assertEqual(command[6], "--receipt")
+            self.calls.append(phase)
+            path = command[7]
+            value = self.phase_receipt(phase)
+            if phase == target:
+                if fault == "failed-child": raise RuntimeError("original compiler/test failed")
+                if fault == "missing-receipt": return "partial native output"
+                if fault == "changed-source": self.digest = "c" * 64
+                if fault == "source": value["source_sha256"] = "c" * 64
+                if fault == "architecture": value["architecture"] = "arm64"
+                if fault == "tags": value["tags"] = "foreign-tags"
+                if fault == "phase": value["phase"] = "controls" if phase == "baselines" else "baselines"
+                if fault == "missing": value["completed"].pop()
+                if fault == "duplicate": value["completed"].append(value["completed"][0])
+                if fault == "order": value["completed"].reverse()
+                if fault == "missing-image": value["images"].pop(next(iter(value["images"])))
+                if fault == "foreign-image": value["images"]["foreign"] = "b" * 64
+                if fault == "bad-image": value["images"][next(iter(value["images"]))] = "invalid"
+                if fault == "verdicts": value["verdicts"] = {"foreign": 1}
+                if fault == "extra": value["extra"] = True
+                if fault == "oversized": path.write_text(" " * 65537); return ""
+                if fault == "symlink":
+                    alternate = self.source / "foreign-receipt.json"
+                    alternate.write_text(json.dumps(value))
+                    path.symlink_to(alternate)
+                    return ""
+            path.write_text(json.dumps(value))
+            return "phase completed"
+        with patch.object(RUNNER, "checked_source", side_effect=lambda source, env: self.digest), contextlib.redirect_stdout(io.StringIO()):
+            try:
+                return RUNNER.execute_partitioned(self.source, "original-tags", {"GOARCH": "amd64", "original": "environment"}, child)
+            finally:
+                self.digest = original
+
+    def test_both_serial_phases_are_mandatory_with_original_bounds(self):
+        result = self.orchestrate()
+        self.assertEqual([item["phase"] for item in result], ["baselines", "controls"])
+        self.assertEqual(sum(result[0]["verdicts"].values()), 316)
+        self.assertEqual(len(result[0]["images"]), 6)
+        self.assertEqual(len(result[1]["images"]), 43)
+        self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
+        self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
+
+    def test_bad_or_incomplete_phase_cannot_certify_complete_lifecycle(self):
+        faults = ("failed-child", "missing-receipt", "changed-source", "source", "architecture", "tags", "phase",
+                  "missing", "duplicate", "order", "missing-image", "foreign-image", "bad-image", "verdicts", "extra", "oversized", "symlink")
+        for phase in RUNNER.SOURCE_PHASES:
+            for fault in faults:
+                with self.subTest(phase=phase, fault=fault):
+                    self.calls = []
+                    with self.assertRaises((ValueError, RuntimeError)):
+                        self.orchestrate(fault, phase)
+                    self.assertEqual(self.calls, ["baselines"] if phase == "baselines" else list(RUNNER.SOURCE_PHASES))
+
+    def test_partial_invocation_cannot_publish_full_completion(self):
+        for phase, path in (("unknown", None), ("baselines", None), ("controls", None), ("complete", self.source / "result.json")):
+            with self.subTest(phase=phase), self.assertRaisesRegex(ValueError, "partial complete"):
+                RUNNER.check(self.source, phase=phase, receipt_path=path)
+        path = self.source / "result.json"
+        path.write_text("original receipt")
+        with self.assertRaisesRegex(ValueError, "fresh owned"):
+            RUNNER.check(self.source, phase="controls", receipt_path=path)
+        self.assertEqual(path.read_text(), "original receipt")
+
+    def test_phase_writer_executes_exact_original_tests_and_restores_every_mutant(self):
+        # Model compiler/process boundaries only. The actual check() traversal,
+        # exact native event validator, mutation application and restoration run.
+        before = self.source / "target.go"
+        before.write_text("original")
+        cases = {"TestOriginal": ("child",)}
+        phases = {"protocol/tun": cases}
+        mutation = ("omitted-owner", "protocol/tun", "target.go", "original", "defective", "TestOriginal/child", "original owner omitted")
+        for phase in RUNNER.SOURCE_PHASES:
+            builds, runs = [], []
+            destination = self.source / (phase + ".json")
+            def compile_image(source, package, image, tags, env):
+                builds.append(before.read_text())
+                image.write_bytes(before.read_bytes())
+            def execute(source, package, image, selection, env, failure=False):
+                runs.append((selection, failure))
+                if failure:
+                    rows = wire(package, cases)
+                    rows.insert(-3, {"Package": "github.com/sagernet/sing-box/" + package, "Action": "output", "Test": "TestOriginal/child", "Output": "original owner omitted"})
+                    for row in rows:
+                        if row["Action"] == "pass": row["Action"] = "fail"
+                    return 1, "\n".join(json.dumps(row) for row in rows)
+                return 0, "\n".join(json.dumps(row) for row in wire(package, cases))
+            validator = RUNNER.receipt("protocol/tun")
+            validator.run = lambda *args, **kwargs: (0, "TestOriginal\n")
+            with patch.object(RUNNER, "PHASES", phases), patch.object(RUNNER, "MUTATIONS", (mutation,)), \
+                 patch.object(RUNNER, "checked_source", return_value=self.digest), \
+                 patch.object(RUNNER, "compile_image", side_effect=compile_image), \
+                 patch.object(RUNNER, "execute", side_effect=execute), \
+                 patch.object(RUNNER, "receipt", return_value=validator), \
+                 patch.dict(os.environ, {"GOARCH": "amd64"}), contextlib.redirect_stdout(io.StringIO()):
+                result = RUNNER.check(self.source, "original-tags", phase=phase, receipt_path=destination)
+            self.assertEqual(result, json.loads(destination.read_text()))
+            self.assertEqual(builds, ["original"] if phase == "baselines" else ["defective"])
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0][1], phase == "controls")
+            self.assertEqual(before.read_text(), "original")
 
 
 if __name__ == "__main__":
