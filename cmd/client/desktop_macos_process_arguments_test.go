@@ -28,6 +28,7 @@ func TestMacOSProcessArgumentsRetainExactConcreteFamily(t *testing.T) {
 	}{
 		{"original-default", "", "routervpn-external"},
 		{"explicit-external", macosprocess.ExternalFamily, "routervpn-external"},
+		{"paired-node", macosprocess.NodeFamily, "routervpn-node"},
 		{"ordered-node-chain", macosprocess.NodeChainFamily, "routervpn-node-chain"},
 		{"ordered-socks", macosprocess.NodeChainSOCKSFamily, "routervpn-node-chain-socks"},
 		{"candidate-prefix", macosprocess.CandidatePrefixFamily, "routervpn-node-candidate-prefix"},

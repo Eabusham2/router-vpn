@@ -49,10 +49,14 @@ func asyncMeasurementPathContext(parent context.Context, a *app, p common.Router
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	paired, err := captureDesktopPairedMeasurement(parent, a, p, st)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	binding := &asyncMeasurementAdoption{
 		owner: a, session: session, stateToken: mtuStateSnapshotToken(st), profiles: profiles,
 		multihop: st.Mode == "multihop", graph: graph, generation: homeExitProofs.generation(a),
-		tor: tor, importedOpenVPN: imported,
+		tor: tor, importedOpenVPN: imported, pairedNode: paired,
 	}
 	// The observer and terminal persistence use the exact same immutable
 	// binding. Stop cancels HTTP only; it never stops or replaces the VPN.
@@ -61,6 +65,7 @@ func asyncMeasurementPathContext(parent context.Context, a *app, p common.Router
 		return nil, nil, nil, err
 	}
 	ctx = context.WithValue(ctx, asyncMeasurementBindingKey{}, binding)
+	ctx = withDesktopPairedMeasurement(ctx, paired)
 	return ctx, stop, func() error { return binding.validateContext(ctx) }, nil
 }
 

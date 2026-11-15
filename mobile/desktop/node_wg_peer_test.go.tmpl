@@ -114,6 +114,7 @@ func startDesktopExternalInstalledPacket(t *testing.T, server *desktopNodeLayerS
 // client, one cryptographic peer and fixed inner DNS/health/echo destinations.
 // The application cannot launch it or supply an arbitrary forwarding rule.
 type desktopNodeWGRequest struct {
+	BenchmarkPort   int    `json:"benchmark_port,omitempty"`
 	Schema          int    `json:"schema"`
 	Address         string `json:"address"`
 	ClientAddress   string `json:"client_address"`
@@ -129,7 +130,7 @@ func desktopNodeWGRequestIdentity(request desktopNodeWGRequest) (netip.Addr, net
 	bad := errors.New("WireGuard reference requires its exact captured physical and cryptographic peers")
 	local, localErr := netip.ParseAddr(request.Address)
 	remote, remoteErr := netip.ParseAddr(request.ClientAddress)
-	if request.Schema != 1 || localErr != nil || remoteErr != nil || !local.Is4() || !remote.Is4() ||
+	if !desktopNodePrivateBenchmarkCapture(request.BenchmarkPort, request.NodeProofID) || request.Schema != 1 || localErr != nil || remoteErr != nil || !local.Is4() || !remote.Is4() ||
 		!local.IsPrivate() || !remote.IsPrivate() || local.String() != request.Address || remote.String() != request.ClientAddress ||
 		local != remote && (local.String() != "192.168.210.2" || remote.String() != "192.168.210.1") {
 		return netip.Addr{}, netip.Addr{}, "", bad
@@ -512,6 +513,10 @@ func runDesktopNodeUDPReferenceWithLayer(t *testing.T, reader *bufio.Reader, req
 	if request.DirectRouter {
 		direct = startDesktopNodeRouterHealth(t, netip.MustParseAddr("10.77.0.1"), request.NodeProofID)
 	}
+	var benchmark *desktopNodeChainBenchmark
+	if request.BenchmarkPort != 0 {
+		benchmark = desktopNodeChainBenchmarkStart(t, request.BenchmarkPort)
+	}
 	rules := map[string]desktopReferenceRule{}
 	for _, rule := range []desktopReferenceRule{
 		{Network: "udp", Address: "192.168.50.133", Port: 53, Target: dnsListener.LocalAddr().String()},
@@ -520,6 +525,13 @@ func runDesktopNodeUDPReferenceWithLayer(t *testing.T, reader *bufio.Reader, req
 		{Network: "tcp", Address: "2001:db8::99", Port: 9999}, {Network: "udp", Address: "2001:db8::99", Port: 9999},
 	} {
 		rules[rule.Network+"/"+net.JoinHostPort(rule.Address, fmt.Sprint(rule.Port))] = rule
+	}
+	if benchmark != nil {
+		target, allowed := benchmark.route("udp", "10.77.0.1:45998")
+		if !allowed {
+			t.Fatal("original private benchmark lost its exact route")
+		}
+		rules["udp/10.77.0.1:45998"] = desktopReferenceRule{Network: "udp", Address: "10.77.0.1", Port: 45998, Target: target}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	handler := &desktopNodeWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: ctx, cancel: cancel, rules: rules, owned: map[io.Closer]bool{}}}
@@ -578,6 +590,9 @@ func runDesktopNodeUDPReferenceWithLayer(t *testing.T, reader *bufio.Reader, req
 	}
 	respond := func() {
 		reply := desktopNodeLayerReply{Schema: 1, Address: address, BaseAddress: baseAddress, ProbeNetwork: "udp", RawUDP: bind.packets.Load(), PlainTCP: handler.tcp.Load(), PlainUDP: handler.udp.Load(), DNSQueries: dnsQueries.Load(), RouterQueries: health.count(), DirectQueries: direct.count()}
+		if benchmark != nil {
+			reply.Benchmark = benchmark.snapshot()
+		}
 		if layer != nil {
 			reply.AESAddress = aesAddress
 			reply.PhysicalClientAddress, reply.RelaySourceAddress = layer.physicalClient.String(), layer.relaySource.String()
@@ -610,6 +625,10 @@ func runDesktopNodeUDPReferenceWithLayer(t *testing.T, reader *bufio.Reader, req
 		}
 		switch strings.TrimSuffix(string(line), "\n") {
 		case "stats":
+		case "hold-benchmark", "release-benchmark":
+			if err := benchmark.control(strings.TrimSuffix(string(line), "\n")); err != nil {
+				t.Fatal(err)
+			}
 		case "fail-dns":
 			failedDNS.Store(true)
 		case "restore-dns":
@@ -1096,5 +1115,33 @@ func TestRouterVPNDesktopNodeWireGuardOuterCannotBypassFinal(t *testing.T) {
 				t.Fatal("final WireGuard DNS positive control skipped its encrypted peer", observed)
 			}
 		})
+	}
+}
+
+func TestRouterVPNDesktopNodePairedBenchmarkSource(t *testing.T) {
+	for _, kind := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, fault := range []string{"original", "foreign-port", "missing-identity"} {
+			t.Run(kind+"/"+fault, func(t *testing.T) {
+				config, options := desktopReferenceFixture(t)
+				digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + options.Peers[0].PublicKey))
+				request := desktopNodeWGRequest{Schema: 1, Address: "192.168.210.2", ClientAddress: "192.168.210.1", PrivateKey: config.PrivateKey,
+					ClientPublicKey: config.Peers[0].PublicKey, PreSharedKey: config.Peers[0].PreSharedKey, NodeProofID: hex.EncodeToString(digest[:]), BenchmarkPort: 45998}
+				if fault == "foreign-port" {
+					request.BenchmarkPort = 45999
+				}
+				if fault == "missing-identity" {
+					request.NodeProofID = ""
+				}
+				var err error
+				if kind == "wg" {
+					_, _, _, err = desktopNodeWGRequestIdentity(request)
+				} else {
+					_, _, _, err = desktopNodeAWGRequestIdentity(desktopNodeAWGRequest{desktopNodeWGRequest: request, Mode: kind, Parameters: config.Parameters})
+				}
+				if (err == nil) != (fault == "original") {
+					t.Fatal("private benchmark changed original encrypted source admission", err)
+				}
+			})
+		}
 	}
 }

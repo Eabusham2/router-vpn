@@ -357,7 +357,7 @@ def _spawn_watcher() -> int:
             os.close(descriptor)
 
 
-def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capture=None, node_chain_capture=None, candidate_prefix_capture=None) -> int:
+def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capture=None, node_chain_capture=None, candidate_prefix_capture=None, node_capture=None) -> int:
     root = _linux.root_dir()
     store = _linux.read_store(root)
     runtime_id = _linux.safe_profile_id()
@@ -366,7 +366,7 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
     control_profile = _linux.required_profile(store, control_id, "policy/control")
     policy = _linux.policy_value(control_profile)
     previous = _linux.read_state(root)
-    if sum(value is not None for value in (external_capture, node_chain_capture, candidate_prefix_capture)) > 1:
+    if sum(value is not None for value in (external_capture, node_chain_capture, candidate_prefix_capture, node_capture)) > 1:
         raise RuntimeError('macOS baseline cannot combine independent native policy families')
     if external_capture is not None:
         external_capture = _darwin_external_capture(external_capture)
@@ -386,6 +386,14 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
         policy = node_chain_capture['policy']
         if retained_state is None and store.get('selected_id') != node_chain_capture['profile_id']:
             raise RuntimeError('macOS ordered baseline changed its original selected Router control')
+    if node_capture is not None:
+        node_capture = _darwin_node_capture(node_capture)
+        if retained_state is not None:
+            _darwin_node_state(retained_state, node_capture)
+        _darwin_node_profile(control_profile, runtime_id, control_id, node_capture, store)
+        policy = node_capture['policy']
+        if retained_state is None and store.get('selected_id') != node_capture['profile_id']:
+            raise RuntimeError('macOS paired-node baseline changed its original selected profile')
     if candidate_prefix_capture is not None:
         candidate_prefix_capture = _darwin_candidate_prefix_capture(candidate_prefix_capture)
         if candidate_prefix_capture['schema'] == 2 and retained_state is None:
@@ -397,7 +405,7 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
         if retained_state is None and store.get('selected_id') != candidate_prefix_capture['profile_id']:
             raise RuntimeError('macOS candidate prefix baseline changed its full saved Router control')
 
-    if policy == "off" and external_capture is None and node_chain_capture is None and candidate_prefix_capture is None:
+    if policy == "off" and external_capture is None and node_chain_capture is None and candidate_prefix_capture is None and node_capture is None:
         if previous and previous.get("platform") == "darwin":
             _require_watcher_retired(previous)
             _darwin.remove_darwin(previous, dry_run=_dry_run(), retain_state=_retained_removal(root, previous))
@@ -406,7 +414,7 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
         return 0
 
     endpoint = os.environ.get("HOMEVPN_ENDPOINT") or str(runtime_profile.get("endpoint") or "")
-    if external_capture is not None or node_chain_capture is not None or candidate_prefix_capture is not None:
+    if external_capture is not None or node_chain_capture is not None or candidate_prefix_capture is not None or node_capture is not None:
         socket_broker = True
     else:
         socket_broker = _linux.native_socket_broker_policy(control_profile, runtime_id, control_id, retained_state)
@@ -419,11 +427,13 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
     else:
         endpoint_ips, native_egress = retained
     lan = bool(control_profile.get("home_lan_access", False))
+    if node_capture is not None:
+        lan = node_capture["home_lan_access"]
     if candidate_prefix_capture is not None:
         lan = candidate_prefix_capture["home_lan_access"]
     _require_watcher_retired(previous)
     socket_capture = ((os.environ['HOMEVPN_TOR_SESSION'], os.environ['HOMEVPN_TOR_SOURCE_SHA256'])
-                      if socket_broker and retained_state is None and external_capture is None and node_chain_capture is None and candidate_prefix_capture is None else None)
+                      if socket_broker and retained_state is None and external_capture is None and node_chain_capture is None and candidate_prefix_capture is None and node_capture is None else None)
     if external_capture is not None:
         socket_capture = ((external_capture['session_id'], external_capture['source_sha256'])
                           if retained_state is None else None)
@@ -433,7 +443,13 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
     if candidate_prefix_capture is not None:
         socket_capture = ((candidate_prefix_capture['session_id'], candidate_prefix_capture['source_sha256'])
                           if retained_state is None else None)
+    if node_capture is not None:
+        socket_capture = ((node_capture['session_id'], node_capture['source_sha256'])
+                          if retained_state is None else None)
     state = _darwin_state_base(runtime_id, control_id, endpoint, endpoint_ips, lan, policy)
+    if node_capture is not None:
+        state['native_socket_family'] = 'paired-node-v1'
+        state['native_node_capture'] = node_capture
     if external_capture is not None:
         state['native_socket_family'] = 'external-v1'
         state['native_external_capture'] = external_capture
@@ -611,6 +627,10 @@ def darwin_reassert() -> int:
     # Record possible protection mutation after read-only profile validation,
     # before apply can acquire a reference or change its durable journal.
     _darwin._baseline.CAPABILITY.possible_mutation()
+    if state.get('native_socket_family') == 'paired-node-v1':
+        capture = _darwin_node_capture(state.get('native_node_capture'))
+        _darwin_node_state(state, capture)
+        return darwin_apply(spawn_watch=False, retained_state=state, node_capture=capture)
     if state.get('native_socket_family') == 'node-candidate-prefix-v1':
         capture = _darwin_candidate_prefix_capture(state.get('native_candidate_prefix_capture'))
         return darwin_apply(spawn_watch=False, retained_state=state, candidate_prefix_capture=capture)
@@ -923,7 +943,7 @@ def _darwin_node_chain_state(state, capture):
             or state.get('native_socket_family') != capture['family']
             or state.get('native_socket_broker') is not True
             or state.get('native_node_chain_capture') != capture
-            or 'native_external_capture' in state or 'native_candidate_prefix_capture' in state
+            or 'native_external_capture' in state or 'native_candidate_prefix_capture' in state or 'native_node_capture' in state
             or state.get('profile_id') != capture['profile_id']
             or state.get('policy_profile_id') != capture['profile_id']
             or state.get('policy') != capture['policy']
@@ -1029,6 +1049,162 @@ def darwin_node_chain(action, value):
                 raise RuntimeError('macOS ordered retirement retained its original native reference')
             proof = {'present': False, 'rules_sha256': ''}
         result = _darwin_node_chain_result(capture, 'held' if action == 'retire' else 'retired', token, proof)
+    return result
+
+
+_NODE_CAPTURE_FIELDS = ('schema', 'family', 'profile_id', 'node_id', 'mode', 'start_layer',
+                        'session_id', 'source_sha256', 'config_sha256', 'home_lan_access', 'policy')
+_NODE_MODES = ('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2', 'ss-v2ray')
+_NODE_LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
+
+
+def _darwin_node_capture(value):
+    _darwin._baseline._fields(value, _NODE_CAPTURE_FIELDS)
+    if (type(value['schema']) is not int or value['schema'] != 1 or value['family'] != 'paired-node-v1'
+            or value['mode'] not in _NODE_MODES or value['start_layer'] not in _NODE_LAYERS
+            or type(value['home_lan_access']) is not bool or value['policy'] not in ('off', 'on-connect', 'always')
+            or type(value['session_id']) is not str or not re.fullmatch('[0-9a-f]{32}', value['session_id'])
+            or any(type(value[key]) is not str or not re.fullmatch('[0-9a-f]{64}', value[key])
+                   for key in ('source_sha256', 'config_sha256', 'node_id'))):
+        raise RuntimeError('macOS paired-node baseline lost its exact original policy capture')
+    _linux.validate_profile_id(value['profile_id'], 'native paired-node profile id')
+    return {key: value[key] for key in _NODE_CAPTURE_FIELDS}
+
+
+def _darwin_node_profile(profile, runtime_id, control_id, capture, store=None):
+    if (runtime_id != control_id or runtime_id != capture['profile_id']
+            or profile.get('node_kind', '') not in ('', 'router-vpn') or profile.get('external') is not None
+            or profile.get('node_proof_id') != capture['node_id']
+            or (profile.get('start_layer') or 'off') != capture['start_layer']
+            or _darwin_saved_member_policy(profile) != capture['policy']
+            or profile.get('home_lan_access', True) is not capture['home_lan_access']):
+        raise RuntimeError('macOS paired-node baseline differs from its original saved paired policy')
+    if any(os.environ.get(key) for key in ('HOMEVPN_ENDPOINT', 'HOMEVPN_NATIVE_ENDPOINTS_JSON',
+            'HOMEVPN_NATIVE_EGRESS_JSON', 'HOMEVPN_TOR_PHYSICAL_BROKER', 'HOMEVPN_TOR_SESSION',
+            'HOMEVPN_TOR_SOURCE_SHA256', 'HOMEVPN_EXTERNAL_SESSION')):
+        raise RuntimeError('macOS paired-node baseline mixed another native protection family')
+
+
+def _darwin_node_selected(root, capture):
+    store = _linux.read_store(root)
+    if store.get('selected_id') != capture['profile_id']:
+        raise RuntimeError('macOS paired-node baseline changed its original selected profile')
+    profile = _linux.required_profile(store, capture['profile_id'], 'paired-node control')
+    _darwin_node_profile(profile, capture['profile_id'], capture['profile_id'], capture, store)
+
+
+def _darwin_node_state(state, capture):
+    if (not state or state.get('platform') != 'darwin'
+            or capture.get('family') != 'paired-node-v1'
+            or state.get('native_socket_family') != capture['family']
+            or state.get('native_socket_broker') is not True
+            or state.get('native_node_capture') != capture
+            or any(key in state for key in ('native_external_capture', 'native_candidate_prefix_capture', 'native_node_chain_capture'))
+            or state.get('profile_id') != capture['profile_id']
+            or state.get('policy_profile_id') != capture['profile_id']
+            or state.get('policy') != capture['policy']
+            or state.get('home_lan_access') is not capture['home_lan_access']
+            or state.get('endpoint') != '' or state.get('endpoint_ips') != []
+            or 'native_egress' in state):
+        raise RuntimeError('macOS paired-node cleanup belongs to another retained owner')
+    _darwin._baseline.retained(state)
+    return state
+
+
+def _darwin_node_receipt(value, capture):
+    _darwin._baseline._fields(value, ('schema', 'capture', 'phase', 'pf_token', 'baseline'))
+    if (type(value['schema']) is not int or value['schema'] != capture['schema']
+            or _darwin_node_capture(value['capture']) != capture
+            or value['phase'] not in ('active', 'held', 'retired')):
+        raise RuntimeError('macOS paired-node baseline receipt belongs to another original capture')
+    _darwin._baseline.token(value['pf_token'])
+    proof = _darwin._baseline._proof(value['baseline'])
+    if proof['present'] is not (value['phase'] == 'active' or value['phase'] == 'held' and capture['policy'] != 'off' or capture['policy'] == 'always'):
+        raise RuntimeError('macOS paired-node receipt changed its selected retirement policy')
+    return value
+
+
+def _darwin_node_result(capture, phase, token, baseline):
+    return _darwin_node_receipt(dict(schema=capture['schema'], capture=capture, phase=phase,
+                                          pf_token=token, baseline=baseline), capture)
+
+
+def _darwin_node_live_receipt(state, capture):
+    _darwin_node_state(state, capture)
+    value = state[_darwin._baseline.STATE_KEY]
+    request = value['request']
+    if (value['complete'] is not True or state.get('darwin_transition_pending') is True
+            or request['session_id'] != capture['session_id']
+            or request['source_sha256'] != capture['source_sha256']
+            or request['home_lan_access'] is not capture['home_lan_access']
+            or request.get('isolated_only', False) is not (capture['policy'] == 'off')
+            or not _darwin._baseline.status(state)):
+        raise RuntimeError('macOS paired-node baseline lacks its current native session proof')
+    return _darwin_node_result(capture, 'active', state['pf_token'], value['target'])
+
+
+def darwin_node(action, value):
+    """A distinct ordered capture on the original guarded PF journal.
+
+    No source can request a command, rule, namespace, endpoint or UID exception.
+    Native graph/source proof and joined process retirement remain separate.
+    """
+    if action not in ('apply', 'current', 'retire', 'release') or _dry_run():
+        raise RuntimeError('macOS paired-node baseline requires its actual native transaction')
+    _darwin._baseline._fields(value, ('capture', 'expected'))
+    capture = _darwin_node_capture(value['capture'])
+    expected = value['expected']
+    if expected is not None:
+        expected = _darwin_node_receipt(expected, capture)
+    root = _linux.root_dir()
+    state = _linux.read_state(root)
+    if action == 'apply':
+        if expected is not None or capture['schema'] != 1:
+            raise RuntimeError('macOS paired-node application requires original member policy capture')
+        _darwin_node_selected(root, capture)
+        os.environ['HOMEVPN_PROFILE_ID'] = capture['profile_id']
+        os.environ['HOMEVPN_POLICY_PROFILE_ID'] = capture['profile_id']
+        if state.get('native_node_capture') == capture:
+            result = _darwin_node_live_receipt(state, capture)
+        else:
+            darwin_apply(spawn_watch=False, node_capture=capture)
+            result = _darwin_node_live_receipt(_linux.read_state(root), capture)
+    elif action == 'current':
+        result = _darwin_node_live_receipt(state, capture)
+        if expected is None or result != expected:
+            raise RuntimeError('macOS paired-node readback changed its original baseline receipt')
+    elif not state:
+        if (expected is None or capture['policy'] not in ('off', 'on-connect')
+                or action != 'release' and not (action == 'retire' and capture['policy'] == 'off')
+                or _darwin.owned_namespace_present(_darwin.OWNED_PF_ANCHOR)
+                or _darwin._baseline.reference(expected['pf_token'])):
+            raise RuntimeError('macOS paired-node removal has no exact retired reference proof')
+        result = _darwin_node_result(capture, 'held' if action == 'retire' else 'retired', expected['pf_token'],
+                                            {'present': False, 'rules_sha256': ''})
+    else:
+        _darwin_node_state(state, capture)
+        token = _darwin._baseline.token(state.get('pf_token'))
+        if expected is not None and token != expected['pf_token']:
+            raise RuntimeError('macOS paired-node cleanup changed its original PF reference')
+        # Existing retirement checks every live guardian generation, grant,
+        # table and unreferenced child before settling the original baseline.
+        darwin_release(False, retain_protection=action == 'retire')
+        after = _linux.read_state(root)
+        if action == 'retire' and capture['policy'] != 'off' or capture['policy'] == 'always':
+            _darwin_node_state(after, capture)
+            journal = after[_darwin._baseline.STATE_KEY]
+            request = journal['request']
+            if (request['session_id'] != '' or request['source_sha256'] != ''
+                    or journal['complete'] is not True or after.get('darwin_transition_pending') is True
+                    or after.get('pf_token') != token or not _darwin._baseline.status(after)):
+                raise RuntimeError('macOS paired-node retirement lost its exact empty native baseline')
+            proof = journal['target']
+        else:
+            if (after or _darwin.owned_namespace_present(_darwin.OWNED_PF_ANCHOR)
+                    or _darwin._baseline.reference(token)):
+                raise RuntimeError('macOS paired-node retirement retained its original native reference')
+            proof = {'present': False, 'rules_sha256': ''}
+        result = _darwin_node_result(capture, 'held' if action == 'retire' else 'retired', token, proof)
     return result
 
 
@@ -1159,7 +1335,7 @@ def _darwin_candidate_prefix_state(state, capture):
             or state.get('native_socket_family') != 'node-candidate-prefix-v1'
             or state.get('native_socket_broker') is not True
             or state.get('native_candidate_prefix_capture') != capture
-            or 'native_external_capture' in state or 'native_node_chain_capture' in state
+            or 'native_external_capture' in state or 'native_node_chain_capture' in state or 'native_node_capture' in state
             or state.get('profile_id') != capture['profile_id']
             or state.get('policy_profile_id') != capture['profile_id']
             or state.get('policy') != capture['policy']
@@ -1309,13 +1485,13 @@ def main() -> int:
     if sys.platform != "darwin" and os.environ.get("HOMEVPN_KILLSWITCH_DARWIN_TEST") != "1":
         return _linux.main()
     try:
-        if len(sys.argv) == 3 and sys.argv[1] in ('external-native', 'ordered-native', 'candidate-prefix-native'):
+        if len(sys.argv) == 3 and sys.argv[1] in ('external-native', 'ordered-native', 'candidate-prefix-native', 'paired-node-native'):
             if os.getuid() != 0 or os.geteuid() != 0 or _linux.root_dir() != _darwin._baseline.ROOT:
                 raise RuntimeError('macOS external baseline requires its fixed privileged controller')
             with _darwin_external_authority():
                 with _darwin_action_guard(_linux.root_dir()):
                     dispatch = {'external-native': darwin_external, 'ordered-native': darwin_node_chain,
-                                'candidate-prefix-native': darwin_candidate_prefix}[sys.argv[1]]
+                                'candidate-prefix-native': darwin_candidate_prefix, 'paired-node-native': darwin_node}[sys.argv[1]]
                     result = dispatch(sys.argv[2], darwin_external_input())
             print(json.dumps(result, separators=(',', ':')))
             return 0

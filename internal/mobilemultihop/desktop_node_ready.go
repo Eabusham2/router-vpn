@@ -60,12 +60,13 @@ func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer 
 	if meta.RestoredMTU != 0 {
 		mtu = meta.RestoredMTU
 	}
-	// Darwin allocation is admitted only for this complete sealed ordered
-	// policy. An ordinary node/imported/external capture cannot opt into it
-	// by presenting a utun-shaped name or copying public metadata.
+	// Darwin allocation requires an admitted concrete sealed policy. A foreign
+	// imported/external capture cannot opt into it with a utun-shaped name.
 	interfaceValid := (meta.TargetOS == "windows" || meta.TargetOS == "linux") && r.InterfaceName == "router-vpn"
 	if meta.TargetOS == "darwin" {
 		switch original := policy.(type) {
+		case *DesktopNodePolicy:
+			interfaceValid = original != nil && DesktopLinuxNodePhysicalGraphSupported(meta.Mode, meta.StartLayer) && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
 		case *DesktopNodeChainPolicy:
 			interfaceValid = original != nil && desktopNodeChainReadyInterface("darwin", r.InterfaceName)
 		case *DesktopNodeChainExecutionPhysicalPolicy:

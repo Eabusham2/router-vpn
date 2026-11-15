@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"router-vpn/internal/common"
 )
@@ -63,10 +65,25 @@ func validateHomeExitBindingLocked(a *app, session *connectionSession, proof *ho
 			return errors.New("Home public-exit proof belongs to a replaced multihop graph")
 		}
 	}
+	if err := proof.pairedNode.currentLocked(a); err != nil {
+		return err
+	}
 	return validateMeasurementProfilesLocked(a, proof.Profiles)
 }
 
 func (a *app) validateHomeExitBinding(proof *homeExitProof) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	return a.validateHomeExitBindingContext(ctx, proof)
+}
+
+func (a *app) validateHomeExitBindingContext(ctx context.Context, proof *homeExitProof) error {
+	if proof == nil {
+		return errors.New("Home public-exit proof has no original capture")
+	}
+	if err := proof.pairedNode.current(ctx); err != nil {
+		return err
+	}
 	tracker := sessionTrackerFor(a)
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
@@ -76,6 +93,15 @@ func (a *app) validateHomeExitBinding(proof *homeExitProof) error {
 }
 
 func (a *app) homeExitProofCurrent(proof *homeExitProof, profile common.RouterProfile, observed connectionSession) bool {
+	if proof != nil && proof.pairedNode != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		err := proof.pairedNode.current(ctx)
+		cancel()
+		if err != nil {
+			homeExitProofs.CompareAndDelete(a, proof)
+			return false
+		}
+	}
 	tracker := sessionTrackerFor(a)
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()

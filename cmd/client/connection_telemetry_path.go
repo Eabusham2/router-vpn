@@ -23,7 +23,14 @@ func connectionTelemetryPathContext(parent context.Context, a *app, p common.Rou
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	validate := func() error {
+	paired, err := captureDesktopPairedMeasurement(parent, a, p, st)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	validateContext := func(ctx context.Context) error {
+		if err := paired.current(ctx); err != nil {
+			return err
+		}
 		if err := validateActiveTelemetryPath(a, p, st, sessionID); err != nil {
 			return err
 		}
@@ -34,8 +41,12 @@ func connectionTelemetryPathContext(parent context.Context, a *app, p common.Rou
 		}
 		return validateMeasurementProfiles(a, profiles)
 	}
-	ctx, stop, err := speedLabPathContext(parent, validate)
-	return ctx, stop, validate, err
+	ctx, stop, err := speedLabPathContextWithCaller(parent, validateContext)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	ctx = withDesktopPairedMeasurement(ctx, paired)
+	return ctx, stop, func() error { return validateContext(ctx) }, nil
 }
 
 // Keep the legacy entry/exit JSON shape for the native clients. The values are

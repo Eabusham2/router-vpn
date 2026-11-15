@@ -231,7 +231,7 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 		}
 		_, retained := h.parent.session.dependents[h]
 		selected := p.originalSession == h.parent.session && h.parent.session.nodeChain == h.runtime &&
-			h.parent.session.external == nil && h.parent.session.candidatePrefix == nil && retained
+			h.parent.session.external == nil && h.parent.session.candidatePrefix == nil && h.parent.session.pairedNode == nil && retained
 		p.gate <- struct{}{}
 		if !selected {
 			return errors.New("macOS ordered runtime belongs to a replaced retained session")
@@ -371,7 +371,7 @@ func (owner *desktopNodeChainPlatformRuntime) PublishGraph(ctx context.Context, 
 	}
 	defer func() { p.gate <- struct{}{} }()
 	_, retained := h.parent.session.dependents[h]
-	if p.originalSession != h.parent.session || h.parent.session.nodeChain != owner || h.parent.session.external != nil || h.parent.session.candidatePrefix != nil || !retained {
+	if p.originalSession != h.parent.session || h.parent.session.nodeChain != owner || h.parent.session.external != nil || h.parent.session.pairedNode != nil || h.parent.session.candidatePrefix != nil || !retained {
 		return empty, errors.New("macOS ordered graph publication lost its exact retained session")
 	}
 	if err := p.currentLocked(ctx, true); err != nil {
@@ -519,7 +519,7 @@ func (owner *desktopNodeChainPlatformRuntime) start(ctx context.Context) error {
 		a.mu.Unlock()
 		return err
 	}
-	if p.originalSession != h.parent.session || h.parent.session.external != nil || h.parent.session.candidatePrefix != nil ||
+	if p.originalSession != h.parent.session || h.parent.session.external != nil || h.parent.session.pairedNode != nil || h.parent.session.candidatePrefix != nil ||
 		h.parent.session.nodeChain != nil || a.cmd != nil || a.state.Connected || legacy || external || graph ||
 		a.checkCapturedConnectionOperationLocked(h.operation) != nil || h.runtime.capture.sources.currentLocked(a) != nil {
 		p.gate <- struct{}{}
@@ -1020,7 +1020,7 @@ func (h *desktopMacOSNodeChainHost) closeCaptured(ctx context.Context, hold bool
 		a.mu.Unlock()
 		return err
 	}
-	if p.originalSession != h.parent.session || h.published && (h.parent.session.nodeChain != h.runtime || h.parent.session.external != nil || h.parent.session.candidatePrefix != nil) {
+	if p.originalSession != h.parent.session || h.published && (h.parent.session.nodeChain != h.runtime || h.parent.session.external != nil || h.parent.session.pairedNode != nil || h.parent.session.candidatePrefix != nil) {
 		p.gate <- struct{}{}
 		a.mu.Unlock()
 		return errors.New("macOS ordered retirement belongs to another retained session")
@@ -1190,10 +1190,13 @@ func (p *desktopMacOSParent) captureNodeChainStopContext(ctx context.Context, a 
 		p.gate <- struct{}{}
 		return nil, errors.New("macOS ordered Stop lost its original session")
 	}
-	owner, prefix := s.nodeChain, s.candidatePrefix
+	owner, prefix, paired := s.nodeChain, s.candidatePrefix, s.pairedNode
 	p.gate <- struct{}{}
-	if owner != nil && prefix != nil {
+	if owner != nil && prefix != nil || paired != nil && (owner != nil || prefix != nil) {
 		return nil, errors.New("macOS Stop found conflicting retained native purposes")
+	}
+	if paired != nil {
+		return paired.captureStop(ctx, a, p, s)
 	}
 	if prefix != nil {
 		return prefix.captureStop(ctx, a, p, s)
@@ -1242,7 +1245,7 @@ func (captured *desktopMacOSNodeChainStopCapture) current(ctx context.Context) e
 		return err
 	}
 	defer func() { p.gate <- struct{}{} }()
-	if p.originalSession != h.parent.session || h.parent.session.nodeChain != h.runtime || h.parent.session.external != nil || h.parent.session.candidatePrefix != nil {
+	if p.originalSession != h.parent.session || h.parent.session.nodeChain != h.runtime || h.parent.session.external != nil || h.parent.session.pairedNode != nil || h.parent.session.candidatePrefix != nil {
 		return errors.New("macOS ordered Stop belongs to another retained session")
 	}
 	return ctx.Err()
@@ -1316,7 +1319,7 @@ func prepareDesktopMacOSNodeChainMTUStop(ctx context.Context, a *app, command *e
 			return err
 		}
 		defer func() { p.gate <- struct{}{} }()
-		if p.originalSession != h.parent.session || h.parent.session.nodeChain != owner || h.parent.session.external != nil || h.parent.session.candidatePrefix != nil {
+		if p.originalSession != h.parent.session || h.parent.session.nodeChain != owner || h.parent.session.external != nil || h.parent.session.pairedNode != nil || h.parent.session.candidatePrefix != nil {
 			return errors.New("macOS ordered MTU teardown belongs to a replacement session")
 		}
 		return nil

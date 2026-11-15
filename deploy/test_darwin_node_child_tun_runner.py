@@ -88,10 +88,14 @@ def workflow_inventory(raw):
         raise ValueError('native workflow changed its complete job or architecture inventory')
     command = 'python3 deploy/test_darwin_node_child_tun.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_CHILD_RECEIPT"'
     run = re.findall(r'^        run: \|\n((?:          [^\n]*\n)+)', raw, re.M)
-    if len(run) != 1:
-        raise ValueError('native workflow lost its one actual standalone invocation')
-    commands = [line.strip() for line in run[0].splitlines() if line.strip() and not line.lstrip().startswith('#')]
-    if commands != [command] or raw.count('run: python3 deploy/test_darwin_node_child_tun_runner.py') != 1:
+    checks = [
+        'python3 deploy/test_darwin_node_child_tun_runner.py',
+        'python3 deploy/test_darwin_paired_node_child_runner.py',
+        'python3 deploy/test_darwin_paired_node_platform.py --go go',
+        "go test -race -p=1 ./internal/mobilemultihop -run '^TestDesktopNodeReadyRecordBindsDarwinOriginalSelection$' -count=1",
+    ]
+    commands = [[line.strip() for line in block.splitlines() if line.strip() and not line.lstrip().startswith('#')] for block in run]
+    if commands != [checks, [command]]:
         raise ValueError('native workflow weakened actual invocation or its runner checks')
     if raw.count('--preflight-only') != 1 or raw.index('--preflight-only') > raw.index(command) or '--compile-only' in raw:
         raise ValueError('handshake preflight replaced or followed mandatory native acceptance')
@@ -363,10 +367,18 @@ class CompilationDiagnostics(unittest.TestCase):
             if image_changed:
                 first=calls[0][0];Path(first[first.index('-o')+1]).write_bytes(b'replaced native image')
             return preflight_transcript() if preflight_only else diagnostic_transcript() if diagnostic_original_case else transcript()
+        def paired(source,before,compiler,captured,child,identities,work):
+            box=work/'paired-node-box.test';box.write_bytes(b'original paired box');box.chmod(0o755)
+            identities[box]=G.image_identity(box)
+            return dict(schema=1,scope='paired-node-component-boundaries',verdicts=105,
+                        cases=list(G.PAIRED.CASES),phases=['command','box'],
+                        source_sha256=G.PAIRED.source_digest(before),command_sha256=identities[child][-1],
+                        box_sha256=identities[box][-1],output_sha256='c'*64)
         source=Path('/captured/source');before={'original':'a'*64}
         inventory=[(source,before),(source,{'changed':'b'*64})] if source_changed else None
-        with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID.RACE,'verify_image',side_effect=ValueError('wrong native compiler') if wrong_image_compiler else None) as image_readback, patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run), patch.object(G,'native_output',side_effect=run):
+        with contextlib.redirect_stdout(io.StringIO()), patch.object(G,'required_host',return_value=('arm64',501)), patch.object(G,'checked_sources',side_effect=inventory,return_value=(source,before)), patch.object(G,'selected_compiler',return_value=('/captured/go',{})), patch.object(G.UID.RACE,'verify_image',side_effect=ValueError('wrong native compiler') if wrong_image_compiler else None) as image_readback, patch.object(G.UID,'privilege_tool',return_value='/usr/bin/sudo'), patch.object(G.UID,'run',side_effect=run), patch.object(G,'native_output',side_effect=run), patch.object(G,'execute_paired_boundaries',side_effect=paired) as paired_run:
             result=G.execute(source,environment={},compile_only=compile_only,preflight_only=preflight_only,diagnostic_original_case=diagnostic_original_case)
+        self.assertEqual(paired_run.call_count,0 if compile_only or preflight_only or diagnostic_original_case else 1)
         self.assertEqual(image_readback.call_count,2)
         self.assertEqual(result['toolchain'],'go1.26.5')
         for index,(command,kwargs) in enumerate(calls[:2]):
@@ -616,6 +628,21 @@ class EncryptedPeerSourceClosure(unittest.TestCase):
             self.assertEqual(copies[target],after+source[len(before):])
             self.assertTrue(target.endswith('_darwin_test.go'))
 
+    def test_paired_raw_and_layer_providers_are_original_darwin_sources(self):
+        copies=G.NODE.PREP.darwin_node_chain_peer_copies()
+        for name, roots in (
+            ('node_wg_peer_test.go.tmpl', ('TestRouterVPNDesktopNodeWireGuardReferenceProcess', 'TestRouterVPNDesktopNodeWireGuardLayerReferenceProcess')),
+            ('node_awg_peer_test.go.tmpl', ('TestRouterVPNDesktopNodeAmneziaReferenceProcess', 'TestRouterVPNDesktopNodeAmneziaLayerReferenceProcess')),
+        ):
+            target=G.NODE.PREP.DARWIN_NODE_CHAIN_PEERS[name]
+            original=(ROOT/'mobile/desktop'/name).read_bytes()
+            projected=copies[target]
+            self.assertEqual(projected.split(b'\n',1)[1],original.split(b'\n',1)[1])
+            for root in roots:
+                self.assertEqual(projected.count(('func '+root+'(t *testing.T)').encode()),1)
+            self.assertIn('routervpn_darwin_node_chain', G.TAGS)
+            self.assertIn('routervpn_darwin_external_host', G.TAGS)
+
     def test_wrong_original_platform_or_symlink_cannot_be_projected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);sources=self.peer_sources()
@@ -643,8 +670,12 @@ class EncryptedPeerSourceClosure(unittest.TestCase):
         for needle in ('address == "192.168.210.2" && client == "192.168.210.1"',
                        'address != client', 'ROUTERVPN_DARWIN_NODE_CHAIN_ADDRESS', 'found == 1',
                        'request.BenchmarkPort != 0 && request.BenchmarkPort != 45998',
-                       'Destination: "10.77.0.1:45998"', 'if p.held.Load()', 'n > 8972'):
+                       'Destination: "10.77.0.1:45998"'):
             self.assertIn(needle,raw)
+        benchmark=(ROOT/'mobile/desktop/node_private_benchmark_test.go.tmpl').read_text()
+        self.assertIn('node_private_benchmark_test.go.tmpl',G.NODE.PREP.PEER_TEMPLATES)
+        for needle in ('if p.held.Load()', 'n > 8972', 'connection.Close(); <-done'):
+            self.assertIn(needle,benchmark)
         imported=(ROOT/'mobile/desktop/node_imported_peer_linux_test.go.tmpl').read_text()
         self.assertIn('if !request.Cover || n < 1 || n > 1200',imported)
         self.assertNotIn('45998',imported)

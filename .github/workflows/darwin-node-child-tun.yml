@@ -62,7 +62,11 @@ jobs:
           go-version: '1.26.3'
           cache: false
       - name: Verify exact native verdict, ownership and source projection boundaries
-        run: python3 deploy/test_darwin_node_child_tun_runner.py
+        run: |
+          python3 deploy/test_darwin_node_child_tun_runner.py
+          python3 deploy/test_darwin_paired_node_child_runner.py
+          python3 deploy/test_darwin_paired_node_platform.py --go go
+          go test -race -p=1 ./internal/mobilemultihop -run '^TestDesktopNodeReadyRecordBindsDarwinOriginalSelection$' -count=1
       - name: Compile and authenticate original child before changing host networking
         timeout-minutes: 25
         run: ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE=1 CGO_ENABLED=1 python3 deploy/test_darwin_node_child_tun.py --standalone --preflight-only --require-commit "$GITHUB_SHA"

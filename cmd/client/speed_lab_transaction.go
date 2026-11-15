@@ -45,6 +45,7 @@ type speedLabRestorePlan struct {
 	request          speedLabRequest
 	native           *desktopNodeLaunch
 	linux            *desktopLinuxNodeRestore
+	pairedNode       desktopMacOSPairedNodeRestore
 	external         *speedLabExternalRestore
 	tor              *speedLabTorRestore
 	multihop         *multihopSelection
@@ -341,6 +342,9 @@ func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context
 
 func clearSpeedLabRestorePlan(plan speedLabRestorePlan) {
 	clearDesktopLinuxNodeRestore(plan.linux)
+	if plan.pairedNode != nil {
+		plan.pairedNode.clear()
+	}
 	if launch := plan.native; launch != nil {
 		launch.workspaceMu.Lock()
 		owner := launch.ownedNode
@@ -654,6 +658,21 @@ func (a *app) speedLabCaptureRestorePlanContext(ctx context.Context, snapshot sp
 		if !ok || launch == nil || launch.external != nil || launch.tor != nil || launch.command != snapshot.Runtime || launch.profileID != st.RouterID || launch.mode != plan.request.Mode {
 			return plan, errors.New("previous native connection has another captured owner")
 		}
+		if launch.pairedNode != nil {
+			if launch.ownedNode != nil {
+				return plan, errors.New("paired Router restoration has conflicting host authority")
+			}
+			plan.pairedNode, err = launch.pairedNode.CaptureRestore(ctx, profile)
+			if err != nil {
+				return plan, err
+			}
+			if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
+				clearSpeedLabRestorePlan(plan)
+				return speedLabRestorePlan{}, err
+			}
+			plan.request.Execution = "local"
+			return plan, nil
+		}
 		if launch.ownedNode != nil {
 			plan.native, err = a.captureDesktopOwnedNodeRestore(launch, profile)
 			if err != nil {
@@ -893,6 +912,8 @@ func (a *app) speedLabRestartPlanWithTorRuntimeContext(ctx context.Context, plan
 		err = a.restartSpeedLabOrderedExecution(ctx, plan.orderedExecution)
 	case plan.standard != nil:
 		err = plan.standard.restart(ctx, a)
+	case plan.pairedNode != nil:
+		err = plan.pairedNode.restart(ctx, a, plan.profile)
 	case plan.linux != nil:
 		err = a.restartCapturedDesktopLinuxNode(plan, "speed-lab:restore")
 	case plan.tor != nil:

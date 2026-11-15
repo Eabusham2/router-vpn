@@ -20,8 +20,14 @@ func TestDesktopSingleNodeOffKeepsOriginalSourceAndPlatform(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, target := range []string{"windows", "linux"} {
+				for _, target := range []string{"windows", "linux", "darwin"} {
 					policy, err := NewDesktopNodePolicy(original, desktopNodeTestSession, target)
+					if target == "darwin" && !DesktopLinuxNodePhysicalGraphSupported(mode, layer) {
+						if policy != nil || err == nil {
+							t.Fatal("Darwin Off admitted a graph without retained native composition", mode, layer)
+						}
+						continue
+					}
 					if err != nil {
 						t.Fatal(target, err)
 					}
@@ -43,8 +49,8 @@ func TestDesktopSingleNodeOffKeepsOriginalSourceAndPlatform(t *testing.T) {
 						t.Fatal("Off accepted metadata-only protected substitution")
 					}
 				}
-				if p, err := NewDesktopNodePolicy(original, desktopNodeTestSession, "darwin"); p != nil || err == nil {
-					t.Fatal("Off opened Darwin without a retained single-Node host")
+				if p, err := NewDesktopNodePolicy(original, desktopNodeTestSession, "freebsd"); p != nil || err == nil {
+					t.Fatal("Off opened an unsupported native host")
 				}
 			})
 		}

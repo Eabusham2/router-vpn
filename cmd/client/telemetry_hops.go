@@ -85,7 +85,10 @@ func measureRoutedProfileSpeedWithClock(ctx context.Context, p common.RouterProf
 	if strings.TrimSpace(p.RouterAPI) == "" || strings.TrimSpace(p.APIToken) == "" {
 		return routedSpeedResult{}, errors.New("node has no private benchmark API/token")
 	}
-	client := newPrivateBenchmarkHTTPClient(30 * time.Second)
+	client, err := newPrivateBenchmarkHTTPClientContext(ctx, p, 30*time.Second)
+	if err != nil {
+		return routedSpeedResult{}, err
+	}
 	defer client.CloseIdleConnections()
 	base := strings.TrimRight(p.RouterAPI, "/")
 
@@ -227,8 +230,20 @@ func routedSpeedPathContext(parent context.Context, a *app, st state, graph acti
 			tokens[id] = asyncMeasurementProfileToken(p)
 		}
 	}
+	pairedProfile, pairedProfileFound := a.profileByIDLocked(st.RouterID)
+	pairedProfile = cloneRouterProfile(pairedProfile)
 	a.mu.Unlock()
-	validate := func() error {
+	if st.Mode != "multihop" && !pairedProfileFound {
+		return nil, nil, nil, errors.New("routed throughput lost its original single Router profile")
+	}
+	paired, err := captureDesktopPairedMeasurement(parent, a, pairedProfile, st)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	validateContext := func(ctx context.Context) error {
+		if err := paired.current(ctx); err != nil {
+			return err
+		}
 		if st.Mode == "multihop" {
 			if err := validateCurrentMultihopSpeedGraph(a, st, graph, sessionID); err != nil {
 				return err
@@ -246,8 +261,12 @@ func routedSpeedPathContext(parent context.Context, a *app, st state, graph acti
 		}
 		return nil
 	}
-	ctx, stop, err := speedLabPathContext(parent, validate)
-	return ctx, stop, validate, err
+	ctx, stop, err := speedLabPathContextWithCaller(parent, validateContext)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	ctx = withDesktopPairedMeasurement(ctx, paired)
+	return ctx, stop, func() error { return validateContext(ctx) }, nil
 }
 
 func (a *app) profileSpeedTest(w http.ResponseWriter, r *http.Request) {

@@ -254,7 +254,7 @@ func (owner *desktopNodeCandidatePrefixPlatformRuntime) start(ctx context.Contex
 		return err
 	}
 	if p.originalSession != h.parent.session || h.parent.session.external != nil ||
-		h.parent.session.candidatePrefix != nil || h.parent.session.nodeChain != nil || a.cmd != nil || a.state.Connected || legacy || external || graph ||
+		h.parent.session.candidatePrefix != nil || h.parent.session.pairedNode != nil || h.parent.session.nodeChain != nil || a.cmd != nil || a.state.Connected || legacy || external || graph ||
 		a.checkCapturedConnectionOperationLocked(h.operation) != nil || h.runtime.capture.sources.currentLocked(a) != nil {
 		p.gate <- struct{}{}
 		a.mu.Unlock()
@@ -389,7 +389,7 @@ func (h *desktopMacOSCandidatePrefixHost) currentLocked(ctx context.Context, run
 		}
 		_, retained := h.parent.session.dependents[h]
 		selected := p.originalSession == h.parent.session && h.parent.session.candidatePrefix == h.runtime &&
-			h.parent.session.nodeChain == nil && h.parent.session.external == nil && retained
+			h.parent.session.pairedNode == nil && h.parent.session.nodeChain == nil && h.parent.session.external == nil && retained
 		p.gate <- struct{}{}
 		if !selected {
 			return errors.New("macOS candidate prefix belongs to a replaced retained session")
@@ -583,7 +583,7 @@ func (h *desktopMacOSCandidatePrefixHost) closeCaptured(ctx context.Context, hol
 	}
 	defer func() { p.gate <- struct{}{} }()
 	if p.originalSession != h.parent.session || h.published && (h.parent.session.candidatePrefix != h.runtime ||
-		h.parent.session.nodeChain != nil || h.parent.session.external != nil) {
+		h.parent.session.pairedNode != nil || h.parent.session.nodeChain != nil || h.parent.session.external != nil) {
 		return errors.New("macOS candidate prefix retirement belongs to another retained session")
 	}
 	if h.published {
@@ -655,7 +655,7 @@ func (captured *desktopMacOSCandidatePrefixStopCapture) current(ctx context.Cont
 		return err
 	}
 	defer func() { p.gate <- struct{}{} }()
-	if p.originalSession != h.parent.session || h.parent.session.candidatePrefix != h.runtime || h.parent.session.nodeChain != nil || h.parent.session.external != nil {
+	if p.originalSession != h.parent.session || h.parent.session.candidatePrefix != h.runtime || h.parent.session.pairedNode != nil || h.parent.session.nodeChain != nil || h.parent.session.external != nil {
 		return errors.New("macOS candidate prefix Stop belongs to another retained session")
 	}
 	return ctx.Err()

@@ -21,6 +21,7 @@ type homeExitProof struct {
 	Profiles   map[string]string
 	Multihop   bool
 	Graph      activeMultihopGraph
+	pairedNode *desktopPairedMeasurementBinding
 	IP         string
 	At         time.Time
 }
@@ -116,10 +117,17 @@ func (a *app) proveHomeExit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	paired, err := captureDesktopPairedMeasurement(r.Context(), a, profile, stateAtStart)
+	if err != nil {
+		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "Home public-exit proof") {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
+		return
+	}
 	binding := homeExitProof{Generation: homeExitProofs.generation(a), SessionID: before.ID, RouterID: targetID, Runtime: before.ActualMode, Base: before.ActualBase,
-		StateToken: stateToken, Profiles: profiles, Multihop: stateAtStart.Mode == "multihop", Graph: graph}
-	validate := func() error { return a.validateHomeExitBinding(&binding) }
-	measured, stop, err := speedLabPathContext(r.Context(), validate)
+		StateToken: stateToken, Profiles: profiles, Multihop: stateAtStart.Mode == "multihop", Graph: graph, pairedNode: paired}
+	validate := func(ctx context.Context) error { return a.validateHomeExitBindingContext(ctx, &binding) }
+	measured, stop, err := speedLabPathContextWithCaller(r.Context(), validate)
 	if err != nil {
 		if !asyncMeasurementRequestError(w, r.Context(), r.Context(), "Home public-exit proof") {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -127,7 +135,8 @@ func (a *app) proveHomeExit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer stop()
-	client, err := newAsyncMeasurementHTTPClient(stateAtStart, 5*time.Second)
+	measured = withDesktopPairedMeasurement(measured, paired)
+	client, err := newAsyncMeasurementHTTPClientContext(measured, stateAtStart, 5*time.Second)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -137,7 +146,7 @@ func (a *app) proveHomeExit(w http.ResponseWriter, r *http.Request) {
 	if asyncMeasurementRequestError(w, r.Context(), measured, "Home public-exit proof") {
 		return
 	}
-	if freshnessErr := validate(); freshnessErr != nil {
+	if freshnessErr := validate(measured); freshnessErr != nil {
 		http.Error(w, freshnessErr.Error(), http.StatusConflict)
 		return
 	}
@@ -176,6 +185,9 @@ func (a *app) adoptHomeExitProof(ctx context.Context, binding homeExitProof, ip 
 		return http.StatusConflict, err
 	}
 	defer release()
+	if err := binding.pairedNode.current(ctx); err != nil {
+		return http.StatusConflict, err
+	}
 	tracker := sessionTrackerFor(a)
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()

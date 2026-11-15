@@ -12,6 +12,8 @@ import (
 func desktopMacOSProcessArguments(scope macosprocess.Scope) ([]string, error) {
 	var command string
 	switch scope.Family {
+	case macosprocess.NodeFamily:
+		command = "routervpn-node"
 	case macosprocess.ExternalFamily:
 		command = "routervpn-external"
 	case macosprocess.NodeChainSOCKSFamily:

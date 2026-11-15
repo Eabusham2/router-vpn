@@ -27,6 +27,7 @@ type asyncMeasurementAdoption struct {
 	generation      uint64
 	tor             *desktopTorMeasurementBinding
 	importedOpenVPN *nativeMultihopRuntime
+	pairedNode      *desktopPairedMeasurementBinding
 }
 
 // speedLabPathContext runs validate synchronously before starting its observer.
@@ -117,6 +118,9 @@ func (b *asyncMeasurementAdoption) validateLockedWithTor(current *connectionSess
 			return err
 		}
 	}
+	if err := b.pairedNode.currentLocked(a); err != nil {
+		return err
+	}
 	return validateMeasurementProfilesLocked(a, b.profiles)
 }
 
@@ -125,6 +129,9 @@ func (b *asyncMeasurementAdoption) validate() error {
 }
 
 func (b *asyncMeasurementAdoption) validateContext(ctx context.Context) error {
+	if err := b.pairedNode.current(ctx); err != nil {
+		return err
+	}
 	if b.importedOpenVPN != nil {
 		if err := validateDesktopImportedOpenVPNRuntime(ctx, b.owner, b.importedOpenVPN); err != nil {
 			return err
@@ -183,6 +190,12 @@ func (a *app) beginAsyncMeasurementOperation(ctx context.Context, binding *async
 		a.operationMu.Unlock()
 		return nil, err
 	}
+	// Native observation runs after operation admission and outside tracker/app
+	// locks. The final locked check below only reads the original atomic epoch.
+	if err := binding.pairedNode.current(ctx); err != nil {
+		a.operationMu.Unlock()
+		return nil, err
+	}
 	return a.operationMu.Unlock, nil
 }
 
@@ -200,6 +213,9 @@ func (a *app) beginAsyncMeasurementAdoption(ctx context.Context) (func(), error)
 	binding, ok := ctx.Value(asyncMeasurementBindingKey{}).(*asyncMeasurementAdoption)
 	if !ok || binding == nil || binding.owner != a {
 		return nil, errors.New("live measurement has no matching immutable adoption binding")
+	}
+	if err := binding.pairedNode.current(ctx); err != nil {
+		return nil, err
 	}
 	if binding.importedOpenVPN != nil {
 		if err := validateDesktopImportedOpenVPNRuntime(ctx, a, binding.importedOpenVPN); err != nil {

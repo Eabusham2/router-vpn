@@ -1,6 +1,9 @@
 package main
 
-import "context"
+import (
+	"context"
+	"runtime"
+)
 
 // Linux inherits fixed original descriptors from its created parent. These
 // options select no path, PID or named socket that could be reopened later.
@@ -19,4 +22,22 @@ func routerVPNRunNodeMTUWithParents(parent context.Context, directory, session, 
 		return routerVPNRunLinuxNodeControlled(parent, directory, session, config, source, transfer, mtu, linux)
 	}
 	return routerVPNRunNodeMTUWithJournal(parent, directory, session, config, source, transfer, mtu, windows)
+}
+
+// Darwin has one exact inherited family and no public MTU or foreign-parent
+// override; its original manifest captures all restoration inputs.
+func routerVPNRunNodeWithControl(parent context.Context, directory, session, config, source, imported, transfer string, mtu int, windows routerVPNNodeJournalOptions, linux routerVPNNodeLinuxParentOptions, darwin string) error {
+	if darwin != "" {
+		if darwin != "inherited-v1" || runtime.GOOS != "darwin" || imported != "" || transfer != "" || mtu != 0 || windows != (routerVPNNodeJournalOptions{}) || linux != (routerVPNNodeLinuxParentOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunDarwinNodeControlled(parent, directory, session, source, config)
+	}
+	if imported != "" {
+		if source != "" || linux != (routerVPNNodeLinuxParentOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunImportedMTUWithJournal(parent, directory, session, config, imported, transfer, mtu, windows)
+	}
+	return routerVPNRunNodeMTUWithParents(parent, directory, session, config, source, transfer, mtu, windows, linux)
 }

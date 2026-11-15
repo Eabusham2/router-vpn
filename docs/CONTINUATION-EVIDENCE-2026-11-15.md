@@ -613,9 +613,10 @@ source, held-kernel-alias retirement failure and successful original retry.
 The original protected group remains intact. Linux adds actual single-node
 owner live/cancel/network-change cases and a Box/TUN/DNS encrypted Off case;
 existing external cases remain intact. These witnesses require hosted native
-execution. The separate Darwin single paired Router retained host, and broader
-Linux graph families, remain open; a policy-only guard change would not supply
-their missing host composition.
+execution. The separate Darwin single paired Router retained host was still
+open at that checkpoint. The implementation below now supplies its bounded
+host composition; broader Linux graph families and actual native acceptance
+remain separate work.
 
 ### Imported OpenVPN middle with original native connection ownership
 
@@ -724,6 +725,72 @@ portable probe suite. Actual XNU binding, private-peer Auto/Cancel, the new
 paired macOS host and complete exact-SHA release acceptance remain separate
 mandatory native work; these results do not claim physical-device acceptance.
 
+### Single paired macOS Router host and owned measurements
+
+The native installed parent now retains a distinct `paired-node-v1` session
+for WireGuard, AWG Fast/Strong, Shadowsocks, Hysteria2 and SS/V2Ray. These six
+runtime modes support each recorded Start Layer and Off/On-connect/Always
+protection. This is a bounded single-node composition, not a fabricated
+two-node chain or evidence of every requested graph family. The actual public
+Connect/Disconnect dispatch uses the installed parent, original inherited
+workspace/process descriptions, private node source and policy, native Box,
+PF/socket ownership, selected DNS and authenticated node proof. Connected is
+reported only after that captured host is proved and adopted. Missing native
+authority cannot fall back to an ordinary unowned helper.
+
+Home, public-IP and live latency/throughput observations capture the original
+native reader and measurement epoch. Their sockets bind to that utun, selected
+DNS queries enter the sealed graph's DNS rule, and final adoption rejects a
+retired reader or changed profile/network/session. HTTP redirects and ambient
+resolver fallback are refused. Startup DNS proof keeps its original proof
+label; it is not displayed as a fresh DNS timing. The actual Go HTTP transport
+preserves the original bounded request across its internally detached dial
+context. DNS cancellation closes and joins the original socket. Full native
+checks run outside the application/tracker locks. The live HTTP timers still
+enclose the transport's per-request native ownership checks; separating that
+validation cost from the displayed response/transfer duration remains a
+measurement refinement. The Python Auto MTU probes above already bracket
+their recorded network intervals separately.
+
+Auto/Retest/Cancel and temporary Speed Lab operations retain complete original
+connection state and captured native ownership. A replacement Darwin utun
+may have a new name and index. The raw MTU controller adopts it only when the
+original paired Box confirms the exact next inbound, source context, name,
+index and observed MTU. The parent separately requires the old reader's
+retirement, full native acknowledgement and original selected-node proof.
+Cancellation keeps only the original operation's bounded rollback authority.
+Ordered and other graph families cannot opt into this paired-only reader
+capability. The broader fixed-name boundary in those other raw MTU paths
+still requires its own current native evidence or implementation; this change
+does not silently extend their authority.
+
+Portable validation includes 53 common measurement/controller roots with
+203 race-instrumented verdicts, three extracted HTTP/DNS/proof cancellation
+paths and their three causal old-behavior controls, 17 exact physical-reader
+admission cases and four causal controls, plus three generated raw MTU roots
+with nine race-instrumented verdicts. The raw tests reject both the former
+fixed-name implementation and omission of the original Box confirmation. The
+whole raw MTU run also observed 18 failing verdicts in existing native Linux
+startup/retirement families because this workspace refused netlink access;
+120 verdicts passed. That whole run is not recorded as a pass, and the actual
+native gates remain required. Portable socket, kernel-snapshot and retained
+host doubles are explicit boundaries, not native acceptance.
+
+The authoritative reusable Darwin workflow now requires a separate installed
+paired-host job on Intel and Apple Silicon using the same caller's exact-SHA
+native bundle. Its finite inventory is 54 mode/layer/protection connections
+and 15 wrong-node, DNS/key failure, sealed-restoration and Auto-MTU
+cancellation/retest cases. The latter transfer real private encrypted UDP;
+fake optimizer measurements are refused. The same controller image must also
+pass all 55 baseline-capture and 13 original-reader verdicts. The old ordered
+host and child gates remain mandatory. The paired component gate requires all
+105 generated command/Box verdicts, including the nine new raw MTU cases.
+Component and installed-host receipts
+are distinct and bound to their actual source and images. Runtime preparation,
+workflow dependency parity, aggregate provenance gates and paired inventory
+controls passed on the composed source. Exact-SHA native execution, package
+publication and physical-device acceptance remain pending at this cutoff.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths
@@ -743,7 +810,7 @@ prove these behaviors merely because a filename or string is present.
 | 149–159; 340; later graph additions | Mode catalog, shared graph compilers, SMART/AUTO rollback, MAX/ALL native witnesses | All requested graph/platform combinations remain accountable. Ordered paths currently have bounded family/placement/length and execution support; those bounds are not full delivery. |
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
-| 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and Windows/Linux single paired Router Off paths with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin single paired Router retained hosting remains unfinished; a mode-only baseline/receipt is insufficient. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
+| 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and bounded Windows/Linux/macOS single paired Router hosts with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin paired source now includes actual installed parent/child composition; its new native gate has not yet passed at this cutoff. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
 | 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members; typed CONNECT uses a fixed three-member composition at this cutoff. Broader requested positions/protocols/execution choices remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle now follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
@@ -760,8 +827,12 @@ prove these behaviors merely because a filename or string is present.
    It refused before native rule load or peer traffic. This is a real
    production two-second refusal, not a proven fixture-phase defect. Existing
    PF readback race tests passed. No timeout was relaxed and no refusal was
-   suppressed. Native profiling or an equivalent reduction in readback work
-   is still needed.
+   suppressed. Later Off-host jobs at `7c7afb87` refused slot equality before
+   guardian preparation in about 367 ms on Intel and 106.7 ms on ARM64; those
+   failures are distinct from the earlier two-second grant expiry. The bounded
+   first-difference diagnostic in `4a463f03` must identify the actual mismatch
+   before an equality or timeout change is justified. No speculative PF repair
+   or relaxed ownership check is included in the paired-host change.
 2. **Deep ordinary encrypted startup, locally repaired:** a retained trace
    proved that the next endpoint wrote its first handshake about 1.76 ms
    before its predecessor opened. WireGuard discarded the packet because

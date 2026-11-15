@@ -133,6 +133,18 @@ func (engine *routerVPNNodeMTUBox) Change(ctx context.Context, expected adapter.
 	return engine.instance.RouterVPNChangeMTU(ctx, expected, mtu)
 }
 
+// A fresh Darwin utun name is accepted only after the original physical Box
+// has adopted this exact returned reader. Neither GOOS nor an interface name
+// alone grants succession authority to another graph or an ambient runtime.
+func (engine *routerVPNNodeMTUBox) validatePairedDarwinMTUReader(ctx context.Context, next adapter.Inbound,
+	before routerVPNNodeMTURecord, name string, index, mtu int) error {
+	if engine == nil || engine.instance == nil || engine.physical == nil || next == nil || next.Tag() != engine.tag {
+		return routerVPNExternalFailure
+	}
+	return engine.physical.ConfirmPairedDarwinMTUReader(ctx, engine.instance, next,
+		before.Session, before.Config, name, index, mtu)
+}
+
 func (engine *routerVPNNodeMTUBox) ClaimTUN(guard func() bool) (string, int, int, error) {
 	if engine.physical != nil {
 		return engine.physical.ClaimTUN(guard)
@@ -356,12 +368,21 @@ func (owner *routerVPNNodeMTU) changeBeforeContext(parent context.Context, value
 		return routerVPNExternalFailure
 	}
 	name, index, mtu, err := observed.RouterVPNDesktopMTUInterfaceContext(observe)
-	if err != nil || name != owner.record.Interface || index < 1 || mtu < 1280 || mtu > 9000 {
+	if err != nil || index < 1 || mtu < 1280 || mtu > 9000 {
 		return routerVPNExternalFailure
+	}
+	if name != before.Interface {
+		retained, ok := owner.engine.(interface {
+			validatePairedDarwinMTUReader(context.Context, adapter.Inbound, routerVPNNodeMTURecord, string, int, int) error
+		})
+		if !ok || owner.chain != nil || owner.execution != nil || owner.prefix != nil || owner.openVPN != nil ||
+			index == before.Index || retained.validatePairedDarwinMTUReader(observe, next, before, name, index, mtu) != nil {
+			return routerVPNExternalFailure
+		}
 	}
 	after := before
 	after.Reader++
-	after.Index, after.MTU = index, mtu
+	after.Interface, after.Index, after.MTU = name, index, mtu
 	if owner.openVPN != nil {
 		if err := owner.openVPN.handoffMTU(observe, previous, before, reader, after); err != nil {
 			return err
@@ -509,21 +530,29 @@ func (owner *routerVPNNodeMTU) commandContext(ctx context.Context, request route
 	return nil
 }
 
-func init() {
-	var directory, session, config, physicalSource, importedSource, physicalTransfer string
+func init() { mainCommand.AddCommand(routerVPNNewNodeCommandWithRun(routerVPNRunNodeWithControl)) }
+
+type routerVPNNodeCommandRun func(context.Context, string, string, string, string, string, string, int, routerVPNNodeJournalOptions, routerVPNNodeLinuxParentOptions, string) error
+
+func routerVPNNewNodeCommandWithRun(run routerVPNNodeCommandRun) *cobra.Command {
+	var directory, session, config, physicalSource, importedSource, physicalTransfer, darwin string
 	var physicalMTU int
 	var journal routerVPNNodeJournalOptions
 	var linuxParent routerVPNNodeLinuxParentOptions
-	command := &cobra.Command{Use: "routervpn-node", Short: "Run one captured Router VPN node and its retained TUN", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(*cobra.Command, []string) error {
+	command := &cobra.Command{Use: "routervpn-node", Short: "Run one captured Router VPN node and its retained TUN", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(command *cobra.Command, _ []string) error {
+		if run == nil || command.Flags().Changed("darwin-control") && darwin != "inherited-v1" {
+			return routerVPNExternalFailure
+		}
+		if darwin != "" {
+			for _, name := range []string{"imported-source-sha256", "physical-transfer-sha256", "physical-mtu", "journal-parent-handle", "journal-parent-image", "journal-pipe", "journal-capture-sha256", "linux-parent-channel", "linux-parent-directory", "linux-parent-capture"} {
+				if command.Flags().Changed(name) {
+					return routerVPNExternalFailure
+				}
+			}
+		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		if importedSource != "" {
-			if physicalSource != "" || linuxParent != (routerVPNNodeLinuxParentOptions{}) {
-				return routerVPNExternalFailure
-			}
-			return routerVPNRunImportedMTUWithJournal(ctx, directory, session, config, importedSource, physicalTransfer, physicalMTU, journal)
-		}
-		return routerVPNRunNodeMTUWithParents(ctx, directory, session, config, physicalSource, physicalTransfer, physicalMTU, journal, linuxParent)
+		return run(ctx, directory, session, config, physicalSource, importedSource, physicalTransfer, physicalMTU, journal, linuxParent, darwin)
 	}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private runtime directory")
 	command.Flags().StringVar(&session, "session", "", "captured runtime identity")
@@ -539,7 +568,8 @@ func init() {
 	command.Flags().IntVar(&linuxParent.ChannelFD, "linux-parent-channel", 0, "inherited original Linux parent channel")
 	command.Flags().IntVar(&linuxParent.DirectoryFD, "linux-parent-directory", 0, "inherited original Linux parent task directory")
 	command.Flags().StringVar(&linuxParent.CaptureSHA256, "linux-parent-capture", "", "captured Linux command identity")
-	mainCommand.AddCommand(command)
+	command.Flags().StringVar(&darwin, "darwin-control", "", "original inherited Darwin controller")
+	return command
 }
 
 func routerVPNRunNodeMTU(parent context.Context, directory, session, config string) (failure error) {

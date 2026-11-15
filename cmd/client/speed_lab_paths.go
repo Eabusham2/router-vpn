@@ -264,8 +264,8 @@ func captureSpeedLabIdentityContext(ctx context.Context, a *app) (speedLabPathId
 		}
 	} else if raw, exists := lookupDesktopNativeLaunch(a); exists {
 		launch, ok := raw.(*desktopNodeLaunch)
-		if ok && launch != nil && launch.ownedNode != nil {
-			proof, err := a.readDesktopOwnedNodeReadyContext(ctx, launch, false)
+		if ok && launch != nil && (launch.ownedNode != nil || launch.pairedNode != nil) {
+			proof, err := a.readDesktopRouterReadyContext(ctx, launch, false)
 			if err != nil || launch.command != command || launch.profileID != profile.ID || launch.external != nil || launch.tor != nil {
 				return speedLabPathIdentity{}, speedLabPath{}, errors.Join(err, errors.New("active Router Speed Lab path lost its exact native owner"))
 			}
@@ -314,7 +314,7 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 	}
 	if identity.External != nil && (identity.External.external == nil || identity.External.tor != nil || identity.Tor != nil) ||
 		identity.Tor != nil && (identity.Tor.tor == nil || identity.Tor.external != nil || identity.GraphOK || identity.TorEntry != identity.Tor.tor.predecessor || (identity.TorEntry == nil) != (identity.EntryToken == "")) ||
-		identity.Node != nil && (identity.Node.ownedNode == nil || identity.Node.external != nil || identity.Node.tor != nil || identity.External != nil || identity.Tor != nil || identity.GraphOK) {
+		identity.Node != nil && (identity.Node.ownedNode == nil && identity.Node.pairedNode == nil || identity.Node.external != nil || identity.Node.tor != nil || identity.External != nil || identity.Tor != nil || identity.GraphOK) {
 		return errors.New("Speed Lab identity mixes incompatible native path owners")
 	}
 	if identity.Linux != nil && (identity.External != nil || identity.Tor != nil || identity.TorEntry != nil || identity.Node != nil || identity.GraphOK) {
@@ -417,7 +417,7 @@ func validateSpeedLabIdentityContext(ctx context.Context, a *app, identity speed
 		if raw, exists := lookupDesktopNativeLaunch(a); !exists || raw != identity.Node || identity.Node.command != identity.Command || identity.Node.profileID != identity.RouterID {
 			return errors.New("Speed Lab result belongs to a replacement native Router process")
 		}
-		proof, err := a.readDesktopOwnedNodeReadyContext(ctx, identity.Node, false)
+		proof, err := a.readDesktopRouterReadyContext(ctx, identity.Node, false)
 		if err != nil || proof.SessionID != identity.NodeSession || proof.SourceSHA256 != identity.NodeSource || identity.NodeSession == "" || identity.NodeSource == "" {
 			return errors.Join(err, errors.New("Speed Lab result belongs to a changed native Router source"))
 		}

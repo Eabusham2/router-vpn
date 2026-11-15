@@ -73,12 +73,15 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'node_chain_socks_physical_linux.go.tmpl', 'node_chain_connect_physical_linux.go.tmpl', 'node_chain_socks_physical_windows.go.tmpl', 'node_chain_connect_physical_windows.go.tmpl', 'node_chain_socks_physical_darwin.go.tmpl', 'node_chain_connect_physical_darwin.go.tmpl', 'node_chain_socks_physical_other.go.tmpl', 'node_chain_connect_physical_other.go.tmpl',
                 'node_candidate_prefix_physical_linux.go.tmpl', 'node_candidate_prefix_physical_windows.go.tmpl', 'node_candidate_prefix_physical_other.go.tmpl',
                 'node_candidate_prefix_physical_darwin.go.tmpl', 'node_candidate_prefix_physical_darwin_test.go.tmpl',
-                'node_physical_linux.go.tmpl', 'node_physical_darwin.go.tmpl',
+                'node_physical_linux.go.tmpl', 'node_physical_darwin.go.tmpl', 'node_paired_physical_darwin.go.tmpl',
                 'node_physical_linux_test.go.tmpl', 'node_physical_darwin_test.go.tmpl', 'node_physical_unix_test.go.tmpl',
                 'node_linux_lifecycle.go.tmpl', 'node_linux_lifecycle_test.go.tmpl',
                 'node_linux_source_join.go.tmpl', 'node_linux_source_join_test.go.tmpl',
                 'node_physical_windows.go.tmpl', 'node_physical_windows_test.go.tmpl', 'node_physical_other.go.tmpl')
 BOX_TEMPLATES = {
+    'node_box_darwin.go.tmpl': 'routervpn_desktop_node_box_darwin.go',
+    'node_box_darwin_test.go.tmpl': 'routervpn_desktop_node_box_darwin_test.go',
+    'node_box_paired_mtu_darwin_test.go.tmpl': 'routervpn_desktop_node_box_paired_mtu_darwin_test.go',
     'external_box_openvpn_entry_test.go.tmpl': 'routervpn_desktop_external_box_openvpn_entry_test.go',
     'external_hysteria_layer_peer_test.go.tmpl': 'routervpn_desktop_external_hysteria_layer_peer_test.go',
     'external_box_windows_hysteria2_layer_test.go.tmpl': 'routervpn_desktop_external_box_windows_hysteria2_layer_test.go',
@@ -207,6 +210,7 @@ PEER_TEMPLATES = {
     'node_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_windows_test.go',
     'node_resolved_private_tld_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_resolved_private_tld_test.go',
     'node_resolved_broker_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_resolved_broker_test.go',
+    'node_private_benchmark_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_private_benchmark_test.go',
     'node_layer_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_test.go',
     'node_router_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_peer_test.go',
     'node_router_cover_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_cover_peer_test.go',
@@ -435,6 +439,7 @@ def pt_copies():
                    'node_candidate_prefix_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
                    'node_physical_linux.go.tmpl': b'//go:build linux\n\n',
                    'node_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
+                   'node_paired_physical_darwin.go.tmpl': b'//go:build darwin && !ios\n\n',
                    'node_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
                    'node_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
                    'node_physical_unix_test.go.tmpl': b'//go:build linux || darwin\n\n',
@@ -450,7 +455,10 @@ def pt_copies():
     for name, relative in BOX_TEMPLATES.items():
         path = ROOT/'mobile/desktop'/name
         raw = path.read_bytes()
-        prefix = {'node_box_imported_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
+        prefix = {'node_box_darwin.go.tmpl': b'//go:build darwin && !ios\n\n',
+                  'node_box_darwin_test.go.tmpl': b'//go:build darwin && !ios\n\n',
+                  'node_box_paired_mtu_darwin_test.go.tmpl': b'//go:build darwin && !ios\n\n',
+                  'node_box_imported_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
                   'node_chain_box_linux.go.tmpl': b'//go:build linux\n\n',
                   'node_candidate_prefix_box_linux.go.tmpl': b'//go:build linux\n\n',
                   'node_candidate_prefix_box_darwin.go.tmpl': b'//go:build darwin\n\n',

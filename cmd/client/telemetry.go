@@ -596,7 +596,7 @@ func privatePathLatencyWithClock(ctx context.Context, p common.RouterProfile, st
 	samples = clampLiveSamples(samples, 2)
 	values := make([]float64, 0, samples)
 	failed := 0
-	client, err := newAsyncMeasurementHTTPClient(st, 1800*time.Millisecond)
+	client, err := newAsyncMeasurementHTTPClientContext(ctx, st, 1800*time.Millisecond)
 	if err != nil {
 		return connectionLatencyResult{}, err
 	}

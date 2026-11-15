@@ -1,0 +1,75 @@
+package main
+
+import (
+	"context"
+	"io"
+	"strings"
+	"testing"
+)
+
+func TestRouterVPNNodeDarwinCommandFlags(t *testing.T) {
+	for _, flag := range []string{"imported-source-sha256", "physical-transfer-sha256", "physical-mtu", "journal-parent-handle",
+		"journal-parent-image", "journal-pipe", "journal-capture-sha256",
+		"linux-parent-channel", "linux-parent-directory", "linux-parent-capture"} {
+		t.Run(flag, func(t *testing.T) {
+			calls := 0
+			command := routerVPNNewNodeCommandWithRun(func(context.Context, string, string, string, string, string, string, int,
+				routerVPNNodeJournalOptions, routerVPNNodeLinuxParentOptions, string) error {
+				calls++
+				return nil
+			})
+			value := ""
+			if flag == "physical-mtu" || flag == "journal-parent-handle" ||
+				flag == "linux-parent-channel" || flag == "linux-parent-directory" {
+				value = "0"
+			}
+			command.SetArgs([]string{"--darwin-control=inherited-v1", "--" + flag + "=" + value})
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if command.Execute() == nil || calls != 0 {
+				t.Fatal("explicit foreign platform flag reached inherited Darwin dispatch")
+			}
+		})
+	}
+	t.Run("exact-captured-arguments", func(t *testing.T) {
+		calls := 0
+		command := routerVPNNewNodeCommandWithRun(func(ctx context.Context, directory, session, config, source, imported, transfer string, mtu int,
+			windows routerVPNNodeJournalOptions, linux routerVPNNodeLinuxParentOptions, darwin string) error {
+			calls++
+			if ctx == nil || ctx.Err() != nil || directory != "/original-private-workspace" || session != desktopExternalSession ||
+				config != strings.Repeat("b", 64) || source != strings.Repeat("c", 64) || imported != "" || transfer != "" || mtu != 0 ||
+				windows != (routerVPNNodeJournalOptions{}) || linux != (routerVPNNodeLinuxParentOptions{}) || darwin != "inherited-v1" {
+				t.Fatal("command replaced its original inherited argument capture")
+			}
+			return nil
+		})
+		command.SetArgs([]string{"--runtime-dir=/original-private-workspace", "--session=" + desktopExternalSession,
+			"--config-sha256=" + strings.Repeat("b", 64), "--physical-source-sha256=" + strings.Repeat("c", 64),
+			"--darwin-control=inherited-v1"})
+		command.SetOut(io.Discard)
+		command.SetErr(io.Discard)
+		if err := command.Execute(); err != nil || calls != 1 {
+			t.Fatal("exact inherited dispatch was not preserved", err)
+		}
+	})
+	for _, value := range []string{"", "foreign"} {
+		name := "empty-family"
+		if value != "" {
+			name = "unknown-family"
+		}
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			command := routerVPNNewNodeCommandWithRun(func(context.Context, string, string, string, string, string, string, int,
+				routerVPNNodeJournalOptions, routerVPNNodeLinuxParentOptions, string) error {
+				calls++
+				return nil
+			})
+			command.SetArgs([]string{"--darwin-control=" + value})
+			command.SetOut(io.Discard)
+			command.SetErr(io.Discard)
+			if command.Execute() == nil || calls != 0 {
+				t.Fatal("noncanonical Darwin family reached dispatch")
+			}
+		})
+	}
+}

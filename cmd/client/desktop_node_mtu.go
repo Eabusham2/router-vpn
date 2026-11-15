@@ -383,6 +383,12 @@ func (owner *desktopNodeMTUOwner) verifyReaderChangeContext(ctx context.Context,
 		return err
 	}
 	previous := owner.record
+	if owner.launch != nil && owner.launch.pairedNode != nil {
+		if next.Interface == previous.Interface && next.Index == previous.Index && next.Reader == previous.Reader {
+			return nil
+		}
+		return owner.launch.pairedNode.validateMTUReaderChange(ctx, owner, next)
+	}
 	if next.Interface == previous.Interface {
 		return nil
 	}

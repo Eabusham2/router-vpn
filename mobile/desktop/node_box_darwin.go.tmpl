@@ -1,0 +1,51 @@
+//go:build darwin && !ios
+
+package box
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+)
+
+// The original single-node preparation owns its exact physical source even
+// after partial startup. It grants no parent baseline or paired proof receipt.
+type RouterVPNDesktopDarwinNodePreparation struct {
+	network *routervpndesktoppt.NodeNetworkOwner
+	policy  *mobilemultihop.DesktopNodePolicy
+}
+
+func routerVPNDesktopDarwinNodeTarget(policy *mobilemultihop.DesktopNodePolicy) bool {
+	if policy == nil || policy.Validate() != nil {
+		return false
+	}
+	meta := policy.Metadata()
+	return meta.TargetOS == "darwin" && mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(meta.Mode, meta.StartLayer)
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodePreparePhysicalOwned(policy *mobilemultihop.DesktopNodePolicy) (*RouterVPNDesktopDarwinNodePreparation, error) {
+	if !routerVPNDesktopDarwinNodeTarget(policy) {
+		return nil, errors.New("Darwin paired node lost its complete original physical graph")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopDarwinNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodePhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopDarwinNodePreparation) CloseSource(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("Darwin paired node cleanup lost its retained preparation")
+	}
+	return p.network.CloseDarwinNodePhysicalSource(ctx, p.policy)
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodeActivatePhysical(policy *mobilemultihop.DesktopNodePolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if !routerVPNDesktopDarwinNodeTarget(policy) {
+		return nil, errors.New("Darwin paired node activation lost its original graph")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

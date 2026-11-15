@@ -377,6 +377,9 @@ func proveSelectedDNSWithClock(parent context.Context, a *app, s observedConnect
 		result.Reason = selectionErr.Error()
 		return result
 	}
+	if proof, owned := proveDesktopPairedNodeDNS(parent, a, s, runtimeID, selected); owned {
+		return proof
+	}
 	if proof, owned := proveDesktopImportedDNSObservation(parent, a, s, runtimeID, selected); owned {
 		return proof
 	}

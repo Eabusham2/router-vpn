@@ -1,0 +1,91 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/macosprocess"
+)
+
+func desktopDarwinSingleCommandFiles(t *testing.T, restored int) (*mobilemultihop.DesktopNodePolicy, *routerVPNExternalFiles) {
+	t.Helper()
+	original := desktopNodeCommandOriginal(t)
+	input, err := original.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, desktopExternalSession, "darwin", restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivation, err := macosprocess.MarshalNodePolicyInput(restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy, desktopImportedCommandFiles(t, map[string]string{"node-source.json": input, "node-policy.json": string(derivation), "sing-box.json": policy.Config()})
+}
+
+func TestRouterVPNNodeDarwinManifestReplay(t *testing.T) {
+	for _, restored := range []int{0, 1400} {
+		policy, files := desktopDarwinSingleCommandFiles(t, restored)
+		meta := policy.Metadata()
+		actual, err := routerVPNDarwinNodeCommandPhysicalCapture(files, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256)
+		if err != nil || actual == nil || actual == policy || actual.OriginalProfile() == policy.OriginalProfile() || actual.Config() != policy.Config() || !reflect.DeepEqual(actual.Metadata(), meta) {
+			t.Fatal("single-node manifest lost original private replay or captured MTU", err)
+		}
+	}
+	for _, name := range []string{"missing-source", "missing-policy", "missing-config", "changed-source", "changed-policy", "changed-config", "duplicate-policy", "foreign-field", "null-mtu", "missing-mtu", "session", "source", "config"} {
+		t.Run(name, func(t *testing.T) {
+			policy, files := desktopDarwinSingleCommandFiles(t, 1400)
+			meta := policy.Metadata()
+			session, source, config := meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256
+			changed := map[string]string{}
+			switch name {
+			case "missing-source":
+				changed["node-source.json"] = ""
+			case "missing-policy":
+				changed["node-policy.json"] = ""
+			case "missing-config":
+				changed["sing-box.json"] = ""
+			case "changed-source":
+				raw, _ := policy.OriginalProfile().LaunchInput()
+				changed["node-source.json"] = strings.Replace(raw, "captured-router", "other-router", 1)
+			case "changed-policy":
+				changed["node-policy.json"] = `{"schema":1,"restored_mtu":1392}`
+			case "changed-config":
+				changed["sing-box.json"] = policy.Config() + " "
+			case "duplicate-policy":
+				changed["node-policy.json"] = `{"schema":1,"restored_mtu":1400,"restored_mtu":1400}`
+			case "foreign-field":
+				changed["node-policy.json"] = `{"schema":1,"restored_mtu":1400,"accepted":true}`
+			case "null-mtu":
+				changed["node-policy.json"] = `{"schema":1,"restored_mtu":null}`
+			case "missing-mtu":
+				changed["node-policy.json"] = `{"schema":1}`
+			case "session":
+				session = strings.Repeat("e", 32)
+			case "source":
+				source = strings.Repeat("e", 64)
+			case "config":
+				config = strings.Repeat("e", 64)
+			}
+			for file, raw := range changed {
+				path := filepath.Join(files.root.Name(), file)
+				if raw == "" {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if actual, err := routerVPNDarwinNodeCommandPhysicalCapture(files, session, config, source); err == nil || actual != nil {
+				t.Fatal("substituted private manifest reached single-node native derivation", name)
+			}
+		})
+	}
+}

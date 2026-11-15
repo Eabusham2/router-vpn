@@ -102,6 +102,7 @@ func desktopNodeLayerPreparationError(t *testing.T, stage string, err error) {
 }
 
 type desktopNodeLayerRequest struct {
+	BenchmarkPort       int                           `json:"benchmark_port,omitempty"`
 	Schema              int                           `json:"schema"`
 	Mode                string                        `json:"mode"`
 	Layer               string                        `json:"layer"`
@@ -116,43 +117,44 @@ type desktopNodeLayerRequest struct {
 }
 
 type desktopNodeLayerReply struct {
-	Schema                int    `json:"schema"`
-	Address               string `json:"address"`
-	AESAddress            string `json:"aes_address"`
-	BaseAddress           string `json:"base_address,omitempty"`
-	PhysicalClientAddress string `json:"physical_client_address,omitempty"`
-	RelaySourceAddress    string `json:"relay_source_address,omitempty"`
-	ProtocolFiles         string `json:"protocol_files,omitempty"`
-	ParametersSHA256      string `json:"parameters_sha256,omitempty"`
-	ProtocolRawUDP        int64  `json:"protocol_raw_udp,omitempty"`
-	ProtocolRawTCP        int64  `json:"protocol_raw_tcp,omitempty"`
-	ProtocolTCP           int64  `json:"protocol_tcp,omitempty"`
-	ProtocolUDP           int64  `json:"protocol_udp,omitempty"`
-	ProtocolTLSHTTP       int64  `json:"protocol_tls_http,omitempty"`
-	ProtocolWebSocket     int64  `json:"protocol_websocket,omitempty"`
-	ProtocolMux           int64  `json:"protocol_mux,omitempty"`
-	UDPBranchAddress      string `json:"udp_branch_address,omitempty"`
-	UDPBranchRawUDP       int64  `json:"udp_branch_raw_udp,omitempty"`
-	UDPBranchTCP          int64  `json:"udp_branch_tcp,omitempty"`
-	UDPBranchUDP          int64  `json:"udp_branch_udp,omitempty"`
-	AppID                 []byte `json:"app_id,omitempty"`
-	RawTCP                int64  `json:"raw_tcp"`
-	RawUDP                int64  `json:"raw_udp"`
-	PlainTCP              int64  `json:"plain_tcp"`
-	PlainUDP              int64  `json:"plain_udp"`
-	RejectedUDP           int64  `json:"rejected_udp,omitempty"`
-	DNSQueries            uint32 `json:"dns_queries"`
-	RouterQueries         uint32 `json:"router_queries,omitempty"`
-	DirectQueries         uint32 `json:"direct_router_queries,omitempty"`
-	CoverPackets          uint64 `json:"cover_packets,omitempty"`
-	CoverBytes            uint64 `json:"cover_bytes,omitempty"`
-	CoverReplies          uint64 `json:"cover_replies,omitempty"`
-	CoverReplyBytes       uint64 `json:"cover_reply_bytes,omitempty"`
-	CoverMaximum          uint32 `json:"cover_maximum,omitempty"`
-	Probe                 string `json:"probe,omitempty"`
-	ProbeCount            int64  `json:"probe_count,omitempty"`
-	ProbeNetwork          string `json:"probe_network"`
-	ProbeTarget           string `json:"probe_target,omitempty"`
+	Benchmark             *desktopNodeChainBenchmarkReply `json:"benchmark,omitempty"`
+	Schema                int                             `json:"schema"`
+	Address               string                          `json:"address"`
+	AESAddress            string                          `json:"aes_address"`
+	BaseAddress           string                          `json:"base_address,omitempty"`
+	PhysicalClientAddress string                          `json:"physical_client_address,omitempty"`
+	RelaySourceAddress    string                          `json:"relay_source_address,omitempty"`
+	ProtocolFiles         string                          `json:"protocol_files,omitempty"`
+	ParametersSHA256      string                          `json:"parameters_sha256,omitempty"`
+	ProtocolRawUDP        int64                           `json:"protocol_raw_udp,omitempty"`
+	ProtocolRawTCP        int64                           `json:"protocol_raw_tcp,omitempty"`
+	ProtocolTCP           int64                           `json:"protocol_tcp,omitempty"`
+	ProtocolUDP           int64                           `json:"protocol_udp,omitempty"`
+	ProtocolTLSHTTP       int64                           `json:"protocol_tls_http,omitempty"`
+	ProtocolWebSocket     int64                           `json:"protocol_websocket,omitempty"`
+	ProtocolMux           int64                           `json:"protocol_mux,omitempty"`
+	UDPBranchAddress      string                          `json:"udp_branch_address,omitempty"`
+	UDPBranchRawUDP       int64                           `json:"udp_branch_raw_udp,omitempty"`
+	UDPBranchTCP          int64                           `json:"udp_branch_tcp,omitempty"`
+	UDPBranchUDP          int64                           `json:"udp_branch_udp,omitempty"`
+	AppID                 []byte                          `json:"app_id,omitempty"`
+	RawTCP                int64                           `json:"raw_tcp"`
+	RawUDP                int64                           `json:"raw_udp"`
+	PlainTCP              int64                           `json:"plain_tcp"`
+	PlainUDP              int64                           `json:"plain_udp"`
+	RejectedUDP           int64                           `json:"rejected_udp,omitempty"`
+	DNSQueries            uint32                          `json:"dns_queries"`
+	RouterQueries         uint32                          `json:"router_queries,omitempty"`
+	DirectQueries         uint32                          `json:"direct_router_queries,omitempty"`
+	CoverPackets          uint64                          `json:"cover_packets,omitempty"`
+	CoverBytes            uint64                          `json:"cover_bytes,omitempty"`
+	CoverReplies          uint64                          `json:"cover_replies,omitempty"`
+	CoverReplyBytes       uint64                          `json:"cover_reply_bytes,omitempty"`
+	CoverMaximum          uint32                          `json:"cover_maximum,omitempty"`
+	Probe                 string                          `json:"probe,omitempty"`
+	ProbeCount            int64                           `json:"probe_count,omitempty"`
+	ProbeNetwork          string                          `json:"probe_network"`
+	ProbeTarget           string                          `json:"probe_target,omitempty"`
 }
 
 type desktopNodeLayerRoute struct {
@@ -160,6 +162,7 @@ type desktopNodeLayerRoute struct {
 }
 
 type desktopNodeLayerServer struct {
+	benchmark                                  atomic.Pointer[desktopNodeChainBenchmark]
 	ctx                                        context.Context
 	cancel                                     context.CancelFunc
 	tcp                                        net.Listener
@@ -437,6 +440,8 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 			s.rejectedUDP.Add(1)
 			return errors.New("layer peer rejected retired original SOCKS association")
 		}
+	} else if captured, ok := s.benchmark.Load().route("udp", metadata.Destination.String()); ok {
+		target = captured
 	} else if len(s.routes) != 0 {
 		var found bool
 		target, found = s.route("udp", metadata.Destination.String())
@@ -866,7 +871,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var trailing any
 	if decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
 		!mobilemultihop.DesktopNodePhysicalGraphSupported(request.Mode, request.Layer) ||
-		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && !desktopNodeCompositeMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 || !desktopNodeRouterHealthCaptureValid(request) || !desktopNodeHysteria2CaptureValid(request) {
+		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && !desktopNodeCompositeMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 || !desktopNodePrivateBenchmarkCapture(request.BenchmarkPort, request.NodeProofID) || !desktopNodeRouterHealthCaptureValid(request) || !desktopNodeHysteria2CaptureValid(request) {
 		t.Fatal("layer reference request escaped its captured fixture")
 	}
 	key, keyErr := base64.StdEncoding.Strict().DecodeString(request.Password)
@@ -1020,6 +1025,11 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	if request.Cover {
 		coverServer.cover.Store(&desktopNodeRouterCover{})
 	}
+	var benchmark *desktopNodeChainBenchmark
+	if request.BenchmarkPort != 0 {
+		benchmark = desktopNodeChainBenchmarkStart(t, request.BenchmarkPort)
+		coverServer.benchmark.Store(benchmark)
+	}
 	stage = "native process scope"
 	scope, err := desktopNodeLayerReferenceScope()
 	if err != nil {
@@ -1036,6 +1046,9 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		}
 		reply := desktopNodeLayerReply{Schema: 1, Address: address, AESAddress: aesAddress, BaseAddress: baseAddress, ProtocolFiles: protocolFiles,
 			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count, ProbeNetwork: probeNetwork, ProbeTarget: target}
+		if benchmark != nil {
+			reply.Benchmark = benchmark.snapshot()
+		}
 		reply.RejectedUDP = server.rejectedUDP.Load()
 		reply.RouterQueries = routerHealth.count()
 		reply.DirectQueries = directHealth.count()
@@ -1065,6 +1078,13 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		}
 		if err != nil || len(line) > 64 {
 			t.Fatal("layer reference received another control operation", err)
+		}
+		if string(line) == "hold-benchmark\n" || string(line) == "release-benchmark\n" {
+			if err := benchmark.control(strings.TrimSuffix(string(line), "\n")); err != nil {
+				t.Fatal(err)
+			}
+			respond("", "", server)
+			continue
 		}
 		if string(line) == "stats\n" || string(line) == "fail-dns\n" || string(line) == "restore-dns\n" {
 			if string(line) == "fail-dns\n" {

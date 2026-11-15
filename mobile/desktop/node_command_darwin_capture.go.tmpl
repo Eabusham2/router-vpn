@@ -1,0 +1,43 @@
+package main
+
+import "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+import "github.com/sagernet/sing-box/routervpn/macosprocess"
+
+// This replay is called only after the inherited process family authenticates
+// every input file. Neither its derivation record nor staged graph is authority.
+func routerVPNDarwinNodeCommandPhysicalCapture(files *routerVPNExternalFiles, session, config, source string) (*mobilemultihop.DesktopNodePolicy, error) {
+	if files == nil || files.root == nil || !routerVPNExternalSession.MatchString(session) || !routerVPNExternalSource.MatchString(config) || !routerVPNExternalSource.MatchString(source) {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err := files.read("node-policy.json", macosprocess.NodePolicyInputLimit)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	input, err := macosprocess.ParseNodePolicyInput(raw)
+	clear(raw)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err = files.read("node-source.json", mobilemultihop.NodeLaunchInputLimit)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	original, err := mobilemultihop.ParseNodeLaunchInput(string(raw))
+	clear(raw)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, "darwin", input.RestoredMTU)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	if meta.TargetOS != "darwin" || meta.SessionID != session || meta.SourceSHA256 != source || meta.ConfigSHA256 != config || !mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(meta.Mode, meta.StartLayer) {
+		return nil, routerVPNExternalFailure
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	if err != nil || string(staged) != policy.Config() {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
+}

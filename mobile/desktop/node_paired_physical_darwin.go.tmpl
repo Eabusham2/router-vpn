@@ -1,0 +1,14 @@
+//go:build darwin && !ios
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// CloseDarwinNodePhysicalSource joins only this exact retained single-node
+// preparation. It never retires the separately owned parent PF baseline.
+func (n *NodeNetworkOwner) CloseDarwinNodePhysicalSource(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) error {
+	return n.closeOrderedPhysicalSource(ctx, policy, "node")
+}

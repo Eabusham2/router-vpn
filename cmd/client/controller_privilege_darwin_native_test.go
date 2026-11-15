@@ -127,13 +127,23 @@ func init() {
 		}
 	}
 	if mtuUtility {
-		marker := filepath.Join(macOSOwnedControllerRoot, macOSNodeChainNativeMarker)
-		info, err := os.Lstat(marker)
-		body, readErr := os.ReadFile(marker)
-		if os.Getuid() != 0 || os.Geteuid() != 0 || err != nil || readErr != nil || !info.Mode().IsRegular() || !ownedDesktopInfo(info) || info.Mode().Perm() != 0600 || string(body) != "explicit disposable macOS ordered PF and TUN fixture\n" {
-			fmt.Fprintln(os.Stderr, "MTU test utility has no exact root-owned ordered fixture authority")
+		authority := false
+		for name, expected := range map[string]string{
+			macOSNodeChainNativeMarker:  "explicit disposable macOS ordered PF and TUN fixture\n",
+			macOSPairedNodeNativeMarker: macOSPairedNodeNativeAuthority,
+		} {
+			marker := filepath.Join(macOSOwnedControllerRoot, name)
+			info, err := os.Lstat(marker)
+			body, readErr := os.ReadFile(marker)
+			if err == nil && readErr == nil && info.Mode().IsRegular() && ownedDesktopInfo(info) && info.Mode().Perm() == 0600 && string(body) == expected {
+				authority = true
+			}
+		}
+		if os.Getuid() != 0 || os.Geteuid() != 0 || !authority {
+			fmt.Fprintln(os.Stderr, "MTU test utility has no exact root-owned native fixture authority")
 			os.Exit(123)
 		}
+
 		if handled, err := mtuOwnerUtility(os.Args[1:]); !handled || err != nil {
 			fmt.Fprintln(os.Stderr, "captured actual MTU utility failed", err)
 			os.Exit(124)
@@ -205,6 +215,9 @@ func macOSControllerFixtureChild() error {
 	}
 	if owned == nil || owned.accessToken == "" || owned.ownerToken == "" {
 		return errors.New("native fixture lost actual inherited launch credentials")
+	}
+	if handled, err := macOSPairedNodeNativeController(owned); handled {
+		return err
 	}
 	if handled, err := macOSCandidatePrefixNativeController(owned); handled {
 		return err

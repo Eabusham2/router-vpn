@@ -1,0 +1,178 @@
+package routervpnamnezia
+
+import (
+	"bytes"
+	"errors"
+	"net"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// Only the exact original paired node may opt in to this test-only private
+// benchmark. Zero preserves every existing provider's route inventory.
+func desktopNodePrivateBenchmarkCapture(port int, nodeID string) bool {
+	return port == 0 || port == 45998 && desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: "shadowsocks", NodeProofID: nodeID}) && nodeID != ""
+}
+
+// This optional private benchmark is a separate final-only route. The existing
+// unauthenticated cover endpoint and its 1200-byte limit are unchanged.
+type desktopNodeChainBenchmarkReply struct {
+	Port           int    `json:"port"`
+	Packets        uint64 `json:"packets"`
+	Replies        uint64 `json:"replies"`
+	ReceivedBytes  uint64 `json:"received_bytes"`
+	SentBytes      uint64 `json:"sent_bytes"`
+	Held           bool   `json:"held"`
+	HeldPackets    uint64 `json:"held_packets"`
+	MaximumPayload uint64 `json:"maximum_payload"`
+}
+type desktopNodeChainBenchmark struct {
+	address                                                string
+	held                                                   atomic.Bool
+	packets, replies, received, sent, heldPackets, maximum atomic.Uint64
+}
+
+func (p *desktopNodeChainBenchmark) snapshot() *desktopNodeChainBenchmarkReply {
+	return &desktopNodeChainBenchmarkReply{45998, p.packets.Load(), p.replies.Load(), p.received.Load(), p.sent.Load(), p.held.Load(), p.heldPackets.Load(), p.maximum.Load()}
+}
+func desktopNodeChainBenchmarkStart(t *testing.T, port int) *desktopNodeChainBenchmark {
+	t.Helper()
+	if port != 45998 {
+		t.Fatal("ordered benchmark requires its exact captured final port")
+	}
+	connection, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &desktopNodeChainBenchmark{address: connection.LocalAddr().String()}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		body := make([]byte, 8973)
+		for {
+			n, from, err := connection.ReadFrom(body)
+			if err != nil {
+				return
+			}
+			if n < 1 || n > 8972 {
+				continue
+			}
+			p.packets.Add(1)
+			p.received.Add(uint64(n))
+			for old := p.maximum.Load(); uint64(n) > old; old = p.maximum.Load() {
+				if p.maximum.CompareAndSwap(old, uint64(n)) {
+					break
+				}
+			}
+			if p.held.Load() {
+				p.heldPackets.Add(1)
+				continue
+			}
+			if wrote, err := connection.WriteTo(body[:n], from); err == nil && wrote == n {
+				p.replies.Add(1)
+				p.sent.Add(uint64(wrote))
+			}
+		}
+	}()
+	t.Cleanup(func() { connection.Close(); <-done })
+	return p
+}
+
+func (p *desktopNodeChainBenchmark) control(action string) error {
+	if p == nil || action != "hold-benchmark" && action != "release-benchmark" {
+		return errors.New("private benchmark lost its original captured owner or operation")
+	}
+	p.held.Store(action == "hold-benchmark")
+	return nil
+}
+
+func (p *desktopNodeChainBenchmark) route(network, destination string) (string, bool) {
+	if p == nil || network != "udp" || destination != "10.77.0.1:45998" {
+		return "", false
+	}
+	return p.address, true
+}
+
+func TestRouterVPNDesktopNodePrivateBenchmarkCapture(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		port     int
+		identity string
+		valid    bool
+	}{
+		{"disabled", 0, "", true}, {"original", 45998, strings.Repeat("a", 64), true},
+		{"foreign-port", 45999, strings.Repeat("a", 64), false}, {"missing-identity", 45998, "", false},
+		{"malformed-identity", 45998, strings.Repeat("A", 64), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if desktopNodePrivateBenchmarkCapture(test.port, test.identity) != test.valid {
+				t.Fatal("private benchmark substituted captured authority")
+			}
+		})
+	}
+	t.Run("route-and-control", func(t *testing.T) {
+		var absent *desktopNodeChainBenchmark
+		if absent.control("hold-benchmark") == nil {
+			t.Fatal("absent benchmark accepted control")
+		}
+		if _, ok := absent.route("udp", "10.77.0.1:45998"); ok {
+			t.Fatal("absent benchmark granted route")
+		}
+		p := desktopNodeChainBenchmarkStart(t, 45998)
+		for _, request := range [][2]string{{"tcp", "10.77.0.1:45998"}, {"udp", "10.77.0.1:45999"}, {"udp", "10.77.0.2:45998"}, {"udp", "[::ffff:10.77.0.1]:45998"}} {
+			if _, ok := p.route(request[0], request[1]); ok {
+				t.Fatal("private benchmark admitted foreign route", request)
+			}
+		}
+		if target, ok := p.route("udp", "10.77.0.1:45998"); !ok || target != p.address {
+			t.Fatal("private benchmark lost original sink")
+		}
+		if p.control("stats") == nil {
+			t.Fatal("benchmark accepted unrelated control")
+		}
+		c, err := net.Dial("udp4", p.address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		body := bytes.Repeat([]byte{0x61}, 1252)
+		reply := make([]byte, 1253)
+		exchange := func() {
+			t.Helper()
+			c.SetDeadline(time.Now().Add(time.Second))
+			if _, err := c.Write(body); err != nil {
+				t.Fatal(err)
+			}
+			n, err := c.Read(reply)
+			if err != nil || !bytes.Equal(reply[:n], body) {
+				t.Fatal("original benchmark changed payload", err)
+			}
+		}
+		exchange()
+		if err := p.control("hold-benchmark"); err != nil {
+			t.Fatal(err)
+		}
+		c.SetDeadline(time.Now().Add(150 * time.Millisecond))
+		c.Write(body)
+		if _, err := c.Read(reply); err == nil {
+			t.Fatal("held benchmark manufactured response")
+		}
+		if p.snapshot().HeldPackets != 1 {
+			t.Fatal("held original request was not observed")
+		}
+		if err := p.control("release-benchmark"); err != nil {
+			t.Fatal(err)
+		}
+		exchange()
+		deadline := time.Now().Add(time.Second)
+		for p.snapshot().Replies != 2 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		state := p.snapshot()
+		if state.Packets != 3 || state.Replies != 2 || state.ReceivedBytes != 3756 || state.SentBytes != 2504 || state.HeldPackets != 1 || state.Held || state.MaximumPayload != 1252 {
+			t.Fatal("benchmark accounting lost original packets", state)
+		}
+	})
+}

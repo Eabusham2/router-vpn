@@ -9,6 +9,7 @@ type Family string
 
 const (
 	ExternalFamily           Family = ""
+	NodeFamily               Family = "paired-node-v1"
 	NodeChainFamily          Family = "ordered-node-chain-v1"
 	NodeChainSOCKSFamily     Family = "ordered-node-chain-socks-v1"
 	NodeChainCONNECTFamily   Family = "ordered-node-chain-connect-v1"
@@ -33,7 +34,7 @@ func (family Family) protocolSchema() int {
 	switch family {
 	case ExternalFamily:
 		return 1
-	case NodeChainFamily, NodeChainSOCKSFamily, NodeChainCONNECTFamily, NodeChainExecutionFamily, CandidatePrefixFamily:
+	case NodeFamily, NodeChainFamily, NodeChainSOCKSFamily, NodeChainCONNECTFamily, NodeChainExecutionFamily, CandidatePrefixFamily:
 		return 2
 	default:
 		return 0
@@ -45,6 +46,8 @@ func (scope Scope) inputManifest() ([]scopeInput, error) {
 	case ExternalFamily:
 		// Keep the original filenames, order and per-document limit unchanged.
 		return []scopeInput{{"source.json", 16 << 20}, {"capture.json", 16 << 20}, {"sing-box.json", 16 << 20}}, nil
+	case NodeFamily:
+		return []scopeInput{{"node-source.json", 40 << 20}, {"node-policy.json", NodePolicyInputLimit}, {"sing-box.json", 4 << 20}}, nil
 	case NodeChainFamily:
 		// The ordered source is the canonical complete launch input. It already
 		// includes its validated capture/projection; no external-policy adapter

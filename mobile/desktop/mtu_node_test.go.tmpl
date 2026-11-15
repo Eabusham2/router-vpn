@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/inbound"
 	boxService "github.com/sagernet/sing-box/adapter/service"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -93,6 +95,141 @@ func desktopNodeMTUApply(t *testing.T, owner *routerVPNNodeMTU, action string, v
 	// command returns. They are independent from the native reader transaction.
 	owner.record.Generation, owner.record.Request = request.Generation, request.Request
 	return request
+}
+
+// Only the original native physical confirmation is doubled here. The actual
+// command, nonce, lease, candidate/rollback adoption and record consumer below
+// execute unchanged. Native installed-host gates exercise the real capability.
+type desktopPairedDarwinMTUEngineFixture struct {
+	*desktopNodeMTUEngineFixture
+	checks     []routerVPNNodeMTURecord
+	confirmed  []adapter.Inbound
+	confirmErr error
+	confirm    func(context.Context) error
+}
+
+func (engine *desktopPairedDarwinMTUEngineFixture) validatePairedDarwinMTUReader(ctx context.Context,
+	next adapter.Inbound, before routerVPNNodeMTURecord, name string, index, mtu int) error {
+	engine.checks = append(engine.checks, before)
+	engine.confirmed = append(engine.confirmed, next)
+	if engine.confirm != nil {
+		if err := engine.confirm(ctx); err != nil {
+			return err
+		}
+	}
+	if engine.confirmErr != nil {
+		return engine.confirmErr
+	}
+	reader, ok := next.(*desktopMTUTUNFixture)
+	if !ok || next != engine.current || reader.name != name || reader.index != index || reader.mtu != mtu || ctx.Err() != nil {
+		return errors.New("original native confirmation lost its returned reader")
+	}
+	return nil
+}
+
+func desktopPairedDarwinMTUFixture(t *testing.T) (*routerVPNNodeMTU, *desktopPairedDarwinMTUEngineFixture) {
+	t.Helper()
+	base := &desktopNodeMTUEngineFixture{current: &desktopMTUTUNFixture{name: "utun71", index: 71, mtu: 1420}}
+	engine := &desktopPairedDarwinMTUEngineFixture{desktopNodeMTUEngineFixture: base}
+	base.change = func(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+		previous := expected.(*desktopMTUTUNFixture)
+		next := &desktopMTUTUNFixture{name: "utun" + strconv.Itoa(previous.index+1), index: previous.index + 1,
+			mtu: mtu, guard: previous.guard, guardContext: previous.guardContext}
+		base.current = next
+		return next, nil
+	}
+	owner, err := newRouterVPNNodeMTU(engine, strings.Repeat("a", 32), strings.Repeat("b", 64), strings.Repeat("c", 64), func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return owner, engine
+}
+
+func TestRouterVPNNodeMTUPairedDarwinAdoptsOnlyConfirmedSuccessors(t *testing.T) {
+	owner, engine := desktopPairedDarwinMTUFixture(t)
+	original := owner.record
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	first := desktopNodeMTUApply(t, owner, "set", 1320)
+	if owner.record.Interface != "utun72" || owner.record.Index != 72 || owner.record.Reader != 2 || owner.record.MTU != 1320 || owner.current() != nil {
+		t.Fatal("confirmed successor was not the actual current readback", owner.record)
+	}
+	if len(engine.checks) != 1 || engine.checks[0].Interface != original.Interface || engine.checks[0].Session != original.Session ||
+		engine.checks[0].Config != original.Config || engine.confirmed[0] != owner.inbound {
+		t.Fatal("native confirmation lost the original identity or returned reader")
+	}
+	if owner.command(first) == nil || len(engine.values) != 1 {
+		t.Fatal("old command could mutate the successor")
+	}
+	desktopNodeMTUApply(t, owner, "rollback", 0)
+	if owner.record.Interface != "utun73" || owner.record.Index != 73 || owner.record.Reader != 3 || owner.record.MTU != original.MTU ||
+		owner.record.Active || !owner.record.Restored || owner.current() != nil || len(engine.checks) != 2 || engine.checks[1].Interface != "utun72" {
+		t.Fatal("rollback did not adopt its independently confirmed reader", owner.record)
+	}
+}
+
+func TestRouterVPNNodeMTUPairedDarwinRefusesUnownedRename(t *testing.T) {
+	for _, name := range []string{"no-capability", "refused-capability", "same-index", "retired-during-confirmation", "mixed-prefix", "mixed-openvpn"} {
+		t.Run(name, func(t *testing.T) {
+			owner, engine := desktopPairedDarwinMTUFixture(t)
+			desktopNodeMTUApply(t, owner, "begin", 0)
+			before, inbound := owner.record, owner.inbound
+			switch name {
+			case "no-capability":
+				owner.engine = engine.desktopNodeMTUEngineFixture
+			case "refused-capability":
+				engine.confirmErr = errors.New("original physical owner refused")
+			case "same-index":
+				engine.change = func(_ context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+					old := expected.(*desktopMTUTUNFixture)
+					next := &desktopMTUTUNFixture{name: "utun99", index: old.index, mtu: mtu, guard: old.guard, guardContext: old.guardContext}
+					engine.current = next
+					return next, nil
+				}
+			case "retired-during-confirmation":
+				engine.confirm = func(context.Context) error { return context.Canceled }
+			case "mixed-prefix":
+				owner.prefix = &routerVPNNodeCandidatePrefixRuntime{}
+			case "mixed-openvpn":
+				owner.openVPN = &routerVPNImportedOpenVPN{}
+			}
+			// This invokes the production mutation/returned-reader boundary. The
+			// higher command layer also refuses a candidate-prefix mutation.
+			if owner.changeBeforeContext(context.Background(), 1320, time.Time{}) == nil {
+				t.Fatal("unowned rename was accepted")
+			}
+			if owner.record != before || owner.inbound != inbound {
+				t.Fatal("refused rename advanced the original record")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeMTUPairedDarwinCancelledChangeRetainsOnlyOriginalRollback(t *testing.T) {
+	owner, engine := desktopPairedDarwinMTUFixture(t)
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	before := owner.record
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	engine.change = func(ctx context.Context, expected adapter.Inbound, value int) (adapter.Inbound, error) {
+		old := expected.(*desktopMTUTUNFixture)
+		next := &desktopMTUTUNFixture{name: "utun72", index: 72, mtu: before.MTU, guard: old.guard, guardContext: old.guardContext}
+		engine.current = next
+		cancel()
+		return next, context.Canceled
+	}
+	engine.confirm = func(ctx context.Context) error {
+		if ctx.Err() != nil || !mobilemtu.SameOperationContext(ctx, ctx) {
+			return errors.New("original cleanup allowance was not retained")
+		}
+		return nil
+	}
+	if err := owner.changeBeforeContext(parent, 1320, time.Time{}); err == nil {
+		t.Fatal("cancelled candidate became successful")
+	}
+	if owner.record.Interface != "utun72" || owner.record.MTU != before.MTU || owner.record.Reader != before.Reader+1 ||
+		owner.inbound != engine.current || owner.current() != nil || len(engine.checks) != 1 {
+		t.Fatal("cancelled transaction lost its exact returned rollback reader", owner.record)
+	}
 }
 
 func TestRouterVPNNodeMTURetainsExactReaderAcrossSetAndRollback(t *testing.T) {

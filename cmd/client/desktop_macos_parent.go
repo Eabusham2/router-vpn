@@ -7,6 +7,7 @@ import (
 	"os"
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemtu"
+	"router-vpn/internal/mobilemultihop"
 	"sync/atomic"
 )
 
@@ -21,6 +22,18 @@ type desktopMacOSParentWitness interface {
 // Concrete platform runtime types remain in their own OS source files.
 type desktopMacOSCandidatePrefixRuntime interface {
 	desktopNodeCandidatePrefixPlatform
+	captureStop(context.Context, *app, *desktopMacOSParent, *desktopMacOSSession) (desktopRetainedStopCapture, error)
+}
+
+// The single paired Router has a distinct purpose from ordered preparation.
+type desktopMacOSPairedNodeRuntime interface {
+	CaptureRestore(context.Context, common.RouterProfile) (desktopMacOSPairedNodeRestore, error)
+	CaptureMeasurement(context.Context) (desktopMacOSPairedNodeMeasurement, error)
+	Current(context.Context) error
+	Ready(context.Context) (mobilemultihop.DesktopNodeReadyRecord, error)
+	Reprove(context.Context) error
+	validateMTUReaderChange(context.Context, *desktopNodeMTUOwner, desktopNodeMTURecord) error
+	Close(context.Context) error
 	captureStop(context.Context, *app, *desktopMacOSParent, *desktopMacOSSession) (desktopRetainedStopCapture, error)
 }
 
@@ -46,6 +59,7 @@ type desktopMacOSParent struct {
 type desktopMacOSSession struct {
 	parent           *desktopMacOSParent
 	dependents       map[ownedDesktopNodeParent]struct{}
+	pairedNode       desktopMacOSPairedNodeRuntime      // Original single paired Router; protected by parent.gate.
 	external         desktopExternalRetainedRuntime     // Exact active ordinary host; protected by parent.gate.
 	nodeChain        *desktopNodeChainPlatformRuntime   // Exact active ordered host; protected by parent.gate.
 	candidatePrefix  desktopMacOSCandidatePrefixRuntime // Separate never-connected purpose; protected by parent.gate.

@@ -508,7 +508,7 @@ func (a *app) publicIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer stopMeasurement()
-	client, err := newAsyncMeasurementHTTPClient(stateAtStart, 5*time.Second)
+	client, err := newAsyncMeasurementHTTPClientContext(measurementCtx, stateAtStart, 5*time.Second)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -619,7 +619,7 @@ func (a *app) retestDNS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	client, err := newAsyncMeasurementHTTPClient(stateAtStart, 45*time.Second)
+	client, err := newAsyncMeasurementHTTPClientContext(measurementCtx, stateAtStart, 45*time.Second)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return

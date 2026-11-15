@@ -7,7 +7,7 @@ import (
 
 const mtuDarwinOrderedInterfacePolicy = "darwin-ordered-reader-v1"
 
-// Only the retained Darwin ordered wrapper implements this capability. It
+// Only retained Darwin ordered and paired wrappers implement this capability. Each
 // confirms exact native reader/kernel receipts, including a separately joined
 // cleanup receipt; an interface name is never mutation authority.
 type mtuInterfaceSuccessionOwner interface {
@@ -18,6 +18,12 @@ func (owner *mtuLiveOwner) interfaceSuccessionCapabilityLocked() (mtuInterfaceSu
 	capability, present := owner.kernel.(mtuInterfaceSuccessionOwner)
 	if !present {
 		return nil, nil
+	}
+	if paired, ok := owner.kernel.(interface{ validatePairedMTUInterfaceScope(*mtuLiveOwner) error }); ok {
+		if err := paired.validatePairedMTUInterfaceScope(owner); err != nil {
+			return nil, err
+		}
+		return capability, nil
 	}
 	path := owner.snapshot.Multihop
 	if path == nil || path.Chain == nil || path.Native == nil {

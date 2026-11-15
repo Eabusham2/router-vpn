@@ -42,6 +42,7 @@ type desktopNodeLaunch struct {
 	importedDNSLast            string
 	importedDNSGeneration      uint64
 	importedOpenVPN            *desktopImportedOpenVPNRuntime
+	pairedNode                 desktopMacOSPairedNodeRuntime
 	ownedNode                  *desktopOwnedNodeRuntime
 	chain                      *desktopNodeChainLaunch
 	candidatePrefix            *desktopNodeCandidatePrefixLaunch

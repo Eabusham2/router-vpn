@@ -77,6 +77,77 @@ class OwnedDarwinPF(unittest.TestCase):
         self.watcher = self.stack.enter_context(patch.object(D, '_spawn_watcher'))
         self.resolver = self.stack.enter_context(patch('socket.getaddrinfo', side_effect=AssertionError('pre-tunnel DNS')))
 
+    def paired_node_capture(self, policy='always', mode='wg', layer='off'):
+        self.selected.update(node_kind='router-vpn', node_proof_id='f'*64, start_layer=layer,
+                             kill_switch_policy=policy, kill_switch=policy != 'off')
+        self.selected.pop('external', None)
+        self.private_json(self.root/'routers.json', self.store)
+        self.stack.enter_context(patch.dict(os.environ, {'HOMEVPN_TOR_PHYSICAL_BROKER': '',
+            'HOMEVPN_TOR_SESSION': '', 'HOMEVPN_TOR_SOURCE_SHA256': '', 'HOMEVPN_ENDPOINT': ''}))
+        return dict(schema=1, family='paired-node-v1', profile_id=self.selected['id'], node_id='f'*64,
+                    mode=mode, start_layer=layer, session_id='c'*32, source_sha256='d'*64,
+                    config_sha256='e'*64, home_lan_access=False, policy=policy)
+
+    def test_paired_node_original_baseline_all_modes_layers_policies(self):
+        for mode in D._NODE_MODES:
+            for layer in D._NODE_LAYERS:
+                for policy in ('off', 'on-connect', 'always'):
+                    with self.subTest(mode=mode, layer=layer, policy=policy):
+                        capture = self.paired_node_capture(policy, mode, layer)
+                        active = D.darwin_node('apply', dict(capture=capture, expected=None))
+                        self.assertEqual(active['capture'], capture)
+                        self.assertEqual(D.darwin_node('current', dict(capture=capture, expected=active)), active)
+                        state = self.saved()
+                        self.assertEqual(state['native_socket_family'], 'paired-node-v1')
+                        self.assertEqual(state['native_node_capture'], capture)
+                        self.assertEqual(state['endpoint_ips'], [])
+                        self.assertNotIn('native_egress', state)
+                        held = D.darwin_node('retire', dict(capture=capture, expected=active))
+                        self.assertEqual(held['baseline']['present'], policy != 'off')
+                        retired = D.darwin_node('release', dict(capture=capture, expected=held))
+                        self.assertEqual(retired['baseline']['present'], policy == 'always')
+                        if policy == 'always': D.darwin_release(True)
+                        self.assertEqual(self.references, {'999'})
+
+    def test_paired_node_capture_cannot_borrow_family_or_saved_profile(self):
+        original = self.paired_node_capture('off')
+        for fault in [dict(family='ordered-node-chain-v1'), dict(mode='max'), dict(start_layer='xor'),
+                      dict(node_id='1'*64), dict(profile_id='another'), dict(policy='always'),
+                      dict(home_lan_access=True), dict(schema=True), dict(extra='foreign')]:
+            before, commands = D._linux.read_state(self.root), list(self.commands)
+            with self.assertRaises(RuntimeError):
+                D.darwin_node('apply', dict(capture={**original, **fault}, expected=None))
+            self.assertEqual(D._linux.read_state(self.root), before)
+            self.assertEqual(self.commands, commands)
+        self.selected['node_kind'] = 'external'
+        self.private_json(self.root/'routers.json', self.store)
+        with self.assertRaises(RuntimeError):
+            D.darwin_node('apply', dict(capture=original, expected=None))
+
+    def test_paired_node_failed_retirement_and_replacement_keep_exact_owner(self):
+        original = self.paired_node_capture('on-connect')
+        active = D.darwin_node('apply', dict(capture=original, expected=None))
+        def failed_clear(phase, request):
+            if request['action'] == 'clear':
+                raise RuntimeError('original native reference remains')
+            return self.native(phase, request)
+        with patch.object(P._baseline, '_invoke', side_effect=failed_clear):
+            with self.assertRaisesRegex(RuntimeError, 'reference remains'):
+                D.darwin_node('release', dict(capture=original, expected=active))
+        self.assertEqual(self.saved()['native_node_capture'], original)
+        self.assertIn(active['pf_token'], self.references)
+        held = D.darwin_node('retire', dict(capture=original, expected=active))
+        successor = self.paired_node_capture('off')
+        successor.update(session_id='1'*32, source_sha256='2'*64)
+        actual = D.darwin_node('apply', dict(capture=successor, expected=None))
+        before, commands = D._linux.read_state(self.root), list(self.commands)
+        with self.assertRaisesRegex(RuntimeError, 'another retained owner'):
+            D.darwin_node('release', dict(capture=original, expected=held))
+        self.assertEqual(D._linux.read_state(self.root), before)
+        self.assertEqual(self.commands, commands)
+        self.assertEqual(D.darwin_node('current', dict(capture=successor, expected=actual)), actual)
+        D.darwin_node('release', dict(capture=successor, expected=actual))
+
     def external_capture(self, policy='always'):
         self.selected['external'] = {'protocol': 'shadowsocks'}
         self.selected['kill_switch_policy'] = policy

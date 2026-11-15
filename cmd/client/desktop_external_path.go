@@ -362,6 +362,11 @@ func verifySpeedLabPath(ctx context.Context, a *app, identity speedLabPathIdenti
 	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		return err
 	}
+	if identity.Node != nil && identity.Node.pairedNode != nil {
+		if err := identity.Node.pairedNode.Reprove(ctx); err != nil {
+			return err
+		}
+	}
 	if identity.External != nil {
 		if err := a.verifyDesktopExternalCurrentPath(ctx, identity.External); err != nil {
 			return err

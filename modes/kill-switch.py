@@ -645,7 +645,9 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
             or value.get('endpoint') != '' or value.get('endpoint_ips') != [] or 'native_egress' in value):
         return False
     family = value.get('native_socket_family')
-    if family == 'external-v1':
+    if family == 'paired-node-v1':
+        key, schemas = 'native_node_capture', (1,)
+    elif family == 'external-v1':
         key, schemas = 'native_external_capture', (1, 2)
     elif family == 'node-candidate-prefix-v1':
         key, schemas = 'native_candidate_prefix_capture', (2, 3)
@@ -654,7 +656,7 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
         key, schemas = 'native_node_chain_capture', (2, 3)
     else:
         return False
-    if any(other in value for other in ('native_external_capture', 'native_candidate_prefix_capture', 'native_node_chain_capture') if other != key):
+    if any(other in value for other in ('native_external_capture', 'native_candidate_prefix_capture', 'native_node_chain_capture', 'native_node_capture') if other != key):
         return False
     capture = value.get(key)
     if (type(capture) is not dict or type(capture.get('schema')) is not int or capture['schema'] not in schemas
@@ -667,6 +669,13 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
             or any(type(capture.get(field)) is not str or not re.fullmatch('[0-9a-f]{64}', capture[field])
                    for field in ('source_sha256', 'config_sha256'))):
         return False
+    if family == 'paired-node-v1':
+        if (set(capture) != {'schema', 'family', 'profile_id', 'node_id', 'mode', 'start_layer',
+                             'session_id', 'source_sha256', 'config_sha256', 'home_lan_access', 'policy'}
+                or capture.get('mode') not in ('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2', 'ss-v2ray')
+                or capture.get('start_layer') not in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
+                or type(capture.get('node_id')) is not str or not re.fullmatch('[0-9a-f]{64}', capture['node_id'])):
+            return False
     if family == 'external-v1' and capture['schema'] == 2:
         entry = capture.get('entry_profile_id')
         if (type(entry) is not str or capture.get('final_policy') != 'off'

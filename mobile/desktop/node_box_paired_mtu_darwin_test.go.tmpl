@@ -1,0 +1,83 @@
+//go:build darwin && !ios
+
+package box
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type desktopPairedDarwinWrappedPolicy struct {
+	mobilemultihop.DesktopPhysicalPolicy
+}
+
+func TestRouterVPNDesktopNodeDarwinPairedMTUReader(t *testing.T) {
+	for _, fault := range []string{"original", "nil-context", "cancelled", "foreign-box", "foreign-reader", "nil-policy", "wrapped-policy", "linux-policy", "session", "config", "fixed-alias", "detached", "wrong-name", "non-ascii-name", "index", "index-overflow", "mtu", "changed-readback", "retired-source"} {
+		t.Run(fault, func(t *testing.T) {
+			instance, policy, network, _ := desktopDarwinSingleBoxFixture(t)
+			owner, err := instance.RouterVPNDesktopDarwinNodeActivatePhysical(policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := t.Context()
+			selected := instance
+			var reader adapter.Inbound = owner.inbound
+			session, config := policy.Metadata().SessionID, policy.Metadata().ConfigSHA256
+			name, index, mtu := owner.name, owner.index, owner.mtu
+			savedPolicy := owner.policy
+			savedAlias, savedDetached := owner.interfaceName, owner.detached
+			defer func() { owner.policy = savedPolicy; owner.interfaceName = savedAlias; owner.detached = savedDetached }()
+			switch fault {
+			case "nil-context":
+				ctx = nil
+			case "cancelled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			case "foreign-box":
+				selected = &Box{}
+			case "foreign-reader":
+				reader = &desktopTorBoxTUN{}
+			case "nil-policy":
+				owner.policy = nil
+			case "wrapped-policy":
+				owner.policy = desktopPairedDarwinWrappedPolicy{policy}
+			case "linux-policy":
+				owner.policy, err = mobilemultihop.NewDesktopNodePolicy(policy.OriginalProfile(), session, "linux")
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "session":
+				session = strings.Repeat("b", 32)
+			case "config":
+				config = strings.Repeat("b", 64)
+			case "fixed-alias":
+				owner.interfaceName = owner.name
+			case "detached":
+				owner.detached = true
+			case "wrong-name":
+				name = "utun992"
+			case "non-ascii-name":
+				name = "utun９９１"
+			case "index":
+				index++
+			case "index-overflow":
+				index = int(uint64(1) << 32)
+			case "mtu":
+				mtu++
+			case "changed-readback":
+				owner.index++
+			case "retired-source":
+				network.CancelAdmission()
+			}
+			err = owner.ConfirmPairedDarwinMTUReader(ctx, selected, reader, session, config, name, index, mtu)
+			if (err == nil) != (fault == "original") {
+				t.Fatal("paired MTU reader confirmation changed original authority", fault, err)
+			}
+		})
+	}
+}

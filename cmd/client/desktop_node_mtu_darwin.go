@@ -190,6 +190,9 @@ func claimDesktopMacOSMTUOperation(ctx context.Context, a *app, command *exec.Cm
 }
 
 func captureDesktopPlatformMTUSnapshot(a *app, snapshot mtuRetestSnapshot) (mtuLiveSnapshot, bool, error) {
+	if live, handled, err := captureDesktopMacOSPairedNodeMTUSnapshot(a, snapshot); handled || err != nil {
+		return live, handled, err
+	}
 	h, handled, err := desktopMacOSMTUHost(snapshot)
 	if err != nil || !handled {
 		return mtuLiveSnapshot{}, handled, err
@@ -227,6 +230,9 @@ func captureDesktopPlatformMTUSnapshot(a *app, snapshot mtuRetestSnapshot) (mtuL
 }
 
 func openDesktopPlatformMTUOwner(a *app, snapshot mtuRetestSnapshot, live mtuLiveSnapshot, token string, command *exec.Cmd) (mtuKernelOwner, bool, error) {
+	if owner, handled, err := openDesktopMacOSPairedNodeMTUOwner(a, snapshot, live, token, command); handled || err != nil {
+		return owner, handled, err
+	}
 	h, handled, err := desktopMacOSMTUHost(snapshot)
 	if err != nil {
 		return nil, true, err
