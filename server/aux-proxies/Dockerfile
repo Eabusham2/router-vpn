@@ -1,4 +1,4 @@
-FROM golang:1.24.13-alpine AS start-layer-build
+FROM golang:1.26.3-alpine AS start-layer-build
 WORKDIR /src
 COPY go.mod ./
 COPY cmd/start-layer-relay ./cmd/start-layer-relay
