@@ -8,9 +8,11 @@ import (
 // The raw owner first authenticates the command nonce, lease, generation and
 // bounded reader delta (including one pending mutation followed by rollback).
 // This comparison then requires actual kernel retirement before paired reproof.
+// The pinned allocator may reuse the retired utun alias. Its new kernel index
+// and exact live readback, never name inequality, identify the successor.
 func validateDesktopMacOSPairedNodeReaderRetirement(old, next desktopNodeMTURecord, interfaces []net.Interface) error {
 	if !desktopNodeChainDarwinInterfaceName(old.Interface) || !desktopNodeChainDarwinInterfaceName(next.Interface) ||
-		old.Interface == next.Interface || old.Index <= 0 || old.Index == next.Index || next.Index <= 0 ||
+		old.Index <= 0 || old.Index == next.Index || next.Index <= 0 ||
 		next.Reader <= old.Reader || old.Session != next.Session || old.Config != next.Config || old.Path != next.Path {
 		return errors.New("paired Darwin reader changed its original source or predecessor")
 	}

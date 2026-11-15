@@ -26,6 +26,27 @@ func TestDesktopDarwinPairedReaderRequiresOriginalRetirement(t *testing.T) {
 			t.Fatal("authenticated pending rollback could not retire original", err)
 		}
 	})
+	for _, scenario := range []string{"same-alias-fresh-index", "same-alias-rollback", "same-alias-old-reader-retained", "same-alias-rollback-old-reader-retained"} {
+		t.Run(scenario, func(t *testing.T) {
+			changed := next
+			changed.Interface = old.Interface
+			kernel := []net.Interface{{Index: changed.Index, Name: changed.Interface, MTU: changed.MTU, Flags: net.FlagUp}}
+			rollback := scenario == "same-alias-rollback" || scenario == "same-alias-rollback-old-reader-retained"
+			retained := scenario == "same-alias-old-reader-retained" || scenario == "same-alias-rollback-old-reader-retained"
+			if rollback {
+				changed.Reader++
+				changed.MTU = old.MTU
+				kernel[0].MTU = changed.MTU
+			}
+			if retained {
+				kernel = append(kernel, net.Interface{Index: old.Index, Name: old.Interface, MTU: old.MTU, Flags: net.FlagUp})
+			}
+			err := validateDesktopMacOSPairedNodeReaderRetirement(old, changed, kernel)
+			if (err != nil) != retained {
+				t.Fatal("consistent same-alias successor lost original retirement requirement", scenario, err)
+			}
+		})
+	}
 	for name, mutate := range map[string]func(*desktopNodeMTURecord, *[]net.Interface){
 		"old-reader-retained": func(_ *desktopNodeMTURecord, k *[]net.Interface) {
 			*k = append(*k, net.Interface{Index: old.Index, Name: old.Interface})

@@ -201,7 +201,7 @@ func (owner *desktopMacOSPairedNodeMTUOwner) verifyReaderChangeLocked(ctx contex
 	if err := owner.originalLocked(); err != nil {
 		return err
 	}
-	if !sameDesktopMacOSMTUReadback(old, owner.native.record) || old.Interface == next.Interface || next.Reader <= old.Reader || old.Index == next.Index || old.Session != next.Session || old.Config != next.Config || old.Path != next.Path {
+	if !sameDesktopMacOSMTUReadback(old, owner.native.record) || next.Reader <= old.Reader || old.Index == next.Index || old.Session != next.Session || old.Config != next.Config || old.Path != next.Path {
 		return errors.New("macOS paired Node MTU successor changed its original acknowledged predecessor")
 	}
 	if err := validateDesktopMacOSPairedNodeMTUSnapshotLocked(owner.host, owner.snapshot); err != nil {

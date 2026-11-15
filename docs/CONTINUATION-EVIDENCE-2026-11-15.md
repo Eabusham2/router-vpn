@@ -771,7 +771,8 @@ native PF/utun performance or physical-device acceptance.
 
 Auto/Retest/Cancel and temporary Speed Lab operations retain complete original
 connection state and captured native ownership. A replacement Darwin utun
-may have a new name and index. The raw MTU controller adopts it only when the
+may reuse the retired interface's name while acquiring a fresh kernel index,
+or receive a new name. The raw MTU controller adopts it only when the
 original paired Box confirms the exact next inbound, source context, name,
 index and observed MTU. The parent separately requires the old reader's
 retirement, full native acknowledgement and original selected-node proof.
@@ -780,6 +781,23 @@ Ordered and other graph families cannot opt into this paired-only reader
 capability. The broader fixed-name boundary in those other raw MTU paths
 still requires its own current native evidence or implementation; this change
 does not silently extend their authority.
+
+The pinned MTU manager retires the original reader before starting its
+candidate. Its fresh Darwin constructor chooses an available utun name;
+removing the highest numbered interface can therefore make that same name
+available again. The paired parent now accepts this allocator behavior only
+with its existing exact native acknowledgement, a newer reader, a distinct
+kernel index, absence of the old kernel index, matching live name/MTU/up
+readback and original-node proof. Both name-only inequalities were removed;
+the independent identity and retirement checks remain. The portable reader
+inventory adds same-name replacement and rollback positives and separate
+retained-original refusals. Its original mismatched-name negative remains.
+Seven affected client race roots and seven runner tests passed; the actual
+parent-method projection covers 20 owner, acknowledgement, kernel and proof
+scenarios and rejects both old name-inequality implementations. An initial
+broader local selector also reached five existing physical-network setup
+refusals in two unrelated roots; those are not reported as passing. Real
+Darwin replacement and rollback acceptance remains required.
 
 Portable validation includes 53 common measurement/controller roots with
 203 race-instrumented verdicts, three extracted HTTP/DNS/proof cancellation
@@ -799,7 +817,7 @@ native bundle. Its finite inventory is 54 mode/layer/protection connections
 and 15 wrong-node, DNS/key failure, sealed-restoration and Auto-MTU
 cancellation/retest cases. The latter transfer real private encrypted UDP;
 fake optimizer measurements are refused. The same controller image must also
-pass all 55 baseline-capture and 13 original-reader verdicts. The old ordered
+pass all 55 baseline-capture and 17 original-reader verdicts. The old ordered
 host and child gates remain mandatory. The paired component gate requires all
 105 generated command/Box verdicts, including the nine new raw MTU cases.
 Component and installed-host receipts
