@@ -160,19 +160,36 @@ func (b *nodeChainCONNECTExecutionBinding) physicalEgress(config, entryTag strin
 	return scope.physicalEgress(config, []string{"tcp", "udp"}, entryTag, capture)
 }
 
-// The only execution public member is the exact original imported trio middle.
-// A protocol label or nil node alone never substitutes for its captured owner.
-func (p *NodeChainExecutionPolicy) importedPublicMiddle() bool {
-	if p == nil || p.local == nil || len(p.local.nodes) != 3 || p.local.nodes[1] != nil {
-		return false
+// The public member belongs to its original captured penultimate import.
+// Schema2 retains its complete paired prefix. Distinct typed families keep
+// their original trio and source-pointer bindings.
+func (p *NodeChainExecutionPolicy) importedPublicPosition() int {
+	if p == nil || p.local == nil || len(p.local.nodes) < 3 {
+		return -1
+	}
+	position := len(p.local.nodes) - 2
+	if p.local.nodes[position] != nil {
+		return -1
 	}
 	if p.socks != nil {
-		return p.connect == nil && p.source.Schema == 3 && p.local.socksSource == p.socks.source && p.socks.local == p.local && p.socks.source != nil
+		if len(p.local.nodes) == 3 && p.connect == nil && p.source.Schema == 3 && p.local.socksSource == p.socks.source && p.socks.local == p.local && p.socks.source != nil {
+			return position
+		}
+		return -1
 	}
 	if p.connect != nil {
-		return p.source.Schema == 4 && p.local.connectSource == p.connect.source && p.connect.local == p.local && p.connect.source != nil
+		if len(p.local.nodes) == 3 && p.source.Schema == 4 && p.local.connectSource == p.connect.source && p.connect.local == p.local && p.connect.source != nil {
+			return position
+		}
+		return -1
 	}
-	return p.source.Schema == 1 && p.local.importedMiddle != nil && p.local.connectSource == nil
+	if p.source.Schema == 1 && p.source.Server.Schema == 2 && p.local.importedMiddle != nil && p.local.importedMiddle.hostname == nil && p.local.connectSource == nil && p.local.socksSource == nil {
+		return position
+	}
+	return -1
+}
+func (p *NodeChainExecutionPolicy) importedPublicMiddle() bool {
+	return p.importedPublicPosition() >= 0
 }
 func (p *NodeChainExecutionPolicy) importedExpectedPublicIP() string {
 	if !p.importedPublicMiddle() {

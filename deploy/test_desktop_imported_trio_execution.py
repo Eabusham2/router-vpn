@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require actual imported-trio Box ownership; encrypted/device I/O is separate."""
+"""Require actual imported-SS Box ownership; encrypted/device I/O is separate."""
 import argparse
 import hashlib
 import importlib.util
@@ -12,11 +12,13 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'github.com/sagernet/sing-box'
-PREFIX = 'TestRouterVPNDesktopImportedTrioExecution'
+PREFIX = 'TestRouterVPNDesktopImported'
 CASES = {
-    'NativeAdoptionAndRestore': tuple(mode+'/'+requested for mode in ('wg', 'awg2-fast', 'awg2-strong') for requested in ('server', 'auto')),
-    'PhysicalPolicy': tuple(target+'/'+requested for target in ('linux', 'windows') for requested in ('server', 'auto')),
-    'RejectsChangedNativeGraph': ('middle-key', 'middle-endpoint', 'selected-dns', 'entry-key', 'cancel'),
+    'TrioExecutionNativeAdoptionAndRestore': tuple(mode+'/'+requested for mode in ('wg', 'awg2-fast', 'awg2-strong') for requested in ('server', 'auto')),
+    'TrioExecutionPhysicalPolicy': tuple(target+'/'+requested for target in ('linux', 'windows') for requested in ('server', 'auto')),
+    'TrioExecutionRejectsChangedNativeGraph': ('middle-key', 'middle-endpoint', 'selected-dns', 'entry-key', 'cancel'),
+    'PrefixExecutionNativeAdoption': tuple(mode+'/'+str(count)+'/'+requested for mode in ('wg','awg2-fast','awg2-strong') for count in (2,6) for requested in ('server','auto')),
+    'PrefixExecutionRejectsChangedNativeGraph': ('middle-key','middle-endpoint','earlier-key','earlier-detour','selected-dns','cancel'),
 }
 GENERATED = {
     'mobile/desktop/node_chain_execution_imported_test.go.tmpl': 'routervpn_desktop_node_chain_execution_imported_test.go',

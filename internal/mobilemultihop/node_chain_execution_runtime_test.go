@@ -488,7 +488,7 @@ func newNodeChainExecutionRuntimeFixtureFromSource(t *testing.T, source NodeChai
 		t.Fatal(err)
 	}
 	for position, node := range policy.local.nodes {
-		if node == nil && position == 1 && policy.importedPublicMiddle() {
+		if node == nil && position == policy.importedPublicPosition() {
 			continue
 		}
 		api, _ := privateAPI(predecessorText(node.profile, "router_api"))
@@ -554,9 +554,9 @@ func newNodeChainExecutionRuntimeFixtureFromSource(t *testing.T, source NodeChai
 		_, _ = w.Write([]byte(body))
 	}))
 	e.publicPeer = public.Listener.Addr().String()
-	if policy.importedPublicMiddle() {
-		e.peers[local[1].Tag+"/1.1.1.1:443"] = e.publicPeer
-		e.peers[serverProofs[1].Tag+"/1.1.1.1:443"] = e.publicPeer
+	if position := policy.importedPublicPosition(); position >= 0 {
+		e.peers[local[position].Tag+"/1.1.1.1:443"] = e.publicPeer
+		e.peers[serverProofs[position].Tag+"/1.1.1.1:443"] = e.publicPeer
 	}
 	f.trust = trust
 	f.runtime, err = NewNodeChainExecutionRuntime(projection, e)

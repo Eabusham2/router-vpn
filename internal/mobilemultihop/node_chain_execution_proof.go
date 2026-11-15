@@ -29,7 +29,7 @@ func (s *nodeChainExecutionTrial) retainDial(operation *leaseStopIO, ctx context
 	}
 	allowed := false
 	for i, proof := range proofs {
-		if i == 1 && s.runtime.projection.policy.importedPublicMiddle() {
+		if i == s.runtime.projection.policy.importedPublicPosition() {
 			allowed = allowed || tag == proof.Tag && address == "1.1.1.1:443"
 			continue
 		}
@@ -85,7 +85,7 @@ func (s *nodeChainExecutionTrial) provePrefix(parent context.Context, position i
 		dial := func(dialCtx context.Context, tag, address string) (net.Conn, error) {
 			return s.retainDial(operation, dialCtx, tag, address)
 		}
-		if position == 1 && s.runtime.projection.policy.importedPublicMiddle() {
+		if position == s.runtime.projection.policy.importedPublicPosition() {
 			return nil, proveExternalPublicIP(call, dial, proof.Tag, s.runtime.projection.policy.importedExpectedPublicIP(), s.runtime.testTLS)
 		}
 		data, err := externalProofHTTP(call, dial, proof.Tag,

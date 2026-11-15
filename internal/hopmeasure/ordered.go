@@ -33,3 +33,23 @@ func NewOrderedImportedServerContext(ctx context.Context, engine Engine, hops []
 	}
 	return newContext(ctx, engine, hops, true, true, true)
 }
+
+// NewOrderedImportedSSServerPrefixContext keeps one original Local entry,
+// independently captured paired Server prefixes, one penultimate imported SS
+// public path, and a paired final. The execution adapter binds the schema2
+// source; the shared validator retains every role, tag and Server digest.
+func NewOrderedImportedSSServerPrefixContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	if len(hops) < 3 || len(hops) > 8 {
+		return nil, errors.New("ordered imported SS Server measurement requires its complete captured prefix")
+	}
+	for i, hop := range hops {
+		want := "private-node"
+		if i == len(hops)-2 {
+			want = "public-path"
+		}
+		if hop.Kind != want {
+			return nil, errors.New("ordered imported SS Server measurement changed its captured public position")
+		}
+	}
+	return newContext(ctx, engine, hops, true, true, true)
+}

@@ -29,11 +29,13 @@ def verdict(rows, code=0):
 
 class ImportedExecutionRunner(unittest.TestCase):
     def test_complete_original_inventory(self):
-        self.assertEqual(verdict(events())['tests'], 18)
-        self.assertEqual(set(gate.CASES), {'NativeAdoptionAndRestore', 'PhysicalPolicy', 'RejectsChangedNativeGraph'})
-        self.assertEqual(len(gate.CASES['NativeAdoptionAndRestore']), 6)
-        self.assertEqual(len(gate.CASES['PhysicalPolicy']), 4)
-        self.assertEqual(len(gate.CASES['RejectsChangedNativeGraph']), 5)
+        self.assertEqual(verdict(events())['tests'], 38)
+        self.assertEqual(set(gate.CASES), {'TrioExecutionNativeAdoptionAndRestore', 'TrioExecutionPhysicalPolicy', 'TrioExecutionRejectsChangedNativeGraph', 'PrefixExecutionNativeAdoption', 'PrefixExecutionRejectsChangedNativeGraph'})
+        self.assertEqual(len(gate.CASES['TrioExecutionNativeAdoptionAndRestore']), 6)
+        self.assertEqual(len(gate.CASES['TrioExecutionPhysicalPolicy']), 4)
+        self.assertEqual(len(gate.CASES['TrioExecutionRejectsChangedNativeGraph']), 5)
+        self.assertEqual(gate.CASES['PrefixExecutionNativeAdoption'], tuple(mode+'/'+str(count)+'/'+requested for mode in ('wg','awg2-fast','awg2-strong') for count in (2,6) for requested in ('server','auto')))
+        self.assertEqual(gate.CASES['PrefixExecutionRejectsChangedNativeGraph'], ('middle-key','middle-endpoint','earlier-key','earlier-detour','selected-dns','cancel'))
 
     def test_each_original_leaf_required(self):
         for missing in gate.expected():

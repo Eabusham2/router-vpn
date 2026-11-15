@@ -2,8 +2,10 @@ package box
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -210,6 +212,189 @@ func TestRouterVPNDesktopImportedTrioExecutionRejectsChangedNativeGraph(t *testi
 			}
 			if f.requests.Load() != 0 {
 				t.Fatal("refused original source reached authenticated discovery")
+			}
+		})
+	}
+}
+
+func desktopImportedPrefixExecutionSources(t *testing.T, count int, mode, execution string) (*mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainServerPolicy) {
+	t.Helper()
+	trio, _ := desktopImportedExecutionSources(t, "wg", execution)
+	var imported mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(trio.LocalSource()), &imported) != nil {
+		t.Fatal("original imported source")
+	}
+	modes := make([]string, count+1)
+	for i := range modes {
+		modes[i] = mode
+	}
+	original := chainNativeSourceModes(t, modes)
+	launch, err := original.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &source) != nil {
+		t.Fatal("original complete prefixes")
+	}
+	source.Schema, source.Nodes[count] = 2, imported.Nodes[1]
+	proofs := original.ProofInventory()
+	serverSource := mobilemultihop.NodeChainServerSource{Schema: 2, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: mode}
+	for i, input := range source.Nodes {
+		if i == count {
+			source.IdentitySources = append(source.IdentitySources, "")
+			serverSource.Nodes = append(serverSource.Nodes, input)
+			serverSource.IdentitySources = append(serverSource.IdentitySources, "")
+			continue
+		}
+		client := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(20 + i)}, 32))
+		remote, _ := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{byte(70 + i)}, 32))
+		standard := fmt.Sprintf("[Interface]\nAddress=10.77.0.2/24,fd77::2/64\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=2000\n[Peer]\nPublicKey=%s\nEndpoint=198.51.100.%d:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", client, base64.StdEncoding.EncodeToString(remote.PublicKey().Bytes()), 20+i)
+		identity := chainNativeJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(standard))})
+		source.IdentitySources = append(source.IdentitySources, identity)
+		if i == 0 {
+			continue
+		}
+		independent := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(220 + i)}, 32))
+		serverIdentity := chainNativeJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(strings.Replace(standard, client, independent, 1)))})
+		if i < count {
+			var row struct {
+				Mode      string `json:"mode"`
+				Files     string `json:"files"`
+				Profile   string `json:"profile_json"`
+				Start     string `json:"start"`
+				Bootstrap string `json:"dns_bootstrap"`
+			}
+			if json.Unmarshal([]byte(input), &row) != nil {
+				t.Fatal("packet capture")
+			}
+			var files map[string]string
+			if json.Unmarshal([]byte(row.Files), &files) != nil {
+				t.Fatal("packet files")
+			}
+			name := "wg.conf"
+			if mode != "wg" {
+				name = "awg.conf"
+			}
+			raw, err := base64.StdEncoding.DecodeString(files[name])
+			if err != nil || !strings.Contains(string(raw), client) {
+				t.Fatal("original packet identity absent")
+			}
+			files[name] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(raw), client, independent, 1)))
+			node, err := mobilemultihop.NewNodeProfile(row.Mode, chainNativeJSON(t, files), row.Profile, row.Start, row.Bootstrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, err = node.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		serverSource.Nodes = append(serverSource.Nodes, input)
+		serverSource.IdentitySources = append(serverSource.IdentitySources, serverIdentity)
+	}
+	prep, err := mobilemultihop.NewNodeChainExecutionPreparation(chainNativeJSON(t, source), execution)
+	if err != nil {
+		t.Fatal("longer original preparation", err)
+	}
+	server, err := mobilemultihop.NewNodeChainServerPolicy(chainNativeJSON(t, serverSource))
+	if err != nil {
+		t.Fatal("longer original Server", err)
+	}
+	return prep, server
+}
+
+func TestRouterVPNDesktopImportedPrefixExecutionNativeAdoption(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, count := range []int{2, 6} {
+			for _, execution := range []string{"server", "auto"} {
+				t.Run(fmt.Sprintf("%s/%d/%s", mode, count, execution), func(t *testing.T) {
+					prep, server := desktopImportedPrefixExecutionSources(t, count, mode, execution)
+					f := newExecutionNativeFixtureWithSources(t, prep, server, nil)
+					before, err := adapter.RouterVPNInboundsContext(t.Context(), f.box.inbound)
+					if err != nil || len(before) != 1 {
+						t.Fatal(err)
+					}
+					projection := f.adopt(t)
+					after, err := adapter.RouterVPNInboundsContext(t.Context(), f.box.inbound)
+					if err != nil || len(after) != 1 || after[0] != before[0] || f.engine.instance != f.box || f.requests.Load() != 2 {
+						t.Fatal("longer adoption replaced original Box/TUN/discovery", err)
+					}
+					for _, proof := range prep.ProofInventory() {
+						actual, found, err := adapter.RouterVPNOutboundContext(t.Context(), f.box.outbound, proof.Tag)
+						if err != nil || !found || actual != f.prefixes[proof.Tag] {
+							t.Fatal("longer adoption replaced original member", err)
+						}
+					}
+					for _, kind := range []string{"local", "server"} {
+						proofs, err := projection.ProofInventory(kind)
+						if err != nil || len(proofs) != count+2 {
+							t.Fatal("longer proof inventory", err)
+						}
+						for i, proof := range proofs {
+							if (proof.Kind == "public-path") != (i == count) || (proof.NodeID == "") != (i == count) {
+								t.Fatal("public/private proof position changed", i)
+							}
+						}
+					}
+					if _, err := f.engine.ObserveChainContext(t.Context()); err != nil {
+						t.Fatal("original captured graph no longer current", err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRouterVPNDesktopImportedPrefixExecutionRejectsChangedNativeGraph(t *testing.T) {
+	for _, fault := range []string{"middle-key", "middle-endpoint", "earlier-key", "earlier-detour", "selected-dns", "cancel"} {
+		t.Run(fault, func(t *testing.T) {
+			prep, server := desktopImportedPrefixExecutionSources(t, 3, "wg", "auto")
+			proofs := prep.ProofInventory()
+			middle := proofs[3].Tag
+			f := newExecutionNativeFixtureWithSources(t, prep, server, func(graph map[string]any) {
+				for _, family := range []string{"outbounds", "endpoints"} {
+					for _, raw := range graph[family].([]any) {
+						row := raw.(map[string]any)
+						if row["tag"] == middle {
+							if fault == "middle-key" {
+								row["password"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{99}, 32))
+							}
+							if fault == "middle-endpoint" {
+								row["server"] = "203.0.113.25"
+							}
+						}
+						if row["tag"] == proofs[1].Tag {
+							if fault == "earlier-key" {
+								row["private_key"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{99}, 32))
+							}
+							if fault == "earlier-detour" {
+								delete(row, "detour")
+							}
+						}
+					}
+				}
+				if fault == "selected-dns" {
+					dns, err := prep.DNSCapture()
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
+						row := raw.(map[string]any)
+						if row["tag"] == dns.DNS.ResolverTag {
+							row["server"] = "192.168.50.134"
+						}
+					}
+				}
+			})
+			if fault == "cancel" {
+				f.current.Store(false)
+			}
+			if engine, err := f.capture(t.Context()); err == nil || engine != nil {
+				t.Fatal("changed longer graph borrowed original authority", fault)
+			}
+			if f.requests.Load() != 0 {
+				t.Fatal("refused longer graph reached authenticated discovery")
 			}
 		})
 	}

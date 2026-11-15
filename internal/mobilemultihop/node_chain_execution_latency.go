@@ -65,7 +65,7 @@ func (s *NodeChainExecutionMeasurement) NewLatencyBenchmarkContext(ctx context.C
 		} else if position == len(proofs)-1 {
 			role = "exit"
 		}
-		if position == 1 && p.policy.importedPublicMiddle() {
+		if position == p.policy.importedPublicPosition() {
 			kind = "public-path"
 		}
 		hops[position] = nodeChainExecutionLatencyHop{proof.ProfileID, position, role, kind}

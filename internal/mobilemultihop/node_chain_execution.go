@@ -102,7 +102,7 @@ func newNodeChainExecutionPolicyFamily(sourceJSON string, connect *nodeChainCONN
 		}
 		local = connect.local
 	}
-	if err != nil || local.validateCapture() != nil || local.openVPNMiddle != nil || local.importedMiddle != nil && len(local.nodes) != 3 || len(local.nodes) != len(source.Server.Members)+1 ||
+	if err != nil || local.validateCapture() != nil || local.openVPNMiddle != nil || len(local.nodes) != len(source.Server.Members)+1 ||
 		local.importedMiddle != nil && local.importedMiddle.hostname != nil {
 		return nil, nodeChainExecutionError
 	}
@@ -127,7 +127,7 @@ func newNodeChainExecutionPolicyFamily(sourceJSON string, connect *nodeChainCONN
 	packetIndex := 0
 	for index, node := range local.nodes {
 		if node == nil {
-			if index != 1 || len(local.nodes) != 3 {
+			if index != len(local.nodes)-2 || source.Server.Schema != 2 && len(local.nodes) != 3 {
 				return nil, nodeChainExecutionError
 			}
 			var middleSource, publicIP string
@@ -349,7 +349,7 @@ func (p *NodeChainExecutionPolicy) captureSeal() string {
 }
 
 func (p *NodeChainExecutionPolicy) validateCapture() error {
-	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || p.local.validateCapture() != nil || p.local.openVPNMiddle != nil || p.local.importedMiddle != nil && len(p.local.nodes) != 3 ||
+	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.local == nil || p.local.validateCapture() != nil || p.local.openVPNMiddle != nil ||
 		p.source.Request.Validate(p.source.Server) != nil || !reflect.DeepEqual(p.localProofs, p.local.ProofInventory()) {
 		return nodeChainExecutionError
 	}
