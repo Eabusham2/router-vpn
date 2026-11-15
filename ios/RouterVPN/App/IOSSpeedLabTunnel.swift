@@ -14,10 +14,11 @@ import Foundation
     private let savedEnabled: Bool
     private let savedDescription: String?
     private let multihopExecution: IOSMultihopExecution.Capture?
+    private let orderedExecution: IOSNodeChainExecutionControl?
 
-    private init(identity: IOSSessionIdentity?, proto: NETunnelProviderProtocol?, manager: NETunnelProviderManager?, execution: IOSMultihopExecution.Capture? = nil) throws {
+    private init(identity: IOSSessionIdentity?, proto: NETunnelProviderProtocol?, manager: NETunnelProviderManager?, execution: IOSMultihopExecution.Capture? = nil, ordered: IOSNodeChainExecutionControl? = nil) throws {
         self.identity = identity
-        multihopExecution = execution
+        multihopExecution = execution; orderedExecution = ordered
         savedProtocol = proto.map { $0.copy() as! NETunnelProviderProtocol }
         savedRules = (manager?.onDemandRules ?? []).map { $0.copy() as! NEOnDemandRule }
         // The app owns simple Connect rules. Do not silently flatten an unknown
@@ -31,6 +32,8 @@ import Foundation
     }
 
     static func capture(model: RouterVPNModel, owner: UUID) async throws -> IOSSpeedLabTunnel {
+        try model.iosSpeedLabOwnership.require(owner)
+        try await IOSNodeChainExecutionControl.requireAvailable()
         try model.iosSpeedLabOwnership.require(owner)
         guard !model.tunnelTransitioning else { throw issue("Wait for the active VPN transition before testing a temporary path.") }
         let identity = model.activeSessionIdentity
@@ -49,16 +52,32 @@ import Foundation
                     rawProfile: identity.rawProfile, bundleData: identity.bundleData,
                     configuration: proto.providerConfiguration ?? [:])
                 guard captured.entryBundleData == identity.entryBundleData, captured.entryMode == identity.entryMode,
-                      captured.nodeChainSource == identity.nodeChainSource else { throw CancellationError() }
+                      captured.nodeChainSource == identity.nodeChainSource,
+                      captured.nodeChainExecutionSource == identity.nodeChainExecutionSource else { throw CancellationError() }
             } else {
                 guard idle(manager), !model.connected, !manager.isOnDemandEnabled else { throw CancellationError() }
             }
             var execution: IOSMultihopExecution.Capture?
-            if let identity, identity.nodeChainSource == nil,
+            if let identity, identity.nodeChainSource == nil, identity.nodeChainExecutionSource == nil,
                try IOSMultihopExecution.requiresCapture(configuration: proto.providerConfiguration ?? [:]) {
                 execution = try await readExecution(manager, model: model, identity: identity, owner: owner)
             }
-            return try IOSSpeedLabTunnel(identity: identity, proto: proto, manager: manager, execution: execution)
+            var ordered: IOSNodeChainExecutionControl?
+            if let identity, identity.nodeChainExecutionSource != nil {
+                guard let connection = manager.connection as? NETunnelProviderSession else { throw CancellationError() }
+                let source = try IOSNodeChainExecutionSession.Source.capture(identity)
+                let expected = proto.copy() as! NETunnelProviderProtocol
+                let control = IOSNodeChainExecutionControl(source: source, owner: owner,
+                    send: { try await sendOrdered(connection, data: $0) }, current: {
+                        try model.iosSpeedLabOwnership.require(owner)
+                        guard model.connected, model.activeSessionIdentity == identity,
+                              connection.status == .connected, connection.connectedDate == identity.connectedAt,
+                              sameProtocol(manager.protocolConfiguration, expected) else { throw CancellationError() }
+                    })
+                try await control.capture(); ordered = control
+            }
+            do { return try IOSSpeedLabTunnel(identity: identity, proto: proto, manager: manager, execution: execution, ordered: ordered) }
+            catch { try await ordered?.retire(); throw error }
         }
         guard identity == nil, !model.connected else { throw CancellationError() }
         return try IOSSpeedLabTunnel(identity: nil, proto: nil, manager: nil)
@@ -74,6 +93,7 @@ import Foundation
         guard manager.connection.status == .connected,
               manager.connection.connectedDate == identity.connectedAt,
               Self.sameProtocol(manager.protocolConfiguration, expected) else { throw CancellationError() }
+        try await orderedExecution?.verify()
         if let multihopExecution {
             let current = try await Self.readExecution(manager, model: model, identity: identity, owner: owner)
             guard current.source == multihopExecution.source, current.sessionID == multihopExecution.sessionID,
@@ -91,6 +111,7 @@ import Foundation
               identity?.bundleData == original.identity?.bundleData,
               identity?.entryBundleData == original.identity?.entryBundleData,
               identity?.nodeChainSource == original.identity?.nodeChainSource,
+              identity?.nodeChainExecutionSource == original.identity?.nodeChainExecutionSource,
               identity?.entryMode == original.identity?.entryMode else { throw CancellationError() }
         if original.savedProtocol == nil {
             guard identity == nil, !savedOnDemand,
@@ -105,13 +126,17 @@ import Foundation
               Self.sameRules(savedRules, original.savedRules),
               multihopExecution?.source == original.multihopExecution?.source,
               multihopExecution?.execution == original.multihopExecution?.execution,
-              multihopExecution?.pins == original.multihopExecution?.pins else { throw CancellationError() }
+              multihopExecution?.pins == original.multihopExecution?.pins,
+              orderedExecution?.source == original.orderedExecution?.source,
+              orderedExecution?.restoration?.execution == original.orderedExecution?.restoration?.execution else { throw CancellationError() }
     }
 
     func requireMeasuredExecution(requested: String, selected: String) throws {
         guard ["local", "server", "auto"].contains(requested), ["local", "server"].contains(selected),
               requested == "auto" || requested == selected else { throw CancellationError() }
-        if let multihopExecution {
+        if let orderedExecution {
+            guard orderedExecution.source.requested == requested, orderedExecution.restoration?.execution == selected else { throw CancellationError() }
+        } else if let multihopExecution {
             guard multihopExecution.source.requested == requested,
                   multihopExecution.execution == selected else { throw CancellationError() }
         } else {
@@ -329,6 +354,7 @@ import Foundation
             guard reconnect ? model.iosSpeedLabOwnership.current(owner) : model.iosSpeedLabOwnership.mayRestoreSelection(owner) else { throw CancellationError() }
         }
         try requireOwner()
+        if !reconnect { try await orderedExecution?.retire(); try requireOwner() }
         guard savedProtocol != nil else {
             guard !model.connected, !model.tunnelTransitioning, model.activeSessionIdentity == nil else { throw CancellationError() }
             try captureRestoredOwner(nil, model.iosConnectGeneration)
@@ -369,6 +395,7 @@ import Foundation
         if let multihopExecution {
             options[IOSMultihopExecution.launchKey] = String(decoding: try multihopExecution.encoded(), as: UTF8.self) as NSString
         }
+        if let orderedExecution { options.merge(try orderedExecution.options()) { _, captured in captured } }
         try manager.connection.startVPNTunnel(options: options)
         let tor = ["external-tor", "external-tor-bridge"].contains(identity.rawProfile)
         var restoreTimeout: TimeInterval = tor ? 210 : 130
@@ -391,6 +418,7 @@ import Foundation
                 guard restored.engine == identity.engine, restored.rawProfile == identity.rawProfile,
                       restored.bundleData == identity.bundleData, restored.entryBundleData == identity.entryBundleData,
                       restored.nodeChainSource == identity.nodeChainSource,
+                      restored.nodeChainExecutionSource == identity.nodeChainExecutionSource,
                       restored.entryMode == identity.entryMode else {
                     throw Self.issue("Restoration proved a different runtime or predecessor source.")
                 }
@@ -399,6 +427,15 @@ import Foundation
                     guard current.source == multihopExecution.source, current.execution == multihopExecution.execution,
                           current.pins == multihopExecution.pins,
                           current.sessionID != multihopExecution.sessionID else { throw IOSMultihopExecution.issue() }
+                }
+                if let orderedExecution {
+                    guard let connection = manager.connection as? NETunnelProviderSession else { throw CancellationError() }
+                    try await orderedExecution.proveRestored(send: { try await Self.sendOrdered(connection, data: $0) }, current: {
+                        try requireOwner()
+                        guard model.iosConnectGeneration == generation, model.activeSessionIdentity == restored,
+                              connection.status == .connected, connection.connectedDate == restored.connectedAt,
+                              Self.sameProtocol(manager.protocolConfiguration, proto) else { throw CancellationError() }
+                    })
                 }
                 if onDemand {
                     manager.isOnDemandEnabled = true
@@ -440,6 +477,27 @@ import Foundation
             proto.providerConfiguration = configuration
         }
         return proto
+    }
+
+    private final class OrderedReply: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Data, Error>?
+        init(_ continuation: CheckedContinuation<Data, Error>) { self.continuation = continuation }
+        func finish(_ data: Data?) {
+            lock.lock(); let waiting = continuation; continuation = nil; lock.unlock()
+            guard let waiting else { return }
+            if let data, !data.isEmpty, data.count <= 20 * 1024 { waiting.resume(returning: data) }
+            else { waiting.resume(throwing: IOSNodeChainExecutionSession.issue()) }
+        }
+    }
+    static func sendOrdered(_ connection: NETunnelProviderSession, data: Data) async throws -> Data {
+        guard data.count <= 1024 else { throw IOSNodeChainExecutionSession.issue() }
+        return try await withCheckedThrowingContinuation { continuation in
+            let reply = OrderedReply(continuation)
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 4) { reply.finish(nil) }
+            do { try connection.sendProviderMessage(data) { reply.finish($0) } }
+            catch { reply.finish(nil) }
+        }
     }
 
     private static func readExecution(_ manager: NETunnelProviderManager, model: RouterVPNModel,

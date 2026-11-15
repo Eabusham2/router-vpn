@@ -147,7 +147,9 @@ def main():
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(stub), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         capture = APP / 'IOSNodeChainCapture.swift'
+        executionBoundary=work/'UnrelatedExecution.swift';executionBoundary.write_text(L.C.EXECUTION_REFUSAL)
         sources = [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift')]
+        sources.append(str(executionBoundary))
         binary = work / 'tests'
         subprocess.run(command + sources + [str(code), '-o', str(binary)], check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
@@ -159,9 +161,9 @@ def main():
         # defect without weakening the source schema check or positive cases.
         before = '              let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,'
         after = '              let identitySources = Optional((root["identity_sources"] as? [String]) ?? []),'
-        native_identity = 'guard !identitySources[position].isEmpty, !(schema == 2 && position == 1 || schema == 5 && position == nodes.count - 2),'
+        native_identity = 'guard !identitySources[position].isEmpty, !((schema == 2 || schema == 5) && position == nodes.count - 2),'
         assert source.count(before) == 1 and source.count(native_identity) == 1
-        changed = source.replace(before, after, 1).replace(native_identity, 'guard !(schema == 2 && position == 1 || schema == 5 && position == nodes.count - 2),', 1)
+        changed = source.replace(before, after, 1).replace(native_identity, 'guard !((schema == 2 || schema == 5) && position == nodes.count - 2),', 1)
         mutated = work / 'MissingIdentityReceipt.swift'; mutated.write_text(changed)
         variants = [
             ('required-native-inventory', [str(mutated) if path == str(capture) else path for path in sources], body, 'ACCEPTED native handoff missing identity inventory'),

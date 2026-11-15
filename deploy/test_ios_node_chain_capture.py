@@ -141,6 +141,24 @@ func chainFixtureModes(count int,layer string,mixed bool)(string,error){
 }
 '''
 
+# Local-only compiler consumers do not model a remote execution owner. The
+# new distinct branch is tested by the real typed execution compiler gate.
+EXECUTION_REFUSAL = r'''
+import Foundation
+@MainActor enum IOSNodeChainExecutionControl {
+ static func startupLast(input:String,finalProfile:RouterProfile)throws->[String:NSObject]{throw NSError(domain:"UnrelatedExecutionLastBoundary",code:1)}
+}
+final class IOSNodeChainExecutionCapture {
+ private init(){}
+ static func compile(bundles:[Data],requested:String)throws->IOSNodeChainExecutionCapture{throw NSError(domain:"UnrelatedExecutionBoundary",code:1)}
+ let members:[IOSNodeChainCapture.Member]=[]
+ let strict=false,homeLANAccess=false,isCONNECT=false
+ let launchInput="",ordinaryLaunchInput="",sourceSHA256="",configSHA256="",requested=""
+ let startupTimeout:TimeInterval=120
+ func close()throws{throw NSError(domain:"UnrelatedExecutionBoundary",code:1)}
+}
+'''
+
 LIBBOX = P.SWIFT[:P.SWIFT.index('func compile(')]
 LIBBOX += r'''
 public func LibboxRouterOpenVPNEndpoint(_ config:String,_ user:String,_ password:String,_ tag:String,_ detour:String,_ error:UnsafeMutablePointer<NSError?>?)->String{

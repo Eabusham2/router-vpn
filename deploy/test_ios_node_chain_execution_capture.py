@@ -25,12 +25,26 @@ assert GO.count(anchor)==1
 GO=GO.replace(anchor,r'''
  case "execution-new":value,err=executionNew(r.Source,r.Mode)
  case "execution-open":value,err=executionOpen(r.Source)
+ case "connect-execution-new":value,err=connectExecutionNew(r.Source,r.Mode)
+ case "connect-execution-open":value,err=connectExecutionOpen(r.Source)
  case "execution-digest":sum:=sha256.Sum256([]byte(r.Source));value=hex.EncodeToString(sum[:])
 '''+anchor,1)+r'''
 type executionEnvelope struct{Kind string `json:"kind"`;Schema int `json:"schema"`;Source string `json:"source"`;SourceSHA string `json:"source_sha256"`;ConfigSHA string `json:"config_sha256"`}
 func executionPrepared(p *mobilemultihop.NodeChainExecutionPreparation)(string,error){
- launch,err:=json.Marshal(executionEnvelope{"routervpn-node-chain-execution-preparation-input",1,p.Source(),p.SourceSHA256(),p.ConfigSHA256()});if err!=nil{return "",err}
+ kind:="routervpn-node-chain-execution-preparation-input";if p.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"}
+ launch,err:=json.Marshal(executionEnvelope{kind,1,p.Source(),p.SourceSHA256(),p.ConfigSHA256()});if err!=nil{return "",err}
  raw,err:=json.Marshal(map[string]string{"source":p.Source(),"source_sha256":p.SourceSHA256(),"config":p.Config(),"config_sha256":p.ConfigSHA256(),"local_source_sha256":p.LocalSourceSHA256(),"requested":p.Execution(),"launch":string(launch)});return string(raw),err
+}
+func connectExecutionNew(input,requested string)(string,error){
+ original,err:=mobilemultihop.NewNodeChainCONNECTSource(input);if err!=nil{return "",err}
+ p,err:=mobilemultihop.NewNodeChainCONNECTExecutionPreparation(original,requested);if err!=nil{return "",err};return executionPrepared(p)
+}
+func connectExecutionOpen(input string)(string,error){
+ if err:=libbox.RouterValidatePrivateNodeJSON(input);err!=nil{return "",err}
+ var e executionEnvelope;if err:=json.Unmarshal([]byte(input),&e);err!=nil{return "",err}
+ canonical,err:=json.Marshal(e);if err!=nil||string(canonical)!=input||e.Kind!="routervpn-node-chain-connect-execution-preparation-input"||e.Schema!=1{return "",fmt.Errorf("noncanonical typed private launch")}
+ p,err:=mobilemultihop.ParseNodeChainCONNECTExecutionPreparation(e.Source);if err!=nil{return "",err}
+ if p.Source()!=e.Source||p.SourceSHA256()!=e.SourceSHA||p.ConfigSHA256()!=e.ConfigSHA{return "",fmt.Errorf("changed typed execution source")};return executionPrepared(p)
 }
 func executionNew(input,requested string)(string,error){
  if _,err:=mobilemultihop.ParseNodeChainLaunchInput(input);err!=nil{return "",err}
@@ -110,6 +124,9 @@ func executionMake(_ operation:String,_ source:String,_ requested:String)throws-
 }
 public func LibboxRouterNodeChainExecutionFromLaunch(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("execution-new",input,execution)}}
 public func LibboxNewRouterNodeChainExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("execution-open",input,"")}}
+public func LibboxNewRouterNodeChainCONNECTExecution(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("connect-execution-new",input,execution)}}
+public func LibboxNewRouterNodeChainCONNECTExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("connect-execution-open",input,"")}}
+public func LibboxRouterNodeChainCONNECTExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
 public func LibboxNewRouterNodeChainExecutionRestore(_ value:LibboxRouterNodeChainExecutionRestoreCapture,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
 public func LibboxRouterNodeChainExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
 '''
@@ -229,7 +246,7 @@ def main():
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(work/'Libbox.swift'),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(work/('libLibbox'+suffix))],check=True,timeout=90)
         link=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
         subprocess.run(options+link+['-emit-module','-emit-library','-module-name','CryptoKit',str(work/'CryptoKit.swift'),'-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/('libCryptoKit'+suffix))],check=True,timeout=90)
-        command=options+link+['-lCryptoKit',str(APP/'Models.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSNodeChainCapture.swift'),str(APP/'IOSImportedOpenVPNSource.swift')]
+        command=options+link+['-lCryptoKit',str(APP/'Models.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSNodeChainCapture.swift'),str(APP/'IOSImportedOpenVPNSource.swift'),str(APP/'IOSNodeChainCONNECTCapture.swift'),str(APP/'IOSNodeChainSOCKSCapture.swift'),str(APP/'IOSNodeChainProviderCapture.swift')]
         source=APP/'IOSNodeChainExecutionCapture.swift';tests=work/'Tests.swift';binary=work/'tests'
         subprocess.run(command+[str(source),str(tests),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary),str(compiler)],check=True,timeout=180)
@@ -239,7 +256,7 @@ def main():
           ('requested','plan.requestedExecution() == requested,','true,'),
           ('launch-error','guard failure == nil, let input else {','guard let input else {'),
           ('local-node','nodes == original["nodes"] as? [String], identities == original["identity_sources"] as? [String] else {','!nodes.isEmpty, identities == original["identity_sources"] as? [String] else {'),
-          ('imported-schema','schema == 1 || schema == 2,','schema == 1,'),
+          ('imported-schema','(schema == 1 || schema == 2),','schema == 1,'),
           ('local-schema','returned["schema"] as? Int == schema,','true,'),
           ('local-identity','identities == original["identity_sources"] as? [String] else {','!identities.isEmpty else {'),
           ('cleanup-bind-order','func bindNative(_ server: LibboxCommandServer) throws { try plan.bindNative(server); try requireCurrent() }','func bindNative(_ server: LibboxCommandServer) throws { try requireCurrent(); try plan.bindNative(server) }'),

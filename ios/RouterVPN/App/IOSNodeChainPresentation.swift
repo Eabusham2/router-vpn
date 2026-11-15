@@ -81,8 +81,20 @@ enum IOSNodeChainPresentation {
     }
 
     static func active(_ identity: IOSSessionIdentity?) -> [IOSNodePathPoint]? {
-        guard let identity, identity.engine == "multihop-libbox",
-              let source = identity.nodeChainSource,
+        guard let identity, identity.engine == "multihop-libbox" else { return nil }
+        if let input = identity.nodeChainExecutionSource {
+            guard let launch = try? JSONSerialization.jsonObject(with: input) as? [String: Any],
+                  launch["kind"] as? String == "routervpn-node-chain-connect-execution-preparation-input",
+                  let raw = launch["source"] as? String,
+                  let preparation = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                  preparation["schema"] as? Int == 4,
+                  let requested = preparation["execution"] as? String, ["server", "auto"].contains(requested),
+                  let source = preparation["local_source"] as? String,
+                  let path = capturedCONNECT(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested),
+                  path.count == 3, identity.rawProfile == path.last?.mode else { return nil }
+            return path
+        }
+        guard let source = identity.nodeChainSource,
               let path = captured(source: source, bundleData: identity.bundleData),
               identity.rawProfile == path.last?.mode else { return nil }
         return path
@@ -162,11 +174,12 @@ enum IOSNodeChainPresentation {
         return planned(selected: control, catalog: profiles)
     }
 
-    private static func capturedCONNECT(source: Data, bundleData: Data) -> [IOSNodePathPoint]? {
+    private static func capturedCONNECT(source: Data, bundleData: Data, selectionExecution: String = "local") -> [IOSNodePathPoint]? {
         guard !source.isEmpty, source.count <= 40 * 1024 * 1024, !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024,
               let root = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
               Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]), root["schema"] as? Int == 4,
               root["execution"] as? String == "local", let inputs = root["nodes"] as? [String], (3...8).contains(inputs.count),
+              selectionExecution == "local" || inputs.count == 3,
               let identities = root["identity_sources"] as? [String], identities.count == inputs.count,
               identities.enumerated().allSatisfy({ $0.offset == inputs.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }),
               let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
@@ -189,18 +202,23 @@ enum IOSNodeChainPresentation {
             }
             profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
         }
-        guard profiles.last == control, control.multihopNodes == nodes else { return nil }
+        guard let last = profiles.last, control.multihopNodes == nodes, control.multihopExecution == selectionExecution else { return nil }
+        var expected = control
+        if selectionExecution != "local" { expected.startupMode = nil; expected.autoConnect = nil }
+        guard last == expected else { return nil }
         return planned(selected: control, catalog: profiles)
     }
 
     /// Progress durations are initial, routed private HTTP verifications.
     /// Periodic health renewals do not publish fresh RTT samples here.
-    static func progress(_ value: [String: Any], expected: [String]) -> String? {
+    static func progress(_ value: [String: Any], expected: [String], requestedExecution: String = "local") -> String? {
         guard (2...8).contains(expected.count), Set(expected).count == expected.count,
-              value["execution"] as? String == "local",
+              ["local", "server", "auto"].contains(requestedExecution),
+              let execution = value["execution"] as? String,
+              (requestedExecution == "auto" ? ["local", "server"].contains(execution) : execution == requestedExecution),
               let stage = value["stage"] as? String, ["verifying", "selected", "closed"].contains(stage),
               let rows = value["prefixes"] as? [[String: Any]], rows.count <= expected.count else { return nil }
-        var lines = ["Ordered route • Local • \(stage)"]
+        var lines = ["Ordered route • \(execution == "server" ? "Server" : "Local") • \(stage)"]
         for (position, row) in rows.enumerated() {
             guard let reported = row["position"] as? NSNumber, CFGetTypeID(reported) != CFBooleanGetTypeID(),
                   reported.doubleValue == Double(position), row["profile_id"] as? String == expected[position],

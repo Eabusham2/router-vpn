@@ -6,13 +6,14 @@ enum IOSOrderedRouteCapture {
     case ordinary(IOSNodeChainCapture)
     case socks(IOSNodeChainSOCKSCapture)
     case connect(IOSNodeChainCONNECTCapture)
-    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let value): return value.members; case .socks(let value): return value.members; case .connect(let value): return value.members } }
-    var launchInput: String { switch self { case .ordinary(let value): return value.launchInput; case .socks(let value): return value.source; case .connect(let value): return value.source } }
-    var strict: Bool { switch self { case .ordinary(let value): return value.strict; case .socks(let value): return value.strict; case .connect(let value): return value.strict } }
-    var homeLANAccess: Bool { switch self { case .ordinary(let value): return value.homeLANAccess; case .socks(let value): return value.homeLANAccess; case .connect(let value): return value.homeLANAccess } }
-    var startupTimeout: TimeInterval { switch self { case .ordinary(let value): return value.startupTimeout; case .socks(let value): return value.startupTimeout; case .connect(let value): return value.startupTimeout } }
-    var providerKey: String { switch self { case .ordinary: return IOSNodeChainProviderCapture.key; case .socks: return IOSNodeChainSOCKSCapture.providerKey; case .connect: return IOSNodeChainCONNECTCapture.providerKey } }
-    func close() throws { switch self { case .ordinary(let value): try value.plan.close(); case .socks(let value): try value.plan.close(); case .connect(let value): try value.plan.close() } }
+    case execution(IOSNodeChainExecutionCapture)
+    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let value): return value.members; case .socks(let value): return value.members; case .connect(let value): return value.members; case .execution(let value): return value.members } }
+    var launchInput: String { switch self { case .ordinary(let value): return value.launchInput; case .socks(let value): return value.source; case .connect(let value): return value.source; case .execution(let value): return value.launchInput } }
+    var strict: Bool { switch self { case .ordinary(let value): return value.strict; case .socks(let value): return value.strict; case .connect(let value): return value.strict; case .execution(let value): return value.strict } }
+    var homeLANAccess: Bool { switch self { case .ordinary(let value): return value.homeLANAccess; case .socks(let value): return value.homeLANAccess; case .connect(let value): return value.homeLANAccess; case .execution(let value): return value.homeLANAccess } }
+    var startupTimeout: TimeInterval { switch self { case .ordinary(let value): return value.startupTimeout; case .socks(let value): return value.startupTimeout; case .connect(let value): return value.startupTimeout; case .execution(let value): return value.startupTimeout } }
+    var providerKey: String { switch self { case .ordinary: return IOSNodeChainProviderCapture.key; case .socks: return IOSNodeChainSOCKSCapture.providerKey; case .connect: return IOSNodeChainCONNECTCapture.providerKey; case .execution: return IOSNodeChainProviderCapture.executionKey } }
+    func close() throws { switch self { case .ordinary(let value): try value.plan.close(); case .socks(let value): try value.plan.close(); case .connect(let value): try value.plan.close(); case .execution(let value): try value.close() } }
 }
 
 @MainActor
@@ -21,6 +22,12 @@ extension RouterVPNModel {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let sources = try iosNodeChainBundles(for: selected).map { try encoder.encode($0) }
         let control = selected.routerProfiles.first(where: { $0.id == selected.selectedRouterID })
+        if let control, ["server", "auto"].contains(control.multihopExecution ?? "") {
+            guard let nodes = control.multihopNodes, IOSMultihopNodeSelection.supportsCONNECTExecution(nodes) else {
+                throw IOSMultihopNodeSelection.issue("This ordered execution needs its exact original CONNECT trio.")
+            }
+            return .execution(try IOSNodeChainExecutionCapture.compile(bundles: sources, requested: control.multihopExecution!))
+        }
         if control?.multihopNodes?.contains(where: { ["http-connect", "https-connect"].contains($0.mode) }) == true {
             return .connect(try IOSNodeChainCONNECTCapture.compile(bundles: sources))
         }
@@ -49,6 +56,9 @@ extension RouterVPNModel {
 extension IOSRuntimeSelector {
     static func selectNodeChain(_ capture: IOSOrderedRouteCapture) throws -> IOSRuntimeSelection {
         switch capture {
+        case .execution(let original):
+            return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: original.members.last!.mode,
+                                       files: [:], nodeChainInput: original.launchInput, nodeChainExecution: original.requested)
         case .ordinary(let original): return try selectNodeChain(original)
         case .socks(let original):
             return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: original.members[original.members.count - 1].mode,

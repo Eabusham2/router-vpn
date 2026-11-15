@@ -31,7 +31,7 @@ extension RouterVPNModel {
             return
         }
         let connectedAt = session.connectedDate
-        let chainKeys = ["nodeChainSource", "nodeChainSOCKSSource", "nodeChainCONNECTSource"]
+        let chainKeys = ["nodeChainSource", "nodeChainSOCKSSource", "nodeChainCONNECTSource", "nodeChainExecutionSource"]
         let selectedKeys = chainKeys.filter { configuration[$0] != nil }
         guard selectedKeys.count <= 1 else {
             if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }
@@ -41,12 +41,25 @@ extension RouterVPNModel {
         let chainSource = configuration[chainKey] as? String
         if let identity {
             guard identity.connectedAt == connectedAt, identity.bundleData == bundleData,
-                  identity.nodeChainSource == chainSource.map({ Data($0.utf8) }) else {
+                  (chainKey == "nodeChainExecutionSource" ? identity.nodeChainExecutionSource == chainSource.map({ Data($0.utf8) }) && identity.nodeChainSource == nil : identity.nodeChainSource == chainSource.map({ Data($0.utf8) }) && identity.nodeChainExecutionSource == nil) else {
                 if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }
                 return
             }
         }
-        let orderedNodes = chainSource.flatMap { IOSNodeChainPresentation.captured(source: Data($0.utf8), bundleData: bundleData) }
+        let orderedNodes: [IOSNodePathPoint]?
+        var orderedExecution = "local"
+        if chainKey == "nodeChainExecutionSource" {
+            guard let identity, let input = identity.nodeChainExecutionSource,
+                  let launch = try? JSONSerialization.jsonObject(with: input) as? [String: Any],
+                  let raw = launch["source"] as? String,
+                  let preparation = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                  let requested = preparation["execution"] as? String, ["server", "auto"].contains(requested) else {
+                if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }; return
+            }
+            orderedExecution = requested
+            orderedNodes = IOSNodeChainPresentation.active(identity)
+        } else { orderedNodes = chainSource.flatMap { IOSNodeChainPresentation.captured(source: Data($0.utf8), bundleData: bundleData) } }
+        let capturedExecution = orderedExecution
         guard configuration[chainKey] == nil || orderedNodes != nil else {
             if multihopProgressInFlight == ticket { multihopProgressInFlight = nil }
             return
@@ -65,7 +78,7 @@ extension RouterVPNModel {
                       self.selectedNodeProfile?.id == nodeID, self.connected || self.tunnelTransitioning,
                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
                 if let orderedNodes {
-                    guard let text = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id)) else { return }
+                    guard let text = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id), requestedExecution: capturedExecution) else { return }
                     self.multihopProgressText = text
                     return
                 }

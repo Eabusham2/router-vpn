@@ -705,3 +705,6 @@ subprocess.run([sys.executable, str(ROOT/"deploy/test_native_runner_dependencies
 subprocess.run([sys.executable, str(ROOT/"deploy/test_mobile_xray_entry_bindings.py")], check=True)
 
 subprocess.run([sys.executable, str(ROOT/"deploy/test_ios_xray_exit_fixture_inputs.py")], check=True)
+
+from test_ios_connect_execution_workflow import check as check_ios_connect_execution_workflow
+check_ios_connect_execution_workflow(read)

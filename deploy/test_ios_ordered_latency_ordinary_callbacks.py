@@ -7,7 +7,7 @@ spec=importlib.util.spec_from_file_location('ordinary_callbacks_base',ROOT/'depl
 BOUNDARY=C.BOUNDARY
 BOUNDARY=BOUNDARY.replace('let boundaryTransport="socks5"','let boundaryTransport="wg"\nnonisolated(unsafe)var ordinaryCount=2\nnonisolated(unsafe)var ordinaryExecution="local"')
 BOUNDARY=BOUNDARY.replace('[PathPoint(mode:"wg"),PathPoint(mode:boundaryTransport),PathPoint(mode:"shadowsocks")]','(0..<ordinaryCount).map{PathPoint(mode:$0==ordinaryCount-1 ? "shadowsocks":"wg")}')
-start=BOUNDARY.index('struct OrdinaryCapture{');end=BOUNDARY.index('\nenum IOSOrderedRouteCapture',start)
+start=BOUNDARY.index('struct OrdinaryCapture{');end=BOUNDARY.index('\nstruct ExecutionCapture',start)
 BOUNDARY=BOUNDARY[:start]+'''struct OrdinaryCapture{let selectionExecution=ordinaryExecution,launchInput="captured-source",sourceSHA256=String(repeating:"1",count:64),configSHA256=String(repeating:"2",count:64);var members:[Member]{(0..<ordinaryCount).map{Member(id:"node-\\($0)")}}}'''+BOUNDARY[end:]
 BOUNDARY=BOUNDARY.replace('boundaryTransport == "socks5" ? .socks(SOCKSCapture()):.connect(CONNECTCapture())','.ordinary(OrdinaryCapture())')
 BOUNDARY=BOUNDARY.replace('["entry","middle","final"].enumerated().map{["position":$0.offset,"node_id":$0.element,"kind":$0.offset==1 ? "public-path":"private-node"] as [String:Any]}','(0..<ordinaryCount).map{["position":$0,"node_id":"node-\\($0)","kind":"private-node"] as [String:Any]}')

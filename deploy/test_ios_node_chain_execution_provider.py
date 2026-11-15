@@ -18,15 +18,21 @@ def module(name,path):
 SOURCE=module('execution_source_fixture',ROOT/'deploy/test_ios_node_chain_execution_capture.py')
 PROVIDER=module('ordered_provider_fixture',ROOT/'deploy/test_ios_node_chain_provider.py')
 SAVED=module('execution_saved_fixture',ROOT/'deploy/test_ios_node_chain_execution_restore_last.py')
-CAPTURE_TESTS=SOURCE.SWIFT.split('@main struct Tests {',1)[0]+r'''
+connect_text=(ROOT/'deploy/test_ios_connect_execution_capture.py').read_text()
+CONNECT_FIXTURE=connect_text[connect_text.index('func connectFixture('):connect_text.index('\n@main struct Tests')]
+
+CAPTURE_TESTS=SOURCE.SWIFT.split('@main struct Tests {',1)[0]+CONNECT_FIXTURE+r'''
 @main struct Tests {
  @MainActor static var checks=0
  @MainActor static func check(_ yes:Bool,_ name:String){guard yes else{fatalError(name)};checks+=1}
  @MainActor static func reject(_ name:String,_ action:()throws->Void){do{try action();fatalError("ACCEPTED "+name)}catch{checks+=1}}
  @MainActor static func main()throws{
   defer{LibboxTestClose()}
-  for count in [2,3,8]{for requested in ["server","auto"]{for awg in [false,true]{
-   let bundles=try fixture(count,"off",requested,awg),capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)
+  var rows:[(Int,String,[Data])]=[]
+  for count in [2,3,8]{for requested in ["server","auto"]{for awg in [false,true]{rows.append((count,requested,try fixture(count,"off",requested,awg)))}}}
+  for kind in ["http-connect","https-connect"]{for requested in ["server","auto"]{rows.append((3,requested,try connectFixture(kind,"wg",requested)))}}
+  for (count,requested,bundles) in rows {
+   let capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:requested)
    let final=capture.members.last!
    let provider:[String:Any]=["engine":"multihop-libbox",IOSNodeChainProviderCapture.executionKey:capture.launchInput,
       "bundle":bundles.last!,"mode":final.mode,"rawProfileID":final.mode,"modeCandidates":[final.mode]]
@@ -55,7 +61,7 @@ CAPTURE_TESTS=SOURCE.SWIFT.split('@main struct Tests {',1)[0]+r'''
     reject("provider "+field){_ = try IOSNodeChainProviderCapture.reopenExecution(changed)}
    }
    try capture.close()
-  }}}
+  }
   print("PASS Apple execution provider original capture: \(checks) real compiler checks")
  }
 }
@@ -71,7 +77,7 @@ def source_gate(work):
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(work/'Libbox.swift'),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(work/('libLibbox'+suffix))],check=True,timeout=90)
         link=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
         subprocess.run(options+link+['-emit-module','-emit-library','-module-name','CryptoKit',str(work/'CryptoKit.swift'),'-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/('libCryptoKit'+suffix))],check=True,timeout=90)
-        command=options+link+['-lCryptoKit']+[str(APP/name) for name in ['Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainExecutionCapture.swift','IOSNodeChainProviderCapture.swift']]
+        command=options+link+['-lCryptoKit']+[str(APP/name) for name in ['Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainExecutionCapture.swift','IOSNodeChainProviderCapture.swift']]
         source=TUN/'IOSNodeChainExecutionProviderCapture.swift';tests=work/'Tests.swift';binary=work/'capture'
         subprocess.run(command+[str(source),str(tests),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary),str(compiler)],check=True,timeout=180)

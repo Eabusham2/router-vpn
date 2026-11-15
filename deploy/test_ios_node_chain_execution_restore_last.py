@@ -22,10 +22,14 @@ bridge=(ROOT/'mobile/chain_execution/bridge.go.tmpl').read_text()
 bridge=bridge[bridge.index('const routerNodeChainExecutionLaunchKind'):bridge.index('func (m *RouterNodeChainExecution) ProgressJSON')]
 last=(ROOT/'mobile/chain_execution/last.go.tmpl').read_text()
 last=last[last.index('func RouterNodeChainExecutionFromLast'):last.index('// Capture only')]
+connect=(ROOT/'mobile/chain_execution/connect.go.tmpl').read_text()
+connect_const=connect[connect.index('const routerNodeChainCONNECTExecutionLaunchKind'):connect.index('type routerNodeCONNECTExecutionServerKey')]
+connect=connect[connect.index('func NewRouterNodeChainCONNECTExecution('):connect.index('// The typed execution plan creates')]
 GO=SOURCE.GO[:SOURCE.GO.index('type executionEnvelope')]
 GO=GO.replace(';libbox "router-vpn/mobile"','')
 GO=GO.replace('"fmt"','"fmt";"errors";"net/url";"router-vpn/internal/multihoprelay"',1)
 GO=GO.replace(' case "execution-new":',r'''
+ case "connect-execution-last":var m *RouterNodeChainExecution;m,err=RouterNodeChainCONNECTExecutionFromLast(r.Source,r.Mode,r.Policy);if err==nil{value,err=executionReceipt(m)}
  case "execution-last":var m *RouterNodeChainExecution;m,err=RouterNodeChainExecutionFromLast(r.Source,r.Mode,r.Policy);if err==nil{value,err=executionReceipt(m)}
  case "execution-last-record":value,err=executionSavedRecord(r.Source,r.Mode)
  case "execution-typed-readback":value,err=executionTypedReadback(r.Source)
@@ -33,13 +37,20 @@ GO=GO.replace(' case "execution-new":',r'''
 GO+=r'''
 var errRouterNodeChainExecution=errors.New("execution source")
 type RouterNodeChainExecution struct{prep *mobilemultihop.NodeChainExecutionPreparation;last *mobilemultihop.NodeChainExecutionLast}
-'''+bridge+last+r'''
+'''+bridge+last+connect_const+connect+r'''
 func executionReceipt(m *RouterNodeChainExecution)(string,error){
  launch,err:=m.LaunchInput();if err!=nil{return "",err}
  raw,err:=json.Marshal(map[string]string{"source":m.Source(),"source_sha256":m.SourceSHA256(),"config":m.Config(),"config_sha256":m.ConfigSHA256(),"local_source_sha256":m.LocalSourceSHA256(),"requested":m.RequestedExecution(),"launch":launch});return string(raw),err
 }
+func connectExecutionNew(input,requested string)(string,error){m,err:=NewRouterNodeChainCONNECTExecution(input,requested);if err!=nil{return "",err};return executionReceipt(m)}
+func connectExecutionOpen(input string)(string,error){m,err:=NewRouterNodeChainCONNECTExecutionLaunch(input);if err!=nil{return "",err};return executionReceipt(m)}
+func capturedExecution(input string)(*RouterNodeChainExecution,error){
+ var launch routerNodeChainExecutionLaunch;if err:=json.Unmarshal([]byte(input),&launch);err!=nil{return nil,err}
+ if launch.Kind==routerNodeChainCONNECTExecutionLaunchKind{return NewRouterNodeChainCONNECTExecutionLaunch(input)}
+ return NewRouterNodeChainExecutionLaunch(input)
+}
 func executionNew(input,requested string)(string,error){m,err:=RouterNodeChainExecutionFromLaunch(input,requested);if err!=nil{return "",err};return executionReceipt(m)}
-func executionOpen(input string)(string,error){m,err:=NewRouterNodeChainExecutionLaunch(input);if err!=nil{return "",err};return executionReceipt(m)}
+func executionOpen(input string)(string,error){m,err:=capturedExecution(input);if err!=nil{return "",err};return executionReceipt(m)}
 type savedLast struct{
  Schema int `json:"schema"`;LocalSourceSHA256 string `json:"local_source_sha256"`;LocalInputSHA256 string `json:"local_input_sha256"`
  Setting string `json:"setting"`;Execution string `json:"execution"`;Target string `json:"target"`
@@ -49,11 +60,13 @@ type savedLast struct{
 }
 func digest(raw []byte)string{sum:=sha256.Sum256(raw);return hex.EncodeToString(sum[:])}
 func executionSavedRecord(input,selected string)(string,error){
- m,err:=NewRouterNodeChainExecutionLaunch(input);if err!=nil{return "",err}
+ m,err:=capturedExecution(input);if err!=nil{return "",err}
  var source mobilemultihop.NodeChainSource;if err=json.Unmarshal([]byte(m.prep.LocalSource()),&source);err!=nil{return "",err}
- chain,err:=mobilemultihop.NewNodeChain(m.prep.LocalSource());if err!=nil{return "",err};proof:=chain.ProofInventory()[0]
+ var proof mobilemultihop.NodeChainProof
+ if m.prep.RequiresCONNECTExecutionObserver(){original,e:=m.prep.OriginalCONNECTSource();if e!=nil{return "",e};_,meta,e:=original.ReadValidated();if e!=nil{return "",e};proof=meta.Proofs[0]}else{chain,e:=mobilemultihop.NewNodeChain(m.prep.LocalSource());if e!=nil{return "",e};proof=chain.ProofInventory()[0]}
  raw,err:=json.Marshal(mobilemultihop.NodeChainServerSource{Schema:source.Schema,EntryID:proof.ProfileID,EntryNodeID:proof.NodeID,EntryMode:proof.Mode,Nodes:source.Nodes[1:],IdentitySources:source.IdentitySources[1:]});if err!=nil{return "",err}
- policy,err:=mobilemultihop.NewNodeChainServerPolicy(string(raw));if err!=nil{return "",err};descriptor:=policy.Descriptor();identity,err:=descriptor.Digest();if err!=nil{return "",err}
+ var policy *mobilemultihop.NodeChainServerPolicy
+ if m.prep.RequiresCONNECTExecutionObserver(){policy,err=mobilemultihop.NewNodeChainCONNECTServerPolicy(string(raw))}else{policy,err=mobilemultihop.NewNodeChainServerPolicy(string(raw))};if err!=nil{return "",err};descriptor:=policy.Descriptor();identity,err:=descriptor.Digest();if err!=nil{return "",err}
  discovery,err:=m.prep.Discovery();if err!=nil{return "",err};api,err:=url.Parse(discovery.API);if err!=nil{return "",err}
  record:=savedLast{Schema:1,LocalSourceSHA256:m.LocalSourceSHA256(),LocalInputSHA256:digest([]byte(m.prep.LocalSource())),Setting:m.RequestedExecution(),Execution:selected,Target:mobilemultihop.Targets[0],Descriptor:descriptor,DescriptorSHA256:identity,DNSPolicySHA256:descriptor.DNSPolicySHA256,EntryHost:api.Hostname(),Peer:"10.80.0.2",FirstPort:27100,LastPort:27107,Port:27104}
  raw,err=json.Marshal(record);if err!=nil{return "",err};record.Digest=digest(append([]byte("routervpn-node-chain-execution-last-v1\x00"),raw...));raw,err=json.Marshal(record);if err!=nil{return "",err}
@@ -62,7 +75,7 @@ func executionSavedRecord(input,selected string)(string,error){
 // Model only the native typed-readback boundary. No OS value is claimed here:
 // the actual typed shared/native projection has separate mandatory gates.
 func executionTypedReadback(input string)(string,error){
- m,err:=NewRouterNodeChainExecutionLaunch(input);if err!=nil{return "",err}
+ m,err:=capturedExecution(input);if err!=nil{return "",err}
  receipt,err:=executionReceipt(m);if err!=nil{return "",err};var fields map[string]string;_ = json.Unmarshal([]byte(receipt),&fields)
  var graph map[string]any;if err=json.Unmarshal([]byte(fields["config"]),&graph);err!=nil{return "",err};inbounds:=graph["inbounds"].([]any);inbounds[0].(map[string]any)["mtu"]=1400
  raw,err:=json.Marshal(graph);if err!=nil{return "",err};fields["config"]=string(raw);fields["config_sha256"]=digest(raw)
@@ -132,7 +145,21 @@ public func LibboxRouterNodeChainExecutionFromLast(_ input:String,_ requested:St
 }}
 public func LibboxTestSavedLast(_ input:String,_ selected:String)throws->String{try bridge(["Op":"execution-last-record","Source":input,"Mode":selected])}
 ''')
-SWIFT=SOURCE.SWIFT[:SOURCE.SWIFT.index('@main struct Tests')]+r'''
+# Typed Last uses the exact new exported bridge body above, not a generic parser.
+before='public func LibboxRouterNodeChainCONNECTExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}'
+assert LIBBOX.count(before)==1
+LIBBOX=LIBBOX.replace(before,r'''
+public func LibboxRouterNodeChainCONNECTExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){
+ let fault=SavedFault.shared.take()
+ let raw=try bridge(["Op":"connect-execution-last","Source":input,"Mode":requested,"Policy":record])
+ if fault=="drop-last"{return try executionMake("connect-execution-new",input,requested)}
+ return try LibboxRouterNodeChainExecution(JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:String])
+}}
+public func LibboxTestCONNECTExecutionFixture(_ kind:String)throws->String{try bridge(["Op":"chain-connect-fixture","Mode":kind])}
+''')
+connect_swift=(ROOT/'deploy/test_ios_connect_execution_capture.py').read_text()
+connect_fixture=connect_swift[connect_swift.index('func connectFixture('):connect_swift.index('@main struct Tests{')]
+SWIFT=SOURCE.SWIFT[:SOURCE.SWIFT.index('@main struct Tests')]+connect_fixture+r'''
 @main struct Tests {
  @MainActor static var checks=0
  @MainActor static func check(_ yes:Bool,_ name:String){guard yes else{fatalError(name)};checks+=1}
@@ -142,6 +169,7 @@ SWIFT=SOURCE.SWIFT[:SOURCE.SWIFT.index('@main struct Tests')]+r'''
   var paths=[[Data]]()
   for count in [2,3,4]{for mixed in [false,true]{paths.append(try fixture(count,"off","auto",mixed))}}
   for first in ["wg","awg2-fast","awg2-strong"]{paths.append(try importedFixture("auto",first,"2022-blake3-aes-256-gcm"))}
+  for kind in ["http-connect","https-connect"]{paths.append(try connectFixture(kind,"wg","auto"))}
   for bundles in paths{for selected in ["local","server"]{
    let final=try profile(bundles.last!)
    let original=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"auto")
@@ -213,7 +241,7 @@ def main():
         subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(work/'Libbox.swift'),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(work/('libLibbox'+suffix))],check=True,timeout=90)
         link=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
         subprocess.run(options+link+['-emit-module','-emit-library','-module-name','CryptoKit',str(work/'CryptoKit.swift'),'-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/('libCryptoKit'+suffix))],check=True,timeout=90)
-        command=options+link+['-lCryptoKit',str(APP/'Models.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSNodeChainCapture.swift'),str(APP/'IOSImportedOpenVPNSource.swift')]
+        command=options+link+['-lCryptoKit',str(APP/'Models.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSNodeChainCapture.swift'),str(APP/'IOSImportedOpenVPNSource.swift'),str(APP/'IOSNodeChainCONNECTCapture.swift'),str(APP/'IOSNodeChainSOCKSCapture.swift'),str(APP/'IOSNodeChainProviderCapture.swift')]
         source=APP/'IOSNodeChainExecutionCapture.swift';binary=work/'tests';tests=work/'Tests.swift'
         subprocess.run(command+[str(source),str(tests),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary),str(compiler)],check=True,timeout=180)

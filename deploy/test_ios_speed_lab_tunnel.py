@@ -6,6 +6,7 @@ the actual host code against changed preferences, user intent, and stale owners.
 """
 from pathlib import Path
 import shutil
+import ios_ordered_execution_control_boundary as ORDERED
 import subprocess
 import tempfile
 
@@ -57,6 +58,7 @@ enum Status {case connected,connecting,reasserting,disconnecting,disconnected,in
   epoch=UUID().uuidString
   starts+=1;hold=options?["routervpn_mtu_hold"] as? String ?? "";status = .connected;connectedDate=Date(timeIntervalSince1970:Double(starts+10));Trace.values.append("native-start")
  }
+ func sendProviderMessage(_ data:Data,responseHandler:((Data?)->Void)?)throws{throw CancellationError()}
  func stopVPNTunnel(){stops+=1;status=stuckStop ? .disconnecting:.disconnected;connectedDate=nil;Trace.values.append("native-stop")}
 }
 typealias NETunnelProviderSession=Connection
@@ -401,7 +403,7 @@ def main():
     cleanup+=declaration(runner,'private func restore(').replace('private func','func',1)+'\n}'
     with tempfile.TemporaryDirectory(prefix='routervpn-speed-native-') as folder:
         path=Path(folder)/'test.swift';binary=Path(folder)/'test'
-        prefix=SHIM+'\n'+(APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSSpeedLabOwnership.swift').read_text()+'\n'+(APP/'IOSSessionIdentity.swift').read_text()+'\n'+wire+'\n'
+        prefix=SHIM+'\n'+ORDERED.SWIFT+'\n'+(APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSSpeedLabOwnership.swift').read_text()+'\n'+(APP/'IOSSessionIdentity.swift').read_text()+'\n'+wire+'\n'
         def compile_and_run(body, negative=None):
             path.write_text(prefix+body+'\n'+cleanup)
             subprocess.run([swift,'-swift-version','6','-parse-as-library',str(APP/'IOSMultihopStartLayer.swift'),str(path),'-o',str(binary)],check=True,timeout=90)
@@ -413,7 +415,7 @@ def main():
                 print('Apple Speed Lab negative control rejected: '+negative)
         compile_and_run(source)
         for before,after,failure in (
-            ('captured.nodeChainSource == identity.nodeChainSource else', 'true else', 'changed ordered source cannot capture original'),
+            ('captured.nodeChainSource == identity.nodeChainSource,', 'true,', 'changed ordered source cannot capture original'),
             ('                      restored.nodeChainSource == identity.nodeChainSource,\n', '', 'restored ordered observation cannot substitute middle'),
             ('if let identity, identity.nodeChainSource == nil,', 'if let identity,', 'ordered source must not borrow legacy pair proof'),
         ):

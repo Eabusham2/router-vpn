@@ -303,7 +303,8 @@ final class Counter:@unchecked Sendable{static let shared=Counter();var value=0}
 
 def main():
     with tempfile.TemporaryDirectory(prefix='ios-execution-registry-') as directory:
-        work=Path(directory);boundary=work/'Boundary.swift';boundary.write_text(BOUNDARY+IPC);tests=work/'Tests.swift';tests.write_text(TESTS)
+        complete_boundary=BOUNDARY+HOST.LATENCY.NATIVE.replace("SOCKS","Execution").replace("public ","")+(TUN/"RouterVPNOrderedLatency.swift").read_text().replace("import Libbox\n","")
+        work=Path(directory);boundary=work/'Boundary.swift';boundary.write_text(complete_boundary+IPC);tests=work/'Tests.swift';tests.write_text(TESTS)
         host=work/'Host.swift';host.write_text((TUN/'RouterVPNNodeChainExecutionHost.swift').read_text().replace('import Libbox\n',''))
         registry=TUN/'RouterVPNNodeChainExecutionRegistry.swift'
         command=['swiftc','-j','1','-swift-version','6','-module-cache-path',str(work/'modules'),str(boundary),str(host)]
@@ -356,12 +357,12 @@ def main():
             ('provider-proof','self.currentPathProofGuard() === proof else','true else','provider stale proof IPC published'),
         ):
             assert IPC.count(before)==1,name
-            boundary.write_text(BOUNDARY+IPC.replace(before,after,1));binary=work/name
+            boundary.write_text(complete_boundary+IPC.replace(before,after,1));binary=work/name
             subprocess.run(command+[str(registry),str(tests),'-o',str(binary)],check=True,timeout=90)
             result=subprocess.run([str(binary)],capture_output=True,text=True,timeout=30)
             assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,(result.stdout+result.stderr)[-2000:])
             print('Rejected ordered provider IPC control:',name,flush=True)
-        boundary.write_text(BOUNDARY+IPC)
+        boundary.write_text(complete_boundary+IPC)
         source=host.read_text();before='runAutomatic: restored == nil';assert source.count(before)==1
         host.write_text(source.replace(before,'runAutomatic: true',1));binary=work/'automatic-replay'
         subprocess.run(command+[str(registry),str(tests),'-o',str(binary)],check=True,timeout=90)

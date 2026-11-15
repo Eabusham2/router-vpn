@@ -118,8 +118,8 @@ extension RouterVPNModel {
         }
     }
 
-    func saveIOSNodeChain(_ nodes: [IOSMultihopNodeSelection], owner: IOSNodeChainEditorOwner) throws {
-        try IOSMultihopNodeSelection.validate(nodes, execution: "local", entryID: nil, entryMode: nil,
+    func saveIOSNodeChain(_ nodes: [IOSMultihopNodeSelection], owner: IOSNodeChainEditorOwner, execution: String = "local") throws {
+        try IOSMultihopNodeSelection.validate(nodes, execution: execution, entryID: nil, entryMode: nil,
                                              exitID: nil, exitMode: nil, controlID: owner.controlID)
         try requireIOSNodeChainEditorOwner(owner, nodes: nodes)
         guard let final = nodes.last, var value = bundle else {
@@ -132,7 +132,7 @@ extension RouterVPNModel {
         }
         value.selectedRouterID = final.id
         value.routerProfiles[index].multihopEnabled = true
-        value.routerProfiles[index].multihopExecution = "local"
+        value.routerProfiles[index].multihopExecution = execution
         value.routerProfiles[index].multihopNodes = nodes
         value.routerProfiles[index].multihopEntryID = nil; value.routerProfiles[index].multihopEntryMode = nil
         value.routerProfiles[index].multihopExitID = nil; value.routerProfiles[index].multihopExitMode = nil

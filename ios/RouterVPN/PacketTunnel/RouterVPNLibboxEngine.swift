@@ -232,7 +232,9 @@ final class RouterVPNLibboxEngine {
         var setupError: NSError?; LibboxSetup(setup, &setupError)
         if let setupError { throw setupError }
         var createError: NSError?
-        let created = LibboxNewCommandServer(platform, platform, &createError)
+        let created = capture.isCONNECT
+            ? LibboxRouterNodeChainCONNECTExecutionNewCommandServer(capture.plan, platform, platform, &createError)
+            : LibboxNewCommandServer(platform, platform, &createError)
         // Even a failed or cancelled factory can return the original resource.
         // Retain and bind it before inspecting the error or current generation.
         if let created { try host.bindNative(created) }
@@ -1502,24 +1504,26 @@ final class RouterVPNLibboxEngine {
         }
         func run() {
             engine.ownershipLock.lock()
-            let socks = engine.nodeChainSOCKS, connect = engine.nodeChainCONNECT, ordinary = engine.nodeChainDelivery, generation = engine.ownershipGeneration
+            let socks = engine.nodeChainSOCKS, connect = engine.nodeChainCONNECT, ordinary = engine.nodeChainDelivery, execution = engine.nodeChainExecution, generation = engine.ownershipGeneration
             let available = !engine.starting && !engine.permanentlyStopped && engine.server != nil
             engine.ownershipLock.unlock()
-            guard available, [socks != nil, connect != nil, ordinary != nil].filter({ $0 }).count == 1, request.operation == "ordered-latency-info" || request.session == engine.settingsEpoch else { completion(nil); return }
+            guard available, [socks != nil, connect != nil, ordinary != nil, execution != nil].filter({ $0 }).count == 1, request.operation == "ordered-latency-info" || request.session == engine.settingsEpoch else { completion(nil); return }
             func current() -> Bool {
                 engine.ownershipLock.lock(); defer { engine.ownershipLock.unlock() }
-                return engine.nodeChainSOCKS === socks && engine.nodeChainCONNECT === connect && engine.nodeChainDelivery === ordinary && engine.nodeChainExecution == nil && engine.nodeCandidatePrefix == nil && engine.ownershipGeneration == generation && !engine.permanentlyStopped
+                return engine.nodeChainSOCKS === socks && engine.nodeChainCONNECT === connect && engine.nodeChainDelivery === ordinary && engine.nodeChainExecution === execution && engine.nodeCandidatePrefix == nil && engine.ownershipGeneration == generation && !engine.permanentlyStopped
             }
             var result: Data?
             do {
                 guard current() else { throw CancellationError() }
                 if request.operation == "ordered-latency-info" {
-                    if let connect { result = try connect.latencyInfo(request, session: engine.settingsEpoch) }
+                    if let execution { result = try execution.latencyInfo(request, session: engine.settingsEpoch) }
+                    else if let connect { result = try connect.latencyInfo(request, session: engine.settingsEpoch) }
                     else if let socks { result = try socks.latencyInfo(request, session: engine.settingsEpoch) }
                     else if let ordinary { result = try ordinary.latencyInfo(request, session: engine.settingsEpoch) }
                 }
                 else if request.operation == "ordered-latency-open" {
-                    if let connect { _ = try connect.latencyOpen(request) }
+                    if let execution { _ = try execution.latencyOpen(request) }
+                    else if let connect { _ = try connect.latencyOpen(request) }
                     else if let socks { _ = try socks.latencyOpen(request) }
                     else if let ordinary { _ = try ordinary.latencyOpen(request) }
                     result = request.reply(["opened": true, "closed": false])

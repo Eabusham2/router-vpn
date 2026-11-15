@@ -175,6 +175,14 @@ for header in headers:
     assert 'LibboxRouterStrategyCloseService' in header.read_text(), str(header)
     for symbol in ('LibboxNewRouterNodeChainExecution', 'LibboxRouterNodeChainExecutionFromLaunch', 'LibboxNewRouterNodeChainExecutionLaunch', 'LibboxNewRouterNodeChainExecutionRestore'):
         assert symbol+'(' in content, 'Missing ordered execution constructor: '+symbol
+    # Distinct typed execution ABI; candidate preparation owns no factory.
+    for signature in (
+        'FOUNDATION_EXPORT LibboxRouterNodeChainExecution* _Nullable LibboxNewRouterNodeChainCONNECTExecution(NSString* _Nullable localSource, NSString* _Nullable execution, NSError* _Nullable* _Nullable error);',
+        'FOUNDATION_EXPORT LibboxRouterNodeChainExecution* _Nullable LibboxNewRouterNodeChainCONNECTExecutionLaunch(NSString* _Nullable input, NSError* _Nullable* _Nullable error);',
+        'FOUNDATION_EXPORT LibboxRouterNodeChainExecution* _Nullable LibboxRouterNodeChainCONNECTExecutionFromLast(NSString* _Nullable localSource, NSString* _Nullable execution, NSString* _Nullable lastJSON, NSError* _Nullable* _Nullable error);',
+        'FOUNDATION_EXPORT LibboxCommandServer* _Nullable LibboxRouterNodeChainCONNECTExecutionNewCommandServer(LibboxRouterNodeChainExecution* _Nullable m, id<LibboxCommandServerHandler> _Nullable handler, id<LibboxPlatformInterface> _Nullable platform, NSError* _Nullable* _Nullable error);',
+    ):
+        assert signature in content, 'CONNECT execution original-owner ABI changed: '+signature
     # PREFIX_PREPARATION_ABI_BEGIN
     for signature in (
         'FOUNDATION_EXPORT LibboxRouterNodeChainCandidatePreparation* _Nullable LibboxNewRouterNodeChainCandidatePreparation(NSString* _Nullable source, int32_t prefixPosition, NSString* _Nullable inventory, NSError* _Nullable* _Nullable error);',
@@ -282,6 +290,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   [[ $(go list -m -f '{{.Version}}' github.com/xtls/xray-core) == "$XRAY_VERSION" ]]
   bash "$ROOT/../../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_VENDOR"
   python3 "$ROOT/../../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"
+  python3 "$ROOT/../../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
   python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation_runner.py"
   python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"

@@ -6,6 +6,7 @@ struct IOSNodeChainEditorView: View {
     @State private var draft = IOSNodeChainDraft()
     @State private var owner: IOSNodeChainEditorOwner?
     @State private var detail = ""
+    @State private var execution = "local"
 
     private var available: [RouterProfile] {
         model.iosNodeChainEditorProfiles(owner: owner)
@@ -80,12 +81,22 @@ struct IOSNodeChainEditorView: View {
                 }
                 Button("Add preceding node") { change { try draft.append() } }.disabled(draft.nodes.count >= IOSMultihopNodeSelection.maximumNodes)
             }
-            Section("Local execution") {
+            Section("Execution") {
+                Picker("Execution", selection: $execution) {
+                    Text("Local").tag("local")
+                    if IOSMultihopNodeSelection.supportsCONNECTExecution(draft.nodes) {
+                        Text("Server").tag("server")
+                        Text("Compare").tag("auto")
+                    } else if execution != "local" {
+                        Text("Unavailable saved execution").tag(execution).disabled(true)
+                    }
+                }
+                Text("Server and Compare are available for one paired WireGuard or AWG2 entry, one original HTTP/HTTPS CONNECT node and a paired Shadowsocks final. Compare proves both choices before retaining a winner.")
                 Text("Traffic follows this order through one VPN connection. Paired preceding nodes use WireGuard or AWG2. The selected final Router node can use Shadowsocks 2022 or Hysteria2; Hysteria2 requires Start Layer Off on that final node. A route supports one saved Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN node after one to six paired prefixes, with Start Layer Off on that custom node and a Shadowsocks 2022 final. An imported Shadowsocks hostname retains its saved Custom TCP transport resolver through the original preceding prefix; application DNS remains on the final node. OpenVPN retains its original single literal TCP or UDP remote and connected native owner. SOCKS5 and CONNECT retain their original literal server address and credentials; HTTPS CONNECT also retains verified TLS and SNI. CONNECT requires the paired final node’s captured SS UoT-v2 service declaration and preserves its selected DNS.")
                 Text("Each node keeps its own saved credentials, Start Layer and protection settings. DNS uses the final node. Every node must pass verification before Connected.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Save ordered route") {
-                    do { guard let owner else { return }; try model.saveIOSNodeChain(draft.nodes, owner: owner); dismiss() }
+                    do { guard let owner else { return }; try model.saveIOSNodeChain(draft.nodes, owner: owner, execution: execution); dismiss() }
                     catch { detail = error.localizedDescription }
                 }.disabled(!draft.canSave || owner == nil)
                 if !detail.isEmpty { Text(detail).font(.caption) }
@@ -95,6 +106,7 @@ struct IOSNodeChainEditorView: View {
         .navigationTitle("Ordered nodes")
         .onAppear {
             let selected = model.selectedNodeProfile
+            execution = selected?.multihopExecution ?? "local"
             draft = IOSNodeChainDraft(saved: selected?.multihopNodes, finalID: selected?.normalizedNodeKind == "router-vpn" ? selected?.id ?? "" : "")
             do { owner = try model.captureIOSNodeChainEditorOwner(); detail = "" }
             catch { owner = nil; detail = error.localizedDescription }

@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths:
       - 'ios/RouterVPN/prepare-libbox.sh'
+      - 'ios/RouterVPN/App/IOS*.swift'
+      - 'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift'
+      - 'ios/RouterVPN/test_runtime_selection_contract.py'
+      - 'deploy/test_ios_connect_execution_*.py'
+      - 'deploy/ios_ordered_execution_control_boundary.py'
       - 'ios/RouterVPN/prepare-wireguard-kit.sh'
       - 'deploy/prepare-apple-amnezia-timers.py'
       - 'deploy/test_apple_amnezia_timer_preparation.py'
@@ -18,6 +23,11 @@ on:
   pull_request:
     paths:
       - 'ios/RouterVPN/prepare-libbox.sh'
+      - 'ios/RouterVPN/App/IOS*.swift'
+      - 'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift'
+      - 'ios/RouterVPN/test_runtime_selection_contract.py'
+      - 'deploy/test_ios_connect_execution_*.py'
+      - 'deploy/ios_ordered_execution_control_boundary.py'
       - 'ios/RouterVPN/prepare-wireguard-kit.sh'
       - 'deploy/prepare-apple-amnezia-timers.py'
       - 'deploy/test_apple_amnezia_timer_preparation.py'
@@ -42,6 +52,15 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - name: Require complete typed CONNECT execution contracts
+        run: |
+          xcrun --find swiftc
+          python3 deploy/test_ios_connect_execution_workflow.py
+          python3 deploy/test_ios_connect_execution_capture.py
+          python3 deploy/test_ios_connect_execution_runtime.py
+          python3 deploy/test_ios_connect_execution_control.py
+          python3 deploy/test_ios_connect_execution_launch.py
+          python3 deploy/test_ios_connect_execution_speed_lab.py
       - name: Static pin and link contracts
         run: |
           python3 ios/RouterVPN/test_libbox_build_contract.py

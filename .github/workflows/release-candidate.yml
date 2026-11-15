@@ -586,6 +586,10 @@ jobs:
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
       - uses: ./.github/actions/go-windows-sockets
+      - name: Require complete typed CONNECT execution contracts
+        run: |
+          xcrun --find swiftc
+          python3 deploy/test_ios_connect_execution_workflow.py
       - name: Run iOS/iPadOS source contracts
         working-directory: ios/RouterVPN
         run: |

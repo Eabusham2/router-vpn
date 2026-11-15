@@ -12,7 +12,10 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1];APP=ROOT/'ios/RouterVPN/App'
 spec=importlib.util.spec_from_file_location('saved_execution',ROOT/'deploy/test_ios_node_chain_execution_restore_last.py')
 SAVED=importlib.util.module_from_spec(spec);spec.loader.exec_module(SAVED)
-SWIFT=SAVED.SOURCE.SWIFT[:SAVED.SOURCE.SWIFT.index('@main struct Tests')]+r'''
+connect_text=(ROOT/'deploy/test_ios_connect_execution_capture.py').read_text()
+CONNECT_FIXTURE=connect_text[connect_text.index('func connectFixture('):connect_text.index('\n@main struct Tests')]
+
+SWIFT=SAVED.SOURCE.SWIFT[:SAVED.SOURCE.SWIFT.index('@main struct Tests')]+CONNECT_FIXTURE+r'''
 @MainActor enum IOSPrivateJSONStore {
  static var bytes:Data?
  static func read(_ filename:String,maximumBytes:Int)throws->Data?{guard filename=="ordered-execution-last-v1.json",bytes==nil || bytes!.count<=maximumBytes else{throw NSError(domain:"PrivateStoreBoundary",code:1)};return bytes}
@@ -43,6 +46,7 @@ SWIFT=SAVED.SOURCE.SWIFT[:SAVED.SOURCE.SWIFT.index('@main struct Tests')]+r'''
     cases.append((try importedFixture(requested,first,"2022-blake3-aes-256-gcm"),requested,selected))
    }
   }}
+  for kind in ["http-connect","https-connect"]{for selected in ["local","server"]{cases.append((try connectFixture(kind,"wg","auto"),"auto",selected))}}
   for row in cases {
    let bundles=row.bundles,requested=row.requested,selected=row.selected
    let source=try IOSNodeChainExecutionSession.Source.compile(bundles,requested:requested)
@@ -60,9 +64,9 @@ SWIFT=SAVED.SOURCE.SWIFT[:SAVED.SOURCE.SWIFT.index('@main struct Tests')]+r'''
    let originalPreparation=try object(Data((originalLaunch["source"] as! String).utf8))
    let originalLocal=try object(Data((originalPreparation["local_source"] as! String).utf8))
    let localSchema=originalLocal["schema"] as! Int
-   check(localSchema==1 || localSchema==2 && (originalLocal["identity_sources"] as! [String])[1].isEmpty,"imported session lost original unpaired identity slot")
+   check(localSchema==1 || (localSchema==2 || localSchema==4) && (originalLocal["identity_sources"] as! [String])[1].isEmpty,"imported session lost original unpaired identity slot")
    for fault in ["local-schema","member-schema","imported-kind","paired-identity","imported-identity","preparation-schema","launch-schema"] {
-    if (fault=="imported-kind" || fault=="imported-identity") && localSchema != 2 {continue}
+    if (fault=="imported-kind" || fault=="imported-identity") && localSchema != 2 && localSchema != 4 {continue}
     var launch=originalLaunch,preparation=originalPreparation,local=originalLocal
     if fault=="local-schema"{local["schema"]=localSchema==1 ? 2:1}
     if fault=="member-schema" || fault=="imported-kind"{
@@ -151,7 +155,7 @@ def main():
   subprocess.run(options+['-emit-module','-emit-library','-module-name','Libbox',str(work/'Libbox.swift'),'-emit-module-path',str(work/'Libbox.swiftmodule'),'-o',str(work/('libLibbox'+suffix))],check=True,timeout=90)
   link=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
   subprocess.run(options+link+['-emit-module','-emit-library','-module-name','CryptoKit',str(work/'CryptoKit.swift'),'-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/('libCryptoKit'+suffix))],check=True,timeout=90)
-  command=options+link+['-lCryptoKit']+[str(APP/name) for name in ['Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainExecutionCapture.swift','IOSSessionIdentity.swift']]
+  command=options+link+['-lCryptoKit']+[str(APP/name) for name in ['Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainExecutionCapture.swift','IOSSessionIdentity.swift']]
   source=APP/'IOSNodeChainExecutionSession.swift';tests=work/'Tests.swift';binary=work/'baseline'
   subprocess.run(command+[str(source),str(tests),'-o',str(binary)],check=True,timeout=90)
   subprocess.run([str(binary),str(compiler)],check=True,timeout=180)
@@ -172,7 +176,7 @@ def main():
   identity=APP/'IOSSessionIdentity.swift';identity_text=identity.read_text()
   for name,before,after,witness in (
    ('paired-only','schema == 1 || schema == 2 && nodes.count == 3','schema == 1','compiled execution session identity was refused'),
-   ('imported-kind','member["kind"] as? String == "routervpn-node-chain-imported-member",','true,','ACCEPTED execution identity imported-kind'),
+   ('imported-kind','member["kind"] as? String == (schema == 4 ? "routervpn-node-chain-connect-member" : "routervpn-node-chain-imported-member"),','true,','ACCEPTED execution identity imported-kind'),
    ('imported-identity','                      identities[position].isEmpty else { return false }','                      true else { return false }','ACCEPTED execution identity imported-identity'),
    ('paired-identity','!identities[position].isEmpty else { return false }','true else { return false }','ACCEPTED execution identity paired-identity'),
   ):

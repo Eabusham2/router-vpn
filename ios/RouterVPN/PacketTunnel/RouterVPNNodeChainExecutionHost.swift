@@ -19,6 +19,7 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
     private var cancelled = false, runStarted = false, runEntered = false
     private var observations = 0
     private var measurement: LibboxRouterHopMeasurement?
+    private var latencyOwner: RouterVPNOrderedLatencyOwner?
     private var health: DispatchSourceTimer?
     private var callback: ((Error?) -> Void)?
     private var measurementAdoption: ((LibboxRouterHopMeasurement?, LibboxRouterHopMeasurement) -> Bool)?
@@ -151,9 +152,9 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
 
     func cancel() {
         lock.lock(); cancelled = true
-        let timer = health, probe = measurement; health = nil
+        let timer = health, probe = measurement, latency = latencyOwner; health = nil
         lock.unlock()
-        timer?.cancel()
+        timer?.cancel(); latency?.cancel()
         capture.networkChanged(); probe?.networkChanged()
         finish(Self.issue("The ordered execution owner was cancelled."))
     }
@@ -266,6 +267,57 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
         return result
     }
 
+    func latencyInfo(_ request: RouterVPNOrderedLatencyRequest, session: String) throws -> Data? {
+        var result: Data?
+        try observe {
+            guard capture.isCONNECT, capture.healthy(), let status = platform.mtu.request(operation: "mtu-status", request: request.request, session: ""),
+                  let mtu = try JSONSerialization.jsonObject(with: status) as? [String: Any],
+                  let mtuSession = mtu["session_id"] as? String else { throw CancellationError() }
+            let members: [[String: Any]] = capture.members.enumerated().map { position, member in
+                ["position": position, "node_id": member.id, "kind": position == capture.members.count - 2 ? "public-path" : "private-node"]
+            }
+            result = request.reply(["provider_session": session, "mtu_session_id": mtuSession,
+                "source_sha256": capture.plan.sourceSHA256(), "config_sha256": capture.plan.configSHA256(), "nodes": members])
+        }
+        return result
+    }
+    private func requireLatency(_ request: RouterVPNOrderedLatencyRequest) throws {
+        try requireCurrent()
+        guard capture.isCONNECT, capture.plan.sourceSHA256() == request.source, capture.plan.configSHA256() == request.config,
+              capture.members.contains(where: { $0.id == request.node }), capture.plan.healthy(),
+              let status = platform.mtu.request(operation: "mtu-status", request: request.lease, session: ""),
+              let body = try JSONSerialization.jsonObject(with: status) as? [String: Any],
+              body["measurement_lease"] as? String == request.lease, body["measurement_hold"] as? Bool == true,
+              body["measurement_ready"] as? Bool == true else { throw CancellationError() }
+        try requireCurrent()
+    }
+    func latencyOpen(_ request: RouterVPNOrderedLatencyRequest) throws -> RouterVPNOrderedLatencyOwner {
+        try requireLatency(request)
+        lock.lock()
+        if let old = latencyOwner, !old.isClosed() {
+            lock.unlock()
+            guard old.request.matches(request) else { throw CancellationError() }; return old
+        }
+        let owner = RouterVPNOrderedLatencyOwner(request) { [weak self] in
+            guard let self else { throw CancellationError() }; try self.requireLatency(request)
+        }
+        guard !cancelled, !complete, RouterVPNOrderedLatencyRegistry.shared.retain(owner) else { lock.unlock(); throw CancellationError() }
+        latencyOwner = owner // retain before any native factory or cancellation
+        lock.unlock()
+        try owner.open { [self] retain in
+            try observe {
+                try requireLatency(request)
+                lock.lock(); let original = server, probe = measurement; lock.unlock()
+                guard let original, let probe else { throw CancellationError() }
+                var failure: NSError?
+                let returned = LibboxRouterNodeChainExecutionNewLatencyBenchmark(capture.plan, original, probe, &failure)
+                if let returned { retain(returned) }
+                guard returned != nil, failure == nil else { throw failure ?? CancellationError() }
+            }
+        }
+        return owner
+    }
+
     func progress() -> Data? {
         guard beginObservation() else { return nil }
         defer { endObservation() }
@@ -284,6 +336,8 @@ final class RouterVPNNodeChainExecutionHost: @unchecked Sendable {
         lock.lock(); let alreadyComplete = complete; lock.unlock()
         if alreadyComplete { return }
         if !remoteJoined {
+            lock.lock(); let latency = latencyOwner; lock.unlock()
+            try latency?.close() // join the original borrowed facade before its measurement service
             var failure: Error?
             do { try platform.mtu.drainForNodeChainExecutionCleanup() } catch { failure = error }
             lock.lock(); let probe = measurement; lock.unlock()

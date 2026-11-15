@@ -2,6 +2,7 @@
 """Run the complete shipping prefix launch/binding with an explicit NE boundary."""
 from pathlib import Path
 import subprocess,tempfile
+import ios_ordered_execution_control_boundary as ORDERED
 from test_ios_startup_policy import member
 ROOT=Path(__file__).resolve().parents[1];APP=ROOT/'ios/RouterVPN/App'
 BOUNDARY=r'''
@@ -69,7 +70,8 @@ enum IOSRuntimeSelectionError:Error{case unsupportedMode(String)}
 }
 @MainActor enum IOSStrategyTransport{static func send(_ session:NETunnelProviderSession,request:[String:String])async throws->Data{throw CancellationError()}}
 typealias IOSSessionIdentity=String
-extension String {init(connectedAt:Date,engine:String,rawProfile:String,bundleData:Data,configuration:[String:Any])throws{self="ordinary-proved-session"}}
+extension String {var nodeChainExecutionSource:Data?{nil}
+ init(connectedAt:Date,engine:String,rawProfile:String,bundleData:Data,configuration:[String:Any])throws{self="ordinary-proved-session"}}
 @MainActor enum Fixture {
  static var fault="",current=true,starts=0,saves=0,loads=0,readbacks=0,launchedWithoutHold=false
  static var managers:[NETunnelProviderManager]=[]
@@ -128,7 +130,7 @@ extension String {init(connectedAt:Date,engine:String,rawProfile:String,bundleDa
 
 def main():
     refresh=member((APP/'RouterVPNModel.swift').read_text(),'    func refreshTunnelStatus() async {')
-    fixture_source=BOUNDARY.replace(' // SHIPPING_REFRESH',refresh)
+    fixture_source=BOUNDARY.replace(' // SHIPPING_REFRESH',refresh)+ORDERED.SWIFT+ORDERED.REFRESH
     original=(APP/'IOSNodeCandidatePrefixTunnel.swift').read_text().replace('@preconcurrency import NetworkExtension','// Explicit NetworkExtension boundary in this portable fixture.')
     with tempfile.TemporaryDirectory(prefix='ios-prefix-launch-') as folder:
         work=Path(folder);source=work/'Launch.swift';fixture=work/'Test.swift';fixture.write_text(fixture_source);binary=work/'test'

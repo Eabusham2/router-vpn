@@ -651,6 +651,11 @@ final class RouterVPNModel: ObservableObject {
            let encoded = try? previous.encoded() {
             launchOptions[IOSMultihopExecution.startupLaunchKey] = String(decoding: encoded, as: UTF8.self) as NSString
         }
+        if let nodeChainSource, selection.nodeChainExecution != nil, IOSSpeedLabContext.startupAdmission != nil,
+           let selected = IOSDNSRuntimePolicy.selectedProfile(in: bundle),
+           try IOSStartupPolicy.mode(selected.startupMode) == "last" {
+            launchOptions.merge(try IOSNodeChainExecutionControl.startupLast(input: nodeChainSource, finalProfile: selected)) { _, captured in captured }
+        }
         let options: [String: NSObject]? = launchOptions.isEmpty ? nil : launchOptions
         let startupTimeout: TimeInterval
         if let nodeChainTimeout { startupTimeout = nodeChainTimeout }
@@ -775,6 +780,20 @@ final class RouterVPNModel: ObservableObject {
                 let raw = configuration["rawProfileID"] as? String ?? configuration["mode"] as? String ?? "wg"
                 let identity = try IOSSessionIdentity(connectedAt: connectedAt, engine: engine, rawProfile: raw,
                     bundleData: data, configuration: configuration)
+                if identity.nodeChainExecutionSource != nil {
+                    guard let connection = manager.connection as? NETunnelProviderSession else { throw CancellationError() }
+                    let source = try IOSNodeChainExecutionSession.Source.capture(identity)
+                    let observed = try await IOSNodeChainExecutionControl.observe(source: source,
+                        send: { try await IOSSpeedLabTunnel.sendOrdered(connection, data: $0) }, current: {
+                            guard self.iosConnectGeneration == generation, !self.userDisconnectInProgress,
+                                  connection.status == .connected, connection.connectedDate == connectedAt,
+                                  let now = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
+                                  NSDictionary(dictionary: now).isEqual(to: configuration) else { throw CancellationError() }
+                        })
+                    if IOSSpeedLabContext.owner == nil, !iosSpeedLabOwnership.active {
+                        try IOSNodeChainExecutionLastStore.record(observed.last)
+                    }
+                }
                 activeEngine = engine; activeRawProfile = raw; activeSessionIdentity = identity
             }
         } catch {

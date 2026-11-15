@@ -340,7 +340,7 @@ def main(selected_mutations=None):
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
         mutants = (
-            ('hysteria-final-identity', presentation.replace('identity.rawProfile == path.last?.mode else', 'true else', 1), body, 'FAIL HY2 map rejects another final raw transport'),
+            ('hysteria-final-identity', presentation.replace('let path = captured(source: source, bundleData: identity.bundleData),\n              identity.rawProfile == path.last?.mode else', 'let path = captured(source: source, bundleData: identity.bundleData),\n              true else', 1), body, 'FAIL HY2 map rejects another final raw transport'),
             ('prefix-suffix-testing', presentation.replace('return testing.contains(id) ? "Testing" : "Saved"','return "Testing"',1), body, 'FAIL prefix markers distinguish only tested members'),
             ('prefix-list-scope', presentation, body.replace('location: IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: model.iosCandidateTestingNodeIDs)', 'location: IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: Set(ordered?.map(\\.id) ?? []))',1), 'FAIL node list distinguishes unused saved suffix'),
             ('testing-map-source', presentation.replace('if connected && !iosCandidateTesting {', 'if connected {', 1), body, 'FAIL temporary Testing uses saved path without live packet animation'),

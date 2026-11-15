@@ -17,20 +17,25 @@ struct IOSRuntimeSelection: Hashable {
     // Private immutable launch bytes retain every ordered source across the
     // first system-preference lookup. This value is never profile metadata.
     let nodeChainInput: String?
+    let nodeChainExecution: String?
 
     init(engine: IOSRuntimeEngine, logicalModeID: String, rawProfileID: String,
-         files: [String: Data], multihopEntryMode: String? = nil, nodeChainInput: String? = nil) {
+         files: [String: Data], multihopEntryMode: String? = nil, nodeChainInput: String? = nil, nodeChainExecution: String? = nil) {
         self.engine = engine
         self.logicalModeID = logicalModeID
         self.rawProfileID = rawProfileID
         self.files = files
         self.multihopEntryMode = multihopEntryMode
         self.nodeChainInput = nodeChainInput
+        self.nodeChainExecution = nodeChainExecution
     }
 
     var displayName: String {
         if engine == .multihop {
-            if nodeChainInput != nil { return "Ordered nodes • Local • \(rawProfileID) final" }
+            if nodeChainInput != nil {
+                let execution = nodeChainExecution == "server" ? "Server" : nodeChainExecution == "auto" ? "Compare" : "Local"
+                return "Ordered nodes • \(execution) • \(rawProfileID) final"
+            }
             let entry = multihopEntryMode ?? "Unspecified"
             return "\(entry) entry → \(rawProfileID) exit"
         }

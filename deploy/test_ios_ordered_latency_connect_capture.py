@@ -58,7 +58,7 @@ def main():
         code=d/'Tests.swift';code.write_text(tests);fixture=d/'Capture.swift';binary=d/'tests';command=options+['-I',str(d),'-L',str(d),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(d)]
         command += [str(APP/x) for x in ['Models.swift','IOSMultihopStartLayer.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSSessionIdentity.swift','IOSNodeChainPresentation.swift']]
         def run(value):
-            fixture.write_text(enum+model+value);subprocess.run(command+[str(fixture),str(code),'-o',str(binary)],check=True,timeout=90)
+            fixture.write_text(S.C.EXECUTION_REFUSAL+enum+model+value);subprocess.run(command+[str(fixture),str(code),'-o',str(binary)],check=True,timeout=90)
             return subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
         result=run(app);assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip(),flush=True)
         for name,before,after,count,witness in [

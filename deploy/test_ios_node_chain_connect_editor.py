@@ -18,12 +18,13 @@ APP = ROOT / 'ios/RouterVPN/App'
 spec = importlib.util.spec_from_file_location('ordered_editor_launch', ROOT / 'deploy/test_ios_node_chain_launch.py')
 L = importlib.util.module_from_spec(spec); spec.loader.exec_module(L)
 C, S = L.C, L.S
+E = L.module("execution_editor_source", "test_ios_node_chain_execution_capture.py")
 L.TESTS=L.TESTS.replace("LibboxTestSOCKSFixture()", "LibboxTestCONNECTFixture()")
 
-GO = C.GO.replace(' case "chain-fixture":', ''' case "editor-digest":
+GO = E.GO.replace(' case "chain-fixture":', ''' case "editor-digest":
   var raw []byte;raw,err=base64.StdEncoding.DecodeString(r.Source);if err==nil{sum:=sha256.Sum256(raw);value=hex.EncodeToString(sum[:])}
  case "chain-fixture":''', 1)
-LIBBOX = C.LIBBOX + r'''
+LIBBOX = E.LIBBOX + r'''
 public func LibboxEditorDigest(_ data:Data)throws->String{try bridge(["Op":"editor-digest","Source":data.base64EncodedString()])}
 '''
 
@@ -97,6 +98,21 @@ TESTS = r'''
  }
  static func run()throws {
   try runOriginal()
+  for requested in ["server","auto"]{
+   IOSNodeBundleStore.shared.records=[:]
+   let nodes=try sources(3,false,"",true),model=RouterVPNModel();model.bundle=nodes.last!
+   for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
+   let owner=try model.captureIOSNodeChainEditorOwner(),selection=model.selectedNodeProfile!.multihopNodes!
+   try model.saveIOSNodeChain(selection,owner:owner,execution:requested)
+   let captured=try model.captureIOSOrderedRoute(model.bundle!);defer{try? captured.close()}
+   try check("typed editor retains selected execution",model.selectedNodeProfile!.multihopExecution==requested && captured.providerKey==IOSNodeChainProviderCapture.executionKey)
+   let runtime=try IOSRuntimeSelector.selectNodeChain(captured)
+   try check("typed editor selected execution reaches launch",runtime.nodeChainExecution==requested)
+   let stale=try model.captureIOSNodeChainEditorOwner(),before=model.writes
+   try editMiddle{$0.routerProfiles[0].external?.httpsConnect?.password="changed-original"}
+   try reject("execution editor stale original proxy"){try model.saveIOSNodeChain(selection,owner:stale,execution:requested)}
+   try check("stale execution editor leaves current store",model.writes==before)
+  }
   do {
    IOSNodeBundleStore.shared.records=[:]
    let nodes=try sources(3,false,"",true),model=RouterVPNModel();model.bundle=nodes.last!
@@ -332,7 +348,7 @@ def main(selected_mutations=None):
     # directory is included by the real Xcode project, including this view.
     for call in ('draft.choose(id, at: position)', 'draft.move(from: position, to: position - 1)',
                  'draft.move(from: position, to: position + 1)', 'draft.remove(at: position)',
-                 'draft.append()', 'draft.chooseFinalMode(mode)', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner)',
+                 'draft.append()', 'draft.chooseFinalMode(mode)', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner, execution: execution)',
                  'model.captureIOSNodeChainEditorOwner()', 'model.iosNodeChainEditorProfiles(owner: owner)',
                  'IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position)',
                  'IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}))'):
@@ -349,7 +365,10 @@ def main(selected_mutations=None):
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(lib), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
-        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift')]
+        crypto=work/'CryptoKit.swift';crypto.write_text(E.CRYPTO)
+        subprocess.run(command+['-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-emit-module-path',str(work/'CryptoKit.swiftmodule'),'-o',str(work/('libCryptoKit.dylib' if platform.system()=='Darwin' else 'libCryptoKit.so'))],check=True,timeout=90)
+        command+=['-lCryptoKit']
+        command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift','IOSNodeChainExecutionCapture.swift')]
         binary = work / 'tests'
         command += [str(shipping), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)

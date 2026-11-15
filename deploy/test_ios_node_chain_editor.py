@@ -320,7 +320,7 @@ def main(selected_mutations=None):
     # directory is included by the real Xcode project, including this view.
     for call in ('draft.choose(id, at: position)', 'draft.move(from: position, to: position - 1)',
                  'draft.move(from: position, to: position + 1)', 'draft.remove(at: position)',
-                 'draft.append()', 'draft.chooseFinalMode(mode)', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner)',
+                 'draft.append()', 'draft.chooseFinalMode(mode)', 'draft.chooseMode(mode, at: position)', 'model.saveIOSNodeChain(draft.nodes, owner: owner, execution: execution)',
                  'model.captureIOSNodeChainEditorOwner()', 'model.iosNodeChainEditorProfiles(owner: owner)',
                  'IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position)',
                  'IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}))'):
@@ -337,7 +337,9 @@ def main(selected_mutations=None):
         library = work / ('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(lib), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(library)], check=True, timeout=90)
         command = options + ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
+        executionBoundary=work/'UnrelatedExecution.swift';executionBoundary.write_text(C.EXECUTION_REFUSAL)
         command += [str(APP / name) for name in ('Models.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift', 'IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift', 'IOSNodeChainProviderCapture.swift', 'IOSNodeChainSOCKSCapture.swift', 'IOSNodeChainCONNECTCapture.swift', 'IOSNodeChainLaunch.swift')]
+        command.append(str(executionBoundary))
         binary = work / 'tests'
         command += [str(shipping), str(code), '-o', str(binary)]
         subprocess.run(command, check=True, timeout=120)

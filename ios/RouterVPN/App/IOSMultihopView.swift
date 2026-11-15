@@ -336,7 +336,7 @@ struct IOSMultihopView: View {
                     NavigationLink("Add or reorder nodes") { IOSNodeChainEditorView() }
                         .disabled(model.profileMutationBlocked || viaEntry.running)
                     if let saved = model.selectedNodeProfile?.multihopNodes {
-                        Text("Saved: \(saved.count) nodes • Local execution").font(.caption)
+                        Text("Saved: \(saved.count) nodes • \(model.selectedNodeProfile?.multihopExecution == "server" ? "Server" : model.selectedNodeProfile?.multihopExecution == "auto" ? "Compare both" : "Local") execution").font(.caption)
                         Button("Edit an entry and exit pair") { editingPair = true }
                             .disabled(model.profileMutationBlocked || viaEntry.running)
                         if model.selectedNodeProfile?.multihopEnabled == true {

@@ -6,10 +6,13 @@ controlled boundaries; it does not claim Apple SDK, system TUN or relay traffic.
 """
 from pathlib import Path
 import subprocess
+import importlib.util
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
 HOST=ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNNodeChainExecutionHost.swift'
+spec=importlib.util.spec_from_file_location('execution_latency_boundary',ROOT/'deploy/ios_ordered_latency_boundary.py')
+LATENCY=importlib.util.module_from_spec(spec);spec.loader.exec_module(LATENCY)
 
 BOUNDARY=r'''
 import Foundation
@@ -42,9 +45,15 @@ final class LibboxRouterHopMeasurement {
 }
 final class LibboxRouterNodeChainExecution {
  var owner:IOSNodeChainExecutionCapture?
+ func healthy()->Bool{owner?.healthy() ?? false}
+ func sourceSHA256()->String{String(repeating:"a",count:64)}
+ func configSHA256()->String{String(repeating:"b",count:64)}
  func progressJSON()->String{"{\"stage\":\"selected\"}"}
 }
 final class IOSNodeChainExecutionCapture:@unchecked Sendable {
+ struct Member {let id:String}
+ var isCONNECT=false
+ let members=[Member(id:"entry"),Member(id:"proxy"),Member(id:"final")]
  let plan=LibboxRouterNodeChainExecution(),config="exact-preparation"
  private let lock=NSLock()
  var runGate:DispatchSemaphore?,healthGate:DispatchSemaphore?,healthEntered=DispatchSemaphore(value:0)
@@ -83,6 +92,11 @@ final class IOSNodeChainExecutionCapture:@unchecked Sendable {
  func nativeClosed()->Bool{lock.lock();defer{lock.unlock()};Trace.shared.add("native-receipt");return closed && nativeReceipt}
 }
 final class MTU:@unchecked Sendable {
+ var latencyLease=""
+ func request(operation:String,request:String,session:String)->Data?{
+  guard !latencyLease.isEmpty else{return nil}
+  return try? JSONSerialization.data(withJSONObject:["session_id":"mtu-original","measurement_lease":latencyLease,"measurement_hold":true,"measurement_ready":true])
+ }
  var proofObservationToken:UUID?=UUID(),isChanging=false,optimizerRunning=false,failDrain=0,activateFailure=false,activated=false
  func observeNodeChainExecutionMeasurement(_ token:UUID,_ action:()throws->Void)throws->Bool{guard !optimizerRunning,proofObservationToken==token else{return false};try action();return true}
  func drainForNodeChainExecutionCleanup()throws{Trace.shared.add("mtu-drain");if failDrain>0{failDrain-=1;throw failure("optimizer join pending")}}
@@ -243,7 +257,7 @@ def main():
         work=Path(d);source=work/'Host.swift';binary=work/'host'
         command=['swiftc','-j','1','-swift-version','6','-parse-as-library','-module-cache-path',str(work/'modules'),str(source),'-o',str(binary)]
         def run(value):
-            source.write_text(BOUNDARY+RESTORE_BOUNDARY+value+TESTS)
+            source.write_text(BOUNDARY+RESTORE_BOUNDARY+LATENCY.NATIVE.replace("SOCKS","Execution").replace("public ","")+(ROOT/"ios/RouterVPN/PacketTunnel/RouterVPNOrderedLatency.swift").read_text().replace("import Libbox\n","")+value+TESTS)
             subprocess.run(command,check=True,timeout=90)
             return subprocess.run([str(binary)],capture_output=True,text=True,timeout=35)
         result=run(text);assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip())

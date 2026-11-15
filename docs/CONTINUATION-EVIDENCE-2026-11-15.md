@@ -3586,3 +3586,70 @@ passed on a hosted runner. Frozen source manifest SHA-256:
 8fa91da3fcc9e4d67bab14274dc3266b23f1c70d5b1b706165305acd23be1ab3.
 Validation receipt SHA-256:
 df6bdf2d12f4eebd1d84125ab1aa04ce0cc5e68ef358d38ccc549524d694b363.
+
+
+## Apple typed CONNECT execution reaches the actual app and PacketTunnel
+
+This unit adopts the existing shared typed execution into the iPhone/iPad app
+for the original closed trio: paired WG/AWG entry, literal HTTP or verified
+HTTPS CONNECT middle, and independently owned paired SS2022 final. The ordinary
+source parser remains separate. The native execution factory is retained and
+bound before factory error/cancellation handling inside the existing single
+PacketTunnel. Captured sources, private final-profile identity, selected DNS,
+MTU/native ownership, explicit Server or Compare selection and joined cleanup
+remain part of the original execution.
+
+The actual ordered editor, complete profiles and public launch now reach that
+owner. Runtime selection and session presentation retain the typed source;
+selected latency uses the execution's existing fifty-sample facade and MTU
+lease. App status waits for the original provider process/generation receipt.
+The new app control scopes opaque temporary capture/release to the exact
+process, registry generation, session, owner and capture nonce. Speed Lab
+verifies that capsule before stopping, restores the same already-proved choice
+under a fresh session without rerunning Compare, and retires only its original
+capsule on cancellation or Disconnect. Startup Last uses the separately
+validated stored choice. A stale result cannot adopt a replacement session.
+
+All five new required gates pass on frozen source: capture has 318 source
+checks and four causal controls; runtime covers the typed native factory,
+fifty-sample facade, IPC and cleanup with five controls plus required ABI and
+caller checks; app control covers original capture, same-owner/same-winner
+restoration and exact release with four controls; public launch exercises its
+original-source control; Speed Lab exercises actual app refresh, capture,
+stop, restore and Disconnect with two controls. Existing changed dependencies
+also pass, including editor/profile persistence, ordinary capture, provider,
+registry, Last, latency, startup, presentation, prefix launch, external Compare
+and strategy ownership. The frozen receipt binds 28 completed logs. These are
+shipping Swift/shared-Go component checks with explicitly substituted native,
+NetworkExtension and storage boundaries; the counts are not a denominator for
+product completion or physical acceptance.
+
+The required Apple native contract preserves all 46 original native scripts
+and adds the five new gates to the same checked 300-second loop. Compile smoke,
+Libbox and release workflows require the guarded source and exact inputs;
+central workflow checks also preserve the published Linux native dependency
+and current mandatory server-phase order. The separate full Libbox regression
+attempt reached its local whole-script 600-second orchestration limit after
+passing the 1453-check shipping-engine baseline, execution41, Local CONNECT11,
+SOCKS11, prefix28, ordinary30 and several replay arms. It is retained as
+incomplete, not reported as a full-suite pass. No child or shipping workflow
+bound was increased. The portable runtime entrypoint passes its source checks
+and explicitly skips the unavailable Apple SDK lane.
+
+Frozen owned49 manifest SHA-256:
+4da3c13ded3e69413b904dbd890b2ebb320a954f6e3abfa62aba724afc5f066c.
+Its validation receipt SHA-256:
+b0d7902a2a78fc9bff78a752071910c3dc762afa73e3b1e29e3d5972493ee4df.
+Root-owned central6 manifest SHA-256:
+41964cb9319a71dc1674a630ac96c08d438744b397db16eb0ba4ea8b3224e417.
+All 55 original preimages and frozen result hashes were checked at 05671f0b
+before integration; unrelated newer SOCKS, Speed Lab and Windows alias work
+was preserved. Only the enumerated files were copied from isolated projections. A single
+trailing space in a generated Swift import was removed during integration;
+production bytes and executable statements retain their frozen identities.
+
+Actual current Xcode/framework compilation, final package provenance, rendered
+UI, real tunnel/transition/leak acceptance, signing and deployment remain
+separate required evidence. Public generic paired/imported-SS Server/Compare
+admission is the next distinct Apple source unit. Other graph families and the
+full original requirement ledger are not closed by this CONNECT implementation.

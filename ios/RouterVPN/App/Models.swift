@@ -646,11 +646,18 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         }
     }
 
+    /// Public choice only; full private source compilation owns admission.
+    static func supportsCONNECTExecution(_ nodes: [Self]) -> Bool {
+        nodes.count == 3 && supportsNativePrefix(nodes[0].mode) &&
+            ["http-connect", "https-connect"].contains(nodes[1].mode) && nodes[2].mode == "shadowsocks"
+    }
+
     static func validate(_ nodes: [Self], execution: String?, entryID: String?, entryMode: String?,
                          exitID: String?, exitMode: String?, controlID: String? = nil) throws {
-        guard (2...maximumNodes).contains(nodes.count), execution == "local",
+        guard (2...maximumNodes).contains(nodes.count),
+              execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsCONNECTExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("An ordered chain needs two to eight nodes, explicit Local execution, and no separate entry/exit selection.")
+            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires one paired prefix, an HTTP/HTTPS CONNECT middle and a Shadowsocks final.")
         }
         var seen = Set<String>()
         for node in nodes {

@@ -8,7 +8,8 @@ BOUNDARY=r'''
 protocol ObservableObject:AnyObject{}
 @propertyWrapper struct Published<T>{var wrappedValue:T;init(wrappedValue:T){self.wrappedValue=wrappedValue}}
 struct ClientBundle:Codable,Equatable {var secret="original-private-source"}
-struct IOSSessionIdentity:Equatable {let nodeChainSource:Data?;let connectedAt:Date}
+struct IOSSessionIdentity:Equatable {let nodeChainExecutionSource:Data?=nil
+ let nodeChainSource:Data?;let connectedAt:Date}
 let boundaryTransport="socks5"
 struct PathPoint{let mode:String}
 enum IOSNodeChainPresentation {static func active(_ identity:IOSSessionIdentity?)->[PathPoint]?{identity==nil ? nil:[PathPoint(mode:"wg"),PathPoint(mode:boundaryTransport),PathPoint(mode:"shadowsocks")]}}
@@ -17,7 +18,8 @@ struct Member{let id:String;var profile:[String:Any]{["node_kind":id=="middle" ?
 struct SOCKSCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
 struct CONNECTCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
 struct OrdinaryCapture{let selectionExecution="local",launchInput="captured-source",sourceSHA256=String(repeating:"1",count:64),configSHA256=String(repeating:"2",count:64),members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
-enum IOSOrderedRouteCapture{case socks(SOCKSCapture),connect(CONNECTCapture),ordinary(OrdinaryCapture);var members:[Member]{switch self{case .socks(let v):return v.members;case .connect(let v):return v.members;case .ordinary(let v):return v.members}};func close()throws{}}
+struct ExecutionCapture{let isCONNECT=false;let ordinaryLaunchInput="",sourceSHA256="",configSHA256="";let members:[Member]=[]}
+enum IOSOrderedRouteCapture{case socks(SOCKSCapture),connect(CONNECTCapture),ordinary(OrdinaryCapture),execution(ExecutionCapture);var members:[Member]{switch self{case .socks(let v):return v.members;case .connect(let v):return v.members;case .ordinary(let v):return v.members;case .execution(let v):return v.members}};func close()throws{}}
 struct Ownership{var active=false}
 @MainActor final class RouterVPNModel:ObservableObject{
  var connected=true,activeSessionIdentity:IOSSessionIdentity?=IOSSessionIdentity(nodeChainSource:Data("captured-source".utf8),connectedAt:Date(timeIntervalSince1970:1))

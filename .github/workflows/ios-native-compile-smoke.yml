@@ -22,6 +22,10 @@ jobs:
         run: python3 deploy/test_mobile_tor_apple_preprocessor.py --native
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
+      - name: Require complete typed CONNECT execution contracts
+        run: |
+          xcrun --find swiftc
+          python3 deploy/test_ios_connect_execution_workflow.py
       - name: Validate iOS runtime and DNS truth contracts
         run: |
           python3 ios/RouterVPN/test_runtime_selection_contract.py

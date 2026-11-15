@@ -28,7 +28,7 @@ ordinary local and execution paths keep their original checks.
 |---|---|---|
 | Android | Typed source/profile, UI selection, native factory, Session and retained restore are implemented. | Exact-current APK/ABI build, actual encrypted Server/Compare networking and device acceptance. |
 | Windows, Linux and macOS | Public CONNECT Server/Compare selection, complete profiles and distinct native execution/physical/Ready/Last owners are implemented. | Exact-current installed native acceptance and package verification. |
-| iPhone and iPad | The shared typed bridge and mobile restore capability exist. The Apple host adapter is being completed separately. | Actual PacketTunnel adoption, Xcode build, signing and device acceptance. |
+| iPhone and iPad | Public CONNECT Server/Compare capture, editor/profile selection, execution-owned PacketTunnel factory, selected-path latency and retained restoration are implemented. | Exact-current Xcode/framework build, encrypted native acceptance, signing and device acceptance. |
 
 Source and actual native-object tests cover original factory ownership,
 wrong/foreign handles, fresh Last discovery, joined cleanup and restored MTU.
@@ -78,6 +78,22 @@ including exact omitted-guard failures. Local controller/peer compilation and
 source controls pass; actual encrypted kernel acceptance remains a required
 hosted result. The published driver selects the actual pinned Linux compiler
 and checks the resulting image version before executing the suite.
+
+The Apple app now admits the exact CONNECT execution trio through its typed
+source and public Connect path. It retains the independent native factory in
+the existing PacketTunnel, waits for the original provider owner before
+reporting the session, and routes selected-path latency through that owner.
+Startup Last and Speed Lab retain the already-proved Local/Server choice;
+temporary capture, verification and retirement are scoped to the original
+process, registry generation, session and request. A replacement owner cannot
+be restored or stopped by a stale operation. Complete profiles and the ordered
+editor preserve each original private member. Five new required source gates
+and their negative controls pass; the unchanged native Apple contract retains
+all 46 earlier scripts and adds these five with the original 300-second bound.
+These portable tests explicitly model Apple OS/native handles. Xcode, package,
+visual and device evidence remain required. Public ordinary paired/imported-SS
+Server/Compare admission is tracked separately and is not closed by this
+CONNECT integration.
 
 ## November 15: original scope and bounded desktop additions
 

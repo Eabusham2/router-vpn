@@ -8,6 +8,7 @@ explicit failure-injectable boundaries. No network/device acceptance is claimed.
 """
 from pathlib import Path
 import shutil
+import ios_ordered_execution_control_boundary as ORDERED
 import subprocess
 import tempfile
 
@@ -172,7 +173,7 @@ enum IOSStartupLastChoice{static func restored(configuration:[String:Any],digest
  var activeEngine:String{activeSessionIdentity?.engine ?? "none"}
  var activeRawProfile:String{activeSessionIdentity?.rawProfile ?? ""}
  var unifiedSelectedProfile:RouterProfile?{selectedNodeProfile}
- static func iosStrategyDigest(_ data:Data)->String{SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
+ nonisolated static func iosStrategyDigest(_ data:Data)->String{SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()}
  func refreshTunnelStatus()async{
   await Task.yield();Trace.refreshHook?(self)
   guard let m=NETunnelProviderManager.stored.first,let p=m.protocolConfiguration as? NETunnelProviderProtocol,let c=p.providerConfiguration else{connected=false;tunnelTransitioning=false;activeSessionIdentity=nil;return}
@@ -503,7 +504,7 @@ def source():
     text += (APP / "IOSStrategySession.swift").read_text().split("#if canImport(NetworkExtension)", 1)[0]
     text += (APP / "IOSSpeedLab.swift").read_text().split("// One shared HTTP policy", 1)[0].replace("import Security", "")
     text += (APP / "IOSHopMeasurements.swift").read_text().split("\nstruct IOSHopMeasurementsCard:", 1)[0].replace("import SwiftUI", "import Foundation").replace("@preconcurrency import NetworkExtension", "")
-    return text + TESTS
+    return text + ORDERED.SWIFT + TESTS
 
 
 def main():

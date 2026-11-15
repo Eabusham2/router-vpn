@@ -2,10 +2,58 @@ import Foundation
 import CryptoKit
 import Libbox
 
+/// Closed source union. A CONNECT source never enters the ordinary parser,
+/// and neither source-only plan owns PacketTunnel forwarding.
+enum IOSNodeChainExecutionLocalSource {
+    case ordinary(IOSNodeChainCapture)
+    case connect(IOSNodeChainCONNECTCapture)
+
+    var isCONNECT: Bool { if case .connect = self { return true }; return false }
+    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let v): return v.members; case .connect(let v): return v.members } }
+    var strict: Bool { switch self { case .ordinary(let v): return v.strict; case .connect(let v): return v.strict } }
+    var homeLANAccess: Bool { switch self { case .ordinary(let v): return v.homeLANAccess; case .connect(let v): return v.homeLANAccess } }
+    var finalProfile: [String: Any] { switch self { case .ordinary(let v): return v.finalProfile; case .connect(let v): return v.finalProfile } }
+    var selectionExecution: String { switch self { case .ordinary(let v): return v.selectionExecution; case .connect(let v): return v.selectionExecution } }
+    var launchInput: String { switch self { case .ordinary(let v): return v.launchInput; case .connect(let v): return v.source } }
+    var sourceSHA256: String { switch self { case .ordinary(let v): return v.sourceSHA256; case .connect(let v): return v.sourceSHA256 } }
+    func close() throws { switch self { case .ordinary(let v): try v.plan.close(); case .connect(let v): try v.plan.close() } }
+
+    static func compile(bundles: [Data], requested: String) throws -> Self {
+        guard let last = bundles.last, let root = try JSONSerialization.jsonObject(with: last) as? [String: Any],
+              let id = root["selectedRouterID"] as? String, let profiles = root["routerProfiles"] as? [[String: Any]],
+              profiles.filter({ $0["id"] as? String == id }).count == 1,
+              let final = profiles.first(where: { $0["id"] as? String == id }),
+              let nodes = final["multihop_nodes"] as? [[String: Any]] else { throw IOSNodeChainCONNECTCapture.issue() }
+        if nodes.contains(where: { ["http-connect", "https-connect"].contains($0["mode"] as? String ?? "") }) {
+            return .connect(try IOSNodeChainCONNECTCapture.compileOriginalForExecution(bundles: bundles, requested: requested))
+        }
+        return .ordinary(try IOSNodeChainCapture.compileOriginalForExecution(bundles: bundles, requested: requested))
+    }
+
+    static func open(_ original: String, requested: String) throws -> Self {
+        guard let root = try JSONSerialization.jsonObject(with: Data(original.utf8)) as? [String: Any] else { throw IOSNodeChainCONNECTCapture.issue() }
+        if root["schema"] as? Int == 4 {
+            return .connect(try IOSNodeChainCONNECTCapture.open(original, selectionExecution: requested))
+        }
+        var failure: NSError?
+        let returned = LibboxNewRouterNodeChain(original, &failure)
+        guard let plan = returned, failure == nil else { try? returned?.close(); throw failure ?? IOSNodeChainCONNECTCapture.issue() }
+        do { return .ordinary(try IOSNodeChainCapture(plan: plan, selectionExecution: requested)) }
+        catch { try? plan.close(); throw error }
+    }
+
+    func newExecution(_ requested: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterNodeChainExecution? {
+        isCONNECT ? LibboxNewRouterNodeChainCONNECTExecution(launchInput, requested, failure) : LibboxRouterNodeChainExecutionFromLaunch(launchInput, requested, failure)
+    }
+    func fromLast(_ requested: String, _ record: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterNodeChainExecution? {
+        isCONNECT ? LibboxRouterNodeChainCONNECTExecutionFromLast(launchInput, requested, record, failure) : LibboxRouterNodeChainExecutionFromLast(launchInput, requested, record, failure)
+    }
+}
+
 /// Complete private Server/Compare preparation. Its source-only Local plan
 /// retains the original node bytes; only the execution plan owns forwarding.
 final class IOSNodeChainExecutionCapture {
-    let local: IOSNodeChainCapture
+    let local: IOSNodeChainExecutionLocalSource
     let plan: LibboxRouterNodeChainExecution
     let requested: String
     let source: String
@@ -26,16 +74,17 @@ final class IOSNodeChainExecutionCapture {
     var homeLANAccess: Bool { local.homeLANAccess }
     var finalProfile: [String: Any] { local.finalProfile }
     var startupTimeout: TimeInterval { 120 }
+    var isCONNECT: Bool { local.isCONNECT }
 
     static func compile(bundles: [Data], requested: String) throws -> IOSNodeChainExecutionCapture {
-        let local = try IOSNodeChainCapture.compileOriginalForExecution(bundles: bundles, requested: requested)
+        let local = try IOSNodeChainExecutionLocalSource.compile(bundles: bundles, requested: requested)
         do {
             var failure: NSError?
-            guard let plan = LibboxRouterNodeChainExecutionFromLaunch(local.launchInput, requested, &failure), failure == nil else {
+            guard let plan = local.newExecution(requested, &failure), failure == nil else {
                 throw failure ?? issue("The complete ordered execution could not be prepared.")
             }
             return try adopt(local: local, requested: requested, plan: plan)
-        } catch { try? local.plan.close(); throw error }
+        } catch { try? local.close(); throw error }
     }
 
     static func reopen(_ input: String, selectedProfile: [String: Any]) throws -> IOSNodeChainExecutionCapture {
@@ -46,18 +95,14 @@ final class IOSNodeChainExecutionCapture {
         guard let original = preparation["local_source"] as? String, let requested = preparation["execution"] as? String,
               ["server", "auto"].contains(requested) else { throw issue("The original execution selection is missing.") }
         var failure: NSError?
-        guard let localPlan = LibboxNewRouterNodeChain(original, &failure), failure == nil else {
-            throw failure ?? issue("The original complete Local source could not be reproduced.")
-        }
-        let local: IOSNodeChainCapture
-        do { local = try IOSNodeChainCapture(plan: localPlan, selectionExecution: requested) }
-        catch { try? localPlan.close(); throw error }
+        let local = try IOSNodeChainExecutionLocalSource.open(original, requested: requested)
         do {
             guard try canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == canonical(local.finalProfile) else {
                 throw issue("The selected final node changed its private execution source.")
             }
             failure = nil
-            guard let plan = LibboxNewRouterNodeChainExecutionLaunch(input, &failure), failure == nil else {
+            let returned = local.isCONNECT ? LibboxNewRouterNodeChainCONNECTExecutionLaunch(input, &failure) : LibboxNewRouterNodeChainExecutionLaunch(input, &failure)
+            guard let plan = returned, failure == nil else {
                 throw failure ?? issue("The private execution source could not be reproduced.")
             }
             let result = try adopt(local: local, requested: requested, plan: plan)
@@ -66,15 +111,15 @@ final class IOSNodeChainExecutionCapture {
                 throw issue("The execution launch is not its exact original canonical source.")
             }
             return result
-        } catch { try? local.plan.close(); throw error }
+        } catch { try? local.close(); throw error }
     }
 
-    private static func adopt(local: IOSNodeChainCapture, requested: String, plan: LibboxRouterNodeChainExecution, ordinaryInput: String? = nil, expected: String? = nil, lastRecord: String? = nil) throws -> IOSNodeChainExecutionCapture {
+    private static func adopt(local: IOSNodeChainExecutionLocalSource, requested: String, plan: LibboxRouterNodeChainExecution, ordinaryInput: String? = nil, expected: String? = nil, lastRecord: String? = nil) throws -> IOSNodeChainExecutionCapture {
         do { return try IOSNodeChainExecutionCapture(local: local, requested: requested, plan: plan, ordinaryInput: ordinaryInput, expected: expected, lastRecord: lastRecord) }
         catch { try? plan.close(); throw error }
     }
 
-    private init(local: IOSNodeChainCapture, requested: String, plan: LibboxRouterNodeChainExecution, ordinaryInput: String?, expected: String?, lastRecord: String?) throws {
+    private init(local: IOSNodeChainExecutionLocalSource, requested: String, plan: LibboxRouterNodeChainExecution, ordinaryInput: String?, expected: String?, lastRecord: String?) throws {
         guard requested == "server" || requested == "auto", local.selectionExecution == requested else { throw Self.issue("The requested execution changed.") }
         guard expected == nil || expected == "server" || requested == "auto" && expected == "local" else { throw Self.issue("The retained concrete execution is invalid.") }
         self.local = local; self.requested = requested; self.plan = plan; self.expectedExecution = expected; self.lastRecord = lastRecord
@@ -88,12 +133,12 @@ final class IOSNodeChainExecutionCapture {
         sourceSHA256 = plan.sourceSHA256(); configSHA256 = plan.configSHA256()
         let preparation = try Self.object(source, limit: IOSNodeChainCapture.maximumInputBytes)
         let launch = try Self.object(launchInput, limit: IOSNodeChainCapture.maximumInputBytes)
-        guard Set(preparation.keys) == Set(["schema", "execution", "local_source"]), preparation["schema"] as? Int == 1,
+        guard Set(preparation.keys) == Set(["schema", "execution", "local_source"]), preparation["schema"] as? Int == (local.isCONNECT ? 4 : 1),
               preparation["execution"] as? String == requested, plan.requestedExecution() == requested,
               plan.localSourceSHA256() == local.sourceSHA256, Self.hex(sourceSHA256),
               configSHA256 == SHA256.hash(data: Data(config.utf8)).map({ String(format: "%02x", $0) }).joined(),
               Self.launchFields(launch, lastRecord: lastRecord),
-              launch["kind"] as? String == "routervpn-node-chain-execution-preparation-input",
+              launch["kind"] as? String == (local.isCONNECT ? "routervpn-node-chain-connect-execution-preparation-input" : "routervpn-node-chain-execution-preparation-input"),
               launch["source"] as? String == source, launch["source_sha256"] as? String == sourceSHA256,
               launch["config_sha256"] as? String == configSHA256,
               let localSource = preparation["local_source"] as? String else {
@@ -104,9 +149,9 @@ final class IOSNodeChainExecutionCapture {
         // Embedded Local schema two identifies the imported SS member. It is
         // independent of the ordinary execution and saved Last launch schemas.
         guard Set(returned.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
-              let schema = original["schema"] as? Int, schema == 1 || schema == 2,
+              let schema = original["schema"] as? Int, local.isCONNECT ? schema == 4 : (schema == 1 || schema == 2),
               returned["schema"] as? Int == schema, returned["execution"] as? String == "local",
-              let nodes = returned["nodes"] as? [String], schema != 2 || nodes.count == 3, let identities = returned["identity_sources"] as? [String],
+              let nodes = returned["nodes"] as? [String], (schema != 2 && schema != 4) || nodes.count == 3, let identities = returned["identity_sources"] as? [String],
               nodes == original["nodes"] as? [String], identities == original["identity_sources"] as? [String] else {
             throw Self.issue("Server execution requires the exact complete member order and independent private identities.")
         }
@@ -138,7 +183,7 @@ final class IOSNodeChainExecutionCapture {
     func close() throws {
         try plan.close()
         lock.lock(); closed = true; lock.unlock()
-        try local.plan.close()
+        try local.close()
     }
 
     /// This value is private-storage content, never a live or cleanup receipt.
@@ -155,7 +200,7 @@ final class IOSNodeChainExecutionCapture {
         let record = try Self.object(raw, limit: 16 * 1024)
         guard record["execution"] as? String == selected else { throw Self.issue("Last changed the proved concrete execution.") }
         failure = nil
-        let validation = LibboxRouterNodeChainExecutionFromLast(local.launchInput, requested, raw, &failure)
+        let validation = local.fromLast(requested, raw, &failure)
         defer { try? validation?.close() }
         guard failure == nil, let validation, validation.source() == source,
               validation.requestedExecution() == requested, healthy(), try execution() == selected else {
@@ -172,12 +217,12 @@ final class IOSNodeChainExecutionCapture {
         let value = try object(raw, limit: 16 * 1024)
         guard let selected = value["execution"] as? String, ["local", "server"].contains(selected) else { throw issue("Last has no original concrete execution.") }
         var failure: NSError?
-        let returned = LibboxRouterNodeChainExecutionFromLast(original.local.launchInput, original.requested, raw, &failure)
+        let returned = original.local.fromLast(original.requested, raw, &failure)
         guard let plan = returned, failure == nil else {
             try? returned?.close()
             throw failure ?? issue("The saved Last record no longer matches every original node.")
         }
-        let local: IOSNodeChainCapture
+        let local: IOSNodeChainExecutionLocalSource
         do { local = try original.freshLocalSource() } catch { try? plan.close(); throw error }
         do {
             let result = try adopt(local: local, requested: original.requested, plan: plan, ordinaryInput: input, expected: selected, lastRecord: raw)
@@ -185,7 +230,7 @@ final class IOSNodeChainExecutionCapture {
                 try result.close(); throw issue("Last changed the original ordinary preparation.")
             }
             return result
-        } catch { try? local.plan.close(); throw error }
+        } catch { try? local.close(); throw error }
     }
 
     /// Schema two is a separate dispatch. Native canonical parsing must keep
@@ -198,17 +243,11 @@ final class IOSNodeChainExecutionCapture {
         guard let original = preparation["local_source"] as? String,
               let requested = preparation["execution"] as? String else { throw issue("The original Last selection is missing.") }
         var failure: NSError?
-        let localReturned = LibboxNewRouterNodeChain(original, &failure)
-        guard let localPlan = localReturned, failure == nil else {
-            try? localReturned?.close(); throw failure ?? issue("The original Last members could not be reproduced.")
-        }
-        let local: IOSNodeChainCapture
-        do { local = try IOSNodeChainCapture(plan: localPlan, selectionExecution: requested) }
-        catch { try? localPlan.close(); throw error }
-        defer { try? local.plan.close() }
+        let local = try IOSNodeChainExecutionLocalSource.open(original, requested: requested)
+        defer { try? local.close() }
         guard try canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == canonical(local.finalProfile) else { throw issue("The selected final node changed before Last.") }
         failure = nil
-        let ordinary = LibboxRouterNodeChainExecutionFromLaunch(local.launchInput, requested, &failure)
+        let ordinary = local.newExecution(requested, &failure)
         defer { try? ordinary?.close() }
         guard failure == nil, let ordinary else { throw failure ?? issue("The original ordinary source could not be reproduced.") }
         failure = nil
@@ -234,16 +273,10 @@ final class IOSNodeChainExecutionCapture {
         return Restoration(original: self, native: returned, selected: selected)
     }
 
-    private func freshLocalSource() throws -> IOSNodeChainCapture {
+    private func freshLocalSource() throws -> IOSNodeChainExecutionLocalSource {
         let preparation = try Self.object(source, limit: IOSNodeChainCapture.maximumInputBytes)
         guard let input = preparation["local_source"] as? String else { throw Self.issue("The complete original Local source is missing.") }
-        var failure: NSError?
-        let returned = LibboxNewRouterNodeChain(input, &failure)
-        guard let plan = returned, failure == nil else {
-            try? returned?.close(); throw failure ?? Self.issue("The original member source could not be reproduced.")
-        }
-        do { return try IOSNodeChainCapture(plan: plan, selectionExecution: requested) }
-        catch { try? plan.close(); throw error }
+        return try IOSNodeChainExecutionLocalSource.open(input, requested: requested)
     }
 
     final class Restoration {
@@ -275,7 +308,7 @@ final class IOSNodeChainExecutionCapture {
                 try? returned?.close(); throw failure ?? IOSNodeChainExecutionCapture.issue("The original native restore could not be constructed.")
             }
             do { try plan.requireRestore(native) } catch { try? plan.close(); throw error }
-            let local: IOSNodeChainCapture
+            let local: IOSNodeChainExecutionLocalSource
             do { local = try original.freshLocalSource() } catch { try? plan.close(); throw error }
             do {
                 let result = try IOSNodeChainExecutionCapture.adopt(local: local, requested: original.requested, plan: plan,
@@ -288,7 +321,7 @@ final class IOSNodeChainExecutionCapture {
                 // again after every source/config read before host adoption.
                 try plan.requireRestore(native)
                 return result
-            } catch { try? local.plan.close(); try? plan.close(); throw error }
+            } catch { try? local.close(); try? plan.close(); throw error }
         }
     }
 

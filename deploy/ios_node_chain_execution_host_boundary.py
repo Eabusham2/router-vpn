@@ -41,6 +41,8 @@ public final class LibboxRouterNodeChainExecution {
  public func close()throws{networkChanged();lock.lock();defer{lock.unlock()};server?.torCleanup(closeFailures==0);if closeFailures>0{closeFailures-=1;throw NSError(domain:"ExecutionRemotePending",code:1)};closed=true}
  public func nativeClosed()->Bool{lock.lock();defer{lock.unlock()};guard closed,let server else{return false};return !server.strategyCalls().contains("start") || server.instanceJoined()}
  public func retainsServerCleanup(_ original:LibboxCommandServer)->Bool{lock.lock();defer{lock.unlock()};return server===original && !closed}
+ public func sourceSHA256()->String{String(repeating:"a",count:64)}
+ public func configSHA256()->String{String(repeating:"b",count:64)}
  public func progressJSON()->String{"{\"stage\":\"selected\",\"execution\":\"server\"}"}
  public func holdLast(){lock.lock();lastGate=DispatchSemaphore(value:0);lock.unlock()}
  public func releaseLast(){lock.lock();let gate=lastGate;lock.unlock();gate?.signal()}
@@ -52,10 +54,16 @@ public func LibboxRouterNodeChainExecutionNewHopMeasurement(_ plan:LibboxRouterN
  guard let probe=plan.measurement(original) else{failure?.pointee=NSError(domain:"ExecutionMeasurementBoundary",code:1);return nil};LibboxExecutionHostFixture.shared.measurement(probe);return probe
 }
 '''
+NATIVE += r'''
+public func LibboxRouterNodeChainCONNECTExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedCONNECTExecutionFactory",code:1);return nil}
+public func LibboxRouterNodeChainExecutionNewLatencyBenchmark(_ plan:LibboxRouterNodeChainExecution,_ server:LibboxCommandServer,_ measurement:LibboxRouterHopMeasurement,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterOrderedLatency?{error?.pointee=NSError(domain:"UnrelatedExecutionLatencyFactory",code:1);return nil}
+'''
 SOURCE=r'''
 // Source validation has its separate real shared-compiler gate. This boundary
 // provides only the immutable fields consumed by this actual native host.
 final class IOSNodeChainExecutionCapture: @unchecked Sendable {
+ struct Member {let id:String}
+ let isCONNECT=false,members:[Member]=[]
  let plan=LibboxRouterNodeChainExecution(),strict=true
  let sourceSHA256=String(repeating:"a",count:64),configSHA256=String(repeating:"b",count:64),ordinaryLaunchInput="original"
  let finalProfile:[String:Any]=["id":"original"]

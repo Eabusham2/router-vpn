@@ -15,10 +15,14 @@ import Combine
     }
     init(_ model: RouterVPNModel) throws {
         guard model.connected, let bundle = model.bundle, let identity = model.activeSessionIdentity,
-              let active = identity.nodeChainSource, let path = IOSNodeChainPresentation.active(identity), (2...8).contains(path.count) else { throw CancellationError() }
+              let active = identity.nodeChainSource ?? identity.nodeChainExecutionSource, let path = IOSNodeChainPresentation.active(identity), (2...8).contains(path.count) else { throw CancellationError() }
         let captured = try model.captureIOSOrderedRoute(bundle)
         defer { try? captured.close() }
         switch captured {
+        case .execution(let original):
+            guard original.isCONNECT, path.count == 3, identity.nodeChainSource == nil,
+                  Data(original.ordinaryLaunchInput.utf8) == active else { throw CancellationError() }
+            source = original.sourceSHA256; config = original.configSHA256; ids = original.members.map(\.id)
         case .socks(let original):
             guard path.count >= 3, path[path.count - 2].mode == "socks5", Data(original.source.utf8) == active else { throw CancellationError() }
             source = original.plan.sourceSHA256(); config = original.plan.configSHA256(); ids = original.members.map(\.id)
@@ -129,7 +133,7 @@ private final class IOSOrderedLatencyReply: @unchecked Sendable {
     private var task: Task<Void, Never>?
     private var cancelled = false
     static func supported(_ model: RouterVPNModel) -> Bool {
-        guard model.connected, model.activeSessionIdentity?.nodeChainSource != nil, let path = IOSNodeChainPresentation.active(model.activeSessionIdentity) else { return false }
+        guard model.connected, (model.activeSessionIdentity?.nodeChainSource != nil || model.activeSessionIdentity?.nodeChainExecutionSource != nil), let path = IOSNodeChainPresentation.active(model.activeSessionIdentity) else { return false }
         return (2...8).contains(path.count)
     }
     func load(_ model: RouterVPNModel) {

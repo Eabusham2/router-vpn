@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import ios_ordered_execution_control_boundary as ORDERED
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
@@ -703,7 +704,7 @@ def main(negative=True, selected_mutations=None):
                  (APP / 'IOSNativePQProfile.swift').read_text(), (APP / 'IOSMultihopStartLayer.swift').read_text(),
                  (PROVIDER / 'RouterVPNStrategyPolicy.swift').read_text(), (PROVIDER / 'RouterVPNProviderStrategy.swift').read_text()]:
         source += '\n' + strip_imports(text)
-    source = 'import CoreFoundation\n' + source + MAX.P.SWIFT[:MAX.P.SWIFT.index('func profile(')] + TEST
+    source = 'import CoreFoundation\n' + ORDERED.SWIFT + ORDERED.REFRESH + source + MAX.P.SWIFT[:MAX.P.SWIFT.index('func profile(')] + TEST
     with tempfile.TemporaryDirectory(prefix='routervpn-owned-app-') as tmp, tempfile.TemporaryDirectory(prefix='.ios-owned-max-go-', dir=ROOT) as go_tmp:
         go_tmp = Path(go_tmp)
         (go_tmp / 'main.go').write_text(MAX.GO)
