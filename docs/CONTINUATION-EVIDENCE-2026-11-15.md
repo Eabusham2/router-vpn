@@ -746,11 +746,28 @@ resolver fallback are refused. Startup DNS proof keeps its original proof
 label; it is not displayed as a fresh DNS timing. The actual Go HTTP transport
 preserves the original bounded request across its internally detached dial
 context. DNS cancellation closes and joins the original socket. Full native
-checks run outside the application/tracker locks. The live HTTP timers still
-enclose the transport's per-request native ownership checks; separating that
-validation cost from the displayed response/transfer duration remains a
-measurement refinement. The Python Auto MTU probes above already bracket
-their recorded network intervals separately.
+checks run outside the application/tracker locks. Private paired latency,
+download and upload retain each request's original checked clock and exclude
+native ownership validation only while no DNS query or HTTP transfer is in
+flight. Selected DNS exchange and parsing, TCP connection, TLS, request bytes
+and the complete response body remain measured. The actual body EOF freezes
+the interval before the full final native check; successful body closure,
+post-validation clock checks and the original uncancelled owner are required
+before publishing a result. This avoids subtracting validation time that
+overlaps arriving response bytes. Incomplete or oversized bodies, changed
+owners, failed validation and invalid clocks produce no sample. Overall
+request deadlines still include validation. Untimed observations and the
+parallel public Speed Lab duration retain their existing behavior. The Python
+Auto MTU probes above also bracket their recorded network intervals separately.
+
+The timing refinement passed full client race tests, including 18 actual
+private latency/download/upload consumer cases and existing captured-owner
+and checked-clock tests. Its mandatory transport projection passed nine
+source roots, 27 leaves and seven causal controls with real HTTP, TLS and DNS
+byte exchange; native socket binding and ownership checks are explicitly
+modeled boundaries. The privileged Darwin ARM64 controller compiled and
+linked with the actual shipping test tag. These results do not establish
+native PF/utun performance or physical-device acceptance.
 
 Auto/Retest/Cancel and temporary Speed Lab operations retain complete original
 connection state and captured native ownership. A replacement Darwin utun

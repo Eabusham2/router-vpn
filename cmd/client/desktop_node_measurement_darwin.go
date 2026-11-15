@@ -80,8 +80,15 @@ func (m *desktopMacOSPairedNodeNativeMeasurement) Current(ctx context.Context) e
 	return ctx.Err()
 }
 
+func (m *desktopMacOSPairedNodeNativeMeasurement) currentBeforeHTTPIO(ctx context.Context) error {
+	if timing := clientHTTPRequestTiming(ctx); timing != nil {
+		return timing.currentBeforeIO(ctx, m)
+	}
+	return m.Current(ctx)
+}
+
 func (m *desktopMacOSPairedNodeNativeMeasurement) dial(ctx context.Context, network, address string) (net.Conn, error) {
-	if err := m.Current(ctx); err != nil {
+	if err := m.currentBeforeHTTPIO(ctx); err != nil {
 		return nil, err
 	}
 	dialer := net.Dialer{ControlContext: func(call context.Context, actualNetwork, actualAddress string, raw syscall.RawConn) error {
@@ -96,7 +103,7 @@ func (m *desktopMacOSPairedNodeNativeMeasurement) dial(ctx context.Context, netw
 	if err != nil {
 		return nil, err
 	}
-	if err := m.Current(ctx); err != nil {
+	if err := m.currentBeforeHTTPIO(ctx); err != nil {
 		_ = connection.Close()
 		return nil, err
 	}
@@ -131,6 +138,13 @@ func (m *desktopMacOSPairedNodeNativeMeasurement) lookup(parent context.Context,
 		if err != nil {
 			return nil, err
 		}
+		timing := clientHTTPRequestTiming(ctx)
+		if timing != nil {
+			if err := timing.beginDNS(m); err != nil {
+				_ = connection.Close()
+				return nil, err
+			}
+		}
 		answer, exchangeErr := func() ([]byte, error) {
 			var once sync.Once
 			closeConnection := func() { once.Do(func() { _ = connection.Close() }) }
@@ -157,7 +171,12 @@ func (m *desktopMacOSPairedNodeNativeMeasurement) lookup(parent context.Context,
 		if err != nil {
 			return nil, err
 		}
-		if err := m.Current(ctx); err != nil {
+		if timing != nil {
+			if err := timing.endDNS(m); err != nil {
+				return nil, err
+			}
+		}
+		if err := m.currentBeforeHTTPIO(ctx); err != nil {
 			return nil, err
 		}
 		result = append(result, answers...)
@@ -201,6 +220,12 @@ func (m *desktopMacOSPairedNodeNativeMeasurement) HTTPClient(ctx context.Context
 				}
 				connection, err := m.dial(call, kind, net.JoinHostPort(ip.String(), port))
 				if err == nil {
+					if timing := clientHTTPRequestTiming(call); timing != nil {
+						if err := timing.beginHTTP(m); err != nil {
+							_ = connection.Close()
+							return nil, err
+						}
+					}
 					return connection, nil
 				}
 				failure = err
@@ -226,13 +251,28 @@ func (r *desktopMacOSPairedNodeRoundTripper) CloseIdleConnections() {
 	r.transport.CloseIdleConnections()
 }
 func (r *desktopMacOSPairedNodeRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
-	if err := r.measurement.Current(request.Context()); err != nil {
+	timing := clientHTTPRequestTiming(request.Context())
+	if timing != nil {
+		if err := timing.claim(r.measurement); err != nil {
+			return nil, err
+		}
+	}
+	if err := r.measurement.currentBeforeHTTPIO(request.Context()); err != nil {
 		return nil, err
 	}
 	owned := request.WithContext(context.WithValue(request.Context(), desktopMacOSPairedNodeRequestContextKey{}, request.Context()))
 	response, err := r.transport.RoundTrip(owned)
 	if err != nil {
 		return nil, err
+	}
+	if timing != nil {
+		body, err := timing.responseBody(request.Context(), r.measurement, response.Body)
+		if err != nil {
+			_ = response.Body.Close()
+			return nil, err
+		}
+		response.Body = body
+		return response, nil
 	}
 	if err := r.measurement.Current(request.Context()); err != nil {
 		response.Body.Close()

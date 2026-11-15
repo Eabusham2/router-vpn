@@ -103,6 +103,7 @@ func measureRoutedProfileSpeedWithClock(ctx context.Context, p common.RouterProf
 	if err != nil {
 		return routedSpeedResult{}, fmt.Errorf("download benchmark clock start failed: %w", errors.Join(err, context.Cause(ctx)))
 	}
+	downloadReq, downloadInterval = captureClientHTTPRequestInterval(downloadReq, downloadInterval)
 	downloadResp, err := client.Do(downloadReq)
 	if err != nil {
 		return routedSpeedResult{}, fmt.Errorf("download benchmark failed: %w", err)
@@ -143,6 +144,7 @@ func measureRoutedProfileSpeedWithClock(ctx context.Context, p common.RouterProf
 	if err != nil {
 		return routedSpeedResult{}, fmt.Errorf("upload benchmark clock start failed: %w", errors.Join(err, context.Cause(ctx)))
 	}
+	uploadReq, uploadInterval = captureClientHTTPRequestInterval(uploadReq, uploadInterval)
 	uploadResp, err := client.Do(uploadReq)
 	if err != nil {
 		return routedSpeedResult{}, fmt.Errorf("upload benchmark failed: %w", err)

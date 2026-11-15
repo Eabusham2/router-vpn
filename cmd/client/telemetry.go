@@ -616,6 +616,7 @@ func privatePathLatencyWithClock(ctx context.Context, p common.RouterProfile, st
 		if err != nil {
 			return connectionLatencyResult{}, err
 		}
+		req, interval = captureClientHTTPRequestInterval(req, interval)
 		resp, err := client.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
