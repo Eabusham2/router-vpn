@@ -135,6 +135,10 @@ func windowsSSEntryHostFixture(t *testing.T, protocol, kill string) (*desktopWin
 		desktopSSProvisionLayer(&p, modes[layerModes[1]-'0'], "10.93.0.1", 'b')
 	}
 	p.ID = "windows-ss-final-" + name
+	// The fixture's session observer is live before these additional saved
+	// profiles are installed; match its application lock during construction.
+	f.base.a.mu.Lock()
+	defer f.base.a.mu.Unlock()
 	for _, v := range []common.RouterProfile{p, e} {
 		f.base.a.profiles.Profiles = append(f.base.a.profiles.Profiles, v)
 	}
@@ -482,6 +486,8 @@ func TestDesktopWindowsExternalSSEntryPersistedLayerSources(t *testing.T) {
 		t.Run(variant, func(t *testing.T) {
 			f, p, e := windowsSSEntryHostFixture(t, variant, "always")
 			a := f.base.a
+			a.mu.Lock()
+			defer a.mu.Unlock()
 			// The shared import fixture uses JSON numbers. This regression must
 			// explicitly start with Go integers to exercise the representation
 			// change at persistence without changing normal imported sources.
