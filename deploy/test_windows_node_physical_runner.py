@@ -947,12 +947,12 @@ class LeaseRetryFailureRecovery(unittest.TestCase):
         source = (ROOT / "mobile/desktop/external_box_windows_server_test.go.tmpl").read_text()
         helper = source[source.index("func desktopWFPRouterServerLeaseStopRetry("):]
         start = helper.index("\tvar retirementFailure error\n")
-        end = helper.index("\n\tselect{\n\tcase <-cancelled:", start)
+        end = helper.index("\n\tselect {\n\tcase <-cancelled:", start)
         observed = helper[start:end]
-        retry = helper[helper.index("\tif err:=f.proof.Close();err==nil{"):]
+        retry = helper[helper.index("\tif err := f.proof.Close(); err == nil {"):]
         self.assertTrue(retry.endswith("\n}\n"))
         retry = retry[:-2]
-        failure = 'retirementFailure=fmt.Errorf("returned native data stream remained writable after lease cancellation: %d %v",n,err)'
+        failure = 'retirementFailure = fmt.Errorf("returned native data stream remained writable after lease cancellation: %d %v", n, err)'
         self.assertEqual(observed.count(failure), 1)
         # Run the actual observation and stop/retry/stream-close statements.
         # Native WFP/quiescence and HTTP transport remain separate native gates;
@@ -1023,8 +1023,8 @@ func TestOriginalLeaseFixtureRecovery(t *testing.T){
         caller = source[source.index("func desktopWFPTestRouterExecution("):source.index("func desktopWFPRouterServerLeaseStopRetry(")]
         observed_at = caller.index("retirementFailure = desktopWFPRouterServerLeaseStopRetry(")
         drained_at = caller.index("retained = f.drain(t)", observed_at)
-        blocked_at = caller.index("desktopExternalWFPRequireBlocked(t, peer)", drained_at)
-        self.assertGreater(caller.index("if retirementFailure != nil { t.Fatal(retirementFailure) }"), blocked_at)
+        blocked_at = caller.index("f.requireHostPolicy(t, peer)", drained_at)
+        self.assertGreater(caller.index("if retirementFailure != nil {\n\t\t\t\tt.Fatal(retirementFailure)\n\t\t\t}"), blocked_at)
 
 
 class OrdinaryOpenVPNScope(unittest.TestCase):
@@ -1216,9 +1216,13 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
         names = re.search(r'for _, name := range (\[\]string\{[^\n]+\})', original)
         self.assertIsNotNone(networks)
         self.assertIsNotNone(names)
+        # Copy the shipping network/name guard as well as its literal names.
+        # Otherwise the inventory double invents an Off case for UDP/mixed.
+        selection = original[names.end():original.index("t.Run(name,", names.end())]
+        self.assertEqual(selection.count('if name == "off" && network != "tcp"'), 1)
         body = 'package inventory\nimport "testing"\nfunc ' + GATE.EXTERNAL_OPENVPN_ROOT + '(t *testing.T){\n'
         body += 'for _, network := range ' + networks.group(1) + '{t.Run(network,func(t *testing.T){\n'
-        body += 'for _, name := range ' + names.group(1) + '{\nCONTROL\nt.Run(name,func(t *testing.T){})\n}\n})}\n}\n'
+        body += 'for _, name := range ' + names.group(1) + selection + '\nCONTROL\nt.Run(name,func(t *testing.T){})\n}\n})}\n}\n'
         omitted = 'if network == "mixed" && name == "commit-refused" { continue }'
         compiler = shutil.which("go")
         self.assertIsNotNone(compiler, "Go is required for actual OpenVPN inventory selection")
@@ -1270,9 +1274,11 @@ class OrdinaryOpenVPNScope(unittest.TestCase):
         networks = re.search(r'for _, network := range (\[\]string\{[^\n]+\})', original)
         names = re.search(r'for _, name := range (\[\]string\{[^\n]+\})', original)
         self.assertIsNotNone(networks); self.assertIsNotNone(names)
+        selection = original[names.end():original.index("t.Run(name,", names.end())]
+        self.assertEqual(selection.count('if name == "off" && network != "tcp"'), 1)
         body = 'package inventory\nimport "testing"\nfunc ' + GATE.EXTERNAL_OPENVPN_ENTRY_ROOT + '(t *testing.T){\n'
         body += 'for _, network := range ' + networks.group(1) + '{t.Run(network,func(t *testing.T){\n'
-        body += 'for _, name := range ' + names.group(1) + '{\nCONTROL\nt.Run(name,func(t *testing.T){})\n}\n})}\n}\n'
+        body += 'for _, name := range ' + names.group(1) + selection + '\nCONTROL\nt.Run(name,func(t *testing.T){})\n}\n})}\n}\n'
         compiler = shutil.which("go")
         self.assertIsNotNone(compiler)
         with tempfile.TemporaryDirectory(prefix="windows-openvpn-entry-selection-") as directory:
