@@ -120,7 +120,13 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 	command.WaitDelay = 5 * time.Second
 	command.ExtraFiles = desktopDarwinProcessAuthority(ctx)
 	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
-	command.Stdin = bytes.NewReader(input)
+	// Read-only commands capture no input. Let exec supply immediate EOF from
+	// the null device instead of creating an empty pipe and copy goroutine for
+	// every native readback. Explicit input, including an empty rules document,
+	// retains its original pipe and joined copy lifecycle.
+	if input != nil {
+		command.Stdin = bytes.NewReader(input)
+	}
 	output, diagnostics := desktopDarwinCommandBuffer{limit: 2 << 20}, desktopDarwinCommandBuffer{limit: 128 << 10}
 	command.Stdout, command.Stderr = &output, &diagnostics
 	started := time.Now()

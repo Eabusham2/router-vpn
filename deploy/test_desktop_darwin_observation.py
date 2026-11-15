@@ -53,7 +53,7 @@ type DesktopSocketCapture struct{SessionID,SourceSHA256,NetworkID string}
 type DesktopSocketKernelOwner struct{Kind,IdentitySHA256 string;Generation uint64;ProcessID uint32}
 '''
     regression = r'''package mobiletor
-import("context";"errors";"fmt";"os";"os/exec";"path/filepath";"strconv";"strings";"syscall";"testing";"time")
+import("context";"errors";"fmt";"io";"os";"os/exec";"path/filepath";"strconv";"strings";"syscall";"testing";"time")
 func TestActualDarwinCommandObservation(t *testing.T){
  // Native path ownership and the PF command-budget boundary are modeled;
  // the exact shipping command/observer and actual process lifecycle run.
@@ -127,6 +127,31 @@ func TestActualDarwinCommandPhaseObservation(t *testing.T){
  if values["phase"]!="protected-path"||values["child"]!="0"||queue<5000||path<5000||phase!=path||elapsed<queue+path||elapsed>queue+path+1||numeric("start_us")!=0||numeric("wait_us")!=0{
   t.Fatal("actual command charged prior queue time to native phase",line)
  }
+}
+func TestDarwinCommandInputChild(t *testing.T){
+ if len(os.Args)<2||os.Args[len(os.Args)-1]!="native-input-observation"{return}
+ info,err:=os.Stdin.Stat();if err!=nil{t.Fatal(err)}
+ mode:="other"
+ if info.Mode()&os.ModeNamedPipe!=0{mode="pipe"}else if info.Mode()&os.ModeCharDevice!=0{mode="null"}
+ input,err:=io.ReadAll(io.LimitReader(os.Stdin,256));if err!=nil{t.Fatal(err)}
+ fmt.Printf("native input mode=%s bytes=%x\n",mode,input)
+}
+func TestActualDarwinCommandInputOwnership(t *testing.T){
+ image,err:=os.Executable();if err!=nil{t.Fatal(err)}
+ inspectPath=func(path string,private bool)error{if path!=image||private{return errors.New("input fixture changed original executable")};return nil}
+ for _,item:=range []struct{name string;input []byte;mode string}{
+  {"absent",nil,"null"},{"explicit-empty",[]byte{},"pipe"},{"explicit-bytes",[]byte("actual original input\x00\n"),"pipe"},
+ }{t.Run(item.name,func(t *testing.T){
+  released:=make(chan struct{})
+  enterCommand=func(context.Context)(func(),error){return func(){close(released)},nil}
+  defer func(){enterCommand=nil}()
+  ctx,cancel:=context.WithTimeout(context.Background(),2*time.Second);defer cancel()
+  output,err:=desktopDarwinCommand(ctx,image,item.input,"-test.run=^TestDarwinCommandInputChild$","--","native-input-observation")
+  if err!=nil{t.Fatal("original captured input did not reach EOF and join",err)}
+  want:=fmt.Sprintf("native input mode=%s bytes=%x\nPASS\n",item.mode,item.input)
+  if string(output)!=want{t.Fatal("original command changed absent or explicit input ownership",item.name,string(output),want)}
+  select{case <-released:default:t.Fatal("joined input command retained original command slot")}
+ })}
 }
 func TestDarwinCommandPipeChild(t *testing.T){
  if len(os.Args)<3{return}
@@ -244,6 +269,15 @@ func TestDarwinObservationDropsFullPipe(t *testing.T){
                      'actual command lost its bounded PF query category'))
     variants.append(('total-charged-to-phase', command, pipe,
                      'actual command charged prior queue time to native phase'))
+    input_marker = 'if input != nil {\n\t\tcommand.Stdin = bytes.NewReader(input)\n\t}'
+    if command.count(input_marker) != 1:
+        raise RuntimeError('Darwin command lost its captured absent-versus-explicit input boundary')
+    for label, replacement in (
+            ('empty-pipe-for-absent-input', 'command.Stdin = bytes.NewReader(input)'),
+            ('discard-explicit-empty-input', input_marker.replace('input != nil', 'len(input) != 0')),
+            ('discard-explicit-input-bytes', input_marker.replace('bytes.NewReader(input)', 'bytes.NewReader(nil)'))):
+        variants.append((label, command.replace(input_marker, replacement, 1), pipe,
+                         'original command changed absent or explicit input ownership'))
     with tempfile.TemporaryDirectory(prefix='darwin-command-observation-') as temporary:
         folder = Path(temporary)
         (folder/'observer.go').write_text(observer)
@@ -256,12 +290,14 @@ func TestDarwinObservationDropsFullPipe(t *testing.T){
             (folder/'pipe.go').write_text(selected_pipe)
             files = [str(folder/name) for name in ('command.go','observer.go','owner.go','pipe.go','observation_test.go')]
             selected_tests = [] if label == 'baseline' else ['-run=^TestDarwinCommandInheritedOutput$/exited-parent$'] if label == 'unbounded-inherited-output' else ['-run=^TestActualDarwinCommandObservation$|^TestActualDarwinCommandPhaseObservation$|^TestDarwinObservationDropsFullPipe$']
+            if label in ('empty-pipe-for-absent-input', 'discard-explicit-empty-input', 'discard-explicit-input-bytes'):
+                selected_tests = ['-run=^TestActualDarwinCommandInputOwnership$']
             result = subprocess.run([compiler,'test','-race','-v','-timeout=15s',*selected_tests,*files],
                                     text=True,capture_output=True,timeout=120,
                                     env=race_environment)
             output = result.stdout+result.stderr
             if witness is None:
-                required = ('TestActualDarwinCommandObservation', 'TestActualDarwinCommandPhaseObservation', 'TestDarwinObservationDropsFullPipe', 'TestDarwinCommandInheritedOutput', 'TestDarwinCommandInheritedOutput/exited-parent', 'TestDarwinCommandInheritedOutput/cancelled-original-context')
+                required = ('TestActualDarwinCommandObservation', 'TestActualDarwinCommandPhaseObservation', 'TestActualDarwinCommandInputOwnership', 'TestActualDarwinCommandInputOwnership/absent', 'TestActualDarwinCommandInputOwnership/explicit-empty', 'TestActualDarwinCommandInputOwnership/explicit-bytes', 'TestDarwinObservationDropsFullPipe', 'TestDarwinCommandInheritedOutput', 'TestDarwinCommandInheritedOutput/exited-parent', 'TestDarwinCommandInheritedOutput/cancelled-original-context')
                 if result.returncode or any(output.count('--- PASS: '+name+' (') != 1 for name in required):
                     raise AssertionError(output)
             elif not result.returncode or witness not in output:
