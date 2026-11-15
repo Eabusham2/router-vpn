@@ -12,11 +12,12 @@ const NodeChainExecutionGateTag = "routervpn-chain-application"
 // source before entry-authenticated discovery is available. It grants no
 // application forwarding and contains no guessed server source or port.
 type NodeChainExecutionPreparationSource struct {
-	Schema      int                       `json:"schema"`
-	Execution   string                    `json:"execution"`
-	LocalSource string                    `json:"local_source"`
-	Desktop     *DesktopNodeChainMetadata `json:"desktop,omitempty"`
-	DesktopLast string                    `json:"desktop_last,omitempty"`
+	Schema         int                              `json:"schema"`
+	Execution      string                           `json:"execution"`
+	LocalSource    string                           `json:"local_source"`
+	Desktop        *DesktopNodeChainMetadata        `json:"desktop,omitempty"`
+	DesktopLast    string                           `json:"desktop_last,omitempty"`
+	DesktopCONNECT *DesktopNodeChainCONNECTMetadata `json:"desktop_connect,omitempty"`
 }
 
 // NodeChainExecutionDiscoveryCapture is private original-route authority. The
@@ -93,13 +94,22 @@ func newNodeChainExecutionPreparationProjected(localSource, execution string, de
 
 // The distinct typed caller supplies its original private runtime and source.
 // Generic public constructors still pass only their validated schema1/2 graph.
-func newNodeChainExecutionPreparationCaptured(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource) (*NodeChainExecutionPreparation, error) {
+func newNodeChainExecutionPreparationCaptured(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, typedDesktop ...*nodeChainCONNECTExecutionDesktop) (*NodeChainExecutionPreparation, error) {
+	if len(typedDesktop) > 1 || len(typedDesktop) == 1 && (typedDesktop[0] == nil || connect == nil || desktop != nil || mobile != nil) {
+		return nil, nodeChainExecutionError
+	}
 	var err error
 	p := &NodeChainExecutionPreparation{source: NodeChainExecutionPreparationSource{Schema: 1, Execution: execution, LocalSource: localSource}, local: local, desktop: desktop, mobile: mobile}
 	if connect != nil {
 		p.source.Schema = 4
 		p.connect = &nodeChainCONNECTExecutionBinding{source: connect, local: local, preparation: p}
 		p.connect.self = p.connect
+		if len(typedDesktop) == 1 {
+			p.connect.desktop = typedDesktop[0]
+			if err := typedDesktop[0].bind(p, p.connect); err != nil {
+				return nil, err
+			}
+		}
 	}
 	config := local.Config()
 	if mobile != nil {

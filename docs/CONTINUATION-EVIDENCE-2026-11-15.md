@@ -2938,3 +2938,53 @@ owned CommandServer/bridge integration continue separately. All required
 native hosted encrypted execution, package publication, physical-device
 networking, Apple signing and deliberate private deployment retain their
 own evidence requirements. No private server/router deployment occurred.
+
+## Typed desktop CONNECT execution, adoption and retained-choice records
+
+The twelve-file desktop adapter unit adds an explicit wrapper around the
+original desktop CONNECT physical policy and the schema-four execution
+preparation. Preparation, projection, ready/adoption records and Last
+restoration retain their original concrete CONNECT family. Generic paired
+policy parsers remain closed. Replacing an equal-valued policy, source,
+preparation or native owner is rejected; source/config/session seals and
+canonical serialized records are checked again at each handoff.
+
+Physical analysis follows the original captured desktop graph rather than
+mistaking the local authenticated Server front for a new external proxy.
+The live execution graph remains the owned runtime graph. The exact original
+physical policy, service roots and selected-DNS rows are carried into the
+new wrapper. Desktop adoption uses distinct
+`routervpn-node-chain-connect-execution-adoption-v1` and
+`routervpn-node-chain-connect-execution-ready-v1` records; the paired record
+family cannot silently accept them.
+
+Last restoration captures the already proved execution choice and retains
+the original CONNECT desktop policy. Reproof creates a new owned runtime
+and fresh Server lease only when the saved winner was Server; it does not
+rank candidates again. Tests exercise the actual HTTP/TLS Manager/Last
+paths with network-policy, DNS and worker boundaries explicitly modeled.
+The existing ordinary paired path and its Last logic remain covered.
+
+All 109 new executable records passed with the race detector in 84.258
+seconds under the unchanged 120-second per-invocation bound. A separate
+bounded invocation passed all 40 retained typed-core/paired Last records
+in 43.562 seconds. The final new-test log SHA-256 is
+`39be627dc273f631de2778102ab11fe6fa60ea96301e53cbd2f6e50fbe02f00f`.
+Both invocations require complete run/pass inventories. The earlier combined
+invocation exceeded its original total timeout; that failure remains
+recorded, and the unrelated test groups were split without increasing the
+bound. Intermediate fixture errors and causal paired-policy regression
+observations are also preserved rather than counted as passes.
+
+The owned source manifest SHA-256 is
+`cf4b7cb9f843dbcecba9ef8696f9b721cccccad40f650cdfcbbcf1c64708f0d6`;
+preimages, final patch and separate receipts are in
+`connect-execution-desktop-validation`. The required optional-proof
+call-site and restore-oracle corrections were published in the preceding
+foundation commit and are recorded as explicit prerequisites.
+
+This unit closes shared desktop policy/record/restore adapters. Native
+process/controller/physical integration and public product admission are
+separate work in progress. Neither the modeled component checks nor a
+cross-compiled artifact proves actual PF/WFP, encrypted network traffic,
+physical-device operation or release publication.

@@ -109,6 +109,8 @@ func (l NodeChainExecutionLast) ValidatePreparation(preparation *NodeChainExecut
 	target := ""
 	if preparation.desktop != nil {
 		target = preparation.desktop.metadata.TargetOS
+	} else if preparation.connect != nil && preparation.connect.desktop != nil {
+		target = preparation.connect.desktop.metadata.TargetOS
 	}
 	if target != l.record.DesktopTargetOS {
 		return nodeChainExecutionError
@@ -198,6 +200,8 @@ func (r *NodeChainExecutionRuntime) CaptureLastContext(ctx context.Context) (Nod
 		EntryHost: p.policy.front.Host, Peer: source.Request.Peer, FirstPort: source.FirstPort, LastPort: source.LastPort, Port: source.Request.Port}}
 	if p.preparation.desktop != nil {
 		last.record.DesktopTargetOS = p.preparation.desktop.metadata.TargetOS
+	} else if p.preparation.connect != nil && p.preparation.connect.desktop != nil {
+		last.record.DesktopTargetOS = p.preparation.connect.desktop.metadata.TargetOS
 	}
 	last.record.Digest = nodeChainExecutionLastDigest(last.record)
 	raw, err := json.Marshal(last.record)

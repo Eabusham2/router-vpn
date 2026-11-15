@@ -46,6 +46,8 @@ func ReadDesktopPhysicalPolicy(policy DesktopPhysicalPolicy) (string, DesktopPhy
 		return policy.PhysicalReadValidated()
 	case *DesktopNodeChainCONNECTPolicy:
 		return policy.PhysicalReadValidated()
+	case *DesktopNodeChainCONNECTExecutionPhysicalPolicy:
+		return policy.PhysicalReadValidated()
 	case *DesktopNodeChainExecutionPhysicalPolicy:
 		return policy.PhysicalReadValidated()
 	case *DesktopNodeCandidatePreparationPolicy:

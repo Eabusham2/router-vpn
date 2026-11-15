@@ -13,6 +13,7 @@ type nodeChainCONNECTExecutionBinding struct {
 	source      *NodeChainCONNECTSource
 	local       *NodeChain
 	preparation *NodeChainExecutionPreparation
+	desktop     *nodeChainCONNECTExecutionDesktop
 }
 
 // NewNodeChainCONNECTExecutionPreparation is a distinct, closed preparation
@@ -38,7 +39,7 @@ func NewNodeChainCONNECTExecutionPreparation(original *NodeChainCONNECTSource, e
 // after the original native registry/Box has captured that pointer.
 func ParseNodeChainCONNECTExecutionPreparation(input string) (*NodeChainExecutionPreparation, error) {
 	var source NodeChainExecutionPreparationSource
-	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil || source.Schema != 4 || source.Desktop != nil || source.DesktopLast != "" {
+	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil || source.Schema != 4 || source.Desktop != nil || source.DesktopCONNECT != nil || source.DesktopLast != "" {
 		return nil, nodeChainExecutionError
 	}
 	original, err := NewNodeChainCONNECTSource(source.LocalSource)
@@ -53,7 +54,14 @@ func ParseNodeChainCONNECTExecutionPreparation(input string) (*NodeChainExecutio
 }
 
 func (b *nodeChainCONNECTExecutionBinding) validate(p *NodeChainExecutionPreparation, local *NodeChain) error {
-	if b == nil || b.self != b || b.preparation != p || b.local != local || local == nil || b.source == nil || local.connectSource != b.source || len(local.nodes) != 3 || b.source.desktop != nil || p == nil || p.desktop != nil || p.mobile != nil || p.source.Schema != 4 || p.source.DesktopLast != "" || p.source.LocalSource != b.source.sourceJSON {
+	if b == nil || b.self != b || b.preparation != p || b.local != local || local == nil || b.source == nil || local.connectSource != b.source || len(local.nodes) != 3 || p == nil || p.desktop != nil || p.mobile != nil || p.source.Schema != 4 || p.source.LocalSource != b.source.sourceJSON {
+		return nodeChainExecutionError
+	}
+	if b.desktop == nil {
+		if b.source.desktop != nil || p.source.DesktopCONNECT != nil || p.source.DesktopLast != "" {
+			return nodeChainExecutionError
+		}
+	} else if b.desktop.validate(p, b) != nil {
 		return nodeChainExecutionError
 	}
 	if _, _, err := b.source.ReadValidated(); err != nil || local.validateCONNECTSource() != nil {
@@ -67,7 +75,7 @@ func (p *NodeChainExecutionPreparation) validateCONNECTExecutionCapture() error 
 		return nodeChainExecutionError
 	}
 	if p.connect == nil {
-		if p.source.Schema != 1 || p.local.connectSource != nil || p.local.socksSource != nil {
+		if p.source.Schema != 1 || p.local.connectSource != nil || p.local.socksSource != nil || p.source.DesktopCONNECT != nil {
 			return nodeChainExecutionError
 		}
 		return nil
@@ -126,6 +134,9 @@ func NewNodeChainCONNECTExecutionPolicy(preparation *NodeChainExecutionPreparati
 func (b *nodeChainCONNECTExecutionBinding) physicalEgress(config, entryTag string) ([]PhysicalEgress, error) {
 	if b == nil || b.preparation == nil || b.validate(b.preparation, b.local) != nil {
 		return nil, nodeChainExecutionError
+	}
+	if b.desktop != nil {
+		return b.desktop.physicalEgress(config, entryTag)
 	}
 	members, closures, err := nodeChainCONNECTMembers(b.source.pair, b.source.middle)
 	if err != nil {
