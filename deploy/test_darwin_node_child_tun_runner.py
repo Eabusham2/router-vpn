@@ -1144,7 +1144,11 @@ func main() {
   child.SysProcAttr=&syscall.SysProcAttr{Setpgid:true}
   child.Stdout=os.Stdout;child.Stderr=os.Stderr
   if err:=child.Start();err!=nil {panic(err)}
-  if err:=os.WriteFile(os.Args[2],[]byte(strconv.Itoa(child.Process.Pid)),0600);err!=nil {panic(err)}
+  // Publish a complete ownership receipt; creation alone precedes WriteFile's
+  // payload and can expose an empty PID to the original observer.
+  pending:=os.Args[2]+".pending"
+  if err:=os.WriteFile(pending,[]byte(strconv.Itoa(child.Process.Pid)),0600);err!=nil {panic(err)}
+  if err:=os.Rename(pending,os.Args[2]);err!=nil {panic(err)}
   return
  }
  if err:=verify(os.Args[1]);err!=nil {fmt.Fprintln(os.Stderr,err);os.Exit(1)}
