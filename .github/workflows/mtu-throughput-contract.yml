@@ -9,6 +9,7 @@ on:
       - 'modes/test_mtu_policy.py'
       - 'modes/test_generated_profile_fingerprint_fail_closed.py'
       - 'modes/test_mtu_optimizer_owner.py'
+      - 'modes/test_mtu_darwin_probes.py'
       - 'modes/mtu-throughput-tuner.py'
       - 'modes/mtu-throughput-tuner-platform.py'
       - 'modes/kill-switch-platform.py'
@@ -42,6 +43,7 @@ on:
       - 'modes/test_mtu_policy.py'
       - 'modes/test_generated_profile_fingerprint_fail_closed.py'
       - 'modes/test_mtu_optimizer_owner.py'
+      - 'modes/test_mtu_darwin_probes.py'
       - 'modes/mtu-throughput-tuner.py'
       - 'modes/mtu-throughput-tuner-platform.py'
       - 'modes/kill-switch-platform.py'
@@ -89,6 +91,8 @@ jobs:
           python3 modes/test_generated_profile_fingerprint_fail_closed.py
       - name: Execute captured MTU helper and retired-owner controls
         run: python3 modes/test_mtu_optimizer_owner.py -v
+      - name: Execute Darwin tunnel-bound MTU proof and UDP probe controls
+        run: python3 modes/test_mtu_darwin_probes.py -v
       - name: Run deterministic direct and platform-wrapper optimizer self-tests
         run: |
           python3 modes/mtu-throughput-tuner.py --self-test

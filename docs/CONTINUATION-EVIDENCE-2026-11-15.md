@@ -696,6 +696,34 @@ are working-tree executable results with each suite's documented Android/native
 boundary doubles. They are not relabeled as one uninterrupted exact-SHA APK
 build, a physical-device network test or a published release.
 
+### Darwin Auto MTU probe ownership
+
+The shipping Python optimizer now binds its private identity HTTP connection
+and UDP benchmark socket to the exact authenticated native MTU reader using
+XNU `IP_BOUND_IF`/`IPV6_BOUND_IF`, with socket-option readback before connection.
+An ordinary Home LAN response cannot replace this tunnel path when protection
+is Off. The original MTU capability remains authoritative across a controlled
+utun replacement; an already-open probe never retargets a successor. The
+optimizer and adoption use that original capability instead of treating an
+ambient Home LAN route as the measurement owner.
+
+The original owner is checked around HTTP proof and each UDP measurement
+round. A changed identity/index/MTU, retired operation, refused binding or
+incorrect readback rejects the result. HTTP has a preconnected literal socket,
+bounded body, no proxy and no redirect. Native checks run outside the recorded
+RTT/throughput intervals. Existing candidate selection, rollback, operation
+timeouts and Linux/Windows probe behavior are retained.
+
+Focused portable validation passed: 11 actual Python probe-consumer tests,
+27 original-owner/helper subprocess tests including original-anchor rollback
+and Home LAN route separation, four whole-package gate controls, and both
+optimizer self-tests. Three causal controls rejected the former ambient
+HTTP/UDP implementation, omitted socket readback and acceptance of a replaced
+reader. Socket and native-owner boundaries are explicitly doubled in the
+portable probe suite. Actual XNU binding, private-peer Auto/Cancel, the new
+paired macOS host and complete exact-SHA release acceptance remain separate
+mandatory native work; these results do not claim physical-device acceptance.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths

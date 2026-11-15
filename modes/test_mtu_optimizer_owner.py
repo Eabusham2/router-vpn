@@ -451,6 +451,27 @@ class OwnerConsumerTests(unittest.TestCase):
         self.assertEqual((self.helper_state()["interface"], self.helper_state()["mtu"]), ("utun995", 1400))
         self.assertEqual(self.set_calls(), [["--mtu-owner-set", "1320"], ["--mtu-owner-set", "1400"]])
 
+    def test_darwin_native_measurement_does_not_borrow_home_lan_route(self):
+        with mock.patch.dict(os.environ, self.darwin_state()), self.optimize_context(), \
+                mock.patch.object(MOD.platform, "system", return_value="Darwin"), \
+                mock.patch.object(MOD, "route_interface", side_effect=AssertionError("Home LAN is not the owned tunnel")), \
+                mock.patch.object(MOD, "bench_candidate", side_effect=self.successful_benchmark), \
+                mock.patch.object(MOD, "persist") as persist:
+            result = MOD.optimize(defer_adopt=True)
+        self.assertEqual((result["original_interface"], result["interface"], result["winner"]["mtu"]),
+                         ("utun991", "utun993", 1320))
+        self.assertEqual(self.helper_state()["mtu"], 1400)
+        persist.assert_not_called()
+
+    def test_darwin_native_adoption_retains_exact_owner_when_home_lan_route_differs(self):
+        with mock.patch.dict(os.environ, self.measured_darwin_state()), self.optimize_context(), \
+                mock.patch.object(MOD.platform, "system", return_value="Darwin"), \
+                mock.patch.object(MOD, "route_interface", side_effect=AssertionError("Home LAN is not the owned tunnel")):
+            applied = MOD.apply_measured_result()
+        self.assertEqual((applied["original_interface"], applied["interface"], applied["applied_mtu"]),
+                         ("utun991", "utun994", 1320))
+        self.assertEqual(self.set_calls(), [["--mtu-owner-set", "1320"]])
+
 
 if __name__ == "__main__":
     unittest.main()

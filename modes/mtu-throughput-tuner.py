@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -28,6 +29,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from urllib.parse import urlsplit
 from typing import Any
 
 from network_context import generated_profile_fingerprint, network_fingerprint
@@ -91,12 +93,20 @@ def prove_node(profile: dict[str, Any]) -> None:
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise RuntimeError("selected node has no valid exact proof id")
     url = validate_proof_url(str(profile.get("path_probe_url") or "http://10.77.0.1:8787/health"))
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "Cache-Control": "no-store"})
-    with opener.open(req, timeout=3.0) as response:
-        raw = response.read(16 * 1024 + 1)
-        if response.status != 200 or len(raw) > 16 * 1024:
-            raise RuntimeError("selected-node path proof failed during MTU optimization")
+    if platform.system().lower() == "darwin":
+        # The private address can also be reachable over Home LAN, especially
+        # with protection Off. Only the original controller-owned utun can
+        # authorize this proof; the ordinary OS route is not proof of its path.
+        benchmark = private_ip(str(profile.get("daita_host") or "10.77.0.1"))
+        owner = capture_darwin_probe_owner(str(benchmark), benchmark.version)
+        raw = darwin_node_proof(url, owner)
+    else:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        req = urllib.request.Request(url, headers={"Accept": "application/json", "Cache-Control": "no-store"})
+        with opener.open(req, timeout=3.0) as response:
+            raw = response.read(16 * 1024 + 1)
+            if response.status != 200 or len(raw) > 16 * 1024:
+                raise RuntimeError("selected-node path proof failed during MTU optimization")
     body = json.loads(raw.decode("utf-8"))
     if not isinstance(body, dict) or body.get("ok") is not True or body.get("node_id") != expected or body.get("proof") != PROOF_KIND:
         raise RuntimeError("selected-node identity changed during MTU optimization")
@@ -306,6 +316,74 @@ def set_interface_mtu(alias: str, family: int, mtu: int) -> dict[str, Any]:
     return owner_state(alias, family, mtu)
 
 
+class DarwinProbeOwner:
+    """One exact reader for a probe, never an alias-based retargetable socket."""
+
+    def __init__(self, alias: str, family: int, state: dict[str, Any]):
+        self.alias, self.family, self.state = alias, family, dict(state)
+
+    def validate(self) -> None:
+        if owner_state(self.alias, self.family) != self.state:
+            raise RuntimeError("captured Darwin MTU probe reader changed")
+
+    def bind(self, sock: socket.socket, family: int) -> None:
+        expected_family = socket.AF_INET6 if family == 6 else socket.AF_INET
+        if family not in {4, 6} or sock.family != expected_family:
+            raise RuntimeError("Darwin MTU probe changed its socket family")
+        self.validate()
+        # XNU values, also used by desktop_imported_mtu_socket_darwin.go.
+        level, option = (socket.IPPROTO_IPV6, 125) if family == 6 else (socket.IPPROTO_IP, 25)
+        sock.setsockopt(level, option, self.state["index"])
+        if sock.getsockopt(level, option) != self.state["index"]:
+            raise RuntimeError("Darwin MTU probe did not retain its exact tunnel interface")
+        self.validate()
+
+
+def capture_darwin_probe_owner(host: str, family: int) -> DarwinProbeOwner:
+    if platform.system().lower() != "darwin":
+        raise RuntimeError("Darwin MTU probe requires its native platform")
+    original, _policy = owner_interface_scope()
+    alias = original or route_interface(host)
+    # A route/override supplies only a lookup name. The authenticated native
+    # helper must identify that same original operation and a real utun reader.
+    state = owner_state(alias, family)
+    if re.fullmatch(r"utun[0-9]+", state["interface"]) is None:
+        raise RuntimeError("Darwin MTU probe has no captured tunnel reader")
+    return DarwinProbeOwner(alias, family, state)
+
+
+def darwin_node_proof(url: str, owner: DarwinProbeOwner) -> bytes:
+    parsed = urlsplit(url)
+    ip = private_ip(parsed.hostname or "")
+    port = 80 if parsed.port is None else parsed.port
+    if not 1 <= port <= 65535 or "%" in str(ip):
+        raise RuntimeError("Darwin MTU proof changed its literal destination or port")
+    af = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
+    destination = (str(ip), port, 0, 0) if ip.version == 6 else (str(ip), port)
+    with socket.socket(af, socket.SOCK_STREAM) as sock:
+        sock.settimeout(3.0)
+        owner.bind(sock, ip.version)
+        sock.connect(destination)
+        owner.validate()
+        connection = http.client.HTTPConnection(str(ip), port, timeout=3.0)
+        # A preconnected literal socket prevents HTTPConnection from resolving
+        # or connecting by the ordinary route. No proxy or redirect is followed.
+        connection.sock = sock
+        try:
+            path = parsed.path or "/health"
+            if parsed.query:
+                path += "?" + parsed.query
+            connection.request("GET", path, headers={"Accept": "application/json", "Cache-Control": "no-store", "Connection": "close"})
+            response = connection.getresponse()
+            raw = response.read(16 * 1024 + 1)
+            owner.validate()
+            if response.status != 200 or len(raw) > 16 * 1024:
+                raise RuntimeError("selected-node path proof failed during MTU optimization")
+            return raw
+        finally:
+            connection.close()
+
+
 def candidate_mtus(ceiling: int) -> list[int]:
     minimum = max(MIN_OPT_MTU, minimum_mtu())
     ceiling = max(minimum, min(MAX_OPT_MTU, int(ceiling)))
@@ -326,6 +404,8 @@ def packet_payload_size(mtu: int, family: int) -> int:
 def bench_candidate(host: str, port: int, family: int, mtu: int) -> dict[str, Any]:
     fake = os.environ.get("HOMEVPN_MTU_BENCH_FAKE", "").strip()
     if fake:
+        if platform.system().lower() == "darwin":
+            raise RuntimeError("Darwin native MTU measurement cannot use an algorithm fixture")
         table = json.loads(fake)
         row = table.get(str(mtu))
         if not isinstance(row, dict):
@@ -338,6 +418,9 @@ def bench_candidate(host: str, port: int, family: int, mtu: int) -> dict[str, An
             "median_rtt_ms": float(row.get("median_rtt_ms", 0.0)),
         }
 
+    owner = capture_darwin_probe_owner(host, family) if platform.system().lower() == "darwin" else None
+    if owner is not None and (private_ip(host).version != family or "%" in host or owner.state["mtu"] != mtu):
+        raise RuntimeError("Darwin MTU benchmark changed its captured family or candidate")
     af = socket.AF_INET6 if family == 6 else socket.AF_INET
     destination: tuple[Any, ...] = (host, port, 0, 0) if family == 6 else (host, port)
     payload = os.urandom(packet_payload_size(mtu, family))
@@ -348,20 +431,30 @@ def bench_candidate(host: str, port: int, family: int, mtu: int) -> dict[str, An
 
     with socket.socket(af, socket.SOCK_DGRAM) as sock:
         sock.settimeout(SOCKET_TIMEOUT)
+        if owner is not None:
+            owner.bind(sock, family)
         sock.connect(destination)
         for _ in range(RTT_SAMPLES):
+            if owner is not None:
+                owner.validate()
             started = time.monotonic()
+            data = b""
             try:
                 sock.send(payload)
                 sent += 1
                 data = sock.recv(4096)
-                if data:
-                    replies += 1
-                    rtts.append((time.monotonic() - started) * 1000.0)
             except (socket.timeout, OSError):
-                continue
+                pass
+            elapsed = time.monotonic() - started
+            if owner is not None:
+                owner.validate()
+            if data:
+                replies += 1
+                rtts.append(elapsed * 1000.0)
 
         for _ in range(BURST_ROUNDS):
+            if owner is not None:
+                owner.validate()
             started = time.monotonic()
             round_sent = 0
             round_replies = 0
@@ -385,9 +478,14 @@ def bench_candidate(host: str, port: int, family: int, mtu: int) -> dict[str, An
                     replies += 1
                     recv_bytes += len(data)
             elapsed = max(0.001, time.monotonic() - started)
+            if owner is not None:
+                owner.validate()
             if round_sent:
                 bits = (round_sent * len(payload) + recv_bytes) * 8
                 throughputs.append(bits / elapsed / 1_000_000.0)
+
+        if owner is not None:
+            owner.validate()
 
     ratio = replies / sent if sent else 0.0
     median_rtt = statistics.median(rtts) if rtts else 9999.0
@@ -509,7 +607,7 @@ def optimize(*, defer_adopt: bool = False) -> dict[str, Any]:
     port = int(profile.get("daita_port") or 45999)
     if not 1 <= port <= 65535:
         raise RuntimeError("invalid private MTU benchmark port")
-    alias = route_interface(host)
+    alias = owner_interface_scope()[0] or route_interface(host)
     original = interface_mtu(alias, family)
     ceiling = int(profile.get("effective_mtu") or 0)
     if not max(MIN_OPT_MTU, minimum_mtu(captured=True)) <= ceiling <= MAX_OPT_MTU:
@@ -587,7 +685,7 @@ def apply_measured_result(*, rollback: bool = False) -> dict[str, Any]:
     ip = private_ip(host)
     if ip.version != family:
         raise RuntimeError("active MTU path IP family changed before adoption")
-    if route_interface(host) != before["interface"]:
+    if platform.system().lower() != "darwin" and route_interface(host) != before["interface"]:
         raise RuntimeError("active MTU path interface changed before adoption")
     expected = os.environ.get("HOMEVPN_MTU_EXPECTED_PATH_KEY", "").strip()
     current = measurement_context(profile, root)
