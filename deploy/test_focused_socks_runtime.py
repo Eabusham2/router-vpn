@@ -30,6 +30,9 @@ PREFIX = "TestNodeChainSOCKSRuntime"
 RUNTIME = "internal/mobilemultihop/node_chain_runtime.go"
 MEASUREMENT = "internal/mobilemultihop/node_chain_measurement.go"
 SOURCE_PATHS = (
+    "internal/mobilemultihop/node_chain_imported_openvpn.go",
+    "internal/mobilemultihop/node_chain_openvpn_runtime.go",
+    "internal/mobilemultihop/node_chain_openvpn_test.go",
     "internal/mobilemultihop/node_chain_socks_runtime.go",
     "internal/mobilemultihop/node_chain_socks_runtime_test.go",
     "internal/mobilemultihop/node_chain.go",

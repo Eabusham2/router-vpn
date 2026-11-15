@@ -136,6 +136,9 @@ INVENTORY = json.loads(r'''{
     }
   ],
   "files": [
+    "internal/mobilemultihop/node_chain_imported_openvpn.go",
+    "internal/mobilemultihop/node_chain_openvpn_runtime.go",
+    "internal/mobilemultihop/node_chain_openvpn_test.go",
     "internal/mobilemultihop/desktop_egress.go",
     "internal/mobilemultihop/node_chain.go",
     "internal/mobilemultihop/node_chain_connect_physical.go",

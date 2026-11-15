@@ -77,8 +77,8 @@ class CONNECTRuntimeGate(unittest.TestCase):
         self.assertEqual([len(c.expected) for c in selected[6:]], [52, 10, 6, 2, 1])
         self.assertEqual(sum(len(c.expected) for c in selected if not c.mutation), 132)
         self.assertEqual(sum(bool(c.mutation) for c in selected), 7)
-        self.assertEqual(len(D.INVENTORY["files"]), 11)
-        self.assertEqual(len(D.BASE.SOURCE_PATHS), 13)
+        self.assertEqual(len(D.INVENTORY["files"]), 14)
+        self.assertEqual(len(D.BASE.SOURCE_PATHS), 16)
         for case in selected:
             self.assertEqual((case.seconds, case.outer_seconds), (120, 600))
             command = D.BASE.command_for("/captured/go", case, Path("/overlay") if case.mutation else None)

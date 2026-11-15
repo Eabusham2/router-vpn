@@ -128,7 +128,16 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual([len(case.expected) for case in D.cases()], [36, 27, 17, 9, 5, 1])
         self.assertEqual((len(D.INITIAL_FAULTS), len(D.CURRENT_FAULTS), len(D.PROOF_FAULTS)), (8, 10, 6))
         self.assertEqual(len(D.ORIGINAL_ROOTS), 8)
-        self.assertEqual(len(D.SOURCE_PATHS), 5)
+        self.assertEqual(len(D.SOURCE_PATHS), 8)
+        self.assertEqual(set(D.SOURCE_PATHS) - {
+            "internal/mobilemultihop/node_chain_socks_runtime.go",
+            "internal/mobilemultihop/node_chain_socks_runtime_test.go",
+            "internal/mobilemultihop/node_chain.go", D.RUNTIME, D.MEASUREMENT,
+        }, {
+            "internal/mobilemultihop/node_chain_imported_openvpn.go",
+            "internal/mobilemultihop/node_chain_openvpn_runtime.go",
+            "internal/mobilemultihop/node_chain_openvpn_test.go",
+        })
         self.assertIn("TestNodeChainImportedMiddleRequiresPublicProof/#00", D.cases()[1].expected)
         self.assertIn("TestNodeChainCompleteCapturedPaths/2/", D.cases()[2].expected)
         self.assertIn("TestNodeChainImportedMiddleSourceAndNativeProjection/awg2-strong/",

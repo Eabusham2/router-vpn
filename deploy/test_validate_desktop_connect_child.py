@@ -27,9 +27,25 @@ ORIGINAL = module("desktop_connect_original_parser_tests", "test_validate_deskto
 
 
 class CONNECTChildGate(unittest.TestCase):
+    def test_original_openvpn_generation_records_remain_additive_and_mandatory(self):
+        root = "TestRouterVPNDesktopNodeChainOpenVPNOriginalGenerationAcrossMTU"
+        suite = next(item for item in G.REGRESSIONS if item["name"] == "original-ordered-runtime")
+        expected = {root, *(root + "/" + leaf for leaf in (
+            "retained", "generation", "connected-at", "capacity", "remote", "missing", "pending", "cancelled"))}
+        self.assertEqual({case for case in suite["cases"] if case == root or case.startswith(root + "/")}, expected)
+        self.assertEqual(len(set(suite["cases"]) - expected), 36)
+        self.assertRegex(root, suite["selector"])
+        package = G.PACKAGE[suite["package"]]
+        events = ORIGINAL.transcript(suite["cases"], package)
+        G.require_verdict(ORIGINAL.raw(events), 0, package, suite["cases"])
+        for omitted in expected:
+            with self.subTest(omitted=omitted), self.assertRaises(ValueError):
+                G.require_verdict(ORIGINAL.raw([event for event in events if event.get("Test") != omitted]),
+                                  0, package, suite["cases"])
+
     def test_original_regressions_and_bounds_are_unchanged(self):
         self.assertEqual(G.REGRESSIONS, G.ORIGINAL_REGRESSIONS)
-        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [36, 28, 52, 27, 11])
+        self.assertEqual([len(item["cases"]) for item in G.REGRESSIONS], [45, 28, 52, 27, 11])
         self.assertEqual(G.CHILD["limits"], {"compile_seconds": 600, "case_seconds": 90, "process_seconds": 100})
         self.assertEqual(len(G.CHILD["command_cases"]), 83)
         self.assertEqual(len(G.CHILD["box_cases"]), 15)
