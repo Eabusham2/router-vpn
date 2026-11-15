@@ -77,7 +77,7 @@ func (r *desktopWindowsExternalRelease) Close(ctx context.Context) error {
 	if k.target == nil || *k.target != r.target || !k.locked {
 		return errors.New("modeled release changed its exact original target")
 	}
-	if r.target.Policy == "on-connect" {
+	if r.target.Policy == "on-connect" || r.target.Policy == "off" {
 		if err := r.barrier(ctx, mobiletor.DesktopWindowsProtectionCommit{Action: "release", Previous: copyDesktopNodeProtectionTarget(&r.target)}); err != nil {
 			return err
 		}
