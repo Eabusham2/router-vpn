@@ -73,6 +73,7 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-validate-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy);value="checked"
  case "ordered-imported-source":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Config,r.Policy)
+ case "ordered-imported-openvpn-source":value,err=mobilemultihop.NodeChainImportedOpenVPNMemberInput(r.Config,r.Policy)
  case "external-validate-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy);value="checked"
  case "external-prepare":value,err=mobilemultihop.PrepareExternalExecutionCapture(r.Config,r.Policy,r.Source)
  case "external-response-probe":err=mobilemultihop.ValidateExternalResponseProbe(r.Node,r.Config);value="checked"
@@ -147,6 +148,12 @@ public func LibboxRouterValidateExternalTransport(_ config:String,_ capture:Stri
 public func LibboxRouterNodeChainImportedMemberInput(_ config:String,_ capture:String,_ error:inout NSError?)->String? {
  let value=result(&error,["Op":"ordered-imported-source","Config":config,"Policy":capture])
  return error == nil && !value.isEmpty ? value:nil
+}
+public func LibboxRouterNodeChainImportedOpenVPNMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String {
+ var failure:NSError?
+ let value=result(&failure,["Op":"ordered-imported-openvpn-source","Config":config,"Policy":capture])
+ error?.pointee=failure
+ return value
 }
 public func LibboxRouterValidateExternalDNS(_ profile:String,_ entry:String,_ error:inout NSError?)->Bool {
  result(&error,["Op":"external-validate-dns","Config":profile,"Policy":entry]) == "checked"

@@ -521,7 +521,7 @@ def main():
             subprocess.run(options+(['-lcrypto'] if name=='CryptoKit' else [])+['-emit-module','-emit-library','-module-name',name,str(path),'-emit-module-path',str(work/(name+'.swiftmodule')),'-o',str(work/('lib'+name+suffix))],check=True,timeout=90)
         options+=['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
         if platform.system()!='Darwin':options+=['-lNetwork','-lCryptoKit']
-        shipping=[APP/name for name in ['IOSMultihopExecution.swift','Models.swift','IOSExternalExecution.swift','IOSHomeDNSPolicy.swift', 'IOSDNSRuntimePolicy.swift','IOSRuntimeSelection.swift','IOSNativeXrayProfile.swift','IOSNativePQProfile.swift','IOSMultihopStartLayer.swift','IOSNodeLatencyStatistics.swift','IOSSpeedLabOwnership.swift']]
+        shipping=[APP/name for name in ['IOSMultihopExecution.swift','Models.swift','IOSImportedOpenVPNSource.swift','IOSExternalExecution.swift','IOSHomeDNSPolicy.swift', 'IOSDNSRuntimePolicy.swift','IOSRuntimeSelection.swift','IOSNativeXrayProfile.swift','IOSNativePQProfile.swift','IOSMultihopStartLayer.swift','IOSNodeLatencyStatistics.swift','IOSSpeedLabOwnership.swift']]
         code=work/'Tests.swift';code.write_text(store+'\n'+source)
         binary=work/'tests'
         command=options+['-Onone','-whole-module-optimization',*map(str,shipping),str(code),'-o',str(binary)]
