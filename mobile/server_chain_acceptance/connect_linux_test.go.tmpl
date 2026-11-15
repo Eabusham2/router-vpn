@@ -233,9 +233,11 @@ func serverChainCONNECTScenario(t *testing.T, protocol, name string) {
 	}
 	negative := strings.HasPrefix(name, "wrong-") || name == "failed-selected-dns"
 	ready, failed := false, false
+	lastSnapshot := pending
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		reply := worker.call(t, "snapshot")
+		lastSnapshot = reply
 		if !reply.OK {
 			failed = true
 			break
@@ -254,7 +256,17 @@ func serverChainCONNECTScenario(t *testing.T, protocol, name string) {
 		worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
 	} else {
 		if !ready {
-			t.Fatal("actual imported suffix never proved ready")
+			// Keep the original failure and its deadline. Only public protocol
+			// names, numeric peer counters and the existing fixed-vocabulary
+			// worker diagnostics may leave this captured private fixture.
+			stats := p.control(t, "stats")
+			t.Fatal("actual imported suffix never proved ready", "protocol", protocol,
+				"middle_tcp", stats.Peer.Middle.RawTCP, "middle_udp", stats.Peer.Middle.RawUDP,
+				"middle_streams", stats.Peer.Middle.TCP, "middle_packets", stats.Peer.Middle.UDP,
+				"middle_public", stats.Peer.Middle.PublicQueries, "middle_auth", stats.MiddleAuth,
+				"tls_refused", stats.TLSRefused,
+				serverChainEncryptedDiagnostic(lastSnapshot, stats.Peer.serverChainEncryptedStats),
+				routerVPNSafeServerChainDiagnostics(worker.process.log.text()))
 		}
 		targets, err := policy.ProofTargets(capture)
 		if err != nil || len(targets) != 2 || targets[0].Proof.NodeID != "" || targets[1].Proof.NodeID == "" {

@@ -69,16 +69,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential git iproute2 util-linux sudo
       - name: Require exact verdict, source, cleanup and platform inventory
         run: python3 deploy/test_server_node_chain_encrypted_runner.py
-      - name: Require actual encrypted suffix, selected DNS, UoT and joined Stop
-        timeout-minutes: 45
-        env:
-          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
-          ROUTERVPN_SERVER_RECEIPT: ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json
-          CGO_ENABLED: '1'
-        run: |
-          python3 deploy/test_server_node_chain_encrypted.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_SERVER_RECEIPT"
       - name: Require CONNECT verdict, source, authentication and cleanup inventory
         run: python3 deploy/test_server_node_chain_connect_encrypted_runner.py
+      # The currently failing independent suffix runs first so its original
+      # proof counters are available promptly. Both native gates stay required.
       - name: Require actual HTTP and HTTPS CONNECT suffix and selected-path DNS
         timeout-minutes: 45
         env:
@@ -87,6 +81,14 @@ jobs:
           CGO_ENABLED: '1'
         run: |
           python3 deploy/test_server_node_chain_connect_encrypted.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_CONNECT_SERVER_RECEIPT"
+      - name: Require actual encrypted suffix, selected DNS, UoT and joined Stop
+        timeout-minutes: 45
+        env:
+          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
+          ROUTERVPN_SERVER_RECEIPT: ${{ runner.temp }}/server-node-chain-${{ matrix.arch }}.json
+          CGO_ENABLED: '1'
+        run: |
+          python3 deploy/test_server_node_chain_encrypted.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_SERVER_RECEIPT"
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Server-encrypted-${{ matrix.arch }}-${{ github.sha }}
