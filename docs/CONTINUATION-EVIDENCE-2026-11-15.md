@@ -1883,3 +1883,63 @@ the actual dispatcher and saved store with its explicit temporary PF backend;
 they do not establish physical macOS kernel or installed-app acceptance.
 The separate native Box factory repair and longer OpenVPN unit remain pending
 until their own native validation and publication are complete.
+
+
+## 2026-11-15: retain active original reference UDP associations
+
+The new eight-member OpenVPN reference exercise exposed a confirmed defect in
+`mobile/amnezia/desktop_reference_test.go.tmpl`: its UDP forwarder imposed
+a thirty-second absolute deadline on the upstream socket. A diagnostic
+run observed seven active original associations expiring at 30.000–30.001
+seconds while their owner context remained live, followed by replacement
+upstream tuples. That diagnostic completed both fifty-sample measurements.
+The earlier final-position invalidation remains a retained, unreproduced
+failure; these observations do not conclusively attribute it to this defect.
+
+The reference caller still supplies thirty seconds. The same original UDP
+association now refreshes a shared inactivity deadline after validated traffic
+in either direction. It uses the actual gVisor carrier's supported read
+deadline and the native upstream socket's read/write deadline. Updates are
+serialized across both original sockets;
+the tuple, destination checks, admitted owner registry, reciprocal closure and
+joined worker remain unchanged. Deadline and reciprocal-write failures are
+retained in the joined error. The private accelerated-test budget cannot
+exceed the real thirty-second bound. No shipping proof, request, measurement,
+native observation or lifecycle deadline changed.
+
+`deploy/test_reference_udp_lifetime.py` compiles the actual handler struct,
+rule lookup, ownership methods, exported caller and forwarding helpers. Four
+actual Go test roots passed with race detection using real loopback UDP.
+They cover bidirectional and each one-way traffic flow beyond two short idle
+budgets with the same upstream tuple, inactivity retirement, original owner
+Close/join, wrong destinations, initial/refreshed deadline failures, write
+failure and the executable thirty-second default. All four causal variants
+reject their intended defect: the original absolute lifetime, missing tuple
+validation, the carrier's unsupported combined deadline and discarded
+supported-method errors. The idle assertion matches the
+original timeout throughout the complete joined error chain, preserving
+valid reciprocal socket-closure ordering.
+
+A prepublication native review caught that the pinned packet carrier rejects
+combined/write deadlines with `os.ErrInvalid`, while supporting read
+deadlines. The initial extracted test had incorrectly supported the combined
+method. Both implementation and test were corrected before publication; the
+initial local precursor was never pushed. The actual captured constructors
+for WG/AWG, ordered prefixes and OpenVPN all retain this same UDP carrier.
+
+The corrected helper also passed actual encrypted candidate composition on
+one unchanged race-instrumented native image, SHA-256
+`dad597e4aad8ce67fa11e1e2b55139e79a31131a30bd90f4102ab45a00a02a07`.
+The original WG/UDP trio passed in 28.587 seconds with all 150 measurements.
+The candidate's eight-member AWG Strong/UDP public/final group passed in
+35.454 seconds with both fifty-sample results, all prefix/DNS/native-capacity
+proofs, saved history, actual reconnect refusal and joined cleanup. That
+candidate contains the longer OpenVPN work still under development; it is
+not an exact-main installed-host or physical-device acceptance claim.
+
+The two source files were frozen against exact
+`f9d1ffc3d1f60ab866c3993133b988bfcfc0c36c`; source hashes, full logs and causal
+evidence are retained in `reference-udp-idle-validation`. This is actual
+reference-handler and bounded encrypted component evidence, not kernel or
+device acceptance. The longer OpenVPN source unit, its required release gate,
+and remaining encrypted-path checks continue separately.
