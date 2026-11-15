@@ -1207,3 +1207,29 @@ stream omitting the required `pair-openvpn` case. Logs and exact command
 evidence were retained in `source-integrity-inventory-validation`. This
 bounded correction does not establish native device acceptance, private
 deployment, or completion of the longer CONNECT implementation in progress.
+
+## Retained CONNECT configuration causal control
+
+The mandatory source control named `connect-changed-private-config-seal`
+still removed a constructor digest check even though shipping accessors
+already validated their retained configuration through
+`nodeChainCONNECTIntegrity.current`. The accessor and its existing rejection
+test are unchanged between published `de5ab30d90b1859d10c86b012b7cbdc4619bc02f`
+and the longer-path draft. This is an existing stale mutation target, not a
+new graph regression: on the published production source, the original
+positive passes and the obsolete constructor mutation also passes because
+the actual retained-read guard still rejects the altered configuration.
+
+The same control now removes only `p.config != saved.config` from the actual
+private integrity readback. The fixed source inventory also requires that
+existing implementation file. The unchanged test then fails with its exact
+original `changed private config retained source seal` witness. This keeps
+the construction digest, retained-read protection, malformed-configuration
+test, fourteen source attempts, nine causal controls, strict event parser,
+and original test/process bounds intact; no production source changed.
+
+The positive, obsolete mutation reproduction, and corrected causal execution
+all ran under Go 1.26.3 race instrumentation. The nine composed validator
+tests passed. Exact commands and event hashes are retained in
+`connect-seal-control-validation`. Source validation remains distinct from
+native encrypted execution, packaged delivery, and device acceptance.

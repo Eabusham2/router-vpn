@@ -38,7 +38,7 @@ class CONNECTSourceGate(unittest.TestCase):
     def test_exact_new_and_original_connect_inventory_and_bounds(self):
         selected=D.cases()
         self.assertEqual([len(x.expected) for x in selected[9:]], [84,52,2,2,1])
-        self.assertEqual(len(D.INVENTORY["files"]),6)
+        self.assertEqual(len(D.INVENTORY["files"]),7)
         self.assertEqual(len(D.INVENTORY["roots"]),7)
         self.assertEqual(sum(len(x.expected) for x in selected if not x.mutation),300)
         self.assertEqual(sum(bool(x.mutation) for x in selected),9)
