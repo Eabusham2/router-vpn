@@ -183,7 +183,7 @@ func serverChainEncryptedStart(t *testing.T, command *exec.Cmd) *serverChainEncr
 			case <-time.After(3 * time.Second):
 				_ = p.command.Process.Kill()
 				<-p.done
-				t.Error("encrypted fixture required emergency process kill; joined retirement not established")
+				t.Error("encrypted fixture required emergency process kill; joined retirement not established", routerVPNSafeServerChainDiagnostics(p.log.text()))
 			}
 		}
 		_ = p.output.Close()
@@ -512,7 +512,7 @@ func (w *serverChainEncryptedWorker) call(t *testing.T, operation string) multih
 func (w *serverChainEncryptedWorker) stop(t *testing.T) {
 	t.Helper()
 	if !w.call(t, "stop").OK {
-		t.Fatal("original encrypted worker did not join on Stop")
+		t.Fatal("original encrypted worker did not join on Stop", routerVPNSafeServerChainDiagnostics(w.process.log.text()))
 	}
 	terminal, err := multihoprelay.DecodeNodeChainIPCResponse(w.process.line(t))
 	if err != nil || !terminal.OK || terminal.Operation != "closed" || terminal.Nonce != w.capture.OwnerID || terminal.CaptureSHA256 != w.digest {

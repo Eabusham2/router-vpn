@@ -602,33 +602,33 @@ func (n *routerVPNServerChain) Close(ctx context.Context) error {
 	n.cancel()
 	if n.front != nil {
 		if err := n.front.Close(ctx); err != nil {
-			return err
+			return routerVPNServerChainAtStage("close-front", err)
 		}
 	}
 	if begun {
 		select {
 		case <-n.proofDone:
 		case <-ctx.Done():
-			return ctx.Err()
+			return routerVPNServerChainAtStage("close-proof", ctx.Err())
 		}
 	}
 	n.expiryJoinOnce.Do(func() { go func() { n.expiryWorkers.Wait(); close(n.expiryJoined) }() })
 	select {
 	case <-n.expiryJoined:
 	case <-ctx.Done():
-		return ctx.Err()
+		return routerVPNServerChainAtStage("close-expiry", ctx.Err())
 	}
 	if err := n.drainConnections(ctx); err != nil {
-		return err
+		return routerVPNServerChainAtStage("close-connections", err)
 	}
 	if n.socks != nil {
 		if err := n.socks.CloseContext(ctx); err != nil {
-			return err
+			return routerVPNServerChainAtStage("close-socks", err)
 		}
 	}
 	if n.connect != nil {
 		if err := n.connect.CloseContext(ctx); err != nil {
-			return err
+			return routerVPNServerChainAtStage("close-connect", err)
 		}
 	}
 	if n.box != nil {
@@ -636,29 +636,29 @@ func (n *routerVPNServerChain) Close(ctx context.Context) error {
 		select {
 		case <-n.boxDone:
 		case <-ctx.Done():
-			return ctx.Err()
+			return routerVPNServerChainAtStage("close-box", ctx.Err())
 		}
 		if n.boxError != nil {
-			return errors.New("original ordered native close remains pending")
+			return routerVPNServerChainAtStage("close-box", n.boxError)
 		}
 	}
 	if n.carrier != nil {
 		if err := n.carrier.CloseContext(ctx); err != nil {
-			return err
+			return routerVPNServerChainAtStage("close-carrier", err)
 		}
 	}
 	if n.carrierJoined != nil {
 		select {
 		case <-n.carrierJoined:
 		case <-ctx.Done():
-			return ctx.Err()
+			return routerVPNServerChainAtStage("close-carrier-join", ctx.Err())
 		}
 	}
 	if n.stopParent != nil && !n.stopParent() {
 		select {
 		case <-n.parentDone:
 		case <-ctx.Done():
-			return ctx.Err()
+			return routerVPNServerChainAtStage("close-parent", ctx.Err())
 		}
 	}
 	n.mu.Lock()

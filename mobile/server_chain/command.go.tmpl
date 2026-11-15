@@ -125,8 +125,10 @@ func routerVPNRunNodeChainRelayWithDiagnostics(ctx context.Context, directory st
 			}
 		case "stop":
 			drain, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			response.OK = owner.Close(drain) == nil
+			err := owner.Close(drain)
+			response.OK = err == nil
 			cancel()
+			routerVPNWriteServerChainDiagnostic(diagnostics, "stop", err)
 			if encoder.Encode(response) != nil {
 				return bad
 			}

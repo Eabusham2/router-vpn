@@ -65,7 +65,7 @@ class NativeServerChainRunner(unittest.TestCase):
   self.assertFalse(RUN.rejected(output(rows),1,name,witness,'build failed'));self.assertFalse(RUN.rejected(output(rows),1,name,witness,'WARNING: DATA RACE'))
  def test_imported_resolver_inventory_and_original_refusals_are_required(self):
   self.assertEqual(RUN.ROOTS[15],'TestServerChainImportedBenchmarkChecksEverySelectedAnswer')
-  for name in (RUN.ROOTS[3]+'/prefix-foreign-tuple',RUN.ROOTS[3]+'/prefix-uot',RUN.ROOTS[15]+'/private-after-good',RUN.ROOTS[15]+'/disabled-ipv6'):
+  for name in (RUN.ROOTS[3]+'/prefix-foreign-tuple',RUN.ROOTS[3]+'/prefix-uot',RUN.ROOTS[15]+'/private-after-good',RUN.ROOTS[15]+'/disabled-ipv6',RUN.ROOTS[13]+'/stop-retry'):
    with self.subTest(name=name):
     rows=[r for r in success() if r.get('Test')!=name]
     with self.assertRaises(ValueError):RUN.verdict(output(rows),0)

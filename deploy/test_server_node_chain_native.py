@@ -30,7 +30,7 @@ CHILDREN={
  ROOTS[3]:('wrong-password','foreign-user','no-auth','prefix-foreign-tuple','prefix-uot','legacy-uot','udp-associate','retired-proof'),
  ROOTS[5]:('native-owner','partial-construction'),ROOTS[7]:('duplicate','null','alias','foreign-request','linked-capture'),
  ROOTS[8]:('none','private-first','private-after-good','loopback-after-good','ipv6-after-good','mapped-after-good','zoned','invalid','over-bound'),
- ROOTS[13]:('snapshot-bootstrap','construction'),
+ ROOTS[13]:('snapshot-bootstrap','construction','stop-retry'),
  ROOTS[15]:('private-after-good','loopback-after-good','disabled-ipv6','mapped','empty')}
 EXPECTED=set(ROOTS)|{root+'/'+child for root,children in CHILDREN.items() for child in children}
 PACKAGE='github.com/sagernet/sing-box/cmd/sing-box'

@@ -12,6 +12,20 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
 )
 
+type serverChainDiagnosticStopOwner struct {
+	*serverChainCommandOwner
+	failure  error
+	attempts int
+}
+
+func (o *serverChainDiagnosticStopOwner) Close(ctx context.Context) error {
+	o.attempts++
+	if o.attempts == 1 {
+		return o.failure
+	}
+	return o.serverChainCommandOwner.Close(ctx)
+}
+
 func TestServerChainCommandFailureDiagnosticsPreserveRefusal(t *testing.T) {
 	for _, partial := range []bool{false, true} {
 		t.Run(map[bool]string{false: "snapshot-bootstrap", true: "construction"}[partial], func(t *testing.T) {
@@ -60,6 +74,42 @@ func TestServerChainCommandFailureDiagnosticsPreserveRefusal(t *testing.T) {
 			}
 		})
 	}
+	t.Run("stop-retry", func(t *testing.T) {
+		capture := serverChainCommandCapture(t)
+		directory := serverChainCommandDirectory(t, capture)
+		private := "private-stop-key /private/worker/lease.json"
+		failure := routerVPNServerChainAtStage("close-connect", errors.Join(errors.New(private), context.DeadlineExceeded))
+		owner := &serverChainDiagnosticStopOwner{serverChainCommandOwner: &serverChainCommandOwner{capture: capture}, failure: failure}
+		var input, output, diagnostics bytes.Buffer
+		digest, _ := capture.Digest()
+		for range 2 {
+			if err := json.NewEncoder(&input).Encode(multihoprelay.NodeChainIPCRequest{Schema: 1, Operation: "stop", Nonce: strings.Repeat("b", 64), CaptureSHA256: digest}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		err := routerVPNRunNodeChainRelayWithDiagnostics(t.Context(), directory, &input, &output, &diagnostics,
+			func(context.Context, *os.Root, string, multihoprelay.NodeChainCapture) (routerVPNNodeChainRelayOwner, error) {
+				return owner, nil
+			})
+		if err != nil || !owner.closed.Load() || owner.attempts != 3 {
+			t.Fatal("Stop diagnostic changed retained retry or terminal join", err)
+		}
+		lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+		if len(lines) != 3 {
+			t.Fatal("Stop diagnostic changed IPC inventory")
+		}
+		for i, line := range lines {
+			response, err := multihoprelay.DecodeNodeChainIPCResponse([]byte(line))
+			if err != nil || response.OK != (i != 0) || response.CaptureSHA256 != digest || response.Receipt != nil || i < 2 && response.Operation != "stop" || i == 2 && response.Operation != "closed" {
+				t.Fatal("Stop diagnostic acknowledged an unjoined owner", i, err)
+			}
+		}
+		want := routerVPNServerChainDiagnostic("stop", failure)
+		actual := routerVPNSafeServerChainDiagnostics(diagnostics.String())
+		if len(actual) != 1 || actual[0] != want || strings.Contains(diagnostics.String(), private) || strings.Contains(diagnostics.String(), digest) || !strings.Contains(want, `"stage":"close-connect"`) || !strings.Contains(want, `"deadline":true`) {
+			t.Fatal("Stop diagnostic lost original stage or disclosed private material", actual)
+		}
+	})
 }
 
 func TestServerChainFailureDiagnosticsSanitizeNativeErrors(t *testing.T) {
@@ -83,5 +133,12 @@ func TestServerChainFailureDiagnosticsSanitizeNativeErrors(t *testing.T) {
 	_, err := native.Snapshot(cancelled, strings.Repeat("a", 64))
 	if err == nil || !errors.Is(err, context.Canceled) || !strings.Contains(routerVPNServerChainDiagnostic("snapshot", err), `"stage":"native-admission"`) {
 		t.Fatal("actual native snapshot dropped cancellation stage")
+	}
+	for _, stage := range []string{"close-front", "close-proof", "close-expiry", "close-connections", "close-socks", "close-connect", "close-box", "close-carrier", "close-carrier-join", "close-parent"} {
+		failure := routerVPNServerChainAtStage(stage, errors.Join(errors.New(private), context.Canceled))
+		line := routerVPNServerChainDiagnostic("stop", failure)
+		if strings.Contains(line, private) || !strings.Contains(line, `"stage":"`+stage+`"`) || !strings.Contains(line, `"operation":"stop"`) || !strings.Contains(line, `"cancelled":true`) || !errors.Is(failure, context.Canceled) {
+			t.Fatal("Stop diagnostic dropped original boundary or cancellation", stage)
+		}
 	}
 }
