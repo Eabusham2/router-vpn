@@ -3889,3 +3889,44 @@ remain explicit fixture boundaries. Actual Xcode/framework packaging,
 current-SHA native encrypted execution, physical iPhone/iPad networking,
 signing and private deployment still require their own evidence. This unit
 closes these source integration gaps, not the full original requirement set.
+
+
+## Retire joined HTTPS constructions that returned no connection
+
+The authoritative 4d19502d ARM64 server job 132996725179 passed all eight
+HTTP cases and HTTPS/original, including the previously failing HTTP final-key
+refusal. HTTPS/wrong-middle-key then failed Stop at `close-connect`; the
+independent standalone ARM64 job 132997132071 reproduced it. Neither reported
+a caller deadline nor cancellation at that Stop stage. These partial passes
+are not a successful full native gate.
+
+A real verified-TLS and HTTP-407 reproduction, using the original DefaultDialer
+and connection manager, returned no usable connection. Its retained TCP
+half-close error remained after the actual native close, manager removal and
+all raw/transport/operation joins succeeded. Because construction returned no
+socket, the worker's returned-connection retirement callback could not own it.
+
+The original failed constructor now captures a separate cleanup-only receipt
+while its Server source is valid. It can be consumed only after the entire
+original Capture and outbound are retired and every original operation stage
+has joined. It seals the original policy, source, lower/final/manager, operation,
+raw TCP wrapper and TLS transport. It accepts only the original raw-close error
+objects; additional TLS errors, failed native close, failed deadline setters,
+forced-close timeouts, incomplete joins, substituted handles and any returned
+result/owned connection remain failures. The connection attempt and its
+original close result stay failed and observable after final acknowledgement.
+No peer authentication, Connected proof or cleanup deadline is weakened.
+
+The old source reproduces the actual joined failure. The repaired race suite
+passes all 17 CONNECT close records, including every existing record, in
+6.703 seconds. Three independent omissions fail at their intended witnesses:
+missing acknowledgement, omitted native-close failure guard, and acceptance of
+a mixed unrelated TLS error. The new fixture uses real TLS verification, HTTP,
+TCP and original native close owners; its private policy/construction frame is
+explicitly modeled, so full encrypted Server/kernel acceptance remains required
+in the current-SHA hosted gate.
+
+Frozen four-file manifest SHA256:
+`ea2092e901f3c60ddc3ba653b19db6cbaafff9c85f8102afc1fa38e932a260c8`.
+All preimages match 17e5b12b. Exact-current release publication and physical
+acceptance remain separate. No private target was changed.

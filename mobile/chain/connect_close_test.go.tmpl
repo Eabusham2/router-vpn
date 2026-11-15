@@ -1,21 +1,31 @@
 package routervpnnodeconnect
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	stdTLS "crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/dialer"
+	nativeTLS "github.com/sagernet/sing-box/common/tls"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
 	"github.com/sagernet/sing-box/option"
 	SS "github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/common/uot"
+	sHTTP "github.com/sagernet/sing/protocol/http"
 	"github.com/sagernet/sing/service"
 	"io"
+	"math/big"
 	"net"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -707,5 +717,189 @@ func TestCONNECTServerEncryptedRetirementKeepsTrialFailure(t *testing.T) {
 				t.Fatal("matching-key cleanup failed", closeErr, retryErr)
 			}
 		})
+	}
+}
+
+type connectFailedHandshakeRaw struct{ original net.Conn }
+
+func (d *connectFailedHandshakeRaw) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	return d.original, nil
+}
+func (*connectFailedHandshakeRaw) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("unexpected packet factory")
+}
+
+// The native policy frame is modeled explicitly, while TLS verification,
+// HTTP authentication failure, TCP, the connection manager and every retained
+// Close below use their actual implementations. Full source/worker admission
+// remains the mandatory isolated native Server gate.
+func TestCONNECTServerFailedHTTPSRetirement(t *testing.T) {
+	public, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(485), DNSNames: []string{"proxy.example.com"},
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), IsCA: true,
+		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, public, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	peerJoined := make(chan error, 1)
+	var wrongKeySeen atomic.Bool
+	go func() {
+		raw, failure := listener.Accept()
+		if failure != nil {
+			peerJoined <- failure
+			return
+		}
+		defer raw.Close()
+		_ = raw.SetDeadline(time.Now().Add(3 * time.Second))
+		secured := stdTLS.Server(raw, &stdTLS.Config{MinVersion: stdTLS.VersionTLS12,
+			Certificates: []stdTLS.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}})
+		if failure = secured.HandshakeContext(ctx); failure != nil {
+			peerJoined <- failure
+			return
+		}
+		request, failure := http.ReadRequest(bufio.NewReader(secured))
+		if failure != nil {
+			peerJoined <- failure
+			return
+		}
+		defer request.Body.Close()
+		if request.Method != http.MethodConnect || request.Header.Get("Proxy-Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte("original-user:wrong-password")) {
+			peerJoined <- errors.New("original wrong-key HTTP request missing")
+			return
+		}
+		wrongKeySeen.Store(true)
+		_, failure = io.WriteString(secured, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+		peerJoined <- errors.Join(failure, secured.Close())
+	}()
+	manager := route.NewConnectionManager(log.NewNOPFactory().Logger())
+	lowerCtx := service.ContextWith[adapter.ConnectionManager](ctx, manager)
+	lower, err := dialer.New(lowerCtx, option.DialerOptions{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracked, err := lower.DialContext(ctx, "tcp", M.ParseSocksaddr(listener.Addr().String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tracked.Close() })
+	retained, err := captureServerTCP(tracked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	op := connectCloseOperation(owner, retained)
+	// Construction must remain open until the stock HTTP/TLS factory returns.
+	op.constructed = make(chan struct{})
+	capture := &Capture{server: &serverCapture{}}
+	capture.self, capture.server.self = capture, capture.server
+	capture.middle, owner.capture = owner, capture
+	config, err := nativeTLS.NewClient(op.ctx, log.NewNOPFactory().Logger(), "127.0.0.1", option.OutboundTLSOptions{
+		Enabled: true, ServerName: "proxy.example.com", Certificate: []string{string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner.tlsConfig = config
+	transport := &transportDialer{operation: op, Dialer: nativeTLS.NewDialer(&connectFailedHandshakeRaw{original: op.tcp}, config)}
+	client := sHTTP.NewClient(sHTTP.Options{Dialer: transport, Server: M.ParseSocksaddr(listener.Addr().String()), Username: "original-user", Password: "wrong-password"})
+	result, trialFailure := client.DialContext(op.ctx, "tcp", M.ParseSocksaddr("198.51.100.20:8787"))
+	op.mu.Lock()
+	op.result = result
+	op.mu.Unlock()
+	op.failedServerRetirement = capture.failedServerOperationRetirement(op, trialFailure)
+	close(op.constructed)
+	closeCtx, finish := context.WithTimeout(context.Background(), 2*time.Second)
+	defer finish()
+	closeFailure := op.closeContext(closeCtx)
+	stopFailure := owner.CloseContext(closeCtx)
+	select {
+	case peerFailure := <-peerJoined:
+		if peerFailure != nil {
+			t.Fatal("original TLS peer failed", peerFailure)
+		}
+	case <-closeCtx.Done():
+		t.Fatal("original TLS peer did not join", closeCtx.Err())
+	}
+	t.Logf("actual wrong proxy key=%t result=%T trial=%v close=%v stop=%v manager=%d drained=%t raw=%t native=%t force=%t graceful=%t raw_error=%v transport_error=%v native_error=%v force_error=%v deadline_error=%v",
+		wrongKeySeen.Load(), result, trialFailure, closeFailure, stopFailure, manager.Count(), completed(op.drained), completed(op.tcp.done), completed(op.tcp.nativeDone), completed(op.tcp.forceDone), completed(op.tcp.gracefulDone), op.tcp.err, op.transport.err, op.tcp.nativeErr, op.tcp.forceErr, op.tcp.deadlineErr)
+	if !wrongKeySeen.Load() || result != nil || trialFailure == nil || !completed(op.drained) || manager.Count() != 0 {
+		t.Fatal("failed HTTPS trial did not preserve its original refusal and joined owners")
+	}
+	retire := op.failedServerRetirement
+	if retire == nil || closeFailure == nil || stopFailure == nil || op.retirementAcknowledged.Load() {
+		t.Fatal("failed HTTPS trial lost its original failure or acquired early retirement")
+	}
+	if retire(closeCtx) == nil {
+		t.Fatal("live captured Server acknowledged a failed construction")
+	}
+	capture.retired.Store(true)
+	reject := func(name string) {
+		t.Helper()
+		if retire(closeCtx) == nil {
+			t.Fatal("failed construction retirement accepted foreign or incomplete owner", name)
+		}
+	}
+	oldMiddle := capture.middle
+	capture.middle = &Outbound{}
+	reject("replacement middle")
+	capture.middle = oldMiddle
+	oldRaw := op.tcp
+	op.tcp = newOriginalConn(retained, op)
+	reject("replacement raw")
+	op.tcp = oldRaw
+	oldPayload := op.tcp.Conn
+	op.tcp.Conn = &connectRetirementWrapper{Conn: retained}
+	reject("replacement raw payload")
+	op.tcp.Conn = oldPayload
+	op.result = retained
+	reject("returned result")
+	op.result = nil
+	op.connection = &ownedConn{Conn: retained, operation: op}
+	reject("returned owned connection")
+	op.connection = nil
+	oldDone := op.drained
+	op.drained = make(chan struct{})
+	reject("operation not joined")
+	op.drained = oldDone
+	oldNativeDone := op.tcp.nativeDone
+	op.tcp.nativeDone = make(chan struct{})
+	reject("native close not joined")
+	op.tcp.nativeDone = oldNativeDone
+	op.tcp.nativeErr = errors.New("unrelated native close failure")
+	reject("native close failure")
+	op.tcp.nativeErr = nil
+	op.tcp.forceErr = context.DeadlineExceeded
+	reject("original forced close deadline")
+	op.tcp.forceErr = nil
+	op.tcp.deadlineErr = errors.New("original deadline setter failed")
+	reject("deadline failure")
+	op.tcp.deadlineErr = nil
+	oldTransportErr := op.transport.err
+	op.transport.err = errors.Join(oldTransportErr, errors.New("unrelated TLS close failure"))
+	reject("mixed transport failure")
+	op.transport.err = oldTransportErr
+	oldCloseErr := op.closeErr
+	op.closeErr = errors.Join(oldCloseErr, errors.New("unrelated construction close failure"))
+	reject("mixed operation failure")
+	op.closeErr = oldCloseErr
+	if err := capture.CloseContext(closeCtx); err != nil || !op.retirementAcknowledged.Load() {
+		t.Fatal("joined original failed HTTPS construction still blocks final retirement", err)
+	}
+	if err := op.closeContext(closeCtx); err != closeFailure {
+		t.Fatal("final acknowledgement erased the original failed trial close", err)
+	}
+	if err := capture.CloseContext(closeCtx); err != nil || manager.Count() != 0 {
+		t.Fatal("failed HTTPS retirement retry changed original ownership", err)
 	}
 }

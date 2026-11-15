@@ -103,6 +103,11 @@ func (o *Outbound) CloseContext(ctx context.Context) error {
 		if err := joinContext(ctx, op.drained); err != nil {
 			return errors.Join(failure, err)
 		}
+		if !op.retirementAcknowledged.Load() && op.failedServerRetirement != nil {
+			if err := op.failedServerRetirement(ctx); err == nil {
+				op.retirementAcknowledged.Store(true)
+			}
+		}
 		if !op.retirementAcknowledged.Load() {
 			failure = errors.Join(failure, op.closeErr)
 		}
@@ -123,6 +128,7 @@ type closeState struct {
 type operation struct {
 	connection             *ownedConn
 	retirementAcknowledged atomic.Bool
+	failedServerRetirement func(context.Context) error
 	budget                 atomic.Pointer[closeState]
 	mu                     sync.Mutex
 	owner                  *Outbound

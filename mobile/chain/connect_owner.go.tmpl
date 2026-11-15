@@ -341,6 +341,12 @@ func (o *Outbound) dial(ctx context.Context, network string, destination M.Socks
 	if failure == nil {
 		failure = o.current(operationCtx)
 	}
+	// A failed constructor returns no connection to the worker's connection
+	// ledger. Capture its distinct final-retirement receipt before publication;
+	// the caller still receives the complete original trial/close failure.
+	if failure != nil && o.capture.validate() == nil {
+		op.failedServerRetirement = o.capture.failedServerOperationRetirement(op, failure)
+	}
 	close(op.constructed)
 	if failure != nil {
 		return nil, nil, errors.Join(failure, op.closeContext(ctx))

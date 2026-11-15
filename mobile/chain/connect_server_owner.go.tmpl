@@ -376,3 +376,70 @@ func (c *Capture) serverConnectionRetirement(original net.Conn) func(context.Con
 		return nil
 	}
 }
+
+// A failed HTTP/TLS constructor never hands a connection to the worker's
+// returned-socket ledger. Seal its original native operation separately while
+// the source is live. This receipt can be consumed only after Capture.Close
+// retires the entire original Server owner and the failed operation joins.
+func (c *Capture) failedServerOperationRetirement(op *operation, trialFailure error) func(context.Context) error {
+	if c == nil || c.self != c || c.server == nil || c.server.self != c.server ||
+		op == nil || trialFailure == nil || op.owner == nil || c.middle != op.owner {
+		return nil
+	}
+	owner, server := op.owner, c.server
+	policy, source, lower := server.policy, server.capture.Clone(), server.lower.Load()
+	final, finalManager := c.final, c.finalManager
+	owner.mu.Lock()
+	op.mu.Lock()
+	_, present := owner.operations[op]
+	raw, transport := op.tcp, op.transport
+	valid := present && owner.self == owner && owner.capture == c && !owner.closed && op.connection == nil && op.result == nil
+	var rawPayload, transportPayload net.Conn
+	if raw != nil {
+		rawPayload = raw.Conn
+	}
+	if transport != nil {
+		transportPayload = transport.Conn
+	}
+	op.mu.Unlock()
+	owner.mu.Unlock()
+	native, nativeOK := rawPayload.(*serverTCPConnection)
+	if !valid || raw == nil || raw.operation != op || !nativeOK || native == nil || native.Conn == nil || native.half == nil ||
+		(transport != nil && transport.operation != op) {
+		return nil
+	}
+	nativePayload, nativeHalf := native.Conn, native.half
+	return func(ctx context.Context) error {
+		if ctx == nil || ctx.Err() != nil || c.self != c || !c.retired.Load() || c.server != server || server.self != server ||
+			c.middle != owner || owner.self != owner || owner.capture != c || server.policy != policy ||
+			!reflect.DeepEqual(server.capture, source) || server.lower.Load() != lower || c.final != final || c.finalManager != finalManager {
+			return errCapture
+		}
+		if err := adapter.RouterVPNLockContext(ctx, &owner.mu); err != nil {
+			return err
+		}
+		defer owner.mu.Unlock()
+		_, present := owner.operations[op]
+		op.mu.Lock()
+		valid := present && owner.closed && op.owner == owner && op.retired && op.connection == nil && op.result == nil &&
+			op.tcp == raw && op.transport == transport
+		op.mu.Unlock()
+		if !valid || !completed(op.constructed) || !completed(op.drained) || raw.operation != op || raw.Conn != rawPayload ||
+			native.Conn != nativePayload || native.half != nativeHalf ||
+			!completed(raw.done) || !completed(raw.nativeDone) || !completed(raw.forceDone) || !completed(raw.gracefulDone) ||
+			raw.nativeErr != nil || raw.forceErr != nil || raw.deadlineErr != nil {
+			return errCapture
+		}
+		// Only the exact retained raw-close error may be acknowledged. A separate
+		// TLS close_notify error, failed native Close or unrelated result remains
+		// a failure even when its containing goroutine has returned.
+		if transport != nil && (transport.operation != op || transport.Conn != transportPayload || !completed(transport.done) ||
+			(transport.err != nil && !serverRetirementErrors(raw.err, transport.err, 0))) {
+			return errCapture
+		}
+		if !serverRetirementErrors(raw.err, op.closeErr, 0) {
+			return errCapture
+		}
+		return nil
+	}
+}
