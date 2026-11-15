@@ -662,6 +662,7 @@ func TestRouterVPNDesktopNodeChainObservationalStopOwnership(t *testing.T) {
 						t.Fatal(err)
 					}
 					done := make(chan error, 1)
+					started := make(chan struct{})
 					finished := false
 					// This cleanup is registered after Box.Close, so it first
 					// releases/joins the loop and original proof owner.
@@ -688,8 +689,23 @@ func TestRouterVPNDesktopNodeChainObservationalStopOwnership(t *testing.T) {
 							typed = complete
 						}
 						done <- routerVPNRunNodeMTULoopWithComplete(parent, graph, files, instance, session, config, nil,
-							func(ctx context.Context) error { return ctx.Err() }, func() error { return nil }, nil, typed, nil)
+							func(ctx context.Context) error { return ctx.Err() }, func() error { close(started); return nil }, nil, typed, nil)
 					}()
+					// The original typed owner must complete startup and attach the
+					// captured reader before the heartbeat observation begins. Source
+					// validation is startup work; it cannot consume the heartbeat's
+					// separate bound or make an absent heartbeat acceptable.
+					startupDeadline := time.NewTimer(15 * time.Second)
+					defer startupDeadline.Stop()
+					select {
+					case <-started:
+						startupDeadline.Stop()
+					case err := <-done:
+						finished = true
+						t.Fatal("observational loop failed before original reader attachment", err)
+					case <-startupDeadline.C:
+						t.Fatal("observational loop did not attach original reader")
+					}
 					deadline := time.NewTimer(3 * time.Second)
 					tick := time.NewTicker(10 * time.Millisecond)
 					defer deadline.Stop()
@@ -710,7 +726,7 @@ func TestRouterVPNDesktopNodeChainObservationalStopOwnership(t *testing.T) {
 							finished = true
 							t.Fatal("observational loop failed before original heartbeat", err)
 						case <-deadline.C:
-							t.Fatal("observational loop did not publish original heartbeat")
+							t.Fatalf("observational loop did not publish original heartbeat: read=%v record=%+v", readErr, status)
 						case <-tick.C:
 						}
 					}
