@@ -2603,3 +2603,42 @@ physical-device acceptance or Apple signing is established here. Frozen source
 and detailed receipts are in `darwin-imported-admission-validation`,
 `darwin-imported-appkit-validation`, `darwin-imported-execution-validation`
 and `macos-imported-alias-validation`.
+
+
+## Darwin controller keeps every native root in bounded invocations
+
+Published `e486f928` Intel controller job `132912355637` reached the global
+180-second Go test alarm in its combined controller/parent/execution run.
+The current Stop root had been entered for seventeen seconds and its final
+`nil-graph` leaf for zero seconds; the visible stack was runnable fixture
+construction. The retained log is bounded at the failed binary's 24 KiB
+excerpt, so it cannot reconstruct every earlier root duration. This observation
+does not prove a production Stop deadlock or a native timeout-policy failure.
+
+The test gate now compiles and captures the same original controller,
+capability helper and AppKit executable once. Before running tests it lists
+the compiled image's old selector and requires the exact forty-three roots.
+Five previously implicit External roots are now explicit mandatory verdicts.
+Two disjoint groups execute all thirty-one original roots and all twelve
+execution roots. Each retains the original 180-second Go and 200-second owned
+process limit. Source and executable object metadata/content are rechecked
+before and after listing and each group. Missing, repeated, foreign or failed
+verdicts and changed images stop the later group.
+
+All thirteen focused runner roots passed, with actual filesystem identity
+checks and explicit modeled native subprocess boundaries. Seven causal controls
+rejected the old broad selector, omitted execution group, absent image readback,
+missing compiled inventory, old job budget, omitted architecture and ignored
+native failure. These controls establish orchestration behavior, not native
+Darwin acceptance. The complete current Intel and Apple Silicon runs remain
+required; no original Go test or production source changed.
+
+The owning workflow job now has a finite twenty-five-minute budget for the
+separate required phases. The unchanged compiler/signing limits plus the two
+owned process maxima total 970 seconds, separately from twenty seconds for
+interpreter discovery, fifteen seconds for inventory listing, identity reads
+and other workflow steps. This is not a claim that every independent step can
+consume its maximum simultaneously. The ES diagnostic and other workflow jobs
+are unchanged. The full failed job log remains in `release-e486f928-audit`;
+source manifest, focused results and causal evidence are in
+`darwin-controller-groups-validation`.

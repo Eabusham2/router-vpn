@@ -286,6 +286,7 @@ class MacOSNativeVerdicts(unittest.TestCase):
         names += ['TestDesktopMacOS'+name for name in self.gate.PARENT_CASES]
         names += ['TestDesktopMacOS'+name for name in self.gate.EXECUTION_PARENT_CASES]
         names += ['TestDesktopMacOS'+name for name in self.gate.EXECUTION_PRODUCT_CASES]
+        names += ['TestDesktopMacOS'+name for name in self.gate.ADDITIONAL_PARENT_CASES]
         self.lines = ['--- PASS: '+name+' (0.01s)' for name in names]
         self.output = '\n'.join(self.lines+['PASS', ''])
 
@@ -352,14 +353,10 @@ class MacOSNativeVerdicts(unittest.TestCase):
             self.assertIsNone(re.search(pattern, name))
         tree = ast.parse(Path(self.gate.__file__).read_text())
         main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
-        commands = [node.value for node in ast.walk(main) if isinstance(node, ast.Assign)
-                    and any(isinstance(target, ast.Name) and target.id == 'command' for target in node.targets)]
-        # The original second assignment adds sudo around this same command.
-        self.assertEqual(len(commands), 2)
-        selected = [node for node in ast.walk(commands[0]) if isinstance(node, ast.Starred)
-                    and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
-                    and node.value.func.id == 'native_test_arguments']
-        self.assertEqual(len(selected), 1, 'actual native invocation omitted the required execution roots')
+        calls = [node for node in ast.walk(main) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == 'execute_native_groups']
+        self.assertEqual(len(calls), 1, 'actual native invocation omitted its required groups')
+        self.assertEqual([node.id for node in calls[0].args], ['command', 'images', 'before', 'environment', 'sudo'])
 
     def test_execution_product_stop_requires_all_seven_exact_native_roots(self):
         expected = ('ExecutionProductStopKeepsOriginalOwnerAndIntent',
@@ -384,6 +381,104 @@ class MacOSNativeVerdicts(unittest.TestCase):
                             line.replace('--- PASS:', '--- FAIL:')):
                 with self.subTest(case=suffix, verdict=changed), self.assertRaises(RuntimeError):
                     self.gate.require_native_verdicts(self.output.replace(line, changed, 1))
+
+
+class MacOSNativeGroups(unittest.TestCase):
+    def setUp(self):
+        self.gate = GATES[1]
+
+    def test_explicit_groups_equal_every_original_source_selected_root(self):
+        g = self.gate
+        selector = g.native_test_arguments()[0].removeprefix('-test.run=')
+        selected = []
+        for path in (ROOT/'cmd/client').glob('*test.go'):
+            selected.extend(name for name in re.findall(r'^func (Test\w+)\(t \*testing\.T\)', path.read_text(), re.M)
+                            if re.search(selector, name))
+        groups = g.native_groups()
+        self.assertEqual(tuple(groups), ('original', 'execution'))
+        self.assertEqual([len(names) for names in groups.values()], [31, 12])
+        names = sum(groups.values(), ())
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(set(names), set(selected))
+        g.require_native_inventory('\n'.join(sorted(selected))+'\n')
+        for group, expected in groups.items():
+            arguments = g.native_test_arguments(group)
+            self.assertEqual(arguments[1:], ['-test.v', '-test.timeout=180s'])
+            pattern = arguments[0].removeprefix('-test.run=')
+            self.assertEqual({name for name in names if re.search(pattern, name)}, set(expected))
+            for name in expected:self.assertIsNone(re.search(pattern, name+'Foreign'))
+        with self.assertRaises(ValueError):g.native_test_arguments('foreign')
+
+    def test_compiled_inventory_rejects_each_omission_duplicate_and_foreign_root(self):
+        names = list(sum(self.gate.native_groups().values(), ()))
+        for name in names:
+            for changed in ([value for value in names if value != name], [*names,name], [*names,'TestForeign']):
+                with self.subTest(name=name),self.assertRaises(RuntimeError):
+                    self.gate.require_native_inventory('\n'.join(changed)+'\n')
+
+    def exercise(self, fault=None):
+        g = self.gate;calls=[];source={'original':'a'*64}
+        with tempfile.TemporaryDirectory(prefix='native-controller-groups-') as directory:
+            paths=[Path(directory)/name for name in ('controller','installcap','appkit')]
+            for path in paths:path.write_bytes(b'original-'+path.name.encode());path.chmod(0o755)
+            images={path:g.native_image_identity(path) for path in paths}
+            command=['sudo','-n','--','env','ORIGINAL=1',str(paths[0])]
+            def run(actual,**options):
+                calls.append((actual,options))
+                self.assertEqual(actual[:len(command)],command)
+                self.assertEqual(options,dict(cwd=g.ROOT,env={'CAPTURED':'only'},timeout=15 if len(calls)==1 else 200,sudo='sudo'))
+                if len(calls)==1:
+                    names=sum(g.native_groups().values(), ())
+                    return '\n'.join(names[:-1] if fault=='inventory' else names)+'\n'
+                group=list(g.native_groups())[len(calls)-2]
+                self.assertEqual(actual[len(command):],g.native_test_arguments(group))
+                if fault=='failed':raise subprocess.CalledProcessError(1,actual,output='original refusal')
+                if fault=='timeout':raise RuntimeError('original owned group timed out and joined')
+                if fault=='source':source['foreign']='b'*64
+                if fault=='image':paths[0].write_bytes(b'foreign')
+                if fault=='capability':paths[1].write_bytes(b'foreign')
+                if fault=='appkit':paths[2].write_bytes(b'foreign')
+                if fault=='symlink':
+                    target=Path(directory)/'foreign';target.write_bytes(paths[0].read_bytes());paths[0].unlink();paths[0].symlink_to(target)
+                names=g.native_groups()[group]
+                if fault=='borrowed':names=sum(g.native_groups().values(), ())
+                if fault=='missing':names=names[:-1]
+                return '\n'.join('--- PASS: '+name+' (0.01s)' for name in names)+'\nPASS\n'
+            with mock.patch.object(g,'source_identity',side_effect=lambda:dict(source)),mock.patch.object(g,'reported_run',side_effect=run),contextlib.redirect_stdout(io.StringIO()):
+                if fault:
+                    with self.assertRaises((RuntimeError,subprocess.CalledProcessError)):
+                        g.execute_native_groups(command,images,{'original':'a'*64},{'CAPTURED':'only'},'sudo')
+                    self.assertLessEqual(len(calls),2)
+                else:
+                    self.assertEqual(g.execute_native_groups(command,images,source,{'CAPTURED':'only'},'sudo'),['original','execution'])
+                    self.assertEqual(len(calls),3)
+        return calls
+
+    def test_one_original_image_and_environment_reach_both_required_groups(self):
+        self.exercise()
+
+    def test_failure_or_replaced_source_image_stops_before_later_group(self):
+        for fault in ('inventory','failed','timeout','source','image','capability','appkit','symlink','borrowed','missing'):
+            with self.subTest(fault=fault):self.exercise(fault)
+
+    def test_whole_group_cannot_borrow_other_groups_positive_verdicts(self):
+        for group,names in self.gate.native_groups().items():
+            output='\n'.join('--- PASS: '+name+' (0.01s)' for name in names)+'\nPASS\n'
+            self.gate.require_native_verdicts(output,group)
+            for other in self.gate.native_groups():
+                if other!=group:
+                    with self.assertRaises(RuntimeError):self.gate.require_native_verdicts(output,other)
+
+    def test_workflow_keeps_both_native_hosts_and_finite_phase_budget(self):
+        source=(ROOT/'.github/workflows/macos-native-installer-contract.yml').read_text()
+        match=re.search(r'(?ms)^  owned-controller:\n(.*?)(?=^  [A-Za-z][\w-]*:\n|\Z)',source)
+        self.assertIsNotNone(match)
+        job=match[1]
+        self.assertIn('runner: [macos-15-intel, macos-15]',job)
+        self.assertIn('    timeout-minutes: 25\n',job)
+        self.assertIn('          python3 deploy/test_macos_controller_privilege.py --go "$(command -v go)"',job)
+        step=job.split('      - name: Prove installed supervisor, native peer identity and joined AppKit shutdown\n',1)[1].split('      - ',1)[0]
+        self.assertNotIn('continue-on-error',step);self.assertNotIn('if:',step);self.assertNotIn('|| true',step)
 
 
 class DarwinMutationOverlays(unittest.TestCase):

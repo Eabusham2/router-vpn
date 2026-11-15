@@ -18,6 +18,7 @@ import platform
 import pwd
 import re
 import subprocess
+import stat
 import sys
 import tempfile
 import time
@@ -53,28 +54,98 @@ EXECUTION_PRODUCT_CASES = ('ExecutionProductStopKeepsOriginalOwnerAndIntent',
                            'ExecutionProductStopRejectsFalseTerminalAbsence')
 
 
-def native_test_arguments():
+# These five roots were matched by the original External prefix. Retain them
+# explicitly so partitioning cannot silently remove an existing native check.
+ADDITIONAL_PARENT_CASES = ('ExternalBaselineBindsEachOriginalProtectionMember',
+                           'ExternalOffRequiresOriginalController',
+                           'ExternalOffPreservesLegacyRouterExecution',
+                           'ExternalOffRetirementKeepsOriginalRetry',
+                           'ExternalOffRetirementPreservesReplacementOwner')
+
+
+def native_groups():
+    return {
+        'original': tuple('TestMacOSOwnedControllerNative'+name for name in CASES) +
+                    tuple('TestDesktopMacOS'+name for name in PARENT_CASES+ADDITIONAL_PARENT_CASES),
+        'execution': tuple('TestDesktopMacOS'+name for name in EXECUTION_PARENT_CASES+EXECUTION_PRODUCT_CASES),
+    }
+
+
+def native_test_arguments(group=None):
     original = '^Test(MacOSOwnedControllerNative|DesktopMacOS(Parent|Session|External))'
     execution = '|'.join('TestDesktopMacOS'+name for name in EXECUTION_PARENT_CASES+EXECUTION_PRODUCT_CASES)
-    return ['-test.run='+original+'|^('+execution+')$', '-test.v', '-test.timeout=180s']
+    pattern = original+'|^('+execution+')$'
+    if group is not None:
+        if group not in native_groups():
+            raise ValueError('Unknown original native controller group')
+        pattern = '^('+'|'.join(native_groups()[group])+')$'
+    return ['-test.run='+pattern, '-test.v', '-test.timeout=180s']
 
 
-def require_native_verdicts(output):
+def require_native_verdicts(output, group=None):
     """Only complete, unique top-level Go verdicts prove the required cases."""
     if not isinstance(output, str) or re.search(
             r'(?im)^\s*(?:--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|'
             r'WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
         raise RuntimeError('Native macOS output contains failure, skip, race or incomplete build evidence')
-    names = ['TestMacOSOwnedControllerNative'+name for name in CASES]
-    names += ['TestDesktopMacOS'+name for name in PARENT_CASES]
-    names += ['TestDesktopMacOS'+name for name in EXECUTION_PARENT_CASES]
-    names += ['TestDesktopMacOS'+name for name in EXECUTION_PRODUCT_CASES]
+    groups = native_groups()
+    if group is not None and group not in groups:
+        raise ValueError('Unknown original native controller verdict group')
+    names = groups[group] if group is not None else sum(groups.values(), ())
+    top = re.findall(r'^--- PASS: (Test\S+) \([0-9]+(?:\.[0-9]+)?s\)$', output, re.MULTILINE)
+    if len(top) != len(names) or set(top) != set(names):
+        raise RuntimeError('Native macOS verdict inventory was omitted, duplicated or borrowed')
     for name in names:
         pattern = r'^--- PASS: '+re.escape(name)+r' \([0-9]+(?:\.[0-9]+)?s\)$'
         if len(re.findall(pattern, output, flags=re.MULTILINE)) != 1:
             raise RuntimeError('Mandatory exact-once native macOS verdict was missing or repeated: '+name)
     if output.splitlines().count('PASS') != 1 or not output.rstrip().endswith('\nPASS'):
         raise RuntimeError('Native macOS execution did not finish with one complete PASS verdict')
+
+
+def native_image_identity(path):
+    path = Path(path)
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not before.st_mode & 0o111:
+        raise RuntimeError('Native controller lost its original regular executable')
+    data = path.read_bytes()
+    after = path.lstat()
+    def identity(value):
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+                value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    if identity(before) != identity(after):
+        raise RuntimeError('Native controller image changed during capture')
+    return (*identity(after), hashlib.sha256(data).hexdigest())
+
+
+def require_native_inventory(output):
+    expected = sum(native_groups().values(), ())
+    names = output.splitlines()
+    if len(set(expected)) != len(expected) or len(names) != len(expected) or set(names) != set(expected):
+        raise RuntimeError('Compiled native controller inventory changed before partitioning')
+
+
+def execute_native_groups(command, images, before, environment, sudo):
+    def current():
+        if source_identity() != before or any(native_image_identity(path) != identity for path, identity in images.items()):
+            raise RuntimeError('Native controller original source or image changed between groups')
+    current()
+    selector = native_test_arguments()[0].removeprefix('-test.run=')
+    inventory = reported_run([*command, '-test.list='+selector], cwd=ROOT, env=environment, timeout=15, sudo=sudo)
+    require_native_inventory(inventory)
+    current()
+    completed = []
+    for group in native_groups():
+        current()
+        print('Original native controller group: '+group, flush=True)
+        output = reported_run([*command, *native_test_arguments(group)], cwd=ROOT, env=environment, timeout=200, sudo=sudo)
+        print(output, end='', flush=True)
+        require_native_verdicts(output, group)
+        current()
+        completed.append(group)
+    if completed != list(native_groups()):
+        raise RuntimeError('Native controller omitted an original required group')
+    return completed
 
 
 def native_failure_excerpt(output):
@@ -311,12 +382,10 @@ def main():
                    'ROUTERVPN_MACOS_FIXTURE_PYTHON=' + str(Path(python).absolute()),
                    'ROUTERVPN_MACOS_FIXTURE_INSTALLCAP=' + str(capability),
                    'ROUTERVPN_MACOS_FIXTURE_APPKIT=' + str(appkit), 'GORACE=atexit_sleep_ms=0',
-                   str(binary), *native_test_arguments()]
+                   str(binary)]
         if sudo: command = [sudo, '-n', '--', *command]
-        output = reported_run(command, cwd=ROOT, env=environment, timeout=200, sudo=sudo)
-        print(output, end='')
-        require_native_verdicts(output)
-        if source_identity() != before: raise RuntimeError('Native ownership source changed during execution')
+        images = {path: native_image_identity(path) for path in (binary, capability, appkit)}
+        execute_native_groups(command, images, before, environment, sudo)
     print('Exact native macOS supervisor, actual peer credentials, inherited locks, owned cleanup, crash boundaries and AppKit authenticated transports passed.')
 
 

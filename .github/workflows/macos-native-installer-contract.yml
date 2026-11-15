@@ -97,7 +97,10 @@ jobs:
       matrix:
         runner: [macos-15-intel, macos-15]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    # Two mandatory native groups retain 180s Go / 200s process limits.
+    # Compiler/signing, installer controls and inventory have separate bounds;
+    # this finite job budget is not a sum-of-all-stage-maxima guarantee.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
