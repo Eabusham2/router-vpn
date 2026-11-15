@@ -19,6 +19,12 @@ type desktopDarwinKernelSocket struct {
 	network                 string
 }
 
+type desktopDarwinFD struct {
+	number int
+	socket bool
+	kind   uint32
+}
+
 func desktopDarwinSocketIdentity(file *os.File) (desktopDarwinKernelSocket, error) {
 	if file == nil {
 		return desktopDarwinKernelSocket{}, errors.New("Darwin physical socket descriptor is missing")

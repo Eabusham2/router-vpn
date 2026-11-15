@@ -697,7 +697,13 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                     self.assertEqual(kwargs['timeout'], 850)
                     case = command[-1]
                     self.assertIn(case, gate.SEPARATE_CASES)
-                    verdicts = self.verdicts(case) if case in gate.SOCKS_CASES else ['--- PASS: '+gate.native_case_name(case)+' (0.01s)']
+                    if case in gate.SOCKS_CASES:
+                        verdicts = self.verdicts(case)
+                    elif case in gate.OFF_CASES:
+                        root = gate.native_case_name(case)
+                        verdicts = ['--- PASS: '+name+' (0.01s)' for name in (root, *(root+'/'+leaf for leaf in gate.OFF_CASES[case]))]
+                    else:
+                        verdicts = ['--- PASS: '+gate.native_case_name(case)+' (0.01s)']
                     return '\n'.join(verdicts[1:] if missing == case else verdicts)+'\n'
                 return '\n'.join(original)+'\n'
             with self.subTest(missing=missing), mock.patch.object(gate.platform, 'system', return_value='Darwin'), mock.patch.dict(os.environ, {'GOOS': 'darwin'}), mock.patch.object(gate.UID, 'compiler_toolchain', side_effect=lambda source, go, env: ('fixture-go', env)), mock.patch.object(gate.UID, 'privilege_tool', return_value=None), mock.patch.object(gate, 'reported_run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
@@ -707,12 +713,62 @@ class DarwinSOCKSBoundaries(unittest.TestCase):
                 else:
                     gate.execute(ROOT)
             expected = gate.SEPARATE_CASES
-            if missing in gate.SOCKS_CASES:
+            if missing in gate.SOCKS_CASES+tuple(gate.OFF_CASES):
                 expected = expected[:expected.index(missing)+1]
             self.assertEqual(len(calls), 2+len(expected))
             self.assertNotIn('--case', calls[1])
             for command, case in zip(calls[2:], expected):
                 self.assertEqual(command, calls[1]+['--case', case])
+
+    def test_off_execution_requires_every_original_native_boundary_once(self):
+        gate = self.gate
+        for case, leaves in gate.OFF_CASES.items():
+            root = gate.native_case_name(case)
+            lines = ['--- PASS: '+name+' (0.01s)' for name in (root, *(root+'/'+leaf for leaf in leaves))]
+            samples = [('\n'.join(lines), True)]
+            for index in range(len(lines)):
+                for changed in (lines[:index]+lines[index+1:], lines+[lines[index]],
+                                lines[:index]+[lines[index].replace('PASS', 'SKIP')]+lines[index+1:],
+                                lines+[lines[index].replace('PASS', 'FAIL')]):
+                    samples.append(('\n'.join(changed), False))
+            samples.extend(('\n'.join(lines+[fault]), False) for fault in
+                           ('--- PASS: '+root+'/foreign (0.01s)', 'WARNING: DATA RACE',
+                            'panic: actual native failure', 'FAIL native [build failed]'))
+            for output, valid in samples:
+                def run(command, **kwargs):
+                    if 'test' in command:
+                        Path(command[command.index('-o')+1]).write_bytes(b'explicit runner invocation fixture only')
+                        return ''
+                    self.assertEqual(command[-2:], ['--case', case])
+                    self.assertEqual(kwargs['timeout'], 850)
+                    return output+'\n--- PASS: TestDesktopPFABIRejectsUnprovedKernel (0.01s)\n'
+                with self.subTest(case=case, output=output), \
+                     mock.patch.object(gate.platform, 'system', return_value='Darwin'), \
+                     mock.patch.dict(os.environ, {'GOOS': 'darwin'}), \
+                     mock.patch.object(gate.UID, 'compiler_toolchain', side_effect=lambda source, go, env: ('fixture-go', env)), \
+                     mock.patch.object(gate.UID, 'privilege_tool', return_value=None), \
+                     mock.patch.object(gate, 'reported_run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+                    if valid:
+                        gate.execute(ROOT, case=case)
+                    else:
+                        with self.assertRaises(ValueError):
+                            gate.execute(ROOT, case=case)
+        with self.assertRaises(ValueError):
+            gate.require_off_verdicts('', 'TCPAndUDP')
+
+    def test_off_requires_both_original_source_and_native_witness_before_compilation(self):
+        gate = self.gate
+        source, package, original = gate.checked_sources(ROOT)
+        for missing in ('desktop_socket_darwin_off.go', 'desktop_socket_darwin_off_test.go'):
+            changed = dict(original)
+            del changed[missing]
+            with self.subTest(missing=missing), \
+                 mock.patch.object(gate.platform, 'system', return_value='Darwin'), \
+                 mock.patch.object(gate, 'checked_sources', return_value=(source, package, changed)), \
+                 mock.patch.object(gate, 'reported_run') as run, \
+                 self.assertRaisesRegex(ValueError, 'source/test closure is incomplete'):
+                gate.execute(ROOT, case='OffHostAndBroker')
+            run.assert_not_called()
 
     def test_descriptor_requires_every_native_boundary_once(self):
         root = 'TestDesktopDarwinGuardianKernelDescriptorOwnership'
@@ -875,6 +931,14 @@ class DarwinOriginalReadbackObservation(unittest.TestCase):
         regression.execute(ROOT)
 
 
+class DarwinOffAdmissionJoin(unittest.TestCase):
+    def test_original_creation_joins_before_retained_descriptor_cleanup(self):
+        spec = importlib.util.spec_from_file_location('darwin_off_close_admission', ROOT/'deploy/test_darwin_off_close_admission.py')
+        regression = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(regression)
+        regression.execute(ROOT)
+
+
 class DarwinSOCKSCleanupOwnership(unittest.TestCase):
     def test_actual_registration_reaches_bounded_owner_before_blocked_connection_close(self):
         source = (ROOT/'internal/mobiletor/desktop_socket_darwin_guardian_test.go').read_text()
@@ -987,9 +1051,11 @@ type DesktopSocketCreation struct{SocketID,Network string}
 type DesktopSocketGrant struct{}
 type desktopDarwinKernelSocket struct{uid uint32;network string}
 type desktopDarwinOwnedSocket struct{creation DesktopSocketCreation;file *os.File;identity desktopDarwinKernelSocket;grants map[string]DesktopSocketGrant}
-type desktopDarwinGuardian struct{uid uint32;sockets map[string]*desktopDarwinOwnedSocket}
+type desktopDarwinGuardian struct{uid uint32;sockets map[string]*desktopDarwinOwnedSocket;options struct{HostProtectionOff bool}}
 var inspect func(*os.File)(desktopDarwinKernelSocket,error)
 func desktopDarwinSocketIdentity(f *os.File)(desktopDarwinKernelSocket,error){return inspect(f)}
+// The native Off path is not modeled by this original admission fixture.
+func(g *desktopDarwinGuardian)prepareOffSocket(context.Context,DesktopSocketCreation,*os.File,desktopDarwinKernelSocket)error{return errors.New("portable admission fixture cannot grant Darwin Off authority")}
 '''
         test = r'''package creator
 import("context";"errors";"os";"testing";"time")

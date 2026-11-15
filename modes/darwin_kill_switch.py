@@ -46,7 +46,7 @@ def owned_label(value: str) -> str:
     return 'rvpn:' + base64.urlsafe_b64encode(hashlib.sha256(value.encode()).digest()).decode().rstrip('=')
 
 
-def render_owned_pf_rules(lan_access: bool, capture: tuple[str, str] | None) -> str:
+def render_owned_pf_rules(lan_access: bool, capture: tuple[str, str] | None, isolated_only: bool = False) -> str:
     """Empty native-owner baseline; no account, tuple or utun name is borrowed."""
     if capture is None:
         session, source = 'inactive', ''
@@ -56,6 +56,10 @@ def render_owned_pf_rules(lan_access: bool, capture: tuple[str, str] | None) -> 
         raise RuntimeError('macOS native baseline lost its exact session/source')
     else:
         session, source = capture
+    if type(isolated_only) is not bool or isolated_only and capture is None:
+        raise RuntimeError('macOS isolated baseline requires its active original capture')
+    if isolated_only:
+        return f'anchor "p{session}" out\n'
     allowed = owned_label('allowed\0'+session+'\0'+source)
     reset = owned_label('unproven\0'+session+'\0'+source)
     label = owned_label('baseline\0'+session+'\0'+source)
@@ -453,14 +457,17 @@ def apply_darwin(
     dry_run: bool,
     native_egress=None,
     socket_broker: bool = False,
+    isolated_only: bool = False,
     socket_capture: tuple[str, str] | None = None,
     retain_state: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     previous_anchors = _state_anchors(previous_state)
+    if type(isolated_only) is not bool or isolated_only and not socket_broker:
+        raise RuntimeError('macOS isolated baseline requires its captured native socket owner')
     if socket_broker:
         if endpoint_ips or native_egress is not None or refresh:
             raise RuntimeError('macOS native socket baseline cannot acquire endpoint or name-only tunnel authority')
-        render_owned_pf_rules(lan_access, socket_capture)  # validate the complete capture before any operation
+        render_owned_pf_rules(lan_access, socket_capture, isolated_only)  # validate the complete capture before any operation
         if dry_run:
             return {'pf_token': str(previous_state.get('pf_token') or 'dry-run'),
                     'darwin_baseline_utun': [], 'darwin_tunnel_interfaces': [],
@@ -493,8 +500,9 @@ def apply_darwin(
         # fixed anchors during handoff. A failure retains deny and exact cleanup
         # authority, including failure after the kernel applied a command.
         journal = _baseline.transition(previous_state, action='replace', lan=lan_access,
-                                       capture=socket_capture, retain=persist_plan)
-        retire_physical_states(physical)
+                                       capture=socket_capture, isolated_only=isolated_only, retain=persist_plan)
+        if not isolated_only:
+            retire_physical_states(physical)
         return {**extra, **journal}
     if socket_capture is not None:
         raise RuntimeError('macOS socket capture requires its native baseline')

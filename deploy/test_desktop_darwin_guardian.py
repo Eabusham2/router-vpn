@@ -48,7 +48,13 @@ READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAn
                   'PFReadbackInventoryCancelledWaiterDoesNotDetachNativeOwner',
                   'PFReadbackInventoryCancellationAndFailureNeverBecomeEmptyProof')
 SOCKS_CASES = ('SOCKSAssociations', 'SOCKSDerivedExpiry')
-SEPARATE_CASES = ('SocketRetirementReusesCapacity',)+SOCKS_CASES
+OFF_CASES = {
+    'OffHostAndBroker': ('tcp4', 'udp4', 'tcp6', 'udp6'),
+    'OffJoinedGuardianRetainsAliasGuard': ('kill', 'channel-loss'),
+    'OffStateCollisionPreservesHost': ('udp4', 'udp6'),
+}
+CASES += tuple(OFF_CASES)
+SEPARATE_CASES = ('SocketRetirementReusesCapacity',)+SOCKS_CASES+tuple(OFF_CASES)
 SOCKS_LEAVES = ('original-kernel-identity', 'stale-control-permit', 'expired-control-permit',
                 'derived-expiry', 'sibling-claim', 'child-before-parent', 'joined-sibling-isolation',
                 'group-renewal', 'renewal-authority', 'renewal-frame')
@@ -85,6 +91,19 @@ def require_descriptor_verdicts(output):
             raise ValueError('Darwin descriptor gate omitted or duplicated an original native boundary')
         if re.search(r'(?m)^\s*--- (?:SKIP|FAIL): '+re.escape(name)+r' \(', output):
             raise ValueError('Darwin descriptor gate retained an unsuccessful native boundary')
+
+
+def require_off_verdicts(output, case):
+    if case not in OFF_CASES:
+        raise ValueError('Darwin Off gate requires an original native case')
+    root = native_case_name(case)
+    expected = {root, *(root+'/'+leaf for leaf in OFF_CASES[case])}
+    pattern = r'(?m)^[ \t]*--- PASS: ('+re.escape(root)+r'(?:/[^\s]+)?) \([0-9]+(?:\.[0-9]+)?s\)$'
+    actual = re.findall(pattern, output)
+    if len(actual) != len(expected) or set(actual) != expected:
+        raise ValueError('Darwin Off gate omitted, duplicated or substituted an original native boundary')
+    if re.search(r'(^|\n)(?:.*--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|.*WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]', output):
+        raise ValueError('Darwin Off gate retained an unsuccessful native boundary')
 
 
 def native_case_name(case):
@@ -130,6 +149,10 @@ def checked_sources(source: Path):
     if verifier.is_symlink() or not verifier.is_file():
         raise ValueError('Darwin guardian lost its pinned PF source verifier')
     records['dependency/darwin-pf-abi.py'] = hashlib.sha256(verifier.read_bytes()).hexdigest()
+    admission = ROOT/'deploy/test_darwin_off_close_admission.py'
+    if admission.is_symlink() or not admission.is_file():
+        raise ValueError('Darwin Off lost its original admission/cleanup regression')
+    records['regression/'+admission.name] = hashlib.sha256(admission.read_bytes()).hexdigest()
     # The kernel ACL parser/readback is part of this ownership boundary too.
     for path in sorted((ROOT/'internal/common').glob('owned_path_acl*.go')):
         if path.name.endswith('_test.go'):
@@ -582,6 +605,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             'desktop_socket_darwin_observation.go', 'desktop_socket_observation_test.go',
             'desktop_socket_darwin_frame_test.go', 'desktop_socket_darwin_descriptor.go',
             'desktop_socket_darwin_descriptor_test.go', 'desktop_socket_darwin_socks.go',
+            'desktop_socket_darwin_off.go', 'desktop_socket_darwin_off_test.go',
             'desktop_socket_darwin_socks_guardian.go', 'desktop_socket_darwin_socks_pf.go',
             'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go',
             'desktop_socket_pf_scoped.go', 'desktop_socket_pf_scoped_test.go',
@@ -623,9 +647,13 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
                 separate_output = reported_run(command+['--case', separate], cwd=source, timeout=850, sudo=sudo)
                 if separate in SOCKS_CASES:
                     require_socks_verdicts(separate_output, separate)
+                elif separate in OFF_CASES:
+                    require_off_verdicts(separate_output, separate)
                 output += separate_output
         elif case in SOCKS_CASES:
             require_socks_verdicts(output, case)
+        elif case in OFF_CASES:
+            require_off_verdicts(output, case)
         wanted = (case,) if case else CASES+READBACK_CASES+SOCKS_CASES
         if any('--- PASS: '+native_case_name(name)+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
@@ -633,6 +661,9 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             require_descriptor_verdicts(output)
         if case in (None, 'IsolatedStateInspection'):
             require_isolated_state_verdicts(output)
+        if case is None:
+            for off_case in OFF_CASES:
+                require_off_verdicts(output, off_case)
         if '--- PASS: TestDesktopPFABIRejectsUnprovedKernel (' not in output:
             raise ValueError('Darwin guardian omitted the private ABI version-rejection boundary')
         if case is None:
@@ -859,6 +890,25 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('foreign block composition', 'ForeignBlockAndLaterPass', 'owned permit bypassed a later foreign block',
          'desktop_socket_darwin_pf.go', (
              ('"pass out on %s %s proto %s', '"pass out quick on %s %s proto %s'),)),
+        ('Off preserves ordinary host traffic', 'OffHostAndBroker', 'Darwin Off blocked an unrelated ordinary host socket',
+         'desktop_socket_darwin_pf.go', (
+             ('if desktopDarwinPFTestScope != "" && !p.HostProtectionOff {',
+              'if desktopDarwinPFTestScope != "" {'),)),
+        ('Off retains original engine descriptor aliases', 'OffJoinedGuardianRetainsAliasGuard', 'Darwin Off source released a still-held original engine alias',
+         'desktop_socket_darwin_off.go', (
+             ('if uintptr(fd.number) != original.file.Fd() && value.object[0] == identity.socket {',
+              'if false && uintptr(fd.number) != original.file.Fd() && value.object[0] == identity.socket {'),)),
+        ('Off rejects original floating state collision', 'OffStateCollisionPreservesHost', 'Darwin Off prebound source admitted actual old floating state',
+         'desktop_socket_darwin_off.go', (
+             ('g.pf.scopedSockets[creation.SocketID] = desktopDarwinPFLocalSocket{creation: creation, local: local}',
+              '// causal control: omit original bound socket from native state inspection'),)),
+        ('Off guardian loss retains creator guard', 'OffJoinedGuardianRetainsAliasGuard', 'Darwin Off guardian loss removed its retained creator UID guard',
+         'desktop_socket_darwin_helper.go', (
+             ('if g.options.HostProtectionOff && !release {',
+              'if false && g.options.HostProtectionOff && !release {'),)),
+        ('Off preserves unrelated original host state', 'OffStateCollisionPreservesHost', 'Darwin Off preparation removed unrelated original host state',
+         'desktop_socket_darwin_pf.go', (
+             ('if !options.HostProtectionOff {', 'if true {'),)),
         ('descriptor close-on-exec installation', 'DescriptorOwnership', 'original descriptor is not close-on-exec',
          'desktop_socket_darwin_descriptor.go', (
              ('syscall.F_SETFD, syscall.FD_CLOEXEC)', 'syscall.F_SETFD, 0)'),)),

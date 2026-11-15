@@ -88,6 +88,48 @@ class OwnedDarwinPF(unittest.TestCase):
                     session_id='c'*32, source_sha256='d'*64, config_sha256='e'*64,
                     home_lan_access=False, policy=policy)
 
+    def test_off_native_families_keep_host_states_and_exact_retirement_capture(self):
+        families = [('external', self.external_capture, D.darwin_external),
+                    ('candidate-prefix', self.candidate_prefix_capture, D.darwin_candidate_prefix)]
+        for family in D._NODE_CHAIN_FAMILIES:
+            families.append((family, lambda policy, family=family: self.node_chain_capture(policy, family), D.darwin_node_chain))
+        for label, capture_for, action in families:
+            with self.subTest(family=label):
+                capture = capture_for('off')
+                active = action('apply', dict(capture=capture, expected=None))
+                self.assertTrue(active['baseline']['present'])
+                self.assertEqual(self.rules[P.OWNED_PF_ANCHOR], 'anchor "p'+capture['session_id']+'" out\n')
+                self.assertIs(self.saved()[P._baseline.STATE_KEY]['request']['isolated_only'], True)
+                self.assertEqual(action('current', dict(capture=capture, expected=active)), active)
+                self.retire.assert_not_called()
+                before = self.saved()
+                journal = before[P._baseline.STATE_KEY]
+                journal['request'].pop('isolated_only')
+                self.private_json(self.root/'run/kill-switch.json', before)
+                with self.assertRaisesRegex(RuntimeError, 'persistent kill-switch state contains an invalid policy'):
+                    action('current', dict(capture=capture, expected=active))
+                journal['request']['isolated_only'] = True
+                self.private_json(self.root/'run/kill-switch.json', before)
+                held = action('retire', dict(capture=capture, expected=active))
+                self.assertEqual(held['phase'], 'held')
+                self.assertFalse(held['baseline']['present'])
+                self.assertEqual(held['pf_token'], active['pf_token'])
+                self.assertFalse((self.root/'run/kill-switch.json').exists())
+                self.assertEqual(self.references, {'999'})
+                self.assertEqual(action('retire', dict(capture=capture, expected=active)), held)
+                retired = action('release', dict(capture=capture, expected=held))
+                self.assertEqual(retired['phase'], 'retired')
+                self.assertFalse(retired['baseline']['present'])
+                self.assertEqual(action('release', dict(capture=capture, expected=retired)), retired)
+                with self.assertRaisesRegex(RuntimeError, 'retired reference proof'):
+                    action('release', dict(capture=capture, expected=None))
+                self.references.add(active['pf_token'])
+                with self.assertRaisesRegex(RuntimeError, 'retired reference proof'):
+                    action('release', dict(capture=capture, expected=retired))
+                self.references.remove(active['pf_token'])
+        self.watcher.assert_not_called()
+        self.resolver.assert_not_called()
+
     def test_external_family_uses_exact_existing_native_journal_and_always_retirement(self):
         capture = self.external_capture()
         request = dict(capture=capture, expected=None)
@@ -988,7 +1030,7 @@ class OwnedDarwinPF(unittest.TestCase):
         if previous not in request['expected']:
             raise RuntimeError('native baseline has another exact preimage')
         capture = (request['session_id'], request['source_sha256']) if request['session_id'] else None
-        rules = P.render_owned_pf_rules(request['home_lan_access'], capture) if request['action'] == 'replace' else None
+        rules = P.render_owned_pf_rules(request['home_lan_access'], capture, request.get('isolated_only', False)) if request['action'] == 'replace' else None
         target = {'present': rules is not None, 'rules_sha256': hashlib.sha256(rules.encode()).hexdigest() if rules is not None else ''}
         if phase == 'apply':
             saved = self.saved()

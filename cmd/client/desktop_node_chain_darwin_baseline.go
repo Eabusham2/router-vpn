@@ -35,7 +35,7 @@ type desktopMacOSNodeChainReceipt struct {
 func (s desktopMacOSNodeChainSelection) valid() bool {
 	return s.Schema == 2 && (s.Family == macosprocess.NodeChainFamily || s.Family == macosprocess.NodeChainSOCKSFamily || s.Family == macosprocess.NodeChainCONNECTFamily || s.Family == macosprocess.NodeChainExecutionFamily) && validProfileID(s.ProfileID) &&
 		desktopMacOSExternalShort.MatchString(s.Session) && desktopMacOSExternalLong.MatchString(s.Source) &&
-		desktopMacOSExternalLong.MatchString(s.Config) && (s.Policy == "on-connect" || s.Policy == "always")
+		desktopMacOSExternalLong.MatchString(s.Config) && (s.Policy == "off" || s.Policy == "on-connect" || s.Policy == "always")
 }
 
 func exactDesktopMacOSNodeChainFields(object map[string]any, names ...string) bool {
@@ -71,7 +71,7 @@ func decodeDesktopMacOSNodeChainReceipt(raw []byte, capture desktopMacOSNodeChai
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&value) != nil || value.Schema != 2 || value.Capture != capture || value.Phase != phase ||
-		!desktopMacOSExternalToken.MatchString(value.Token) || value.Baseline.Present != (phase != "retired" || capture.Policy == "always") ||
+		!desktopMacOSExternalToken.MatchString(value.Token) || value.Baseline.Present != (phase == "active" || phase == "held" && capture.Policy != "off" || capture.Policy == "always") ||
 		value.Baseline.Present && !desktopMacOSExternalLong.MatchString(value.Baseline.Rules) || !value.Baseline.Present && value.Baseline.Rules != "" {
 		return desktopMacOSNodeChainReceipt{}, failure
 	}

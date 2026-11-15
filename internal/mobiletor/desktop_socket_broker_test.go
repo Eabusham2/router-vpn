@@ -17,6 +17,36 @@ import (
 	"time"
 )
 
+type desktopPreboundRefusalSource struct{}
+
+func (*desktopPreboundRefusalSource) CreateSocket(context.Context, DesktopSocketCreation) (DesktopSocketCreated, error) {
+	return DesktopSocketCreated{}, errors.New("fixture cannot create native authority")
+}
+func (*desktopPreboundRefusalSource) Cancel() {}
+func (*desktopPreboundRefusalSource) Close(context.Context) error {
+	return errors.New("fixture cannot retire native authority")
+}
+
+func TestDesktopSocketPreboundRejectsOtherPlatforms(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		return // Darwin's actual original-object capability has native host cases.
+	}
+	file, err := os.CreateTemp(t.TempDir(), "prebound-refusal-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	source := &desktopPreboundRefusalSource{}
+	creation := DesktopSocketCreation{Capture: desktopSocketFixtureCapture(), Network: "udp", SocketID: strings.Repeat("a", 32),
+		Binding: DesktopSocketBinding{LocalAddress: netip.MustParseAddr("127.0.0.1")}}
+	called := false
+	capability := &desktopSocketPrebound{source: source, creation: creation, local: netip.MustParseAddrPort("127.0.0.1:43127"),
+		verify: func(*os.File) error { called = true; return nil }}
+	if err := capability.validate(source, creation, file); err == nil || called {
+		t.Fatal("another platform accepted Darwin-only prebound authority", err)
+	}
+}
+
 func desktopSocketAwaitControlQueue(t *testing.T, control *desktopSocketControlMutex, count int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

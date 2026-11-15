@@ -229,35 +229,36 @@ type DesktopSocketBroker struct {
 }
 
 type desktopSocket struct {
-	retirement   desktopRetirementState
-	admission    desktopSocketAdmissionObservation
-	ctx          context.Context
-	cancel       context.CancelFunc
-	broker       *DesktopSocketBroker
-	id           string
-	network      string
-	remote       netip.AddrPort
-	binding      DesktopSocketBinding
-	mu           sync.Mutex
-	closing      bool
-	conn         net.Conn
-	packet       net.PacketConn
-	keeper       *desktopSocketKeeper
-	sourceFile   *os.File
-	sourceNative DesktopSocketNative
-	local        netip.AddrPort
-	peers        map[netip.AddrPort]*desktopSocketPeer
-	operation    chan struct{}
-	done         chan struct{}
-	closeOnce    sync.Once
-	io           sync.WaitGroup
-	readUntil    time.Time
-	writeUntil   time.Time
-	lastFailure  error
-	parent       *desktopSocket
-	children     map[*desktopSocket]struct{}
-	socksClaimed bool
-	scopedPolicy DesktopSocketPolicy
+	retirement     desktopRetirementState
+	admission      desktopSocketAdmissionObservation
+	ctx            context.Context
+	cancel         context.CancelFunc
+	broker         *DesktopSocketBroker
+	id             string
+	network        string
+	remote         netip.AddrPort
+	binding        DesktopSocketBinding
+	mu             sync.Mutex
+	closing        bool
+	conn           net.Conn
+	packet         net.PacketConn
+	keeper         *desktopSocketKeeper
+	sourceFile     *os.File
+	sourcePrebound *desktopSocketPrebound
+	sourceNative   DesktopSocketNative
+	local          netip.AddrPort
+	peers          map[netip.AddrPort]*desktopSocketPeer
+	operation      chan struct{}
+	done           chan struct{}
+	closeOnce      sync.Once
+	io             sync.WaitGroup
+	readUntil      time.Time
+	writeUntil     time.Time
+	lastFailure    error
+	parent         *desktopSocket
+	children       map[*desktopSocket]struct{}
+	socksClaimed   bool
+	scopedPolicy   DesktopSocketPolicy
 }
 
 type desktopSocketPeer struct {
@@ -478,8 +479,21 @@ func (b *DesktopSocketBroker) DialContext(ctx context.Context, network, address 
 		if err := b.policy.Bind(controlCtx, b.capture, s.binding, actualNetwork, raw); err != nil {
 			return err
 		}
-		if err := s.adoptRetained(desktopSocketBindTCP(raw, s.binding.LocalAddress)); err != nil {
-			return err
+		if s.sourcePrebound != nil {
+			if err := s.sourcePrebound.validate(b.source, s.sourcePrebound.creation, s.sourceFile); err != nil {
+				return err
+			}
+			keeper, local, err := desktopSocketRetain(raw)
+			if err == nil && local != s.sourcePrebound.local {
+				err = errors.New("Darwin prebound TCP import changed its original local tuple")
+			}
+			if err := s.adoptRetained(keeper, local, err); err != nil {
+				return err
+			}
+		} else {
+			if err := s.adoptRetained(desktopSocketBindTCP(raw, s.binding.LocalAddress)); err != nil {
+				return err
+			}
 		}
 		_, err := s.permit(controlCtx, remote)
 		return err
@@ -490,7 +504,7 @@ func (b *DesktopSocketBroker) DialContext(ctx context.Context, network, address 
 	} else if s.sourceNative != nil {
 		connection, err = desktopSocketImportNativeTCP(operation, network, remote, s.sourceNative, control)
 	} else {
-		connection, err = desktopSocketImportTCP(operation, network, remote, s.sourceFile, control)
+		connection, err = desktopSocketImportTCP(operation, network, remote, s.sourceFile, control, s.sourcePrebound)
 	}
 	s.mu.Lock()
 	s.conn = connection
@@ -561,7 +575,7 @@ func (b *DesktopSocketBroker) openPacketOwned(ctx context.Context, network strin
 	} else if s.sourceNative != nil {
 		packet, err = desktopSocketImportNativePacket(operation, network, s.sourceNative, s.binding.LocalAddress, listener.Control)
 	} else {
-		packet, err = desktopSocketImportPacket(operation, network, s.sourceFile, s.binding.LocalAddress, listener.Control)
+		packet, err = desktopSocketImportPacket(operation, network, s.sourceFile, s.binding.LocalAddress, listener.Control, s.sourcePrebound)
 	}
 	s.mu.Lock()
 	s.packet = packet

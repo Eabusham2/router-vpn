@@ -7,10 +7,10 @@ import (
 )
 
 func TestDesktopMacOSExternalBaselineExactReceiptAndRetirement(t *testing.T) {
-	for _, policy := range []string{"on-connect", "always"} {
+	for _, policy := range []string{"off", "on-connect", "always"} {
 		for _, phase := range []string{"active", "held", "retired"} {
 			s := desktopMacOSExternalSelection{Schema: 1, ProfileID: "owned-profile", Protocol: "hysteria2", Session: strings.Repeat("a", 32), Source: strings.Repeat("b", 64), Config: strings.Repeat("c", 64), Policy: policy}
-			value := desktopMacOSExternalReceipt{Schema: 1, Capture: s, Phase: phase, Token: "417", Baseline: desktopMacOSBaselineProof{Present: phase != "retired" || policy == "always"}}
+			value := desktopMacOSExternalReceipt{Schema: 1, Capture: s, Phase: phase, Token: "417", Baseline: desktopMacOSBaselineProof{Present: phase == "active" || phase == "held" && policy != "off" || policy == "always"}}
 			if value.Baseline.Present {
 				value.Baseline.Rules = strings.Repeat("d", 64)
 			}
@@ -20,13 +20,19 @@ func TestDesktopMacOSExternalBaselineExactReceiptAndRetirement(t *testing.T) {
 				t.Fatal("original native receipt changed selected retirement", policy, phase, err)
 			}
 			for name, edit := range map[string]func(*desktopMacOSExternalReceipt){
-				"session":            func(v *desktopMacOSExternalReceipt) { v.Capture.Session = strings.Repeat("e", 32) },
-				"source":             func(v *desktopMacOSExternalReceipt) { v.Capture.Source = strings.Repeat("e", 64) },
-				"config":             func(v *desktopMacOSExternalReceipt) { v.Capture.Config = strings.Repeat("e", 64) },
-				"profile":            func(v *desktopMacOSExternalReceipt) { v.Capture.ProfileID = "other" },
-				"protocol":           func(v *desktopMacOSExternalReceipt) { v.Capture.Protocol = "tor" },
-				"LAN":                func(v *desktopMacOSExternalReceipt) { v.Capture.HomeLAN = !v.Capture.HomeLAN },
-				"policy":             func(v *desktopMacOSExternalReceipt) { v.Capture.Policy = "off" },
+				"session":  func(v *desktopMacOSExternalReceipt) { v.Capture.Session = strings.Repeat("e", 32) },
+				"source":   func(v *desktopMacOSExternalReceipt) { v.Capture.Source = strings.Repeat("e", 64) },
+				"config":   func(v *desktopMacOSExternalReceipt) { v.Capture.Config = strings.Repeat("e", 64) },
+				"profile":  func(v *desktopMacOSExternalReceipt) { v.Capture.ProfileID = "other" },
+				"protocol": func(v *desktopMacOSExternalReceipt) { v.Capture.Protocol = "tor" },
+				"LAN":      func(v *desktopMacOSExternalReceipt) { v.Capture.HomeLAN = !v.Capture.HomeLAN },
+				"policy": func(v *desktopMacOSExternalReceipt) {
+					if v.Capture.Policy == "off" {
+						v.Capture.Policy = "always"
+					} else {
+						v.Capture.Policy = "off"
+					}
+				},
 				"phase":              func(v *desktopMacOSExternalReceipt) { v.Phase = "joined-process" },
 				"schema":             func(v *desktopMacOSExternalReceipt) { v.Schema = 0 },
 				"token":              func(v *desktopMacOSExternalReceipt) { v.Token = "417 extra" },

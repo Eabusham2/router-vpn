@@ -12,7 +12,7 @@ func macOSNodeChainBaselineFixture(policy, phase string) desktopMacOSNodeChainRe
 	value := desktopMacOSNodeChainReceipt{Schema: 2,
 		Capture: desktopMacOSNodeChainSelection{Schema: 2, Family: macosprocess.NodeChainFamily, ProfileID: "owned-final",
 			Session: strings.Repeat("a", 32), Source: strings.Repeat("b", 64), Config: strings.Repeat("c", 64), Policy: policy},
-		Phase: phase, Token: "417", Baseline: desktopMacOSBaselineProof{Present: phase != "retired" || policy == "always"}}
+		Phase: phase, Token: "417", Baseline: desktopMacOSBaselineProof{Present: phase == "active" || phase == "held" && policy != "off" || policy == "always"}}
 	if value.Baseline.Present {
 		value.Baseline.Rules = strings.Repeat("d", 64)
 	}
@@ -20,7 +20,7 @@ func macOSNodeChainBaselineFixture(policy, phase string) desktopMacOSNodeChainRe
 }
 
 func TestDesktopMacOSNodeChainBaselineExactReceiptAndRetirement(t *testing.T) {
-	for _, policy := range []string{"on-connect", "always"} {
+	for _, policy := range []string{"off", "on-connect", "always"} {
 		for _, phase := range []string{"active", "held", "retired"} {
 			t.Run(policy+"/"+phase, func(t *testing.T) {
 				value := macOSNodeChainBaselineFixture(policy, phase)
@@ -38,7 +38,13 @@ func TestDesktopMacOSNodeChainBaselineExactReceiptAndRetirement(t *testing.T) {
 					"source":         func(v *desktopMacOSNodeChainReceipt) { v.Capture.Source = strings.Repeat("e", 64) },
 					"config":         func(v *desktopMacOSNodeChainReceipt) { v.Capture.Config = strings.Repeat("e", 64) },
 					"LAN":            func(v *desktopMacOSNodeChainReceipt) { v.Capture.HomeLAN = true },
-					"policy":         func(v *desktopMacOSNodeChainReceipt) { v.Capture.Policy = "off" },
+					"policy": func(v *desktopMacOSNodeChainReceipt) {
+						if v.Capture.Policy == "off" {
+							v.Capture.Policy = "always"
+						} else {
+							v.Capture.Policy = "off"
+						}
+					},
 					"phase":          func(v *desktopMacOSNodeChainReceipt) { v.Phase = "joined-process" },
 					"zero-token":     func(v *desktopMacOSNodeChainReceipt) { v.Token = "0" },
 					"token-prefix":   func(v *desktopMacOSNodeChainReceipt) { v.Token = "0417" },

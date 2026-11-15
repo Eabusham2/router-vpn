@@ -38,7 +38,7 @@ func (n *ExternalNetworkOwner) prepareExternalPhysicalDarwin(policy *mobilemulti
 	if err != nil || meta.TargetOS != "darwin" || !n.Matches(meta.SessionID, meta.SourceSHA256) {
 		return errors.New("darwin ordinary physical sockets belong to another native target")
 	}
-	options := mobiletor.DesktopDarwinSocketOptions{}
+	options := mobiletor.DesktopDarwinSocketOptions{HostProtectionOff: meta.KillSwitchPolicy == "off"}
 	for _, destination := range captured.PrivateDestinations {
 		address, err := netip.ParseAddr(destination.Host)
 		if err != nil || address.String() != destination.Host || !(address.IsPrivate() || address.IsLinkLocalUnicast()) || destination.Port < 1 || destination.Port > 65535 ||

@@ -70,7 +70,7 @@ def _proof(value):
     return {'present': present, 'rules_sha256': digest}
 
 
-def _request(action: str, lan: bool, capture, expected):
+def _request(action: str, lan: bool, capture, expected, isolated_only: bool = False):
     if action not in ('replace', 'clear') or type(lan) is not bool or type(expected) is not list or len(expected) not in (1, 2):
         raise RuntimeError('macOS baseline request has no bounded transition')
     session, source = '', ''
@@ -78,23 +78,30 @@ def _request(action: str, lan: bool, capture, expected):
         if type(capture) is not tuple or len(capture) != 2 or any(type(v) is not str for v in capture) or not re.fullmatch('[0-9a-f]{32}', capture[0]) or not re.fullmatch('[0-9a-f]{64}', capture[1]):
             raise RuntimeError('macOS baseline request lost its complete session/source')
         session, source = capture
+    if type(isolated_only) is not bool or isolated_only and (action != 'replace' or capture is None):
+        raise RuntimeError('macOS isolated baseline requires its active original capture')
     if action == 'clear' and (lan or capture is not None):
         raise RuntimeError('macOS baseline removal cannot borrow a connection')
     proofs = [_proof(value) for value in expected]
     if len(proofs) == 2 and proofs[0] == proofs[1]:
         raise RuntimeError('macOS baseline transition contains duplicate proofs')
     # Field order is the native canonical record contract, not arbitrary JSON.
-    return {'schema': 1, 'action': action, 'home_lan_access': lan,
-            'session_id': session, 'source_sha256': source, 'expected': proofs}
+    request = {'schema': 1, 'action': action, 'home_lan_access': lan}
+    if isolated_only:
+        request['isolated_only'] = True
+    return {**request, 'session_id': session, 'source_sha256': source, 'expected': proofs}
 
 
 def _parse_request(value):
-    _fields(value, ('schema', 'action', 'home_lan_access', 'session_id', 'source_sha256', 'expected'))
+    isolated = type(value) is dict and 'isolated_only' in value
+    _fields(value, ('schema', 'action', 'home_lan_access', 'session_id', 'source_sha256', 'expected') + (('isolated_only',) if isolated else ()))
+    if isolated and value['isolated_only'] is not True:
+        raise RuntimeError('macOS isolated baseline flag is not its canonical captured mode')
     if type(value['schema']) is not int or value['schema'] != 1:
         raise RuntimeError('macOS baseline request has another schema')
     session, source = value['session_id'], value['source_sha256']
     capture = None if session == '' and source == '' else (session, source)
-    return _request(value['action'], value['home_lan_access'], capture, value['expected'])
+    return _request(value['action'], value['home_lan_access'], capture, value['expected'], isolated)
 
 
 def _strict_object(pairs):
@@ -187,11 +194,11 @@ def retained(state: dict):
     return [previous, target]
 
 
-def transition(state: dict, *, action: str, lan: bool = False, capture=None,
+def transition(state: dict, *, action: str, lan: bool = False, capture=None, isolated_only: bool = False,
                retain: Callable[[dict], None]):
     if not callable(retain):
         raise RuntimeError('macOS native baseline requires durable cleanup ownership')
-    request = _request(action, lan, capture, retained(state))
+    request = _request(action, lan, capture, retained(state), isolated_only)
     try:
         plan = _invoke('plan', request)
     except RuntimeError:
@@ -201,7 +208,7 @@ def transition(state: dict, *, action: str, lan: bool = False, capture=None,
         # The exact old token has now been independently proved absent. This
         # second read-only plan accepts only actual namespace absence; it never
         # treats a different present baseline as an old owner or a fresh start.
-        request = _request(action, lan, capture, [{'present': False, 'rules_sha256': ''}])
+        request = _request(action, lan, capture, [{'present': False, 'rules_sha256': ''}], isolated_only)
         plan = _invoke('plan', request)
     # Validate even an internal adapter result; tests exercise this same seam.
     plan = _result(_canonical(plan), request, False)
@@ -225,7 +232,7 @@ def status(state: dict) -> bool:
             return False
         original = _parse_request(value['request'])
         capture = (original['session_id'], original['source_sha256']) if original['session_id'] else None
-        request = _request('replace', original['home_lan_access'], capture, expected)
+        request = _request('replace', original['home_lan_access'], capture, expected, original.get('isolated_only', False))
         result = _invoke('plan', request)
         result = _result(_canonical(result), request, False)
         return result['previous'] == result['target'] == expected[0] and reference(state.get('pf_token'))

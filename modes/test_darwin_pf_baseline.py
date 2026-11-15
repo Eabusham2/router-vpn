@@ -43,7 +43,7 @@ class BaselineTransition(unittest.TestCase):
             raise RuntimeError('independently changed kernel owner')
         target = {'present': False, 'rules_sha256': ''}
         if request['action'] == 'replace':
-            policy = (request['home_lan_access'], request['session_id'], request['source_sha256'])
+            policy = (request['home_lan_access'], request['session_id'], request['source_sha256'], request.get('isolated_only', False))
             target = {'present': True, 'rules_sha256': hashlib.sha256(repr(policy).encode()).hexdigest()}
         result = {'schema': 1, 'request_sha256': hashlib.sha256(B._canonical(request)).hexdigest(),
                   'previous': copy.deepcopy(self.current), 'target': target, 'applied': phase == 'apply'}
@@ -69,6 +69,43 @@ class BaselineTransition(unittest.TestCase):
         self.assertEqual(result[B.STATE_KEY]['target'], self.current)
         self.assertTrue(result[B.STATE_KEY]['complete'])
         self.assertTrue(B.status(self.saved))
+
+    def test_isolated_mode_survives_journal_status_ambiguous_commit_and_reboot(self):
+        self.ambiguous = True
+        with self.assertRaisesRegex(RuntimeError, 'completion unknown'):
+            self.apply(isolated_only=True)
+        self.assertIs(self.saved[B.STATE_KEY]['request']['isolated_only'], True)
+        self.ambiguous = False
+        self.apply(isolated_only=True)
+        self.assertTrue(B.status(self.saved))
+        original = copy.deepcopy(self.saved)
+        self.saved[B.STATE_KEY]['request'].pop('isolated_only')
+        self.assertFalse(B.status(self.saved), 'captured Off baseline became whole-host protection')
+        self.saved = original
+        self.current = {'present': False, 'rules_sha256': ''}
+        self.references.clear()
+        self.apply(isolated_only=True)
+        self.assertIs(self.saved[B.STATE_KEY]['request']['isolated_only'], True)
+        self.references.add('417')
+        self.assertTrue(B.status(self.saved))
+        result = B.transition(self.saved, action='clear', retain=self.persist)
+        self.saved.update(result)
+        self.assertFalse(self.current['present'])
+        self.assertNotIn('isolated_only', result[B.STATE_KEY]['request'])
+
+    def test_isolated_mode_rejects_missing_capture_and_noncanonical_flag_before_native(self):
+        for options in ({'action': 'replace', 'capture': None, 'isolated_only': True},
+                        {'action': 'clear', 'isolated_only': True},
+                        {'action': 'replace', 'capture': self.capture, 'isolated_only': 1}):
+            with self.subTest(options=options), self.assertRaises(RuntimeError):
+                B.transition({}, retain=self.persist, **options)
+        self.assertEqual(self.events, [])
+        request = B._request('replace', False, self.capture, [self.current], True)
+        self.assertEqual(B._parse_request(request), request)
+        self.assertIn(b'"home_lan_access":false,"isolated_only":true,"session_id":', B._canonical(request))
+        for flag in (False, None, 0, 1, 'true'):
+            with self.subTest(flag=flag), self.assertRaises(RuntimeError):
+                B._parse_request({**request, 'isolated_only': flag})
 
     def test_failed_persistence_never_admits_a_native_apply(self):
         def failed(value):

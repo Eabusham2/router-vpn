@@ -3,7 +3,9 @@ package mobiletor
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"os"
+	"runtime"
 	"syscall"
 )
 
@@ -18,12 +20,43 @@ type DesktopSocketCreation struct {
 }
 
 // DesktopSocketCreated transfers ownership even when CreateSocket also returns
-// an error. File or Native must be an actual unbound, unconnected kernel socket;
-// the broker imports that socket without recreating one under its own identity.
+// an error. File or Native must be an actual unconnected kernel socket. Sources
+// supply it unbound except the closed Darwin Off capability, whose original
+// creator-bound tuple and kernel object are independently rechecked on import.
+// The broker imports that socket without recreating one under its own identity.
 type DesktopSocketCreated struct {
 	Creation DesktopSocketCreation
 	File     *os.File
 	Native   DesktopSocketNative
+	prebound *desktopSocketPrebound
+}
+
+// This capability has no exported constructor or fields. Only the concrete
+// Darwin Off owner may attach it after binding, state inspection and actual
+// creator/socket readback. Exported metadata cannot authorize a bind bypass.
+type desktopSocketPrebound struct {
+	source   DesktopSocketSource
+	creation DesktopSocketCreation
+	local    netip.AddrPort
+	verify   func(*os.File) error
+}
+
+func (p *desktopSocketPrebound) validate(source DesktopSocketSource, creation DesktopSocketCreation, file *os.File) error {
+	if p == nil || runtime.GOOS != "darwin" || p.source == nil || p.source != source || p.creation != creation ||
+		file == nil || p.verify == nil || !p.local.IsValid() || p.local.Port() == 0 || p.local.Addr() != creation.Binding.LocalAddress {
+		return errors.New("desktop prebound socket lost its closed original Darwin authority")
+	}
+	return p.verify(file)
+}
+
+func desktopSocketCapturedPrebound(captured []*desktopSocketPrebound) (*desktopSocketPrebound, error) {
+	if len(captured) > 1 {
+		return nil, errors.New("desktop socket import mixed prebound authorities")
+	}
+	if len(captured) == 1 {
+		return captured[0], nil
+	}
+	return nil, nil
 }
 
 // DesktopSocketNative retains an OS socket that cannot be closed as an os.File.
@@ -120,9 +153,15 @@ func (s *desktopSocket) create(ctx context.Context) error {
 	s.mu.Lock()
 	s.sourceFile = reply.File
 	s.sourceNative = reply.Native
+	s.sourcePrebound = reply.prebound
 	s.mu.Unlock()
 	if err != nil || ctx.Err() != nil || !s.live() || (reply.File == nil) == (reply.Native == nil) || reply.Creation != request {
 		return errors.Join(err, ctx.Err(), errors.New("desktop physical socket creation lost its exact captured owner"))
+	}
+	if reply.prebound != nil {
+		if err := reply.prebound.validate(s.broker.source, request, reply.File); err != nil {
+			return err
+		}
 	}
 	return nil
 }

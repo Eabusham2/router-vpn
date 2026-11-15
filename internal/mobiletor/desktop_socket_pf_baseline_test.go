@@ -72,6 +72,34 @@ func TestDesktopPFBaselineRecordExactRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDesktopPFBaselineIsolatedCaptureAndCanonicalMode(t *testing.T) {
+	request := desktopPFBaselineFixture()
+	protected, err := EncodeDesktopDarwinPFBaselineRequest(request)
+	if err != nil || bytes.Contains(protected, []byte("isolated_only")) {
+		t.Fatal("protected baseline changed its original canonical record", err)
+	}
+	request.IsolatedOnly = true
+	raw, err := EncodeDesktopDarwinPFBaselineRequest(request)
+	if err != nil || !bytes.Contains(raw, []byte(`"home_lan_access":false,"isolated_only":true,"session_id":`)) {
+		t.Fatal("isolated baseline lost its canonical captured mode", err)
+	}
+	parsed, err := ParseDesktopDarwinPFBaselineRequest(raw)
+	if err != nil || !parsed.IsolatedOnly || parsed.SessionID != request.SessionID || parsed.SourceSHA256 != request.SourceSHA256 {
+		t.Fatal("isolated baseline changed its complete original capture", err)
+	}
+	for _, flag := range []string{"false", "null", "0", "1", `"true"`} {
+		if _, err := ParseDesktopDarwinPFBaselineRequest(bytes.Replace(raw, []byte(`"isolated_only":true`), []byte(`"isolated_only":`+flag), 1)); err == nil {
+			t.Fatal("isolated baseline accepted an ambiguous captured mode", flag)
+		}
+	}
+	for _, action := range []string{"replace", "clear"} {
+		request.Action, request.SessionID, request.SourceSHA256 = action, "", ""
+		if _, err := EncodeDesktopDarwinPFBaselineRequest(request); err == nil {
+			t.Fatal("isolated baseline accepted an inactive or removed capture", action)
+		}
+	}
+}
+
 func TestDesktopPFBaselineRecordRejectsAmbiguousAuthority(t *testing.T) {
 	for name, mutate := range map[string]func(*DesktopDarwinPFBaselineRequest){
 		"schema":              func(r *DesktopDarwinPFBaselineRequest) { r.Schema = 2 },

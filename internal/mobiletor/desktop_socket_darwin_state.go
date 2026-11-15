@@ -167,6 +167,17 @@ func desktopDarwinStatesAbsent(raw []byte, captured []desktopDarwinStateInterfac
 }
 
 func desktopDarwinCheckPhysicalStates(ctx context.Context, captured []desktopDarwinStateInterface) error {
+	if err := desktopDarwinCheckPhysicalInterfaces(ctx, captured); err != nil {
+		return err
+	}
+	raw, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "states")
+	if err != nil {
+		return err
+	}
+	return desktopDarwinStatesAbsent(raw, captured)
+}
+
+func desktopDarwinCheckPhysicalInterfaces(ctx context.Context, captured []desktopDarwinStateInterface) error {
 	if err := desktopDarwinCheckStateInterfaces(captured); err != nil {
 		return err
 	}
@@ -177,9 +188,24 @@ func desktopDarwinCheckPhysicalStates(ctx context.Context, captured []desktopDar
 			return errors.Join(err, errors.New("Darwin physical interface bypasses PF or has no independent filter readback"))
 		}
 	}
+	return ctx.Err()
+}
+
+func desktopDarwinCheckIsolatedStates(ctx context.Context, captured []desktopDarwinStateInterface, sockets map[string]desktopDarwinPFLocalSocket) error {
+	if err := desktopDarwinCheckPhysicalInterfaces(ctx, captured); err != nil {
+		return err
+	}
 	raw, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "states")
 	if err != nil {
 		return err
 	}
-	return desktopDarwinStatesAbsent(raw, captured)
+	for id, socket := range sockets {
+		if id != socket.creation.SocketID || !socket.creation.Capture.valid() || socket.local.Addr() != socket.creation.Binding.LocalAddress {
+			return errors.New("Darwin Off state scope lost its original socket capture")
+		}
+		if err := desktopPFIsolatedStatesAbsent(raw, socket.creation.Network, socket.local); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }

@@ -11,10 +11,10 @@ import (
 	"syscall"
 )
 
-func desktopSocketImportTCP(context.Context, string, netip.AddrPort, *os.File, func(context.Context, string, string, syscall.RawConn) error) (net.Conn, error) {
+func desktopSocketImportTCP(context.Context, string, netip.AddrPort, *os.File, func(context.Context, string, string, syscall.RawConn) error, ...*desktopSocketPrebound) (net.Conn, error) {
 	return nil, errors.New("this platform does not accept a Unix socket creator")
 }
 
-func desktopSocketImportPacket(context.Context, string, *os.File, netip.Addr, func(string, string, syscall.RawConn) error) (net.PacketConn, error) {
+func desktopSocketImportPacket(context.Context, string, *os.File, netip.Addr, func(string, string, syscall.RawConn) error, ...*desktopSocketPrebound) (net.PacketConn, error) {
 	return nil, errors.New("this platform does not accept a Unix socket creator")
 }

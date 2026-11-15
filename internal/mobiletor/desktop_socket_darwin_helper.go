@@ -256,6 +256,9 @@ func (g *desktopDarwinGuardian) release(c DesktopSocketCreation) error {
 	}
 	delete(g.sockets, c.SocketID)
 	delete(g.socks, c.SocketID)
+	if g.pf != nil {
+		delete(g.pf.scopedSockets, c.SocketID)
+	}
 	return nil
 }
 
@@ -317,6 +320,11 @@ func (g *desktopDarwinGuardian) create(ctx context.Context, c DesktopSocketCreat
 			return nil, errors.New("Darwin SOCKS creator replaced its captured UDP owner")
 		}
 		if _, _, err := g.checkSOCKSControl(ctx, association); err != nil {
+			return nil, err
+		}
+	}
+	if g.options.HostProtectionOff {
+		if err := g.pf.verify(ctx, true); err != nil {
 			return nil, err
 		}
 	}
@@ -387,6 +395,12 @@ func (g *desktopDarwinGuardian) adoptCreatedSocket(ctx context.Context, c Deskto
 		file.Close()
 		return nil, err
 	}
+	if g.options.HostProtectionOff {
+		if err := g.prepareOffSocket(ctx, c, file, identity); err != nil {
+			file.Close()
+			return nil, err
+		}
+	}
 	g.sockets[c.SocketID] = &desktopDarwinOwnedSocket{creation: c, file: file, identity: identity, grants: make(map[string]DesktopSocketGrant)}
 	return file, nil
 }
@@ -424,8 +438,18 @@ func (g *desktopDarwinGuardian) bind(ctx context.Context, c DesktopSocketCreatio
 	if err != nil {
 		return err
 	}
-	if _, _, err = desktopSocketSourceRaw(file, identity.network, c.Binding.LocalAddress); err != nil {
-		return err
+	if g.options.HostProtectionOff {
+		scope, exists := g.pf.scopedSockets[owned.creation.SocketID]
+		if !exists || scope.creation != owned.creation {
+			return errors.New("Darwin Off bind lost its pre-transfer state capture")
+		}
+		if err := desktopDarwinPreboundSocket(file, owned.creation, identity, scope.local); err != nil {
+			return err
+		}
+	} else {
+		if _, _, err = desktopSocketSourceRaw(file, identity.network, c.Binding.LocalAddress); err != nil {
+			return err
+		}
 	}
 	if err = desktopDarwinCheckInterface(DesktopDarwinSocketInterface{Name: c.Binding.InterfaceName, Index: c.Binding.InterfaceIndex, Address: c.Binding.LocalAddress}); err != nil {
 		return err
@@ -552,7 +576,11 @@ func (g *desktopDarwinGuardian) cleanup(release bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if g.pf != nil {
-		if err := g.pf.close(ctx); err != nil {
+		retire := g.pf.close
+		if g.options.HostProtectionOff && !release {
+			retire = g.pf.retirePermissions
+		}
+		if err := retire(ctx); err != nil {
 			return err
 		}
 	}

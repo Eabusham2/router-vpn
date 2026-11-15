@@ -51,7 +51,7 @@ func desktopChainOffSource(t *testing.T, family, protected string) NodeChainSour
 	return source
 }
 
-func TestDesktopNodeChainLinuxOffRetainsFullCapture(t *testing.T) {
+func TestDesktopNodeChainOffRetainsFullCapture(t *testing.T) {
 	for _, family := range []string{"ordinary", "socks", "connect"} {
 		for _, protected := range []string{"", "on-connect", "always"} {
 			t.Run(family+"/"+protected, func(t *testing.T) {
@@ -61,7 +61,7 @@ func TestDesktopNodeChainLinuxOffRetainsFullCapture(t *testing.T) {
 				if want == "" {
 					want = "off"
 				}
-				for _, target := range []string{"linux", "windows", "darwin"} {
+				for _, target := range []string{"linux", "windows", "darwin", "android"} {
 					var p DesktopPhysicalPolicy
 					var err error
 					switch family {
@@ -84,9 +84,9 @@ func TestDesktopNodeChainLinuxOffRetainsFullCapture(t *testing.T) {
 						}
 						p, err = NewDesktopNodeChainPolicy(original, desktopNodeTestSession, target, 1392)
 					}
-					if want == "off" && target != "linux" && target != "windows" {
+					if target == "android" {
 						if err == nil {
-							t.Fatal("unimplemented native Off target accepted", target)
+							t.Fatal("unimplemented desktop target accepted", target)
 						}
 						continue
 					}

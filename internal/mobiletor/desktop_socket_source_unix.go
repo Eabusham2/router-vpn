@@ -17,8 +17,20 @@ import (
 // Those APIs duplicate the actual kernel socket; they do not create a socket
 // with the receiver's credentials. Bind/Grant must still verify its creator.
 func desktopSocketSourceRaw(file *os.File, network string, address netip.Addr) (syscall.RawConn, string, error) {
+	return desktopSocketSourceRawCaptured(file, network, address, nil)
+}
+
+func desktopSocketSourceRawCaptured(file *os.File, network string, address netip.Addr, prebound *desktopSocketPrebound) (syscall.RawConn, string, error) {
 	if file == nil || (network != "tcp" && network != "udp") || !address.IsValid() {
 		return nil, "", errors.New("desktop socket creator supplied no socket")
+	}
+	if prebound != nil {
+		if err := prebound.validate(prebound.source, prebound.creation, file); err != nil {
+			return nil, "", err
+		}
+		if prebound.creation.Network != network || prebound.local.Addr().Is4() != address.Is4() {
+			return nil, "", errors.New("Darwin prebound import changed its captured transport family")
+		}
 	}
 	raw, err := file.SyscallConn()
 	if err != nil {
@@ -70,7 +82,7 @@ func desktopSocketSourceRaw(file *os.File, network string, address netip.Addr) (
 			value, ok := local.(*syscall.SockaddrInet6)
 			unbound = ok && value.Port == 0 && value.ZoneId == 0 && value.Addr == [16]byte{}
 		}
-		if readErr != nil || !unbound {
+		if readErr != nil || prebound == nil && !unbound {
 			result = errors.New("desktop socket creator changed its family or already bound a tuple")
 			return
 		}
@@ -94,8 +106,12 @@ type desktopImportedTCP struct {
 
 func (c *desktopImportedTCP) RemoteAddr() net.Addr { return net.TCPAddrFromAddrPort(c.remote) }
 
-func desktopSocketImportTCP(ctx context.Context, network string, remote netip.AddrPort, file *os.File, control func(context.Context, string, string, syscall.RawConn) error) (net.Conn, error) {
-	raw, actualNetwork, err := desktopSocketSourceRaw(file, "tcp", remote.Addr())
+func desktopSocketImportTCP(ctx context.Context, network string, remote netip.AddrPort, file *os.File, control func(context.Context, string, string, syscall.RawConn) error, captured ...*desktopSocketPrebound) (net.Conn, error) {
+	prebound, err := desktopSocketCapturedPrebound(captured)
+	if err != nil {
+		return nil, err
+	}
+	raw, actualNetwork, err := desktopSocketSourceRawCaptured(file, "tcp", remote.Addr(), prebound)
 	if err != nil {
 		return nil, err
 	}
@@ -220,8 +236,12 @@ func desktopSocketConnectImported(ctx context.Context, connection *net.TCPConn, 
 	return connection.SetWriteDeadline(time.Time{})
 }
 
-func desktopSocketImportPacket(ctx context.Context, network string, file *os.File, local netip.Addr, control func(string, string, syscall.RawConn) error) (net.PacketConn, error) {
-	raw, actualNetwork, err := desktopSocketSourceRaw(file, "udp", local)
+func desktopSocketImportPacket(ctx context.Context, network string, file *os.File, local netip.Addr, control func(string, string, syscall.RawConn) error, captured ...*desktopSocketPrebound) (net.PacketConn, error) {
+	prebound, err := desktopSocketCapturedPrebound(captured)
+	if err != nil {
+		return nil, err
+	}
+	raw, actualNetwork, err := desktopSocketSourceRawCaptured(file, "udp", local, prebound)
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +253,10 @@ func desktopSocketImportPacket(ctx context.Context, network string, file *os.Fil
 	}
 	var result error
 	err = raw.Control(func(handle uintptr) {
+		if prebound != nil {
+			result = prebound.validate(prebound.source, prebound.creation, file)
+			return
+		}
 		var target syscall.Sockaddr
 		if local.Is4() {
 			target = &syscall.SockaddrInet4{Addr: local.As4()}

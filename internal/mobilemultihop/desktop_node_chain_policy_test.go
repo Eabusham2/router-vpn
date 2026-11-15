@@ -316,8 +316,8 @@ func TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor(t *testing
 		}
 	}
 	allOff := desktopChainFixture(t, 3, "", func(_ int, profile map[string]any) { profile["kill_switch_policy"] = "off" })
-	if _, err := NewDesktopNodeChainPolicy(allOff, desktopNodeTestSession, "darwin", 0); err == nil {
-		t.Fatal("protected desktop authority silently adopted disabled protection")
+	if _, err := NewDesktopNodeChainPolicy(allOff, desktopNodeTestSession, "android", 0); err == nil {
+		t.Fatal("desktop Off authority adopted an unsupported native target")
 	}
 	if _, _, _, err := ReadDesktopPhysicalPolicy(desktopPhysicalWrapper{policy}); err == nil {
 		t.Fatal("caller wrapper substituted a closed constructor")

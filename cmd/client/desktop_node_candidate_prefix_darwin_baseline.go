@@ -36,7 +36,7 @@ type desktopMacOSCandidatePrefixReceipt struct {
 func (s desktopMacOSCandidatePrefixSelection) valid() bool {
 	return s.Schema == 2 && s.Family == macosprocess.CandidatePrefixFamily && validProfileID(s.ProfileID) &&
 		desktopMacOSExternalShort.MatchString(s.Session) && desktopMacOSExternalLong.MatchString(s.Source) &&
-		desktopMacOSExternalLong.MatchString(s.Config) && (s.Policy == "on-connect" || s.Policy == "always")
+		desktopMacOSExternalLong.MatchString(s.Config) && (s.Policy == "off" || s.Policy == "on-connect" || s.Policy == "always")
 }
 
 func exactDesktopMacOSCandidatePrefixFields(object map[string]any, names ...string) bool {
@@ -72,7 +72,7 @@ func decodeDesktopMacOSCandidatePrefixReceipt(raw []byte, capture desktopMacOSCa
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&value) != nil || value.Schema != 2 || value.Capture != capture || value.Phase != phase ||
-		!desktopMacOSExternalToken.MatchString(value.Token) || value.Baseline.Present != (phase != "retired" || capture.Policy == "always") ||
+		!desktopMacOSExternalToken.MatchString(value.Token) || value.Baseline.Present != (phase == "active" || phase == "held" && capture.Policy != "off" || capture.Policy == "always") ||
 		value.Baseline.Present && !desktopMacOSExternalLong.MatchString(value.Baseline.Rules) || !value.Baseline.Present && value.Baseline.Rules != "" {
 		return desktopMacOSCandidatePrefixReceipt{}, failure
 	}

@@ -53,6 +53,47 @@ static int routervpn_darwin_tcp_established(int fd) {
     return 0;
 }
 
+static int routervpn_darwin_tcp_unconnected(int fd) {
+    struct tcp_connection_info value;
+    memset(&value, 0, sizeof(value));
+    socklen_t length = sizeof(value);
+    if (getsockopt(fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &value, &length) != 0) return errno;
+    if (length != sizeof(value) || value.tcpi_state != TCPS_CLOSED) return EINVAL;
+    return 0;
+}
+
+// Inventory only the original engine process. A truncated or racing native
+// result is unknown, never evidence that its returned socket aliases closed.
+static int routervpn_darwin_fds(int32_t *fds, uint32_t *types, uint32_t capacity, uint32_t *count) {
+    if (capacity != 16384) return EINVAL;
+    struct proc_fdinfo *entries = calloc(capacity, sizeof(*entries));
+    if (entries == NULL) return ENOMEM;
+    int size = (int)(capacity * sizeof(*entries));
+    int actual = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, entries, size);
+    int result = 0;
+    if (actual <= 0 || actual >= size || actual % sizeof(*entries) != 0) {
+        result = errno ? errno : EIO;
+    } else {
+        *count = (uint32_t)(actual / sizeof(*entries));
+        for (uint32_t i = 0; i < *count; i++) {
+            fds[i] = entries[i].proc_fd;
+            types[i] = entries[i].proc_fdtype;
+        }
+    }
+    free(entries);
+    return result;
+}
+
+static int routervpn_darwin_socket_object(int fd, uint64_t *socket, uint64_t *pcb) {
+    struct socket_fdinfo value;
+    memset(&value, 0, sizeof(value));
+    int count = proc_pidfdinfo(getpid(), fd, PROC_PIDFDSOCKETINFO, &value, sizeof(value));
+    if (count != sizeof(value) || value.psi.soi_so == 0) return errno ? errno : EIO;
+    *socket = value.psi.soi_so;
+    *pcb = value.psi.soi_pcb;
+    return 0;
+}
+
 static int routervpn_darwin_tunnel(int fd, char *name, uint32_t size) {
     struct socket_fdinfo value;
     memset(&value, 0, sizeof(value));
@@ -188,4 +229,38 @@ func desktopDarwinSOCKSEstablished(fd int) error {
 		return errors.Join(syscall.Errno(code), errors.New("Darwin SOCKS original TCP control is no longer established"))
 	}
 	return nil
+}
+
+func desktopDarwinTCPUnconnected(fd int) error {
+	if code := C.routervpn_darwin_tcp_unconnected(C.int(fd)); code != 0 {
+		return errors.Join(syscall.Errno(code), errors.New("Darwin prebound TCP source is listening or connected"))
+	}
+	return nil
+}
+
+func desktopDarwinFDInventory() ([]desktopDarwinFD, error) {
+	fds, types := make([]C.int32_t, 16384), make([]C.uint32_t, 16384)
+	var count C.uint32_t
+	if code := C.routervpn_darwin_fds(&fds[0], &types[0], C.uint32_t(len(fds)), &count); code != 0 {
+		return nil, syscall.Errno(code)
+	}
+	if count == 0 || int(count) >= len(fds) {
+		return nil, errors.New("Darwin original engine FD inventory is incomplete")
+	}
+	result := make([]desktopDarwinFD, int(count))
+	for index := range result {
+		if fds[index] < 0 || types[index] == 0 {
+			return nil, errors.New("Darwin original engine FD inventory has an unknown record")
+		}
+		result[index] = desktopDarwinFD{number: int(fds[index]), socket: types[index] == C.PROX_FDTYPE_SOCKET, kind: uint32(types[index])}
+	}
+	return result, nil
+}
+
+func desktopDarwinSocketObject(fd int) ([2]uint64, error) {
+	var socket, pcb C.uint64_t
+	if code := C.routervpn_darwin_socket_object(C.int(fd), &socket, &pcb); code != 0 {
+		return [2]uint64{}, syscall.Errno(code)
+	}
+	return [2]uint64{uint64(socket), uint64(pcb)}, nil
 }

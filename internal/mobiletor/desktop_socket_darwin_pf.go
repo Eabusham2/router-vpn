@@ -67,17 +67,20 @@ type desktopDarwinPFPermit struct {
 // Only captured metadata crosses the private child channel. Actual permits,
 // retained descriptors and monotonic deadlines remain in the guardian.
 type desktopDarwinPF struct {
-	Capture  DesktopSocketCapture
-	UID      uint32
-	Account  string
-	Baseline string
-	Slot     string
-	Anchor   string
-	Pointer  string
-	Physical []desktopDarwinStateInterface
-	permits  map[string]desktopDarwinPFPermit
-	tunnel   string
-	index    uint32
+	HostProtectionOff bool
+	slotPolicy        *desktopDarwinPFSlotPolicy
+	scopedSockets     map[string]desktopDarwinPFLocalSocket
+	Capture           DesktopSocketCapture
+	UID               uint32
+	Account           string
+	Baseline          string
+	Slot              string
+	Anchor            string
+	Pointer           string
+	Physical          []desktopDarwinStateInterface
+	permits           map[string]desktopDarwinPFPermit
+	tunnel            string
+	index             uint32
 }
 
 func desktopDarwinPFLabel(value string) string {
@@ -89,6 +92,9 @@ func desktopDarwinPFAllowedTag(c DesktopSocketCapture) string {
 }
 
 func desktopDarwinPFBaseline(c DesktopSocketCapture, o DesktopDarwinSocketOptions) string {
+	if o.HostProtectionOff {
+		return desktopPFIsolatedBaseline(c.SessionID)
+	}
 	return desktopPFOwnedBaseline(c.SessionID, c.SourceSHA256, len(o.LANPrefixes) != 0, desktopDarwinPFTestScope)
 }
 
@@ -313,10 +319,19 @@ func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string
 		return nil, err
 	}
 	p := &desktopDarwinPF{Capture: capture, UID: uid, Account: account, Baseline: baseline,
-		Slot:    desktopDarwinPFSlot(capture),
-		permits: make(map[string]desktopDarwinPFPermit)}
+		HostProtectionOff: options.HostProtectionOff,
+		Slot:              desktopDarwinPFSlot(capture),
+		permits:           make(map[string]desktopDarwinPFPermit)}
 	p.Anchor = desktopDarwinPFGeneration(capture)
 	p.Pointer = strings.TrimSpace(desktopDarwinPFPointer(capture))
+	if options.HostProtectionOff {
+		p.slotPolicy, err = desktopDarwinIsolatedSlotPolicy(ctx, capture, uid)
+		if err != nil {
+			return nil, err
+		}
+		p.Pointer = p.slotPolicy.expected
+		p.scopedSockets = make(map[string]desktopDarwinPFLocalSocket)
+	}
 	existing, err := desktopDarwinPFRead(ctx, p.Slot)
 	if err != nil || existing != "" {
 		return nil, errors.Join(err, errors.New("Darwin physical slot still belongs to another network generation"))
@@ -334,13 +349,15 @@ func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string
 	if err != nil {
 		return nil, err
 	}
-	if err := desktopDarwinRetirePhysicalStates(ctx, p.Physical); err != nil {
-		return nil, err
+	if !options.HostProtectionOff {
+		if err := desktopDarwinRetirePhysicalStates(ctx, p.Physical); err != nil {
+			return nil, err
+		}
 	}
 	if err := desktopDarwinPFLoad(ctx, p.Anchor, p.render()); err != nil {
 		return p, err
 	}
-	if err := desktopDarwinPFLoadPointer(ctx, capture); err != nil {
+	if err := p.loadPointer(ctx); err != nil {
 		return p, err
 	}
 	return p, p.verify(ctx, true)
@@ -350,7 +367,7 @@ func (p *desktopDarwinPF) valid() bool {
 	return p != nil && p.Capture.valid() && p.UID >= 0x40000000 && p.UID < 0x80000000 &&
 		p.Slot == desktopDarwinPFSlot(p.Capture) && p.Anchor == desktopDarwinPFGeneration(p.Capture) &&
 		len(p.Slot) <= desktopDarwinPFAnchorPathLimit && len(p.Anchor) <= desktopDarwinPFAnchorPathLimit &&
-		p.Baseline != "" && p.Pointer == strings.TrimSpace(desktopDarwinPFPointer(p.Capture)) &&
+		p.Baseline != "" && p.pointerValid() &&
 		strings.HasPrefix(p.Account, "_rvpnt_") && desktopSocketHex(strings.TrimPrefix(p.Account, "_rvpnt_"), 20)
 }
 
@@ -360,6 +377,9 @@ func (p *desktopDarwinPF) verify(ctx context.Context, complete bool) error {
 	}
 	return desktopPFCompleteReadback(ctx, desktopDarwinPFGlobalChecks(ctx),
 		func(captured context.Context) error {
+			if p.HostProtectionOff {
+				return desktopDarwinCheckIsolatedStates(captured, p.Physical, p.scopedSockets)
+			}
 			return desktopDarwinCheckPhysicalStates(captured, p.Physical)
 		},
 		func(captured context.Context) error {
@@ -370,7 +390,7 @@ func (p *desktopDarwinPF) verify(ctx context.Context, complete bool) error {
 			return nil
 		},
 		func(captured context.Context) error {
-			pointer, err := desktopDarwinPFReadPointer(captured, p.Capture)
+			pointer, err := desktopDarwinPFRead(captured, p.Slot)
 			if err != nil || pointer != p.Pointer {
 				return errors.Join(err, errors.New("Darwin PF slot changed its network owner"))
 			}
@@ -421,7 +441,7 @@ func (p *desktopDarwinPF) render() string {
 	if p.tunnel != "" {
 		lines = append(lines, "pass out on "+p.tunnel+" all tag \""+desktopDarwinPFAllowedTag(p.Capture)+"\" no state label \""+desktopDarwinPFLabel("tunnel\x00"+p.Capture.NetworkID+"\x00"+p.tunnel+"\x00"+strconv.FormatUint(uint64(p.index), 10))+"\"")
 	}
-	if desktopDarwinPFTestScope != "" {
+	if desktopDarwinPFTestScope != "" && !p.HostProtectionOff {
 		lines = append(lines, "block drop out quick "+desktopDarwinPFTestScope+" ! tagged \""+desktopDarwinPFAllowedTag(p.Capture)+"\"")
 	}
 	return strings.Join(lines, "\n") + "\n"
@@ -471,6 +491,9 @@ func (p *desktopDarwinPF) grantBounded(ctx context.Context, g DesktopSocketGrant
 
 func (p *desktopDarwinPF) expire(ctx context.Context) error {
 	if p.permits == nil {
+		if p.HostProtectionOff {
+			return p.retirePermissions(ctx)
+		}
 		return nil
 	}
 	changed := false
@@ -554,10 +577,7 @@ func (p *desktopDarwinPF) close(ctx context.Context) error {
 	// The leaf binds the full session, source and fresh network nonce. A
 	// replacement may change the slot, but cannot acquire this old leaf's identity. Never clear or
 	// rewrite that replacement slot or the household/system PF ruleset.
-	if err := desktopDarwinPFLoad(ctx, p.Anchor, "\n"); err != nil {
-		return err
-	}
-	if err := p.filtersAbsent(ctx); err != nil {
+	if err := p.retirePermissions(ctx); err != nil {
 		return err
 	}
 	pointer, err := desktopDarwinPFRead(ctx, p.Slot)

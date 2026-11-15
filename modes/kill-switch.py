@@ -633,6 +633,55 @@ def _standard_mutation_guard(root: Path, *, corrupt_recovery=False):
         _MUTATION_LOCAL.standard_guard = None
 
 
+def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
+    """Permit durable Off cleanup records only for the captured macOS owner.
+
+    This is a storage boundary, not native presence/absence or mutation proof.
+    The Darwin transaction still validates its exact baseline journal, original
+    installation lock, captured children and actual PF reference before use.
+    """
+    if (sys.platform != 'darwin' or type(value) is not dict or value.get('platform') != 'darwin'
+            or value.get('policy') != 'off' or value.get('native_socket_broker') is not True
+            or value.get('endpoint') != '' or value.get('endpoint_ips') != [] or 'native_egress' in value):
+        return False
+    family = value.get('native_socket_family')
+    if family == 'external-v1':
+        key, schema = 'native_external_capture', 1
+    elif family == 'node-candidate-prefix-v1':
+        key, schema = 'native_candidate_prefix_capture', 2
+    elif family in ('ordered-node-chain-v1', 'ordered-node-chain-socks-v1',
+                    'ordered-node-chain-connect-v1', 'ordered-node-chain-execution-v1'):
+        key, schema = 'native_node_chain_capture', 2
+    else:
+        return False
+    if any(other in value for other in ('native_external_capture', 'native_candidate_prefix_capture', 'native_node_chain_capture') if other != key):
+        return False
+    capture = value.get(key)
+    if (type(capture) is not dict or type(capture.get('schema')) is not int or capture['schema'] != schema
+            or capture.get('policy') != 'off' or capture.get('profile_id') != value.get('profile_id')
+            or value.get('profile_id') != value.get('policy_profile_id')
+            or type(capture.get('home_lan_access')) is not bool
+            or capture['home_lan_access'] is not value.get('home_lan_access')
+            or schema == 2 and capture.get('family') != family
+            or type(capture.get('session_id')) is not str or not re.fullmatch('[0-9a-f]{32}', capture['session_id'])
+            or any(type(capture.get(field)) is not str or not re.fullmatch('[0-9a-f]{64}', capture[field])
+                   for field in ('source_sha256', 'config_sha256'))):
+        return False
+    journal = value.get('darwin_native_baseline')
+    if type(journal) is not dict or type(journal.get('schema')) is not int or journal['schema'] != 1 or type(journal.get('complete')) is not bool:
+        return False
+    request = journal.get('request')
+    if type(request) is not dict or type(request.get('schema')) is not int or request['schema'] != 1:
+        return False
+    if request.get('action') == 'replace':
+        return (request.get('isolated_only') is True and request.get('session_id') == capture['session_id']
+                and request.get('source_sha256') == capture['source_sha256']
+                and request.get('home_lan_access') is capture['home_lan_access'])
+    return (request.get('action') == 'clear' and 'isolated_only' not in request
+            and request.get('session_id') == '' and request.get('source_sha256') == ''
+            and request.get('home_lan_access') is False)
+
+
 def read_state(root: Path) -> dict[str, Any]:
     path = state_path(root)
     try:
@@ -647,14 +696,14 @@ def read_state(root: Path) -> dict[str, Any]:
         raise RuntimeError(f"persistent kill-switch state is corrupt: {exc}") from exc
     if not isinstance(value, dict):
         raise RuntimeError("persistent kill-switch state must be a JSON object")
-    if value.get("policy") not in {"on-connect", "always"}:
+    if value.get("policy") not in {"on-connect", "always"} and not _darwin_isolated_native_state(value):
         raise RuntimeError("persistent kill-switch state contains an invalid policy")
     return value
 
 
 @_serialized_mutation
 def write_state(root: Path, value: dict[str, Any]) -> None:
-    if not isinstance(value, dict) or value.get("policy") not in {"on-connect", "always"}:
+    if not isinstance(value, dict) or value.get("policy") not in {"on-connect", "always"} and not _darwin_isolated_native_state(value):
         raise RuntimeError("refusing invalid persistent kill-switch state")
     path = state_path(root)
     run, parent_before = _runtime_state_dir(root)

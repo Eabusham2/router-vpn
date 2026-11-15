@@ -29,3 +29,13 @@ func desktopDarwinReadTunnel(*os.File) (string, error) {
 func desktopDarwinSOCKSEstablished(int) error {
 	return errors.New("Darwin SOCKS original TCP state requires the native SDK adapter")
 }
+
+func desktopDarwinTCPUnconnected(int) error {
+	return errors.New("Darwin prebound socket state requires the native SDK adapter")
+}
+func desktopDarwinFDInventory() ([]desktopDarwinFD, error) {
+	return nil, errors.New("Darwin original FD inventory requires the native libproc adapter")
+}
+func desktopDarwinSocketObject(int) ([2]uint64, error) {
+	return [2]uint64{}, errors.New("Darwin original socket object requires the native libproc adapter")
+}

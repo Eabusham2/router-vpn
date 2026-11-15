@@ -25,6 +25,7 @@ type DesktopDarwinPFBaselineRequest struct {
 	Schema        int                            `json:"schema"`
 	Action        string                         `json:"action"`
 	HomeLANAccess bool                           `json:"home_lan_access"`
+	IsolatedOnly  bool                           `json:"isolated_only,omitempty"`
 	SessionID     string                         `json:"session_id"`
 	SourceSHA256  string                         `json:"source_sha256"`
 	Expected      []DesktopDarwinPFBaselineProof `json:"expected"`
@@ -63,6 +64,9 @@ func (r DesktopDarwinPFBaselineRequest) validate() error {
 	}
 	if r.Action == "clear" && (r.HomeLANAccess || r.SessionID != "" || r.SourceSHA256 != "") {
 		return errors.New("Darwin PF baseline removal cannot borrow a connection policy")
+	}
+	if r.IsolatedOnly && (r.Action != "replace" || r.SessionID == "" || r.SourceSHA256 == "") {
+		return errors.New("Darwin isolated baseline requires its active original session")
 	}
 	for index, proof := range r.Expected {
 		if !proof.valid() || index != 0 && proof == r.Expected[0] {

@@ -383,7 +383,7 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
         if retained_state is None and store.get('selected_id') != candidate_prefix_capture['profile_id']:
             raise RuntimeError('macOS candidate prefix baseline changed its full saved Router control')
 
-    if policy == "off":
+    if policy == "off" and external_capture is None and node_chain_capture is None and candidate_prefix_capture is None:
         if previous and previous.get("platform") == "darwin":
             _require_watcher_retired(previous)
             _darwin.remove_darwin(previous, dry_run=_dry_run(), retain_state=_retained_removal(root, previous))
@@ -435,7 +435,7 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None, external_capt
     def retain_state(extra):
         _write_state(root, {**state, **extra, "darwin_transition_pending": True})
     extra = _darwin.apply_darwin(endpoint_ips, lan, previous, refresh=False, dry_run=_dry_run(), native_egress=native_egress,
-                               socket_broker=socket_broker, socket_capture=socket_capture, retain_state=retain_state)
+                               socket_broker=socket_broker, socket_capture=socket_capture, isolated_only=policy == "off", retain_state=retain_state)
     state.update(extra)
     _write_state(root, state)
     if spawn_watch and not socket_broker:
@@ -546,7 +546,7 @@ def darwin_release(force: bool = False, *, retain_protection: bool = False) -> i
     if not state:
         return 0
     _require_watcher_retired(state)
-    if not force and (state.get("policy") == "always" or retain_protection):
+    if not force and (state.get("policy") == "always" or retain_protection and state.get("policy") != "off"):
         # Remove the old tunnel-interface permission but retain the fail-closed
         # pre-connect endpoint exception while disconnected.
         socket_broker = state.get('native_socket_broker') is True
@@ -618,7 +618,7 @@ def _darwin_external_capture(value):
     if (type(value['schema']) is not int or value['schema'] != 1
             or type(value['protocol']) is not str or value['protocol'] not in _EXTERNAL_PROTOCOLS
             or type(value['home_lan_access']) is not bool
-            or value['policy'] not in ('on-connect', 'always')
+            or value['policy'] not in ('off', 'on-connect', 'always')
             or type(value['session_id']) is not str or not re.fullmatch('[0-9a-f]{32}', value['session_id'])
             or any(type(value[key]) is not str or not re.fullmatch('[0-9a-f]{64}', value[key])
                    for key in ('source_sha256', 'config_sha256'))):
@@ -666,7 +666,7 @@ def _darwin_external_receipt(value, capture):
         raise RuntimeError('macOS external baseline receipt belongs to another original capture')
     _darwin._baseline.token(value['pf_token'])
     proof = _darwin._baseline._proof(value['baseline'])
-    if proof['present'] is not (value['phase'] in ('active', 'held') or capture['policy'] == 'always'):
+    if proof['present'] is not (value['phase'] == 'active' or value['phase'] == 'held' and capture['policy'] != 'off' or capture['policy'] == 'always'):
         raise RuntimeError('macOS external receipt changed its selected retirement policy')
     return value
 
@@ -684,6 +684,7 @@ def _darwin_external_live_receipt(state, capture):
             or request['session_id'] != capture['session_id']
             or request['source_sha256'] != capture['source_sha256']
             or request['home_lan_access'] is not capture['home_lan_access']
+            or request.get('isolated_only', False) is not (capture['policy'] == 'off')
             or not _darwin._baseline.status(state)):
         raise RuntimeError('macOS external baseline lacks its current native session proof')
     return _darwin_external_result(capture, 'active', state['pf_token'], value['target'])
@@ -724,11 +725,12 @@ def darwin_external(action, value):
     elif not state:
         # Only an originally observed reference can authorize an idempotent
         # post-removal readback. Unknown partial application stays owned.
-        if (action != 'release' or expected is None or capture['policy'] != 'on-connect'
+        if (expected is None or capture['policy'] not in ('off', 'on-connect')
+                or action != 'release' and not (action == 'retire' and capture['policy'] == 'off')
                 or _darwin.owned_namespace_present(_darwin.OWNED_PF_ANCHOR)
                 or _darwin._baseline.reference(expected['pf_token'])):
             raise RuntimeError('macOS external removal has no exact retired reference proof')
-        result = _darwin_external_result(capture, 'retired', expected['pf_token'],
+        result = _darwin_external_result(capture, 'held' if action == 'retire' else 'retired', expected['pf_token'],
                                           {'present': False, 'rules_sha256': ''})
     else:
         _darwin_external_state(state, capture)
@@ -739,7 +741,7 @@ def darwin_external(action, value):
         # grant, table and unreferenced child before replacing its deny rules.
         darwin_release(False, retain_protection=action == 'retire')
         after = _linux.read_state(root)
-        if action == 'retire' or capture['policy'] == 'always':
+        if action == 'retire' and capture['policy'] != 'off' or capture['policy'] == 'always':
             _darwin_external_state(after, capture)
             journal = after[_darwin._baseline.STATE_KEY]
             request = journal['request']
@@ -769,7 +771,7 @@ def _darwin_node_chain_capture(value):
     if (type(value['schema']) is not int or value['schema'] != 2
             or type(value['family']) is not str or value['family'] not in _NODE_CHAIN_FAMILIES
             or type(value['home_lan_access']) is not bool
-            or value['policy'] not in ('on-connect', 'always')
+            or value['policy'] not in ('off', 'on-connect', 'always')
             or type(value['session_id']) is not str or not re.fullmatch('[0-9a-f]{32}', value['session_id'])
             or any(type(value[key]) is not str or not re.fullmatch('[0-9a-f]{64}', value[key])
                    for key in ('source_sha256', 'config_sha256'))):
@@ -826,7 +828,7 @@ def _darwin_node_chain_receipt(value, capture):
         raise RuntimeError('macOS ordered baseline receipt belongs to another original capture')
     _darwin._baseline.token(value['pf_token'])
     proof = _darwin._baseline._proof(value['baseline'])
-    if proof['present'] is not (value['phase'] in ('active', 'held') or capture['policy'] == 'always'):
+    if proof['present'] is not (value['phase'] == 'active' or value['phase'] == 'held' and capture['policy'] != 'off' or capture['policy'] == 'always'):
         raise RuntimeError('macOS ordered receipt changed its selected retirement policy')
     return value
 
@@ -844,6 +846,7 @@ def _darwin_node_chain_live_receipt(state, capture):
             or request['session_id'] != capture['session_id']
             or request['source_sha256'] != capture['source_sha256']
             or request['home_lan_access'] is not capture['home_lan_access']
+            or request.get('isolated_only', False) is not (capture['policy'] == 'off')
             or not _darwin._baseline.status(state)):
         raise RuntimeError('macOS ordered baseline lacks its current native session proof')
     return _darwin_node_chain_result(capture, 'active', state['pf_token'], value['target'])
@@ -880,11 +883,12 @@ def darwin_node_chain(action, value):
         if expected is None or result != expected:
             raise RuntimeError('macOS ordered readback changed its original baseline receipt')
     elif not state:
-        if (action != 'release' or expected is None or capture['policy'] != 'on-connect'
+        if (expected is None or capture['policy'] not in ('off', 'on-connect')
+                or action != 'release' and not (action == 'retire' and capture['policy'] == 'off')
                 or _darwin.owned_namespace_present(_darwin.OWNED_PF_ANCHOR)
                 or _darwin._baseline.reference(expected['pf_token'])):
             raise RuntimeError('macOS ordered removal has no exact retired reference proof')
-        result = _darwin_node_chain_result(capture, 'retired', expected['pf_token'],
+        result = _darwin_node_chain_result(capture, 'held' if action == 'retire' else 'retired', expected['pf_token'],
                                             {'present': False, 'rules_sha256': ''})
     else:
         _darwin_node_chain_state(state, capture)
@@ -895,7 +899,7 @@ def darwin_node_chain(action, value):
         # table and unreferenced child before settling the original baseline.
         darwin_release(False, retain_protection=action == 'retire')
         after = _linux.read_state(root)
-        if action == 'retire' or capture['policy'] == 'always':
+        if action == 'retire' and capture['policy'] != 'off' or capture['policy'] == 'always':
             _darwin_node_chain_state(after, capture)
             journal = after[_darwin._baseline.STATE_KEY]
             request = journal['request']
@@ -922,7 +926,7 @@ def _darwin_candidate_prefix_capture(value):
     if (type(value['schema']) is not int or value['schema'] != 2
             or value['family'] != 'node-candidate-prefix-v1'
             or type(value['home_lan_access']) is not bool
-            or value['policy'] not in ('on-connect', 'always')
+            or value['policy'] not in ('off', 'on-connect', 'always')
             or type(value['session_id']) is not str or not re.fullmatch('[0-9a-f]{32}', value['session_id'])
             or any(type(value[key]) is not str or not re.fullmatch('[0-9a-f]{64}', value[key])
                    for key in ('source_sha256', 'config_sha256'))):
@@ -978,7 +982,7 @@ def _darwin_candidate_prefix_receipt(value, capture):
         raise RuntimeError('macOS candidate prefix baseline receipt belongs to another original capture')
     _darwin._baseline.token(value['pf_token'])
     proof = _darwin._baseline._proof(value['baseline'])
-    if proof['present'] is not (value['phase'] in ('active', 'held') or capture['policy'] == 'always'):
+    if proof['present'] is not (value['phase'] == 'active' or value['phase'] == 'held' and capture['policy'] != 'off' or capture['policy'] == 'always'):
         raise RuntimeError('macOS candidate prefix receipt changed its selected retirement policy')
     return value
 
@@ -996,6 +1000,7 @@ def _darwin_candidate_prefix_live_receipt(state, capture):
             or request['session_id'] != capture['session_id']
             or request['source_sha256'] != capture['source_sha256']
             or request['home_lan_access'] is not capture['home_lan_access']
+            or request.get('isolated_only', False) is not (capture['policy'] == 'off')
             or not _darwin._baseline.status(state)):
         raise RuntimeError('macOS candidate prefix baseline lacks its current native session proof')
     return _darwin_candidate_prefix_result(capture, 'active', state['pf_token'], value['target'])
@@ -1032,11 +1037,12 @@ def darwin_candidate_prefix(action, value):
         if expected is None or result != expected:
             raise RuntimeError('macOS candidate prefix readback changed its original baseline receipt')
     elif not state:
-        if (action != 'release' or expected is None or capture['policy'] != 'on-connect'
+        if (expected is None or capture['policy'] not in ('off', 'on-connect')
+                or action != 'release' and not (action == 'retire' and capture['policy'] == 'off')
                 or _darwin.owned_namespace_present(_darwin.OWNED_PF_ANCHOR)
                 or _darwin._baseline.reference(expected['pf_token'])):
             raise RuntimeError('macOS candidate prefix removal has no exact retired reference proof')
-        result = _darwin_candidate_prefix_result(capture, 'retired', expected['pf_token'],
+        result = _darwin_candidate_prefix_result(capture, 'held' if action == 'retire' else 'retired', expected['pf_token'],
                                             {'present': False, 'rules_sha256': ''})
     else:
         _darwin_candidate_prefix_state(state, capture)
@@ -1047,7 +1053,7 @@ def darwin_candidate_prefix(action, value):
         # table and unreferenced child before settling the original baseline.
         darwin_release(False, retain_protection=action == 'retire')
         after = _linux.read_state(root)
-        if action == 'retire' or capture['policy'] == 'always':
+        if action == 'retire' and capture['policy'] != 'off' or capture['policy'] == 'always':
             _darwin_candidate_prefix_state(after, capture)
             journal = after[_darwin._baseline.STATE_KEY]
             request = journal['request']

@@ -43,7 +43,7 @@ func (n *NetworkOwner) preparePhysicalDarwin(policy *mobiletor.DesktopBridgePoli
 	if err != nil {
 		return err
 	}
-	options := mobiletor.DesktopDarwinSocketOptions{}
+	options := mobiletor.DesktopDarwinSocketOptions{HostProtectionOff: policy.Metadata().KillSwitchPolicy == "off"}
 	for _, destination := range destinations {
 		address, err := netip.ParseAddr(destination.Host)
 		if err != nil || address.String() != destination.Host || destination.Port < 1 || destination.Port > 65535 ||

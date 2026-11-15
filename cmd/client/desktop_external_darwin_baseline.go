@@ -39,7 +39,7 @@ var desktopMacOSExternalToken = regexp.MustCompile(`^[1-9][0-9]{0,19}$`)
 func (s desktopMacOSExternalSelection) valid() bool {
 	return s.Schema == 1 && validProfileID(s.ProfileID) && desktopMacOSExternalShort.MatchString(s.Session) &&
 		desktopMacOSExternalLong.MatchString(s.Source) && desktopMacOSExternalLong.MatchString(s.Config) &&
-		(s.Policy == "on-connect" || s.Policy == "always") &&
+		(s.Policy == "off" || s.Policy == "on-connect" || s.Policy == "always") &&
 		(s.Protocol == "socks5" || s.Protocol == "shadowsocks" || s.Protocol == "http-connect" || s.Protocol == "https-connect" || s.Protocol == "hysteria2" || s.Protocol == "wireguard" || s.Protocol == "amneziawg" || s.Protocol == "openvpn")
 }
 
@@ -71,7 +71,7 @@ func decodeDesktopMacOSExternalReceipt(raw []byte, capture desktopMacOSExternalS
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&value) != nil || value.Schema != 1 || value.Capture != capture || value.Phase != phase ||
-		!desktopMacOSExternalToken.MatchString(value.Token) || value.Baseline.Present != (phase == "active" || phase == "held" || capture.Policy == "always") ||
+		!desktopMacOSExternalToken.MatchString(value.Token) || value.Baseline.Present != (phase == "active" || phase == "held" && capture.Policy != "off" || capture.Policy == "always") ||
 		value.Baseline.Present && !desktopMacOSExternalLong.MatchString(value.Baseline.Rules) || !value.Baseline.Present && value.Baseline.Rules != "" {
 		return desktopMacOSExternalReceipt{}, failure
 	}

@@ -1,10 +1,40 @@
 # Current implementation status
 
-Updated November 14, 2026 UTC. This file distinguishes published source,
+Updated November 15, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
+
+## November 15: original scope and bounded desktop additions
+
+The [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md)
+records the recovered original requirements and newer published source through
+`3b90efe0`: macOS prefix-only candidate controls with purpose-safe dialog
+ownership, atomic native descriptor transfer, the measured Compare test oracle,
+and Linux/Windows ordinary OpenVPN-entry to independent SS2022-final hosts.
+The OpenVPN addition is a bounded two-node Local path with one literal TCP or
+UDP entry remote, both Start Layers Off and On-connect/Always protection. It
+preserves the separate existing imported-OpenVPN to paired-Router-final path.
+Other graph positions, final protocols, layers, execution choices and platform
+adoption remain separately accountable.
+
+Source checks, component builds and compiled native fixtures are identified
+separately from kernel execution. Linux's new encrypted entry cases could not
+execute locally because netlink access was denied; Windows's new WFP cases are
+cross-compiled and mandatory, with actual Windows execution still required.
+This continuation's macOS Off source adds the captured isolated-UID owner to
+ordinary ordered and typed SOCKS/CONNECT paths, including execution preparation
+derived from the ordinary policy. Candidate-prefix and external baseline/receipt
+adapters can represent Off, but their independent public constructors/physical
+admission still require On-connect or Always; those adapters alone do not enable
+an Off connection. The ordered Off
+path keeps ordinary host traffic open and
+retains the original engine guard until descriptor and guardian retirement are
+proved. Actual macOS packet/state/alias execution remains a native gate; this
+does not add direct Tor acceptance or complete every requested graph. No current
+complete release, physical-device acceptance or private deployment is inferred
+from these source additions.
 
 ## November 14: actual native editor results and public SOCKS connections
 

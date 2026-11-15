@@ -259,6 +259,7 @@ def inputs():
                              ROOT/'deploy/test_linux_node_lifecycle_runner.py',
                              ROOT/'deploy/test_desktop_darwin_guardian.py',
                              ROOT/'deploy/test_desktop_darwin_guardian_runner.py',
+                             ROOT/'deploy/test_darwin_off_close_admission.py',
                              ROOT/'deploy/test_desktop_darwin_observation.py',
                              ROOT/'deploy/darwin_race_toolchain.py',
                              ROOT/'deploy/test_darwin_race_toolchain.py',

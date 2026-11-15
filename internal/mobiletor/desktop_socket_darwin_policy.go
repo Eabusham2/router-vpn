@@ -34,6 +34,7 @@ type DesktopDarwinSocketDestination struct {
 }
 
 type DesktopDarwinSocketOptions struct {
+	HostProtectionOff   bool
 	Interfaces          []DesktopDarwinSocketInterface
 	PrivateDestinations []DesktopDarwinSocketDestination
 	LANPrefixes         []netip.Prefix
@@ -135,6 +136,9 @@ func (o DesktopDarwinSocketOptions) binding(owner DesktopSocketKernelOwner, remo
 // guardian. Each physical socket is created by an otherwise empty child under
 // a dedicated locked account and transferred without changing kernel identity.
 type DesktopDarwinSocketPolicy struct {
+	offMu             sync.Mutex
+	offSockets        map[string]*desktopDarwinOffDescriptor
+	offFailure        error
 	capture           DesktopSocketCapture
 	options           DesktopDarwinSocketOptions
 	owner             DesktopSocketKernelOwner
@@ -230,6 +234,14 @@ func NewDesktopDarwinSocketPolicy(ctx context.Context, capture DesktopSocketCapt
 	expectedOwner := desktopDarwinOwnerForPID(capture, p.uid, p.account, p.owner.Generation, uint32(command.Process.Pid))
 	expectedBaseline, baselineErr := desktopDarwinPFCanonical(readback, desktopDarwinPFBaseline(capture, options))
 	expectedPointer := strings.TrimSpace(desktopDarwinPFPointer(capture))
+	if options.HostProtectionOff {
+		p.pf.slotPolicy, err = desktopDarwinIsolatedSlotPolicy(readback, capture, p.uid)
+		baselineErr = errors.Join(baselineErr, err)
+		if p.pf.slotPolicy != nil {
+			expectedPointer = p.pf.slotPolicy.expected
+		}
+		p.pf.scopedSockets = make(map[string]desktopDarwinPFLocalSocket)
+	}
 	// Prepare carries metadata, never borrowed proof. Independently compile the
 	// captured baseline, retain the complete absolute pointer, and compare the
 	// still-empty generation before admitting any native socket or trusting the
@@ -238,6 +250,7 @@ func NewDesktopDarwinSocketPolicy(ctx context.Context, capture DesktopSocketCapt
 	verifyErr := p.pf.verify(readback, true)
 	p.pf.permits = nil
 	if p.owner != expectedOwner || p.pf.Capture != capture || p.pf.UID != p.uid || p.pf.Account != p.account || baselineErr != nil ||
+		p.pf.HostProtectionOff != options.HostProtectionOff ||
 		p.pf.Baseline != expectedBaseline || p.pf.Pointer != expectedPointer || desktopDarwinVerifyAccount(p.account, p.uid) != nil || verifyErr != nil {
 		channel.Close()
 		close(p.monitorDone)
@@ -295,7 +308,8 @@ func (p *DesktopDarwinSocketPolicy) createSocketAdmitted(ctx context.Context, c 
 		return DesktopSocketCreated{}, net.ErrClosed
 	}
 	reply, file, err := p.callLocked(ctx, desktopDarwinRequest{Operation: "create", Capture: p.capture, Creation: c}, nil, true)
-	return DesktopSocketCreated{Creation: reply.Creation, File: file}, errors.Join(err, ctx.Err())
+	prebound, retainedErr := p.retainOffDescriptor(c, file)
+	return DesktopSocketCreated{Creation: reply.Creation, File: file, prebound: prebound}, errors.Join(err, retainedErr, ctx.Err())
 }
 
 func (p *DesktopDarwinSocketPolicy) Bind(ctx context.Context, c DesktopSocketCapture, b DesktopSocketBinding, network string, raw syscall.RawConn) error {
@@ -421,6 +435,9 @@ func (p *DesktopDarwinSocketPolicy) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	if err := p.joinOffDescriptorCreation(ctx); err != nil {
+		return err
+	}
 	if p.pf == nil {
 		p.channel.Close()
 		select {
@@ -516,16 +533,27 @@ func (p *DesktopDarwinSocketPolicy) releaseSocketAdmitted(ctx context.Context, c
 	if c.Capture != p.capture || c.Binding.Owner != p.owner {
 		return net.ErrClosed
 	}
+	// Keep the guardian's original tuple/state scope until actual engine alias
+	// retirement is known. Its release acknowledgment alone is not that proof.
+	if err := p.checkOffDescriptorRetirement(ctx, c, false); err != nil {
+		return err
+	}
 	_, file, err := p.callLocked(ctx, desktopDarwinRequest{Operation: "release", Capture: p.capture, Creation: c}, nil, false)
 	if file != nil {
 		file.Close()
 		return errors.New("Darwin socket release transferred a descriptor")
 	}
 	if err == nil {
-		return ctx.Err()
+		return errors.Join(p.releaseOffDescriptor(ctx, c), ctx.Err())
 	}
 	select {
 	case <-p.joined:
+		if p.options.HostProtectionOff {
+			if err := p.pf.retirePermissions(ctx); err != nil {
+				return err
+			}
+			return errors.Join(p.releaseOffDescriptor(ctx, c), ctx.Err())
+		}
 		return errors.Join(p.pf.close(ctx), ctx.Err())
 	default:
 		return err

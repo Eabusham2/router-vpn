@@ -12,7 +12,7 @@ func macOSCandidatePrefixBaselineFixture(policy, phase string) desktopMacOSCandi
 	value := desktopMacOSCandidatePrefixReceipt{Schema: 2,
 		Capture: desktopMacOSCandidatePrefixSelection{Schema: 2, Family: macosprocess.CandidatePrefixFamily, ProfileID: "saved-control-final",
 			Session: strings.Repeat("a", 32), Source: strings.Repeat("b", 64), Config: strings.Repeat("c", 64), Policy: policy},
-		Phase: phase, Token: "417", Baseline: desktopMacOSBaselineProof{Present: phase != "retired" || policy == "always"}}
+		Phase: phase, Token: "417", Baseline: desktopMacOSBaselineProof{Present: phase == "active" || phase == "held" && policy != "off" || policy == "always"}}
 	if value.Baseline.Present {
 		value.Baseline.Rules = strings.Repeat("d", 64)
 	}
@@ -20,7 +20,7 @@ func macOSCandidatePrefixBaselineFixture(policy, phase string) desktopMacOSCandi
 }
 
 func TestDesktopMacOSCandidatePrefixBaselineExactReceiptAndRetirement(t *testing.T) {
-	for _, policy := range []string{"on-connect", "always"} {
+	for _, policy := range []string{"off", "on-connect", "always"} {
 		for _, phase := range []string{"active", "held", "retired"} {
 			t.Run(policy+"/"+phase, func(t *testing.T) {
 				value := macOSCandidatePrefixBaselineFixture(policy, phase)
@@ -40,7 +40,13 @@ func TestDesktopMacOSCandidatePrefixBaselineExactReceiptAndRetirement(t *testing
 					"source":         func(v *desktopMacOSCandidatePrefixReceipt) { v.Capture.Source = strings.Repeat("e", 64) },
 					"config":         func(v *desktopMacOSCandidatePrefixReceipt) { v.Capture.Config = strings.Repeat("e", 64) },
 					"LAN":            func(v *desktopMacOSCandidatePrefixReceipt) { v.Capture.HomeLAN = true },
-					"policy":         func(v *desktopMacOSCandidatePrefixReceipt) { v.Capture.Policy = "off" },
+					"policy": func(v *desktopMacOSCandidatePrefixReceipt) {
+						if v.Capture.Policy == "off" {
+							v.Capture.Policy = "always"
+						} else {
+							v.Capture.Policy = "off"
+						}
+					},
 					"phase":          func(v *desktopMacOSCandidatePrefixReceipt) { v.Phase = "joined-process" },
 					"zero-token":     func(v *desktopMacOSCandidatePrefixReceipt) { v.Token = "0" },
 					"token-prefix":   func(v *desktopMacOSCandidatePrefixReceipt) { v.Token = "0417" },

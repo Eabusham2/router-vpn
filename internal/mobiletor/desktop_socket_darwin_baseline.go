@@ -142,6 +142,9 @@ func RunDesktopDarwinPFBaseline(ctx context.Context, raw []byte, apply bool) ([]
 	var compiled []desktopPFFilterRule
 	if request.Action == "replace" {
 		source := desktopPFOwnedBaseline(request.SessionID, request.SourceSHA256, request.HomeLANAccess, desktopDarwinPFTestScope)
+		if request.IsolatedOnly {
+			source = desktopPFIsolatedBaseline(request.SessionID)
+		}
 		compiled, err = desktopPFCompileFilters(source)
 		if err != nil || len(compiled) == 0 {
 			return nil, errors.Join(err, errors.New("Darwin PF baseline lost its finite compiled filter policy"))
