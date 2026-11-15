@@ -46,7 +46,7 @@ def check_release_aggregate_gates(source: str) -> None:
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
     required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
-                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "darwin-prefix-host", "server-ordered-encrypted",
+                "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "linux-connect-execution-host", "darwin-prefix-host", "server-ordered-encrypted",
                 "openvpn-prefix-native", "ss-prefix-native", "typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
     assert len(values) == len(set(values)) and set(values) == required, (
         "native release aggregate changed its complete required gate inventory")
@@ -87,6 +87,14 @@ def check_release_aggregate_gates(source: str) -> None:
         "native release lost its actual installed ordered Darwin host workflow")
     assert [line for line in darwin_host if line.startswith("    needs:")] == ["    needs: native-runtimes"], (
         "native ordered Darwin host lost its successful current-run runtime producer dependency")
+    linux_connect = job("linux-connect-execution-host")
+    assert [line for line in linux_connect if line.startswith("    uses:")] == [
+        "    uses: ./.github/workflows/linux-connect-execution-host.yml"], (
+        "native release lost its actual installed Linux CONNECT execution workflow")
+    assert [line for line in linux_connect if line.startswith("    needs:")] == ["    needs: native-runtimes"], (
+        "native Linux CONNECT execution lost its successful current-run runtime producer dependency")
+    assert not any(line.startswith("    with:") for line in linux_connect), (
+        "native Linux CONNECT execution must retain its no-input same-SHA workflow")
     darwin_prefix = job("darwin-prefix-host")
     assert "    uses: ./.github/workflows/darwin-node-prefix-host-tun.yml" in darwin_prefix, (
         "native release lost its actual installed closed Darwin prefix workflow")
@@ -114,6 +122,7 @@ def check_release_aggregate_gates(source: str) -> None:
     for name, lines in (("aggregate", aggregate), ("imported-pq-reality", pq),
                         ("imported-xhttp", xhttp), ("imported-naive-h2", naive_h2), ("imported-naive-h3", naive_h3),
                         ("darwin-ordered-child", darwin_child), ("darwin-ordered-host", darwin_host),
+                        ("linux-connect-execution-host", linux_connect),
                         ("darwin-prefix-host", darwin_prefix),
                         ("native-runtimes", runtimes), ("server-ordered-encrypted", server_encrypted),
                         ("openvpn-prefix-native", openvpn_prefix), ("ss-prefix-native", ss_prefix), *focused):
@@ -126,6 +135,16 @@ def check_connect_execution_host_workflow(source: str, release: str, builder: st
     path = ROOT / "deploy/test_darwin_connect_execution_workflow.py"
     spec = importlib.util.spec_from_file_location("connect_execution_host_workflow", path)
     assert spec and spec.loader, "CONNECT execution workflow guard is unavailable"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.check(source, release, builder)
+
+
+def check_linux_connect_execution_host_workflow(source: str, release: str, builder: str) -> None:
+    """Require exact installed Linux execution before release publication."""
+    path = ROOT / "deploy/test_linux_connect_execution_workflow.py"
+    spec = importlib.util.spec_from_file_location("linux_connect_execution_host_workflow", path)
+    assert spec and spec.loader, "Linux CONNECT execution workflow guard is unavailable"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.check(source, release, builder)
@@ -627,6 +646,7 @@ check_release_aggregate_gates(rc)
 check_focused_native_release_workflow(read(".github/workflows/focused-source-validation.yml"))
 check_server_encrypted_workflow(read(".github/workflows/server-node-chain-encrypted.yml"))
 check_connect_execution_host_workflow(read(".github/workflows/darwin-node-host-tun.yml"), rc, read("deploy/build-native-runtime.py"))
+check_linux_connect_execution_host_workflow(read(".github/workflows/linux-connect-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 require(rc, rc_rel,
         "windows-complete-max:",
         "uses: ./.github/workflows/windows-node-max-contract.yml",

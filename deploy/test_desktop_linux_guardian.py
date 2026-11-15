@@ -379,7 +379,23 @@ def namespace_test_execution(executable, selector, case, environment):
     extended = case in ('NodeHostTUN/node-chain-connect-http-wg-four-connect',
                         'NodeHostTUN/node-chain-connect-https-wg-eight-connect',
                         'NodeHostTUN/node-chain-socks-wg-four-connect', 'NodeHostTUN/node-chain-socks-wg-eight-connect')
-    seconds, timeout = (250, 265) if extended else (120, 135)
+    connect_execution = case in (
+        'CONNECTExecution/http-wg-server',
+        'CONNECTExecution/http-awg-fast-auto-local',
+        'CONNECTExecution/http-awg-strong-auto-server',
+        'CONNECTExecution/https-awg-strong-server',
+        'CONNECTExecution/https-wg-auto-local',
+        'CONNECTExecution/https-awg-fast-auto-server',
+        'CONNECTExecution/http-wrong-auth',
+        'CONNECTExecution/https-wrong-auth',
+        'CONNECTExecution/https-tls-name',
+        'CONNECTExecution/http-wrong-public',
+        'CONNECTExecution/https-wrong-final',
+        'CONNECTExecution/https-failed-dns',
+        'CONNECTExecution/http-replaced-source',
+        'CONNECTExecution/https-held-cleanup',
+    )
+    seconds, timeout = (240, 250) if connect_execution else ((250, 265) if extended else (120, 135))
     return subprocess.run([str(executable), '-test.run=' + selector,
                            '-test.count=1', '-test.timeout=' + str(seconds) + 's', '-test.v'],
                           env=environment, timeout=timeout)

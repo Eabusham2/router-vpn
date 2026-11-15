@@ -72,8 +72,8 @@ func TestRouterVPNDesktopCONNECTExecutionReferenceProcess(t *testing.T) {
 	}
 	_ = image.Close()
 	local, remote := netip.MustParseAddr(request.Peer.Paired.Address), netip.MustParseAddr(request.Peer.Paired.ClientAddress)
-	if local != remote {
-		t.Fatal("Darwin fixture requires captured same-host physical peer")
+	if err := connectExecutionPhysicalPeer(local, remote); err != nil {
+		t.Fatal("original platform physical peer refused", err)
 	}
 	if request.Layers == nil || request.Layers.validate(request.Peer) != nil || request.Layers.Final != "off" || request.Layers.Fault != "" {
 		t.Fatal("CONNECT execution requires captured entry layer and unlayered final")

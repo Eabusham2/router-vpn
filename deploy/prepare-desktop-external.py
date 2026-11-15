@@ -166,6 +166,8 @@ BOX_TEMPLATES = {
 PEER_TEMPLATES = {
     'node_chain_imported_execution_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_execution_peer_test.go',
     'node_chain_connect_execution_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_connect_execution_peer_test.go',
+    'node_chain_connect_execution_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_connect_execution_peer_linux_test.go',
+    'node_chain_connect_execution_peer_darwin_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_connect_execution_peer_darwin_test.go',
     'node_chain_imported_execution_layers_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_execution_layers_peer_test.go',
     'node_peer_network_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_network_test.go',
     'node_external_amnezia_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_amnezia_installed_test.go',
@@ -934,6 +936,10 @@ def copy_encrypted_peer_templates(vendor):
         prefix = b'package routervpnamnezia\n'
         if name in ('node_chain_imported_execution_peer_test.go.tmpl', 'node_chain_imported_execution_layers_peer_test.go.tmpl', 'node_chain_connect_execution_peer_test.go.tmpl'):
             prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_node_chain)\n\n' + prefix
+        elif name == 'node_chain_connect_execution_peer_linux_test.go.tmpl':
+            prefix = b'//go:build linux && !android\n\n' + prefix
+        elif name == 'node_chain_connect_execution_peer_darwin_test.go.tmpl':
+            prefix = b'//go:build darwin && routervpn_darwin_node_chain\n\n' + prefix
         elif name in ('node_peer_windows_test.go.tmpl', 'node_layer_peer_windows_test.go.tmpl', 'node_xray_peer_windows_test.go.tmpl', 'node_naive_peer_windows_test.go.tmpl', 'node_composite_peer_windows_test.go.tmpl'):
             prefix = b'//go:build windows && routervpn_windows_node_composition\n\n' + prefix
         elif name == 'node_naive_h3_literal_test.go.tmpl':
