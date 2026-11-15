@@ -170,6 +170,20 @@ func TestOrderedCandidateSaveHTTPRequiresFreshOriginalOwner(t *testing.T) {
 
 func testOrderedCandidateSaveHTTPRequiresFreshOriginalOwner(t *testing.T, f *desktopNodeChainOwnedFixture, catalog *desktopNodeChainCandidateCatalog, id string) {
 	t.Helper()
+	// This mailbox fixture owns candidate measurement, not a resolver probe.
+	// Releasing the real MTU hold resumes Auto, whose original tracker.observe
+	// may otherwise start an unrelated DNS proof and legitimately retire the
+	// drained candidate through the measurement-adoption guard. Hold that probe
+	// at its existing pending boundary; do not invent a passed DNS receipt or
+	// disable Auto, the publication hold, or original tracker cleanup.
+	tracker := catalog.identity.Tracker
+	tracker.mu.Lock()
+	if tracker.dnsProofRunning || tracker.dnsProofWork != nil {
+		tracker.mu.Unlock()
+		t.Fatal("candidate Save fixture does not own the original idle DNS boundary")
+	}
+	tracker.dnsProofRunning = true
+	tracker.mu.Unlock()
 	// Successful measurement and Save both release their MTU hold and resume
 	// Auto. Join this original fixture's workers before native and file cleanup.
 	capturedCommand := f.launch.command

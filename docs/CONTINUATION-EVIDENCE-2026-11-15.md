@@ -1666,3 +1666,29 @@ identity checks, native joins and time bounds are unchanged.
 The original reproduced refusal, complete runner output, causal-control
 receipt and exact patch are retained in `windows-socks-schema-validation`.
 This repair does not establish native release publication or device acceptance.
+
+## Candidate Save fixture retains its original DNS observation boundary
+
+Exact `9363845c` Release gap audit job `132845310072` failed the SOCKS
+candidate Save fixture with HTTP 409 after the original receipt was retired.
+Releasing its real MTU publication hold resumes Auto. The fixture's original
+tracker observation could then start an unmodelled resolver proof worker;
+the production measurement-adoption guard correctly invalidated the drained
+candidate belonging to that same owner. A forced original observation
+reproduced this in 4.374 seconds with the exact retirement reason, before
+the fixture's explicit expiry check. The 120-second receipt lifetime was
+not the cause and remains unchanged.
+
+The shared test fixture now explicitly owns the idle resolver boundary and
+holds that unrelated probe pending. It supplies no successful DNS receipt
+and retains Auto, the real publication hold, clocks, candidate ownership and
+joined original tracker cleanup. Shipping source is unchanged. The paired,
+HTTP/HTTPS CONNECT and SOCKS Save tests passed with race detection in 26.186
+seconds, including their original expiry, repeated-Save and complete-profile
+assertions. With identical forced original-observer scheduling, the repaired
+fixture passed in 8.83 seconds. Omitting only its pending boundary failed in
+6.48 seconds at the exact same-owner DNS-adoption retirement witness, with
+exit status one and no unrelated timeout, panic or race failure. The source,
+positive and causal-control evidence are retained in
+`candidate-save-ci-validation`. Native release and device acceptance remain
+separate requirements.
