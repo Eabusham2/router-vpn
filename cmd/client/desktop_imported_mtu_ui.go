@@ -234,7 +234,7 @@ func (u *desktopImportedMTUUI) run(parent context.Context, operation *mtuViewOpe
 	if raw, found := routerNodeAutomaticMTUs.Load(u.a); found {
 		automatic := raw.(*routerNodeAutomaticMTU)
 		automatic.mu.Lock()
-		if automatic.command == u.runtime.launch.command {
+		if !automatic.retired && automatic.command == u.runtime.launch.command {
 			automatic.completed, automatic.attempted, automatic.resume = true, true, false
 		}
 		automatic.mu.Unlock()
@@ -405,6 +405,9 @@ func (a *app) writeDesktopImportedMTUViewStatus(w http.ResponseWriter, r *http.R
 }
 
 func (a *app) startDesktopImportedAutomaticMTU() bool {
+	if a.controllerClosing() {
+		return true
+	}
 	raw, found := nativeMultihopOwners.Load(a)
 	runtime, ok := raw.(*nativeMultihopRuntime)
 	if !found || !ok || runtime == nil || runtime.selection.Native == nil || !runtime.selection.Native.imported {
@@ -413,17 +416,31 @@ func (a *app) startDesktopImportedAutomaticMTU() bool {
 	if runtime.launch == nil {
 		return true
 	}
-	profile := runtime.selection.Exit
-	// This read-only eligibility check cannot begin a measurement. The worker
-	// below still proves the same live runtime before public Retest admission.
-	_, policy, err := readDesktopImportedMTUPolicyContext(context.Background(), runtime.selection)
-	if err != nil || !policy.Automatic || policy.Jumbo || mtuSuspended(a) {
-		return true
-	}
 	command := runtime.launch.command
 	raw, _ = routerNodeAutomaticMTUs.LoadOrStore(a, &routerNodeAutomaticMTU{command: command})
 	automatic := raw.(*routerNodeAutomaticMTU)
 	automatic.mu.Lock()
+	if automatic.retired {
+		automatic.mu.Unlock()
+		return true
+	}
+	// Source preflight can create private parent directories too. Include it
+	// in the same terminal receipt before reading any captured assets.
+	preflight := automatic.workerStartedLocked()
+	automatic.mu.Unlock()
+	defer automatic.workerJoined()
+	profile := runtime.selection.Exit
+	// This read-only eligibility check cannot begin a measurement. The worker
+	// below still proves the same live runtime before public Retest admission.
+	_, policy, err := readDesktopImportedMTUPolicyContext(preflight, runtime.selection)
+	if err != nil || !policy.Automatic || policy.Jumbo || mtuSuspended(a) {
+		return true
+	}
+	automatic.mu.Lock()
+	if automatic.retired {
+		automatic.mu.Unlock()
+		return true
+	}
 	if automatic.command != command {
 		automatic.command, automatic.waiting, automatic.attempted, automatic.completed, automatic.resume = command, false, false, false, false
 	}
@@ -435,11 +452,13 @@ func (a *app) startDesktopImportedAutomaticMTU() bool {
 		return true
 	}
 	automatic.waiting, automatic.resume = true, false
+	workerContext := automatic.workerStartedLocked()
 	automatic.mu.Unlock()
 	go func() {
+		defer automatic.workerJoined()
 		defer func() {
 			automatic.mu.Lock()
-			resume := automatic.command == command && automatic.resume && !automatic.completed
+			resume := !automatic.retired && automatic.command == command && automatic.resume && !automatic.completed
 			if automatic.command == command {
 				automatic.waiting = false
 			}
@@ -448,12 +467,12 @@ func (a *app) startDesktopImportedAutomaticMTU() bool {
 				a.startRouterNodeAutomaticMTU()
 			}
 		}()
-		ready, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		ready, stop := context.WithTimeout(workerContext, 30*time.Second)
 		defer stop()
 		ticker := time.NewTicker(25 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			if !a.ownsConnectionRuntime(command) {
+			if workerContext.Err() != nil || !a.ownsConnectionRuntime(command) {
 				return
 			}
 			if mtuSuspended(a) {
@@ -474,7 +493,7 @@ func (a *app) startDesktopImportedAutomaticMTU() bool {
 			return
 		}
 		automatic.mu.Lock()
-		if automatic.command != command || automatic.attempted {
+		if automatic.retired || automatic.command != command || automatic.attempted {
 			automatic.mu.Unlock()
 			return
 		}
@@ -482,7 +501,7 @@ func (a *app) startDesktopImportedAutomaticMTU() bool {
 		automatic.mu.Unlock()
 		encoded, _ := json.Marshal(mtuViewRequest{Session: runtime.launch.mtuSession, Profile: profile.ID})
 		attempt := &mtuAutomaticAttempt{}
-		ctx := context.WithValue(context.Background(), mtuAutomaticContextKey{}, attempt)
+		ctx := context.WithValue(workerContext, mtuAutomaticContextKey{}, attempt)
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, "/api/mtu/retest", bytes.NewReader(encoded))
 		if err != nil {
 			return
@@ -490,7 +509,7 @@ func (a *app) startDesktopImportedAutomaticMTU() bool {
 		a.retestMTU(&mtuAutomaticResponse{header: make(http.Header)}, request)
 		if !attempt.accepted.Load() && attempt.retry.Load() {
 			automatic.mu.Lock()
-			if automatic.command == command {
+			if !automatic.retired && automatic.command == command {
 				automatic.attempted, automatic.resume = false, true
 			}
 			automatic.mu.Unlock()

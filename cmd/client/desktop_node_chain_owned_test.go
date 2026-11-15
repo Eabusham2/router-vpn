@@ -107,6 +107,20 @@ func newDesktopNodeChainOwnedFixtureWith(t *testing.T, a *app, selection multiho
 		// releasing the fixture's files or deleting its application owners.
 		cleanup, finishCleanup := context.WithTimeout(context.Background(), 15*time.Second)
 		defer finishCleanup()
+		// A throughput hold release legitimately resumes Auto. Its source
+		// capture can still create private parent directories, so join the
+		// original worker before retiring the fixture's files.
+		a.mu.Lock()
+		a.closing = true
+		a.mu.Unlock()
+		if err := retireRouterNodeAutomaticMTUContext(cleanup, a); err != nil {
+			t.Error("ordered fixture automatic MTU did not join", err)
+		}
+		tracker := cancelSessionTracker(a)
+		if err := tracker.stopDNSProofs(cleanup); err != nil {
+			t.Error("ordered fixture DNS proof did not join", err)
+		}
+		joinSessionTracker(a, tracker)
 		watchDone := desktopOwnedNodeMonitorDone(f.launch)
 		if err := stopDesktopOwnedNodeMonitor(cleanup, f.launch); err != nil {
 			t.Error("ordered fixture watcher did not join", err)

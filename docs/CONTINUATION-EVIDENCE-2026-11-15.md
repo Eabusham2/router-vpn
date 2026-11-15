@@ -791,6 +791,37 @@ workflow dependency parity, aggregate provenance gates and paired inventory
 controls passed on the composed source. Exact-SHA native execution, package
 publication and physical-device acceptance remain pending at this cutoff.
 
+### Terminal Auto MTU worker retirement
+
+The stale-middle HTTP rejection in hosted multihop job `132775241212`,
+run `43702077043`, exposed a workspace cleanup race after the test itself
+passed. A temporary diagnostic on the actual private-directory creation
+path traced the late write to an automatically resumed MTU worker, before
+that worker had published an MTU view. Joining the existing connection
+monitor alone could not join this separate source capture. The diagnostic
+was removed before publication.
+
+Terminal controller shutdown now retains one counted Auto MTU lifetime for
+all still-owned command generations, including imported-node source
+preflight. It cancels that original context before waiting for every worker
+to finish. A pending join retains its original receipt for the existing
+shutdown retry; a delayed hold release, reset, retry result or completion
+cannot reopen the terminal owner. Actual Retest inherits this lifetime even
+when cancellation precedes view publication. Ordinary Disconnect, temporary
+measurement holds and their valid Auto resumption keep their existing
+behavior. Platform-service Auto MTU has its separate existing owner and is
+not claimed as newly implemented by this change.
+
+The ordered fixture now joins Auto work, its original DNS proof tracker and
+the existing owned monitor before releasing private files. The final
+race-instrumented client image passed 22 focused regression roots with 50
+verdicts, including original-worker replacement, pending-join retry, late
+hold release and cancellation before view publication. An earlier broader
+run encountered the executor's existing physical-network inventory `EPERM`
+in `TestControllerShutdownCancelsSpeedLabIntentWithoutRestoringConnection`;
+that case is not recorded as a local pass. Actual native shutdown and the
+full exact-SHA release remain mandatory.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths

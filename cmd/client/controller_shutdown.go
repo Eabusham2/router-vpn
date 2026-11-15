@@ -132,6 +132,12 @@ func (a *app) drainControllerOwner() error {
 	// as well, because its durable adoption can otherwise wait for the same lock.
 	a.cancelConnectionOperation()
 	cancelCapturedMTU(a)
+	join, finishJoin := context.WithTimeout(context.Background(), 5*time.Second)
+	err := retireRouterNodeAutomaticMTUContext(join, a)
+	finishJoin()
+	if err != nil {
+		return err
+	}
 	if err := stopSessionDNSProofs(a); err != nil {
 		return err
 	}

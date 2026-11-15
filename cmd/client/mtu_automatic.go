@@ -34,6 +34,11 @@ type routerNodeAutomaticMTU struct {
 	attempted bool
 	completed bool
 	resume    bool
+	workers   int
+	retired   bool
+	joined    chan struct{}
+	context   context.Context
+	cancel    context.CancelFunc
 }
 
 var routerNodeAutomaticMTUs sync.Map
@@ -62,6 +67,9 @@ func retainCompletedRouterNodeMTU(live *mtuLiveOwner) {
 	owner := raw.(*routerNodeAutomaticMTU)
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
+	if owner.retired {
+		return
+	}
 	if owner.command != live.command {
 		owner.command, owner.waiting = live.command, false
 	}
@@ -75,7 +83,7 @@ func resetRouterNodeAutomaticMTU(a *app) {
 		// A hold may still encounter the running HTTP view after its exact
 		// kernel owner has committed and closed. Cancel that view without
 		// turning its retained proof into another pending Auto attempt.
-		if !owner.completed {
+		if !owner.completed && !owner.retired {
 			owner.attempted = false
 			owner.resume = true
 		}
@@ -90,13 +98,17 @@ func (a *app) startRouterNodeAutomaticMTU() {
 	if a.startPlatformServiceAutomaticMTU() {
 		return
 	}
-	a.startRouterNodeAutomaticMTUWithRun(a.runRouterNodeAutomaticMTU)
+	a.startRouterNodeAutomaticMTUWithContextRun(a.runRouterNodeAutomaticMTUContext)
 }
 
 func (a *app) runRouterNodeAutomaticMTU(snapshot mtuRetestSnapshot) mtuAutomaticResult {
+	return a.runRouterNodeAutomaticMTUContext(context.Background(), snapshot)
+}
+
+func (a *app) runRouterNodeAutomaticMTUContext(parent context.Context, snapshot mtuRetestSnapshot) mtuAutomaticResult {
 	encoded, _ := json.Marshal(mtuViewRequest{Session: snapshot.SessionID, Profile: snapshot.Profile.ID})
 	attempt := &mtuAutomaticAttempt{}
-	ctx := context.WithValue(context.Background(), mtuAutomaticContextKey{}, attempt)
+	ctx := context.WithValue(parent, mtuAutomaticContextKey{}, attempt)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "/api/mtu/retest", bytes.NewReader(encoded))
 	if err != nil {
 		return mtuAutomaticResult{}
@@ -107,28 +119,35 @@ func (a *app) runRouterNodeAutomaticMTU(snapshot mtuRetestSnapshot) mtuAutomatic
 	return mtuAutomaticResult{accepted: attempt.accepted.Load(), retry: attempt.retry.Load()}
 }
 
-func (owner *routerNodeAutomaticMTU) finish(a *app, command *exec.Cmd, run func(mtuRetestSnapshot) mtuAutomaticResult) {
+func (owner *routerNodeAutomaticMTU) finish(a *app, command *exec.Cmd, run func(context.Context, mtuRetestSnapshot) mtuAutomaticResult) {
 	owner.mu.Lock()
 	resume := false
 	if owner.command == command {
 		owner.waiting = false
-		resume = owner.resume
+		resume = owner.resume && !owner.retired
 	}
 	owner.mu.Unlock()
 	if resume && !mtuSuspended(a) && a.ownsConnectionRuntime(command) {
-		a.startRouterNodeAutomaticMTUWithRun(run)
+		a.startRouterNodeAutomaticMTUWithContextRun(run)
 	}
 }
 
 func (owner *routerNodeAutomaticMTU) resumeAfterHold(command *exec.Cmd) {
 	owner.mu.Lock()
-	if owner.command == command && !owner.attempted {
+	if owner.command == command && !owner.attempted && !owner.retired {
 		owner.resume = true
 	}
 	owner.mu.Unlock()
 }
 
 func (a *app) startRouterNodeAutomaticMTUWithRun(run func(mtuRetestSnapshot) mtuAutomaticResult) {
+	if run == nil {
+		return
+	}
+	a.startRouterNodeAutomaticMTUWithContextRun(func(_ context.Context, snapshot mtuRetestSnapshot) mtuAutomaticResult { return run(snapshot) })
+}
+
+func (a *app) startRouterNodeAutomaticMTUWithContextRun(run func(context.Context, mtuRetestSnapshot) mtuAutomaticResult) {
 	a.mu.Lock()
 	command := a.cmd
 	profileID := a.profiles.SelectedID
@@ -136,7 +155,7 @@ func (a *app) startRouterNodeAutomaticMTUWithRun(run func(mtuRetestSnapshot) mtu
 		profileID = a.state.RouterID
 	}
 	profile, found := a.profileByIDLocked(profileID)
-	eligible := found && command != nil && a.state.Connected && a.state.Phase == "connected" && strings.EqualFold(profile.MTUPolicy, "auto") && profile.External == nil && profile.NodeKind != "external"
+	eligible := !a.controllerClosingLocked() && found && command != nil && a.state.Connected && a.state.Phase == "connected" && strings.EqualFold(profile.MTUPolicy, "auto") && profile.External == nil && profile.NodeKind != "external"
 	a.mu.Unlock()
 	if !eligible || run == nil || mtuSuspended(a) {
 		return
@@ -144,6 +163,10 @@ func (a *app) startRouterNodeAutomaticMTUWithRun(run func(mtuRetestSnapshot) mtu
 	raw, _ := routerNodeAutomaticMTUs.LoadOrStore(a, &routerNodeAutomaticMTU{command: command})
 	owner := raw.(*routerNodeAutomaticMTU)
 	owner.mu.Lock()
+	if owner.retired {
+		owner.mu.Unlock()
+		return
+	}
 	if owner.command != command {
 		owner.command, owner.waiting, owner.attempted, owner.completed, owner.resume = command, false, false, false, false
 	}
@@ -161,16 +184,18 @@ func (a *app) startRouterNodeAutomaticMTUWithRun(run func(mtuRetestSnapshot) mtu
 		return
 	}
 	owner.waiting = true
+	workerContext := owner.workerStartedLocked()
 	owner.resume = false
 	owner.mu.Unlock()
 	go func() {
+		defer owner.workerJoined()
 		defer owner.finish(a, command, run)
 		deadline := time.NewTimer(30 * time.Second)
 		defer deadline.Stop()
 		ticker := time.NewTicker(25 * time.Millisecond)
 		defer ticker.Stop()
 		for {
-			if !a.ownsConnectionRuntime(command) {
+			if workerContext.Err() != nil || !a.ownsConnectionRuntime(command) {
 				return
 			}
 			if mtuSuspended(a) {
@@ -190,16 +215,16 @@ func (a *app) startRouterNodeAutomaticMTUWithRun(run func(mtuRetestSnapshot) mtu
 					return
 				}
 				owner.mu.Lock()
-				if owner.command != command || owner.attempted {
+				if owner.retired || owner.command != command || owner.attempted {
 					owner.mu.Unlock()
 					return
 				}
 				owner.attempted = true
 				owner.mu.Unlock()
-				result := run(snapshot)
+				result := run(workerContext, snapshot)
 				if !result.accepted && result.retry {
 					owner.mu.Lock()
-					if owner.command == command && !owner.completed {
+					if owner.command == command && !owner.completed && !owner.retired {
 						owner.attempted, owner.resume = false, true
 					}
 					owner.mu.Unlock()
@@ -207,6 +232,8 @@ func (a *app) startRouterNodeAutomaticMTUWithRun(run func(mtuRetestSnapshot) mtu
 				return
 			}
 			select {
+			case <-workerContext.Done():
+				return
 			case <-deadline.C:
 				return
 			case <-ticker.C:

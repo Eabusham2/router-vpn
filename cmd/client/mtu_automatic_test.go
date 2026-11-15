@@ -106,7 +106,7 @@ func TestRouterNodeAutomaticMTUHoldReleaseBeforeWaitingWorkerFinishes(t *testing
 	if !resume {
 		t.Fatal("hold release was lost while the old worker was still waiting")
 	}
-	owner.finish(a, command, run)
+	owner.finish(a, command, func(_ context.Context, snapshot mtuRetestSnapshot) mtuAutomaticResult { return run(snapshot) })
 	select {
 	case <-ran:
 	case <-time.After(3 * time.Second):
