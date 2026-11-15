@@ -128,6 +128,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_imported_openvpn_runtime.py',
                              ROOT/'deploy/test_desktop_imported_trio_execution.py',
                              ROOT/'deploy/test_desktop_imported_trio_execution_runner.py',
+                             ROOT/'deploy/test_desktop_imported_trio_controller.py',
+                             ROOT/'deploy/test_desktop_imported_trio_controller_runner.py',
                              ROOT/'deploy/test_desktop_imported_pq_runtime.py',
                              ROOT/'deploy/test_desktop_imported_xhttp_runtime.py',
                              ROOT/'deploy/test_desktop_imported_naive_h2_runtime.py',
@@ -1640,6 +1642,12 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                      '--receipt', temp/'imported-trio-execution.json',
                      *(['--without-race'] if not race else [])],
                     cwd=source, env=env, timeout=1200)
+                run([sys.executable, ROOT/'deploy/test_desktop_imported_trio_controller_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                run([sys.executable, ROOT/'deploy/test_desktop_imported_trio_controller.py',
+                     '--receipt', temp/'imported-trio-controller.json',
+                     *(['--without-race'] if not race else [])],
+                    cwd=ROOT, env=env, timeout=1200)
                 if target.startswith('linux/'):
                     # The desktop reference owns its two native builds and
                     # exact traffic matrix. Keep it outside the existing

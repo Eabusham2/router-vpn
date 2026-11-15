@@ -2414,3 +2414,44 @@ negative/timeout diagnostics are unchanged. This is a test-fixture repair;
 local compiler/process doubles do not establish Darwin kernel acceptance.
 The exact failing log, frozen source and causal evidence are retained in
 `release-39454fbb-audit` and `darwin-parent-path-validation`.
+
+
+## Native-host public controller validation for the imported trio
+
+The imported-trio Box gate verifies its actual native owners, but its eighteen
+records do not exercise all six public application roots on each shipping
+host. A separate required controller gate now compiles those original tests
+on native Windows and Linux AMD64/ARM64. It checks the complete 57-record
+inventory: original preparation, exact source refusals, public Connect and
+both comparison winners, joined retained-choice restoration, missing/foreign
+member refusal, and complete-profile Save/Load. Linux/Windows source fixtures
+do not become macOS admission authority.
+
+The same retained application executable runs every whole root separately.
+The compiler is bounded at 240 seconds; the original 120-second Go alarm and
+135-second process envelope apply to each root. The native builder gives this
+separate finite sequence a 1,200-second caller bound. Race execution is
+required except for the existing native Windows ARM64 compiler limitation.
+Actual host, GOOS/GOARCH and captured compiler environment must agree.
+
+The gate hashes the existing native builder's complete shipping input set,
+including all four imported application files and both gate files. It rejects
+source or image changes before accepting a root, and requires strict package,
+root and child verdicts. Missing, duplicated, late, foreign, failed, skipped
+and race outputs cannot satisfy acceptance. Its runner tests also retain
+compiler failure, timeout and partial-run refusal; failed work cannot issue
+a complete receipt.
+
+The first complete Linux AMD64 race invocation passed all 57 records in
+277.089 seconds including compilation. Its executable SHA-256 is
+`7ffae60be9dd89f00e3344f4d00069120e0570e0b623702ebdfa0b27f148212a`;
+its source identity is
+`ac7855cc9d4e53a63916f79853db13ca20962feddaba4c7782796b5f5d8190ce`.
+All five orchestration/verdict runner roots passed. Independent review
+confirmed the native target gates and finite-stage budget. The original
+controllers are real shipping functions, while their existing encrypted
+prefix, child-process-record and privileged kernel fixtures remain explicitly
+modeled. This result does not establish installed Windows execution, physical
+networking or private deployment. Those hosted and live requirements remain
+separate. Receipts and source manifests are in
+`imported-controller-gate-validation`.
