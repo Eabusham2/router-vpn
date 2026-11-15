@@ -3289,3 +3289,23 @@ observation optimization; it is scoped dependency compilation, not a freshly
 built complete native bundle. Exact identities and outputs are retained in
 `android-connect-execution-validation`. Exact-current APK/ABI, real Android
 networking, Apple host adoption and full release publication remain separate.
+
+## Preserve the complete Android profile dispatcher contract
+
+At published `2f04d9d0c50c878c0fb171e6dd9a050edfa5a4d5`, exact-head native
+release blockers run `43761046326` and recovered map-first UI run `43761046360`
+both reached the same obsolete four-family early-return marker in
+`android/test_android_connection_profiles_contract.py`. The shipping harness
+already includes the distinct `ordered-connect-execution` compiler and return
+branch. The old contract failure was reproduced locally before editing.
+
+The source contract now requires that exact new compiler and all five return
+families, while preserving the original complete, imported, OpenVPN and ordinary
+execution branches. Every dispatch marker must occur exactly once. Six causal
+source controls reject an omitted or substituted CONNECT compiler, missing
+CONNECT return, omitted original execution compiler, omitted original complete
+family and duplicate CONNECT compiler. The actual profile safety contract,
+all 12 durability-entrypoint tests and the full enclosing durable-state
+transaction audit pass. No application, runtime deadline or protection guard
+changed. This repairs a shared source gate; a new exact-SHA release and real
+device acceptance still require their own evidence.

@@ -142,14 +142,46 @@ for marker in ('"multihop_nodes"', 'stageOrderedNodes(updates,row)', 'currentOrd
 # The complete ordered family still runs every paired and imported case. The
 # imported-only selector is a separate focused entry point, never a substitute
 # for the all/ordered-chain compiler, source composition or original controls.
-for marker in ('args.case_family in ("all", "ordered-chain", "ordered-imported", "ordered-openvpn", "fixture-transport")',
-               'if args.case_family == "ordered-execution":\n        import test_android_node_chain_execution_capture as chain',
-               'chain.compiler_source(GO) if chain else GO',
-               'chain.prepare_sources(src, app, JAVA)',
-               'chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")',
-               'if args.case_family == "ordered-openvpn":\n                chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)',
-               'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution"):'):
-    assert marker in harness, f"complete ordered profile compiler/case dispatch missing: {marker}"
+ORDERED_DISPATCH_MARKERS = (
+    'args.case_family in ("all", "ordered-chain", "ordered-imported", "ordered-openvpn", "fixture-transport")',
+    'if args.case_family == "ordered-execution":\n        import test_android_node_chain_execution_capture as chain',
+    'if args.case_family == "ordered-connect-execution":\n        import test_android_connect_execution_capture as chain',
+    'chain.compiler_source(GO) if chain else GO',
+    'chain.prepare_sources(src, app, JAVA)',
+    'chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")',
+    'if args.case_family == "ordered-openvpn":\n                chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)',
+    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution"):',
+)
+
+
+def validate_ordered_dispatch(source: str) -> None:
+    for marker in ORDERED_DISPATCH_MARKERS:
+        assert source.count(marker) == 1, f"complete ordered profile compiler/case dispatch missing or duplicated: {marker}"
+
+
+validate_ordered_dispatch(harness)
+# Exercise the actual source contract: the new family must reach its own
+# compiler, and extending the return inventory must preserve every old family.
+connect_dispatch = ORDERED_DISPATCH_MARKERS[2]
+return_dispatch = ORDERED_DISPATCH_MARKERS[-1]
+dispatch_controls = (
+    ("CONNECT compiler omitted", connect_dispatch, ""),
+    ("CONNECT compiler substituted", connect_dispatch,
+     connect_dispatch.replace("test_android_connect_execution_capture", "test_android_node_chain_execution_capture")),
+    ("CONNECT return omitted", return_dispatch,
+     return_dispatch.replace(', "ordered-connect-execution"', "")),
+    ("original execution compiler omitted", ORDERED_DISPATCH_MARKERS[1], ""),
+    ("original complete family omitted", return_dispatch,
+     return_dispatch.replace('"ordered-chain", ', "")),
+    ("CONNECT compiler duplicated", connect_dispatch, connect_dispatch + "\n" + connect_dispatch),
+)
+for name, before, after in dispatch_controls:
+    try:
+        validate_ordered_dispatch(harness.replace(before, after, 1))
+    except AssertionError as error:
+        assert before in str(error), f"dispatch control failed for an unrelated reason: {name}: {error}"
+    else:
+        raise AssertionError(f"ordered profile dispatch contract accepted its deliberate defect: {name}")
 workflow = (ROOT.parent / '.github/workflows/android-multihop-contract.yml').read_text()
 for dependency in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java',
                    'android/test_android_node_chain_capture.py'):
