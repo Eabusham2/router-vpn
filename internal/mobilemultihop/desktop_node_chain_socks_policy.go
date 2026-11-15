@@ -15,11 +15,22 @@ type DesktopNodeChainSOCKSMetadata struct {
 }
 
 type DesktopNodeChainSOCKSPolicy struct {
-	original *NodeChainSOCKSSource
-	native   *NodeChainSOCKSSource
-	metadata DesktopNodeChainSOCKSMetadata
-	inputs   desktopNodePolicyInputs
-	seal     string
+	original   *NodeChainSOCKSSource
+	native     *NodeChainSOCKSSource
+	metadata   DesktopNodeChainSOCKSMetadata
+	inputs     desktopNodePolicyInputs
+	seal       string
+	derivation *desktopNodeChainSOCKSDerivation
+}
+
+// Retain only the constructor's immutable canonical projection. Each read
+// still checks both original typed sources; no process or live proof is cached.
+type desktopNodeChainSOCKSDerivation struct {
+	owner                                *DesktopNodeChainSOCKSPolicy
+	original, native                     *NodeChainSOCKSSource
+	inputs                               desktopNodePolicyInputs
+	originalSeal, nativeSeal, policySeal string
+	captureJSON, captureSHA256           string
 }
 
 // This private binding is created only by the typed desktop derivation.
@@ -175,6 +186,15 @@ func deriveDesktopNodeChainSOCKSPolicy(original *NodeChainSOCKSSource, inputs de
 	}
 	policy := &DesktopNodeChainSOCKSPolicy{original: original, native: native, metadata: meta, inputs: inputs}
 	policy.seal = policy.currentSeal()
+	captureJSON, err := json.Marshal(capture)
+	if err != nil {
+		return bad()
+	}
+	policy.derivation = &desktopNodeChainSOCKSDerivation{
+		owner: policy, original: original, native: native, inputs: inputs,
+		originalSeal: original.seal, nativeSeal: native.seal, policySeal: policy.seal,
+		captureJSON: string(captureJSON), captureSHA256: externalDigest(captureJSON),
+	}
 	return policy, capture, nil
 }
 
@@ -236,13 +256,22 @@ func (p *DesktopNodeChainSOCKSPolicy) currentSeal() string {
 }
 
 func (p *DesktopNodeChainSOCKSPolicy) validatedCapture() (DesktopPhysicalCapture, error) {
-	if p == nil || p.original == nil || p.native == nil || p.seal == "" ||
-		p.currentSeal() != p.seal || p.native.validate() != nil || p.native.desktop == nil ||
-		p.native.desktop.original != p.original {
+	if p == nil || p.original == nil || p.native == nil || p.derivation == nil {
 		return DesktopPhysicalCapture{}, desktopNodeChainSOCKSPolicyError
 	}
-	derived, capture, err := deriveDesktopNodeChainSOCKSPolicy(p.original, p.inputs)
-	if err != nil || derived.seal != p.seal || derived.native.config != p.native.config {
+	d := p.derivation
+	if d.owner != p || d.original != p.original || d.native != p.native || d.inputs != p.inputs ||
+		d.originalSeal == "" || d.originalSeal != p.original.seal || d.nativeSeal != p.native.seal ||
+		d.policySeal != p.seal || p.currentSeal() != p.seal ||
+		p.original.validate() != nil || p.native.validate() != nil || p.native.desktop == nil ||
+		p.native.desktop.original != p.original ||
+		d.captureSHA256 == "" || externalDigest([]byte(d.captureJSON)) != d.captureSHA256 {
+		return DesktopPhysicalCapture{}, desktopNodeChainSOCKSPolicyError
+	}
+	// Decode a new value so returned root slices and DNS query pointers cannot
+	// change the constructor's capture or another reader's authority.
+	var capture DesktopPhysicalCapture
+	if json.Unmarshal([]byte(d.captureJSON), &capture) != nil {
 		return DesktopPhysicalCapture{}, desktopNodeChainSOCKSPolicyError
 	}
 	return capture, nil

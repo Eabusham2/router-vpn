@@ -222,6 +222,102 @@ func TestDesktopNodeChainSOCKSPolicyRetainsSourceAndPhysicalBinding(t *testing.T
 	}
 }
 
+func TestDesktopNodeChainSOCKSPolicyDerivationRetainsConstructorIdentity(t *testing.T) {
+	for name, change := range map[string]func(*testing.T, *DesktopNodeChainSOCKSPolicy) *DesktopNodeChainSOCKSPolicy{
+		"copied-policy": func(t *testing.T, p *DesktopNodeChainSOCKSPolicy) *DesktopNodeChainSOCKSPolicy {
+			copied := *p
+			return &copied
+		},
+		"missing-derivation": func(t *testing.T, p *DesktopNodeChainSOCKSPolicy) *DesktopNodeChainSOCKSPolicy {
+			p.derivation = nil
+			return p
+		},
+		"borrowed-derivation": func(t *testing.T, p *DesktopNodeChainSOCKSPolicy) *DesktopNodeChainSOCKSPolicy {
+			other, err := NewDesktopNodeChainSOCKSPolicy(p.original, p.inputs.sessionID, p.inputs.targetOS, p.inputs.restoredMTU)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.derivation = other.derivation
+			return p
+		},
+		"identical-fresh-original": func(t *testing.T, p *DesktopNodeChainSOCKSPolicy) *DesktopNodeChainSOCKSPolicy {
+			replacement, err := NewNodeChainSOCKSSource(p.original.sourceJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.original = replacement
+			return p
+		},
+		"identical-fresh-native": func(t *testing.T, p *DesktopNodeChainSOCKSPolicy) *DesktopNodeChainSOCKSPolicy {
+			other, err := NewDesktopNodeChainSOCKSPolicy(p.original, p.inputs.sessionID, p.inputs.targetOS, p.inputs.restoredMTU)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.native = other.native
+			return p
+		},
+		"changed-inputs": func(t *testing.T, p *DesktopNodeChainSOCKSPolicy) *DesktopNodeChainSOCKSPolicy {
+			p.inputs.restoredMTU = 1300
+			return p
+		},
+		"resealed-original": func(t *testing.T, p *DesktopNodeChainSOCKSPolicy) *DesktopNodeChainSOCKSPolicy {
+			p.original.sourceJSON += " "
+			p.original.seal = p.original.digest()
+			return p
+		},
+		"resealed-policy": func(t *testing.T, p *DesktopNodeChainSOCKSPolicy) *DesktopNodeChainSOCKSPolicy {
+			p.metadata.SessionID = strings.Repeat("b", 32)
+			p.seal = p.currentSeal()
+			return p
+		},
+		"changed-retained-capture": func(t *testing.T, p *DesktopNodeChainSOCKSPolicy) *DesktopNodeChainSOCKSPolicy {
+			p.derivation.captureJSON += " "
+			return p
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, p := desktopSOCKSPolicyFixture(t, "wg", "", "linux", 0)
+			if _, _, _, err := p.ReadValidated(); err != nil {
+				t.Fatal(err)
+			}
+			p = change(t, p)
+			if p.Validate() == nil {
+				t.Fatal("derivation admitted replaced typed constructor authority")
+			}
+			if _, err := p.ReadValidatedLaunch(); err == nil {
+				t.Fatal("launch reader admitted replaced typed constructor authority")
+			}
+			if _, _, _, err := ReadDesktopPhysicalPolicy(p); err == nil {
+				t.Fatal("physical reader admitted replaced typed constructor authority")
+			}
+		})
+	}
+}
+
+func TestDesktopNodeChainSOCKSPolicyDerivationReturnsIndependentCapture(t *testing.T) {
+	_, p := desktopSOCKSPolicyFixture(t, "wg", "", "linux", 0)
+	config, meta, capture, err := p.ReadValidated()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, expected, err := deriveDesktopNodeChainSOCKSPolicy(p.original, p.inputs)
+	if err != nil || !reflect.DeepEqual(capture, expected) {
+		t.Fatal("retained capture differs from full original derivation", err)
+	}
+	meta.Prefixes[1].Tag = "foreign-middle"
+	meta.Roots[0].Tag = "foreign-root"
+	capture.PhysicalRoots[0].Destinations[0].Port = 1
+	capture.PhysicalRoots[0].Networks[0] = "foreign-network"
+	capture.SelectedDNS.Resolver.Server = "foreign.invalid"
+	if capture.SelectedDNS.Resolver.DisableCache != nil {
+		*capture.SelectedDNS.Resolver.DisableCache = !*capture.SelectedDNS.Resolver.DisableCache
+	}
+	againConfig, again, fresh, err := p.ReadValidated()
+	if err != nil || againConfig != config || again.Prefixes[1].Tag == "foreign-middle" || again.Roots[0].Tag == "foreign-root" || !reflect.DeepEqual(fresh, expected) {
+		t.Fatal("reader mutation changed constructor capture or another read", err)
+	}
+}
+
 func TestDesktopNodeChainSOCKSPolicyRestoreRequiresOriginalFinalPolicy(t *testing.T) {
 	for _, fault := range []string{"linux", "windows", "darwin", "bad-target", "bad-session", "fixed", "projected-again"} {
 		t.Run(fault, func(t *testing.T) {

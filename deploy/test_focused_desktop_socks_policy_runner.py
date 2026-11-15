@@ -119,11 +119,13 @@ class RunnerTests(unittest.TestCase):
                 yield args, source, output, calls
 
     def test_exact_new_and_preserved_inventory(self):
-        self.assertEqual([len(case.expected) for case in D.cases()], [53, 29, 70, 36, 24, 11, 2, 4])
+        self.assertEqual([len(case.expected) for case in D.cases()], [64, 29, 70, 36, 24, 11, 2, 4])
         self.assertEqual(len(D.SOURCE_PATHS), 8)
         self.assertEqual([len(case.witness_tests) for case in D.cases()[5:]], [10, 1, 3])
         self.assertIn(D.PREFIX + "KeepsOriginalGraph/awg2-strong/darwin/", D.cases()[0].expected)
         self.assertIn(D.PREFIX + "RestoreRequiresOriginalFinalPolicy/fixed", D.cases()[0].expected)
+        self.assertIn(D.PREFIX + "DerivationRetainsConstructorIdentity/copied-policy", D.cases()[0].expected)
+        self.assertIn(D.PREFIX + "DerivationReturnsIndependentCapture", D.cases()[0].expected)
         self.assertIn(D.OLD_PREFIX + "ExactPhysicalProjection/linux/3/", D.cases()[1].expected)
 
     def test_fixed_race_commands_and_original_bounds(self):

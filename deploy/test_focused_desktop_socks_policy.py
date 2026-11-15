@@ -37,7 +37,11 @@ SOURCE_PATHS = (
     "internal/mobilemultihop/desktop_physical_policy.go", "internal/mobilemultihop/desktop_node_cover.go",
 )
 ROOT_SUFFIXES = ("KeepsOriginalGraph", "StrictChildReceipt", "RetainsSourceAndPhysicalBinding",
-                 "RestoreRequiresOriginalFinalPolicy", "RunsOriginalProofs")
+                 "RestoreRequiresOriginalFinalPolicy", "RunsOriginalProofs",
+                 "DerivationRetainsConstructorIdentity", "DerivationReturnsIndependentCapture")
+DERIVATION_FAULTS = ("copied-policy", "missing-derivation", "borrowed-derivation",
+                     "identical-fresh-original", "identical-fresh-native", "changed-inputs",
+                     "resealed-original", "resealed-policy", "changed-retained-capture")
 RECEIPT_FAULTS = ("session", "target", "source-hash", "config-hash", "original-hash", "root",
                   "dns-tun", "kind", "unknown", "whitespace", "schema", "source")
 CANONICAL_FAULTS = tuple(x for x in RECEIPT_FAULTS if x not in ("unknown", "schema"))
@@ -77,6 +81,7 @@ def cases(suite: str = SUITE) -> tuple[Case, ...]:
     for suffix, children in (("StrictChildReceipt", RECEIPT_FAULTS),
                              ("RetainsSourceAndPhysicalBinding", BINDING_FAULTS),
                              ("RestoreRequiresOriginalFinalPolicy", RESTORE_CASES),
+                             ("DerivationRetainsConstructorIdentity", DERIVATION_FAULTS),
                              ("RunsOriginalProofs", ("linux", "windows", "darwin"))):
         expected.update(PREFIX + suffix + "/" + child for child in children)
     original = {OLD_PREFIX + suffix for suffix in OLD_ROOTS}
