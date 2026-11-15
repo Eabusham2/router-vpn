@@ -20,6 +20,13 @@ SPEC.loader.exec_module(GATE)
 
 class NodeProcessRunner(unittest.TestCase):
     def test_single_node_off_uses_separate_required_original_owner_groups(self):
+        self.assertEqual(GATE.SINGLE_NODE_OFF_CASES, {
+            "TestDesktopSingleNodeOffPublicTemporaryRestoresOriginalOwner": ("router-external-router", "external-router-external"),
+            "TestDesktopSingleNodeOffPublicJoinRetainsOriginalSource": (),
+            "TestDesktopSingleNodeOffCatalogHasCompleteRetainedCoverage": (),
+            "TestDesktopSingleNodeOffPreparationSealsBeforePreviousStop": ("wg", "awg2-fast", "awg2-strong"),
+        })
+        self.assertEqual(sum(1 + len(children) for children in GATE.SINGLE_NODE_OFF_CASES.values()), 9)
         groups=GATE.baseline_groups()
         self.assertEqual([selected for _,selected,_ in groups[-4:]], [(root,) for root in GATE.SINGLE_NODE_OFF_CASES])
         for label,selected,expected in groups[-4:]:
@@ -130,8 +137,8 @@ class NodeProcessRunner(unittest.TestCase):
         self.assertEqual(GATE.PRODUCT_CASES["TestDesktopOrderedExecutionRetirementKeepsCallerBudget"],
                          ("retire", "restore-lookup"))
         groups = GATE.baseline_groups()
-        self.assertEqual([selected for _, selected, _ in groups[-len(roots):]], [(root,) for root in roots])
-        for _, selected, expected in groups[-len(roots):]:
+        self.assertEqual([selected for _, selected, _ in groups[-(len(roots) + 4):-4]], [(root,) for root in roots])
+        for _, selected, expected in groups[-(len(roots) + 4):-4]:
             root, = selected
             self.assertEqual(set(expected), {root, *(root + "/" + child for child in GATE.PRODUCT_CASES[root])})
         for path in ("cmd/client/desktop_node_chain_execution_product.go",
@@ -142,7 +149,7 @@ class NodeProcessRunner(unittest.TestCase):
             self.assertIn(path, GATE.REQUIRED_SOURCES)
 
     def test_every_product_root_and_leaf_is_required_by_actual_verdict_parser(self):
-        groups = GATE.baseline_groups()[-len(GATE.PRODUCT_CASES):]
+        groups = GATE.baseline_groups()[-(len(GATE.PRODUCT_CASES) + 4):-4]
         for _, _, expected in groups:
             passing = ["--- PASS: " + name + " (0.01s)" for name in expected]
             GATE.check_baseline(0, "\n".join(passing), expected)
@@ -336,8 +343,10 @@ class NodeProcessRunner(unittest.TestCase):
                       "cmd/client/desktop_imported_owned.go", "cmd/client/multihop_native_launch.go",
                       "cmd/client/desktop_protection_selection.go")}
         changes = GATE.mutants()
-        self.assertEqual(len(changes), 50)
-        self.assertEqual(len({change[1] for change in changes}), 50)
+        self.assertEqual(len(changes), 51)
+        self.assertEqual(sum(change[1] == "public-off-node-uses-ordinary-helper" for change in changes), 1)
+        self.assertEqual(sum(change[1] != "public-off-node-uses-ordinary-helper" for change in changes), 50)
+        self.assertEqual(len({change[1] for change in changes}), 51)
         for filename, _, test, witness, replacement in changes:
             self.assertIn(filename, originals)
             self.assertNotEqual(replacement.encode(), originals[filename])
@@ -562,7 +571,7 @@ class NodeProcessRunner(unittest.TestCase):
         partitions = [GATE.suite_controls(suite, changes) for suite in GATE.EXECUTION_SUITES]
         self.assertEqual(tuple(item for part in partitions for item in part), changes)
         self.assertEqual(len({item[1] for part in partitions for item in part}), len(changes))
-        self.assertEqual([len(part) for part in partitions], [0, 25, 25, 0])
+        self.assertEqual([len(part) for part in partitions], [0, 26, 25, 0])
         self.assertEqual(GATE.suite_controls("complete", changes), changes)
         with self.assertRaisesRegex(ValueError, "Unknown native Node process execution suite"):
             GATE.suite_controls("ownership-controls-3", changes)
