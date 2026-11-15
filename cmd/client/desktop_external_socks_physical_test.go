@@ -35,7 +35,7 @@ func desktopRetainedSOCKSFixture(t *testing.T, kill string) (common.RouterProfil
 
 func TestDesktopExternalPhysicalSOCKSKeepsOriginalSourceAndOwnedAssociation(t *testing.T) {
 	for _, target := range []string{"linux", "windows", "darwin"} {
-		for _, kill := range []string{"on-connect", "always"} {
+		for _, kill := range []string{"off", "on-connect", "always"} {
 			t.Run(target+"/"+kill, func(t *testing.T) {
 				profile, launch := desktopRetainedSOCKSFixture(t, kill)
 				owner := launch.external
@@ -95,14 +95,21 @@ func TestDesktopExternalPhysicalSOCKSKeepsOtherPlatformAndUnownedGuards(t *testi
 		})
 	}
 	for _, target := range []string{"linux", "windows", "darwin"} {
-		for _, fault := range []string{"off", "predecessor", "not-direct", "changed-source"} {
+		for _, fault := range []string{"changed-protection", "predecessor", "not-direct", "changed-source"} {
 			t.Run(target+"/"+fault, func(t *testing.T) {
-				kill := "always"
-				if fault == "off" {
-					kill = "off"
-				}
-				_, launch := desktopRetainedSOCKSFixture(t, kill)
+				_, launch := desktopRetainedSOCKSFixture(t, "always")
 				switch fault {
+				case "changed-protection":
+					var capture map[string]any
+					if json.Unmarshal(launch.external.capture, &capture) != nil {
+						t.Fatal("original SOCKS capture is missing")
+					}
+					profile := capture["profile"].(map[string]any)
+					profile["kill_switch_policy"], profile["kill_switch"] = "off", false
+					launch.external.capture, _ = json.Marshal(capture)
+					if _, err := mobilemultihop.NewExternalPolicy(string(launch.external.source), string(launch.external.capture)); err != nil {
+						t.Fatal("changed-protection control must be independently valid", err)
+					}
 				case "predecessor":
 					launch.external.predecessor = "captured-router-source"
 				case "not-direct":
@@ -111,7 +118,7 @@ func TestDesktopExternalPhysicalSOCKSKeepsOtherPlatformAndUnownedGuards(t *testi
 					launch.config = bytes.Replace(launch.config, []byte("captured-password"), []byte("foreign-password"), 1)
 				}
 				err := prepareDesktopExternalPhysicalCaptured(launch, target)
-				if launch.external.physical != nil || (fault == "changed-source") != (err != nil) {
+				if launch.external.physical != nil || (fault == "changed-source" || fault == "changed-protection") != (err != nil) {
 					t.Fatal("unowned SOCKS graph acquired retained admission", fault, err)
 				}
 			})

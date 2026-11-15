@@ -48,7 +48,7 @@ func desktopRetainedOpenVPNFixture(t *testing.T, network, kill string) (common.R
 func TestDesktopExternalPhysicalOpenVPNKeepsOriginalProfileAndDerivedMailboxes(t *testing.T) {
 	for _, target := range []string{"linux", "windows", "darwin"} {
 		for _, network := range []string{"tcp", "udp", "mixed"} {
-			for _, kill := range []string{"on-connect", "always"} {
+			for _, kill := range []string{"off", "on-connect", "always"} {
 				t.Run(target+"/"+network+"/"+kill, func(t *testing.T) {
 					profile, launch := desktopRetainedOpenVPNFixture(t, network, kill)
 					owner := launch.external
@@ -123,14 +123,23 @@ func TestDesktopExternalPhysicalOpenVPNKeepsUnsupportedTargetAndCaptureGuards(t 
 		})
 	}
 	for _, target := range []string{"linux", "windows", "darwin"} {
-		for _, fault := range []string{"off", "predecessor", "not-direct", "graph", "metadata", "source", "session", "proof-source", "proof-config"} {
+		for _, fault := range []string{"changed-protection", "predecessor", "not-direct", "graph", "metadata", "source", "session", "proof-source", "proof-config"} {
 			t.Run(target+"/"+fault, func(t *testing.T) {
-				kill := "always"
-				if fault == "off" {
-					kill = "off"
-				}
-				_, launch := desktopRetainedOpenVPNFixture(t, "mixed", kill)
+				_, launch := desktopRetainedOpenVPNFixture(t, "mixed", "always")
 				switch fault {
+				case "changed-protection":
+					// Off is supported when captured originally. A different
+					// valid policy cannot replace this Always proof identity.
+					var capture map[string]any
+					if json.Unmarshal(launch.external.capture, &capture) != nil {
+						t.Fatal("original OpenVPN capture is missing")
+					}
+					profile := capture["profile"].(map[string]any)
+					profile["kill_switch_policy"], profile["kill_switch"] = "off", false
+					launch.external.capture, _ = json.Marshal(capture)
+					if _, err := mobilemultihop.NewExternalPolicy(string(launch.external.source), string(launch.external.capture)); err != nil {
+						t.Fatal("changed-protection control must be independently valid", err)
+					}
 				case "predecessor":
 					launch.external.predecessor = "captured-predecessor"
 				case "not-direct":
@@ -150,7 +159,7 @@ func TestDesktopExternalPhysicalOpenVPNKeepsUnsupportedTargetAndCaptureGuards(t 
 				}
 				config, metadata := bytes.Clone(launch.config), bytes.Clone(launch.metadata)
 				err := prepareDesktopExternalPhysicalCaptured(launch, target)
-				ineligible := fault == "off" || fault == "predecessor" || fault == "not-direct"
+				ineligible := fault == "predecessor" || fault == "not-direct"
 				if (err == nil) != ineligible || launch.external.physical != nil || !bytes.Equal(config, launch.config) || !bytes.Equal(metadata, launch.metadata) {
 					t.Fatal("invalid OpenVPN capture acquired or replaced physical authority", fault, err)
 				}
