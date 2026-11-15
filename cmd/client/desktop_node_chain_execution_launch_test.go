@@ -39,7 +39,7 @@ func TestDesktopNodeChainExecutionSourceKeepsCapturedPairedGraph(t *testing.T) {
 }
 
 func TestDesktopNodeChainExecutionSourceRejectsReplacementAuthority(t *testing.T) {
-	for _, fault := range []string{"policy", "preparation", "member", "local"} {
+	for _, fault := range []string{"policy", "preparation", "copied-preparation", "copied-physical", "member", "local"} {
 		t.Run(fault, func(t *testing.T) {
 			target := "linux"
 			_, launch := desktopNodeChainLaunchFixture(t, 3, target)
@@ -62,6 +62,12 @@ func TestDesktopNodeChainExecutionSourceRejectsReplacementAuthority(t *testing.T
 				launch.chain.policy, err = mobilemultihop.NewDesktopNodeChainPolicy(launch.chain.policy.OriginalChain(), launch.mtuSession, target, 0)
 			case "preparation":
 				execution.preparation, err = mobilemultihop.NewDesktopNodeChainExecutionPreparation(launch.chain.policy, "auto")
+			case "copied-preparation":
+				copy := *execution.preparation
+				execution.preparation = &copy
+			case "copied-physical":
+				copy := *execution.physical
+				execution.physical = &copy
 			case "member":
 				launch.chain.selection.Nodes[1].Profile.APIToken = "replacement-secret"
 			}
@@ -70,6 +76,12 @@ func TestDesktopNodeChainExecutionSourceRejectsReplacementAuthority(t *testing.T
 			}
 			if execution.validateSource() == nil {
 				t.Fatal("equal bytes or changed member replaced original execution authority")
+			}
+			if policy, err := execution.physicalPolicy(); err == nil || policy != nil {
+				t.Fatal("failed source read exposed a physical owner", err)
+			}
+			if config, _, _, err := execution.readPolicy(); err == nil || config != "" {
+				t.Fatal("failed source read exposed executable policy", err)
 			}
 		})
 	}

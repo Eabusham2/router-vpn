@@ -65,6 +65,57 @@ func desktopExecutionProjection(t *testing.T, source NodeChainExecutionSource, t
 	return original, preparation, projection
 }
 
+func TestDesktopNodeChainExecutionSourceReadRetainsOriginal(t *testing.T) {
+	for _, fault := range []string{"original", "nil-preparation", "equal-preparation", "copied-preparation", "copied-physical", "changed-source", "changed-policy", "changed-physical"} {
+		t.Run(fault, func(t *testing.T) {
+			source := desktopExecutionSource(t, "auto", "", false)
+			original, prep, _ := desktopExecutionProjection(t, source, "linux", desktopNodeTestSession, 0)
+			physical, err := prep.DesktopPhysicalPolicy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			requested := prep
+			switch fault {
+			case "nil-preparation":
+				requested = nil
+			case "equal-preparation":
+				requested, err = NewDesktopNodeChainExecutionPreparation(original, "auto")
+				if err != nil || requested.Source() != prep.Source() {
+					t.Fatal("fixture lost byte-identical independent preparation", err)
+				}
+			case "copied-preparation":
+				copy := *prep
+				requested = &copy
+			case "copied-physical":
+				copy := *physical
+				physical = &copy
+			case "changed-source":
+				original.original.sourceJSON += " "
+			case "changed-policy":
+				original.inputs.restoredMTU = 1300
+			case "changed-physical":
+				physical.metadata.SessionID = strings.Repeat("d", 32)
+			}
+			owner, meta, err := physical.ReadOriginalValidated(requested)
+			if fault != "original" {
+				if err == nil || owner != nil || !reflect.DeepEqual(meta, DesktopNodeChainMetadata{}) {
+					t.Fatal("source read lent authority from a replaced or altered original", fault, err)
+				}
+				return
+			}
+			if err != nil || owner != original || meta.SourceSHA256 != original.metadata.SourceSHA256 || len(meta.Prefixes) != 3 || len(meta.Roots) == 0 {
+				t.Fatal("source read lost original source or metadata", err)
+			}
+			meta.Prefixes[0].ProfileID = "caller-replacement"
+			meta.Roots[0].Tag = "caller-replacement"
+			owner, again, err := physical.ReadOriginalValidated(prep)
+			if err != nil || owner != original || !reflect.DeepEqual(again, original.metadata) {
+				t.Fatal("metadata read lent original mutable slices", err)
+			}
+		})
+	}
+}
+
 func TestDesktopNodeChainExecutionKeepsActualPhysicalGraph(t *testing.T) {
 	for _, target := range []string{"linux", "windows", "darwin"} {
 		for _, execution := range []string{"server", "auto"} {

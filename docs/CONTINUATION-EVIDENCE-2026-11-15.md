@@ -3431,3 +3431,68 @@ Final native receipt:
 3a2051a722b7de2c07444b5cdf6dc3f6f4a4d51b2e88819999d0523fc44f470b.
 All ten preimages were checked against published 99000bd7 before integration;
 original gate deadlines and production proof protections are unchanged.
+
+
+## Preserve the four-second eight-node execution observation boundary
+
+The previously reproduced eight-node paired publication timeout is repaired in
+three production files: the desktop execution launch and the ordinary/CONNECT
+shared desktop physical-policy implementations. A fresh typed source read
+validates the exact supplied preparation pointer, the concrete physical owner,
+its reverse bindings, and the original sealed policy, returning independently
+copied metadata. The parent still checks the selected original node/source
+pointers, exclusive family, target, source/configuration hashes, session and
+staged launch. This removes repeated traversal through several validating
+getters inside one observation. It does not store a reusable validation result.
+
+The session implementation, its original four-second Current and Result bounds,
+and the live process/network checks before and after copying the result are
+unchanged. The first new diagnostic made eight-node Server Connect/publication
+and Current pass, then exposed a separate positive-status fixture race with
+its own background observer. The final paired fixture now joins only that
+captured observer before a synchronous positive status read. An explicitly
+held original receipt must still refuse through both the concrete proof guard
+and the actual public HTTP handler; releasing it must allow the same owner.
+Original private workspace/process retirement and replacement-owner checks
+remain active.
+
+Final local race evidence passes all fifteen bounded phases, with 151 distinct
+Go pass records including parent test records. This covers all nine public
+paired combinations (two, three and eight nodes; Server, Compare selecting
+Local, Compare selecting Server), the 42-case source matrix across three target
+metadata families plus six source refusals, retained session result/cleanup/
+restoration, all three imported-SS public choices, all six CONNECT public
+choices, both CONNECT retained restores, and shared physical/source authority.
+The two new shared source-read roots contain 24 leaves, covering original
+reads, nil/equal/copied preparations, copied physical owners, altered source,
+policy and physical data, and mutation of returned metadata slices.
+
+The final controller image SHA-256 is
+464ed67b97cb16f10c8a361d1ff6e565bbe39b2ca27f2aec6d09ef6b338b8571;
+the final shared image is
+c4b8155dd30a7b9544e5e9f9fb2c1cac8268c3be5546413224580855c9b4e306.
+Every phase records its exact selector, image, output hash and unchanged
+120/135-second controller or 180/195-second shared test/outer limits. The three
+eight-node final phases pass in 46.142, 37.050 and 36.098 seconds respectively;
+these include complete controller transactions and are not device/network
+performance measurements. The original baseline failure/profile remains
+preserved, including its reported concurrent compiler. The first diagnostic
+status refusal is also retained and is not counted as a successful full case.
+
+Three source-audit mutation suites and the existing actual shipping-chain
+scorers pass. The shared helper body and its call sites are now part of that
+mandatory structural closure; both original validation calls and the exact
+preparation binding have explicit removal controls. An independent agent
+review found no lost ownership/source check or deadline change. These are
+source/model tests, separate from exact-SHA installed native acceptance.
+
+Concurrent upstream 0f811811, a8bee362 and fab7e334 were preserved by normal
+fast-forward ancestry. They change provider/Android/Windows test fixtures;
+this unit's Linux production inputs stayed byte-identical through validation.
+No private target, live router, deployment or device state was changed.
+
+The later concurrent Linux installed gate and native fixture repairs through
+ea8a7c77 were also preserved. The fifteen local source-read phases above used
+their recorded controller/shared image identities; they do not claim a full
+native build of those later unrelated fixture additions. The source-read
+production inputs and all exercised original test bodies remained unchanged.

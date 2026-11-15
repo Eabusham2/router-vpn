@@ -145,6 +145,19 @@ func (p *DesktopNodeChainCONNECTExecutionPhysicalPolicy) OriginalDesktopCONNECTP
 	}
 	return p.original, nil
 }
+
+// ReadOriginalValidated is a fresh read of the distinct CONNECT physical
+// owner, exact preparation and original policy, never a cached live proof.
+func (p *DesktopNodeChainCONNECTExecutionPhysicalPolicy) ReadOriginalValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainCONNECTPolicy, DesktopNodeChainMetadata, error) {
+	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {
+		return nil, DesktopNodeChainMetadata{}, nodeChainExecutionError
+	}
+	_, metadata, _, err := p.original.ReadValidated()
+	if err != nil {
+		return nil, DesktopNodeChainMetadata{}, err
+	}
+	return p.original, metadata.DesktopNodeChainMetadata, nil
+}
 func (p *NodeChainExecutionPreparation) CONNECTDesktopPhysicalPolicy() (*DesktopNodeChainCONNECTExecutionPhysicalPolicy, error) {
 	if p == nil || p.connect == nil || p.connect.desktop == nil || p.validateCapture() != nil || p.connect.desktop.physical.Validate() != nil {
 		return nil, nodeChainExecutionError

@@ -27,7 +27,7 @@ ordinary local and execution paths keep their original checks.
 | Surface | Current source boundary | Evidence still required |
 |---|---|---|
 | Android | Typed source/profile, UI selection, native factory, Session and retained restore are implemented. | Exact-current APK/ABI build, actual encrypted Server/Compare networking and device acceptance. |
-| Windows, Linux and macOS | Public CONNECT Server/Compare selection, complete profiles and distinct native execution/physical/Ready/Last owners are implemented. | Exact-current installed native acceptance and package verification; the existing eight-node paired Result deadline is under correction. |
+| Windows, Linux and macOS | Public CONNECT Server/Compare selection, complete profiles and distinct native execution/physical/Ready/Last owners are implemented. | Exact-current installed native acceptance and package verification. |
 | iPhone and iPad | The shared typed bridge and mobile restore capability exist. The Apple host adapter is being completed separately. | Actual PacketTunnel adoption, Xcode build, signing and device acceptance. |
 
 Source and actual native-object tests cover original factory ownership,
@@ -47,10 +47,15 @@ public controller retains the original HTTP/HTTPS compiler and its already
 proved Local/Server choice. Actual controller code with explicit process and
 kernel models passes all six CONNECT public choices, both retained restores,
 source bounds and profile cases. Native widget and installed network acceptance
-remain separate. An older eight-node paired-path test also fails on the exact
-published baseline while reading the selected result under its original
-four-second bound. Its profile identifies repeated source validation; this
-remaining issue is not counted as a successful regression or complete release.
+remain separate. The earlier eight-node paired Result timeout is corrected by
+reading each captured execution source and its metadata through one validated
+typed owner per observation. All nine two-, three- and eight-node Server and
+Compare public cases pass their original four-second Current/Result checks.
+The native process/network checks before and after copying the selected result
+remain in place. The positive fixture joins only its own background watcher;
+an explicitly held receipt must still return the existing refusal. Source,
+session, imported-SS and CONNECT regressions are recorded separately in the
+evidence ledger. This does not establish installed packet acceptance.
 
 The required macOS ordered-host workflow now also runs a separate installed
 CONNECT execution suite on Intel and Apple Silicon, using the exact same-run

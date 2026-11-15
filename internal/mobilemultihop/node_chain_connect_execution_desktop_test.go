@@ -24,6 +24,58 @@ func desktopCONNECTExecutionFixture(t *testing.T, mode, protocol, target, execut
 	}
 	return original, prep
 }
+
+func TestDesktopCONNECTExecutionSourceReadRetainsOriginal(t *testing.T) {
+	for _, protocol := range []string{"http-connect", "https-connect"} {
+		for _, fault := range []string{"original", "nil-preparation", "equal-preparation", "copied-preparation", "copied-physical", "changed-source", "changed-policy", "changed-physical"} {
+			t.Run(protocol+"/"+fault, func(t *testing.T) {
+				original, prep := desktopCONNECTExecutionFixture(t, "wg", protocol, "linux", "auto")
+				physical, err := prep.CONNECTDesktopPhysicalPolicy()
+				if err != nil {
+					t.Fatal(err)
+				}
+				requested := prep
+				switch fault {
+				case "nil-preparation":
+					requested = nil
+				case "equal-preparation":
+					requested, err = NewDesktopNodeChainCONNECTExecutionPreparation(original, "auto")
+					if err != nil || requested.Source() != prep.Source() {
+						t.Fatal("fixture lost byte-identical independent preparation", err)
+					}
+				case "copied-preparation":
+					copy := *prep
+					requested = &copy
+				case "copied-physical":
+					copy := *physical
+					physical = &copy
+				case "changed-source":
+					original.original.sourceJSON += " "
+				case "changed-policy":
+					original.inputs.restoredMTU = 1300
+				case "changed-physical":
+					physical.owner.capture.ConfiguredMTU = 1300
+				}
+				owner, meta, err := physical.ReadOriginalValidated(requested)
+				if fault != "original" {
+					if err == nil || owner != nil || !reflect.DeepEqual(meta, DesktopNodeChainMetadata{}) {
+						t.Fatal("CONNECT source read lent replaced or altered authority", fault, err)
+					}
+					return
+				}
+				if err != nil || owner != original || meta.SourceSHA256 != original.metadata.SourceSHA256 || len(meta.Prefixes) != 3 || len(meta.Roots) == 0 {
+					t.Fatal("CONNECT source read lost original source or metadata", err)
+				}
+				meta.Prefixes[0].ProfileID = "caller-replacement"
+				meta.Roots[0].Tag = "caller-replacement"
+				owner, again, err := physical.ReadOriginalValidated(prep)
+				if err != nil || owner != original || !reflect.DeepEqual(again, original.metadata.DesktopNodeChainMetadata) {
+					t.Fatal("CONNECT metadata read lent original mutable slices", err)
+				}
+			})
+		}
+	}
+}
 func TestDesktopCONNECTExecutionOriginalPhysical(t *testing.T) {
 	for ti, target := range []string{"linux", "windows", "darwin"} {
 		for pi, protocol := range []string{"http-connect", "https-connect"} {

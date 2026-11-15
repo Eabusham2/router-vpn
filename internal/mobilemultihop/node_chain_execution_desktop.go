@@ -129,6 +129,20 @@ func (p *DesktopNodeChainExecutionPhysicalPolicy) OriginalDesktopPolicy() (*Desk
 	return p.original, nil
 }
 
+// ReadOriginalValidated checks this physical owner and its exact preparation
+// once, then reads the original immutable policy. The returned metadata is a
+// fresh value; callers must still perform their live process/network proofs.
+func (p *DesktopNodeChainExecutionPhysicalPolicy) ReadOriginalValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, DesktopNodeChainMetadata, error) {
+	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {
+		return nil, DesktopNodeChainMetadata{}, nodeChainExecutionError
+	}
+	_, metadata, _, err := p.original.ReadValidated()
+	if err != nil {
+		return nil, DesktopNodeChainMetadata{}, err
+	}
+	return p.original, metadata, nil
+}
+
 func (p *NodeChainExecutionPreparation) DesktopPhysicalPolicy() (*DesktopNodeChainExecutionPhysicalPolicy, error) {
 	if p.validateCapture() != nil || p.desktop == nil || p.desktopPhysical.Validate() != nil {
 		return nil, nodeChainExecutionError

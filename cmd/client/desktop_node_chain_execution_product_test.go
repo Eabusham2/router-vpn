@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"router-vpn/internal/common"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -185,12 +186,15 @@ func TestDesktopOrderedExecutionPublicConnectUsesChildOnly(t *testing.T) {
 	for _, count := range []int{2, 3, 8} {
 		for _, choice := range []struct{ requested, winner string }{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
 			t.Run(fmt.Sprintf("%d-%s-%s", count, choice.requested, choice.winner), func(t *testing.T) {
+				var a *app
+				// The fixture joins its original process/watcher before its
+				// public registration is retired by this earlier cleanup.
+				t.Cleanup(func() { desktopOrderedExecutionOwners.Delete(a); desktopComparisons.Delete(a) })
 				f := newDesktopNodeChainOwnedFixture(t, count)
-				a := f.a
+				a = f.a
 				f.executionModel = &desktopExecutionOwnedModel{winner: choice.winner}
 				a.connectionContext, a.connectionCancel = nil, nil
 				a.state.Mode, a.state.Phase = "off", "off"
-				t.Cleanup(func() { desktopOrderedExecutionOwners.Delete(a); desktopComparisons.Delete(a) })
 				release, err := a.holdCapturedMTU(context.Background())
 				if err != nil {
 					t.Fatal(err)
@@ -240,8 +244,37 @@ func TestDesktopOrderedExecutionPublicConnectUsesChildOnly(t *testing.T) {
 				if err := owner.session.Current(context.Background()); err != nil {
 					t.Fatal("request completion revoked retained native connection", err)
 				}
+				// A positive synchronous status read cannot assume that the
+				// fixture's background receipt observer is idle. Stop and join
+				// only this captured watcher; retain its live native owner.
+				watchDone := desktopOwnedNodeMonitorDone(f.launch)
+				joinContext, cancelJoin := context.WithTimeout(context.Background(), 15*time.Second)
+				joinErr := stopDesktopOwnedNodeMonitor(joinContext, f.launch)
+				if joinErr == nil && watchDone != nil {
+					joinErr = joinDesktopOwnedNodeMonitorStop(joinContext, a, watchDone)
+				}
+				cancelJoin()
+				if joinErr != nil || owner.session.Current(context.Background()) != nil {
+					t.Fatal("original fixture watcher did not join with native owner retained", joinErr)
+				}
 				mux := http.NewServeMux()
 				registerDesktopMultihopRoutes(mux, a)
+				if count == 8 && choice.requested == "server" {
+					execution := owner.session.execution
+					blocked := httptest.NewRecorder()
+					func() {
+						execution.mu.Lock()
+						defer execution.mu.Unlock()
+						err := owner.session.native.execution.currentLocked(f.launch, *owner.session.graph)
+						if err == nil || err.Error() != "ordered execution receipt is already being observed" {
+							t.Fatal("held original receipt bypassed its observation guard", err)
+						}
+						mux.ServeHTTP(blocked, httptest.NewRequest(http.MethodGet, "/api/multihop/status", nil))
+					}()
+					if blocked.Code != http.StatusConflict || strings.TrimSpace(blocked.Body.String()) != "ordered native route changed or is not ready for measurement" {
+						t.Fatal("held original receipt published public status", blocked.Code, blocked.Body.String())
+					}
+				}
 				status := httptest.NewRecorder()
 				mux.ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/multihop/status", nil))
 				var observed map[string]any

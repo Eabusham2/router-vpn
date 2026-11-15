@@ -311,10 +311,10 @@ class NativeShippingAuditTests(unittest.TestCase):
              "owner.execution.currentContext(context.Background(), owner.launch, graph)"),
             (launch, "e.original.selection.Native.validate(e.original.selection) != nil", "false"),
             (launch, "e.original.execution != nil && e.original.execution != e", "false"),
-            (launch, "physical != e.physical", "false"),
+            (launch, "e.physical.ReadOriginalValidated(e.preparation)", "other.ReadOriginalValidated(e.preparation)"),
             (launch, "original != e.original.policy", "false"),
             (launch, "original.OriginalChain() != selected.chain", "false"),
-            (launch, "if err := e.validateSource(); err != nil {", "if err := error(nil); err != nil {"),
+            (launch, "_, _, err := e.readSourceValidated()", "_, _, err := other.readSourceValidated()"),
             (launch, "physical.ConfigSHA256 != e.preparation.ConfigSHA256()", "false"),
             (launch, 'physical.Kind != kind', "false"),
             (launch, "launch.chain != e.original", "false"),
@@ -354,6 +354,24 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.assert_backend_proof_admission(True)
         self.assert_multihop_scores(True)
 
+    def test_execution_source_read_keeps_both_original_validations(self):
+        for path in ("internal/mobilemultihop/node_chain_execution_desktop.go",
+                     "internal/mobilemultihop/node_chain_connect_execution_desktop.go"):
+            for before, after in (
+                    ("preparation == nil || p.preparation != preparation", "false"),
+                    ("p.preparation != preparation || p.Validate() != nil", "p.preparation != preparation"),
+                    ("_, metadata, _, err := p.original.ReadValidated()", "_, metadata, _, err := other.ReadValidated()"),
+                    ("if err != nil {\n\t\treturn nil, DesktopNodeChainMetadata{}, err", "if false {\n\t\treturn nil, DesktopNodeChainMetadata{}, err")):
+                with self.subTest(path=path, before=before):
+                    self.changes.clear()
+                    self.replace(path, before, after)
+                    self.changes[path] += "\n// " + before + "\n"
+                    self.assert_backend_proof_admission(False)
+                    self.assert_multihop_scores(False)
+        self.changes.clear()
+        self.assert_backend_proof_admission(True)
+        self.assert_multihop_scores(True)
+
     def test_connect_execution_keeps_distinct_sealed_owner_and_original_graph(self):
         launch = "cmd/client/desktop_node_chain_execution_launch.go"
         graph = "cmd/client/desktop_node_chain_execution_graph.go"
@@ -363,16 +381,16 @@ class NativeShippingAuditTests(unittest.TestCase):
             (launch, "(e.physical == nil) == (e.connectPhysical == nil)", "false"),
             (launch, "e.original.connectPolicy == nil || e.original.policy != nil || selected.connect == nil || selected.chain != nil || selected.socks != nil", "false"),
             (launch, "e.original.policy == nil || e.original.connectPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil", "false"),
-            (launch, "e.preparation.CONNECTDesktopPhysicalPolicy()", "other.CONNECTDesktopPhysicalPolicy()"),
-            (launch, "physical != e.connectPhysical", "false"),
-            (launch, "physical.OriginalDesktopCONNECTPolicy()", "other.OriginalDesktopCONNECTPolicy()"),
+            (launch, "e.connectPhysical.ReadOriginalValidated(e.preparation)", "e.connectPhysical.ReadOriginalValidated(other)"),
+            (launch, "policy, meta = e.connectPhysical, metadata", "policy, meta = e.physical, metadata"),
+            (launch, "e.connectPhysical.ReadOriginalValidated(e.preparation)", "other.ReadOriginalValidated(e.preparation)"),
             (launch, "original != e.original.connectPolicy", "false"),
             (launch, "source != selected.connect.source", "false"),
             (launch, "original == nil || !original.hasPolicy() || original.socksPolicy != nil", "original == nil"),
             (launch, "_, meta, _, err := original.connectPolicy.ReadValidated()", "_, meta, _, err := other.ReadValidated()"),
             (launch, "_, meta, _, err := original.policy.ReadValidated()", "_, meta, _, err := other.ReadValidated()"),
-            (launch, "return e.connectPhysical, nil", "return e.physical, nil"),
-            (launch, "policy, err := e.physicalPolicy()", "policy, err := other.physicalPolicy()"),
+            (launch, "policy, _, err := e.readSourceValidated()", "policy, _, err := other.readSourceValidated()"),
+            (launch, "policy, meta, err := e.readSourceValidated()", "policy, meta, err := other.readSourceValidated()"),
             (launch, 'kind = "node-chain-connect-execution"', 'kind = "node-chain-execution"'),
             (launch, "physical.SourceSHA256 != meta.SourceSHA256", "false"),
             (launch, "physical.SessionID != meta.SessionID", "false"),
