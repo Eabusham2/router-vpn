@@ -120,10 +120,14 @@ def build_contract():
     block=prepare[begin:end]
     import textwrap
     tree=ast.parse(textwrap.dedent(block))
-    loop=next(node for node in tree.body if isinstance(node,ast.For))
-    signatures=ast.literal_eval(loop.iter)
-    names=('LibboxNewRouterNodeChainCONNECTExecution(', 'LibboxNewRouterNodeChainCONNECTExecutionLaunch(', 'LibboxRouterNodeChainCONNECTExecutionFromLast(', 'LibboxRouterNodeChainCONNECTExecutionNewCommandServer(')
-    assert len(signatures)==4 and all(sum(name in value for value in signatures)==1 for name in names)
+    assert len(tree.body)==2 and all(isinstance(node,ast.For) for node in tree.body), 'both original typed ABI families are required'
+    signatures=[]
+    for family,loop in zip(('CONNECT','SOCKS'),tree.body):
+        original=ast.literal_eval(loop.iter)
+        names=(f'LibboxNewRouterNodeChain{family}Execution(', f'LibboxNewRouterNodeChain{family}ExecutionLaunch(', f'LibboxRouterNodeChain{family}ExecutionFromLast(', f'LibboxRouterNodeChain{family}ExecutionNewCommandServer(')
+        assert len(original)==4 and all(sum(name in value for value in original)==1 for name in names)
+        signatures.extend(original)
+    assert len(set(signatures))==8
     content='\n'.join(signatures)
     exec(compile(tree,'actual-apple-abi-check','exec'),{'content':content})
     for signature in signatures:
@@ -137,7 +141,7 @@ def build_contract():
     try:require_caller(prepare.replace(caller,': # omitted native owner'))
     except AssertionError:pass
     else:raise AssertionError('Omitted native owner gate was accepted')
-    print('PASS Apple typed ABI4 + missing-signature4 + original native-owner caller/omission')
+    print('PASS Apple typed ABI8 + missing-signature8 + original native-owner caller/omission')
 
 def main():
     build_contract()

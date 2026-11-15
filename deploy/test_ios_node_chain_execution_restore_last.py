@@ -25,6 +25,8 @@ last=last[last.index('func RouterNodeChainExecutionFromLast'):last.index('// Cap
 connect=(ROOT/'mobile/chain_execution/connect.go.tmpl').read_text()
 connect_const=connect[connect.index('const routerNodeChainCONNECTExecutionLaunchKind'):connect.index('type routerNodeCONNECTExecutionServerKey')]
 connect=connect[connect.index('func NewRouterNodeChainCONNECTExecution('):connect.index('// The typed execution plan creates')]
+socks=(ROOT/'mobile/chain_execution/socks.go.tmpl').read_text()
+socks_const=socks[socks.index('const routerNodeChainSOCKSExecutionLaunchKind'):socks.index('type routerNodeSOCKSExecutionServerKey')]
 GO=SOURCE.GO[:SOURCE.GO.index('type executionEnvelope')]
 GO=GO.replace(';libbox "router-vpn/mobile"','')
 GO=GO.replace('"fmt"','"fmt";"errors";"net/url";"router-vpn/internal/multihoprelay"',1)
@@ -37,7 +39,7 @@ GO=GO.replace(' case "execution-new":',r'''
 GO+=r'''
 var errRouterNodeChainExecution=errors.New("execution source")
 type RouterNodeChainExecution struct{prep *mobilemultihop.NodeChainExecutionPreparation;last *mobilemultihop.NodeChainExecutionLast}
-'''+bridge+last+connect_const+connect+r'''
+'''+bridge+last+connect_const+connect+socks_const+r'''
 func executionReceipt(m *RouterNodeChainExecution)(string,error){
  launch,err:=m.LaunchInput();if err!=nil{return "",err}
  raw,err:=json.Marshal(map[string]string{"source":m.Source(),"source_sha256":m.SourceSHA256(),"config":m.Config(),"config_sha256":m.ConfigSHA256(),"local_source_sha256":m.LocalSourceSHA256(),"requested":m.RequestedExecution(),"launch":launch});return string(raw),err
