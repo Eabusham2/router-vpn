@@ -3747,3 +3747,21 @@ with the original text left only in a comment. Frozen one-file manifest SHA256:
 The concurrent typed SOCKS source work in `74f6f3db` is preserved. These are
 source-contract results; hosted native acceptance and release publication
 remain separate requirements.
+
+## Required imported-prefix inventory retained in CONNECT validation
+
+The authoritative `c833afd2` ARM64 job `132985629323` stopped before native
+execution because the dependent CONNECT validator still expected eight imported
+server cases. The producer had added 14 original packet-prefix cases. The
+dependent test now requires the exact original-eight-plus-fourteen tuple and
+rejects omissions, duplicates, foreign substitutions, reordering and restoration
+of the obsolete eight-only tuple. The producer's 14 ordinary cases and the
+separate 17 CONNECT cases retain their existing exact inventories.
+
+The actual repaired CONNECT runner passes all 16 roots, including 68 inventory
+mutations, and the existing producer runner passes all 23 roots. The one-file
+source manifest SHA256 is
+`a4c6314bec044b6303d4795a6ca3b9425fd76a3a4ed3692e099c0052e8ee412d`.
+This updates a dependent test contract; native deadlines, failure admission and
+cleanup receipts are unchanged. The separate wrong-final-key native Stop
+failure still requires its own diagnosis and exact-current acceptance.
