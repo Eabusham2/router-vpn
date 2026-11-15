@@ -130,6 +130,34 @@ class OwnedDarwinPF(unittest.TestCase):
         self.watcher.assert_not_called()
         self.resolver.assert_not_called()
 
+    def test_external_native_protocols_reach_original_plan_without_relaxing_unknown_rejection(self):
+        protocols = ('socks5', 'shadowsocks', 'http-connect', 'https-connect',
+                     'hysteria2', 'wireguard', 'amneziawg', 'openvpn')
+        for protocol in protocols:
+            with self.subTest(protocol=protocol):
+                fixture = OwnedDarwinPF()
+                fixture.setUp()
+                try:
+                    capture = fixture.external_capture('on-connect')
+                    capture['protocol'] = protocol
+                    fixture.selected['external'] = {'protocol': protocol}
+                    fixture.private_json(fixture.root/'routers.json', fixture.store)
+                    sentinel = RuntimeError('original external native plan refuses execution')
+                    with patch.object(P._baseline, '_invoke', side_effect=sentinel) as native:
+                        with self.assertRaises(RuntimeError) as raised:
+                            D.darwin_external('apply', dict(capture=capture, expected=None))
+                        self.assertIs(raised.exception, sentinel)
+                        self.assertEqual(native.call_count, 1)
+                    for invalid in ('tor', 'unknown', protocol.upper(), protocol+' '):
+                        changed = dict(capture, protocol=invalid)
+                        with patch.object(P._baseline, '_invoke', side_effect=sentinel) as native:
+                            with self.assertRaisesRegex(RuntimeError, 'exact ordinary policy capture'):
+                                D.darwin_external('apply', dict(capture=changed, expected=None))
+                            native.assert_not_called()
+                    fixture.resolver.assert_not_called()
+                finally:
+                    fixture.doCleanups()
+
     def test_external_family_uses_exact_existing_native_journal_and_always_retirement(self):
         capture = self.external_capture()
         request = dict(capture=capture, expected=None)
