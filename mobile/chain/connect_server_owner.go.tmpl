@@ -440,6 +440,7 @@ func (c *Capture) failedServerOperationRetirement(op *operation, trialFailure er
 		if !serverRetirementErrors(raw.err, op.closeErr, 0) {
 			return errCapture
 		}
+		op.retirementAcknowledged.Store(true)
 		return nil
 	}
 }

@@ -903,3 +903,55 @@ func TestCONNECTServerFailedHTTPSRetirement(t *testing.T) {
 		t.Fatal("failed HTTPS retirement retry changed original ownership", err)
 	}
 }
+
+type connectUnreturnedNativeCloseCause struct {
+	net.Conn
+	failure error
+}
+
+func (c *connectUnreturnedNativeCloseCause) Close() error {
+	return errors.Join(c.Conn.Close(), c.failure)
+}
+
+func TestCONNECTFailedConstructionReceiptCannotAcknowledgeAnotherOperation(t *testing.T) {
+	owner := &Outbound{operations: make(map[*operation]struct{})}
+	capture := &Capture{server: &serverCapture{}}
+	capture.self, capture.server.self, capture.middle = capture, capture.server, owner
+	owner.capture = capture
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	actualFailure := errors.New("original native Close refused retirement")
+	var operations []*operation
+	for index := 0; index < 2; index++ {
+		client, _ := connectServerTCPFixture(t)
+		var nativeFailure error
+		if index == 0 {
+			nativeFailure = actualFailure
+		}
+		native := &connectUnreturnedNativeCloseCause{Conn: client, failure: nativeFailure}
+		half := &connectServerHalfCloseFailure{Conn: native, failure: errors.New("original unpublished protocol close failure")}
+		manager := route.NewConnectionManager(log.NewNOPFactory().Logger())
+		retained, err := captureServerTCP(manager.TrackConn(half))
+		if err != nil {
+			t.Fatal(err)
+		}
+		op := connectCloseOperation(owner, retained)
+		op.failedServerRetirement = capture.failedServerOperationRetirement(op, errors.New("original authentication refusal"))
+		if op.failedServerRetirement == nil {
+			t.Fatal("original unpublished receipt absent")
+		}
+		if err := op.closeContext(ctx); err == nil || manager.Count() != 0 {
+			t.Fatal("original close failure or full close join absent", err)
+		}
+		operations = append(operations, op)
+	}
+	// The second receipt proves only its own successful native Close. It must
+	// not acknowledge the first operation's independent native Close failure.
+	operations[0].failedServerRetirement = operations[1].failedServerRetirement
+	if err := capture.CloseContext(ctx); !errors.Is(err, actualFailure) {
+		t.Fatal("foreign failed-construction receipt acknowledged another native Close failure", err)
+	}
+	if operations[0].retirementAcknowledged.Load() || !errors.Is(operations[0].closeContext(ctx), actualFailure) {
+		t.Fatal("foreign receipt erased the original failed operation")
+	}
+}

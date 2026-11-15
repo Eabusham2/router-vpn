@@ -104,9 +104,10 @@ func (o *Outbound) CloseContext(ctx context.Context) error {
 			return errors.Join(failure, err)
 		}
 		if !op.retirementAcknowledged.Load() && op.failedServerRetirement != nil {
-			if err := op.failedServerRetirement(ctx); err == nil {
-				op.retirementAcknowledged.Store(true)
-			}
+			// The sealed callback acknowledges its own captured operation. A
+			// replaced callback cannot grant retirement to this loop's owner.
+			// A refusal leaves that owner's original close error below.
+			_ = op.failedServerRetirement(ctx)
 		}
 		if !op.retirementAcknowledged.Load() {
 			failure = errors.Join(failure, op.closeErr)
