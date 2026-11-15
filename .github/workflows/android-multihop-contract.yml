@@ -12,7 +12,9 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java'
       - 'android/test_android_node_chain_execution_capture.py'
       - 'android/test_android_connect_execution_capture.py'
+      - 'android/test_android_socks_execution_capture.py'
       - 'android/test_android_connect_execution_runtime.py'
+      - 'android/test_android_socks_execution_runtime.py'
       - 'android/test_android_node_chain_execution_runtime.py'
       - 'android/test_android_node_chain_execution_restore.py'
       - 'android/test_android_runtime_contract.py'
@@ -104,7 +106,9 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java'
       - 'android/test_android_node_chain_execution_capture.py'
       - 'android/test_android_connect_execution_capture.py'
+      - 'android/test_android_socks_execution_capture.py'
       - 'android/test_android_connect_execution_runtime.py'
+      - 'android/test_android_socks_execution_runtime.py'
       - 'android/test_android_node_chain_execution_runtime.py'
       - 'android/test_android_node_chain_execution_restore.py'
       - 'android/test_android_runtime_contract.py'
@@ -216,7 +220,9 @@ jobs:
           python3 android/test_android_node_chain_capture.py
           python3 android/test_android_node_chain_execution_capture.py
           python3 android/test_android_connect_execution_capture.py
+          python3 android/test_android_socks_execution_capture.py
           python3 android/test_android_connect_execution_runtime.py
+          python3 android/test_android_socks_execution_runtime.py
           python3 android/test_android_node_candidates.py
           python3 android/test_android_node_connect_candidates.py
           python3 android/test_android_node_socks_candidates.py

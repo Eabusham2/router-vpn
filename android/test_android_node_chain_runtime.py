@@ -101,6 +101,7 @@ SOURCES[NATIVE + 'RouterHopMeasurement.java'] = r'''package io.nekohasekai.libbo
 }'''
 SOURCES[NATIVE + 'RouterMTU.java'] = 'package io.nekohasekai.libbox;public class RouterMTU{}'
 SOURCES[NATIVE + 'Libbox.java'] = SOURCES[NATIVE + 'Libbox.java'].replace('public static void routerStrategyCloseService(CommandServer server)throws Exception{}', 'public static void routerStrategyCloseService(CommandServer server)throws Exception{server.checkedCloses++;if(server.failClose)throw new IllegalStateException("native Box drain pending");server.closed=true;}')[:-1] + r'''
+ public static CommandServer routerNodeChainSOCKSExecutionNewCommandServer(RouterNodeChainExecution plan,CommandServerHandler h,PlatformInterface p)throws Exception{throw new IllegalStateException("No typed SOCKS factory in ordinary fixture");}
  public static RouterHopMeasurement routerNodeChainNewHopMeasurement(RouterNodeChain plan,CommandServer server)throws Exception{if(plan.server!=server||!plan.healthy())throw new IllegalStateException("unproved ordered measurement");return new RouterHopMeasurement();}
  public static RouterNodeChain mtuPlan;public static CommandServer mtuServer;public static RouterMTUPlatform mtuPlatform;
  public static RouterMTU routerNodeChainNewMTU(RouterNodeChain plan,CommandServer server,RouterMTUPlatform platform)throws Exception{

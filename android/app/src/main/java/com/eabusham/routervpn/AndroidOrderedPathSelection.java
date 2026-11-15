@@ -203,7 +203,7 @@ final class AndroidOrderedPathSelection {
             try { if(!"local".equals(execution))AndroidNodeChainCapture.validateCONNECTExecutionSource(preview.source,execution);requireCurrent(); } finally { preview.close(); }
         } else if(AndroidNodeChainCapture.sourceSchema(sources)==3) {
             AndroidNodeChainSOCKSCapture preview=AndroidNodeChainSOCKSCapture.compile(source,jsonStrings(inputs),jsonStrings(identities));
-            try { requireCurrent(); } finally { preview.close(); }
+            try { if(!"local".equals(execution))AndroidNodeChainCapture.validateSOCKSExecutionSource(preview.source,execution);requireCurrent(); } finally { preview.close(); }
         } else {
             RouterNodeChain preview=Libbox.newRouterNodeChain(source);
             if(preview==null)throw new IllegalStateException("The native compiler returned no complete ordered path.");
@@ -240,8 +240,8 @@ final class AndroidOrderedPathSelection {
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();for(Member member:members)sources.add(member.source);
         int schema=AndroidNodeChainCapture.sourceSchema(sources);
         if(!"local".equals(execution)&&!members.isEmpty()) {
-            if((schema>=3&&schema!=4)||(schema==2||schema==4)&&members.size()!=3||!"shadowsocks".equals(members.get(members.size()-1).mode))
-                throw new IllegalStateException("Server and Compare require paired packet prefixes or a three-node path with one literal Shadowsocks or HTTP/HTTPS CONNECT middle, with a Shadowsocks 2022 final. Longer imported paths use Local.");
+            if(schema>4||(schema==2||schema==3||schema==4)&&members.size()!=3||!"shadowsocks".equals(members.get(members.size()-1).mode))
+                throw new IllegalStateException("Server and Compare require paired packet prefixes or a three-node path with one literal Shadowsocks, SOCKS5 or HTTP/HTTPS CONNECT middle, with a Shadowsocks 2022 final. Longer imported paths use Local.");
             for(Member member:members)if(member.source.imported)
                 AndroidNumericAddress.parse(member.source.external().server);
         }

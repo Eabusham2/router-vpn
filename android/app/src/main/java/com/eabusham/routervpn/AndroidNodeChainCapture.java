@@ -99,7 +99,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source) throws Exception {
         this.original=original; plan=null; selectionExecution=original.execution;
         boolean isCONNECT=sourceSchema(original.members)==4;
-        if (!"local".equals(selectionExecution) && !(isCONNECT && original.members.size()==3 && java.util.Arrays.asList("server","auto").contains(selectionExecution))) throw new IllegalStateException("The typed imported source requires Local or an exact CONNECT execution trio.");
+        if (!"local".equals(selectionExecution) && !(original.members.size()==3 && java.util.Arrays.asList("server","auto").contains(selectionExecution))) throw new IllegalStateException("SOCKS5 and CONNECT Server or Compare require the complete three-node path.");
         socks=isCONNECT?null:AndroidNodeChainSOCKSCapture.compile(source,inputs,identities);
         connect=isCONNECT?AndroidNodeChainCONNECTCapture.compile(source,inputs,identities):null;
         try {
@@ -187,9 +187,30 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             validateCONNECTExecutionSource(input,execution);
             return;
         }
+        if (sourceSchema(members)==3) {
+            validateSOCKSExecutionSource(input,execution);
+            return;
+        }
         RouterNodeChain local=Libbox.newRouterNodeChain(input);
         if(local==null)throw new IllegalStateException("The native compiler returned no complete Local source.");
         try { validateExecutionPlan(local,execution); } finally { local.close(); }
+    }
+
+    static void validateSOCKSExecutionSource(String input,String execution) throws Exception {
+        JSONObject original=new JSONObject(input);
+        if(original.getInt("schema")!=3||original.getJSONArray("nodes").length()!=3||!java.util.Arrays.asList("server","auto").contains(execution))
+            throw new IllegalStateException("SOCKS5 execution requires the complete original three-node path.");
+        RouterNodeChainExecution preview=Libbox.newRouterNodeChainSOCKSExecution(input,execution);
+        if(preview==null)throw new IllegalStateException("The native SOCKS5 compiler returned no execution preparation.");
+        try {
+            JSONObject preparation=new JSONObject(preview.source()),returned=new JSONObject(preparation.getString("local_source"));
+            if(preparation.getInt("schema")!=3 || !execution.equals(preview.requestedExecution()) || !execution.equals(preparation.getString("execution"))
+                    || returned.getInt("schema")!=3 || !"local".equals(returned.getString("execution"))
+                    || !original.getJSONArray("nodes").toString().equals(returned.getJSONArray("nodes").toString())
+                    || !original.getJSONArray("identity_sources").toString().equals(returned.getJSONArray("identity_sources").toString())
+                    || preview.config()==null || preview.config().isEmpty())
+                throw new IllegalStateException("The typed SOCKS5 preview changed its original source.");
+        } finally { preview.close(); }
     }
 
     static void validateCONNECTExecutionSource(String input,String execution) throws Exception {

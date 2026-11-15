@@ -146,11 +146,12 @@ ORDERED_DISPATCH_MARKERS = (
     'args.case_family in ("all", "ordered-chain", "ordered-imported", "ordered-openvpn", "fixture-transport")',
     'if args.case_family == "ordered-execution":\n        import test_android_node_chain_execution_capture as chain',
     'if args.case_family == "ordered-connect-execution":\n        import test_android_connect_execution_capture as chain',
+    'if args.case_family == "ordered-socks-execution":\n        import test_android_socks_execution_capture as chain',
     'chain.compiler_source(GO) if chain else GO',
     'chain.prepare_sources(src, app, JAVA)',
     'chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")',
     'if args.case_family == "ordered-openvpn":\n                chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)',
-    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution"):',
+    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-socks-execution"):',
 )
 
 
@@ -163,8 +164,15 @@ validate_ordered_dispatch(harness)
 # Exercise the actual source contract: the new family must reach its own
 # compiler, and extending the return inventory must preserve every old family.
 connect_dispatch = ORDERED_DISPATCH_MARKERS[2]
+socks_dispatch = ORDERED_DISPATCH_MARKERS[3]
 return_dispatch = ORDERED_DISPATCH_MARKERS[-1]
 dispatch_controls = (
+    ("SOCKS compiler omitted", socks_dispatch, ""),
+    ("SOCKS compiler substituted", socks_dispatch,
+     socks_dispatch.replace("test_android_socks_execution_capture", "test_android_node_chain_execution_capture")),
+    ("SOCKS return omitted", return_dispatch,
+     return_dispatch.replace(', "ordered-socks-execution"', "")),
+    ("SOCKS compiler duplicated", socks_dispatch, socks_dispatch + "\n" + socks_dispatch),
     ("CONNECT compiler omitted", connect_dispatch, ""),
     ("CONNECT compiler substituted", connect_dispatch,
      connect_dispatch.replace("test_android_connect_execution_capture", "test_android_node_chain_execution_capture")),

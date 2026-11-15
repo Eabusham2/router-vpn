@@ -151,27 +151,26 @@ public final class NodeChainExecutionCaptureHarness {
    reject(()->draft.setExecution(requested),"Server/Compare accepted a HY2 final without a native execution compiler");before.same(hy2,"unsupported execution choice");
    check(draft.execution().equals("local"),"invalid execution choice changed the draft");
    for(String protocol:List.of("socks5","http","https")){
-    var f=new NodeChainCaptureHarness.Fixture(root,"connect/2/");var custom=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");custom.protocol=protocol;custom.server="198.51.100.75";custom.username="original-user";custom.password="original-password";custom.tlsServerName="middle.example.test";
+    boolean isSOCKS=protocol.equals("socks5");String family=isSOCKS?"SOCKS":"CONNECT";int schema=isSOCKS?3:4;
+    var f=new NodeChainCaptureHarness.Fixture(root,(isSOCKS?"":"connect/")+"2/");var custom=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");custom.protocol=protocol;custom.server="198.51.100.75";custom.username="original-user";custom.password="original-password";custom.tlsServerName="middle.example.test";
     var exits=new AndroidStandardExitStore(f.context);exits.save(custom);var typed=new AndroidOrderedPathSelection(f.nodes,f.profiles);typed.addPrefix(custom.id,protocol.equals("socks5")?"socks5":protocol.equals("http")?"http-connect":"https-connect");
-    if(protocol.equals("socks5")){
-     reject(()->typed.setExecution(requested),"Server/Compare accepted a SOCKS middle without its native execution compiler");check(typed.execution().equals("local"),"unsupported SOCKS graph mutated execution");
-    }else{
+    {
      typed.setExecution(requested);var selected=typed.save();
-     check(selected.execution.equals(requested)&&selected.members.size()==3,"CONNECT editor lost its exact trio or execution choice");
+     check(selected.execution.equals(requested)&&selected.members.size()==3,family+" editor lost its exact trio or execution choice");
      try(var local=AndroidNodeChainCapture.compile(selected);var captured=AndroidNodeChainExecutionCapture.compile(local,requested)){
       JSONObject preparation=new JSONObject(captured.source),retained=new JSONObject(preparation.getString("local_source")),original=new JSONObject(local.launchInput);
-      check(local.connect!=null&&local.socks==null&&captured.local==local&&captured.requested.equals(requested),"CONNECT execution borrowed an ordinary or foreign source");
-      check(preparation.getInt("schema")==4&&retained.getInt("schema")==4&&retained.getString("execution").equals("local"),"CONNECT execution entered the ordinary compiler or changed its Local source");
-      for(String field:List.of("nodes","identity_sources"))check(retained.getJSONArray(field).toString().equals(original.getJSONArray(field).toString()),"CONNECT execution changed its original "+field);
-      check(!captured.healthy(),"source-only CONNECT editor fabricated native readiness");
-      reject(captured::captureRestore,"source-only CONNECT editor fabricated a restore owner");
+      check((isSOCKS?local.socks!=null&&local.connect==null:local.connect!=null&&local.socks==null)&&captured.local==local&&captured.requested.equals(requested),family+" execution borrowed an ordinary or foreign source");
+      check(preparation.getInt("schema")==schema&&retained.getInt("schema")==schema&&retained.getString("execution").equals("local"),family+" execution entered the ordinary compiler or changed its Local source");
+      for(String field:List.of("nodes","identity_sources"))check(retained.getJSONArray(field).toString().equals(original.getJSONArray(field).toString()),family+" execution changed its original "+field);
+      check(!captured.healthy(),"source-only "+family+" editor fabricated native readiness");
+      reject(captured::captureRestore,"source-only "+family+" editor fabricated a restore owner");
      }
      // Choosing a draft value is pure. Save must reach the real typed compiler
      // before it publishes any replacement private source or preference.
      var retry=new AndroidOrderedPathSelection(f.nodes,f.profiles);String next=requested.equals("server")?"auto":"server";retry.setExecution(next);
      var beforePreview=new NodeChainCaptureHarness.State(f);final boolean[] compilerReached={false};
-     Libbox.afterExecution=plan->{compilerReached[0]=true;throw new IllegalStateException("controlled CONNECT execution preview refusal");};
-     try{reject(retry::save,"CONNECT editor Save bypassed its typed compiler refusal");check(compilerReached[0]&&retry.execution().equals(next),"rejected CONNECT Save missed the real compiler or changed the draft");beforePreview.same(f,"CONNECT compiler refusal before publication");check(f.profiles.currentOrderedPath().execution.equals(requested),"rejected CONNECT Save changed the original saved execution");}
+     Libbox.afterExecution=plan->{compilerReached[0]=true;throw new IllegalStateException("controlled "+family+" execution preview refusal");};
+     try{reject(retry::save,family+" editor Save bypassed its typed compiler refusal");check(compilerReached[0]&&retry.execution().equals(next),"rejected "+family+" Save missed the real compiler or changed the draft");beforePreview.same(f,family+" compiler refusal before publication");check(f.profiles.currentOrderedPath().execution.equals(requested),"rejected "+family+" Save changed the original saved execution");}
      finally{Libbox.afterExecution=null;}
     }
    }
@@ -251,7 +250,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ("local-digest", '!local.sourceSHA256.equals(plan.localSourceSHA256())', 'false', 'readback', 'execution accepted native readback substitution: local-digest'),
         ("member-order", '!sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))', 'false', 'readback', 'execution accepted native readback substitution: member-order'),
         ("identity-order", '!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))', 'false', 'readback', 'execution accepted native readback substitution: identity-order'),
-        ("imported-schema", '(originalSchema != 1 && originalSchema != 2 && !(local.connect != null && originalSchema == 4))', 'originalSchema != 1', 'imported', 'imported SS execution was refused'),
+        ("imported-schema", '(originalSchema != 1 && originalSchema != 2 && !(local.socks != null && originalSchema == 3) && !(local.connect != null && originalSchema == 4))', 'originalSchema != 1', 'imported', 'imported SS execution was refused'),
         ("schema-substitution", 'returned.getInt("schema") != originalSchema', 'false', 'imported-readback', 'imported execution accepted native readback substitution: local-schema'),
         ("imported-identity", '!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))', 'false', 'imported-readback', 'imported execution accepted native readback substitution: imported-identity'),
         ("source-change", '        local.requireCurrent();\n        if (restore != null) plan.requireRestore(restore.nativeCapture);\n    }\n\n    void requireCurrent()', '        if (restore != null) plan.requireRestore(restore.nativeCapture);\n    }\n\n    void requireCurrent()', 'changed', 'execution survived original source replacement during compile'),

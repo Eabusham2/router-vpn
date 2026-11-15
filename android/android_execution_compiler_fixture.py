@@ -5,9 +5,25 @@ Native Run/proof/MTU/restore remain explicitly refusing boundaries.
 """
 
 def compiler_source(source):
-    cases = r'''case len(args)==3&&args[0]=="connect-execution-preparation":result,err=connectExecutionPreparation(args[1],args[2]);case len(args)==2&&args[0]=="connect-execution-replay":result,err=connectExecutionReplay(args[1]);case len(args)==4&&args[0]=="connect-execution-last":result,err=connectExecutionLast(args[1],args[2],args[3]);case len(args)==3&&args[0]=="execution-preparation":result,err=executionPreparation(args[1],args[2]);case len(args)==2&&args[0]=="execution-replay":result,err=executionReplay(args[1]);case len(args)==4&&args[0]=="execution-last":result,err=executionLast(args[1],args[2],args[3]);'''
+    cases = r'''case len(args)==3&&args[0]=="socks-execution-preparation":result,err=socksExecutionPreparation(args[1],args[2]);case len(args)==2&&args[0]=="socks-execution-replay":result,err=socksExecutionReplay(args[1]);case len(args)==4&&args[0]=="socks-execution-last":result,err=socksExecutionLast(args[1],args[2],args[3]);case len(args)==3&&args[0]=="connect-execution-preparation":result,err=connectExecutionPreparation(args[1],args[2]);case len(args)==2&&args[0]=="connect-execution-replay":result,err=connectExecutionReplay(args[1]);case len(args)==4&&args[0]=="connect-execution-last":result,err=connectExecutionLast(args[1],args[2],args[3]);case len(args)==3&&args[0]=="execution-preparation":result,err=executionPreparation(args[1],args[2]);case len(args)==2&&args[0]=="execution-replay":result,err=executionReplay(args[1]);case len(args)==4&&args[0]=="execution-last":result,err=executionLast(args[1],args[2],args[3]);'''
     assert source.count("case len(args)==2:") == 1
     return source.replace("case len(args)==2:", cases + "case len(args)==2:") + r'''
+func socksExecutionPreparation(input,requested string)(string,error){
+ original,err:=mobilemultihop.NewNodeChainSOCKSSource(input);if err!=nil{return "",err};prep,err:=mobilemultihop.NewNodeChainSOCKSExecutionPreparation(original,requested);if err!=nil{return "",err};return executionPrepared(prep)
+}
+func socksExecutionReplay(input string)(string,error){
+ if err:=libbox.RouterValidatePrivateNodeJSON(input);err!=nil{return "",err}
+ var envelope executionEnvelope;var fields map[string]json.RawMessage
+ if err:=json.Unmarshal([]byte(input),&fields);err!=nil{return "",err};if len(fields)!=5{return "",fmt.Errorf("unexpected typed envelope")}
+ if err:=json.Unmarshal([]byte(input),&envelope);err!=nil{return "",err};if envelope.Kind!="routervpn-node-chain-socks-execution-preparation-input"||envelope.Schema!=1{return "",fmt.Errorf("foreign typed envelope")}
+ prep,err:=mobilemultihop.ParseNodeChainSOCKSExecutionPreparation(envelope.Source);if err!=nil{return "",err}
+ if prep.SourceSHA256()!=envelope.SourceSHA||prep.ConfigSHA256()!=envelope.ConfigSHA{return "",fmt.Errorf("changed typed source")};return executionPrepared(prep)
+}
+func socksExecutionLast(input,requested,lastJSON string)(string,error){
+ raw,err:=socksExecutionPreparation(input,requested);if err!=nil{return "",err};var values map[string]string;if err=json.Unmarshal([]byte(raw),&values);err!=nil{return "",err}
+ prep,err:=mobilemultihop.ParseNodeChainSOCKSExecutionPreparation(values["source"]);if err!=nil{return "",err};last,err:=mobilemultihop.ParseNodeChainExecutionLast(lastJSON,prep);if err!=nil{return "",err}
+ var envelope map[string]any;if err=json.Unmarshal([]byte(values["launch"]),&envelope);err!=nil{return "",err};envelope["schema"]=2;envelope["last"]=last.JSON();launch,err:=json.Marshal(envelope);if err!=nil{return "",err};values["launch"]=string(launch);result,err:=json.Marshal(values);return string(result),err
+}
 func connectExecutionPreparation(input,requested string)(string,error){
  original,err:=mobilemultihop.NewNodeChainCONNECTSource(input);if err!=nil{return "",err};prep,err:=mobilemultihop.NewNodeChainCONNECTExecutionPreparation(original,requested);if err!=nil{return "",err};return executionPrepared(prep)
 }
@@ -26,7 +42,7 @@ func connectExecutionLast(input,requested,lastJSON string)(string,error){
 }
 type executionEnvelope struct{Kind string `json:"kind"`;Schema int `json:"schema"`;Source string `json:"source"`;SourceSHA string `json:"source_sha256"`;ConfigSHA string `json:"config_sha256"`}
 func executionPrepared(prep *mobilemultihop.NodeChainExecutionPreparation)(string,error){
- kind:="routervpn-node-chain-execution-preparation-input";if prep.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"};launch,err:=json.Marshal(executionEnvelope{kind,1,prep.Source(),prep.SourceSHA256(),prep.ConfigSHA256()});if err!=nil{return "",err}
+ kind:="routervpn-node-chain-execution-preparation-input";if prep.RequiresSOCKSExecutionObserver(){kind="routervpn-node-chain-socks-execution-preparation-input"};if prep.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"};launch,err:=json.Marshal(executionEnvelope{kind,1,prep.Source(),prep.SourceSHA256(),prep.ConfigSHA256()});if err!=nil{return "",err}
  raw,err:=json.Marshal(map[string]string{"source":prep.Source(),"source_sha256":prep.SourceSHA256(),"config":prep.Config(),"config_sha256":prep.ConfigSHA256(),"local_source_sha256":prep.LocalSourceSHA256(),"requested":prep.Execution(),"launch":string(launch)});return string(raw),err
 }
 func executionPreparation(input,requested string)(string,error){
@@ -88,6 +104,9 @@ def prepare_native(src):
     marker = "static String call(String...args)throws Exception{"
     assert source.count(marker) == 1
     methods = r'''public static java.util.function.Consumer<RouterNodeChainExecution> afterExecution;
+public static RouterNodeChainExecution newRouterNodeChainSOCKSExecution(String source,String requested)throws Exception{return new RouterNodeChainExecution(call("socks-execution-preparation",source,requested));}
+public static RouterNodeChainExecution newRouterNodeChainSOCKSExecutionLaunch(String source)throws Exception{return new RouterNodeChainExecution(call("socks-execution-replay",source));}
+public static RouterNodeChainExecution routerNodeChainSOCKSExecutionFromLast(String source,String requested,String last)throws Exception{return new RouterNodeChainExecution(call("socks-execution-last",source,requested,last));}
 public static RouterNodeChainExecution newRouterNodeChainCONNECTExecution(String source,String requested)throws Exception{return new RouterNodeChainExecution(call("connect-execution-preparation",source,requested));}
 public static RouterNodeChainExecution newRouterNodeChainCONNECTExecutionLaunch(String source)throws Exception{return new RouterNodeChainExecution(call("connect-execution-replay",source));}
 public static RouterNodeChainExecution routerNodeChainCONNECTExecutionFromLast(String source,String requested,String last)throws Exception{return new RouterNodeChainExecution(call("connect-execution-last",source,requested,last));}

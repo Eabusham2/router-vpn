@@ -6,6 +6,30 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 15: Android typed SOCKS5 execution
+
+Android's ordered editor, complete profiles and existing single VpnService now
+adopt the distinct SOCKS5 Server/Compare preparation for the exact three-node
+path: one paired WG/AWG entry, one literal-address imported SOCKS5 member and
+one independent paired Shadowsocks 2022 final. The original authentication,
+UDP association, member identities, selected DNS and device policy remain
+captured. Its own native CommandServer and execution owner govern proof,
+measurements, MTU, history, cancellation and joined cleanup. Last and temporary
+restoration retain the already-proved Local/Server choice and original native
+capsule rather than rerunning Compare.
+
+The source/compiler/editor gate passed 227 checks and two compiled causal
+controls. The shipping Java lifecycle and restoration gate passed 237 checks
+and three compiled causal controls with native/OS boundaries explicitly
+modeled. Existing CONNECT execution and Local SOCKS host suites retain their
+original coverage. Both new gates are required by the Android workflow. See
+[the Android evidence](ANDROID-SOCKS-EXECUTION-EVIDENCE-2026-11-15.md) and
+[the shared native bridge evidence](SOCKS-MOBILE-EXECUTION-EVIDENCE-2026-11-15.md).
+Exact-current APK/ABI builds, encrypted native networking and device acceptance
+remain separate requirements. Longer SOCKS Server/Compare, other imported
+positions, multiple imports and other platform adapters remain accountable to
+their own implementations and evidence.
+
 ## November 15: typed CONNECT execution and retained restoration
 
 The shared execution compiler and desktop native host now retain a distinct
@@ -282,8 +306,8 @@ the captured prefixes and layers. Existing capacity checks still reject a
 configured entry that cannot carry the required nested dual-stack packet;
 an eight-node selection is not a promise that every saved MTU/layer combination
 fits. The separate Shadowsocks and OpenVPN extensions are described above.
-SOCKS5 Server/Compare, other imported positions and multiple imported members
-remain separately unfinished.
+SOCKS5 Server/Compare outside the bounded Android trio described above, other
+imported positions and multiple imported members remain separately unfinished.
 
 The required source, encrypted Run, native MTU and installed desktop gates
 retain their original cases and add four- and eight-node cases. Encrypted

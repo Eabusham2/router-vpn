@@ -321,6 +321,9 @@ def sources():
     result[NATIVE + 'RouterNodeChainExecutionRestoreCapture.java'] = '''package io.nekohasekai.libbox;public final class RouterNodeChainExecutionRestoreCapture {final RouterNodeChainExecution original;final String selected;RouterNodeChainExecutionRestoreCapture(RouterNodeChainExecution original,String selected){this.original=original;this.selected=selected;}}'''
     lib = result[NATIVE + 'Libbox.java']
     result[NATIVE + 'Libbox.java'] = lib[:-1] + r'''
+ public static RouterNodeChainExecution newRouterNodeChainSOCKSExecution(String source,String requested)throws Exception{throw new IllegalStateException("No typed SOCKS preparation in ordinary fixture");}
+ public static RouterNodeChainExecution newRouterNodeChainSOCKSExecutionLaunch(String source)throws Exception{throw new IllegalStateException("No typed SOCKS launch in ordinary fixture");}
+ public static RouterNodeChainExecution routerNodeChainSOCKSExecutionFromLast(String source,String requested,String last)throws Exception{throw new IllegalStateException("No typed SOCKS Last in ordinary fixture");}
  public static RouterNodeChainExecution newRouterNodeChainCONNECTExecution(String source,String requested)throws Exception{throw new IllegalStateException("No typed CONNECT preparation in ordinary fixture");}
  public static RouterNodeChainExecution newRouterNodeChainCONNECTExecutionLaunch(String source)throws Exception{throw new IllegalStateException("No typed CONNECT launch in ordinary fixture");}
  public static RouterNodeChainExecution routerNodeChainCONNECTExecutionFromLast(String source,String requested,String last)throws Exception{throw new IllegalStateException("No typed CONNECT Last in ordinary fixture");}
