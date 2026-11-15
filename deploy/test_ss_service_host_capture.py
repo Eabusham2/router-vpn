@@ -22,7 +22,13 @@ def block(text,signature):
   depth+=(text[i]=='{')-(text[i]=='}');i+=1
  return text[a:i]
 
-SWIFT_MAIN=r''' static func main() throws {
+SWIFT_MAIN=r''' static func main() {
+  do { try run() } catch {
+   print("Apple generated SS capture failure: \((error as NSError).localizedDescription)")
+   exit(1)
+  }
+ }
+ static func run() throws {
   defer { UserDefaults.standard.removePersistentDomain(forName: UserDefaults.suite) }
   let raw=try Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[1]))
   let original=try JSONDecoder().decode(ClientBundle.self,from:raw)
@@ -92,7 +98,7 @@ def apple(bundle,work,mutant=False):
  subprocess.run(command+[str(APP/'Models.swift'),str(APP/'IOSNodeLatencyStatistics.swift'),str(APP/'IOSSpeedLabOwnership.swift'),str(work/'Layer.swift'),str(work/'Test.swift'),'-o',str(work/'test')],check=True,timeout=90)
  result=subprocess.run([str(work/'test'),str(bundle)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=30)
  if mutant:
-  assert result.returncode!=0 and 'Entry Start Layer requires the exact bounded AES assets' in result.stdout,result.stdout[-3000:]
+  assert result.returncode==1 and result.stdout.splitlines().count('Apple generated SS capture failure: Entry Start Layer requires the exact bounded AES assets of the captured home node.')==1,result.stdout[-3000:]
   print('Apple original one-asset guard rejected by actual generated-layer capture',flush=True)
  else:
   assert result.returncode==0,result.stdout[-5000:]

@@ -1539,3 +1539,21 @@ code changed. The remaining runtime-contract commands continue independently.
 The frozen patch, source hashes and complete log are retained under
 `ios-runtime-tail-validation`. These checks use explicit native/store doubles
 and do not establish Xcode packaging, physical UI or live tunnel acceptance.
+
+## Generated Shadowsocks capture control reports its exact intended failure
+
+The portable continuation of the required iOS runtime gate passed all eighteen
+generated-asset store/capture checks. Its original one-asset-guard mutation
+also rejected the invalid capture, but Linux's uncaught Swift error report
+omitted the NSError description expected by the outer test. This was test
+error-report formatting, not an observed production or native tunnel crash.
+
+The Swift test entrypoint now catches and reports the original error's
+localized description explicitly, then exits with status one. The mutation
+check requires exactly that status and one complete intended failure line;
+a trap, unrelated error, missing witness or duplicated witness cannot satisfy
+it. Shipping Swift extraction, generated assets and the original deliberately
+broken guard are unchanged. The eighteen positive checks and exact mutation
+witness pass in 17.914 seconds. The frozen patch and complete log are retained
+in `ios-runtime-tail-validation`; actual SDK and device acceptance remain
+separate requirements.
