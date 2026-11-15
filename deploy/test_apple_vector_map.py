@@ -20,6 +20,55 @@ ASSET = SHARED / "map/routervpn-land-110m.json"
 IOS_UI = ROOT / "ios/RouterVPN/App/IOSUnifiedProductView.swift"
 IOS_MODELS = ROOT / "ios/RouterVPN/App/Models.swift"
 
+# This map gate runs before prepare-libbox.sh. Compile the verbatim source
+# parser while making both unavailable native operations reject explicitly.
+# Actual libbox-backed OpenVPN admission remains in its separate required gate.
+IOS_OPENVPN_NATIVE_BOUNDARY = r'''
+func LibboxRouterOpenVPNEndpoint(_ config: String, _ username: String, _ password: String, _ tag: String, _ detour: String, _ failure: UnsafeMutablePointer<NSError?>?) -> String {
+ failure?.pointee = NSError(domain: "RouterVPNMapNativeBoundary", code: 1)
+ return ""
+}
+func LibboxRouterNodeChainImportedOpenVPNMemberInput(_ config: String, _ capture: String, _ failure: UnsafeMutablePointer<NSError?>?) -> String {
+ failure?.pointee = NSError(domain: "RouterVPNMapNativeBoundary", code: 2)
+ return ""
+}
+'''
+
+
+def ios_openvpn_map_dependency(swift, work):
+    original = IOS_MODELS.with_name("IOSImportedOpenVPNSource.swift").read_text()
+    assert original.count("import Libbox\n") == 1
+    helper = work / "IOSImportedOpenVPNSource.swift"
+    helper.write_text(original.replace("import Libbox\n", IOS_OPENVPN_NATIVE_BOUNDARY, 1))
+    model = work / "MapModelBoundary.swift"
+    model.write_text(IOS_MODEL_BOUNDARY.replace("import SwiftUI", "import Foundation")
+                     .replace("import MapKit\n", "").replace("import Combine\n", "")
+                     .replace(": ObservableObject", "").replace("@Published ", ""))
+    sources = [str(IOS_MODELS), str(IOS_MODELS.with_name("IOSSessionIdentity.swift")),
+               str(IOS_MODELS.with_name("IOSNodeChainPresentation.swift")), str(model)]
+    command = [swift, "-typecheck", "-swift-version", "6", "-strict-concurrency=complete"]
+    subprocess.run(command + sources + [str(helper)], check=True, timeout=90)
+    missing = subprocess.run(command + sources, capture_output=True, text=True, timeout=90)
+    assert missing.returncode != 0 and "cannot find 'IOSImportedOpenVPNSource' in scope" in missing.stderr, "original missing OpenVPN map dependency was not reproduced"
+    boundary = work / "MapNativeBoundary.swift"
+    boundary.write_text("import Foundation\n" + IOS_OPENVPN_NATIVE_BOUNDARY + r'''
+@main struct Test {
+ static func main() {
+  var failure: NSError?
+  precondition(LibboxRouterOpenVPNEndpoint("", "", "", "", "", &failure).isEmpty)
+  precondition(failure?.domain == "RouterVPNMapNativeBoundary" && failure?.code == 1)
+  failure = nil
+  precondition(LibboxRouterNodeChainImportedOpenVPNMemberInput("", "", &failure).isEmpty)
+  precondition(failure?.domain == "RouterVPNMapNativeBoundary" && failure?.code == 2)
+ }
+}
+''')
+    binary = work / "map-native-boundary"
+    subprocess.run([swift, "-swift-version", "6", "-parse-as-library", str(boundary), "-o", str(binary)], check=True, timeout=90)
+    subprocess.run([str(binary)], check=True, timeout=15)
+    print("iOS map source closure: PASS (actual helper; missing-source control; rejecting native boundary)")
+    return helper
+
 CORE = r'''
 import Foundation
 @main struct Test {
@@ -267,6 +316,7 @@ def main():
         raise SystemExit("Swift compiler is required for vector map geometry")
     with tempfile.TemporaryDirectory(prefix="routervpn-map-") as temporary:
         work = Path(temporary)
+        openvpn_helper = ios_openvpn_map_dependency(swift, work)
         ios_map = ios_map_source()
         ios_map_access_check(swift, work, ios_map)
         source = work / "main.swift"
@@ -334,7 +384,7 @@ def main():
             ios_source.write_text(IOS_MODEL_BOUNDARY + ios_map)
             command = ["xcrun", "swiftc", "-typecheck", "-swift-version", "6", "-strict-concurrency=complete",
                        "-target", "arm64-apple-ios17.0", "-sdk", ios_sdk, str(GEOMETRY), str(RENDERER), str(IOS_MODELS),
-                       str(IOS_MODELS.with_name("IOSSessionIdentity.swift")), str(IOS_MODELS.with_name("IOSNodeChainPresentation.swift")), str(ios_source)]
+                       str(IOS_MODELS.with_name("IOSSessionIdentity.swift")), str(IOS_MODELS.with_name("IOSNodeChainPresentation.swift")), str(openvpn_helper), str(ios_source)]
             subprocess.run(command, check=True, timeout=120)
             print("iOS complete shipping map/coordinator: actual SwiftUI/MapKit SDK typecheck PASS (application model boundary substituted)")
             original = ios_map.replace("fileprivate var packet:", "var packet:", 1)
