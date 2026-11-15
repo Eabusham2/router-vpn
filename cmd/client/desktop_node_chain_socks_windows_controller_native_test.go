@@ -18,14 +18,15 @@ import (
 )
 
 type windowsSOCKSInspection struct {
-	Connected       bool                                        `json:"connected"`
-	OriginalSources bool                                        `json:"original_sources"`
-	NativeJoined    bool                                        `json:"native_joined"`
-	JournalSettled  bool                                        `json:"journal_settled"`
-	WFPAbsent       bool                                        `json:"wfp_absent"`
-	TUNAbsent       bool                                        `json:"tun_absent"`
-	MeasurementRows int                                         `json:"measurement_rows"`
-	Proof           *mobilemultihop.DesktopNodeChainReadyRecord `json:"proof,omitempty"`
+	KillSwitchPolicy string                                      `json:"kill_switch_policy"`
+	Connected        bool                                        `json:"connected"`
+	OriginalSources  bool                                        `json:"original_sources"`
+	NativeJoined     bool                                        `json:"native_joined"`
+	JournalSettled   bool                                        `json:"journal_settled"`
+	WFPAbsent        bool                                        `json:"wfp_absent"`
+	TUNAbsent        bool                                        `json:"tun_absent"`
+	MeasurementRows  int                                         `json:"measurement_rows"`
+	Proof            *mobilemultihop.DesktopNodeChainReadyRecord `json:"proof,omitempty"`
 }
 
 func windowsSOCKSRegisterRoutes(mux *http.ServeMux, a *app, original common.RouterProfileStore) (func(), error) {
@@ -135,6 +136,11 @@ func windowsSOCKSInspect(ctx context.Context, a *app, launch *desktopNodeLaunch,
 	if launch == nil || launch.chain == nil || launch.chain.socksPolicy == nil || launch.chain.policy != nil || launch.ownedNode == nil || launch.ownedNode.chain != launch.chain {
 		return result, errors.New("typed native inspection lost original retained parent")
 	}
+	_, metadata, _, readErr := launch.chain.socksPolicy.ReadValidated()
+	if readErr != nil {
+		return result, readErr
+	}
+	result.KillSwitchPolicy = metadata.KillSwitchPolicy
 	name, err := windowsSOCKSConfiguredTUN(launch.chain.socksPolicy)
 	if err != nil || name != configuredTUN {
 		return result, errors.Join(err, errors.New("typed fixture lost configured TUN capture"))

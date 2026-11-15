@@ -651,3 +651,81 @@ func TestDesktopSocketWindowsWFPHandoffRetainsDenyUntilRelease(t *testing.T) {
 		})
 	}
 }
+
+func TestDesktopSocketWindowsWFPOffBaselineAndSuccession(t *testing.T) {
+	original := desktopWindowsWFPTestOwner(t, "off", true, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+	target := desktopWindowsWFPTarget(t, original)
+	if err := readDesktopWindowsPreparedProtection(ctx, original.capture, "off", target.BaselineSHA256, original.fixtureScope); err != nil {
+		t.Fatal("Off lacks complete independent prepared readback", err)
+	}
+	if err := readDesktopWindowsPreparedProtection(ctx, original.capture, "on-connect", target.BaselineSHA256, original.fixtureScope); err == nil {
+		t.Fatal("Off prepared record adopted protected policy")
+	}
+	record, err := desktopWindowsParseBaseline(original.metadata)
+	if err != nil || !bytes.Equal(record.IsolatedSID, original.isolatedSID) || len(original.baseline) != 4 {
+		t.Fatal("Off baseline lost its exact bounded isolated SID", err)
+	}
+	for _, fault := range []string{"missing", "well-known", "invalid-revision", "protected-scope"} {
+		t.Run(fault, func(t *testing.T) {
+			changed := *record
+			changed.IsolatedSID = append([]byte(nil), record.IsolatedSID...)
+			switch fault {
+			case "missing":
+				changed.IsolatedSID = nil
+			case "well-known":
+				changed.IsolatedSID = []byte{1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0}
+			case "invalid-revision":
+				changed.IsolatedSID[0] = 2
+			case "protected-scope":
+				changed.KillSwitchPolicy = "always"
+			}
+			raw, err := json.Marshal(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := desktopWindowsParseBaseline(raw); err == nil {
+				t.Fatal("Off record accepted missing or foreign account scope")
+			}
+		})
+	}
+	if err := original.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := readDesktopWindowsRetainedProtection(ctx, target, original.fixtureScope); err != nil {
+		t.Fatal("Off lost retained exact native identity", err)
+	}
+	for _, policy := range []string{"always", "off"} {
+		options := original.options
+		options.KillSwitchPolicy = policy
+		next, err := newDesktopWindowsSocketPolicySuccessor(ctx, desktopWindowsWFPTestCapture(t), options, &target, original.fixtureScope)
+		if next != nil {
+			t.Cleanup(func() { desktopWindowsWFPJoinCandidate(t, next) })
+		}
+		if err != nil {
+			t.Fatal("exact Off/protected succession failed", policy, err)
+		}
+		current := desktopWindowsWFPTarget(t, next)
+		if err := readDesktopWindowsPreparedProtection(ctx, next.capture, policy, current.BaselineSHA256, next.fixtureScope); err != nil {
+			t.Fatal(err)
+		}
+		if err := readDesktopWindowsPreparedProtection(ctx, target.Capture, target.Policy, target.BaselineSHA256, next.fixtureScope); err == nil {
+			t.Fatal("Off replacement adopted a stale prepared target")
+		}
+		if policy == "off" && bytes.Equal(next.isolatedSID, original.isolatedSID) {
+			t.Fatal("Off succession reused the old isolated account")
+		}
+		if err := next.Close(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := readDesktopWindowsRetainedProtection(ctx, current, next.fixtureScope); err != nil {
+			t.Fatal(err)
+		}
+		target = current
+	}
+	desktopWindowsWFPExactRelease(t, ctx, original.fixtureScope, target, false)
+	if err := readDesktopWindowsProtectionExpectation(ctx, nil, original.fixtureScope); err != nil {
+		t.Fatal("normal Off release did not prove exact absence", err)
+	}
+}

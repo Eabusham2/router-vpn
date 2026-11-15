@@ -40,8 +40,8 @@ CONNECT_PUBLIC = load("windows_public_connect_source", "test_desktop_connect_adm
 COMMAND_OWNER = load("windows_socks_command_owner", "test_windows_node_max.py")
 ROOT_TEST = "TestWindowsInstalledCONNECTNodeChain"
 ORIGINAL_PREFIX_CASES = ("wg-save", "wg-cancel", "awg-fast-save", "awg-fast-cancel", "awg-strong-save", "awg-strong-cancel")
-ORIGINAL_SOCKS_CASES = ("wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source")
-CASES = ("http-wg-connect", "http-awg-fast-connect", "http-awg-strong-connect", "https-wg-connect", "https-awg-fast-connect", "https-awg-strong-connect", "https-wg-wrong-middle-key", "http-wg-wrong-middle-public", "https-wg-tls-name", "https-wg-tls-trust", "http-wg-final-dns-failure", "https-wg-final-node-failure", "https-wg-final-key", "https-wg-middle-source")
+ORIGINAL_SOCKS_CASES = ("wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off")
+CASES = ("http-wg-connect", "http-awg-fast-connect", "http-awg-strong-connect", "https-wg-connect", "https-awg-fast-connect", "https-awg-strong-connect", "https-wg-wrong-middle-key", "http-wg-wrong-middle-public", "https-wg-tls-name", "https-wg-tls-trust", "http-wg-final-dns-failure", "https-wg-final-node-failure", "https-wg-final-key", "https-wg-middle-source", "http-wg-connect-off", "https-wg-connect-off")
 REQUIRED = (ROOT_TEST, *(ROOT_TEST + "/" + case for case in CASES))
 PREFIX = "Native Windows typed CONNECT full-path acceptance: "
 OWNED = (*SOCKS_GATE.OWNED,
@@ -196,6 +196,8 @@ def execute_typed(source, bundle, go, env, before, original_socks_receipt, owner
         installed = work / "installed"
         native = installed / "runtime/native"
         native.mkdir(parents=True)
+        (installed / "client").mkdir()
+        shutil.copyfile(ROOT / "client/Private-RouterVPN-Protection.ps1", installed / "client/Private-RouterVPN-Protection.ps1")
         for name in original["files"]:
             shutil.copyfile(bundle / name, native / name)
         child = native / BUILD.binary_name(target)

@@ -35,6 +35,8 @@ def execute(shell="pwsh", go="go"):
     if baseline.returncode or "owned Windows protection assertions:" not in baseline.stdout:
         raise ValueError("Shipping Windows protection adapter did not execute its complete real fixture")
     mutants = (
+        ("off-owned-inactive", "Off inactive record claimed managed source ownership.",
+         replace_once(source, "elseif (-not $value.active -or $value.policy", "elseif ($value.policy")),
         ("ordinary-release-removes-always", "Normal release changed Always",
          replace_once(source, "-Operation release\n", "-Operation force-off\n")),
         ("legacy-owner-takeover", "Native preparation adopted a live legacy rule",

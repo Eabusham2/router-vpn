@@ -52,7 +52,7 @@ func TestDesktopWindowsProtectionCommitValidation(t *testing.T) {
 		case "network":
 			bad.Capture.NetworkID = "a"
 		case "policy":
-			bad.Policy = "off"
+			bad.Policy = "invalid"
 		case "digest":
 			bad.BaselineSHA256 = strings.Repeat("A", 64)
 		}

@@ -37,7 +37,7 @@ func TestWindowsProtectionOwnerRecordRoundTrip(t *testing.T) {
 	if err != nil || decoded != record {
 		t.Fatal("owner record lost a captured identity on round trip", err)
 	}
-	for _, policy := range []string{"on-connect", "always"} {
+	for _, policy := range []string{"on-connect", "always", "off"} {
 		for _, generation := range []uint64{1, 1<<53 + 1, math.MaxUint64} {
 			changed := record
 			changed.Policy, changed.Capture.Generation = policy, generation
@@ -74,7 +74,7 @@ func TestWindowsProtectionOwnerRecordInvalidFields(t *testing.T) {
 		"no-token":              func(r *OwnerRecord) { r.Controller.AuthenticationID = 0 },
 		"no-sid":                func(r *OwnerRecord) { r.Controller.SID = "" },
 		"sid-alias":             func(r *OwnerRecord) { r.Controller.SID = "BA" },
-		"policy-off":            func(r *OwnerRecord) { r.Policy = "off" },
+		"policy-invalid":            func(r *OwnerRecord) { r.Policy = "invalid" },
 		"policy-coerced":        func(r *OwnerRecord) { r.Policy = "Always" },
 	}
 	for name, change := range changes {

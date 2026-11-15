@@ -41,7 +41,7 @@ def receipts(digest):
                 "images": {"controller": "d" * 64, "peer": "e" * 64, "scoped_engine": "f" * 64}}
     typed = {"schema": 2, "native": True, "target": "windows/amd64", "source_sha256": "a" * 64,
              "bundle_sha256": digest,
-             "cases": ["wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source"],
+             "cases": ["wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off"],
              "unmodified_shipping_image": False, "test_scope": "captured-native-child-app-id",
              "typed_full_path": True, "positive_application_and_selected_dns_proved": True,
              "measurement_bytes_per_direction_per_hop": 8 << 20, "measurement_hops": 3,
@@ -128,7 +128,7 @@ class WindowsSOCKSReleaseReceipt(unittest.TestCase):
                 with patch.object(BUILD.platform, "system", return_value="Windows"), \
                      patch.object(BUILD, "native_host_target", return_value="windows/amd64"), \
                      patch.object(BUILD, "reuse", return_value={"policy_sha256": "a" * 64}) as reuse, \
-                     patch.object(BUILD, "run", side_effect=["", "", "", "", "", "", output]) as run, \
+                     patch.object(BUILD, "run", side_effect=["", "", "", "", "", "", "", output]) as run, \
                      patch.object(BUILD, "verify_installed_windows_connect_receipt") as connect:
                     if accepted:
                         BUILD.verify_installed_windows_prefix(ROOT, bundle, "windows/amd64", {})
@@ -144,9 +144,10 @@ class WindowsSOCKSReleaseReceipt(unittest.TestCase):
                     self.assertEqual([Path(call.args[0][1]).name for call in run.call_args_list], [
                         "test_windows_candidate_prefix_runner.py", "test_windows_socks_node_chain_host_runner.py",
                         "test_windows_socks_release_receipt.py", "test_desktop_connect_parent_runner.py",
+                        "test_desktop_connect_admission_runner.py",
                         "test_windows_connect_node_chain_host_runner.py", "test_windows_connect_release_receipt.py",
                         "test_windows_connect_node_chain_host.py"])
-                    self.assertEqual(run.call_args_list[-1].kwargs["timeout"], 3000 + 4200 + 4200)
+                    self.assertEqual(run.call_args_list[-1].kwargs["timeout"], BUILD.WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT)
 
     def test_native_process_failure_cannot_reach_receipt_or_reuse(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -35,7 +35,7 @@ func (r *desktopNodeProtectionFixtureRelease) Close(context.Context) error {
 	if r.kernel.locked || r.kernel.target == nil || *r.kernel.target != r.target {
 		return errors.New("fixture release found another owner")
 	}
-	if r.target.Policy == "on-connect" {
+	if r.target.Policy == "on-connect" || r.target.Policy == "off" {
 		r.kernel.target = nil
 	}
 	r.done = true

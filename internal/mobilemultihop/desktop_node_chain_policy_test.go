@@ -316,7 +316,7 @@ func TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor(t *testing
 		}
 	}
 	allOff := desktopChainFixture(t, 3, "", func(_ int, profile map[string]any) { profile["kill_switch_policy"] = "off" })
-	if _, err := NewDesktopNodeChainPolicy(allOff, desktopNodeTestSession, "windows", 0); err == nil {
+	if _, err := NewDesktopNodeChainPolicy(allOff, desktopNodeTestSession, "darwin", 0); err == nil {
 		t.Fatal("protected desktop authority silently adopted disabled protection")
 	}
 	if _, _, _, err := ReadDesktopPhysicalPolicy(desktopPhysicalWrapper{policy}); err == nil {

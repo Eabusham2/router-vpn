@@ -63,14 +63,14 @@ func desktopProtectionSelectionForConcretePurposesWithCONNECT(node *mobilemultih
 	}
 	if connectChain != nil {
 		_, meta, _, err := connectChain.ReadValidated()
-		if err != nil || meta.TargetOS != "windows" || !validProfileID(meta.ProfileID) || meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
+		if err != nil || meta.TargetOS != "windows" || !validProfileID(meta.ProfileID) || meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" && meta.KillSwitchPolicy != "off" {
 			return empty, errors.Join(err, errors.New("CONNECT protection lost its sealed native policy"))
 		}
 		return desktopProtectionSelection{meta.ProfileID, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil
 	}
 	if socksChain != nil {
 		_, meta, _, err := socksChain.ReadValidated()
-		if err != nil || meta.TargetOS != "windows" || !validProfileID(meta.ProfileID) || meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
+		if err != nil || meta.TargetOS != "windows" || !validProfileID(meta.ProfileID) || meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" && meta.KillSwitchPolicy != "off" {
 			return empty, errors.Join(err, errors.New("typed ordered protection lost its sealed native policy"))
 		}
 		return desktopProtectionSelection{meta.ProfileID, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil
@@ -78,7 +78,7 @@ func desktopProtectionSelectionForConcretePurposesWithCONNECT(node *mobilemultih
 	if chain != nil {
 		_, meta, _, err := chain.ReadValidated()
 		if err != nil || meta.TargetOS != "windows" || !validProfileID(meta.ProfileID) ||
-			meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" {
+			meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always" && meta.KillSwitchPolicy != "off" {
 			return empty, errors.Join(err, errors.New("ordered protection lost its sealed aggregate native policy"))
 		}
 		return desktopProtectionSelection{meta.ProfileID, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, meta.KillSwitchPolicy}, nil

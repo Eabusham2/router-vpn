@@ -39,8 +39,8 @@ class FullPathGate(unittest.TestCase):
             'https-wg-connect', 'https-awg-fast-connect', 'https-awg-strong-connect',
             'https-wg-wrong-middle-key', 'http-wg-wrong-middle-public',
             'https-wg-tls-name', 'https-wg-tls-trust', 'http-wg-final-dns-failure',
-            'https-wg-final-node-failure', 'https-wg-final-key', 'https-wg-middle-source'))
-        self.assertEqual(len(G.REQUIRED), 15)
+            'https-wg-final-node-failure', 'https-wg-final-key', 'https-wg-middle-source', 'http-wg-connect-off', 'https-wg-connect-off'))
+        self.assertEqual(len(G.REQUIRED), 17)
         G.require_verdicts(completed())
         for old in (G.PREFIX_GATE, G.SOCKS_GATE):
             original = ''.join('=== RUN   ' + name + '\n--- PASS: ' + name + ' (0.01s)\n' for name in old.REQUIRED) + 'PASS\n'

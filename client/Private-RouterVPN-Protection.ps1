@@ -17,7 +17,7 @@ function ConvertFrom-RouterVPNOwnedProtectionStatus([string]$Text) {
     if ($value.active -or $value.policy -cne 'off') { throw 'Native Windows protection Off status is inconsistent.' }
   } elseif ($value.phase -ceq 'preparing') {
     if (-not $value.active -or $value.policy -cne '') { throw 'Native Windows protection preparation status is inconsistent.' }
-  } elseif (-not $value.active -or $value.policy -cnotin @('on-connect','always')) {
+  } elseif (-not $value.active -or $value.policy -cnotin @('off','on-connect','always')) {
     throw 'Native Windows protection ownership status is inconsistent.'
   }
   return $value

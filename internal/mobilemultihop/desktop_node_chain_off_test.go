@@ -84,7 +84,7 @@ func TestDesktopNodeChainLinuxOffRetainsFullCapture(t *testing.T) {
 						}
 						p, err = NewDesktopNodeChainPolicy(original, desktopNodeTestSession, target, 1392)
 					}
-					if want == "off" && target != "linux" {
+					if want == "off" && target != "linux" && target != "windows" {
 						if err == nil {
 							t.Fatal("unimplemented native Off target accepted", target)
 						}

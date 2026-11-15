@@ -136,7 +136,7 @@ func TestWindowsProtectionJournalRejectsChangedIdentity(t *testing.T) {
 		"profile":      func(r *JournalRecord) { r.Intent.ProfileID = "another-profile" },
 		"profile-rev":  func(r *JournalRecord) { r.Intent.ProfileRevision = "" },
 		"result-rev":   func(r *JournalRecord) { r.Intent.ResultProfileRevision = strings.Repeat("c", 64) },
-		"policy":       func(r *JournalRecord) { r.Intent.Candidate.Target.Policy = "off" },
+		"policy":       func(r *JournalRecord) { r.Intent.Candidate.Target.Policy = "invalid" },
 		"source":       func(r *JournalRecord) { r.Intent.Candidate.Target.Capture.SourceSHA256 = "" },
 		"baseline":     func(r *JournalRecord) { r.Intent.Candidate.Target.BaselineSHA256 = "" },
 		"native-owner": func(r *JournalRecord) { r.Intent.Candidate.Engine = nil },

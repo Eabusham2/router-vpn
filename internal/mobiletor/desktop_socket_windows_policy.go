@@ -63,6 +63,7 @@ type DesktopWindowsSocketPolicy struct {
 	owner                       DesktopSocketKernelOwner
 	interfaces                  []desktopWindowsPolicyInterface
 	user                        desktopWFPCondition
+	isolatedSID                 []byte // Off baseline is scoped to this captured account only.
 	baselineEngine, leaseEngine *desktopWFPEngine
 	sublayer                    syscall.GUID
 	lockKey                     syscall.GUID
@@ -95,7 +96,7 @@ var _ DesktopSocketSource = (*DesktopWindowsSocketPolicy)(nil)
 var _ DesktopSocketSourceRelease = (*DesktopWindowsSocketPolicy)(nil)
 
 func desktopWindowsValidateOptions(options DesktopWindowsSocketOptions, fixture bool) error {
-	if options.KillSwitchPolicy != "on-connect" && options.KillSwitchPolicy != "always" || len(options.Interfaces) < 1 || len(options.Interfaces) > 2 || len(options.PrivateDestinations) > 64 || len(options.LANPrefixes) > 32 {
+	if options.KillSwitchPolicy != "on-connect" && options.KillSwitchPolicy != "always" && options.KillSwitchPolicy != "off" || len(options.Interfaces) < 1 || len(options.Interfaces) > 2 || len(options.PrivateDestinations) > 64 || len(options.LANPrefixes) > 32 {
 		return errors.New("Windows physical sockets require a bounded captured strict policy")
 	}
 	families := make(map[bool]bool)
@@ -301,7 +302,9 @@ func newDesktopWindowsPolicyOwner(ctx context.Context, capture DesktopSocketCapt
 	p.gate <- struct{}{}
 	p.sublayer = desktopWindowsManagedKey("baseline", p.fixtureScope)
 	var err error
-	p.metadata, err = p.baselineMetadata()
+	if options.KillSwitchPolicy != "off" {
+		p.metadata, err = p.baselineMetadata()
+	}
 	if err != nil {
 		p.Cancel()
 		return nil, err
@@ -333,6 +336,14 @@ func (p *DesktopWindowsSocketPolicy) pair(label string, family int, weight uint6
 }
 func (p *DesktopWindowsSocketPolicy) compileBaseline() []desktopWFPRule {
 	var rules []desktopWFPRule
+	if p.options.KillSwitchPolicy == "off" {
+		// Ordinary host traffic is untouched. The isolated engine account
+		// still requires an exact native socket grant for every physical flow.
+		for _, family := range []int{4, 6} {
+			rules = append(rules, p.pair("owned-source-deny", family, 1, false, true, p.user)...)
+		}
+		return rules
+	}
 	for _, family := range []int{4, 6} {
 		rules = append(rules, p.pair("deny", family, 1, false, true)...)
 		if len(p.fixtureScope) == 0 {
@@ -366,9 +377,28 @@ func (p *DesktopWindowsSocketPolicy) compileBaseline() []desktopWFPRule {
 	return rules
 }
 func (p *DesktopWindowsSocketPolicy) prepare() error {
+	if p.options.KillSwitchPolicy == "off" {
+		if err := p.prepareIdentity(); err != nil {
+			return err
+		}
+		var err error
+		p.metadata, err = p.baselineMetadata()
+		if err != nil {
+			return err
+		}
+	}
 	if err := p.prepareBaseline(); err != nil {
 		return err
 	}
+	if p.identity == nil {
+		if err := p.prepareIdentity(); err != nil {
+			return err
+		}
+	}
+	p.observed.Store(time.Now().UnixMilli())
+	return nil
+}
+func (p *DesktopWindowsSocketPolicy) prepareIdentity() error {
 	var err error
 	p.identity, err = NewDesktopWindowsSocketIdentity(p.ctx, p.capture)
 	if p.identity != nil {
@@ -387,14 +417,26 @@ func (p *DesktopWindowsSocketPolicy) prepare() error {
 	if err != nil {
 		return err
 	}
-	p.user, err = desktopWFPUserCondition(p.baselineEngine.api, sid)
+	api, err := desktopWFPLoad()
 	if err != nil {
 		return err
 	}
-	p.observed.Store(time.Now().UnixMilli())
+	p.user, err = desktopWFPUserCondition(api, sid)
+	if err != nil {
+		return err
+	}
+	if p.options.KillSwitchPolicy == "off" {
+		if !desktopWindowsIsolatedAccountSID(sid) {
+			return errors.New("Windows Off source lost its isolated local account SID")
+		}
+		p.isolatedSID = append([]byte(nil), sid...)
+	}
 	return nil
 }
 func (p *DesktopWindowsSocketPolicy) prepareBaseline() error {
+	if p.options.KillSwitchPolicy == "off" && (p.identity == nil || !desktopWindowsIsolatedAccountSID(p.isolatedSID) || len(p.user.Bytes) == 0) {
+		return errors.New("Windows Off baseline has no captured isolated socket account")
+	}
 	for _, item := range p.options.Interfaces {
 		captured, err := desktopWindowsCheckInterface(item, len(p.fixtureScope) > 0)
 		if err != nil {

@@ -104,7 +104,7 @@ func (s *desktopNodeProtectionSlot) captureJournalReleaseLocked(ctx context.Cont
 }
 
 func (r *desktopNodeJournalRelease) barrier(ctx context.Context, change mobiletor.DesktopWindowsProtectionCommit) error {
-	if r == nil || ctx == nil || ctx.Err() != nil || r.target.Policy != "on-connect" || change.Validate() != nil ||
+	if r == nil || ctx == nil || ctx.Err() != nil || (r.target.Policy != "on-connect" && r.target.Policy != "off") || change.Validate() != nil ||
 		change.Action != "release" || change.Previous == nil || *change.Previous != r.target || change.Candidate != nil {
 		return errors.New("durable release barrier changed its exact native removal")
 	}

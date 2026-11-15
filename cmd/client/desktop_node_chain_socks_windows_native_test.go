@@ -24,7 +24,28 @@ import (
 	"router-vpn/internal/windowscontroller"
 )
 
-var windowsSOCKSHostCases = []string{"wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source"}
+// The installed test image retains the shipping standalone native status entry.
+func init() {
+	if handled, err := windowsPhysicalProtectionUtility(os.Args[1:]); handled {
+		if err != nil {
+			os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+}
+
+func windowsOrderedOffStatusAdapter(t *testing.T, ctx context.Context, root string) {
+	t.Helper()
+	command := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop'; . (Join-Path $env:ROUTERVPN_WINDOWS_PREFIX_ROOT 'client/Private-RouterVPN-Protection.ps1'); $raw=@(& (Join-Path $env:ROUTERVPN_WINDOWS_PREFIX_ROOT 'router-vpn-client.exe') '--windows-physical-protection' 'status'); if ($LASTEXITCODE -ne 0 -or $raw.Count -ne 1) { throw 'Original native status utility failed.' }; $status=ConvertFrom-RouterVPNOwnedProtectionStatus $raw[0]; if (-not $status.active -or $status.policy -cne 'off' -or $status.phase -cne 'owned') { throw 'Off lost its active isolated source owner.' }; Write-Output 'verified actual owned Off status adapter'`)
+	command.Env = append(os.Environ(), "ROUTERVPN_WINDOWS_PREFIX_ROOT="+root)
+	output, err := command.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(output)) != "verified actual owned Off status adapter" {
+		t.Fatalf("installed Off shipping status adapter: %v\n%s", err, output)
+	}
+}
+
+var windowsSOCKSHostCases = []string{"wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off"}
 
 func windowsSOCKSInstalledSources(t *testing.T, peer *windowsPrefixPeer, password, fault string) (common.RouterProfileStore, map[string]map[string]map[string][]byte) {
 	t.Helper()
@@ -162,9 +183,19 @@ func TestWindowsSOCKSLauncher(t *testing.T) {
 	if mode == "" {
 		t.Fatal("unknown typed installed scenario")
 	}
+	off := strings.HasSuffix(action, "-off")
+	action = strings.TrimSuffix(action, "-off")
 	peer, password, observe := windowsSOCKSPeerStart(t, mode)
 	windowsSOCKSTrust(t, peer.reply.PublicCA)
 	profiles, assets := windowsSOCKSInstalledSources(t, peer, password, action)
+	if off {
+		for i := range profiles.Profiles {
+			profiles.Profiles[i].KillSwitch, profiles.Profiles[i].KillSwitchPolicy = false, "off"
+			if err := common.NormalizeRouterProfile(&profiles.Profiles[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	for _, directory := range []string{"client", "modes", "runtime"} {
 		if err := os.MkdirAll(filepath.Join(root, directory), 0700); err != nil {
 			t.Fatal(err)
@@ -223,11 +254,14 @@ func TestWindowsSOCKSLauncher(t *testing.T) {
 	var ready windowsSOCKSInspection
 	if !negative {
 		response = call("GET", "/api/native-socks/inspect", nil)
-		if response.Status != 200 || json.Unmarshal(response.Body, &ready) != nil || !ready.Connected || !ready.OriginalSources || ready.MeasurementRows != 3 || ready.Proof == nil || ready.Proof.Kind != "routervpn-node-chain-socks-ready-v1" {
+		if response.Status != 200 || json.Unmarshal(response.Body, &ready) != nil || off && ready.KillSwitchPolicy != "off" || !ready.Connected || !ready.OriginalSources || ready.MeasurementRows != 3 || ready.Proof == nil || ready.Proof.Kind != "routervpn-node-chain-socks-ready-v1" {
 			t.Fatal("typed actual proof/measurement", response.Status, string(response.Body))
 		}
 	}
 	if !negative {
+		if off {
+			windowsOrderedOffStatusAdapter(t, ctx, root)
+		}
 		beforeFifty := observe("stats")
 		receipts, err := desktopOrderedLatencyNativeRoundTrip(ctx, func(callCtx context.Context, method, path string, body []byte) (int, []byte, error) {
 			response, err := client.Request(callCtx, method, path, body, 1<<20)

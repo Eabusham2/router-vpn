@@ -26,7 +26,7 @@ type DesktopProtectionTransferRecord struct {
 
 func (r DesktopProtectionTransferRecord) Validate() error {
 	if r.Schema != 1 || r.Kind != "routervpn-windows-protection-transfer-v1" || !desktopSocketHex(r.SessionID, 32) ||
-		!desktopSocketHex(r.SourceSHA256, 64) || !desktopSocketHex(r.ConfigSHA256, 64) || r.Policy != "on-connect" && r.Policy != "always" {
+		!desktopSocketHex(r.SourceSHA256, 64) || !desktopSocketHex(r.ConfigSHA256, 64) || r.Policy != "on-connect" && r.Policy != "always" && r.Policy != "off" {
 		return errors.New("Windows protection transfer lost its captured native launch")
 	}
 	if r.Predecessor != nil && (r.Predecessor.Validate() != nil || r.Predecessor.Capture.SessionID == r.SessionID) {

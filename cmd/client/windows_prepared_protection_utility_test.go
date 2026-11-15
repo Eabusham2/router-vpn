@@ -8,7 +8,7 @@ import (
 
 func TestWindowsPreparedProtectionUtilityCapture(t *testing.T) {
 	session, source, network, baseline := strings.Repeat("ab", 16), strings.Repeat("cd", 32), strings.Repeat("ef", 16), strings.Repeat("dc", 32)
-	for _, policy := range []string{"on-connect", "always"} {
+	for _, policy := range []string{"on-connect", "always", "off"} {
 		args := []string{windowsPreparedProtectionUtilityFlag, session, source, network, policy, baseline}
 		record, handled, err := parseWindowsPreparedProtectionUtility(args)
 		if !handled || err != nil || record.Prepared || record.Schema != 1 || record.SessionID != session ||
@@ -28,7 +28,7 @@ func TestWindowsPreparedProtectionUtilityCapture(t *testing.T) {
 			func(v []string) []string { v[2] += "00"; return v },
 			func(v []string) []string { v[3] = v[3][:30]; return v },
 			func(v []string) []string { v[2] = strings.Repeat("z", 64); return v },
-			func(v []string) []string { v[4] = "off"; return v },
+			func(v []string) []string { v[4] = "invalid"; return v },
 			func(v []string) []string { v[4] = "Always"; return v },
 			func(v []string) []string { v[5] = strings.ToUpper(v[5]); return v },
 			func(v []string) []string { v[5] = ""; return v },

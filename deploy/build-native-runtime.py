@@ -1167,8 +1167,8 @@ def verify_installed_windows_prefix(source, bundle, target, env):
     run([sys.executable, ROOT/'deploy/test_desktop_connect_admission_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_windows_connect_node_chain_host_runner.py'], cwd=ROOT, env=env, timeout=60)
     run([sys.executable, ROOT/'deploy/test_windows_connect_release_receipt.py'], cwd=ROOT, env=env, timeout=60)
-    # The composed gate executes original prefix6 and SOCKS8 exactly once,
-    # then proves the distinct authenticated HTTP/HTTPS CONNECT14 carrier.
+    # The composed gate executes original prefix6 and SOCKS9 exactly once,
+    # then proves the distinct authenticated HTTP/HTTPS CONNECT16 carrier.
     # All three receipts are mandatory for fresh and reused publication.
     output = run([sys.executable, ROOT/'deploy/test_windows_connect_node_chain_host.py', source, '--bundle', bundle],
                  cwd=ROOT, env=env, timeout=WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT)
@@ -1212,7 +1212,7 @@ def verify_installed_windows_socks_receipt(output, target, original, digest_befo
                isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest) for name, digest in values.items()) for values in mappings):
         raise ValueError('Installed Windows SOCKS omitted its exact source/image hash maps')
     cases = ['wg-connect', 'awg-fast-connect', 'awg-strong-connect', 'wg-wrong-middle-key',
-             'wg-wrong-middle-public', 'wg-final-dns-failure', 'wg-final-node-failure', 'wg-middle-source']
+             'wg-wrong-middle-public', 'wg-final-dns-failure', 'wg-final-node-failure', 'wg-middle-source', 'wg-connect-off']
     if (type(receipt.get('schema')) is not int or receipt.get('schema') != 2 or receipt.get('native') is not True or
             receipt.get('target') != target or receipt.get('source_sha256') != original['policy_sha256'] or
             receipt.get('bundle_sha256') != digest_before or receipt.get('cases') != cases or
@@ -1259,7 +1259,7 @@ def verify_installed_windows_connect_receipt(output, target, original, digest_be
     cases = ['http-wg-connect', 'http-awg-fast-connect', 'http-awg-strong-connect',
              'https-wg-connect', 'https-awg-fast-connect', 'https-awg-strong-connect',
              'https-wg-wrong-middle-key', 'http-wg-wrong-middle-public', 'https-wg-tls-name', 'https-wg-tls-trust',
-             'http-wg-final-dns-failure', 'https-wg-final-node-failure', 'https-wg-final-key', 'https-wg-middle-source']
+             'http-wg-final-dns-failure', 'https-wg-final-node-failure', 'https-wg-final-key', 'https-wg-middle-source', 'http-wg-connect-off', 'https-wg-connect-off']
     if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or
             receipt.get('target') != target or receipt.get('source_sha256') != original['policy_sha256'] or
             receipt.get('bundle_sha256') != digest_before or receipt.get('cases') != cases or

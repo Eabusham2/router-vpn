@@ -62,7 +62,7 @@ func TestDesktopProtectionTransferRecordRejectsChangedFields(t *testing.T) {
 			case "config":
 				r.ConfigSHA256 = strings.Repeat("c", 63)
 			case "policy":
-				r.Policy = "off"
+				r.Policy = "invalid"
 			case "old-session":
 				r.Predecessor.Capture.SessionID = ""
 			case "old-source":
@@ -70,7 +70,7 @@ func TestDesktopProtectionTransferRecordRejectsChangedFields(t *testing.T) {
 			case "old-network":
 				r.Predecessor.Capture.NetworkID = strings.Repeat("f", 31)
 			case "old-policy":
-				r.Predecessor.Policy = "off"
+				r.Predecessor.Policy = "invalid"
 			case "old-baseline":
 				r.Predecessor.BaselineSHA256 = ""
 			case "reused-session":

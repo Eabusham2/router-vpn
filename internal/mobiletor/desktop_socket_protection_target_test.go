@@ -45,7 +45,7 @@ func TestDesktopWindowsProtectionTargetRejectsSubstitution(t *testing.T) {
 			case "network":
 				invalid.Capture.NetworkID = "3"
 			case "policy":
-				invalid.Policy = "off"
+				invalid.Policy = "invalid"
 			case "digest":
 				invalid.BaselineSHA256 = "0"
 			case "uppercase":

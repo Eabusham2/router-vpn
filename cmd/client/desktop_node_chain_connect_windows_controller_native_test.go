@@ -18,6 +18,7 @@ import (
 )
 
 type windowsCONNECTInspection struct {
+	KillSwitchPolicy        string                                      `json:"kill_switch_policy"`
 	PublicConnectCalls      int                                         `json:"public_connect_calls"`
 	PublicProfileCapability bool                                        `json:"public_profile_capability"`
 	Connected               bool                                        `json:"connected"`
@@ -159,6 +160,11 @@ func windowsCONNECTInspect(ctx context.Context, a *app, launch *desktopNodeLaunc
 	if launch == nil || launch.chain == nil || launch.chain.connectPolicy == nil || launch.chain.policy != nil || launch.chain.socksPolicy != nil || launch.ownedNode == nil || launch.ownedNode.chain != launch.chain {
 		return result, errors.New("typed native inspection lost original retained parent")
 	}
+	_, metadata, _, readErr := launch.chain.connectPolicy.ReadValidated()
+	if readErr != nil {
+		return result, readErr
+	}
+	result.KillSwitchPolicy = metadata.KillSwitchPolicy
 	name, err := windowsCONNECTConfiguredTUN(launch.chain.connectPolicy)
 	if err != nil || name != configuredTUN {
 		return result, errors.Join(err, errors.New("typed fixture lost configured TUN capture"))

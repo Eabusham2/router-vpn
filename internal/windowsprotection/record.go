@@ -76,7 +76,7 @@ func (c Controller) Validate() error {
 
 func (r OwnerRecord) Validate() error {
 	if r.Schema != OwnerRecordSchema || r.Kind != OwnerRecordKind || !lowerHex(r.OwnerID, 32) ||
-		(r.Policy != "on-connect" && r.Policy != "always") {
+		(r.Policy != "on-connect" && r.Policy != "always" && r.Policy != "off") {
 		return errors.New("Windows protection requires its exact schema-2 owner record and policy")
 	}
 	if err := r.Capture.Validate(); err != nil {

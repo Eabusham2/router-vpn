@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,16 @@ type desktopWindowsBaselineRecord struct {
 	DHCP4Servers     []netip.Addr         `json:"dhcp4_servers"`
 	FixtureSHA256    string               `json:"fixture_sha256,omitempty"`
 	SublayerWeight   *uint16              `json:"sublayer_weight"`
+	IsolatedSID      []byte               `json:"isolated_sid,omitempty"`
+}
+
+// The source creates a fresh local user, never a group or well-known SID.
+// Canonical records retain that exact account after its token is retired.
+func desktopWindowsIsolatedAccountSID(sid []byte) bool {
+	return len(sid) == 28 && sid[0] == 1 && sid[1] == 5 &&
+		bytes.Equal(sid[2:8], []byte{0, 0, 0, 0, 0, 5}) &&
+		binary.LittleEndian.Uint32(sid[8:12]) == 21 &&
+		binary.LittleEndian.Uint32(sid[24:28]) >= 1000
 }
 
 func desktopWindowsManagedKey(kind string, fixtureScope []byte) syscall.GUID {
@@ -50,7 +61,7 @@ func (p *DesktopWindowsSocketPolicy) baselineMetadata() ([]byte, error) {
 	return json.Marshal(desktopWindowsBaselineRecord{Schema: 2, Kind: "routervpn-owned-physical-baseline",
 		Capture: p.capture, KillSwitchPolicy: p.options.KillSwitchPolicy,
 		LANPrefixes: p.options.LANPrefixes, DHCP4Servers: p.options.DHCP4Servers,
-		FixtureSHA256: desktopWindowsFixtureHash(p.fixtureScope), SublayerWeight: &weight})
+		FixtureSHA256: desktopWindowsFixtureHash(p.fixtureScope), SublayerWeight: &weight, IsolatedSID: p.isolatedSID})
 }
 func desktopWindowsParseBaseline(data []byte) (*desktopWindowsBaselineRecord, error) {
 	if len(data) == 0 || len(data) > 16384 {
@@ -64,8 +75,15 @@ func desktopWindowsParseBaseline(data []byte) (*desktopWindowsBaselineRecord, er
 	}
 	canonical, err := json.Marshal(record)
 	if err != nil || !bytes.Equal(canonical, data) || record.Schema != 2 || record.Kind != "routervpn-owned-physical-baseline" ||
-		!record.Capture.valid() || record.KillSwitchPolicy != "always" && record.KillSwitchPolicy != "on-connect" || record.SublayerWeight == nil {
+		!record.Capture.valid() || record.KillSwitchPolicy != "always" && record.KillSwitchPolicy != "on-connect" && record.KillSwitchPolicy != "off" || record.SublayerWeight == nil {
 		return nil, errors.New("Windows baseline record lost its canonical identity")
+	}
+	if record.KillSwitchPolicy == "off" {
+		if !desktopWindowsIsolatedAccountSID(record.IsolatedSID) {
+			return nil, errors.New("Windows Off baseline lost its isolated account scope")
+		}
+	} else if len(record.IsolatedSID) != 0 {
+		return nil, errors.New("Windows protected baseline acquired a different account scope")
 	}
 	if err := desktopWindowsValidateLAN(record.LANPrefixes); err != nil {
 		return nil, err
@@ -87,6 +105,17 @@ func desktopWindowsDecodeBaseline(data, fixtureScope []byte) (*DesktopWindowsSoc
 		sublayer: desktopWindowsManagedKey("baseline", fixtureScope), fixtureScope: append([]byte(nil), fixtureScope...),
 		baselineWeight: *record.SublayerWeight,
 		options:        DesktopWindowsSocketOptions{KillSwitchPolicy: record.KillSwitchPolicy, LANPrefixes: record.LANPrefixes, DHCP4Servers: record.DHCP4Servers}}
+	if record.KillSwitchPolicy == "off" {
+		api, err := desktopWFPLoad()
+		if err != nil {
+			return nil, err
+		}
+		p.isolatedSID = append([]byte(nil), record.IsolatedSID...)
+		p.user, err = desktopWFPUserCondition(api, p.isolatedSID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	p.baseline = p.compileBaseline()
 	return p, nil
 }

@@ -29,6 +29,7 @@ var windowsCONNECTHostCases = []string{
 	"https-wg-wrong-middle-key", "http-wg-wrong-middle-public",
 	"https-wg-tls-name", "https-wg-tls-trust", "http-wg-final-dns-failure",
 	"https-wg-final-node-failure", "https-wg-final-key", "https-wg-middle-source",
+	"http-wg-connect-off", "https-wg-connect-off",
 }
 
 func windowsCONNECTCase(scenario string) (protocol, mode, action string, found bool) {
@@ -187,12 +188,22 @@ func TestWindowsCONNECTLauncher(t *testing.T) {
 	if !ok {
 		t.Fatal("unknown installed CONNECT scenario")
 	}
+	off := strings.HasSuffix(action, "-off")
+	action = strings.TrimSuffix(action, "-off")
 	peer, password, connectCA, serverName, observe := windowsCONNECTPeerStart(t, mode, protocol)
 	windowsSOCKSTrust(t, peer.reply.PublicCA)
 	if protocol == "https-connect" && action != "tls-trust" {
 		windowsSOCKSTrust(t, connectCA)
 	}
 	profiles, assets := windowsCONNECTInstalledSources(t, peer, protocol, password, serverName, action)
+	if off {
+		for i := range profiles.Profiles {
+			profiles.Profiles[i].KillSwitch, profiles.Profiles[i].KillSwitchPolicy = false, "off"
+			if err := common.NormalizeRouterProfile(&profiles.Profiles[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	for _, directory := range []string{"client", "modes", "runtime"} {
 		if err := os.MkdirAll(filepath.Join(root, directory), 0700); err != nil {
 			t.Fatal(err)
@@ -254,11 +265,14 @@ func TestWindowsCONNECTLauncher(t *testing.T) {
 	var ready windowsCONNECTInspection
 	if !negative {
 		response = call("GET", "/api/native-connect/inspect", nil)
-		if response.Status != 200 || json.Unmarshal(response.Body, &ready) != nil || !ready.Connected || !ready.OriginalSources || ready.PublicConnectCalls != 1 || !ready.PublicProfileCapability || ready.MeasurementRows != 3 || ready.Proof == nil || ready.Proof.Kind != "routervpn-node-chain-connect-ready-v1" {
+		if response.Status != 200 || json.Unmarshal(response.Body, &ready) != nil || off && ready.KillSwitchPolicy != "off" || !ready.Connected || !ready.OriginalSources || ready.PublicConnectCalls != 1 || !ready.PublicProfileCapability || ready.MeasurementRows != 3 || ready.Proof == nil || ready.Proof.Kind != "routervpn-node-chain-connect-ready-v1" {
 			t.Fatal("typed actual proof/measurement", response.Status, string(response.Body))
 		}
 	}
 	if !negative {
+		if off {
+			windowsOrderedOffStatusAdapter(t, ctx, root)
+		}
 		beforeFifty := observe("stats")
 		receipts, err := desktopOrderedLatencyNativeRoundTrip(ctx, func(callCtx context.Context, method, path string, body []byte) (int, []byte, error) {
 			response, err := client.Request(callCtx, method, path, body, 1<<20)

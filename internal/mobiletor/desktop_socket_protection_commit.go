@@ -32,7 +32,7 @@ func (change DesktopWindowsProtectionCommit) Validate() error {
 			return errors.New("Windows commit lost its distinct captured successor")
 		}
 	case "release", "off":
-		if change.Previous == nil || change.Candidate != nil || change.Action == "release" && change.Previous.Policy != "on-connect" {
+		if change.Previous == nil || change.Candidate != nil || change.Action == "release" && change.Previous.Policy != "on-connect" && change.Previous.Policy != "off" {
 			return errors.New("Windows retirement commit lost its exact authorized target")
 		}
 	default:

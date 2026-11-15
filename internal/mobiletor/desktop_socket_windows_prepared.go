@@ -25,7 +25,7 @@ func ReadDesktopWindowsPreparedProtection(ctx context.Context, capture DesktopSo
 
 func readDesktopWindowsPreparedProtection(ctx context.Context, capture DesktopSocketCapture, policy, baselineSHA256 string, scope []byte) error {
 	decoded, err := hex.DecodeString(baselineSHA256)
-	if !capture.valid() || policy != "on-connect" && policy != "always" || err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != baselineSHA256 {
+	if !capture.valid() || policy != "on-connect" && policy != "always" && policy != "off" || err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != baselineSHA256 {
 		return errors.New("Windows prepared protection requires an exact captured owner and policy")
 	}
 	_, err = readDesktopWindowsProtectionRequest(ctx, scope, &desktopWindowsPreparedCapture{capture, policy, baselineSHA256})

@@ -720,3 +720,159 @@ func TestDesktopSocketWindowsWFPActualProcessDeath(t *testing.T) {
 		t.Fatal("explicit crash recovery did not retire its exact baseline", err)
 	}
 }
+
+func desktopWindowsWFPOffExchange(t *testing.T, ctx context.Context, network, address string, dial func(context.Context, string, string) (net.Conn, error)) {
+	t.Helper()
+	connection, err := dial(ctx, network, address)
+	if err != nil {
+		t.Fatal("Off ordinary host or granted source could not dial", err)
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("off-owned-source-traffic/" + network)
+	if _, err := connection.Write(payload); err != nil {
+		t.Fatal("Off ordinary host or granted source write failed", err)
+	}
+	answer := make([]byte, len(payload))
+	if _, err := io.ReadFull(connection, answer); err != nil || !bytes.Equal(payload, answer) {
+		t.Fatal("Off ordinary host or granted source lost actual bytes", err)
+	}
+}
+
+// Off removes host-wide denial, not the isolated engine's native ownership.
+// The separate executable peer makes both the ordinary-host and isolated-token
+// checks traverse real WFP ALE rules instead of sharing a loopback exemption.
+func TestDesktopSocketWindowsWFPOffOwnedSource(t *testing.T) {
+	peer := desktopWindowsWFPStartPeer(t, "peer")
+	for _, network := range []string{"tcp4", "tcp6", "udp4", "udp6"} {
+		t.Run(network, func(t *testing.T) {
+			p := desktopWindowsWFPTestOwner(t, "off", true)
+			broker := desktopWindowsWFPBroker(t, p)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			ordinary := &net.Dialer{Timeout: time.Second}
+			desktopWindowsWFPOffExchange(t, ctx, network, peer.record.Endpoints[network], ordinary.DialContext)
+			desktopWindowsWFPOffExchange(t, ctx, network, peer.record.Endpoints[network], broker.DialContext)
+			if err := broker.Close(ctx); err != nil {
+				t.Fatal("Off broker did not join source retirement", err)
+			}
+			desktopWindowsWFPOffExchange(t, ctx, network, peer.record.Endpoints[network], ordinary.DialContext)
+		})
+	}
+	for _, network := range []string{"udp4", "udp6"} {
+		t.Run("held-"+network, func(t *testing.T) {
+			p := desktopWindowsWFPTestOwner(t, "off", true)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			remote := netip.MustParseAddrPort(peer.record.Endpoints[network])
+			binding, err := p.Select(ctx, p.capture, "udp", remote)
+			if err != nil {
+				t.Fatal(err)
+			}
+			creation := DesktopSocketCreation{Capture: p.capture, Binding: binding, SocketID: desktopWindowsWFPTestCapture(t).NetworkID, Network: "udp"}
+			created, err := p.CreateSocket(ctx, creation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer created.Native.Close()
+			t.Cleanup(func() {
+				_ = created.Native.Close()
+				cleanup, finish := context.WithTimeout(context.Background(), 5*time.Second)
+				defer finish()
+				for {
+					if err := p.ReleaseSocket(cleanup, creation); err == nil {
+						return
+					}
+					select {
+					case <-cleanup.Done():
+						t.Error("Off source fixture did not join its original endpoint")
+						return
+					case <-time.After(10 * time.Millisecond):
+					}
+				}
+			})
+			packet, err := desktopSocketImportNativePacket(ctx, network, created.Native, binding.LocalAddress, func(_, _ string, raw syscall.RawConn) error { return p.Bind(ctx, p.capture, binding, "udp", raw) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer packet.Close()
+			// No Grant was requested. Ordinary host traffic is already proved,
+			// so a missing deny cannot masquerade as a dead peer or host firewall.
+			if err := packet.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			payload := []byte("ungranted-isolated-source")
+			_, writeErr := packet.WriteTo(payload, net.UDPAddrFromAddrPort(remote))
+			answer := make([]byte, len(payload))
+			_, _, readErr := packet.ReadFrom(answer)
+			if writeErr == nil && readErr == nil && bytes.Equal(payload, answer) {
+				t.Fatal("Off isolated source bypassed its exact socket grant")
+			}
+			raw, err := created.Native.SyscallConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			held, err := desktopWindowsNativeDuplicate(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
+			if err := packet.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.ReleaseSocket(ctx, creation); err == nil {
+				t.Fatal("Off retirement accepted a held native alias")
+			}
+			if err := p.Close(ctx); err == nil {
+				t.Fatal("Off cleanup removed denial before its held alias retired")
+			}
+			reader, err := desktopWFPOpen(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			if err := reader.AssertComplete(p.sublayer, p.baseline); err != nil {
+				t.Fatal("Off held alias lost its scoped deny", err)
+			}
+			options, scope := desktopWindowsWFPTestOptions(t, "off")
+			candidate, err := newDesktopWindowsSocketPolicy(ctx, desktopWindowsWFPTestCapture(t), options, scope)
+			if err == nil {
+				t.Fatal("Off successor bypassed an unretired source")
+			}
+			if candidate != nil {
+				if err := candidate.Close(ctx); err != nil {
+					t.Fatal("refused Off candidate cleanup", err)
+				}
+			}
+			ordinary := &net.Dialer{Timeout: time.Second}
+			desktopWindowsWFPOffExchange(t, ctx, network, remote.String(), ordinary.DialContext)
+			if err := held.Close(); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				err = p.ReleaseSocket(ctx, creation)
+				if err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("Off exact ALE endpoint did not retire", err)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if err := p.Close(ctx); err != nil {
+				t.Fatal("Off source failed joined cleanup", err)
+			}
+			if err := errors.Join(reader.SublayerAbsent(p.sublayer), reader.SublayerAbsent(p.lockKey)); err != nil {
+				t.Fatal("Off cleanup retained owned native objects", err)
+			}
+			replacement := desktopWindowsWFPTestOwner(t, "off", true)
+			if bytes.Equal(replacement.isolatedSID, p.isolatedSID) {
+				t.Fatal("Off replacement reused the former isolated account")
+			}
+			desktopWindowsWFPOffExchange(t, ctx, network, remote.String(), ordinary.DialContext)
+		})
+	}
+}

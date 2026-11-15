@@ -37,10 +37,11 @@ BUILD = load("windows_prefix_complete_bundle", "build-native-runtime.py")
 SOCKS_PARENT = load("windows_retained_socks_parent", "test_desktop_socks_parent.py")
 COMMAND_OWNER = load("windows_socks_command_owner", "test_windows_node_max.py")
 ROOT_TEST = "TestWindowsInstalledSOCKSNodeChain"
-CASES = ("wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source")
+CASES = ("wg-connect", "awg-fast-connect", "awg-strong-connect", "wg-wrong-middle-key", "wg-wrong-middle-public", "wg-final-dns-failure", "wg-final-node-failure", "wg-middle-source", "wg-connect-off")
 REQUIRED = (ROOT_TEST, *(ROOT_TEST + "/" + case for case in CASES))
 PREFIX = "Native Windows typed SOCKS full-path acceptance: "
-OWNED = ("deploy/test_windows_node_max.py", "deploy/windows_build_owner.py",
+OWNED = ("client/Private-RouterVPN-Protection.ps1", "cmd/client/windows_protection_utility_windows.go",
+         "cmd/client/windows_prepared_protection_utility.go", "deploy/test_windows_node_max.py", "deploy/windows_build_owner.py",
          "deploy/test_windows_build_owner.py", "deploy/test_windows_node_max_runner.py","cmd/client/desktop_node_chain_socks_windows_native_test.go",
          "cmd/client/desktop_node_chain_socks_windows_peer_native_test.go",
          "cmd/client/desktop_node_chain_socks_windows_controller_native_test.go",
@@ -175,6 +176,8 @@ def execute_typed(source, bundle, go, env, before, original_prefix_receipt, owne
         installed = work / "installed"
         native = installed / "runtime/native"
         native.mkdir(parents=True)
+        (installed / "client").mkdir()
+        shutil.copyfile(ROOT / "client/Private-RouterVPN-Protection.ps1", installed / "client/Private-RouterVPN-Protection.ps1")
         for name in original["files"]:
             shutil.copyfile(bundle / name, native / name)
         child = native / BUILD.binary_name(target)

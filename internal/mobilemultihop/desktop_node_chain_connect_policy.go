@@ -77,7 +77,7 @@ func deriveDesktopNodeChainCONNECTPolicy(original *NodeChainCONNECTSource, input
 		lan = lan && device.HomeLANAccess
 	}
 	capture, kill, lan, err := captureDesktopNodeChainGraphWithCONNECT(config, projectedConfig, originalMeta.Proofs, originalMeta.DNS, originalMeta.Physical, finalCapture, kill, ipv6, lan, original)
-	if err != nil || (kill != "always" && kill != "on-connect" && !(kill == "off" && inputs.targetOS == "linux")) {
+	if err != nil || (kill != "always" && kill != "on-connect" && !(kill == "off" && (inputs.targetOS == "linux" || inputs.targetOS == "windows"))) {
 		return bad()
 	}
 	var originalGraph, graph map[string]any

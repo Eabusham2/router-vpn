@@ -18,5 +18,16 @@ class DuplicateObservationInventory(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     GATE.require_duplicate_observations(output)
 
+class OffObservationInventory(unittest.TestCase):
+    def test_exact_host_source_and_held_alias_leaves_required(self):
+        names = (GATE.OFF_OBSERVATION_ROOT, *(GATE.OFF_OBSERVATION_ROOT + "/" + leaf for leaf in GATE.OFF_OBSERVATION_LEAVES))
+        rows = ["--- PASS: " + name + " (0.01s)\n" for name in names]
+        GATE.require_off_observations("".join(rows))
+        self.assertIn(GATE.OFF_OBSERVATION_ROOT, GATE.REQUIRED)
+        for i in range(len(rows)):
+            for output in ("".join(rows[:i] + rows[i+1:]), "".join(rows + [rows[i]]), "".join(rows).replace(rows[i], "expected: " + rows[i])):
+                with self.assertRaises(ValueError):
+                    GATE.require_off_observations(output)
+
 if __name__ == "__main__":
     unittest.main()

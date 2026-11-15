@@ -21,17 +21,27 @@ try {
   $off='{"schema":1,"active":false,"policy":"off","phase":"off"}'
   $always='{"schema":1,"active":true,"policy":"always","phase":"retained"}'
   foreach($valid in @($off,$always,
+    '{"schema":1,"active":true,"policy":"off","phase":"owned"}',
+    '{"schema":1,"active":true,"policy":"off","phase":"retained"}',
+    '{"schema":1,"active":true,"policy":"off","phase":"transition"}',
     '{"schema":1,"active":true,"policy":"on-connect","phase":"owned"}',
     '{"schema":1,"active":true,"policy":"always","phase":"transition"}',
     '{"schema":1,"active":true,"policy":"","phase":"preparing"}')) {
     $value=ConvertFrom-RouterVPNOwnedProtectionStatus $valid
     Check ($value.schema -eq 1) 'Valid native protection status was rejected.'
   }
+  foreach($phase in @('owned','retained','transition')) {
+    $scoped='{"schema":1,"active":true,"policy":"off","phase":"'+$phase+'"}'
+    $value=ConvertFrom-RouterVPNOwnedProtectionStatus $scoped
+    Check ($value.active -and $value.policy -ceq 'off' -and $value.phase -ceq $phase) 'Off lost its active isolated-source ownership.'
+    Reject { ConvertFrom-RouterVPNOwnedProtectionStatus ($scoped.Replace('true','false')) } 'Off inactive record claimed managed source ownership.'
+    Reject { ConvertFrom-RouterVPNOwnedProtectionStatus ($scoped.Replace($phase,'off')) } 'Off owned source was confused with native absence.'
+  }
   foreach($invalid in @('', 'null','[]',($off+"`n"),(' '+$off),$off.Replace('1','2'),$off.Replace('false','"false"'),
     $off.Replace('"schema":1','"schema":1.0'),$off.Replace('"active":false','"active":false,"active":true'),
     $off.Replace('"policy":"off"','"unknown":0,"policy":"off"'),$off.Replace('false','true'),
     $off.Replace('"off","phase"','"always","phase"'),$always.Replace('true','false'),
-    $always.Replace('"always"','"off"'),$always.Replace('retained','preparing'),$always.Replace('retained','connected'),
+    $always.Replace('"always"','""'),$always.Replace('retained','preparing'),$always.Replace('retained','connected'),
     $off.Replace('"active":false,',''),('x'*4097))) {
     Reject { ConvertFrom-RouterVPNOwnedProtectionStatus $invalid } 'Malformed or misleading native status was accepted.'
   }

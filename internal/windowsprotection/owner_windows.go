@@ -54,7 +54,7 @@ type PreparedOwner struct {
 // from native Windows authorities. No environment variable, caller-selected
 // pathname, parsed record or supplied PID chooses this owner.
 func CreatePreparedOwner(ctx context.Context, capture Capture, policy string) (*PreparedOwner, error) {
-	if ctx == nil || ctx.Err() != nil || capture.Validate() != nil || policy != "on-connect" && policy != "always" {
+	if ctx == nil || ctx.Err() != nil || capture.Validate() != nil || policy != "on-connect" && policy != "always" && policy != "off" {
 		return nil, errors.New("protection preparation requires its live exact capture and strict policy")
 	}
 	paths, err := windowscontroller.MachineDirectories()
@@ -67,7 +67,7 @@ func CreatePreparedOwner(ctx context.Context, capture Capture, policy string) (*
 // The private machine-directory parameter is the native fixture boundary.
 // Production calls it only with MachineDirectories' authoritative ProgramData.
 func createPreparedOwner(ctx context.Context, machineDirectory string, capture Capture, policy string) (_ *PreparedOwner, failure error) {
-	if ctx == nil || ctx.Err() != nil || capture.Validate() != nil || policy != "on-connect" && policy != "always" {
+	if ctx == nil || ctx.Err() != nil || capture.Validate() != nil || policy != "on-connect" && policy != "always" && policy != "off" {
 		return nil, errors.New("protection preparation requires its live exact capture and strict policy")
 	}
 	api, err := protectionNative()

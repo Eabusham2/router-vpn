@@ -17,7 +17,7 @@ type DesktopWindowsProtectionTarget struct {
 }
 
 func (t DesktopWindowsProtectionTarget) Validate() error {
-	if !t.Capture.valid() || t.Policy != "on-connect" && t.Policy != "always" || !desktopSocketHex(t.BaselineSHA256, 64) {
+	if !t.Capture.valid() || t.Policy != "on-connect" && t.Policy != "always" && t.Policy != "off" || !desktopSocketHex(t.BaselineSHA256, 64) {
 		return errors.New("Windows protection target requires its complete captured identity")
 	}
 	return nil

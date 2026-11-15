@@ -92,7 +92,7 @@ func TestDesktopWindowsProtectionObservationCapturedOutcomes(t *testing.T) {
 func TestDesktopWindowsProtectionObservationRejectsInvalidRequest(t *testing.T) {
 	target := desktopProtectionObservationTarget()
 	invalid := target
-	invalid.Policy = "off"
+	invalid.Policy = "invalid"
 	callback := func(context.Context, int) error { return nil }
 	open := func() (desktopWindowsProtectionObservationNative, error) {
 		t.Fatal("invalid request opened a native owner")

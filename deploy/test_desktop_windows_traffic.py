@@ -33,6 +33,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsNativeRejectsChangedCreationAndBoundSources",
     "TestDesktopSocketWindowsNativeUDPRetainsBoundDescriptor",
     "TestDesktopSocketWindowsNativeDuplicateFailureObservation",
+    "TestDesktopSocketWindowsWFPOffOwnedSource",
 )
 NATIVE_UDP_FAILURE_CASES = ("source_validation", "captured_bind_control", "socket_bind")
 
@@ -49,16 +50,43 @@ def require_duplicate_observations(output):
             raise ValueError("WFP traffic omitted or duplicated an original duplicate failure observation: " + name)
 
 
+OFF_OBSERVATION_ROOT = "TestDesktopSocketWindowsWFPOffOwnedSource"
+OFF_OBSERVATION_LEAVES = ("tcp4", "tcp6", "udp4", "udp6", "held-udp4", "held-udp6")
+
+
+def require_off_observations(output):
+    for name in (OFF_OBSERVATION_ROOT, *(OFF_OBSERVATION_ROOT + "/" + leaf for leaf in OFF_OBSERVATION_LEAVES)):
+        pattern = r"(?m)^\s*--- PASS: " + re.escape(name) + r" \([^\r\n]*\)\r?$"
+        if len(re.findall(pattern, output)) != 1:
+            raise ValueError("WFP Off omitted or duplicated an actual host/source/alias proof: " + name)
+
+
 def mutants(target):
     policy = (target / "desktop_socket_windows_policy.go").read_text(encoding="utf-8")
     network = (target / "desktop_socket_windows_network.go").read_text(encoding="utf-8")
     imported = (target / "desktop_socket_native_windows.go").read_text(encoding="utf-8")
+    identity = (target / "desktop_socket_windows_identity.go").read_text(encoding="utf-8")
     return (
         ("ordinary-socket-bypass", "desktop_socket_windows_policy.go", REQUIRED[4],
          "ordinary process socket bypassed the captured WFP baseline",
          IDENTITY.replace_once(policy,
                                'p.pair("deny", family, 1, false, true)',
                                'p.pair("deny", family, 1, true, true)')),
+        ("off-host-scope", "desktop_socket_windows_policy.go", REQUIRED[10],
+         "Off ordinary host or granted source",
+         IDENTITY.replace_once(policy,
+                               'p.pair("owned-source-deny", family, 1, false, true, p.user)',
+                               'p.pair("owned-source-deny", family, 1, false, true)')),
+        ("off-isolated-deny", "desktop_socket_windows_policy.go", REQUIRED[10],
+         "Off isolated source bypassed its exact socket grant",
+         IDENTITY.replace_once(policy,
+                               'p.pair("owned-source-deny", family, 1, false, true, p.user)',
+                               'p.pair("owned-source-deny", family, 1, true, true, p.user)')),
+        ("off-held-alias-retirement", "desktop_socket_windows_identity.go", REQUIRED[10],
+         "Off retirement accepted a held native alias",
+         IDENTITY.replace_once(identity,
+                               'if _, _, err := p.api.endpointProperties(p.engine, endpoint); !errors.Is(err, desktopWindowsEndpointNotFound) {',
+                               'if _, _, err := p.api.endpointProperties(p.engine, endpoint); false {')),
         ("different-adapter-lease", "desktop_socket_windows_network.go", REQUIRED[0],
          "selected physical adapter lease:",
          IDENTITY.replace_once(network,
@@ -109,6 +137,7 @@ def execute(source=ROOT, go="go", *, env=None):
         for network in ("tcp4", "tcp6", "udp4", "udp6"):
             if "--- PASS: " + REQUIRED[4] + "/" + network + " (" not in output:
                 raise ValueError("WFP traffic omitted a required actual address/transport family: " + network)
+        require_off_observations(output)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("WFP traffic binary changed during execution")
         for label, filename, test, witness, replacement in candidates:

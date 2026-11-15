@@ -41,6 +41,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPPreparedCapture",
     "TestDesktopSocketWindowsWFPPreparedRejectsAdditionalPermit",
     "TestDesktopSocketWindowsWFPHandoffRetainsDenyUntilRelease",
+    "TestDesktopSocketWindowsWFPOffBaselineAndSuccession",
 )
 
 
@@ -53,6 +54,16 @@ def mutants(target):
     worker = (target / "desktop_socket_windows_probe_worker_test.go").read_text(encoding="utf-8")
     fixture = (target / "desktop_socket_windows_probe_process_test.go").read_text(encoding="utf-8")
     return (
+        ("off-record-scope", "desktop_socket_windows_baseline.go", REQUIRED[20],
+         "Off record accepted missing or foreign account scope",
+         IDENTITY.replace_once(baseline,
+                               'if !desktopWindowsIsolatedAccountSID(record.IsolatedSID) {',
+                               'if false {')),
+        ("off-protected-mode", "desktop_socket_windows_baseline.go", REQUIRED[20],
+         "Off record accepted missing or foreign account scope",
+         IDENTITY.replace_once(baseline,
+                               '} else if len(record.IsolatedSID) != 0 {',
+                               '} else if false {')),
         ("extra-filter", "desktop_socket_windows_wfp.go", REQUIRED[4],
          "full WFP readback accepted an extra broader permit",
          IDENTITY.replace_once(wfp,
