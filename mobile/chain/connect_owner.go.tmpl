@@ -353,7 +353,11 @@ func (o *Outbound) DialContext(ctx context.Context, network string, destination 
 	if err != nil {
 		return nil, err
 	}
-	return &ownedConn{Conn: conn, operation: op}, nil
+	original := &ownedConn{Conn: conn, operation: op}
+	op.mu.Lock()
+	op.connection = original
+	op.mu.Unlock()
+	return original, nil
 }
 
 func (o *Outbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {

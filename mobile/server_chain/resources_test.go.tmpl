@@ -59,6 +59,36 @@ func TestServerChainNativeCloseDeadlineRetainsOriginalAttempt(t *testing.T) {
 	}
 }
 func TestServerChainNativeCloseErrorRetriesSameObject(t *testing.T) {
+	// The protocol suite supplies the actual sealed original-owner callback.
+	// This ledger control isolates when that callback may be consumed.
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	failure := errors.New("original trial close failure")
+	originalReceipt := &serverChainRetirementConn{Conn: left, failure: failure}
+	ledger := &routerVPNServerChain{}
+	receipt := ledger.trackClose(originalReceipt)
+	var acknowledgements atomic.Int32
+	receipt.retire = func(ctx context.Context, actual net.Conn, err error) error {
+		acknowledgements.Add(1)
+		if actual != originalReceipt || err != failure {
+			return errors.New("foreign retirement")
+		}
+		return ctx.Err()
+	}
+	if receipt.CloseContext(t.Context()) != failure || acknowledgements.Load() != 0 {
+		t.Fatal("trial Close consumed final retirement authority")
+	}
+	if err := ledger.drainConnections(t.Context()); err != nil || acknowledgements.Load() != 1 {
+		t.Fatal("final drain did not consume original joined receipt", err)
+	}
+	ledger.connectionsMu.Lock()
+	remaining := len(ledger.connections)
+	ledger.connectionsMu.Unlock()
+	if remaining != 0 {
+		t.Fatal("acknowledged original remained in ledger")
+	}
+
 	owned, retire := context.WithCancel(t.Context())
 	defer retire()
 	n := &routerVPNServerChain{ctx: owned, cancel: retire}
@@ -117,3 +147,10 @@ func TestServerChainNativeUnreturnedTCPAndPacketRemainOwned(t *testing.T) {
 		t.Fatal("retired original packet socket remained writable")
 	}
 }
+
+type serverChainRetirementConn struct {
+	net.Conn
+	failure error
+}
+
+func (c *serverChainRetirementConn) Close() error { return c.failure }

@@ -103,7 +103,9 @@ func (o *Outbound) CloseContext(ctx context.Context) error {
 		if err := joinContext(ctx, op.drained); err != nil {
 			return errors.Join(failure, err)
 		}
-		failure = errors.Join(failure, op.closeErr)
+		if !op.retirementAcknowledged.Load() {
+			failure = errors.Join(failure, op.closeErr)
+		}
 	}
 	return failure
 }
@@ -119,19 +121,21 @@ type closeState struct {
 }
 
 type operation struct {
-	budget               atomic.Pointer[closeState]
-	mu                   sync.Mutex
-	owner                *Outbound
-	ctx                  context.Context
-	cancel               context.CancelFunc
-	tcp                  *originalConn
-	transport            *transportConn
-	result               net.Conn
-	tcpAsked, retired    bool
-	deadline             time.Time
-	constructed, drained chan struct{}
-	closeOnce            sync.Once
-	closeErr             error
+	connection             *ownedConn
+	retirementAcknowledged atomic.Bool
+	budget                 atomic.Pointer[closeState]
+	mu                     sync.Mutex
+	owner                  *Outbound
+	ctx                    context.Context
+	cancel                 context.CancelFunc
+	tcp                    *originalConn
+	transport              *transportConn
+	result                 net.Conn
+	tcpAsked, retired      bool
+	deadline               time.Time
+	constructed, drained   chan struct{}
+	closeOnce              sync.Once
+	closeErr               error
 }
 
 func (s *operation) reserveDeadline(attempted time.Time) time.Time {

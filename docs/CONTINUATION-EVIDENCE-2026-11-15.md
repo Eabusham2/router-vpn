@@ -3786,3 +3786,49 @@ shipping source or widen any deadline. Frozen one-file manifest SHA256:
 `254379577f352624e5ed93b8210ff71cfc19c288e1219c586865ece70c685cac`.
 This repair changes the source contract test; native encrypted networking and
 exact-current release publication remain independently required.
+
+## Joined CONNECT Server retirement after an authenticated trial failure
+
+The current `ef940ff7` ARM64 server job `132990838792` still failed HTTP
+wrong-final-key Stop at `close-connections`, with neither caller timeout nor
+cancellation. Original HTTP and wrong-middle-key cases passed first. A real
+SS2022 TCP reproduction showed the final's authentication refusal and retained
+half-close error even after the original TCP close, manager removal and all
+operation joins had completed. Trial failure and resource retirement needed
+separate receipts.
+
+The original captured Server connection now supplies a sealed cleanup callback
+to the worker's final drain. Ordinary connection Close still returns its
+original error and invalidates the trial. Final retirement may acknowledge
+only that same operation's retained error after all original raw, native,
+forced, graceful and transport joins complete, with successful actual native
+closure. Foreign owners, replaced wrapper payloads, incomplete joins and mixed
+unrelated errors remain refused. The acknowledged operation's original error
+is immutable; only the already-joined outbound retirement stops re-reporting
+it as an outstanding resource. Packet cleanup and existing deadlines remain
+unchanged.
+
+The final Shadowsocks stream's opaque `StreamGuard` exposes no raw connection
+or `Upstream` bypass. A cleanup-only attestation accepts the caller's already
+known original raw pointer and seals guard, raw, cipher and completion identity.
+It becomes valid after original Close releases both I/O locks and joins the
+cipher. CONNECT searches only its bounded retained operations and checks the
+complete original outer path, including the transparent UoT wrapper. An actual
+additional cipher-close failure still prevents retirement acknowledgement.
+
+The final current-source race checks pass 18 stream-lifecycle records, 16
+CONNECT close records and eight worker/diagnostic records. Matching and wrong
+SS2022 keys use real encrypted TCP, the original DefaultDialer and connection
+manager, and the actual opaque stream guard. Four targeted omissions reject
+lost acknowledgement, ignored native-close failure, acceptance of mixed errors
+and bypassed final worker drain. Copied-owner controls copy identity fields
+without copying mutexes. The protocol fixture's private capture frame is
+explicitly modeled; it is not full HTTP/HTTPS, kernel or remote deployment
+acceptance. Earlier incomplete local overlay attempts are retained separately
+and are not passing evidence.
+
+Frozen eight-file source manifest SHA256:
+`d9588cf4b3dd30297127d177448bdeb4f2b0748b62c5b4346bb6c5c2af3814aa`.
+The production relay materializer already copies the complete authenticated
+stream source and includes it in its digest. Exact-current native encrypted
+server acceptance and release publication remain mandatory.

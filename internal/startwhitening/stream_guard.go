@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,17 +78,21 @@ func DialAuthenticatedStream(ctx context.Context, raw net.Conn, handshake func(n
 // It intentionally does not expose Upstream/ReaderReplaceable fast paths that
 // would let native copy routines bypass the lifecycle locks.
 type StreamGuard struct {
-	raw      net.Conn
-	cipher   net.Conn
-	readMu   sync.Mutex
-	writeMu  sync.Mutex
-	closed   atomic.Bool
-	once     sync.Once
-	closeErr error
+	self      *StreamGuard
+	closeDone chan struct{}
+	raw       net.Conn
+	cipher    net.Conn
+	readMu    sync.Mutex
+	writeMu   sync.Mutex
+	closed    atomic.Bool
+	once      sync.Once
+	closeErr  error
 }
 
 func GuardAuthenticatedStream(raw, cipher net.Conn) *StreamGuard {
-	return &StreamGuard{raw: raw, cipher: cipher}
+	guard := &StreamGuard{raw: raw, cipher: cipher, closeDone: make(chan struct{})}
+	guard.self = guard
+	return guard
 }
 func (c *StreamGuard) Read(p []byte) (int, error) {
 	c.readMu.Lock()
@@ -116,6 +121,7 @@ func (c *StreamGuard) NeedHandshake() bool {
 }
 func (c *StreamGuard) Close() error {
 	c.once.Do(func() {
+		defer close(c.closeDone)
 		c.closed.Store(true)
 		interrupt := c.raw.Close()
 		c.readMu.Lock()
@@ -133,3 +139,25 @@ func (c *StreamGuard) SetReadDeadline(t time.Time) error  { return c.raw.SetRead
 func (c *StreamGuard) SetWriteDeadline(t time.Time) error { return c.raw.SetWriteDeadline(t) }
 
 var _ net.Conn = (*StreamGuard)(nil)
+
+// CaptureJoinedRetirement reveals no transport or cipher. An owner that already
+// holds the exact raw connection may capture this cleanup-only acknowledgement
+// while live. It becomes usable only after Close joins the original raw close,
+// both I/O directions and the original cipher close. Close still returns errors.
+func (c *StreamGuard) CaptureJoinedRetirement(knownRaw net.Conn) func(context.Context) error {
+	if c == nil || c.self != c || knownRaw == nil || reflect.ValueOf(knownRaw).Kind() != reflect.Pointer || c.raw != knownRaw || c.cipher == nil || reflect.ValueOf(c.cipher).Kind() != reflect.Pointer || c.closeDone == nil || c.closed.Load() {
+		return nil
+	}
+	raw, cipher, done := c.raw, c.cipher, c.closeDone
+	return func(ctx context.Context) error {
+		if ctx == nil || ctx.Err() != nil || c.self != c || c.raw != raw || c.cipher != cipher || c.closeDone != done {
+			return errors.New("authenticated retirement lost its original stream")
+		}
+		select {
+		case <-done:
+		default:
+			return errors.New("authenticated original stream has not joined")
+		}
+		return ctx.Err()
+	}
+}

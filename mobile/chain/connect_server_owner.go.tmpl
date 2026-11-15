@@ -14,6 +14,7 @@ import (
 	"github.com/sagernet/sing-box/common/dialer"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
 	"github.com/sagernet/sing-box/option"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -207,4 +208,171 @@ func (c *Capture) constructServerLower(ctx context.Context) (*serverLiteralDiale
 		return nil, err
 	}
 	return &serverLiteralDialer{owner: c, original: original, remote: c.options.ServerOptions.Build()}, nil
+}
+
+// ServerConnectionRetirement captures cleanup authority while the actual
+// connection is live. It is not a replacement Close: trial callers retain the
+// exact protocol failure. Only the worker's final drain may acknowledge it.
+func (c *Capture) ServerConnectionRetirement(original net.Conn) func(context.Context, net.Conn, error) error {
+	if c == nil || c.validate() != nil || c.server == nil {
+		return nil
+	}
+	return c.serverConnectionRetirement(original)
+}
+func serverConnectionPath(original net.Conn) ([]net.Conn, *ownedConn, *startwhitening.StreamGuard) {
+	var path []net.Conn
+	current := original
+	for i := 0; i < 16; i++ {
+		if current == nil {
+			return nil, nil, nil
+		}
+		value := reflect.ValueOf(current)
+		if value.Kind() != reflect.Pointer || value.IsNil() {
+			return nil, nil, nil
+		}
+		for _, prior := range path {
+			if prior == current {
+				return nil, nil, nil
+			}
+		}
+		path = append(path, current)
+		if owned, ok := current.(*ownedConn); ok {
+			return path, owned, nil
+		}
+		if guard, ok := current.(*startwhitening.StreamGuard); ok {
+			return path, nil, guard
+		}
+		upstream, ok := current.(interface{ Upstream() any })
+		if !ok {
+			return nil, nil, nil
+		}
+		current, ok = upstream.Upstream().(net.Conn)
+		if !ok {
+			return nil, nil, nil
+		}
+	}
+	return nil, nil, nil
+}
+
+// Error membership is by original object, never errno/message matching. Only
+// multi-error containers are flattened; a newly fabricated error is foreign.
+func serverRetirementErrors(original, actual error, depth int) bool {
+	if original == nil || actual == nil || depth > 16 {
+		return false
+	}
+	if reflect.TypeOf(original).Comparable() && reflect.TypeOf(actual).Comparable() && original == actual {
+		return true
+	}
+	if many, ok := actual.(interface{ Unwrap() []error }); ok {
+		all := many.Unwrap()
+		if len(all) == 0 {
+			return false
+		}
+		for _, part := range all {
+			if !serverRetirementErrors(original, part, depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	if many, ok := original.(interface{ Unwrap() []error }); ok {
+		for _, part := range many.Unwrap() {
+			if serverRetirementErrors(part, actual, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+func (c *Capture) serverConnectionRetirement(original net.Conn) func(context.Context, net.Conn, error) error {
+	path, connection, guard := serverConnectionPath(original)
+	var joinedGuard func(context.Context) error
+	if c != nil && c.self == c && c.middle != nil && c.middle.self == c.middle && guard != nil {
+		c.middle.mu.Lock()
+		if len(c.middle.operations) <= operationLimit {
+			for candidate := range c.middle.operations {
+				candidate.mu.Lock()
+				known := candidate.connection
+				candidate.mu.Unlock()
+				if known == nil {
+					continue
+				}
+				if joined := guard.CaptureJoinedRetirement(known); joined != nil {
+					if connection != nil {
+						c.middle.mu.Unlock()
+						return nil
+					}
+					connection, joinedGuard = known, joined
+				}
+			}
+		}
+		c.middle.mu.Unlock()
+	}
+	if c == nil || c.self != c || c.server == nil || c.server.self != c.server || connection == nil {
+		return nil
+	}
+	op := connection.operation
+	if op == nil || op.owner == nil {
+		return nil
+	}
+	owner, server := op.owner, c.server
+	policy, source, lower := server.policy, server.capture.Clone(), server.lower.Load()
+	final, finalManager := c.final, c.finalManager
+	owner.mu.Lock()
+	op.mu.Lock()
+	valid := owner.self == owner && owner.capture == c && c.middle == owner && !owner.closed && !op.retired && op.connection == connection
+	_, present := owner.operations[op]
+	originalRaw, originalTransport, originalResult := op.tcp, op.transport, op.result
+	originalPayload := connection.Conn
+	var rawPayload, transportPayload net.Conn
+	if originalRaw != nil {
+		rawPayload = originalRaw.Conn
+	}
+	if originalTransport != nil {
+		transportPayload = originalTransport.Conn
+	}
+	op.mu.Unlock()
+	owner.mu.Unlock()
+	if !valid || !present {
+		return nil
+	}
+	return func(ctx context.Context, actual net.Conn, failure error) error {
+		if ctx == nil || ctx.Err() != nil || actual != original || c.self != c || c.server != server || server.self != server || c.middle != owner || owner.self != owner || owner.capture != c || server.policy != policy || !reflect.DeepEqual(server.capture, source) || server.lower.Load() != lower || c.final != final || c.finalManager != finalManager {
+			return errCapture
+		}
+		current, owned, actualGuard := serverConnectionPath(actual)
+		if actualGuard != guard || (guard == nil && owned != connection) || (guard != nil && (joinedGuard == nil || joinedGuard(ctx) != nil)) || len(current) != len(path) {
+			return errCapture
+		}
+		for i := range path {
+			if current[i] != path[i] {
+				return errCapture
+			}
+		}
+		if err := adapter.RouterVPNLockContext(ctx, &owner.mu); err != nil {
+			return err
+		}
+		defer owner.mu.Unlock()
+		op.mu.Lock()
+		valid := op.connection == connection && connection.operation == op && op.owner == owner && op.retired
+		raw, transport := op.tcp, op.transport
+		valid = valid && raw == originalRaw && transport == originalTransport && op.result == originalResult && connection.Conn == originalPayload
+		op.mu.Unlock()
+		if !valid || !completed(op.constructed) || !completed(op.drained) || raw == nil || raw.operation != op || !completed(raw.done) || !completed(raw.nativeDone) || !completed(raw.forceDone) || !completed(raw.gracefulDone) || raw.nativeErr != nil || raw.forceErr != nil || raw.deadlineErr != nil {
+			return errCapture
+		}
+		if raw.Conn != rawPayload || (transport != nil && transport.Conn != transportPayload) {
+			return errCapture
+		}
+		if transport != nil && (transport.operation != op || !completed(transport.done)) {
+			return errCapture
+		}
+		if !serverRetirementErrors(op.closeErr, failure, 0) {
+			return errCapture
+		}
+		// This acknowledges only joined retirement. op.closeErr stays immutable and
+		// remains observable through every original connection Close/retry.
+		op.retirementAcknowledged.Store(true)
+		return nil
+	}
 }

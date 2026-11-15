@@ -23,6 +23,7 @@ type routerVPNServerChainClose struct {
 	mu       sync.Mutex
 	current  *routerVPNServerChainCloseAttempt
 	closed   bool
+	retire   func(context.Context, net.Conn, error) error
 }
 
 func (c *routerVPNServerChainClose) CloseContext(ctx context.Context) error {
@@ -107,7 +108,11 @@ func (n *routerVPNServerChain) trackConnection(original net.Conn) *routerVPNServ
 	if original == nil {
 		return nil
 	}
-	return &routerVPNServerChainConn{original, n.trackClose(original)}
+	owner := n.trackClose(original)
+	if n.connect != nil {
+		owner.retire = n.connect.ServerConnectionRetirement(original)
+	}
+	return &routerVPNServerChainConn{original, owner}
 }
 func (n *routerVPNServerChain) trackPacketConnection(original net.PacketConn) *routerVPNServerChainPacketConn {
 	if original == nil {
@@ -126,7 +131,7 @@ func (n *routerVPNServerChain) drainConnections(ctx context.Context) error {
 	}
 	n.connectionsMu.Unlock()
 	for _, owner := range owners {
-		if err := owner.CloseContext(ctx); err != nil {
+		if err := owner.retireContext(ctx); err != nil {
 			return err
 		}
 	}
@@ -135,6 +140,35 @@ func (n *routerVPNServerChain) drainConnections(ctx context.Context) error {
 	n.connectionsMu.Unlock()
 	if remaining != 0 {
 		return errServerChainFront
+	}
+	return nil
+}
+
+// Only the final worker drain uses this path, after front/proof workers joined.
+// A trial Close above still returns its error and invalidates the trial.
+func (c *routerVPNServerChainClose) retireContext(ctx context.Context) error {
+	failure := c.CloseContext(ctx)
+	if failure == nil {
+		return nil
+	}
+	c.mu.Lock()
+	if c.current != nil || c.closed || c.retire == nil {
+		c.mu.Unlock()
+		return failure
+	}
+	original, ok := c.original.(net.Conn)
+	if !ok {
+		c.mu.Unlock()
+		return failure
+	}
+	if err := c.retire(ctx, original, failure); err != nil {
+		c.mu.Unlock()
+		return errors.Join(failure, err)
+	}
+	c.closed = true
+	c.mu.Unlock()
+	if c.release != nil {
+		c.release(c)
 	}
 	return nil
 }

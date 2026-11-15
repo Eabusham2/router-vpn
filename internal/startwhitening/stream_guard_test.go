@@ -463,3 +463,56 @@ func TestStreamDialUnsupportedDeadlineStillExpiresAndJoinsCipherConstruction(t *
 		})
 	}
 }
+
+func TestStreamRetirementRequiresOriginalJoinedClose(t *testing.T) {
+	raw, peer := net.Pipe()
+	defer peer.Close()
+	cipher := &streamDelayedClose{Conn: raw, entered: make(chan struct{}), release: make(chan struct{})}
+	guard := GuardAuthenticatedStream(raw, cipher)
+	attest := guard.CaptureJoinedRetirement(raw)
+	if attest == nil {
+		t.Fatal("original live stream did not capture retirement")
+	}
+	if guard.CaptureJoinedRetirement(peer) != nil {
+		t.Fatal("foreign raw acquired retirement")
+	}
+	// Copy the identity fields without copying live synchronization primitives.
+	copied := &StreamGuard{self: guard.self, closeDone: guard.closeDone, raw: guard.raw, cipher: guard.cipher}
+	if copied.CaptureJoinedRetirement(raw) != nil {
+		t.Fatal("copied stream acquired retirement")
+	}
+	if err := attest(t.Context()); err == nil {
+		t.Fatal("unfinished stream claimed joined retirement")
+	}
+	done := make(chan error, 1)
+	go func() { done <- guard.Close() }()
+	<-cipher.entered
+	if err := attest(t.Context()); err == nil {
+		t.Fatal("held original cipher claimed joined retirement")
+	}
+	close(cipher.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := attest(t.Context()); err != nil {
+		t.Fatal("joined original stream failed retirement", err)
+	}
+	guard.cipher = raw
+	if err := attest(t.Context()); err == nil {
+		t.Fatal("replaced cipher claimed joined retirement")
+	}
+	guard.cipher = cipher
+	guard.raw = peer
+	if err := attest(t.Context()); err == nil {
+		t.Fatal("replaced raw claimed joined retirement")
+	}
+	guard.raw = raw
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := attest(cancelled); err == nil {
+		t.Fatal("cancelled caller acquired retirement")
+	}
+	if _, ok := any(guard).(interface{ Upstream() any }); ok {
+		t.Fatal("retirement exposed raw I/O bypass")
+	}
+}

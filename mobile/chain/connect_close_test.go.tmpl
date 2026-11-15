@@ -1,8 +1,19 @@
 package routervpnnodeconnect
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"github.com/sagernet/sing-box/option"
+	SS "github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/uot"
+	"github.com/sagernet/sing/service"
 	"io"
 	"net"
 	"sync"
@@ -477,5 +488,224 @@ func TestCONNECTServerTrackedHalfCloseFailureRetainsReceipt(t *testing.T) {
 	owner.mu.Unlock()
 	if retained != 1 {
 		t.Fatal("failed tracked CONNECT operation lost its retained owner")
+	}
+}
+
+// Transparent wrapper used only to exercise captured-path replacement refusals.
+type connectRetirementWrapper struct{ net.Conn }
+type connectRetirementCipherFailure struct {
+	net.Conn
+	failure error
+}
+
+func (c *connectRetirementCipherFailure) Close() error { return errors.Join(c.Conn.Close(), c.failure) }
+
+func (c *connectRetirementWrapper) Upstream() any { return c.Conn }
+
+type wrongFinalActualHandler struct{ accepted atomic.Int32 }
+
+func (h *wrongFinalActualHandler) NewConnection(_ context.Context, c net.Conn, m M.Metadata) error {
+	h.accepted.Add(1)
+	var b [4]byte
+	if _, e := io.ReadFull(c, b[:]); e != nil {
+		return e
+	}
+	if string(b[:]) != "ping" {
+		return errors.New("unexpected authenticated payload")
+	}
+	_, e := c.Write([]byte("pong"))
+	return e
+}
+func (*wrongFinalActualHandler) NewPacketConnection(context.Context, N.PacketConn, M.Metadata) error {
+	return errors.New("unexpected UDP")
+}
+func (*wrongFinalActualHandler) NewError(context.Context, error) {}
+func TestCONNECTServerEncryptedRetirementKeepsTrialFailure(t *testing.T) {
+	for _, wrong := range []bool{false, true} {
+		name := "correct-key"
+		if wrong {
+			name = "wrong-key"
+		}
+		t.Run(name, func(t *testing.T) {
+			listener, e := net.Listen("tcp4", "127.0.0.1:0")
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer listener.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			handler := new(wrongFinalActualHandler)
+			password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{73}, 32))
+			server, e := SS.NewServiceWithPassword("2022-blake3-aes-256-gcm", password, 10, handler, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			joined := make(chan error, 1)
+			go func() {
+				c, e := listener.Accept()
+				if e != nil {
+					joined <- e
+					return
+				}
+				_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+				// Exactly the native reference final's lifetime: return the original
+				// NewConnection error, close its actual accepted TCP, then acknowledge join.
+				e = server.NewConnection(ctx, c, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})
+				closeErr := c.Close()
+				joined <- errors.Join(e, closeErr)
+			}()
+			manager := route.NewConnectionManager(log.NewNOPFactory().Logger())
+			lowerCtx := service.ContextWith[adapter.ConnectionManager](ctx, manager)
+			lower, e := dialer.New(lowerCtx, option.DialerOptions{}, false)
+			if e != nil {
+				t.Fatal(e)
+			}
+			tracked, e := lower.DialContext(ctx, "tcp", M.ParseSocksaddr(listener.Addr().String()))
+			if e != nil {
+				t.Fatal(e)
+			}
+			retained, e := captureServerTCP(tracked)
+			if e != nil {
+				t.Fatal(e)
+			}
+			owner := &Outbound{operations: make(map[*operation]struct{})}
+			op := connectCloseOperation(owner, retained)
+			// The actual encrypted transport is op.tcp; construct the same private
+			// operation/capture ownership frame as the native factory. This test
+			// does not claim Box, source compilation or HTTP proxy admission.
+			capture := &Capture{server: &serverCapture{}}
+			capture.self = capture
+			capture.server.self = capture.server
+			capture.middle = owner
+			owner.capture = capture
+			original := &ownedConn{Conn: op.tcp, operation: op}
+			op.connection = original
+
+			t.Cleanup(func() { _ = tracked.Close() })
+			if wrong {
+				password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{74}, 32))
+			}
+			client, e := SS.NewWithPassword("2022-blake3-aes-256-gcm", password, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			encrypted, e := client.DialConn(op.tcp, M.ParseSocksaddr("10.77.0.1:8787"))
+			if e != nil {
+				t.Fatal(e)
+			}
+
+			guard := startwhitening.GuardAuthenticatedStream(original, encrypted)
+			wrapper := &connectRetirementWrapper{Conn: guard}
+			retire := capture.serverConnectionRetirement(wrapper)
+			if retire == nil {
+				t.Fatal("opaque original SS retirement receipt was not captured")
+			}
+			packets := uot.NewLazyConn(guard, uot.Request{IsConnect: true, Destination: M.ParseSocksaddr("192.168.50.133:53")})
+			packetRetire := capture.serverConnectionRetirement(packets)
+			foreignCipher := &connectRetirementCipherFailure{Conn: original, failure: errors.New("unrelated original cipher close failure")}
+			foreignGuard := startwhitening.GuardAuthenticatedStream(original, foreignCipher)
+			foreignRetire := capture.serverConnectionRetirement(foreignGuard)
+			if foreignRetire == nil {
+				t.Fatal("original second close boundary missing")
+			}
+			if packetRetire == nil {
+				t.Fatal("original UoT retirement path was not captured")
+			}
+			if err := retire(ctx, wrapper, errors.New("not closed")); err == nil {
+				t.Fatal("unclosed opaque stream acquired retirement acknowledgement")
+			}
+			_, writeErr := guard.Write([]byte("ping"))
+			var reply [4]byte
+			_, readErr := io.ReadFull(guard, reply[:])
+			var peerErr error
+			select {
+			case peerErr = <-joined:
+			case <-ctx.Done():
+				t.Fatal("actual encrypted peer did not join", ctx.Err())
+			}
+			if wrong {
+				if handler.accepted.Load() != 0 || peerErr == nil || readErr == nil {
+					t.Fatal("wrong final key did not cause actual encrypted authentication refusal", peerErr, readErr)
+				}
+			} else if peerErr != nil || writeErr != nil || readErr != nil || string(reply[:]) != "pong" || handler.accepted.Load() != 1 {
+				t.Fatal("actual matching-key control failed", peerErr, writeErr, readErr)
+			}
+			before := manager.Count()
+			closeCtx, finish := context.WithTimeout(context.Background(), 2*time.Second)
+			defer finish()
+			closeErr := wrapper.Close()
+			retryErr := owner.CloseContext(closeCtx)
+			t.Logf("actual peer joined; tracked=%T manager_before=%d manager_after=%d accepted=%d peer_error=%v read_error=%v operation_close=%v outbound_retry=%v raw_done=%t native_done=%t force_done=%t operation_drained=%t", tracked, before, manager.Count(), handler.accepted.Load(), peerErr, readErr, closeErr, retryErr, completed(op.tcp.done), completed(op.tcp.nativeDone), completed(op.tcp.forceDone), completed(op.drained))
+			if manager.Count() != 0 || !completed(op.tcp.nativeDone) || !completed(op.drained) {
+				t.Fatal("original owned cleanup did not join")
+			}
+			if wrong {
+				if closeErr == nil || retryErr == nil {
+					t.Fatal("authentication failure lost original close receipt")
+				}
+				reject := func(name string, actual net.Conn, failure error) {
+					t.Helper()
+					if retire(closeCtx, actual, failure) == nil {
+						t.Fatal("retirement accepted foreign or incomplete owner", name)
+					}
+				}
+				foreignClose := foreignGuard.Close()
+				if foreignRetire(closeCtx, foreignGuard, foreignClose) == nil {
+					t.Fatal("unrelated actual cipher Close failure was acknowledged")
+				}
+				copied := *original
+				reject("copied original", &copied, closeErr)
+				reject("mixed error", wrapper, errors.Join(closeErr, errors.New("unrelated close remains unjoined")))
+				wrapper.Conn = &copied
+				reject("replaced wrapper", wrapper, closeErr)
+				wrapper.Conn = guard
+				capture.middle = &Outbound{}
+				reject("replaced outbound", wrapper, closeErr)
+				capture.middle = owner
+				original.Conn = tracked
+				reject("replaced payload", wrapper, closeErr)
+				original.Conn = op.tcp
+				rawPayload := op.tcp.Conn
+				op.tcp.Conn = &connectServerOpaqueConn{Conn: tracked}
+				reject("replaced native payload", wrapper, closeErr)
+				op.tcp.Conn = rawPayload
+				nativeDone := op.tcp.nativeDone
+				op.tcp.nativeDone = make(chan struct{})
+				reject("native close incomplete", wrapper, closeErr)
+				op.tcp.nativeDone = nativeDone
+				forceDone := op.tcp.forceDone
+				op.tcp.forceDone = make(chan struct{})
+				reject("force close incomplete", wrapper, closeErr)
+				op.tcp.forceDone = forceDone
+				drained := op.drained
+				op.drained = make(chan struct{})
+				reject("operation incomplete", wrapper, closeErr)
+				op.drained = drained
+				op.tcp.nativeErr = errors.New("original native Close failed")
+				reject("native failure", wrapper, closeErr)
+				op.tcp.nativeErr = nil
+				if err := retire(closeCtx, wrapper, closeErr); err != nil {
+					t.Fatal("joined original authentication refusal could not retire", err)
+				}
+				if err := packetRetire(closeCtx, packets, closeErr); err != nil {
+					t.Fatal("original UoT path lost joined retirement", err)
+				}
+				if err := capture.CloseContext(closeCtx); err != nil {
+					t.Fatal("original capture retained acknowledged trial error", err)
+				}
+				if err := owner.Close(); err != nil {
+					t.Fatal("Box outbound close retained acknowledged trial error", err)
+				}
+				if err := original.Close(); err == nil {
+					t.Fatal("retirement erased original trial Close failure")
+				}
+				if err := retire(closeCtx, wrapper, closeErr); err != nil {
+					t.Fatal("same original retirement retry changed", err)
+				}
+			}
+			if !wrong && (closeErr != nil || retryErr != nil) {
+				t.Fatal("matching-key cleanup failed", closeErr, retryErr)
+			}
+		})
 	}
 }
