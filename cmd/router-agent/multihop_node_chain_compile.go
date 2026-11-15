@@ -57,7 +57,9 @@ func compileServerNodeChainPlan(input io.Reader, output io.Writer) error {
 		return bad
 	}
 	var policy *mobilemultihop.NodeChainServerPolicy
-	if connect {
+	if privateNodeChainSOCKSInput(raw) {
+		policy, err = mobilemultihop.NewNodeChainSOCKSServerPlan(string(raw))
+	} else if connect {
 		policy, err = mobilemultihop.NewNodeChainCONNECTServerPlan(string(raw))
 	} else {
 		policy, err = mobilemultihop.NewNodeChainServerPlan(string(raw))
@@ -69,17 +71,27 @@ func compileServerNodeChainPlan(input io.Reader, output io.Writer) error {
 }
 
 // Schema selects a distinct typed compiler; it grants no source or transport
-// authority itself. A rejected CONNECT source never falls back to the paired
+// authority itself. A rejected SOCKS or CONNECT source never falls back to the paired
 // or imported-SS compiler. The installed reader uses this same dispatch.
 func parsePrivateNodeChainServerSource(raw []byte) (*mobilemultihop.NodeChainServerPolicy, error) {
 	connect, err := privateNodeChainCONNECTInput(raw)
 	if err != nil {
 		return nil, err
 	}
+	if privateNodeChainSOCKSInput(raw) {
+		return mobilemultihop.NewNodeChainSOCKSServerPolicy(string(raw))
+	}
 	if connect {
 		return mobilemultihop.NewNodeChainCONNECTServerPolicy(string(raw))
 	}
 	return mobilemultihop.NewNodeChainServerPolicy(string(raw))
+}
+
+func privateNodeChainSOCKSInput(raw []byte) bool {
+	var header struct {
+		Schema json.RawMessage `json:"schema"`
+	}
+	return len(raw) > 0 && len(raw) <= mobilemultihop.NodeChainInputLimit && json.Unmarshal(raw, &header) == nil && string(header.Schema) == "3"
 }
 
 func privateNodeChainCONNECTInput(raw []byte) (bool, error) {

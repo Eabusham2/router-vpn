@@ -144,6 +144,8 @@ func (r NodeChainServerFrontRoute) AllowsResolvedDestination(network, original, 
 // opens no socket and proves no connectivity. The worker owns the separate
 // authenticated front and must not forward while proofs are pending.
 type NodeChainServerPolicy struct {
+	socks                                          *nodeChainSOCKSServerScope
+	socksMiddle                                    *nodeChainSOCKSMember
 	connect                                        *nodeChainCONNECTServerScope
 	connectMiddle                                  *nodeChainCONNECTMember
 	carrier                                        *NodeChainServerCarrier
@@ -169,13 +171,25 @@ func newNodeChainServerPolicy(sourceJSON string, carrier *NodeChainServerCarrier
 }
 
 func newNodeChainServerPolicyCaptured(sourceJSON string, carrier *NodeChainServerCarrier, connect bool) (*NodeChainServerPolicy, error) {
+	family := 0
+	if connect {
+		family = 4
+	}
+	return newNodeChainServerPolicyFamily(sourceJSON, carrier, family)
+}
+
+func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerCarrier, family int) (*NodeChainServerPolicy, error) {
+	connect, socks := family == 4, family == 3
+	if family != 0 && !connect && !socks {
+		return nil, nodeChainServerError
+	}
 	var source NodeChainServerSource
-	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || (!connect && source.Schema != 1 && source.Schema != 2 || connect && (source.Schema != 4 || carrier != nil)) ||
+	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || (family == 0 && source.Schema != 1 && source.Schema != 2 || family != 0 && (source.Schema != family || carrier != nil)) ||
 		!exactID.MatchString(source.EntryID) || !proofID.MatchString(source.EntryNodeID) || !NodeChainPrefixMode(source.EntryMode) ||
 		len(source.Nodes) < 1 || len(source.Nodes) > multihoprelay.NodeChainMaximumMembers || len(source.IdentitySources) != len(source.Nodes) {
 		return nil, nodeChainServerError
 	}
-	if (source.Schema == 2 || source.Schema == 4) && (len(source.Nodes) != 2 || source.IdentitySources[0] != "" || source.IdentitySources[1] == "") {
+	if (source.Schema == 2 || source.Schema == 3 || source.Schema == 4) && (len(source.Nodes) != 2 || source.IdentitySources[0] != "" || source.IdentitySources[1] == "") {
 		return nil, nodeChainServerError
 	}
 	raw, err := json.Marshal(source)
@@ -186,6 +200,8 @@ func newNodeChainServerPolicyCaptured(sourceJSON string, carrier *NodeChainServe
 	domain := "routervpn-server-node-chain-source-v1"
 	if source.Schema == 2 {
 		domain = "routervpn-server-node-chain-source-v2"
+	} else if source.Schema == 3 {
+		domain = "routervpn-server-node-chain-source-v3"
 	} else if source.Schema == 4 {
 		domain = "routervpn-server-node-chain-source-v4"
 	}
@@ -199,6 +215,32 @@ func newNodeChainServerPolicyCaptured(sourceJSON string, carrier *NodeChainServe
 	blocked := map[string]bool{}
 	for index, launch := range source.Nodes {
 
+		if socks && index == 0 {
+			middle, err := parseNodeChainSOCKSMember(launch)
+			if err != nil {
+				return nil, err
+			}
+			closure, err := middle.closure()
+			if err != nil {
+				return nil, err
+			}
+			ipv6, ranges, err := externalDevicePolicy(middle.selection.Profile)
+			if err != nil {
+				return nil, err
+			}
+			p.blockIPv6 = p.blockIPv6 || ipv6 == "off"
+			for _, value := range ranges {
+				blocked[value] = true
+			}
+			p.socksMiddle = middle
+			p.socks = &nodeChainSOCKSServerScope{policy: p, middle: middle}
+			p.socks.self = p.socks
+			p.nodes = append(p.nodes, nil)
+			p.descriptor.Members = append(p.descriptor.Members, multihoprelay.NodeChainMember{Position: 1, ProfileID: middle.selection.ExitID, Mode: "socks5", StartLayer: "off", NodeKind: "external", ProofKind: "public-path", SourceSHA256: middle.source, ExpectedPublicIP: middle.selection.ExpectedPublicIP})
+			members = append(members, nodeChainGraphMember{profile: middle.selection.Profile, source: middle.source, mode: "socks5", imported: true})
+			closures = append(closures, closure)
+			continue
+		}
 		if connect && index == 0 {
 			middle, err := parseNodeChainCONNECTMember(launch)
 			if err != nil {
@@ -293,6 +335,12 @@ func newNodeChainServerPolicyCaptured(sourceJSON string, carrier *NodeChainServe
 			}
 			member.ServerPublicKey = predecessorText(peer, "public_key")
 
+		} else if socks {
+			// SOCKS carries the final's UDP through its negotiated association,
+			// never through CONNECT's UoT-v2 final authority.
+			if !nodeChainFinalClosure(node, closure) || closure.final["type"] != "shadowsocks" || layer != "off" || closure.final["method"] != NativeStartLayerMethod || closure.final["udp_over_tcp"] != nil {
+				return nil, nodeChainServerError
+			}
 		} else if connect {
 			// The typed remote final retains its declared SS2022 UoT service. Start
 			// layers remain outside this first worker family; generic SS is unchanged.
@@ -331,7 +379,13 @@ func newNodeChainServerPolicyCaptured(sourceJSON string, carrier *NodeChainServe
 		return nil, nodeChainServerError
 	}
 	var expected []PhysicalEgress
-	if p.connect != nil {
+	if p.socks != nil {
+		p.socks.final = p.nodes[1]
+		p.socks.closures = append([]*externalPredecessor(nil), closures...)
+		// Only the fixed control tuple exists at compilation. The UDP relay
+		// is negotiated and retained by this family's native association owner.
+		expected, err = p.socks.middle.policy.DirectPhysicalEgress([]string{"tcp"})
+	} else if p.connect != nil {
 		p.connect.final = p.nodes[1]
 		capability, captureErr := importedCONNECTCapture(closures[1].graph, closures[1].final, "", p.nodes[1].mode, p.nodes[1].profile, p.nodes[1].inputs.Files)
 		if captureErr != nil || capability != "uot-v2" {
@@ -356,6 +410,8 @@ func newNodeChainServerPolicyCaptured(sourceJSON string, carrier *NodeChainServe
 	var scope nodeChainCapturedTransportScope
 	if p.connect != nil {
 		scope = p.connect
+	} else if p.socks != nil {
+		scope = p.socks
 	}
 	config, proofs, dns, _, err := compileNodeChainClosuresWithTransport(members, closures, expected, scope)
 	if err != nil {
@@ -391,6 +447,10 @@ func newNodeChainServerPolicyCaptured(sourceJSON string, carrier *NodeChainServe
 	for index, proof := range proofs {
 		proof.Position = index + 1
 		p.proofs = append(p.proofs, proof)
+		if p.socks != nil && index == 0 {
+			p.proofTargets = append(p.proofTargets, NodeChainServerProof{Proof: proof, Network: "tcp", Address: "1.1.1.1:443", ExpectedPublicIP: p.socks.middle.selection.ExpectedPublicIP})
+			continue
+		}
 		if p.connect != nil && index == 0 {
 			p.proofTargets = append(p.proofTargets, NodeChainServerProof{Proof: proof, Network: "tcp", Address: "1.1.1.1:443", ExpectedPublicIP: p.connect.middle.selection.ExpectedPublicIP})
 			continue
@@ -460,6 +520,13 @@ func (p *NodeChainServerPolicy) validateCapture() error {
 		return nodeChainServerError
 	}
 
+	if p.descriptor.Schema == 3 {
+		if !p.socks.original() || p.connect != nil {
+			return nodeChainServerError
+		}
+	} else if p.socks != nil || p.socksMiddle != nil {
+		return nodeChainServerError
+	}
 	if p.descriptor.Schema == 4 {
 		if !p.connect.original() {
 			return nodeChainServerError
@@ -469,6 +536,13 @@ func (p *NodeChainServerPolicy) validateCapture() error {
 	}
 	for index, node := range p.nodes {
 		proof := p.proofs[index]
+		if p.socks != nil && index == 0 {
+			middle, target := p.socks.middle, p.proofTargets[index]
+			if node != nil || proof.Position != 1 || proof.SourceSHA256 != middle.source || proof.ProfileID != middle.selection.ExitID || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "socks5" || proof.StartLayer != "off" || target.API != "" || target.Token != "" || target.Network != "tcp" || target.Address != "1.1.1.1:443" || target.ExpectedPublicIP != middle.selection.ExpectedPublicIP {
+				return nodeChainServerError
+			}
+			continue
+		}
 		if p.connect != nil && index == 0 {
 			middle, target := p.connect.middle, p.proofTargets[index]
 			if node != nil || proof.Position != 1 || proof.SourceSHA256 != middle.source || proof.ProfileID != middle.selection.ExitID || proof.NodeID != "" || proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != middle.selection.Protocol || proof.StartLayer != "off" || target.API != "" || target.Token != "" || target.Network != "tcp" || target.Address != "1.1.1.1:443" || target.ExpectedPublicIP != middle.selection.ExpectedPublicIP {

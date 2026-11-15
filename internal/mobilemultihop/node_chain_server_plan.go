@@ -42,16 +42,30 @@ func NewNodeChainServerPlan(input string) (*NodeChainServerPolicy, error) {
 func NewNodeChainCONNECTServerPlan(input string) (*NodeChainServerPolicy, error) {
 	return newNodeChainServerPlanCaptured(input, true)
 }
+func NewNodeChainSOCKSServerPlan(input string) (*NodeChainServerPolicy, error) {
+	return newNodeChainServerPlanFamily(input, 3)
+}
 func newNodeChainServerPlanCaptured(input string, connect bool) (*NodeChainServerPolicy, error) {
+	family := 0
+	if connect {
+		family = 4
+	}
+	return newNodeChainServerPlanFamily(input, family)
+}
+func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPolicy, error) {
+	connect, socks := family == 4, family == 3
+	if family != 0 && !connect && !socks {
+		return nil, nodeChainServerPlanError
+	}
 	bad := nodeChainServerPlanError
 	var plan map[string]any
-	if exactJSON([]byte(input), &plan, NodeChainInputLimit) != nil || !nodeChainPlanKeys(plan, []string{"schema", "entry_node_id", "entry", "members"}, nil) || (!connect && plan["schema"] != float64(1) || connect && plan["schema"] != float64(4)) {
+	if exactJSON([]byte(input), &plan, NodeChainInputLimit) != nil || !nodeChainPlanKeys(plan, []string{"schema", "entry_node_id", "entry", "members"}, nil) || (family == 0 && plan["schema"] != float64(1) || family != 0 && plan["schema"] != float64(family)) {
 		return nil, bad
 	}
 	entryNode, ok := plan["entry_node_id"].(string)
 	entryRaw, entryOK := plan["entry"].(map[string]any)
 	rows, rowsOK := plan["members"].([]any)
-	if !ok || !proofID.MatchString(entryNode) || !entryOK || !rowsOK || len(rows) < 1 || len(rows) > multihoprelay.NodeChainMaximumMembers || connect && len(rows) != 2 {
+	if !ok || !proofID.MatchString(entryNode) || !entryOK || !rowsOK || len(rows) < 1 || len(rows) > multihoprelay.NodeChainMaximumMembers || family != 0 && len(rows) != 2 {
 		return nil, bad
 	}
 	entry, err := nodeChainPlanCapture(entryRaw)
@@ -93,7 +107,9 @@ func newNodeChainServerPlanCaptured(input string, connect bool) (*NodeChainServe
 
 			var original string
 			var err error
-			if connect {
+			if socks {
+				original, err = NodeChainImportedSOCKSMemberInput(config, capture)
+			} else if connect {
 				original, err = NodeChainImportedCONNECTMemberInput(config, capture)
 			} else {
 				original, err = NodeChainImportedMemberInput(config, capture)
@@ -102,8 +118,8 @@ func newNodeChainServerPlanCaptured(input string, connect bool) (*NodeChainServe
 				return nil, bad
 			}
 			local.Schema, source.Schema = 2, 2
-			if connect {
-				local.Schema, source.Schema = 4, 4
+			if family != 0 {
+				local.Schema, source.Schema = family, family
 			}
 			local.Nodes, source.Nodes = append(local.Nodes, original), append(source.Nodes, original)
 			local.IdentitySources, source.IdentitySources = append(local.IdentitySources, ""), append(source.IdentitySources, "")
@@ -177,7 +193,14 @@ func newNodeChainServerPlanCaptured(input string, connect bool) (*NodeChainServe
 	}
 	defer clear(localJSON)
 
-	if connect {
+	if socks {
+		if local.Schema != 3 {
+			return nil, bad
+		}
+		if _, err := NewNodeChainSOCKSSource(string(localJSON)); err != nil {
+			return nil, bad
+		}
+	} else if connect {
 		if local.Schema != 4 {
 			return nil, bad
 		}
@@ -194,7 +217,9 @@ func newNodeChainServerPlanCaptured(input string, connect bool) (*NodeChainServe
 	defer clear(raw)
 
 	var policy *NodeChainServerPolicy
-	if connect {
+	if socks {
+		policy, err = NewNodeChainSOCKSServerPolicy(string(raw))
+	} else if connect {
 		policy, err = NewNodeChainCONNECTServerPolicy(string(raw))
 	} else {
 		policy, err = NewNodeChainServerPolicy(string(raw))

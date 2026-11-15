@@ -16,6 +16,12 @@ CORE = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-server-node-chain-source.json'
 PREFIXES = ('cmd/sing-box/routervpn_server_chain_', 'routervpn_server_chain_')
 _connect_spec=importlib.util.spec_from_file_location("server_owned_connect",ROOT/"deploy/prepare-mobile-connect.py")
+SOCKS_TEMPLATES={
+ "socks_owner.go.tmpl":"protocol/routervpnnodesocks/socks_owner.go",
+ "socks_scope.go.tmpl":"protocol/routervpnnodesocks/socks_scope.go",
+ "socks_server_owner.go.tmpl":"protocol/routervpnnodesocks/socks_server_owner.go",
+ "socks_server_owner_test.go.tmpl":"protocol/routervpnnodesocks/socks_server_owner_test.go",
+}
 CONNECT=importlib.util.module_from_spec(_connect_spec)
 _connect_spec.loader.exec_module(CONNECT)
 
@@ -25,6 +31,8 @@ def inputs():
     return sorted([Path(__file__).resolve(), ROOT/'deploy/test_server_node_chain_preparation.py',
                    ROOT/'deploy/test_server_node_chain_native.py', ROOT/'deploy/test_server_node_chain_native_runner.py',
                    *sorted((ROOT/'mobile/server_chain').glob('*.tmpl')), *CONNECT.server_inputs(),
+                   *(ROOT/'mobile/chain'/name for name in SOCKS_TEMPLATES),
+                   *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_socks_server*.go')),
                    *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_server*.go')), *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_connect_server*.go')),
                    *sorted((ROOT/'internal/multihoprelay').glob('node_chain_*.go'))])
 
@@ -61,12 +69,17 @@ def copies():
     if not required.issubset(content):
         raise ValueError('Incomplete ordered Server native owner')
     content.update(CONNECT.server_copies())
+    for name,target in SOCKS_TEMPLATES.items():
+        path=ROOT/'mobile/chain'/name
+        if path.is_symlink() or not path.is_file() or not path.read_bytes().startswith(b'package routervpnnodesocks\n'):
+            raise ValueError('Changed ordered SOCKS Server package boundary')
+        content[target]=path.read_bytes()
     return content
 
 
 def destination(vendor, name):
     relative = Path(name)
-    if relative.is_absolute() or '..' in relative.parts or not (name.startswith(PREFIXES) or name in CONNECT.SERVER_TEMPLATES.values()):
+    if relative.is_absolute() or '..' in relative.parts or not (name.startswith(PREFIXES) or name in CONNECT.SERVER_TEMPLATES.values() or name in SOCKS_TEMPLATES.values()):
         raise ValueError('Foreign ordered Server ownership path')
     path = vendor/relative
     current = vendor

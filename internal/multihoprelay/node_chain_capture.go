@@ -130,15 +130,15 @@ func nodeChainDigest(domain string, value any) (string, error) {
 }
 
 func (s NodeChainDescriptor) Validate() error {
-	if (s.Schema != 1 && s.Schema != 2 && s.Schema != 4) || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
+	if (s.Schema != 1 && s.Schema != 2 && s.Schema != 3 && s.Schema != 4) || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
 		!proofID.MatchString(s.SourceSHA256) || !proofID.MatchString(s.DNSPolicySHA256) || len(s.Members) < 1 || len(s.Members) > NodeChainMaximumMembers {
 		return nodeChainCaptureError
 	}
 	// Imported families remain distinct: original paired entry, one unlayered
-	// SS2022 (schema 2) or HTTP(S) CONNECT (schema 4), and paired SS final.
+	// SS2022 (schema 2), SOCKS5 (schema 3), or HTTP(S) CONNECT (schema 4), and paired SS final.
 	// These descriptors contain no native lower/socket authority. Only the
 	// operator's separately captured typed suffix can open its first transport.
-	if (s.Schema == 2 || s.Schema == 4) && len(s.Members) != 2 {
+	if (s.Schema == 2 || s.Schema == 3 || s.Schema == 4) && len(s.Members) != 2 {
 		return nodeChainCaptureError
 	}
 	ids, nodes := map[string]bool{s.EntryID: true}, map[string]bool{s.EntryNodeID: true}
@@ -149,8 +149,8 @@ func (s NodeChainDescriptor) Validate() error {
 			return nodeChainCaptureError
 		}
 		ids[member.ProfileID] = true
-		if (s.Schema == 2 || s.Schema == 4) && index == 0 {
-			modeOK := s.Schema == 2 && member.Mode == "shadowsocks" ||
+		if (s.Schema == 2 || s.Schema == 3 || s.Schema == 4) && index == 0 {
+			modeOK := s.Schema == 2 && member.Mode == "shadowsocks" || s.Schema == 3 && member.Mode == "socks5" ||
 				s.Schema == 4 && (member.Mode == "http-connect" || member.Mode == "https-connect")
 			if member.NodeKind != "external" || member.ProofKind != "public-path" || !proofID.MatchString(member.SourceSHA256) ||
 				!externalPublicIP(member.ExpectedPublicIP) || member.NodeID != "" || !modeOK || member.StartLayer != "off" ||
@@ -195,6 +195,8 @@ func (s NodeChainDescriptor) Digest() (string, error) {
 	domain := "routervpn-server-node-chain-descriptor-v1"
 	if s.Schema == 2 {
 		domain = "routervpn-server-node-chain-descriptor-v2"
+	} else if s.Schema == 3 {
+		domain = "routervpn-server-node-chain-descriptor-v3"
 	} else if s.Schema == 4 {
 		domain = "routervpn-server-node-chain-descriptor-v4"
 	}
@@ -202,7 +204,7 @@ func (s NodeChainDescriptor) Digest() (string, error) {
 }
 
 func (q NodeChainRequest) validateShape() error {
-	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 4) || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) || !proofID.MatchString(q.SourceSHA256) ||
+	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3 && q.Schema != 4) || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) || !proofID.MatchString(q.SourceSHA256) ||
 		!proofID.MatchString(q.DescriptorSHA256) || !proofID.MatchString(q.DNSPolicySHA256) || !proofID.MatchString(q.Epoch) ||
 		!nodeChainPrivateAddress(q.Peer) || q.AcquireExpiresAt <= 0 || q.Port < 1024 || q.Port > 65535 ||
 		len(q.Users) < 1 || len(q.Users) > NodeChainMaximumMembers {
@@ -270,6 +272,8 @@ func (q NodeChainRequest) Digest() (string, error) {
 	domain := "routervpn-server-node-chain-request-v1"
 	if q.Schema == 2 {
 		domain = "routervpn-server-node-chain-request-v2"
+	} else if q.Schema == 3 {
+		domain = "routervpn-server-node-chain-request-v3"
 	} else if q.Schema == 4 {
 		domain = "routervpn-server-node-chain-request-v4"
 	}

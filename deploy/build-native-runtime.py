@@ -1821,6 +1821,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     env=env, timeout=900)
                 run([sys.executable, ROOT/'deploy/test_desktop_darwin_guardian.py', source, '--mutations'],
                     env=env, timeout=1800)
+            if target.startswith('linux/'):
+                run(['go', 'test', *race, '-p=1', '-mod=readonly', '-tags='+','.join(tags(target)),
+                     '-ldflags=-checklinkname=0', './protocol/routervpnamnezia', '-run', '^TestRouterVPNNodeSOCKSServer',
+                     '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './protocol/routervpnnodesocks', '-run', '^TestOriginalSOCKS',
                  '-count=1', '-timeout=90s'], cwd=source, env=env, timeout=600)

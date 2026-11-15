@@ -1,0 +1,234 @@
+package routervpnnodesocks
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"net"
+	"net/netip"
+	"reflect"
+)
+
+// The remote association has its own physical transport owner. It never
+// substitutes a synthetic WG lower or a CONNECT TCP-only/UoT transport.
+type serverCapture struct {
+	self    *serverCapture
+	policy  *mobilemultihop.NodeChainServerPolicy
+	capture multihoprelay.NodeChainCapture
+	proofs  []mobilemultihop.NodeChainProof
+	device  mobilemultihop.NodeChainSOCKSDevicePolicy
+	lower   *serverAssociationDialer
+}
+type serverAssociationDialer struct {
+	owner    *Capture
+	original N.Dialer
+}
+
+func NewServerCapture(ctx context.Context, policy *mobilemultihop.NodeChainServerPolicy, original multihoprelay.NodeChainCapture) (*Capture, error) {
+	if ctx == nil || ctx.Err() != nil || policy == nil || original.Validate() != nil || original.Source.Schema != 3 || policy.NativeCarrierRequired() {
+		return nil, errCapture
+	}
+	config, err := policy.NativeConfig(original)
+	if err != nil {
+		return nil, err
+	}
+	proofs := policy.ProofInventory()
+	if len(proofs) != 2 || proofs[0].Position != 1 || proofs[1].Position != 2 || proofs[0].NodeID != "" || proofs[0].NodeKind != "external" || proofs[0].Kind != "public-path" || proofs[0].Mode != "socks5" || proofs[1].Mode != "shadowsocks" || proofs[1].StartLayer != "off" {
+		return nil, errCapture
+	}
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+		Endpoints []json.RawMessage `json:"endpoints"`
+		Inbounds  []json.RawMessage `json:"inbounds"`
+	}
+	if json.Unmarshal([]byte(config), &graph) != nil || len(graph.Outbounds) != 2 || len(graph.Endpoints) != 0 || len(graph.Inbounds) != 0 {
+		return nil, errCapture
+	}
+	c := &Capture{ctx: ctx, config: config, tag: proofs[0].Tag}
+	selected, finalCount := 0, 0
+	for _, raw := range graph.Outbounds {
+		var identity struct {
+			Type string `json:"type"`
+			Tag  string `json:"tag"`
+		}
+		if json.Unmarshal(raw, &identity) != nil {
+			return nil, errCapture
+		}
+		switch identity.Tag {
+		case proofs[0].Tag:
+			selected++
+			if identity.Type != "socks" || json.Unmarshal(raw, &c.options) != nil {
+				return nil, errCapture
+			}
+		case proofs[1].Tag:
+			finalCount++
+			var final option.ShadowsocksOutboundOptions
+			if identity.Type != "shadowsocks" || json.Unmarshal(raw, &final) != nil || final.Detour != c.tag || final.UDPOverTCP != nil || final.Method != mobilemultihop.NativeStartLayerMethod {
+				return nil, errCapture
+			}
+		default:
+			return nil, errCapture
+		}
+	}
+	address, err := netip.ParseAddr(c.options.Server)
+	if selected != 1 || finalCount != 1 || err != nil || address.String() != c.options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || c.options.ServerPort == 0 || !reflect.DeepEqual(c.options.DialerOptions, option.DialerOptions{}) || c.options.Version != "5" || c.options.Network != "" || c.options.UDPOverTCP != nil || (c.options.Username == "") != (c.options.Password == "") || len(c.options.Username) > 255 || len(c.options.Password) > 255 {
+		return nil, errCapture
+	}
+	c.server = &serverCapture{policy: policy, capture: original.Clone(), proofs: append([]mobilemultihop.NodeChainProof(nil), proofs...)}
+	c.server.device, err = policy.SOCKSServerDevice(original)
+	if err != nil {
+		return nil, err
+	}
+	c.server.self = c.server
+	c.self = c
+	if c.validate() != nil {
+		return nil, errCapture
+	}
+	return c, nil
+}
+func (c *Capture) validateServer() error {
+	if c == nil || c.self != c || c.ctx == nil || c.ctx.Err() != nil {
+		return errCapture
+	}
+	s := c.server
+	if s == nil || s.self != s || c.source != nil || s.policy == nil || c.lowerTag != "" || c.lowerType != "" || len(s.proofs) != 2 {
+		return errCapture
+	}
+	device, err := s.policy.SOCKSServerDevice(s.capture)
+	if err != nil || device != s.device {
+		return errCapture
+	}
+	config, err := s.policy.NativeConfig(s.capture)
+	if err != nil || config != c.config || !reflect.DeepEqual(s.policy.ProofInventory(), s.proofs) {
+		return errCapture
+	}
+	return nil
+}
+func (c *Capture) ObserveServerContext(ctx context.Context, policy *mobilemultihop.NodeChainServerPolicy, original multihoprelay.NodeChainCapture) error {
+	if c == nil || ctx == nil || ctx.Err() != nil || c.validate() != nil || c.server == nil || policy != c.server.policy || !reflect.DeepEqual(original, c.server.capture) {
+		return errCapture
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+		return err
+	}
+	middle := c.original
+	c.mu.Unlock()
+	if middle == nil {
+		return errCapture
+	}
+	return middle.current(ctx)
+}
+func (c *Capture) constructServerLower(ctx context.Context) (*serverAssociationDialer, error) {
+	if c.server == nil || c.server.lower != nil || ctx == nil || ctx.Value(captureKey{}) != c {
+		return nil, errCapture
+	}
+	original, err := dialer.New(ctx, option.DialerOptions{}, false)
+	if err != nil {
+		return nil, err
+	}
+	return &serverAssociationDialer{owner: c, original: original}, nil
+}
+
+// Only the permanent control acquisition and the one relay returned to this
+// same SOCKS library operation can use the physical dialer. Late returns remain
+// retained by operation.close, including nonnil sockets returned with errors.
+func (d *serverAssociationDialer) dialOperation(ctx context.Context, op *operation, network string, address M.Socksaddr) (net.Conn, error) {
+	if d == nil || ctx == nil || ctx.Err() != nil || op == nil || ctx != op.ctx || d.owner == nil || d.owner.validate() != nil || d.owner.server == nil || d.owner.server.lower != d || d.original == nil || op.owner == nil || op.owner.capture != d.owner || op.owner.serverLower != d || op.owner.current(ctx) != nil {
+		return nil, errCapture
+	}
+	op.mu.Lock()
+	valid := !op.retired && op.tcpAsked
+	if network == "tcp" {
+		valid = valid && !op.udpAsked && op.tcp == nil && address == op.owner.control
+	} else if network == "udp" {
+		valid = valid && op.network == "udp" && op.udpAsked && op.tcp != nil && op.udp == nil
+	} else {
+		valid = false
+	}
+	op.mu.Unlock()
+	remote, err := netip.ParseAddrPort(address.String())
+	if !valid || err != nil || address.IsDomain() || remote.Port() == 0 || remote.Addr().IsUnspecified() || remote.Addr().IsMulticast() || remote.Addr().Is4In6() || remote.Addr().Zone() != "" || remote.Addr().Is6() && d.owner.middleIPv6Off() {
+		return nil, errCapture
+	}
+	original, failure := d.original.DialContext(ctx, network, address)
+	if network == "tcp" && original != nil {
+		// Native tracking wrappers own full Close and manager removal. Expose only
+		// the same original TCP half-close so association retirement can prove EOF.
+		captured, err := captureServerControl(original)
+		return captured, errors.Join(failure, err)
+	}
+	return original, failure
+}
+func (c *Capture) middleIPv6Off() bool {
+	if c.server != nil {
+		return c.server.device.IPv6Mode == "off"
+	}
+	return len(c.metadata.Devices) < 3 || c.metadata.Devices[len(c.metadata.Devices)-2].IPv6Mode == "off"
+}
+func (c *Capture) CloseContext(ctx context.Context) error {
+	if c == nil || ctx == nil || c.server != nil && c.self != c {
+		return errCapture
+	}
+	c.closeContextOnce.Do(func() {
+		c.closeContextDone = make(chan struct{})
+		go func() { c.closeContextError = c.CloseOriginal(); close(c.closeContextDone) }()
+	})
+	// A joined original result remains authoritative after caller cancellation.
+	select {
+	case <-c.closeContextDone:
+		return c.closeContextError
+	default:
+	}
+	select {
+	case <-c.closeContextDone:
+		return c.closeContextError
+	case <-ctx.Done():
+		select {
+		case <-c.closeContextDone:
+			return c.closeContextError
+		default:
+			return ctx.Err()
+		}
+	}
+}
+
+type serverControlConnection struct {
+	net.Conn
+	half interface{ CloseWrite() error }
+}
+
+func (c *serverControlConnection) CloseWrite() error { return c.half.CloseWrite() }
+func captureServerControl(original net.Conn) (net.Conn, error) {
+	if original == nil {
+		return nil, errCapture
+	}
+	current := original
+	// The native dialer may retain manager/power wrappers. Bound traversal and
+	// expose only half-close; all I/O and full Close stay on the original owner.
+	for depth := 0; depth < 16; depth++ {
+		value := reflect.ValueOf(current)
+		if value.Kind() == reflect.Pointer && value.IsNil() {
+			break
+		}
+		if half, ok := current.(interface{ CloseWrite() error }); ok {
+			return &serverControlConnection{Conn: original, half: half}, nil
+		}
+		upstream, ok := current.(interface{ Upstream() any })
+		if !ok {
+			break
+		}
+		next, ok := upstream.Upstream().(net.Conn)
+		if !ok || next == nil {
+			break
+		}
+		current = next
+	}
+	return original, errors.New("original SOCKS Server TCP control lacks retained half-close")
+}

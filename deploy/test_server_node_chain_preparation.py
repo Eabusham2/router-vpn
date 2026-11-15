@@ -39,6 +39,11 @@ class ServerNodeChainPreparation(unittest.TestCase):
    self.assertIn(source,inputs)
    expected[target]=source.read_bytes()
   self.assertIn(ROOT/'internal/mobilemultihop/node_chain_connect_server.go',inputs)
+  for name,target in PREP.SOCKS_TEMPLATES.items():
+   source=ROOT/'mobile/chain'/name
+   self.assertIn(source,inputs)
+   expected[target]=source.read_bytes()
+  self.assertIn(ROOT/'internal/mobilemultihop/node_chain_socks_server.go',inputs)
   self.assertEqual(content,expected)
   for package in ('mobilemultihop','multihoprelay'):
    for source in (ROOT/'internal'/package).glob('node_chain_server*.go' if package=='mobilemultihop' else 'node_chain_*.go'):

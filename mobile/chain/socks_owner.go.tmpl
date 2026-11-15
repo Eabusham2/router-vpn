@@ -38,6 +38,11 @@ type captureKey struct{}
 // Only an explicitly supplied local registry can use this factory; ordinary
 // include/registry.go and every current app launch retain their original path.
 type Capture struct {
+ self *Capture
+ server *serverCapture
+ closeContextOnce sync.Once
+ closeContextDone chan struct{}
+ closeContextError error
 	mu sync.Mutex
 	ctx context.Context
 	source *mobilemultihop.NodeChainSOCKSSource
@@ -127,6 +132,7 @@ func (c *Capture) Register(registry *outbound.Registry) error {
 }
 
 func (c *Capture) validate() error {
+	if c != nil && c.server != nil { return c.validateServer() }
 	if c == nil || c.ctx == nil || c.ctx.Err() != nil || c.source == nil {
 		return errCapture
 	}
@@ -152,13 +158,20 @@ func (c *Capture) construct(ctx context.Context, _ adapter.Router, _ log.Context
 	if !c.registered || c.claimed || c.retired || c.ctx.Err() != nil {
 		return nil, errCapture
 	}
+    var serverLower *serverAssociationDialer
+    if c.server != nil {
+        var err error
+        serverLower, err = c.constructServerLower(ctx)
+        if err != nil { return nil, err }
+    }
 	c.claimed = true
 	original := &Outbound{
 		Adapter: outbound.NewAdapterWithDialerOptions("socks", tag, []string{"tcp", "udp"}, options.DialerOptions),
-		capture: c, ctx: ctx, manager: manager, control: options.ServerOptions.Build(),
+		capture: c, ctx: ctx, manager: manager, control: options.ServerOptions.Build(), serverLower: serverLower,
 		operations: make(map[*operation]struct{}),
 	}
 	c.original = original
+	if serverLower != nil { c.server.lower = serverLower }
 	return original, nil
 }
 
@@ -166,7 +179,7 @@ func (c *Capture) construct(ctx context.Context, _ adapter.Router, _ log.Context
 // Cleanup does not require a live source/proof context, manager lookup or tag.
 // A late caller cannot reopen registration after this captured retirement.
 func (c *Capture) CloseOriginal() error {
-	if c == nil {
+	if c == nil || c.server != nil && c.self != c {
 		return errCapture
 	}
 	c.mu.Lock()
@@ -183,6 +196,7 @@ func (c *Capture) CloseOriginal() error {
 // or an operation whose native factory has not yet returned. Closing a caller's
 // pool slot is never substituted for this retained association's joined Close.
 type Outbound struct {
+ serverLower *serverAssociationDialer
 	outbound.Adapter
 	mu sync.Mutex
 	capture *Capture
@@ -204,6 +218,12 @@ func (o *Outbound) Start(stage adapter.StartStage) error {
 	if o == nil || o.capture.validate() != nil || o.ctx.Err() != nil {
 		return errCapture
 	}
+    if o.capture.server != nil {
+        o.mu.Lock()
+        defer o.mu.Unlock()
+        if o.closed || o.lower != nil || len(o.operations) != 0 || o.serverLower == nil || o.capture.server.lower != o.serverLower { return errCapture }
+        return nil
+    }
 	lower, found, err := adapter.RouterVPNOutboundContext(o.ctx, o.manager, o.capture.lowerTag)
 	if err != nil || !found || lower == nil || lower.Type() != o.capture.lowerType || lower.Tag() != o.capture.lowerTag {
 		return errors.Join(err, errCapture)
@@ -226,13 +246,17 @@ func (o *Outbound) current(ctx context.Context) error {
 	}
 	lower, closed := o.lower, o.closed
 	o.mu.Unlock()
-	if closed || lower == nil {
+	if closed || lower == nil && o.capture.server == nil {
 		return net.ErrClosed
 	}
 	actual, found, err := adapter.RouterVPNOutboundContext(ctx, o.manager, o.Tag())
 	if err != nil || !found || actual != o {
 		return errors.Join(err, errCapture)
 	}
+    if o.capture.server != nil {
+        if lower != nil || o.serverLower == nil || o.capture.server.lower != o.serverLower || o.serverLower.owner != o.capture { return errCapture }
+        return ctx.Err()
+    }
 	actual, found, err = adapter.RouterVPNOutboundContext(ctx, o.manager, o.capture.lowerTag)
 	if err != nil || !found || actual != lower {
 		return errors.Join(err, errCapture)
@@ -464,15 +488,22 @@ func (s *operation) DialContext(ctx context.Context, network string, address M.S
 	remote, err := netip.ParseAddrPort(address.String())
 	if !valid || err != nil || address.IsDomain() || !remote.IsValid() || remote.Port() == 0 ||
 		remote.Addr().IsUnspecified() || remote.Addr().IsMulticast() || remote.Addr().Is4In6() || remote.Addr().Zone() != "" ||
-		remote.Addr().Is6() && s.owner.capture.metadata.Devices[len(s.owner.capture.metadata.Devices)-2].IPv6Mode == "off" {
+		remote.Addr().Is6() && s.owner.capture.middleIPv6Off() {
 		return nil, errCapture
 	}
-	// Both the permanent control and its one authenticated negotiated relay
-	// use the same captured predecessor object. No physical broker is called.
+	// The local family uses the same captured predecessor. The typed server
+	// family uses its original per-association physical owner below; neither
+	// grants a generic physical dialer to a caller or an arbitrary relay.
 	s.owner.mu.Lock()
 	lower := s.owner.lower
 	s.owner.mu.Unlock()
-	raw, failure := lower.DialContext(ctx, network, address)
+    var raw net.Conn
+    var failure error
+    if s.owner.capture.server != nil {
+        raw, failure = s.owner.serverLower.dialOperation(ctx, s, network, address)
+    } else {
+        raw, failure = lower.DialContext(ctx, network, address)
+    }
 	var captured *originalConn
 	if raw != nil { captured = newOriginalConn(s.owner, raw) }
 	s.mu.Lock()

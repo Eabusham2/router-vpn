@@ -85,7 +85,7 @@ func nodeChainServerCaptureFixture(t *testing.T, policy *NodeChainServerPolicy) 
 		}
 		if descriptor.Schema == 1 || i == 0 {
 			request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()))
-			if descriptor.Schema == 2 || descriptor.Schema == 4 {
+			if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 {
 				request.LocalPacketPositions = append(request.LocalPacketPositions, 0)
 			}
 		}

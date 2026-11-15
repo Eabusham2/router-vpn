@@ -1,0 +1,397 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	BDNS "github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/option"
+	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+)
+
+// Real physical control/negotiated UDP, SOCKS authentication, SS2022 and DNS.
+// The reference server maps private destinations to loopback test services;
+// the native suffix dials the captured physical tuple without a replacement
+// dialer. The suffix uses its real native interface monitor. Reference
+// services remain component fixtures; there is no TUN/entry/Compare claim.
+func nodeSOCKSServerPhysical(t *testing.T) netip.Addr {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, i := range interfaces {
+		if i.Flags&net.FlagUp == 0 || i.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := i.Addrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range addresses {
+			p, e := netip.ParsePrefix(raw.String())
+			if e == nil && p.Addr().Is4() && p.Addr().IsGlobalUnicast() {
+				return p.Addr()
+			}
+		}
+	}
+	t.Fatal("native SOCKS Server component requires an up IPv4 physical interface")
+	return netip.Addr{}
+}
+func nodeSOCKSServerProvider(t *testing.T, s *desktopNodeLayerServer, address netip.Addr, password, fault string) (desktopExternalInstalledSSPeer, *desktopExternalInstalledSOCKSPeer) {
+	t.Helper()
+	listener, err := net.Listen("tcp4", net.JoinHostPort(address.String(), "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.tcp = listener
+	var failures atomic.Uint32
+	p := &desktopExternalInstalledSOCKSPeer{server: s, request: desktopExternalInstalledPeerRequest{Password: password, SOCKSFault: fault}, authFailures: &failures, bindHost: address.String(), handshakeDeadline: true, controlOwnedUDP: true}
+	var once sync.Once
+	closePeer := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			s.closing = true
+			var all []io.Closer
+			for c := range s.connections {
+				all = append(all, c)
+			}
+			s.mu.Unlock()
+			s.cancel()
+			_ = listener.Close()
+			for _, c := range all {
+				_ = c.Close()
+			}
+			s.workers.Wait()
+			if p.joinFailed.Load() {
+				t.Error("native SOCKS Server reference control did not join")
+			}
+		})
+	}
+	t.Cleanup(closePeer)
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		for {
+			c, e := listener.Accept()
+			if e != nil {
+				return
+			}
+			if !s.enter(c) {
+				_ = c.Close()
+				return
+			}
+			go func() {
+				defer s.leave(c)
+				s.rawTCP.Add(1)
+				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+				_ = p.serve(c)
+			}()
+		}
+	}()
+	return desktopExternalInstalledSSPeer{address: listener.Addr().String(), close: closePeer}, p
+}
+
+type nodeSOCKSServerFixture struct {
+	ctx        context.Context
+	cancel     context.CancelFunc
+	policy     *mobilemultihop.NodeChainServerPolicy
+	lease      multihoprelay.NodeChainCapture
+	capture    *ownedSOCKS.Capture
+	native     *box.Box
+	middle     *ownedSOCKS.Outbound
+	final      adapter.Outbound
+	dns        adapter.DNSTransport
+	reference  *nodeSOCKSFixture
+	server     *desktopNodeLayerServer
+	provider   *desktopExternalInstalledSOCKSPeer
+	closeOnce  sync.Once
+	closeError error
+}
+
+func (f *nodeSOCKSServerFixture) close() error {
+	f.closeOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		f.closeError = f.capture.CloseContext(ctx)
+		if f.closeError == nil {
+			f.closeError = f.native.Close()
+		}
+		f.cancel()
+	})
+	return f.closeError
+}
+func newNodeSOCKSServerFixture(t *testing.T, mode, fault string) *nodeSOCKSServerFixture {
+	t.Helper()
+	f := &nodeSOCKSServerFixture{}
+	f.ctx, f.cancel = context.WithTimeout(context.Background(), 25*time.Second)
+	t.Cleanup(f.cancel)
+	// Reuse the real encrypted reference services and the complete original
+	// paired identities. The independently constructed no-TUN suffix below has
+	// its own source, registry, Box, SOCKS association owner and physical sockets.
+	f.reference = newNodeSOCKSFixture(t, mode, "")
+	original, err := f.reference.source.Source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(original), &source) != nil {
+		t.Fatal("source")
+	}
+	address := nodeSOCKSServerPhysical(t)
+	ctx, stop := context.WithCancel(f.ctx)
+	f.server = &desktopNodeLayerServer{ctx: ctx, cancel: stop, connections: map[io.Closer]bool{}, routes: append([]desktopNodeLayerRoute(nil), f.reference.socksServer.routes...)}
+	provider, peer := nodeSOCKSServerProvider(t, f.server, address, "captured-native-user-password", fault)
+	f.provider = peer
+	endpointAddress := netip.MustParseAddrPort(provider.address)
+	port := int(endpointAddress.Port())
+	password := "captured-native-user-password"
+	if fault == "password" {
+		password += "-wrong"
+	}
+	memberConfig := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "endpoints": []any{}, "outbounds": []any{map[string]any{"type": "socks", "tag": "custom-exit", "server": address.String(), "server_port": port, "version": "5", "username": "captured-native-user", "password": password}}, "route": map[string]any{"final": "custom-exit", "rules": []any{}, "auto_detect_interface": true}}
+	profile := map[string]any{"id": "server-socks-original", "node_kind": "external", "external": map[string]any{"protocol": "socks5", "expected_public_ip": "203.0.113.88", "socks5": map[string]any{"host": address.String(), "port": port, "username": "captured-native-user", "password": password}}, "endpoint": address.String(), "dns_mode": "home", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": false, "kill_switch_policy": "on-connect"}
+	member, err := mobilemultihop.NodeChainImportedSOCKSMemberInput(desktopNodeChainJSON(t, memberConfig), desktopNodeChainJSON(t, map[string]any{"schema": 1, "exit_id": "server-socks-original", "protocol": "socks5", "expected_public_ip": "203.0.113.88", "profile": profile}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Nodes[1] = member
+	if fault == "final-key" {
+		var final map[string]any
+		if json.Unmarshal([]byte(source.Nodes[2]), &final) != nil {
+			t.Fatal("final launch")
+		}
+		var assets map[string]string
+		if json.Unmarshal([]byte(final["files"].(string)), &assets) != nil {
+			t.Fatal("final assets")
+		}
+		for name, raw := range assets {
+			decoded, e := base64.StdEncoding.DecodeString(raw)
+			if e != nil {
+				t.Fatal(e)
+			}
+			decoded = bytes.ReplaceAll(decoded, []byte(f.reference.request.FinalPassword), []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{91}, 32))))
+			assets[name] = base64.StdEncoding.EncodeToString(decoded)
+		}
+		changed, err := mobilemultihop.NewNodeProfile(final["mode"].(string), desktopNodeChainJSON(t, assets), final["profile_json"].(string), final["start"].(string), final["dns_bootstrap"].(string))
+		if err != nil {
+			t.Fatal("changed final key source", err)
+		}
+		source.Nodes[2], err = changed.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	serverSource := mobilemultihop.NodeChainServerSource{Schema: 3, EntryID: f.reference.meta.Proofs[0].ProfileID, EntryNodeID: f.reference.meta.Proofs[0].NodeID, EntryMode: mode, Nodes: source.Nodes[1:], IdentitySources: source.IdentitySources[1:]}
+	f.policy, err = mobilemultihop.NewNodeChainSOCKSServerPolicy(desktopNodeChainJSON(t, serverSource))
+	if err != nil {
+		t.Fatal("typed original server source", err)
+	}
+	descriptor := f.policy.Descriptor()
+	digest, _ := descriptor.Digest()
+	key, e := ecdh.X25519().GenerateKey(rand.Reader)
+	if e != nil {
+		t.Fatal(e)
+	}
+	request := multihoprelay.NodeChainRequest{Schema: 3, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), Port: 26240, LocalPacketPublicKeys: []string{base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())}, LocalPacketPositions: []int{0}}
+	for i := range descriptor.Members {
+		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: fmt.Sprintf("%048x", 101+i*2), Password: fmt.Sprintf("%048x", 102+i*2)})
+	}
+	f.lease = multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: descriptor, RegistrySHA256: digest, OwnerID: strings.Repeat("3", 64), Peer: request.Peer, Host: "10.77.0.1", BootstrapDeadline: time.Now().Add(time.Minute).UTC()}
+	f.capture, err = ownedSOCKS.NewServerCapture(f.ctx, f.policy, f.lease)
+	if err != nil {
+		t.Fatal("native original capture", err)
+	}
+	ins, outs, ends := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
+	if err = f.capture.Register(outs); err != nil {
+		t.Fatal(err)
+	}
+	SS.RegisterOutbound(outs)
+	dnsRegistry := BDNS.NewTransportRegistry()
+	DNST.RegisterUDP(dnsRegistry)
+	DNST.RegisterTCP(dnsRegistry)
+	nativeContext := box.Context(f.capture.Context(), ins, outs, ends, dnsRegistry, boxService.NewRegistry(), certificate.NewRegistry())
+	config, err := f.policy.NativeConfig(f.lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](nativeContext, []byte(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.native, err = box.New(box.Options{Context: nativeContext, Options: options})
+	if err != nil {
+		t.Fatal("actual server Box construction", err)
+	}
+	t.Cleanup(func() {
+		if err := f.close(); err != nil {
+			t.Error("original server owner did not join", err)
+		}
+	})
+	if err = f.native.Start(); err != nil {
+		t.Fatal("actual server Box start", err)
+	}
+	proofs := f.policy.ProofInventory()
+	middle, found := f.native.Outbound().Outbound(proofs[0].Tag)
+	if !found {
+		t.Fatal("owned middle missing")
+	}
+	f.middle = middle.(*ownedSOCKS.Outbound)
+	f.final, found = f.native.Outbound().Outbound(proofs[1].Tag)
+	if !found {
+		t.Fatal("paired final missing")
+	}
+	dnsCapture, err := f.policy.DNSCapture(f.lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.dns, found = service.FromContext[adapter.DNSTransportManager](nativeContext).Transport(dnsCapture.ResolverTag)
+	if !found {
+		t.Fatal("selected DNS absent")
+	}
+	return f
+}
+func TestRouterVPNNodeSOCKSServerEncryptedOwnership(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newNodeSOCKSServerFixture(t, mode, "")
+			if err := f.capture.ObserveServerContext(f.ctx, f.policy, f.lease); err != nil {
+				t.Fatal(err)
+			}
+			data, err := f.reference.get(t, f.final, "http://"+desktopNodeRouterHealthTarget+"/health")
+			var proof desktopImportedWGSSHealthReply
+			if err != nil || json.Unmarshal(data, &proof) != nil || !proof.OK || proof.NodeID != f.reference.request.FinalNodeProofID {
+				t.Fatal("original paired final encrypted proof", err)
+			}
+			data, err = f.reference.get(t, f.middle, "https://1.1.1.1/cdn-cgi/trace")
+			if err != nil || !strings.Contains(string(data), "ip=203.0.113.88") {
+				t.Fatal("SOCKS public proof", err)
+			}
+			message := new(dns.Msg)
+			message.SetQuestion("example.com.", dns.TypeA)
+			ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+			reply, err := f.dns.Exchange(ctx, message)
+			cancel()
+			if err != nil || reply == nil || reply.Id != message.Id || len(reply.Answer) != 1 {
+				t.Fatal("original negotiated UDP/SS DNS", err)
+			}
+			if f.server.plainUDP.Load() == 0 || f.server.plainTCP.Load() < 2 || f.reference.peer.snapshot().FinalUDP == 0 {
+				t.Fatal("native path bypassed original SOCKS/SS transports")
+			}
+			reconstructed, err := mobilemultihop.NewNodeChainSOCKSServerPolicy(f.policy.Source())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.capture.ObserveServerContext(f.ctx, reconstructed, f.lease) == nil {
+				t.Fatal("foreign equal policy acquired original owner")
+			}
+			copied := *f.capture
+			if copied.ObserveServerContext(f.ctx, f.policy, f.lease) == nil {
+				t.Fatal("copied capture acquired original sockets")
+			}
+			if copied.CloseContext(f.ctx) == nil || copied.CloseOriginal() == nil {
+				t.Fatal("copied capture retired original sockets")
+			}
+			if err := f.capture.ObserveServerContext(f.ctx, f.policy, f.lease); err != nil {
+				t.Fatal("foreign close changed original owner", err)
+			}
+			if err = f.close(); err != nil {
+				t.Fatal(err)
+			}
+			if f.capture.ObserveServerContext(context.Background(), f.policy, f.lease) == nil {
+				t.Fatal("retired owner observed live")
+			}
+		})
+	}
+}
+func TestRouterVPNNodeSOCKSServerRefusesWrongAuthority(t *testing.T) {
+	for _, fault := range []string{"password", "auth-downgrade", "relay-domain", "final-key", "cancelled", "foreign-lease"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newNodeSOCKSServerFixture(t, "wg", fault)
+			if fault == "cancelled" {
+				message := new(dns.Msg)
+				message.SetQuestion("example.com.", dns.TypeA)
+				ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+				_, err := f.dns.Exchange(ctx, message)
+				cancel()
+				if err != nil {
+					t.Fatal("original live association before cancellation", err)
+				}
+				if closed, count := nodeSOCKSOwnerState(f.middle); closed || count == 0 {
+					t.Fatal("cancel fixture has no live association")
+				}
+				f.cancel()
+				if f.capture.ObserveServerContext(context.Background(), f.policy, f.lease) == nil {
+					t.Fatal("cancel retained live owner")
+				}
+				if err := f.close(); err != nil {
+					t.Fatal("cancel did not join original control/UDP", err)
+				}
+				if closed, count := nodeSOCKSOwnerState(f.middle); !closed || count != 0 {
+					t.Fatal("cancel left original association outstanding")
+				}
+				return
+			}
+			if fault == "foreign-lease" {
+				other := f.lease.Clone()
+				other.OwnerID = strings.Repeat("4", 64)
+				if f.capture.ObserveServerContext(f.ctx, f.policy, other) == nil {
+					t.Fatal("foreign lease accepted")
+				}
+				return
+			}
+			if fault == "relay-domain" {
+				message := new(dns.Msg)
+				message.SetQuestion("example.com.", dns.TypeA)
+				ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
+				defer cancel()
+				if _, err := f.dns.Exchange(ctx, message); err == nil {
+					t.Fatal("uncaptured relay accepted")
+				}
+				nodeSOCKSUntil(t, func() bool { return f.provider.rejected.Load() > 0 }, "native client did not retire rejected domain relay")
+				return
+			}
+			if _, err := f.reference.get(t, f.final, "http://"+desktopNodeRouterHealthTarget+"/health"); err == nil {
+				t.Fatal("wrong original credentials proved final")
+			}
+			if fault == "auth-downgrade" {
+				nodeSOCKSUntil(t, func() bool { return f.provider.rejected.Load() > 0 }, "native client did not retire authentication downgrade")
+			}
+			if fault == "final-key" {
+				state := f.reference.peer.snapshot()
+				if state.FinalRawTCP == 0 || state.FinalTCP != 0 {
+					t.Fatal("wrong-key refusal bypassed original ciphertext peer")
+				}
+			}
+		})
+	}
+}

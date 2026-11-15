@@ -278,6 +278,18 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 					p.visited[key] = true
 					return nil
 				}
+				if captured, ok := p.connect.(*nodeChainSOCKSServerPhysicalProof); ok {
+					if err := captured.negotiatedAssociation(tag, value); err != nil {
+						return err
+					}
+					// This is the fixed control inventory only. It does not
+					// fabricate a UDP tuple or authorize a client firewall.
+					if err := p.node(tag, "tcp"); err != nil {
+						return err
+					}
+					p.visited[key] = true
+					return nil
+				}
 				return ErrDynamicPhysicalEgress
 			}
 			// Both SOCKS control and its negotiated relay traverse the captured
