@@ -37,13 +37,26 @@ for forbidden in (
 ):
     assert forbidden not in joined, f"floating language builder returned: {forbidden}"
 for required in (
-    "FROM golang:1.24.13-alpine AS build",
+    "FROM golang:1.26.3-alpine AS build",
     "FROM golang:1.26.3-alpine AS binaries",
     "FROM golang:1.25.12-bookworm AS go-build",
     "FROM golang:1.23.12-alpine AS plugin",
     "FROM rust:1.88.0-bookworm AS overtls-upstream-build",
 ):
     assert required in joined, f"published image dependency pin missing: {required}"
+
+# Each builder of this repository's module must match its declared toolchain;
+# another correctly pinned stage must not hide an obsolete compiler here.
+toolchain = re.search(r"(?m)^toolchain go(\d+\.\d+\.\d+)$", (ROOT / "go.mod").read_text())
+assert toolchain is not None, "repository toolchain lost its exact patch pin"
+for rel, stage in (
+    ("server/init/Dockerfile", "binaries"),
+    ("deploy/router-agent.Dockerfile", "build"),
+    ("deploy/update-controller.Dockerfile", "build"),
+    ("server/aux-proxies/Dockerfile", "start-layer-build"),
+):
+    required = f"FROM golang:{toolchain.group(1)}-alpine AS {stage}"
+    assert required in docs[rel].splitlines(), f"{rel}: module builder must use {required}"
 
 # Every source archive commit parameter in a published Dockerfile is one full
 # immutable Git object id.
