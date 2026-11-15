@@ -66,11 +66,7 @@ func (owner *routerVPNLinuxNodeControl) bindExternal(ctx context.Context, origin
 		return routerVPNExternalFailure
 	}
 	meta := policy.Metadata()
-	capture, err := policy.Capture()
-	if err != nil || meta.TargetOS != "linux" || meta.SOCKSUDPAssociationRequired && meta.Protocol != "socks5" ||
-		(meta.Protocol != "socks5" && meta.Protocol != "shadowsocks" && meta.Protocol != "http-connect" && meta.Protocol != "https-connect" && meta.Protocol != "hysteria2" && meta.Protocol != "wireguard" && meta.Protocol != "amneziawg" && meta.Protocol != "openvpn") ||
-		capture.EntryID != "" || capture.EntryTag != "" || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
-		capture.StartLayer != "" || capture.EntryStartLayer != "" {
+	if policy.ValidateLinuxControlledAdmission() != nil {
 		return routerVPNExternalFailure
 	}
 	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
@@ -81,11 +77,11 @@ func (owner *routerVPNLinuxNodeControl) bindExternal(ctx context.Context, origin
 		meta.ConfigSHA256 != config || selected != transfer {
 		return routerVPNExternalFailure
 	}
-	owner.control, err = linuxprotection.NewNodeChildControl(ctx, owner.bootstrap, selection)
+	control, err := linuxprotection.NewNodeChildControl(ctx, owner.bootstrap, selection)
 	if err != nil {
 		return err
 	}
-	owner.external, owner.selection, owner.selectionHash = policy, selection, selected
+	owner.control, owner.external, owner.selection, owner.selectionHash = control, policy, selection, selected
 	return nil
 }
 

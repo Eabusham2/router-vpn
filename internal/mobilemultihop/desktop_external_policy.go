@@ -547,3 +547,38 @@ func desktopExternalSS2022Import(external map[string]any) bool {
 	}
 	return false
 }
+
+// ValidateLinuxControlledAdmission binds the ordinary child to the same bounded
+// Linux compositions as its retained parent. It grants no socket permission:
+// the child must still authenticate and bind the original selection/bootstrap.
+func (p *DesktopExternalPolicy) ValidateLinuxControlledAdmission() error {
+	if p == nil || p.Validate() != nil || p.metadata.TargetOS != "linux" {
+		return desktopExternalPolicyError
+	}
+	capture, err := p.Capture()
+	if err != nil || capture.PredecessorSHA256 != "" || capture.Execution != "" ||
+		p.metadata.SOCKSUDPAssociationRequired && p.metadata.Protocol != "socks5" {
+		return desktopExternalPolicyError
+	}
+	switch p.metadata.Protocol {
+	case "socks5", "shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg", "openvpn":
+	default:
+		return desktopExternalPolicyError
+	}
+	if capture.EntryID == "" && capture.EntryTag == "" {
+		// Preserve the previously admitted direct scope. Layered direct transports
+		// have a separate native host boundary.
+		if capture.StartLayer != "" || capture.EntryStartLayer != "" {
+			return desktopExternalPolicyError
+		}
+		return nil
+	}
+	switch desktopExternalEntryKind(p.original, capture, "linux") {
+	case "wireguard", "shadowsocks":
+		// Validate above reconstructs the complete Linux lower graph, including its
+		// bounded finals, original private credentials and independent layer owners.
+		return nil
+	default:
+		return desktopExternalPolicyError
+	}
+}
