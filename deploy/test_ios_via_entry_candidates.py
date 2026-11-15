@@ -23,6 +23,29 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
 PHASES = ('runtime', 'actor', 'sdk', 'sdk-actor')
 PHASE_RECEIPT = 'Apple candidate phase complete: '
+SOCKET_DRAIN_FAULTS = ('cancel', 'disconnect', 'new-profile', 'network', 'source', 'session')
+SOCKET_DRAIN_WITNESSES = tuple(label + fault for fault in SOCKET_DRAIN_FAULTS for label in (
+    'socket completion retains owned temporary runtime ', 'Cancel is not fabricated socket drain: '))
+
+
+def mutation_witness_matches(returncode, stderr, expected):
+    allowed = (expected,) if isinstance(expected, str) else expected
+    failures = [line for line in stderr.splitlines() if line.startswith('FAIL:')]
+    return returncode == 1 and len(failures) == 1 and failures[0] in tuple('FAIL: ' + item for item in allowed)
+
+
+def check_mutation_witness_contract():
+    assert SOCKET_DRAIN_FAULTS == ('cancel', 'disconnect', 'new-profile', 'network', 'source', 'session')
+    assert len(set(SOCKET_DRAIN_WITNESSES)) == 12
+    for witness in SOCKET_DRAIN_WITNESSES:
+        line = 'FAIL: ' + witness
+        assert mutation_witness_matches(1, line + '\n', SOCKET_DRAIN_WITNESSES)
+        for invalid in ('unrelated failure', 'prefix ' + line, line + ' suffix', line + '\n' + line):
+            assert not mutation_witness_matches(1, invalid, SOCKET_DRAIN_WITNESSES)
+        for status in (0, 2, -4):
+            assert not mutation_witness_matches(status, line, SOCKET_DRAIN_WITNESSES)
+    assert not mutation_witness_matches(1, 'FAIL: newer intent respected: disconnect', SOCKET_DRAIN_WITNESSES)
+
 spec = importlib.util.spec_from_file_location('speed_path_fixture', ROOT / 'deploy/test_ios_speed_lab_external_paths.py')
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
 
@@ -259,7 +282,7 @@ import Network
    check("a network change during teardown cannot adopt old results onto the new path",runner.receipt==nil && !runner.error.isEmpty && !model.connected && !IOSMTUMeasurementGate.held)
  }
  static func socketDrain() async throws {
-  for fault in ["cancel","disconnect","new-profile","network","source","session"] {
+  for fault in __SOCKET_DRAIN_FAULTS__ {
    let model=try fresh(),runner=IOSViaEntryLatency();NWTest.shared.holdCancellation(true)
    let worker=Task{await runner.measure(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))}
    await wait{NWTest.shared.events.contains(where:{$0.hasPrefix("cancel:")})}
@@ -446,6 +469,7 @@ import Network
 
 
 def main(phase=None):
+    check_mutation_witness_contract()
     if phase is not None and phase not in PHASES:
         raise ValueError('Unknown Apple candidate phase')
     import platform
@@ -474,7 +498,7 @@ def main(phase=None):
     manual = view.split('    private func chooseExit(id: String) {', 1)[1].rsplit('\n}', 1)[0]
     manual = '    func chooseExit(id: String) {' + manual
     assert 'selection: Binding(get: { exitID }, set: { chooseExit(id: $0) })' in view
-    code['Fixture.swift'] = 'import Foundation\n' + types + '\n' + boundaries + '\n' + FIXTURE.replace('// SHIPPING_MANUAL_EXIT_CHOICE', manual)
+    code['Fixture.swift'] = 'import Foundation\n' + types + '\n' + boundaries + '\n' + FIXTURE.replace('__SOCKET_DRAIN_FAULTS__', json.dumps(SOCKET_DRAIN_FAULTS)).replace('// SHIPPING_MANUAL_EXIT_CHOICE', manual)
     with tempfile.TemporaryDirectory(prefix='ios-via-entry-') as temporary:
         folder = Path(temporary); network = folder / 'Network.swift'; network.write_text(NETWORK)
         suffix = '.dylib' if platform.system() == 'Darwin' else '.so'
@@ -501,10 +525,8 @@ def main(phase=None):
             print(f'Apple candidate stage: execute {label}', flush=True)
             result = subprocess.run([str(binary)] + ([witness] if witness else []), text=True, capture_output=True, timeout=120)
             if mutation:
-                assert result.returncode != 0 and 'FAIL:' in result.stderr, f'Negative control escaped: {mutation}\n{result.stdout}\n{result.stderr}'
-                if expected:
-                    allowed = (expected,) if isinstance(expected, str) else expected
-                    assert any('FAIL: '+item in result.stderr for item in allowed), f'{mutation} failed at an unrelated witness: {result.stdout}{result.stderr}'
+                assert result.returncode == 1 and 'FAIL:' in result.stderr, f'Negative control escaped: {mutation}\n{result.stdout}\n{result.stderr}'
+                assert expected and mutation_witness_matches(result.returncode, result.stderr, expected), f'{mutation} failed at an unrelated witness: {result.stdout}{result.stderr}'
                 print(f'Apple candidate negative control rejected: {mutation}', flush=True)
             else:
                 assert result.returncode == 0, result.stdout + result.stderr
@@ -528,9 +550,7 @@ def main(phase=None):
             'trimmed candidate statistic': 'actual summary removes five samples at each end',
             'receipt robust winner': 'receipt selects robust fifty-sample winner',
             'network changed during native retirement': 'a network change during teardown cannot adopt old results onto the new path',
-            'cancel substituted for acknowledged socket drain': (
-                'socket completion retains owned temporary runtime cancel',
-                'Cancel is not fabricated socket drain: cancel'),
+            'cancel substituted for acknowledged socket drain': SOCKET_DRAIN_WITNESSES,
             'direct probe lost its required physical interface': 'direct measurements require captured physical interface',
         }
         focused_witnesses = {

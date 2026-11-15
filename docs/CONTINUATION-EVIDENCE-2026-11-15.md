@@ -1615,3 +1615,30 @@ The frozen patch, exact source hashes, complete failing job log and positive
 receipt are retained in `focused-validator-go-order-validation`. Independent
 review confirmed that production admission, source guards, native inventories
 and deadlines remain unchanged. Hosted native execution remains required.
+
+## Apple candidate controls recognize every original socket-drain fault
+
+Exact `43ec6092` iOS smoke job `132842446035` rejected the intended negative
+control at `Cancel is not fabricated socket drain: disconnect`. Its Python
+witness list incorrectly recognized only the cancellation variant, although
+the unchanged Swift fixture exercises six original fault cases, each with
+two owned-runtime/socket-drain assertions. Which intended assertion fails
+first can depend on scheduling; an unrelated failure must still be refused.
+
+The fixture and expected labels now share the pinned six-fault inventory.
+Acceptance requires exit status one and exactly one complete expected failure
+line. The twelve specific drain witnesses are accepted; unrelated assertions,
+prefixed, suffixed or duplicated witnesses and other exit statuses are rejected.
+All 259 baseline checks and all six actual compiled negative controls passed
+in 93.385 seconds under the original 150-second bound. Thirteen existing
+runner tests passed, and three deliberately weakened witness parsers failed
+the duplicate, exit-status and substring controls. The original mutation,
+fault order, fifty-sample coverage, clocks and shipping code are unchanged.
+
+The exact patch, original native failure, positive runtime and control logs
+are retained in `ios-candidate-witness-validation`. The separate thirty-seven
+remaining iOS continuation commands also completed without another failure;
+`ios-runtime-tail-validation/completed-tail-receipt.json` pins their matching
+scripts and logs. Their real-SDK telemetry and forwarding portions explicitly
+remain for native Apple CI. No device or complete release claim follows from
+these portable source and Swift checks.
