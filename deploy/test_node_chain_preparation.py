@@ -338,15 +338,28 @@ class NodeChainPreparation(unittest.TestCase):
         desktop = ast.parse((ROOT/'deploy/build-native-runtime.py').read_text())
         commands = [[item.value if isinstance(item, ast.Constant) and isinstance(item.value, str) else ''
                      for item in node.elts] for node in ast.walk(desktop) if isinstance(node, ast.List)]
+        # The desktop builder discovers these roots from one retained native
+        # image, then runs every original family. Follow that actual executable
+        # invocation; a literal -run list is no longer the only selection path.
+        loader = ast.parse("root_phases = load('desktop_native_root_phases', 'test_desktop_native_root_phases.py')").body[0]
+        invoke = ast.parse("root_phases.execute(source, target, ','.join(tags(target)), env, run)").body[0].value
+        self.assertEqual(sum(ast.dump(node) == ast.dump(loader) for node in ast.walk(desktop)), 1)
+        self.assertEqual(sum(ast.dump(node) == ast.dump(invoke) for node in ast.walk(desktop)), 1)
+        spec = importlib.util.spec_from_file_location('selected_desktop_root_phases', ROOT/'deploy/test_desktop_native_root_phases.py')
+        phases = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(phases)
+        def selected_patterns(package):
+            direct = [command[command.index('-run')+1] for command in commands if package in command and '-run' in command]
+            return direct + ([phases.SELECTION] if package == '.' else [])
         for package, names in roots.items():
             if package == './experimental/libbox':
                 continue  # Desktop owns its original command-process lifecycle.
-            patterns = [command[command.index('-run')+1] for command in commands if package in command and '-run' in command]
+            patterns = selected_patterns(package)
             for name in names:
                 self.assertTrue(any(re.search(pattern, name) for pattern in patterns), ('desktop', package, name))
         for template in ('node_chain_box_physical_test.go.tmpl',):
             package = '.' if template.startswith('node_chain_box') else './cmd/sing-box'
-            patterns = [command[command.index('-run')+1] for command in commands if package in command and '-run' in command]
+            patterns = selected_patterns(package)
             for name in re.findall(r'^func (Test\w+)\(', (ROOT/'mobile/desktop'/template).read_text(), re.M):
                 self.assertTrue(any(re.search(pattern, name) for pattern in patterns), ('desktop', package, name))
 
