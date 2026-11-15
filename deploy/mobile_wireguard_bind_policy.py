@@ -495,12 +495,38 @@ def patch(source):
     if source not in (original,legacy,result):raise ValueError("Partial WireGuard bind correction")
     return result
 
+ENDPOINT_SOURCE_SHA = '20edc21a2c31b34075e529621c337a9f0b2a775b'
+ENDPOINT_OLD = '\te.device = wgDevice'
+ENDPOINT_NEW = '''	// A dependent endpoint may send through this device as soon as Start
+	// returns. Join the original TUN-up transition so its peer is running:
+	// WireGuard otherwise drops an early injected packet and the next hop
+	// cannot retransmit its first handshake until the normal retry timer.
+	// Keep this after resolver installation for hostname peers.
+	if err = wgDevice.Up(); err != nil {
+		wgDevice.Close()
+		return E.Cause(err, "start wireguard")
+	}
+	e.device = wgDevice'''
+
+def patch_endpoint(source):
+    original = source.replace(ENDPOINT_NEW, ENDPOINT_OLD, 1) if source.count(ENDPOINT_NEW) == 1 else source
+    if blobsha(original.encode()) != ENDPOINT_SOURCE_SHA or original.count(ENDPOINT_OLD) != 1:
+        raise ValueError("Pinned WireGuard endpoint differs; refusing a partial startup correction")
+    result = original.replace(ENDPOINT_OLD, ENDPOINT_NEW, 1)
+    if source not in (original, result):
+        raise ValueError("Partial WireGuard endpoint startup correction")
+    return result
+
 def prepare(vendor):
     STACK.prepare(vendor)
     file=Path(vendor)/"transport/wireguard/client_bind.go"
     if file.is_symlink():raise ValueError("WireGuard bind source is a symlink")
+    endpoint=file.with_name("endpoint.go")
+    if endpoint.is_symlink():raise ValueError("WireGuard endpoint source is a symlink")
+    endpoint_result=patch_endpoint(endpoint.read_text())
     result=patch(file.read_text())
     test=(ROOT/"mobile/wireguard/client_bind_test.go.tmpl").read_bytes()
     file.write_text(result)
+    endpoint.write_text(endpoint_result)
     (file.parent/"routervpn_client_bind_test.go").write_bytes(test)
     print("Verified WireGuard original bind lifecycle and connection publication")

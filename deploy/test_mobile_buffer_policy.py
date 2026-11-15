@@ -85,6 +85,17 @@ class WireGuardPublicationPolicyTests(unittest.TestCase):
             for broken in (original+'changed',fixed+'changed',fixed.replace('g.connAccess.Lock()','',1),fixed.replace('if g == nil {','if false {',1),fixed.replace('g.cancel()','',1)):
                 with self.assertRaises(ValueError):policy.patch(broken)
         with self.assertRaises(ValueError):policy.patch(original)
+    def test_endpoint_startup_join_is_pinned_idempotent_and_rejects_drift(self):
+        spec=importlib.util.spec_from_file_location('wg_endpoint_policy',ROOT/'deploy/mobile_wireguard_bind_policy.py')
+        policy=importlib.util.module_from_spec(spec);spec.loader.exec_module(policy)
+        self.assertEqual(policy.ENDPOINT_SOURCE_SHA,'20edc21a2c31b34075e529621c337a9f0b2a775b')
+        original=policy.ENDPOINT_OLD+'\n// isolated projection fixture\n'
+        with mock.patch.object(policy,'ENDPOINT_SOURCE_SHA',policy.blobsha(original.encode())):
+            fixed=policy.patch_endpoint(original)
+            self.assertEqual(policy.patch_endpoint(fixed),fixed)
+            for broken in (original+'changed',fixed+'changed',fixed.replace('wgDevice.Up()', 'wgDevice.Down()',1)):
+                with self.assertRaises(ValueError):policy.patch_endpoint(broken)
+        with self.assertRaises(ValueError):policy.patch_endpoint(original)
     def test_build_cache_and_native_test_require_the_owned_fix(self):
         prepare=(ROOT/'deploy/prepare-mobile-multihop.py').read_text()
         self.assertIn('WIREGUARD_BIND.inputs()',prepare)

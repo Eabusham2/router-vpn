@@ -1,7 +1,9 @@
 package wireguard
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"github.com/sagernet/sing-box/log"
 	M "github.com/sagernet/sing/common/metadata"
@@ -564,5 +566,79 @@ func TestRouterVPNClientBindActualKeepaliveAfterClosedBind(t *testing.T) {
 	}
 	if n != device.MessageInitiationSize || packet[0] != 1 {
 		t.Fatalf("not actual WireGuard initiation: size=%d type=%d", n, packet[0])
+	}
+}
+
+// Keep the asynchronous TUN-up event pending. Start must join device and peer
+// readiness itself before a dependent hop can enqueue its first handshake.
+type routerPendingUpDevice struct {
+	Device
+	events chan wgTun.Event
+	once   sync.Once
+}
+
+func (d *routerPendingUpDevice) Events() <-chan wgTun.Event { return d.events }
+func (d *routerPendingUpDevice) Close() error {
+	err := d.Device.Close()
+	d.once.Do(func() { close(d.events) })
+	return err
+}
+func TestRouterVPNClientBindEndpointStartupReadiness(t *testing.T) {
+	for _, hostname := range []bool{false, true} {
+		name := "literal"
+		if hostname {
+			name = "hostname"
+		}
+		t.Run(name, func(t *testing.T) {
+			listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			target := M.SocksaddrFromNet(listener.LocalAddr())
+			if hostname {
+				target = M.Socksaddr{Fqdn: "owned-peer.invalid", Port: target.Port}
+			}
+			var resolved atomic.Int64
+			endpoint, err := NewEndpoint(EndpointOptions{
+				Context: pause.WithDefaultManager(ctx), Logger: log.NewNOPFactory().Logger(),
+				Dialer: &routerLifecycleDialer{}, Workers: 1, Address: []netip.Prefix{netip.MustParsePrefix("10.77.0.2/32")},
+				PrivateKey: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)),
+				ResolvePeer: func(domain string) ([]netip.Addr, error) {
+					if domain != "owned-peer.invalid" {
+						return nil, errors.New("unexpected peer resolver")
+					}
+					resolved.Add(1)
+					return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+				},
+				Peers: []PeerOptions{{Endpoint: target, PublicKey: base64.StdEncoding.EncodeToString(append([]byte{9}, make([]byte, 31)...)), AllowedIPs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}, PersistentKeepaliveInterval: 1}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending := &routerPendingUpDevice{Device: endpoint.tunDevice, events: make(chan wgTun.Event)}
+			endpoint.tunDevice = pending
+			endpoint.returnDevice = &returnDeviceWrapper{Device: pending}
+			defer endpoint.Close()
+			if err := endpoint.Start(hostname); err != nil {
+				t.Fatal(err)
+			}
+			if err := listener.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			packet := make([]byte, 2048)
+			n, _, err := listener.ReadFromUDP(packet)
+			if err != nil {
+				t.Fatalf("Start returned without first-handshake readiness: %v", err)
+			}
+			if n != device.MessageInitiationSize || packet[0] != 1 {
+				t.Fatalf("unexpected first packet length/type: %d/%d", n, packet[0])
+			}
+			if hostname && resolved.Load() == 0 {
+				t.Fatal("hostname peer started before its original resolver")
+			}
+		})
 	}
 }
