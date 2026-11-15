@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,9 +19,11 @@ import (
 )
 
 type desktopExecutionOwnedModel struct {
-	winner   string
-	startErr error
-	ready    mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	winner        string
+	startErr      error
+	ready         mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	beforePublish func()
+	afterPublish  func(int64, int64)
 }
 
 // This models authenticated child records and the Windows controller/kernel.
@@ -169,8 +172,16 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	desktopOwnedNodeTestWrite(t, launch, "node-ready.json", base)
 	f.live = desktopNodeMTURecord{Schema: 1, Session: meta.SessionID, Config: meta.ConfigSHA256, Path: strings.Repeat("c", 64), Reader: 1, Interface: m.ready.InterfaceName, Index: 91, MTU: mtu, Heartbeat: time.Now().UnixMilli()}
 	publish := func() error {
+		if m.beforePublish != nil {
+			m.beforePublish()
+		}
 		launch.workspaceMu.Lock()
 		defer launch.workspaceMu.Unlock()
+		// The modeled child shares this lock with its parent; a real child
+		// does not. Stamp publication only after that artificial contention,
+		// while the initial constructor or heartbeat mutex owns the model.
+		m.ready.ObservedAt = time.Now().UnixMilli()
+		f.live.Heartbeat = time.Now().UnixMilli()
 		for name, record := range map[string]any{"node-chain-execution-ready.json": m.ready, "node-mtu-status.json": f.live} {
 			data, err := json.Marshal(record)
 			if err != nil {
@@ -183,6 +194,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 			if err := launch.directoryRoot.Rename(pending, name); err != nil {
 				return err
 			}
+		}
+		if m.afterPublish != nil {
+			m.afterPublish(m.ready.ObservedAt, f.live.Heartbeat)
 		}
 		return nil
 	}
@@ -206,8 +220,6 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 			case <-ticker.C:
 			}
 			f.heartbeat.Lock()
-			m.ready.ObservedAt = time.Now().UnixMilli()
-			f.live.Heartbeat = time.Now().UnixMilli()
 			err := publish()
 			f.heartbeat.Unlock()
 			if err != nil {
@@ -284,6 +296,55 @@ func desktopExecutionServerNode(input, identity string, position int) (string, s
 		identity = string(files)
 	}
 	return input, identity, err
+}
+
+func TestDesktopNodeChainExecutionHeartbeatStampsOriginalPublication(t *testing.T) {
+	f, s := prepareDesktopExecutionSessionModel(t, "local")
+	if err := s.startContext(f.operation); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	published := make(chan [2]int64, 1)
+	resume := make(chan struct{})
+	var enterOnce, publishOnce, resumeOnce sync.Once
+	defer resumeOnce.Do(func() { close(resume) })
+	// Acquire in the writer's own order; install observers under heartbeat
+	// ownership before allowing the next pulse to wait on the parent lock.
+	f.heartbeat.Lock()
+	f.launch.workspaceMu.Lock()
+	f.executionModel.beforePublish = func() { enterOnce.Do(func() { close(entered) }) }
+	f.executionModel.afterPublish = func(proof, mtu int64) {
+		publishOnce.Do(func() {
+			published <- [2]int64{proof, mtu}
+			<-resume // Pin the first publication; a later good pulse cannot hide it.
+		})
+	}
+	f.heartbeat.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			f.launch.workspaceMu.Unlock()
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("original pulse did not reach the held workspace")
+	}
+	// Cross a real millisecond boundary after the old stamp would have been
+	// taken. This controls only lock contention, never the production clock.
+	<-time.After(2 * time.Millisecond)
+	releasedAt := time.Now().UnixMilli()
+	f.launch.workspaceMu.Unlock()
+	locked = false
+	select {
+	case stamp := <-published:
+		if stamp[0] < releasedAt || stamp[1] < releasedAt {
+			t.Fatalf("first original publication retained a pre-lock timestamp: proof=%d mtu=%d released=%d", stamp[0], stamp[1], releasedAt)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("original pulse did not publish after workspace release")
+	}
 }
 
 func TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement(t *testing.T) {

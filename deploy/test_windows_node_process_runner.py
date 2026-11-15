@@ -65,7 +65,7 @@ class NodeProcessRunner(unittest.TestCase):
         execution = (
             "GraphRetainsSelectedAuthority", "ObservationHonorsCallerAndBusyReceipt",
             "StaleOperationCannotMutateReplacement", "PublicationRequiresOriginalOperation",
-            "RestoreKeepsRetainedCloseIntent", "OwnedStartupProofAndRetirement",
+            "RestoreKeepsRetainedCloseIntent", "HeartbeatStampsOriginalPublication", "OwnedStartupProofAndRetirement",
             "SessionOwnsChildResultAndRetirement", "SessionCleanupKeepsReplacementPublications",
             "SessionRestoresOnlyCapturedChoice", "SessionPartialStartupCleanup",
             "SessionChangedSourceStillJoinsOriginalChild",
@@ -80,7 +80,7 @@ class NodeProcessRunner(unittest.TestCase):
         roots = tuple("TestDesktopNodeChainExecution" + name for name in execution) + tuple(
             "TestDesktopOrderedLatency" + name for name in ordinary)
         self.assertEqual(tuple(GATE.ORDERED_CASES), roots)
-        self.assertEqual(sum(1 + len(children) for children in GATE.ORDERED_CASES.values()), 162)
+        self.assertEqual(sum(1 + len(children) for children in GATE.ORDERED_CASES.values()), 163)
         self.assertTrue(set(roots).issubset(GATE.SHARED_TESTS))
         for root, children in GATE.ORDERED_CASES.items():
             for name in (root, *(root + "/" + child for child in children)):

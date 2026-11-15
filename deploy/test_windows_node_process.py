@@ -242,6 +242,7 @@ ORDERED_CASES = {
         'retained-darwin',
         'windows-fallback',
     ),
+    'TestDesktopNodeChainExecutionHeartbeatStampsOriginalPublication': (),
     'TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement': (
         'local',
         'server',

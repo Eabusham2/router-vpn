@@ -876,6 +876,28 @@ refuse that ambient root. This local check used one installed Linux compiler;
 the two-version Darwin mismatch comes from the actual job log. Corrected
 exact-SHA native execution and publication remain required.
 
+### Execution fixture timestamps follow actual publication
+
+The test child for ordered desktop execution shares a workspace mutex with
+its modeled parent. It previously stamped proof and MTU heartbeat records
+before waiting for that mutex, unlike the independent production child.
+The fixture now stamps both records only after acquiring publication ownership.
+The production two-second freshness guard and readiness checks are unchanged.
+
+A new mandatory Windows case holds the workspace, captures the first pulse
+after release and prevents a later pulse from hiding its timestamps. Its
+causal control restores the old stamp placement and fails. The exact publisher
+control uses real mutexes, clock and filesystem writes with modeled record
+types. The composed race-instrumented client passed three relevant roots and
+15 verdicts, including both original retained-intent restoration branches and
+the unchanged readiness rejection cases. Two Windows runner inventory checks
+passed; the required inventory grows from 162 to 163 verdicts.
+
+Historical Windows job `132775180886` at `b698` failed a generic readiness
+check before its ordinary-close branch. This proven fixture defect does not
+establish the cause of that particular native failure. Exact-SHA Windows
+execution still must rerun and pass.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths
