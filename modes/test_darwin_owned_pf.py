@@ -928,6 +928,94 @@ class OwnedDarwinPF(unittest.TestCase):
                     self.assertFalse(retired['baseline']['present'])
                     self.assertEqual(self.references, {'999'})
 
+    def imported_prefix_capture(self, count, protocol):
+        capture, rows = self.connect_prefix_capture(count-2, protocol)
+        capture['family'] = ('ordered-node-chain-socks-v1' if protocol == 'socks5'
+                             else 'ordered-node-chain-v1')
+        return capture, rows
+
+    def test_imported_complete_prefix_keeps_original_member_baseline(self):
+        # Exercise the actual saved-store dispatcher and journal lifecycle.
+        # The existing explicit PF backend remains the only native double.
+        for protocol in ('socks5', 'openvpn'):
+            for count in (3, 4, 8):
+                with self.subTest(protocol=protocol, count=count):
+                    capture, rows = self.imported_prefix_capture(count, protocol)
+                    try:
+                        active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                    except RuntimeError as error:
+                        self.fail('imported prefix lost its original saved member baseline: '+str(error))
+                    self.assertEqual(D._darwin_node_chain_rows(capture), rows)
+                    self.assertEqual(active['capture'], capture)
+                    state = self.saved()
+                    self.assertEqual(state['native_node_chain_capture'], capture)
+                    self.assertEqual(state['policy'], 'on-connect')
+                    self.assertFalse(state['home_lan_access'])
+                    self.assertEqual(state['endpoint_ips'], [])
+                    self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+                    self.assertEqual(D.darwin_node_chain('current', dict(capture=capture, expected=active)), active)
+                    held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+                    self.assertTrue(held['baseline']['present'])
+                    retired = D.darwin_node_chain('release', dict(capture=capture, expected=held))
+                    self.assertFalse(retired['baseline']['present'])
+                    self.assertEqual(self.references, {'999'})
+
+    def test_imported_prefix_rows_preserve_exact_family_and_position(self):
+        import copy
+        for protocol in ('socks5', 'openvpn'):
+            capture, rows = self.imported_prefix_capture(8, protocol)
+            for fault in ('too-short', 'too-long', 'wrong-position', 'second-external', 'wrong-prefix',
+                          'wrong-final', 'wrong-family', 'ss-trio-only', 'duplicate-prefix',
+                          'digest', 'canonical', 'control', 'aggregate-policy', 'aggregate-lan'):
+                changed, modified = copy.deepcopy(capture), copy.deepcopy(rows)
+                if fault == 'too-short': modified = modified[-2:]
+                elif fault == 'too-long':
+                    extra = list(modified[0]); extra[0] = 'another-prefix'; modified.insert(0, extra)
+                elif fault == 'wrong-position': modified[0], modified[-2] = modified[-2], modified[0]
+                elif fault == 'second-external':
+                    modified[1] = list(modified[-2]); modified[1][0] = 'another-external'
+                elif fault == 'wrong-prefix': modified[0][1] = 'hysteria2'
+                elif fault == 'wrong-final': modified[-1][1] = 'hysteria2'
+                elif fault == 'wrong-family':
+                    changed['family'] = 'ordered-node-chain-connect-v1'
+                elif fault == 'ss-trio-only':
+                    changed['family'] = 'ordered-node-chain-v1'; modified[-2][1] = 'shadowsocks'
+                elif fault == 'duplicate-prefix': modified[1][0] = modified[0][0]
+                elif fault == 'control': changed['profile_id'] = 'another-control'
+                elif fault == 'aggregate-policy': changed['policy'] = 'always'
+                elif fault == 'aggregate-lan': changed['home_lan_access'] = True
+                raw = json.dumps(modified, separators=(',', ':'), ensure_ascii=True)
+                if fault == 'canonical': raw += ' '
+                changed.update(members_json=raw,
+                               members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
+                if fault == 'digest': changed['members_sha256'] = 'f'*64
+                with self.subTest(protocol=protocol, fault=fault), self.assertRaises(RuntimeError, msg='imported prefix borrowed another family, position or member capture'):
+                    D._darwin_node_chain_capture(changed)
+            self.assertEqual(self.commands, [])
+
+    def test_imported_prefix_checks_every_original_saved_member(self):
+        import copy
+        for protocol in ('socks5', 'openvpn'):
+            capture, rows = self.imported_prefix_capture(8, protocol)
+            original = copy.deepcopy(self.store)
+            for row in rows:
+                for fault in ('missing', 'duplicate', 'policy', 'lan', 'ipv6', 'kind'):
+                    changed = copy.deepcopy(original)
+                    member = next(value for value in changed['profiles'] if value['id'] == row[0])
+                    if fault == 'missing': changed['profiles'].remove(member)
+                    elif fault == 'duplicate': changed['profiles'].append(copy.deepcopy(member))
+                    elif fault == 'policy': member['kill_switch_policy'] = 'always'
+                    elif fault == 'lan': member['home_lan_access'] = not row[5]
+                    elif fault == 'ipv6': member['ipv6_mode'] = 'off' if row[4] == 'on' else 'on'
+                    elif fault == 'kind': member['node_kind'] = 'router-vpn' if row[2] == 'external' else 'external'
+                    self.private_json(self.root/'routers.json', changed)
+                    before = list(self.commands)
+                    with self.subTest(protocol=protocol, member=row[0], fault=fault), self.assertRaises(RuntimeError, msg='changed imported prefix member reached native mutation'):
+                        D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                    self.assertEqual(self.commands, before)
+                    self.assertEqual(D._linux.read_state(self.root), {})
+            self.private_json(self.root/'routers.json', original)
+
     def test_connect_prefix_rows_preserve_family_and_position_bounds(self):
         import copy
         capture, rows = self.connect_prefix_capture(6)
@@ -946,7 +1034,7 @@ class OwnedDarwinPF(unittest.TestCase):
             elif fault == 'ordinary-family':
                 changed['family'] = 'ordered-node-chain-v1'; modified[-2][1] = 'shadowsocks'
             elif fault == 'socks-family':
-                changed['family'] = 'ordered-node-chain-socks-v1'; modified[-2][1] = 'socks5'
+                changed['family'] = 'ordered-node-chain-socks-v1'
             elif fault == 'execution-family': changed['family'] = 'ordered-node-chain-execution-v1'
             elif fault == 'duplicate-prefix': modified[1][0] = modified[0][0]
             elif fault == 'control': changed['profile_id'] = 'another-control'

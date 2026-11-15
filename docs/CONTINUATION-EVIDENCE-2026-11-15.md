@@ -1841,3 +1841,45 @@ is isolated child mailbox and cancellation/drain evidence; it does not
 establish physical networking or OS kernel acceptance. Current exact-SHA
 native packaging, final release publication and remaining product work
 continue separately.
+
+
+## 2026-11-15: preserve complete imported-prefix macOS baselines
+
+An independent review traced the actual macOS native prepare path through
+`modes/kill-switch-platform.py`. Its `_darwin_node_chain_rows` parser permitted
+variable-length CONNECT rows, but still required every other imported family
+to contain exactly three members. Consequently it rejected the already
+published four/eight-member SOCKS graphs before native preparation. The same
+parser would reject the longer schema-five OpenVPN graphs under development.
+The Go selection validator already accepted the complete canonical rows; this
+was a real shipping Python admission mismatch, not a network timeout or an
+unsupported physical-device observation.
+
+The parser now permits the existing three-to-eight bound only for the exact
+typed SOCKS family with SOCKS mode, or the ordinary ordered family with
+OpenVPN mode, alongside the preserved CONNECT branch. The imported member
+must remain penultimate before its original SS2022 final. Imported SS2022
+retains its three-member bound. Canonical row encoding/digest, distinct IDs,
+source-family checks, saved-member equality, aggregate protection and LAN
+policy, and owned PF journal retirement remain enforced. This does not grant
+physical endpoint exceptions or broaden the shared compiler's graph admission.
+
+The required `deploy/test_darwin_pf_journal.py` gate passed its 20 baseline
+tests, 107 dispatcher tests (8.390 seconds), and all 47 causal controls. The
+43 existing controls remain, with four new exact-family, position and
+admission controls. The actual dispatcher exercises apply/current/retire/
+release for three, four and eight members and rejects replacements of every
+original saved member before backend mutation. Replaying the exact original
+8826 parser against the unchanged new positive test fails with the intended
+missing-member-baseline witness. The existing CONNECT wrong-family fixture
+now changes only the family; simultaneously changing its protocol to SOCKS
+would describe a valid supported graph and is no longer a truthful negative.
+
+The source unit contains the parser and its two executable test/gate files.
+All three main-worktree preimages match the frozen 8826 source, so this repair
+preserves the newer d1e7 native-drain fixture change. Hashes and complete logs
+are retained in `darwin-imported-prefix-baseline-validation`. These tests run
+the actual dispatcher and saved store with its explicit temporary PF backend;
+they do not establish physical macOS kernel or installed-app acceptance.
+The separate native Box factory repair and longer OpenVPN unit remain pending
+until their own native validation and publication are complete.
