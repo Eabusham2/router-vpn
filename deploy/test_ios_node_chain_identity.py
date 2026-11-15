@@ -153,15 +153,15 @@ def main():
         subprocess.run([str(binary), str(compiler)], check=True, timeout=180)
 
         source = capture.read_text()
-        # The schema-two imported member has no paired identity, while every
+        # The schema-two/five imported members have no paired identity, while every
         # native member still requires one. Remove both inventory-presence and
         # native-role requirements to reproduce the original missing-receipt
         # defect without weakening the source schema check or positive cases.
         before = '              let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,'
         after = '              let identitySources = Optional((root["identity_sources"] as? [String]) ?? []),'
-        native_identity = 'guard !identitySources[position].isEmpty, !(schema == 2 && position == 1),'
+        native_identity = 'guard !identitySources[position].isEmpty, !((schema == 2 || schema == 5) && position == 1),'
         assert source.count(before) == 1 and source.count(native_identity) == 1
-        changed = source.replace(before, after, 1).replace(native_identity, 'guard !(schema == 2 && position == 1),', 1)
+        changed = source.replace(before, after, 1).replace(native_identity, 'guard !((schema == 2 || schema == 5) && position == 1),', 1)
         mutated = work / 'MissingIdentityReceipt.swift'; mutated.write_text(changed)
         variants = [
             ('required-native-inventory', [str(mutated) if path == str(capture) else path for path in sources], body, 'ACCEPTED native handoff missing identity inventory'),

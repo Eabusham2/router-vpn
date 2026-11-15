@@ -1434,3 +1434,25 @@ missing-boundary controls: the original ten remain, with three additional
 helper-bound/family controls. No production app code or runtime validation
 was changed. Exact source hashes and both original-failure and successful
 logs are retained in `ios-profile-audit-validation`.
+
+## Apple original-identity control follows the imported OpenVPN schema
+
+The exact `2a9e594d7016fd6f9a00b89f5e9ce4ab54fbcac2` iOS smoke run
+`43719177603`, job `132827227145`, passed all thirty-two shipping
+Swift/shared-Go identity checks, then stopped because its deliberate defect
+control still searched for the pre-OpenVPN schema-two-only native guard.
+Shipping `IOSNodeChainCapture` excludes both imported schema two and five
+from claiming a paired identity at their imported position.
+
+The test now locates that actual guard and preserves both schema exclusions
+when deliberately removing the mandatory identity requirement. The corrected
+gate passes all thirty-two original positive checks and rejects the three
+original causal defects: missing native identity inventory, identity change
+after an awaited operation, and omission of the original WireGuard proof
+parser. The required failure witnesses remain explicit. No shipping source,
+identity validator, native admission rule, or deadline changed.
+
+The successful real Swift/Go log and original hosted failure are retained in
+`ios-identity-audit-validation`. NetworkExtension preferences and record storage
+are explicit test doubles; this result does not establish Xcode packaging,
+native networking, physical acceptance, or a fully green release.
