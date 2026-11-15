@@ -115,9 +115,8 @@ func macOSCandidatePrefixInstall(t *testing.T, peer *macOSNodeChainPeer, scenari
 	return store
 }
 
-// The only bridge below public platform admission belongs to this tagged,
-// installed native fixture. Every source, request and lifetime check remains
-// shipping code; no injected runtime, network observer, measurement or DOWN.
+// The installed fixture registers the shipping public routes. Only read-only
+// ownership observation is added; admission and worker handoff are unchanged.
 func macOSCandidatePrefixNativeController(owned *ownedDesktopController) (bool, error) {
 	raw, err := readPrivateRegular(filepath.Join(macOSOwnedControllerRoot, macOSCandidatePrefixMarker), 128)
 	if errors.Is(err, os.ErrNotExist) {
@@ -159,83 +158,6 @@ func macOSCandidatePrefixNativeController(owned *ownedDesktopController) (bool, 
 		value := a.state
 		a.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(value)
-	})
-	mux.HandleFunc("/api/native-prefix-catalog", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "GET only", 405)
-			return
-		}
-		ctx, stop := context.WithTimeout(r.Context(), 12*time.Second)
-		defer stop()
-		view, err := captureOrderedCandidateNativePreparedViewScope(ctx, a, len(modes)-1, orderedCandidateSavedPrefixScope, physicalNetworkIdentityContext)
-		if err != nil {
-			http.Error(w, err.Error(), 409)
-			return
-		}
-		control := viaEntryControlFor(a)
-		control.mu.Lock()
-		err = rememberOrderedCandidatePreparedViewLocked(control, view)
-		if err == nil {
-			control.preparedView = view
-		}
-		control.mu.Unlock()
-		if err != nil {
-			http.Error(w, err.Error(), 409)
-			return
-		}
-		viaEntryJSON(w, map[string]any{"view_token": view.token, "candidates": view.candidates, "prefix_position": view.position})
-	})
-	mux.HandleFunc("/api/native-prefix-start", func(w http.ResponseWriter, r *http.Request) {
-		var q orderedCandidatePreparedRequestEnvelope
-		if !viaEntryDecode(w, r, &q) {
-			return
-		}
-		if q.Scope != orderedCandidateSavedPrefixScope || q.Samples != 50 || q.PrefixPosition != len(modes)-1 || len(q.CandidateIDs) != 1 || q.CandidateIDs[0] != macOSCandidatePrefixCandidate {
-			http.Error(w, "original finite prefix request required", 400)
-			return
-		}
-		control := viaEntryControlFor(a)
-		control.mu.Lock()
-		view := control.preparedView
-		valid := view != nil && view.token == q.ViewToken && view.position == q.PrefixPosition && view.scopeValue() == q.Scope && time.Now().Before(view.expires)
-		if valid {
-			valid = reserveOrderedCandidatePreparedAdmissionLocked(control, q.RequestID, view) == nil
-		}
-		control.mu.Unlock()
-		if !valid {
-			http.Error(w, "original view changed", 409)
-			return
-		}
-		admission, stopAdmission := context.WithTimeout(r.Context(), 12*time.Second)
-		defer stopAdmission()
-		lifetime, stopLifetime := context.WithTimeout(context.Background(), viaEntryRequestTimeout)
-		p, err := beginOrderedCandidateNativePreparationWithLifetime(admission, lifetime, a, orderedCandidatePreparationRequest{Scope: q.Scope, RequestID: q.RequestID, Position: q.PrefixPosition, CandidateIDs: q.CandidateIDs, Samples: 50}, physicalNetworkIdentityContext)
-		if err != nil {
-			stopLifetime()
-			http.Error(w, err.Error(), 409)
-			return
-		}
-		if !view.matchesPreparation(p, time.Now()) {
-			stopLifetime()
-			_ = p.finish()
-			http.Error(w, "original source view changed", 409)
-			return
-		}
-		control.mu.Lock()
-		if control.preparedView != view || control.owner != p.owner || p.owner.cancelled || admission.Err() != nil {
-			control.mu.Unlock()
-			stopLifetime()
-			_ = p.finish()
-			http.Error(w, "original worker handoff changed", 409)
-			return
-		}
-		job := &orderedCandidatePreparedJob{view: view, preparation: p}
-		p.owner.prepared = job
-		response := orderedCandidatePreparedResponseLocked(p.owner, time.Now())
-		control.mu.Unlock()
-		go runOrderedCandidatePreparedJob(p, job, stopLifetime)
-		w.WriteHeader(http.StatusAccepted)
-		viaEntryJSON(w, response)
 	})
 	mux.HandleFunc("/api/native-prefix-observation", func(w http.ResponseWriter, r *http.Request) {
 		value, err := macOSCandidatePrefixObservation(r.Context(), a, captured)
@@ -388,7 +310,7 @@ func macOSCandidatePrefixNativeCase(t *testing.T, scenario string) {
 		return err == nil && code == 200
 	}, "original prefix controller did not start")
 	beforeTunnels := macOSExternalNativeTunnels(t)
-	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/native-prefix-catalog", "")
+	status, raw, err := macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/multihop/saved-candidates/catalog?prefix_position=1&scope=saved-prefix-local", "")
 	var view struct {
 		Token      string                   `json:"view_token"`
 		Position   int                      `json:"prefix_position"`
@@ -396,6 +318,15 @@ func macOSCandidatePrefixNativeCase(t *testing.T, scenario string) {
 	}
 	if err != nil || status != 200 || json.Unmarshal(raw, &view) != nil || len(view.Token) != 64 || view.Position != len(modes)-1 {
 		t.Fatal("native prefix source view unavailable", status, err, string(raw))
+	}
+	var envelope map[string]any
+	if json.Unmarshal(raw, &envelope) != nil || envelope["scope"] != orderedCandidateSavedPrefixScope || envelope["proof_scope"] != "selected-prefix" || envelope["application_open"] != false || envelope["dns_open"] != false || envelope["samples"] != float64(50) {
+		t.Fatal("public prefix catalog lost its closed exact purpose", string(raw))
+	}
+	staleToken := view.Token
+	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/multihop/saved-candidates/catalog?prefix_position=1&scope=saved-prefix-local", "")
+	if err != nil || status != 200 || json.Unmarshal(raw, &view) != nil || len(view.Token) != 64 || view.Token == staleToken || view.Position != len(modes)-1 {
+		t.Fatal("public prefix catalog failed to replace its original view", status, err, string(raw))
 	}
 	token = view.Token
 	var choice *orderedCandidateChoice
@@ -413,17 +344,26 @@ func macOSCandidatePrefixNativeCase(t *testing.T, scenario string) {
 	}
 	request := orderedCandidatePreparedRequestEnvelope{orderedCandidateRequest: orderedCandidateRequest{id, token, view.Position, []string{choice.ID}, 50}, Scope: orderedCandidateSavedPrefixScope}
 	body, _ := json.Marshal(request)
-	publicStatus, _, publicErr := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/saved-candidates", string(body))
-	if publicErr != nil || publicStatus != http.StatusConflict {
-		t.Fatal("unaccepted public Darwin prefix POST bypassed native admission", publicStatus, publicErr)
+	// Malformed and foreign requests cannot consume the original exact view.
+	for _, bad := range []orderedCandidatePreparedRequestEnvelope{
+		{orderedCandidateRequest: orderedCandidateRequest{id, staleToken, view.Position, []string{choice.ID}, 50}, Scope: orderedCandidateSavedPrefixScope},
+		{orderedCandidateRequest: orderedCandidateRequest{id, strings.Repeat("0", 64), view.Position, []string{choice.ID}, 50}, Scope: orderedCandidateSavedPrefixScope},
+		{orderedCandidateRequest: orderedCandidateRequest{id, token, view.Position, []string{choice.ID}, 49}, Scope: orderedCandidateSavedPrefixScope},
+		{orderedCandidateRequest: orderedCandidateRequest{id, token, view.Position, []string{choice.ID}, 50}, Scope: orderedCandidateSavedCompleteScope},
+	} {
+		invalid, _ := json.Marshal(bad)
+		code, _, requestErr := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/saved-candidates", string(invalid))
+		if requestErr != nil || code < 400 {
+			t.Fatal("public prefix accepted a foreign or malformed view", code, requestErr)
+		}
 	}
-	publicStatus, _, publicErr = macOSExternalNativeHTTP(ctx, client, http.MethodGet, "/api/multihop/saved-candidates/catalog?prefix_position=1&scope=saved-prefix-local", "")
-	if publicErr != nil || publicStatus != http.StatusConflict {
-		t.Fatal("unaccepted public Darwin prefix catalog bypassed native admission", publicStatus, publicErr)
-	}
-	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/native-prefix-start", string(body))
+	status, raw, err = macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/saved-candidates", string(body))
 	if err != nil || status != 202 {
 		t.Fatal("native prefix original job was not admitted", status, err, string(raw))
+	}
+	replayStatus, _, replayErr := macOSExternalNativeHTTP(ctx, client, http.MethodPost, "/api/multihop/saved-candidates", string(body))
+	if replayErr != nil || replayStatus != http.StatusConflict {
+		t.Fatal("public prefix replay acquired another native worker", replayStatus, replayErr)
 	}
 	const base = "/api/multihop/saved-candidates"
 	var result struct {
@@ -589,7 +529,7 @@ func macOSCandidatePrefixNativeCase(t *testing.T, scenario string) {
 	if receipt.ExitCode != 0 {
 		t.Fatal("original prefix controller did not join", receipt.ExitCode)
 	}
-	t.Logf("actual sealed Darwin selected-prefix host verified %s: original encrypted private prefix, exactly fifty TCP handshakes, unopened saved final, closed application and DNS, native Stop and process join, PF and utun retirement, explicit detached decision", scenario)
+	t.Logf("actual sealed Darwin selected-prefix host verified %s: shipping public catalog and admission, original encrypted private prefix, exactly fifty TCP handshakes, unopened saved final, closed application and DNS, native Stop and process join, PF and utun retirement, explicit detached decision", scenario)
 }
 
 func TestDesktopDarwinInstalledPrefixCandidateFixtureKeepsClosedAuthority(t *testing.T) {
@@ -623,18 +563,12 @@ func TestDesktopDarwinInstalledPrefixCandidateFixtureKeepsClosedAuthority(t *tes
 			}
 			a := &app{profiles: store, state: state{Mode: "off", Phase: "off"}, cfg: common.ClientConfig{ProfilesFile: filepath.Join(root, "routers.json"), ModesFile: filepath.Join(root, "modes.json"), ScriptsDir: filepath.Join(root, "modes"), StateFile: filepath.Join(root, "state.json")}}
 			observe := func(ctx context.Context) (string, error) { return "explicit-source-only-boundary", ctx.Err() }
-			if _, err := captureOrderedCandidatePreparedViewScope(context.Background(), a, 1, orderedCandidateSavedPrefixScope, observe); err == nil {
-				t.Fatal("public Darwin source view bypassed native admission")
-			}
-			view, err := captureOrderedCandidateNativePreparedViewScope(context.Background(), a, 1, orderedCandidateSavedPrefixScope, observe)
+			view, err := captureOrderedCandidatePreparedViewScope(context.Background(), a, 1, orderedCandidateSavedPrefixScope, observe)
 			if err != nil {
 				t.Fatal(err)
 			}
 			q := orderedCandidatePreparationRequest{Scope: orderedCandidateSavedPrefixScope, RequestID: strings.Repeat("a", 32), Position: 1, CandidateIDs: []string{macOSCandidatePrefixCandidate}, Samples: 50}
-			if _, err := beginOrderedCandidatePreparationWithLifetime(context.Background(), context.Background(), a, q, observe); err == nil {
-				t.Fatal("public Darwin prefix preparation bypassed native admission")
-			}
-			p, err := beginOrderedCandidateNativePreparationWithLifetime(context.Background(), context.Background(), a, q, observe)
+			p, err := beginOrderedCandidatePreparationWithLifetime(context.Background(), context.Background(), a, q, observe)
 			if err != nil {
 				t.Fatal(err)
 			}

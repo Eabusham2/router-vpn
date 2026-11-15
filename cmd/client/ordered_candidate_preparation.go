@@ -78,16 +78,22 @@ func beginOrderedCandidatePreparationWithLifetime(ctx, lifetime context.Context,
 	if err != nil {
 		return nil, err
 	}
-	if scope == orderedCandidateSavedPrefixScope && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+	if scope == orderedCandidateSavedPrefixScope && !orderedCandidatePrefixPlatformSupported() {
 		return nil, errors.New("candidate prefix native platform admission is unavailable")
 	}
 	return beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime, a, q, observe)
 }
 
-// This unexported body owns the complete request, source and lifetime checks.
-// The tagged installed Darwin fixture may exercise the concrete native path
-// below public platform admission. Production callers enter through the public
-// wrapper above; no request or setting can override that platform decision.
+func orderedCandidatePrefixPlatformSupported() bool {
+	return orderedCandidatePrefixTargetSupported(runtime.GOOS, runtime.GOARCH)
+}
+
+func orderedCandidatePrefixTargetSupported(target, architecture string) bool {
+	return target == "linux" || target == "windows" || target == "darwin" && (architecture == "amd64" || architecture == "arm64")
+}
+
+// This body owns the complete request, source and lifetime checks. Its sole
+// caller is the public platform wrapper; fixtures retain that same boundary.
 func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Context, a *app, q orderedCandidatePreparationRequest,
 	observe func(context.Context) (string, error)) (result *orderedCandidatePreparation, failure error) {
 	scope, scopeErr := normalizedOrderedCandidateSavedScope(q.Scope)

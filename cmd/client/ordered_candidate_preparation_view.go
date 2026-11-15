@@ -45,15 +45,15 @@ func captureOrderedCandidatePreparedViewScope(ctx context.Context, a *app, posit
 	if scopeErr != nil {
 		return nil, scopeErr
 	}
-	if scope == orderedCandidateSavedPrefixScope && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+	if scope == orderedCandidateSavedPrefixScope && !orderedCandidatePrefixPlatformSupported() {
 		return nil, errors.New("this platform has no accepted closed prefix controller")
 	}
 
 	return captureOrderedCandidateNativePreparedViewScope(ctx, a, position, scope, observe)
 }
 
-// The tagged installed Darwin fixture uses this complete source-only body below
-// the public platform decision. It cannot create a native or Connected owner.
+// The public platform wrapper is the sole caller of this source-only body.
+// A captured view cannot create a native or Connected owner.
 func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app, position int, scope string,
 	observe func(context.Context) (string, error)) (*orderedCandidatePreparedView, error) {
 	scope, scopeErr := normalizedOrderedCandidateSavedScope(scope)

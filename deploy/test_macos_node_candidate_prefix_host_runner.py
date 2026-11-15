@@ -54,8 +54,8 @@ def workflow_inventory(consumer, wrapper):
 
 def private_callers(sources):
     allowed={
-        'beginOrderedCandidateNativePreparationWithLifetime': {'cmd/client/ordered_candidate_preparation.go':1,'cmd/client/desktop_node_candidate_prefix_darwin_native_test.go':2},
-        'captureOrderedCandidateNativePreparedViewScope': {'cmd/client/ordered_candidate_preparation_view.go':1,'cmd/client/desktop_node_candidate_prefix_darwin_native_test.go':2},
+        'beginOrderedCandidateNativePreparationWithLifetime': {'cmd/client/ordered_candidate_preparation.go':1},
+        'captureOrderedCandidateNativePreparedViewScope': {'cmd/client/ordered_candidate_preparation_view.go':1},
     }
     for symbol, expected in allowed.items():
         found={}
@@ -116,12 +116,17 @@ class NativePrefixGate(unittest.TestCase):
         with patch.object(G.EXTERNAL,'sha',return_value='b'*64),patch.object(G.subprocess,'run') as run,self.assertRaises(ValueError):
             G.execute_authority(Path('/captured/controller'),'a'*64,{})
         run.assert_not_called()
-    def test_original_private_admission_caller_inventory_and_public_refusal(self):
+    def test_public_admission_has_no_fixture_only_source_or_worker_bridge(self):
         sources={str(p.relative_to(ROOT)):p.read_text() for p in (ROOT/'cmd/client').glob('*.go')}
         private_callers(sources)
         for symbol in ('beginOrderedCandidateNativePreparationWithLifetime','captureOrderedCandidateNativePreparedViewScope'):
             changed=dict(sources);changed['cmd/client/unapproved.go']='package main\nfunc bypass(){'+symbol+'(nil)}\n'
             with self.subTest(symbol=symbol),self.assertRaises(ValueError):private_callers(changed)
+        fixture=sources['cmd/client/desktop_node_candidate_prefix_darwin_native_test.go']
+        self.assertNotIn('/api/native-prefix-catalog',fixture)
+        self.assertNotIn('/api/native-prefix-start',fixture)
+        self.assertIn('registerOrderedCandidatePreparedRoutes(mux, a)',fixture)
+        self.assertIn('shipping public catalog and admission',G.receipt(G.CASES[0]))
         negative=sources['cmd/client/ordered_candidate_prefix_unsupported_test.go']
         self.assertIn('func TestOrderedCandidatePrefixUnsupportedPlatformKeepsAdmissionClosed(',negative)
         self.assertIn('captureOrderedCandidatePreparedViewScope(',negative)

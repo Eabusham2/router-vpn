@@ -1,4 +1,4 @@
-//go:build linux || windows
+//go:build linux || windows || (darwin && (amd64 || arm64))
 
 package main
 
@@ -153,6 +153,21 @@ func TestOrderedCandidatePrefixResultCannotBorrowFullCaptureOrSaveScope(t *testi
 		reply := orderedCandidateHTTP(t, a, "/api/multihop/saved-candidates/save-profile", map[string]any{"request_id": q.RequestID, "view_token": job.view.token, "candidate_id": q.CandidateIDs[0], "name": "Detached draft", "proposed_path": []any{}, "scope": scope})
 		if reply.Code != 409 || !strings.Contains(reply.Body.String(), "original temporary candidate result is unavailable") {
 			t.Fatal("foreign Save scope crossed original prefix purpose", reply.Code, reply.Body.String())
+		}
+	}
+}
+
+func TestOrderedCandidatePrefixPlatformTargets(t *testing.T) {
+	for _, target := range []struct {
+		os, arch  string
+		supported bool
+	}{
+		{"darwin", "amd64", true}, {"darwin", "arm64", true}, {"darwin", "386", false},
+		{"darwin", "arm", false}, {"ios", "arm64", false}, {"android", "arm64", false},
+		{"freebsd", "amd64", false}, {"linux", "amd64", true}, {"windows", "arm64", true},
+	} {
+		if got := orderedCandidatePrefixTargetSupported(target.os, target.arch); got != target.supported {
+			t.Fatal("selected-prefix platform changed its native acceptance target", target, got)
 		}
 	}
 }

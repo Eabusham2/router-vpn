@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Actual installed Darwin closed selected-prefix acceptance; no public admission override.
+"""Actual installed Darwin closed selected-prefix acceptance; shipping public catalog and admission.
 
 Each original case retains the existing240-second native bound. This independent
 six-case gate cannot replace any of the ordinary28host/19measurement cases.
@@ -28,6 +28,10 @@ CASES=('wg-save','wg-cancel','awg-fast-save','awg-fast-cancel','awg-strong-save'
 SOURCE_FILES=(
  'deploy/test_macos_node_candidate_prefix_host.py','deploy/test_macos_node_candidate_prefix_host_runner.py',
  'cmd/client/desktop_node_candidate_prefix_darwin_native_test.go',
+ 'cmd/client/ordered_candidate_preparation.go','cmd/client/ordered_candidate_preparation_view.go',
+ 'cmd/client/ordered_candidate_preparation_api.go','cmd/client/ordered_candidate_prefix_api_test.go',
+ 'cmd/client/ordered_candidate_prefix_unsupported_test.go','cmd/client/multihop_native_routes.go',
+
  '.github/workflows/darwin-node-prefix-host-tun.yml',
  'deploy/native-artifact-workflow-parity-audit.py','deploy/test_native_artifact_aggregate.py',
  'deploy/reusable-workflow-concurrency-audit.py','.github/workflows/release-candidate.yml',
@@ -43,7 +47,7 @@ def case_inventory(source=None):
 
 def receipt(case):
  if case not in CASES:raise ValueError('Unknown selected-prefix native case')
- return 'actual sealed Darwin selected-prefix host verified '+case+': original encrypted private prefix, exactly fifty TCP handshakes, unopened saved final, closed application and DNS, native Stop and process join, PF and utun retirement, explicit detached decision'
+ return 'actual sealed Darwin selected-prefix host verified '+case+': shipping public catalog and admission, original encrypted private prefix, exactly fifty TCP handshakes, unopened saved final, closed application and DNS, native Stop and process join, PF and utun retirement, explicit detached decision'
 
 def check_output(output,root,children,required_receipt=None):
  if not isinstance(output,str) or re.search(r'(?im)^\s*(?:--- (?:FAIL|SKIP):|FAIL(?:\s|$)|SKIP(?:\s|$)|WARNING: DATA RACE|panic:|fatal error:)|\[build failed\]',output):raise ValueError('Prefix output contains failure/skip/race evidence')
@@ -180,7 +184,8 @@ def execute(bundle, source=None, go='go', environment=None, *, required_commit=N
                              sealed_bundle_sha256=signed_hash, images=identities, cases=list(completed),
                              sources=before, authority_cases=list(AUTHORITY_CASES),
                              authority_output_sha256=hashlib.sha256(authority_output.encode()).hexdigest(),
-                             output_sha256=output_digest.hexdigest(), native=True)
+                             output_sha256=output_digest.hexdigest(), native=True, public_admission=True, public_catalog='/api/multihop/saved-candidates/catalog',
+                             public_start='/api/multihop/saved-candidates')
     if work.exists() or work.is_symlink():
         raise ValueError('Native selected-prefix acceptance did not retire its exact compilation workspace')
     if receipt_file is not None:
