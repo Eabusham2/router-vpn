@@ -1671,7 +1671,8 @@ func TestOriginalSSFinalTrustFault(t *testing.T){
         self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_LEAVES), 13)
         expected_layers = {"layers/" + entry + "/" + final for entry in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening") for final in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")} | {"reject/"+fault for fault in ("entry-layer-key","final-layer-key","entry-whitening","final-whitening","entry-layer-inner","final-layer-inner")}
         self.assertEqual(set(GATE.EXTERNAL_SS_ENTRY_LAYER_LEAVES), expected_layers | {"receipt-identity", "retired-initial-packet"})
-        self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_CASES["shadowsocks"]), 32)
+        self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_CASES["shadowsocks"]), 33)
+        self.assertIn(GATE.EXTERNAL_SS_ENTRY_ROOT + "/shadowsocks/off", GATE.EXTERNAL_SS_ENTRY_CASES["shadowsocks"])
         self.assertEqual(len(GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"]), 32)
         self.assertIn(GATE.EXTERNAL_SS_ENTRY_ROOT + "/hysteria2/reject/final-trust", GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"])
         self.assertIn(GATE.EXTERNAL_SS_ENTRY_ROOT + "/hysteria2/final-wrapper-tcp-denied", GATE.EXTERNAL_SS_ENTRY_CASES["hysteria2"])
@@ -1983,7 +1984,7 @@ class NativePhaseOrchestration(unittest.TestCase):
         self.assertEqual(len(set(calls)), 7)
         self.assertEqual(len(results), 7)
         self.assertIn("all seven native phases and their controls passed", output)
-        self.assertEqual([len(row["executables"]) for row in results], [3, 6, 3, 7, 3 + len(GATE.EXTERNAL_LEASE_CONTROLS), 7, 3])
+        self.assertEqual([len(row["executables"]) for row in results], [3, 6, 7, 7, 3 + len(GATE.EXTERNAL_LEASE_CONTROLS), 7, 3])
 
     def test_partial_wrong_target_changed_source_or_missing_images_never_complete(self):
         for fault in ("missing", "source", "phase", "target", "image", "unrelated-image", "mutated-source", "oversized"):
