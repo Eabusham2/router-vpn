@@ -46,11 +46,12 @@ func TestLinuxNodeControlSelectionBindsPolicyBeforeMutation(t *testing.T) {
 		t.Fatal("control selection lacks its separate selected-policy identity", err)
 	}
 	for label, mutate := range map[string]func(*NodeSelection){
-		"session": func(s *NodeSelection) { s.SessionID = strings.Repeat("e", 32) },
-		"source":  func(s *NodeSelection) { s.SourceSHA256 = strings.Repeat("e", 64) },
-		"config":  func(s *NodeSelection) { s.ConfigSHA256 = strings.Repeat("e", 64) },
-		"policy":  func(s *NodeSelection) { s.Policy = "on-connect" },
-		"lan":     func(s *NodeSelection) { s.HomeLAN = false },
+		"session":    func(s *NodeSelection) { s.SessionID = strings.Repeat("e", 32) },
+		"source":     func(s *NodeSelection) { s.SourceSHA256 = strings.Repeat("e", 64) },
+		"config":     func(s *NodeSelection) { s.ConfigSHA256 = strings.Repeat("e", 64) },
+		"policy":     func(s *NodeSelection) { s.Policy = "on-connect" },
+		"policy-off": func(s *NodeSelection) { s.Policy = "off" },
+		"lan":        func(s *NodeSelection) { s.HomeLAN = false },
 	} {
 		t.Run(label, func(t *testing.T) {
 			changed := selection
@@ -65,7 +66,9 @@ func TestLinuxNodeControlSelectionBindsPolicyBeforeMutation(t *testing.T) {
 		func(s *NodeSelection) { s.SessionID = "" },
 		func(s *NodeSelection) { s.SourceSHA256 = strings.Repeat("A", 64) },
 		func(s *NodeSelection) { s.ConfigSHA256 = strings.Repeat("0", 63) },
-		func(s *NodeSelection) { s.Policy = "off" },
+		func(s *NodeSelection) { s.Policy = "" },
+		func(s *NodeSelection) { s.Policy = "OFF" },
+		func(s *NodeSelection) { s.Policy = "unknown" },
 	} {
 		changed := selection
 		mutate(&changed)
