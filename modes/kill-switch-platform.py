@@ -880,7 +880,10 @@ def _darwin_node_chain_rows(capture):
             middle = {'ordered-node-chain-v1': ('shadowsocks', 'openvpn'),
                       'ordered-node-chain-socks-v1': ('socks5',),
                       'ordered-node-chain-connect-v1': ('http-connect', 'https-connect')}
-            if len(rows) != 3 or position != 1 or row[1] not in middle.get(capture['family'], ()) or rows[-1][1] != 'shadowsocks':
+            connect = capture['family'] == 'ordered-node-chain-connect-v1'
+            count_valid = 3 <= len(rows) <= 8 if connect else len(rows) == 3
+            middle_position = len(rows)-2 if connect else 1
+            if not count_valid or position != middle_position or row[1] not in middle.get(capture['family'], ()) or rows[-1][1] != 'shadowsocks':
                 raise RuntimeError(fail)
         elif position < len(rows)-1 and row[1] not in ('wg', 'awg2-fast', 'awg2-strong') or position == len(rows)-1 and row[1] not in ('shadowsocks', 'hysteria2'):
             raise RuntimeError(fail)

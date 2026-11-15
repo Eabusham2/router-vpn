@@ -20,6 +20,10 @@ FILES = ('modes/darwin_pf_baseline.py', 'modes/darwin_install_capability.py', 'm
          'modes/cleanup-private-runtime.py', 'modes/select-standard-engine.sh',
          'modes/tor-prelaunch-witness.py')
 MUTANTS = (
+    ('CONNECT complete packet-prefix admission', 'kill-switch-platform.py',
+     "count_valid = 3 <= len(rows) <= 8 if connect else len(rows) == 3", "count_valid = len(rows) == 3",
+     'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_connect_complete_prefix_keeps_original_member_baseline',
+     'CONNECT prefix lost its original saved member baseline'),
     ('ordered OpenVPN original member admission', 'kill-switch-platform.py',
      "'ordered-node-chain-v1': ('shadowsocks', 'openvpn'),", "'ordered-node-chain-v1': ('shadowsocks',),",
      'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_node_chain_openvpn_middle_keeps_original_policy_rows',

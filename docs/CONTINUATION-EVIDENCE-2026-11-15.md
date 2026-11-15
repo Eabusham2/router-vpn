@@ -1052,6 +1052,30 @@ paired verdicts. Original phase bounds, native PF/utun/encrypted traffic and
 installed Auto/Retest/Cancel gates remain mandatory. This source repair does
 not establish native kernel acceptance, package publication or device tests.
 
+### Complete CONNECT prefix protection rows on macOS
+
+The macOS baseline dispatcher now preserves three to eight captured members
+for the CONNECT family, with one HTTP/HTTPS CONNECT member in the penultimate
+position, paired WG/AWG members before it and a paired Shadowsocks final.
+Other imported families retain their previous three-position bound. The
+canonical member digest, exact saved-profile reconstruction, strongest captured
+protection and combined LAN policy are unchanged.
+
+The actual dispatcher passed twelve protocol/length vectors, twelve malformed
+shape or foreign-family vectors and 48 changes across every saved member of
+an eight-position capture. Changes were refused before native mutation.
+The full portable PF journal gate passed twenty baseline and 104 dispatcher
+tests plus 43 causal controls, including restoration of the old length guard.
+Three focused tests passed again after integration. The operating-system and
+PF backend remain explicit fixture boundaries; no Mac kernel pass is implied.
+
+This is an independently validated protection prerequisite. It creates no
+typed tunnel source and grants no application socket authority. At this
+publication cutoff the shipping CONNECT source compiler is still bounded to
+three members. The complete longer-path engine and mobile/UI capture changes
+remain under development, so this prerequisite does not close requirement
+214–224 or establish delivery of all longer CONNECT paths.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths
