@@ -420,6 +420,28 @@ class DarwinMutationOverlays(unittest.TestCase):
         self.assertIn(revoke[0][1], self.gate.CASES)
         self.assertEqual(revoke[0][3], 'desktop_socket_darwin_policy.go')
 
+    def test_off_source_order_control_refuses_before_any_native_install(self):
+        controls = [entry for entry in self.mutations if entry[0] == 'Off dry-run preserves original native expansion order']
+        self.assertEqual(len(controls), 1)
+        _, case, witness, name, changes = controls[0]
+        self.assertEqual((case, name), ('OffHostAndBroker', 'desktop_socket_darwin_off.go'))
+        self.assertEqual(changes, (('"-n", "-v", "-o", "none", "-a", desktopDarwinPFNamespace, "-f", "-"',
+                                   '"-n", "-v", "-a", desktopDarwinPFNamespace, "-f", "-"'),))
+        native = (ROOT/'internal/mobiletor/desktop_socket_darwin_off_test.go').read_text()
+        preflight = native.split('func TestDesktopDarwinGuardianKernelOffHostAndBroker(t *testing.T) {', 1)[1].split('for _, network :=', 1)[0]
+        self.assertIn(witness, preflight)
+        self.assertIn('desktopDarwinIsolatedSlotPolicy', preflight)
+        self.assertNotIn('desktopDarwinPFLoad', preflight)
+        verdict = '--- FAIL: '+self.gate.native_case_name(case)+' (0.01s)'
+        output = '    fixture.go:1: '+witness+'\n'+verdict+'\nFAIL\n'
+        self.gate.require_mutation_failure(output, case, witness)
+        for suffix in ('Native fixture cleanup retained its recovery record', 'panic: test timed out',
+                       'WARNING: DATA RACE', '[build failed]'):
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                self.gate.require_mutation_failure(output+suffix, case, witness)
+        with self.assertRaises(ValueError):
+            self.gate.require_mutation_failure(output.replace(witness, 'unrelated failure'), case, witness)
+
     def test_descriptor_retirement_requires_the_first_original_tuple_and_joined_cleanup(self):
         controls = [entry for entry in self.mutations if entry[0] == 'per-socket descriptor retirement']
         self.assertEqual(len(controls), 1)

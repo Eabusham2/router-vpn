@@ -890,6 +890,10 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('foreign block composition', 'ForeignBlockAndLaterPass', 'owned permit bypassed a later foreign block',
          'desktop_socket_darwin_pf.go', (
              ('"pass out on %s %s proto %s', '"pass out quick on %s %s proto %s'),)),
+        ('Off dry-run preserves original native expansion order', 'OffHostAndBroker', 'Darwin Off canonical reset order differs from original native expansion',
+         'desktop_socket_darwin_off.go', (
+             ('"-n", "-v", "-o", "none", "-a", desktopDarwinPFNamespace, "-f", "-"',
+              '"-n", "-v", "-a", desktopDarwinPFNamespace, "-f", "-"'),)),
         ('Off preserves ordinary host traffic', 'OffHostAndBroker', 'Darwin Off blocked an unrelated ordinary host socket',
          'desktop_socket_darwin_pf.go', (
              ('if desktopDarwinPFTestScope != "" && !p.HostProtectionOff {',

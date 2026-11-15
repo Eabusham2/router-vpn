@@ -822,7 +822,7 @@ prove these behaviors merely because a filename or string is present.
 
 ## Native continuation findings
 
-1. **Darwin PF grant:** baseline job `132590548214` retained about 1.997
+1. **Darwin PF grant and Off-slot order:** baseline job `132590548214` retained about 1.997
    seconds on entry, but full pre-mutation readback took about 2.091 seconds.
    It refused before native rule load or peer traffic. This is a real
    production two-second refusal, not a proven fixture-phase defect. Existing
@@ -830,9 +830,21 @@ prove these behaviors merely because a filename or string is present.
    suppressed. Later Off-host jobs at `7c7afb87` refused slot equality before
    guardian preparation in about 367 ms on Intel and 106.7 ms on ARM64; those
    failures are distinct from the earlier two-second grant expiry. The bounded
-   first-difference diagnostic in `4a463f03` must identify the actual mismatch
-   before an equality or timeout change is justified. No speculative PF repair
-   or relaxed ownership check is included in the paired-host change.
+   diagnostic at `4a463f03` then captured the same first difference on Intel job
+   `132769776861` and ARM64 job `132769777026` in
+   [run 43700305208](https://github.com/Eabusham2/router-vpn/actions/runs/43700305208):
+   expected and actual rule text had equal lengths, but line 2 was expected as
+   IPv4 UDP and observed as IPv6 TCP. The independent `pfctl` dry run applied
+   its default optimizer, while the native loader retained source expansion
+   order. The Off-only expected-policy parser now uses `-o none`; actual rule
+   installation, exact ordered comparison, protected-policy canonicalization
+   and all timeouts remain unchanged. A real system-parser preflight and a
+   mandatory old-option mutation run before this case installs an Off slot.
+   Actual-method race controls, readback controls, native gate inventory checks
+   and the Darwin ARM64 guardian package compile passed. These are bounded
+   source/component/compiler results; the corrected Intel/ARM64 kernel gates
+   still need to pass. The older grant-expiry observation remains a historical
+   lead to assess from those reruns, not the cause of this ordering failure.
 2. **Deep ordinary encrypted startup, locally repaired:** a retained trace
    proved that the next endpoint wrote its first handshake about 1.76 ms
    before its predecessor opened. WireGuard discarded the packet because

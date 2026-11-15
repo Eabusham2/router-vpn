@@ -79,6 +79,39 @@ func desktopDarwinOffHostExchange(t *testing.T, network string, remote netip.Add
 }
 
 func TestDesktopDarwinGuardianKernelOffHostAndBroker(t *testing.T) {
+	// Exercise the real system parser before installing anything. A dry-run
+	// optimizer must not reorder the two-family expansion installed by the
+	// native loader; the original full slot equality remains mandatory later.
+	capture := desktopSocketFixtureCapture()
+	const uid = 0x40000001
+	rules, err := desktopPFCompileFilters(desktopPFIsolatedPointer(capture, desktopDarwinPFGeneration(capture), uid, desktopDarwinPFTestScope))
+	if err != nil || len(rules) != 9 {
+		t.Fatal("actual Darwin Off native source expansion", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), desktopSocketControlWait)
+	slot, err := desktopDarwinIsolatedSlotPolicy(ctx, capture, uid)
+	cancel()
+	if err != nil {
+		t.Fatal("actual Darwin Off source-order canonicalization", err)
+	}
+	lines := strings.Split(slot.expected, "\n")
+	if len(lines) != 9 {
+		t.Fatal("Darwin Off canonical reset order differs from original native expansion")
+	}
+	for index, rule := range rules[:4] {
+		family, protocol := "inet", "tcp"
+		if rule.Family == 6 {
+			family = "inet6"
+		}
+		if rule.Protocol == 17 {
+			protocol = "udp"
+		}
+		prefix := fmt.Sprintf("pass out on %s %s proto %s from any to %s user = %d ", rule.Interface, family, protocol, rule.Destination.Addr(), rule.UID)
+		if rule.Action != "pass" || rule.Family != 4 && rule.Family != 6 || rule.Protocol != 6 && rule.Protocol != 17 ||
+			!strings.HasPrefix(lines[index], prefix) {
+			t.Fatal("Darwin Off canonical reset order differs from original native expansion")
+		}
+	}
 	for _, network := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
 		t.Run(network, func(t *testing.T) {
 			remote := desktopDarwinKernelPeer(t, network)

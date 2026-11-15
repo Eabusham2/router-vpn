@@ -29,6 +29,7 @@ import (
  "net/netip"
  "os"
  "os/exec"
+ "reflect"
  "strings"
  "sync"
  "sync/atomic"
@@ -39,6 +40,16 @@ import (
 const desktopSocketControlWait = 3*time.Second
 var fixtureNativeRefusal = errors.New("fixture cannot certify native descriptor verification")
 var fixtureCleanupRefusal = errors.New("fixture cannot certify native PF absence")
+var fixturePFCommandRefusal = errors.New("fixture cannot execute Darwin pfctl")
+var fixturePFCommandContext context.Context
+var fixturePFCommandInput string
+var fixturePFCommandArgs []string
+const desktopDarwinPFNamespace="com.apple/original"
+func desktopDarwinCommand(ctx context.Context,path string,input []byte,args ...string)([]byte,error){
+ fixturePFCommandContext=ctx;fixturePFCommandInput=string(input)
+ fixturePFCommandArgs=append([]string{path},args...)
+ return []byte("untrusted partial native output"),fixturePFCommandRefusal
+}
 type DesktopSocketCapture struct{ Session string }
 type DesktopSocketBinding struct{Owner string; LocalAddress netip.Addr}
 type DesktopSocketCreation struct{ Capture DesktopSocketCapture; Binding DesktopSocketBinding; SocketID,Network string }
@@ -107,6 +118,18 @@ func (p *DesktopDarwinSocketPolicy) retainOffDescriptor(c DesktopSocketCreation,
 '''
 
 TESTS = r'''
+func TestActualDarwinOffCanonicalSourceOrder(t *testing.T){
+ ctx,cancel:=context.WithCancel(context.Background());defer cancel()
+ original:="pass out proto tcp all user 1073741825 flags any tag \"original\" no state\n"
+ for _,off:=range []bool{false,true}{
+  canonical:=desktopDarwinPFCanonical
+  expected:=[]string{"/sbin/pfctl","-n","-v","-a",desktopDarwinPFNamespace,"-f","-"}
+  if off {canonical=desktopDarwinPFCanonicalInSourceOrder;expected=[]string{"/sbin/pfctl","-n","-v","-o","none","-a",desktopDarwinPFNamespace,"-f","-"}}
+  result,err:=canonical(ctx,original)
+  if !reflect.DeepEqual(fixturePFCommandArgs,expected){t.Fatal("Off canonical dry-run changed original source-order command",off,fixturePFCommandArgs)}
+  if fixturePFCommandContext!=ctx||fixturePFCommandInput!=original||result!=""||!errors.Is(err,fixturePFCommandRefusal){t.Fatal("canonical parser changed original caller/source or manufactured native success",err)}
+ }
+}
 func TestActualDarwinOffGuardPrecedesCreator(t *testing.T){
  binding:=DesktopSocketBinding{Owner:"original-owner",LocalAddress:netip.MustParseAddr("192.0.2.10")}
  capture:=DesktopSocketCapture{"original"}
@@ -179,6 +202,10 @@ def execute(root: Path = ROOT, *, go='go', policy=None, off=None, count=1, mutat
     bodies += [method(off_source, 'func (p *DesktopDarwinSocketPolicy) '+name+'(')
                for name in ('joinOffDescriptorCreation', 'offDescriptorsRetired')]
     bodies.append(method((root / HELPER.relative_to(ROOT)).read_text(), 'func (g *desktopDarwinGuardian) create('))
+    pf_source = (root/'internal/mobiletor/desktop_socket_darwin_pf.go').read_text()
+    bodies.extend(method(pf_source, 'func '+name+'(') for name in ('desktopDarwinPFCanonical', 'desktopDarwinPFRulesText'))
+    bodies.append(method(off_source, 'func desktopDarwinPFCanonicalInSourceOrder('))
+    assert method(off_source, 'func desktopDarwinIsolatedSlotPolicy(').count('desktopDarwinPFCanonicalInSourceOrder(ctx,') == 1, 'Off slot lost its source-order parser'
     start = broker_source.index('type desktopSocketControlMutex struct {')
     end = broker_source.index('func desktopSocketGrantControlled(', start)
     original = HEADER + broker_source[start:end] + '\n'.join(bodies) + TESTS
@@ -193,6 +220,10 @@ def execute(root: Path = ROOT, *, go='go', policy=None, off=None, count=1, mutat
         assert original.count(guard) == 1, 'Darwin Off creator guard boundary changed'
         variants.append(('missing-precreate-guard', original.replace(guard, ''),
                          'Off creator allocation preceded original independent guard refusal'))
+        option = '"-n", "-v", "-o", "none", "-a", desktopDarwinPFNamespace, "-f", "-"'
+        assert original.count(option) == 1, 'Off source-order parser option changed'
+        variants.append(('old-optimizing-canonical', original.replace(option, '"-n", "-v", "-a", desktopDarwinPFNamespace, "-f", "-"'),
+                         'Off canonical dry-run changed original source-order command'))
     environment = dict(os.environ)
     if platform.system() == 'Darwin':
         spec = importlib.util.spec_from_file_location('darwin_off_race', root/'deploy/darwin_race_toolchain.py')
@@ -204,7 +235,7 @@ def execute(root: Path = ROOT, *, go='go', policy=None, off=None, count=1, mutat
         for label, source, witness in variants:
             (directory / 'admission_test.go').write_text(source)
             result = subprocess.run([go, 'test', '-p=1', '-race', '-v', './'+directory.name,
-                                     '-run', '^TestActualDarwinOff(CloseJoinsAdmittedCreation|GuardPrecedesCreator)$',
+                                     '-run', '^TestActualDarwinOff(CloseJoinsAdmittedCreation|GuardPrecedesCreator|CanonicalSourceOrder)$',
                                      '-count='+str(count), '-timeout=30s'], cwd=root,
                                     env=environment, capture_output=True, text=True, timeout=120)
             output = result.stdout + result.stderr
@@ -212,6 +243,7 @@ def execute(root: Path = ROOT, *, go='go', policy=None, off=None, count=1, mutat
                 if result.returncode == 0 or witness not in output or re.search(r'panic:|fatal error:|WARNING: DATA RACE|\[build failed\]|fixture did not join', output):
                     raise AssertionError(label+': missing clean intended rejection\n'+output)
             elif (result.returncode != 0
+                  or output.count('--- PASS: TestActualDarwinOffCanonicalSourceOrder (') != count
                   or output.count('--- PASS: TestActualDarwinOffCloseJoinsAdmittedCreation (') != count
                   or output.count('--- PASS: TestActualDarwinOffCloseJoinsAdmittedCreation/') != count*2
                   or output.count('--- PASS: TestActualDarwinOffGuardPrecedesCreator (') != count

@@ -32,6 +32,21 @@ type desktopDarwinPFSlotPolicy struct {
 	expected string
 }
 
+// The native FILTER transaction installs source order without pfctl's basic
+// optimizer. The Off slot has intentionally nonterminal, unlabelled tag-reset
+// rules, which that optimizer can reorder by address family. Ask the independent
+// parser for the same source expansion, retaining exact ordered readback below.
+// This dry-run changes no native rules and leaves protected canonicalization
+// unchanged. The mandatory native preflight checks this option against the
+// system parser before installing any owned slot.
+func desktopDarwinPFCanonicalInSourceOrder(ctx context.Context, rules string) (string, error) {
+	raw, err := desktopDarwinCommand(ctx, "/sbin/pfctl", []byte(rules), "-n", "-v", "-o", "none", "-a", desktopDarwinPFNamespace, "-f", "-")
+	if err != nil {
+		return "", err
+	}
+	return desktopDarwinPFRulesText(raw), nil
+}
+
 func desktopDarwinIsolatedSlotPolicy(ctx context.Context, capture DesktopSocketCapture, uid uint32) (*desktopDarwinPFSlotPolicy, error) {
 	if !capture.valid() || uid < 0x40000000 || uid >= 0x80000000 {
 		return nil, errors.New("Darwin Off slot has no captured creator UID")
@@ -43,7 +58,7 @@ func desktopDarwinIsolatedSlotPolicy(ctx context.Context, capture DesktopSocketC
 			filters = append(filters, line)
 		}
 	}
-	canonical, err := desktopDarwinPFCanonical(ctx, strings.Join(filters, "\n")+"\n")
+	canonical, err := desktopDarwinPFCanonicalInSourceOrder(ctx, strings.Join(filters, "\n")+"\n")
 	if err != nil {
 		return nil, err
 	}
