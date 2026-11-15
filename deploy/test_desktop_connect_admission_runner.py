@@ -4,6 +4,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 import importlib.util
 import io
+import re
 import unittest
 from unittest.mock import Mock
 
@@ -19,14 +20,40 @@ def completed():
 
 class PublicCONNECTSourceGate(unittest.TestCase):
     def test_every_protocol_source_and_public_transaction_is_required(self):
-        self.assertEqual(len(G.REQUIRED), 72)
-        self.assertEqual(len(set(G.REQUIRED)), 72)
+        self.assertEqual(len(G.REQUIRED), 77)
+        self.assertEqual(len(set(G.REQUIRED)), 77)
         G.require_verdicts(completed())
         for line in completed().splitlines(True):
             for broken in (completed().replace(line, '', 1), completed()+line,
                            completed().replace(line, 'foreign '+line, 1)):
                 with self.subTest(line=line), self.assertRaises(ValueError):
                     G.require_verdicts(broken)
+
+    def test_exact_current_registered_source_inventory(self):
+        source=(ROOT/'cmd/client/desktop_node_chain_connect_admission_test.go').read_text()
+        body=source.split('func TestDesktopCONNECTRegisteredRouteRefusesChangedSourceAndGraph(t *testing.T) {',1)[1].split('\nfunc ',1)[0]
+        faults=re.search(r'for _, fault := range \[\]string\{([^}]+)\}',body)
+        self.assertIsNotNone(faults)
+        self.assertEqual(tuple(re.findall(r'"([^"\n]+)"',faults[1])),G.REQUEST_FAULTS)
+        root='TestDesktopCONNECTRegisteredExecutionRequiresOriginalRuntime'
+        self.assertIn('func '+root+'(t *testing.T) {',source)
+        self.assertEqual(G.ROOTS[root],('http-connect/server','http-connect/auto','https-connect/server','https-connect/auto'))
+        for protocol in G.PROTOCOLS:
+            for execution in ('server','auto'):
+                self.assertIn('TestDesktopCONNECTRegisteredRouteRefusesChangedSourceAndGraph/'+protocol+'/'+execution+'-final-layer',G.REQUIRED)
+                self.assertNotIn('TestDesktopCONNECTRegisteredRouteRefusesChangedSourceAndGraph/'+protocol+'/'+execution,G.REQUIRED)
+
+    def test_pre_capability_inventory_and_omitted_native_trust_are_refused(self):
+        root='TestDesktopCONNECTRegisteredExecutionRequiresOriginalRuntime'
+        old=completed().replace('server-final-layer','server').replace('auto-final-layer','auto')
+        old=''.join(line for line in old.splitlines(True) if root not in line)
+        with self.assertRaises(ValueError): G.require_verdicts(old)
+        omitted=''.join(line for line in completed().splitlines(True) if root not in line)
+        with self.assertRaises(ValueError): G.require_verdicts(omitted)
+        run=Mock(return_value=(0,completed()))
+        with redirect_stdout(io.StringIO()): G.execute('/captured/controller','linux',run,ROOT,{})
+        selector=next(arg for arg in run.call_args.args[0] if arg.startswith('-test.run='))
+        self.assertIn(root,selector)
 
     def test_failure_skip_race_and_false_process_success_are_refused(self):
         for fault in ('--- FAIL:', '--- SKIP:', 'WARNING: DATA RACE', 'panic:', 'fatal error:'):

@@ -3496,3 +3496,29 @@ ea8a7c77 were also preserved. The fifteen local source-read phases above used
 their recorded controller/shared image identities; they do not claim a full
 native build of those later unrelated fixture additions. The source-read
 production inputs and all exercised original test bodies remained unchanged.
+
+
+## Keep the installed CONNECT source inventory aligned with supported execution
+
+Published 8e3d5022 already repaired the old Local-only registered-route fixture:
+the unsupported Server/Compare cases now use a prohibited final Start Layer,
+and a new registered-route root requires the original native runtime receipt.
+The earlier four-member alternative was therefore superseded and was not
+replayed. The installed source driver still expected the older names and 72
+records, which would reject the current correct Go output.
+
+The driver and strict runner now require all 77 current records, including the
+five parent/leaf records of TestDesktopCONNECTRegisteredExecutionRequiresOriginalRuntime.
+All prior source, protocol, lifecycle, missing/duplicate/foreign verdict and
+failed/skipped/race rejection checks remain. The original 90-second Go and
+100-second outer bounds are unchanged. The runner also compares its negative
+inventory against the actual shipping Go fixture and rejects the obsolete
+72-record output or omitted native-trust family. All five runner roots pass
+on the integrated source. This unit changes no Go production or native test
+source and makes no new installed-network claim.
+
+Frozen two-file manifest SHA-256:
+bbfa9e8355623458450e6f6e872abafc5b7383fb4309708e57c990a552a7085d.
+Its exact preimages were checked after 999e67d9 before integration. Earlier
+superseded diagnostic failures, including unavailable local physical-network
+capture, remain outside this passing source-inventory evidence.

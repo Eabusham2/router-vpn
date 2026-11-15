@@ -7,8 +7,8 @@ PROTOCOLS = ('http-connect', 'https-connect')
 CAPABILITY_FAULTS = ('original', 'anonymous', 'hostname', 'wrong-endpoint', 'layer',
     'paired-token', 'paired-proof', 'paired-api', 'missing-source', 'opposite-source',
     'partial-auth', 'oversized-auth', 'bad-port', 'bad-sni', 'socks5')
-REQUEST_FAULTS = ('stale-middle', 'stale-final', 'partial-capture', 'cancelled', 'server',
-    'auto', 'layer', 'hostname', 'first', 'final', 'wrong-protocol')
+REQUEST_FAULTS = ('stale-middle', 'stale-final', 'partial-capture', 'cancelled', 'server-final-layer',
+    'auto-final-layer', 'layer', 'hostname', 'first', 'final', 'wrong-protocol')
 ROOTS = {
     'TestDesktopCONNECTPublicAdmissionRequiresOriginalHost': (),
     'TestDesktopCONNECTPublicCapabilityRetainsExactProtocolAndSecrets': tuple(
@@ -17,6 +17,8 @@ ROOTS = {
         name for mode in ('wg', 'awg2-fast', 'awg2-strong') for name in (mode, *(mode+'/'+protocol for protocol in PROTOCOLS))),
     'TestDesktopCONNECTRegisteredRouteRefusesChangedSourceAndGraph': tuple(
         name for protocol in PROTOCOLS for name in (protocol, *(protocol+'/'+fault for fault in REQUEST_FAULTS))),
+    'TestDesktopCONNECTRegisteredExecutionRequiresOriginalRuntime': tuple(
+        protocol+'/'+execution for protocol in PROTOCOLS for execution in ('server', 'auto')),
     'TestDesktopCONNECTCandidateProfileLoadReachesPublicCapture': PROTOCOLS,
 }
 REQUIRED = tuple(name for root, leaves in ROOTS.items() for name in (root, *(root+'/'+leaf for leaf in leaves)))
