@@ -256,6 +256,62 @@ func TestDesktopExternalLatencyCallerWorkspaceAdmission(t *testing.T) {
 	}
 }
 
+// The native fixture may atomically republish its terminal status after the
+// controller has joined the exact drain. A post-join assertion must tolerate
+// only Lstat/Open replacement, as the normal production mailbox reader does.
+// This does not wait for drain or retry any decoded state/ownership failure.
+func desktopLatencyDrainObservationFixture(read func() (desktopLatencyNativeRecord, error)) (desktopLatencyNativeRecord, error) {
+	var record desktopLatencyNativeRecord
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		record, err = read()
+		if !errors.Is(err, errDesktopRuntimeSnapshotChanged) {
+			return record, err
+		}
+	}
+	return record, err
+}
+
+func TestDesktopExternalLatencyDrainObservationRetriesOnlySnapshotReplacement(t *testing.T) {
+	foreign := errors.New("captured runtime ownership changed")
+	for _, tc := range []struct {
+		name    string
+		changes int
+		failure error
+		drained bool
+		calls   int
+	}{
+		{"first-snapshot-replaced", 1, nil, true, 2},
+		{"second-snapshot-replaced", 2, nil, true, 3},
+		{"replacement-never-settles", 3, errDesktopRuntimeSnapshotChanged, true, 3},
+		{"foreign-owner", 0, foreign, true, 1},
+		{"foreign-owner-after-replacement", 1, foreign, true, 2},
+		{"undrained-is-not-retried", 0, nil, false, 1},
+		{"undrained-after-replacement-is-not-retried", 1, nil, false, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			want := desktopLatencyNativeRecord{
+				desktopLatencyNativeRequest: desktopLatencyNativeRequest{Request: strings.Repeat("d", 32), Generation: 7},
+				Status:                      hopmeasure.Status{Stage: "cancelled", Complete: true, Drained: tc.drained},
+			}
+			record, err := desktopLatencyDrainObservationFixture(func() (desktopLatencyNativeRecord, error) {
+				calls++
+				if calls <= tc.changes {
+					return desktopLatencyNativeRecord{}, errDesktopRuntimeSnapshotChanged
+				}
+				return want, tc.failure
+			})
+			if calls != tc.calls || !errors.Is(err, tc.failure) {
+				t.Fatal("snapshot observation changed exact retry/refusal contract", calls, err)
+			}
+			if tc.changes < 3 && (record.desktopLatencyNativeRequest != want.desktopLatencyNativeRequest || record.Status.Stage != want.Status.Stage || record.Status.Complete != want.Status.Complete || record.Status.Drained != want.Status.Drained) {
+				t.Fatal("snapshot observation replaced or completed the original decoded record", record)
+			}
+		})
+	}
+}
+
 func TestDesktopExternalLatencyCallerJoinsNativeDrain(t *testing.T) {
 	for _, observer := range []string{"network", "held-app"} {
 		t.Run(observer, func(t *testing.T) {
@@ -315,7 +371,9 @@ func TestDesktopExternalLatencyCallerJoinsNativeDrain(t *testing.T) {
 				t.Fatal("native measurement lost original cancellation", err)
 			}
 			release()
-			record, err := readDesktopLatencyDrainRecord(launch)
+			record, err := desktopLatencyDrainObservationFixture(func() (desktopLatencyNativeRecord, error) {
+				return readDesktopLatencyDrainRecord(launch)
+			})
 			if err != nil || record.Request != operation.request || record.Generation != 1 || !record.Status.Complete || !record.Status.Drained || record.Status.Stage != "cancelled" || len(record.Status.Results) != 0 || !desktopMeasurementCancelRetired(launch, "latency-cancel.json") {
 				t.Fatal("observer returned before exact native generation and sockets drained", record, err)
 			}

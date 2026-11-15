@@ -1801,3 +1801,43 @@ source hashes and preimage checks are retained in
 `socks-prefix-independent-review`. Publication of this source does not by
 itself establish a green final release, native packages, physical devices,
 signing or private deployment. Those remain distinct requirements.
+
+
+## 2026-11-15: exact-head native-drain fixture observation repair
+
+At source `8826ddfc54a882093fdeeb308214fc676dfc9566`, standalone Multihop
+run `43731537111`, job `132864902604`, failed the held-app leaf of
+`TestDesktopExternalLatencyCallerJoinsNativeDrain`. The test performed a
+second, single-shot status read after production had joined the exact native
+drain. Its child fixture can atomically republish the same terminal record
+every 20 milliseconds. A replacement between Lstat and Open correctly
+returns `errDesktopRuntimeSnapshotChanged`; that snapshot race does not by
+itself mean production returned before drain.
+
+The change is confined to `cmd/client/desktop_external_cohort_context_test.go`.
+Its post-join assertion now permits at most three immediate reads, retrying
+only that exact snapshot-change error. It does not wait for a different
+drain state or retry a decoded ownership/state failure. Request identity,
+generation, Complete/Drained, cancelled stage, absent results, retired cancel
+input and preservation of the original live tunnel remain required by the
+original final assertions. No production source, timeouts or cancellation
+protections changed.
+
+Validation used a race-instrumented Go 1.26.3 image built from this exact
+one-file change. Seven retry/refusal leaves passed, including persistent
+replacement, foreign errors and undrained records. Ten repetitions of the
+actual network/held-app root passed all twenty subcase executions. A
+scratch-only causal overlay forced the first final observation to return
+the snapshot-change error: the repaired arm then read the actual child
+record and passed; the original one-read arm failed the unchanged final
+assertion with the intended error. Both causal arms completed in 0.23
+seconds, without timeout, panic or race-detector substitutes. Root also
+executed the frozen original image with both test roots: all seven controls
+and both actual child cases passed (the joined-drain root took 0.46 seconds).
+
+Preimage/source hashes, commands, logs, frozen test-image identities and
+causal receipts are retained in `latency-drain-observation-validation`. This
+is isolated child mailbox and cancellation/drain evidence; it does not
+establish physical networking or OS kernel acceptance. Current exact-SHA
+native packaging, final release publication and remaining product work
+continue separately.
