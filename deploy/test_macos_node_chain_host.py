@@ -103,7 +103,8 @@ def require_public_entrypoints(source):
     fragments = (
         (connect, 'if public == nil {'),
         (connect, 'public.Store(true) a.nativeMultihopConnectOwned(w, r, driver)'),
-        (controller, 'if len(modes) == 2 && (modes[1] == "socks5" || modes[1] == "http-connect" || modes[1] == "https-connect") {'),
+        (controller, 'if len(modes) >= 2 && ((len(modes) == 2 && modes[1] == "socks5") || modes[len(modes)-1] == "http-connect" || modes[len(modes)-1] == "https-connect") {'),
+        (controller, 'middle, found := a.profileByIDLocked(control.MultihopNodes[len(control.MultihopNodes)-2].ID)'),
         (controller, 'macOSNodeChainNativeConnect(a, w, r, driver, &publicConnect)'),
         (controller, 'mux.HandleFunc("/api/multihop/status", func(w http.ResponseWriter, r *http.Request) { publicStatus.Store(true) a.nativeMultihopStatus(w, r) })'),
         (controller, 'value.PublicConnect, value.PublicStatus = publicConnect.Load(), publicStatus.Load()'),

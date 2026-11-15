@@ -43,8 +43,17 @@ def workflow_inventory(consumer, wrapper):
             raise ValueError('Ordered native workflow lost its exact job/concurrency boundary')
     if consumer.count('on:\n  workflow_call:\n') != 1 or re.search(r'^  (?:workflow_dispatch|push|pull_request):', consumer, re.M):
         raise ValueError('Ordered host consumer must use this caller run without optional inputs')
-    if re.findall(r'^  ([A-Za-z][\w-]*):', consumer.split('jobs:\n')[1], re.M) != ['host']:
+    if re.findall(r'^  ([A-Za-z][\w-]*):', consumer.split('jobs:\n')[1], re.M) != ['host', 'paired-host']:
         raise ValueError('Ordered host consumer changed its complete job inventory')
+    paired = G.load('ordered_paired_host_workflow', 'test_darwin_paired_host_workflow.py')
+    try:
+        paired.check(consumer, (ROOT/'.github/workflows/release-candidate.yml').read_text(),
+                     (ROOT/'deploy/build-native-runtime.py').read_text())
+    except (AssertionError, ValueError, IndexError) as error:
+        raise ValueError('Installed paired host lost its own exact artifact and execution boundary') from error
+    # Each job must satisfy its own architecture, bundle and native-command
+    # boundaries. The paired job cannot supply a missing ordered-host token.
+    consumer = consumer.split('\n  paired-host:\n', 1)[0] + '\n'
     required = (
         '  group: darwin-node-host-tun-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}',
         '    runs-on: ${{ matrix.runner }}', '    timeout-minutes: 120', '      fail-fast: false',
@@ -120,7 +129,8 @@ class OrderedNativeVerdicts(unittest.TestCase):
         source = (ROOT/'cmd/client/desktop_node_chain_darwin_native_test.go').read_text()
         self.assertTrue(G.require_public_entrypoints(source))
         fragments = ('if public == nil {', 'public.Store(true)', 'a.nativeMultihopConnectOwned(w, r, driver)',
-                     'if len(modes) == 2 && (modes[1] == "socks5" || modes[1] == "http-connect" || modes[1] == "https-connect") {',
+                     'if len(modes) >= 2 && ((len(modes) == 2 && modes[1] == "socks5") || modes[len(modes)-1] == "http-connect" || modes[len(modes)-1] == "https-connect") {',
+                     'middle, found := a.profileByIDLocked(control.MultihopNodes[len(control.MultihopNodes)-2].ID)',
                      'macOSNodeChainNativeConnect(a, w, r, driver, &publicConnect)',
                      'a.nativeMultihopStatus(w, r)', 'publicConnect.Load(), publicStatus.Load()',
                      'public := publicProfileFor(middle)', 'public.External == nil || !public.External.OrderedMiddle',
@@ -135,6 +145,28 @@ class OrderedNativeVerdicts(unittest.TestCase):
             changed = source.replace('public.Store(true)', private+'\n\tpublic.Store(true)', 1)
             with self.subTest(private=private), self.assertRaises(ValueError):
                 G.require_public_entrypoints(changed)
+
+    def test_connect_prefix_public_capability_keeps_exact_family_and_member(self):
+        source = (ROOT/'cmd/client/desktop_node_chain_darwin_native_test.go').read_text()
+        current = 'if len(modes) >= 2 && ((len(modes) == 2 && modes[1] == "socks5") || modes[len(modes)-1] == "http-connect" || modes[len(modes)-1] == "https-connect") {'
+        mutations = (
+            ('old-three-node-rule', current,
+             'if len(modes) == 2 && (modes[1] == "socks5" || modes[1] == "http-connect" || modes[1] == "https-connect") {'),
+            ('first-http-member', 'modes[len(modes)-1] == "http-connect"', 'modes[1] == "http-connect"'),
+            ('first-https-member', 'modes[len(modes)-1] == "https-connect"', 'modes[1] == "https-connect"'),
+            ('broadened-socks', '(len(modes) == 2 && modes[1] == "socks5")', 'modes[len(modes)-1] == "socks5"'),
+            ('missing-minimum', 'len(modes) >= 2 && ', ''),
+            ('wrong-captured-member',
+             'middle, found := a.profileByIDLocked(control.MultihopNodes[len(control.MultihopNodes)-2].ID)',
+             'middle, found := a.profileByIDLocked(control.MultihopNodes[1].ID)'),
+        )
+        self.assertTrue(G.require_public_entrypoints(source))
+        for name, before, after in mutations:
+            with self.subTest(name=name):
+                self.assertEqual(source.count(before), 1)
+                changed = source.replace(before, after, 1)
+                with self.assertRaises(ValueError):
+                    G.require_public_entrypoints(changed)
 
     def test_exact_source_inventory_preserves_original_paths_and_adds_nine_hysteria_cases(self):
         self.assertEqual(G.case_inventory(), G.CASES)
@@ -152,9 +184,11 @@ class OrderedNativeVerdicts(unittest.TestCase):
         original = tuple(re.findall(r'"([a-z0-9-]+)"', match[1]))
         prefixes = ('node-chain-3-', 'node-chain-3-awg-fast-wg-', 'node-chain-3-awg-strong-awg-fast-')
         selected = tuple(prefix+'prefix-candidates-'+action for prefix in prefixes for action in ('save', 'cancel'))
+        off = tuple('node-chain-3-prefix-candidates-off-'+action for action in ('save', 'cancel'))
+        selected = selected[:2] + off + selected[2:]
         complete = tuple(prefix+'candidates-'+action for prefix in prefixes for action in ('save', 'cancel'))
         self.assertEqual(original, selected + G.ORIGINAL_CASES[:-2] + complete)
-        self.assertEqual(len(original), 38)
+        self.assertEqual(len(original), 40)
         hysteria = (ROOT/'cmd/client/desktop_node_chain_linux_hysteria_tun_native_test.go').read_text()
         body = hysteria.split('func linuxNodeChainHysteriaHostCases() []string {', 1)[1].split('\n}', 1)[0]
         self.assertEqual(tuple(re.findall(r'"([a-z0-9-]+)"', body)), G.HYSTERIA_CASES)
@@ -574,9 +608,27 @@ class OrderedNativeWorkflows(unittest.TestCase):
             ('        run: python3 deploy/test_macos_connect_node_chain_host_runner.py', '        run: true'),
         )
         for before, after in changes:
-            self.assertEqual(self.consumer.count(before), 1)
+            ordered, paired = self.consumer.split('\n  paired-host:\n', 1)
+            self.assertEqual(ordered.count(before), 1)
             with self.subTest(change=before), self.assertRaises(ValueError):
-                workflow_inventory(self.consumer.replace(before, after, 1), self.wrapper)
+                workflow_inventory(ordered.replace(before, after, 1)+'\n  paired-host:\n'+paired, self.wrapper)
+
+    def test_paired_job_cannot_borrow_ordered_architecture_bundle_or_execution(self):
+        ordered, paired = self.consumer.split('\n  paired-host:\n', 1)
+        changes = (
+            ('          - arch: arm64\n            runner: macos-15\n', ''),
+            ('          path: ${{ runner.temp }}/paired-host-bundle',
+             '          path: ${{ runner.temp }}/paired-host-bundle\n          run-id: 12345'),
+            ('python3 deploy/test_macos_paired_node_host.py --bundle', 'true # --bundle'),
+            ('          if-no-files-found: error', '          if-no-files-found: warn'),
+        )
+        for before, after in changes:
+            self.assertEqual(paired.count(before), 1)
+            with self.subTest(change=before), self.assertRaises(ValueError):
+                workflow_inventory(ordered+'\n  paired-host:\n'+paired.replace(before, after, 1), self.wrapper)
+        for changed in (ordered+'\n', self.consumer+'\n  paired-host:\n'+paired):
+            with self.assertRaises(ValueError):
+                workflow_inventory(changed, self.wrapper)
 
     def test_standalone_wrapper_cannot_skip_or_borrow_runtime_producer(self):
         for before, after in (

@@ -1456,3 +1456,32 @@ The successful real Swift/Go log and original hosted failure are retained in
 `ios-identity-audit-validation`. NetworkExtension preferences and record storage
 are explicit test doubles; this result does not establish Xcode packaging,
 native networking, physical acceptance, or a fully green release.
+
+## Installed Mac source gates follow the actual captured CONNECT member
+
+The exact `80cb0b15b0745e312ee380e70683e452b302e1ba` authoritative release
+job `132835155471` stopped before native child execution because the installed
+Mac structural audit still required the old three-node-only CONNECT condition.
+The actual controller now checks the penultimate imported member after all
+captured paired prefixes. The corrected audit requires that current condition
+and the exact penultimate-profile lookup, while retaining the separate
+three-node SOCKS restriction and actual public Connect/status dispatchers.
+
+The original public-route removal, private-entrypoint and misleading-comment
+controls remain. Six additional mutations reject the old three-node rule,
+fixed HTTP/HTTPS positions, broadened SOCKS placement, an omitted minimum,
+and a wrong captured-profile lookup. Full runner verification also exposed
+two earlier inventory assumptions: Linux now requires the original two Off
+prefix Save/Cancel cases in its forty-case inventory, and the Mac workflow
+contains both ordered and single-paired host jobs. The gate now requires both
+jobs, checks each one's own architecture and artifact boundaries, and invokes
+the existing paired-host workflow validator against the supplied source.
+Ordered and paired jobs cannot supply each other's missing evidence.
+
+The original hosted failure and complete base-runner failures were reproduced.
+All fifty-eight focused checks pass: thirty ordered-host runner checks, ten
+SOCKS runner checks, fourteen CONNECT runner checks and four paired-workflow
+checks. Logs and exact file hashes are retained in
+`macos-public-entry-audit-validation`. Production code, native scenarios,
+workflow execution, timeouts and required receipts are unchanged; these source
+gate results do not establish installed PF/utun or physical-device acceptance.
