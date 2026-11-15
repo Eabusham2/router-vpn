@@ -73,7 +73,8 @@ func TestActualPairedReaderConfirmation(t *testing.T){
 }
 '''
 
-def execute(root=ROOT,go='go'):
+def execute(root=ROOT,go='go',environment=None):
+    captured=dict(os.environ if environment is None else environment, GOTOOLCHAIN='local')
     raw=(root/'mobile/desktop/node_box_physical.go.tmpl').read_text()
     start=raw.index('func (owner *RouterVPNDesktopNodePhysical) ConfirmPairedDarwinMTUReader(')
     end=raw.index('\nfunc ',start+1)
@@ -99,7 +100,7 @@ def execute(root=ROOT,go='go'):
             # original executable authority checks determine the verdict.
             if label=='changed-readback':source=source.replace('actualName, actualIndex, actualMTU, err :=','_, _, _, err =',1)
             (work/'confirmation.go').write_text(HEADER+source)
-            result=subprocess.run([go,'test','-race','-p=1','-count=1','-timeout=30s','-v','.'],cwd=work,env=dict(os.environ,GOTOOLCHAIN='local'),capture_output=True,text=True,timeout=120)
+            result=subprocess.run([go,'test','-race','-p=1','-count=1','-timeout=30s','-v','.'],cwd=work,env=captured,capture_output=True,text=True,timeout=120)
             output=result.stdout+result.stderr
             if label=='original':
                 if result.returncode or output.count('--- PASS: TestActualPairedReaderConfirmation/')!=17 or 'DATA RACE' in output:raise AssertionError(output)

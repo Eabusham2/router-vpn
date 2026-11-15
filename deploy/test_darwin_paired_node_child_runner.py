@@ -6,6 +6,8 @@ from unittest.mock import patch
 import contextlib
 import importlib.util
 import io
+import inspect
+import os
 import subprocess
 import tempfile
 import unittest
@@ -25,6 +27,7 @@ class PairedBoundaries(unittest.TestCase):
             for path in (child,peer):path.write_bytes(path.name.encode());path.chmod(0o755)
             sources={'original':'a'*64};identities={path:G.image_identity(path) for path in (child,peer)}
             calls=[];verified=[];reads=[0]
+            captured={'GOROOT':'/captured/go1.26.5','GOTOOLCHAIN':'local','PATH':'/captured/go1.26.5/bin','CC':'/captured/clang','CGO_ENABLED':'1'}
             def readback(_):
                 reads[0]+=1
                 return work, {'changed':'b'*64} if mutation=='source' and reads[0]>1 else sources
@@ -48,10 +51,10 @@ class PairedBoundaries(unittest.TestCase):
             gate=SimpleNamespace(UID=SimpleNamespace(run=run,RACE=SimpleNamespace(verify_image=lambda *args:verified.append(args))),
                                  NODE=G.NODE,native_fixture_compile=G.native_fixture_compile,image_identity=G.image_identity,
                                  checked_sources=readback)
-            with patch.object(P.READER,'execute') as reader,patch.object(P.PLATFORM,'verify') as platform,contextlib.redirect_stdout(io.StringIO()):
-                receipt=P.execute(gate,work,sources,'/captured/go',{},child,identities,work)
-            platform.assert_called_once_with(go='/captured/go')
-            reader.assert_called_once_with(go='/captured/go')
+            with patch.dict(os.environ,{'GOROOT':'/ambient/go1.26.3','GOTOOLCHAIN':'auto'}),patch.object(P.READER,'execute') as reader,patch.object(P.PLATFORM,'verify') as platform,contextlib.redirect_stdout(io.StringIO()):
+                receipt=P.execute(gate,work,sources,'/captured/go',captured,child,identities,work)
+            platform.assert_called_once_with(go='/captured/go',environment=captured)
+            reader.assert_called_once_with(go='/captured/go',environment=captured)
             self.assertEqual(len(calls),3);self.assertEqual(calls[0][1]['timeout'],600)
             self.assertEqual(calls[0][0][-1],'.');self.assertIn('-race',calls[0][0])
             self.assertEqual(len(verified),1)
@@ -98,5 +101,54 @@ class PairedBoundaries(unittest.TestCase):
                     'artifacts':{'generated-child-test':{'sha256':'b'*64}}}
             with self.assertRaisesRegex(ValueError,'boundary receipt'):G.publish_receipt(target,result,gone)
             self.assertFalse(target.exists())
+
+
+    def test_absolute_compiler_without_captured_environment_is_not_sufficient(self):
+        source=inspect.getsource(P.execute)
+        for call in ('PLATFORM.verify','READER.execute'):
+            before=call+'(go=str(compiler), environment=captured)'
+            self.assertEqual(source.count(before),1)
+            namespace=dict(P.__dict__)
+            exec(compile(source.replace(before,call+'(go=str(compiler))',1),'<omitted compiler environment>','exec'),namespace)
+            with self.subTest(call=call),patch.object(P,'execute',namespace['execute']),self.assertRaises(AssertionError):self.exercise()
+
+    def test_reader_compile_preserves_selected_root_and_standalone_default(self):
+        captured={'GOROOT':'/selected/go1.26.5','GOTOOLCHAIN':'local','PATH':'/selected/go1.26.5/bin','CC':'/selected/clang','CGO_ENABLED':'1'}
+        ambient={'GOROOT':'/ambient/go1.26.3','GOTOOLCHAIN':'auto','PATH':'/ambient/bin','CC':'/ambient/clang'}
+        for supplied in (captured,None):
+            calls=[];expected=dict(captured if supplied is not None else ambient,GOTOOLCHAIN='local')
+            def run(command,**options):
+                self.assertEqual(command[0],'/selected/go')
+                self.assertEqual(options['env'],expected)
+                self.assertEqual(options['timeout'],120)
+                self.assertIn('-race',command)
+                calls.append(command)
+                # Explicit subprocess contract model: real compiler/17 native
+                # source cases remain required by execute, never replaced here.
+                output=''.join('--- PASS: TestActualPairedReaderConfirmation/case'+str(i)+'\n' for i in range(17)) if len(calls)==1 else 'paired reader causal refusal failed'
+                return SimpleNamespace(returncode=0 if len(calls)==1 else 1,stdout=output,stderr='')
+            with self.subTest(captured=supplied is not None),patch.dict(os.environ,ambient,clear=True),patch.object(P.READER.subprocess,'run',side_effect=run),contextlib.redirect_stdout(io.StringIO()):
+                P.READER.execute(go='/selected/go',environment=supplied)
+            self.assertEqual(len(calls),5)
+        self.assertEqual(captured['GOROOT'],'/selected/go1.26.5')
+        self.assertEqual(captured['GOTOOLCHAIN'],'local')
+
+    def test_platform_selection_preserves_compiler_root_while_selecting_targets(self):
+        captured={'GOROOT':'/selected/go1.26.5','GOTOOLCHAIN':'local','PATH':'/selected/go1.26.5/bin','CC':'/selected/clang','CGO_ENABLED':'1','GOOS':'darwin','GOARCH':'amd64'}
+        original=dict(captured);calls=[]
+        def run(command,**options):
+            self.assertEqual(command[0],'/selected/go')
+            env=options['env'];target=env['GOOS']
+            for key in ('GOROOT','GOTOOLCHAIN','PATH','CC'):self.assertEqual(env[key],captured[key])
+            self.assertEqual(env['CGO_ENABLED'],'0');self.assertEqual(env['GO111MODULE'],'off')
+            self.assertEqual(env['GOARCH'],'arm64' if target in ('darwin','ios') else 'amd64')
+            calls.append(target)
+            names=[p.name for p in Path(options['cwd']).glob('*.go')]
+            selected=[name for name in names if (target=='darwin') != name.endswith('_other.go')]
+            return SimpleNamespace(returncode=0,stdout='\n'.join(selected),stderr='')
+        with patch.dict(os.environ,{'GOROOT':'/ambient/go1.26.3','GOTOOLCHAIN':'auto'}),patch.object(P.PLATFORM.subprocess,'run',side_effect=run):
+            selected=P.PLATFORM.verify(go='/selected/go',environment=captured)
+        self.assertEqual(len(calls),12);self.assertEqual(len(selected),12)
+        self.assertEqual(captured,original)
 
 if __name__=='__main__':unittest.main()

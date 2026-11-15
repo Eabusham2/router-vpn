@@ -857,6 +857,25 @@ in `TestControllerShutdownCancelsSpeedLabIntentWithoutRestoringConnection`;
 that case is not recorded as a local pass. Actual native shutdown and the
 full exact-SHA release remain mandatory.
 
+### Captured Go environment in nested Darwin native gates
+
+Exact-`a59702a9` Build All run `43706224191`, Darwin AMD64 child job
+`132787802547`, reached the native handshake preflight and then failed while
+compiling the paired-reader fixture: the selected Go 1.26.5 executable received
+the ambient Go 1.26.3 standard-library root. The parent had already captured a
+consistent compiler environment, but passed only the executable to two nested
+helpers. Both now receive that original environment explicitly. The reader
+keeps local toolchain dispatch; platform source selection keeps its existing
+target overrides. Compiler pins, native assertions and deadlines are unchanged.
+
+Eight focused runner tests passed, including removal of either environment
+handoff. Twelve real source selections and all 17 reader cases plus four
+original causal controls passed with the captured compiler environment and a
+deliberately invalid ambient root. Omitting the capture made the real compiler
+refuse that ambient root. This local check used one installed Linux compiler;
+the two-version Darwin mismatch comes from the actual job log. Corrected
+exact-SHA native execution and publication remain required.
+
 ## Requirement-to-evidence ledger
 
 This table preserves the original identifiers and points to shipping paths

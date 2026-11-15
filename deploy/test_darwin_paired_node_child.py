@@ -125,8 +125,8 @@ def validate_receipt(receipt, sources, child_hash, box_hash=None):
 
 def execute(gate, source, before, compiler, captured, child, identities, work):
     phases=checked_phases()
-    PLATFORM.verify(go=str(compiler))
-    READER.execute(go=str(compiler))
+    PLATFORM.verify(go=str(compiler), environment=captured)
+    READER.execute(go=str(compiler), environment=captured)
     box=work/'paired-node-box.test'
     gate.UID.run(gate.native_fixture_compile(compiler,box,'.'),cwd=source,env=captured,timeout=600)
     gate.UID.RACE.verify_image(compiler,box,source,captured)

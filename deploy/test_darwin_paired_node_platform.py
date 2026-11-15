@@ -21,7 +21,8 @@ GROUPS = {
 }
 
 
-def verify(root=ROOT, go=GO, transform=None):
+def verify(root=ROOT, go=GO, transform=None, environment=None):
+    captured = dict(os.environ if environment is None else environment)
     selected = {}
     for target in ('darwin', 'ios', 'linux', 'windows'):
         for group, names in GROUPS.items():
@@ -33,7 +34,7 @@ def verify(root=ROOT, go=GO, transform=None):
                         raw = transform(name, raw)
                     if raw is not None:
                         (folder / name.removesuffix('.tmpl')).write_bytes(raw)
-                env = dict(os.environ, GO111MODULE='off', GOOS=target,
+                env = dict(captured, GO111MODULE='off', GOOS=target,
                            GOARCH='arm64' if target in ('darwin', 'ios') else 'amd64', CGO_ENABLED='0')
                 run = subprocess.run([go, 'list', '-e', '-f', r'{{join .GoFiles "\n"}}', '.'],
                                      cwd=folder, env=env, capture_output=True, text=True, timeout=30)
