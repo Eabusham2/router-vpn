@@ -11,10 +11,22 @@ CONTROLLER_BOUNDARY='import Foundation\nprotocol ObservableObject: AnyObject {}\
 # preparation fixture executes the actual owner and its joined teardown.
 CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace(
     '@MainActor final class RouterVPNModel {var connected=true;var activeEngine="multihop-libbox"}',
-    '@MainActor final class RouterVPNModel {var connected=true;var activeEngine="multihop-libbox";var tunnelTransitioning=false;let iosSpeedLabOwnership=IOSSpeedLabOwnership();var selectedNodeProfile:Selected?;var iosVisibleOrderedNodePath:[String]?;var bundle:String?;struct Selected{var multihopExecution:String?};func captureIOSNodeChain(_ source:String)throws->IOSNodeChainCapture{throw NSError(domain:"OriginalStoreBoundary",code:1)}}')
+    '@MainActor final class RouterVPNModel {var connected=true;var activeEngine="multihop-libbox";var tunnelTransitioning=false;let iosSpeedLabOwnership=IOSSpeedLabOwnership();var selectedNodeProfile:Selected?;var iosVisibleOrderedNodePath:[String]?;var bundle:String?;struct Selected{var multihopExecution:String?};func captureIOSNodeChain(_ source:String)throws->IOSNodeChainCapture{throw NSError(domain:"OriginalStoreBoundary",code:1)};func captureIOSCandidateOriginal(_ source:String)throws->IOSNodeCandidateOriginalCapture{throw NSError(domain:"OriginalStoreBoundary",code:1)}}')
 CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace('struct IOSNodeCandidatePrefix:Decodable {', 'struct IOSNodeCandidatePrefix:Decodable,Equatable {')
 CONTROLLER_BOUNDARY = CONTROLLER_BOUNDARY.replace(' let plan=Plan(),sourceSHA256="",configSHA256=""', ' struct Member {let id:String;let mode:String;let profile:[String:Any]}\n let members:[Member]=[];let plan=Plan(),sourceSHA256="",configSHA256=""')
 CONTROLLER_BOUNDARY += r'''
+// The actual controller uses the complete original-source union for saved
+// prefix proposals and connected typed proposals. These declarations provide
+// only the store/native boundary; they grant no execution or cleanup authority.
+@MainActor struct IOSNodeCandidateOriginalCapture {
+ let members:[IOSNodeChainCapture.Member]=[]
+ let requiresIndependentPrefix=false,sourceSHA256="",configSHA256=""
+ func close()throws{throw NSError(domain:"OriginalStoreBoundary",code:1)}
+ static func reopenConnected(_ source:String,selectedProfile:[String:Any],sourceSHA256:String,configSHA256:String)throws->Self{throw NSError(domain:"OriginalStoreBoundary",code:1)}
+}
+@MainActor extension IOSNodeCandidateProposal {
+ static func compile(original:IOSNodeCandidateOriginalCapture,records:[String:Data],position:Int,candidateID:String,measuredInput:String)throws->Self{throw NSError(domain:"OriginalStoreBoundary",code:1)}
+}
 @MainActor enum IOSRuntimeSelector {static func selectNodeChain(_ capture:IOSNodeChainCapture)throws->Int{throw NSError(domain:"OriginalStoreBoundary",code:1)}}
 @MainActor struct IOSNodeCandidatePrefixCapture {
  let sourceSHA256="",configSHA256="",captureSHA256=""
@@ -29,7 +41,7 @@ CONTROLLER_BOUNDARY += r'''
  static func reserve(model:RouterVPNModel,prefixPosition:Int?=nil,request:String?=nil,onCancelled:@escaping @MainActor ()->Void)throws->IOSNodeCandidatePreparation{throw IOSNodeCandidateResult.issue()}
  func start()async throws{throw IOSNodeCandidateResult.issue()}
  func requireLive()throws{throw IOSNodeCandidateResult.issue()}
- func originalForProposal()throws->IOSNodeChainCapture{throw IOSNodeCandidateResult.issue()}
+ func originalForProposal()throws->IOSNodeCandidateOriginalCapture{throw IOSNodeCandidateResult.issue()}
  func bind(_ value:IOSNodeCandidateTransaction)throws{throw IOSNodeCandidateResult.issue()}
  func seal(token:UUID,measured:Int64,expires:Int64)throws{throw IOSNodeCandidateResult.issue()}
  func requireSaved(token:UUID)throws{throw IOSNodeCandidateResult.issue()}
