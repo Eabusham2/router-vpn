@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"encoding/base64"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -118,6 +119,88 @@ func TestOrderedRegistryParserCaptureRefusesInvalidAuthority(t *testing.T) {
 			}
 			if _, err := relayNodeChainValidationCapture(source, host, peer, port, now); err == nil {
 				t.Fatal("offline parser accepted invalid captured authority")
+			}
+		})
+	}
+}
+
+func pairingImportedPrefixDescriptor(t *testing.T, count int) multihoprelay.NodeChainDescriptor {
+	t.Helper()
+	source := pairingOrderedDescriptor(t, 2)
+	members := make([]multihoprelay.NodeChainMember, 0, count-1)
+	for i := 0; i < count-3; i++ {
+		key := func(value byte) string {
+			private, err := ecdh.X25519().NewPrivateKey(bytes.Repeat([]byte{value}, 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return base64.StdEncoding.EncodeToString(private.PublicKey().Bytes())
+		}
+		members = append(members, multihoprelay.NodeChainMember{Position: i + 1, ProfileID: fmt.Sprintf("original-prefix-%d", i), NodeID: fmt.Sprintf("%064x", 201+i), Mode: "awg2-strong", StartLayer: "off", ClientPublicKey: key(byte(91 + i)), ServerPublicKey: key(byte(111 + i))})
+	}
+	members = append(members, source.Members...)
+	for i := range members {
+		members[i].Position = i + 1
+	}
+	source.Members = members
+	if source.Validate() != nil {
+		t.Fatal("invalid original complete descriptor")
+	}
+	return source
+}
+
+func TestOrderedRegistryImportedPrefixParserCapture(t *testing.T) {
+	for _, count := range []int{3, 4, 8} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			source := pairingImportedPrefixDescriptor(t, count)
+			now := time.Unix(1794657600, 0).UTC()
+			capture, err := relayNodeChainValidationCapture(source, "10.77.0.1", "10.77.0.2", 26240, now)
+			if err != nil || capture.Validate() != nil {
+				t.Fatal("complete original imported parser capture refused", err)
+			}
+			want := make([]int, count-2)
+			for i := range want {
+				want[i] = i
+			}
+			if !reflect.DeepEqual(capture.Source, source) || !reflect.DeepEqual(capture.Request.LocalPacketPositions, want) || len(capture.Request.LocalPacketPublicKeys) != len(want) || len(capture.Request.Users) != count-1 {
+				t.Fatal("complete original packet positions lost")
+			}
+			for _, key := range capture.Request.LocalPacketPublicKeys {
+				for _, member := range source.Members {
+					if key == member.ClientPublicKey || key == member.ServerPublicKey {
+						t.Fatal("parser invented original packet ownership")
+					}
+				}
+			}
+			for _, fault := range []string{"missing-key", "import-position", "duplicate-position", "foreign-key", "middle-key", "middle-node", "socks-shape", "connect-shape"} {
+				t.Run(fault, func(t *testing.T) {
+					changed := capture.Clone()
+					switch fault {
+					case "missing-key":
+						changed.Request.LocalPacketPublicKeys = changed.Request.LocalPacketPublicKeys[:len(want)-1]
+					case "import-position":
+						changed.Request.LocalPacketPositions[len(want)-1]++
+					case "duplicate-position":
+						changed.Request.LocalPacketPositions[len(want)-1] = -1
+					case "foreign-key":
+						if count == 3 {
+							changed.Request.LocalPacketPublicKeys[0] = "foreign"
+						} else {
+							changed.Request.LocalPacketPublicKeys[0] = source.Members[0].ClientPublicKey
+						}
+					case "middle-key":
+						changed.Source.Members[count-3].ClientPublicKey = changed.Request.LocalPacketPublicKeys[0]
+					case "middle-node":
+						changed.Source.Members[count-3].NodeID = strings.Repeat("e", 64)
+					case "socks-shape":
+						changed.Source.Schema, changed.Request.Schema = 3, 3
+					case "connect-shape":
+						changed.Source.Schema, changed.Request.Schema = 4, 4
+					}
+					if changed.Validate() == nil {
+						t.Fatal("invalid complete parser authority accepted")
+					}
+				})
 			}
 		})
 	}

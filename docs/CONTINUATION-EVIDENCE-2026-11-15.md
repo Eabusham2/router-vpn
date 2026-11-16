@@ -4192,3 +4192,28 @@ cross-compilation. The owned test executables were hashed before cleanup.
 The four-file manifest SHA256 is
 `cdd0caf576bac5a561bb2f2525057798cf825a14d05651c749500c85250abfef`.
 All four published-25eb9cbf preimages still matched at integration on af246190.
+
+## November 16: complete imported packet positions in registry validation
+
+The operator's private registry checker still generated one synthetic local
+packet key for every imported execution descriptor. That matched the original
+trio but refused longer Shadowsocks sources already supported by the compiler.
+Schema two now captures every required contiguous packet position before the
+penultimate import, with fresh independent parser-only keys. The original
+descriptor, imported identity and final member stay intact. The distinct
+SOCKS and CONNECT schemas retain their existing bounds in this change.
+
+Thirty-nine focused race-instrumented root/subtest records passed, including
+three-, four- and eight-member captures and invalid source, position, key,
+peer, port and clock cases. Restoring the exact former one-key caller made the
+eight-member case fail at its intended capture refusal. The original
+120-second test bound remains unchanged. This exercises the actual registry
+capture and validation functions; it does not allocate a lease, publish a live
+registry or establish native parser, routing or encrypted-network acceptance.
+
+The two-file manifest SHA256 is
+`59b628dc05f1ae7084c76b1082d729d296baf76299cfc396503cf7e2727ad8c2`.
+Validation receipt SHA256:
+`66b158690e13d5bdc4e4301f5ca04a5eb45e388a0cca1cc049cdde0b584bb5f6`.
+Both 6ae72d87 preimages and both recorded log hashes matched when integrated
+on c38fa99c. No private router or deployment configuration changed.
