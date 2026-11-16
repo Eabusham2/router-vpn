@@ -70,7 +70,7 @@ def native_multihop_ordered_owner(read) -> bool:
 		return false
 	}
 	return desktopNodeChainConcretePolicyCount(c.policy, c.socksPolicy, c.connectPolicy) == 1 &&
-		(c.execution == nil || (c.policy != nil || c.connectPolicy != nil) && c.execution.original == c && c.preparation == nil)
+		(c.execution == nil || (c.policy != nil || c.connectPolicy != nil || c.socksPolicy != nil) && c.execution.original == c && c.preparation == nil)
         '''),
         ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func desktopNodeChainConcretePolicyCount(chain *mobilemultihop.DesktopNodeChainPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSPolicy, connect *mobilemultihop.DesktopNodeChainCONNECTPolicy) int', r'''
 	count := 0
@@ -394,8 +394,8 @@ if launch != nil && launch.chain != nil {
 	bad := func() (desktopExecutionSourceObservation, error) {
 		return desktopExecutionSourceObservation{}, errors.New("execution launch changed its exact original source or physical preparation")
 	}
-	if e == nil || e.original == nil || e.preparation == nil || (e.physical == nil) == (e.connectPhysical == nil) ||
-		!e.original.hasPolicy() || e.original.socksPolicy != nil || e.original.preparation != nil || e.original.selection.Native == nil ||
+	if e == nil || e.original == nil || e.preparation == nil || desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical) != 1 ||
+		!e.original.hasPolicy() || e.original.preparation != nil || e.original.selection.Native == nil ||
 		e.original.selection.Native.chain == nil || e.original.selection.Native.validate(e.original.selection) != nil {
 		return bad()
 	}
@@ -406,7 +406,20 @@ if launch != nil && launch.chain != nil {
 	var observed desktopExecutionSourceObservation
 	var policy mobilemultihop.DesktopPhysicalPolicy
 	var meta mobilemultihop.DesktopNodeChainMetadata
-	if e.connectPhysical != nil {
+	if e.socksPhysical != nil {
+		if e.original.socksPolicy == nil || e.original.policy != nil || e.original.connectPolicy != nil || selected.socks == nil || selected.chain != nil || selected.connect != nil {
+			return bad()
+		}
+		original, metadata, err := e.socksPhysical.ReadOriginalValidated(e.preparation)
+		if err != nil || original != e.original.socksPolicy {
+			return bad()
+		}
+		source, err := original.OriginalSource()
+		if err != nil || source != selected.socks.source {
+			return bad()
+		}
+		policy, meta = e.socksPhysical, metadata
+	} else if e.connectPhysical != nil {
 		if e.original.connectPolicy == nil || e.original.policy != nil || selected.connect == nil || selected.chain != nil || selected.socks != nil {
 			return bad()
 		}
@@ -441,7 +454,7 @@ if launch != nil && launch.chain != nil {
 		return bad()
 	}
 	observed.policy, observed.metadata = policy, meta
-	if physicalRead && e.connectPhysical != nil {
+	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil) {
 		var err error
 		observed.config, observed.physical, observed.capture, err = policy.PhysicalReadValidated()
 		if err != nil {
@@ -449,7 +462,29 @@ if launch != nil && launch.chain != nil {
 		}
 	}
 	return observed, nil
-
+        '''),
+        ('cmd/client/desktop_node_chain_socks_execution.go', 'func desktopNodeChainExecutionPhysicalCount(paired *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,\n\tconnect *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) int', r'''
+	count := 0
+	if paired != nil {
+		count++
+	}
+	if connect != nil {
+		count++
+	}
+	if socks != nil {
+		count++
+	}
+	return count
+        '''),
+        ('internal/mobilemultihop/node_chain_socks_execution_desktop.go', 'func (p *DesktopNodeChainSOCKSExecutionPhysicalPolicy) ReadOriginalValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainSOCKSPolicy, DesktopNodeChainMetadata, error)', r'''
+	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {
+		return nil, DesktopNodeChainMetadata{}, nodeChainExecutionError
+	}
+	_, metadata, _, err := p.original.ReadValidated()
+	if err != nil {
+		return nil, DesktopNodeChainMetadata{}, err
+	}
+	return p.original, metadata.DesktopNodeChainMetadata, nil
         '''),
         ('internal/mobilemultihop/node_chain_execution_desktop.go', 'func (p *DesktopNodeChainExecutionPhysicalPolicy) ReadOriginalSourceValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, *NodeChain, DesktopNodeChainMetadata, error)', r'''
 	original, metadata, err := p.ReadOriginalValidated(preparation)
@@ -499,8 +534,12 @@ if launch != nil && launch.chain != nil {
 	return p.original, metadata.DesktopNodeChainMetadata, nil
         '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func desktopNodeChainExecutionOriginalMetadata(original *desktopNodeChainLaunch) (mobilemultihop.DesktopNodeChainMetadata, error)', r'''
-	if original == nil || !original.hasPolicy() || original.socksPolicy != nil {
+	if original == nil || !original.hasPolicy() {
 		return mobilemultihop.DesktopNodeChainMetadata{}, errors.New("execution metadata lost its original typed policy")
+	}
+	if original.socksPolicy != nil {
+		_, meta, _, err := original.socksPolicy.ReadValidated()
+		return meta.DesktopNodeChainMetadata, err
 	}
 	if original.connectPolicy != nil {
 		_, meta, _, err := original.connectPolicy.ReadValidated()
@@ -524,7 +563,9 @@ if launch != nil && launch.chain != nil {
 	}
 	meta, physical := observed.metadata, observed.physical
 	kind := "node-chain-execution"
-	if e.connectPhysical != nil {
+	if e.socksPhysical != nil {
+		kind = "node-chain-socks-execution"
+	} else if e.connectPhysical != nil {
 		kind = "node-chain-connect-execution"
 	}
 	if err != nil || physical.ConfigSHA256 != e.preparation.ConfigSHA256() || physical.SourceSHA256 != meta.SourceSHA256 ||
@@ -566,7 +607,7 @@ if launch != nil && launch.chain != nil {
 		!e.ready.Progress.Complete || !e.ready.Progress.Ready || !e.ready.Progress.DNSProven || !e.ready.Progress.PublicProven || e.ready.SelectionEpoch == 0 {
 		return nil, errors.New("ordered execution graph preceded its selected native proof")
 	}
-	return &desktopNodeChainExecutionProof{execution: e, physical: e.physical, connectPhysical: e.connectPhysical, projection: e.projection, identity: e.identity,
+	return &desktopNodeChainExecutionProof{execution: e, physical: e.physical, connectPhysical: e.connectPhysical, socksPhysical: e.socksPhysical, projection: e.projection, identity: e.identity,
 		winner: *e.ready.Progress.Comparison.Winner, target: e.ready.Progress.Comparison.Target, epoch: e.ready.SelectionEpoch}, nil
         '''),
         ('cmd/client/desktop_node_chain_execution_graph.go', 'func (proof *desktopNodeChainExecutionProof) currentContext(ctx context.Context, launch *desktopNodeLaunch, graph activeMultihopGraph) error', r'''
@@ -596,7 +637,7 @@ if launch != nil && launch.chain != nil {
 		}
 		return nil, nil
 	}
-	if e == nil || e != proof.execution || e.bound(launch) != nil || e.physical != proof.physical || e.connectPhysical != proof.connectPhysical || graph.Execution != string(proof.winner.Execution) {
+	if e == nil || e != proof.execution || e.bound(launch) != nil || e.physical != proof.physical || e.connectPhysical != proof.connectPhysical || e.socksPhysical != proof.socksPhysical || graph.Execution != string(proof.winner.Execution) {
 		return nil, errors.New("ordered execution graph replaced its original preparation")
 	}
 	return e, nil
@@ -1237,7 +1278,7 @@ return err == nil && base64.StdEncoding.EncodeToString(key) == ss.Password
 		return bad
 	}
 	middle := len(members) - 2
-	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || desktopNodeChainCONNECTExecutionShape(members)) {
+	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || desktopNodeChainCONNECTExecutionShape(members) || desktopNodeChainSOCKSExecutionShape(members)) {
 		return bad
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
@@ -1256,6 +1297,39 @@ return err == nil && base64.StdEncoding.EncodeToString(key) == ss.Password
 		proofs[p.NodeProofID] = true
 	}
 	return nil
+        '''),
+        ('cmd/client/desktop_node_chain_socks_execution.go', 'func desktopNodeChainSOCKSExecutionShape(members []desktopNodeChainMember) bool', r'''
+	if len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[2].Mode != "shadowsocks" ||
+		!desktopNodeChainSOCKSMiddle(members[1].Profile, members[1].Mode) {
+		return false
+	}
+	entry, final := members[0].Profile.StartLayer, members[2].Profile.StartLayer
+	return (entry == "" || entry == "off" || entry == "aes-256-gcm" || entry == "aes-256-gcm+xor-whitening") &&
+		(final == "" || final == "off")
+        '''),
+        ('cmd/client/desktop_node_chain_socks_execution.go', 'func desktopSOCKSTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool', r'''
+	return (requested == "server" || requested == "auto") && desktopNodeChainSOCKSExecutionShape(members) && desktopOrderedExecutionMembers(members, requested) == nil
+        '''),
+        ('cmd/client/desktop_node_chain_socks_execution.go', 'func desktopSOCKSTrioExecutionChoices() []string', r'''
+	if nativeDesktopImportedTrioExecutionPlatformSupported() && nativeNodeChainSOCKSHostSupported() {
+		return []string{"local", "server", "auto"}
+	}
+	return []string{"local"}
+        '''),
+        ('cmd/client/multihop_node_chain_socks_capture.go', 'func desktopNodeChainSOCKSMiddle(profile common.RouterProfile, mode string) bool', r'''
+	if mode != "socks5" || profile.NodeKind != "external" || profile.External == nil ||
+		profile.External.Protocol != "socks5" || profile.External.SOCKS5 == nil ||
+		profile.NodeProofID != "" || profile.APIToken != "" || profile.RouterAPI != "" ||
+		profile.StartLayer != "" && profile.StartLayer != "off" {
+		return false
+	}
+	socks := profile.External.SOCKS5
+	address, err := netip.ParseAddr(socks.Host)
+	return err == nil && address.Zone() == "" && !address.Is4In6() &&
+		!address.IsUnspecified() && !address.IsMulticast() &&
+		socks.Host == profile.Endpoint && socks.Port >= 1 && socks.Port <= 65535 &&
+		len(socks.Username) <= 255 && len(socks.Password) <= 255 &&
+		(socks.Username == "") == (socks.Password == "")
         '''),
         ('cmd/client/desktop_node_chain_imported_execution.go', 'func desktopNodeChainCONNECTExecutionShape(members []desktopNodeChainMember) bool', r'''
 	if len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[2].Mode != "shadowsocks" ||
@@ -1313,7 +1387,7 @@ return err == nil && base64.StdEncoding.EncodeToString(key) == ss.Password
 	// a separate child-owned derivation; never rewrite saved member preferences.
 	members, err := resolveDesktopNodeChainMembers(control, profiles, nodes, "local")
 	if desktopNodeChainHasSOCKS(nodes) {
-		members, err = resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, execution)
+		members, err = resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, "local")
 	}
 	if desktopNodeChainHasCONNECT(nodes) {
 		members, err = resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, "local")
@@ -1373,7 +1447,7 @@ return true
 		return true
 	}
 	return runtime.GOOS == "darwin" && nativeDesktopImportedTrioExecutionPlatformSupported() &&
-		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested))
+		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested) || desktopSOCKSTrioExecutionMembers(members, requested))
         '''),
         (product_path, "func validDesktopOrderedExecution(value string) bool", '''
 return value == "local" || value == "server" || value == "auto"
@@ -1388,8 +1462,12 @@ return value == "local" || value == "server" || value == "auto"
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" {
 		return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
 	}
-	if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasOpenVPN(nodes)) {
+	if requested != "local" && desktopNodeChainHasOpenVPN(nodes) {
 		return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
+	}
+	if requested != "local" && desktopNodeChainHasSOCKS(nodes) &&
+		(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) || nodes[1].Mode != "socks5") {
+		return errors.New("SOCKS Server and Compare require their original exact trio")
 	}
 	if requested != "local" && desktopNodeChainHasCONNECT(nodes) &&
 		(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) ||
@@ -1479,11 +1557,13 @@ return ctx.Err()
     if not _ordered_once(status,
         '"ordered_executions": desktopOrderedExecutionChoices(),',
         '"ordered_imported_trio_executions": desktopImportedTrioExecutionChoices(),',
-        '"ordered_connect_trio_executions": desktopCONNECTTrioExecutionChoices(),'):
+        '"ordered_connect_trio_executions": desktopCONNECTTrioExecutionChoices(),',
+        '"ordered_socks_trio_executions": desktopSOCKSTrioExecutionChoices(),'):
         return False
     public_profile = _function(_tokens(read("cmd/client/profile_public_view.go")),
         "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile")
     if not _ordered_once(public_profile,
+        'OrderedSOCKSExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && nativeNodeChainSOCKSHostSupported() && desktopNodeChainSOCKSMiddle(p, "socks5"),',
         'OrderedCONNECTExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && (desktopNodeChainCONNECTMiddle(p, "http-connect") || desktopNodeChainCONNECTMiddle(p, "https-connect")),',
         'OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p),'):
         return False

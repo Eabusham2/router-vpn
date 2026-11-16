@@ -153,6 +153,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"ordered_executions":               desktopOrderedExecutionChoices(),
 		"ordered_imported_trio_executions": desktopImportedTrioExecutionChoices(),
 		"ordered_connect_trio_executions":  desktopCONNECTTrioExecutionChoices(),
+		"ordered_socks_trio_executions":    desktopSOCKSTrioExecutionChoices(),
 		"ordered_max_nodes":                common.MultihopMaximumNodes,
 		"entry_id":                         entryID,
 		"exit_id":                          exitID,

@@ -48,7 +48,9 @@ func (e *desktopNodeChainExecutionLaunch) readReadyContext(ctx context.Context, 
 		if !fresh || e.ready != nil || e.adoption != "" {
 			return empty, errors.New("execution adoption preceded its original fresh native observation")
 		}
-		if e.connectPhysical != nil {
+		if e.socksPhysical != nil {
+			projection, identity, err = mobilemultihop.ParseDesktopNodeChainSOCKSExecutionAdoptionRecord(raw, e.preparation, transfer)
+		} else if e.connectPhysical != nil {
 			projection, identity, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionAdoptionRecord(raw, e.preparation, transfer)
 		} else {
 			projection, identity, err = mobilemultihop.ParseDesktopNodeChainExecutionAdoptionRecord(raw, e.preparation, transfer)
@@ -68,10 +70,14 @@ func (e *desktopNodeChainExecutionLaunch) readReadyContext(ctx context.Context, 
 	}
 	defer clear(heartbeat)
 	// The common readback view is descriptive only. The distinct typed parser
-	// must validate CONNECT authority first; its Kind is never rewritten to the
+	// must validate its concrete authority first; its Kind is never rewritten to the
 	// paired value and no generic parser is used as a fallback.
 	var record mobilemultihop.DesktopNodeChainExecutionReadyRecord
-	if e.connectPhysical != nil {
+	if e.socksPhysical != nil {
+		var typed mobilemultihop.DesktopNodeChainSOCKSExecutionReadyRecord
+		typed, err = mobilemultihop.ParseDesktopNodeChainSOCKSExecutionAdoptedReadyRecord(heartbeat, projection, identity, transfer)
+		record = mobilemultihop.DesktopNodeChainExecutionReadyRecord(typed)
+	} else if e.connectPhysical != nil {
 		var typed mobilemultihop.DesktopNodeChainCONNECTExecutionReadyRecord
 		typed, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionAdoptedReadyRecord(heartbeat, projection, identity, transfer)
 		record = mobilemultihop.DesktopNodeChainExecutionReadyRecord(typed)

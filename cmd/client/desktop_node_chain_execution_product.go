@@ -45,8 +45,12 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" {
 		return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
 	}
-	if requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasOpenVPN(nodes)) {
+	if requested != "local" && desktopNodeChainHasOpenVPN(nodes) {
 		return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
+	}
+	if requested != "local" && desktopNodeChainHasSOCKS(nodes) &&
+		(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) || nodes[1].Mode != "socks5") {
+		return errors.New("SOCKS Server and Compare require their original exact trio")
 	}
 	if requested != "local" && desktopNodeChainHasCONNECT(nodes) &&
 		(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) ||

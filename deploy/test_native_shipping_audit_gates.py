@@ -398,8 +398,8 @@ class NativeShippingAuditTests(unittest.TestCase):
         graph = "cmd/client/desktop_node_chain_execution_graph.go"
         policy = "cmd/client/desktop_node_chain_policy_dispatch.go"
         changes = (
-            (policy, "(c.policy != nil || c.connectPolicy != nil)", "true"),
-            (launch, "(e.physical == nil) == (e.connectPhysical == nil)", "false"),
+            (policy, "(c.policy != nil || c.connectPolicy != nil || c.socksPolicy != nil)", "true"),
+            (launch, "desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical) != 1", "false"),
             (launch, "e.original.connectPolicy == nil || e.original.policy != nil || selected.connect == nil || selected.chain != nil || selected.socks != nil", "false"),
             (launch, "e.original.policy == nil || e.original.connectPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil", "false"),
             (launch, "e.connectPhysical.ReadOriginalValidated(e.preparation)", "e.connectPhysical.ReadOriginalValidated(other)"),
@@ -407,7 +407,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             (launch, "e.connectPhysical.ReadOriginalValidated(e.preparation)", "other.ReadOriginalValidated(e.preparation)"),
             (launch, "original != e.original.connectPolicy", "false"),
             (launch, "source != selected.connect.source", "false"),
-            (launch, "original == nil || !original.hasPolicy() || original.socksPolicy != nil", "original == nil"),
+            (launch, "original == nil || !original.hasPolicy()", "original == nil"),
             (launch, "_, meta, _, err := original.connectPolicy.ReadValidated()", "_, meta, _, err := other.ReadValidated()"),
             (launch, "_, meta, _, err := original.policy.ReadValidated()", "_, meta, _, err := other.ReadValidated()"),
             (launch, "policy, _, err := e.readSourceValidated()", "policy, _, err := other.readSourceValidated()"),
@@ -427,6 +427,32 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.changes.clear()
                 self.replace(path, before, after)
                 self.changes[path] += "\n// " + before + "\nvar connectExecutionAuditDecoy = `" + before + "`\n"
+                self.assertFalse(_NATIVE.native_multihop_ordered_owner(self.body))
+                self.assert_backend_proof_admission(False)
+                self.assert_multihop_scores(False)
+
+    def test_socks_execution_keeps_original_association_and_selected_physical_owner(self):
+        launch = "cmd/client/desktop_node_chain_execution_launch.go"
+        graph = "cmd/client/desktop_node_chain_execution_graph.go"
+        physical = "internal/mobilemultihop/node_chain_socks_execution_desktop.go"
+        changes = (
+            (launch, "e.original.socksPolicy == nil || e.original.policy != nil || e.original.connectPolicy != nil || selected.socks == nil || selected.chain != nil || selected.connect != nil", "false"),
+            (launch, "e.socksPhysical.ReadOriginalValidated(e.preparation)", "e.socksPhysical.ReadOriginalValidated(other)"),
+            (launch, "original != e.original.socksPolicy", "false"),
+            (launch, "source != selected.socks.source", "false"),
+            (launch, "policy, meta = e.socksPhysical, metadata", "policy, meta = e.physical, metadata"),
+            (launch, 'kind = "node-chain-socks-execution"', 'kind = "node-chain-connect-execution"'),
+            (physical, "p.preparation != preparation", "false"),
+            (graph, "socksPhysical: e.socksPhysical", "socksPhysical: nil"),
+            (graph, "e.socksPhysical != proof.socksPhysical", "false"),
+        )
+        self.assert_backend_proof_admission(True)
+        self.assert_multihop_scores(True)
+        for path, before, after in changes:
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\nvar socksExecutionAuditDecoy = `" + before + "`\n"
                 self.assertFalse(_NATIVE.native_multihop_ordered_owner(self.body))
                 self.assert_backend_proof_admission(False)
                 self.assert_multihop_scores(False)
@@ -623,8 +649,8 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("func desktopOrderedExecutionChoices() []string", 'nativeDesktopOrderedExecutionPlatformSupported()', 'nativeNodeChainPlatformSupported()'),
             ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'common.ValidateMultihopNodes(nodes)', 'error(nil)'),
             ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks"', 'false'),
-            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && (desktopNodeChainHasSOCKS(nodes) || desktopNodeChainHasOpenVPN(nodes))', 'false'),
-            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", ' || desktopNodeChainHasOpenVPN(nodes)', ''),
+            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && desktopNodeChainHasOpenVPN(nodes)', 'false'),
+            ("func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", 'requested != "local" && desktopNodeChainHasSOCKS(nodes)', 'false'),
         ):
             with self.subTest(declaration=declaration, before=before):
                 self.changes.clear()
@@ -664,7 +690,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             (selection, 'resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, "local")', 'resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, execution)'),
             (selection, 'desktopOrderedExecutionMembers(members, execution)', 'desktopOrderedExecutionMembers(members, "local")'),
             (selection, 'liveMeasurementProfileToken(control) != liveMeasurementProfileToken(final.Profile)', "false"),
-            (product, '(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) ||', '(false ||'),
+            (product, '(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) ||\n\t\t\t(nodes[1].Mode != "http-connect"', '(false ||\n\t\t\t(nodes[1].Mode != "http-connect"'),
             (product, '(nodes[1].Mode != "http-connect" && nodes[1].Mode != "https-connect")', "false"),
             (platform, 'desktopCONNECTTrioExecutionMembers(members, requested)', "true"),
             ("cmd/client/multihop_native_routes.go", '"ordered_connect_trio_executions":  desktopCONNECTTrioExecutionChoices(),', '"ordered_connect_trio_executions":  desktopOrderedExecutionChoices(),'),
@@ -687,6 +713,35 @@ class NativeShippingAuditTests(unittest.TestCase):
             with self.subTest(duplicate=declaration):
                 self.changes.clear()
                 self.changes[path] = self.body(path)+"\n"+declaration+" { return true }\n"
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+                self.assert_multihop_chain(False)
+
+    def test_socks_execution_product_keeps_original_source_and_exact_public_admission(self):
+        shape = "cmd/client/desktop_node_chain_socks_execution.go"
+        selection = "cmd/client/multihop_node_chain_selection.go"
+        product = "cmd/client/desktop_node_chain_execution_product.go"
+        changes = (
+            (shape, "len(members) != 3", "false"),
+            (shape, "!mobilemultihop.NodeChainPrefixMode(members[0].Mode)", "false"),
+            (shape, 'members[2].Mode != "shadowsocks"', "false"),
+            (shape, "!desktopNodeChainSOCKSMiddle(members[1].Profile, members[1].Mode)", "false"),
+            (shape, '(final == "" || final == "off")', "true"),
+            (shape, '(entry == "" || entry == "off" || entry == "aes-256-gcm" || entry == "aes-256-gcm+xor-whitening")', "true"),
+            (shape, '(requested == "server" || requested == "auto")', "true"),
+            (shape, "desktopOrderedExecutionMembers(members, requested) == nil", "true"),
+            (shape, "nativeDesktopImportedTrioExecutionPlatformSupported() && nativeNodeChainSOCKSHostSupported()", "true"),
+            (selection, 'resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, "local")', 'resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, execution)'),
+            (product, 'nodes[1].Mode != "socks5"', "false"),
+            ("cmd/client/desktop_node_chain_imported_execution_platform.go", 'desktopSOCKSTrioExecutionMembers(members, requested)', "true"),
+            ("cmd/client/multihop_native_routes.go", '"ordered_socks_trio_executions":    desktopSOCKSTrioExecutionChoices(),', '"ordered_socks_trio_executions":    desktopOrderedExecutionChoices(),'),
+            ("cmd/client/profile_public_view.go", 'OrderedSOCKSExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && nativeNodeChainSOCKSHostSupported() && desktopNodeChainSOCKSMiddle(p, "socks5"),', 'OrderedSOCKSExecutionMiddle: true,'),
+        )
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        for path, before, after in changes:
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\nvar socksProductAuditDecoy = `" + before + "`\n"
                 self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
                 self.assert_multihop_chain(False)
 

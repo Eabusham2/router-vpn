@@ -16,6 +16,7 @@ type desktopNodeChainExecutionProof struct {
 	execution       *desktopNodeChainExecutionLaunch
 	physical        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
 	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
+	socksPhysical   *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
 	projection      *mobilemultihop.NodeChainExecutionProjection
 	identity        mobilemultihop.NodeChainIdentity
 	winner          routechoice.Candidate
@@ -47,7 +48,7 @@ func captureDesktopNodeChainExecutionProofContext(ctx context.Context, launch *d
 		!e.ready.Progress.Complete || !e.ready.Progress.Ready || !e.ready.Progress.DNSProven || !e.ready.Progress.PublicProven || e.ready.SelectionEpoch == 0 {
 		return nil, errors.New("ordered execution graph preceded its selected native proof")
 	}
-	return &desktopNodeChainExecutionProof{execution: e, physical: e.physical, connectPhysical: e.connectPhysical, projection: e.projection, identity: e.identity,
+	return &desktopNodeChainExecutionProof{execution: e, physical: e.physical, connectPhysical: e.connectPhysical, socksPhysical: e.socksPhysical, projection: e.projection, identity: e.identity,
 		winner: *e.ready.Progress.Comparison.Winner, target: e.ready.Progress.Comparison.Target, epoch: e.ready.SelectionEpoch}, nil
 }
 
@@ -93,7 +94,7 @@ func (proof *desktopNodeChainExecutionProof) original(launch *desktopNodeLaunch,
 		}
 		return nil, nil
 	}
-	if e == nil || e != proof.execution || e.bound(launch) != nil || e.physical != proof.physical || e.connectPhysical != proof.connectPhysical || graph.Execution != string(proof.winner.Execution) {
+	if e == nil || e != proof.execution || e.bound(launch) != nil || e.physical != proof.physical || e.connectPhysical != proof.connectPhysical || e.socksPhysical != proof.socksPhysical || graph.Execution != string(proof.winner.Execution) {
 		return nil, errors.New("ordered execution graph replaced its original preparation")
 	}
 	return e, nil

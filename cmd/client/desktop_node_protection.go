@@ -168,7 +168,7 @@ func (s *desktopNodeProtectionSlot) beginConcretePurposesCapturedWithCONNECT(ctx
 	var execution *desktopNodeChainExecutionLaunch
 	if launch != nil && launch.chain != nil && launch.chain.execution != nil {
 		execution = launch.chain.execution
-		if desktopNodeChainConcretePolicyCount(chain, socksChain, connectChain) != 1 || chain != launch.chain.policy || connectChain != launch.chain.connectPolicy || node != nil || external != nil || imported != nil || socksChain != nil || prefix != nil || execution.bound(launch) != nil {
+		if desktopNodeChainConcretePolicyCount(chain, socksChain, connectChain) != 1 || chain != launch.chain.policy || connectChain != launch.chain.connectPolicy || socksChain != launch.chain.socksPolicy || node != nil || external != nil || imported != nil || prefix != nil || execution.bound(launch) != nil {
 			return nil, errors.New("execution protection lost its exclusive original source and preparation")
 		}
 		selection, err = desktopNodeChainExecutionProtectionSelection(execution)

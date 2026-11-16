@@ -38,6 +38,7 @@ type desktopMacOSProcess struct {
 	execution                *mobilemultihop.NodeChainExecutionPreparation
 	executionPhysical        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
 	executionCONNECTPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
+	executionSOCKSPhysical   *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
 }
 
 func startDesktopMacOSProcess(ctx context.Context, parent *desktopMacOSSessionCapture, scope macosprocess.Scope) (*desktopMacOSProcess, error) {
@@ -78,6 +79,25 @@ func startDesktopMacOSProcessCapturedExecution(ctx context.Context, parent *desk
 	physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,
 	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy,
 	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
+	return startDesktopMacOSProcessCapturedExecutionFamilies(ctx, parent, scope, preparation, physical, connectPhysical, nil, verify)
+}
+
+func startDesktopMacOSSOCKSExecutionProcessWithVerifier(ctx context.Context, parent *desktopMacOSSessionCapture,
+	scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation,
+	physical *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy,
+	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
+	if preparation == nil || physical == nil {
+		return nil, errors.New("macOS SOCKS child requires its exact typed preparation")
+	}
+	return startDesktopMacOSProcessCapturedExecutionFamilies(ctx, parent, scope, preparation, nil, nil, physical, verify)
+}
+
+func startDesktopMacOSProcessCapturedExecutionFamilies(ctx context.Context, parent *desktopMacOSSessionCapture,
+	scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation,
+	physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,
+	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy,
+	socksPhysical *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy,
+	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
 	if ctx == nil || parent == nil || verify == nil {
 		return nil, errors.New("macOS child requires its original captured application")
 	}
@@ -86,7 +106,12 @@ func startDesktopMacOSProcessCapturedExecution(ctx context.Context, parent *desk
 	}
 	var arguments []string
 	var err error
-	if connectPhysical != nil {
+	if desktopNodeChainExecutionPhysicalCount(physical, connectPhysical, socksPhysical) > 1 {
+		return nil, errors.New("macOS child mixed physical execution owners")
+	}
+	if socksPhysical != nil {
+		arguments, err = desktopMacOSSOCKSExecutionProcessArguments(scope, preparation, socksPhysical)
+	} else if connectPhysical != nil {
 		if physical != nil {
 			return nil, errors.New("macOS child mixed two physical execution owners")
 		}
@@ -102,7 +127,7 @@ func startDesktopMacOSProcessCapturedExecution(ctx context.Context, parent *desk
 	if err := parent.Current(ctx); err != nil {
 		return nil, err
 	}
-	p := &desktopMacOSProcess{parent: parent, scope: scope, execution: preparation, executionPhysical: physical, executionCONNECTPhysical: connectPhysical,
+	p := &desktopMacOSProcess{parent: parent, scope: scope, execution: preparation, executionPhysical: physical, executionCONNECTPhysical: connectPhysical, executionSOCKSPhysical: socksPhysical,
 		gate: make(chan struct{}, 1), joined: make(chan struct{})}
 	// The initially empty gate holds construction until every partial native
 	// owner is published to this retained dependent. Parent close can wait for it.
@@ -195,7 +220,14 @@ func (p *desktopMacOSProcess) currentLocked(ctx context.Context) error {
 	if p.closed || p.retiring.Load() || !p.started.Load() || p.bootstrap == nil {
 		return errors.New("macOS child has no live captured handshake")
 	}
-	if p.executionCONNECTPhysical != nil {
+	if desktopNodeChainExecutionPhysicalCount(p.executionPhysical, p.executionCONNECTPhysical, p.executionSOCKSPhysical) > 1 {
+		return errors.New("macOS process mixed physical execution owners")
+	}
+	if p.executionSOCKSPhysical != nil {
+		if _, err := desktopMacOSSOCKSExecutionProcessArguments(p.scope, p.execution, p.executionSOCKSPhysical); err != nil {
+			return err
+		}
+	} else if p.executionCONNECTPhysical != nil {
 		if p.executionPhysical != nil {
 			return errors.New("macOS CONNECT process mixed native owners")
 		}

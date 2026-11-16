@@ -76,7 +76,7 @@ func desktopMacOSMTUHost(snapshot mtuRetestSnapshot) (*desktopMacOSNodeChainHost
 			return nil, true, errors.New("macOS ordered MTU capture borrowed an execution proof")
 		}
 	} else if capture.Execution == nil || capture.Execution.execution != runtime.host.execution ||
-		capture.Execution.physical != runtime.host.executionPhysical {
+		capture.Execution.physical != runtime.host.executionPhysical || capture.Execution.connectPhysical != runtime.host.executionCONNECTPhysical || capture.Execution.socksPhysical != runtime.host.executionSOCKSPhysical {
 		return nil, true, errors.New("macOS execution MTU capture lost its original physical proof")
 	}
 	return runtime.host, true, nil
@@ -105,8 +105,8 @@ func validateDesktopMacOSMTUSnapshotLocked(h *desktopMacOSNodeChainHost, snapsho
 		return errors.New("macOS MTU snapshot substituted its proved original session or full graph")
 	}
 	if h.execution != nil && (chain.Execution == nil || chain.Execution.execution != h.execution ||
-		chain.Execution.physical != h.executionPhysical || h.execution.preparation != h.executionPreparation ||
-		h.process.execution != h.executionPreparation || h.process.executionPhysical != h.executionPhysical) {
+		chain.Execution.physical != h.executionPhysical || chain.Execution.connectPhysical != h.executionCONNECTPhysical || chain.Execution.socksPhysical != h.executionSOCKSPhysical || h.execution.preparation != h.executionPreparation ||
+		h.process.execution != h.executionPreparation || h.process.executionPhysical != h.executionPhysical || h.process.executionCONNECTPhysical != h.executionCONNECTPhysical || h.process.executionSOCKSPhysical != h.executionSOCKSPhysical) {
 		return errors.New("macOS MTU snapshot replaced its adopted execution or physical preparation")
 	}
 	return validateMTURetestSnapshotState(h.parent.app, snapshot)

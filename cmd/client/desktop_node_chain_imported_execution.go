@@ -49,7 +49,7 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 		return bad
 	}
 	middle := len(members) - 2
-	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || desktopNodeChainCONNECTExecutionShape(members)) {
+	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || desktopNodeChainCONNECTExecutionShape(members) || desktopNodeChainSOCKSExecutionShape(members)) {
 		return bad
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}

@@ -41,7 +41,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, err
 	}
 	var prep *mobilemultihop.NodeChainExecutionPreparation
-	if launch.chain.execution.connectPhysical != nil {
+	if launch.chain.execution.socksPhysical != nil {
+		prep, err = mobilemultihop.ParseDesktopNodeChainSOCKSExecutionPreparation(string(raw))
+	} else if launch.chain.execution.connectPhysical != nil {
 		prep, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionPreparation(string(raw))
 	} else {
 		prep, err = mobilemultihop.ParseDesktopNodeChainExecutionPreparation(string(raw))
@@ -61,7 +63,17 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, err
 	}
 	var proofs []mobilemultihop.NodeChainProof
-	if local.Schema == 4 {
+	if local.Schema == 3 {
+		original, sourceErr := prep.OriginalSOCKSSource()
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		_, metadata, sourceErr := original.ReadValidated()
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		proofs = metadata.Proofs
+	} else if local.Schema == 4 {
 		original, sourceErr := prep.OriginalCONNECTSource()
 		if sourceErr != nil {
 			return nil, sourceErr
@@ -88,6 +100,12 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		}
 		serverInput.Schema = 4
 	}
+	if local.Schema == 3 {
+		if len(local.Nodes) != 3 || local.IdentitySources[1] != "" || proofs[1].NodeKind != "external" || proofs[1].Mode != "socks5" {
+			return nil, errors.New("modeled SOCKS execution lost its original UDP association source")
+		}
+		serverInput.Schema = 3
+	}
 	for position := 1; position < len(local.Nodes); position++ {
 		input, identity, err := desktopExecutionServerNode(local.Nodes[position], local.IdentitySources[position], position)
 		if err != nil {
@@ -104,7 +122,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	}
 	encoded, _ := json.Marshal(serverInput)
 	var server *mobilemultihop.NodeChainServerPolicy
-	if local.Schema == 4 {
+	if local.Schema == 3 {
+		server, err = mobilemultihop.NewNodeChainSOCKSServerPolicy(string(encoded))
+	} else if local.Schema == 4 {
 		server, err = mobilemultihop.NewNodeChainCONNECTServerPolicy(string(encoded))
 	} else {
 		server, err = mobilemultihop.NewNodeChainServerPolicy(string(encoded))
@@ -134,11 +154,11 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, err
 	}
 	request := multihoprelay.NodeChainRequest{Schema: descriptor.Schema, SessionID: strings.Repeat("7", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("8", 64), Peer: peer.Addr().String(), AcquireExpiresAt: time.Now().Add(10 * time.Second).Unix(), LocalPacketPublicKeys: []string{key}, Port: 32003, Users: []multihoprelay.NodeChainUser{{Position: 1, Username: strings.Repeat("9", 48), Password: strings.Repeat("a", 48)}}}
-	if descriptor.Schema == 2 || descriptor.Schema == 4 {
+	if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 {
 		request.LocalPacketPositions = []int{0}
 	}
 	for position := 1; position+1 < len(local.Nodes); position++ {
-		if (descriptor.Schema == 2 || descriptor.Schema == 4) && position == len(local.Nodes)-2 {
+		if (descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4) && position == len(local.Nodes)-2 {
 			// Imported SS has no packet client; retain its original source and
 			// separate relay user without fabricating paired credentials.
 			request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,
@@ -173,12 +193,14 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		}
 	}
 	source := mobilemultihop.NodeChainExecutionSource{Schema: 1, Execution: prep.Execution(), LocalSource: prep.LocalSource(), Server: descriptor, Request: request, FirstPort: 32000, LastPort: 32007}
-	if local.Schema == 4 {
-		source.Schema = 4
+	if local.Schema == 3 || local.Schema == 4 {
+		source.Schema = local.Schema
 	}
 	encoded, _ = json.Marshal(source)
 	var policy *mobilemultihop.NodeChainExecutionPolicy
-	if local.Schema == 4 {
+	if local.Schema == 3 {
+		policy, err = mobilemultihop.NewNodeChainSOCKSExecutionPolicy(prep, string(encoded))
+	} else if local.Schema == 4 {
 		policy, err = mobilemultihop.NewNodeChainCONNECTExecutionPolicy(prep, string(encoded))
 	} else {
 		policy, err = mobilemultihop.NewNodeChainExecutionPolicy(string(encoded))
@@ -196,7 +218,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	}
 	identity := mobilemultihop.NodeChainIdentity{EngineID: "original-execution-engine", SessionID: meta.SessionID, NetworkID: "original-execution-network", SourceSHA256: projection.SourceSHA256(), ConfigSHA256: projection.ConfigSHA256()}
 	var adoption any
-	if local.Schema == 4 {
+	if local.Schema == 3 {
+		adoption, err = mobilemultihop.NewDesktopNodeChainSOCKSExecutionAdoptionRecord(projection, identity, owned.attempt.digest)
+	} else if local.Schema == 4 {
 		adoption, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionAdoptionRecord(projection, identity, owned.attempt.digest)
 	} else {
 		adoption, err = mobilemultihop.NewDesktopNodeChainExecutionAdoptionRecord(projection, identity, owned.attempt.digest)
@@ -234,7 +258,10 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		mtu = meta.RestoredMTU
 	}
 	m.ready = mobilemultihop.DesktopNodeChainExecutionReadyRecord{Schema: 1, Kind: "routervpn-node-chain-execution-ready-v1", SourceSHA256: meta.SourceSHA256, PreparationSourceSHA256: prep.SourceSHA256(), PreparationConfigSHA256: prep.ConfigSHA256(), TransferSHA256: owned.attempt.digest, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, Identity: identity, SelectionEpoch: 1, Generation: 1, Reader: 1, InterfaceName: "router-vpn", InterfaceIndex: 91, MTU: mtu, ObservedAt: time.Now().UnixMilli(), Progress: progress}
-	if local.Schema == 4 {
+	if local.Schema == 3 {
+		m.ready.Kind = "routervpn-node-chain-socks-execution-ready-v1"
+		err = mobilemultihop.DesktopNodeChainSOCKSExecutionReadyRecord(m.ready).Validate(projection, owned.attempt.digest)
+	} else if local.Schema == 4 {
 		m.ready.Kind = "routervpn-node-chain-connect-execution-ready-v1"
 		err = mobilemultihop.DesktopNodeChainCONNECTExecutionReadyRecord(m.ready).Validate(projection, owned.attempt.digest)
 	} else {

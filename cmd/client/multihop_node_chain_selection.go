@@ -43,7 +43,7 @@ func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []c
 	// a separate child-owned derivation; never rewrite saved member preferences.
 	members, err := resolveDesktopNodeChainMembers(control, profiles, nodes, "local")
 	if desktopNodeChainHasSOCKS(nodes) {
-		members, err = resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, execution)
+		members, err = resolveDesktopNodeChainSOCKSMembers(control, profiles, nodes, "local")
 	}
 	if desktopNodeChainHasCONNECT(nodes) {
 		members, err = resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, "local")

@@ -413,7 +413,7 @@ func newDesktopLinuxExternalTransactionWithStartup(startup context.Context, h *d
 }
 
 func (t *desktopLinuxNodeTransaction) validatePolicy() error {
-	if t.execution != nil && (desktopNodeChainConcretePolicyCount(t.chain, t.socksChain, t.connectChain) != 1 || t.socksChain != nil || t.candidatePrefix != nil || t.policy != nil || t.imported != nil || t.external != nil) {
+	if t.execution != nil && (desktopNodeChainConcretePolicyCount(t.chain, t.socksChain, t.connectChain) != 1 || t.candidatePrefix != nil || t.policy != nil || t.imported != nil || t.external != nil) {
 		return errors.New("Linux execution transaction mixed its original concrete source")
 	}
 	if t.candidatePrefix != nil {

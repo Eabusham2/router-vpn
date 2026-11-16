@@ -19,6 +19,7 @@ type desktopNodeChainExecutionLaunch struct {
 	preparation     *mobilemultihop.NodeChainExecutionPreparation
 	physical        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
 	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
+	socksPhysical   *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
 	mu              sync.Mutex
 	adoption        string
 	projection      *mobilemultihop.NodeChainExecutionProjection
@@ -36,7 +37,7 @@ func desktopNodeChainLaunchExecution(launch *desktopNodeLaunch) *desktopNodeChai
 }
 
 func newDesktopNodeChainExecutionSource(original *desktopNodeChainLaunch, requested string) (*desktopNodeChainExecutionLaunch, error) {
-	if original == nil || original.socksPolicy != nil || original.preparation != nil || !original.originalPolicyCurrent() {
+	if original == nil || original.preparation != nil || !original.originalPolicyCurrent() {
 		return nil, errors.New("execution preparation requires its complete original typed Local source")
 	}
 	meta, err := desktopNodeChainExecutionOriginalMetadata(original)
@@ -45,6 +46,18 @@ func newDesktopNodeChainExecutionSource(original *desktopNodeChainLaunch, reques
 	}
 	if meta.TargetOS != "linux" && meta.TargetOS != "windows" && meta.TargetOS != "darwin" {
 		return nil, errors.New("execution host has no supported native target")
+	}
+	if original.socksPolicy != nil {
+		prep, err := mobilemultihop.NewDesktopNodeChainSOCKSExecutionPreparation(original.socksPolicy, requested)
+		if err != nil {
+			return nil, err
+		}
+		physical, err := prep.SOCKSDesktopPhysicalPolicy()
+		if err != nil {
+			return nil, err
+		}
+		result := &desktopNodeChainExecutionLaunch{original: original, preparation: prep, socksPhysical: physical}
+		return result, result.validateSource()
 	}
 	if original.connectPolicy != nil {
 		prep, err := mobilemultihop.NewDesktopNodeChainCONNECTExecutionPreparation(original.connectPolicy, requested)
@@ -95,8 +108,8 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 	bad := func() (desktopExecutionSourceObservation, error) {
 		return desktopExecutionSourceObservation{}, errors.New("execution launch changed its exact original source or physical preparation")
 	}
-	if e == nil || e.original == nil || e.preparation == nil || (e.physical == nil) == (e.connectPhysical == nil) ||
-		!e.original.hasPolicy() || e.original.socksPolicy != nil || e.original.preparation != nil || e.original.selection.Native == nil ||
+	if e == nil || e.original == nil || e.preparation == nil || desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical) != 1 ||
+		!e.original.hasPolicy() || e.original.preparation != nil || e.original.selection.Native == nil ||
 		e.original.selection.Native.chain == nil || e.original.selection.Native.validate(e.original.selection) != nil {
 		return bad()
 	}
@@ -107,7 +120,20 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 	var observed desktopExecutionSourceObservation
 	var policy mobilemultihop.DesktopPhysicalPolicy
 	var meta mobilemultihop.DesktopNodeChainMetadata
-	if e.connectPhysical != nil {
+	if e.socksPhysical != nil {
+		if e.original.socksPolicy == nil || e.original.policy != nil || e.original.connectPolicy != nil || selected.socks == nil || selected.chain != nil || selected.connect != nil {
+			return bad()
+		}
+		original, metadata, err := e.socksPhysical.ReadOriginalValidated(e.preparation)
+		if err != nil || original != e.original.socksPolicy {
+			return bad()
+		}
+		source, err := original.OriginalSource()
+		if err != nil || source != selected.socks.source {
+			return bad()
+		}
+		policy, meta = e.socksPhysical, metadata
+	} else if e.connectPhysical != nil {
 		if e.original.connectPolicy == nil || e.original.policy != nil || selected.connect == nil || selected.chain != nil || selected.socks != nil {
 			return bad()
 		}
@@ -142,7 +168,7 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 		return bad()
 	}
 	observed.policy, observed.metadata = policy, meta
-	if physicalRead && e.connectPhysical != nil {
+	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil) {
 		var err error
 		observed.config, observed.physical, observed.capture, err = policy.PhysicalReadValidated()
 		if err != nil {
@@ -155,8 +181,12 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 // This descriptive view never substitutes for either sealed physical owner.
 // Read the retained Local policy directly to avoid recursing through execution.
 func desktopNodeChainExecutionOriginalMetadata(original *desktopNodeChainLaunch) (mobilemultihop.DesktopNodeChainMetadata, error) {
-	if original == nil || !original.hasPolicy() || original.socksPolicy != nil {
+	if original == nil || !original.hasPolicy() {
 		return mobilemultihop.DesktopNodeChainMetadata{}, errors.New("execution metadata lost its original typed policy")
+	}
+	if original.socksPolicy != nil {
+		_, meta, _, err := original.socksPolicy.ReadValidated()
+		return meta.DesktopNodeChainMetadata, err
 	}
 	if original.connectPolicy != nil {
 		_, meta, _, err := original.connectPolicy.ReadValidated()
@@ -174,6 +204,13 @@ func (e *desktopNodeChainExecutionLaunch) physicalPolicy() (mobilemultihop.Deskt
 func (e *desktopNodeChainExecutionLaunch) projectionPhysicalCurrent(projection *mobilemultihop.NodeChainExecutionProjection) error {
 	if e.validateSource() != nil || projection == nil {
 		return errors.New("execution projection lost its original typed physical source")
+	}
+	if e.socksPhysical != nil {
+		physical, err := projection.SOCKSDesktopPhysicalPolicy()
+		if err != nil || physical != e.socksPhysical {
+			return errors.New("SOCKS execution replaced its original physical source")
+		}
+		return nil
 	}
 	if e.connectPhysical != nil {
 		physical, err := projection.CONNECTDesktopPhysicalPolicy()
@@ -204,7 +241,9 @@ func (e *desktopNodeChainExecutionLaunch) readPolicyCapture() (desktopExecutionS
 	}
 	meta, physical := observed.metadata, observed.physical
 	kind := "node-chain-execution"
-	if e.connectPhysical != nil {
+	if e.socksPhysical != nil {
+		kind = "node-chain-socks-execution"
+	} else if e.connectPhysical != nil {
 		kind = "node-chain-connect-execution"
 	}
 	if err != nil || physical.ConfigSHA256 != e.preparation.ConfigSHA256() || physical.SourceSHA256 != meta.SourceSHA256 ||

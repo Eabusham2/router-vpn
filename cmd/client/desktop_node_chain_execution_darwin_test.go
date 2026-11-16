@@ -146,9 +146,15 @@ func TestDesktopMacOSExecutionReaderRequiresPhysicalRetirement(t *testing.T) {
 // and host retirement run here. The child ACK and PF command are explicit
 // boundary models; the Python journal handoff separately checks deny retention.
 func macOSExecutionRetirementFixture(t *testing.T) (*desktopMacOSNodeChainHost, *[]string) {
+	return macOSExecutionRetirementFixtureWith(t, func(t *testing.T) (*app, *desktopNodeLaunch) {
+		return desktopNodeChainLaunchFixture(t, 3, "darwin")
+	})
+}
+
+func macOSExecutionRetirementFixtureWith(t *testing.T, source func(*testing.T) (*app, *desktopNodeLaunch)) (*desktopMacOSNodeChainHost, *[]string) {
 	t.Helper()
 	p, session, controller, _, _ := macOSParentFixture(t)
-	a, launch := desktopNodeChainLaunchFixture(t, 3, "darwin")
+	a, launch := source(t)
 	execution, err := newDesktopNodeChainExecutionSource(launch.chain, "auto")
 	if err != nil {
 		t.Fatal(err)
@@ -164,8 +170,8 @@ func macOSExecutionRetirementFixture(t *testing.T) (*desktopMacOSNodeChainHost, 
 	parent := &desktopMacOSSessionCapture{app: a, controller: controller, parent: p, session: session}
 	meta := launch.chain.policyMetadata()
 	runtime := &desktopNodeChainPlatformRuntime{registered: true}
-	h := &desktopMacOSNodeChainHost{parent: parent, runtime: runtime, launch: launch, policy: launch.chain.policy,
-		execution: execution, executionPreparation: execution.preparation, executionPhysical: execution.physical,
+	h := &desktopMacOSNodeChainHost{parent: parent, runtime: runtime, launch: launch, policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy, connectPolicy: launch.chain.connectPolicy,
+		execution: execution, executionPreparation: execution.preparation, executionPhysical: execution.physical, executionCONNECTPhysical: execution.connectPhysical, executionSOCKSPhysical: execution.socksPhysical,
 		operation: operation, gate: make(chan struct{}, 1), entered: true, published: true, staged: true, baselineEntered: true,
 		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
 			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
@@ -204,7 +210,7 @@ func macOSExecutionRetirementFixture(t *testing.T) (*desktopMacOSNodeChainHost, 
 		return &copy, ctx.Err()
 	}
 	child := &desktopMacOSProcess{parent: parent, command: launch.command, execution: execution.preparation,
-		executionPhysical: execution.physical, gate: make(chan struct{}, 1), joined: make(chan struct{})}
+		executionPhysical: execution.physical, executionCONNECTPhysical: execution.connectPhysical, executionSOCKSPhysical: execution.socksPhysical, gate: make(chan struct{}, 1), joined: make(chan struct{})}
 	child.gate <- struct{}{}
 	child.started.Store(true)
 	close(child.joined)

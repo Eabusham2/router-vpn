@@ -89,6 +89,9 @@ func TestDesktopSOCKSPublicCapabilityRetainsStrictSourceAndSecrets(t *testing.T)
 			if view.External == nil || view.External.OrderedMiddle != want || !reflect.DeepEqual(p, before) {
 				t.Fatal("public capability changed its source or admitted an unsupported middle", fault)
 			}
+			if view.External.OrderedSOCKSExecutionMiddle != (want && nativeDesktopImportedTrioExecutionPlatformSupported()) || view.External.OrderedCONNECTExecutionMiddle {
+				t.Fatal("SOCKS execution hint borrowed another family or bypassed original source validation", fault)
+			}
 			raw, err := json.Marshal(view)
 			if err != nil {
 				t.Fatal(err)

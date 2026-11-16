@@ -18,7 +18,9 @@ func desktopExecutionParentSavedChoice(t *testing.T, prep *mobilemultihop.NodeCh
 	}
 	var policy *mobilemultihop.NodeChainExecutionPolicy
 	var err error
-	if source.Schema == 4 {
+	if source.Schema == 3 {
+		policy, err = mobilemultihop.NewNodeChainSOCKSExecutionPolicy(prep, projection.Source())
+	} else if source.Schema == 4 {
 		policy, err = mobilemultihop.NewNodeChainCONNECTExecutionPolicy(prep, projection.Source())
 	} else {
 		policy, err = mobilemultihop.NewNodeChainExecutionPolicy(projection.Source())
@@ -27,7 +29,16 @@ func desktopExecutionParentSavedChoice(t *testing.T, prep *mobilemultihop.NodeCh
 		t.Fatal(err)
 	}
 	var meta mobilemultihop.DesktopPhysicalMetadata
-	if source.Schema == 4 {
+	if source.Schema == 3 {
+		physical, err := prep.SOCKSDesktopPhysicalPolicy()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, meta, _, err = physical.PhysicalReadValidated()
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if source.Schema == 4 {
 		physical, err := prep.CONNECTDesktopPhysicalPolicy()
 		if err != nil {
 			t.Fatal(err)

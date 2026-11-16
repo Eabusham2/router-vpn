@@ -880,7 +880,7 @@ def _darwin_node_chain_rows(capture):
             middle = {'ordered-node-chain-v1': ('shadowsocks', 'openvpn'),
                       'ordered-node-chain-socks-v1': ('socks5',),
                       'ordered-node-chain-connect-v1': ('http-connect', 'https-connect'),
-                      'ordered-node-chain-execution-v1': ('shadowsocks', 'http-connect', 'https-connect')}
+                      'ordered-node-chain-execution-v1': ('shadowsocks', 'socks5', 'http-connect', 'https-connect')}
             connect = capture['family'] == 'ordered-node-chain-connect-v1'
             variable = (connect
                         or capture['family'] == 'ordered-node-chain-socks-v1' and row[1] == 'socks5'
