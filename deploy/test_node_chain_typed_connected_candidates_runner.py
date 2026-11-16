@@ -3,7 +3,9 @@
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('typed_native_gate',ROOT/'deploy/test_node_chain_typed_connected_candidates.py');V=importlib.util.module_from_spec(spec);spec.loader.exec_module(V)
@@ -96,4 +98,57 @@ class NativeConnectedVerdict(unittest.TestCase):
         self.assertIn('-timeout=150s',gate.command('go',['.'],'test'))
         prep=(ROOT/'deploy/prepare-mobile-node-chain.py').read_text()
         for filename in ('typed_candidates.go.tmpl','typed_candidates_test.go.tmpl','typed_candidates_run_test.go.tmpl','test_node_chain_typed_connected_candidates.py','test_node_chain_typed_connected_candidates_runner.py'):self.assertIn(filename,prep)
+    def prepared_fixture(self, directory):
+        core=Path(directory)
+        actual={}
+        for module in ('prepare-mobile-node-chain','prepare-mobile-connect'):
+            spec=importlib.util.spec_from_file_location('fixture_'+module.replace('-','_'),ROOT/'deploy'/(module+'.py'))
+            prep=importlib.util.module_from_spec(spec);spec.loader.exec_module(prep)
+            names=('connect_lifecycle.go.tmpl',) if module=='prepare-mobile-connect' else ('typed_candidates.go.tmpl','typed_candidates_test.go.tmpl','socks_lifecycle.go.tmpl')
+            for name in names:
+                target=prep.TEMPLATES[name]
+                actual[name]=target
+                path=core/target;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((ROOT/'mobile/chain'/name).read_bytes())
+        for name in V.SHARED:
+            target=core/'experimental/libbox/routervpn/mobilemultihop'/name;target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_text((ROOT/'internal/mobilemultihop'/name).read_text().replace('"router-vpn/internal/','"'+V.PACKAGE+'/routervpn/'))
+        return core,actual
+
+    def test_actual_two_preparer_registry_projection_is_checked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core,actual=self.prepared_fixture(directory)
+            self.assertEqual(V.source_projections(),actual)
+            self.assertIsNone(V.checked_sources(core))
+            self.assertEqual(V.TEMPLATE_PREPARERS['connect_lifecycle.go.tmpl'],'prepare-mobile-connect')
+            # Restoring the old blanket registry must fail at the original
+            # mapping boundary, before any Go command or native execution.
+            with patch.dict(V.TEMPLATE_PREPARERS,{'connect_lifecycle.go.tmpl':'prepare-mobile-node-chain'}):
+                with self.assertRaisesRegex(ValueError,'lost its original preparer: connect_lifecycle'):
+                    V.checked_sources(core)
+
+    def test_every_actual_native_and_shared_body_remains_exact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core,actual=self.prepared_fixture(directory)
+            paths=[core/target for target in actual.values()]+[core/'experimental/libbox/routervpn/mobilemultihop'/name for name in V.SHARED]
+            for path in paths:
+                original=path.read_bytes()
+                with self.subTest(path=path.name):
+                    path.write_bytes(original+b'\n// foreign owner\n')
+                    with self.assertRaisesRegex(ValueError,'changed connected'):
+                        V.checked_sources(core)
+                    path.write_bytes(original)
+            self.assertIsNone(V.checked_sources(core))
+
+    def test_missing_connect_projection_is_not_replaced_by_decoy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core,actual=self.prepared_fixture(directory)
+            target=core/actual['connect_lifecycle.go.tmpl'];original=target.read_bytes();target.unlink()
+            (core/'experimental/libbox/connect_lifecycle.go').write_bytes(original)
+            with self.assertRaises(FileNotFoundError):V.checked_sources(core)
+
+    def test_registry_inventory_cannot_drop_or_add_a_template(self):
+        for changed in ({k:v for k,v in V.TEMPLATE_PREPARERS.items() if k!='connect_lifecycle.go.tmpl'},dict(V.TEMPLATE_PREPARERS,foreign='prepare-mobile-connect')):
+            with patch.dict(V.TEMPLATE_PREPARERS,changed,clear=True),self.assertRaisesRegex(ValueError,'registry inventory'):
+                V.source_projections()
+
 if __name__=='__main__':unittest.main()

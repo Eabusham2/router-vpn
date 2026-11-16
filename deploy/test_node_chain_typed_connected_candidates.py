@@ -19,6 +19,12 @@ PACKAGE = 'github.com/sagernet/sing-box/experimental/libbox'
 ROOTS = {f'TestRouterNodeChain{family}ConnectedCandidateRequiresProof': ('3','4','8') for family in ('SOCKS','CONNECT')}
 ROOTS.update({f'TestRouterNodeChain{family}ConnectedCandidateNativeOwnership': ('original','catalog','copied-handle','copied-owner','copied-owner-cleared','foreign-slot','duplicate-constructor','prepare-once','held-prepare','stale-close','engine','runtime','held-close','network') for family in ('SOCKS','CONNECT')})
 TEMPLATES = ('typed_candidates.go.tmpl','typed_candidates_test.go.tmpl','socks_lifecycle.go.tmpl','connect_lifecycle.go.tmpl')
+TEMPLATE_PREPARERS = {
+    'typed_candidates.go.tmpl': 'prepare-mobile-node-chain',
+    'typed_candidates_test.go.tmpl': 'prepare-mobile-node-chain',
+    'socks_lifecycle.go.tmpl': 'prepare-mobile-node-chain',
+    'connect_lifecycle.go.tmpl': 'prepare-mobile-connect',
+}
 SHARED = ('node_chain_socks_runtime.go','node_chain_connect_runtime.go','node_chain_typed_connected_candidates.go')
 NATIVE = 'experimental/libbox/routervpn_node_chain_typed_candidates.go'
 CONTROLS = tuple((family, fault, before, after, witness) for family in ('SOCKS','CONNECT') for fault,before,after,witness in (
@@ -85,11 +91,28 @@ def negative(raw,code,family,fault,witness):
     if not rows or rows[-1].get('Action')!='fail' or rows[-1].get('Test'):raise ValueError('connected omission package did not join')
 
 
-def checked_sources(core):
-    spec=importlib.util.spec_from_file_location('typed_connected_projection',ROOT/'deploy/prepare-mobile-node-chain.py')
-    prep=importlib.util.module_from_spec(spec);spec.loader.exec_module(prep)
+def source_projections():
+    if set(TEMPLATE_PREPARERS) != set(TEMPLATES):
+        raise ValueError('connected template registry inventory changed')
+    preparers = {}
+    for name in set(TEMPLATE_PREPARERS.values()):
+        spec=importlib.util.spec_from_file_location('typed_connected_'+name.replace('-', '_'),ROOT/'deploy'/(name+'.py'))
+        prep=importlib.util.module_from_spec(spec);spec.loader.exec_module(prep)
+        preparers[name] = prep
+    projections = {}
     for name in TEMPLATES:
-        if (ROOT/'mobile/chain'/name).read_bytes()!=(core/prep.TEMPLATES[name]).read_bytes():
+        registry = preparers[TEMPLATE_PREPARERS[name]].TEMPLATES
+        if name not in registry:
+            raise ValueError('connected template lost its original preparer: '+name)
+        projections[name] = registry[name]
+    if len(set(projections.values())) != len(TEMPLATES):
+        raise ValueError('connected native projections collide')
+    return projections
+
+
+def checked_sources(core):
+    for name, target in source_projections().items():
+        if (ROOT/'mobile/chain'/name).read_bytes()!=(core/target).read_bytes():
             raise ValueError('changed connected native projection: '+name)
     for name in SHARED:
         expected=(ROOT/'internal/mobilemultihop'/name).read_text().replace('"router-vpn/internal/','"'+PACKAGE+'/routervpn/')
