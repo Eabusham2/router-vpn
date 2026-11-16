@@ -1067,7 +1067,7 @@ class OwnedDarwinPF(unittest.TestCase):
     def test_execution_socks_keeps_original_saved_member_baseline(self):
         # Actual capture, saved-profile reconstruction and journal lifecycle;
         # the existing PF/kernel double is not installed native acceptance.
-        for protocol, count in (('socks5', 3),):
+        for protocol, count in (('socks5', count) for count in range(3, 9)):
             for mode in ('wg', 'awg2-fast', 'awg2-strong'):
                 with self.subTest(protocol=protocol, mode=mode, count=count):
                     capture, rows = self.execution_imported_capture(protocol, mode, count)
@@ -1094,16 +1094,37 @@ class OwnedDarwinPF(unittest.TestCase):
                     self.assertEqual(D.darwin_node_chain('release', dict(capture=capture, expected=retired)), retired)
                     self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
 
-    def test_execution_socks_keeps_exact_trio_and_original_rows(self):
+    def test_execution_socks_complete_prefix_cannot_borrow_local_receipt(self):
+        import copy
+        for count in (4, 8):
+            with self.subTest(count=count):
+                capture, _ = self.execution_imported_capture('socks5', count=count)
+                active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                local = dict(capture, family='ordered-node-chain-socks-v1')
+                self.assertEqual(D._darwin_node_chain_capture(local), local)
+                before_commands, before_state = list(self.commands), copy.deepcopy(self.saved())
+                for action in ('current', 'retire', 'release'):
+                    for expected in (None, active):
+                        with self.subTest(action=action, receipt=expected is not None), self.assertRaises(RuntimeError):
+                            D.darwin_node_chain(action, dict(capture=local, expected=expected))
+                        self.assertEqual(self.commands, before_commands)
+                        self.assertEqual(self.saved(), before_state)
+                held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+                retired = D.darwin_node_chain('release', dict(capture=capture, expected=held))
+                self.assertTrue(retired['baseline']['present'])
+                self.assertEqual(retired['capture'], capture)
+                self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+
+    def test_execution_socks_keeps_complete_prefix_and_original_rows(self):
         import copy
         capture, rows = self.execution_imported_capture('socks5')
-        for fault in ('two', 'four', 'eight', 'middle-first', 'middle-final', 'second-external',
+        for fault in ('two', 'four', 'eight', 'nine', 'middle-first', 'middle-final', 'second-external',
                       'wrong-prefix', 'wrong-final', 'paired-middle', 'openvpn', 'duplicate-id',
                       'digest', 'canonical', 'control', 'aggregate-policy', 'aggregate-lan'):
             changed, modified = copy.deepcopy(capture), copy.deepcopy(rows)
             if fault == 'two': modified.pop(0)
-            elif fault in ('four', 'eight'):
-                for index in range(1 if fault == 'four' else 5):
+            elif fault in ('four', 'eight', 'nine'):
+                for index in range({'four': 1, 'eight': 5, 'nine': 6}[fault]):
                     extra = list(modified[0]); extra[0] = 'extra-'+str(index); modified.insert(0, extra)
             elif fault == 'middle-first': modified[0], modified[1] = modified[1], modified[0]
             elif fault == 'middle-final': modified[1], modified[2] = modified[2], modified[1]
@@ -1123,12 +1144,16 @@ class OwnedDarwinPF(unittest.TestCase):
             if fault == 'digest': changed['members_sha256'] = 'f'*64
             before = list(self.commands)
             with self.subTest(fault=fault), self.assertRaises(RuntimeError, msg='SOCKS execution borrowed an unsupported shape or member capture'):
-                D._darwin_node_chain_capture(changed)
+                if fault in ('four', 'eight'):
+                    # A valid shape cannot invent saved paired-member authority.
+                    D.darwin_node_chain('apply', dict(capture=changed, expected=None))
+                else:
+                    D._darwin_node_chain_capture(changed)
             self.assertEqual(self.commands, before)
 
     def test_execution_socks_checks_every_original_saved_member(self):
         import copy
-        for protocol, count in (('socks5', 3),):
+        for protocol, count in (('socks5', count) for count in (3, 4, 8)):
             capture, rows = self.execution_imported_capture(protocol, count=count)
             original = copy.deepcopy(self.store)
             for row in rows:
