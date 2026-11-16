@@ -69,8 +69,40 @@ SWIFT = C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')] + r'''
  static var checks=0
  static func check(_ name:String,_ value:@autoclosure ()throws->Bool)throws{guard try value()else{throw NSError(domain:"PrefixCheck",code:1,userInfo:[NSLocalizedDescriptionKey:name])};checks+=1}
  static func reject(_ name:String,_ action:()throws->Void)throws{do{try action()}catch{checks+=1;return};throw NSError(domain:"PrefixCheck",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])}
- static func main(){defer{LibboxTestClose()};do{try run();print("Apple independent prefix capture: \(checks) shipping Swift/shared Go checks PASS")}
+ static func main(){defer{LibboxTestClose()};do{try run();try openVPNPrefixes();print("Apple independent prefix capture: \(checks) shipping Swift/shared Go checks PASS")}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
+ static func openVPNPrefixes()throws{
+  for count in [3,4,8] {for mode in ["wg","awg2-fast","awg2-strong"] {for network in ["tcp","udp"] {
+   let middlePosition=count-2,finalPosition=count-1,id="saved-openvpn-prefix-middle"
+   var bundles=try sources(count,"off",true)
+   for position in bundles.indices {bundles[position]=try editProfile(bundles[position]){p in
+    p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""
+   }}
+   var middle=try profile(bundles[middlePosition]);middle["id"]=id;middle["node_kind"]="external";middle.removeValue(forKey:"node_proof_id")
+   middle["router_api"]="";middle["api_token"]="";middle["endpoint"]="203.0.113.20";middle["start_layer"]="off";middle["home_lan_access"]=false;middle["kill_switch_policy"]="always"
+   let raw="client\ndev tun\nproto "+network+"\nremote 203.0.113.20 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\ntun-mtu 1400\ndata-ciphers AES-256-GCM:AES-128-GCM\n"
+   middle["external"]=["protocol":"openvpn","expected_public_ip":"203.0.113.88","openvpn":["config":raw,"username":" exact prefix user ","password":" exact prefix secret "]]
+   bundles[middlePosition]=try data(["selectedRouterID":id,"routerProfiles":[middle],"profiles":[String:[String:String]]()])
+   bundles[finalPosition]=try editProfile(bundles[finalPosition]){p in var nodes=p["multihop_nodes"] as! [[String:Any]];for i in 0..<middlePosition{nodes[i]["mode"]=mode};nodes[middlePosition]=["id":id,"mode":"openvpn"];p["multihop_nodes"]=nodes}
+   let original=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? original.plan.close()}
+   let source=try object(Data(original.launchInput.utf8)),inputs=source["nodes"] as! [String]
+   let inventory=String(decoding:try data(["schema":1,"revision":"original-openvpn-prefix-catalog","inputs":[inputs.last!]]),as:UTF8.self)
+   let positions=middlePosition==1 ? [0] : [0,middlePosition-1]
+   for position in positions {
+    let value=try IOSNodeCandidatePrefixCapture.compile(original:original,position:position,inventory:inventory);defer{try? value.native.close()}
+    try check("OpenVPN retained only saved original provenance",value.originalLaunchInput==original.launchInput && value.originalSourceSHA256==original.sourceSHA256 && value.sourceSHA256 != original.sourceSHA256)
+    try check("OpenVPN prefix exact original paired identities",value.metadata.prefixes.map(\.profile_id)==Array(original.members.prefix(position+1)).map(\.id))
+    try check("OpenVPN prefix has no application or DNS ingress",!value.metadata.ready && !value.metadata.application_open && !value.metadata.dns_open && value.metadata.stage=="pending-prefix-proof")
+    try check("saved OpenVPN is absent from runnable prefix",!value.config.contains("openvpn-client") && !value.config.contains("203.0.113.20") && !value.config.contains(" exact prefix secret "))
+    try check("saved suffix has no native tag in prefix",!value.config.contains("routervpn-chain-\(position+1)-"))
+    try check("OpenVPN prefix preserves configured MTU semantics",value.metadata.mtu_measurement=="configured-bounds-only" && value.metadata.mtu.original<=value.metadata.mtu.ceiling)
+    let reopened=try IOSNodeCandidatePrefixCapture.reopen(value.launchInput,originalInput:original.launchInput,selectedProfile:original.finalProfile,position:position,inventory:inventory);defer{try? reopened.native.close()}
+    try check("OpenVPN saved-prefix private source roundtrip",reopened.config==value.config && reopened.captureSHA256==value.captureSHA256 && reopened.launchInput==value.launchInput)
+   }
+   try reject("OpenVPN middle cannot become packet candidate prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:middlePosition,inventory:inventory)}
+   try reject("OpenVPN final cannot become packet candidate prefix"){_ = try IOSNodeCandidatePrefixCapture.compile(original:original,position:finalPosition,inventory:inventory)}
+  }}}
+ }
  static func run()throws{
   for mixed in [false,true] {
    let bundles=try sources(4,"off",mixed)

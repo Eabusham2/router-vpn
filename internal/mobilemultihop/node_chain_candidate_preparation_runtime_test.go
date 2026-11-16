@@ -45,9 +45,13 @@ func (o *candidatePreparationOwnerFixture) CandidateInventoryCurrentContext(ctx 
 func newCandidatePreparationRuntimeFixture(t *testing.T, mode string) (*NodeChainCandidatePreparationRuntime, *candidatePreparationOwnerFixture) {
 	t.Helper()
 	p, _, _ := candidatePreparationFixture(t, []string{mode, mode, "shadowsocks"}, []string{"", "", ""}, 1)
+	return candidatePreparationRuntimeFromSource(t, p)
+}
+func candidatePreparationRuntimeFromSource(t *testing.T, p *NodeChainCandidatePreparation) (*NodeChainCandidatePreparationRuntime, *candidatePreparationOwnerFixture) {
+	t.Helper()
 	base := newNodeChainTestEngine(t, p.original)
 	base.identity.SourceSHA256, base.identity.ConfigSHA256 = p.SourceSHA256(), p.ConfigSHA256()
-	base.dead = 2
+	base.dead = p.position + 1
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +69,7 @@ func newCandidatePreparationRuntimeFixture(t *testing.T, mode string) (*NodeChai
 	}()
 	t.Cleanup(func() { _ = listener.Close(); <-done })
 	owner := &candidatePreparationOwnerFixture{candidateRouteFixture: &candidateRouteFixture{nodeChainTestEngine: base,
-		tag: p.proofs[1].Tag, address: p.candidates.targets[0].Address, peer: listener.Addr().String()}, capture: p.capture}
+		tag: p.proofs[p.position].Tag, address: p.candidates.targets[0].Address, peer: listener.Addr().String()}, capture: p.capture}
 	runtime, err := NewNodeChainCandidatePreparationRuntime(p, owner)
 	if err != nil {
 		t.Fatal(err)

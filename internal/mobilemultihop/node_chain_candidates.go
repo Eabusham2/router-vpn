@@ -41,13 +41,16 @@ type NodeChainCandidatePlan struct {
 }
 
 func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
-	if c == nil || c.validateCapture() != nil || c.openVPNMiddle != nil || c.importedMiddle != nil && len(c.nodes) != 3 || position < 0 || position >= len(c.proofs) ||
+	if c == nil || c.validateCapture() != nil || c.openVPNMiddle != nil && position >= len(c.nodes)-2 || c.importedMiddle != nil && len(c.nodes) != 3 || position < 0 || position >= len(c.proofs) ||
 		c.nodes[position] == nil || !NodeChainPrefixMode(c.proofs[position].Mode) {
 		// WG/AWG TCP dialing waits for the destination handshake. A lazy SS
 		// stream would measure an upstream socket instead, so cannot acquire
 		// this particular TCP connection timing capability.
 		return nil, errors.New("candidate timing requires an original paired packet prefix")
 	}
+	// A later saved OpenVPN member is only source provenance for a temporary
+	// prefix preparation. The selected position must precede it; neither that
+	// member nor the final becomes a candidate route or a TCP timing target.
 	var record NodeChainCandidateInventory
 	if exactJSON([]byte(inventory), &record, NodeChainInputLimit) != nil || record.Schema != 1 ||
 		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 || len(record.Inputs) > hopmeasure.CandidateMaximumTargets {

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'github.com/sagernet/sing-box'
@@ -19,6 +20,7 @@ MAX_BUILD_OUTPUT_BYTES = 64 * 1024
 ROOTS = {
     PACKAGE: {
         'TestRouterVPNNodeChainCandidatePreparationNativeClosedPrefixAndFifty': ('wg', 'awg2-fast', 'awg2-strong'),
+        'TestRouterVPNNodeChainCandidatePreparationNativeOpenVPNSavedSuffix': ('3', '4', '8'),
         'TestRouterVPNNodeChainCandidatePreparationNativeRejectsActualGraph': ('mtu', 'rule', 'key'),
         'TestRouterVPNNodeChainCandidatePreparationNativeKeepsExactGate': (),
         'TestRouterVPNNodeChainCandidatePreparationNativeDeniedInputRetainsRetirement': ('held', 'failed-close'),
@@ -85,12 +87,15 @@ def expected(package):
             for suffix in ('', *('/'+child for child in children))}
 
 
-def verdict(raw, code):
+def verdict(raw, code, inventory=None):
+    inventory = {p: expected(p) for p in ROOTS} if inventory is None else inventory
+    if not inventory or any(p not in ROOTS or not names or not names <= expected(p) for p, names in inventory.items()):
+        raise ValueError('foreign or empty prefix phase inventory')
     if code:
         raise ValueError('native prefix preparation command failed')
     started, finished = set(), set()
-    runs, passes = {p: set() for p in ROOTS}, {p: set() for p in ROOTS}
-    build_packages = {p+'.test': p for p in ROOTS}
+    runs, passes = {p: set() for p in inventory}, {p: set() for p in inventory}
+    build_packages = {p+'.test': p for p in inventory}
     build_output_bytes = {}
     for line in raw.splitlines():
         row = json.loads(line)
@@ -111,10 +116,10 @@ def verdict(raw, code):
             build_output_bytes[package] = size
             continue
         package, action, name = row.get('Package'), row.get('Action'), row.get('Test')
-        if package not in ROOTS or package in finished or action in ('skip', 'fail') or 'DATA RACE' in row.get('Output', ''):
+        if package not in inventory or package in finished or action in ('skip', 'fail') or 'DATA RACE' in row.get('Output', ''):
             raise ValueError('foreign, late, skipped, failed or racing prefix verdict')
         if name:
-            if package not in started or name not in expected(package):
+            if package not in started or name not in inventory[package]:
                 raise ValueError('unstarted or unexpected prefix test')
             if action == 'run':
                 if name in runs[package] or any(name.startswith(parent+'/') for parent in passes[package]):
@@ -131,12 +136,12 @@ def verdict(raw, code):
                 raise ValueError('duplicate prefix package')
             started.add(package)
         elif action == 'pass':
-            if package not in started or runs[package] != expected(package) or passes[package] != runs[package]:
+            if package not in started or runs[package] != inventory[package] or passes[package] != runs[package]:
                 raise ValueError('incomplete prefix inventory')
             finished.add(package)
         elif action != 'output':
             raise ValueError('unexpected prefix package event')
-    if finished != set(ROOTS):
+    if finished != set(inventory):
         raise ValueError('missing original prefix package')
     return sum(len(values) for values in passes.values())
 
@@ -147,6 +152,64 @@ def command(go, packages, selection, overlay=None):
     if overlay is not None:
         args += ['-overlay', str(overlay)]
     return args+packages+['-run', selection]
+
+
+OPENVPN_ROOT = 'TestRouterVPNNodeChainCandidatePreparationNativeOpenVPNSavedSuffix'
+BASELINE_BUDGET = 900
+
+
+def positive_phases():
+    original = {p: {name for name in expected(p)
+                    if name != OPENVPN_ROOT and not name.startswith(OPENVPN_ROOT+'/')}
+                for p in ROOTS}
+    selection = '^('+'|'.join(root for roots in ROOTS.values() for root in roots
+                              if root != OPENVPN_ROOT)+')$'
+    phases = [('original', ['.', './experimental/libbox'], selection, original)]
+    for child in ('3', '4', '8'):
+        phases.append(('openvpn-'+child, ['.'], '^'+OPENVPN_ROOT+'$/^'+child+'$',
+                       {PACKAGE: {OPENVPN_ROOT, OPENVPN_ROOT+'/'+child}}))
+    return phases
+
+
+def partition_verdict(results):
+    phases = positive_phases()
+    if [item[0] for item in results] != [phase[0] for phase in phases]:
+        raise ValueError('missing, duplicate, foreign or reordered prefix partition')
+    union = {p: set() for p in ROOTS}
+    for (label, raw, code), (_, _, _, inventory) in zip(results, phases):
+        verdict(raw, code, inventory)
+        for package, names in inventory.items():
+            # The same Go parent runs once per selected child. Only that parent
+            # may repeat across phases; every leaf is required exactly once.
+            overlap = union[package] & names
+            if overlap - ({OPENVPN_ROOT} if package == PACKAGE else set()):
+                raise ValueError('duplicate prefix partition coverage')
+            union[package].update(names)
+    if union != {p: expected(p) for p in ROOTS}:
+        raise ValueError('incomplete prefix partition union')
+    return sum(map(len, union.values()))
+
+
+def positive_baseline(core, go, env):
+    started = time.monotonic()
+    results = []
+    for label, packages, selection, inventory in positive_phases():
+        remaining = BASELINE_BUDGET - (time.monotonic() - started)
+        if remaining <= 0:
+            raise ValueError('native prefix baseline exceeded total process budget')
+        result = subprocess.run(command(go, packages, selection), cwd=core, env=env,
+                                text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=remaining)
+        try:
+            verdict(result.stdout, result.returncode, inventory)
+            if time.monotonic() - started > BASELINE_BUDGET:
+                raise ValueError('native prefix baseline exceeded total process budget')
+        except (ValueError, TypeError):
+            print(result.stdout, flush=True)
+            raise
+        results.append((label, result.stdout, result.returncode))
+        print('PASS native prefix preparation phase:', label, flush=True)
+    return partition_verdict(results)
 
 
 def execute(core, go):
@@ -162,13 +225,7 @@ def execute(core, go):
         if (core/'experimental/libbox/routervpn/mobilemultihop'/path.name).read_text() != source:
             raise ValueError('native prefix gate has stale shared policy source')
     env = dict(os.environ, GOMAXPROCS='2', GOGC='20', GOMEMLIMIT='768MiB')
-    selected = '^('+'|'.join(name for roots in ROOTS.values() for name in roots)+')$'
-    baseline = subprocess.run(command(go, ['.', './experimental/libbox'], selected), cwd=core, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900)
-    try:
-        count = verdict(baseline.stdout, baseline.returncode)
-    except (ValueError, TypeError):
-        print(baseline.stdout, flush=True)
-        raise
+    count = positive_baseline(core, go, env)
     print('PASS native prefix preparation inventory:', count, flush=True)
     with tempfile.TemporaryDirectory(prefix='prefix-causal-') as directory:
         for label, relative, before, after, package, name, witness in CONTROLS:

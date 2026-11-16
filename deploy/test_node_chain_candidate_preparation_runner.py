@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 import re
 import unittest
+from unittest import mock
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('prefix_gate', ROOT/'deploy/test_node_chain_candidate_preparation.py')
@@ -32,7 +34,7 @@ def raw(rows):
 
 class PrefixGate(unittest.TestCase):
     def test_complete_inventory(self):
-        self.assertEqual(GATE.verdict(raw(receipt()), 0), 41)
+        self.assertEqual(GATE.verdict(raw(receipt()), 0), 45)
 
 
     def build_output(self, package=GATE.PACKAGE, output=None):
@@ -48,7 +50,7 @@ class PrefixGate(unittest.TestCase):
             if row['Action'] == 'start':
                 augmented.append(self.build_output(row['Package']))
             augmented.append(row)
-        self.assertEqual(GATE.verdict(raw(augmented), 0), 41)
+        self.assertEqual(GATE.verdict(raw(augmented), 0), 45)
         split = [self.build_output(output='first linker fragment\n'),
                  self.build_output()] + rows
         self.assertEqual(GATE.verdict(raw(split), 0), GATE.verdict(raw(rows), 0))
@@ -76,7 +78,7 @@ class PrefixGate(unittest.TestCase):
 
     def test_build_output_bound_counts_every_utf8_fragment(self):
         exact = 'é'*(GATE.MAX_BUILD_OUTPUT_BYTES//2)
-        self.assertEqual(GATE.verdict(raw([self.build_output(output=exact)]+receipt()), 0), 41)
+        self.assertEqual(GATE.verdict(raw([self.build_output(output=exact)]+receipt()), 0), 45)
         for rows in ([self.build_output(output=exact+'x')],
                      [self.build_output(output=exact), self.build_output(output='x')]):
             with self.assertRaises(ValueError): GATE.verdict(raw(rows+receipt()), 0)
@@ -112,6 +114,14 @@ class PrefixGate(unittest.TestCase):
         rows = [row for row in receipt() if row.get('Test') != 'TestRouterVPNNodeChainCandidatePreparationNativeClosedPrefixAndFifty/awg2-strong']
         with self.assertRaises(ValueError): GATE.verdict(raw(rows), 0)
 
+    def test_requires_saved_openvpn_prefix_cases(self):
+        root = 'TestRouterVPNNodeChainCandidatePreparationNativeOpenVPNSavedSuffix'
+        self.assertEqual(GATE.ROOTS[GATE.PACKAGE][root], ('3', '4', '8'))
+        for child in ('3', '4', '8'):
+            rows = [row for row in receipt() if row.get('Test') != root+'/'+child]
+            with self.subTest(child=child), self.assertRaises(ValueError):
+                GATE.verdict(raw(rows), 0)
+
     def test_rejects_empty_package(self):
         rows = [dict(Package=package, Action=action) for package in GATE.ROOTS for action in ('start','pass')]
         with self.assertRaises(ValueError): GATE.verdict(raw(rows), 0)
@@ -143,6 +153,64 @@ class PrefixGate(unittest.TestCase):
         self.assertLess(source.index(line),source.index('go_retry test ./experimental/libbox/routervpn/...'))
         self.assertIn('RouterNodeChainCandidatePreparation newRouterNodeChainCandidatePreparation(java.lang.String, int, java.lang.String) throws java.lang.Exception;',source)
         self.assertIn('io.nekohasekai.libbox.RouterNodeChainCandidateCatalog) throws java.lang.Exception;',source)
+
+
+    def partition_rows(self, inventory):
+        return [row for row in receipt() if row['Package'] in inventory and
+                (not row.get('Test') or row['Test'] in inventory[row['Package']])]
+
+    def partition_results(self):
+        return [(label, raw(self.partition_rows(inventory)), 0)
+                for label, _, _, inventory in GATE.positive_phases()]
+
+    def test_partitions_preserve_exact_union_and_original_selection(self):
+        phases = GATE.positive_phases()
+        self.assertEqual([p[0] for p in phases], ['original', 'openvpn-3', 'openvpn-4', 'openvpn-8'])
+        self.assertEqual(phases[0][1], ['.', './experimental/libbox'])
+        self.assertNotIn(GATE.OPENVPN_ROOT, phases[0][2])
+        self.assertEqual(sum(len(n) for p in phases for n in p[3].values()), 47)
+        self.assertEqual(GATE.partition_verdict(self.partition_results()), 45)
+        for child, phase in zip(('3', '4', '8'), phases[1:]):
+            self.assertEqual(phase[2], '^'+GATE.OPENVPN_ROOT+'$/^'+child+'$')
+            self.assertEqual(phase[3], {GATE.PACKAGE: {GATE.OPENVPN_ROOT, GATE.OPENVPN_ROOT+'/'+child}})
+        for _, packages, selection, _ in phases:
+            self.assertIn('-timeout=150s', GATE.command('go', packages, selection))
+
+    def test_missing_duplicate_foreign_or_reordered_partition_refused(self):
+        results = self.partition_results()
+        for changed in (results[:-1], results+[results[-1]], results[::-1],
+                        [('foreign', results[0][1], 0)]+results[1:]):
+            with self.assertRaises(ValueError): GATE.partition_verdict(changed)
+
+    def test_partition_scope_missing_duplicate_failed_and_foreign_events_refused(self):
+        results = self.partition_results()
+        rows = self.partition_rows(GATE.positive_phases()[1][3])
+        leaf = GATE.OPENVPN_ROOT+'/3'
+        for changed, code in (([r for r in rows if r.get('Test') != leaf], 0),
+                              (rows+[rows[-1]], 0), (rows, 1),
+                              (receipt(), 0),
+                              ([dict(r, Action='fail') if r.get('Test') == leaf and r['Action']=='pass' else r for r in rows], 0)):
+            bad = list(results); bad[1] = (bad[1][0], raw(changed), code)
+            with self.assertRaises(ValueError): GATE.partition_verdict(bad)
+        # Swapping a valid other leaf's transcript cannot fill this phase.
+        bad = list(results); bad[1] = (bad[1][0], results[2][1], 0)
+        with self.assertRaises(ValueError): GATE.partition_verdict(bad)
+
+    def test_total_budget_is_shared_and_failed_phase_stops_next_launch(self):
+        results = self.partition_results()
+        completed = [subprocess.CompletedProcess([], 0, stdout=r[1]) for r in results]
+        with mock.patch.object(GATE.time, 'monotonic', side_effect=[0, 0, 100, 100, 200, 200, 300, 300, 400]), mock.patch.object(GATE.subprocess, 'run', side_effect=completed) as run:
+            self.assertEqual(GATE.positive_baseline(Path('/unused'), 'go', {}), 45)
+            self.assertEqual([c.kwargs['timeout'] for c in run.call_args_list], [900, 800, 700, 600])
+        with mock.patch.object(GATE.time, 'monotonic', side_effect=[0, 0, 901]), mock.patch.object(GATE.subprocess, 'run', return_value=completed[0]) as run:
+            with self.assertRaises(ValueError): GATE.positive_baseline(Path('/unused'), 'go', {})
+            self.assertEqual(run.call_count, 1)
+        with mock.patch.object(GATE.time, 'monotonic', return_value=0), mock.patch.object(GATE.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, stdout='')) as run:
+            with self.assertRaises(ValueError): GATE.positive_baseline(Path('/unused'), 'go', {})
+            self.assertEqual(run.call_count, 1)
+        with mock.patch.object(GATE.time, 'monotonic', return_value=0), mock.patch.object(GATE.subprocess, 'run', side_effect=subprocess.TimeoutExpired('go', 900)) as run:
+            with self.assertRaises(subprocess.TimeoutExpired): GATE.positive_baseline(Path('/unused'), 'go', {})
+            self.assertEqual(run.call_count, 1)
 
 
 if __name__ == '__main__':

@@ -87,6 +87,34 @@ public final class NodeCandidatePrefixCaptureHarness {
    original.close();
   }
  }
+ static void openVPNPrefixes(Path root)throws Exception{
+  for(String key:List.of("2/","2/awg-fast","2/awg-strong","3/","7/"))for(String network:List.of("tcp","udp")){
+   var fixture=new NodeChainCaptureHarness.Fixture(root,key);var exits=new AndroidStandardExitStore(fixture.context);
+   var custom=new AndroidStandardExitStore.Entry();custom.id="1234567890abcdef1234567890abcdef";custom.name="Saved prefix OpenVPN";custom.protocol="openvpn";
+   custom.server="203.0.113.20";custom.serverPort=1194;custom.expectedPublicIp="203.0.113.88";custom.username=" exact prefix user ";custom.password=" exact prefix secret ";
+   custom.openVPNConfig="client\ndev tun\nproto "+network+"\nremote 203.0.113.20 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+"ab".repeat(32)+"\ntun-mtu 1400\ndata-ciphers AES-256-GCM:AES-128-GCM\n";
+   custom.policy.put("dns_mode","rescue").put("start_layer","off").put("home_lan_access",false).put("kill_switch_policy","always");AndroidNodeStore.ChainSource.requireImported(custom);exits.save(custom);
+   var editor=new AndroidOrderedPathSelection(fixture.nodes,fixture.profiles);editor.addPrefix(custom.id,"openvpn");editor.save();
+   try(var original=AndroidNodeChainCapture.compile(fixture.profiles.currentOrderedPath())){
+    int lastPrefix=original.memberInputs.size()-3;String inventory=inventory(original);var before=new NodeChainCaptureHarness.State(fixture);
+    for(int position=0;position<=lastPrefix;position++){
+     try(var capture=AndroidNodeCandidatePrefixCapture.compile(original,position,inventory)){
+      var meta=new JSONObject(capture.metadata);
+      check(capture.original==original&&capture.plan.originalSourceSHA256().equals(original.sourceSHA256),"OpenVPN prefix lost original complete saved owner");
+      check(meta.getJSONArray("prefixes").length()==position+1&&!meta.getBoolean("ready")&&!meta.getBoolean("dns_open")&&!meta.getBoolean("application_open"),"OpenVPN prefix source claimed connected ingress");
+      check(!capture.config.contains("openvpn-client")&&!capture.config.contains("203.0.113.20")&&!capture.config.contains(" exact prefix secret "),"OpenVPN suffix entered executable candidate preparation");
+      check(!capture.config.contains("routervpn-chain-"+(position+1)+"-"),"OpenVPN candidate preparation retained an unselected member");
+      try(var reopened=AndroidNodeCandidatePrefixCapture.reopen(capture.launchInput,original,position,inventory)){
+       check(reopened.config.equals(capture.config)&&reopened.captureSHA256.equals(capture.captureSHA256),"OpenVPN saved prefix replay changed original source");
+      }
+     }
+    }
+    reject(()->AndroidNodeCandidatePrefixCapture.compile(original,lastPrefix+1,inventory),"OpenVPN middle became a packet candidate prefix");
+    reject(()->AndroidNodeCandidatePrefixCapture.compile(original,lastPrefix+2,inventory),"OpenVPN final became a packet candidate prefix");
+    before.same(fixture,"OpenVPN prefix capture leaves saved source unchanged");
+   }
+  }
+ }
  static void refusals(Path root)throws Exception{
   for(String fault:List.of("original","application","dns","ready","proof","position","mtu","measured","numeric","config")){
    var fixture=new NodeChainCaptureHarness.Fixture(root,"2/");try(var original=AndroidNodeChainCapture.compile(fixture.profiles.currentOrderedPath())){
@@ -103,7 +131,7 @@ public final class NodeCandidatePrefixCaptureHarness {
    finally{RouterNodeChainCandidatePreparation.afterMetadata=null;Files.write(path,old);}
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);positive(root);refusals(root);System.out.println("Android prefix capture: "+checks+" real compiler/source checks PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);positive(root);refusals(root);openVPNPrefixes(root);System.out.println("Android prefix capture: "+checks+" real compiler/source checks PASS");}
 }'''
 
 

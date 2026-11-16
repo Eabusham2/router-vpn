@@ -41,11 +41,12 @@ import (
 // Privileged TUN/physical monitor/encrypted packet I/O are explicit boundaries.
 type candidatePreparationNativePrefix struct {
 	*chainNativePrefix
-	candidateDials atomic.Int32
+	candidateDials   atomic.Int32
+	candidateAddress string
 }
 
 func (p *candidatePreparationNativePrefix) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
-	if destination.String() == "198.51.100.23:8388" {
+	if destination.String() == p.candidateAddress {
 		p.candidateDials.Add(1)
 	}
 	return p.chainNativePrefix.DialContext(ctx, network, destination)
@@ -63,7 +64,11 @@ type candidatePreparationNativeFixture struct {
 
 func candidatePreparationNativeSource(t *testing.T, mode string) *mobilemultihop.NodeChainCandidatePreparation {
 	t.Helper()
-	chain := chainNativeSourceModes(t, []string{mode, mode})
+	return candidatePreparationNativeSourceFromChain(t, chainNativeSourceModes(t, []string{mode, mode}), 1, 3)
+}
+
+func candidatePreparationNativeSourceFromChain(t *testing.T, chain *mobilemultihop.NodeChain, position, candidatePrefixes int) *mobilemultihop.NodeChainCandidatePreparation {
+	t.Helper()
 	source, err := chain.LaunchInput()
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +78,11 @@ func candidatePreparationNativeSource(t *testing.T, mode string) *mobilemultihop
 		t.Fatal(err)
 	}
 	source = chainNativeJSON(t, original)
-	candidate := chainNativeSourceModes(t, []string{"wg", "wg", "wg"})
+	modes := make([]string, candidatePrefixes)
+	for i := range modes {
+		modes[i] = "wg"
+	}
+	candidate := chainNativeSourceModes(t, modes)
 	candidateInput, err := candidate.LaunchInput()
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +92,7 @@ func candidatePreparationNativeSource(t *testing.T, mode string) *mobilemultihop
 		t.Fatal(err)
 	}
 	inventory := chainNativeJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-native-catalog", Inputs: []string{record.Nodes[len(record.Nodes)-1]}})
-	prep, err := mobilemultihop.NewNodeChainCandidatePreparation(source, 1, inventory)
+	prep, err := mobilemultihop.NewNodeChainCandidatePreparation(source, position, inventory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,97 +257,122 @@ func (o *candidatePreparationNativeOwner) BeginMeasurementContext(ctx context.Co
 func TestRouterVPNNodeChainCandidatePreparationNativeClosedPrefixAndFifty(t *testing.T) {
 	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(mode, func(t *testing.T) {
-			prep := candidatePreparationNativeSource(t, mode)
-			f := newCandidatePreparationNativeFixture(t, prep, nil)
-			meta := adapter.InboundContext{Inbound: "routervpn-chain-tun", InboundType: C.TypeTun, Destination: M.ParseSocksaddr("192.168.50.133:53")}
-			if !f.box.router.RouterVPNNodeChainGated() || f.box.router.PreMatch(meta, nil).Action != adapter.PreMatchDrop {
-				t.Fatal("pending candidate preparation opened native DNS ingress")
-			}
-			for position, proof := range prep.ProofInventory() {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path != "/health" || r.Host != "10.77.0.1:8787" || r.Header.Get("Authorization") != fmt.Sprintf("Bearer chain-native-token-%d", position) {
-						t.Error("native prefix used another private proof")
-						w.WriteHeader(401)
-						return
-					}
-					_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": proof.NodeID, "proof": "router-vpn-private-agent-v1"})
-				}))
-				t.Cleanup(server.Close)
-				f.prefixes[proof.Tag].dial = func(ctx context.Context) (net.Conn, error) {
-					return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
-				}
-			}
-			engine, err := f.capture(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			owner := &candidatePreparationNativeOwner{RouterVPNNodeChainCandidatePreparationEngine: engine, capture: prep.CaptureSHA256()}
-			runtime, err := mobilemultihop.NewNodeChainCandidatePreparationRuntime(prep, owner)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer runtime.CloseContext(context.Background())
-			if err := runtime.StartContext(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			if f.box.router.PreMatch(meta, nil).Action != adapter.PreMatchDrop {
-				t.Fatal("prepared candidate purpose opened native DNS ingress")
-			}
-			meta.Destination = M.ParseSocksaddr("203.0.113.10:443")
-			if f.box.router.PreMatch(meta, nil).Action != adapter.PreMatchDrop {
-				t.Fatal("prepared candidate purpose opened native application ingress")
-			}
-			measurement, err := runtime.NewMeasurementContext(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer measurement.Close()
-			request := strings.Repeat("a", 32)
-			deadline := time.Now().Add(hopmeasure.RequestTimeout)
-			if err := measurement.Start(request, "chain-native-3"); err != nil {
-				t.Fatal(err)
-			}
-			// Drain bounds one cleanup observation, not all fifty samples.
-			// Retain the exact worker and retry within its existing full budget.
-			for {
-				if err := measurement.Drain(request); err == nil {
-					break
-				}
-				if !time.Now().Before(deadline) {
-					t.Fatal("native candidate worker exceeded its existing request budget", measurement.StatusJSON())
-				}
-				t.Log("original native candidate worker remains owned", f.prefixes[prep.ProofInventory()[1].Tag].candidateDials.Load())
-			}
-			var status hopmeasure.CandidateStatus
-			if err := json.Unmarshal([]byte(measurement.StatusJSON()), &status); err != nil {
-				t.Fatal(err)
-			}
-			if !status.Complete || !status.Drained || len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil || status.Results[0].Benchmark.Attempts != 50 || f.prefixes[prep.ProofInventory()[1].Tag].candidateDials.Load() != 50 {
-				t.Fatal("native prefix lost original proofs or fifty candidate connections", status, f.prefixes[prep.ProofInventory()[1].Tag].candidateDials.Load())
-			}
-			if len(f.prefixes) != 2 || owner.measuring.Load() || owner.released.Load() != 1 {
-				t.Fatal("native preparation acquired suffix or lost measurement hold")
-			}
-			for _, resolver := range f.resolvers {
-				if resolver.calls.Load() != 0 {
-					t.Fatal("candidate preparation queried saved DNS")
-				}
-			}
-			connection, err := engine.Dial(t.Context(), prep.ProofInventory()[0].Tag, "198.51.100.23:8388")
-			if connection != nil {
-				_ = connection.Close()
-			}
-			if err == nil {
-				t.Fatal("native candidate dial bypassed selected prefix")
-			}
-			connection, err = engine.Dial(t.Context(), prep.ProofInventory()[1].Tag, "1.1.1.1:443")
-			if connection != nil {
-				_ = connection.Close()
-			}
-			if err == nil {
-				t.Fatal("native candidate dial acquired unselected public proof")
-			}
+			candidatePreparationNativeClosedPrefixAndFifty(t, candidatePreparationNativeSource(t, mode), "chain-native-3", "198.51.100.23:8388")
 		})
+	}
+}
+
+func TestRouterVPNNodeChainCandidatePreparationNativeOpenVPNSavedSuffix(t *testing.T) {
+	for _, count := range []int{1, 2, 6} {
+		t.Run(fmt.Sprint(count+2), func(t *testing.T) {
+			chain := chainNativeOpenVPNPrefixSource(t, count)
+			prep := candidatePreparationNativeSourceFromChain(t, chain, count-1, 7)
+			if strings.Contains(prep.Config(), "openvpn-client") {
+				t.Fatal("saved OpenVPN endpoint entered native candidate preparation")
+			}
+			candidatePreparationNativeClosedPrefixAndFifty(t, prep, "chain-native-7", "198.51.100.27:8388")
+		})
+	}
+}
+
+func candidatePreparationNativeClosedPrefixAndFifty(t *testing.T, prep *mobilemultihop.NodeChainCandidatePreparation, candidateID, candidateAddress string) {
+	t.Helper()
+	f := newCandidatePreparationNativeFixture(t, prep, nil)
+	selected := prep.PrefixPosition()
+	for _, prefix := range f.prefixes {
+		prefix.candidateAddress = candidateAddress
+	}
+	meta := adapter.InboundContext{Inbound: "routervpn-chain-tun", InboundType: C.TypeTun, Destination: M.ParseSocksaddr("192.168.50.133:53")}
+	if !f.box.router.RouterVPNNodeChainGated() || f.box.router.PreMatch(meta, nil).Action != adapter.PreMatchDrop {
+		t.Fatal("pending candidate preparation opened native DNS ingress")
+	}
+	for position, proof := range prep.ProofInventory() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/health" || r.Host != "10.77.0.1:8787" || r.Header.Get("Authorization") != fmt.Sprintf("Bearer chain-native-token-%d", position) {
+				t.Error("native prefix used another private proof")
+				w.WriteHeader(401)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": proof.NodeID, "proof": "router-vpn-private-agent-v1"})
+		}))
+		t.Cleanup(server.Close)
+		f.prefixes[proof.Tag].dial = func(ctx context.Context) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+		}
+	}
+	engine, err := f.capture(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := &candidatePreparationNativeOwner{RouterVPNNodeChainCandidatePreparationEngine: engine, capture: prep.CaptureSHA256()}
+	runtime, err := mobilemultihop.NewNodeChainCandidatePreparationRuntime(prep, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.CloseContext(context.Background())
+	if err := runtime.StartContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if f.box.router.PreMatch(meta, nil).Action != adapter.PreMatchDrop {
+		t.Fatal("prepared candidate purpose opened native DNS ingress")
+	}
+	meta.Destination = M.ParseSocksaddr("203.0.113.10:443")
+	if f.box.router.PreMatch(meta, nil).Action != adapter.PreMatchDrop {
+		t.Fatal("prepared candidate purpose opened native application ingress")
+	}
+	measurement, err := runtime.NewMeasurementContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer measurement.Close()
+	request := strings.Repeat("a", 32)
+	deadline := time.Now().Add(hopmeasure.RequestTimeout)
+	if err := measurement.Start(request, candidateID); err != nil {
+		t.Fatal(err)
+	}
+	// Drain bounds one cleanup observation, not all fifty samples.
+	// Retain the exact worker and retry within its existing full budget.
+	for {
+		if err := measurement.Drain(request); err == nil {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("native candidate worker exceeded its existing request budget", measurement.StatusJSON())
+		}
+		t.Log("original native candidate worker remains owned", f.prefixes[prep.ProofInventory()[selected].Tag].candidateDials.Load())
+	}
+	var status hopmeasure.CandidateStatus
+	if err := json.Unmarshal([]byte(measurement.StatusJSON()), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Complete || !status.Drained || len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil || status.Results[0].Benchmark.Attempts != 50 || f.prefixes[prep.ProofInventory()[selected].Tag].candidateDials.Load() != 50 {
+		t.Fatal("native prefix lost original proofs or fifty candidate connections", status, f.prefixes[prep.ProofInventory()[selected].Tag].candidateDials.Load())
+	}
+	if len(f.prefixes) != selected+1 || owner.measuring.Load() || owner.released.Load() != 1 {
+		t.Fatal("native preparation acquired suffix or lost measurement hold")
+	}
+	for _, resolver := range f.resolvers {
+		if resolver.calls.Load() != 0 {
+			t.Fatal("candidate preparation queried saved DNS")
+		}
+	}
+	unselected := "unselected-prefix"
+	if selected > 0 {
+		unselected = prep.ProofInventory()[0].Tag
+	}
+	connection, err := engine.Dial(t.Context(), unselected, candidateAddress)
+	if connection != nil {
+		_ = connection.Close()
+	}
+	if err == nil {
+		t.Fatal("native candidate dial bypassed selected prefix")
+	}
+	connection, err = engine.Dial(t.Context(), prep.ProofInventory()[selected].Tag, "1.1.1.1:443")
+	if connection != nil {
+		_ = connection.Close()
+	}
+	if err == nil {
+		t.Fatal("native candidate dial acquired unselected public proof")
 	}
 }
 func TestRouterVPNNodeChainCandidatePreparationNativeRejectsActualGraph(t *testing.T) {
