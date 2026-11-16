@@ -509,15 +509,25 @@ def external_overlay(source, directory, mutation=None):
     return path
 
 
-def report_external_hysteria2(status, output):
+def print_native_output(output):
+    # Windows redirects Python stdout through the active ANSI code page by
+    # default. Native diagnostics contain UTF-8 node labels and must reach the
+    # log intact before the unchanged verdict parser examines the transcript.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="strict")
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
+
+
+def report_external_hysteria2(status, output):
+    print_native_output(output)
     if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_HY2_CASES) or \
             socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
         raise ValueError("Actual ordinary Windows Hysteria2 omitted its required native result")
 
 
 def report_external_hysteria2_layer(mode, status, output):
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     if mode not in EXTERNAL_HY2_LAYER_CASES or status or any(
             not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_HY2_LAYER_CASES[mode]) or \
             socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
@@ -588,7 +598,7 @@ def socks_native_aborted(output):
 
 
 def report_external_socks(status, output):
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_SOCKS_CASES) or \
             socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
         raise ValueError("Actual ordinary Windows SOCKS omitted its required native result")
@@ -637,7 +647,7 @@ def execute_external_socks(source, workspace, build, captured):
 
 
 def report_external_packet(status, output, protocol):
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     if protocol not in EXTERNAL_PACKET_CASES or status or \
             any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_PACKET_CASES[protocol]) or \
             socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
@@ -645,7 +655,7 @@ def report_external_packet(status, output, protocol):
 
 
 def report_external_server(status, output, group=None):
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     required = EXTERNAL_SERVER_CASES if group is None else EXTERNAL_SERVER_GROUPS.get(group, (None, ()))[1]
     observed = re.findall(r"^\s*--- PASS: (\S+) \(", output, re.MULTILINE)
     if not required or status or set(observed) != set(required) or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
@@ -653,19 +663,19 @@ def report_external_server(status, output, group=None):
 
 
 def report_external_local(status, output):
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_LOCAL_CASES) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
         raise ValueError("Paired Windows Router Local omitted its required native result")
 
 
 def report_external_compare(status, output):
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_COMPARE_CASES) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
         raise ValueError("Paired Windows Router Compare omitted its required native result")
 
 
 def report_external_lease_unit(status, output):
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     if status or any(not exact_native_verdict(output, "PASS", case) for case in EXTERNAL_LEASE_UNIT_CASES) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
         raise ValueError("Windows shipping lease scope omitted its required result")
 
@@ -688,7 +698,7 @@ def execute_external_packet(source, workspace, build, captured):
     authority = reference + "Authority"
     status, output = BOOT.IDENTITY.run([binary, "-test.run=^(" + reference + "|" + authority + ")$", "-test.count=1", "-test.timeout=60s", "-test.v"],
         cwd=source, env=captured, timeout=75)
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     required = (authority, *(reference + "/" + protocol for protocol in EXTERNAL_PACKET_PROTOCOLS))
     # The isolated TLS-root wrapper repeats its parent verdict; only actual
     # child leaves and the independent authority test count as evidence.
@@ -770,7 +780,7 @@ def execute_external_packet(source, workspace, build, captured):
 
 
 def report_external_openvpn(status, output, network):
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     required = external_openvpn_cases(network)
     observed = re.findall(r"^\s*--- PASS: (\S+) \(", output, re.MULTILINE)
     if not required or status or set(observed) != set(required) or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
@@ -859,7 +869,7 @@ def execute_external_openvpn(source, workspace, build, captured):
 
 
 def report_external_ss_entry(status, output, network, group=None):
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     required = EXTERNAL_SS_ENTRY_CASES.get(network, ()) if group is None else EXTERNAL_SS_ENTRY_GROUPS.get(network, {}).get(group, (None, ()))[1]
     observed = re.findall(r"^\s*--- PASS: (\S+) \(", output, re.MULTILINE)
     if not required or status or set(observed) != set(required) or any(not exact_native_verdict(output, "PASS", case) for case in required) or socks_native_aborted(output) or "--- FAIL:" in output or re.search(r"^FAIL(?:\s|$)", output, re.MULTILINE):
@@ -1005,7 +1015,7 @@ def execute_partitioned(source, env, run):
             path = Path(temporary) / (phase + ".json")
             output = run([sys.executable, Path(__file__).resolve(), source,
                           "--phase", phase, "--receipt", path], env=env, timeout=PHASE_TIMEOUTS[phase])
-            print(output, flush=True)
+            print_native_output(output)
             if path.is_symlink() or not path.is_file() or not stat.S_ISREG(path.stat().st_mode) or path.stat().st_size > 32768:
                 raise ValueError("Windows physical phase has no bounded regular receipt")
             value = json.loads(path.read_text(encoding="utf-8"))
@@ -1040,7 +1050,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     status, output = BOOT.IDENTITY.run([compiler, "test", *race, "-count=1", "-timeout=30s", "-v",
         RESOURCES / "socket_peer.go", RESOURCES / "socket_peer_test.go"],
         cwd=source, env=captured, timeout=90)
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    print_native_output(output)
     if status or "--- PASS: TestWindowsNodeObserverTransportPeer (" not in output or any(value in output for value in ("--- SKIP:", "DATA RACE")):
         raise ValueError("Windows Node transport-specific observer lost its required peer checks")
     build = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(TAGS), *race, "-ldflags=-checklinkname=0"]
@@ -1068,7 +1078,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 # deadline and require each new leaf in this bounded aggregate run.
                 status, output = BOOT.IDENTITY.run([binary, "-test.run=^TestRouterVPNDesktopNodeWindowsWFP", "-test.count=1", "-test.timeout=1200s", "-test.v"],
                                                    cwd=source, env=captured, timeout=1215)
-                print(output, end="" if output.endswith("\n") else "\n", flush=True)
+                print_native_output(output)
                 if status or any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *IPC_CASES)) or any(value in output for value in ("--- SKIP:", "DATA RACE")):
                     raise ValueError("Actual WFP encrypted Node omitted a required native proof")
                 # Off has its own bounded invocation; no protected case loses

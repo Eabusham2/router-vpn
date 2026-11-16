@@ -193,6 +193,36 @@ class NativeNodeScope(unittest.TestCase):
 
 
 class OrdinaryHysteria2Scope(unittest.TestCase):
+    def test_native_utf8_output_survives_windows_codepage_without_weakening_verdicts(self):
+        complete = "captured path: Node1 → Node2; original DNS ✓\n" + "".join(
+            "--- PASS: " + case + " (0.01s)\n" for case in GATE.EXTERNAL_HY2_CASES)
+        # The real TextIOWrapper reproduces the hosted cp1252 failure; a
+        # StringIO capture would conceal it. Preserve bytes, not replacement
+        # characters, and require every original refusal after printing.
+        with self.assertRaises(UnicodeEncodeError):
+            complete.encode("cp1252")
+        first = "--- PASS: " + GATE.EXTERNAL_HY2_CASES[0] + " (0.01s)\n"
+        invalid = [(1, complete), (0, complete + first)]
+        invalid += [(0, complete.replace("--- PASS: " + case + " (0.01s)\n", ""))
+                    for case in GATE.EXTERNAL_HY2_CASES]
+        invalid += [(0, complete + marker + "\n") for marker in (
+            "--- SKIP: hidden", "WARNING: DATA RACE", "--- FAIL: hidden", "FAIL", "panic: bad")]
+        for status, output in [(0, complete), *invalid]:
+            with self.subTest(status=status, output=output):
+                raw = io.BytesIO()
+                stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
+                try:
+                    with contextlib.redirect_stdout(stream):
+                        if (status, output) == (0, complete):
+                            GATE.report_external_hysteria2(status, output)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "required native result"):
+                                GATE.report_external_hysteria2(status, output)
+                    self.assertEqual(raw.getvalue().decode("utf-8"), output)
+                    self.assertEqual(stream.errors, "strict")
+                finally:
+                    stream.close()
+
     def setUp(self):
         NativeNodeScope.setUp(self)
         for relative, actual in (
