@@ -85,8 +85,8 @@ def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def verify(core):
-    identity = {'original_execution': BASE.verify(core), 'prepared_core': SNAPSHOT.source_digest(core)}
+def verify(core, *, desktop=False):
+    identity = {'original_execution': BASE.verify(core, desktop=desktop), 'prepared_core': SNAPSHOT.source_digest(core)}
     record = json.loads((core/NATIVE.OWNER).read_bytes())
     if record.get('schema') != 1 or record.get('core') != NATIVE.PIN:
         raise ValueError('native OpenVPN lost its original prepared core')
@@ -144,7 +144,7 @@ def run(core, go, tags, race, ldflags, receipt=None, tagged_only=False):
     core = core.absolute()
     if 'with_openvpn' not in tags.split(','):
         raise ValueError('positive native OpenVPN gate requires actual implementation')
-    source = verify(core)
+    source = verify(core, desktop=tagged_only)
     env = dict(os.environ, GOMAXPROCS='1')
     flags = ['-p=1', '-mod=readonly', '-count=1'] + (['-race'] if race else [])
     with tempfile.TemporaryDirectory(prefix='routervpn-openvpn-execution-owner-') as temporary:
@@ -186,7 +186,7 @@ def run(core, go, tags, race, ldflags, receipt=None, tagged_only=False):
             if not rejected(result, selected, witness):
                 raise ValueError('native OpenVPN compiled control missed its witness: '+label)
             print('Native OpenVPN causal refusal PASS:', label, flush=True)
-        if verify(core) != source or any(sha((assets/name).read_bytes()) != digest for name, digest in fixture_hashes.items()):
+        if verify(core, desktop=tagged_only) != source or any(sha((assets/name).read_bytes()) != digest for name, digest in fixture_hashes.items()):
             raise ValueError('native OpenVPN source or original fixture changed during execution')
     result = {'schema': 1, 'core': NATIVE.PIN, 'source_sha256': source, 'race': race,
               'generator': generated, 'native': positive, 'without_openvpn': stub, 'tagged_only': tagged_only,

@@ -78,3 +78,21 @@ they do not establish native execution on those operating systems. Exact-SHA
 hosted builds and package execution, public controller/editor acceptance,
 installed kernel/firewall behavior, physical-device networking, signing,
 private deployment and whole-release publication remain separate checks.
+
+## Original desktop gate source inventory
+
+The shipping native builder invokes the original OpenVPN owner gate with
+`--tagged-only`. Its source verifier previously used the mobile CONNECT file
+inventory, although the canonical desktop preparer intentionally omits those
+mobile bridge files and includes the desktop reference peer. The verifier now
+uses an explicit desktop inventory for that existing caller. Missing files do
+not select a mode; the default mobile inventory is unchanged.
+
+All 12 OpenVPN runner tests and the original 14 owner runner tests passed.
+The inventory test removes and changes each required file in both projections
+and rejects the opposite projection. An independent check of the actual
+canonically prepared desktop core reproduced the old missing-mobile-bridge
+error and passed the explicit desktop verification, with source identity
+`fc2aeed1be5e30336b2f5b278f1cc91641d12153207e9e5209a734746c14a543`.
+This repairs source verification before the existing native gate; it adds no
+runtime claim and changes no test deadline or production owner.

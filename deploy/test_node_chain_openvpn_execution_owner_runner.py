@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import tempfile
 import unittest
 from types import SimpleNamespace
 
@@ -45,6 +46,28 @@ class NativeOpenVPNVerdicts(unittest.TestCase):
         self.assertEqual(RUNNER.BASE.PREFIX, 'TestRouterVPNExecution')
         self.assertEqual(RUNNER.BASE.verdict(encoded(events(RUNNER.BASE)), 0),
                          {'roots': 44, 'test_records': 181})
+
+    def test_original_mobile_and_desktop_connect_source_inventories_remain_closed(self):
+        for desktop in (False, True):
+            expected = {relative: (ROOT/'mobile/chain'/template).read_bytes()
+                        for template, relative in RUNNER.BASE.CONNECT.TEMPLATES.items()
+                        if not (desktop and relative.startswith('experimental/libbox/') or
+                                not desktop and template in RUNNER.BASE.CONNECT.DESKTOP_ONLY)}
+            with self.subTest(desktop=desktop), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for relative, raw in expected.items():
+                    path = root/relative; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
+                self.assertEqual(set(RUNNER.BASE.verify_connect_sources(root, desktop=desktop)), set(expected))
+                for relative, raw in expected.items():
+                    path = root/relative; path.unlink()
+                    with self.subTest(missing=relative), self.assertRaises(FileNotFoundError):
+                        RUNNER.BASE.verify_connect_sources(root, desktop=desktop)
+                    path.write_bytes(raw+b'\n')
+                    with self.subTest(changed=relative), self.assertRaises(ValueError):
+                        RUNNER.BASE.verify_connect_sources(root, desktop=desktop)
+                    path.write_bytes(raw)
+                with self.assertRaises(FileNotFoundError):
+                    RUNNER.BASE.verify_connect_sources(root, desktop=not desktop)
 
     def test_each_omitted_run_pass_and_terminal_is_rejected(self):
         for parser in (RUNNER.POSITIVE, RUNNER.STUB, RUNNER.GENERATOR):

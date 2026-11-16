@@ -154,7 +154,7 @@ def verdict(raw, code):
     return {'roots': sum(map(len, ROOTS.values())), 'test_records': sum(map(len, passes.values()))}
 
 
-def verify(core):
+def verify(core, *, desktop=False):
     if subprocess.check_output(['git', '-C', str(core), 'rev-parse', 'HEAD'], text=True).strip() != PREP.PIN:
         raise ValueError('native owner lost original core pin')
     record = json.loads((core/PREP.OWNER).read_bytes())
@@ -174,15 +174,22 @@ def verify(core):
     for template, relative in GATE.TEMPLATES.items():
         if GATE.destination(core, relative).read_bytes() != (ROOT/'mobile/chain_gate'/template).read_bytes():
             raise ValueError('native owner lost original application gate')
+    connect_sources = verify_connect_sources(core, desktop=desktop)
+    return hashlib.sha256(json.dumps({'execution': PREP.digest(), 'connect': connect_sources}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def verify_connect_sources(core, *, desktop=False):
+    # Match the explicit canonical projection; missing files never choose it.
+    # Mobile retains every bridge, desktop retains its real reference peer.
     connect_sources = {}
     for template, relative in CONNECT.TEMPLATES.items():
-        if template in CONNECT.DESKTOP_ONLY:
+        if desktop and relative.startswith('experimental/libbox/') or not desktop and template in CONNECT.DESKTOP_ONLY:
             continue
         original = (ROOT/'mobile/chain'/template).read_bytes()
         if (core/relative).read_bytes() != original:
             raise ValueError('native owner lost original typed CONNECT source')
         connect_sources[relative] = hashlib.sha256(original).hexdigest()
-    return hashlib.sha256(json.dumps({'execution': PREP.digest(), 'connect': connect_sources}, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return connect_sources
 
 
 CONTROLS = (
