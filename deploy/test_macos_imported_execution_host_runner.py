@@ -33,9 +33,51 @@ class ImportedExecutionHostGate(unittest.TestCase):
     def test_exact_shipping_inventory(self):
         self.assertEqual(GATE.case_inventory(), GATE.CASES)
         self.assertEqual(len(GATE.CASES), 13)
-        self.assertEqual(sum(1+len(x) for x in GATE.SOURCE_TESTS.values()), 40)
+        original = (GATE.ADMISSION, GATE.REFUSAL, GATE.STATUS)
+        self.assertEqual(sum(1+len(GATE.SOURCE_TESTS[name]) for name in original), 40)
+        self.assertEqual(sum(1+len(x) for x in GATE.SOURCE_TESTS.values()), 84)
         for case in GATE.CASES:
             GATE.check_verdict(output(case), case)
+
+    def test_published_complete_prefix_sources_remain_required(self):
+        expected = {
+            'TestDesktopDarwinImportedPrefixExecutionAdmission': tuple(
+                f'{count}-{mode}' for count in range(2, 7) for mode in ('wg', 'awg2-fast', 'awg2-strong')),
+            'TestDesktopDarwinImportedPrefixExecutionCompleteLayers': ('2', '6'),
+            'TestDesktopDarwinImportedPrefixExecutionBoundedSource': (
+                'empty', 'two', 'nine', 'paired-only', 'second-import', 'wrong-position',
+                'later-mode', 'later-id', 'later-proof', 'missing-proof', 'middle-layer',
+                'hostname', 'endpoint', 'credential', 'final'),
+            'TestDesktopImportedPrefixExecutionOriginalPreparation': tuple(
+                f'{target}/{count}/{choice}' for target in ('linux', 'windows')
+                for count in (4, 8) for choice in ('server', 'auto')),
+        }
+        source_paths = ('cmd/client/desktop_node_chain_imported_execution_darwin_prefix_test.go',
+                        'cmd/client/desktop_node_chain_imported_prefix_execution_test.go')
+        for path in (*source_paths, 'modes/kill-switch-platform.py', 'modes/test_darwin_owned_pf.py'):
+            self.assertIn(path, GATE.SOURCES)
+        source = '\n'.join((ROOT/path).read_text() for path in source_paths)
+        for root, leaves in expected.items():
+            self.assertEqual(GATE.SOURCE_TESTS[root], leaves)
+            self.assertEqual(source.count('func '+root+'(t *testing.T)'), 1)
+        execution = inspect.getsource(GATE.execute)
+        self.assertIn('for root, leaves in SOURCE_TESTS.items():', execution)
+        self.assertIn("'-test.timeout=120s'", execution)
+        self.assertIn('timeout=130', execution)
+        self.assertIn('BASE.check_authority_verdict(result.stdout, selected=(root,', execution)
+
+    def test_every_required_source_record_must_run_and_pass(self):
+        for root, leaves in GATE.SOURCE_TESTS.items():
+            names = (root, *(root+'/'+leaf for leaf in leaves))
+            lines = (['=== RUN   '+name for name in names]
+                     + ['--- PASS: '+name+' (0.01s)' for name in names] + ['PASS', ''])
+            raw = '\n'.join(lines)
+            selected = (root, names)
+            GATE.BASE.check_authority_verdict(raw, selected=selected)
+            for name in names:
+                for marker in ('=== RUN   '+name, '--- PASS: '+name+' (0.01s)'):
+                    with self.subTest(root=root, missing=marker), self.assertRaises(ValueError):
+                        GATE.BASE.check_authority_verdict(raw.replace(marker+'\n', '', 1), selected=selected)
 
     def test_omitted_case_source(self):
         source = (ROOT/GATE.SOURCES[7]).read_text()

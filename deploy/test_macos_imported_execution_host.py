@@ -45,7 +45,10 @@ SOURCES = ('deploy/test_macos_imported_execution_host.py', 'deploy/test_macos_im
            'cmd/client/desktop_node_chain_imported_execution_platform_test.go',
            'cmd/client/desktop_node_chain_execution_product.go', 'cmd/client/profile_public_view.go',
            'cmd/client/multihop_native_routes.go', 'client/macos/RouterVPNConnectionProfiles.swift',
-           'deploy/native_multihop_audit.py', 'deploy/test_native_shipping_audit_gates.py')
+           'deploy/native_multihop_audit.py', 'deploy/test_native_shipping_audit_gates.py',
+           'cmd/client/desktop_node_chain_imported_execution_darwin_prefix_test.go',
+           'cmd/client/desktop_node_chain_imported_prefix_execution_test.go',
+           'modes/kill-switch-platform.py', 'modes/test_darwin_owned_pf.py')
 ADMISSION = 'TestDesktopDarwinImportedTrioExecutionAdmission'
 REFUSAL = 'TestDesktopDarwinImportedTrioExecutionBoundedSource'
 STATUS = 'TestDesktopImportedTrioStatusKeepsSeparateCapability'
@@ -59,6 +62,22 @@ SOURCE_TESTS = {
               'duplicate-proof', 'foreign-final'),
     STATUS: (),
 }
+# These are the published complete-prefix source tests. The encrypted installed
+# CASES above retain their original explicit trio scope and native evidence.
+PREFIX_ADMISSION = 'TestDesktopDarwinImportedPrefixExecutionAdmission'
+PREFIX_LAYERS = 'TestDesktopDarwinImportedPrefixExecutionCompleteLayers'
+PREFIX_REFUSAL = 'TestDesktopDarwinImportedPrefixExecutionBoundedSource'
+PREFIX_PREPARATION = 'TestDesktopImportedPrefixExecutionOriginalPreparation'
+SOURCE_TESTS.update({
+    PREFIX_ADMISSION: tuple(f'{count}-{mode}' for count in range(2, 7)
+                            for mode in ('wg', 'awg2-fast', 'awg2-strong')),
+    PREFIX_LAYERS: ('2', '6'),
+    PREFIX_REFUSAL: ('empty', 'two', 'nine', 'paired-only', 'second-import', 'wrong-position',
+                    'later-mode', 'later-id', 'later-proof', 'missing-proof', 'middle-layer',
+                    'hostname', 'endpoint', 'credential', 'final'),
+    PREFIX_PREPARATION: tuple(f'{target}/{count}/{choice}' for target in ('linux', 'windows')
+                              for count in (4, 8) for choice in ('server', 'auto')),
+})
 
 
 def case_inventory(source=None):

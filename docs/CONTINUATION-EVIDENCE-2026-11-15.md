@@ -4241,3 +4241,19 @@ The broader unpublished AppKit/controller draft and its 123 compiled source
 records were preserved for comparison, not replayed over the concurrent
 implementation or claimed as evidence for different source bytes. No
 production timeout, MTU bound or policy check was relaxed.
+
+## November 16: published Darwin prefix source cases are mandatory
+
+The required macOS imported-execution host gate now runs the complete-prefix
+source roots published in 0a891267 and the existing complete original
+preparation root. It preserves all forty original trio/status records and
+requires 84 source root/subtest records in total. Each complete root retains
+the original 120-second Go and 130-second process limits, and every required
+record must both run and pass. The exact source files and firewall helper are
+included in the captured source identity.
+
+Seventeen Python runner tests passed, including omission of each required
+RUN or PASS record. The thirteen original encrypted installed cases and their
+separate native scope remain unchanged. This is required-gate and receipt
+verification; it does not relabel the new source cases as installed Darwin
+packet acceptance. Current native execution and release results remain pending.
