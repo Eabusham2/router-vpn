@@ -118,7 +118,7 @@ OPENVPN_EXECUTION_ROOTS = (
 )
 OPENVPN_EXECUTION_PHASES = tuple(("OpenVPN execution "+root, "^"+root+"$") for root in OPENVPN_EXECUTION_ROOTS)
 
-OPENVPN_DESKTOP_EXECUTION_ROOTS = ('TestDesktopOpenVPNExecutionOriginalPhysicalLinux', 'TestDesktopOpenVPNExecutionOriginalPhysicalWindows', 'TestDesktopOpenVPNExecutionOriginalPhysicalDarwin', 'TestDesktopOpenVPNExecutionOriginalOwnerRefusals', 'TestDesktopOpenVPNExecutionCanonicalParserRefusals', 'TestDesktopOpenVPNExecutionConcretePhysicalAndCover', 'TestDesktopOpenVPNExecutionSavedChoiceBinding', 'TestDesktopOpenVPNExecutionLastRuntimeReproof', 'TestDesktopOpenVPNExecutionPrefixRuntimeAndStop')
+OPENVPN_DESKTOP_EXECUTION_ROOTS = ('TestDesktopOpenVPNExecutionOriginalPhysicalLinux', 'TestDesktopOpenVPNExecutionOriginalPhysicalWindows', 'TestDesktopOpenVPNExecutionOriginalPhysicalDarwin', 'TestDesktopOpenVPNExecutionOriginalOwnerRefusals', 'TestDesktopOpenVPNExecutionCanonicalParserRefusals', 'TestDesktopOpenVPNExecutionConcretePhysicalAndCover', 'TestDesktopOpenVPNExecutionSavedChoiceBinding', 'TestDesktopOpenVPNExecutionLastRuntimeReproof', 'TestDesktopOpenVPNExecutionPrefixRuntimeAndStop', 'TestDesktopOpenVPNExecutionCanonicalRecords', 'TestDesktopOpenVPNExecutionMaximumRecords')
 OPENVPN_DESKTOP_EXECUTION_PHASES = tuple(("desktop OpenVPN execution "+root,"^"+root+"$") for root in OPENVPN_DESKTOP_EXECUTION_ROOTS)
 
 PHASES = (

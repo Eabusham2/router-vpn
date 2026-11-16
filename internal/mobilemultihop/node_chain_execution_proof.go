@@ -10,6 +10,10 @@ import (
 	"router-vpn/internal/hopmeasure"
 )
 
+// The typed OpenVPN execution uses the same public proof presentation as its
+// original Local source; this label conveys no private Router proof authority.
+const nodeChainOpenVPNExecutionPublicLabel = "Cumulative path through custom middle to public HTTPS edge"
+
 func nodeChainExecutionTarget(target string) bool {
 	for _, allowed := range Targets {
 		if target == allowed {
@@ -175,7 +179,11 @@ func (s *nodeChainExecutionTrial) proveComplete(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		rows = append(rows, NodeChainPrefixProgress{Position: proof.Position, ProfileID: proof.ProfileID, ResponseMS: float64(elapsed) / float64(time.Millisecond), Proven: true})
+		row := NodeChainPrefixProgress{Position: proof.Position, ProfileID: proof.ProfileID, ResponseMS: float64(elapsed) / float64(time.Millisecond), Proven: true}
+		if s.runtime.projection.policy.openvpn != nil && i == s.runtime.projection.policy.importedPublicPosition() {
+			row.Kind, row.Label = "public-path", nodeChainOpenVPNExecutionPublicLabel
+		}
+		rows = append(rows, row)
 	}
 	if err := s.proveDNS(ctx); err != nil {
 		return err

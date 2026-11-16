@@ -45,6 +45,7 @@ func TestNodeChainOpenVPNExecutionRuntimeServerOwnsOriginalLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := f.runtime.Progress()
+	assertOpenVPNExecutionProofPresentation(t, p)
 	if !p.Ready || p.Execution != "server" || !p.DNSProven || !p.PublicProven || len(p.Comparison.Measurements) != 0 || p.Comparison.Final == nil {
 		t.Fatal("missing selected proof", p)
 	}
@@ -86,6 +87,7 @@ func TestNodeChainOpenVPNExecutionCompareKeepsSharedTargetAndFreshWinner(t *test
 		t.Fatal(err)
 	}
 	p := f.runtime.Progress()
+	assertOpenVPNExecutionProofPresentation(t, p)
 	if !p.Ready || !p.Complete || !p.DNSProven || !p.PublicProven || len(p.Prefixes) != 3 || len(p.Comparison.Measurements) != 2 || p.Comparison.Winner == nil || p.Comparison.Final == nil {
 		t.Fatal("incomplete original comparison", p)
 	}
@@ -437,6 +439,24 @@ func TestNodeChainOpenVPNExecutionRetainsFailedOriginalStop(t *testing.T) {
 	for _, worker := range f.runner.workers {
 		if worker.Alive() {
 			t.Fatal("original worker not joined")
+		}
+	}
+}
+
+// Actual shared proof completion must preserve the public provider row instead
+// of describing its HTTPS observation as a private Router agent proof.
+func assertOpenVPNExecutionProofPresentation(t *testing.T, p NodeChainExecutionProgress) {
+	t.Helper()
+	if len(p.Prefixes) < 3 {
+		t.Fatal("OpenVPN proof inventory absent")
+	}
+	for i, row := range p.Prefixes {
+		if i == len(p.Prefixes)-2 {
+			if row.Kind != "public-path" || row.Label != nodeChainOpenVPNExecutionPublicLabel {
+				t.Fatal("OpenVPN public proof mislabeled", row)
+			}
+		} else if row.Kind != "" || row.Label != "" {
+			t.Fatal("private proof presentation changed", row)
 		}
 	}
 }
