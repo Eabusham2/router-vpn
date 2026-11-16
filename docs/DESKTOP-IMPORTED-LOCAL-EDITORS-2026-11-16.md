@@ -52,6 +52,34 @@ Local receipts are retained under
 `/workspace/scratch/00a34583247b` workspace. The publication also checks that the
 Windows shipping control inventory and its required runner agree exactly.
 
+## Completed macOS residual verification
+
+A bounded continuation on the same unchanged
+`241a6da52781865e775b52bc6792c538112d8a71` inputs compiled and executed the exact
+three uncompleted controls plus a fresh shipping baseline. The baseline again
+passed 36,202 checks; `hysteria-execution-capability`,
+`hysteria-final-layer-required`, and `paired-ss-execution-capability` each
+rejected their intended behavioral defect. The continuation completed in
+57.645 seconds under its 300-second aggregate bound, retaining every original
+90-second compilation/runtime child deadline. All processes joined and all
+33 recorded source inputs remained unchanged.
+
+The continuation extracts the original matrix construction and witnesses from
+the unchanged shipping Python gate. It asserts that the first attempt's 80
+control names are the exact ordered prefix and these three names are the entire
+remaining suffix. It does not edit any generated Swift assertion, substitute
+an expected outcome, or rerun only a fabricated smaller model. Together the
+original and continued attempts cover all 83 original controls; this is not a
+claim that the original timed-out invocation passed or that one complete
+aggregate run succeeded.
+
+Continuation output SHA-256:
+`1ab2cedd90267fa95726b6e06d131e92907f97278b4244b80649db57e56b0aae`.
+The retained `macos-241a-residual/summary.json` records exact generated program
+and executable hashes, individual durations, witnesses, and the complete
+83-control coverage inventory. Hosted native compilation and installed-device
+acceptance remain separate.
+
 These callback and model results do not establish real WPF, GTK or AppKit visual
 acceptance, packaged tunnel behavior, device networking, deployment or a green
 exact-SHA release. Those remain separate gates. Mobile consumers and schema6

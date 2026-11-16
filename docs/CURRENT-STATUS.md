@@ -8,11 +8,13 @@ The controller and ordinary latency readers are published prerequisites.
 
 [Desktop editor evidence](DESKTOP-IMPORTED-LOCAL-EDITORS-2026-11-16.md) records
 10,550 Windows callback checks and two new causal controls, 6,327 cumulative
-Linux model checks and 35 controls, and the macOS 36,202-check baseline plus 80
-of 83 controls. The macOS aggregate timed out at its unchanged 900-second outer
-bound; the remaining three controls and hosted native verification stay open.
-These source/callback results do not establish device or visual acceptance.
-Mobile consumers and schema6 Server/Compare remain separate units.
+Linux model checks and 35 controls, and the macOS 36,202-check baseline plus all
+83 controls across the original and bounded residual attempts. The original
+macOS aggregate timeout is retained; its final three controls and a fresh
+baseline passed separately with unchanged child deadlines. These source/callback
+results do not establish device, visual or exact-SHA native release acceptance.
+Android consumers are independently published in `9cd90023`; Apple consumers
+and schema6 Server/Compare remain separate units.
 
 # 2026-11-16: Ordinary Local multiple-import shared/native core
 
