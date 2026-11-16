@@ -102,6 +102,7 @@ CONTROL_NAMES = (
     "hostname-execution-boolean",
     "hostname-execution-conflict",
     "socks-execution-final-layer-required",
+    "connect-execution-final-layer-required",
 )
 SCRIPT = "deploy/test_desktop_connection_profile_modes.py"
 SOURCE_PATH = "client/macos/RouterVPNConnectionProfiles.swift"

@@ -238,7 +238,7 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
                     if (!JSON_NODE_HOLDS_VALUE(raw_layer) || json_node_get_value_type(raw_layer) != G_TYPE_STRING) return FALSE;
                 }
                 const char *layer = linux_ordered_string_v1(final_profile, "start_layer");
-                if (strcmp(layer, "") != 0 && strcmp(layer, "off") != 0) return FALSE;
+                if (strcmp(layer, "") != 0 && strcmp(layer, "off") != 0 && strcmp(layer, "aes-256-gcm") != 0 && strcmp(layer, "aes-256-gcm+xor-whitening") != 0) return FALSE;
             }
         }
         gboolean admitted = imported ? linux_ordered_imported_position_v1(mode, i, json_array_get_length(selection->nodes)) && strcmp(mode, linux_ordered_imported_mode_v1(profile)) == 0 : linux_ordered_router_v1(profile) && (i + 1 == json_array_get_length(selection->nodes) || linux_ordered_prefix_v1(mode));

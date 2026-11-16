@@ -397,7 +397,9 @@ function global:New-RouterVPNOrderedConnectPayload {
                     }elseif($connectLayer-cnotin@('','off')){throw 'The imported CONNECT member requires Start Layer Off.'}
                 }
                 $finals=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$nodes[-1].id})
-                if($finals.Count-ne1-or[string](Get-RouterVPNOrderedValue $finals[0] 'start_layer' '')-cnotin@('','off')){throw 'CONNECT execution retains the original unlayered Shadowsocks final.'}
+                if($finals.Count-ne1){throw 'The original CONNECT final source is missing.'}
+                $connectFinalLayer=Get-RouterVPNOrderedValue $finals[0] 'start_layer' ''
+                if($connectFinalLayer-isnot[string]-or$connectFinalLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')){throw 'The original CONNECT final layer is invalid.'}
             }
         }
         if($imported){if(-not(Test-RouterVPNOrderedImportedPosition $node.mode $position $nodes.Count)-or$node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])){throw 'An imported node retains its exact Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN transport between the paired entry and final.'}}

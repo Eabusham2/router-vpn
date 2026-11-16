@@ -106,8 +106,8 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 						if !desktopSOCKSExecutionPairedLayer(final.StartLayer) {
 							return errors.New("saved SOCKS execution lost its original final Start Layer")
 						}
-					} else if final.StartLayer != "" && final.StartLayer != "off" {
-						return errors.New("saved typed CONNECT execution requires its original unlayered SS final")
+					} else if !desktopCONNECTExecutionPairedLayer(final.StartLayer) {
+						return errors.New("saved CONNECT execution lost its original final Start Layer")
 					}
 				}
 			}

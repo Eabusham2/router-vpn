@@ -209,6 +209,8 @@ def inputs():
                              ROOT/'.github/workflows/desktop-native-runtime.yml',
                              ROOT/'deploy/test_desktop_socks_execution_controller.py',
                              ROOT/'deploy/test_desktop_socks_execution_controller_runner.py',
+                             ROOT/'deploy/test_desktop_connect_execution_layers.py',
+                             ROOT/'deploy/test_desktop_connect_execution_layers_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution.py',
                              ROOT/'deploy/test_mobile_node_chain_execution_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution_preparation.py',
@@ -1730,6 +1732,13 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     continue
                 run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_controller.py',
                      '--phase', socks_phase, '--receipt', temp/('socks-controller-'+socks_phase+'.json'),
+                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1200)
+            run([sys.executable, ROOT/'deploy/test_desktop_connect_execution_layers_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # Independent final layers retain the original compiler/root bounds.
+            for connect_layer_phase in ('source', 'controls'):
+                run([sys.executable, ROOT/'deploy/test_desktop_connect_execution_layers.py',
+                     '--phase', connect_layer_phase, '--receipt', temp/('connect-layers-'+connect_layer_phase+'.json'),
                      *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1200)
             verify_imported_desktop_native_dns(source, target, env)
             verify_imported_desktop_native_openvpn(source, target, env)

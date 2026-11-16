@@ -228,10 +228,9 @@ func TestDesktopCONNECTRegisteredRouteRefusesChangedSourceAndGraph(t *testing.T)
 						a.profiles.Profiles[1].Endpoint, proxy.Host = "middle.example.test", "middle.example.test"
 					}
 					if fault == "server-final-layer" || fault == "auto-final-layer" {
-						// Server/Compare now have a real typed trio compiler. Keep
-						// the rejection at its still-unsupported final layer and
-						// capture the matching token before sending the request.
-						a.profiles.Profiles[2].StartLayer = "aes-256-gcm"
+						// Capture the matching token for an invalid final policy;
+						// XOR alone never supplies authenticated encryption.
+						a.profiles.Profiles[2].StartLayer = "xor-only"
 					}
 					q := orderedPublicRequest(t, a, nodes)
 					status := http.StatusBadRequest

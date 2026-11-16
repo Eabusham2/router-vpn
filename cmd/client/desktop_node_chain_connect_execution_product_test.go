@@ -25,7 +25,13 @@ func TestDesktopCONNECTTrioExecutionPublicConnectUsesOriginalChild(t *testing.T)
 
 type desktopCONNECTExecutionChoice struct{ requested, winner string }
 
+type desktopCONNECTExecutionFixture func(*testing.T, int, string, string) (*app, *desktopNodeLaunch)
+
 func testDesktopCONNECTExecutionPublicConnect(t *testing.T, count int, selected ...desktopCONNECTExecutionChoice) {
+	testDesktopCONNECTExecutionPublicConnectFixture(t, count, desktopCONNECTPrefixProductLaunchFixture, selected...)
+}
+
+func testDesktopCONNECTExecutionPublicConnectFixture(t *testing.T, count int, fixture desktopCONNECTExecutionFixture, selected ...desktopCONNECTExecutionChoice) {
 	if (runtime.GOOS != "linux" && runtime.GOOS != "windows") || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
 		t.Skip("execution product retains its independent installed platform admission")
 	}
@@ -35,7 +41,7 @@ func testDesktopCONNECTExecutionPublicConnect(t *testing.T, count int, selected 
 	for _, protocol := range []string{"http-connect", "https-connect"} {
 		for _, choice := range selected {
 			t.Run(fmt.Sprintf("%s-%s-%s", protocol, choice.requested, choice.winner), func(t *testing.T) {
-				capturedApp, capturedLaunch := desktopCONNECTPrefixProductLaunchFixture(t, count-2, "wg", protocol)
+				capturedApp, capturedLaunch := fixture(t, count-2, "wg", protocol)
 				// Register before the fixture: its original watcher/process must
 				// join before these registries are removed, including Fatal paths.
 				t.Cleanup(func() { desktopOrderedExecutionOwners.Delete(capturedApp); desktopComparisons.Delete(capturedApp) })
@@ -228,7 +234,7 @@ func TestDesktopCONNECTTrioExecutionSelectionBounds(t *testing.T) {
 						case "long":
 							altered = append(altered[:1], append([]desktopNodeChainMember{altered[0]}, altered[1:]...)...)
 						case "final-layer":
-							altered[2].Profile.StartLayer = "aes-256-gcm"
+							altered[2].Profile.StartLayer = "xor-only"
 						case "entry-layer":
 							altered[0].Profile.StartLayer = "unsupported"
 						case "wrong-final":
@@ -260,8 +266,14 @@ func TestDesktopCONNECTTrioExecutionSelectionBounds(t *testing.T) {
 }
 
 func prepareDesktopCONNECTExecutionModel(t *testing.T, requested, winner string) (*desktopNodeChainOwnedFixture, *desktopNodeChainExecutionSession) {
+	return prepareDesktopCONNECTExecutionModelFixture(t, requested, winner, func(t *testing.T) (*app, *desktopNodeLaunch) {
+		return desktopCONNECTProductLaunchFixture(t, "wg", "https-connect")
+	})
+}
+
+func prepareDesktopCONNECTExecutionModelFixture(t *testing.T, requested, winner string, fixture func(*testing.T) (*app, *desktopNodeLaunch)) (*desktopNodeChainOwnedFixture, *desktopNodeChainExecutionSession) {
 	t.Helper()
-	a, captured := desktopCONNECTProductLaunchFixture(t, "wg", "https-connect")
+	a, captured := fixture(t)
 	f := newDesktopNodeChainOwnedFixtureWith(t, a, captured.chain.selection)
 	f.executionModel = &desktopExecutionOwnedModel{winner: winner}
 	request := &desktopNodeChainExecutionRequest{capture: f.capture, native: f.selection.Native, requested: requested}
@@ -274,9 +286,15 @@ func prepareDesktopCONNECTExecutionModel(t *testing.T, requested, winner string)
 }
 
 func TestDesktopCONNECTTrioExecutionRestoreRetainsChosenSource(t *testing.T) {
+	testDesktopCONNECTExecutionRestoreRetainsChosenSource(t, func(t *testing.T) (*app, *desktopNodeLaunch) {
+		return desktopCONNECTProductLaunchFixture(t, "wg", "https-connect")
+	})
+}
+
+func testDesktopCONNECTExecutionRestoreRetainsChosenSource(t *testing.T, fixture func(*testing.T) (*app, *desktopNodeLaunch)) {
 	for _, winner := range []string{"local", "server"} {
 		t.Run(winner, func(t *testing.T) {
-			f, s := prepareDesktopCONNECTExecutionModel(t, "auto", winner)
+			f, s := prepareDesktopCONNECTExecutionModelFixture(t, "auto", winner, fixture)
 			if err := s.startContext(f.operation); err != nil {
 				t.Fatal(err)
 			}

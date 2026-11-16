@@ -86,7 +86,8 @@ WINDOWS_EDITOR_CONTROLS = {'socks-execution-final-layer': 'SOCKS execution refus
  'imported-execution-prefix': 'complete imported execution prefix refused',
  'connect-execution-global': 'CONNECT execution borrowed unrelated global '
                              'capability',
- 'connect-execution-final': 'CONNECT execution admitted layered final',
+ 'connect-execution-final': 'CONNECT execution admitted malformed final layer',
+ 'connect-execution-final-layer-required': 'CONNECT execution refused captured final layer',
  'imported-execution-capability': 'imported execution accepted absent or '
                                   'nonboolean native capability',
  'connect-protocol': 'CONNECT request borrowed a different saved protocol',
@@ -1371,10 +1372,22 @@ for count in 3...8 { for protocolName in ["http-connect", "https-connect"] { for
     owner.connectMultihop(); check(!DispatchQueue.background.pending.isEmpty, "CONNECT execution did not use its distinct native capability"); DispatchQueue.background.run()
     check(owner.api.calls.count == before + 1 && owner.api.calls.last!.body["execution"] as? String == requested && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes, "CONNECT execution did not use its distinct native capability")
     DispatchQueue.main.run(); DispatchQueue.clear()
+    for finalLayer in ["aes-256-gcm", "aes-256-gcm+xor-whitening"] {
+        owner.profiles[final]["start_layer"] = finalLayer
+        owner.api.orderedCurrent = ["selected_id": "ordered-\(final)", "profiles": owner.profiles]
+        do { let draft = try owner.makeOrderedNodeDraft(); check(try draft.selection() == original, "CONNECT execution refused captured final layer") }
+        catch { check(false, "CONNECT execution refused captured final layer") }
+        let calls = owner.api.calls.count
+        owner.connectMultihop(); DispatchQueue.background.run()
+        check(owner.api.calls.count == calls + 1 && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes && owner.api.calls.last!.body["execution"] as? String == requested && owner.profiles[final]["start_layer"] as? String == finalLayer, "CONNECT execution replaced original final layer")
+        DispatchQueue.main.run(); DispatchQueue.clear()
+    }
+    owner.profiles[final]["start_layer"] = "off"
+    owner.api.orderedCurrent = ["selected_id": "ordered-\(final)", "profiles": owner.profiles]
     for fault in ["hint", "numeric-hint", "final-layer", "long", "wrong-protocol", "later-prefix-layer", "prefix-layer-type", "prefix-kind", "middle-layer"] {
         var catalog = owner.profiles, rows = original.orderedNodes
         if fault == "hint" || fault == "numeric-hint" { var ext = catalog[middle]["external"] as! [String:Any]; ext["ordered_connect_execution_middle_supported"] = fault == "hint" ? false : 1; catalog[middle]["external"] = ext }
-        if fault == "final-layer" { catalog[final]["start_layer"] = "aes-256-gcm" }
+        if fault == "final-layer" { catalog[final]["start_layer"] = "xor-only" }
         if fault == "long" { rows.insert(["id":"extra", "mode":"wg"], at:0) }
         if fault == "wrong-protocol" { rows[middle]["mode"] = protocolName == "http-connect" ? "https-connect" : "http-connect" }
         if fault == "later-prefix-layer" { catalog[middle - 1]["start_layer"] = "aes-256-gcm " }
@@ -1723,9 +1736,9 @@ def macos(directory):
         "imported-execution-body": (' || importedExecutionPrefixes(rows, profiles: profiles)', '', "imported execution did not use separate exact-trio capability"),
     }
     imported_execution_variants.update({
-        "connect-execution-prefix-layer": ('["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(allowedLayer)', 'true', "CONNECT execution accepted changed typed trio: later-prefix-layer"),
+        "connect-execution-prefix-layer": ('["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(allowedLayer)', '(position < middle || ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(allowedLayer))', "CONNECT execution accepted changed typed trio: later-prefix-layer"),
         "connect-execution-old-trio": ('guard (3...8).contains(count), rows.dropLast(2).allSatisfy', 'guard count == 3, rows.dropLast(2).allSatisfy', "CONNECT execution draft lost original complete path"),
-        "connect-execution-final-layer": ('guard ["", "off"].contains(members[final]["start_layer"] as? String ?? "") else { return false }', 'guard true else { return false }', "CONNECT execution accepted changed typed trio: final-layer"),
+        "connect-execution-final-layer": ('["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(allowedLayer)', '(position == count - 1 || ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(allowedLayer))', "CONNECT execution accepted changed typed trio: final-layer"),
         "connect-execution-boolean": ('CFGetTypeID(hint) == CFBooleanGetTypeID(), hint.boolValue', 'hint.boolValue', "CONNECT execution accepted changed typed trio: numeric-hint"),
         "connect-execution-capability": ('"ordered_connect_trio_executions" : (importedPrefixes', '"ordered_imported_trio_executions" : (importedPrefixes', "CONNECT execution did not use its distinct native capability"),
         "socks-execution-old-trio": ('guard (3...8).contains(socksCount), rows.dropLast(2).allSatisfy', 'guard socksCount == 3, rows.dropLast(2).allSatisfy', "SOCKS execution lost its distinct complete source hint"),
@@ -1745,6 +1758,7 @@ def macos(directory):
     })
     imported_execution_variants.update({
         "socks-execution-final-layer-required": ('position != socksMiddle || socksPrefixLayer == "" || socksPrefixLayer == "off"', '(position != socksMiddle && position != socksCount - 1) || socksPrefixLayer == "" || socksPrefixLayer == "off"', "SOCKS execution refused captured final layer"),
+        "connect-execution-final-layer-required": ('position != middle || allowedLayer == "" || allowedLayer == "off"', '(position != middle && position != count - 1) || allowedLayer == "" || allowedLayer == "off"', "CONNECT execution refused captured final layer"),
     })
     for name, (old, new, _) in imported_execution_variants.items():
         variants[name] = replace_once(source, old, new)

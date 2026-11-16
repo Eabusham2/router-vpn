@@ -77,7 +77,7 @@ enum RouterVPNOrderedNodes {
         let count = rows.count
         guard (3...8).contains(count), rows.dropLast(2).allSatisfy({ prefixModes.contains($0["mode"] ?? "") }),
               ["http-connect", "https-connect"].contains(rows[count - 2]["mode"] ?? ""), rows.last?["mode"] == "shadowsocks" else { return false }
-        let middle = count - 2, final = count - 1
+        let middle = count - 2
         var members = [[String: Any]]()
         for row in rows {
             let matches = profiles.filter { $0["id"] as? String == row["id"] }
@@ -94,7 +94,6 @@ enum RouterVPNOrderedNodes {
                       position != middle || allowedLayer == "" || allowedLayer == "off" else { return false }
             }
         }
-        guard ["", "off"].contains(members[final]["start_layer"] as? String ?? "") else { return false }
         guard importedMiddleMode(members[middle]) == rows[middle]["mode"],
               let external = members[middle]["external"] as? [String: Any],
               let hint = external["ordered_connect_execution_middle_supported"] as? NSNumber,

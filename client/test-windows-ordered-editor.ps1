@@ -1,7 +1,7 @@
 param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='',[switch]$PositiveOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
-$controls=@{'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted layered final';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
+$controls=@{'connect-execution-final-layer-required'='CONNECT execution refused captured final layer';'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted malformed final layer';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
 if($NegativeControl-and$controls.Keys-cnotcontains$NegativeControl){throw 'Unknown ordered editor causal control.'}
 if($PositiveOnly-and$NegativeControl){throw 'Positive editor phase cannot select a causal control.'}
 $Client=Join-Path $Root 'client'
@@ -45,9 +45,14 @@ if($NegativeControl-ceq'connect-execution-prefix-layer'){
     $Settings=$Settings.Replace($anchor,'$false')
 }
 if($NegativeControl-ceq'connect-execution-final'){
-    $anchor="-or[string](Get-RouterVPNOrderedValue `$finals[0] 'start_layer' '')-cnotin@('','off')"
+    $anchor="`$connectFinalLayer-isnot[string]-or`$connectFinalLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')"
     if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'CONNECT execution layer guard changed.'}
-    $Settings=$Settings.Replace($anchor,'')
+    $Settings=$Settings.Replace($anchor,'$false')
+}
+if($NegativeControl-ceq'connect-execution-final-layer-required'){
+    $anchor="`$connectFinalLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')"
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'CONNECT original final layer guard changed.'}
+    $Settings=$Settings.Replace($anchor,"`$connectFinalLayer-cnotin@('','off')")
 }
 if($NegativeControl-ceq'connect-execution-global'){
     $anchor="return 'ordered_connect_trio_executions'"
@@ -428,9 +433,19 @@ try{
             }
             $executionProfiles[$position].start_layer=$capturedLayer
         }
-        $executionProfiles[$nodeCount-1].start_layer='aes-256-gcm'
-        $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
-        Check $refused 'CONNECT execution admitted layered final'
+        foreach($finalLayer in @('aes-256-gcm','aes-256-gcm+xor-whitening')){
+            $executionProfiles[$nodeCount-1].start_layer=$finalLayer
+            $accepted=$true;$layeredRequest=$null
+            try{$layeredRequest=New-RouterVPNOrderedConnectPayload $executionDraft $executionStore}catch{$accepted=$false}
+            Check ($accepted-and$null-ne$layeredRequest) 'CONNECT execution refused captured final layer'
+            Check ($layeredRequest.nodes.Count-eq$nodeCount-and$layeredRequest.execution-ceq$executionChoice-and$executionProfiles[$nodeCount-1].start_layer-ceq$finalLayer) 'CONNECT execution replaced original final layer'
+        }
+        foreach($badFinalLayer in @('xor-only','AES-256-GCM','aes-256-gcm ',$true)){
+            $executionProfiles[$nodeCount-1].start_layer=$badFinalLayer
+            $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
+            Check $refused 'CONNECT execution admitted malformed final layer'
+        }
+        $executionProfiles[$nodeCount-1].start_layer='off'
     }}}
     foreach($socksCount in 3..8){foreach($prefixMode in @('wg','awg2-fast','awg2-strong')){foreach($executionChoice in @('server','auto')){foreach($entryLayer in @('off','aes-256-gcm','aes-256-gcm+xor-whitening')){
         $socksMiddle=$socksCount-2;$socksFinal=$socksCount-1

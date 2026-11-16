@@ -29,8 +29,8 @@ def complete(controls=None, positive=None, summary=None):
 
 class MacProfileGateTests(unittest.TestCase):
     def test_exact_original_and_new_control_order_is_required(self):
-        self.assertEqual(len(D.CONTROL_NAMES), 74)
-        self.assertEqual(len(set(D.CONTROL_NAMES)), 74)
+        self.assertEqual(len(D.CONTROL_NAMES), 75)
+        self.assertEqual(len(set(D.CONTROL_NAMES)), 75)
         self.assertEqual(D.CONTROL_NAMES[19], "ordered-locked-source-preconditions")
         self.assertEqual(D.CONTROL_NAMES[20:22], ("ordered-execution-capture", "ordered-execution-connect"))
         self.assertEqual(D.CONTROL_NAMES[22:30], (
@@ -56,7 +56,7 @@ class MacProfileGateTests(unittest.TestCase):
             "socks-execution-capability", "socks-execution-boolean", "socks-execution-layer",
             "socks-execution-entry-layer", "socks-execution-protocol", "socks-execution-draft",
             "socks-execution-body"))
-        self.assertEqual(D.CONTROL_NAMES[70:], ("hostname-execution-minimum", "hostname-execution-boolean", "hostname-execution-conflict", "socks-execution-final-layer-required"))
+        self.assertEqual(D.CONTROL_NAMES[70:], ("hostname-execution-minimum", "hostname-execution-boolean", "hostname-execution-conflict", "socks-execution-final-layer-required", "connect-execution-final-layer-required"))
         self.assertTrue(D.verdict(complete(), 0, False, True)["accepted"])
 
     def test_inventory_matches_actual_prepared_swift_programs_without_execution(self):
@@ -99,7 +99,7 @@ class MacProfileGateTests(unittest.TestCase):
                 fixture.macos(workspace)
         self.assertEqual(tuple(executed), ("shipping",) + D.CONTROL_NAMES)
         self.assertEqual(tuple(compiled), tuple(executed))
-        self.assertEqual(len(compiled), 75)
+        self.assertEqual(len(compiled), 76)
         for name in D.CONTROL_NAMES:
             self.assertNotEqual(compiled[name], compiled["shipping"], name)
 

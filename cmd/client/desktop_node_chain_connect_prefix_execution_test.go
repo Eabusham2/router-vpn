@@ -137,7 +137,7 @@ func TestDesktopCONNECTPrefixExecutionSourceRefusals(t *testing.T) {
 			case "wrong-final":
 				members[7].Mode = "hysteria2"
 			case "final-layer":
-				members[7].Profile.StartLayer = "aes-256-gcm"
+				members[7].Profile.StartLayer = "xor-only"
 			case "too-many":
 				members = append([]desktopNodeChainMember{members[0]}, members...)
 			case "socks-family":

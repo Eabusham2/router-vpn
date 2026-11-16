@@ -41,7 +41,8 @@ WINDOWS_EDITOR_WITNESSES = {'socks-execution-old-trio': 'SOCKS execution refused
  'imported-execution-prefix': 'complete imported execution prefix refused',
  'connect-execution-global': 'CONNECT execution borrowed unrelated global '
                              'capability',
- 'connect-execution-final': 'CONNECT execution admitted layered final',
+ 'connect-execution-final': 'CONNECT execution admitted malformed final layer',
+ 'connect-execution-final-layer-required': 'CONNECT execution refused captured final layer',
  'imported-execution-capability': 'imported execution accepted absent or '
                                   'nonboolean native capability',
  'connect-protocol': 'CONNECT request borrowed a different saved protocol',
@@ -76,6 +77,7 @@ LINUX_CONTROLS = ('connect-execution-old-trio',
  'connect-execution-global',
  'connect-execution-capability',
  'connect-execution-final',
+ 'connect-execution-final-layer-required',
  'imported-execution-capability',
  'connect-mode',
  'connect-protocol',

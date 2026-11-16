@@ -87,12 +87,12 @@ func desktopNodeChainCONNECTExecutionShape(members []desktopNodeChainMember) boo
 	}
 	middle, final := len(members)-2, len(members)-1
 	if members[final].Mode != "shadowsocks" || !desktopNodeChainCONNECTMiddle(members[middle].Profile, members[middle].Mode) ||
-		members[final].Profile.StartLayer != "" && members[final].Profile.StartLayer != "off" {
+		!desktopCONNECTExecutionPairedLayer(members[final].Profile.StartLayer) {
 		return false
 	}
 	for _, member := range members[:middle] {
 		layer := member.Profile.StartLayer
-		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
+		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || !desktopCONNECTExecutionPairedLayer(layer) {
 			return false
 		}
 	}
@@ -101,4 +101,10 @@ func desktopNodeChainCONNECTExecutionShape(members []desktopNodeChainMember) boo
 
 func desktopCONNECTTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool {
 	return (requested == "server" || requested == "auto") && desktopNodeChainCONNECTExecutionShape(members) && desktopOrderedExecutionMembers(members, requested) == nil
+}
+
+// The paired final owns its captured authenticated layer independently of the
+// imported CONNECT member, which retains its existing unlayered proxy contract.
+func desktopCONNECTExecutionPairedLayer(layer string) bool {
+	return layer == "" || layer == "off" || layer == "aes-256-gcm" || layer == "aes-256-gcm+xor-whitening"
 }

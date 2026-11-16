@@ -33,8 +33,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
                     D.require_host(target, *wrong)
 
     def test_complete_original_and_new_inventories(self):
-        self.assertEqual(len(D.WINDOWS_CONTROLS), 24)
-        self.assertEqual(len(D.LINUX_CONTROLS), 31)
+        self.assertEqual(len(D.WINDOWS_CONTROLS), 25)
+        self.assertEqual(len(D.LINUX_CONTROLS), 32)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
         self.assertEqual(D.LINUX_CONTROLS[3:8], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-final-layer", "socks-execution-layer"))
         for target in D.TARGETS:
@@ -115,8 +115,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_windows_suite_budget_covers_each_original_bounded_command(self):
         source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
-        self.assertEqual(D.windows_suite_budget(source), 4230)
-        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 24) * 90)
+        self.assertEqual(D.windows_suite_budget(source), 4320)
+        self.assertEqual(D.windows_suite_budget(source), (22 + 1 + 25) * 90)
         self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
 
     def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):

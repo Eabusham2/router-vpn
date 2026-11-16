@@ -275,8 +275,16 @@ static void connect_model_only(void) {
                         json_object_set_string_member(paired,"start_layer","off");
                     }
                     JsonObject *final=json_array_get_object_element(profiles,count-1);
-                    json_object_set_string_member(final,"start_layer","aes-256-gcm");
-                    check(!linux_ordered_current_v1(selection,store),"CONNECT execution accepted layered final");
+                    const char *final_layers[]={"aes-256-gcm","aes-256-gcm+xor-whitening"};
+                    for(guint layer=0;layer<2;layer++) {
+                        json_object_set_string_member(final,"start_layer",final_layers[layer]);
+                        check(linux_ordered_current_v1(selection,store),"CONNECT execution refused captured final layer");
+                        check(strcmp(linux_ordered_string_v1(final,"start_layer"),final_layers[layer])==0,"CONNECT execution replaced original final layer");
+                    }
+                    json_object_set_string_member(final,"start_layer","xor-only");
+                    check(!linux_ordered_current_v1(selection,store),"CONNECT execution accepted malformed final layer");
+                    json_object_set_boolean_member(final,"start_layer",TRUE);
+                    check(!linux_ordered_current_v1(selection,store),"CONNECT execution accepted nonstring final layer");
                     json_object_set_string_member(final,"start_layer","off");
                 }
                 check(linux_ordered_execution_v1(selection,"local"),"CONNECT original Local choice lost");
