@@ -279,15 +279,93 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     }
 
     static int sourceSchema(List<AndroidNodeStore.ChainSource> members) throws Exception {
-        int imported=0,middle=-1;for(int i=0;i<members.size();i++)if(members.get(i).imported){
-            imported++;middle=i;String protocol=AndroidExternalPolicy.protocol(members.get(i).external().protocol);
-            boolean variablePrefix="shadowsocks".equals(protocol)||"socks5".equals(protocol)||"http-connect".equals(protocol)||"https-connect".equals(protocol)||"openvpn".equals(protocol);
-            if(members.size()<3||members.size()>8||i!=members.size()-2||!variablePrefix&&members.size()!=3)throw new IllegalStateException("A custom node requires its supported penultimate position before the paired final node.");
-        }
-        if(imported>1)throw new IllegalStateException("This custom path supports one imported intermediate node.");
+        int imported=0,middle=-1;
+        for(int i=0;i<members.size();i++)if(members.get(i).imported){imported++;middle=i;}
         if(imported==0)return 1;
-        String protocol=AndroidExternalPolicy.protocol(members.get(middle).external().protocol);
-        return "openvpn".equals(protocol)?5:"socks5".equals(protocol)?3:("http-connect".equals(protocol)||"https-connect".equals(protocol))?4:2;
+        if(members.size()<3||members.size()>8||members.get(0).imported||members.get(members.size()-1).imported)
+            throw new IllegalStateException("An imported interior requires its original paired entry and final node.");
+        // Preserve every existing single-penultimate source family. Schema six
+        // is a separate Local shape, never a promotion of a typed middle.
+        if(imported==1&&middle==members.size()-2) {
+            String protocol=AndroidExternalPolicy.protocol(members.get(middle).external().protocol);
+            switch(protocol) {
+                case "shadowsocks":return 2;
+                case "socks5":return 3;
+                case "http-connect":case "https-connect":return 4;
+                case "openvpn":return 5;
+                default:throw new IllegalStateException("The imported source has no ordered transport owner.");
+            }
+        }
+        for(AndroidNodeStore.ChainSource member:members)if(member.imported)requireLiteralImportedSS(member);
+        return 6;
+    }
+
+    static void requireLiteralImportedSS(AndroidNodeStore.ChainSource member) throws Exception {
+        AndroidStandardExitStore.Entry source=member.external();
+        AndroidNodeStore.ChainSource.requireImported(source);
+        if(!"shadowsocks".equals(AndroidExternalPolicy.protocol(source.protocol)))
+            throw new IllegalStateException("Independent Local imports require original Shadowsocks 2022 sources.");
+        AndroidNumericAddress.parse(source.server);
+    }
+
+    static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
+        int schema=sourceSchema(members);
+        if(schema!=6)return;
+        if(!"local".equals(execution)||members.size()!=modes.size()||!"shadowsocks".equals(modes.get(modes.size()-1)))
+            throw new IllegalStateException("Independent imported interiors require Local and their original paired Shadowsocks final.");
+        for(int i=0;i<members.size()-1;i++) {
+            if(members.get(i).imported) {
+                if(!"shadowsocks".equals(modes.get(i)))throw new IllegalStateException("Keep each imported source's original Shadowsocks transport.");
+            } else if(!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(i)))
+                throw new IllegalStateException("Every paired interior must retain its original packet transport.");
+        }
+    }
+
+    /** Validate the complete staged Local schema-six proposal before any store
+     * writes. Per-member validation cannot establish ordered graph ownership. */
+    static void validateLocalImportedSources(List<AndroidNodeStore.ChainSource> members,List<String> modes) throws Exception {
+        requireCompleteShape(members,modes,"local");
+        if(sourceSchema(members)!=6)throw new IllegalStateException("The independent-import preview requires its complete schema-six source.");
+        JSONObject control=members.get(members.size()-1).profile();
+        JSONArray selected=AndroidNodeStore.orderedSelection(control),inputs=new JSONArray(),identities=new JSONArray();
+        if(!"local".equals(control.getString("multihop_execution"))||selected.length()!=members.size())
+            throw new IllegalStateException("The staged Local path changed its exact complete selection.");
+        for(int i=0;i<members.size();i++) {
+            AndroidNodeStore.ChainSource member=members.get(i);JSONObject reference=selected.getJSONObject(i);
+            if(!member.profileId.equals(reference.getString("id"))||!modes.get(i).equals(reference.getString("mode")))
+                throw new IllegalStateException("The staged Local path reordered or replaced an original member.");
+            inputs.put(memberInput(member,modes.get(i),member.profile()));identities.put(identityInput(member));
+        }
+        String source=bounded(new JSONObject().put("schema",6).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString(),MAX_INPUT);
+        RouterNodeChain preview=Libbox.newRouterNodeChain(source);
+        if(preview==null)throw new IllegalStateException("The native compiler returned no complete imported Local graph.");
+        try {
+            String launch=bounded(preview.launchInput(),MAX_INPUT);
+            JSONObject returned=new JSONObject(launch);
+            String config=bounded(preview.config(),4*1024*1024);
+            String sourceSHA=preview.sourceSHA256(),configSHA=preview.configSHA256();
+            // The unprojected native launch carries all four receipt hashes in
+            // addition to kind and its complete four-field source. Never trim
+            // those seals to make a preview resemble the constructor input.
+            if(returned.length()!=9||!"routervpn-node-chain-launch-input".equals(returned.getString("kind"))
+                    ||returned.getInt("schema")!=6||!"local".equals(returned.getString("execution"))
+                    ||!inputs.toString().equals(returned.getJSONArray("nodes").toString())
+                    ||!identities.toString().equals(returned.getJSONArray("identity_sources").toString())
+                    ||sourceSHA==null||!sourceSHA.matches("[0-9a-f]{64}")||!sourceSHA.equals(returned.getString("source_sha256"))
+                    ||configSHA==null||!configSHA.equals(digest(config))||!configSHA.equals(returned.getString("config_sha256"))
+                    ||!configSHA.equals(returned.getString("original_config_sha256"))
+                    ||!returned.getString("metadata_sha256").matches("[0-9a-f]{64}"))
+                throw new IllegalStateException("The native Local preview changed its original imported set.");
+            // Reopen through the sealed native parser so a well-formed but
+            // substituted metadata digest cannot survive the preview boundary.
+            RouterNodeChain sealed=Libbox.routerNodeChainLaunch(launch);
+            if(sealed==null)throw new IllegalStateException("The native Local preview lost its sealed source.");
+            try {
+                if(!launch.equals(sealed.launchInput())||!config.equals(sealed.config())
+                        ||!sourceSHA.equals(sealed.sourceSHA256())||!configSHA.equals(sealed.configSHA256()))
+                    throw new IllegalStateException("The native Local preview could not reopen its original sealed source.");
+            } finally { sealed.close(); }
+        } finally { preview.close(); }
     }
 
     JSONObject controlProfile() throws Exception { return original.control.profile(); }

@@ -116,18 +116,12 @@ final class AndroidConnectionProfileStore {
         }else if(!ordered){if(ordinary)throw new IllegalStateException("An ordinary entry cannot be restored as a direct connection.");entry="";exit="";multiMode=external?originalExternal.protocol:"shadowsocks";}
         String preparedCustom=external?null:prepareCustomPresetJSON(mode,layers);
         Map<String,NodeUpdate> updates=new LinkedHashMap<>();
+        Map<String,ImportedUpdate> orderedImports=new LinkedHashMap<>();
         if(ordered){
-            stageOrderedNodes(updates,row);
-            JSONArray selected=row.getJSONArray(MULTI_NODES);
-            for(int i=0;i<selected.length();i++)if("external".equals(selected.getJSONObject(i).optString("node_kind"))){
-                JSONObject middle=selected.getJSONObject(i);originalOrdinary=AndroidStandardExitStore.copy(exits.get(middle.getString("node_id")));
-                updatedOrdinary=AndroidStandardExitStore.copy(originalOrdinary);
-                updatedOrdinary.policy=AndroidConnectionProfilePolicy.external(middle.getJSONObject("policy"),originalOrdinary.protocol);
-                AndroidNodeStore.ChainSource.requireImported(updatedOrdinary);
-            }
+            stageOrderedNodes(updates,row,orderedImports);
         }
         else if(!external)stageNode(updates,nodeId,row.optJSONObject("policy"),row.optString("node_profile_id",""));
-        if(ordered&&!"local".equals(execution))validateOrderedExecution(updates,row,updatedOrdinary);
+        if(ordered)validateOrderedProposal(updates,row,orderedImports);
         if(multi&&!ordered){if(!ordinary)stageNode(updates,entry,row.optJSONObject("entry_policy"),row.optString("entry_profile_id",""));if(!external)stageNode(updates,exit,row.optJSONObject("exit_policy"),row.optString("exit_profile_id",""));}
         if(external)validateExternalGraph(updatedExternal!=null?updatedExternal:originalExternal,multi&&!ordinary?findNode(entry):null,updatedOrdinary,entryMode,execution);
         else if(multi&&ordinary){
@@ -146,7 +140,7 @@ final class AndroidConnectionProfileStore {
         if(preparedCustom!=null)nextPreferences.put(CUSTOM_KEY,preparedCustom);
         PreferenceUpdate preferenceUpdate=new PreferenceUpdate(originalPreferences,nextPreferences);
         // All validation above is complete before any selection, node-file, preset or preference mutation.
-        List<NodeUpdate> applied=new ArrayList<>();List<AndroidNodeStore.SelectionSnapshot> attemptedSelections=new ArrayList<>();boolean externalAttempted=false,ordinaryAttempted=false,selectionAttempted=false;
+        List<NodeUpdate> applied=new ArrayList<>();List<ImportedUpdate> appliedImports=new ArrayList<>();List<AndroidNodeStore.SelectionSnapshot> attemptedSelections=new ArrayList<>();boolean externalAttempted=false,ordinaryAttempted=false,selectionAttempted=false;
         synchronized(prefs()) {
         try{
             if(!preferenceUpdate.original.equals(snapshotPreferences()))throw new IllegalStateException("The selected connection changed before profile mutation.");
@@ -154,6 +148,7 @@ final class AndroidConnectionProfileStore {
             // Both ordinary sources are captured before either row is written.
             // A later atomic save also guards each row against a competing editor.
             if(originalOrdinary!=null)requireExternalUnchanged(originalOrdinary);
+            for(ImportedUpdate update:orderedImports.values())requireExternalUnchanged(update.original);
             if(originalExternal!=null)requireExternalUnchanged(originalExternal);
             for(NodeUpdate update:updates.values()){
                 if(!java.util.Arrays.equals(update.original,readLimited(nodes.file(update.id),AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("A linked Router node changed during profile validation.");
@@ -161,6 +156,10 @@ final class AndroidConnectionProfileStore {
                 byte[] updatedBundle=update.updated;
                 attemptedSelections.add(new AndroidNodeStore.SelectionSnapshot(update.id,updatedBundle));
                 if(!update.id.equals(nodes.applyProfileBundle(update.id,update.original,updatedBundle).id))throw new IllegalStateException("Router node identity changed during connection-profile apply.");
+            }
+            for(ImportedUpdate update:orderedImports.values()){
+                appliedImports.add(update);
+                exits.saveIfUnchanged(update.updated,AndroidStandardExitStore.snapshot(update.original));
             }
             if(updatedOrdinary!=null){ordinaryAttempted=true;exits.saveIfUnchanged(updatedOrdinary,AndroidStandardExitStore.snapshot(originalOrdinary));}
             if(updatedExternal!=null){externalAttempted=true;exits.saveIfUnchanged(updatedExternal,AndroidStandardExitStore.snapshot(originalExternal));}
@@ -178,6 +177,7 @@ final class AndroidConnectionProfileStore {
             } else {
             if(externalAttempted)try{restoreExternal(originalExternal,updatedExternal);}catch(Exception error){rollback=append(rollback,error);}
             if(ordinaryAttempted)try{restoreExternal(originalOrdinary,updatedOrdinary);}catch(Exception error){rollback=append(rollback,error);}
+            for(int i=appliedImports.size()-1;i>=0;i--)try{ImportedUpdate update=appliedImports.get(i);restoreExternal(update.original,update.updated);}catch(Exception error){rollback=append(rollback,error);}
             for(int i=applied.size()-1;i>=0;i--)try{NodeUpdate update=applied.get(i);nodes.restoreProfileBundle(update.id,update.original,update.updated);}catch(Exception error){rollback=append(rollback,error);}
             if(selectionAttempted)try{nodes.restoreProfileSelection(originalSelection,attemptedSelections);}catch(Exception error){rollback=append(rollback,error);}
             try{rollbackPreferences(preferenceUpdate);}catch(Exception error){rollback=append(rollback,error);}
@@ -322,13 +322,14 @@ final class AndroidConnectionProfileStore {
         return result.put("policy",policy.choices);
     }
 
-    private void stageOrderedNodes(Map<String,NodeUpdate> updates,JSONObject row) throws Exception {
+    private void stageOrderedNodes(Map<String,NodeUpdate> updates,JSONObject row,Map<String,ImportedUpdate> imported) throws Exception {
         validateOrderedRow(row,SCHEMA_VERSION);
         JSONArray members=row.getJSONArray(MULTI_NODES);Set<String> proofs=new HashSet<>();long total=0;
         for(int i=0;i<members.length();i++) {
             JSONObject member=members.getJSONObject(i);String id=member.getString("node_id");
             if("external".equals(member.optString("node_kind"))) {
-                AndroidStandardExitStore.Entry source=AndroidStandardExitStore.copy(exits.get(id));
+                AndroidStandardExitStore.Entry original=AndroidStandardExitStore.copy(exits.get(id));
+                AndroidStandardExitStore.Entry source=AndroidStandardExitStore.copy(original);
                 source.policy=AndroidConnectionProfilePolicy.external(member.getJSONObject("policy"),source.protocol);
                 AndroidNodeStore.ChainSource.requireImported(source);
                 if(!source.id.equals(member.getString("id"))||!AndroidExternalPolicy.protocol(source.protocol).equals(member.getString("mode"))||!source.expectedPublicIp.equals(member.getString("expected_public_ip")))throw new IllegalStateException("The saved custom middle node changed its original external identity.");
@@ -337,7 +338,9 @@ final class AndroidConnectionProfileStore {
                 else if("http-connect".equals(AndroidExternalPolicy.protocol(source.protocol))||"https-connect".equals(AndroidExternalPolicy.protocol(source.protocol)))io.nekohasekai.libbox.Libbox.routerNodeChainImportedCONNECTMemberInput(input.source,input.capture);
                 else if("openvpn".equals(source.protocol))io.nekohasekai.libbox.Libbox.routerNodeChainImportedOpenVPNMemberInput(input.source,input.capture);
                 else io.nekohasekai.libbox.Libbox.routerNodeChainImportedMemberInput(input.source,input.capture);
+                if(imported.put(id,new ImportedUpdate(original,source))!=null)throw new IllegalStateException("A saved imported source occupies more than one position.");
                 total+=AndroidStandardExitStore.snapshot(source).getBytes(StandardCharsets.UTF_8).length;
+                if(total>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("Complete saved ordered sources exceed their aggregate bound.");
                 continue;
             }
             stageNode(updates,id,member.getJSONObject("policy"),member.getString("id"));
@@ -359,18 +362,20 @@ final class AndroidConnectionProfileStore {
         updates.put(controlId,new NodeUpdate(controlId,control.original,updated));
         long complete=0;
         for(NodeUpdate member:updates.values())complete+=member.updated.length;
+        for(ImportedUpdate member:imported.values())complete+=AndroidStandardExitStore.snapshot(member.updated).getBytes(StandardCharsets.UTF_8).length;
         if(complete>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("Complete ordered sources with their final references exceed the aggregate bound.");
     }
 
-    private void validateOrderedExecution(Map<String,NodeUpdate> updates,JSONObject row,AndroidStandardExitStore.Entry imported) throws Exception {
+    private void validateOrderedProposal(Map<String,NodeUpdate> updates,JSONObject row,Map<String,ImportedUpdate> imported) throws Exception {
         JSONArray references=row.getJSONArray(MULTI_NODES);
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
         for(int i=0;i<references.length();i++) {
             JSONObject member=references.getJSONObject(i);String id=member.getString("node_id");
             AndroidNodeStore.ChainSource source;
             if("external".equals(member.optString("node_kind"))) {
-                if(imported==null||!id.equals(imported.id))throw new IllegalStateException("The execution preview lost its exact imported source.");
-                source=AndroidNodeStore.stagedChainSource(imported);
+                ImportedUpdate update=imported.get(id);
+                if(update==null||!id.equals(update.updated.id))throw new IllegalStateException("The execution preview lost its exact imported source.");
+                source=AndroidNodeStore.stagedChainSource(update.updated);
             } else {
                 NodeUpdate update=updates.get(id);
                 if(update==null)throw new IllegalStateException("The execution preview omitted a staged paired member.");
@@ -378,7 +383,10 @@ final class AndroidConnectionProfileStore {
             }
             sources.add(source);modes.add(member.getString("mode"));
         }
-        AndroidNodeChainCapture.validateExecutionSources(sources,modes,row.getString("multihop_execution"));
+        String execution=row.getString("multihop_execution");
+        AndroidNodeChainCapture.requireCompleteShape(sources,modes,execution);
+        if(!"local".equals(execution))AndroidNodeChainCapture.validateExecutionSources(sources,modes,execution);
+        else if(AndroidNodeChainCapture.sourceSchema(sources)==6)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);
     }
 
     private static JSONArray orderedReferences(JSONArray members) throws Exception {
@@ -395,11 +403,16 @@ final class AndroidConnectionProfileStore {
             if(row.has(key))throw new IllegalStateException("An ordered saved path cannot borrow a pair or imported source.");
         JSONArray members=row.getJSONArray(MULTI_NODES);Set<String> local=new HashSet<>();
         if(members.length()<2||members.length()>8)throw new IllegalStateException("A saved ordered path requires two to eight complete members.");
+        int importedCount=0,importedPosition=-1;
+        for(int i=0;i<members.length();i++)if("external".equals(members.getJSONObject(i).optString("node_kind"))){importedCount++;importedPosition=i;}
+        boolean independent=importedCount>1||importedCount==1&&importedPosition!=members.length()-2;
+        if(independent&&(!"local".equals(row.getString("multihop_execution"))||!"shadowsocks".equals(members.getJSONObject(members.length()-1).getString("mode"))))
+            throw new IllegalStateException("Independent saved imports require their complete Local Shadowsocks path.");
         for(int i=0;i<members.length();i++) {
             JSONObject member=members.getJSONObject(i);
             if("external".equals(member.optString("node_kind"))) {
                 boolean variablePrefix=java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"));
-                if(member.length()!=6||members.length()<3||i!=members.length()-2||!variablePrefix&&members.length()!=3||!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"))||!member.getString("id").equals(member.getString("node_id"))
+                if(member.length()!=6||members.length()<3||i==0||i==members.length()-1||independent&&!"shadowsocks".equals(member.getString("mode"))||!independent&&i!=members.length()-2||!variablePrefix&&members.length()!=3||!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"))||!member.getString("id").equals(member.getString("node_id"))
                         ||!member.getString("id").matches("[A-Za-z0-9_-]{1,64}")||!local.add(member.getString("node_id"))||!(member.get("expected_public_ip") instanceof String))throw new IllegalStateException("A saved imported node requires its original middle position and external identity.");
                 String mode=member.getString("mode"),protocol="http-connect".equals(mode)?"http":"https-connect".equals(mode)?"https":mode;
                 AndroidConnectionProfilePolicy.external(member.getJSONObject("policy"),protocol);continue;
@@ -586,6 +599,11 @@ final class AndroidConnectionProfileStore {
             try{rollbackPreferences(preferenceUpdate);}catch(Exception rollback){failure.addSuppressed(rollback);}
             throw failure;
         }
+    }
+
+    private static final class ImportedUpdate {
+        final AndroidStandardExitStore.Entry original,updated;
+        ImportedUpdate(AndroidStandardExitStore.Entry original,AndroidStandardExitStore.Entry updated){this.original=original;this.updated=updated;}
     }
 
     private static final class NodeUpdate {

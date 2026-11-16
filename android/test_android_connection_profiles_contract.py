@@ -144,7 +144,7 @@ harness = (ROOT / "test_android_connection_profiles.py").read_text(encoding="utf
 for family in ('imported-router', 'imported-wireguard-router', 'imported-amneziawg-router', 'imported-final-wg', 'imported-final-awg2-fast', 'imported-final-awg2-strong', 'imported-nested-wg', 'imported-nested-awg2-fast', 'imported-nested-awg2-strong'):
     assert harness.count('"' + family + '"') >= 2, f"mandatory profile family missing: {family}"
 
-for marker in ('"multihop_nodes"', 'stageOrderedNodes(updates,row)', 'currentOrderedPath()',
+for marker in ('"multihop_nodes"', 'stageOrderedNodes(updates,row,orderedImports)', 'currentOrderedPath()',
                'validateOrderedRow(row,schema)', 'nodes.captureChain(', 'orderedReferences(members)',
                'saved ordered control differs from its exact final member policy'):
     assert marker in store, f"Android ordered profile capture missing: {marker}"
@@ -160,11 +160,12 @@ ORDERED_DISPATCH_MARKERS = (
     'if args.case_family == "ordered-openvpn-execution":\n        import test_android_openvpn_execution_capture as chain',
     'if args.case_family == "ordered-connect-final-layers":\n        import test_android_connect_execution_layers as chain',
     'if args.case_family == "ordered-connect-final-layers-extended":\n        import test_android_connect_execution_layers_extended as chain',
+    'if args.case_family == "ordered-multiple-imported":\n        import test_android_multiple_imported_local as chain',
     'chain.compiler_source(GO) if chain else GO',
     'chain.prepare_sources(src, app, JAVA)',
     'chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")',
     'if args.case_family == "ordered-openvpn":\n                chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)',
-    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-connect-final-layers", "ordered-connect-final-layers-extended", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution"):',
+    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-connect-final-layers", "ordered-connect-final-layers-extended", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution", "ordered-multiple-imported"):',
 )
 
 
@@ -213,6 +214,7 @@ dispatch_controls = (
 for family, module, marker in (
     ("ordered-connect-final-layers", "test_android_connect_execution_layers", ORDERED_DISPATCH_MARKERS[6]),
     ("ordered-connect-final-layers-extended", "test_android_connect_execution_layers_extended", ORDERED_DISPATCH_MARKERS[7]),
+    ("ordered-multiple-imported", "test_android_multiple_imported_local", ORDERED_DISPATCH_MARKERS[8]),
 ):
     dispatch_controls += (
         (family + " compiler omitted", marker, ""),

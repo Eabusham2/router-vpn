@@ -833,8 +833,9 @@ public static RouterNodeChainSOCKS newRouterNodeChainSOCKS(String source)throws 
 static String call(String...args)throws Exception{''')
     if 'routerNodeChainImportedSOCKSMemberInput' not in source:
         source=source[:-1]+'''public static String routerNodeChainImportedSOCKSMemberInput(String config,String capture)throws Exception{return call("chain-socks-member",config,capture);}}'''
-    source=source[:-1]+'''public static RouterNodeChainCONNECT newRouterNodeChainCONNECT(String source)throws Exception{return new RouterNodeChainCONNECT(call("chain-connect-new",source));}
-public static String routerNodeChainImportedCONNECTMemberInput(String config,String capture)throws Exception{return call("chain-connect-member",config,capture);}}'''
+    source=source[:-1]+'''public static RouterNodeChainCONNECT newRouterNodeChainCONNECT(String source)throws Exception{return new RouterNodeChainCONNECT(call("chain-connect-new",source));}}'''
+    if 'routerNodeChainImportedCONNECTMemberInput' not in source:
+        source=source[:-1]+'''public static String routerNodeChainImportedCONNECTMemberInput(String config,String capture)throws Exception{return call("chain-connect-member",config,capture);}}'''
     libbox.write_text(source)
     (src / "io/nekohasekai/libbox/RouterNodeChainSOCKS.java").write_text(r'''package io.nekohasekai.libbox;public final class RouterNodeChainSOCKS {
  private final String original;private boolean closed;RouterNodeChainSOCKS(String source){original=source;}

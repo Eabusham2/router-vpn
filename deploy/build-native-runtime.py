@@ -323,6 +323,7 @@ def inputs():
                              ROOT/'.github/workflows/ios-native-compile-smoke.yml',
                              ROOT/'.github/workflows/ios-libbox-engine.yml',
                              ROOT/'android/test_android_node_chain_imported_runtime.py',
+                             ROOT/'android/test_android_multiple_imported_local.py',
                              ROOT/'deploy/test_reference_udp_lifetime.py',
                              ROOT/'deploy/test_xray_vision_state.py',
                              ROOT/'deploy/test_xray_vision_state_runner.py',

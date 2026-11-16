@@ -52,7 +52,12 @@ final class AndroidOrderedLatencyStore {
                 int offset=selectedExecution.isEmpty()?0:1;
                 if(fields.length!=11+offset||!fields[7+offset].matches("[3-8]"))throw invalid();
                 count=Integer.parseInt(fields[7+offset]);
-                if(position!=count-2||!"intermediate".equals(role)||!(prefix+"custom node "+(position+1)+" of "+count+" → Cloudflare edge").equals(label))throw invalid();
+                // Ordinary Local captures may own several independent imported
+                // interiors. This parser grants no authority: completed()/the
+                // retained worker still bind the exact source, slot and request.
+                // Selected Server/Compare receipts retain their original middle.
+                if(position<1||position>=count-1||(!selectedExecution.isEmpty()&&position!=count-2)
+                        ||!"intermediate".equals(role)||!(prefix+"custom node "+(position+1)+" of "+count+" → Cloudflare edge").equals(label))throw invalid();
             } else {
                 if(!label.matches(java.util.regex.Pattern.quote(prefix)+"node [1-8] of [2-8]")||!label.startsWith(prefix+"node "+(position+1)+" of "))throw invalid();
                 count=label.charAt(label.length()-1)-'0';

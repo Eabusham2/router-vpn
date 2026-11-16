@@ -69,6 +69,7 @@ public static String version(){return "1.14.1";}
 public static String routerNodeChainImportedMemberInput(String config,String capture)throws Exception{return call("chain-imported",config,capture);}
 public static String routerNodeChainImportedOpenVPNMemberInput(String config,String capture)throws Exception{return call("chain-openvpn-member",config,capture);}
 public static String routerNodeChainImportedSOCKSMemberInput(String config,String capture)throws Exception{return call("chain-socks-member",config,capture);}
+public static String routerNodeChainImportedCONNECTMemberInput(String config,String capture)throws Exception{return call("chain-connect-member",config,capture);}
 public static void routerValidateExternalTransport(String config,String capture)throws Exception{call("external-transport",config,capture);}
 public static void routerValidateExternalDNS(String profile,String entry)throws Exception{call("external-dns",profile,entry);}
 public static void routerValidateExternalResponseProbe(String host,String probe)throws Exception{call("external-response",host,probe);}
@@ -1032,7 +1033,7 @@ def run_transport_fixture(work, src, classes, jar, env):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-connect-final-layers", "ordered-connect-final-layers-extended", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution", "general-stores", "fixture-transport"), default="all")
+    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-connect-final-layers", "ordered-connect-final-layers-extended", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution", "ordered-multiple-imported", "general-stores", "fixture-transport"), default="all")
     args = parser.parse_args()
     chain = None
     if args.case_family in ("all", "ordered-chain", "ordered-imported", "ordered-openvpn", "fixture-transport"):
@@ -1051,6 +1052,8 @@ def main():
         import test_android_openvpn_execution_capture as chain
     if args.case_family == "ordered-imported-execution":
         import test_android_imported_prefix_execution_capture as chain
+    if args.case_family == "ordered-multiple-imported":
+        import test_android_multiple_imported_local as chain
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
         raise RuntimeError("Real Android JSON implementation required")
@@ -1091,7 +1094,7 @@ def main():
         else:
             # Non-ordered fixtures cannot accidentally accept a new execution
             # preview; actual ordered source families use the shared compiler.
-            (app / "AndroidNodeChainCapture.java").write_text('package com.eabusham.routervpn; final class AndroidNodeChainCapture {static void validateExecutionSources(java.util.List<AndroidNodeStore.ChainSource> nodes,java.util.List<String> modes,String execution)throws Exception{throw new IllegalStateException("No ordered execution compiler in this non-ordered fixture");}}')
+            (app / "AndroidNodeChainCapture.java").write_text('package com.eabusham.routervpn; final class AndroidNodeChainCapture {static int sourceSchema(java.util.List<AndroidNodeStore.ChainSource> nodes)throws Exception{throw new IllegalStateException("No ordered source compiler in this non-ordered fixture");}static void requireCompleteShape(java.util.List<AndroidNodeStore.ChainSource> nodes,java.util.List<String> modes,String execution)throws Exception{throw new IllegalStateException("No ordered shape compiler in this non-ordered fixture");}static void validateLocalImportedSources(java.util.List<AndroidNodeStore.ChainSource> nodes,java.util.List<String> modes)throws Exception{throw new IllegalStateException("No independent Local compiler in this non-ordered fixture");}static void validateExecutionSources(java.util.List<AndroidNodeStore.ChainSource> nodes,java.util.List<String> modes,String execution)throws Exception{throw new IllegalStateException("No ordered execution compiler in this non-ordered fixture");}}')
         if args.case_family in ("all", "fixture-transport"):
             (src / "io/nekohasekai/libbox/FixtureTransportHarness.java").write_text(TRANSPORT_HARNESS)
         classes = work / "classes"
@@ -1108,7 +1111,7 @@ def main():
                 chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)
             else:
                 chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")
-            if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-connect-final-layers", "ordered-connect-final-layers-extended", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution"):
+            if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-connect-final-layers", "ordered-connect-final-layers-extended", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution", "ordered-multiple-imported"):
                 return
         # Each complete case family retains the original finite JVM budget.
         if args.case_family in ("all", "home-dns"):

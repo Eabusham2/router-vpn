@@ -412,8 +412,8 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     # retaining the real execution compiler and the complete original stores.
     public_original=(app / "AndroidConnectionProfileStore.java").read_text()
     public_controls=(
-        ("profile-preview", 'if(ordered&&!"local".equals(execution))validateOrderedExecution(updates,row,updatedOrdinary);',
-         'if(false&&ordered&&!"local".equals(execution))validateOrderedExecution(updates,row,updatedOrdinary);',
+        ("profile-preview", 'if(ordered)validateOrderedProposal(updates,row,orderedImports);',
+         'if(false&&ordered)validateOrderedProposal(updates,row,orderedImports);',
          "profile load bypassed real execution compiler refusal"),
         ("profile-request", '.put("multihop_enabled",true).put("multihop_execution",captured.execution)',
          '.put("multihop_enabled",true).put("multihop_execution","local")',

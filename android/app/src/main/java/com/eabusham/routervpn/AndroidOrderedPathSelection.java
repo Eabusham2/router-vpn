@@ -78,7 +78,9 @@ final class AndroidOrderedPathSelection {
         if(source.imported){
             String mode=AndroidExternalPolicy.protocol(source.external().protocol);boolean variablePrefix="shadowsocks".equals(mode)||"socks5".equals(mode)||"http-connect".equals(mode)||"https-connect".equals(mode)||"openvpn".equals(mode);
             boolean paired=true;for(Member member:members)paired&=!member.source.imported;
-            if(members.size()>=2&&members.size()<8&&(variablePrefix||members.size()==2)&&paired&&"shadowsocks".equals(members.get(members.size()-1).mode))result.add(mode);
+            boolean independent="local".equals(execution)&&"shadowsocks".equals(mode)&&literalSS(source);
+            for(Member member:members)if(member.source.imported)independent&=literalSS(member.source);
+            if(members.size()>=2&&members.size()<8&&(variablePrefix||members.size()==2)&&(paired||independent)&&"shadowsocks".equals(members.get(members.size()-1).mode))result.add(mode);
         }
         else for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
         requireCurrent();return Collections.unmodifiableList(result);
@@ -144,7 +146,7 @@ final class AndroidOrderedPathSelection {
         if(source.imported&&!"shadowsocks".equals(members.get(members.size()-1).mode))throw new IllegalStateException("An imported middle requires its paired Shadowsocks 2022 final.");
         requirePrefixMode(source,mode);
         int position=members.size()-1;
-        if(!source.imported&&members.size()>=3&&members.get(members.size()-2).source.imported&&List.of("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(members.get(members.size()-2).mode))position--;
+        if(!source.imported&&members.size()>=3&&members.get(members.size()-2).source.imported&&!("local".equals(execution)&&literalSS(members.get(members.size()-2).source)))position--;
         members.add(position,new Member(source,mode));
         try { requireBound(); }
         catch(Exception failure) { members.remove(position);throw failure; }
@@ -239,6 +241,8 @@ final class AndroidOrderedPathSelection {
         }
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();for(Member member:members)sources.add(member.source);
         int schema=AndroidNodeChainCapture.sourceSchema(sources);
+        List<String> modes=new ArrayList<>();for(Member member:members)modes.add(member.mode);
+        AndroidNodeChainCapture.requireCompleteShape(sources,modes,execution);
         if(!"local".equals(execution)&&!members.isEmpty()) {
             boolean hysteriaFinal=schema==1&&"hysteria2".equals(members.get(members.size()-1).mode);
             if(hysteriaFinal) {
@@ -258,6 +262,11 @@ final class AndroidOrderedPathSelection {
             }
         }
         if(size>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
+    }
+
+    private static boolean literalSS(AndroidNodeStore.ChainSource source) {
+        try { AndroidNodeChainCapture.requireLiteralImportedSS(source);return true; }
+        catch(Exception unavailable) { return false; }
     }
 
     private static boolean hasCapturedHysteriaFinal(AndroidNodeStore.ChainSource source) throws Exception {
