@@ -101,6 +101,7 @@ SOURCES[NATIVE + 'RouterHopMeasurement.java'] = r'''package io.nekohasekai.libbo
 }'''
 SOURCES[NATIVE + 'RouterMTU.java'] = 'package io.nekohasekai.libbox;public class RouterMTU{}'
 SOURCES[NATIVE + 'Libbox.java'] = SOURCES[NATIVE + 'Libbox.java'].replace('public static void routerStrategyCloseService(CommandServer server)throws Exception{}', 'public static void routerStrategyCloseService(CommandServer server)throws Exception{server.checkedCloses++;if(server.failClose)throw new IllegalStateException("native Box drain pending");server.closed=true;}')[:-1] + r'''
+ public static CommandServer routerNodeChainOpenVPNExecutionNewCommandServer(RouterNodeChainExecution plan,CommandServerHandler h,PlatformInterface p)throws Exception{throw new IllegalStateException("No typed OpenVPN factory in ordinary fixture");}
  public static CommandServer routerNodeChainSOCKSExecutionNewCommandServer(RouterNodeChainExecution plan,CommandServerHandler h,PlatformInterface p)throws Exception{throw new IllegalStateException("No typed SOCKS factory in ordinary fixture");}
  public static RouterHopMeasurement routerNodeChainNewHopMeasurement(RouterNodeChain plan,CommandServer server)throws Exception{if(plan.server!=server||!plan.healthy())throw new IllegalStateException("unproved ordered measurement");return new RouterHopMeasurement();}
  public static RouterNodeChain mtuPlan;public static CommandServer mtuServer;public static RouterMTUPlatform mtuPlatform;
@@ -132,7 +133,7 @@ SOURCES[APP + 'AndroidNodeStore.java'] = r'''package com.eabusham.routervpn;fina
 }'''
 SOURCES[APP + 'AndroidNodeChainCapture.java'] = r'''package com.eabusham.routervpn;final class AndroidNodeChainCapture {
  static final String SESSION_FILE="routervpn-node-chain.json";final AndroidNodeStore.ChainCapture source;final io.nekohasekai.libbox.RouterNodeChain plan;
- final String sourceSHA256="a".repeat(64),configSHA256="b".repeat(64);final String config,launchInput;final boolean strict;final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;
+ final String sourceSHA256="a".repeat(64),configSHA256="b".repeat(64);final String config,launchInput;final boolean strict;final boolean openVPN=false;final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source){this.source=source;strict=source.strict;plan=new io.nekohasekai.libbox.RouterNodeChain(source.members.size());config="{\"original\":\"one-complete-TUN\",\"modes\":"+new org.json.JSONArray(source.modes).toString()+"}";launchInput="ordered:"+source.members.size()+":"+String.join(",",source.modes);}
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source){source.requireCurrent();return new AndroidNodeChainCapture(source);}
  boolean ownsSource(AndroidNodeStore.ChainCapture value){return source==value;}

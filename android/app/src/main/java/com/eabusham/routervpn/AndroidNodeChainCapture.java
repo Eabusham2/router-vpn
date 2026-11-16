@@ -22,7 +22,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     final AndroidNodeChainCONNECTCapture connect;
     final String sourceInput, launchInput, config, sourceSHA256, configSHA256, selectionExecution;
     final List<String> memberInputs, identityInputs;
-    final boolean strict, homeLANAccess;
+    final boolean strict, homeLANAccess, openVPN;
     private final AndroidNodeStore.ChainCapture original;
 
     static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture original) throws Exception {
@@ -60,7 +60,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source, RouterNodeChain plan) throws Exception {
         if (plan == null) throw new IllegalStateException("The native ordered compiler returned no source owner.");
-        this.original = original; this.plan = plan; socks = null; connect = null; selectionExecution = original.execution;
+        this.original = original; this.plan = plan; socks = null; connect = null; openVPN = sourceSchema(original.members) == 5; selectionExecution = original.execution;
         if (inputs.size() != original.members.size()) throw new IllegalStateException("The native input omitted an original ordered member.");
         memberInputs = Collections.unmodifiableList(new ArrayList<>(inputs));
         identityInputs = Collections.unmodifiableList(new ArrayList<>(identities));
@@ -97,7 +97,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     }
 
     private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source) throws Exception {
-        this.original=original; plan=null; selectionExecution=original.execution;
+        this.original=original; plan=null; openVPN=false; selectionExecution=original.execution;
         boolean isCONNECT=sourceSchema(original.members)==4;
         int count=original.members.size();
         if (!"local".equals(selectionExecution) && !(java.util.Arrays.asList("server","auto").contains(selectionExecution) && count>=3&&count<=8)) throw new IllegalStateException("SOCKS5 and CONNECT Server or Compare require three to eight complete original nodes.");
@@ -244,12 +244,24 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if(local==null || !java.util.Arrays.asList("server","auto").contains(execution))
             throw new IllegalStateException("Choose the original ordered Server or Compare graph.");
         JSONObject original=new JSONObject(local.launchInput());
-        RouterNodeChainExecution preview=Libbox.routerNodeChainExecutionFromLaunch(local.launchInput(),execution);
+        RouterNodeChainExecution preview=original.getInt("schema")==5
+                ? Libbox.routerNodeChainOpenVPNExecutionFromLaunch(local.launchInput(),execution)
+                : Libbox.routerNodeChainExecutionFromLaunch(local.launchInput(),execution);
         if(preview==null)throw new IllegalStateException("The native compiler returned no ordered execution preparation.");
         try {
             if(!execution.equals(preview.requestedExecution()) || !local.sourceSHA256().equals(preview.localSourceSHA256())
                     || preview.config()==null || preview.config().isEmpty())
                 throw new IllegalStateException("The ordered execution preview changed its original Local source.");
+            if(original.getInt("schema")==5) {
+                JSONObject preparation=new JSONObject(preview.source()),returned=new JSONObject(preparation.getString("local_source"));
+                if(preparation.length()!=4 || preparation.getInt("schema")!=5
+                        || !execution.equals(preparation.getString("execution"))
+                        || !local.launchInput().equals(preparation.getString("openvpn_local_launch"))
+                        || returned.length()!=4 || returned.getInt("schema")!=5 || !"local".equals(returned.getString("execution"))
+                        || !original.getJSONArray("nodes").toString().equals(returned.getJSONArray("nodes").toString())
+                        || !original.getJSONArray("identity_sources").toString().equals(returned.getJSONArray("identity_sources").toString()))
+                    throw new IllegalStateException("The typed OpenVPN preview changed its original sealed Local source.");
+            }
         } finally { preview.close(); }
     }
 

@@ -90,6 +90,7 @@ final class AndroidOrderedPathSelection {
             case "socks5":return "Custom SOCKS5";
             case "http-connect":return "Custom HTTP CONNECT";
             case "https-connect":return "Custom HTTPS CONNECT";
+            case "openvpn":return "Custom OpenVPN";
             case "wg":return "WireGuard";
             case "awg2-fast":return "AmneziaWG Fast";
             case "awg2-strong":return "AmneziaWG Strong";
@@ -240,8 +241,8 @@ final class AndroidOrderedPathSelection {
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();for(Member member:members)sources.add(member.source);
         int schema=AndroidNodeChainCapture.sourceSchema(sources);
         if(!"local".equals(execution)&&!members.isEmpty()) {
-            if(schema>4||schema==3&&(members.size()<3||members.size()>8)||schema==4&&(members.size()<3||members.size()>8)||!"shadowsocks".equals(members.get(members.size()-1).mode))
-                throw new IllegalStateException("Server and Compare require paired packet prefixes before the Shadowsocks 2022 final. A supported Shadowsocks, SOCKS5 or HTTP/HTTPS CONNECT middle may retain three to eight nodes; a Shadowsocks hostname requires at least four.");
+            if(schema>5||schema==3&&(members.size()<3||members.size()>8)||schema==4&&(members.size()<3||members.size()>8)||schema==5&&(members.size()<3||members.size()>8)||!"shadowsocks".equals(members.get(members.size()-1).mode))
+                throw new IllegalStateException("Server and Compare require paired packet prefixes before the Shadowsocks 2022 final. A supported Shadowsocks, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN middle may retain three to eight nodes; a Shadowsocks hostname requires at least four.");
             if(schema==4)AndroidNodeChainCapture.requireCONNECTExecutionFinalOff(members.get(members.size()-1).source.profile());
             for(Member member:members)if(member.source.imported) {
                 AndroidStandardExitStore.Entry imported=member.source.external();

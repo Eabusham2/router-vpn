@@ -30,7 +30,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         if (local == null) throw new IllegalStateException("This execution requires the complete original ordered source.");
         local.requireCurrent();
         if (!requested.equals(local.selectionExecution)) throw new IllegalStateException("The execution differs from the complete original saved selection.");
-        RouterNodeChainExecution plan = local.socks != null ? Libbox.newRouterNodeChainSOCKSExecution(local.launchInput, requested) : local.connect != null ? Libbox.newRouterNodeChainCONNECTExecution(local.launchInput, requested) : Libbox.routerNodeChainExecutionFromLaunch(local.launchInput, requested);
+        RouterNodeChainExecution plan = local.socks != null ? Libbox.newRouterNodeChainSOCKSExecution(local.launchInput, requested) : local.connect != null ? Libbox.newRouterNodeChainCONNECTExecution(local.launchInput, requested) : local.openVPN ? Libbox.routerNodeChainOpenVPNExecutionFromLaunch(local.launchInput, requested) : Libbox.routerNodeChainExecutionFromLaunch(local.launchInput, requested);
         return adopt(local, requested, plan);
     }
 
@@ -44,7 +44,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         JSONObject preparation = privateJSON(record.getString("source"), AndroidNodeChainCapture.MAX_INPUT);
         String requested = preparation.getString("execution");
         requireRequested(requested);
-        AndroidNodeChainExecutionCapture result = adopt(local, requested, local.socks != null ? Libbox.newRouterNodeChainSOCKSExecutionLaunch(input) : local.connect != null ? Libbox.newRouterNodeChainCONNECTExecutionLaunch(input) : Libbox.newRouterNodeChainExecutionLaunch(input));
+        AndroidNodeChainExecutionCapture result = adopt(local, requested, local.socks != null ? Libbox.newRouterNodeChainSOCKSExecutionLaunch(input) : local.connect != null ? Libbox.newRouterNodeChainCONNECTExecutionLaunch(input) : local.openVPN ? Libbox.newRouterNodeChainOpenVPNExecutionLaunch(input) : Libbox.newRouterNodeChainExecutionLaunch(input));
         if (!input.equals(result.launchInput)) {
             try { result.close(); }
             catch (Exception cleanup) { throw new IllegalStateException("The altered execution source could not retire its native capture.", cleanup); }
@@ -66,7 +66,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         if (!("local".equals(selected)||"server".equals(selected)) || !"auto".equals(requested)&&!requested.equals(selected)
                 || !requested.equals(saved.getString("setting")))
             throw new IllegalStateException("Last lost its original requested and selected execution.");
-        RouterNodeChainExecution plan=local.socks != null ? Libbox.routerNodeChainSOCKSExecutionFromLast(local.launchInput,requested,raw) : local.connect != null ? Libbox.routerNodeChainCONNECTExecutionFromLast(local.launchInput,requested,raw) : Libbox.routerNodeChainExecutionFromLast(local.launchInput,requested,raw);
+        RouterNodeChainExecution plan=local.socks != null ? Libbox.routerNodeChainSOCKSExecutionFromLast(local.launchInput,requested,raw) : local.connect != null ? Libbox.routerNodeChainCONNECTExecutionFromLast(local.launchInput,requested,raw) : local.openVPN ? Libbox.routerNodeChainOpenVPNExecutionFromLast(local.launchInput,requested,raw) : Libbox.routerNodeChainExecutionFromLast(local.launchInput,requested,raw);
         if (plan == null) throw new IllegalStateException("Last returned no original native preparation.");
         try { return new AndroidNodeChainExecutionCapture(local,requested,plan,null,selected,raw); }
         catch (Exception invalid) { try { plan.close(); } catch (Exception cleanup) { invalid.addSuppressed(cleanup); } throw invalid; }
@@ -114,12 +114,13 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         sourceSHA256 = plan.sourceSHA256(); configSHA256 = plan.configSHA256();
         JSONObject preparation = privateJSON(source, AndroidNodeChainCapture.MAX_INPUT);
         JSONObject launch = privateJSON(launchInput, AndroidNodeChainCapture.MAX_INPUT);
-        if (preparation.length() != 3 || preparation.getInt("schema") != (local.socks != null ? 3 : local.connect != null ? 4 : 1)
+        if (preparation.length() != (local.openVPN ? 4 : 3) || preparation.getInt("schema") != (local.socks != null ? 3 : local.connect != null ? 4 : local.openVPN ? 5 : 1)
+                || local.openVPN && !local.launchInput.equals(preparation.getString("openvpn_local_launch"))
                 || !requested.equals(preparation.getString("execution")) || !requested.equals(plan.requestedExecution())
                 || !local.sourceSHA256.equals(plan.localSourceSHA256())
                 || sourceSHA256 == null || !sourceSHA256.matches("[0-9a-f]{64}")
                 || configSHA256 == null || !configSHA256.equals(digest(config))
-                || launch.length() != (lastRecord == null ? 5 : 6) || !(local.socks != null ? "routervpn-node-chain-socks-execution-preparation-input" : local.connect != null ? "routervpn-node-chain-connect-execution-preparation-input" : "routervpn-node-chain-execution-preparation-input").equals(launch.getString("kind"))
+                || launch.length() != (lastRecord == null ? 5 : 6) || !(local.socks != null ? "routervpn-node-chain-socks-execution-preparation-input" : local.connect != null ? "routervpn-node-chain-connect-execution-preparation-input" : local.openVPN ? "routervpn-node-chain-openvpn-execution-preparation-input" : "routervpn-node-chain-execution-preparation-input").equals(launch.getString("kind"))
                 || launch.getInt("schema") != (lastRecord == null ? 1 : 2)
                 || (lastRecord == null ? launch.has("last") : !lastRecord.equals(launch.getString("last"))) || !source.equals(launch.getString("source"))
                 || !sourceSHA256.equals(launch.getString("source_sha256")) || !configSHA256.equals(launch.getString("config_sha256"))) {
@@ -131,9 +132,10 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         // This does not change the execution preparation/ordinary launch schema.
         int originalSchema = original.getInt("schema");
         int originalCount = original.getJSONArray("nodes").length();
-        if (returned.length() != 4 || (originalSchema != 1 && originalSchema != 2 && !(local.socks != null && originalSchema == 3) && !(local.connect != null && originalSchema == 4))
+        if (returned.length() != 4 || (originalSchema != 1 && originalSchema != 2 && !(local.socks != null && originalSchema == 3) && !(local.connect != null && originalSchema == 4) && !(local.openVPN && originalSchema == 5))
                 || originalSchema == 3 && (originalCount < 3 || originalCount > 8)
                 || originalSchema == 4 && (originalCount < 3 || originalCount > 8)
+                || originalSchema == 5 && (originalCount < 3 || originalCount > 8)
                 || returned.getInt("schema") != originalSchema
                 || !"local".equals(returned.getString("execution"))
                 || !sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))

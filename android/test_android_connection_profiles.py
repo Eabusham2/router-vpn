@@ -1032,7 +1032,7 @@ def run_transport_fixture(work, src, classes, jar, env):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-socks-execution", "ordered-imported-execution", "general-stores", "fixture-transport"), default="all")
+    parser.add_argument("--case-family", choices=("all", "connect-router", "home-dns", "router-rates", "imported-router", "profile-rollback", "profile-apply", "profile-preferences", "selection-ownership", "packet-finals", "imported-summary", "ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution", "general-stores", "fixture-transport"), default="all")
     args = parser.parse_args()
     chain = None
     if args.case_family in ("all", "ordered-chain", "ordered-imported", "ordered-openvpn", "fixture-transport"):
@@ -1043,6 +1043,8 @@ def main():
         import test_android_connect_execution_capture as chain
     if args.case_family == "ordered-socks-execution":
         import test_android_socks_execution_capture as chain
+    if args.case_family == "ordered-openvpn-execution":
+        import test_android_openvpn_execution_capture as chain
     if args.case_family == "ordered-imported-execution":
         import test_android_imported_prefix_execution_capture as chain
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
@@ -1102,7 +1104,7 @@ def main():
                 chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)
             else:
                 chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")
-            if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-socks-execution", "ordered-imported-execution"):
+            if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution"):
                 return
         # Each complete case family retains the original finite JVM budget.
         if args.case_family in ("all", "home-dns"):

@@ -3,8 +3,10 @@ from pathlib import Path
 import ast
 import contextlib
 import io
+import os
 import re
 import subprocess
+import tempfile
 from unittest.mock import patch
 import test_android_node_chain_capture as ORDERED
 
@@ -155,11 +157,12 @@ ORDERED_DISPATCH_MARKERS = (
     'if args.case_family == "ordered-connect-execution":\n        import test_android_connect_execution_capture as chain',
     'if args.case_family == "ordered-socks-execution":\n        import test_android_socks_execution_capture as chain',
     'if args.case_family == "ordered-imported-execution":\n        import test_android_imported_prefix_execution_capture as chain',
+    'if args.case_family == "ordered-openvpn-execution":\n        import test_android_openvpn_execution_capture as chain',
     'chain.compiler_source(GO) if chain else GO',
     'chain.prepare_sources(src, app, JAVA)',
     'chain.run(ROOT, work, app, classes, jar, env, imported_only=args.case_family == "ordered-imported")',
     'if args.case_family == "ordered-openvpn":\n                chain.run(ROOT, work, app, classes, jar, env, openvpn_only=True)',
-    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-socks-execution", "ordered-imported-execution"):',
+    'if args.case_family in ("ordered-chain", "ordered-imported", "ordered-openvpn", "ordered-execution", "ordered-connect-execution", "ordered-socks-execution", "ordered-openvpn-execution", "ordered-imported-execution"):',
 )
 
 
@@ -174,8 +177,15 @@ validate_ordered_dispatch(harness)
 connect_dispatch = ORDERED_DISPATCH_MARKERS[2]
 socks_dispatch = ORDERED_DISPATCH_MARKERS[3]
 prefix_dispatch = ORDERED_DISPATCH_MARKERS[4]
+openvpn_dispatch = ORDERED_DISPATCH_MARKERS[5]
 return_dispatch = ORDERED_DISPATCH_MARKERS[-1]
 dispatch_controls = (
+    ("OpenVPN compiler omitted", openvpn_dispatch, ""),
+    ("OpenVPN compiler substituted", openvpn_dispatch,
+     openvpn_dispatch.replace("test_android_openvpn_execution_capture", "test_android_node_chain_execution_capture")),
+    ("OpenVPN return omitted", return_dispatch,
+     return_dispatch.replace(', "ordered-openvpn-execution"', "")),
+    ("OpenVPN compiler duplicated", openvpn_dispatch, openvpn_dispatch + "\n" + openvpn_dispatch),
     ("imported-prefix compiler omitted", prefix_dispatch, ""),
     ("imported-prefix compiler substituted", prefix_dispatch,
      prefix_dispatch.replace("test_android_imported_prefix_execution_capture", "test_android_node_chain_execution_capture")),
@@ -317,5 +327,23 @@ for marker in ('validate_general_inventory(inventory)', 'for fault in ("omitted"
                'json.loads(receipts[0]) != list(selected)',
                'independent store instances both adopted the same obsolete editor source'):
     assert marker in harness, f"original bounded profile inventory/control missing: {marker}"
+
+
+# Exercise the shipping ABI guard with an explicit javap-text boundary. Actual
+# gomobile/AAR production is independently required by the native Android build.
+OPENVPN_EXECUTION_ABI = ('io.nekohasekai.libbox.RouterNodeChainExecution routerNodeChainOpenVPNExecutionFromLaunch(java.lang.String, java.lang.String) throws java.lang.Exception;', 'io.nekohasekai.libbox.RouterNodeChainExecution newRouterNodeChainOpenVPNExecutionLaunch(java.lang.String) throws java.lang.Exception;', 'io.nekohasekai.libbox.RouterNodeChainExecution routerNodeChainOpenVPNExecutionFromLast(java.lang.String, java.lang.String, java.lang.String) throws java.lang.Exception;', 'io.nekohasekai.libbox.CommandServer routerNodeChainOpenVPNExecutionNewCommandServer(io.nekohasekai.libbox.RouterNodeChainExecution, io.nekohasekai.libbox.CommandServerHandler, io.nekohasekai.libbox.PlatformInterface) throws java.lang.Exception;')
+build=(ROOT/'build-sing-box-libbox.sh').read_text()
+expected_loop="  for signature in "+' '.join("'"+value+"'" for value in OPENVPN_EXECUTION_ABI)+"; do\n    grep -Fq \"$signature\" \"$api_list\" || { echo \"combined libbox AAR is missing typed OpenVPN execution API: $signature\" >&2; return 1; }\n  done\n"
+assert build.count(expected_loop)==1,"Android publication lost exact typed OpenVPN execution ABI guard"
+with tempfile.TemporaryDirectory(prefix='android-openvpn-abi-') as folder:
+    api=Path(folder)/'libbox.javap'
+    guard='verify() {\n'+expected_loop+'}\nverify\n'
+    for omitted in (None,*OPENVPN_EXECUTION_ABI):
+        api.write_text('\n'.join(value for value in OPENVPN_EXECUTION_ABI if value!=omitted)+'\n')
+        result=subprocess.run(['bash','-c',guard],env={**os.environ,'api_list':str(api)},text=True,capture_output=True,timeout=10)
+        if omitted is None:
+            assert result.returncode==0,result.stderr
+        else:
+            assert result.returncode==1 and omitted in result.stderr,"Android ABI guard admitted missing typed OpenVPN API"
 
 print("Android connection profile safety contract: PASS")

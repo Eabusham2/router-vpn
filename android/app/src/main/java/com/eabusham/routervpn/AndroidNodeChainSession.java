@@ -181,6 +181,7 @@ final class AndroidNodeChainSession {
     CommandServer newCommandServer(CommandServerHandler handler,PlatformInterface platform) throws Exception {
         requireSource();
         if(!claimed||server!=null||owner!=null)throw new IllegalStateException("The ordered factory has no fresh claimed source.");
+        if(execution!=null&&capture.openVPN)return Libbox.routerNodeChainOpenVPNExecutionNewCommandServer(execution.plan,handler,platform);
         if(execution!=null&&capture.socks!=null)return Libbox.routerNodeChainSOCKSExecutionNewCommandServer(execution.plan,handler,platform);
         if(execution!=null&&capture.connect!=null)return execution.plan.newCommandServer(handler,platform);
         if(execution==null&&capture.connect!=null)return capture.connect.plan.newCommandServer(handler,platform);

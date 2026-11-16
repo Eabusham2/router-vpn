@@ -69,7 +69,7 @@ CAPTURE = r'''package com.eabusham.routervpn;
 import org.json.*;import io.nekohasekai.libbox.*;
 final class AndroidNodeChainCapture {
  static final int MAX_INPUT=40*1024*1024;static final String SESSION_FILE="routervpn-node-chain.json";
- final AndroidNodeStore.ChainCapture source;final RouterNodeChain plan;final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;final String config="{\"original\":\"local-pure-graph\"}",launchInput,sourceSHA256,configSHA256,selectionExecution;final boolean strict;
+ final AndroidNodeStore.ChainCapture source;final RouterNodeChain plan;final boolean openVPN=false;final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;final String config="{\"original\":\"local-pure-graph\"}",launchInput,sourceSHA256,configSHA256,selectionExecution;final boolean strict;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source)throws Exception{
   this.source=source;selectionExecution=source.execution;strict=source.strict;plan=new RouterNodeChain(source.members.size());sourceSHA256="a".repeat(64);configSHA256=RouterNodeChainExecution.digest(config);
   JSONArray nodes=new JSONArray(),identities=new JSONArray();for(int i=0;i<source.members.size();i++){nodes.put("original-node-"+source.members.get(i).id);identities.put(source.imported&&i==source.members.size()-2?"":"original-identity-"+source.members.get(i).id);}
@@ -323,6 +323,9 @@ def sources():
     result[NATIVE + 'RouterNodeChainExecutionRestoreCapture.java'] = '''package io.nekohasekai.libbox;public final class RouterNodeChainExecutionRestoreCapture {final RouterNodeChainExecution original;final String selected;RouterNodeChainExecutionRestoreCapture(RouterNodeChainExecution original,String selected){this.original=original;this.selected=selected;}}'''
     lib = result[NATIVE + 'Libbox.java']
     result[NATIVE + 'Libbox.java'] = lib[:-1] + r'''
+ public static RouterNodeChainExecution routerNodeChainOpenVPNExecutionFromLaunch(String source,String requested)throws Exception{throw new IllegalStateException("No typed OpenVPN preparation in ordinary fixture");}
+ public static RouterNodeChainExecution newRouterNodeChainOpenVPNExecutionLaunch(String source)throws Exception{throw new IllegalStateException("No typed OpenVPN launch in ordinary fixture");}
+ public static RouterNodeChainExecution routerNodeChainOpenVPNExecutionFromLast(String source,String requested,String last)throws Exception{throw new IllegalStateException("No typed OpenVPN Last in ordinary fixture");}
  public static RouterNodeChainExecution newRouterNodeChainSOCKSExecution(String source,String requested)throws Exception{throw new IllegalStateException("No typed SOCKS preparation in ordinary fixture");}
  public static RouterNodeChainExecution newRouterNodeChainSOCKSExecutionLaunch(String source)throws Exception{throw new IllegalStateException("No typed SOCKS launch in ordinary fixture");}
  public static RouterNodeChainExecution routerNodeChainSOCKSExecutionFromLast(String source,String requested,String last)throws Exception{throw new IllegalStateException("No typed SOCKS Last in ordinary fixture");}

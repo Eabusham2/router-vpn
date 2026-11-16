@@ -446,7 +446,7 @@ public final class NodeChainCaptureHarness {
    int middlePosition=editor.members().size()-1,total=editor.members().size()+1;
    check(editor.prefixModes(custom.id).equals(List.of("openvpn")),"original OpenVPN source not offered with exact mode");editor.addPrefix(custom.id,"openvpn");
    reject(()->editor.movePrefix(middlePosition,0),"OpenVPN middle became physical first");
-   for(String execution:List.of("server","auto"))reject(()->editor.setExecution(execution),"OpenVPN borrowed unsupported execution");
+   for(String execution:List.of("server","auto")){editor.setExecution(execution);check(editor.execution().equals(execution),"OpenVPN lost supported typed execution choice");}editor.setExecution("local");
    AndroidNodeStore.ChainCapture saved=editor.save();
    try(AndroidNodeChainCapture capture=AndroidNodeChainCapture.compile(saved)){
     JSONObject launch=new JSONObject(capture.launchInput),member=new JSONObject(capture.memberInputs.get(middlePosition));

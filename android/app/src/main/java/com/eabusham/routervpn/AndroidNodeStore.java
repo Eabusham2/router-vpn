@@ -548,7 +548,7 @@ final class AndroidNodeStore {
                 if (!java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(mode)
                         && !(selected.length()>=3 && i==selected.length()-2 && ("shadowsocks".equals(mode)
                             || java.util.Arrays.asList("http-connect","https-connect").contains(mode)
-                            || "socks5".equals(mode))))
+                            || "socks5".equals(mode) || "openvpn".equals(mode))))
                     throw new IllegalStateException("This ordered transport has no supported Server or Compare graph.");
             }
         }
