@@ -46,8 +46,14 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             'if ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode) { return true }',
             'return mode == "shadowsocks"')),
         ("profiles", "all-member snapshot", "static func snapshot(", "static func add(", (
-            "let members = try model.iosNodeChainBundles(for: source)", "record.chainPolicies = try members.map",
-            "nodeProofID: profile.nodeProofID", "preferences: try capturePreferences(profile)")),
+            "let members = try model.iosNodeChainBundles(for: source)",
+            "guard let nodes = selected.multihopNodes, nodes.count == members.count else",
+            "record.chainPolicies = try members.enumerated().map { position, member in",
+            "member.routerProfiles.filter({ $0.id == nodes[position].id }).count == 1",
+            "let profile = member.routerProfiles.first(where: { $0.id == nodes[position].id })",
+            "return IOSConnectionEntryCapture(nodeID: profile.id, nodeKind: profile.normalizedNodeKind,",
+            "nodeProofID: profile.nodeProofID, externalProtocol: profile.external?.protocolName, externalPublicIP: profile.external?.expectedPublicIP,",
+            "preferences: try capturePreferences(profile))")),
         ("profiles", "stored order", "private static func validateStoredProfiles(", "private static func validatePreferences(", (
             'record.nodeKind == "router-vpn", record.entryPolicy == nil',
             "var captures = record.chainPolicies, captures.count == nodes.count", "for position in captures.indices",
@@ -76,6 +82,10 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             except IndexError:
                 problems.append(f"iOS ordered profile {label}: shipping owner missing")
                 continue
+        if label == "all-member snapshot":
+            # An inactive copy of the old map in a comment cannot establish
+            # complete, ordered capture of the original member at each slot.
+            body = re.sub(r"//[^\n]*|/\*.*?\*/", "", body, flags=re.S)
         for marker in markers:
             if marker not in body:
                 problems.append(f"iOS ordered profile {label}: missing {marker!r}")
@@ -350,7 +360,7 @@ if not ordered_issues:
     # The separate fixture executes the actual Codable/Load/store methods.
     for owner, before, after in (
         ("profiles", "iosConnectionProfilesSchemaVersion = 8", "iosConnectionProfilesSchemaVersion = 7"),
-        ("profiles", "record.chainPolicies = try members.map", "record.chainPolicies = try members.prefix(2).map"),
+        ("profiles", "record.chainPolicies = try members.enumerated().map", "record.chainPolicies = try members.prefix(2).enumerated().map"),
         ("profiles", "record.entryPolicy == nil", "true"),
         ("profiles", "captures.count == nodes.count", "captures.count >= 2"),
         ("profiles", "profile.nodeProofID == capture.nodeProofID", "true"),
@@ -395,6 +405,24 @@ if not ordered_issues:
         changed[owner] = changed[owner].replace(before, after, 1)
         if not ios_ordered_profile_issues(changed):
             errors.append(f"iOS ordered profile audit accepted its missing-boundary control: {before}")
+    # The current snapshot deliberately enumerates the complete captured list
+    # and resolves each member by the selected ID at that position. Exercise
+    # those exact shipping boundaries without changing Swift production code.
+    for label, before, after in (
+        ("reordered members", "record.chainPolicies = try members.enumerated().map", "record.chainPolicies = try members.reversed().enumerated().map"),
+        ("partial selected order", "nodes.count == members.count", "nodes.count <= members.count"),
+        ("duplicate member identity", "member.routerProfiles.filter({ $0.id == nodes[position].id }).count == 1", "member.routerProfiles.filter({ $0.id == nodes[position].id }).count >= 1"),
+        ("wrong position identity", "member.routerProfiles.first(where: { $0.id == nodes[position].id })", "member.routerProfiles.first(where: { $0.id == nodes[0].id })"),
+        ("missing original proof", "nodeProofID: profile.nodeProofID", "nodeProofID: nil"),
+        ("borrowed control preferences", "preferences: try capturePreferences(profile)", "preferences: try capturePreferences(selected)"),
+        ("commented complete capture", "record.chainPolicies = try members.enumerated().map", "/* record.chainPolicies = try members.enumerated().map */ record.chainPolicies = try members.prefix(2).enumerated().map"),
+    ):
+        snapshot = ordered_sources["profiles"].split("static func snapshot(", 1)[1].split("static func add(", 1)[0]
+        assert snapshot.count(before) == 1, (label, before)
+        changed = dict(ordered_sources)
+        changed["profiles"] = changed["profiles"].replace(snapshot, snapshot.replace(before, after, 1), 1)
+        if not any(issue.startswith("iOS ordered profile all-member snapshot:") for issue in ios_ordered_profile_issues(changed)):
+            errors.append(f"iOS ordered profile audit accepted its snapshot control: {label}")
 require("deploy/test_ios_node_chain_profiles.py", '"missing-middle"', '"changed-proof"', '"final-policy"',
         '"stale-during-prepare"', '"missing-capture"', "old-two-record-limit", "lost-ordered-selection")
 require("ios/RouterVPN/test_runtime_selection_contract.py", "test_ios_node_chain_profiles.py")
