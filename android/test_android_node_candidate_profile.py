@@ -116,8 +116,68 @@ public final class NodeCandidateProfileHarness {
    reject(()->AndroidNodeCandidateProfile.captureTemporary(operation,result,new Authority(result)),"temporary proposal ignored cancellation during original graph compile");
   }finally{RouterNodeChain.afterConfig=null;operation.cancel();check(finished.await(10,TimeUnit.SECONDS),"compile-cancelled candidate did not join");}
  }
+ static void unavailable(Work work,String fragment)throws Exception{
+  try{work.run();}catch(AndroidNodeCandidateProfile.ProposalUnavailable expected){check(expected.getMessage().contains(fragment),"wrong deterministic Save reason: "+expected.getMessage());return;}
+  throw new AssertionError("known incompatible replacement did not retain a typed Save reason");
+ }
+ static void fatal(Work work,String message)throws Exception{
+  try{work.run();}catch(AndroidNodeCandidateProfile.ProposalUnavailable wrong){throw new AssertionError(message,wrong);}catch(Exception expected){checks++;return;}
+  throw new AssertionError(message);
+ }
+ static void proposalRows(Path root,String key,int prefix,String fault)throws Exception{
+  var f=new NodeChainCaptureHarness.Fixture(root,key);var entry=NodeCandidateHarness.custom("2022-blake3-aes-256-gcm");new AndroidStandardExitStore(f.context).save(entry);
+  // Retain an independently generated real paired SS source when its original
+  // identity is outside this captured path; never rewrite keys or identities.
+  String extraID="";
+  if(f.members.size()<8){var originals=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE")))).getJSONArray("8/mixed-awg");var extra=originals.getJSONObject(7);var imported=f.nodes.importBundle(extra.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));check(f.nodes.activeId().equals(imported.id),"candidate fixture did not retain the shipping import selection");f.nodes.select(f.control().id);check(f.nodes.activeId().equals(f.control().id),"candidate fixture did not restore the original selected control");extraID=NodeChainCaptureHarness.profile(extra).getString("id");}
+  final String independentPairedID=extraID;
+  var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,prefix);
+  Object lease=AndroidMTUMeasurementGate.acquire();CountDownLatch completed=new CountDownLatch(1),finished=new CountDownLatch(1);var failure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+  RouterNodeChainCandidateMeasurement.holdClose=true;
+  var owner=AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){
+   public void changed(List<AndroidNodeCandidateResult> rows,String detail){}
+   public void completed(AndroidNodeCandidateMeasurement operation,List<AndroidNodeCandidateResult> rows)throws Exception{
+    try{
+     var measured=rows.stream().filter(row->row.id.equals(entry.id)).findFirst().orElseThrow();
+     var duplicate=rows.stream().filter(row->row.id.equals(session.source.members.get(session.source.members.size()-1).profileId)).findFirst().orElseThrow();
+     var authority=new Authority(measured);
+     if(fault.equals("compiler")){
+      RouterNodeChain.afterConfig=()->{throw new IllegalStateException("Native config read failed after actual compilation");};
+      fatal(()->AndroidNodeCandidateProfile.captureTemporary(operation,measured,authority),"unexpected compiler failure became a Save incompatibility");
+     }else if(fault.equals("cancel")){
+      operation.cancel();fatal(()->AndroidNodeCandidateProfile.captureTemporary(operation,duplicate,authority),"cancelled original owner became a Save incompatibility");
+     }else if(fault.equals("source")){
+      Path original=f.members.get(0).file.toPath();byte[] before=Files.readAllBytes(original);Files.write(original,Arrays.copyOf(before,before.length+1));
+      fatal(()->AndroidNodeCandidateProfile.captureTemporary(operation,duplicate,authority),"mutated original source became a Save incompatibility");
+     }else{
+      unavailable(()->AndroidNodeCandidateProfile.captureTemporary(operation,duplicate,new Authority(duplicate)),"duplicates");
+      boolean completePosition=prefix==session.source.members.size()-3;
+      if(fault.equals("hysteria")){
+       check(completePosition&&session.source.modes.get(session.source.modes.size()-1).equals("hysteria2"),"unsupported-final check did not start from a valid captured Hysteria2 path");
+       unavailable(()->AndroidNodeCandidateProfile.captureTemporary(operation,measured,authority),"requires a paired Shadowsocks final; the saved final mode is hysteria2");
+      }else if(completePosition){var valid=AndroidNodeCandidateProfile.captureTemporary(operation,measured,authority);check(valid!=null&&valid.description.contains(entry.id),"known incompatible row prevented a separate complete compiled proposal");}
+      else unavailable(()->AndroidNodeCandidateProfile.captureTemporary(operation,measured,authority),"penultimate position");
+      if(!independentPairedID.isEmpty()){
+       var paired=rows.stream().filter(row->row.id.equals(independentPairedID)).findFirst().orElseThrow();
+       unavailable(()->AndroidNodeCandidateProfile.captureTemporary(operation,paired,new Authority(paired)),"intermediate hop");
+      }
+      check(!Files.exists(f.rows),"proposal classification saved a profile without explicit Save");
+     }
+    }catch(Throwable error){failure.set(error);}finally{completed.countDown();}
+   }
+   public void finished(Throwable error){finished.countDown();}
+  });
+  try{check(completed.await(20,TimeUnit.SECONDS),"proposal classification did not complete");if(failure.get()!=null)throw new AssertionError("actual proposal classification failed: "+key+"/"+prefix+"/"+fault,failure.get());}
+  finally{RouterNodeChain.afterConfig=null;RouterNodeChainCandidateMeasurement.holdClose=false;owner.cancel();check(finished.await(10,TimeUnit.SECONDS)&&owner.joined(),"proposal classification did not join original candidate owner");AndroidMTUMeasurementGate.release(lease);}
+ }
  public static void main(String[] args)throws Exception{
   try{Path root=Path.of(args[0]);
+   if(args.length==2&&args[1].startsWith("rows-")){
+    int count=Integer.parseInt(args[1].substring(5));String key=count==3?"3/":count+"/mixed-awg";
+    proposalRows(root,key,count-3,"");if(count>3)proposalRows(root,key,0,"");
+    if(count==3){for(String fault:List.of("compiler","cancel","source"))proposalRows(root,key,0,fault);proposalRows(root,"3/hy2-awg-fast",0,"hysteria");}
+    System.out.println("Android measured proposal rows "+count+": "+checks+" actual source, strict refusal and individual compiler checks PASS");return;
+   }
    if(args.length==2&&args[1].equals("execution")){
     // Actual shared compilation proves saved source intent. The candidate
     // callback and graph are the explicit doubles above, not remote forwarding.
@@ -147,6 +207,9 @@ def run_profiles(root,work,app,classes,jar,env):
     subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(data)],env=env,check=True,timeout=120)
     execution_data=work/'candidate-profile-execution-data';execution_data.mkdir()
     subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(execution_data),'execution'],env=env,check=True,timeout=120)
+    for count in (3,4,8):
+        rows=work/('candidate-profile-rows-'+str(count));rows.mkdir()
+        subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(rows),'rows-'+str(count)],env=env,check=True,timeout=120)
     controls=(
         ('!operation.joined()||','', 'temporary proposal saved before original candidate join'),
         ('savedAuthority.requireCurrent(result);','', 'temporary proposal saved before original graph drain authority'),
@@ -165,6 +228,22 @@ def run_profiles(root,work,app,classes,jar,env):
         failed=subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(data)],env=env,capture_output=True,text=True,timeout=120)
         assert failed.returncode!=0 and witness in failed.stderr,failed.stdout+failed.stderr
         print('Android detached proposal causal control rejected:',witness,flush=True)
+
+    row_controls=(
+        ('throw unavailable("This replacement duplicates a node retained in the saved path.");', 'throw new IllegalStateException("old duplicate batch failure");'),
+        ('throw unavailable("The measured transport cannot replace a WireGuard or AmneziaWG intermediate hop.");', 'throw new IllegalStateException("old mode batch failure");'),
+        ('throw unavailable("This imported transport needs the penultimate position before the saved final node.");', 'throw new IllegalStateException("old position batch failure");'),
+        ('throw unavailable("This imported intermediate transport requires a paired Shadowsocks final; the saved final mode is "+modes.get(modes.size()-1)+".");', 'throw new IllegalStateException("old final-family batch failure");'),
+    )
+    for index,(old,new) in enumerate(row_controls):
+        assert original.count(old)==1
+        mutation=work/('candidate-row-mutant-'+str(index));mutation.mkdir();source=mutation/'AndroidNodeCandidateProfile.java';source.write_text(original.replace(old,new))
+        target=mutation/'classes';shutil.copytree(classes,target);classpath=str(target)+os.pathsep+str(jar)
+        subprocess.run(['javac','--release','17','-cp',classpath,'-d',str(target),str(source)],check=True,timeout=60)
+        data=mutation/'private';data.mkdir();family='rows-4' if index==2 else 'rows-3'
+        failed=subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(data),family],env=env,capture_output=True,text=True,timeout=120)
+        assert failed.returncode==1 and 'actual proposal classification failed:' in failed.stderr and 'old ' in failed.stderr,failed.stdout+failed.stderr
+        print('Android proposal row causal control rejected:',index,flush=True)
 
     original_store=(app/'AndroidConnectionProfileStore.java').read_text()
     start=original_store.index('synchronized Record appendOrderedProposal(')

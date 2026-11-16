@@ -76,16 +76,30 @@ final class AndroidNodeCandidatePreparationDialog {
     private void update(String detail){activity.runOnUiThread(()->{if(!visible())return;if(owner==null)owner=capturedOwner();output.setText(detail);changed.run();});}
     private void completed(List<AndroidNodeCandidatePreparation.Choice> completed,Throwable failure){activity.runOnUiThread(()->{
         if(!visible())return;if(owner==null)owner=capturedOwner();choices=Collections.unmodifiableList(new ArrayList<>(completed));
-        StringBuilder text=new StringBuilder(failure==null?(choices.isEmpty()?"Temporary VPN stopped. No complete current candidate scores are available.":"Temporary VPN stopped. Choose Save as profile to keep a tested path."):"Candidate results unavailable: "+failure.getMessage());
+        boolean savable=false;for(var choice:choices)if(choice.profile!=null&&choice.saveReason.isEmpty()&&choice.result.current(System.currentTimeMillis()))savable=true;
+        StringBuilder text=new StringBuilder(failure==null?(choices.isEmpty()?"Temporary VPN stopped. No complete current candidate scores are available.":savable?"Temporary VPN stopped. Complete proposals are ready to save.":"Temporary VPN stopped. TCP measurements are available; see each row's Save reason."):"Candidate results unavailable: "+failure.getMessage());
         text.append("\n\nTCP handshake timing only; not HTTP, ICMP or authenticated server proof. Each score requires 50 successful samples. Load and Connect remain separate choices.");
-        for(var choice:choices)text.append(String.format(Locale.US,"\n%s • %.2f ms (50/50, trimmed mean)",choice.result.name,choice.result.score));
-        output.setText(text.toString());changed.run();
+        appendMeasuredRows(text,choices);output.setText(text.toString());changed.run();
     });}
+    private static void appendMeasuredRows(StringBuilder text,List<AndroidNodeCandidatePreparation.Choice> rows){
+        for(var choice:rows){
+            text.append(String.format(Locale.US,"\n%s • %.2f ms (50/50, trimmed mean)",choice.result.name,choice.result.score));
+            if(!choice.saveReason.isEmpty())text.append("\nSave unavailable: ").append(choice.saveReason);
+        }
+    }
     private void chooseProfile(){
         if(!visible())return;
         List<AndroidNodeCandidatePreparation.Choice> available=new ArrayList<>();List<String> labels=new ArrayList<>();
-        for(var choice:choices)if(choice.result.current(System.currentTimeMillis())){available.add(choice);labels.add(choice.result.name+String.format(Locale.US," • %.2f ms",choice.result.score));}
-        if(available.isEmpty()){output.setText("Wait for testing and temporary VPN cleanup to finish. Expired or invalid results require a new test.");return;}
+        boolean measured=false;
+        for(var choice:choices)if(choice.result.current(System.currentTimeMillis())){
+            measured=true;
+            if(choice.profile!=null&&choice.saveReason.isEmpty()){available.add(choice);labels.add(choice.result.name+String.format(Locale.US," • %.2f ms",choice.result.score));}
+        }
+        if(available.isEmpty()){
+            StringBuilder detail=new StringBuilder(measured?"These TCP measurements do not form supported complete profiles.":"Wait for testing and temporary VPN cleanup to finish. Expired or invalid results require a new test.");
+            if(measured)appendMeasuredRows(detail,choices);
+            output.setText(detail.toString());return;
+        }
         proposalDialog=new AlertDialog.Builder(activity).setTitle("Save as profile").setItems(labels.toArray(new CharSequence[0]),(d,w)->{
             var selected=available.get(w);EditText name=new EditText(activity);name.setHint("Profile name");
             proposalDialog=new AlertDialog.Builder(activity).setTitle("Save as profile").setMessage(selected.profile.description+"\n\nThis saves choices only. Use Connection profiles → Load, then Connect to prove this new path.").setView(name).setNegativeButton("Cancel",null).setPositiveButton("Save",(confirm,which)->{

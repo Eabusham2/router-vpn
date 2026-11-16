@@ -19,7 +19,9 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
     static final class Choice {
         final AndroidNodeCandidateResult result;
         final AndroidNodeCandidateProfile profile;
-        private Choice(AndroidNodeCandidateResult result,AndroidNodeCandidateProfile profile){this.result=result;this.profile=profile;}
+        final String saveReason;
+        private Choice(AndroidNodeCandidateResult result,AndroidNodeCandidateProfile profile){this.result=result;this.profile=profile;saveReason="";}
+        private Choice(AndroidNodeCandidateResult result,AndroidNodeCandidateProfile.ProposalUnavailable unavailable){this.result=result;profile=null;saveReason=unavailable.getMessage();}
     }
     private static AndroidNodeCandidatePreparation active;
     private final Context context;
@@ -139,8 +141,17 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
                 public void completed(AndroidNodeCandidateMeasurement owner,List<AndroidNodeCandidateResult> results)throws Exception {
                     requireCurrent();List<Choice> captured=new ArrayList<>();
                     for(AndroidNodeCandidateResult result:results){
-                        owner.requireResult(result);
-                        captured.add(new Choice(result,AndroidNodeCandidateProfile.captureTemporary(owner,result,AndroidNodeCandidatePreparation.this::requireSavedResultCurrent)));
+                        requireCurrent();owner.requireResult(result);
+                        Choice choice;
+                        try {
+                            choice=new Choice(result,AndroidNodeCandidateProfile.captureTemporary(owner,result,AndroidNodeCandidatePreparation.this::requireSavedResultCurrent));
+                        } catch(AndroidNodeCandidateProfile.ProposalUnavailable unavailable) {
+                            // Only a precise complete-path incompatibility is a
+                            // row-level Save reason. A stale owner is still fatal.
+                            requireCurrent();owner.requireResult(result);
+                            choice=new Choice(result,unavailable);
+                        }
+                        requireCurrent();owner.requireResult(result);captured.add(choice);
                     }
                     requireCurrent();choices=Collections.unmodifiableList(captured);batchDone=true;
                 }

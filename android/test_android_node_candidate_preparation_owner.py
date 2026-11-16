@@ -63,10 +63,23 @@ final class AndroidNodeCandidateCatalog {
 }'''
 SOURCES[APP + 'AndroidNodeCandidateProfile.java'] = '''package com.eabusham.routervpn;
 final class AndroidNodeCandidateProfile {
+ // Explicit proposal/source boundary. Actual classification and full graph
+ // compilation are exercised by test_android_node_candidate_profile.py.
+ static final class ProposalUnavailable extends Exception{ProposalUnavailable(String reason){super(reason);}}
+ static volatile String fault="";
  interface SavedResultAuthority{void requireCurrent(AndroidNodeCandidateResult result)throws Exception;}
  final AndroidNodeCandidateResult result;final SavedResultAuthority authority;
  private AndroidNodeCandidateProfile(AndroidNodeCandidateResult result,SavedResultAuthority authority){this.result=result;this.authority=authority;}
- static AndroidNodeCandidateProfile captureTemporary(AndroidNodeCandidateMeasurement owner,AndroidNodeCandidateResult result,SavedResultAuthority authority)throws Exception{owner.requireResult(result);return new AndroidNodeCandidateProfile(result,authority);}
+ static AndroidNodeCandidateProfile captureTemporary(AndroidNodeCandidateMeasurement owner,AndroidNodeCandidateResult result,SavedResultAuthority authority)throws Exception{
+  owner.requireResult(result);
+  if(fault.equals("fatal")&&result.id.equals("two"))throw new IllegalStateException("Unexpected native proposal read failure");
+  if(fault.equals("all")||result.id.equals("one")&&java.util.List.of("mixed","stale","cancel").contains(fault)){
+   if(fault.equals("stale"))AndroidNodeCandidateCatalog.sourcesValid=false;
+   if(fault.equals("cancel"))owner.cancel();
+   throw new ProposalUnavailable("Captured replacement cannot form this complete path");
+  }
+  return new AndroidNodeCandidateProfile(result,authority);
+ }
  void save()throws Exception{authority.requireCurrent(result);}
 }'''
 SOURCES[APP + 'AndroidExternalComparisonNetwork.java'] = '''package com.eabusham.routervpn;
@@ -86,7 +99,7 @@ CASES = r'''
  static boolean activePreparation(){try{Field field=AndroidNodeCandidatePreparation.class.getDeclaredField("active");field.setAccessible(true);return field.get(null)!=null;}catch(Exception error){throw new AssertionError(error);}}
  static AndroidNodeCandidatePreparation prepare(Fixture f,Completion callback)throws Exception{
   check(f.source.modes.equals(List.of("wg","wg","wg"))&&!AndroidNodeCandidatePreparation.packetPrefix(f.source,2),"complete-saved fallback lost its explicit original final packet node");
-  RouterNodeChainCandidateMeasurement.latest=null;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateCatalog.sourcesValid=true;
+  RouterNodeChainCandidateMeasurement.latest=null;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateCatalog.sourcesValid=true;AndroidNodeCandidateProfile.fault="";
   return AndroidNodeCandidatePreparation.reserve(f.service,f.runtime,f.source,AndroidHomeStateStore.snapshot(f.service),AndroidNodeChainSession.selection(f.service,f.source),2,callback);
  }
  static void retire(AndroidNodeCandidatePreparation operation)throws Exception{operation.cancelFromUser();await(()->!activePreparation(),"original preparation observer did not close");}
@@ -140,6 +153,24 @@ CASES = r'''
    check(session.released()&&!AndroidMTUMeasurementGate.held()&&callback.choices.isEmpty(),"revoked candidate result survived failed cleanup or retained a dead lease");
   }
  }
+ static void proposalRows()throws Exception {
+  for(String fault:List.of("mixed","all","fatal","stale","cancel"))try(Fixture f=new Fixture(3,"wg","wg")){
+   Completion callback=new Completion();var operation=prepare(f,callback);AndroidNodeCandidateProfile.fault=fault;operation.start();callback.awaitDone();f.drain();
+   if(fault.equals("mixed")||fault.equals("all")){
+    check(callback.failure==null&&callback.choices.size()==2,"incompatible proposal discarded complete measured rows");
+    var first=callback.choices.get(0);check(first.profile==null&&!first.saveReason.isEmpty(),"incompatible proposal acquired a Save authority or lost its reason");
+    var second=callback.choices.get(1);
+    if(fault.equals("mixed")){check(second.profile!=null&&second.saveReason.isEmpty(),"incompatible row discarded another valid proposal");second.profile.save();}
+    else check(second.profile==null&&!second.saveReason.isEmpty(),"all-incompatible measurements gained a compiled profile");
+    check(!AndroidMTUMeasurementGate.held()&&!f.runtime.isActiveOrTransitioning(),"row decisions returned before original native DOWN");
+    retire(operation);
+   }else{
+    check(callback.failure!=null&&callback.choices.isEmpty(),fault.equals("fatal")?"unexpected compiler failure was swallowed as a row incompatibility":"invalid owner or source was swallowed as a row incompatibility");
+    await(()->!activePreparation(),"failed proposal batch retained its original owner");
+   }
+   AndroidNodeCandidateProfile.fault="";AndroidNodeCandidateCatalog.sourcesValid=true;
+  }
+ }
  public static void main(String[] args)throws Exception {
   String family=args.length==0?"all":args[0];
   try {
@@ -147,6 +178,7 @@ CASES = r'''
    if(family.equals("all")||family.equals("permission"))capturedPermission();
    if(family.equals("all")||family.equals("graph-join"))failedNativeGraphJoin();
    if(family.equals("all")||family.equals("revoke"))revokedWhileCandidateDrains();
+   if(family.equals("all")||family.equals("proposal-rows"))proposalRows();
    System.out.println("Android temporary candidate process owner: "+checks+" executable composed host checks passed; explicit OS/native/source boundaries.");
   } finally {RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidatePreparation.cancelActive();}
  }
@@ -181,6 +213,9 @@ def main():
             ('catalog.requireSavedSourcesCurrent();', '', 'complete', 'post-DOWN candidate ignored captured catalog changes'),
             ('if(runtime.isActiveOrTransitioning()||!sameIdle(now,resultHome)||AndroidHomeStateStore.emergencyDisconnectPending(context))', 'if(false)', 'complete', 'post-DOWN candidate saved after a replacement connection'),
             ('delivered=deliverCompletion(delivered);', '', 'complete', 'recreated Activity did not receive completed candidate choices'),
+            ('catch(AndroidNodeCandidateProfile.ProposalUnavailable unavailable)', 'catch(Exception unavailable)', 'proposal-rows', 'unexpected compiler failure was swallowed as a row incompatibility'),
+            ('choice=new Choice(result,unavailable);', 'throw unavailable;', 'proposal-rows', 'incompatible proposal discarded complete measured rows'),
+            ('choice=new Choice(result,unavailable);', 'continue;', 'proposal-rows', 'incompatible proposal discarded complete measured rows'),
         )
         for number, (before, after, family, witness) in enumerate(controls):
             if original.count(before) != 1:
@@ -189,7 +224,12 @@ def main():
             shutil.copytree(classes, out)
             mutation = work / ('mutant-' + str(number)) / 'AndroidNodeCandidatePreparation.java'
             mutation.parent.mkdir()
-            mutation.write_text(original.replace(before, after))
+            mutated=original.replace(before, after)
+            if before=='catch(AndroidNodeCandidateProfile.ProposalUnavailable unavailable)':
+                constructor='private Choice(AndroidNodeCandidateResult result,AndroidNodeCandidateProfile.ProposalUnavailable unavailable)'
+                assert mutated.count(constructor)==1
+                mutated=mutated.replace(constructor,'private Choice(AndroidNodeCandidateResult result,Exception unavailable)')
+            mutation.write_text(mutated)
             cp = os.pathsep.join((str(out), str(jar)))
             subprocess.run(['javac', '--release', '17', '-encoding', 'UTF-8', '-proc:none', '-cp', cp, '-d', str(out), str(mutation)], check=True, timeout=60)
             result = subprocess.run(['java', '-cp', cp, 'com.eabusham.routervpn.OrderedRuntimeTest', family], capture_output=True, text=True, timeout=60)

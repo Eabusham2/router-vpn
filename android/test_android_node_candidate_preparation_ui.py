@@ -31,11 +31,11 @@ final class AndroidStandardExitStore{AndroidStandardExitStore(Context c){}}
 final class AndroidHomeStateStore{static final class Snapshot{boolean connected;}static Snapshot home=new Snapshot();static Snapshot snapshot(Context c){return home;}}
 final class AndroidConnectionSelection{static String selected="original";static String digest(Context c,AndroidNodeStore n){return selected;}static void requireCurrent(Context c,AndroidNodeStore n,String s){if(!s.equals(selected))throw new IllegalStateException("selection changed");}}
 final class AndroidConnectionProfileStore{static AndroidNodeStore.ChainCapture source=new AndroidNodeStore.ChainCapture();static class Record{String name;Record(String n){name=n;}}AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}AndroidNodeStore.ChainCapture currentOrderedPath(){return source;}}
-final class AndroidNodeCandidateResult{final String name="Original candidate";final double score=2.5;boolean valid=true;boolean current(long now){return valid;}}
-final class AndroidNodeCandidateProfile{static int writes;final String description="Original saved prefix → candidate";final AndroidNodeCandidatePreparation owner;final AndroidNodeCandidateResult result;AndroidNodeCandidateProfile(AndroidNodeCandidatePreparation o,AndroidNodeCandidateResult r){owner=o;result=r;}AndroidConnectionProfileStore.Record save(Context c,String name){if(!owner.retired||owner.cancelled||!result.valid)throw new IllegalStateException("retired result authority");if(name.trim().isEmpty())throw new IllegalStateException("name required");writes++;return new AndroidConnectionProfileStore.Record(name);}}
+final class AndroidNodeCandidateResult{final String name;AndroidNodeCandidateResult(){this("Original candidate");}AndroidNodeCandidateResult(String name){this.name=name;}final double score=2.5;boolean valid=true;boolean current(long now){return valid;}}
+final class AndroidNodeCandidateProfile{static int writes;static AndroidNodeCandidateResult lastSavedResult;final String description="Original saved prefix → candidate";final AndroidNodeCandidatePreparation owner;final AndroidNodeCandidateResult result;AndroidNodeCandidateProfile(AndroidNodeCandidatePreparation o,AndroidNodeCandidateResult r){owner=o;result=r;}AndroidConnectionProfileStore.Record save(Context c,String name){if(!owner.retired||owner.cancelled||!result.valid)throw new IllegalStateException("retired result authority");if(name.trim().isEmpty())throw new IllegalStateException("name required");writes++;lastSavedResult=result;return new AndroidConnectionProfileStore.Record(name);}}
 final class AndroidNodeCandidatePreparation{
  // SHIPPING_PREFIX_DECISION
- interface Callback{void progress(String detail);void finished(List<Choice> choices,Throwable failure);}static final class Choice{final AndroidNodeCandidateResult result=new AndroidNodeCandidateResult();final AndroidNodeCandidateProfile profile;Choice(AndroidNodeCandidatePreparation o){profile=new AndroidNodeCandidateProfile(o,result);}}
+ interface Callback{void progress(String detail);void finished(List<Choice> choices,Throwable failure);}static final class Choice{final AndroidNodeCandidateResult result;final AndroidNodeCandidateProfile profile;final String saveReason;Choice(AndroidNodeCandidatePreparation o){result=new AndroidNodeCandidateResult();profile=new AndroidNodeCandidateProfile(o,result);saveReason="";}Choice(String reason){result=new AndroidNodeCandidateResult("Measured retained duplicate");profile=null;saveReason=reason;}}
  static volatile AndroidNodeCandidatePreparation active;volatile boolean started,cancelled,retired;volatile Callback observer;final List<Choice> results=new ArrayList<>();static AndroidNodeCandidatePreparation retained(){return active;}
  synchronized boolean observes(Callback c){return observer==c;}void detach(Callback c){if(observer==c)observer=null;}void attach(Callback c){observer=c;if(retired)c.finished(results,null);else c.progress("Testing saved path; original candidate drain pending");}
  void cancelFromUser(){cancelled=true;if(active==this)active=null;}
@@ -75,6 +75,18 @@ public final class CandidatePreparationUITest{
    ui.preparedCandidateDialog.cancel();check(owner.cancelled&&AndroidNodeCandidatePreparation.retained()==null,"explicit result Close retained its reservation");
   }
  }
+ static void mixedProposalRows()throws Exception{
+  var ui=screen();ui.test();workers();AlertDialog.last.pick(0);var owner=ui.connection.purpose;ui.connection.approve();
+  owner.results.add(new AndroidNodeCandidatePreparation.Choice("This replacement duplicates a retained node."));owner.complete();
+  check(TextView.latest.contains("Save unavailable: This replacement duplicates a retained node.")&&TextView.latest.split("50/50",-1).length==3,"measured incompatible row or explicit Save reason disappeared");
+  Button.last.click.run(Button.last);check(AlertDialog.last.items!=null&&AlertDialog.last.items.length==1,"incompatible measured row entered the Save picker");
+  try{AlertDialog.last.pick(0);EditText.last.text="Supported measured path";AlertDialog.last.positive.run(AlertDialog.last,0);workers();check(AndroidNodeCandidateProfile.writes==1&&AndroidNodeCandidateProfile.lastSavedResult==owner.results.get(1).result,"incompatible measured row changed the selected valid proposal identity");}
+  catch(Throwable failure){throw new AssertionError("incompatible measured row changed the selected valid proposal identity",failure);}ui.preparedCandidateDialog.cancel();
+  ui=screen();ui.test();workers();AlertDialog.last.pick(0);owner=ui.connection.purpose;ui.connection.approve();owner.complete();
+  owner.results.clear();owner.results.add(new AndroidNodeCandidatePreparation.Choice("An imported middle needs the penultimate position."));owner.observer.finished(owner.results,null);
+  check(TextView.latest.contains("TCP measurements are available")&&TextView.latest.contains("Save unavailable:"),"all-incompatible rows were presented as compiled paths");
+  Button.last.click.run(Button.last);check(TextView.latest.contains("do not form supported complete profiles")&&TextView.latest.contains("Save unavailable: An imported middle needs the penultimate position.")&&TextView.latest.contains("50/50")&&AndroidNodeCandidateProfile.writes==0,"all-incompatible rows acquired Save or lost their measured reason");ui.preparedCandidateDialog.cancel();
+ }
  static void ownershipAndFailure()throws Exception{
   var ui=screen();ui.test();workers();AlertDialog.last.pick(0);var owner=ui.connection.purpose;ui.pauseTest();ui.resumeTest();ui.preparedCandidateDialog.cancel();check(ui.connection.pending==null,"recreated sheet retained captured permission receipt");check(owner.cancelled&&!owner.started,"explicit permission Cancel leaked original reservation");
   ui=screen();ui.test();workers();AlertDialog.last.pick(0);owner=ui.connection.purpose;ui.connection.approve();owner.complete();var old=ui.preparedCandidateDialog;ui.pauseTest();AndroidNodeCandidatePreparation replacement=new AndroidNodeCandidatePreparation();AndroidNodeCandidatePreparation.active=replacement;old.cancel();check(!replacement.cancelled,"stale Activity cancellation stopped a replacement owner");
@@ -88,7 +100,7 @@ public final class CandidatePreparationUITest{
    picker.pick(selected);check(ui.connection.requests==1&&!ui.connection.purpose.started,"full-saved fallback bypassed original permission");ui.preparedCandidateDialog.cancel();
   }
  }
- public static void main(String[] args)throws Exception{idleAndRotation();ownershipAndFailure();fullSavedChoices();System.out.println("Android candidate shipping UI: "+checks+" exact source, purpose, rotation, DOWN and explicit Save checks PASS");}
+ public static void main(String[] args)throws Exception{idleAndRotation();ownershipAndFailure();mixedProposalRows();fullSavedChoices();System.out.println("Android candidate shipping UI: "+checks+" exact source, purpose, rotation, DOWN and explicit Save checks PASS");}
 }'''
 
 def main():
@@ -116,6 +128,10 @@ def main():
             ('AndroidNodeCandidatePreparationDialog.java','if(captured!=null)connection.cancelCandidatePermission(captured);', '', 'recreated sheet retained captured permission receipt'),
             ('AndroidNodeCandidatePreparationDialog.java','owner.attach(notice);','/* no attachment */','recreated sheet did not attach captured progress'),
             ('AndroidNodeCandidatePreparationDialog.java','if(detached)return;detached=true;', 'if(detached)return;if(owner!=null)owner.cancelFromUser();detached=true;', 'Activity pause cancelled process-owned temporary testing'),
+            ('AndroidNodeCandidatePreparationDialog.java','if(choice.profile!=null&&choice.saveReason.isEmpty()){available.add(choice);','if(true){available.add(choice);','incompatible measured row entered the Save picker'),
+            ('AndroidNodeCandidatePreparationDialog.java','var selected=available.get(w);','var selected=choices.get(w);','incompatible measured row changed the selected valid proposal identity'),
+            ('AndroidNodeCandidatePreparationDialog.java','if(measured)appendMeasuredRows(detail,choices);','','all-incompatible rows acquired Save or lost their measured reason'),
+            ('AndroidNodeCandidatePreparationDialog.java','if(!choice.saveReason.isEmpty())text.append("\\nSave unavailable: ").append(choice.saveReason);','if(false)text.append("\\nSave unavailable: ").append(choice.saveReason);','measured incompatible row or explicit Save reason disappeared'),
             ('AndroidNodeCandidatePreparationDialog.java','void cancel(){if(detached)return;', 'void cancel(){if(detached){AndroidNodeCandidatePreparation replacement=AndroidNodeCandidatePreparation.retained();if(replacement!=null)replacement.cancelFromUser();return;}', 'stale Activity cancellation stopped a replacement owner'),
             ('CandidateProductSurface.java','AndroidNodeCandidatePreparation.retained()!=null||!connection.isConnected()', 'false', 'shipping idle picker omitted a WG/AWG prefix or offered lazy final TCP'),
         )

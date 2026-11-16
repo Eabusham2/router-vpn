@@ -563,7 +563,7 @@ jobs:
               owner_markers = (
                   r"Android temporary candidate process owner: [1-9][0-9]* executable composed host checks passed; explicit OS/native/source boundaries\.",
                   *(re.escape("Android temporary candidate supervisor rejected: " + family + "/" + str(number))
-                    for number, family in enumerate(("permission", "complete", "graph-join", "complete", "complete", "complete", "complete"))),
+                    for number, family in enumerate(("permission", "complete", "graph-join", "complete", "complete", "complete", "complete", "proposal-rows", "proposal-rows", "proposal-rows"))),
               )
               markers = tor_markers if suite == "android-tor" else owner_markers
               counts = [len(re.findall(r"^" + marker + r"$", text, re.MULTILINE)) for marker in markers]

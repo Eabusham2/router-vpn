@@ -12,6 +12,12 @@ import java.util.List;
 /** An explicit future connection, compiled from the measured original sources.
  * Saving never edits a node, active selection, native session or receipt. */
 final class AndroidNodeCandidateProfile {
+    /** Only a known complete-path incompatibility may keep a TCP row without
+     * Save. Source, owner, result and native compiler failures retain their
+     * original exception type and invalidate the batch. */
+    static final class ProposalUnavailable extends Exception {
+        private ProposalUnavailable(String reason){super(reason);}
+    }
     /** The preparation seals this authority only after its complete temporary
      * native graph has drained. It checks the original result, sources, idle
      * selection and physical cohort without retaining live measurement power. */
@@ -61,11 +67,23 @@ final class AndroidNodeCandidateProfile {
         for(int i=0;i<sources.size();i++){
             AndroidNodeStore.ChainSource source=sources.get(i);bytes+=source.bytes().length;
             if(!ids.add(source.profileId)||!source.proofId.isEmpty()&&!proofs.add(source.proofId))
-                throw new IllegalStateException("The measured replacement duplicates an original node identity.");
+                throw unavailable("This replacement duplicates a node retained in the saved path.");
             references.put(new JSONObject().put("id",source.profileId).put("mode",modes.get(i)));
             if(i>0)preview.append(" → ");preview.append(source.profileId).append(" (").append(modes.get(i)).append(")");
         }
         if(bytes>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("The proposed original sources exceed their bound.");
+        // The catalog measured the candidate's captured TCP transport. It does
+        // not grant a different packet mode or permission to remove a suffix.
+        if(candidate.imported){
+            if(replacement!=sources.size()-2)
+                throw unavailable("This imported transport needs the penultimate position before the saved final node.");
+            for(int i=0;i<sources.size();i++)if(i!=replacement&&sources.get(i).imported)
+                throw unavailable("The complete saved path supports one imported intermediate node.");
+            if(!"shadowsocks".equals(modes.get(modes.size()-1)))
+                throw unavailable("This imported intermediate transport requires a paired Shadowsocks final; the saved final mode is "+modes.get(modes.size()-1)+".");
+        }else if(replacement<sources.size()-1&&!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(candidateMode)){
+            throw unavailable("The measured transport cannot replace a WireGuard or AmneziaWG intermediate hop.");
+        }
         for(int i=0;i<sources.size();i++){
             AndroidNodeStore.ChainSource source=sources.get(i);JSONObject policy=source.profile();
             if(i==sources.size()-1){policy.put("multihop_enabled",true).put("multihop_execution",execution).put("multihop_nodes",references);for(String key:new String[]{"multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"})policy.remove(key);AndroidNodeStore.orderedSelection(policy);}
@@ -98,6 +116,11 @@ final class AndroidNodeCandidateProfile {
         finally {compiled.close();}
         }
         description=preview.toString();
+    }
+    private ProposalUnavailable unavailable(String reason)throws Exception {
+        // A recognized graph limitation cannot hide an expired or replaced
+        // source/result observed while deciding whether Save is supported.
+        requireCurrent();return new ProposalUnavailable(reason);
     }
     private void requireCurrent()throws Exception {operation.requireResult(result);}
     private void requireSavedCurrent()throws Exception {
