@@ -25,6 +25,7 @@ type RouterNodeChainSOCKS struct {
 	retired     atomic.Bool
 	closed      atomic.Bool
 	measurement atomic.Pointer[hopmeasure.Service]
+	candidate atomic.Pointer[RouterNodeChainSOCKSCandidateMeasurement]
 	cleanup     atomic.Pointer[routerNodeChainSOCKSCleanup]
 	mtu         atomic.Pointer[routerNodeChainSOCKSMTU]
 	measuring   bool // mu; the original worker releases this only after its drain
@@ -255,14 +256,23 @@ func (m *RouterNodeChainSOCKS) networkChangedContext(ctx context.Context) error 
 	if m == nil || ctx == nil {
 		return errRouterNodeChainSOCKS()
 	}
+	if m.self != nil && m.self != m {
+		return errRouterNodeChainSOCKS()
+	}
+	if candidate := m.candidate.Load(); candidate != nil &&
+		(m.self != m || candidate.self != candidate || candidate.owner != m) {
+		return errRouterNodeChainSOCKS()
+	}
 	m.retireProof()
 	if optimizer := m.mtu.Load(); optimizer != nil { optimizer.invalidate() }
+	var candidateErr error
+	if candidate := m.candidate.Load(); candidate != nil { candidateErr = candidate.closeContext(ctx) }
 	if measurement := m.measurement.Load(); measurement != nil {
 		// This original service remains retained on timeout. Do not call its
 		// contextless Invalidate while a native status lock may be occupied.
-		return measurement.CloseContext(ctx)
+		return errors.Join(candidateErr, measurement.CloseContext(ctx))
 	}
-	return ctx.Err()
+	return errors.Join(candidateErr, ctx.Err())
 }
 
 // Close joins shared proof and measurement activity only. NativeClosed also
@@ -275,6 +285,13 @@ func (m *RouterNodeChainSOCKS) Close() error {
 }
 func (m *RouterNodeChainSOCKS) closeContext(ctx context.Context) error {
 	if m == nil || ctx == nil {
+		return errRouterNodeChainSOCKS()
+	}
+	if m.self != nil && m.self != m {
+		return errRouterNodeChainSOCKS()
+	}
+	if candidate := m.candidate.Load(); candidate != nil &&
+		(m.self != m || candidate.self != candidate || candidate.owner != m) {
 		return errRouterNodeChainSOCKS()
 	}
 	m.retireProof()
@@ -301,6 +318,9 @@ func (m *RouterNodeChainSOCKS) closeContext(ctx context.Context) error {
 			return errRouterNodeChainSOCKS()
 		}
 		defer m.cleanup.CompareAndSwap(token, nil)
+	}
+	if candidate := m.candidate.Load(); candidate != nil {
+		if err := candidate.closeContext(ctx); err != nil { return err }
 	}
 	if measurement := m.measurement.Load(); measurement != nil {
 		if err := measurement.CloseContext(ctx); err != nil {

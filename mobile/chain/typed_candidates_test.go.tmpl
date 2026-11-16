@@ -1,0 +1,569 @@
+package libbox
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// Native constructor/daemon/Box identity is real. These component controls
+// retain the existing explicit TUN, packet and DNS doubles and never fabricate
+// Healthy or fifty samples. The separate encrypted gate supplies positive Run.
+func typedCandidateInventory(t *testing.T, source string) string {
+	t.Helper()
+	var original mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(source), &original) != nil || len(original.Nodes) < 3 {
+		t.Fatal("original typed inventory source absent")
+	}
+	return candidateBridgeJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "typed-connected-native", Inputs: []string{original.Nodes[len(original.Nodes)-2]}})
+}
+
+func TestRouterNodeChainSOCKSConnectedCandidateRequiresProof(t *testing.T) {
+	for _, count := range []int{3, 4, 8} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			original := socksBridgeSourcePrefixes(t, count-2, "wg")
+			raw, err := original.Source()
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner, err := NewRouterNodeChainSOCKS(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := socksBridgeStarted(t, owner)
+			state := socksBridgeNativeState(t, f)
+			engine, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.engine.Store(engine)
+			if owner.Healthy() {
+				t.Fatal("native identity fabricated complete proof")
+			}
+			inventory := typedCandidateInventory(t, raw)
+			sum := sha256.Sum256([]byte(inventory))
+			catalog := &candidateBridgeCatalog{digest: hex.EncodeToString(sum[:])}
+			if _, err := RouterNodeChainSOCKSNewCandidateMeasurement(owner, f.server, int32(count-3), inventory, catalog); err == nil {
+				t.Fatal("unproved typed runtime acquired connected candidate")
+			}
+			if owner.candidate.Load() != nil || catalog.calls.Load() != 0 {
+				t.Fatal("unproved source reached catalog or retained candidate")
+			}
+			copied := &RouterNodeChainSOCKS{self: owner, source: original}
+			if _, err := RouterNodeChainSOCKSNewCandidateMeasurement(copied, f.server, 0, inventory, catalog); err == nil {
+				t.Fatal("copied typed owner acquired candidate")
+			}
+			if _, err := RouterNodeChainSOCKSNewCandidateMeasurement(owner, &CommandServer{}, 0, inventory, catalog); err == nil {
+				t.Fatal("foreign server acquired candidate")
+			}
+			if _, err := RouterNodeChainSOCKSNewCandidateMeasurement(owner, f.server, 0, inventory, nil); err == nil {
+				t.Fatal("missing live catalog accepted")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, err := owner.newConnectedCandidateMeasurementContext(ctx, f.server, 0, inventory, catalog); err == nil {
+				t.Fatal("cancelled candidate construction accepted")
+			}
+			if catalog.calls.Load() != 0 || owner.candidate.Load() != nil {
+				t.Fatal("refused construction mutated original candidate ownership")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainSOCKSConnectedCandidateNativeOwnership(t *testing.T) {
+	for _, fault := range []string{"original", "catalog", "copied-handle", "copied-owner", "copied-owner-cleared", "foreign-slot", "duplicate-constructor", "prepare-once", "held-prepare", "stale-close", "engine", "runtime", "held-close", "network"} {
+		t.Run(fault, func(t *testing.T) {
+			owner := socksBridgeOwner(t, "wg")
+			f := socksBridgeStarted(t, owner)
+			state := socksBridgeNativeState(t, f)
+			engine, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.engine.Store(engine)
+			raw, err := owner.source.Source()
+			if err != nil {
+				t.Fatal(err)
+			}
+			inventory := typedCandidateInventory(t, raw)
+			sum := sha256.Sum256([]byte(inventory))
+			catalog := &candidateBridgeCatalog{digest: hex.EncodeToString(sum[:])}
+			plan, err := mobilemultihop.NewNodeChainSOCKSConnectedCandidatePlan(state.runtime, 0, inventory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// This direct component handle tests native identity and callback retirement
+			// without granting a service or pretending the unproved runtime is Ready.
+			candidate := &RouterNodeChainSOCKSCandidateMeasurement{owner: owner, state: state, runtime: state.runtime, engine: engine, plan: plan, catalog: catalog, inventorySHA: catalog.digest, prepareDeadline: time.Now().Add(hopmeasure.ObservationTimeout)}
+			candidate.self = candidate
+			owner.candidate.Store(candidate)
+			if owner.Healthy() || candidate.service.Load() != nil {
+				t.Fatal("component fabricated connected proof/service")
+			}
+			if err := candidate.CandidateInventoryCurrentContext(t.Context(), plan.CaptureSHA256()); err != nil {
+				t.Fatal("original native catalog identity", err)
+			}
+			switch fault {
+			case "original":
+				if catalog.calls.Load() != 1 {
+					t.Fatal("actual live callback was omitted")
+				}
+			case "catalog":
+				catalog.digest = strings.Repeat("0", 64)
+				if err := candidate.CandidateInventoryCurrentContext(t.Context(), plan.CaptureSHA256()); err == nil || !candidate.retired.Load() {
+					t.Fatal("foreign catalog was not retired")
+				}
+			case "copied-handle":
+				copied := &RouterNodeChainSOCKSCandidateMeasurement{self: candidate, owner: owner, state: state, runtime: state.runtime, engine: engine, plan: plan}
+				if copied.current(t.Context()) == nil || copied.Close() == nil || owner.candidate.Load() != candidate {
+					t.Fatal("copied handle borrowed original retirement")
+				}
+			case "copied-owner":
+				copied := &RouterNodeChainSOCKS{self: owner, source: owner.source}
+				copied.state.Store(state)
+				copied.native.Store(owner.native.Load())
+				copied.candidate.Store(candidate)
+				for _, retire := range []func(context.Context) error{copied.networkChangedContext, copied.closeContext} {
+					if err := retire(t.Context()); err == nil || state.lifetime.Err() != nil || owner.retired.Load() || candidate.retired.Load() || owner.candidate.Load() != candidate {
+						t.Fatal("copied owner borrowed original candidate retirement")
+					}
+				}
+			case "copied-owner-cleared":
+				copied := &RouterNodeChainSOCKS{self: owner, source: owner.source}
+				copied.state.Store(state)
+				copied.native.Store(owner.native.Load())
+				for _, retire := range []func(context.Context) error{copied.networkChangedContext, copied.closeContext} {
+					if err := retire(t.Context()); err == nil || state.lifetime.Err() != nil || owner.retired.Load() || candidate.retired.Load() || owner.candidate.Load() != candidate {
+						t.Fatal("copied owner with cleared slot retired original runtime")
+					}
+				}
+			case "foreign-slot":
+				foreignOwner := &RouterNodeChainSOCKS{}
+				foreignOwner.self = foreignOwner
+				foreign := &RouterNodeChainSOCKSCandidateMeasurement{owner: foreignOwner}
+				foreign.self = foreign
+				foreignOwner.candidate.Store(foreign)
+				owner.candidate.Store(foreign)
+				defer owner.candidate.Store(candidate)
+				if err := candidate.Close(); err == nil || candidate.retired.Load() || owner.candidate.Load() != foreign {
+					t.Fatal("candidate retired through replacement owner slot")
+				}
+				for _, retire := range []func(context.Context) error{owner.networkChangedContext, owner.closeContext} {
+					if err := retire(t.Context()); err == nil || state.lifetime.Err() != nil || owner.retired.Load() || foreign.retired.Load() || foreignOwner.candidate.Load() != foreign || owner.candidate.Load() != foreign {
+						t.Fatal("foreign candidate slot borrowed original retirement")
+					}
+				}
+				owner.candidate.Store(candidate)
+			case "duplicate-constructor":
+				if another, err := RouterNodeChainSOCKSNewCandidateMeasurement(owner, f.server, 0, inventory, catalog); err == nil || another != nil || owner.candidate.Load() != candidate || candidate.retired.Load() || state.lifetime.Err() != nil {
+					t.Fatal("duplicate constructor displaced original reservation")
+				}
+			case "prepare-once":
+				deadline := candidate.prepareDeadline
+				candidate.prepareDeadline = time.Now().Add(-time.Second)
+				if err := candidate.Prepare(); !errors.Is(err, context.DeadlineExceeded) || candidate.prepareStarted || catalog.calls.Load() != 1 {
+					t.Fatal("expired original preparation deadline was renewed", err)
+				}
+				candidate.prepareDeadline = deadline
+				if err := candidate.Prepare(); err == nil || candidate.service.Load() != nil {
+					t.Fatal("unproved component preparation fabricated service")
+				}
+				candidate.preparation.Lock()
+				started, done := candidate.prepareStarted, candidate.prepareDone
+				candidate.preparation.Unlock()
+				if !started || done == nil || owner.candidate.Load() != candidate {
+					t.Fatal("failed preparation lost its exact reservation")
+				}
+				select {
+				case <-done:
+				default:
+					t.Fatal("returned preparation did not join")
+				}
+				if err := candidate.Prepare(); err == nil {
+					t.Fatal("failed preparation was repeated")
+				}
+				if err := candidate.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := candidate.Prepare(); err == nil {
+					t.Fatal("closed reservation was prepared")
+				}
+			case "held-prepare":
+				// Explicit construction-activity model; no proved service is fabricated.
+				candidate.preparation.Lock()
+				candidate.prepareStarted = true
+				candidate.prepareDone = make(chan struct{})
+				done := candidate.prepareDone
+				candidate.preparation.Unlock()
+				var once sync.Once
+				release := func() { once.Do(func() { close(done) }) }
+				defer release()
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				err := candidate.closeContext(ctx)
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) || owner.candidate.Load() != candidate {
+					t.Fatal("held preparation fabricated joined cleanup", err)
+				}
+				release()
+			case "stale-close":
+				old := candidate
+				if err := old.Close(); err != nil {
+					t.Fatal(err)
+				}
+				candidate = &RouterNodeChainSOCKSCandidateMeasurement{owner: owner, state: state, runtime: state.runtime, engine: engine, plan: plan, catalog: catalog, inventorySHA: catalog.digest, prepareDeadline: time.Now().Add(hopmeasure.ObservationTimeout)}
+				candidate.self = candidate
+				owner.candidate.Store(candidate)
+				if err := old.Close(); err == nil || candidate.retired.Load() || owner.candidate.Load() != candidate {
+					t.Fatal("stale handle acknowledged same-inventory replacement cleanup")
+				}
+			case "engine":
+				state.engine.Store(&box.RouterVPNNodeChainSOCKSEngine{})
+				err := candidate.current(t.Context())
+				state.engine.Store(engine)
+				if err == nil {
+					t.Fatal("replacement native engine accepted")
+				}
+			case "runtime":
+				original := state.runtime
+				replacement, err := mobilemultihop.NewNodeChainSOCKSRuntime(owner.source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				state.runtime = replacement
+				err = candidate.current(t.Context())
+				state.runtime = original
+				if err == nil {
+					t.Fatal("replacement typed runtime accepted")
+				}
+			case "held-close":
+				catalog.entered = make(chan struct{})
+				catalog.release = make(chan struct{})
+				var once sync.Once
+				release := func() { once.Do(func() { close(catalog.release) }) }
+				defer release()
+				done := make(chan error, 1)
+				go func() { done <- candidate.CandidateInventoryCurrentContext(context.Background(), plan.CaptureSHA256()) }()
+				select {
+				case <-catalog.entered:
+				case <-time.After(time.Second):
+					t.Fatal("original callback did not enter")
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				err := candidate.closeContext(ctx)
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) || owner.candidate.Load() != candidate {
+					t.Fatal("held catalog callback fabricated joined cleanup", err)
+				}
+				release()
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Fatal("retired callback remained current")
+					}
+				case <-time.After(time.Second):
+					t.Fatal("released original callback did not join")
+				}
+			case "network":
+				if err := owner.networkChangedContext(t.Context()); err != nil {
+					t.Fatal("original network retirement", err)
+				}
+				if candidate.current(t.Context()) == nil {
+					t.Fatal("network changed candidate remained current")
+				}
+			}
+			if err := candidate.Close(); err != nil {
+				t.Fatal("joined original native callback cleanup", err)
+			}
+			if owner.candidate.Load() != nil || typedSOCKSCandidateMeasuring(owner) {
+				t.Fatal("joined component retained original activity")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainCONNECTConnectedCandidateRequiresProof(t *testing.T) {
+	for _, count := range []int{3, 4, 8} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			original := connectBridgeSourcePrefixes(t, count-2, "wg", "http-connect", "")
+			raw, err := original.Source()
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner, err := NewRouterNodeChainCONNECT(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := connectBridgeStarted(t, owner)
+			state := connectBridgeNativeState(t, f)
+			engine, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.engine.Store(engine)
+			if owner.Healthy() {
+				t.Fatal("native identity fabricated complete proof")
+			}
+			inventory := typedCandidateInventory(t, raw)
+			sum := sha256.Sum256([]byte(inventory))
+			catalog := &candidateBridgeCatalog{digest: hex.EncodeToString(sum[:])}
+			if _, err := RouterNodeChainCONNECTNewCandidateMeasurement(owner, f.server, int32(count-3), inventory, catalog); err == nil {
+				t.Fatal("unproved typed runtime acquired connected candidate")
+			}
+			if owner.candidate.Load() != nil || catalog.calls.Load() != 0 {
+				t.Fatal("unproved source reached catalog or retained candidate")
+			}
+			copied := &RouterNodeChainCONNECT{self: owner, source: original}
+			if _, err := RouterNodeChainCONNECTNewCandidateMeasurement(copied, f.server, 0, inventory, catalog); err == nil {
+				t.Fatal("copied typed owner acquired candidate")
+			}
+			if _, err := RouterNodeChainCONNECTNewCandidateMeasurement(owner, &CommandServer{}, 0, inventory, catalog); err == nil {
+				t.Fatal("foreign server acquired candidate")
+			}
+			if _, err := RouterNodeChainCONNECTNewCandidateMeasurement(owner, f.server, 0, inventory, nil); err == nil {
+				t.Fatal("missing live catalog accepted")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, err := owner.newConnectedCandidateMeasurementContext(ctx, f.server, 0, inventory, catalog); err == nil {
+				t.Fatal("cancelled candidate construction accepted")
+			}
+			if catalog.calls.Load() != 0 || owner.candidate.Load() != nil {
+				t.Fatal("refused construction mutated original candidate ownership")
+			}
+		})
+	}
+}
+
+func TestRouterNodeChainCONNECTConnectedCandidateNativeOwnership(t *testing.T) {
+	for _, fault := range []string{"original", "catalog", "copied-handle", "copied-owner", "copied-owner-cleared", "foreign-slot", "duplicate-constructor", "prepare-once", "held-prepare", "stale-close", "engine", "runtime", "held-close", "network"} {
+		t.Run(fault, func(t *testing.T) {
+			owner := connectBridgeOwner(t, "wg")
+			f := connectBridgeStarted(t, owner)
+			state := connectBridgeNativeState(t, f)
+			engine, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.engine.Store(engine)
+			raw, err := owner.source.Source()
+			if err != nil {
+				t.Fatal(err)
+			}
+			inventory := typedCandidateInventory(t, raw)
+			sum := sha256.Sum256([]byte(inventory))
+			catalog := &candidateBridgeCatalog{digest: hex.EncodeToString(sum[:])}
+			plan, err := mobilemultihop.NewNodeChainCONNECTConnectedCandidatePlan(state.runtime, 0, inventory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// This direct component handle tests native identity and callback retirement
+			// without granting a service or pretending the unproved runtime is Ready.
+			candidate := &RouterNodeChainCONNECTCandidateMeasurement{owner: owner, state: state, runtime: state.runtime, engine: engine, plan: plan, catalog: catalog, inventorySHA: catalog.digest, prepareDeadline: time.Now().Add(hopmeasure.ObservationTimeout)}
+			candidate.self = candidate
+			owner.candidate.Store(candidate)
+			if owner.Healthy() || candidate.service.Load() != nil {
+				t.Fatal("component fabricated connected proof/service")
+			}
+			if err := candidate.CandidateInventoryCurrentContext(t.Context(), plan.CaptureSHA256()); err != nil {
+				t.Fatal("original native catalog identity", err)
+			}
+			switch fault {
+			case "original":
+				if catalog.calls.Load() != 1 {
+					t.Fatal("actual live callback was omitted")
+				}
+			case "catalog":
+				catalog.digest = strings.Repeat("0", 64)
+				if err := candidate.CandidateInventoryCurrentContext(t.Context(), plan.CaptureSHA256()); err == nil || !candidate.retired.Load() {
+					t.Fatal("foreign catalog was not retired")
+				}
+			case "copied-handle":
+				copied := &RouterNodeChainCONNECTCandidateMeasurement{self: candidate, owner: owner, state: state, runtime: state.runtime, engine: engine, plan: plan}
+				if copied.current(t.Context()) == nil || copied.Close() == nil || owner.candidate.Load() != candidate {
+					t.Fatal("copied handle borrowed original retirement")
+				}
+			case "copied-owner":
+				copied := &RouterNodeChainCONNECT{self: owner, source: owner.source}
+				copied.state.Store(state)
+				copied.native.Store(owner.native.Load())
+				copied.candidate.Store(candidate)
+				for _, retire := range []func(context.Context) error{copied.networkChangedContext, copied.closeContext} {
+					if err := retire(t.Context()); err == nil || state.lifetime.Err() != nil || owner.retired.Load() || candidate.retired.Load() || owner.candidate.Load() != candidate {
+						t.Fatal("copied owner borrowed original candidate retirement")
+					}
+				}
+			case "copied-owner-cleared":
+				copied := &RouterNodeChainCONNECT{self: owner, source: owner.source}
+				copied.state.Store(state)
+				copied.native.Store(owner.native.Load())
+				for _, retire := range []func(context.Context) error{copied.networkChangedContext, copied.closeContext} {
+					if err := retire(t.Context()); err == nil || state.lifetime.Err() != nil || owner.retired.Load() || candidate.retired.Load() || owner.candidate.Load() != candidate {
+						t.Fatal("copied owner with cleared slot retired original runtime")
+					}
+				}
+			case "foreign-slot":
+				foreignOwner := &RouterNodeChainCONNECT{}
+				foreignOwner.self = foreignOwner
+				foreign := &RouterNodeChainCONNECTCandidateMeasurement{owner: foreignOwner}
+				foreign.self = foreign
+				foreignOwner.candidate.Store(foreign)
+				owner.candidate.Store(foreign)
+				defer owner.candidate.Store(candidate)
+				if err := candidate.Close(); err == nil || candidate.retired.Load() || owner.candidate.Load() != foreign {
+					t.Fatal("candidate retired through replacement owner slot")
+				}
+				for _, retire := range []func(context.Context) error{owner.networkChangedContext, owner.closeContext} {
+					if err := retire(t.Context()); err == nil || state.lifetime.Err() != nil || owner.retired.Load() || foreign.retired.Load() || foreignOwner.candidate.Load() != foreign || owner.candidate.Load() != foreign {
+						t.Fatal("foreign candidate slot borrowed original retirement")
+					}
+				}
+				owner.candidate.Store(candidate)
+			case "duplicate-constructor":
+				if another, err := RouterNodeChainCONNECTNewCandidateMeasurement(owner, f.server, 0, inventory, catalog); err == nil || another != nil || owner.candidate.Load() != candidate || candidate.retired.Load() || state.lifetime.Err() != nil {
+					t.Fatal("duplicate constructor displaced original reservation")
+				}
+			case "prepare-once":
+				deadline := candidate.prepareDeadline
+				candidate.prepareDeadline = time.Now().Add(-time.Second)
+				if err := candidate.Prepare(); !errors.Is(err, context.DeadlineExceeded) || candidate.prepareStarted || catalog.calls.Load() != 1 {
+					t.Fatal("expired original preparation deadline was renewed", err)
+				}
+				candidate.prepareDeadline = deadline
+				if err := candidate.Prepare(); err == nil || candidate.service.Load() != nil {
+					t.Fatal("unproved component preparation fabricated service")
+				}
+				candidate.preparation.Lock()
+				started, done := candidate.prepareStarted, candidate.prepareDone
+				candidate.preparation.Unlock()
+				if !started || done == nil || owner.candidate.Load() != candidate {
+					t.Fatal("failed preparation lost its exact reservation")
+				}
+				select {
+				case <-done:
+				default:
+					t.Fatal("returned preparation did not join")
+				}
+				if err := candidate.Prepare(); err == nil {
+					t.Fatal("failed preparation was repeated")
+				}
+				if err := candidate.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := candidate.Prepare(); err == nil {
+					t.Fatal("closed reservation was prepared")
+				}
+			case "held-prepare":
+				// Explicit construction-activity model; no proved service is fabricated.
+				candidate.preparation.Lock()
+				candidate.prepareStarted = true
+				candidate.prepareDone = make(chan struct{})
+				done := candidate.prepareDone
+				candidate.preparation.Unlock()
+				var once sync.Once
+				release := func() { once.Do(func() { close(done) }) }
+				defer release()
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				err := candidate.closeContext(ctx)
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) || owner.candidate.Load() != candidate {
+					t.Fatal("held preparation fabricated joined cleanup", err)
+				}
+				release()
+			case "stale-close":
+				old := candidate
+				if err := old.Close(); err != nil {
+					t.Fatal(err)
+				}
+				candidate = &RouterNodeChainCONNECTCandidateMeasurement{owner: owner, state: state, runtime: state.runtime, engine: engine, plan: plan, catalog: catalog, inventorySHA: catalog.digest, prepareDeadline: time.Now().Add(hopmeasure.ObservationTimeout)}
+				candidate.self = candidate
+				owner.candidate.Store(candidate)
+				if err := old.Close(); err == nil || candidate.retired.Load() || owner.candidate.Load() != candidate {
+					t.Fatal("stale handle acknowledged same-inventory replacement cleanup")
+				}
+			case "engine":
+				state.engine.Store(&box.RouterVPNNodeChainCONNECTEngine{})
+				err := candidate.current(t.Context())
+				state.engine.Store(engine)
+				if err == nil {
+					t.Fatal("replacement native engine accepted")
+				}
+			case "runtime":
+				original := state.runtime
+				replacement, err := mobilemultihop.NewNodeChainCONNECTRuntime(owner.source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				state.runtime = replacement
+				err = candidate.current(t.Context())
+				state.runtime = original
+				if err == nil {
+					t.Fatal("replacement typed runtime accepted")
+				}
+			case "held-close":
+				catalog.entered = make(chan struct{})
+				catalog.release = make(chan struct{})
+				var once sync.Once
+				release := func() { once.Do(func() { close(catalog.release) }) }
+				defer release()
+				done := make(chan error, 1)
+				go func() { done <- candidate.CandidateInventoryCurrentContext(context.Background(), plan.CaptureSHA256()) }()
+				select {
+				case <-catalog.entered:
+				case <-time.After(time.Second):
+					t.Fatal("original callback did not enter")
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				err := candidate.closeContext(ctx)
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) || owner.candidate.Load() != candidate {
+					t.Fatal("held catalog callback fabricated joined cleanup", err)
+				}
+				release()
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Fatal("retired callback remained current")
+					}
+				case <-time.After(time.Second):
+					t.Fatal("released original callback did not join")
+				}
+			case "network":
+				if err := owner.networkChangedContext(t.Context()); err != nil {
+					t.Fatal("original network retirement", err)
+				}
+				if candidate.current(t.Context()) == nil {
+					t.Fatal("network changed candidate remained current")
+				}
+			}
+			if err := candidate.Close(); err != nil {
+				t.Fatal("joined original native callback cleanup", err)
+			}
+			if owner.candidate.Load() != nil || typedCONNECTCandidateMeasuring(owner) {
+				t.Fatal("joined component retained original activity")
+			}
+		})
+	}
+}
+
+func typedSOCKSCandidateMeasuring(owner *RouterNodeChainSOCKS) bool {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return owner.measuring
+}
+
+func typedCONNECTCandidateMeasuring(owner *RouterNodeChainCONNECT) bool {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return owner.measuring
+}

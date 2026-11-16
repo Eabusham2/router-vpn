@@ -1145,3 +1145,62 @@ func TestRouterVPNDesktopNodePairedBenchmarkSource(t *testing.T) {
 		}
 	}
 }
+
+// The chooser sends no application bytes: count its exact control-target stream
+// only after a remote EOF and successful owned close. Live authenticated proof
+// sockets remain unmodified and cannot enter this counter merely by sharing TCP.
+type nodeCandidateTCPConn struct {
+ net.Conn
+ ctx context.Context
+ count *atomic.Uint64
+ bytes atomic.Uint64
+ eof atomic.Bool
+ once sync.Once
+}
+func nodeCandidateObserveTCP(ctx context.Context, c net.Conn, destination, control M.Socksaddr, count *atomic.Uint64) net.Conn {
+ if ctx == nil || c == nil || count == nil || destination != control { return c }
+ return &nodeCandidateTCPConn{Conn:c, ctx:ctx, count:count}
+}
+func (c *nodeCandidateTCPConn) Read(p []byte)(int,error){
+ n,err:=c.Conn.Read(p)
+ if n>0 { c.bytes.Add(uint64(n)) }
+ if err==io.EOF { c.eof.Store(true) }
+ return n,err
+}
+func (c *nodeCandidateTCPConn) Close()error{
+ err:=c.Conn.Close()
+ c.once.Do(func(){if err==nil && c.ctx.Err()==nil && c.eof.Load() && c.bytes.Load()==0 { c.count.Add(1) }})
+ return err
+}
+func(c *nodeCandidateTCPConn)CloseWrite()error{
+ if closer,ok:=c.Conn.(interface{CloseWrite()error});ok{return closer.CloseWrite()}
+ return errors.New("original candidate TCP owner has no half-close")
+}
+func(c *nodeCandidateTCPConn)CloseRead()error{
+ if closer,ok:=c.Conn.(interface{CloseRead()error});ok{return closer.CloseRead()}
+ return errors.New("original candidate TCP owner has no read half-close")
+}
+type nodeCandidateTCPFaultConn struct{net.Conn;readError,closeError bool}
+func(c *nodeCandidateTCPFaultConn)Read(p []byte)(int,error){if c.readError{return 0,errors.New("owned read failed")};return c.Conn.Read(p)}
+func(c *nodeCandidateTCPFaultConn)Close()error{err:=c.Conn.Close();if c.closeError{return errors.New("owned close failed")};return err}
+func TestRouterVPNConnectedCandidateTCPAccounting(t *testing.T){
+ for _,fault:=range []string{"zero","payload","foreign","duplicate","unclosed","read-error","cancelled","close-error","close-only"}{
+ t.Run(fault,func(t *testing.T){
+  ctx,cancel:=context.WithCancel(t.Context());defer cancel()
+  raw,remote:=net.Pipe();defer raw.Close();defer remote.Close()
+  var counter atomic.Uint64
+  control:=M.ParseSocksaddr("10.79.0.1:1080");destination:=control
+  if fault=="foreign"{destination=M.ParseSocksaddr("10.79.0.2:1080")}
+  original:=&nodeCandidateTCPFaultConn{Conn:raw,readError:fault=="read-error",closeError:fault=="close-error"}
+  observed:=nodeCandidateObserveTCP(ctx,original,destination,control,&counter)
+  sent:=make(chan struct{})
+  go func(){defer close(sent);if fault=="payload"{_,_=remote.Write([]byte("original-authenticated-payload"))};_=remote.Close()}()
+  t.Cleanup(func(){_=observed.Close();_=remote.Close();<-sent})
+  if fault!="close-only"{_,_=io.Copy(io.Discard,observed)}
+  if fault=="cancelled"{cancel()}
+  if fault!="unclosed"{_=observed.Close()}
+  if fault=="duplicate"{_=observed.Close()}
+  expected:=uint64(0);if fault=="zero"||fault=="duplicate"{expected=1}
+  if counter.Load()!=expected{t.Fatal("candidate accounting accepted payload, foreign, failed or unclosed stream")}
+ })}
+}

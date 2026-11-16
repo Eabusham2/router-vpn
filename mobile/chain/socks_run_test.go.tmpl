@@ -41,6 +41,7 @@ import (
 )
 
 type socksRunReply struct {
+ CandidateTCP uint64 `json:"candidate_tcp"`
  Schema int `json:"schema"`
  Source string `json:"source,omitempty"`
  SourceSHA256 string `json:"source_sha256"`

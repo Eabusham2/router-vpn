@@ -44,6 +44,7 @@ type nodeSOCKSRunRequest struct {
  Prefixes int `json:"prefixes,omitempty"`
 }
 type nodeSOCKSRunReply struct {
+ CandidateTCP uint64 `json:"candidate_tcp"`
  Schema int `json:"schema"`
  Source string `json:"source,omitempty"`
  SourceSHA256 string `json:"source_sha256"`
@@ -62,6 +63,7 @@ type nodeSOCKSRunReply struct {
 type nodeSOCKSRunPrefix struct {
  *nodeSOCKSPrefixHandler
  first string
+ candidateTCP atomic.Uint64
 }
 func(h *nodeSOCKSRunPrefix) JudgeFlow(protocol uint8, source,destination netip.AddrPort, packet []byte)tun.FlowVerdict{
  if protocol==6&&destination.String()==h.first{return tun.FlowVerdict{Action:tun.ActionAccept}}
@@ -73,6 +75,7 @@ func(h *nodeSOCKSRunPrefix) NewConnectionEx(ctx context.Context,c net.Conn,sourc
   if _,ok:=h.original.rule("tcp",destination);ok{h.original.tcp.Add(1)}
   h.original.desktopReferenceHandler.newReciprocalConnectionEx(ctx,c,source,destination,done);return
  }
+ c=nodeCandidateObserveTCP(ctx,c,destination,M.ParseSocksaddr(h.control),&h.candidateTCP)
  h.nodeSOCKSPrefixHandler.NewConnectionEx(ctx,c,source,destination,done)
 }
 
@@ -456,7 +459,7 @@ func TestRouterVPNDesktopNodeChainSOCKSRunReference(t *testing.T){
  respond:=func(include bool){
   relays.mu.Lock();associations:=len(relays.all);relays.mu.Unlock()
   peerReply:=peer.snapshot();if complete!=nil{peerReply.Prefixes=complete.snapshot().Prefixes};peerReply.Middle.Method="socks5"
-  reply:=nodeSOCKSRunReply{Schema:1,SourceSHA256:meta.SourceSHA256,ConfigSHA256:meta.ConfigSHA256,Address:physicalAddress,
+  reply:=nodeSOCKSRunReply{CandidateTCP:handler.candidateTCP.Load(),Schema:1,SourceSHA256:meta.SourceSHA256,ConfigSHA256:meta.ConfigSHA256,Address:physicalAddress,
    Peer:peerReply,DNS:selectedQueries.Load(),PublicDNS:publicQueries.Load(),FinalAuth:finalAuth.Load(),HeldProofs:heldProofs.Load(),Associations:associations}
   if prefixCount>1{
    if middleAuth==nil{t.Fatal("original SOCKS authentication observation absent")};reply.MiddleAuth=middleAuth()

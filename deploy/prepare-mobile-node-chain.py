@@ -73,6 +73,9 @@ TEMPLATES = {
     'lifecycle_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_lifecycle_test.go',
     'mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_mtu.go',
     'candidates.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidates.go',
+    'typed_candidates.go.tmpl': 'experimental/libbox/routervpn_node_chain_typed_candidates.go',
+    'typed_candidates_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_typed_candidates_test.go',
+    'typed_candidates_run_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_typed_candidates_run_test.go',
     'candidates_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidates_test.go',
     'measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_measurement.go',
     'measurement_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_measurement_test.go',
@@ -82,6 +85,12 @@ TEMPLATES = {
 def inputs():
     return [*CONNECT_BINDING.inputs(), Path(__file__).resolve(), ROOT/'deploy/test_node_chain_candidate_preparation.py',
             ROOT/'deploy/test_node_chain_candidate_preparation_runner.py',
+            ROOT/'deploy/test_node_chain_typed_connected_candidates.py',
+            ROOT/'deploy/test_node_chain_typed_connected_candidates_runner.py',
+            ROOT/'deploy/typed_connected_candidates_native.py',
+            ROOT/'deploy/test_typed_connected_candidates_native.py',
+            ROOT/'deploy/test_typed_connected_candidates_native_runner.py',
+            ROOT/'.github/workflows/typed-connected-candidates.yml',
             ROOT/'deploy/test_node_chain_openvpn_execution_owner.py',
             ROOT/'deploy/test_node_chain_openvpn_execution_owner_runner.py',
             *sorted((ROOT/'mobile/chain').glob('*.tmpl'))]

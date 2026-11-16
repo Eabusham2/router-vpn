@@ -57,7 +57,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(without + decoy)
 
     def test_duplicate_aggregate_or_imported_family_job_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "unix-reality-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", "ss-prefix-native", *TYPED_NATIVE):
+        for job in ("aggregate", "typed-connected-candidates", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "unix-reality-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", "ss-prefix-native", *TYPED_NATIVE):
             with self.subTest(job=job), self.assertRaisesRegex(AssertionError, "missing or duplicate"):
                 self.check(self.source + "\n  " + job + ":\n    runs-on: ubuntu-24.04\n")
 
@@ -69,7 +69,7 @@ class NativeArtifactAggregate(unittest.TestCase):
                     self.check(self.source.replace(marker, replacement, 1) + "\n# " + marker + "\n")
 
     def test_condition_or_nonblocking_gate_fails(self):
-        for job in ("aggregate", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "unix-reality-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", "ss-prefix-native", *TYPED_NATIVE):
+        for job in ("aggregate", "typed-connected-candidates", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "unix-reality-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "native-runtimes", "server-ordered-encrypted", "openvpn-prefix-native", "ss-prefix-native", *TYPED_NATIVE):
             for bypass in ("    if: ${{ false }}\n", "    if: ${{ always() }}\n", "    continue-on-error: true\n"):
                 with self.subTest(job=job, bypass=bypass):
                     with self.assertRaisesRegex(AssertionError, "conditional or nonblocking"):

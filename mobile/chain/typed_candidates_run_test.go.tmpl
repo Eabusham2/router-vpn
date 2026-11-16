@@ -1,0 +1,366 @@
+//go:build linux && !android
+
+package libbox
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The complete original Run proves the real encrypted packet devices, imported
+// middle, final selected DNS and private/public identities before the chooser
+// is opened. Candidate scores are fifty TCP handshakes only, not authentication
+// or proof of the prospective replacement. TUN/first physical mapping retain
+// the existing explicit fixture boundary.
+
+func TestRouterNodeChainSOCKSConnectedCandidateEncrypted(t *testing.T) {
+	chosen := os.Getenv("ROUTERVPN_SOCKS_CONNECTED_CANDIDATE")
+	if chosen == "" {
+		t.Skip("original separately compiled encrypted peer required")
+	}
+	count, err := strconv.Atoi(chosen)
+	if err != nil || strconv.Itoa(count) != chosen {
+		t.Fatal("foreign connected candidate count")
+	}
+
+	if count != 3 && count != 4 && count != 8 {
+		t.Fatal("foreign connected candidate inventory")
+	}
+	t.Run(strings.ReplaceAll(chosen, "/", "-"), func(t *testing.T) {
+		peer := socksRunStartPeerPrefixes(t, "wg", "", count-2)
+		f, _ := socksRunNative(t, peer)
+		if err := f.owner.Run(f.server); err != nil {
+			t.Fatal("original connected candidate encrypted proof", err)
+		}
+		state := f.owner.state.Load()
+		engine := state.engine.Load()
+		var progress mobilemultihop.NodeChainProgress
+		if !f.owner.Healthy() || json.Unmarshal([]byte(f.owner.ProgressJSON()), &progress) != nil || !progress.Ready || !progress.Complete || !progress.DNSProven || !progress.PublicProven || len(progress.Prefixes) != count {
+			t.Fatal("connected candidate requires complete original proof")
+		}
+		var source mobilemultihop.NodeChainSource
+		raw, err := f.owner.source.Source()
+		if err != nil || json.Unmarshal([]byte(raw), &source) != nil || len(source.Nodes) != count {
+			t.Fatal("original full typed source absent", err)
+		}
+		inventory := candidateBridgeJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-connected-catalog", Inputs: []string{source.Nodes[count-2]}})
+		sum := sha256.Sum256([]byte(inventory))
+		catalog := &candidateBridgeCatalog{digest: hex.EncodeToString(sum[:])}
+		// Test pointer-copy refusal without copying mutex/atomic fields.
+		copiedOwner := &RouterNodeChainSOCKS{self: f.owner, source: f.owner.source}
+		if _, err := RouterNodeChainSOCKSNewCandidateMeasurement(copiedOwner, f.server, int32(count-3), inventory, catalog); err == nil {
+			t.Fatal("copied native owner acquired connected candidate")
+		}
+		if _, err := RouterNodeChainSOCKSNewCandidateMeasurement(f.owner, &CommandServer{}, int32(count-3), inventory, catalog); err == nil {
+			t.Fatal("foreign native server acquired connected candidate")
+		}
+		if _, err := RouterNodeChainSOCKSNewCandidateMeasurement(f.owner, f.server, int32(count-2), inventory, catalog); err == nil {
+			t.Fatal("imported suffix became a packet candidate prefix")
+		}
+		candidate, err := RouterNodeChainSOCKSNewCandidateMeasurement(f.owner, f.server, int32(count-3), inventory, catalog)
+		if err != nil {
+			t.Fatal("original typed connected candidate", err)
+		}
+		if candidate.service.Load() != nil || catalog.calls.Load() != 0 {
+			t.Fatal("constructor performed work before returning reservation")
+		}
+		if second, err := RouterNodeChainSOCKSNewCandidateMeasurement(f.owner, f.server, int32(count-3), inventory, catalog); err == nil || second != nil || f.owner.candidate.Load() != candidate || candidate.retired.Load() {
+			t.Fatal("duplicate constructor displaced original reservation")
+		}
+		if err := candidate.Prepare(); err != nil {
+			t.Fatal("original retained candidate preparation", err)
+		}
+		if err := candidate.Prepare(); err == nil {
+			t.Fatal("prepared reservation was repeated")
+		}
+		_, originalMetadata, err := f.owner.source.ReadValidated()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var metadata struct {
+			Source  string `json:"source_sha256"`
+			Targets []struct {
+				ID string `json:"id"`
+			} `json:"targets"`
+		}
+		if json.Unmarshal([]byte(candidate.Metadata()), &metadata) != nil || len(metadata.Targets) != 1 || metadata.Source != originalMetadata.SourceSHA256 {
+			t.Fatal("candidate lost complete typed source identity")
+		}
+		copied := &RouterNodeChainSOCKSCandidateMeasurement{self: candidate, owner: f.owner}
+		copied.service.Store(candidate.service.Load())
+		if err := copied.Start(strings.Repeat("f", 32), metadata.Targets[0].ID); err == nil {
+			t.Fatal("copied connected candidate handle started traffic")
+		}
+		release, err := f.owner.BeginMeasurementContext(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := candidate.Start(strings.Repeat("e", 32), metadata.Targets[0].ID); err == nil {
+			release()
+			t.Fatal("connected candidate bypassed original MTU/measurement exclusion")
+		}
+		release()
+		beforeObservation := peer.observe(t)
+		before := socksRunCounters(t, beforeObservation)
+		rows, ok := before["prefixes"].([]any)
+		if !ok || len(rows) != count-2 {
+			t.Fatal("original encrypted prefix counters absent")
+		}
+
+		request := fmt.Sprintf("%032x", count)
+		if err := candidate.Start(request, metadata.Targets[0].ID); err != nil {
+			t.Fatal("actual connected candidate fifty start", err)
+		}
+		deadline := time.Now().Add(hopmeasure.RequestTimeout + hopmeasure.ObservationTimeout)
+		var status hopmeasure.CandidateStatus
+		for time.Now().Before(deadline) {
+			if json.Unmarshal([]byte(candidate.StatusJSON()), &status) != nil {
+				t.Fatal("connected candidate status absent")
+			}
+			if status.Complete {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err := candidate.Drain(request); err != nil {
+			t.Fatal("connected candidate fifty did not join", err)
+		}
+		if json.Unmarshal([]byte(candidate.StatusJSON()), &status) != nil || !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil || status.Results[0].Benchmark.Attempts != 50 || status.Results[0].Benchmark.Failed != 0 || status.Results[0].Benchmark.Distribution == nil || status.Results[0].Benchmark.Distribution.Samples != 50 {
+			t.Fatal("actual connected candidate fifty receipt absent")
+		}
+		// Client drain precedes the remote reader/close; wait only within the
+		// existing observation bound for the actual peer's owned EOF receipt.
+		observed := peer.observe(t)
+		joinedBy := time.Now().Add(hopmeasure.ObservationTimeout)
+		for observed.CandidateTCP >= beforeObservation.CandidateTCP && observed.CandidateTCP-beforeObservation.CandidateTCP < 50 && time.Now().Before(joinedBy) {
+			time.Sleep(time.Millisecond)
+			observed = peer.observe(t)
+		}
+		if observed.CandidateTCP < beforeObservation.CandidateTCP || observed.CandidateTCP-beforeObservation.CandidateTCP != 50 {
+			t.Fatalf("candidate fifty bypassed original encrypted packet prefix: zero-payload-owned-close=%d/%d", beforeObservation.CandidateTCP, observed.CandidateTCP)
+		}
+		if f.owner.state.Load() != state || state.engine.Load() != engine || !f.owner.Healthy() || typedSOCKSCandidateMeasuring(f.owner) {
+			t.Fatal("candidate replaced original typed engine or retained measurement lease")
+		}
+		current, err := f.owner.source.Source()
+		if err != nil || current != raw {
+			t.Fatal("candidate replaced complete saved typed source")
+		}
+		catalog.mu.Lock()
+		catalog.digest = strings.Repeat("0", 64)
+		catalog.mu.Unlock()
+		if err := candidate.Start(strings.Repeat("d", 32), metadata.Targets[0].ID); err == nil {
+			t.Fatal("changed live catalog admitted candidate")
+		}
+		if err := candidate.Close(); err != nil {
+			t.Fatal("original candidate close", err)
+		}
+		if f.owner.candidate.Load() != nil || typedSOCKSCandidateMeasuring(f.owner) {
+			t.Fatal("joined candidate retained original activity")
+		}
+		catalog.mu.Lock()
+		catalog.digest = hex.EncodeToString(sum[:])
+		catalog.mu.Unlock()
+		replacement, err := RouterNodeChainSOCKSNewCandidateMeasurement(f.owner, f.server, int32(count-3), inventory, catalog)
+		if err != nil {
+			t.Fatal("same-inventory replacement reservation", err)
+		}
+		if err := candidate.Close(); err == nil || f.owner.candidate.Load() != replacement || replacement.retired.Load() {
+			t.Fatal("stale handle acknowledged same-inventory replacement cleanup")
+		}
+		if err := replacement.Close(); err != nil {
+			t.Fatal("unprepared replacement cleanup", err)
+		}
+		if err := replacement.Prepare(); err == nil {
+			t.Fatal("closed reservation was prepared")
+		}
+		socksRunCloseNative(t, f)
+		if err := peer.close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestRouterNodeChainCONNECTConnectedCandidateEncrypted(t *testing.T) {
+	chosen := os.Getenv("ROUTERVPN_CONNECT_CONNECTED_CANDIDATE")
+	if chosen == "" {
+		t.Skip("original separately compiled encrypted peer required")
+	}
+	parts := strings.Split(chosen, "/")
+	if len(parts) != 2 || (parts[0] != "http-connect" && parts[0] != "https-connect") {
+		t.Fatal("foreign connected candidate family")
+	}
+	protocol := parts[0]
+	count, err := strconv.Atoi(parts[1])
+	if err != nil || strconv.Itoa(count) != parts[1] {
+		t.Fatal("foreign connected candidate count")
+	}
+
+	if count != 3 && count != 4 && count != 8 {
+		t.Fatal("foreign connected candidate inventory")
+	}
+	t.Run(strings.ReplaceAll(chosen, "/", "-"), func(t *testing.T) {
+		peer := connectRunStartPeerPrefixes(t, "wg", protocol, "", count-2)
+		f, _ := connectRunNative(t, peer)
+		if err := f.owner.Run(f.server); err != nil {
+			t.Fatal("original connected candidate encrypted proof", err)
+		}
+		state := f.owner.state.Load()
+		engine := state.engine.Load()
+		var progress mobilemultihop.NodeChainProgress
+		if !f.owner.Healthy() || json.Unmarshal([]byte(f.owner.ProgressJSON()), &progress) != nil || !progress.Ready || !progress.Complete || !progress.DNSProven || !progress.PublicProven || len(progress.Prefixes) != count {
+			t.Fatal("connected candidate requires complete original proof")
+		}
+		var source mobilemultihop.NodeChainSource
+		raw, err := f.owner.source.Source()
+		if err != nil || json.Unmarshal([]byte(raw), &source) != nil || len(source.Nodes) != count {
+			t.Fatal("original full typed source absent", err)
+		}
+		inventory := candidateBridgeJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-connected-catalog", Inputs: []string{source.Nodes[count-2]}})
+		sum := sha256.Sum256([]byte(inventory))
+		catalog := &candidateBridgeCatalog{digest: hex.EncodeToString(sum[:])}
+		// Test pointer-copy refusal without copying mutex/atomic fields.
+		copiedOwner := &RouterNodeChainCONNECT{self: f.owner, source: f.owner.source}
+		if _, err := RouterNodeChainCONNECTNewCandidateMeasurement(copiedOwner, f.server, int32(count-3), inventory, catalog); err == nil {
+			t.Fatal("copied native owner acquired connected candidate")
+		}
+		if _, err := RouterNodeChainCONNECTNewCandidateMeasurement(f.owner, &CommandServer{}, int32(count-3), inventory, catalog); err == nil {
+			t.Fatal("foreign native server acquired connected candidate")
+		}
+		if _, err := RouterNodeChainCONNECTNewCandidateMeasurement(f.owner, f.server, int32(count-2), inventory, catalog); err == nil {
+			t.Fatal("imported suffix became a packet candidate prefix")
+		}
+		candidate, err := RouterNodeChainCONNECTNewCandidateMeasurement(f.owner, f.server, int32(count-3), inventory, catalog)
+		if err != nil {
+			t.Fatal("original typed connected candidate", err)
+		}
+		if candidate.service.Load() != nil || catalog.calls.Load() != 0 {
+			t.Fatal("constructor performed work before returning reservation")
+		}
+		if second, err := RouterNodeChainCONNECTNewCandidateMeasurement(f.owner, f.server, int32(count-3), inventory, catalog); err == nil || second != nil || f.owner.candidate.Load() != candidate || candidate.retired.Load() {
+			t.Fatal("duplicate constructor displaced original reservation")
+		}
+		if err := candidate.Prepare(); err != nil {
+			t.Fatal("original retained candidate preparation", err)
+		}
+		if err := candidate.Prepare(); err == nil {
+			t.Fatal("prepared reservation was repeated")
+		}
+		_, originalMetadata, err := f.owner.source.ReadValidated()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var metadata struct {
+			Source  string `json:"source_sha256"`
+			Targets []struct {
+				ID string `json:"id"`
+			} `json:"targets"`
+		}
+		if json.Unmarshal([]byte(candidate.Metadata()), &metadata) != nil || len(metadata.Targets) != 1 || metadata.Source != originalMetadata.SourceSHA256 {
+			t.Fatal("candidate lost complete typed source identity")
+		}
+		copied := &RouterNodeChainCONNECTCandidateMeasurement{self: candidate, owner: f.owner}
+		copied.service.Store(candidate.service.Load())
+		if err := copied.Start(strings.Repeat("f", 32), metadata.Targets[0].ID); err == nil {
+			t.Fatal("copied connected candidate handle started traffic")
+		}
+		release, err := f.owner.BeginMeasurementContext(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := candidate.Start(strings.Repeat("e", 32), metadata.Targets[0].ID); err == nil {
+			release()
+			t.Fatal("connected candidate bypassed original MTU/measurement exclusion")
+		}
+		release()
+		beforeObservation := peer.observe(t)
+		before := connectRunCounters(t, beforeObservation)
+		rows, ok := before["prefixes"].([]any)
+		if !ok || len(rows) != count-2 {
+			t.Fatal("original encrypted prefix counters absent")
+		}
+
+		request := fmt.Sprintf("%032x", count)
+		if err := candidate.Start(request, metadata.Targets[0].ID); err != nil {
+			t.Fatal("actual connected candidate fifty start", err)
+		}
+		deadline := time.Now().Add(hopmeasure.RequestTimeout + hopmeasure.ObservationTimeout)
+		var status hopmeasure.CandidateStatus
+		for time.Now().Before(deadline) {
+			if json.Unmarshal([]byte(candidate.StatusJSON()), &status) != nil {
+				t.Fatal("connected candidate status absent")
+			}
+			if status.Complete {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err := candidate.Drain(request); err != nil {
+			t.Fatal("connected candidate fifty did not join", err)
+		}
+		if json.Unmarshal([]byte(candidate.StatusJSON()), &status) != nil || !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil || status.Results[0].Benchmark.Attempts != 50 || status.Results[0].Benchmark.Failed != 0 || status.Results[0].Benchmark.Distribution == nil || status.Results[0].Benchmark.Distribution.Samples != 50 {
+			t.Fatal("actual connected candidate fifty receipt absent")
+		}
+		// Client drain precedes the remote reader/close; wait only within the
+		// existing observation bound for the actual peer's owned EOF receipt.
+		observed := peer.observe(t)
+		joinedBy := time.Now().Add(hopmeasure.ObservationTimeout)
+		for observed.CandidateTCP >= beforeObservation.CandidateTCP && observed.CandidateTCP-beforeObservation.CandidateTCP < 50 && time.Now().Before(joinedBy) {
+			time.Sleep(time.Millisecond)
+			observed = peer.observe(t)
+		}
+		if observed.CandidateTCP < beforeObservation.CandidateTCP || observed.CandidateTCP-beforeObservation.CandidateTCP != 50 {
+			t.Fatalf("candidate fifty bypassed original encrypted packet prefix: zero-payload-owned-close=%d/%d", beforeObservation.CandidateTCP, observed.CandidateTCP)
+		}
+		if f.owner.state.Load() != state || state.engine.Load() != engine || !f.owner.Healthy() || typedCONNECTCandidateMeasuring(f.owner) {
+			t.Fatal("candidate replaced original typed engine or retained measurement lease")
+		}
+		current, err := f.owner.source.Source()
+		if err != nil || current != raw {
+			t.Fatal("candidate replaced complete saved typed source")
+		}
+		catalog.mu.Lock()
+		catalog.digest = strings.Repeat("0", 64)
+		catalog.mu.Unlock()
+		if err := candidate.Start(strings.Repeat("d", 32), metadata.Targets[0].ID); err == nil {
+			t.Fatal("changed live catalog admitted candidate")
+		}
+		if err := candidate.Close(); err != nil {
+			t.Fatal("original candidate close", err)
+		}
+		if f.owner.candidate.Load() != nil || typedCONNECTCandidateMeasuring(f.owner) {
+			t.Fatal("joined candidate retained original activity")
+		}
+		catalog.mu.Lock()
+		catalog.digest = hex.EncodeToString(sum[:])
+		catalog.mu.Unlock()
+		replacement, err := RouterNodeChainCONNECTNewCandidateMeasurement(f.owner, f.server, int32(count-3), inventory, catalog)
+		if err != nil {
+			t.Fatal("same-inventory replacement reservation", err)
+		}
+		if err := candidate.Close(); err == nil || f.owner.candidate.Load() != replacement || replacement.retired.Load() {
+			t.Fatal("stale handle acknowledged same-inventory replacement cleanup")
+		}
+		if err := replacement.Close(); err != nil {
+			t.Fatal("unprepared replacement cleanup", err)
+		}
+		if err := replacement.Prepare(); err == nil {
+			t.Fatal("closed reservation was prepared")
+		}
+		connectRunCloseNative(t, f)
+		if err := peer.close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

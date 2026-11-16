@@ -44,7 +44,7 @@ def check_release_aggregate_gates(source: str) -> None:
     assert len(needs) == 1 and needs[0].startswith("    needs: [") and needs[0].endswith("]"), (
         "native release aggregate lost its explicit required dependencies")
     values = [value.strip() for value in needs[0][len("    needs: ["):-1].split(",")]
-    required = {"source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
+    required = {"typed-connected-candidates", "source-audit", "paired-openvpn", "generic-builds", "windows-native-smoke",
                 "windows-complete-max", "windows-all-controller", "android", "ios", "macos",
                 "linux", "imported-pq-reality", "imported-xhttp", "imported-naive-h2", "imported-naive-h3", "darwin-ordered-child", "darwin-ordered-host", "unix-naive-h2-host", "unix-reality-host", "linux-connect-execution-host", "linux-socks-execution-host", "linux-imported-execution-host", "linux-connect-prefix-execution-host", "linux-socks-prefix-execution-host", "windows-connect-execution-host", "darwin-prefix-host", "server-ordered-encrypted",
                 "openvpn-prefix-native", "ss-prefix-native", "typed-socks-native", "typed-connect-runtime", "typed-connect-source", "typed-connect-native", "typed-connect-native-mtu", "desktop-connect-child"}
@@ -159,6 +159,12 @@ def check_release_aggregate_gates(source: str) -> None:
     runtimes = job("native-runtimes")
     assert "    uses: ./.github/workflows/desktop-native-runtime.yml" in runtimes and "      platform: all" in runtimes, (
         "native ordered Darwin host lost its complete current-run runtime producer")
+    connected_candidates = job("typed-connected-candidates")
+    assert [line for line in connected_candidates if line.startswith("    uses:")] == [
+        "    uses: ./.github/workflows/typed-connected-candidates.yml"], (
+        "native release lost its actual encrypted connected candidate workflow")
+    assert not any(line.startswith("    with:") for line in connected_candidates), (
+        "connected candidates must retain their no-input same-SHA workflow")
     focused = []
     for name, suite in (("typed-socks-native", "socks-run"),
                         ("typed-connect-runtime", "connect-runtime"),
@@ -188,7 +194,7 @@ def check_release_aggregate_gates(source: str) -> None:
                         ("windows-connect-execution-host", windows_connect),
                         ("darwin-prefix-host", darwin_prefix),
                         ("native-runtimes", runtimes), ("server-ordered-encrypted", server_encrypted),
-                        ("openvpn-prefix-native", openvpn_prefix), ("ss-prefix-native", ss_prefix), *focused):
+                        ("typed-connected-candidates", connected_candidates), ("openvpn-prefix-native", openvpn_prefix), ("ss-prefix-native", ss_prefix), *focused):
         assert not any(line.startswith(("    if:", "    continue-on-error:")) for line in lines), (
             f"native release {name} gate became conditional or nonblocking")
 
@@ -790,6 +796,10 @@ for request, spec in policy.DIRECT_ARTIFACTS.items():
 
 # Keep the one-SHA aggregate exhaustive rather than silently dropping a platform.
 check_release_aggregate_gates(rc)
+_connected_spec = importlib.util.spec_from_file_location("typed_connected_encrypted_workflow", ROOT/"deploy/typed_connected_candidates_native.py")
+_connected_gate = importlib.util.module_from_spec(_connected_spec)
+_connected_spec.loader.exec_module(_connected_gate)
+_connected_gate.workflow_contract((ROOT/".github/workflows/typed-connected-candidates.yml").read_text(), rc)
 check_focused_native_release_workflow(read(".github/workflows/focused-source-validation.yml"))
 check_server_encrypted_workflow(read(".github/workflows/server-node-chain-encrypted.yml"))
 check_paired_ss_execution_host_workflow(read(".github/workflows/darwin-node-host-tun.yml"), rc, read("deploy/build-native-runtime.py"))

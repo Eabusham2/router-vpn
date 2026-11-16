@@ -12,6 +12,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  typed-connected-candidates:
+    name: Original typed connected candidate encrypted ownership
+    uses: ./.github/workflows/typed-connected-candidates.yml
+
   ss-prefix-native:
     name: Original encrypted SS2022 prefix paths and retained source
     uses: ./.github/workflows/ss-node-chain-prefix.yml
@@ -781,7 +785,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [unix-reality-host, unix-naive-h2-host, source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, linux-connect-execution-host, linux-socks-execution-host, linux-imported-execution-host, linux-connect-prefix-execution-host, linux-socks-prefix-execution-host, windows-connect-execution-host, darwin-prefix-host, server-ordered-encrypted, openvpn-prefix-native, typed-socks-native, typed-connect-runtime, typed-connect-source, typed-connect-native, typed-connect-native-mtu, desktop-connect-child, ss-prefix-native]
+    needs: [typed-connected-candidates, unix-reality-host, unix-naive-h2-host, source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, windows-all-controller, android, ios, macos, linux, imported-pq-reality, imported-xhttp, imported-naive-h2, imported-naive-h3, darwin-ordered-child, darwin-ordered-host, linux-connect-execution-host, linux-socks-execution-host, linux-imported-execution-host, linux-connect-prefix-execution-host, linux-socks-prefix-execution-host, windows-connect-execution-host, darwin-prefix-host, server-ordered-encrypted, openvpn-prefix-native, typed-socks-native, typed-connect-runtime, typed-connect-source, typed-connect-native, typed-connect-native-mtu, desktop-connect-child, ss-prefix-native]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

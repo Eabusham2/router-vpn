@@ -49,6 +49,7 @@ type nodeCONNECTRunRequest struct {
 	Fault    string `json:"fault"`
 }
 type nodeCONNECTRunReply struct {
+	CandidateTCP uint64 `json:"candidate_tcp"`
 	Samples      []uint64                      `json:"samples"`
 	Schema       int                           `json:"schema"`
 	Source       string                        `json:"source,omitempty"`
@@ -80,6 +81,7 @@ type nodeCONNECTRunMiddleRouter struct{ server *desktopNodeLayerServer }
 type nodeCONNECTRunPacketHandler struct {
 	*desktopNodeWGHandler
 	control M.Socksaddr
+	candidateTCP atomic.Uint64
 }
 
 func (h *nodeCONNECTRunPacketHandler) NewConnectionEx(ctx context.Context, c net.Conn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
@@ -90,6 +92,7 @@ func (h *nodeCONNECTRunPacketHandler) NewConnectionEx(ctx context.Context, c net
 	if _, ok := h.rule("tcp", destination); ok {
 		h.tcp.Add(1)
 	}
+	c = nodeCandidateObserveTCP(ctx, c, destination, h.control, &h.candidateTCP)
 	h.desktopReferenceHandler.newReciprocalConnectionEx(ctx, c, source, destination, done)
 }
 
@@ -228,10 +231,12 @@ func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
 	const control = "10.79.0.1:1080"
 	const password = "captured-connect-run-password"
 	certificate, proxyCA := desktopNodeChainImportedCertificate(t)
+	var packetHandler *nodeCONNECTRunPacketHandler
 	var provider *desktopImportedCONNECTPeer
 	hooks := &desktopNodeChainImportedPeerHooks{
 		decorate: func(original *desktopNodeWGHandler) tun.Handler {
-			return &nodeCONNECTRunPacketHandler{desktopNodeWGHandler: original, control: M.ParseSocksaddr(control)}
+			packetHandler = &nodeCONNECTRunPacketHandler{desktopNodeWGHandler: original, control: M.ParseSocksaddr(control)}
+			return packetHandler
 		},
 		middle: func(middle *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
 			middle.streamRouter = &nodeCONNECTRunMiddleRouter{server: middle}
@@ -526,7 +531,7 @@ func TestRouterVPNDesktopNodeChainCONNECTRunReference(t *testing.T) {
 			peerReply.Prefixes = complete.snapshot().Prefixes
 		}
 		peerReply.Middle.Method = input.Protocol
-		reply := nodeCONNECTRunReply{Schema: 1, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Address: physicalAddress,
+		reply := nodeCONNECTRunReply{CandidateTCP: packetHandler.candidateTCP.Load(), Schema: 1, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Address: physicalAddress,
 			Peer: peerReply, DNS: selectedQueries.Load(), PublicDNS: publicQueries.Load(), FinalAuth: finalAuth.Load(), HeldProofs: heldProofs.Load(), Associations: associations, MiddleAuth: provider.auth.Load(), TLSRefused: provider.tlsRefused.Load()}
 		reply.Samples = make([]uint64, prefixCount+2)
 		for i := 0; i < prefixCount-1; i++ {

@@ -259,6 +259,13 @@ def execute(core, go):
                 raise ValueError('native prefix source changed during control')
             print('PASS native prefix causal control:', label, flush=True)
 
+    # Separate connected purpose: original 900-second/69-record baseline and
+    # all fourteen controls above remain mandatory and unchanged.
+    spec = importlib.util.spec_from_file_location('typed_connected_native_gate', ROOT/'deploy/test_node_chain_typed_connected_candidates.py')
+    connected = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(connected)
+    connected.execute(core, go)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)

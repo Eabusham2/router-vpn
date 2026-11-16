@@ -41,6 +41,7 @@ import (
 )
 
 type connectRunReply struct {
+ CandidateTCP uint64 `json:"candidate_tcp"`
 	Samples      []uint64        `json:"samples"`
 	Schema       int             `json:"schema"`
 	Source       string          `json:"source,omitempty"`
