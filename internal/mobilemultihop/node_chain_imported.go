@@ -19,6 +19,8 @@ type nodeChainImportedMember struct {
 	input, source, seal string
 	selection           externalPolicyCapture
 	policy              *ExternalPolicy
+	policyOwner         *ExternalPolicy
+	policySeal          string
 	hostname            *nodeChainImportedHostname
 }
 
@@ -95,8 +97,15 @@ func parseNodeChainImportedMember(input string) (*nodeChainImportedMember, error
 	if err != nil || addr.Zone() != "" || addr.Is4In6() || addr.IsUnspecified() || addr.IsMulticast() {
 		return nil, bad
 	}
+	// Traverse the complete policy before retaining its immutable construction
+	// identity. Every observation below recomputes that same complete seal; it
+	// does not need to parse the identical graph again for every network read.
+	if _, err := policy.DesktopCapture(); err != nil {
+		return nil, err
+	}
 	digest, _ := json.Marshal([]string{"routervpn-node-chain-imported-member-v1", input})
-	result := &nodeChainImportedMember{input: input, source: externalDigest(digest), selection: selected, policy: policy}
+	result := &nodeChainImportedMember{input: input, source: externalDigest(digest), selection: selected, policy: policy,
+		policyOwner: policy, policySeal: policy.desktopSeal}
 	result.seal = result.digest()
 	if result.validate() != nil {
 		return nil, bad
@@ -115,7 +124,7 @@ func (m *nodeChainImportedMember) digest() string {
 	if m.policy == nil {
 		return ""
 	}
-	raw, _ := json.Marshal([]any{m.input, m.source, m.selection, m.policy.Config(), m.policy.Metadata()})
+	raw, _ := json.Marshal([]any{m.input, m.source, m.selection, m.policy.Config(), m.policy.Metadata(), m.policySeal})
 	return externalDigest(raw)
 }
 func (m *nodeChainImportedMember) validate() error {
@@ -123,16 +132,19 @@ func (m *nodeChainImportedMember) validate() error {
 		return nodeChainError
 	}
 	if m.hostname != nil {
-		if m.policy != nil || m.hostname.Config == "" {
+		if m.policy != nil || m.policyOwner != nil || m.policySeal != "" || m.hostname.Config == "" {
 			return nodeChainError
 		}
 		return nil
 	}
-	if m.policy == nil {
+	if m.policy == nil || m.policyOwner != m.policy || m.policySeal == "" || m.policy.desktopSeal != m.policySeal {
 		return nodeChainError
 	}
-	_, err := m.policy.DesktopCapture()
-	return err
+	seal, _, err := m.policy.desktopCaptureSeal()
+	if err != nil || seal != m.policySeal {
+		return nodeChainError
+	}
+	return nil
 }
 func (m *nodeChainImportedMember) closure() (*externalPredecessor, error) {
 	if m.validate() != nil {
