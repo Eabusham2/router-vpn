@@ -1,0 +1,164 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"reflect"
+	"slices"
+	"sync"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	nativeOVPN "github.com/sagernet/sing-box/protocol/openvpn"
+)
+
+// The original Server Box owns this endpoint and its first authenticated
+// packet-device receipt. A fresh proof cannot adopt a replacement endpoint,
+// reconnect, capacity or source. Configuration alone never proves readiness.
+type routerVPNServerChainOpenVPN struct {
+	original *routerVPNServerChainOpenVPN
+	server   *routerVPNServerChain
+	policy   *mobilemultihop.NodeChainServerPolicy
+	instance *box.Box
+	config   string
+	capture  mobilemultihop.NodeChainOpenVPNServerCapture
+	endpoint *nativeOVPN.ClientEndpoint
+	mu       sync.Mutex
+	state    *nativeopenvpn.PacketObservation
+}
+
+var errRouterVPNServerChainOpenVPN = errors.New("ordered Server OpenVPN lost its original connected packet owner")
+
+func newRouterVPNServerChainOpenVPN(ctx context.Context, n *routerVPNServerChain, config string) (*routerVPNServerChainOpenVPN, error) {
+	if ctx == nil || ctx.Err() != nil || n == nil || n.ctx == nil || n.ctx.Err() != nil ||
+		n.capture.Source.Schema != 5 || n.policy == nil || n.box == nil || n.openVPN != nil {
+		return nil, errRouterVPNServerChainOpenVPN
+	}
+	sealed, capture, err := n.policy.ReadOpenVPNServerCapture(n.capture)
+	digest := sha256.Sum256([]byte(sealed))
+	if err != nil || sealed == "" || sealed != config || hex.EncodeToString(digest[:]) != n.binding.ConfigSHA256 ||
+		capture.Binding != n.binding || capture.Middle.Tag == "" || capture.Middle.SourceSHA256 == "" ||
+		capture.Middle.ConfiguredMTU < 1280 || capture.Middle.ConfiguredMTU > 65535 ||
+		!reflect.DeepEqual(capture.Proofs, n.policy.ProofInventory()) || len(capture.Proofs) < 2 {
+		return nil, errors.Join(errRouterVPNServerChainOpenVPN, err)
+	}
+	middle := capture.Proofs[len(capture.Proofs)-2]
+	if middle.Tag != capture.Middle.Tag || middle.SourceSHA256 != capture.Middle.SourceSHA256 ||
+		middle.Mode != "openvpn" || middle.NodeKind != "external" || middle.Kind != "public-path" ||
+		capture.Device.Position != middle.Position || capture.Device.ProfileID != middle.ProfileID {
+		return nil, errRouterVPNServerChainOpenVPN
+	}
+	actual, found, err := adapter.RouterVPNOutboundContext(ctx, n.box.Outbound(), capture.Middle.Tag)
+	endpoint, native := actual.(*nativeOVPN.ClientEndpoint)
+	if err != nil || !found || !native || endpoint == nil || n.outputs[capture.Middle.Tag] != actual ||
+		ctx.Err() != nil || n.ctx.Err() != nil {
+		return nil, errors.Join(errRouterVPNServerChainOpenVPN, err)
+	}
+	r := &routerVPNServerChainOpenVPN{server: n, policy: n.policy, instance: n.box, config: sealed, capture: capture, endpoint: endpoint}
+	r.original = r
+	r.capture.Proofs = slices.Clone(capture.Proofs)
+	return r, nil
+}
+
+func (r *routerVPNServerChainOpenVPN) current(ctx context.Context, n *routerVPNServerChain) error {
+	if r == nil || r.original != r || n == nil || r.server != n || n.openVPN != r ||
+		ctx == nil || ctx.Err() != nil || n.ctx == nil || n.ctx.Err() != nil ||
+		n.capture.Source.Schema != 5 || n.policy != r.policy || n.box != r.instance || r.instance == nil ||
+		r.endpoint == nil || n.outputs[r.capture.Middle.Tag] != r.endpoint || n.binding != r.capture.Binding {
+		return errRouterVPNServerChainOpenVPN
+	}
+	config, capture, err := r.policy.ReadOpenVPNServerCapture(n.capture)
+	if err != nil || config != r.config || !reflect.DeepEqual(capture, r.capture) {
+		return errors.Join(errRouterVPNServerChainOpenVPN, err)
+	}
+	actual, found, err := adapter.RouterVPNOutboundContext(ctx, r.instance.Outbound(), r.capture.Middle.Tag)
+	if err != nil || !found || actual != r.endpoint || ctx.Err() != nil || n.ctx.Err() != nil {
+		return errors.Join(errRouterVPNServerChainOpenVPN, err)
+	}
+	return nil
+}
+
+func (r *routerVPNServerChainOpenVPN) observe(ctx context.Context, n *routerVPNServerChain, initial bool) (nativeopenvpn.PacketObservation, error) {
+	empty := nativeopenvpn.PacketObservation{}
+	if err := r.current(ctx, n); err != nil {
+		return empty, err
+	}
+	remote, capacity, err := r.endpoint.RouterVPNConnectedCapacityContext(ctx)
+	if err != nil {
+		return empty, err
+	}
+	if err := r.current(ctx, n); err != nil {
+		return empty, err
+	}
+	state := nativeopenvpn.PacketObservation{Remote: remote, MTU: capacity}
+	if err := r.pin(ctx, state, initial); err != nil {
+		return empty, err
+	}
+	if err := r.current(ctx, n); err != nil {
+		return empty, err
+	}
+	return state, ctx.Err()
+}
+
+// Only observe supplies a native receipt. This method does not read or infer
+// native readiness; it retains the first validated value without replacement.
+func (r *routerVPNServerChainOpenVPN) pin(ctx context.Context, state nativeopenvpn.PacketObservation, initial bool) error {
+	if r == nil || ctx == nil {
+		return errRouterVPNServerChainOpenVPN
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if state.Validate() != nil || state.Remote.Remote != r.capture.Middle.Remote || state.MTU < uint32(r.capture.Middle.ConfiguredMTU) {
+		return errRouterVPNServerChainOpenVPN
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &r.mu); err != nil {
+		return err
+	}
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r.state == nil && initial {
+		original := state
+		r.state = &original
+	}
+	if r.state == nil || *r.state != state {
+		return errRouterVPNServerChainOpenVPN
+	}
+	return ctx.Err()
+}
+
+func (r *routerVPNServerChainOpenVPN) await(ctx context.Context, n *routerVPNServerChain) error {
+	for {
+		_, err := r.observe(ctx, n, true)
+		if !errors.Is(err, nativeopenvpn.ErrRemotePending) {
+			return err
+		}
+		timer := time.NewTimer(40 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (n *routerVPNServerChain) OpenVPNMiddleStateContext(ctx context.Context, tag string) (nativeopenvpn.PacketObservation, error) {
+	if n == nil || n.openVPN == nil || tag != n.openVPN.capture.Middle.Tag {
+		return nativeopenvpn.PacketObservation{}, errRouterVPNServerChainOpenVPN
+	}
+	state, err := n.openVPN.observe(ctx, n, false)
+	if err != nil {
+		n.cancel()
+	}
+	return state, err
+}
+
+var _ mobilemultihop.NodeChainOpenVPNEngine = (*routerVPNServerChain)(nil)

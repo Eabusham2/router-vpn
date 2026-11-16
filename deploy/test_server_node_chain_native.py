@@ -29,7 +29,8 @@ ROOTS=('TestServerChainFrontPendingCannotForward','TestServerChainFrontOriginalC
  'TestServerChainDNSOwnersRetainEveryNativeTransport','TestServerChainDNSOwnersRejectForeignCapture',
  'TestServerChainDNSOwnersRequireCompleteConfiguration','TestServerChainDNSOwnersKeepCallerCancellation',
  'TestServerChainFrontRetirementJoinsBeforeFinalAcknowledgement',
- 'TestServerChainTransportLifetimeJoinsOriginalDrain')
+ 'TestServerChainTransportLifetimeJoinsOriginalDrain',
+ 'TestServerChainOpenVPNOriginalPacketReceipt')
 CHILDREN={
  ROOTS[3]:('wrong-password','foreign-user','no-auth','prefix-foreign-tuple','prefix-uot','legacy-uot','udp-associate','retired-proof'),
  ROOTS[5]:('native-owner','partial-construction'),ROOTS[7]:('duplicate','null','alias','foreign-request','linked-capture'),
@@ -41,7 +42,8 @@ CHILDREN={
  ROOTS[18]:('missing','empty','empty-tag','duplicate-tag','missing-selected','missing-dependency','wrong-final','wrong-selected-owner','changed-binding'),
  ROOTS[19]:('cancelled','expired','during-dependency','during-capture'),
  ROOTS[20]:('joined','late-front','front-worker-pending','proof-worker-pending','missing-receipt','foreign-original','foreign-error','unjoined-receipt','foreign-front'),
- ROOTS[21]:('explicit-stop','parent-cancel','lease-expiry','partial-construction','failed-close-retry','deadline-retains-original','bounded-cancel')}
+ ROOTS[21]:('explicit-stop','parent-cancel','lease-expiry','partial-construction','failed-close-retry','deadline-retains-original','bounded-cancel'),
+ ROOTS[22]:('original','no-initial','nil-context','cancelled','expired','held-lock','pending-generation','pending-time','wrong-remote','wrong-network','under-capacity','reconnect','changed-time','capacity-up','capacity-down','remote-changed','caller-copy')}
 EXPECTED=set(ROOTS)|{root+'/'+child for root,children in CHILDREN.items() for child in children}
 PACKAGE='github.com/sagernet/sing-box/cmd/sing-box'
 
@@ -117,10 +119,12 @@ def run(core,go,tags,race=False,ldflags='',receipt=None):
  ('front-retirement-order',ROOTS[20]+'/joined','joined original front prevented final retirement', [('n.front.joinContext(ctx)', 'n.front.Close(ctx)')]),
  ('front-retirement-proof',ROOTS[20]+'/proof-worker-pending','retirement preceded original proof join', [('if begun {', 'if false && begun {')]),
  ('transport-early-cancel',ROOTS[21]+'/explicit-stop','original packet transport cancelled before drain', [('n.ctx, n.cancel, n.transportCancel = work, cancelWork, cancelTransport','n.ctx, n.cancel, n.transportCancel = work, cancelTransport, cancelTransport')]),
- ('transport-join',ROOTS[21]+'/explicit-stop','joined native transport was not retired', [('n.closeTransportContext(ctx)','context.Background().Err()')]))
+ ('transport-join',ROOTS[21]+'/explicit-stop','joined native transport was not retired', [('n.closeTransportContext(ctx)','context.Background().Err()')]),
+ ('openvpn-generation',ROOTS[22]+'/reconnect','fresh proof replaced original native packet receipt', [('r.state == nil || *r.state != state','r.state == nil')]),
+ ('openvpn-capacity',ROOTS[22]+'/under-capacity','foreign configured packet receipt acquired authority', [('state.MTU < uint32(r.capture.Middle.ConfiguredMTU)','false && state.MTU < uint32(r.capture.Middle.ConfiguredMTU)')]))
  with tempfile.TemporaryDirectory(prefix='server-chain-controls-') as directory:
   for label,name,witness,changes in controls:
-   file=core/('cmd/sing-box/routervpn_server_chain_resources.go' if label=='native-close' else 'cmd/sing-box/routervpn_server_chain_dns_owners.go' if label.startswith('dns-') else 'cmd/sing-box/routervpn_server_chain_native.go' if label=='benchmark-answers' or label.startswith(('front-retirement-','transport-')) else 'cmd/sing-box/routervpn_server_chain_front.go')
+   file=core/('cmd/sing-box/routervpn_server_chain_openvpn.go' if label.startswith('openvpn-') else 'cmd/sing-box/routervpn_server_chain_resources.go' if label=='native-close' else 'cmd/sing-box/routervpn_server_chain_dns_owners.go' if label.startswith('dns-') else 'cmd/sing-box/routervpn_server_chain_native.go' if label=='benchmark-answers' or label.startswith(('front-retirement-','transport-')) else 'cmd/sing-box/routervpn_server_chain_front.go')
    mutated=file.read_text()
    for before,after in changes:
     if mutated.count(before)!=1:raise ValueError('Native causal anchor changed: '+label)

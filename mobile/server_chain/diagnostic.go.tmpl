@@ -30,7 +30,7 @@ func routerVPNServerChainDiagnostic(operation string, failure error) string {
 	var observed *routerVPNServerChainStageError
 	if errors.As(failure, &observed) {
 		switch observed.stage {
-		case "capture", "source", "carrier", "configuration", "binding", "dns-capture", "options", "box-create", "box-start", "outbounds", "dns-owner", "front-routes", "front-create", "initial-observation", "native-admission", "carrier-observation", "source-identity", "observation-context", "front-current", "snapshot-lifecycle", "close-front", "close-proof", "close-expiry", "close-connections", "close-socks", "close-connect", "close-transport", "close-box", "close-carrier", "close-carrier-join", "close-parent":
+		case "capture", "source", "carrier", "configuration", "binding", "dns-capture", "options", "box-create", "box-start", "outbounds", "openvpn-owner", "dns-owner", "front-routes", "front-create", "initial-observation", "native-admission", "carrier-observation", "source-identity", "observation-context", "front-current", "snapshot-lifecycle", "close-front", "close-proof", "close-expiry", "close-connections", "close-socks", "close-connect", "close-transport", "close-box", "close-carrier", "close-carrier-join", "close-parent":
 			stage = observed.stage
 		}
 	}

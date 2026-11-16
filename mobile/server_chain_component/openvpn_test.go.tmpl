@@ -1,0 +1,516 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	BDNS "github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
+	WHT "github.com/sagernet/sing-box/protocol/routervpnwhitening"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Component boundary: the command container and its first physical UDP tuple
+// are explicit fixtures. The helper below is the unchanged shipping helper;
+// its Box, concrete OpenVPN endpoint, TLS-authenticated provider, packet receipt,
+// WG/AWG prefix, selected DNS and SS2022 final all execute their actual code.
+// This does not create a kernel carrier, lease manager or installed host.
+type nativeOpenVPNServerFixture struct {
+	owner        *routerVPNServerChain
+	peer         *nodeChainOpenVPNFixture
+	dns          adapter.DNSTransport
+	originals    []net.Conn
+	closed       bool
+	initialError error
+}
+type nativeOpenVPNServerPhysical struct{ adapter.Endpoint }
+
+func (*nativeOpenVPNServerPhysical) Dependencies() []string { return nil }
+
+func nativeOpenVPNFinalCompanion(t *testing.T, input string) string {
+	t.Helper()
+	var row struct {
+		Mode      string `json:"mode"`
+		Files     string `json:"files"`
+		Profile   string `json:"profile_json"`
+		Start     string `json:"start"`
+		Bootstrap string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(input), &row) != nil {
+		t.Fatal("final input")
+	}
+	var assets map[string]string
+	var profile, graph map[string]any
+	if json.Unmarshal([]byte(row.Files), &assets) != nil || json.Unmarshal([]byte(row.Profile), &profile) != nil {
+		t.Fatal("final captured assets")
+	}
+	raw, err := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+	if err != nil || json.Unmarshal(raw, &graph) != nil {
+		t.Fatal("final config", err)
+	}
+	final := graph["outbounds"].([]any)[0].(map[string]any)
+	configHash, keyHash := sha256.Sum256(raw), sha256.Sum256([]byte(final["password"].(string)))
+	declaration := []byte(desktopNodeChainJSON(t, map[string]any{"schema": 1, "node_id": profile["node_proof_id"], "configured_image": nativecomposite.SSServiceImage, "uot_version": 2, "endpoint": final["server"], "port": final["server_port"], "method": final["method"], "source_sha256": hex.EncodeToString(configHash[:]), "key_sha256": hex.EncodeToString(keyHash[:])}))
+	if err = nativecomposite.ValidateSSServiceCompanion(raw, declaration, profile["node_proof_id"].(string)); err != nil {
+		t.Fatal("actual final companion", err)
+	}
+	assets[nativecomposite.SSServiceAsset] = base64.StdEncoding.EncodeToString(declaration)
+	node, err := mobilemultihop.NewNodeProfile(row.Mode, desktopNodeChainJSON(t, assets), row.Profile, row.Start, row.Bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+func newNativeOpenVPNServerFixture(t *testing.T, mode, network string, count int, finalLayer, fault string) *nativeOpenVPNServerFixture {
+	t.Helper()
+	// The paired-role provider builder creates only source/reference providers.
+	// This distinct Server Box owns the first and only actual client endpoint.
+	// No Local traffic or connected receipt can be borrowed.
+	var localProfile nativeopenvpn.Profile
+	p := nodeChainOpenVPNStartPrefixesWithPair(t, mode, network, fault, 45*time.Second, count, &localProfile, finalLayer)
+	if err := p.closeNative(); err != nil {
+		t.Fatal("unused Local owner did not retire", err)
+	}
+	f := &nativeOpenVPNServerFixture{peer: p, owner: &routerVPNServerChain{}}
+	transport := f.owner.initializeLifetime(t.Context(), p.ctx)
+	launch, err := p.chain.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &source) != nil {
+		t.Fatal("original provider source")
+	}
+	source.Nodes[len(source.Nodes)-1] = nativeOpenVPNFinalCompanion(t, source.Nodes[len(source.Nodes)-1])
+	var member struct {
+		Config  string `json:"config"`
+		Capture string `json:"capture"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[count]), &member) != nil {
+		t.Fatal("original imported member")
+	}
+	var capture struct {
+		Profile struct {
+			External struct {
+				OpenVPN nativeopenvpn.Profile `json:"openvpn"`
+			} `json:"external"`
+		} `json:"profile"`
+	}
+	if json.Unmarshal([]byte(member.Capture), &capture) != nil {
+		t.Fatal("original imported capture")
+	}
+	serverProfile := capture.Profile.External.OpenVPN
+	if fault == "wrong-server-password" {
+		serverProfile.Password += "-wrong"
+		var graph, rawCapture map[string]any
+		if json.Unmarshal([]byte(member.Config), &graph) != nil || json.Unmarshal([]byte(member.Capture), &rawCapture) != nil {
+			t.Fatal("original private source")
+		}
+		compiled, e := nativeopenvpn.CompileProfile(serverProfile, mobilemultihop.ExternalFinalTag, "")
+		if e != nil {
+			t.Fatal(e)
+		}
+		graph["endpoints"] = []any{compiled}
+		rawCapture["profile"].(map[string]any)["external"].(map[string]any)["openvpn"] = serverProfile
+		source.Nodes[count], e = mobilemultihop.NodeChainImportedOpenVPNMemberInput(desktopNodeChainJSON(t, graph), desktopNodeChainJSON(t, rawCapture))
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	if localProfile.Config == "" {
+		t.Fatal("independent provider-issued Local capture absent")
+	}
+	localKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{71}, 32))
+	serverKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{72}, 32))
+	local, err := nativeopenvpn.DescribePeer(localProfile, localKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := nativeopenvpn.DescribePeer(serverProfile, serverKey)
+	if err != nil || nativeopenvpn.ValidatePublicPair(local, server) != nil {
+		t.Fatal("independent provider pair", err)
+	}
+	serverSource := mobilemultihop.NodeChainServerSource{Schema: 5, EntryID: "independent-client-entry", EntryNodeID: strings.Repeat("e", 64), EntryMode: mode, Nodes: source.Nodes, IdentitySources: source.IdentitySources, OpenVPNPairing: &mobilemultihop.NodeChainOpenVPNServerPairing{PrivateKey: serverKey, Local: local, Server: server}}
+	n := f.owner
+	n.policy, err = mobilemultihop.NewNodeChainOpenVPNServerPolicy(desktopNodeChainJSON(t, serverSource))
+	if err != nil {
+		t.Fatal("actual sealed Server source", err)
+	}
+	descriptor := n.policy.Descriptor()
+	digest, _ := descriptor.Digest()
+	request := multihoprelay.NodeChainRequest{Schema: 5, SessionID: strings.Repeat("1", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("2", 64), Peer: "10.77.0.2", AcquireExpiresAt: time.Now().Add(time.Minute).Unix(), Port: 26240}
+	for i := 0; i <= count; i++ {
+		key, e := ecdh.X25519().GenerateKey(rand.Reader)
+		if e != nil {
+			t.Fatal(e)
+		}
+		request.LocalPacketPositions = append(request.LocalPacketPositions, i)
+		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()))
+	}
+	for i := range descriptor.Members {
+		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: fmt.Sprintf("%048x", 101+i*2), Password: fmt.Sprintf("%048x", 102+i*2)})
+	}
+	n.capture = multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: descriptor, RegistrySHA256: digest, OwnerID: strings.Repeat("3", 64), Peer: request.Peer, Host: "10.77.0.1", BootstrapDeadline: time.Now().Add(30 * time.Second).UTC()}
+	config, original, err := n.policy.ReadOpenVPNServerCapture(n.capture)
+	if err != nil {
+		t.Fatal("actual source reader", err)
+	}
+	n.binding = original.Binding
+	proofs := n.policy.ProofInventory()
+	ins, outs, ends := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
+	OVPN.RegisterEndpoint(ends)
+	SS.RegisterOutbound(outs)
+	WHT.RegisterOutbound(outs)
+	address := p.peer.paired.bind.address()
+	if p.complete != nil {
+		address = p.complete.prefixes[0].bind.address()
+	}
+	physical := net.JoinHostPort(p.request.Address, strconv.Itoa(int(netip.MustParseAddrPort(address).Port())))
+	lower := &desktopSSReferenceLower{virtual: physical, original: address}
+	physicalContext := func(c context.Context, tag string) (context.Context, error) {
+		if tag != proofs[0].Tag {
+			return c, nil
+		}
+		parent := c
+		manager := service.FromContext[adapter.OutboundManager](parent)
+		network := service.FromContext[adapter.NetworkManager](parent)
+		if manager == nil || network == nil {
+			return nil, errors.New("actual Box managers absent")
+		}
+		c = service.ExtendContext(parent)
+		c = service.ContextWith[adapter.OutboundManager](c, &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}})
+		c = service.ContextWith[adapter.NetworkManager](c, &desktopImportedPacketNetwork{})
+		if service.FromContext[adapter.OutboundManager](parent) != manager || service.FromContext[adapter.NetworkManager](parent) != network {
+			return nil, errors.New("changed actual Box manager")
+		}
+		return c, nil
+	}
+	endpoint.Register[option.WireGuardEndpointOptions](ends, "wireguard", func(c context.Context, r adapter.Router, l log.ContextLogger, tag string, o option.WireGuardEndpointOptions) (adapter.Endpoint, error) {
+		c, e := physicalContext(c, tag)
+		if e != nil {
+			return nil, e
+		}
+		if tag == proofs[0].Tag {
+			if o.Detour != "" {
+				return nil, errors.New("first detour")
+			}
+			o.Detour = "captured-physical"
+		}
+		v, e := WG.NewEndpoint(c, r, l, tag, o)
+		if e == nil && tag == proofs[0].Tag {
+			return &nativeOpenVPNServerPhysical{v}, nil
+		}
+		return v, e
+	})
+	endpoint.Register[Options](ends, mobilemultihop.AmneziaType, func(c context.Context, r adapter.Router, l log.ContextLogger, tag string, o Options) (adapter.Endpoint, error) {
+		c, e := physicalContext(c, tag)
+		if e != nil {
+			return nil, e
+		}
+		if tag == proofs[0].Tag {
+			if o.Detour != "" {
+				return nil, errors.New("first detour")
+			}
+			o.Detour = "captured-physical"
+		}
+		v, e := NewEndpoint(c, r, l, tag, o)
+		if e == nil && tag == proofs[0].Tag {
+			return &nativeOpenVPNServerPhysical{v}, nil
+		}
+		return v, e
+	})
+	registry := BDNS.NewTransportRegistry()
+	DNST.RegisterUDP(registry)
+	DNST.RegisterTCP(registry)
+	OVPN.RegisterDNSTransport(registry)
+	nativeContext := service.ContextWith[adapter.PlatformInterface](transport, &nodeSOCKSPlatform{})
+	nativeContext = box.Context(nativeContext, ins, outs, ends, registry, boxService.NewRegistry(), certificate.NewRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](nativeContext, []byte(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.box, err = box.New(box.Options{Context: nativeContext, Options: options})
+	if err != nil {
+		t.Fatal("actual Server Box", err)
+	}
+	t.Cleanup(func() {
+		if err := f.close(); err != nil {
+			t.Error("actual original Server failed joined retirement", err)
+		}
+	})
+	if err = n.box.Start(); err != nil {
+		t.Fatal("actual Server start", err)
+	}
+	n.outputs = map[string]adapter.Outbound{}
+	for _, proof := range proofs {
+		actual, found, e := adapter.RouterVPNOutboundContext(n.ctx, n.box.Outbound(), proof.Tag)
+		if e != nil || !found || actual == nil {
+			t.Fatal("original output", e)
+		}
+		n.outputs[proof.Tag] = actual
+	}
+	n.openVPN, err = newRouterVPNServerChainOpenVPN(n.ctx, n, config)
+	if err != nil {
+		t.Fatal("original native helper", err)
+	}
+	initialize, finish := context.WithTimeout(n.ctx, 5*time.Second)
+	defer finish()
+	if err = n.openVPN.await(initialize, n); err != nil {
+		if fault == "wrong-server-password" {
+			f.initialError = err
+			return f
+		}
+		t.Fatal("actual authenticated packet receipt", err)
+	}
+	if fault == "wrong-server-password" {
+		t.Fatal("wrong original provider password acquired connected receipt")
+	}
+	dnsCapture, err := n.policy.DNSCapture(n.capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	f.dns, found = service.FromContext[adapter.DNSTransportManager](nativeContext).Transport(dnsCapture.ResolverTag)
+	if !found {
+		t.Fatal("actual selected DNS absent")
+	}
+	ca := filepath.Join(t.TempDir(), "original-provider-ca.pem")
+	if err = os.WriteFile(ca, []byte(p.peer.paired.ca), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", ca)
+	t.Setenv("SSL_CERT_DIR", t.TempDir())
+	return f
+}
+func (f *nativeOpenVPNServerFixture) close() error {
+	if f.closed {
+		return nil
+	}
+	f.owner.cancel()
+	var failure error
+	for _, c := range f.originals {
+		failure = errors.Join(failure, c.Close())
+	}
+	if failure != nil {
+		return failure
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := f.owner.closeTransportContext(ctx); err != nil {
+		return err
+	}
+	if err := f.owner.box.Close(); err != nil {
+		return err
+	}
+	if !f.owner.stopParent() {
+		select {
+		case <-f.owner.parentDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	f.closed = true
+	return nil
+}
+func (f *nativeOpenVPNServerFixture) ObserveServerContext(ctx context.Context) (mobilemultihop.NodeChainServerBinding, error) {
+	if err := f.owner.openVPN.current(ctx, f.owner); err != nil {
+		return mobilemultihop.NodeChainServerBinding{}, err
+	}
+	if _, err := f.owner.OpenVPNMiddleStateContext(ctx, f.owner.openVPN.capture.Middle.Tag); err != nil {
+		return mobilemultihop.NodeChainServerBinding{}, err
+	}
+	return f.owner.binding, nil
+}
+func (f *nativeOpenVPNServerFixture) OpenVPNMiddleStateContext(ctx context.Context, tag string) (nativeopenvpn.PacketObservation, error) {
+	return f.owner.OpenVPNMiddleStateContext(ctx, tag)
+}
+func (f *nativeOpenVPNServerFixture) DialServerContext(ctx context.Context, tag, network, address string) (net.Conn, error) {
+	if _, err := f.ObserveServerContext(ctx); err != nil {
+		return nil, err
+	}
+	out := f.owner.outputs[tag]
+	if out == nil {
+		return nil, errors.New("foreign actual output")
+	}
+	c, err := out.DialContext(ctx, network, M.ParseSocksaddr(address))
+	if c != nil {
+		f.originals = append(f.originals, c)
+	}
+	return c, err
+}
+func (f *nativeOpenVPNServerFixture) ProveServerDNSContext(ctx context.Context, capture mobilemultihop.NodeChainServerDNSCapture) error {
+	if _, err := f.ObserveServerContext(ctx); err != nil {
+		return err
+	}
+	original, err := f.owner.policy.DNSCapture(f.owner.capture)
+	if err != nil || !reflect.DeepEqual(original, capture) {
+		return errors.New("foreign selected DNS capture")
+	}
+	q := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+	r, err := f.dns.Exchange(ctx, q)
+	if err != nil {
+		return err
+	}
+	if r == nil || r.Id != q.Id || r.Rcode != dns.RcodeSuccess || len(r.Answer) != 1 {
+		return errors.New("actual selected DNS missing answer")
+	}
+	a, ok := r.Answer[0].(*dns.A)
+	if !ok || !a.A.Equal(net.ParseIP("93.184.216.34")) {
+		return errors.New("actual selected DNS changed answer")
+	}
+	_, err = f.ObserveServerContext(ctx)
+	return err
+}
+func TestNativeOpenVPNServerOriginalEndpoint(t *testing.T) {
+	selected := os.Getenv("ROUTERVPN_SERVER_OPENVPN_COMPONENT")
+	t.Run(strings.ReplaceAll(selected, "/", "_"), func(t *testing.T) {
+		parts := strings.Split(selected, "/")
+		if len(parts) != 5 {
+			t.Fatal("explicit component case required")
+		}
+		count, err := strconv.Atoi(parts[2])
+		if err != nil || (count != 1 && count != 5) || (parts[0] != "wg" && parts[0] != "awg2-fast" && parts[0] != "awg2-strong") || (parts[1] != "tcp" && parts[1] != "udp") {
+			t.Fatal("uncaptured native component case")
+		}
+		layer := parts[3]
+		if layer == "off" {
+			layer = ""
+		}
+		if layer != "" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
+			t.Fatal("uncaptured final layer")
+		}
+		fault := parts[4]
+		if fault != "original" && fault != "wrong-server-password" && fault != "reconnect" && fault != "final-layer-key" {
+			t.Fatal("uncaptured component fault")
+		}
+		if fault == "final-layer-key" && layer == "" {
+			t.Fatal("layer-key control requires original enabled layer")
+		}
+		f := newNativeOpenVPNServerFixture(t, parts[0], parts[1], count, layer, fault)
+		if fault == "wrong-server-password" {
+			if f.initialError == nil || f.owner.openVPN.state != nil || f.peer.provider.stats().authFailures < 1 {
+				t.Fatal("wrong Server credential lacked actual authentication refusal", f.initialError, f.peer.provider.stats())
+			}
+			if err := f.close(); err != nil {
+				t.Fatal("failed original authentication did not join", err)
+			}
+			return
+		}
+		n := f.owner
+		original := *n.openVPN.state
+		before := f.peer.snapshot()
+		ctx, cancel := context.WithTimeout(n.ctx, 20*time.Second)
+		defer cancel()
+		result, err := n.policy.Prove(ctx, n.capture, f)
+		if fault == "final-layer-key" {
+			after := f.peer.snapshot()
+			if err == nil || result.PublicProven || after.Final.RouterQueries != before.Final.RouterQueries || after.Final.DNSQueries != before.Final.DNSQueries || after.Final.FinalPublicQueries != before.Final.FinalPublicQueries || after.Middle.PublicQueries <= before.Middle.PublicQueries {
+				t.Fatal("wrong final layer reached an original private/DNS/public proof", err, before, after)
+			}
+			if err := f.close(); err != nil {
+				t.Fatal("wrong final key original retirement did not join", err)
+			}
+			return
+		}
+		if err != nil || !result.DNSProven || !result.PublicProven || len(result.Prefixes) != count+2 || result.Binding != n.binding {
+			t.Fatal("actual native Server proof failed", err)
+		}
+		after := f.peer.snapshot()
+		for i, prefix := range after.Prefixes {
+			if prefix.RawUDP <= before.Prefixes[i].RawUDP || prefix.ProofQueries <= before.Prefixes[i].ProofQueries {
+				t.Fatal("Server omitted actual original packet prefix", i, before.Prefixes[i], prefix)
+			}
+		}
+		if after.Middle.PublicQueries <= before.Middle.PublicQueries || after.Final.RouterQueries <= before.Final.RouterQueries || after.Final.DNSQueries <= before.Final.DNSQueries || after.Final.FinalPublicQueries <= before.Final.FinalPublicQueries {
+			t.Fatal("Server proof borrowed original provider counters", before, after, f.peer.provider.stats())
+		}
+		if state, err := n.OpenVPNMiddleStateContext(ctx, n.openVPN.capture.Middle.Tag); err != nil || state != original {
+			t.Fatal("original packet receipt changed after traffic", err)
+		}
+		endpoint := n.openVPN.endpoint
+		middle := n.openVPN.capture.Middle.Tag
+		n.outputs[middle] = n.outputs[n.policy.ProofInventory()[0].Tag]
+		if _, err := n.openVPN.observe(ctx, n, false); err == nil {
+			t.Fatal("foreign native outbound retained Server authority")
+		}
+		n.outputs[middle] = endpoint
+		originalOwner := n.openVPN
+		copied := *originalOwner
+		n.openVPN = &copied
+		if err := copied.current(ctx, n); err == nil {
+			t.Fatal("copied original owner retained Server authority")
+		}
+		n.openVPN = originalOwner
+		if fault == "reconnect" {
+			endpoint.InterfaceUpdated(n.ctx)
+			deadline := time.NewTimer(5 * time.Second)
+			defer deadline.Stop()
+			tick := time.NewTicker(10 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				remote, capacity, e := endpoint.RouterVPNConnectedCapacityContext(ctx)
+				if e == nil && remote.Generation > original.Remote.Generation && capacity > 0 {
+					break
+				}
+				select {
+				case <-deadline.C:
+					t.Fatal("actual original native reconnect did not complete")
+				case <-tick.C:
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			}
+			if _, err := n.OpenVPNMiddleStateContext(ctx, middle); err == nil || n.ctx.Err() == nil || *n.openVPN.state != original {
+				t.Fatal("reconnected native packet owner replaced original pinned receipt", err)
+			}
+		}
+		if err := f.close(); err != nil {
+			t.Fatal("original native Server close did not join", err)
+		}
+		if _, _, err := endpoint.RouterVPNConnectedCapacityContext(context.Background()); err == nil {
+			t.Fatal("closed original endpoint retained packet readiness")
+		}
+	})
+}

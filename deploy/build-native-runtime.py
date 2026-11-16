@@ -188,6 +188,10 @@ def inputs():
                              ROOT/'deploy/test_desktop_native_root_phases_runner.py',
                              ROOT/'deploy/test_socks_server_prefix_native.py',
                              ROOT/'deploy/test_socks_server_prefix_native_runner.py',
+                             ROOT/'deploy/test_server_node_chain_openvpn_native.py',
+                             ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py',
+                             ROOT/'mobile/server_chain_component/openvpn_owner.go.tmpl',
+                             ROOT/'mobile/server_chain_component/openvpn_test.go.tmpl',
                              ROOT/'deploy/test_desktop_socks_execution_construction.py',
                              ROOT/'deploy/test_desktop_socks_execution_construction_runner.py',
                              ROOT/'deploy/test_desktop_socks_execution_child.py',
@@ -1930,6 +1934,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     cwd=ROOT, env=env, timeout=60)
                 socks_prefix = load('socks_server_prefix_native', 'test_socks_server_prefix_native.py')
                 socks_prefix.execute(source, target, ','.join(tags(target)), env, run)
+                run([sys.executable, ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                openvpn_server = load('openvpn_server_native', 'test_server_node_chain_openvpn_native.py')
+                openvpn_server.execute(source, target, ','.join(tags(target)), env, run)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './protocol/routervpnnodesocks', '-run', '^TestOriginalSOCKS',
                  '-count=1', '-timeout=90s'], cwd=source, env=env, timeout=600)

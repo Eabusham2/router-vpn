@@ -313,7 +313,12 @@ func nodeChainOpenVPNStartBounded(t *testing.T, mode, network, fault string, bud
 
 func nodeChainOpenVPNStartPrefixes(t *testing.T, mode, network, fault string, budget time.Duration, count int) *nodeChainOpenVPNFixture {
 	t.Helper()
-	if count < 1 || count > 6 {
+	return nodeChainOpenVPNStartPrefixesWithPair(t, mode, network, fault, budget, count, nil, "")
+}
+
+func nodeChainOpenVPNStartPrefixesWithPair(t *testing.T, mode, network, fault string, budget time.Duration, count int, local *nativeopenvpn.Profile, finalLayer string) *nodeChainOpenVPNFixture {
+	t.Helper()
+	if count < 1 || count > 6 || finalLayer != "" && finalLayer != "aes-256-gcm" && finalLayer != "aes-256-gcm+xor-whitening" || local == nil && finalLayer != "" {
 		t.Fatal("uncaptured OpenVPN prefix count")
 	}
 
@@ -350,16 +355,28 @@ func nodeChainOpenVPNStartPrefixes(t *testing.T, mode, network, fault string, bu
 	}, middle: func(parent *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
 		routes := append([]desktopNodeLayerRoute(nil), parent.routes...)
 		for i := range routes {
+			if finalLayer == "aes-256-gcm+xor-whitening" && routes[i].Destination == "10.77.0.1:8388" {
+				routes[i].Destination = "10.77.0.1:8389"
+			}
 			if routes[i].Destination == "speed.cloudflare.com:443" {
 				routes[i].Destination = "93.184.216.34:443"
 			}
 		}
-		f.provider = startDesktopInstalledOpenVPNProviderCaptured(t, parent, desktopExternalInstalledPeerRequest{OpenVPNNetwork: network}, "", "", loopback, loopback, true, 2, &desktopOpenVPNProviderCapture{Remote: netip.MustParseAddrPort("203.0.113.24:1194"), MTU: 1500, Routes: routes})
+		f.provider = startDesktopInstalledOpenVPNProviderCaptured(t, parent, desktopExternalInstalledPeerRequest{OpenVPNNetwork: network}, "", "", loopback, loopback, true, 2, &desktopOpenVPNProviderCapture{Remote: netip.MustParseAddrPort("203.0.113.24:1194"), MTU: 1500, Routes: routes, Local: local})
 		if len(f.provider.entryRoutes) != 1 {
 			t.Fatal("middle provider changed its one captured lower tuple")
 		}
 		return desktopExternalInstalledSSPeer{address: f.provider.entryRoutes[0].Target, close: f.provider.close}
 	}}
+	if finalLayer != "" {
+		hooks.final = func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			kind := "shadowsocks"
+			if finalLayer == "aes-256-gcm+xor-whitening" {
+				kind = "routervpn-aes-xor"
+			}
+			return desktopImportedSOCKSLayerProvider(t, owner, map[string]any{"type": kind, "password": request.FinalPassword}, fault)
+		}
+	}
 	// The shared paired reference helper's SS metadata authenticates only its
 	// request envelope. Its middle factory above is the real OpenVPN provider.
 	// The product source below contains solely the original OpenVPN import.
@@ -404,6 +421,12 @@ func nodeChainOpenVPNStartPrefixes(t *testing.T, mode, network, fault string, bu
 			t.Fatal("original provider MTU declaration changed")
 		}
 		private.Config = strings.Replace(private.Config, "tun-mtu 1500\n", "tun-mtu 1280\n", 1)
+		if local != nil {
+			if strings.Count(local.Config, "tun-mtu 1500\n") != 1 {
+				t.Fatal("independent Local provider demand changed")
+			}
+			local.Config = strings.Replace(local.Config, "tun-mtu 1500\n", "tun-mtu 1280\n", 1)
+		}
 	}
 	endpoint, err := nativeopenvpn.CompileProfile(private, mobilemultihop.ExternalFinalTag, "")
 	if err != nil {
@@ -416,10 +439,38 @@ func nodeChainOpenVPNStartPrefixes(t *testing.T, mode, network, fault string, bu
 	if err != nil {
 		t.Fatal(err)
 	}
+	if finalLayer != "" {
+		var input map[string]any
+		var profile map[string]any
+		if json.Unmarshal([]byte(source.Nodes[count+1]), &input) != nil || json.Unmarshal([]byte(input["profile_json"].(string)), &profile) != nil {
+			t.Fatal("original final source")
+		}
+		profile["start_layer"] = finalLayer
+		final, e := mobilemultihop.NewNodeProfile(input["mode"].(string), input["files"].(string), desktopNodeChainJSON(t, profile), input["start"].(string), input["dns_bootstrap"].(string))
+		if e != nil {
+			t.Fatal("independent final layer", e)
+		}
+		source.Nodes[count+1], e = final.LaunchInput()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
 	source.Schema = 5
 	f.chain, err = mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, source))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if local != nil {
+		// The Server fixture owns its separate actual Box. Build only original
+		// reference providers and sealed source here; do not open a Local client.
+		f.closeNative = func() error { return nil }
+		f.engine = &nodeChainOpenVPNComponent{}
+		t.Cleanup(func() {
+			if err := f.close(); err != nil {
+				t.Error("Server reference source did not join", err)
+			}
+		})
+		return f
 	}
 	owners, closeNative := nodeChainOpenVPNNativeOwners(t, ctx, f.chain, physical, fault)
 	f.closeNative = closeNative

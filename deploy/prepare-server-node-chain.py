@@ -30,6 +30,8 @@ _connect_spec.loader.exec_module(CONNECT)
 def inputs():
     return sorted([Path(__file__).resolve(), ROOT/'deploy/test_server_node_chain_preparation.py',
                    ROOT/'deploy/test_server_node_chain_native.py', ROOT/'deploy/test_server_node_chain_native_runner.py',
+                   ROOT/'deploy/test_server_node_chain_openvpn_native.py', ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py',
+                   *sorted((ROOT/'mobile/server_chain_component').glob('*.tmpl')),
                    *sorted((ROOT/'mobile/server_chain').glob('*.tmpl')), *CONNECT.server_inputs(),
                    *(ROOT/'mobile/chain'/name for name in SOCKS_TEMPLATES),
                    *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_socks_server*.go')),
@@ -60,6 +62,8 @@ def copies():
         content[prefix+name] = raw
     required = {'cmd/sing-box/routervpn_server_chain_command.go',
                 'cmd/sing-box/routervpn_server_chain_native.go',
+                'cmd/sing-box/routervpn_server_chain_openvpn.go',
+                'cmd/sing-box/routervpn_server_chain_openvpn_test.go',
                 'cmd/sing-box/routervpn_server_chain_front.go',
                 'routervpn_server_chain_box.go',
                 'cmd/sing-box/routervpn_server_chain_front_test.go',

@@ -33,7 +33,7 @@ def output(rows):return '\n'.join(json.dumps(row) for row in rows)+'\n'
 class NativeServerChainRunner(unittest.TestCase):
  def test_complete_exact_inventory(self):
   receipt=RUN.verdict(output(success()),0)
-  self.assertEqual(receipt['roots'],22);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)
+  self.assertEqual(receipt['roots'],23);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)
  def test_missing_leaf_cannot_pass(self):
   name=RUN.ROOTS[3]+'/prefix-uot';rows=[r for r in success() if r.get('Test')!=name]
   with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
@@ -59,7 +59,7 @@ class NativeServerChainRunner(unittest.TestCase):
   self.assertEqual(result.returncode,0)
   self.assertEqual(result.stdout,payload)
   self.assertIn('go: downloading',observed.getvalue())
-  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],22)
+  self.assertEqual(RUN.verdict(result.stdout,result.returncode,result.stderr)['roots'],23)
   with self.assertRaises(ValueError):RUN.verdict(result.stdout,1,result.stderr)
   with self.assertRaises(ValueError):RUN.verdict(result.stdout,0,'WARNING: DATA RACE')
  def test_causal_control_requires_exact_test_and_witness(self):
@@ -225,6 +225,15 @@ CASES
   root=RUN.ROOTS[21]
   self.assertEqual(root,'TestServerChainTransportLifetimeJoinsOriginalDrain')
   self.assertEqual(RUN.CHILDREN[root],('explicit-stop','parent-cancel','lease-expiry','partial-construction','failed-close-retry','deadline-retains-original','bounded-cancel'))
+  for name in (root,*(root+'/'+child for child in RUN.CHILDREN[root])):
+   for action in ('run','pass'):
+    with self.subTest(name=name,action=action):
+     rows=[r for r in success() if not(r.get('Test')==name and r.get('Action')==action)]
+     with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
+ def test_original_openvpn_packet_inventory_cannot_be_omitted(self):
+  root=RUN.ROOTS[22]
+  self.assertEqual(root,'TestServerChainOpenVPNOriginalPacketReceipt')
+  self.assertEqual(RUN.CHILDREN[root],('original','no-initial','nil-context','cancelled','expired','held-lock','pending-generation','pending-time','wrong-remote','wrong-network','under-capacity','reconnect','changed-time','capacity-up','capacity-down','remote-changed','caller-copy'))
   for name in (root,*(root+'/'+child for child in RUN.CHILDREN[root])):
    for action in ('run','pass'):
     with self.subTest(name=name,action=action):

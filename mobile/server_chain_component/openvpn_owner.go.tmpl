@@ -1,0 +1,27 @@
+package routervpnamnezia
+
+import (
+	"context"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"time"
+)
+
+type routerVPNServerChain struct {
+	policy                         *mobilemultihop.NodeChainServerPolicy
+	capture                        multihoprelay.NodeChainCapture
+	binding                        mobilemultihop.NodeChainServerBinding
+	box                            *box.Box
+	outputs                        map[string]adapter.Outbound
+	openVPN                        *routerVPNServerChainOpenVPN
+	ctx                            context.Context
+	cancel, transportCancel        context.CancelFunc
+	stopParent, stopTransportWatch func() bool
+	parentDone, transportWatchDone chan struct{}
+}
+
+// ORIGINAL_DRAIN_BUDGET
+
+// ORIGINAL_LIFETIME_METHODS

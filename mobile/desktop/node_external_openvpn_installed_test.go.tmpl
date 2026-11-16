@@ -90,6 +90,8 @@ func startDesktopInstalledOpenVPNProviderCapacity(t *testing.T, parent *desktopN
 // through this original native provider. Ordinary provider fixtures retain all
 // previous services, capacities, authentication and cleanup behavior.
 type desktopOpenVPNProviderCapture struct {
+	// Only a paired-role fixture requests a second independently issued identity.
+	Local        *nativeopenvpn.Profile
 	Remote       netip.AddrPort
 	FallbackPort uint16
 	MTU          int
@@ -156,6 +158,18 @@ func startDesktopInstalledOpenVPNProviderCaptured(t *testing.T, parent *desktopN
 	}
 	username, password := "captured-openvpn-user", base64.StdEncoding.EncodeToString(secret)
 	clear(secret)
+	var localCertificate, localKey, localUsername, localPassword string
+	if captured != nil && captured.Local != nil {
+		if maxClients != 2 || *captured.Local != (nativeopenvpn.Profile{}) {
+			t.Fatal("paired provider requires an empty original Local capture and two owned slots")
+		}
+		localCertificate, localKey = issue(75004, "independent-local.routervpn.test", x509.ExtKeyUsageClientAuth)
+		if _, err = rand.Read(secret); err != nil {
+			t.Fatal(err)
+		}
+		localUsername, localPassword = "independent-local-provider", base64.StdEncoding.EncodeToString(secret)
+		clear(secret)
+	}
 	controlKey := "-----BEGIN OpenVPN Static key V1-----\n" + strings.Repeat(strings.Repeat("a", 32)+"\n", 16) + "-----END OpenVPN Static key V1-----\n"
 	ctx, cancel := context.WithCancel(parent.ctx)
 	rules := make(map[string]desktopReferenceRule)
@@ -279,7 +293,9 @@ func startDesktopInstalledOpenVPNProviderCaptured(t *testing.T, parent *desktopN
 		Tunnel:      ovpn.ServerTunnelOptions{AddressPools: []netip.Prefix{netip.MustParsePrefix("10.211.18.1/24"), netip.MustParsePrefix("fd78:211::1/64")}, Topology: "subnet"},
 		TLS:         ovpn.ServerTLSOptions{CertificateAuthority: ovpn.Material{Content: []byte(ca)}, Certificate: ovpn.Material{Content: []byte(certificate)}, Key: ovpn.Material{Content: []byte(key)}, VerifyClientCertificate: "require", RemoteCertificateTLS: "client"},
 		Authentication: ovpn.ServerAuthenticationOptions{Authenticator: func(_ context.Context, user, pass string) error {
-			if subtle.ConstantTimeCompare([]byte(user), []byte(username)) != 1 || subtle.ConstantTimeCompare([]byte(pass), []byte(password)) != 1 {
+			original := subtle.ConstantTimeCompare([]byte(user), []byte(username)) == 1 && subtle.ConstantTimeCompare([]byte(pass), []byte(password)) == 1
+			paired := localUsername != "" && subtle.ConstantTimeCompare([]byte(user), []byte(localUsername)) == 1 && subtle.ConstantTimeCompare([]byte(pass), []byte(localPassword)) == 1
+			if !original && !paired {
 				authFailures.Add(1)
 				return errors.New("captured OpenVPN credential refused")
 			}
@@ -374,6 +390,15 @@ func startDesktopInstalledOpenVPNProviderCaptured(t *testing.T, parent *desktopN
 	}
 	if _, err = nativeopenvpn.CompileProfile(nativeopenvpn.Profile{Config: config, Username: username, Password: password}, "custom-exit", ""); err != nil {
 		t.Fatal(err)
+	}
+	if captured != nil && captured.Local != nil {
+		localConfig := strings.Replace(config, "<cert>\n"+client+"</cert>", "<cert>\n"+localCertificate+"</cert>", 1)
+		localConfig = strings.Replace(localConfig, "<key>\n"+clientKey+"</key>", "<key>\n"+localKey+"</key>", 1)
+		local := nativeopenvpn.Profile{Config: localConfig, Username: localUsername, Password: localPassword}
+		if _, err := nativeopenvpn.CompileProfile(local, "custom-exit", ""); err != nil {
+			t.Fatal(err)
+		}
+		*captured.Local = local
 	}
 	return desktopExternalInstalledOpenVPNPeer{entryRoutes: entryRoutes, address: address, profile: config, username: username, password: password, close: closePeer, stats: func() desktopExternalInstalledOpenVPNStats {
 		return desktopExternalInstalledOpenVPNStats{connections: rawTCP.Load(), physicalUDP: rawUDP.Load(), streams: handler.tcp.Load(), packets: handler.udp.Load(), authFailures: authFailures.Load(), fallbackAttempts: fallbackAttempts.Load(), firstSequence: firstSequence.Load(), finalSequence: finalSequence.Load()}
