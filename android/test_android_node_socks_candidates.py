@@ -33,7 +33,7 @@ public final class NodeSOCKSCandidateHarness {
    var hostname=AndroidStandardExitStore.copy(entry);hostname.id="unsupported-socks-host";hostname.server="unscored.proxy.example";reject(()->exits.save(hostname),"SOCKS hostname acquired an unowned resolver path");
    var unsupported=AndroidStandardExitStore.copy(entry);unsupported.id="unsupported-socks";unsupported.protocol="socks5";unsupported.tlsServerName="";unsupported.username="u".repeat(256);unsupported.password="bounded-password";exits.save(unsupported);
    var udp=AndroidStandardExitStore.copy(entry);udp.id="unsupported-hysteria2";udp.protocol="hysteria2";udp.secret="private-udp-secret";udp.tlsServerName="udp.example";exits.save(udp);
-   session=new AndroidNodeChainSession(fixture.profiles.currentOrderedPath());catalog=new AndroidNodeCandidateCatalog(fixture.context,session,prefix);
+   session=new AndroidNodeChainSession(fixture.profiles.currentOrderedPath());catalog=new AndroidNodeCandidateCatalog(fixture.context,session,prefix<0?fixture.members.size()-3:prefix);
    var row=catalog.rows.stream().filter(v->v.localID.equals(entry.id)).findFirst().orElseThrow();
    check(!row.input.isEmpty()&&row.reason.isEmpty(),"original SOCKS candidate was omitted from eligible catalog");
    check(catalog.rows.stream().anyMatch(v->v.localID.equals(unsupported.id)&&v.input.isEmpty()),"unsupported SOCKS candidate acquired a TCP score");
@@ -62,8 +62,8 @@ public final class NodeSOCKSCandidateHarness {
         authority=new Authority(catalog,result);proposal=AndroidNodeCandidateProfile.captureTemporary(operation,result,authority);
         check(RouterNodeChainSOCKS.opens==opened+1,"SOCKS proposal bypassed its typed native compiler");
         JSONObject proposed=new JSONObject(RouterNodeChainSOCKS.lastSource);
-        check(proposed.getInt("schema")==3&&proposed.getJSONArray("nodes").length()==3&&proposed.getJSONArray("identity_sources").getString(1).isEmpty(),"SOCKS proposal borrowed a generic or paired identity");
-        check(proposed.getJSONArray("nodes").getString(1).equals(row.input),"SOCKS proposal substituted the measured original member");
+        check(proposed.getInt("schema")==3&&proposed.getJSONArray("nodes").length()==fixture.members.size()&&proposed.getJSONArray("identity_sources").getString(catalog.prefix+1).isEmpty(),"SOCKS proposal borrowed a generic or paired identity");
+        check(proposed.getJSONArray("nodes").getString(catalog.prefix+1).equals(row.input),"SOCKS proposal substituted the measured original member");
        }
        check(RouterNodeChainSOCKS.closes==closed+(RouterNodeChainSOCKS.opens-opened),"SOCKS typed compiler handle escaped exact cleanup");
       }catch(Throwable e){failure.set(e);}finally{completed.countDown();}
@@ -78,13 +78,13 @@ public final class NodeSOCKSCandidateHarness {
   public void close()throws Exception{RouterNodeChainSOCKS.afterConfig=null;RouterNodeChainCandidateMeasurement.holdClose=false;if(owner!=null)owner.cancel();finished.await(10,TimeUnit.SECONDS);AndroidMTUMeasurementGate.release(lease);}
  }
  static void save(Path root,String key,String wire)throws Exception{
-  try(var c=new Captured(root,key,wire,0,"")){
+  try(var c=new Captured(root,key,wire,-1,"")){
    var f=c.fixture;var before=new NodeChainCaptureHarness.State(f);
    c.authority.drained=true;reject(()->c.proposal.save(f.context,"Before candidate join"),"SOCKS proposal saved before native candidate join");c.authority.drained=false;
    c.join();reject(()->c.proposal.save(f.context,"Before graph drain"),"SOCKS proposal saved before original graph drain");
    c.session.current=false;AndroidMTUMeasurementGate.release(c.lease);c.authority.drained=true;
    var saved=c.proposal.save(f.context,"Measured "+wire);String stored=Files.readString(f.rows);JSONObject row=new JSONObject(stored).getJSONArray("profiles").getJSONObject(0);
-   check(row.getJSONArray("multihop_nodes").length()==3&&row.getJSONArray("multihop_nodes").getJSONObject(1).getString("mode").equals("socks5"),"SOCKS saved proposal lost exact measured mode or retained final");
+   check(row.getJSONArray("multihop_nodes").length()==f.members.size()&&row.getJSONArray("multihop_nodes").getJSONObject(c.catalog.prefix+1).getString("mode").equals("socks5"),"SOCKS saved proposal lost exact measured mode or retained final");
    check((c.entry.username.isEmpty()||!stored.contains(c.entry.username))&&(c.entry.password.isEmpty()||!stored.contains(c.entry.password))&&!stored.contains("api_token"),"SOCKS saved proposal duplicated original credentials");
    var after=new NodeChainCaptureHarness.State(f);check(before.preferences.equals(after.preferences),"SOCKS Save changed active selection");for(Path path:before.files.keySet())if(!path.equals(f.rows))check(Arrays.equals(before.files.get(path),after.files.get(path)),"SOCKS Save edited an original source");
    var exits=new AndroidStandardExitStore(f.context);var changed=AndroidStandardExitStore.copy(c.entry);changed.username="changed-user";changed.password="changed-after-measurement";exits.save(changed);
@@ -93,14 +93,14 @@ public final class NodeSOCKSCandidateHarness {
    f.profiles.load(saved.id);
    try(var loaded=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){
     check(loaded.plan==null&&loaded.socks!=null&&new JSONObject(loaded.launchInput).getInt("schema")==3,"explicit SOCKS Load did not use its typed source");
-    JSONObject middle=new JSONObject(loaded.memberInputs.get(1));check(middle.getString("capture").contains(c.entry.password),"explicit SOCKS Load lost original credentials");
+    JSONObject middle=new JSONObject(loaded.memberInputs.get(c.catalog.prefix+1));check(middle.getString("capture").contains(c.entry.password),"explicit SOCKS Load lost original credentials");
    }
   }
  }
  public static void main(String[] args)throws Exception{
-  try{Path root=Path.of(args[0]);for(String key:List.of("2/","2/awg-fast","2/awg-strong"))for(String wire:List.of("password","none"))save(root,key,wire);
+  try{Path root=Path.of(args[0]);for(String key:List.of("3/","3/mixed-awg","3/awg-strong","4/mixed-awg","8/mixed-awg"))for(String wire:List.of("password","none"))save(root,key,wire);
    for(String wire:List.of("password","none")){
-    try(var c=new Captured(root,"2/",wire,0,"cancel")){c.join();check(!Files.exists(c.fixture.rows),"cancelled SOCKS compile wrote a profile");}
+    try(var c=new Captured(root,"3/",wire,0,"cancel")){c.join();check(!Files.exists(c.fixture.rows),"cancelled SOCKS compile wrote a profile");}
     try(var c=new Captured(root,"3/",wire,1,"long-prefix")){c.join();check(!Files.exists(c.fixture.rows),"unsupported SOCKS prefix wrote a profile");}
    }
    System.out.println("Android SOCKS candidates: "+checks.get()+" actual source, typed proposal, credential, metric and joined Save checks PASS");
@@ -129,9 +129,9 @@ def run(root,work,app,classes,jar,env,imported_only=False):
     subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeSOCKSCandidateHarness',str(private)],env=env,check=True,timeout=120)
     controls=(
         ('AndroidNodeCandidateCatalog','if(!source.imported)return "shadowsocks";','if(source.imported||!source.imported)return "shadowsocks";','original SOCKS candidate was omitted'),
-        ('AndroidNodeCandidateProfile','sources.add(candidate);modes.add(candidateMode);','sources.add(candidate);modes.add("shadowsocks");','SOCKS proposal failed its original shared capture'),
+        ('AndroidNodeCandidateProfile','sources.set(replacement,candidate);modes.set(replacement,candidateMode);','sources.set(replacement,candidate);modes.set(replacement,"shadowsocks");','SOCKS proposal failed its original shared capture'),
         ('AndroidNodeCandidateProfile','}else if(schema==3){','}else if(schema==2){','SOCKS proposal failed its original shared capture'),
-        ('AndroidNodeCandidateProfile','}else if(schema==3){\n            try(AndroidNodeChainSOCKSCapture compiled=AndroidNodeChainSOCKSCapture.compile(input,capturedInputs,capturedIdentities)){\n                requireCurrent();','}else if(schema==3){\n            try(AndroidNodeChainSOCKSCapture compiled=AndroidNodeChainSOCKSCapture.compile(input,capturedInputs,capturedIdentities)){' ,'SOCKS proposal ignored cancellation during typed compile'),
+        ('AndroidNodeCandidateProfile','}else if(schema==3){\n            try(AndroidNodeChainSOCKSCapture compiled=AndroidNodeChainSOCKSCapture.compile(input,capturedInputs,capturedIdentities)){\n                if(!"local".equals(execution))AndroidNodeChainCapture.validateSOCKSExecutionSource(compiled.source,execution);\n                requireCurrent();','}else if(schema==3){\n            try(AndroidNodeChainSOCKSCapture compiled=AndroidNodeChainSOCKSCapture.compile(input,capturedInputs,capturedIdentities)){\n                if(!"local".equals(execution))AndroidNodeChainCapture.validateSOCKSExecutionSource(compiled.source,execution);' ,'SOCKS proposal ignored cancellation during typed compile'),
         ('AndroidNodeCandidateProfile','try(AndroidNodeChainSOCKSCapture compiled=AndroidNodeChainSOCKSCapture.compile(input,capturedInputs,capturedIdentities)){','{AndroidNodeChainSOCKSCapture compiled=AndroidNodeChainSOCKSCapture.compile(input,capturedInputs,capturedIdentities);','SOCKS typed compiler handle escaped exact cleanup'),
     )
     for index,(name,old,new,witness) in enumerate(controls):

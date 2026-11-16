@@ -169,8 +169,8 @@ public final class NodeCandidateHarness {
  }
  static void adoption(Path root)throws Exception{
   for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305")){
-   var f=new NodeChainCaptureHarness.Fixture(root,method.contains("aes-128")?"2/":method.contains("aes-256")?"2/awg-fast":"3/awg-strong");var entry=custom(method);new AndroidStandardExitStore(f.context).save(entry);
-   var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
+   var f=new NodeChainCaptureHarness.Fixture(root,method.contains("aes-128")?"3/":method.contains("aes-256")?"4/mixed-awg":"8/mixed-awg");var entry=custom(method);new AndroidStandardExitStore(f.context).save(entry);
+   var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,session.source.members.size()-3);
    CountDownLatch ready=new CountDownLatch(1),finished=new CountDownLatch(1);var measured=new java.util.concurrent.atomic.AtomicReference<List<AndroidNodeCandidateResult>>();
    var operation=AndroidNodeCandidateMeasurement.start(catalog,new AndroidNodeCandidateMeasurement.Callback(){public void changed(List<AndroidNodeCandidateResult> rows,String detail){if(rows.size()==2){measured.set(rows);ready.countDown();}}public void finished(Throwable failure){finished.countDown();}});
    check(ready.await(10,TimeUnit.SECONDS),"candidate adoption never received complete native results");
@@ -178,15 +178,23 @@ public final class NodeCandidateHarness {
    var imported=measured.get().stream().filter(row->row.id.equals(entry.id)).findFirst().orElseThrow();var paired=measured.get().stream().filter(row->!row.id.equals(entry.id)).findFirst().orElseThrow();
    var proposal=new AndroidNodeCandidateProfile(operation,imported);check(proposal.description.contains(entry.id)&&proposal.description.contains(session.source.control.profileId),"proposal preview omitted custom candidate or original paired final");
    var saved=proposal.save(f.context,"Measured custom "+method);check(saved.mode.equals("shadowsocks"),"candidate profile saved runtime mode instead of actual final transport");
-   var other=new AndroidNodeCandidateProfile(operation,paired).save(f.context,"Measured paired "+method);
+   byte[] beforeDuplicate=Files.readAllBytes(f.rows);
+   reject(()->new AndroidNodeCandidateProfile(operation,paired),"paired final candidate truncated the retained suffix or duplicated its identity");
+   check(Arrays.equals(beforeDuplicate,Files.readAllBytes(f.rows)),"incompatible next-hop proposal changed saved profiles");
    var after=new NodeChainCaptureHarness.State(f);for(Path path:before.files.keySet())if(!path.equals(f.rows))check(Arrays.equals(before.files.get(path),after.files.get(path)),"candidate save changed active original source");check(before.preferences.equals(after.preferences),"candidate save changed active builder preferences");session.requireCurrent();check(AndroidMTUMeasurementGate.held(),"candidate save retired original measurement lease");
-   JSONArray records=new JSONObject(Files.readString(f.rows)).getJSONArray("profiles");check(records.length()==2,"candidate profile replaced another saved profile");
-   JSONObject customRow=records.getJSONObject(0),pairedRow=records.getJSONObject(1);check(customRow.getJSONArray("multihop_nodes").length()==3&&pairedRow.getJSONArray("multihop_nodes").length()==2,"saved candidate path changed prefix/suffix composition");check(!customRow.toString().contains("api_token")&&!customRow.toString().contains("wg_private_key")&&!customRow.toString().contains(entry.secret),"future profile copied private credentials");
+   JSONArray records=new JSONObject(Files.readString(f.rows)).getJSONArray("profiles");check(records.length()==1,"candidate profile replaced another saved profile");
+   JSONObject customRow=records.getJSONObject(0);JSONArray members=customRow.getJSONArray("multihop_nodes");
+   check(members.length()==session.source.members.size(),"saved candidate path truncated its complete suffix");
+   for(int position=0;position<members.length();position++){
+    boolean replaced=position==catalog.prefix+1;JSONObject member=members.getJSONObject(position);
+    check(member.getString("id").equals(replaced?entry.id:session.source.members.get(position).profileId),"Save replaced a position other than the measured next hop");
+    check(member.getString("mode").equals(replaced?"shadowsocks":session.source.modes.get(position)),"Save changed a retained original mode");
+   }
+   check(customRow.getString("multihop_execution").equals(session.source.execution),"Save replaced the original requested execution");check(!customRow.toString().contains("api_token")&&!customRow.toString().contains("wg_private_key")&&!customRow.toString().contains(entry.secret),"future profile copied private credentials");
    reject(()->f.profiles.load(saved.id),"candidate profile loaded while connected");
    session.current=false;byte[] beforeStale=Files.readAllBytes(f.rows);reject(()->proposal.save(f.context,"Stale"),"retired candidate saved a future profile");check(Arrays.equals(beforeStale,Files.readAllBytes(f.rows)),"stale candidate wrote profile storage");
    operation.cancel();check(finished.await(10,TimeUnit.SECONDS),"candidate profile cleanup did not join");AndroidVpnMutationGuard.busy=false;
    f.profiles.load(saved.id);try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getInt("schema")==2,"future imported profile did not compile after normal Load");}
-   f.profiles.load(other.id);try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getJSONArray("nodes").length()==2,"future paired profile did not compile its exact truncated suffix");}
   }
  }
  public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}

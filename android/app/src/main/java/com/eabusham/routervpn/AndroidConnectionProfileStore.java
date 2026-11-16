@@ -51,14 +51,14 @@ final class AndroidConnectionProfileStore {
     synchronized Record add(String name) throws Exception { requireIdle("saving a connection profile");JSONArray rows=readRows();if(rows.length()>=MAX_PROFILES)throw new IllegalStateException("Connection profile limit reached.");JSONObject row=snapshot(cleanName(name),newId());rows.put(row);writeRows(rows);return toRecord(row); }
     /** Append a separately compiled future connection without touching active choices.
      * The retained candidate transaction supplies a final freshness check. */
-    synchronized Record appendOrderedProposal(String name,List<AndroidNodeStore.ChainSource> sources,List<String> modes,Runnable requireCurrent) throws Exception {
-        if(sources==null||modes==null||sources.size()!=modes.size()||sources.size()<2||sources.size()>8)throw new IllegalStateException("Incomplete candidate path.");
+    synchronized Record appendOrderedProposal(String name,List<AndroidNodeStore.ChainSource> sources,List<String> modes,String execution,Runnable requireCurrent) throws Exception {
+        if(sources==null||modes==null||sources.size()!=modes.size()||sources.size()<2||sources.size()>8||!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalStateException("Incomplete candidate path.");
         requireCurrent.run();JSONArray rows=readRows();if(rows.length()>=MAX_PROFILES)throw new IllegalStateException("Connection profile limit reached.");
         JSONArray members=new JSONArray();for(int i=0;i<sources.size();i++)members.put(orderedSavedMember(sources.get(i),modes.get(i)));
         AndroidNodeStore.ChainSource last=sources.get(sources.size()-1);
         JSONObject row=new JSONObject().put("id",newId()).put("name",cleanName(name)).put("node_kind","router-vpn")
                 .put("node_id",last.id).put("node_profile_id",last.profileId).put("policy",members.getJSONObject(members.length()-1).getJSONObject("policy"))
-                .put("mode","shadowsocks").put("custom_layers",new JSONArray()).put("multihop_enabled",true).put("multihop_execution","local")
+                .put("mode",modes.get(modes.size()-1)).put("custom_layers",new JSONArray()).put("multihop_enabled",true).put("multihop_execution",execution)
                 .put(MULTI_ENTRY_KIND,"router-vpn").put("multihop_entry_id","").put("multihop_entry_mode","").put("multihop_exit_id","").put("multihop_exit_mode","").put(MULTI_NODES,members);
         validateOrderedRow(row,SCHEMA_VERSION);requireCurrent.run();rows.put(row);writeRows(rows);return toRecord(row);
     }

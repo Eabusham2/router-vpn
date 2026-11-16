@@ -31,11 +31,13 @@ public final class NodeCandidateProfileHarness {
   final CountDownLatch completed=new CountDownLatch(1),finished=new CountDownLatch(1);
   AndroidNodeCandidateMeasurement owner;AndroidNodeCandidateResult result;Authority authority;
   AndroidNodeCandidateProfile temporary,live;
-  Captured(Path root,String method)throws Exception{
-   fixture=new NodeChainCaptureHarness.Fixture(root,method.contains("aes-128")?"2/":method.contains("aes-256")?"2/awg-fast":"3/awg-strong");
+  Captured(Path root,String method)throws Exception{this(root,method,method.contains("aes-128")?"3/":method.contains("aes-256")?"4/mixed-awg":"8/mixed-awg","local");}
+  Captured(Path root,String method,String key,String requested)throws Exception{
+   fixture=new NodeChainCaptureHarness.Fixture(root,key);
+   if(!requested.equals("local"))fixture.chooseExecution(requested);
    var entry=NodeCandidateHarness.custom(method);new AndroidStandardExitStore(fixture.context).save(entry);
    session=new AndroidNodeChainSession(fixture.profiles.currentOrderedPath());
-   var catalog=new AndroidNodeCandidateCatalog(fixture.context,session,0);lease=AndroidMTUMeasurementGate.acquire();
+   var catalog=new AndroidNodeCandidateCatalog(fixture.context,session,session.source.members.size()-3);lease=AndroidMTUMeasurementGate.acquire();
    RouterNodeChainCandidateMeasurement.holdClose=true;
    owner=AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){
     public void changed(List<AndroidNodeCandidateResult> rows,String detail){}
@@ -63,8 +65,9 @@ public final class NodeCandidateProfileHarness {
   void drainGraph(){session.current=false;AndroidMTUMeasurementGate.release(lease);authority.drained=true;}
   public void close()throws Exception{RouterNodeChain.afterConfig=null;RouterNodeChainCandidateMeasurement.holdClose=false;owner.cancel();finished.await(10,TimeUnit.SECONDS);AndroidMTUMeasurementGate.release(lease);}
  }
- static void saveAfterDown(Path root,String method)throws Exception{
-  try(var capture=new Captured(root,method)){
+ static void saveAfterDown(Path root,String method)throws Exception{saveAfterDown(root,method,method.contains("aes-128")?"3/":method.contains("aes-256")?"4/mixed-awg":"8/mixed-awg","local");}
+ static void saveAfterDown(Path root,String method,String key,String requested)throws Exception{
+  try(var capture=new Captured(root,method,key,requested)){
    var f=capture.fixture;var before=new NodeChainCaptureHarness.State(f);
    capture.authority.drained=true;
    reject(()->capture.temporary.save(f.context,"Before candidate join"),"temporary proposal saved before original candidate join");
@@ -77,7 +80,14 @@ public final class NodeCandidateProfileHarness {
    var saved=capture.temporary.save(f.context,"Detached "+method);
    check(saved.mode.equals("shadowsocks"),"detached save lost its actual final transport");
    JSONArray rows=new JSONObject(Files.readString(f.rows)).getJSONArray("profiles");JSONObject row=rows.getJSONObject(0);
-   check(rows.length()==1&&row.getJSONArray("multihop_nodes").length()==3,"detached proposal lost original paired prefix/custom middle/final");
+   check(rows.length()==1&&row.getJSONArray("multihop_nodes").length()==capture.session.source.members.size(),"detached proposal truncated the complete original path");
+   JSONArray savedMembers=row.getJSONArray("multihop_nodes");
+   for(int position=0;position<savedMembers.length();position++){
+    var member=savedMembers.getJSONObject(position);boolean replaced=position==capture.owner.catalog.prefix+1;
+    check(member.getString("id").equals(replaced?capture.result.id:capture.session.source.members.get(position).profileId),"detached proposal changed a different original position");
+    check(member.getString("mode").equals(replaced?"shadowsocks":capture.session.source.modes.get(position)),"detached proposal changed a retained original mode");
+   }
+   check(row.getString("multihop_execution").equals(capture.session.source.execution),"detached proposal changed requested execution");
    check(!row.toString().contains("api_token")&&!row.toString().contains("wg_private_key")&&!row.toString().contains(NodeCandidateHarness.custom(method).secret),"detached profile copied original private credentials");
    var after=new NodeChainCaptureHarness.State(f);
    for(Path path:before.files.keySet())if(!path.equals(f.rows))check(Arrays.equals(before.files.get(path),after.files.get(path)),"detached Save edited an original node source");
@@ -93,7 +103,7 @@ public final class NodeCandidateProfileHarness {
    reject(()->capture.temporary.save(f.context,"Expired detached receipt"),"expired detached result saved a profile");
    check(Arrays.equals(original,Files.readAllBytes(f.rows)),"expired result wrote profile storage");
    f.profiles.load(saved.id);
-   try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getInt("schema")==2,"detached saved path did not compile on normal explicit Load");}
+   try(var compiled=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){check(new JSONObject(compiled.launchInput).getInt("schema")==2&&compiled.memberInputs.size()==capture.session.source.members.size(),"detached saved path did not compile its complete original length on normal explicit Load");}
   }
  }
  static void cancellationDuringCompile(Path root)throws Exception{
@@ -107,7 +117,14 @@ public final class NodeCandidateProfileHarness {
   }finally{RouterNodeChain.afterConfig=null;operation.cancel();check(finished.await(10,TimeUnit.SECONDS),"compile-cancelled candidate did not join");}
  }
  public static void main(String[] args)throws Exception{
-  try{Path root=Path.of(args[0]);for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"))saveAfterDown(root,method);cancellationDuringCompile(root);System.out.println("Android detached candidate proposals: "+checks+" complete source, drain and explicit Save checks PASS");}
+  try{Path root=Path.of(args[0]);
+   if(args.length==2&&args[1].equals("execution")){
+    // Actual shared compilation proves saved source intent. The candidate
+    // callback and graph are the explicit doubles above, not remote forwarding.
+    for(String requested:List.of("server","auto"))for(String key:List.of("4/mixed-awg","8/mixed-awg"))saveAfterDown(root,"2022-blake3-aes-256-gcm",key,requested);
+    System.out.println("Android complete candidate proposal execution: "+checks+" shared source and saved-policy checks PASS");return;
+   }
+   for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"))saveAfterDown(root,method);cancellationDuringCompile(root);System.out.println("Android detached candidate proposals: "+checks+" complete source, drain and explicit Save checks PASS");}
   finally{RouterNodeChain.afterConfig=null;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}
  }
 }'''
@@ -128,12 +145,14 @@ def run_profiles(root,work,app,classes,jar,env):
     classpath=str(classes)+os.pathsep+str(jar)
     data=work/'candidate-profile-data';data.mkdir()
     subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(data)],env=env,check=True,timeout=120)
+    execution_data=work/'candidate-profile-execution-data';execution_data.mkdir()
+    subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(execution_data),'execution'],env=env,check=True,timeout=120)
     controls=(
         ('!operation.joined()||','', 'temporary proposal saved before original candidate join'),
         ('savedAuthority.requireCurrent(result);','', 'temporary proposal saved before original graph drain authority'),
         ('try{requireSavedCurrent();}catch','try{}catch', 'late detached authority change wrote profile storage'),
         ('||!result.current(System.currentTimeMillis())','', 'expired detached result saved a profile'),
-        ('throw new IllegalStateException("The compiler returned no complete proposed graph.");requireCurrent();','throw new IllegalStateException("The compiler returned no complete proposed graph.");', 'temporary proposal ignored cancellation during original graph compile'),
+        ('            requireCurrent();}\n        finally {compiled.close();}', '            }\n        finally {compiled.close();}', 'temporary proposal ignored cancellation during original graph compile'),
     )
     original=(app/'AndroidNodeCandidateProfile.java').read_text()
     for index,(old,new,witness) in enumerate(controls):
@@ -146,6 +165,21 @@ def run_profiles(root,work,app,classes,jar,env):
         failed=subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(data)],env=env,capture_output=True,text=True,timeout=120)
         assert failed.returncode!=0 and witness in failed.stderr,failed.stdout+failed.stderr
         print('Android detached proposal causal control rejected:',witness,flush=True)
+
+    original_store=(app/'AndroidConnectionProfileStore.java').read_text()
+    start=original_store.index('synchronized Record appendOrderedProposal(')
+    end=original_store.index('\n    }',start)
+    old='.put("multihop_execution",execution)'
+    assert original_store[start:end].count(old)==1
+    source=work/'candidate-execution-mutant'/'AndroidConnectionProfileStore.java';source.parent.mkdir()
+    source.write_text(original_store[:start]+original_store[start:end].replace(old,'.put("multihop_execution","local")')+original_store[end:])
+    target=source.parent/'classes';shutil.copytree(classes,target);classpath=str(target)+os.pathsep+str(jar)
+    subprocess.run(['javac','--release','17','-cp',classpath,'-d',str(target),str(source)],check=True,timeout=60)
+    data=source.parent/'private';data.mkdir()
+    failed=subprocess.run(['java','-cp',classpath,'com.eabusham.routervpn.NodeCandidateProfileHarness',str(data),'execution'],env=env,capture_output=True,text=True,timeout=120)
+    witness='detached proposal changed requested execution'
+    assert failed.returncode==1 and ('AssertionError: '+witness) in failed.stderr,failed.stdout+failed.stderr
+    print('Android detached proposal causal control rejected:',witness,flush=True)
 
 
 def run(root,work,app,classes,jar,env,imported_only=False):

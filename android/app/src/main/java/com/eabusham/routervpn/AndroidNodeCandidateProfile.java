@@ -21,6 +21,7 @@ final class AndroidNodeCandidateProfile {
     private final SavedResultAuthority savedAuthority;
     private final List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();
     private final List<String> modes=new ArrayList<>();
+    private final String execution;
     final String description;
     AndroidNodeCandidateProfile(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result)throws Exception {
         this(operation,result,null);
@@ -39,26 +40,36 @@ final class AndroidNodeCandidateProfile {
         String candidateMode=AndroidNodeCandidateCatalog.candidateMode(candidate);
         String actual=AndroidNodeChainCapture.memberInput(candidate,candidateMode,candidate.profile());
         if(!selected.input.equals(actual))throw new IllegalStateException("The measured source changed before proposal.");
-        for(int i=0;i<=catalog.prefix;i++){sources.add(catalog.session.source.members.get(i));modes.add(catalog.session.source.modes.get(i));}
-        sources.add(candidate);modes.add(candidateMode);
-        if(candidate.imported){
-            if(catalog.prefix!=0)throw new IllegalStateException("A custom candidate currently requires one first packet node and the original paired final node.");
-            AndroidNodeStore.ChainSource last=catalog.session.source.control;
-            sources.add(last);modes.add("shadowsocks");
-        }
+        AndroidNodeStore.ChainCapture original=catalog.originalSource;
+        int replacement=catalog.prefix+1;
+        if(original==null||replacement<1||replacement>=original.members.size()
+                ||original.members.size()!=original.modes.size()
+                ||!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(original.modes.get(catalog.prefix)))
+            throw new IllegalStateException("The measured packet prefix has no original next-hop position.");
+        execution=original.execution;
+        if(!java.util.Arrays.asList("local","server","auto").contains(execution))
+            throw new IllegalStateException("The measured original path lost its requested execution.");
+        // A score belongs to the next hop reached through this exact prefix.
+        // Keep every other saved member and policy; incompatible replacements
+        // must fail the complete compiler rather than silently truncate a tail.
+        sources.addAll(original.members);modes.addAll(original.modes);
+        sources.set(replacement,candidate);modes.set(replacement,candidateMode);
         JSONArray references=new JSONArray(),inputs=new JSONArray(),identities=new JSONArray();
         List<String> capturedInputs=new ArrayList<>(),capturedIdentities=new ArrayList<>();
         StringBuilder preview=new StringBuilder();long bytes=0;
+        java.util.Set<String> ids=new java.util.HashSet<>(),proofs=new java.util.HashSet<>();
         for(int i=0;i<sources.size();i++){
             AndroidNodeStore.ChainSource source=sources.get(i);bytes+=source.bytes().length;
+            if(!ids.add(source.profileId)||!source.proofId.isEmpty()&&!proofs.add(source.proofId))
+                throw new IllegalStateException("The measured replacement duplicates an original node identity.");
             references.put(new JSONObject().put("id",source.profileId).put("mode",modes.get(i)));
             if(i>0)preview.append(" → ");preview.append(source.profileId).append(" (").append(modes.get(i)).append(")");
         }
         if(bytes>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("The proposed original sources exceed their bound.");
         for(int i=0;i<sources.size();i++){
             AndroidNodeStore.ChainSource source=sources.get(i);JSONObject policy=source.profile();
-            if(i==sources.size()-1){policy.put("multihop_enabled",true).put("multihop_execution","local").put("multihop_nodes",references);for(String key:new String[]{"multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"})policy.remove(key);AndroidNodeStore.orderedSelection(policy);}
-            String member=AndroidNodeChainCapture.memberInput(source,modes.get(i),policy),identity=AndroidNodeChainCapture.identityInput(source);
+            if(i==sources.size()-1){policy.put("multihop_enabled",true).put("multihop_execution",execution).put("multihop_nodes",references);for(String key:new String[]{"multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"})policy.remove(key);AndroidNodeStore.orderedSelection(policy);}
+            String member=AndroidNodeChainCapture.memberInput(source,modes.get(i),"local".equals(execution)?policy:AndroidNodeChainCapture.executionProfile(policy)),identity=AndroidNodeChainCapture.identityInput(source);
             inputs.put(member);identities.put(identity);capturedInputs.add(member);capturedIdentities.add(identity);
         }
         int schema=AndroidNodeChainCapture.sourceSchema(sources);
@@ -66,16 +77,24 @@ final class AndroidNodeCandidateProfile {
         if(input.getBytes(StandardCharsets.UTF_8).length>AndroidNodeChainCapture.MAX_INPUT)throw new IllegalStateException("The complete proposed source exceeds its bound.");
         if(schema==4){
             try(AndroidNodeChainCONNECTCapture compiled=AndroidNodeChainCONNECTCapture.compile(input,capturedInputs,capturedIdentities)){
+                if(!"local".equals(execution))AndroidNodeChainCapture.validateCONNECTExecutionSource(compiled.source,execution);
                 requireCurrent();
             }
         }else if(schema==3){
             try(AndroidNodeChainSOCKSCapture compiled=AndroidNodeChainSOCKSCapture.compile(input,capturedInputs,capturedIdentities)){
+                if(!"local".equals(execution))AndroidNodeChainCapture.validateSOCKSExecutionSource(compiled.source,execution);
                 requireCurrent();
             }
         }else{
         RouterNodeChain compiled=Libbox.newRouterNodeChain(input);
         if(compiled==null)throw new IllegalStateException("The compiler returned no proposed path.");
-        try {if(compiled.config()==null||compiled.config().isEmpty())throw new IllegalStateException("The compiler returned no complete proposed graph.");requireCurrent();}
+        try {if(compiled.config()==null||compiled.config().isEmpty())throw new IllegalStateException("The compiler returned no complete proposed graph.");
+            JSONObject returned=new JSONObject(compiled.launchInput());
+            if(!"routervpn-node-chain-launch-input".equals(returned.getString("kind"))||returned.getInt("schema")!=schema||!"local".equals(returned.getString("execution"))
+                    ||!inputs.toString().equals(returned.getJSONArray("nodes").toString())||!identities.toString().equals(returned.getJSONArray("identity_sources").toString()))
+                throw new IllegalStateException("The native proposal replaced a captured member or paired identity.");
+            if(!"local".equals(execution))AndroidNodeChainCapture.validateExecutionPlan(compiled,execution);
+            requireCurrent();}
         finally {compiled.close();}
         }
         description=preview.toString();
@@ -89,7 +108,7 @@ final class AndroidNodeCandidateProfile {
     AndroidConnectionProfileStore.Record save(Context context,String name)throws Exception {
         synchronized(operation){
             requireSavedCurrent();AndroidConnectionProfileStore store=new AndroidConnectionProfileStore(context,new AndroidNodeStore(context),new AndroidStandardExitStore(context));
-            return store.appendOrderedProposal(name,sources,modes,()->{try{requireSavedCurrent();}catch(Exception stale){throw new IllegalStateException("Retest this original candidate before saving.",stale);}});
+            return store.appendOrderedProposal(name,sources,modes,execution,()->{try{requireSavedCurrent();}catch(Exception stale){throw new IllegalStateException("Retest this original candidate before saving.",stale);}});
         }
     }
 }
