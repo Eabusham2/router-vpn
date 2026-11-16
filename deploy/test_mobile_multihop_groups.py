@@ -213,6 +213,7 @@ MULTIPLE_IMPORTED_ROOTS = (
     'TestNodeChainMultipleImportedCompleteCapture',
     'TestNodeChainMultipleImportedProjectionAndDevicePolicy',
     'TestNodeChainMultipleImportedRejectsChangedOriginalOwners',
+    'TestNodeChainMultipleImportedObservationValidatesEachOriginalPolicy',
     'TestNodeChainMultipleImportedKeepsOlderCapabilitiesClosed',
     'TestNodeChainMultipleImportedProvesEachOriginalPublicIdentity',
     'TestNodeChainMultipleImportedMeasurementRoutesAndCancellation',
@@ -1142,7 +1143,7 @@ class PartitionTests(unittest.TestCase):
 
     def test_independent_imported_roots_remain_mandatory_disjoint_local_phases(self):
         groups = dict(partition(self.names))
-        self.assertEqual(len(MULTIPLE_IMPORTED_ROOTS), 10)
+        self.assertEqual(len(MULTIPLE_IMPORTED_ROOTS), 11)
         for root, (label, selector) in zip(MULTIPLE_IMPORTED_ROOTS, MULTIPLE_IMPORTED_PHASES):
             self.assertEqual(selector, '^' + root + '$')
             self.assertEqual(groups[label], [root])

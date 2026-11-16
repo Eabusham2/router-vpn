@@ -53,6 +53,22 @@ func (r *nodeChainImportedNodes) captureSeal() string {
 }
 
 func (r *nodeChainImportedNodes) current(c *NodeChain) bool {
+	if !r.originalOwnersCurrent(c) {
+		return false
+	}
+	for _, member := range r.members {
+		if member != nil && member.validate() != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// NodeChain.validateCapture validates every retained member in its positional
+// proof loop. Check the original aggregate owners first without running the
+// same full external-policy traversal twice during that one observation.
+// Constructor freeze still uses current, which also validates every member.
+func (r *nodeChainImportedNodes) originalOwnersCurrent(c *NodeChain) bool {
 	if r == nil || r.self != r || r.owner != c || c == nil || c.importedNodes != r ||
 		r.sourceJSON != c.sourceJSON || r.seal == "" || r.captureSeal() != r.seal ||
 		len(r.members) < 3 || len(r.members) > NodeChainMaximumNodes || len(r.members) != len(c.nodes) ||
@@ -72,7 +88,7 @@ func (r *nodeChainImportedNodes) current(c *NodeChain) bool {
 			continue
 		}
 		if position == 0 || position == len(r.members)-1 || c.nodes[position] != nil ||
-			member.validate() != nil || member.input != r.inputs[position] ||
+			member.input != r.inputs[position] ||
 			member.policy != r.policies[position] || member.hostname != r.hostnames[position] || member.hostname != nil {
 			return false
 		}

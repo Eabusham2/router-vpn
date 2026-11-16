@@ -335,7 +335,7 @@ func (c *NodeChain) validateCapture() error {
 		return nodeChainError
 	}
 	if c.importedNodes != nil && (c.importedMiddle != nil || c.importedOwners != nil || c.openVPNMiddle != nil ||
-		c.openVPNOwners != nil || c.socksSource != nil || c.connectSource != nil || !c.importedNodes.current(c)) {
+		c.openVPNOwners != nil || c.socksSource != nil || c.connectSource != nil || !c.importedNodes.originalOwnersCurrent(c)) {
 		return nodeChainError
 	}
 	if c.connectSource != nil && c.validateCONNECTSource() != nil {
