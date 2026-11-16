@@ -166,8 +166,8 @@ public final class NodeChainExecutionCaptureHarness {
    f.profiles.delete(saved.id);check(f.members.stream().allMatch(n->n.file.isFile()),"Delete removed referenced private sources");
   }
   for(String requested:List.of("server","auto")){
-   var hy2=new NodeChainCaptureHarness.Fixture(root,"2/hy2-wg");var draft=new AndroidOrderedPathSelection(hy2.nodes,hy2.profiles);var before=new NodeChainCaptureHarness.State(hy2);
-   reject(()->draft.setExecution(requested),"Server/Compare accepted a HY2 final without a native execution compiler");before.same(hy2,"unsupported execution choice");
+   var hy2=new NodeChainCaptureHarness.Fixture(root,"2/hy2-wg");JSONObject layered=hy2.bundle(1);NodeChainCaptureHarness.profile(layered).put("start_layer","aes-256-gcm");hy2.replace(1,layered);var draft=new AndroidOrderedPathSelection(hy2.nodes,hy2.profiles);var before=new NodeChainCaptureHarness.State(hy2);
+   reject(()->draft.setExecution(requested),"Server/Compare accepted a layered HY2 final");before.same(hy2,"unsupported execution choice");
    check(draft.execution().equals("local"),"invalid execution choice changed the draft");
    for(String protocol:List.of("socks5","http","https")){
     boolean isSOCKS=protocol.equals("socks5");String family=isSOCKS?"SOCKS":"CONNECT";int schema=isSOCKS?3:4;
@@ -196,29 +196,69 @@ public final class NodeChainExecutionCaptureHarness {
   }
  }
 
- static void exportLastSources(Path root)throws Exception{
+
+ static void hysteria(Path root)throws Exception{
+  for(String key:List.of("2/hy2-wg","8/hy2-long"))for(String requested:List.of("server","auto")){
+   var f=new NodeChainCaptureHarness.Fixture(root,key);int count=f.members.size();var ui=new OrderedProductSurface(f);ui.open();ui.choose(0);ui.execution();ui.choose(requested.equals("server")?1:2);ui.save();
+   check(f.profiles.currentOrderedPath().execution.equals(requested),"paired HY2 public execution was refused");
+   try(var local=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath());var captured=AndroidNodeChainExecutionCapture.compile(local,requested);var replay=AndroidNodeChainExecutionCapture.reopen(local,captured.launchInput)){
+    JSONObject original=new JSONObject(local.launchInput),returned=new JSONObject(new JSONObject(captured.source).getString("local_source"));
+    check(local.socks==null&&local.connect==null&&!local.openVPN&&original.getInt("schema")==1&&returned.getInt("schema")==1,"paired HY2 entered an imported execution family");
+    check(original.getJSONArray("nodes").length()==count&&original.getJSONArray("nodes").toString().equals(returned.getJSONArray("nodes").toString())&&original.getJSONArray("identity_sources").toString().equals(returned.getJSONArray("identity_sources").toString()),"paired HY2 execution replaced source or independent identities");
+    JSONObject last=new JSONObject(returned.getJSONArray("nodes").getString(count-1));check(last.getString("mode").equals("hysteria2")&&last.getString("start").isEmpty(),"paired HY2 final changed transport or final layer");
+    check(captured.source.equals(replay.source)&&captured.config.equals(replay.config),"paired HY2 execution replay changed the native graph");
+    reject(captured::execution,"source-only HY2 preparation fabricated current native proof");
+   }
+   var saved=f.profiles.add("Paired HY2 "+requested);f.changePolicies();f.profiles.load(saved.id);
+   check(f.profiles.currentOrderedPath().execution.equals(requested)&&f.profiles.currentOrderedPath().modes.get(count-1).equals("hysteria2"),"paired HY2 saved Load lost original choice");
+   for(int i=0;i<count;i++)check(ConnectionProfilesHarness.sameJSONValue(f.bundle(i).get("profiles"),f.original.get(i).get("profiles"))&&NodeChainCaptureHarness.profile(f.bundle(i)).getString("api_token").equals(NodeChainCaptureHarness.profile(f.original.get(i)).getString("api_token")),"paired HY2 profile action replaced credentials or trust");
+   var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);String changed=requested.equals("auto")?"server":"auto";draft.setExecution(changed);draft.save();f.profiles.update(saved.id,"Updated paired HY2");f.changePolicies();f.profiles.load(saved.id);
+   check(f.profiles.currentOrderedPath().execution.equals(changed),"paired HY2 Update lost exact requested execution");
+   f.changePolicies();var before=new NodeChainCaptureHarness.State(f);Libbox.afterExecution=plan->{throw new IllegalStateException("controlled paired HY2 preview refusal");};
+   try{reject(()->f.profiles.load(saved.id),"paired HY2 Load bypassed real execution compiler refusal");before.same(f,"paired HY2 preview rollback");}finally{Libbox.afterExecution=null;}
+   f.profiles.delete(saved.id);check(f.members.stream().allMatch(n->n.file.isFile()),"paired HY2 Delete removed private linked source");
+  }
+  for(String requested:List.of("server","auto"))for(String fault:List.of("final-layer","proxy-prefix","imported-prefix","wrong-final")){
+   var f=new NodeChainCaptureHarness.Fixture(root,fault.equals("imported-prefix")?"3/hy2-awg-fast":"2/hy2-wg");int last=f.members.size()-1;JSONObject profile=NodeChainCaptureHarness.profile(f.bundle(last));profile.put("multihop_execution",requested);
+   if(fault.equals("final-layer"))profile.put("start_layer","aes-256-gcm");
+   if(fault.equals("proxy-prefix"))profile.getJSONArray("multihop_nodes").getJSONObject(0).put("mode","hysteria2");
+   if(fault.equals("imported-prefix"))profile.getJSONArray("multihop_nodes").getJSONObject(last-1).put("mode","shadowsocks");
+   if(fault.equals("wrong-final"))profile.getJSONArray("multihop_nodes").getJSONObject(last).put("mode","naive-h2");
+   reject(()->AndroidNodeStore.orderedSelection(profile),"paired HY2 saved selection admitted unsupported graph: "+fault);
+  }
+  for(String key:List.of("2/hy2-wg","8/hy2-long")){
+   var missing=new NodeChainCaptureHarness.Fixture(root,key);int last=missing.members.size()-1;JSONObject bundle=missing.bundle(last);bundle.getJSONObject("profiles").remove("wg");missing.replace(last,bundle);var prior=new NodeChainCaptureHarness.State(missing);
+   reject(()->missing.chooseExecution("server"),"paired HY2 execution admitted missing independent identity asset");prior.same(missing,"paired HY2 independent identity refusal");
+  }
+  var f=new NodeChainCaptureHarness.Fixture(root,"2/hy2-wg");var external=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");external.server="198.51.100.76";new AndroidStandardExitStore(f.context).save(external);var before=new NodeChainCaptureHarness.State(f);
+  reject(()->new AndroidOrderedPathSelection(f.nodes,f.profiles).addPrefix(external.id,"shadowsocks"),"paired HY2 editor admitted imported middle");before.same(f,"paired HY2 imported middle refusal");
+ }
+
+ static void exportLastSources(Path root)throws Exception{exportLastSources(root,false);}
+ static void exportLastSources(Path root,boolean hysteria)throws Exception{
   JSONObject exported=new JSONObject();
-  for(int count:new int[]{0,4,8})for(String mode:List.of("server/server","auto/local","auto/server")){
-   String variant=count==0?mode:"imported-"+count+"/"+mode,requested=mode.split("/")[0];var f=new NodeChainCaptureHarness.Fixture(root,count==0?"3/":(count-1)+"/");
-   if(count!=0){var custom=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");custom.server="198.51.100.76";custom.expectedPublicIp="203.0.113.88";new AndroidStandardExitStore(f.context).save(custom);var editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);editor.addPrefix(custom.id,"shadowsocks");editor.setExecution(requested);editor.save();}else f.chooseExecution(requested);
+  for(int count:hysteria?new int[]{2,8}:new int[]{0,4,8})for(String mode:List.of("server/server","auto/local","auto/server")){
+   String variant=hysteria?"hysteria-"+count+"/"+mode:count==0?mode:"imported-"+count+"/"+mode,requested=mode.split("/")[0];var f=new NodeChainCaptureHarness.Fixture(root,hysteria?(count==2?"2/hy2-wg":"8/hy2-long"):count==0?"3/":(count-1)+"/");
+   if(count!=0&&!hysteria){var custom=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");custom.server="198.51.100.76";custom.expectedPublicIp="203.0.113.88";new AndroidStandardExitStore(f.context).save(custom);var editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);editor.addPrefix(custom.id,"shadowsocks");editor.setExecution(requested);editor.save();}else f.chooseExecution(requested);
    // Startup timing does not change the native graph identity.
    JSONObject bundle=f.bundle(f.members.size()-1);NodeChainCaptureHarness.profile(bundle).put("startup_mode","last").put("auto_connect",true);f.replace(f.members.size()-1,bundle);
    try(var local=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){
     JSONArray bundles=new JSONArray();for(int i=0;i<f.members.size();i++)bundles.put(f.bundle(i));
     JSONObject projected=new JSONObject(new JSONObject(local.memberInputs.get(local.memberInputs.size()-1)).getString("profile_json"));
     check(!projected.has("startup_mode")&&!projected.has("auto_connect")&&NodeChainCaptureHarness.profile(f.bundle(f.members.size()-1)).getBoolean("auto_connect"),"execution projection changed private startup choices or included timing in native identity");
-    exported.put(variant,new JSONObject().put("bundles",bundles).put("local_launch",local.launchInput).put("requested",requested).put("selected",mode.split("/")[1]).put("imported_store",count==0?"":Files.readString(f.context.getFilesDir().toPath().resolve("standard-exits.json"))));
+    exported.put(variant,new JSONObject().put("bundles",bundles).put("local_launch",local.launchInput).put("requested",requested).put("selected",mode.split("/")[1]).put("imported_store",count==0||hysteria?"":Files.readString(f.context.getFilesDir().toPath().resolve("standard-exits.json"))));
    }
   }
   Files.writeString(Path.of(System.getenv("ROUTERVPN_ANDROID_EXECUTION_LAST_INPUT")),exported.toString());
  }
- static void lastSources(Path root)throws Exception{
+ static void lastSources(Path root)throws Exception{lastSources(root,false);}
+ static void lastSources(Path root,boolean hysteria)throws Exception{
   JSONObject sources=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_EXECUTION_LAST_INPUT"))));
   JSONObject records=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_EXECUTION_LAST_OUTPUT"))));
-  for(int count:new int[]{0,4,8})for(String mode:List.of("server/server","auto/local","auto/server")){
-   String variant=count==0?mode:"imported-"+count+"/"+mode;
+  for(int count:hysteria?new int[]{2,8}:new int[]{0,4,8})for(String mode:List.of("server/server","auto/local","auto/server")){
+   String variant=hysteria?"hysteria-"+count+"/"+mode:count==0?mode:"imported-"+count+"/"+mode;
    JSONObject original=sources.getJSONObject(variant);var f=new NodeChainCaptureHarness.Fixture(root,original.getJSONArray("bundles"));String requested=original.getString("requested"),raw=records.getString(variant);
-   if(count!=0)Files.writeString(f.context.getFilesDir().toPath().resolve("standard-exits.json"),original.getString("imported_store"));
+   if(count!=0&&!hysteria)Files.writeString(f.context.getFilesDir().toPath().resolve("standard-exits.json"),original.getString("imported_store"));
    try(var local=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath());var last=AndroidNodeChainExecutionCapture.fromLast(local,requested,raw)){
     check(local.launchInput.equals(original.getString("local_launch")),"Last fixture changed the original Android launch before native parsing");
     JSONObject launch=new JSONObject(last.launchInput);check(launch.getInt("schema")==2&&launch.getString("last").equals(raw)&&new JSONObject(raw).getString("execution").equals(original.getString("selected")),"actual native Last parser lost saved choice or distinct envelope");
@@ -233,7 +273,7 @@ public final class NodeChainExecutionCaptureHarness {
    }
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";if(family.equals("last-export")){exportLastSources(root);return;}if(family.equals("last")){lastSources(root);System.out.println("Android exact native Last source: "+checks+" checks PASS");return;}if(family.equals("all")||family.equals("source")){source(root);System.out.println("Android source phase completed: source");}if(family.equals("all")||family.equals("public")){publicRoundtrip(root);System.out.println("Android source phase completed: publicRoundtrip");}if(family.equals("all")||family.equals("readback")){nativeReadback(root);System.out.println("Android source phase completed: nativeReadback");}if(family.equals("all")||family.equals("changed")){changedSource(root);System.out.println("Android source phase completed: changedSource");}if(family.equals("all")||family.equals("imported")){importedSource(root);System.out.println("Android source phase completed: importedSource");}if(family.equals("imported-prefix")){importedPrefixSource(root);System.out.println("Android source phase completed: importedPrefixSource");}if(family.equals("all")||family.equals("imported-readback")){importedReadback(root);System.out.println("Android source phase completed: importedReadback");}System.out.println("Android execution source: "+checks+" checks; actual shared preparation with original all-member captures PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";if(family.equals("hysteria")){hysteria(root);System.out.println("Android paired HY2 execution: "+checks+" checks PASS");return;}if(family.equals("hysteria-last-export")){exportLastSources(root,true);return;}if(family.equals("hysteria-last")){lastSources(root,true);System.out.println("Android paired HY2 native Last source: "+checks+" checks PASS");return;}if(family.equals("last-export")){exportLastSources(root);return;}if(family.equals("last")){lastSources(root);System.out.println("Android exact native Last source: "+checks+" checks PASS");return;}if(family.equals("all")||family.equals("source")){source(root);System.out.println("Android source phase completed: source");}if(family.equals("all")||family.equals("public")){publicRoundtrip(root);System.out.println("Android source phase completed: publicRoundtrip");}if(family.equals("all")||family.equals("readback")){nativeReadback(root);System.out.println("Android source phase completed: nativeReadback");}if(family.equals("all")||family.equals("changed")){changedSource(root);System.out.println("Android source phase completed: changedSource");}if(family.equals("all")||family.equals("imported")){importedSource(root);System.out.println("Android source phase completed: importedSource");}if(family.equals("imported-prefix")){importedPrefixSource(root);System.out.println("Android source phase completed: importedPrefixSource");}if(family.equals("all")||family.equals("imported-readback")){importedReadback(root);System.out.println("Android source phase completed: importedReadback");}System.out.println("Android execution source: "+checks+" checks; actual shared preparation with original all-member captures PASS");}
 }
 '''
 
@@ -277,6 +317,16 @@ func androidImportedLastExecutionSource(t *testing.T,local *NodeChain,source Nod
 }
 '''
 
+
+HYSTERIA_LAST_NAMES = tuple("hysteria-"+str(count)+"/"+mode for count in (2,8)
+                            for mode in ("server/server","auto/local","auto/server"))
+HYSTERIA_LAST_GENERATOR = LAST_GENERATOR.replace(
+    "TestAndroidOrderedExecutionLastSourceFixture", "TestAndroidHysteriaExecutionLastSourceFixture"
+).replace('len(rows)!=9', 'len(rows)!=6').replace('len(records)!=9', 'len(records)!=6').replace(
+    '"server/server","auto/local","auto/server","imported-4/server/server","imported-4/auto/local","imported-4/auto/server","imported-8/server/server","imported-8/auto/local","imported-8/auto/server"',
+    ','.join(json.dumps(name) for name in HYSTERIA_LAST_NAMES))
+
+
 def prepare_sources(src, app, java):
     LOCAL.prepare_sources(src, app, java)
     shutil.copyfile(java / "AndroidNodeChainExecutionCapture.java", app / "AndroidNodeChainExecutionCapture.java")
@@ -307,6 +357,15 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     last_overlay.write_text(json.dumps({"Replace":{str(root/"internal/mobilemultihop/android_execution_last_fixture_test.go"):str(last_generator)}}))
     subprocess.run(["go","test","-p=1","-count=1","-overlay="+str(last_overlay),"./internal/mobilemultihop","-run","^TestAndroidOrderedExecutionLastSourceFixture$"],cwd=root,env=env,check=True,timeout=180)
     subprocess.run([*command,"last"],env=env,check=True,timeout=120)
+    subprocess.run([*command,"hysteria"], env=env, check=True, timeout=120)
+    env["ROUTERVPN_ANDROID_EXECUTION_LAST_INPUT"]=str(work/"hysteria-last-sources.json")
+    env["ROUTERVPN_ANDROID_EXECUTION_LAST_OUTPUT"]=str(work/"hysteria-last-records.json")
+    subprocess.run([*command,"hysteria-last-export"],env=env,check=True,timeout=120)
+    hy_generator=work/"android_hysteria_last_fixture_test.go";hy_generator.write_text(HYSTERIA_LAST_GENERATOR)
+    hy_overlay=work/"hysteria-last-overlay.json"
+    hy_overlay.write_text(json.dumps({"Replace":{str(root/"internal/mobilemultihop/android_hysteria_last_fixture_test.go"):str(hy_generator)}}))
+    subprocess.run(["go","test","-p=1","-count=1","-overlay="+str(hy_overlay),"./internal/mobilemultihop","-run","^TestAndroidHysteriaExecutionLastSourceFixture$"],cwd=root,env=env,check=True,timeout=180)
+    subprocess.run([*command,"hysteria-last"],env=env,check=True,timeout=120)
     original = (app / "AndroidNodeChainExecutionCapture.java").read_text()
     controls = (
         ("complete-prefix", 'originalSchema == 3 && (originalCount < 3 || originalCount > 8)', '(originalSchema == 2 || originalSchema == 3) && originalCount != 3', 'imported-prefix', 'Server execution requires every original member'),
@@ -353,6 +412,22 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         if result.returncode==0 or witness not in result.stderr:
             raise AssertionError(name+" missed exact public transaction witness:\n"+result.stdout+result.stderr)
         print("Android execution public causal control rejected: "+name)
+
+    admission_controls = (
+        ("hysteria-final-layer", "AndroidNodeStore.java", 'if (hysteriaFinal && !java.util.Arrays.asList("", "off").contains(profile.optString("start_layer", "off")))', 'if (false)', 'paired HY2 saved selection admitted unsupported graph: final-layer'),
+        ("hysteria-imported", "AndroidNodeStore.java", '&& !(!hysteriaFinal && selected.length()>=3', '&& !(selected.length()>=3', 'paired HY2 saved selection admitted unsupported graph: imported-prefix'),
+    )
+    for name, filename, old, new, witness in admission_controls:
+        original_source=(app/filename).read_text()
+        assert original_source.count(old)==1,name
+        source=work/("execution-mutant-"+name)/filename;source.parent.mkdir();source.write_text(original_source.replace(old,new,1))
+        output=work/("execution-negative-"+name);shutil.copytree(classes,output)
+        cp=str(output)+os.pathsep+str(jar)
+        subprocess.run(["javac","--release","17","-encoding","UTF-8","-proc:none","-cp",cp,"-d",str(output),str(source)],check=True,timeout=60)
+        result=subprocess.run(["java","-cp",cp,command[3],str(data),"hysteria"],env=env,text=True,capture_output=True,timeout=120)
+        if result.returncode==0 or witness not in result.stderr:
+            raise AssertionError(name+" missed exact paired HY2 admission witness:\n"+result.stdout+result.stderr)
+        print("Android paired HY2 admission causal control rejected: "+name)
 
 
 if __name__ == "__main__":

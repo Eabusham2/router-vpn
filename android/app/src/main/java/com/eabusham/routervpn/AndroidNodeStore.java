@@ -541,12 +541,15 @@ final class AndroidNodeStore {
             throw new IllegalStateException("The selected control must be the original final ordered member.");
         }
         if (!"local".equals(profile.getString("multihop_execution"))) {
-            if (!"shadowsocks".equals(selected.getJSONObject(selected.length()-1).getString("mode")))
-                throw new IllegalStateException("Ordered Server and Compare require the original Shadowsocks 2022 final.");
+            boolean hysteriaFinal="hysteria2".equals(selected.getJSONObject(selected.length()-1).getString("mode"));
+            if (hysteriaFinal && !java.util.Arrays.asList("", "off").contains(profile.optString("start_layer", "off")))
+                throw new IllegalStateException("Paired Hysteria2 execution retains its original final Start Layer Off.");
+            if (!hysteriaFinal&&!"shadowsocks".equals(selected.getJSONObject(selected.length()-1).getString("mode")))
+                throw new IllegalStateException("Ordered Server and Compare require an original Shadowsocks 2022 or paired Hysteria2 final.");
             for (int i=0;i<selected.length()-1;i++) {
                 String mode=selected.getJSONObject(i).getString("mode");
                 if (!java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(mode)
-                        && !(selected.length()>=3 && i==selected.length()-2 && ("shadowsocks".equals(mode)
+                        && !(!hysteriaFinal && selected.length()>=3 && i==selected.length()-2 && ("shadowsocks".equals(mode)
                             || java.util.Arrays.asList("http-connect","https-connect").contains(mode)
                             || "socks5".equals(mode) || "openvpn".equals(mode))))
                     throw new IllegalStateException("This ordered transport has no supported Server or Compare graph.");

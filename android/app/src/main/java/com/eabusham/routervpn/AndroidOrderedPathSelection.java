@@ -241,8 +241,14 @@ final class AndroidOrderedPathSelection {
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();for(Member member:members)sources.add(member.source);
         int schema=AndroidNodeChainCapture.sourceSchema(sources);
         if(!"local".equals(execution)&&!members.isEmpty()) {
-            if(schema>5||schema==3&&(members.size()<3||members.size()>8)||schema==4&&(members.size()<3||members.size()>8)||schema==5&&(members.size()<3||members.size()>8)||!"shadowsocks".equals(members.get(members.size()-1).mode))
-                throw new IllegalStateException("Server and Compare require paired packet prefixes before the Shadowsocks 2022 final. A supported Shadowsocks, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN middle may retain three to eight nodes; a Shadowsocks hostname requires at least four.");
+            boolean hysteriaFinal=schema==1&&"hysteria2".equals(members.get(members.size()-1).mode);
+            if(hysteriaFinal) {
+                if(members.size()<2||members.size()>8)throw new IllegalStateException("Paired Hysteria2 execution requires two to eight original nodes.");
+                for(int i=0;i<members.size()-1;i++)if(members.get(i).source.imported||!List.of("wg","awg2-fast","awg2-strong").contains(members.get(i).mode))
+                    throw new IllegalStateException("Hysteria2 execution requires only original paired packet prefixes.");
+            }
+            if(schema>5||schema==3&&(members.size()<3||members.size()>8)||schema==4&&(members.size()<3||members.size()>8)||schema==5&&(members.size()<3||members.size()>8)||!hysteriaFinal&&!"shadowsocks".equals(members.get(members.size()-1).mode))
+                throw new IllegalStateException("Server and Compare require paired packet prefixes before the Shadowsocks 2022 final or an original paired Hysteria2 final with its Start Layer Off. Imported middle paths retain their Shadowsocks 2022 final; a Shadowsocks hostname requires at least four nodes.");
             for(Member member:members)if(member.source.imported) {
                 AndroidStandardExitStore.Entry imported=member.source.external();
                 if(AndroidStandardExitStore.importedHostname(imported)) {
