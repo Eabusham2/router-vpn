@@ -204,6 +204,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_socks_execution_controller.py',
                              ROOT/'deploy/test_desktop_socks_execution_controller_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution.py',
+                             ROOT/'deploy/test_mobile_node_chain_execution_runner.py',
+                             ROOT/'deploy/test_mobile_node_chain_execution_preparation.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_proxy_xray.py',

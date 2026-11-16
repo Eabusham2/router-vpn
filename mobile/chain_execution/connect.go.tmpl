@@ -99,7 +99,7 @@ func (m *RouterNodeChainExecution) NewCommandServer(handler CommandServerHandler
 		return nil, err
 	}
 	defer m.mu.Unlock()
-	if m.retired.Load() || m.started || m.native.Load() != nil || m.state.Load() != nil || m.connectServer.Load() != nil {
+	if m.retired.Load() || m.openvpnServer.Load() != nil || m.started || m.native.Load() != nil || m.state.Load() != nil || m.connectServer.Load() != nil {
 		return nil, errRouterNodeChainExecution
 	}
 	source, err := m.prep.OriginalCONNECTSource()

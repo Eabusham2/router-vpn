@@ -362,7 +362,7 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   go_retry test -race ./route -run '^TestRouterVPNStrategyInterface' -count=1 -timeout=90s
   go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor . ./route -run '^TestRouterVPNNodeChain' -count=1 -timeout=90s
   go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor . -run '^TestRouterVPNExecutionNativeSOCKS' -count=1 -timeout=90s
-  go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge|NodeChainSOCKS|NodeChainCONNECT|NodeChainLatency|NodeChainOrdinary|NodeChainRemaining)' -count=1
+  go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_openvpn ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge|NodeChainExecutionBridgeOpenVPN|NodeChainSOCKS|NodeChainCONNECT|NodeChainLatency|NodeChainOrdinary|NodeChainRemaining)' -count=1
   go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodesocks -run '^TestOriginalSOCKS' -count=1 -timeout=90s
   go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodeconnect -run '^TestCONNECT' -count=1 -timeout=90s
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
@@ -372,7 +372,7 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./transport/wireguard -run TestRouterVPNClientBind -count=1
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf -count=1 -timeout=120s
   python3 "$ROOT/../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
-  go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox
+  go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_openvpn ./experimental/libbox
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_mobile_external_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_CORE_VENDOR"

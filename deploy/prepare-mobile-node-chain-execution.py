@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-mobile-node-chain-execution-source.json'
 TEMPLATES = {
+    'openvpn.go.tmpl': 'experimental/libbox/routervpn_node_chain_openvpn_execution_mobile.go',
+    'openvpn_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_openvpn_execution_mobile_test.go',
     'socks_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_execution_mobile_test.go',
     'socks.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_execution_mobile.go',
     'connect_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_execution_mobile_test.go',
@@ -75,7 +77,11 @@ ACQUIRE_AFTER = ACQUIRE_BEFORE+'\tcapturedInstance = i\n'
 
 
 def inputs():
-    return [Path(__file__).resolve(), *(ROOT/'mobile/chain_execution'/name for name in sorted(TEMPLATES)), *(ROOT/path for path in sorted(PREREQUISITES.values()))]
+    return [Path(__file__).resolve(),
+            *(ROOT/'deploy'/name for name in ('test_mobile_node_chain_execution.py',
+                'test_mobile_node_chain_execution_runner.py', 'test_mobile_node_chain_execution_preparation.py')),
+            *(ROOT/'mobile/chain_execution'/name for name in sorted(TEMPLATES)),
+            *(ROOT/path for path in sorted(PREREQUISITES.values()))]
 
 
 def digest():
@@ -142,7 +148,9 @@ def prepare(vendor):
         latency = {'experimental/libbox/routervpn_node_chain_execution_latency.go', 'experimental/libbox/routervpn_node_chain_execution_latency_test.go'}
         connect = {TEMPLATES[name] for name in ('connect.go.tmpl', 'connect_test.go.tmpl')}
         socks = {TEMPLATES[name] for name in ('socks.go.tmpl', 'socks_test.go.tmpl')}
-        inventories = tuple(current-previous_last-previous_restore-previous_latency-previous_connect-previous_socks
+        openvpn = {TEMPLATES[name] for name in ('openvpn.go.tmpl', 'openvpn_test.go.tmpl')}
+        inventories = tuple(current-previous_openvpn-previous_last-previous_restore-previous_latency-previous_connect-previous_socks
+                            for previous_openvpn in (set(), openvpn)
                             for previous_last in (set(), last)
                             for previous_restore in (set(), restore_test)
                             for previous_latency in (set(), latency)

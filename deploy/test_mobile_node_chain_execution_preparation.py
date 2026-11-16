@@ -2,6 +2,8 @@
 """Original-source and native close-boundary preparation controls; no native I/O."""
 import importlib.util
 import json
+import re
+import shlex
 from pathlib import Path
 import tempfile
 import unittest
@@ -33,6 +35,54 @@ class Preparation(unittest.TestCase):
     def prepare(self, vendor, pin=None):
         with patch.object(P.subprocess, 'check_output', return_value=(pin or P.PIN)+'\n'):
             P.prepare(vendor)
+
+    def test_execution_validation_changes_invalidate_artifact_reuse(self):
+        required = {ROOT/'deploy'/name for name in (
+            'test_mobile_node_chain_execution.py',
+            'test_mobile_node_chain_execution_runner.py',
+            'test_mobile_node_chain_execution_preparation.py')}
+        modules = [('bridge', P)]
+        for name in ('prepare-mobile-multihop', 'build-native-runtime'):
+            spec = importlib.util.spec_from_file_location('execution_cache_'+name, ROOT/'deploy'/(name+'.py'))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            modules.append((name, module))
+        for name, module in modules:
+            with self.subTest(cache=name):
+                self.assertTrue(required <= set(module.inputs()), name)
+
+    def test_openvpn_bridge_roots_are_required_by_both_real_build_commands(self):
+        roots = re.findall(r'^func (Test\w+)\(', (ROOT/'mobile/chain_execution/openvpn_test.go.tmpl').read_text(), re.M)
+        self.assertEqual(roots, ['TestRouterNodeChainExecutionBridgeOpenVPNOriginalSource',
+                                 'TestRouterNodeChainExecutionBridgeOpenVPNOriginalFactory'])
+        def selected(shell):
+            commands = [shlex.split(line) for line in shell.splitlines()
+                        if re.match(r'\s*(?:go|go_retry) test ', line)]
+            commands = [x for x in commands if './experimental/libbox' in x]
+            for command in commands:
+                self.assertIn('-tags', command)
+                self.assertTrue({'with_openvpn', 'with_gvisor'}.issubset(
+                    command[command.index('-tags')+1].split(',')), 'real OpenVPN registry omitted')
+            for root in roots:
+                self.assertTrue(any('-run' not in x or re.search(x[x.index('-run')+1], root)
+                                    for x in commands), root)
+            self.assertTrue(any('-run' in x and all(re.search(x[x.index('-run')+1], root)
+                                                   for root in roots) for x in commands),
+                            'required explicit OpenVPN bridge selector omitted')
+        for name in ('android/build-sing-box-libbox.sh', 'ios/RouterVPN/prepare-libbox.sh'):
+            source = (ROOT/name).read_text()
+            selected(source)
+            anchor = '|NodeChainExecutionBridgeOpenVPN'
+            self.assertEqual(source.count(anchor), 1)
+            with self.subTest(build=name), self.assertRaises(AssertionError):
+                selected(source.replace(anchor, '', 1)+'\n# decoy '+anchor+'\n')
+            commands = [line for line in source.splitlines() if re.match(r'\s*(?:go|go_retry) test ', line)
+                        and './experimental/libbox' in shlex.split(line)]
+            for command in commands:
+                self.assertIn(',with_openvpn ', command)
+                with self.subTest(build=name, command=command), self.assertRaises(AssertionError):
+                    selected(source.replace(command, command.replace(',with_openvpn ', ' ', 1), 1)
+                             +'\n# decoy with_openvpn\n')
 
     def test_complete_original_and_idempotent(self):
         with tempfile.TemporaryDirectory() as parent:
@@ -76,6 +126,30 @@ class Preparation(unittest.TestCase):
         cases = ((socks, True), (socks | connect, True),
                  ({sorted(socks)[0]}, False), ({sorted(socks)[1]}, False),
                  (socks | {sorted(connect)[0]}, False))
+        for removed, accepted in cases:
+            with self.subTest(removed=removed), tempfile.TemporaryDirectory() as parent:
+                vendor = self.fixture(parent)
+                self.prepare(vendor)
+                record = json.loads((vendor/P.OWNER).read_bytes())
+                for relative in removed:
+                    del record['files'][relative]
+                    (vendor/relative).unlink()
+                (vendor/P.OWNER).write_text(json.dumps(record))
+                before = {str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
+                if accepted:
+                    self.prepare(vendor)
+                    self.assertEqual(set(json.loads((vendor/P.OWNER).read_bytes())['files']), set(P.TEMPLATES.values()))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'ownership inventory'):
+                        self.prepare(vendor)
+                    self.assertEqual(before, {str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
+
+    def test_openvpn_upgrade_requires_the_complete_owned_pair(self):
+        openvpn = {P.TEMPLATES[name] for name in ('openvpn.go.tmpl', 'openvpn_test.go.tmpl')}
+        connect = {P.TEMPLATES[name] for name in ('connect.go.tmpl', 'connect_test.go.tmpl')}
+        cases = ((openvpn, True), (openvpn | connect, True),
+                 ({sorted(openvpn)[0]}, False), ({sorted(openvpn)[1]}, False),
+                 (openvpn | {sorted(connect)[0]}, False))
         for removed, accepted in cases:
             with self.subTest(removed=removed), tempfile.TemporaryDirectory() as parent:
                 vendor = self.fixture(parent)
