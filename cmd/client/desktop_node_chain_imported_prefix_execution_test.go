@@ -52,8 +52,8 @@ func TestDesktopImportedPrefixExecutionOriginalPreparation(t *testing.T) {
 					if owner.validateSource() == nil {
 						t.Fatal("equal source replaced original prefix preparation")
 					}
-					if desktopDarwinImportedTrioExecutionMembers(selected.Nodes, requested) {
-						t.Fatal("long prefix acquired separate Darwin trio admission")
+					if !desktopDarwinImportedTrioExecutionMembers(selected.Nodes, requested) {
+						t.Fatal("complete imported source lost Darwin shape admission")
 					}
 				})
 			}

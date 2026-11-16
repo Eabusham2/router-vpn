@@ -6,6 +6,23 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 16: complete macOS imported Shadowsocks admission and profiles
+
+AppKit's ordered draft, Connect and complete profile callbacks now retain
+three-to-eight-member literal imported Shadowsocks Server/Compare paths. The
+Darwin admission predicate validates every paired prefix and independent Start
+Layer, the penultimate import and the paired Shadowsocks final. Existing typed
+CONNECT bounds, source tokens and native parent/child ownership remain intact.
+
+The complete extracted AppKit suite passed 16,669 checks and all 59 compiled
+causal controls. All 60 generated programs and negative witnesses retained
+their exact contents after the concurrent Windows/Linux merge. Current-source
+Go validation passed 75 Darwin/profile records plus all eight existing longer
+Windows/Linux preparation cases under race instrumentation. These are source
+and component results; installed native networking, current packages, physical
+devices and deployment require their own evidence. See the
+[macOS prefix evidence](MACOS-IMPORTED-EXECUTION-PREFIX-EVIDENCE-2026-11-16.md).
+
 ## November 16: complete Windows/Linux imported Shadowsocks execution
 
 The Windows and GTK ordered editors, public controller, complete connection
@@ -14,7 +31,7 @@ literal-address imported Shadowsocks Server/Compare routes. Every preceding
 WG/AWG member, the penultimate import and independent paired SS2022 final stay
 captured. Last and temporary restoration retain the proved Local/Server choice
 without reranking. Typed CONNECT keeps its separate exact-trio admission;
-macOS public admission remains a separate continuation unit.
+the corresponding macOS source admission is recorded above.
 
 Validation passed 76 compiled Go source/public/persistence/Last/refusal records,
 both admission omission controls, 66 source-audit roots, 5,064 Windows profile

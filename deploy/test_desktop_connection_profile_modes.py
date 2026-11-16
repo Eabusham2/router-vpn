@@ -499,16 +499,20 @@ SWIFT_ORDERED = r'''
     fixtureDefaults.set(finalMode, forKey: macConnectionModeKey)
     return rows
 }
-@MainActor func chooseImportedExecution(_ requested: String, prefix: String = "wg", entryLayer: String? = nil, finalLayer: String? = nil) -> RouterVPNConnectionProfileSelection {
-    _ = chooseOrdered(3, prefixMode: prefix)
-    owner.profiles[1]["node_kind"] = "external"
-    owner.profiles[1]["external"] = ["protocol": "shadowsocks", "ordered_middle_supported": true, "ordered_execution_middle_supported": true]
+@MainActor func chooseImportedExecution(_ requested: String, prefix: String = "wg", entryLayer: String? = nil, finalLayer: String? = nil, count: Int = 3, mixed: Bool = false) -> RouterVPNConnectionProfileSelection {
+    _ = chooseOrdered(count, prefixMode: prefix)
+    let middle = count - 2
+    if mixed {
+        for position in 0..<middle { owner.connectionProfileSelection?.orderedNodes[position]["mode"] = RouterVPNOrderedNodes.prefixModes[position % 3]; owner.profiles[position]["start_layer"] = ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"][position % 3] }
+    }
+    owner.profiles[middle]["node_kind"] = "external"
+    owner.profiles[middle]["external"] = ["protocol": "shadowsocks", "ordered_middle_supported": true, "ordered_execution_middle_supported": true]
     if let entryLayer { owner.profiles[0]["start_layer"] = entryLayer }
-    if let finalLayer { owner.profiles[2]["start_layer"] = finalLayer }
-    owner.connectionProfileSelection?.orderedNodes[1]["mode"] = "shadowsocks"
+    if let finalLayer { owner.profiles[count - 1]["start_layer"] = finalLayer }
+    owner.connectionProfileSelection?.orderedNodes[middle]["mode"] = "shadowsocks"
     owner.multihopExecutionPopup.selectItem(at: requested == "server" ? 1 : 2)
     owner.api.orderedCapabilities = ["ordered_nodes_supported": true, "ordered_executions": ["local"], "ordered_imported_trio_executions": ["local", "server", "auto"]]
-    owner.api.orderedCurrent = ["selected_id": "ordered-2", "profiles": owner.profiles]
+    owner.api.orderedCurrent = ["selected_id": "ordered-\(count - 1)", "profiles": owner.profiles]
     return owner.captureConnectionProfileSelection()
 }
 @MainActor func verifyOrderedSnapshot(_ body: [String: Any], rows: [[String: String]], updating: Bool, execution: String = "local") {
@@ -777,6 +781,42 @@ for requested in ["server", "auto"] { for prefix in ["wg", "awg2-fast", "awg2-st
     check(owner.profiles[0]["start_layer"] as? String == entryLayer && owner.profiles[2]["start_layer"] as? String == finalLayer, "imported execution changed independent paired layers")
   } }
 } }
+// Longer imported execution keeps every original prefix, token and layer.
+for count in 4...8 { for requested in ["server", "auto"] { for prefix in RouterVPNOrderedNodes.prefixModes {
+    _ = chooseImportedExecution(requested, prefix: prefix, entryLayer: "aes-256-gcm", finalLayer: "aes-256-gcm+xor-whitening", count: count)
+    let middle = count - 2
+    for position in 1..<middle { owner.profiles[position]["start_layer"] = importedExecutionLayers[position % 3] }
+    owner.api.orderedCurrent["profiles"] = owner.profiles
+    let original = owner.captureConnectionProfileSelection()
+    do { let draft = try owner.makeOrderedNodeDraft(); check(try draft.selection() == original, "complete imported execution draft lost original prefixes") }
+    catch { check(false, "complete imported execution draft refused original prefixes") }
+    let expectedLayers = owner.profiles.map { $0["start_layer"] as? String ?? "" }
+    let before = owner.api.calls.count
+    owner.connectMultihop(); check(!DispatchQueue.background.pending.isEmpty, "complete imported execution refused its captured native capability")
+    DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+    check(owner.api.calls.count == before + 1, "complete imported execution duplicated or omitted Connect")
+    let body = owner.api.calls.last!.body
+    check(body["nodes"] as? [[String:String]] == original.orderedNodes && body["execution"] as? String == requested && body["expected_profile_tokens"] as? [String:String] == original.profileTokens, "complete imported execution shortened or replaced original members")
+    check(owner.profiles.map { $0["start_layer"] as? String ?? "" } == expectedLayers, "complete imported execution changed a paired prefix layer")
+    for position in 0..<count {
+        var relinked = owner.profiles; relinked[position]["profile_token"] = String(repeating:"f",count:64)
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":relinked]) }, "complete imported execution accepted a relinked original member")
+    }
+} } }
+for requested in ["server", "auto"] {
+    let original = chooseImportedExecution(requested, entryLayer:"aes-256-gcm", finalLayer:"aes-256-gcm+xor-whitening", count:8, mixed:true)
+    let draft = try owner.makeOrderedNodeDraft()
+    check(try draft.selection() == original, "mixed imported execution changed complete original prefix modes")
+    let before = owner.api.calls.count; owner.connectMultihop(); DispatchQueue.background.run(); DispatchQueue.main.run(); DispatchQueue.clear()
+    check(owner.api.calls.count == before+1 && owner.api.calls.last!.body["nodes"] as? [[String:String]] == original.orderedNodes, "mixed imported execution shortened original prefixes")
+    for position in 1..<6 {
+        var changed = owner.profiles; changed[position]["start_layer"] = "xor"
+        check(!RouterVPNOrderedNodes.importedExecutionPrefixes(original.orderedNodes,profiles:changed), "complete imported execution accepted malformed later prefix layer")
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(original,current:["selected_id":original.selectedNodeID,"profiles":changed]) }, "complete imported execution body accepted malformed later prefix layer")
+        changed = owner.profiles; changed[position]["node_kind"] = "external"; changed[position]["external"] = changed[6]["external"]
+        check(!RouterVPNOrderedNodes.importedExecutionPrefixes(original.orderedNodes,profiles:changed), "complete imported execution admitted a second imported prefix")
+    }
+}
 for capability in [NSNull(), false, 1, "true"] as [Any] {
     let original = chooseImportedExecution("server")
     var catalog = owner.profiles
@@ -821,14 +861,9 @@ for fault in ["missing", "wrong-type", "local-only", "paired-only", "stale-middl
     check(owner.api.calls.count == before, "imported execution dispatched after capability or owner change: " + fault)
     DispatchQueue.clear()
 }
-for fault in ["paired", "long", "other-import", "entry-import", "final-import"] {
+for fault in ["paired", "too-long", "other-import", "entry-import", "final-import"] {
     _ = chooseImportedExecution("auto")
-    if fault == "long" {
-        _ = chooseOrdered(4); owner.multihopExecutionPopup.selectItem(at: 2)
-        owner.connectionProfileSelection?.orderedNodes[2]["mode"] = "shadowsocks"
-        owner.profiles[2]["node_kind"] = "external"
-        owner.profiles[2]["external"] = ["protocol": "shadowsocks", "ordered_middle_supported": true, "ordered_execution_middle_supported": true]
-    }
+    if fault == "too-long" { _ = chooseImportedExecution("auto", count: 9) }
     if fault == "paired" { owner.profiles[1].removeValue(forKey: "external"); owner.profiles[1]["node_kind"] = "router-vpn"; owner.connectionProfileSelection?.orderedNodes[1]["mode"] = "wg" }
     if fault == "other-import" { owner.connectionProfileSelection?.orderedNodes[1]["mode"] = "socks5"; owner.profiles[1]["external"] = ["protocol": "socks5", "ordered_middle_supported": true, "ordered_execution_middle_supported": true] }
     if fault == "entry-import" || fault == "final-import" { let index = fault == "entry-import" ? 0 : 2; owner.profiles[index]["external"] = owner.profiles[1]["external"]; owner.profiles[index]["node_kind"] = "external" }
@@ -837,7 +872,7 @@ for fault in ["paired", "long", "other-import", "entry-import", "final-import"] 
     let before = owner.api.calls.count
     owner.connectMultihop()
     if !DispatchQueue.background.pending.isEmpty { DispatchQueue.background.run() }
-    check(owner.api.calls.count == before, "imported execution capability escaped exact trio: " + fault)
+    check(owner.api.calls.count == before, "imported execution capability escaped complete captured prefixes: " + fault)
     DispatchQueue.clear()
 }
 
@@ -1014,10 +1049,10 @@ SWIFT_SETUP = r'''
         else { _ = try settings.write(path: "/api/connection-profile/setup/" + operation, updating: operation == "update") }
     }
 }
-for manager in [true, false] { for requested in ["server", "auto"] { for prefix in ["wg", "awg2-fast", "awg2-strong"] { for operation in ["save", "update", "load"] {
+for manager in [true, false] { for requested in ["server", "auto"] { for prefix in ["wg", "awg2-fast", "awg2-strong"] { for operation in ["save", "update", "load"] { for count in [3,4,8] {
   for entryLayer in importedExecutionLayers { for finalLayer in importedExecutionLayers {
-    _ = setupRows(3)
-    let original = chooseImportedExecution(requested, prefix: prefix, entryLayer: entryLayer, finalLayer: finalLayer), rows = original.orderedNodes
+    _ = setupRows(count)
+    let original = chooseImportedExecution(requested, prefix: prefix, entryLayer: entryLayer, finalLayer: finalLayer, count:count), rows = original.orderedNodes
     let api = manager ? owner.api : settings.api
     api.loaded = setupLoaded(rows, tokens: original.profileTokens)
     api.loaded["multihop_execution"] = requested
@@ -1027,9 +1062,9 @@ for manager in [true, false] { for requested in ["server", "auto"] { for prefix 
     let restored = owner.captureConnectionProfileSelection()
     check(restored.orderedNodes == rows && restored.execution == requested && restored.profileTokens == original.profileTokens, "imported complete-profile action changed captured source or execution")
     if operation != "load" { verifyOrderedSnapshot(api.calls.last!.body, rows: rows, updating: operation == "update", execution: requested) }
-    check(owner.profiles[0]["start_layer"] as? String == entryLayer && owner.profiles[2]["start_layer"] as? String == finalLayer, "imported complete profile changed independent paired layers")
+    check(owner.profiles[0]["start_layer"] as? String == entryLayer && owner.profiles[count-1]["start_layer"] as? String == finalLayer, "imported complete profile changed independent paired layers")
   } }
-} } } }
+} } } } }
 for manager in [true, false] {
     for finalMode in ["shadowsocks", "hysteria2"] { for count in [2, 3, 4, 8] { for operation in ["save", "update", "load"] {
         let rows = setupRows(count, finalMode: finalMode), original = owner.captureConnectionProfileSelection()
@@ -1510,19 +1545,22 @@ def macos(directory):
     for name, (old, new, _) in connect_variants.items():
         variants[name] = replace_once(source, old, new)
     imported_execution_variants = {
-        "imported-execution-layer": ('guard let layer = raw as? String, ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer) else { return false }', 'guard let layer = raw as? String, !layer.isEmpty || layer.isEmpty else { return false }', "Darwin imported execution accepted a malformed paired layer"),
+        "imported-execution-old-trio": ('guard (3...8).contains(rows.count), rows.dropLast(2).allSatisfy', 'guard rows.count == 3, rows.dropLast(2).allSatisfy', "complete imported execution draft refused original prefixes"),
+        "imported-execution-later-prefix-layer": ('where position != middle {', 'where position != middle && (position == 0 || position == members.count - 1) {', "complete imported execution accepted malformed later prefix layer"),
+        "imported-execution-later-prefix-kind": ('guard finalProfile(paired, mode: "shadowsocks") else { return false }', 'guard true else { return false }', "complete imported execution admitted a second imported prefix"),
+        "imported-execution-layer": ('guard let layer = raw as? String, ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer) else { return false }', 'guard let layer = raw as? String, !layer.isEmpty || layer.isEmpty else { return false }', "complete imported execution accepted malformed later prefix layer"),
         "imported-execution-layers-disabled": ('["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer)', '["", "off"].contains(layer)', "imported execution draft lost independent paired layers or exact native capability"),
-        "imported-execution-entry-layer": ('for paired in [members[0], members[2]] {', 'for paired in [members[2]] {', "Darwin imported execution accepted a malformed paired layer"),
-        "imported-execution-final-layer": ('for paired in [members[0], members[2]] {', 'for paired in [members[0]] {', "Darwin imported execution accepted a malformed paired layer"),
+        "imported-execution-entry-layer": ('for (position, paired) in members.enumerated() where position != middle {', 'for (position, paired) in members.enumerated() where position != middle && position != 0 {', "Darwin imported execution accepted a malformed paired layer"),
+        "imported-execution-final-layer": ('for (position, paired) in members.enumerated() where position != middle {', 'for (position, paired) in members.enumerated() where position != middle && position != members.count - 1 {', "Darwin imported execution accepted a malformed paired layer"),
         "imported-execution-boolean": ('CFGetTypeID(permitted) == CFBooleanGetTypeID(), permitted.boolValue', 'permitted.boolValue', "imported execution accepted absent or nonboolean member capability"),
         "imported-execution-live-capability": ('capabilities[executionCapability] as? [String]', 'capabilities["ordered_executions"] as? [String]', "imported execution did not use separate exact-trio capability"),
-        "imported-execution-draft": (' || RouterVPNOrderedNodes.importedExecutionTrio(ordered, profiles: capturedCatalog)', '', "imported execution draft lost independent paired layers or exact native capability"),
-        "imported-execution-body": (' || importedExecutionTrio(rows, profiles: profiles)', '', "imported execution did not use separate exact-trio capability"),
+        "imported-execution-draft": (' || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog)', '', "imported execution draft lost independent paired layers or exact native capability"),
+        "imported-execution-body": (' || importedExecutionPrefixes(rows, profiles: profiles)', '', "imported execution did not use separate exact-trio capability"),
     }
     imported_execution_variants.update({
         "connect-execution-final-layer": ('guard ["", "off"].contains(members[2]["start_layer"] as? String ?? "") else { return false }', 'guard true else { return false }', "CONNECT execution accepted changed typed trio: final-layer"),
         "connect-execution-boolean": ('CFGetTypeID(hint) == CFBooleanGetTypeID(), hint.boolValue', 'hint.boolValue', "CONNECT execution accepted changed typed trio: numeric-hint"),
-        "connect-execution-capability": ('"ordered_connect_trio_executions" : (importedTrio', '"ordered_imported_trio_executions" : (importedTrio', "CONNECT execution did not use its distinct native capability"),
+        "connect-execution-capability": ('"ordered_connect_trio_executions" : (importedPrefixes', '"ordered_imported_trio_executions" : (importedPrefixes', "CONNECT execution did not use its distinct native capability"),
     })
     for name, (old, new, _) in imported_execution_variants.items():
         variants[name] = replace_once(source, old, new)

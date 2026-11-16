@@ -1353,13 +1353,14 @@ if nativeDesktopImportedTrioExecutionPlatformSupported() {
 return []string{"local"}
         '''),
         (platform_path, "func desktopDarwinImportedTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool", '''
-if requested != "server" && requested != "auto" || len(members) != 3 ||
-    !desktopNodeChainImportedExecutionMiddle(members[1].Profile) ||
+if requested != "server" && requested != "auto" || len(members) < 3 || len(members) > common.MultihopMaximumNodes ||
+    !desktopNodeChainImportedExecutionMiddle(members[len(members)-2].Profile) ||
     desktopOrderedExecutionMembers(members, requested) != nil {
     return false
 }
-for _, index := range []int{0, 2} {
-    layer := members[index].Profile.StartLayer
+for index, member := range members {
+    if index == len(members)-2 { continue }
+    layer := member.Profile.StartLayer
     if layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" { return false }
 }
 return true
