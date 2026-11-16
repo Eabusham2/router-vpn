@@ -242,8 +242,14 @@ final class AndroidOrderedPathSelection {
         if(!"local".equals(execution)&&!members.isEmpty()) {
             if(schema>4||(schema==3||schema==4)&&members.size()!=3||!"shadowsocks".equals(members.get(members.size()-1).mode))
                 throw new IllegalStateException("Server and Compare require paired packet prefixes, optionally one literal Shadowsocks middle before the Shadowsocks 2022 final. SOCKS5 and HTTP/HTTPS CONNECT require exactly three nodes.");
-            for(Member member:members)if(member.source.imported)
-                AndroidNumericAddress.parse(member.source.external().server);
+            for(Member member:members)if(member.source.imported) {
+                AndroidStandardExitStore.Entry imported=member.source.external();
+                if(AndroidStandardExitStore.importedHostname(imported)) {
+                    if(members.size()<4 || schema!=2 || members.get(members.size()-2)!=member || !"shadowsocks".equals(member.mode))
+                        throw new IllegalStateException("Hostname Server and Compare require two to six original paired prefixes before the Shadowsocks middle and final.");
+                    AndroidStandardExitStore.validateImportedHostnamePolicy(imported);
+                } else AndroidNumericAddress.parse(imported.server);
+            }
         }
         if(size>AndroidNodeStore.MAX_CHAIN_SOURCE)throw new IllegalStateException("The complete ordered path exceeds its private source bound.");
     }

@@ -20,9 +20,10 @@ public final class ImportedPrefixExecutionHarness {
  static void reject(Checked call,String why)throws Exception{try{call.run();}catch(Exception expected){checks++;return;}throw new AssertionError(why);}
  static final class Fixture {
   final NodeChainCaptureHarness.Fixture original;final AndroidStandardExitStore exits;final AndroidStandardExitStore.Entry imported;
-  Fixture(Path root,String key,String method,String requested)throws Exception{
+  Fixture(Path root,String key,String method,String requested)throws Exception{this(root,key,method,requested,false);}
+  Fixture(Path root,String key,String method,String requested,boolean hostname)throws Exception{
    original=new NodeChainCaptureHarness.Fixture(root,key);exits=new AndroidStandardExitStore(original.context);imported=NodeChainCaptureHarness.hostnameEntry(method);
-   imported.server="198.51.100.76";imported.name="Original complete imported execution";exits.save(imported);
+   if(!hostname)imported.server="198.51.100.76";imported.name="Original complete imported execution";exits.save(imported);
    var draft=new AndroidOrderedPathSelection(original.nodes,original.profiles);draft.addPrefix(imported.id,"shadowsocks");draft.save();
    var ui=new OrderedProductSurface(original);ui.open();ui.choose(0);ui.execution();
    check(ui.dialog.labels.length==3&&ui.dialog.labels[2].toString().equals("Compare both"),"imported prefix public editor lost its execution choices");
@@ -46,34 +47,56 @@ public final class ImportedPrefixExecutionHarness {
   reject(execution::captureRestore,"source-only long imported execution fabricated a native restore capsule");
   try(var replay=AndroidNodeChainExecutionCapture.reopen(local,execution.launchInput)){check(replay.source.equals(execution.source)&&replay.config.equals(execution.config),"long imported execution canonical replay changed its complete source");}
  }
- static void positive(Path root,int prefixes,boolean mixed)throws Exception{
+ static void positive(Path root,int prefixes,boolean mixed)throws Exception{positive(root,prefixes,mixed,false);}
+ static void positive(Path root,int prefixes,boolean mixed,boolean hostname)throws Exception{
   for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"))for(String requested:List.of("server","auto")){
-   String key=(prefixes+1)+"/"+(mixed?"mixed-awg":"");var f=new Fixture(root,key,method,requested);int count=prefixes+2,middle=count-2;
+   String key=(prefixes+1)+"/"+(mixed?"mixed-awg":"");var f=new Fixture(root,key,method,requested,hostname);int count=prefixes+2,middle=count-2;
    var selected=f.original.profiles.currentOrderedPath();List<String> ids=new ArrayList<>(),modes=new ArrayList<>();
    for(int i=0;i<count;i++){ids.add(selected.members.get(i).id);modes.add(selected.modes.get(i));}
    check(count==selected.members.size()&&selected.members.get(middle).imported&&selected.members.get(middle).id.equals(f.imported.id),"long imported editor changed its original penultimate member");
    try(var local=AndroidNodeChainCapture.compile(selected)){
     AndroidNodeChainExecutionCapture captured;try{captured=AndroidNodeChainExecutionCapture.compile(local,requested);}catch(Exception error){throw new AssertionError("long imported execution was refused",error);}
-    try(captured){verify(local,captured,count,requested);}
+    try(captured){verify(local,captured,count,requested);if(hostname)verifyHostname(f,local,captured,count);}
    }
    var row=f.original.profiles.add("Complete imported "+requested);String stored=Files.readString(f.original.rows);
    check(!stored.contains(f.imported.secret)&&!stored.contains("api_token"),"long imported profile duplicated private credentials");
-   f.original.changePolicies();f.original.profiles.load(row.id);var loaded=f.original.profiles.currentOrderedPath();
+   f.original.changePolicies();if(hostname){var changed=f.exits.get(f.imported.id);changed.policy.put("dns_port",5354).put("home_lan_access",true);f.exits.save(changed);}
+   f.original.profiles.load(row.id);if(hostname){var restored=f.exits.get(f.imported.id);check(restored.policy.getInt("dns_port")==5353&&!restored.policy.getBoolean("home_lan_access")&&restored.server.equals(f.imported.server),"hostname execution profile lost its original resolver or name");}
+   var loaded=f.original.profiles.currentOrderedPath();
    check(loaded.execution.equals(requested)&&loaded.members.size()==count,"long imported profile Load lost complete execution");
    for(int i=0;i<count;i++)check(loaded.members.get(i).id.equals(ids.get(i))&&loaded.modes.get(i).equals(modes.get(i)),"long imported profile Load reordered or replaced a source");
    String next=requested.equals("server")?"auto":"server";var draft=new AndroidOrderedPathSelection(f.original.nodes,f.original.profiles);draft.setExecution(next);draft.save();f.original.profiles.update(row.id,"Updated complete imported execution");
    f.original.changePolicies();f.original.profiles.load(row.id);check(f.original.profiles.currentOrderedPath().execution.equals(next),"long imported profile Update lost its execution");
    try(var local=AndroidNodeChainCapture.compile(f.original.profiles.currentOrderedPath());var captured=AndroidNodeChainExecutionCapture.compile(local,next)){
-    verify(local,captured,count,next);
+    verify(local,captured,count,next);if(hostname)verifyHostname(f,local,captured,count);
     JSONObject replacement=f.original.bundle(prefixes-1);NodeChainCaptureHarness.profile(replacement).put("api_token","replacement-prefix-private-token");f.original.replace(prefixes-1,replacement);
     reject(captured::requireCurrent,"long imported execution survived replacement of a later paired prefix");
    }
    f.original.profiles.delete(row.id);check(f.original.members.stream().allMatch(n->n.file.isFile()),"long imported profile Delete removed original private nodes");
   }
  }
- static void readback(Path root,String requested)throws Exception{
+ static void verifyHostname(Fixture f,AndroidNodeChainCapture local,AndroidNodeChainExecutionCapture execution,int count)throws Exception{
+  JSONObject graph=new JSONObject(execution.config),middle=null;JSONArray outbounds=graph.getJSONArray("outbounds");
+  for(int i=0;i<outbounds.length();i++)if(f.imported.server.equals(outbounds.getJSONObject(i).optString("server")))middle=outbounds.getJSONObject(i);
+  check(middle!=null&&middle.getString("password").equals(f.imported.secret)&&middle.getString("method").equals(f.imported.method),"hostname execution replaced its captured transport");
+  String prefix=graph.getJSONArray("endpoints").getJSONObject(count-3).getString("tag");JSONObject dns=graph.getJSONObject("dns"),query=middle.getJSONObject("domain_resolver");
+  JSONObject resolver=NodeChainCaptureHarness.tagged(dns.getJSONArray("servers"),query.getString("server")),application=NodeChainCaptureHarness.tagged(dns.getJSONArray("servers"),dns.getString("final"));
+  check(middle.getString("detour").equals(prefix)&&query.getString("strategy").equals("ipv4_only")&&resolver.getString("detour").equals(prefix)&&resolver.getString("type").equals("tcp")&&resolver.getString("server").equals("10.81.0.53")&&resolver.getInt("server_port")==5353,"hostname execution resolver escaped original packet predecessor");
+  check(!resolver.getString("tag").equals(application.getString("tag"))&&application.getString("detour").equals("proxy")&&application.getString("type").equals("udp")&&application.getString("server").equals(local.finalProfile().getString("adguard_ipv4")),"hostname execution replaced selected final Home DNS");
+ }
+ static void hostnameBounds(Path root)throws Exception{
+  for(String requested:List.of("server","auto")){
+   var f=new NodeChainCaptureHarness.Fixture(root,"2/");var exits=new AndroidStandardExitStore(f.context);var imported=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");exits.save(imported);
+   var local=new AndroidOrderedPathSelection(f.nodes,f.profiles);local.addPrefix(imported.id,"shadowsocks");local.save();
+   var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);reject(()->draft.setExecution(requested),"hostname trio acquired an unowned physical resolver");
+   check(draft.execution().equals("local")&&f.profiles.currentOrderedPath().execution.equals("local"),"hostname rejected selection changed original saved path");
+  }
+  NodeChainCaptureHarness.hostnamePolicyControls(root);
+ }
+ static void readback(Path root,String requested)throws Exception{readback(root,requested,false);}
+ static void readback(Path root,String requested,boolean hostname)throws Exception{
   for(String fault:List.of("later-member","later-identity","missing-prefix","imported-identity","final-member")){
-   var f=new Fixture(root,"7/mixed-awg","2022-blake3-aes-256-gcm",requested);
+   var f=new Fixture(root,"7/mixed-awg","2022-blake3-aes-256-gcm",requested,hostname);
    try(var local=AndroidNodeChainCapture.compile(f.original.profiles.currentOrderedPath())){
     Libbox.afterExecution=plan->{try{
      JSONObject preparation=new JSONObject(plan.value.getString("source")),source=new JSONObject(preparation.getString("local_source"));
@@ -94,6 +117,10 @@ public final class ImportedPrefixExecutionHarness {
   if(phase.startsWith("prefix-"))positive(root,Integer.parseInt(phase.substring(7)),false);
   else if(phase.startsWith("mixed-"))positive(root,Integer.parseInt(phase.substring(6)),true);
   else if(phase.equals("readback")){readback(root,"server");readback(root,"auto");}
+  else if(phase.equals("hostname-2"))positive(root,2,false,true);
+  else if(phase.equals("hostname-6"))positive(root,6,true,true);
+  else if(phase.equals("hostname-readback")){readback(root,"server",true);readback(root,"auto",true);}
+  else if(phase.equals("hostname-bounds"))hostnameBounds(root);
   else throw new IllegalArgumentException("unknown original prefix phase");
   System.out.println("Android imported execution prefixes "+phase+": "+checks+" shipping source/profile checks PASS");
  }
@@ -116,11 +143,13 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     subprocess.run(["go","test","-p=1","-count=1","-overlay="+str(overlay),"./internal/mobilemultihop","-run","^TestAndroidOrderedSourceFixture$"],cwd=root,env=env,check=True,timeout=180)
     data=work/"prefix-data";data.mkdir()
     command=["java","-cp",str(classes)+os.pathsep+str(jar),"com.eabusham.routervpn.ImportedPrefixExecutionHarness",str(data)]
-    phases=[*("prefix-"+str(n) for n in range(1,7)),"mixed-2","mixed-6","readback"]
+    phases=[*("prefix-"+str(n) for n in range(1,7)),"mixed-2","mixed-6","readback","hostname-2","hostname-6","hostname-readback","hostname-bounds"]
     for phase in phases:
         subprocess.run([*command,phase],env=env,check=True,timeout=120)
     originals={name:(app/(name+".java")).read_text() for name in ("AndroidNodeStore","AndroidNodeChainCapture","AndroidNodeChainExecutionCapture","AndroidOrderedPathSelection")}
     controls=(
+        ("hostname-literal","AndroidOrderedPathSelection",'if(AndroidStandardExitStore.importedHostname(imported))','if(false)',"hostname-2","imported prefix public editor refused captured execution"),
+        ("hostname-minimum","AndroidOrderedPathSelection",'members.size()<4 || schema!=2','false || schema!=2',"hostname-bounds","hostname trio acquired an unowned physical resolver"),
         ("node-store","AndroidNodeStore",'selected.length()>=3 && i==selected.length()-2 && ("shadowsocks".equals(mode)','selected.length()==3 && i==1 && ("shadowsocks".equals(mode)',"prefix-2","imported prefix public editor refused captured execution"),
         ("editor","AndroidOrderedPathSelection",'schema>4||(schema==3||schema==4)&&members.size()!=3','schema>4||(schema==2||schema==3||schema==4)&&members.size()!=3',"prefix-2","imported prefix public editor refused captured execution"),
         ("returned-size","AndroidNodeChainExecutionCapture",'(originalSchema == 3 || originalSchema == 4) && original.getJSONArray("nodes").length() != 3','(originalSchema == 2 || originalSchema == 3 || originalSchema == 4) && original.getJSONArray("nodes").length() != 3',"prefix-2","long imported execution was refused"),
