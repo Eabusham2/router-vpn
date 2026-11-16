@@ -112,6 +112,71 @@ func TestActualCopyAndSnapshot(t *testing.T){
             self.assertNotEqual(failed.returncode,0,failed.stdout+failed.stderr)
             self.assertIn('WARNING: DATA RACE',failed.stdout+failed.stderr)
 
+
+    def test_actual_hostname_tcp_reuse_probes_are_not_application_dns(self):
+        template=(ROOT/'mobile/desktop/node_chain_imported_server_peer_test.go.tmpl').read_text()
+        begin=template.index('type desktopNodeChainImportedServerDNS struct')
+        end=template.index('\nfunc TestRouterVPNDesktopNodeChainImportedServerReferenceProcess',begin)
+        shipping=template[begin:end]
+        harness=r'''package main
+import("fmt";"os";"net";"strings";"sync";"sync/atomic";"testing";"time";"github.com/miekg/dns")
+const desktopImportedHostname="Middle.EXAMPLE.test"
+const desktopImportedHostnameDNS="10.78.0.53:5353"
+type desktopReferenceRule struct{Network,Address string;Port int;Target string}
+type serverEntry struct{rules map[string]desktopReferenceRule}
+type serverPaired struct{entry *serverEntry}
+type desktopNodeChainImportedPeer struct{paired *serverPaired}
+func serverPeer()*desktopNodeChainImportedPeer{return &desktopNodeChainImportedPeer{&serverPaired{&serverEntry{make(map[string]desktopReferenceRule)}}}}
+SHIPPING
+type serverWriter struct {dns.ResponseWriter; address net.Addr}
+func(w *serverWriter)RemoteAddr()net.Addr{return w.address}
+func serverQuestion(id,kind uint16)*dns.Msg{q:=new(dns.Msg).SetQuestion(desktopImportedHostname+".",kind);q.Id=id;return q}
+func TestHostnameQuestionBoundaries(t *testing.T){
+ original:=serverQuestion(2,dns.TypeAAAA);address:=&serverWriter{address:&net.TCPAddr{IP:net.IPv4(127,0,0,1),Port:12345}}
+ for label,mutate:=range map[string]func(*dns.Msg){
+ "id":func(q *dns.Msg){q.Id=0},"name":func(q *dns.Msg){q.Question[0].Name="foreign.example."},"private":func(q *dns.Msg){q.Question[0].Name="10.0.0.1."},"mapped":func(q *dns.Msg){q.Question[0].Name="::ffff:127.0.0.1."},"class":func(q *dns.Msg){q.Question[0].Qclass=dns.ClassCHAOS},"type":func(q *dns.Msg){q.Question[0].Qtype=dns.TypeTXT},"duplicate":func(q *dns.Msg){q.Question=append(q.Question,q.Question[0])},"missing":func(q *dns.Msg){q.Question=nil},"response":func(q *dns.Msg){q.Response=true},"opcode":func(q *dns.Msg){q.Opcode=dns.OpcodeStatus},"rcode":func(q *dns.Msg){q.Rcode=dns.RcodeNameError},"authoritative":func(q *dns.Msg){q.Authoritative=true},"truncated":func(q *dns.Msg){q.Truncated=true},"available":func(q *dns.Msg){q.RecursionAvailable=true},"rd":func(q *dns.Msg){q.RecursionDesired=false},"ad":func(q *dns.Msg){q.AuthenticatedData=true},"cd":func(q *dns.Msg){q.CheckingDisabled=true},"answer":func(q *dns.Msg){q.Answer=[]dns.RR{new(dns.A)}},"ns":func(q *dns.Msg){q.Ns=[]dns.RR{new(dns.NS)}},"extra":func(q *dns.Msg){q.Extra=[]dns.RR{new(dns.OPT)}},
+ }{t.Run(label,func(t *testing.T){owner:=new(desktopNodeChainImportedServerDNS);if owner.question(serverQuestion(1,dns.TypeA),address)!=1{t.Fatal("original probe A rejected")};q:=original.Copy();mutate(q);if owner.question(q,address)>=0{t.Fatal("foreign question acquired reuse authority")}})}
+ if desktopNodeChainImportedServerQuestion(nil)!=-1{t.Fatal("nil question admitted")}
+ owner:=new(desktopNodeChainImportedServerDNS)
+ if owner.question(original,address)>=0{t.Fatal("unpaired AAAA acquired reuse authority")}
+ if owner.question(serverQuestion(1,dns.TypeA),address)!=1{t.Fatal("canonical probe A rejected")}
+ foreign:=&serverWriter{address:address.address}
+ if owner.question(original,foreign)>=0{t.Fatal("foreign socket acquired reuse authority")}
+ if owner.question(original,&serverWriter{address:&net.UDPAddr{IP:net.IPv4(127,0,0,1),Port:12345}})>=0{t.Fatal("foreign transport acquired reuse authority")}
+ if owner.question(original,address)!=2{t.Fatal("canonical paired AAAA probe rejected")}
+ if owner.question(original,address)>=0{t.Fatal("completed probe replay admitted")}
+ if owner.question(serverQuestion(0,dns.TypeA),address)!=0{t.Fatal("original application A rejected")}
+}
+func TestHostnameTCPProbeCounters(t *testing.T){
+ peer:=serverPeer();owner:=desktopNodeChainImportedServerHostname(t,peer);rule:=peer.paired.entry.rules["tcp/"+desktopImportedHostnameDNS]
+ if rule.Network!="tcp"||rule.Address!="10.78.0.53"||rule.Port!=5353{t.Fatal("captured resolver route changed")}
+ client:=&dns.Client{Net:"tcp",Timeout:time.Second}
+ reply,_,err:=client.Exchange(serverQuestion(0,dns.TypeA),rule.Target)
+ if err!=nil||len(reply.Answer)!=1||reply.Answer[0].(*dns.A).A.String()!="10.79.0.1"{t.Fatal("original A answer lost",err)}
+ raw,err:=net.DialTimeout("tcp",rule.Target,time.Second);if err!=nil{t.Fatal(err)};defer raw.Close();_ =raw.SetDeadline(time.Now().Add(2*time.Second));connection:=&dns.Conn{Conn:raw}
+ for _,q:=range []*dns.Msg{serverQuestion(1,dns.TypeA),serverQuestion(2,dns.TypeAAAA)}{if err=connection.WriteMsg(q);err!=nil{t.Fatal(err)};reply,err=connection.ReadMsg();if err!=nil||reply.Rcode!=dns.RcodeSuccess{t.Fatal("canonical transport probe failed",err)};if q.Question[0].Qtype==dns.TypeAAAA&&len(reply.Answer)!=0{t.Fatal("transport probe gained IPv6 answer")}}
+ if owner.queries.Load()!=1||owner.probeA.Load()!=1||owner.probeAAAA.Load()!=1{t.Fatal("probe counted as application DNS")}
+ owner.failed.Store(true);reply,_,err=client.Exchange(serverQuestion(0,dns.TypeA),rule.Target);if err!=nil||reply.Rcode!=dns.RcodeNameError||owner.queries.Load()!=2{t.Fatal("selected original DNS refusal lost",err)}
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='server-hostname-reuse-') as directory:
+            root=Path(directory)
+            (root/'go.mod').write_text('module routervpn-server-hostname-reuse\n\ngo 1.26\n\nrequire github.com/miekg/dns v1.1.72\n')
+            (root/'go.sum').write_text('github.com/miekg/dns v1.1.72 h1:vhmr+TF2A3tuoGNkLDFK9zi36F2LS+hKTRW0Uf8kbzI=\ngithub.com/miekg/dns v1.1.72/go.mod h1:+EuEPhdHOsfk6Wk5TT2CzssZdqkmFhf8r+aVyDEToIs=\n')
+            test=root/'actual_test.go';test.write_text(harness.replace('SHIPPING',shipping))
+            command=['go','test','-mod=mod','-race','-count=1','-timeout=15s','-v','.']
+            result=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=45)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            for old,new,witness in (
+                ('if kind == 2 && !owner.probes[key]', 'if false && kind == 2 && !owner.probes[key]', 'unpaired AAAA acquired reuse authority'),
+                ('case 1:\n\t\t\towner.probeA.Add(1)', 'case 1:\n\t\t\towner.probeA.Add(1); owner.queries.Add(1)', 'probe counted as application DNS'),
+            ):
+                self.assertEqual(shipping.count(old),1)
+                test.write_text(harness.replace('SHIPPING',shipping.replace(old,new,1)))
+                failed=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=45)
+                self.assertNotEqual(failed.returncode,0,failed.stdout+failed.stderr)
+                self.assertIn(witness,failed.stdout+failed.stderr)
+
     def test_all_required_native_success_and_refusal_shapes(self):
         self.assertEqual(len(GATE.CASES), 14)
         for case in GATE.CASES:

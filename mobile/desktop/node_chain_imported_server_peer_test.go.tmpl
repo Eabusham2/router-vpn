@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -29,8 +30,58 @@ type desktopNodeChainImportedServerEnvelope struct {
 // This resolver exists only behind the final independently encrypted packet
 // peer. It never resolves an outer/physical socket for the Server worker.
 type desktopNodeChainImportedServerDNS struct {
-	queries atomic.Uint64
-	failed  atomic.Bool
+	queries   atomic.Uint64
+	failed    atomic.Bool
+	probeA    atomic.Uint64
+	probeAAAA atomic.Uint64
+	mu        sync.Mutex
+	probes    map[dns.ResponseWriter]bool
+}
+
+// The pinned TCP transport probes connection reuse with A/ID1 and AAAA/ID2.
+// These are transport probes, not an application IPv6 lookup or its evidence.
+func desktopNodeChainImportedServerQuestion(query *dns.Msg) int {
+	if query == nil || query.Response || query.Opcode != dns.OpcodeQuery || query.Rcode != 0 || query.Authoritative || query.Truncated || query.RecursionAvailable || !query.RecursionDesired || query.AuthenticatedData || query.CheckingDisabled || len(query.Question) != 1 || len(query.Answer) != 0 || len(query.Ns) != 0 || len(query.Extra) != 0 || !strings.EqualFold(query.Question[0].Name, desktopImportedHostname+".") || query.Question[0].Qclass != dns.ClassINET {
+		return -1
+	}
+	if query.Id == 1 && query.Question[0].Qtype == dns.TypeA {
+		return 1
+	}
+	if query.Id == 2 && query.Question[0].Qtype == dns.TypeAAAA {
+		return 2
+	}
+	if query.Question[0].Qtype == dns.TypeA {
+		return 0
+	}
+	return -1
+}
+
+func (owner *desktopNodeChainImportedServerDNS) question(query *dns.Msg, writer dns.ResponseWriter) int {
+	kind := desktopNodeChainImportedServerQuestion(query)
+	if writer == nil {
+		return -1
+	}
+	tcp, ok := writer.RemoteAddr().(*net.TCPAddr)
+	if !ok || tcp == nil {
+		return -1
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if owner.probes == nil {
+		owner.probes = make(map[dns.ResponseWriter]bool)
+	}
+	// miekg/dns retains one response writer per original TCP connection.
+	key := writer
+	if kind == 1 {
+		owner.probes[key] = true
+	}
+	if kind == 2 && !owner.probes[key] {
+		return -1
+	}
+	if kind != 1 {
+		delete(owner.probes, key)
+	}
+	return kind
 }
 
 func desktopNodeChainImportedServerHostname(t *testing.T, peer *desktopNodeChainImportedPeer) *desktopNodeChainImportedServerDNS {
@@ -41,7 +92,8 @@ func desktopNodeChainImportedServerHostname(t *testing.T, peer *desktopNodeChain
 		t.Fatal(err)
 	}
 	server := &dns.Server{Listener: listener, Net: "tcp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, query *dns.Msg) {
-		if len(query.Question) != 1 || !strings.EqualFold(query.Question[0].Name, desktopImportedHostname+".") || query.Question[0].Qclass != dns.ClassINET || query.Question[0].Qtype != dns.TypeA {
+		kind := owner.question(query, w)
+		if kind < 0 {
 			// The non-verbose child writes testing failures to its control stdout
 			// only at exit. Retain a fixed public diagnostic on stderr instead;
 			// never copy the question, hostname, credentials or private graph.
@@ -59,11 +111,18 @@ func desktopNodeChainImportedServerHostname(t *testing.T, peer *desktopNodeChain
 			t.Error("Server hostname DNS changed its captured IPv4 question")
 			return
 		}
-		owner.queries.Add(1)
+		switch kind {
+		case 1:
+			owner.probeA.Add(1)
+		case 2:
+			owner.probeAAAA.Add(1)
+		default:
+			owner.queries.Add(1)
+		}
 		answer := new(dns.Msg).SetReply(query)
 		if owner.failed.Load() {
 			answer.Rcode = dns.RcodeNameError
-		} else {
+		} else if kind != 2 {
 			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: query.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}, A: net.ParseIP("10.79.0.1")}}
 		}
 		_ = w.WriteMsg(answer)
