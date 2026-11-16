@@ -1,4 +1,5 @@
 import Foundation
+import Libbox
 
 /// A future source graph only. Compilation does not run a VPN, alter the live
 /// plan, or write a node record. The caller retains the measured receipt owner.
@@ -31,34 +32,32 @@ import Foundation
             guard let mode = typed.external?.protocolName, ["shadowsocks", "socks5", "http-connect", "https-connect"].contains(mode) else { throw IOSNodeCandidateCapture.issue() }
             candidateMode = mode
         } else { candidateMode = "shadowsocks" }
-        var selected = original.members.prefix(position + 1).map { (id: $0.id, mode: $0.mode) }
-        selected.append((candidateID, candidateMode))
-        if candidate.profile["node_kind"] as? String == "external" {
-            guard position == 0, let final = original.members.last, final.profile["node_kind"] as? String == "router-vpn" else { throw IOSNodeCandidateCapture.issue() }
-            let retained = try source(final.id)
-            guard let originalAssets = try JSONSerialization.jsonObject(with: Data(final.filesJSON.utf8)) as? [String: String],
-                  let launch = try JSONSerialization.jsonObject(with: Data(original.launchInput.utf8)) as? [String: Any],
-                  let identities = launch["identity_sources"] as? [String], let identity = identities.last,
-                  let originalIdentity = try JSONSerialization.jsonObject(with: Data(identity.utf8)) as? [String: String],
-                  retained.files["shadowsocks"] == originalAssets, retained.files["wg"] == originalIdentity,
-                  try JSONSerialization.data(withJSONObject: retained.profile, options: [.sortedKeys]) ==
-                    JSONSerialization.data(withJSONObject: final.profile, options: [.sortedKeys]) else {
-                throw NSError(domain: "RouterVPN.CandidateProposal", code: 3, userInfo: [NSLocalizedDescriptionKey:
-                    "The original paired final node's policy or private assets changed. Reconnect its current source before preparing this custom middle."])
-            }
-            selected.append((final.id, "shadowsocks"))
+        let replacement = position + 1
+        let execution = original.selectionExecution
+        guard original.members.indices.contains(replacement), ["local", "server", "auto"].contains(execution) else {
+            throw IOSNodeCandidateCapture.issue()
         }
+        // The measured target is the next hop reached through this prefix.
+        // Preserve the rest of the complete saved path; its compiler decides
+        // whether the replacement can occupy this exact role.
+        var selected = original.members.map { (id: $0.id, mode: $0.mode) }
+        selected[replacement] = (candidateID, candidateMode)
         guard (2...8).contains(selected.count), Set(selected.map(\.id)).count == selected.count else { throw IOSNodeCandidateCapture.issue() }
         let references = selected.map { ["id": $0.id, "mode": $0.mode] }
-        var bundles: [Data] = []
+        var bundles: [Data] = [], savedProfiles: [RouterProfile] = []
+        var proofs = Set<String>()
         for (index, member) in selected.enumerated() {
             var captured = try source(member.id)
+            if let proof = captured.profile["node_proof_id"] as? String {
+                guard proofs.insert(proof).inserted else { throw IOSNodeCandidateCapture.issue() }
+            }
             if index == selected.count - 1 {
                 captured.profile["multihop_enabled"] = true
-                captured.profile["multihop_execution"] = "local"
+                captured.profile["multihop_execution"] = execution
                 captured.profile["multihop_nodes"] = references
                 for key in ["multihop_entry_id", "multihop_entry_mode", "multihop_exit_id", "multihop_exit_mode"] { captured.profile.removeValue(forKey: key) }
             }
+            savedProfiles.append(try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: captured.profile)))
             let profiles = captured.root["routerProfiles"] as! [[String: Any]]
             captured.root["routerProfiles"] = profiles.map { $0["id"] as? String == member.id ? captured.profile : $0 }
             captured.root["selectedRouterID"] = member.id
@@ -66,10 +65,13 @@ import Foundation
         }
         let preview: (members: [IOSNodeChainCapture.Member], launchInput: String, close: () throws -> Void)
         do {
-            if candidateMode == "socks5" {
+            if execution != "local" {
+                let captured = try IOSNodeChainExecutionCapture.compile(bundles: bundles, requested: execution)
+                preview = (captured.members, captured.local.launchInput, { try captured.close() })
+            } else if selected.contains(where: { $0.mode == "socks5" }) {
                 let captured = try IOSNodeChainSOCKSCapture.compile(bundles: bundles)
                 preview = (captured.members, captured.source, { try captured.plan.close() })
-            } else if ["http-connect", "https-connect"].contains(candidateMode) {
+            } else if selected.contains(where: { ["http-connect", "https-connect"].contains($0.mode) }) {
                 let captured = try IOSNodeChainCONNECTCapture.compile(bundles: bundles)
                 preview = (captured.members, captured.source, { try captured.plan.close() })
             } else {
@@ -95,13 +97,38 @@ import Foundation
               let after = try JSONSerialization.jsonObject(with: Data(preview.launchInput.utf8)) as? [String: Any],
               let priorNodes = prior["nodes"] as? [String], let afterNodes = after["nodes"] as? [String],
               let priorIdentities = prior["identity_sources"] as? [String], let afterIdentities = after["identity_sources"] as? [String],
+              priorNodes.count == selected.count, afterNodes.count == selected.count,
+              priorIdentities.count == selected.count, afterIdentities.count == selected.count,
               Array(priorNodes.prefix(position + 1)) == Array(afterNodes.prefix(position + 1)),
               Array(priorIdentities.prefix(position + 1)) == Array(afterIdentities.prefix(position + 1)) else {
-            // Current saved labels or a re-linked credential cannot substitute
-            // for the exact original prefix that supplied the timing.
             throw IOSNodeCandidateCapture.issue()
         }
-        let profiles = try preview.members.map { try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }
-        return Self(description: selected.map { "\($0.id) (\($0.mode))" }.joined(separator: " → "), profiles: profiles, launchInput: preview.launchInput)
+        for index in selected.indices where index > replacement {
+            guard priorIdentities[index] == afterIdentities[index] else { throw IOSNodeCandidateCapture.issue() }
+            if index == selected.count - 1 {
+                // Only the control member's ordered references may change.
+                // Its credentials, Start Layer, DNS and private transport stay exact.
+                guard let before = try JSONSerialization.jsonObject(with: Data(priorNodes[index].utf8)) as? [String: Any],
+                      let mode = before["mode"] as? String, let files = before["files"] as? String,
+                      let start = before["start"] as? String, let bootstrap = before["dns_bootstrap"] as? String else {
+                    throw IOSNodeCandidateCapture.issue()
+                }
+                var expected = original.members[index].profile
+                expected["multihop_enabled"] = true; expected["multihop_execution"] = execution; expected["multihop_nodes"] = references
+                for key in ["multihop_entry_id", "multihop_entry_mode", "multihop_exit_id", "multihop_exit_mode"] { expected.removeValue(forKey: key) }
+                // Ordered references legitimately change the final member's
+                // source/metadata receipts. Recompute through its real compiler
+                // with the exact original transport, rather than ignoring hashes.
+                let profileJSON = String(decoding: try JSONSerialization.data(withJSONObject: expected, options: [.sortedKeys]), as: UTF8.self)
+                var failure: NSError?
+                let expectedInput: String? = LibboxRouterNodeChainMemberInput(mode, files, profileJSON, start, bootstrap, &failure)
+                guard failure == nil, let expectedInput, expectedInput == afterNodes[index] else {
+                    throw failure ?? IOSNodeCandidateCapture.issue()
+                }
+            } else {
+                guard priorNodes[index] == afterNodes[index] else { throw IOSNodeCandidateCapture.issue() }
+            }
+        }
+        return Self(description: selected.map { "\($0.id) (\($0.mode))" }.joined(separator: " → "), profiles: savedProfiles, launchInput: preview.launchInput)
     }
 }

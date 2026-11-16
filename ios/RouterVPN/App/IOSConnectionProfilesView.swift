@@ -320,8 +320,9 @@ private enum IOSConnectionProfileStore {
         guard (2...8).contains(profiles.count), let final = profiles.last,
               final.normalizedNodeKind == "router-vpn", let nodes = final.multihopNodes,
               nodes.count == profiles.count, nodes.last?.mode == "shadowsocks",
+              let execution = final.multihopExecution, ["local", "server", "auto"].contains(execution),
               nodes.map(\.id) == profiles.map(\.id) else { throw issue("The proposed future chain lost its complete original policies.") }
-        try IOSMultihopNodeSelection.validate(nodes, execution: "local", entryID: nil, entryMode: nil,
+        try IOSMultihopNodeSelection.validate(nodes, execution: execution, entryID: nil, entryMode: nil,
             exitID: nil, exitMode: nil, controlID: final.id)
         var record = IOSConnectionProfileRecord(id: UUID().uuidString.lowercased(), name: try cleanName(name),
             nodeID: final.id, nodeKind: "router-vpn", mode: "shadowsocks", customLayers: [],

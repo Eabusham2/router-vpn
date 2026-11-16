@@ -219,14 +219,18 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
   }
  }
 
- static func candidateProfiles()throws {
-  let(model,ids)=try setup(3),store=IOSNodeBundleStore.shared
-  let profiles=try ids.map{try stored($0).routerProfiles[0]}
+ static func candidateProfiles(count:Int=3,execution:String="local")throws {
+  let(model,ids)=try setup(count),store=IOSNodeBundleStore.shared
+  var profiles=try ids.map{try stored($0).routerProfiles[0]}
+  profiles[profiles.count-1].multihopExecution=execution
   let original=store.records,selection=try encoded(model.bundle!),mode=UserDefaults.standard.string(forKey:iosConnectionModeKey)
   model.profileMutationBlocked=true
   var observations=0
-  let saved=try IOSConnectionProfileStore.appendCandidate(name:" Future measured path ",profiles:profiles,current:{observations+=1})
+  let saved:IOSConnectionProfileRecord
+  do { saved=try IOSConnectionProfileStore.appendCandidate(name:" Future measured path ",profiles:profiles,current:{observations+=1}) }
+  catch { throw failure("candidate save for requested \(execution) failed: \(error.localizedDescription)") }
   try check("candidate future profile captures complete path and explicit mode",saved.mode=="shadowsocks" && saved.chainPolicies?.map(\.nodeID)==ids && saved.preferences?.multihopNodes?.map(\.id)==ids)
+  try check("candidate future profile retains requested execution",saved.preferences?.multihopExecution==execution)
   try check("candidate save cannot apply to active connection",store.records==original && encoded(model.bundle!)==selection && model.imports==0 && UserDefaults.standard.string(forKey:iosConnectionModeKey)==mode)
   let bytes=IOSPrivateJSONStore.bytes,writes=IOSPrivateJSONStore.writes
   for secret in ["PRIVATE-TOKEN","PRIVATE-SOCKS","PRIVATE-ASSET","api_token","private_key"]{try check("candidate profile omits "+secret,!String(decoding:bytes!,as:UTF8.self).contains(secret))}
@@ -302,7 +306,7 @@ extension Optional where Wrapped == RouterProfile {func unwrapCandidate()throws-
    try check("HY2 candidate refusal leaves profile storage unchanged",IOSPrivateJSONStore.bytes==before && IOSPrivateJSONStore.writes==writes)
   }}
  }
- static func main(){do{defer{UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)};try matrix();try failures();try normalization();try candidateProfiles();try importedRoundtrip();try hysteriaRoundtrip();print("Apple ordered profile persistence: PASS (\(checks) shipping Swift checks)")}
+ static func main(){do{defer{UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)};try matrix();try failures();try normalization();for count in [3,4,8]{for execution in ["local","server","auto"]{try candidateProfiles(count:count,execution:execution)}};try importedRoundtrip();try hysteriaRoundtrip();print("Apple ordered profile persistence: PASS (\(checks) shipping Swift checks)")}
  catch{FileHandle.standardError.write(Data(("FAIL ordered profile persistence: "+error.localizedDescription+"\n").utf8));exit(1)}}
 }
 '''
@@ -348,6 +352,7 @@ def main(*, extra_sources=(), extra_flags=(), binary_args=(), binary_cases=None)
         actual = code.read_text()
         controls = {
             'blank-start-layer-capture': ('startLayer: startLayer.isEmpty ? "off" : startLayer,', 'startLayer: startLayer,'),
+            'candidate-execution-preservation': ('        record.chainPolicies = try profiles.map { profile in', '        record.preferences?.multihopExecution = "local"\n        record.chainPolicies = try profiles.map { profile in'),
             'candidate-final-source-guard': ('        try current() // Final fresh source/receipt observation immediately before atomic profile write.', '        // Mutant omits final original-source observation.'),
             'old-two-record-limit': ('(1...IOSMultihopNodeSelection.maximumNodes).contains(replacements.count)', '(1...2).contains(replacements.count)'),
             'lost-ordered-selection': ('profile.multihopNodes = prefs.multihopNodes', 'profile.multihopNodes = nil'),
@@ -360,6 +365,8 @@ def main(*, extra_sources=(), extra_flags=(), binary_args=(), binary_cases=None)
             result = subprocess.run([str(binary), *map(str, binary_args), *map(str, cases[0])], capture_output=True, text=True, timeout=30)
             if result.returncode != 1 or 'FAIL ordered profile persistence:' not in result.stderr:
                 raise AssertionError('control did not reject the changed shipping behavior: ' + label + result.stdout + result.stderr)
+            if label == 'candidate-execution-preservation' and 'candidate save for requested server failed: Saved ordered chain final policy does not match its control profile.' not in result.stderr:
+                raise AssertionError('candidate execution control missed the saved execution witness')
             if label == 'candidate-final-source-guard' and 'expected rejection: candidate changed at atomic profile commit' not in result.stderr:
                 raise AssertionError('candidate guard control failed without exercising the stale commit')
             if label == 'blank-start-layer-capture' and 'blank original Start Layer must save as Off:' not in result.stderr:
