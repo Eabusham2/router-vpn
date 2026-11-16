@@ -5,11 +5,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -93,21 +95,26 @@ func TestDesktopNodeProspectiveALLTemporaryRestoreKeepsExactWinner(t *testing.T)
 					request := httptest.NewRequest(http.MethodPost, "/api/speed-lab/run", strings.NewReader(
 						`{"scope":"temporary","topology":"router","node_id":"`+f.profile.ID+`","mode":"all","base":"awg","duration_mode":"custom","min_seconds":1,"max_seconds":1}`)).WithContext(ctx)
 					response := httptest.NewRecorder()
+					var forbiddenRelease atomic.Bool
 					func() {
 						// Releasing the captured protection is already forbidden at
 						// this original backend boundary. Observe that first wrong
-						// attempt before unrelated later persistence can obscure it.
-						// The public handler and every final restore assertion still
-						// execute unchanged for the valid production path.
+						// attempt without exiting inside the backend ownership stack.
+						// Return a refusal so the public handler can join its normal
+						// restoration before the test reports the forbidden attempt.
+						// Every valid-path restore assertion remains unchanged.
 						slot := f.a.nodeProtection
 						release := slot.backend.release
 						slot.backend.release = func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error) {
-							t.Fatal("temporary ALL attempted protection release during captured restoration")
-							return nil, nil
+							forbiddenRelease.Store(true)
+							return nil, errors.New("fixture refuses temporary ALL protection release")
 						}
 						defer func() { slot.backend.release = release }()
 						f.a.speedLabRun(response, request)
 					}()
+					if forbiddenRelease.Load() {
+						t.Fatal("temporary ALL attempted protection release during captured restoration")
+					}
 					if response.Code < 400 || (ctx.Err() != nil) != (outcome == "cancel") || !f.a.state.Connected || f.a.state.Phase != "connected" ||
 						f.a.state.RuntimeMode != "max-quic-wg" || f.a.state.LogicalMode != "all" || f.a.state.Base != "wg" || len(f.children) != 4+trials {
 						t.Fatal("temporary ALL did not restore its exact previously proved winner", response.Code, response.Body.String(), len(f.children), f.a.state)

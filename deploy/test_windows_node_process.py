@@ -783,7 +783,9 @@ def execute_baseline(binary, captured, digest):
 def check_rejection(name, test, witness, status, output):
     if (not status or invalid_execution(output) or witness not in output or
             not test_line(output, "FAIL", test)):
-        raise ValueError("Node process negative control missed its intended boundary: " + name + "\n" + output[-16384:])
+        diagnostic = output if len(output) <= 16384 else output[:4096] + "\n[bounded output omitted]\n" + output[-12288:]
+        raise ValueError("Node process negative control missed its intended boundary: " + name +
+                         " (exit=" + str(status) + ")\n" + diagnostic)
 
 
 def mutants():
