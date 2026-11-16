@@ -4155,3 +4155,40 @@ Frozen two-file manifest SHA256:
 Both preimages from 25eb9cbf still matched at integration on 06e5a1e3.
 This is executable shared validation and gate evidence, separate from actual
 Darwin PF, utun, installed process, package and device acceptance.
+
+
+## November 16: Windows retirement captures uninspected socket endpoints
+
+Actual Windows native run 43772302566/job 132992292191 at ef940ff7 failed its
+Off-policy held-UDP4 and held-UDP6 cases: ReleaseSocket returned success while
+a duplicated native socket remained open. That production identity code was
+unchanged through the current source checkpoint. The original identity record
+could lack its ordinary endpoint when no InspectSocket/Grant had occurred;
+cleanup then skipped both final endpoint capture and independent retirement
+readback.
+
+Cleanup now captures the final kernel endpoint from the retained original
+socket even without prior inspection, and checks that final endpoint before
+forgetting the source. A surviving duplicate keeps the original retirement
+record until independent endpoint absence is observed. This grants no permit,
+does not publish an ordinary identity proof, and does not mark an unbound or
+failed operation Connected. Existing entered-I/O, late creation, partial
+creation, cancellation and transferred-owner protections remain.
+
+Eight native identity cases require bound and unbound TCP/UDP retirement on
+IPv4 and IPv6 without an earlier InspectSocket call. They query the actual
+endpoint/token/AppID, hold a real duplicate, require refusal, then require
+retirement after its final close. The original failing WFP traffic cases remain
+unchanged. Both faulty guard omissions are required causal controls; the gate
+now requires all 23 identity roots and twenty controls.
+
+Both AMD64 and ARM64 Windows identity/WFP/traffic packages cross-compiled with
+the actual native build tags. Twenty-five identity runner and two traffic
+inventory tests passed, and all twenty mutation seams instantiated. These are
+compilation and gate checks; the new Windows kernel cases still require actual
+current-SHA execution in CI. No native runtime success is inferred from the
+cross-compilation. The owned test executables were hashed before cleanup.
+
+The four-file manifest SHA256 is
+`cdd0caf576bac5a561bb2f2525057798cf825a14d05651c749500c85250abfef`.
+All four published-25eb9cbf preimages still matched at integration on af246190.

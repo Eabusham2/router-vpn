@@ -657,7 +657,7 @@ func (p *DesktopWindowsSocketIdentity) ReleaseSocket(ctx context.Context, creati
 				return err
 			}
 		}
-		if record.endpoint != 0 {
+		if record.endpoint != 0 || record.finalEndpoint != 0 {
 			endpoints := []uint64{record.endpoint, record.finalEndpoint}
 			if record.connect != nil {
 				endpoints = append(endpoints, record.connect.boundEndpoint)

@@ -679,6 +679,97 @@ func TestDesktopSocketWindowsIdentityRejectsUnjoinedDuplicate(t *testing.T) {
 	t.Logf("retired ALE endpoint has independent native status=%d (%#x)", uint32(status), uint32(status))
 }
 
+func TestDesktopSocketWindowsIdentityUninspectedRetirement(t *testing.T) {
+	for _, family := range []string{"4", "6"} {
+		address := "127.0.0.1"
+		if family == "6" {
+			address = "::1"
+		}
+		for _, network := range []string{"tcp", "udp"} {
+			for _, phase := range []string{"unbound", "bound"} {
+				t.Run(network+family+"/"+phase, func(t *testing.T) {
+					p := desktopWindowsIdentityTestNew(t)
+					creation := desktopWindowsIdentityTestCreation(t, p, network, address)
+					result := desktopWindowsIdentityTestCreate(t, p, creation)
+					raw, err := result.Native.SyscallConn()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if phase == "bound" {
+						raw, _ = desktopWindowsIdentityTestBind(t, result.Native, creation.Binding.LocalAddress)
+					}
+					// Query the real endpoint directly. Calling InspectSocket here would
+					// publish its proof and conceal the ungranted source's missing capture.
+					endpoint, err := desktopWindowsALEEndpoint(raw)
+					if err != nil || endpoint == 0 {
+						t.Fatal("uninspected socket has no independently queryable endpoint", err)
+					}
+					if err := p.call(p.ctx, false, func() error {
+						record := p.sockets[creation.SocketID]
+						if record == nil || record.creation != creation || record.endpoint != 0 || record.finalCaptured || record.connect != nil {
+							return errors.New("uninspected retirement fixture already published an endpoint or Connect proof")
+						}
+						properties, appID, err := p.api.endpointProperties(p.engine, endpoint)
+						if err != nil || properties.EndpointID != endpoint || properties.TokenModifiedID != p.statistics.ModifiedID || !bytes.Equal(appID, p.appID) || (properties.LocalPort != 0) != (phase == "bound") {
+							return errors.Join(err, errors.New("uninspected endpoint lost its actual token, app, or bind state"))
+						}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+					held, err := desktopWindowsNativeDuplicate(raw)
+					if held != nil {
+						t.Cleanup(func() { _ = held.Close() })
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := result.Native.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err := p.ReleaseSocket(p.ctx, creation); err == nil || !strings.Contains(err.Error(), "ALE endpoint has not independently retired") {
+						t.Fatal("uninspected retirement accepted a held native alias", err)
+					}
+					if err := p.call(p.ctx, false, func() error {
+						record := p.sockets[creation.SocketID]
+						if record == nil || record.creation != creation || record.endpoint != 0 || !record.finalCaptured || record.finalEndpoint != endpoint || record.connect != nil {
+							return errors.New("uninspected cleanup lost its exact final endpoint or published ordinary proof")
+						}
+						if _, err := record.original.SyscallConn(); !errors.Is(err, net.ErrClosed) {
+							return errors.New("uninspected cleanup did not close its retained original")
+						}
+						properties, appID, err := p.api.endpointProperties(p.engine, endpoint)
+						if err != nil || properties.EndpointID != endpoint || properties.TokenModifiedID != p.statistics.ModifiedID || !bytes.Equal(appID, p.appID) {
+							return errors.Join(err, errors.New("held uninspected alias lost its independently observed kernel owner"))
+						}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+					if err := held.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err := desktopWindowsIdentityTestRelease(p, creation); err != nil {
+						t.Fatal("uninspected endpoint did not retire after its last alias closed", err)
+					}
+					if err := p.call(p.ctx, false, func() error {
+						if p.sockets[creation.SocketID] != nil {
+							return errors.New("retired uninspected source remains owned")
+						}
+						_, _, err := p.api.endpointProperties(p.engine, endpoint)
+						if !errors.Is(err, desktopWindowsEndpointNotFound) {
+							return errors.Join(err, errors.New("uninspected retirement lacks independent endpoint absence"))
+						}
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestDesktopSocketWindowsIdentityRejectsTokenStatisticsReplacement(t *testing.T) {
 	p := desktopWindowsIdentityTestNew(t)
 	creation := desktopWindowsIdentityTestCreation(t, p, "tcp", "127.0.0.1")

@@ -34,6 +34,7 @@ TCP = "desktop_socket_tcp_windows.go"
 IMPORTED = "desktop_socket_native_windows.go"
 CREATOR = "desktop_socket_windows_identity_api.go"
 BROKER = "desktop_socket_broker.go"
+UNINSPECTED_RETIREMENT = "TestDesktopSocketWindowsIdentityUninspectedRetirement"
 REQUIRED = (
     "TestDesktopSocketWindowsIdentitySDKLayout",
     "TestDesktopSocketWindowsIdentityBoundKernelEndpoints",
@@ -56,6 +57,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsIdentityTCPRetainsBoundDescriptor",
     "TestDesktopSocketWindowsIdentitySequentialProtocolTransfer",
     "TestDesktopSocketWindowsIdentityRetainsFailedDuplicateReadback",
+    UNINSPECTED_RETIREMENT,
     "TestDesktopSocketWindowsIdentityObservesRefusedConnectBeforePublication",
 )
 
@@ -139,7 +141,11 @@ def mutants(text):
         ("duplicate-retirement", REQUIRED[7], "retirement ignored a real unjoined duplicate of the ALE endpoint",
          function_mutant(text,
                          "func (p *DesktopWindowsSocketIdentity) ReleaseSocket(",
-                         "if record.endpoint != 0 {", "if false {")),
+                         "if record.endpoint != 0 || record.finalEndpoint != 0 {", "if false {")),
+        ("uninspected-final-readback", UNINSPECTED_RETIREMENT, "uninspected retirement accepted a held native alias",
+         function_mutant(text,
+                         "func (p *DesktopWindowsSocketIdentity) ReleaseSocket(",
+                         "if record.endpoint != 0 || record.finalEndpoint != 0 {", "if record.endpoint != 0 {")),
         ("atomic-expiry", REQUIRED[1], "lost its atomic bounded creation window",
          replace_once(text, "Expires: p.expires,", "Expires: ^uint32(0),")),
     )
@@ -173,6 +179,10 @@ def connect_mutants(text):
         ("entered-import-retirement", REQUIRED[15],
          "pending source retirement ignored entered I/O",
          replace_once(text, "if !closed {", "if !closed && false {")),
+        ("uninspected-final-capture", UNINSPECTED_RETIREMENT,
+         "uninspected retirement accepted a held native alias",
+         replace_once(text, "if record.finalCaptured || record.original == nil {",
+                      "if record.finalCaptured || record.original == nil || (record.endpoint == 0 && record.connect == nil) {")),
     )
 
 
@@ -337,6 +347,9 @@ def execute(source=ROOT, go="go", *, env=None):
                 for name in (REQUIRED[19], REQUIRED[20]):
                     if "--- PASS: " + name + "/" + network + family + " (" not in output:
                         raise ValueError("Windows identity baseline omitted an exact protocol-transfer/retirement family")
+                for phase in ("unbound", "bound"):
+                    if "--- PASS: " + UNINSPECTED_RETIREMENT + "/" + network + family + "/" + phase + " (" not in output:
+                        raise ValueError("Windows identity baseline omitted uninspected endpoint retirement")
             for outcome in ("connected", "connect-error", "cancelled"):
                 if "--- PASS: " + REQUIRED[18] + "/tcp" + family + "/" + outcome + " (" not in output:
                     raise ValueError("Windows identity baseline omitted exact bound-descriptor ownership")
@@ -364,7 +377,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production Windows identity mutant:", name, flush=True)
         if checked_sources(source)[3] != before:
             raise ValueError("Windows identity source changed during its actual native gate")
-    print("Windows isolated identity passed nineteen kernel/lifecycle cases, all four bound/imported-I/O/protocol socket families, IPv4/IPv6 completed-local observations, exact TCP bind/Connect ownership, and sixteen production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
+    print("Windows isolated identity passed " + str(len(REQUIRED)) + " required kernel/lifecycle roots, all four bound/imported-I/O/protocol socket families, bound and unbound alias retirement without an earlier proof, IPv4/IPv6 completed-local observations, exact TCP bind/Connect ownership, and " + str(len(changes)) + " production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":

@@ -291,13 +291,14 @@ func desktopWindowsIdentityCaptureRetirement(record *desktopWindowsIdentitySocke
 			return errors.New("Windows socket retirement precedes actual imported I/O close and join")
 		}
 	}
-	if record.finalCaptured || record.original == nil || (record.endpoint == 0 && record.connect == nil) {
+	if record.finalCaptured || record.original == nil {
 		return nil
 	}
-	// A cancelled Connect may finish before its normal proof is published. Read
-	// the still-retained original before closing it, so its actual final endpoint
-	// cannot be forgotten even when the importer returned an error. This grants
-	// no permission and never marks a failed/cancelled operation connected.
+	// An ungranted or unbound socket still owns a kernel endpoint, and a cancelled
+	// Connect may finish before its normal proof is published. Read the retained
+	// original before closing it even when InspectSocket never ran, so a surviving
+	// duplicate cannot be forgotten. This is cleanup authority only: it grants no
+	// permission and never marks an unbound or failed operation connected.
 	raw, err := record.original.SyscallConn()
 	if err != nil {
 		return err
