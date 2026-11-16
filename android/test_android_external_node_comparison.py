@@ -281,12 +281,14 @@ def sources():
     boundaries=U.S.replace_class(boundaries,'AndroidStandardExitRuntime',runtime)
     policy=U.S.block(boundaries,'final class AndroidExternalPolicy')
     policy_source=(JAVA/'AndroidExternalPolicy.java').read_text()
-    captured=U.S.block(policy_source,'    static final class Captured {')
-    # This comparison fixture restores its original ordinary/pair selection.
-    # Ordered imported compilation is exercised by the real Java/Go source gate;
-    # an unexpected entry into that branch must fail, never invent a native input.
-    imported_boundary='static Captured captureImportedEntry(AndroidStandardExitStore.Entry source)throws Exception{throw new AssertionError("Ordered imported source requires the actual shared-compiler composition gate");}'
-    boundaries=U.S.replace_class(boundaries,'AndroidExternalPolicy',policy[:-1]+captured+imported_boundary+U.S.block(policy_source,'    static String entryDigest(')+'}')
+    # The usage fixture already retains the shipping Captured type and public
+    # imported validation/copy, with a refusing private native boundary. Keep
+    # those original members exactly once when adding the comparison digest.
+    assert policy.count('static final class Captured {') == 1
+    assert policy.count('static Captured captureImportedEntry(') == 1
+    for signature in ('    static final class Captured {', '    static Captured captureImportedEntry('):
+        assert U.S.block(policy,signature) == U.S.block(policy_source,signature), 'Comparison lost original imported capture source'
+    boundaries=U.S.replace_class(boundaries,'AndroidExternalPolicy',policy[:-1]+U.S.block(policy_source,'    static String entryDigest(')+'}')
     libbox='io/nekohasekai/libbox/Libbox.java'
     imported_methods=''.join('public static String '+method+'(String config,String capture){throw new AssertionError("Ordered imported compilation is outside ordinary comparison");}' for method in (
         'routerNodeChainImportedMemberInput','routerNodeChainImportedSOCKSMemberInput','routerNodeChainImportedCONNECTMemberInput'))
