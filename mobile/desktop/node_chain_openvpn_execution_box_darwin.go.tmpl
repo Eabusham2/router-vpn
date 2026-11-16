@@ -1,0 +1,42 @@
+//go:build darwin
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+)
+
+type RouterVPNDesktopDarwinNodeChainOpenVPNExecutionPreparation struct {
+	network *routervpndesktoppt.NodeNetworkOwner
+	policy  *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodeChainOpenVPNExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy) (*RouterVPNDesktopDarwinNodeChainOpenVPNExecutionPreparation, error) {
+	if !routerVPNDesktopNodeChainOpenVPNExecutionPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("ordered OpenVPN execution lost its original Darwin physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopDarwinNodeChainOpenVPNExecutionPreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainOpenVPNExecutionPhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopDarwinNodeChainOpenVPNExecutionPreparation) CloseSource(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("ordered OpenVPN execution cleanup lost its original Darwin preparation")
+	}
+	return p.network.CloseNodeChainOpenVPNExecutionPhysicalSource(ctx, p.policy)
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodeChainOpenVPNExecutionActivatePhysical(policy *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if !routerVPNDesktopNodeChainOpenVPNExecutionPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("ordered OpenVPN execution lost its original Darwin physical activation")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

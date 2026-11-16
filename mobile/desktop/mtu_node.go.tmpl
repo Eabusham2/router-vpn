@@ -799,6 +799,14 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 		}
 		ctx = socksExecutionConstruction.ctx
 	}
+	var openvpnExecutionConstruction *routerVPNDesktopOpenVPNExecutionConstruction
+	if _, ok := physicalPolicy.(*mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy); ok {
+		openvpnExecutionConstruction, err = routerVPNNewDesktopOpenVPNExecutionConstruction(ctx, executionPreparation)
+		if err != nil {
+			return err
+		}
+		ctx = openvpnExecutionConstruction.ctx
+	}
 	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, raw)
 	if err != nil {
 		return routerVPNExternalFailure
@@ -950,6 +958,8 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 			captured, prepareErr = instance.RouterVPNDesktopNodeChainCONNECTExecutionPreparePhysicalOwned(policy)
 		case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
 			captured, prepareErr = instance.RouterVPNDesktopNodeChainSOCKSExecutionPreparePhysicalOwned(policy)
+		case *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy:
+			captured, prepareErr = instance.RouterVPNDesktopNodeChainOpenVPNExecutionPreparePhysicalOwned(policy)
 		case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
 			captured, prepareErr = instance.RouterVPNDesktopCandidatePrefixPreparePhysicalOwned(policy)
 		default:
@@ -990,6 +1000,8 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 			physical, err = instance.RouterVPNDesktopNodeChainCONNECTExecutionActivatePhysical(policy)
 		case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
 			physical, err = instance.RouterVPNDesktopNodeChainSOCKSExecutionActivatePhysical(policy)
+		case *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy:
+			physical, err = instance.RouterVPNDesktopNodeChainOpenVPNExecutionActivatePhysical(policy)
 		case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
 			physical, err = instance.RouterVPNDesktopCandidatePrefixActivatePhysical(policy)
 		default:
@@ -1052,6 +1064,11 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 			}
 			if socksExecutionConstruction != nil {
 				if err := socksExecutionConstruction.current(call); err != nil {
+					return err
+				}
+			}
+			if openvpnExecutionConstruction != nil {
+				if err := openvpnExecutionConstruction.current(call); err != nil {
 					return err
 				}
 			}

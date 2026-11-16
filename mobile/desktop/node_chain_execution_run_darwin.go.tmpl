@@ -159,6 +159,14 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		}
 		graph = socksConstruction.ctx
 	}
+	var openvpnConstruction *routerVPNDesktopOpenVPNExecutionConstruction
+	if control.openvpnPolicy != nil {
+		openvpnConstruction, err = routerVPNNewDesktopOpenVPNExecutionConstruction(graph, control.prep)
+		if err != nil {
+			return err
+		}
+		graph = openvpnConstruction.ctx
+	}
 	parsed, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(control.prep.Config()))
 	if err != nil {
 		return err
@@ -226,6 +234,12 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		if owned != nil {
 			prepared = owned
 		}
+	case *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy:
+		owned, e := instance.RouterVPNDesktopDarwinNodeChainOpenVPNExecutionPreparePhysicalOwned(captured)
+		err = e
+		if owned != nil {
+			prepared = owned
+		}
 	default:
 		return routerVPNExternalFailure
 	}
@@ -268,6 +282,8 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		physical, err = instance.RouterVPNDesktopDarwinNodeChainCONNECTExecutionActivatePhysical(captured)
 	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
 		physical, err = instance.RouterVPNDesktopDarwinNodeChainSOCKSExecutionActivatePhysical(captured)
+	case *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy:
+		physical, err = instance.RouterVPNDesktopDarwinNodeChainOpenVPNExecutionActivatePhysical(captured)
 	default:
 		return routerVPNExternalFailure
 	}
@@ -288,6 +304,11 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 				return err
 			}
 		}
+		if openvpnConstruction != nil {
+			if err := openvpnConstruction.current(call); err != nil {
+				return err
+			}
+		}
 		if err := physical.CurrentContext(call); err != nil {
 			return err
 		}
@@ -304,6 +325,11 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		}
 		if socksConstruction != nil {
 			if err := socksConstruction.current(call); err != nil {
+				return err
+			}
+		}
+		if openvpnConstruction != nil {
+			if err := openvpnConstruction.current(call); err != nil {
 				return err
 			}
 		}

@@ -1,0 +1,101 @@
+package main
+
+import (
+	"context"
+	"errors"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type routerVPNDesktopOpenVPNExecutionConstructionKey struct{}
+
+// The desktop source keeps its original physical derivation independently of
+// the Box-owned provider endpoint. Neither this capture nor the unused Local
+// provider grants a Server trial connection or a new connected generation.
+type routerVPNDesktopOpenVPNExecutionConstruction struct {
+	self          *routerVPNDesktopOpenVPNExecutionConstruction
+	preparation   *mobilemultihop.NodeChainExecutionPreparation
+	physical      *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
+	policy        *mobilemultihop.DesktopNodeChainPolicy
+	source        *mobilemultihop.NodeChain
+	native        *mobilemultihop.NodeChain
+	sourceCapture mobilemultihop.NodeChainOpenVPNCapture
+	nativeCapture mobilemultihop.NodeChainOpenVPNCapture
+	ctx           context.Context
+	config        string
+	metadata      mobilemultihop.DesktopPhysicalMetadata
+}
+
+func routerVPNNewDesktopOpenVPNExecutionConstruction(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation) (*routerVPNDesktopOpenVPNExecutionConstruction, error) {
+	if ctx == nil || ctx.Err() != nil || prep == nil || !prep.RequiresDesktopOpenVPNExecutionObserver() || ctx.Value(routerVPNDesktopOpenVPNExecutionConstructionKey{}) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	physical, err := prep.OpenVPNDesktopPhysicalPolicy()
+	if err != nil {
+		return nil, err
+	}
+	policy, err := physical.OriginalDesktopOpenVPNPolicy()
+	if err != nil {
+		return nil, err
+	}
+	source, err := prep.OriginalOpenVPNSource()
+	if err != nil || source == nil || policy.OriginalChain() != source {
+		return nil, errors.Join(err, routerVPNExternalFailure)
+	}
+	native := policy.NodeChain()
+	if native == nil {
+		return nil, routerVPNExternalFailure
+	}
+	sourceCapture, err := source.OpenVPNMiddleCapture()
+	if err != nil || sourceCapture.Tag == "" {
+		return nil, errors.Join(err, routerVPNExternalFailure)
+	}
+	nativeCapture, err := native.OpenVPNMiddleCapture()
+	if err != nil || nativeCapture.Tag == "" {
+		return nil, errors.Join(err, routerVPNExternalFailure)
+	}
+	config, metadata, _, err := physical.PhysicalReadValidated()
+	if err != nil || config != prep.Config() || metadata.ConfigSHA256 != prep.ConfigSHA256() || metadata.Kind != "node-chain-openvpn-execution" {
+		return nil, errors.Join(err, routerVPNExternalFailure)
+	}
+	local, err := box.RouterVPNNodeOpenVPNExecutionContext(ctx, prep)
+	if err != nil {
+		return nil, err
+	}
+	result := &routerVPNDesktopOpenVPNExecutionConstruction{preparation: prep, physical: physical, policy: policy,
+		source: source, native: native, sourceCapture: sourceCapture, nativeCapture: nativeCapture, config: config, metadata: metadata}
+	result.self = result
+	result.ctx = context.WithValue(local, routerVPNDesktopOpenVPNExecutionConstructionKey{}, result)
+	return result, result.current(ctx)
+}
+
+func (c *routerVPNDesktopOpenVPNExecutionConstruction) current(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || c == nil || c.self != c || c.ctx == nil || c.ctx.Err() != nil ||
+		c.ctx.Value(routerVPNDesktopOpenVPNExecutionConstructionKey{}) != c || c.preparation == nil ||
+		!c.preparation.RequiresDesktopOpenVPNExecutionObserver() || c.physical == nil || c.policy == nil || c.source == nil || c.native == nil {
+		return routerVPNExternalFailure
+	}
+	physical, err := c.preparation.OpenVPNDesktopPhysicalPolicy()
+	if err != nil || physical != c.physical {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	policy, err := physical.OriginalDesktopOpenVPNPolicy()
+	if err != nil || policy != c.policy || policy.OriginalChain() != c.source || policy.NodeChain() != c.native {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	source, err := c.preparation.OriginalOpenVPNSource()
+	if err != nil || source != c.source {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	sourceCapture, err := source.OpenVPNMiddleCapture()
+	nativeCapture, nativeErr := c.native.OpenVPNMiddleCapture()
+	if err != nil || nativeErr != nil || sourceCapture != c.sourceCapture || nativeCapture != c.nativeCapture {
+		return errors.Join(err, nativeErr, routerVPNExternalFailure)
+	}
+	config, metadata, _, err := physical.PhysicalReadValidated()
+	if err != nil || config != c.config || config != c.preparation.Config() || metadata != c.metadata {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	return ctx.Err()
+}

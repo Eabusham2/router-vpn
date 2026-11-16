@@ -1,0 +1,82 @@
+//go:build darwin && with_openvpn
+
+package main
+
+import (
+	"context"
+	"testing"
+)
+
+// Original process observations use the existing explicit component doubles;
+// preparation, physical-family dispatch and private source replay are shipping
+// code. This gate grants no PF, utun or installed-process acceptance.
+func routerVPNDarwinOpenVPNExecutionControlFixture(t *testing.T, execution string) (*routerVPNDarwinNodeChainExecutionControl, *routerVPNExternalFiles, *routerVPNDarwinChainCaptureRead, *routerVPNDarwinChainBootstrapRead) {
+	t.Helper()
+	return routerVPNDarwinExecutionControlFixtureFromPreparation(t, desktopOpenVPNExecutionCommandPreparation(t, "4-tcp", "darwin", execution))
+}
+
+func TestRouterVPNDesktopOpenVPNExecutionDarwinControl(t *testing.T) {
+	for _, execution := range []string{"server", "auto"} {
+		t.Run(execution, func(t *testing.T) {
+			control, files, _, _ := routerVPNDarwinOpenVPNExecutionControlFixture(t, execution)
+			ctx := routerVPNDarwinExecutionControlContext(t)
+			policy, err := control.compile(ctx, files)
+			if err != nil || policy == nil || control.openvpnPolicy != policy || control.policy != nil || control.socksPolicy != nil || control.connectPolicy != nil || !control.exclusivePolicy() || control.current(ctx) != nil {
+				t.Fatal("Darwin OpenVPN lost exclusive original source", err)
+			}
+			if prepared, err := control.prepare(ctx, policy); err != nil || prepared == nil {
+				t.Fatal("Darwin OpenVPN lost original process locks", err)
+			}
+			if other, err := control.compile(ctx, files); err == nil || other != nil {
+				t.Fatal("Darwin OpenVPN control compiled twice")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopOpenVPNExecutionDarwinRefusal(t *testing.T) {
+	for _, fault := range []string{"policy", "preparation", "second-policy", "source", "execution", "missing-authority", "retiring", "cancelled", "nil-caller"} {
+		t.Run(fault, func(t *testing.T) {
+			control, files, capture, _ := routerVPNDarwinOpenVPNExecutionControlFixture(t, "auto")
+			ctx := routerVPNDarwinExecutionControlContext(t)
+			policy, err := control.compile(ctx, files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "policy":
+				copy := *control.openvpnPolicy
+				control.openvpnPolicy = &copy
+			case "preparation":
+				control.prep = desktopOpenVPNExecutionCommandPreparation(t, "4-tcp", "darwin", "auto")
+			case "second-policy":
+				prep, _ := desktopExecutionCommandSource(t, "darwin", "auto")
+				control.policy, err = prep.DesktopPhysicalPolicy()
+			case "source":
+				control.scope.Source = control.execution
+			case "execution":
+				control.execution = control.scope.Source
+			case "missing-authority":
+				capture.files[3] = nil
+			case "retiring":
+				control.retiring.Store(true)
+			case "cancelled":
+				stopped, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = stopped
+			case "nil-caller":
+				ctx = nil
+			}
+			if err != nil {
+				t.Fatal("invalid Darwin refusal fixture", err)
+			}
+			if prepared, err := control.prepare(ctx, policy); err == nil || prepared != nil {
+				t.Fatal("foreign Darwin OpenVPN owner acquired process authority")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopOpenVPNExecutionDarwinEarlyStop(t *testing.T) {
+	testRouterVPNNodeChainExecutionDarwinEarlyStop(t, routerVPNDarwinOpenVPNExecutionControlFixture)
+}

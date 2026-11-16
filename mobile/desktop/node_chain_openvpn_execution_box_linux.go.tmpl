@@ -1,0 +1,54 @@
+//go:build linux
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func (s *Box) RouterVPNDesktopLinuxNodeChainOpenVPNExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy) (*RouterVPNDesktopLinuxNodePreparation, error) {
+	if !routerVPNDesktopNodeChainOpenVPNExecutionPhysicalTarget(policy, "linux") {
+		return nil, errors.New("ordered OpenVPN execution lost its original Linux physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopLinuxNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainOpenVPNExecutionPhysicalPolicy(policy)
+}
+
+// The shared execution controller proves the selected DNS and public path
+// before opening application traffic. The Local proof cannot authorize that
+// transition, even though the original physical scope is unchanged.
+func (s *Box) RouterVPNDesktopLinuxNodeChainOpenVPNExecutionActivatePhysical(ctx context.Context, policy *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if ctx == nil || ctx.Err() != nil || !routerVPNDesktopNodeChainOpenVPNExecutionPhysicalTarget(policy, "linux") {
+		return nil, errors.New("ordered OpenVPN execution lost its original Linux physical activation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil {
+		return nil, err
+	}
+	owner, err := s.routerVPNDesktopNodeActivatePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil || ctx.Err() != nil || !owner.Current() {
+		owner.Cancel()
+		return nil, errors.Join(err, ctx.Err(), errors.New("ordered OpenVPN execution changed its original Linux physical owner"))
+	}
+	return owner, nil
+}
+
+func (s *Box) RouterVPNDesktopLinuxNodeChainOpenVPNExecutionActivateCover(ctx context.Context, policy *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy, physical *RouterVPNDesktopNodePhysical) (*RouterVPNDesktopLinuxNodeCover, error) {
+	if !routerVPNDesktopNodeChainOpenVPNExecutionPhysicalTarget(policy, "linux") {
+		return nil, errors.New("ordered OpenVPN execution cover lost its original Linux policy")
+	}
+	return s.routerVPNDesktopLinuxActivateCover(ctx, policy, physical)
+}

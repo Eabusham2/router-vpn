@@ -1,0 +1,42 @@
+package box
+
+import (
+	"errors"
+	"runtime"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The execution policy retains the exact original OpenVPN physical derivation.
+// The imported provider endpoint remains behind the paired entry and cannot
+// acquire a direct host permission from its public remote address.
+func routerVPNDesktopNodeChainOpenVPNExecutionPhysicalTarget(policy *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy, target string) bool {
+	if policy == nil {
+		return false
+	}
+	original, err := policy.OriginalDesktopOpenVPNPolicy()
+	if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(original, target) {
+		return false
+	}
+	_, meta, _, err := policy.PhysicalReadValidated()
+	return err == nil && meta.Kind == "node-chain-openvpn-execution" && meta.TargetOS == target
+}
+
+func (s *Box) RouterVPNDesktopNodeChainOpenVPNExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy) (*RouterVPNDesktopNodePreparation, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainOpenVPNExecutionPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered OpenVPN execution lost its original Windows physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainOpenVPNExecutionPhysicalPolicy(policy)
+}
+
+func (s *Box) RouterVPNDesktopNodeChainOpenVPNExecutionActivatePhysical(policy *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainOpenVPNExecutionPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered OpenVPN execution lost its original Windows physical activation")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

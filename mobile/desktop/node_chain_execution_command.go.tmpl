@@ -39,6 +39,8 @@ func routerVPNNodeChainExecutionCommandCapture(files *routerVPNExternalFiles, se
 		prep, err = mobilemultihop.ParseDesktopNodeChainSOCKSExecutionPreparation(string(raw))
 	} else if string(header.Schema) == "4" {
 		prep, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionPreparation(string(raw))
+	} else if string(header.Schema) == "5" {
+		prep, err = mobilemultihop.ParseDesktopNodeChainOpenVPNExecutionPreparation(string(raw))
 	} else {
 		prep, err = mobilemultihop.ParseDesktopNodeChainExecutionPreparation(string(raw))
 	}
@@ -74,6 +76,9 @@ func routerVPNDesktopExecutionPhysicalPolicy(prep *mobilemultihop.NodeChainExecu
 	if prep.RequiresCONNECTExecutionObserver() {
 		return prep.CONNECTDesktopPhysicalPolicy()
 	}
+	if prep.RequiresDesktopOpenVPNExecutionObserver() {
+		return prep.OpenVPNDesktopPhysicalPolicy()
+	}
 	return prep.DesktopPhysicalPolicy()
 }
 
@@ -86,6 +91,9 @@ func routerVPNDesktopExecutionPhysicalKind(prep *mobilemultihop.NodeChainExecuti
 	}
 	if prep.RequiresCONNECTExecutionObserver() {
 		return "node-chain-connect-execution"
+	}
+	if prep.RequiresDesktopOpenVPNExecutionObserver() {
+		return "node-chain-openvpn-execution"
 	}
 	return "node-chain-execution"
 }

@@ -261,6 +261,8 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 		adoption, err = mobilemultihop.NewDesktopNodeChainSOCKSExecutionAdoptionRecord(projection, identity, owner.transfer)
 	} else if owner.prep.RequiresCONNECTExecutionObserver() {
 		adoption, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionAdoptionRecord(projection, identity, owner.transfer)
+	} else if owner.prep.RequiresDesktopOpenVPNExecutionObserver() {
+		adoption, err = mobilemultihop.NewDesktopNodeChainOpenVPNExecutionAdoptionRecord(projection, identity, owner.transfer)
 	} else {
 		adoption, err = mobilemultihop.NewDesktopNodeChainExecutionAdoptionRecord(projection, identity, owner.transfer)
 	}
@@ -287,6 +289,14 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 			return routerVPNExternalFailure
 		}
 		saved, err = typed.CaptureCONNECTDesktopLastContext(startup)
+	} else if owner.prep.RequiresDesktopOpenVPNExecutionObserver() {
+		typed, ok := controller.(interface {
+			CaptureOpenVPNDesktopLastContext(context.Context) (mobilemultihop.NodeChainExecutionLast, error)
+		})
+		if !ok {
+			return routerVPNExternalFailure
+		}
+		saved, err = typed.CaptureOpenVPNDesktopLastContext(startup)
 	} else {
 		saved, err = controller.CaptureLastContext(startup)
 	}
@@ -428,6 +438,11 @@ func (owner *routerVPNNodeChainExecutionRuntime) heartbeat(ctx context.Context, 
 		typed.Kind = "routervpn-node-chain-connect-execution-ready-v1"
 		readyErr = typed.Validate(projection, owner.transfer)
 		heartbeat = typed
+	} else if owner.prep.RequiresDesktopOpenVPNExecutionObserver() {
+		typed := mobilemultihop.DesktopNodeChainOpenVPNExecutionReadyRecord(ready)
+		typed.Kind = "routervpn-node-chain-openvpn-execution-ready-v1"
+		readyErr = typed.Validate(projection, owner.transfer)
+		heartbeat = typed
 	} else {
 		readyErr = ready.Validate(projection, owner.transfer)
 	}
@@ -454,6 +469,9 @@ func routerVPNDesktopExecutionProjectionPhysical(projection *mobilemultihop.Node
 	if prep.RequiresCONNECTExecutionObserver() {
 		return projection.CONNECTDesktopPhysicalPolicy()
 	}
+	if prep.RequiresDesktopOpenVPNExecutionObserver() {
+		return projection.OpenVPNDesktopPhysicalPolicy()
+	}
 	return projection.DesktopPhysicalPolicy()
 }
 
@@ -467,6 +485,9 @@ func routerVPNDesktopExecutionLastCapture(prep *mobilemultihop.NodeChainExecutio
 	if prep.RequiresCONNECTExecutionObserver() {
 		return prep.CONNECTDesktopLast()
 	}
+	if prep.RequiresDesktopOpenVPNExecutionObserver() {
+		return prep.OpenVPNDesktopLast()
+	}
 	return prep.DesktopLast()
 }
 
@@ -479,6 +500,9 @@ func routerVPNDesktopExecutionLastCurrent(last mobilemultihop.NodeChainExecution
 	}
 	if prep.RequiresCONNECTExecutionObserver() {
 		return last.ValidateCONNECTDesktopProjection(projection)
+	}
+	if prep.RequiresDesktopOpenVPNExecutionObserver() {
+		return last.ValidateOpenVPNDesktopProjection(projection)
 	}
 	return last.ValidateDesktopProjection(projection)
 }

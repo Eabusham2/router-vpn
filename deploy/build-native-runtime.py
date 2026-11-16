@@ -202,6 +202,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_socks_execution_construction_runner.py',
                              ROOT/'deploy/test_desktop_socks_execution_child.py',
                              ROOT/'deploy/test_desktop_socks_execution_child_runner.py',
+                             ROOT/'deploy/test_desktop_openvpn_execution_child.py',
+                             ROOT/'deploy/test_desktop_openvpn_execution_child_runner.py',
                              ROOT/'deploy/test_socks_server_final_layers.py',
                              ROOT/'deploy/test_socks_server_final_layers_runner.py',
                              ROOT/'deploy/test_connect_final_layers_native.py',
@@ -1722,6 +1724,15 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_child.py',
                      '--core', source, '--tags='+','.join(tags(target)), '--phase', socks_phase,
                      *(['--without-race'] if not race else [])], cwd=source, env=env, timeout=1200)
+            run([sys.executable, ROOT/'deploy/test_desktop_openvpn_execution_child_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # Every phase uses the same complete prepared desktop core, actual
+            # independent private profiles, and original120s/600s native bounds.
+            for openvpn_phase in ('source', 'lifecycle', 'longest', 'box', 'controls'):
+                run([sys.executable, ROOT/'deploy/test_desktop_openvpn_execution_child.py',
+                     '--core', source, '--tags='+','.join(tags(target)), '--phase', openvpn_phase,
+                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
+                    timeout=2400 if openvpn_phase == 'controls' else 1050)
             run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_controller_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
             # New layer phases preserve every original phase and its bounds.
