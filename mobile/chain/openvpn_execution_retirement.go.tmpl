@@ -1,0 +1,57 @@
+package box
+
+import (
+	"context"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Opaque restoration may construct a fresh endpoint only after the exact old
+// execution and Box have joined. Cancelled source/network contexts cannot prove
+// that join, and are not consulted as live owners after native retirement.
+func (e *RouterVPNNodeChainExecutionEngine) OpenVPNExecutionRetiredContext(ctx context.Context, original *mobilemultihop.NodeChain) error {
+	if e == nil || ctx == nil || ctx.Err() != nil || e.instance == nil || e.instance.ctx == nil ||
+		e.prep == nil || original == nil || e.control == nil {
+		return errRouterVPNExecutionOwner
+	}
+	c, ok := e.instance.ctx.Value(routerVPNOpenVPNExecutionKey{}).(*routerVPNOpenVPNExecutionConstruction)
+	if !ok || c == nil {
+		return errRouterVPNExecutionOwner
+	}
+	state := e.state.Load()
+	current := func() error {
+		if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+			return err
+		}
+		valid := c.self == c && c.attempted && c.instance == e.instance && c.prep == e.prep && c.source == original &&
+			c.endpoint != nil && c.close != nil && c.config == e.prep.Config()
+		c.mu.Unlock()
+		if !valid || state == nil || state.stage != 3 || e.state.Load() != state ||
+			!e.revoked.Load() || e.permit.Load() != nil || e.opening.Load() || e.revoking.Load() != 0 || e.stops.Load() != 0 || e.busy.Load() {
+			return errRouterVPNExecutionOwner
+		}
+		source, err := e.prep.OriginalOpenVPNSource()
+		if err != nil || source != original {
+			return errRouterVPNExecutionOwner
+		}
+		capture, err := source.OpenVPNMiddleCapture()
+		if err != nil || capture != c.capture {
+			return errRouterVPNExecutionOwner
+		}
+		closed, err := e.control.ObserveClosedContext(ctx)
+		if err != nil || !closed.Closed || closed.Open || !closed.Drained || closed.Identity != e.gateID {
+			return errRouterVPNExecutionOwner
+		}
+		return ctx.Err()
+	}
+	if err := current(); err != nil {
+		return err
+	}
+	if err := c.close.JoinContext(ctx, c.instance); err != nil {
+		return err
+	}
+	return current()
+}
+
+var _ mobilemultihop.NodeChainOpenVPNExecutionRetiredObserver = (*RouterVPNNodeChainExecutionEngine)(nil)

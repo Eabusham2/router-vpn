@@ -249,6 +249,9 @@ func (e *RouterVPNNodeChainExecutionEngine) nativeCurrent(ctx context.Context, s
 	if err := e.observeTypedCONNECT(ctx); err != nil {
 		return err
 	}
+	if err := e.observeTypedOpenVPN(ctx); err != nil {
+		return err
+	}
 	reader := e.reader.Load()
 	if reader == nil || reader.inbound == nil || reader.generation == 0 {
 		return errRouterVPNExecutionOwner
@@ -387,6 +390,9 @@ func (e *RouterVPNNodeChainExecutionEngine) Dial(ctx context.Context, tag, addre
 		}
 	}
 	if address == hopmeasure.PublicAddress {
+		if e.prep.RequiresOpenVPNExecutionObserver() {
+			return e.dialOpenVPNPublicContext(ctx, state, tag)
+		}
 		if e.prep.RequiresSOCKSExecutionObserver() {
 			return e.dialSOCKSPublicContext(ctx, state, tag)
 		}

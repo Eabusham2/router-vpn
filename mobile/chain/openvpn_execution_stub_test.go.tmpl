@@ -1,0 +1,18 @@
+//go:build !with_openvpn
+
+package box
+
+import "testing"
+
+func TestRouterVPNOpenVPNExecutionNativeWithoutSupport(t *testing.T) {
+	_, prep, _ := openVPNExecutionNativeSources(t, "3-tcp", "server")
+	if routerVPNOpenVPNExecutionSupported() {
+		t.Fatal("native OpenVPN capability fabricated without its implementation")
+	}
+	if _, err := RouterVPNNodeOpenVPNExecutionContext(t.Context(), prep); err == nil {
+		t.Fatal("schema-five execution acquired a native context without OpenVPN")
+	}
+	if endpoint, err := routerVPNConcreteExecutionOpenVPN(nil); err == nil || endpoint != nil {
+		t.Fatal("missing native OpenVPN returned a capacity owner")
+	}
+}

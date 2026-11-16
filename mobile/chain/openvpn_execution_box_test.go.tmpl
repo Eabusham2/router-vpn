@@ -1,0 +1,392 @@
+//go:build with_openvpn
+
+package box
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/protocol/openvpn"
+)
+
+// Actual OpenVPN endpoint, manager, selector, gate and shared discovery run
+// here. The endpoint is unstarted: no native connection is claimed. The TUN,
+// packet-prefix I/O and DNS retain the existing fixture's explicit boundaries.
+func newOpenVPNExecutionNativeFixture(t *testing.T, name, execution string) (*executionNativeFixture, *mobilemultihop.NodeChain) {
+	t.Helper()
+	original, prep, server := openVPNExecutionNativeSources(t, name, execution)
+	f := newExecutionNativeFixtureWithSources(t, prep, server, nil, executionNativeConstructionHook{
+		endpoints: openvpn.RegisterEndpoint,
+		context: func(ctx context.Context) (context.Context, error) {
+			return RouterVPNNodeOpenVPNExecutionContext(ctx, prep)
+		},
+		options: routerVPNNodeSOCKSOptions, created: func(s *Box) { routerVPNNodeSOCKSBind(s) },
+		close: func(s *Box) error {
+			select {
+			case <-s.done:
+				return nil // The original Box.Close already owns endpoint retirement.
+			default:
+				return s.endpoint.Close()
+			}
+		},
+	})
+	return f, original
+}
+
+func openVPNExecutionNativeConstruction(t *testing.T, f *executionNativeFixture) *routerVPNOpenVPNExecutionConstruction {
+	t.Helper()
+	c, ok := f.ctx.Value(routerVPNOpenVPNExecutionKey{}).(*routerVPNOpenVPNExecutionConstruction)
+	if !ok || c == nil || c.instance != f.box || c.endpoint == nil {
+		t.Fatal("original concrete OpenVPN construction absent")
+	}
+	return c
+}
+
+type openVPNExecutionLookalike struct{ adapter.Endpoint }
+
+func (*openVPNExecutionLookalike) RouterVPNConnectedCapacityContext(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error) {
+	return nativeopenvpn.RemoteReceipt{}, 1500, nil
+}
+
+func TestRouterVPNOpenVPNExecutionNativeOriginal(t *testing.T) {
+	if _, err := routerVPNConcreteExecutionOpenVPN(&openVPNExecutionLookalike{}); err == nil {
+		t.Fatal("lookalike reader acquired concrete OpenVPN execution authority")
+	}
+	for _, name := range []string{"3-tcp", "3-udp", "4-tcp", "4-udp", "8-tcp", "8-udp"} {
+		for _, execution := range []string{"server", "auto"} {
+			t.Run(name+"/"+execution, func(t *testing.T) {
+				f, original := newOpenVPNExecutionNativeFixture(t, name, execution)
+				c := openVPNExecutionNativeConstruction(t, f)
+				endpoint := c.endpoint
+				projection := f.adopt(t)
+				if err := f.engine.ObserveOpenVPNExecutionContext(t.Context(), original); err != nil {
+					t.Fatal("original native source refused", err)
+				}
+				if _, err := f.engine.OpenVPNMiddleStateContext(t.Context(), c.capture.Tag); !errors.Is(err, nativeopenvpn.ErrRemotePending) || c.state != nil {
+					t.Fatal("configured OpenVPN endpoint manufactured connected state", err)
+				}
+				server, err := projection.DNSCapture("server")
+				if err != nil || f.engine.SelectContext(t.Context(), server.SelectedTag) != nil {
+					t.Fatal("original Server selection refused", err)
+				}
+				if _, err := f.engine.ObserveChainContext(t.Context()); err != nil || c.endpoint != endpoint || c.state != nil {
+					t.Fatal("unused Local provider blocked Server ownership", err)
+				}
+				if open, err := f.engine.ApplicationOpenContext(t.Context()); err != nil || open {
+					t.Fatal("native OpenVPN adoption opened traffic without proofs", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNOpenVPNExecutionNativePublicServer(t *testing.T) {
+	for _, name := range []string{"3-tcp", "8-udp"} {
+		for _, fault := range []string{"original", "away-and-back", "foreign-tag", "foreign-address"} {
+			t.Run(name+"/"+fault, func(t *testing.T) {
+				f, _ := newOpenVPNExecutionNativeFixture(t, name, "server")
+				testExecutionPublicServerOriginal(t, f, fault)
+			})
+		}
+	}
+}
+
+func TestRouterVPNOpenVPNExecutionNativeAuthority(t *testing.T) {
+	for _, fault := range []string{"copied-construction", "equivalent-source", "preparation", "config", "middle", "box", "closed", "manager", "endpoint", "output", "lookup", "cancelled", "held-lock"} {
+		t.Run(fault, func(t *testing.T) {
+			f, original := newOpenVPNExecutionNativeFixture(t, "3-tcp", "server")
+			e, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := openVPNExecutionNativeConstruction(t, f)
+			ctx := t.Context()
+			switch fault {
+			case "copied-construction":
+				old := f.box.ctx
+				copy := &routerVPNOpenVPNExecutionConstruction{self: c, prep: c.prep, source: c.source, capture: c.capture, config: c.config, digest: c.digest, attempted: c.attempted, instance: c.instance, manager: c.manager, endpoint: c.endpoint}
+				f.box.ctx = context.WithValue(old, routerVPNOpenVPNExecutionKey{}, copy)
+				defer func() { f.box.ctx = old }()
+			case "equivalent-source":
+				other, _, _ := openVPNExecutionNativeSources(t, "3-tcp", "server")
+				original = other
+			case "preparation":
+				_, other, _ := openVPNExecutionNativeSources(t, "3-tcp", "server")
+				before := e.prep
+				e.prep = other
+				defer func() { e.prep = before }()
+			case "config":
+				before := c.config
+				c.config += " "
+				defer func() { c.config = before }()
+			case "middle":
+				before := c.capture
+				c.capture.ConfiguredMTU++
+				defer func() { c.capture = before }()
+			case "box":
+				before := e.instance
+				e.instance = &Box{ctx: f.box.ctx, endpoint: f.box.endpoint, outbound: f.box.outbound}
+				defer func() { e.instance = before }()
+			case "closed":
+				before := f.box.done
+				f.box.done = make(chan struct{})
+				close(f.box.done)
+				defer func() { f.box.done = before }()
+			case "manager":
+				before := f.box.endpoint
+				f.box.endpoint = nil
+				defer func() { f.box.endpoint = before }()
+			case "endpoint":
+				before := c.endpoint
+				c.endpoint = nil
+				defer func() { c.endpoint = before }()
+			case "output":
+				before := e.originalOutbounds[c.capture.Tag]
+				delete(e.originalOutbounds, c.capture.Tag)
+				defer func() { e.originalOutbounds[c.capture.Tag] = before }()
+			case "lookup":
+				mu := chainNativeField[sync.Mutex](t, f.box.endpoint, "access")
+				rows := chainNativeField[map[string]adapter.Endpoint](t, f.box.endpoint, "endpointByTag")
+				mu.Lock()
+				before := (*rows)[c.capture.Tag]
+				delete(*rows, c.capture.Tag)
+				mu.Unlock()
+				defer func() { mu.Lock(); (*rows)[c.capture.Tag] = before; mu.Unlock() }()
+			case "cancelled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			case "held-lock":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 10*time.Millisecond)
+				defer cancel()
+				c.mu.Lock()
+				defer c.mu.Unlock()
+			}
+			if e.ObserveOpenVPNExecutionContext(ctx, original) == nil {
+				t.Fatal("foreign OpenVPN execution owner accepted", fault)
+			}
+		})
+	}
+}
+
+func TestRouterVPNOpenVPNExecutionNativeConnectedReceipt(t *testing.T) {
+	for _, fault := range []string{"same", "generation", "connected-at", "remote", "network", "capacity", "below-configured", "invalid", "cancelled", "pending-after-pin"} {
+		t.Run(fault, func(t *testing.T) {
+			f, _ := newOpenVPNExecutionNativeFixture(t, "3-tcp", "auto")
+			e, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := openVPNExecutionNativeConstruction(t, f)
+			// An explicit component input exercises immutable receipt equality.
+			// The real endpoint stays pending and cannot prove native readiness.
+			state := nativeopenvpn.PacketObservation{Remote: nativeopenvpn.RemoteReceipt{Remote: c.capture.Remote, Generation: 7, ConnectedAt: 1}, MTU: uint32(c.capture.ConfiguredMTU)}
+			if _, err = c.acceptObservation(t.Context(), state); err != nil {
+				t.Fatal(err)
+			}
+			before := c.state
+			changed, ctx := state, t.Context()
+			switch fault {
+			case "generation":
+				changed.Remote.Generation++
+			case "connected-at":
+				changed.Remote.ConnectedAt++
+			case "remote":
+				changed.Remote.Remote.Port++
+			case "network":
+				changed.Remote.Remote.Network = "udp"
+			case "capacity":
+				changed.MTU++
+			case "below-configured":
+				changed.MTU--
+			case "invalid":
+				changed.Remote.Generation = 0
+			case "cancelled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			case "pending-after-pin":
+				_, err = c.read(ctx, e)
+				if err == nil || errors.Is(err, nativeopenvpn.ErrRemotePending) || c.state != before || *c.state != state {
+					t.Fatal("later pending OpenVPN endpoint acquired initial retry", err)
+				}
+				return
+			}
+			_, err = c.acceptObservation(ctx, changed)
+			if fault == "same" && err != nil || fault != "same" && err == nil || c.state != before || *c.state != state {
+				t.Fatal("original OpenVPN connected receipt was replaced", fault, err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNOpenVPNExecutionNativeLast(t *testing.T) {
+	for _, execution := range []string{"local", "server"} {
+		t.Run(execution, func(t *testing.T) {
+			f, _ := newOpenVPNExecutionNativeFixture(t, "4-udp", "auto")
+			c := openVPNExecutionNativeConstruction(t, f)
+			last := executionLastRecord(t, f, execution)
+			e, err := f.capture(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = e.AdoptLastContext(t.Context(), last); err == nil {
+				t.Fatal("saved OpenVPN Last bypassed discovery")
+			}
+			f.discovery(t)
+			if _, err = e.DiscoverContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			owner, endpoint, reader := e.discovery.Load(), c.endpoint, e.reader.Load()
+			plan, err := e.AdoptLastContext(t.Context(), last)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.RequireJoinedContext(t.Context()) != nil || e.discovery.Load() != owner || c.endpoint != endpoint || e.reader.Load() != reader || c.state != nil {
+				t.Fatal("OpenVPN Last replaced original construction or invented connected state")
+			}
+			if open, err := e.ApplicationOpenContext(t.Context()); err != nil || open {
+				t.Fatal("OpenVPN Last opened unproved traffic", err)
+			}
+			runtime, err := mobilemultihop.NewNodeChainExecutionLastRuntime(t.Context(), plan, e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runtime.Progress().Ready || runtime.HealthyContext(t.Context()) == nil {
+				t.Fatal("saved OpenVPN Last was treated as live proof")
+			}
+			if err = runtime.CloseContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNOpenVPNExecutionNativeMTU(t *testing.T) {
+	for _, scenario := range []string{"candidate", "rollback"} {
+		t.Run(scenario, func(t *testing.T) {
+			f, _ := newOpenVPNExecutionNativeFixture(t, "4-tcp", "server")
+			projection := f.adopt(t)
+			e := f.engine
+			server, err := projection.DNSCapture("server")
+			if err != nil || e.SelectContext(t.Context(), server.SelectedTag) != nil {
+				t.Fatal("original Server selection", err)
+			}
+			for _, stage := range adapter.ListStartStages {
+				if err := f.box.inbound.Start(stage); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c := openVPNExecutionNativeConstruction(t, f)
+			// The same explicit receipt input as the equality component above;
+			// the actual endpoint remains unconnected throughout this test.
+			state := nativeopenvpn.PacketObservation{Remote: nativeopenvpn.RemoteReceipt{Remote: c.capture.Remote, Generation: 7, ConnectedAt: 1}, MTU: uint32(c.capture.ConfiguredMTU)}
+			if _, err = c.acceptObservation(t.Context(), state); err != nil {
+				t.Fatal(err)
+			}
+			endpoint, pinned := c.endpoint, c.state
+			binding := executionMTUBinding(t, f, projection)
+			before := e.reader.Load()
+			candidate, rollback := executionMTUReader(), executionMTUReader()
+			candidate.failStart.Store(scenario == "rollback")
+			readbacks := map[adapter.Inbound]routerVPNExecutionMTUReadback{before.inbound: {"original", 11, 1400}, candidate: {"candidate", 12, 1300}, rollback: {"rollback", 13, 1400}}
+			read := func(ctx context.Context, reader adapter.Inbound) (routerVPNExecutionMTUReadback, error) {
+				value, ok := readbacks[reader]
+				if !ok {
+					return value, errRouterVPNExecutionOwner
+				}
+				return value, ctx.Err()
+			}
+			acquire := func(ctx context.Context, reader adapter.Inbound, mtu int) (*inbound.RouterVPNTunTransaction, error) {
+				return f.box.inbound.RouterVPNReplaceTunOwned(ctx, reader, func() (adapter.Inbound, adapter.Inbound, error) { return candidate, rollback, nil })
+			}
+			result, err := e.changeExecutionMTUContext(t.Context(), binding, before.inbound, 1300, acquire, read)
+			if scenario == "rollback" && (err == nil || result != rollback) || scenario == "candidate" && (err != nil || result != candidate) {
+				t.Fatal("OpenVPN original reader transition", err)
+			}
+			if err = e.admitExecutionMTUContext(t.Context(), binding, read); err != nil {
+				t.Fatal(err)
+			}
+			if c.endpoint != endpoint || c.state != pinned || *c.state != state {
+				t.Fatal("OpenVPN MTU reproof replaced connected receipt")
+			}
+			if _, err = c.read(t.Context(), e); err == nil || errors.Is(err, nativeopenvpn.ErrRemotePending) {
+				t.Fatal("OpenVPN MTU reproof adopted pending replacement", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNOpenVPNExecutionNativeRetirement(t *testing.T) {
+	for _, fault := range []string{"success", "original-error"} {
+		t.Run(fault, func(t *testing.T) {
+			f, original := newOpenVPNExecutionNativeFixture(t, "3-tcp", "server")
+			f.adopt(t)
+			e := f.engine
+			if e.OpenVPNExecutionRetiredContext(t.Context(), original) == nil {
+				t.Fatal("live OpenVPN owner fabricated native retirement")
+			}
+			if err := e.RetireContext(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			f.engine = nil // The exact engine was explicitly retired above.
+			if e.OpenVPNExecutionRetiredContext(t.Context(), original) == nil {
+				t.Fatal("closed OpenVPN gate substituted for original Box close")
+			}
+			held := executionReadbackCloseFixture(t, f)
+			sentinel := errors.New("original OpenVPN native service close failed")
+			if fault == "original-error" {
+				held.failure = sentinel
+			}
+			var release sync.Once
+			joined := make(chan struct{})
+			done := make(chan error, 1)
+			defer func() {
+				release.Do(func() { close(held.release) })
+				select {
+				case <-joined:
+				case <-time.After(3 * time.Second):
+					t.Error("original OpenVPN native close did not join")
+				}
+			}()
+			go func() { defer close(joined); done <- f.box.Close() }()
+			select {
+			case <-held.entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("actual OpenVPN Box close did not reach original service")
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			err := e.OpenVPNExecutionRetiredContext(ctx, original)
+			cancel()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("early OpenVPN native done fabricated joined retirement", err)
+			}
+			release.Do(func() { close(held.release) })
+			select {
+			case err = <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("original OpenVPN Box close did not return")
+			}
+			if fault == "success" && err != nil || fault == "original-error" && !errors.Is(err, sentinel) {
+				t.Fatal("original OpenVPN Box close result changed", err)
+			}
+			f.current.Store(false)
+			err = e.OpenVPNExecutionRetiredContext(t.Context(), original)
+			if fault == "success" && err != nil || fault == "original-error" && !errors.Is(err, sentinel) {
+				t.Fatal("OpenVPN retirement lost the original joined close result", err)
+			}
+			foreign, _, _ := openVPNExecutionNativeSources(t, "3-tcp", "server")
+			if e.OpenVPNExecutionRetiredContext(t.Context(), foreign) == nil {
+				t.Fatal("equal foreign OpenVPN source borrowed joined close")
+			}
+		})
+	}
+}

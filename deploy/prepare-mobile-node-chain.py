@@ -51,6 +51,14 @@ TEMPLATES = {
     'candidate_preparation_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_candidate_preparation_test.go',
     'box.go.tmpl': 'routervpn_node_chain.go',
     'openvpn_box.go.tmpl': 'routervpn_node_chain_openvpn.go',
+    'openvpn_execution_box.go.tmpl': 'routervpn_node_chain_openvpn_execution.go',
+    'openvpn_execution_public.go.tmpl': 'routervpn_node_chain_openvpn_execution_public.go',
+    'openvpn_execution_retirement.go.tmpl': 'routervpn_node_chain_openvpn_execution_retirement.go',
+    'openvpn_execution_endpoint.go.tmpl': 'routervpn_node_chain_openvpn_execution_endpoint.go',
+    'openvpn_execution_endpoint_stub.go.tmpl': 'routervpn_node_chain_openvpn_execution_endpoint_stub.go',
+    'openvpn_execution_fixture_test.go.tmpl': 'routervpn_node_chain_openvpn_execution_fixture_test.go',
+    'openvpn_execution_box_test.go.tmpl': 'routervpn_node_chain_openvpn_execution_test.go',
+    'openvpn_execution_stub_test.go.tmpl': 'routervpn_node_chain_openvpn_execution_stub_test.go',
     'openvpn_box_test.go.tmpl': 'routervpn_node_chain_openvpn_test.go',
     'openvpn_prefix_box_test.go.tmpl': 'routervpn_node_chain_openvpn_prefix_test.go',
     'imported_prefix_box_test.go.tmpl': 'routervpn_node_chain_imported_prefix_test.go',
@@ -72,6 +80,8 @@ TEMPLATES = {
 def inputs():
     return [*CONNECT_BINDING.inputs(), Path(__file__).resolve(), ROOT/'deploy/test_node_chain_candidate_preparation.py',
             ROOT/'deploy/test_node_chain_candidate_preparation_runner.py',
+            ROOT/'deploy/test_node_chain_openvpn_execution_owner.py',
+            ROOT/'deploy/test_node_chain_openvpn_execution_owner_runner.py',
             *sorted((ROOT/'mobile/chain').glob('*.tmpl'))]
 
 

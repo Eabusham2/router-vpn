@@ -346,11 +346,25 @@ class NodeChainPreparation(unittest.TestCase):
             package = './'+str(Path(relative).parent) if '/' in relative else '.'
             roots.setdefault(package, []).extend(re.findall(r'^func (Test\w+)\(', (ROOT/'mobile/chain'/template).read_text(), re.M))
         self.assertEqual({'.', './route', './experimental/libbox', './protocol/routervpnnodesocks'}, set(roots))
+        # OpenVPN ownership has two real native build variants and private
+        # shared fixtures. Follow its required executable driver rather than
+        # adding an ungated shell selection that cannot supply those inputs.
+        owner_spec = importlib.util.spec_from_file_location('node_chain_openvpn_owner_selection', ROOT/'deploy/test_node_chain_openvpn_execution_owner.py')
+        owner = importlib.util.module_from_spec(owner_spec)
+        owner_spec.loader.exec_module(owner)
         for relative in ('android/build-sing-box-libbox.sh', 'ios/RouterVPN/prepare-libbox.sh'):
-            commands = [shlex.split(line) for line in (ROOT/relative).read_text().splitlines()
+            source = (ROOT/relative).read_text()
+            calls = [line for line in source.splitlines() if 'deploy/test_node_chain_openvpn_execution_owner.py" --core "$VENDOR"' in line]
+            self.assertEqual(len(calls), 1, relative)
+            self.assertIn('--race --tags ', calls[0])
+            self.assertIn('with_openvpn', calls[0])
+            self.assertNotIn('||', calls[0])
+            commands = [shlex.split(line) for line in source.splitlines()
                         if re.match(r'\s*(?:go|go_retry) test ', line)]
             for package, names in roots.items():
                 patterns = [command[command.index('-run')+1] for command in commands if package in command and '-run' in command]
+                if package == '.':
+                    patterns += [owner.POSITIVE.selection(), owner.STUB.selection()]
                 for name in names:
                     self.assertTrue(any(re.search(pattern, name) for pattern in patterns), (relative, package, name))
         desktop = ast.parse((ROOT/'deploy/build-native-runtime.py').read_text())
@@ -366,14 +380,24 @@ class NodeChainPreparation(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('selected_desktop_root_phases', ROOT/'deploy/test_desktop_native_root_phases.py')
         phases = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(phases)
+        # Verify the exact desktop invocation independently of its expression
+        # arguments before accepting the driver's positive root selection.
+        desktop_source = (ROOT/'deploy/build-native-runtime.py').read_text()
+        self.assertEqual(desktop_source.count("ROOT/'deploy/test_node_chain_openvpn_execution_owner.py'"), 1)
+        self.assertIn("'--core', source, '--go', 'go', '--tags', ','.join(tags(target))", desktop_source)
+        self.assertIn("'--tagged-only', *(['--race'] if race else [])", desktop_source)
+        stub_source = (ROOT/'mobile/chain/openvpn_execution_stub_test.go.tmpl').read_text()
+        self.assertTrue(stub_source.startswith('//go:build !with_openvpn\n'))
         def selected_patterns(package):
             direct = [command[command.index('-run')+1] for command in commands if package in command and '-run' in command]
-            return direct + ([phases.SELECTION] if package == '.' else [])
+            return direct + ([phases.SELECTION, owner.POSITIVE.selection()] if package == '.' else [])
         for package, names in roots.items():
             if package == './experimental/libbox':
                 continue  # Desktop owns its original command-process lifecycle.
             patterns = selected_patterns(package)
             for name in names:
+                if package == '.' and name == owner.PREFIX+'WithoutSupport':
+                    continue  # Excluded by its verified !with_openvpn build tag on desktop.
                 self.assertTrue(any(re.search(pattern, name) for pattern in patterns), ('desktop', package, name))
         for template in ('node_chain_box_physical_test.go.tmpl',):
             package = '.' if template.startswith('node_chain_box') else './cmd/sing-box'

@@ -188,6 +188,13 @@ func testImportedPublicServer(t *testing.T, count int, mode, fault string, hostn
 		hooks = append(hooks, importedPublicHostnameNativeHook(t))
 	}
 	f := newExecutionNativeFixtureWithSources(t, prep, server, nil, hooks...)
+	testExecutionPublicServerOriginal(t, f, fault)
+}
+
+// Share only the authenticated native front exchange. Each caller must first
+// construct its own family-specific original preparation and native owner.
+func testExecutionPublicServerOriginal(t *testing.T, f *executionNativeFixture, fault string) {
+	t.Helper()
 	projection := f.adopt(t)
 	engine := f.engine
 	proofs, err := projection.ProofInventory("server")

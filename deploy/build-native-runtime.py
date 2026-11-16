@@ -1959,6 +1959,14 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 cwd=ROOT, env=env, timeout=120)
             root_phases = load('desktop_native_root_phases', 'test_desktop_native_root_phases.py')
             root_phases.execute(source, target, ','.join(tags(target)), env, run)
+            run([sys.executable, ROOT/'deploy/test_node_chain_openvpn_execution_owner_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # The original desktop composition requires real OpenVPN. Mobile
+            # also compiles the same new owner without that optional tag.
+            run([sys.executable, ROOT/'deploy/test_node_chain_openvpn_execution_owner.py',
+                 '--core', source, '--go', 'go', '--tags', ','.join(tags(target)),
+                 '--tagged-only', *(['--race'] if race else [])],
+                cwd=ROOT, env=env, timeout=4200)
         if target.startswith('linux/'):
             validator = DNSSEC.build(target, temp/'dnssec-bundle', compiled=dnssec_compiled, env=env)
             for name in DNSSEC.names(target):

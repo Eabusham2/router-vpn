@@ -1,0 +1,105 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// The typed OpenVPN path retains its independent Local and Server source
+// identities. The original selected final DNS owns each public measurement.
+func (e *RouterVPNNodeChainExecutionEngine) dialOpenVPNPublicContext(ctx context.Context, state *routerVPNExecutionState, tag string) (net.Conn, error) {
+	if e == nil || ctx == nil || state == nil || state.stage != 2 || state.projection == nil || e.instance == nil || e.instance.dnsRouter == nil || e.resolver == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	original, err := e.prep.OriginalOpenVPNSource()
+	if err != nil {
+		return nil, err
+	}
+	localTag, ipv6, err := original.PublicMeasurementCapture()
+	if err != nil || localTag == "" {
+		return nil, errors.Join(errRouterVPNExecutionOwner, err)
+	}
+	local := original.ProofInventory()
+	if len(local) < 3 || len(local) > mobilemultihop.NodeChainMaximumNodes {
+		return nil, errRouterVPNExecutionOwner
+	}
+	selected, epoch := e.selector.Now(), e.selector.RouterVPNNodeChainSelectionEpoch()
+	execution := ""
+	if selected == state.local.Tag() {
+		execution = "local"
+	} else if selected == state.server.Tag() {
+		execution = "server"
+	} else {
+		return nil, errRouterVPNExecutionOwner
+	}
+	proofs, err := state.projection.ProofInventory(execution)
+	if err != nil || len(proofs) != len(local) {
+		return nil, errRouterVPNExecutionOwner
+	}
+	middle := proofs[len(proofs)-2]
+	if middle.Tag != tag || middle.Position != len(proofs)-2 || middle.Kind != "public-path" || middle.NodeKind != "external" || middle.Mode != "openvpn" || middle.NodeID != "" {
+		return nil, errRouterVPNExecutionOwner
+	}
+	if execution == "local" && (middle.Tag != localTag || middle.SourceSHA256 != local[len(local)-2].SourceSHA256 || middle.ProfileID != local[len(local)-2].ProfileID) {
+		return nil, errRouterVPNExecutionOwner
+	}
+	dns, err := state.projection.DNSCapture(execution)
+	if err != nil || dns.SelectedTag != selected || dns.DNS.ResolverTag != e.dnsCapture.DNS.ResolverTag {
+		return nil, errRouterVPNExecutionOwner
+	}
+	current := func() error {
+		observed, err := e.ObserveChainContext(ctx)
+		if err != nil || observed != state.identity || e.state.Load() != state || e.selector.Now() != selected || e.selector.RouterVPNNodeChainSelectionEpoch() != epoch {
+			return errRouterVPNExecutionOwner
+		}
+		return ctx.Err()
+	}
+	if err = current(); err != nil {
+		return nil, err
+	}
+	if execution == "server" {
+		// Remote authentication and its captured resolver own the fixed hostname.
+		retained := state.prefixes[tag]
+		if retained == nil {
+			return nil, errRouterVPNExecutionOwner
+		}
+		conn, dialErr := retained.DialContext(ctx, "tcp", M.ParseSocksaddr(hopmeasure.PublicAddress))
+		if observed := current(); observed != nil || conn == nil {
+			return conn, errors.Join(dialErr, observed, errRouterVPNExecutionOwner)
+		}
+		return conn, dialErr
+	}
+	query, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	query = adapter.WithContext(query, &adapter.InboundContext{Inbound: dns.DNS.TUNTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
+	addresses, err := e.instance.dnsRouter.Lookup(query, hopmeasure.PublicHost, adapter.DNSQueryOptions{Transport: e.resolver, DisableCache: true, DisableOptimisticCache: true})
+	if observed := current(); err != nil || observed != nil {
+		return nil, errors.Join(err, observed)
+	}
+	for _, ip := range addresses {
+		if !ip.IsValid() || ip.Zone() != "" || ip.Is4In6() || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.Is6() && !ipv6 {
+			return nil, errRouterVPNExecutionOwner
+		}
+	}
+	for _, ip := range addresses {
+		conn, dialErr := e.Dial(ctx, tag, net.JoinHostPort(ip.String(), "443"))
+		if observed := current(); observed != nil {
+			return conn, errors.Join(dialErr, observed)
+		}
+		if dialErr == nil && conn != nil {
+			return conn, nil
+		}
+		if conn != nil {
+			return conn, dialErr
+		}
+	}
+	return nil, errRouterVPNExecutionOwner
+}

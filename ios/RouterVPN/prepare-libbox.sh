@@ -298,6 +298,8 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   bash "$ROOT/../../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_VENDOR"
   python3 "$ROOT/../../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"
   python3 "$ROOT/../../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
+  python3 "$ROOT/../../deploy/test_node_chain_openvpn_execution_owner_runner.py"
+  python3 "$ROOT/../../deploy/test_node_chain_openvpn_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
   python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation_runner.py"
   python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"

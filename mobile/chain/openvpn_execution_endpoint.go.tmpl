@@ -1,0 +1,18 @@
+//go:build with_openvpn
+
+package box
+
+import (
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/protocol/openvpn"
+)
+
+func routerVPNOpenVPNExecutionSupported() bool { return true }
+
+func routerVPNConcreteExecutionOpenVPN(endpoint adapter.Endpoint) (routerVPNOpenVPNExecutionEndpoint, error) {
+	native, ok := endpoint.(*openvpn.ClientEndpoint)
+	if !ok || native == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	return native, nil
+}

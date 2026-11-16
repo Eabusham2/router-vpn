@@ -1,0 +1,260 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+type routerVPNOpenVPNExecutionKey struct{}
+
+type routerVPNOpenVPNExecutionEndpoint interface {
+	adapter.Endpoint
+	RouterVPNConnectedCapacityContext(context.Context) (nativeopenvpn.RemoteReceipt, uint32, error)
+}
+
+// Construction ownership precedes connection readiness. The original Box keeps
+// this receipt across proof controllers, selector trials and TUN reader changes.
+// An unused Local provider need not connect to prove the Server candidate.
+type routerVPNOpenVPNExecutionConstruction struct {
+	self      *routerVPNOpenVPNExecutionConstruction
+	prep      *mobilemultihop.NodeChainExecutionPreparation
+	source    *mobilemultihop.NodeChain
+	capture   mobilemultihop.NodeChainOpenVPNCapture
+	config    string
+	digest    string
+	mu        sync.Mutex
+	attempted bool
+	instance  *Box
+	manager   adapter.EndpointManager
+	endpoint  routerVPNOpenVPNExecutionEndpoint
+	close     *RouterVPNNativeCloseReceipt
+	state     *nativeopenvpn.PacketObservation
+}
+
+func RouterVPNNodeOpenVPNExecutionContext(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation) (context.Context, error) {
+	if ctx == nil || ctx.Err() != nil || prep == nil || !routerVPNOpenVPNExecutionSupported() ||
+		ctx.Value(routerVPNOrderedTypedConstructionKey{}) != nil || ctx.Value(routerVPNOpenVPNExecutionKey{}) != nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	source, err := prep.OriginalOpenVPNSource()
+	if err != nil || source == nil {
+		return nil, errors.Join(errRouterVPNExecutionOwner, err)
+	}
+	capture, err := source.OpenVPNMiddleCapture()
+	if err != nil || capture.Tag == "" {
+		return nil, errors.Join(errRouterVPNExecutionOwner, err)
+	}
+	config := prep.Config()
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(config))
+	if err != nil {
+		return nil, err
+	}
+	digest := routerVPNNodeChainExecutionOptionsDigest(ctx, options)
+	if digest == "" || ctx.Err() != nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	c := &routerVPNOpenVPNExecutionConstruction{prep: prep, source: source, capture: capture, config: config, digest: digest}
+	c.self = c
+	ctx = context.WithValue(ctx, routerVPNOrderedTypedConstructionKey{}, true)
+	return context.WithValue(ctx, routerVPNOpenVPNExecutionKey{}, c), nil
+}
+
+func (c *routerVPNOpenVPNExecutionConstruction) require(ctx, native context.Context, prep *mobilemultihop.NodeChainExecutionPreparation) error {
+	if c == nil || c.self != c || ctx == nil || ctx.Err() != nil || native == nil || native.Err() != nil ||
+		prep == nil || prep != c.prep || native.Value(routerVPNOpenVPNExecutionKey{}) != c || c.source == nil || c.config != prep.Config() {
+		return errRouterVPNExecutionOwner
+	}
+	original, err := prep.OriginalOpenVPNSource()
+	if err != nil || original != c.source {
+		return errRouterVPNExecutionOwner
+	}
+	capture, err := original.OpenVPNMiddleCapture()
+	if err != nil || capture != c.capture || capture.Tag == "" {
+		return errRouterVPNExecutionOwner
+	}
+	return ctx.Err()
+}
+
+// The original Box constructor claims this complete closed graph once, before
+// it constructs an endpoint, inbound, manager or transport.
+func routerVPNOpenVPNExecutionOptions(ctx context.Context, options option.Options) error {
+	if ctx == nil || ctx.Value(routerVPNOpenVPNExecutionKey{}) == nil {
+		return nil
+	}
+	c, ok := ctx.Value(routerVPNOpenVPNExecutionKey{}).(*routerVPNOpenVPNExecutionConstruction)
+	if !ok || c == nil || c.require(ctx, ctx, c.prep) != nil ||
+		routerVPNNodeChainExecutionOptionsDigest(ctx, options) != c.digest {
+		return errRouterVPNExecutionOwner
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+		return err
+	}
+	defer c.mu.Unlock()
+	if c.attempted || ctx.Err() != nil {
+		return errRouterVPNExecutionOwner
+	}
+	c.attempted = true
+	return nil
+}
+
+// Binding cannot grant readiness. A failed concrete endpoint lookup leaves the
+// acquired Box retained for close, but it cannot acquire an execution engine.
+func routerVPNOpenVPNExecutionBind(s *Box) {
+	if s == nil || s.ctx == nil {
+		return
+	}
+	c, ok := s.ctx.Value(routerVPNOpenVPNExecutionKey{}).(*routerVPNOpenVPNExecutionConstruction)
+	if !ok || c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.attempted || c.instance != nil || c.require(s.ctx, s.ctx, c.prep) != nil {
+		return
+	}
+	c.instance, c.manager = s, s.endpoint
+	c.close = s.RouterVPNCaptureCloseReceipt()
+	endpoint, found, err := adapter.RouterVPNEndpointContext(s.ctx, c.manager, c.capture.Tag)
+	if err != nil || !found || endpoint == nil {
+		return
+	}
+	c.endpoint, _ = routerVPNConcreteExecutionOpenVPN(endpoint)
+}
+
+func (c *routerVPNOpenVPNExecutionConstruction) original(ctx context.Context, e *RouterVPNNodeChainExecutionEngine) error {
+	if e == nil || e.instance == nil || e.instance.done == nil || c == nil || c.require(ctx, e.instance.ctx, e.prep) != nil {
+		return errRouterVPNExecutionOwner
+	}
+	select {
+	case <-e.instance.done:
+		return errRouterVPNExecutionOwner
+	default:
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+		return err
+	}
+	valid := c.attempted && c.instance == e.instance && c.manager != nil && c.manager == e.instance.endpoint &&
+		c.endpoint != nil && e.originalOutbounds[c.capture.Tag] == c.endpoint
+	manager, endpoint := c.manager, c.endpoint
+	c.mu.Unlock()
+	if !valid {
+		return errRouterVPNExecutionOwner
+	}
+	actual, found, err := adapter.RouterVPNEndpointContext(ctx, manager, c.capture.Tag)
+	if err != nil || !found || actual != endpoint {
+		return errors.Join(errRouterVPNExecutionOwner, err)
+	}
+	outbound, found, err := adapter.RouterVPNOutboundContext(ctx, e.instance.outbound, c.capture.Tag)
+	if err != nil || !found || outbound != endpoint {
+		return errors.Join(errRouterVPNExecutionOwner, err)
+	}
+	return ctx.Err()
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) ObserveOpenVPNExecutionContext(ctx context.Context, original *mobilemultihop.NodeChain) error {
+	if e == nil || e.instance == nil || e.instance.ctx == nil || original == nil {
+		return errRouterVPNExecutionOwner
+	}
+	c, ok := e.instance.ctx.Value(routerVPNOpenVPNExecutionKey{}).(*routerVPNOpenVPNExecutionConstruction)
+	if !ok || c == nil || c.source != original {
+		return errRouterVPNExecutionOwner
+	}
+	return c.original(ctx, e)
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) observeTypedOpenVPN(ctx context.Context) error {
+	if e == nil || e.prep == nil || e.instance == nil || e.instance.ctx == nil {
+		return errRouterVPNExecutionOwner
+	}
+	original, err := e.prep.OriginalOpenVPNSource()
+	if err != nil {
+		if e.prep.RequiresOpenVPNExecutionObserver() || e.instance.ctx.Value(routerVPNOpenVPNExecutionKey{}) != nil {
+			return errRouterVPNExecutionOwner
+		}
+		return nil
+	}
+	return e.ObserveOpenVPNExecutionContext(ctx, original)
+}
+
+// Only read supplies this method in production, after fresh original-owner
+// checks on both sides of the actual native endpoint's connected-capacity read.
+func (c *routerVPNOpenVPNExecutionConstruction) acceptObservation(ctx context.Context, actual nativeopenvpn.PacketObservation) (nativeopenvpn.PacketObservation, error) {
+	empty := nativeopenvpn.PacketObservation{}
+	if c == nil || c.self != c || ctx == nil || ctx.Err() != nil || actual.Validate() != nil ||
+		actual.Remote.Remote != c.capture.Remote || actual.MTU < uint32(c.capture.ConfiguredMTU) {
+		return empty, errRouterVPNExecutionOwner
+	}
+	if err := adapter.RouterVPNLockContext(ctx, &c.mu); err != nil {
+		return empty, err
+	}
+	defer c.mu.Unlock()
+	if c.state == nil {
+		copy := actual
+		c.state = &copy
+	}
+	if *c.state != actual {
+		return empty, errRouterVPNExecutionOwner
+	}
+	return actual, ctx.Err()
+}
+
+func (c *routerVPNOpenVPNExecutionConstruction) read(ctx context.Context, e *RouterVPNNodeChainExecutionEngine) (nativeopenvpn.PacketObservation, error) {
+	empty := nativeopenvpn.PacketObservation{}
+	if err := c.original(ctx, e); err != nil {
+		return empty, err
+	}
+	remote, capacity, err := c.endpoint.RouterVPNConnectedCapacityContext(ctx)
+	if observed := c.original(ctx, e); observed != nil {
+		return empty, observed
+	}
+	if err != nil {
+		if errors.Is(err, nativeopenvpn.ErrRemotePending) {
+			if lockErr := adapter.RouterVPNLockContext(ctx, &c.mu); lockErr != nil {
+				return empty, lockErr
+			}
+			connected := c.state != nil
+			c.mu.Unlock()
+			if connected {
+				// A later proof's initial retry cannot turn a reconnect into the
+				// first connection of this retained Box.
+				return empty, errRouterVPNExecutionOwner
+			}
+		}
+		return empty, err
+	}
+	return c.acceptObservation(ctx, nativeopenvpn.PacketObservation{Remote: remote, MTU: capacity})
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) OpenVPNMiddleStateContext(ctx context.Context, tag string) (nativeopenvpn.PacketObservation, error) {
+	empty := nativeopenvpn.PacketObservation{}
+	if e == nil || e.instance == nil || e.instance.ctx == nil {
+		return empty, errRouterVPNExecutionOwner
+	}
+	c, ok := e.instance.ctx.Value(routerVPNOpenVPNExecutionKey{}).(*routerVPNOpenVPNExecutionConstruction)
+	if !ok || c == nil || tag == "" || tag != c.capture.Tag {
+		return empty, errRouterVPNExecutionOwner
+	}
+	identity, err := e.ObserveChainContext(ctx)
+	if err != nil {
+		return empty, err
+	}
+	state, err := c.read(ctx, e)
+	if err != nil {
+		return empty, err
+	}
+	observed, err := e.ObserveChainContext(ctx)
+	if err != nil || observed != identity {
+		return empty, errRouterVPNExecutionOwner
+	}
+	return state, ctx.Err()
+}
+
+var _ mobilemultihop.NodeChainOpenVPNExecutionObserver = (*RouterVPNNodeChainExecutionEngine)(nil)
+var _ mobilemultihop.NodeChainOpenVPNEngine = (*RouterVPNNodeChainExecutionEngine)(nil)

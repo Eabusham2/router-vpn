@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"reflect"
 	"strings"
 	"sync"
@@ -184,11 +185,14 @@ func newExecutionNativeFixture(t *testing.T, execution string, edit func(map[str
 // Source construction is separate from the original actual-manager lifecycle.
 // Imported fixtures reuse the same declared I/O boundaries and owner cleanup.
 type executionNativeConstructionHook struct {
-	parent   context.Context
-	registry func(*outbound.Registry) error
-	context  func(context.Context) (context.Context, error)
-	options  func(context.Context, option.Options) error
-	bind     func(*Box)
+	parent    context.Context
+	registry  func(*outbound.Registry) error
+	endpoints func(*endpoint.Registry)
+	context   func(context.Context) (context.Context, error)
+	options   func(context.Context, option.Options) error
+	bind      func(*Box)
+	created   func(*Box)
+	close     func(*Box) error
 }
 
 func newExecutionNativeFixtureWithSources(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation, server *mobilemultihop.NodeChainServerPolicy, edit func(map[string]any), hooks ...executionNativeConstructionHook) *executionNativeFixture {
@@ -240,6 +244,9 @@ func newExecutionNativeFixtureWithSources(t *testing.T, prep *mobilemultihop.Nod
 			if err := hooks[0].registry(outsRegistry); err != nil {
 				t.Fatal(err)
 			}
+		}
+		if hooks[0].endpoints != nil {
+			hooks[0].endpoints(endsRegistry)
 		}
 	}
 	f.ctx = Context(parent, insRegistry, outsRegistry, endsRegistry, dnsRegistry, boxService.NewRegistry(), certificate.NewRegistry())
@@ -320,6 +327,9 @@ func newExecutionNativeFixtureWithSources(t *testing.T, prep *mobilemultihop.Nod
 	if err := router.Initialize(options.Route.Rules, options.Route.RuleSet); err != nil {
 		t.Fatal(err)
 	}
+	if len(hooks) == 1 && hooks[0].created != nil {
+		hooks[0].created(f.box)
+	}
 	for _, stage := range adapter.ListStartStages {
 		if err := outs.Start(stage); err != nil {
 			t.Fatal(err)
@@ -337,6 +347,11 @@ func newExecutionNativeFixtureWithSources(t *testing.T, prep *mobilemultihop.Nod
 		if f.engine != nil {
 			if err := f.engine.RetireContext(ctx); err != nil {
 				t.Error("native owner retirement", err)
+			}
+		}
+		if len(hooks) == 1 && hooks[0].close != nil {
+			if err := hooks[0].close(f.box); err != nil {
+				t.Error("original fixture endpoint close", err)
 			}
 		}
 		if err := outs.Close(); err != nil {
@@ -392,8 +407,47 @@ func TestRouterVPNExecutionNativeDuplicateBindKeepsOriginalOwner(t *testing.T) {
 	}
 }
 
+// Discovery authenticates the peer address of this exact captured entry.
+// Typed sources can use a different private subnet from the generic fixture.
+func (f *executionNativeFixture) discoveryPeer(t *testing.T) string {
+	t.Helper()
+	capture, err := f.prep.Discovery()
+	var graph struct {
+		Endpoints []struct {
+			Tag     string   `json:"tag"`
+			Address []string `json:"address"`
+		} `json:"endpoints"`
+	}
+	if err != nil || json.Unmarshal([]byte(f.prep.Config()), &graph) != nil {
+		t.Fatal("original fixture entry capture", err)
+	}
+	peer := ""
+	for _, endpoint := range graph.Endpoints {
+		if endpoint.Tag != capture.Entry.Tag {
+			continue
+		}
+		for _, address := range endpoint.Address {
+			prefix, err := netip.ParsePrefix(address)
+			if err != nil {
+				t.Fatal("invalid original fixture entry address", err)
+			}
+			if prefix.Addr().Is4() {
+				if peer != "" {
+					t.Fatal("ambiguous original fixture entry peer")
+				}
+				peer = prefix.Addr().String()
+			}
+		}
+	}
+	if peer == "" {
+		t.Fatal("original fixture entry peer absent")
+	}
+	return peer
+}
+
 func (f *executionNativeFixture) discovery(t *testing.T) {
 	t.Helper()
+	peer := f.discoveryPeer(t)
 	capture, err := f.prep.Discovery()
 	if err != nil {
 		t.Fatal(err)
@@ -411,7 +465,7 @@ func (f *executionNativeFixture) discovery(t *testing.T) {
 		case "/health":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": capture.Entry.NodeID, "proof": "router-vpn-private-agent-v1"})
 		case "/api/multihop/chain/lease":
-			_ = json.NewEncoder(w).Encode(mobilemultihop.NodeChainExecutionDiscovery{NodeID: capture.Entry.NodeID, Challenge: multihoprelay.ExternalPacketChallenge{Epoch: strings.Repeat("c", 64), Peer: "10.77.0.2", ExpiresAt: time.Now().Add(55 * time.Second).Unix()}, Sources: []multihoprelay.NodeChainDescriptor{f.server.Descriptor()}, FirstPort: 32000, LastPort: 32007})
+			_ = json.NewEncoder(w).Encode(mobilemultihop.NodeChainExecutionDiscovery{NodeID: capture.Entry.NodeID, Challenge: multihoprelay.ExternalPacketChallenge{Epoch: strings.Repeat("c", 64), Peer: peer, ExpiresAt: time.Now().Add(55 * time.Second).Unix()}, Sources: []multihoprelay.NodeChainDescriptor{f.server.Descriptor()}, FirstPort: 32000, LastPort: 32007})
 		default:
 			http.NotFound(w, r)
 		}
@@ -795,7 +849,7 @@ func executionNativeStoredLast(t *testing.T, f *executionNativeFixture, winner s
 	record := executionNativeLastRecord{Schema: 1, LocalSource: f.prep.LocalSourceSHA256(), LocalInput: hex.EncodeToString(input[:]),
 		Setting: f.prep.Execution(), Execution: winner, Target: mobilemultihop.Targets[0], Descriptor: descriptor,
 		DescriptorSHA: descriptorSHA, DNSPolicySHA: descriptor.DNSPolicySHA256, EntryHost: host,
-		Peer: "10.77.0.2", FirstPort: 32000, LastPort: 32007, Port: 32003}
+		Peer: f.discoveryPeer(t), FirstPort: 32000, LastPort: 32007, Port: 32003}
 	if edit != nil {
 		edit(&record)
 	}

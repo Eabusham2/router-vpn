@@ -353,6 +353,8 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   python3 "$ROOT/../deploy/test_hysteria2_deadlines_pinned.py" "$VENDOR"
   python3 "$ROOT/../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"
   python3 "$ROOT/../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
+  python3 "$ROOT/../deploy/test_node_chain_openvpn_execution_owner_runner.py"
+  python3 "$ROOT/../deploy/test_node_chain_openvpn_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
   python3 "$ROOT/../deploy/test_node_chain_candidate_preparation_runner.py"
   python3 "$ROOT/../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
   go_retry test ./experimental/libbox/routervpn/...

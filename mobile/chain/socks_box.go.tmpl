@@ -86,6 +86,7 @@ func routerVPNNodeSOCKSBind(s *Box) *Box {
 		return s
 	}
 	routerVPNSOCKSExecutionBind(s)
+	routerVPNOpenVPNExecutionBind(s)
 	original, ok := s.ctx.Value(routerVPNNodeSOCKSContextKey{}).(*routerVPNNodeSOCKSConstruction)
 	if !ok || original == nil {
 		return s
@@ -136,6 +137,9 @@ func routerVPNNodeSOCKSOptions(ctx context.Context, options option.Options) erro
 		return nil
 	}
 	if err := routerVPNSOCKSExecutionOptions(ctx, options); err != nil {
+		return err
+	}
+	if err := routerVPNOpenVPNExecutionOptions(ctx, options); err != nil {
 		return err
 	}
 	value := ctx.Value(routerVPNNodeSOCKSContextKey{})

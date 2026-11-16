@@ -51,7 +51,7 @@ func executionLastRecord(t *testing.T, f *executionNativeFixture, execution stri
 		t.Fatal(err)
 	}
 	input := sha256.Sum256([]byte(f.prep.LocalSource()))
-	record := executionLastRecordFixture{Schema: 1, LocalSourceSHA256: f.prep.LocalSourceSHA256(), LocalInputSHA256: hex.EncodeToString(input[:]), Setting: f.prep.Execution(), Execution: execution, Target: mobilemultihop.Targets[0], Descriptor: descriptor, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, EntryHost: api.Hostname(), Peer: "10.77.0.2", FirstPort: 32000, LastPort: 32007, Port: 32003}
+	record := executionLastRecordFixture{Schema: 1, LocalSourceSHA256: f.prep.LocalSourceSHA256(), LocalInputSHA256: hex.EncodeToString(input[:]), Setting: f.prep.Execution(), Execution: execution, Target: mobilemultihop.Targets[0], Descriptor: descriptor, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, EntryHost: api.Hostname(), Peer: f.discoveryPeer(t), FirstPort: 32000, LastPort: 32007, Port: 32003}
 	raw, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
