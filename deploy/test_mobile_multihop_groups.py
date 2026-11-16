@@ -23,6 +23,7 @@ PREFIX_FORMS = ('literal', 'hostname')
 PREFIX_METHODS = ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm',
                   '2022-blake3-chacha20-poly1305')
 DESKTOP_EXECUTION_PHASE = 'desktop execution and ownership'
+ORIGINAL_GRAPHS_PHASE = 'ordered original graphs and ownership'
 DESKTOP_EXECUTION_BATCH_ROOTS = 16
 
 
@@ -291,32 +292,39 @@ def imported_root_verdict(raw, root, code):
     return complete_roots_verdict(raw, [root], code, 'Imported')
 
 
-def desktop_execution_batches(selected):
-    pattern = dict(PHASES)[DESKTOP_EXECUTION_PHASE]
+def complete_phase_batches(label, selected):
+    if label not in (DESKTOP_EXECUTION_PHASE, ORIGINAL_GRAPHS_PHASE):
+        raise ValueError('Uncaptured complete-root phase')
+    pattern = dict(PHASES)[label]
     if (not selected or len(selected) != len(set(selected)) or
             any(not NAME.fullmatch(root) or not re.match(pattern, root) for root in selected)):
-        raise ValueError('Desktop execution lost its complete disjoint discovered inventory')
+        raise ValueError(label+' lost its complete disjoint discovered inventory')
     return tuple(tuple(selected[start:start+DESKTOP_EXECUTION_BATCH_ROOTS])
                  for start in range(0, len(selected), DESKTOP_EXECUTION_BATCH_ROOTS))
+
+
+def desktop_execution_batches(selected):
+    return complete_phase_batches(DESKTOP_EXECUTION_PHASE, selected)
 
 
 def run_phase(label, selected, run=None):
     if run is None:
         run = subprocess.run
-    if label == DESKTOP_EXECUTION_PHASE:
-        # The combined 96-root phase exceeded 180s after desktop execution
-        # coverage grew. Whole-root batches keep that bound and every child;
+    if label in (DESKTOP_EXECUTION_PHASE, ORIGINAL_GRAPHS_PHASE):
+        # The combined desktop and 129-root original-graph phases each exceeded
+        # 180s. Whole-root batches keep that bound and every descendant;
         # the final receipt must cover the original discovery exactly once.
         completed = []
-        for index, roots in enumerate(desktop_execution_batches(selected), 1):
-            print('Shared multihop: desktop execution batch '+str(index)+'; '+str(len(roots))+' complete roots', flush=True)
+        batches = desktop_execution_batches(selected) if label == DESKTOP_EXECUTION_PHASE else complete_phase_batches(label, selected)
+        for index, roots in enumerate(batches, 1):
+            print('Shared multihop: '+label+' batch '+str(index)+'; '+str(len(roots))+' complete roots', flush=True)
             result = run(prefix_command(exact_selector(roots)), cwd=ROOT, capture_output=True, timeout=240)
             raw = result.stdout + result.stderr
             print(raw.decode(errors='replace'), end='', flush=True)
-            complete_roots_verdict(raw, roots, result.returncode, 'Desktop execution')
+            complete_roots_verdict(raw, roots, result.returncode, label)
             completed.extend(roots)
         if completed != selected:
-            raise ValueError('Desktop execution omitted, duplicated or reordered a discovered root')
+            raise ValueError(label+' omitted, duplicated or reordered a discovered root')
         return
     if label == 'ordered imported middle':
         if (not selected or len(selected) != len(set(selected)) or
@@ -625,6 +633,86 @@ class PartitionTests(unittest.TestCase):
             with self.subTest(batches=changed), patch.dict(globals(), desktop_execution_batches=lambda selected: changed), \
                     redirect_stdout(StringIO()), self.assertRaisesRegex(ValueError, 'omitted, duplicated or reordered'):
                 run_phase(DESKTOP_EXECUTION_PHASE, selected, execute)
+
+    def test_original_graph_batches_keep_whole_roots_order_and_existing_bounds(self):
+        package = 'router-vpn/internal/mobilemultihop'
+        for count in (1, 15, 16, 17, 129, 130):
+            selected = ['TestNodeChainFuture'+str(index) for index in range(count)]
+            calls = []
+            def execute(args, **kwargs):
+                roots = [root for root in selected if re.fullmatch(args[-1], root)]
+                self.assertTrue(1 <= len(roots) <= 16)
+                self.assertEqual(args, ['go', 'test', '-json', '-race', '-count=1', '-timeout=180s', PACKAGE, '-run', exact_selector(roots)])
+                self.assertEqual(kwargs, dict(cwd=ROOT, capture_output=True, timeout=240))
+                calls.extend(roots)
+                rows = [dict(Package=package, Action='start')]
+                for root in roots:
+                    rows.extend((dict(Package=package, Action='run', Test=root),
+                                 dict(Package=package, Action='run', Test=root+'/original'),
+                                 dict(Package=package, Action='pass', Test=root+'/original'),
+                                 dict(Package=package, Action='pass', Test=root)))
+                rows.append(dict(Package=package, Action='pass'))
+                return SimpleNamespace(returncode=0, stdout=('\n'.join(json.dumps(row) for row in rows)+'\n').encode(), stderr=b'')
+            with self.subTest(count=count), redirect_stdout(StringIO()):
+                run_phase(ORIGINAL_GRAPHS_PHASE, selected, execute)
+            self.assertEqual(calls, selected)
+            self.assertEqual([root for batch in complete_phase_batches(ORIGINAL_GRAPHS_PHASE, selected) for root in batch], selected)
+        groups = partition(sorted(set(self.names) | {'TestNodeChainFuture'}))
+        self.assertIn((ORIGINAL_GRAPHS_PHASE, dict(groups)[ORIGINAL_GRAPHS_PHASE]), select_ci_group(groups, 'core'))
+        for invalid in ([], ['TestNodeChainFuture']*2, ['TestForeign'], ['TestDesktopFuture'],
+                        ['TestNodeChainExecutionFuture'], ['TestNodeChainImportedFuture'],
+                        ['TestNodeChainHostnameExecutionFuture'], [CONNECT_PREFIX_ROOTS[0]], ['TestNodeChainFuture/partial']):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                run_phase(ORIGINAL_GRAPHS_PHASE, invalid, lambda *args, **kwargs: self.fail('Invalid original inventory was executed'))
+        with self.assertRaises(ValueError): complete_phase_batches('foreign', ['TestNodeChainFuture'])
+
+    def test_original_graph_dispatch_keeps_descendants_and_strict_verdicts(self):
+        roots = ['TestNodeChainOriginal', 'TestNodeChainRetained']
+        package = 'router-vpn/internal/mobilemultihop'
+        def output():
+            rows = [dict(Package=package, Action='start')]
+            for root in roots:
+                rows.extend((dict(Package=package, Action='run', Test=root),
+                             dict(Package=package, Action='run', Test=root+'/original'),
+                             dict(Package=package, Action='pass', Test=root+'/original'),
+                             dict(Package=package, Action='pass', Test=root)))
+            rows.append(dict(Package=package, Action='pass'))
+            return rows
+        for fault in ('missing-root', 'missing-child', 'duplicate', 'foreign-root', 'skip', 'fail',
+                      'race', 'panic', 'exit', 'missing-terminal', 'false-terminal'):
+            rows, code = output(), 0
+            if fault == 'missing-root': rows = [row for row in rows if not str(row.get('Test', '')).startswith(roots[1])]
+            elif fault == 'missing-child': rows.pop(3)
+            elif fault == 'duplicate': rows.insert(2, rows[1])
+            elif fault == 'foreign-root': rows[1]['Test'] = 'TestNodeChainForeign'
+            elif fault in ('skip', 'fail'): rows[3]['Action'] = fault
+            elif fault in ('race', 'panic'): rows.insert(2, dict(Action='output', Output='WARNING: DATA RACE' if fault == 'race' else 'panic: test timed out'))
+            elif fault == 'exit': code = 1
+            elif fault == 'missing-terminal': rows.pop()
+            else: rows[-1] = dict(Package=package, Action='output', Output='PASS\n')
+            calls = []
+            def failed(args, **kwargs):
+                calls.append(args)
+                return SimpleNamespace(returncode=code, stdout=('\n'.join(json.dumps(row) for row in rows)+'\n').encode(), stderr=b'')
+            with self.subTest(fault=fault), redirect_stdout(StringIO()), self.assertRaises(ValueError):
+                run_phase(ORIGINAL_GRAPHS_PHASE, roots, failed)
+            self.assertEqual(len(calls), 1)
+
+    def test_original_graph_final_inventory_rejects_omission_replay_and_reordering(self):
+        selected = ['TestNodeChainOriginal'+str(index) for index in range(129)]
+        batches = complete_phase_batches(ORIGINAL_GRAPHS_PHASE, selected)
+        package = 'router-vpn/internal/mobilemultihop'
+        def execute(args, **kwargs):
+            roots = [root for root in selected if re.fullmatch(args[-1], root)]
+            rows = [dict(Package=package, Action='start')]
+            for root in roots:
+                rows.extend((dict(Package=package, Action='run', Test=root), dict(Package=package, Action='pass', Test=root)))
+            rows.append(dict(Package=package, Action='pass'))
+            return SimpleNamespace(returncode=0, stdout=('\n'.join(json.dumps(row) for row in rows)+'\n').encode(), stderr=b'')
+        for changed in (batches[:-1], batches+batches[:1], tuple(reversed(batches))):
+            with self.subTest(batches=changed), patch.dict(globals(), complete_phase_batches=lambda label, selected: changed), \
+                    redirect_stdout(StringIO()), self.assertRaisesRegex(ValueError, 'omitted, duplicated or reordered'):
+                run_phase(ORIGINAL_GRAPHS_PHASE, selected, execute)
 
     def test_complete_future_coverage_and_exact_commands(self):
         actual = inventory('\n'.join(self.names) + '\nok\trouter-vpn/internal/mobilemultihop\t0.1s\n')
