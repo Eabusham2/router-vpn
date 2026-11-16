@@ -41,7 +41,17 @@ type NodeChainCandidatePlan struct {
 }
 
 func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
-	if c == nil || c.validateCapture() != nil || c.openVPNMiddle != nil && position >= len(c.nodes)-2 || c.importedMiddle != nil && len(c.nodes) != 3 || position < 0 || position >= len(c.proofs) ||
+	// The closed-prefix preparation below does not need the later imported
+	// suffix to be connected. Retain this separate full-path admission until
+	// connected measurements have their own complete native owner proof.
+	if c != nil && c.importedMiddle != nil && len(c.nodes) != 3 {
+		return nil, errors.New("candidate timing requires an original paired packet prefix")
+	}
+	return c.newPacketCandidatePlan(position, inventory)
+}
+
+func (c *NodeChain) newPacketCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
+	if c == nil || c.validateCapture() != nil || (c.openVPNMiddle != nil || c.importedMiddle != nil) && position >= len(c.nodes)-2 || position < 0 || position >= len(c.proofs) ||
 		c.nodes[position] == nil || !NodeChainPrefixMode(c.proofs[position].Mode) {
 		// WG/AWG TCP dialing waits for the destination handshake. A lazy SS
 		// stream would measure an upstream socket instead, so cannot acquire

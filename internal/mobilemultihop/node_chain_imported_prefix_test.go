@@ -264,9 +264,15 @@ func TestNodeChainImportedSSPrefixPurposeBoundary(t *testing.T) {
 			if (err == nil) != (count == 1) {
 				t.Fatal("original trio candidate boundary changed", count, err)
 			}
-			_, err = NewNodeChainCandidatePreparation(startJSON(t, source), 0, inventory)
-			if (err == nil) != (count == 1) {
-				t.Fatal("original trio preparation boundary changed", count, err)
+			prepared, err := NewNodeChainCandidatePreparation(startJSON(t, source), 0, inventory)
+			if err != nil || prepared.OriginalSourceSHA256() != chain.SourceSHA256() ||
+				prepared.PrefixPosition() != 0 || !reflect.DeepEqual(prepared.ProofInventory(), chain.proofs[:1]) {
+				t.Fatal("closed packet-prefix preparation changed its original source", count, err)
+			}
+			for _, position := range []int{count, count + 1} {
+				if _, err := NewNodeChainCandidatePreparation(startJSON(t, source), position, inventory); err == nil {
+					t.Fatal("saved imported or final stream acquired packet-prefix preparation", count, position)
+				}
 			}
 			replay, err := chain.LaunchInput()
 			var replaySource NodeChainSource

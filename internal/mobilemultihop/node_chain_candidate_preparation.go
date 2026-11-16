@@ -40,7 +40,7 @@ func NewNodeChainCandidatePreparation(originalSource string, position int, inven
 	if err != nil {
 		return nil, err
 	}
-	candidates, err := original.NewCandidatePlan(position, inventory)
+	candidates, err := original.newPacketCandidatePlan(position, inventory)
 	if err != nil {
 		return nil, err
 	}
