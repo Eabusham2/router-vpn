@@ -4257,3 +4257,24 @@ RUN or PASS record. The thirteen original encrypted installed cases and their
 separate native scope remain unchanged. This is required-gate and receipt
 verification; it does not relabel the new source cases as installed Darwin
 packet acceptance. Current native execution and release results remain pending.
+
+## November 16: macOS profile verdicts follow the actual published controls
+
+The required native profile validator still expected an older forty-one-control
+inventory. It now requires the actual published order of all 59 controls,
+including execution capture, CONNECT and every complete-prefix defect case.
+The actual Darwin/Apple Swift requirement, exact clean source identity,
+unchanged-source check, joined process requirement and 1,800-second outer cap
+are preserved byte for byte.
+
+Eight focused Python tests passed. A new inventory test prepares all sixty
+actual Swift programs, including the baseline, while explicitly intercepting
+compiler and executable calls. This source-only observation checks that the
+required names and order match the real fixture; it is not Swift execution or
+native proof. Missing, duplicate, foreign, reordered, old-inventory, timed-out
+and unjoined verdicts remain rejected. Current Apple Swift execution remains
+the required hosted gate.
+
+Two-file manifest SHA256:
+`98167538c23c2643a407cdbcc6f2cff833a89bab3f532aa1827aa0d67281b949`.
+Both source preimages and the recorded validation hashes matched on ec18f6d6.
