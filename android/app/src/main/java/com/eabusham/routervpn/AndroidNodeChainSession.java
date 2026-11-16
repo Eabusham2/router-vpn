@@ -181,6 +181,9 @@ final class AndroidNodeChainSession {
     CommandServer newCommandServer(CommandServerHandler handler,PlatformInterface platform) throws Exception {
         requireSource();
         if(!claimed||server!=null||owner!=null)throw new IllegalStateException("The ordered factory has no fresh claimed source.");
+        // The selected packet prefix owns this construction. The complete typed
+        // saved suffix is provenance only and must never receive its factory.
+        if(candidatePrefix!=null)return new CommandServer(handler,platform);
         if(execution!=null&&capture.openVPN)return Libbox.routerNodeChainOpenVPNExecutionNewCommandServer(execution.plan,handler,platform);
         if(execution!=null&&capture.socks!=null)return Libbox.routerNodeChainSOCKSExecutionNewCommandServer(execution.plan,handler,platform);
         if(execution!=null&&capture.connect!=null)return execution.plan.newCommandServer(handler,platform);
@@ -379,16 +382,16 @@ final class AndroidNodeChainSession {
             }
             execution.close();
         }
-        if(execution==null&&capture.connect!=null&&!nativeBound&&server!=null)
+        if(candidatePrefix==null&&execution==null&&capture.connect!=null&&!nativeBound&&server!=null)
             try{capture.connect.plan.bindNative(server);}catch(Exception admissionRefused){ /* Retain the exact original CONNECT cleanup reservation. */ }
-        if(execution==null&&capture.socks!=null&&!nativeBound&&server!=null)
+        if(candidatePrefix==null&&execution==null&&capture.socks!=null&&!nativeBound&&server!=null)
             try{capture.socks.plan.bindNative(server);}catch(Exception admissionRefused){ /* The original close receipt is still required. */ }
         capture.close(); proofClosed = true;
     }
     void requireNativeBindingDrain() {
-        if(execution==null&&capture.connect!=null&&server!=null&&!nativeBound&&!capture.connect.plan.nativeClosed())
+        if(candidatePrefix==null&&execution==null&&capture.connect!=null&&server!=null&&!nativeBound&&!capture.connect.plan.nativeClosed())
             throw new IllegalStateException("The original typed CONNECT construction has not acknowledged cleanup.");
-        if(execution==null&&capture.socks!=null&&server!=null&&!nativeBound&&!capture.socks.plan.nativeClosed())
+        if(candidatePrefix==null&&execution==null&&capture.socks!=null&&server!=null&&!nativeBound&&!capture.socks.plan.nativeClosed())
             throw new IllegalStateException("The original typed SOCKS construction has not acknowledged cleanup.");
         if(candidatePrefix!=null&&server!=null&&!nativeBound&&!candidatePrefix.plan.nativeClosed())
             throw new IllegalStateException("The original prefix construction has not acknowledged its cleanup.");
@@ -396,13 +399,13 @@ final class AndroidNodeChainSession {
             throw new IllegalStateException("The original unstarted server has no sealed native construction receipt.");
     }
     boolean retainsServerCleanup(CommandServer original) {
-        return !released && !nativeClosed && server == original
+        return candidatePrefix == null && !released && !nativeClosed && server == original
                 && (execution==null&&capture.connect!=null?capture.connect.plan.retainsServerCleanup(original):execution==null&&capture.socks!=null?capture.socks.plan.retainsServerCleanup(original):execution != null&&execution.retainsServerCleanup(original));
     }
     void nativeServiceClosed() {
-        if(execution==null&&capture.connect!=null&&(server==null?owner!=null||!proofClosed:!capture.connect.plan.nativeClosed()))
+        if(candidatePrefix==null&&execution==null&&capture.connect!=null&&(server==null?owner!=null||!proofClosed:!capture.connect.plan.nativeClosed()))
             throw new IllegalStateException("The original typed CONNECT Box has no successful native close receipt.");
-        if(execution==null&&capture.socks!=null&&(server==null?owner!=null||!proofClosed:!capture.socks.plan.nativeClosed()))
+        if(candidatePrefix==null&&execution==null&&capture.socks!=null&&(server==null?owner!=null||!proofClosed:!capture.socks.plan.nativeClosed()))
             throw new IllegalStateException("The original typed SOCKS Box has no successful native close receipt.");
         if(candidatePrefix!=null&&(server==null?owner!=null||!proofClosed:!candidatePrefix.plan.nativeClosed()))
             throw new IllegalStateException("The original candidate prefix Box has no successful native close receipt.");
@@ -420,7 +423,7 @@ final class AndroidNodeChainSession {
                 : "local".equals(source.execution) && (typedNative() || capture.plan != null));
     }
 
-    boolean typedNative() { return execution == null && capture.socks != null || execution == null && capture.connect != null; }
+    boolean typedNative() { return candidatePrefix == null && execution == null && (capture.socks != null || capture.connect != null); }
     boolean released() { return released; }
     boolean claimed() { return claimed; }
     void adoptHost(Host value) {

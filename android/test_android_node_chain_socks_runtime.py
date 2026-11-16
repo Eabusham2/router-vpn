@@ -102,7 +102,7 @@ def main():
             ('LayeredVpnService','commandServer = preparedChain==null?new CommandServer(this, this):preparedChain.newCommandServer(this,this);','commandServer = new CommandServer(this,this);','success','typed factory was bypassed'),
             ('LayeredVpnService','if (preparedChain != null) preparedChain.bindNative(commandServer);','','success','typed native construction was not bound'),
             ('LayeredVpnService','chain.execution != null || chain.typedNative()','chain.execution != null','pending','typed shared drain failure closed original Box before joining'),
-            ('AndroidNodeChainSession','if(execution==null&&capture.socks!=null&&(server==null?owner!=null||!proofClosed:!capture.socks.plan.nativeClosed()))','if(false)','receipt','typed missing receipt published DOWN'),
+            ('AndroidNodeChainSession','if(candidatePrefix==null&&execution==null&&capture.socks!=null&&(server==null?owner!=null||!proofClosed:!capture.socks.plan.nativeClosed()))','if(false)','receipt','typed missing receipt published DOWN'),
             ('AndroidNodeChainSession','nativeBound = true;\n        requireSource();','nativeBound = true;','retired-factory','retired factory reached native Start'),
             ('AndroidNodeChainSession','execution==null&&capture.socks!=null?Libbox.routerNodeChainSOCKSNewMTU(capture.socks.plan,server,new AndroidNodeChainMTUPlatform(this,server,owner,platform))','capture.socks!=null?Libbox.routerNodeChainNewMTU(capture.plan,server,platform)','success','typed measurement or MTU borrowed generic native authority'),
         )

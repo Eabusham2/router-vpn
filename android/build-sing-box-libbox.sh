@@ -59,6 +59,15 @@ ANDROID_MODULE_SHA=$(python3 "$ROOT/../deploy/test_mobile_tor_module_graph.py" -
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$ANDROID_MODULE_SHA")
 EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA+$NATIVE_XRAY_SHA"
 
+require_typed_candidate_prefix_api() {
+  local api_list="$1" signature
+  for signature in 'io.nekohasekai.libbox.RouterNodeChainCandidatePreparation newRouterNodeChainSOCKSCandidatePreparation(java.lang.String, int, java.lang.String) throws java.lang.Exception;' 'io.nekohasekai.libbox.RouterNodeChainCandidatePreparation newRouterNodeChainCONNECTCandidatePreparation(java.lang.String, int, java.lang.String) throws java.lang.Exception;'; do
+    grep -Fq "$signature" "$api_list" || {
+      echo "combined libbox AAR is missing typed packet-prefix API: $signature" >&2; return 1
+    }
+  done
+}
+
 verify_aar() {
   test -s "$AAR"
   test -s "$AMNEZIA_LICENSE_OUT"
@@ -114,6 +123,7 @@ verify_aar() {
   grep -Fq 'io.nekohasekai.libbox.RouterNodeChainCandidatePreparation routerNodeChainCandidatePreparationLaunch(java.lang.String) throws java.lang.Exception;' "$api_list" || {
     echo 'combined libbox AAR is missing the strict private prefix launch parser' >&2; return 1
   }
+  require_typed_candidate_prefix_api "$api_list" || return 1
   grep -Fq 'java.lang.String routerNodeChainImportedOpenVPNMemberInput(java.lang.String, java.lang.String) throws java.lang.Exception;' "$api_list" || {
     echo 'combined libbox AAR is missing the exact original OpenVPN middle constructor API' >&2; return 1
   }

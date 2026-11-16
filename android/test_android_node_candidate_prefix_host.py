@@ -17,6 +17,31 @@ spec = importlib.util.spec_from_file_location('prefix_host_base', ROOT/'android/
 base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
 
+
+# The imported source/transport is a boundary here; the separate source gate
+# compiles actual typed captures. A suffix source never owns this prefix Box.
+SOURCES=dict(base.SOURCES)
+raw=SOURCES[base.APP+'AndroidNodeStore.java']
+raw=raw.replace('static final class ChainCapture {','static final class ChainCapture {static String typedMode="";')
+raw=raw.replace('selected.add(i==count-1?finalMode:prefixMode);','selected.add(i==count-1?finalMode:i==count-2&&!typedMode.isEmpty()?typedMode:prefixMode);')
+SOURCES[base.APP+'AndroidNodeStore.java']=raw
+raw=SOURCES[base.APP+'AndroidNodeChainCapture.java']
+raw=raw.replace('final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;','final AndroidNodeChainSOCKSCapture socks;final AndroidNodeChainCONNECTCapture connect;')
+raw=raw.replace('this.source=source;strict=source.strict;plan=new io.nekohasekai.libbox.RouterNodeChain(source.members.size());','this.source=source;strict=source.strict;String middle=source.modes.get(source.modes.size()-2);socks=middle.equals("socks5")?new AndroidNodeChainSOCKSCapture():null;connect=middle.equals("http-connect")||middle.equals("https-connect")?new AndroidNodeChainCONNECTCapture():null;plan=socks!=null||connect!=null?null:new io.nekohasekai.libbox.RouterNodeChain(source.members.size());')
+raw=raw.replace('void close()throws Exception{plan.close();}','void close()throws Exception{if(socks!=null)socks.plan.close();else if(connect!=null)connect.plan.close();else plan.close();}')
+SOURCES[base.APP+'AndroidNodeChainCapture.java']=raw
+TYPED_SUFFIX=r'''package io.nekohasekai.libbox;public class RouterNodeChainSOCKS {
+ public int factories,binds,runs,closes,receipts,cleanupQueries;public boolean cleanupOnlyReceipt;
+ public CommandServer newCommandServer(CommandServerHandler handler,PlatformInterface platform)throws Exception{factories++;throw new IllegalStateException("Unstarted suffix factory was invoked");}
+ public void bindNative(CommandServer server)throws Exception{binds++;throw new IllegalStateException("Unstarted suffix cannot bind prefix Box");}
+ public void run(CommandServer server)throws Exception{runs++;throw new IllegalStateException("Unstarted suffix cannot prove prefix");}
+ public boolean healthy(){return false;}public void networkChanged(){}public void close(){closes++;}
+ public boolean nativeClosed(){receipts++;return cleanupOnlyReceipt;}
+ public boolean retainsServerCleanup(CommandServer server){cleanupQueries++;return false;}public String progressJSON(){return "{}";}
+}'''
+SOURCES[base.NATIVE+'RouterNodeChainSOCKS.java']=TYPED_SUFFIX
+SOURCES[base.NATIVE+'RouterNodeChainCONNECT.java']=TYPED_SUFFIX.replace('SOCKS','CONNECT')
+
 CASES = r'''
  static final class Guard implements AndroidNodeChainRuntime.TemporaryGuard {
   boolean join=true;int drains,cancels;public void requireCurrent(){}public void cancel(){cancels++;}public boolean drain(){drains++;return join;}
@@ -25,8 +50,8 @@ CASES = r'''
   final Guard guard=new Guard();final Result result=new Result();final AndroidNodeChainCapture source;
   final AndroidNodeCandidateCatalog catalog;final AndroidNodeCandidatePrefixCapture capture;final AndroidNodeChainRuntime.Temporary token;
   Prefix(Fixture f)throws Exception{
-   source=AndroidNodeChainCapture.compile(f.source);source.plan.valid=false; // Old final is deliberately unusable.
-   catalog=new AndroidNodeCandidateCatalog(f.source,f.source.members.size()-2);
+   source=AndroidNodeChainCapture.compile(f.source);if(source.plan!=null)source.plan.valid=false; // Old final is deliberately unusable.
+   catalog=new AndroidNodeCandidateCatalog(f.source,f.source.members.size()-(source.socks!=null||source.connect!=null?3:2));
    capture=new AndroidNodeCandidatePrefixCapture(source,catalog.prefix,catalog.inventory);
    token=f.runtime.reserveTemporary(f.source,AndroidHomeStateStore.snapshot(f.service),AndroidNodeChainSession.selection(f.service,f.source),guard,result,capture,catalog);
   }
@@ -82,12 +107,65 @@ CASES = r'''
    reject(()->f.runtime.reserveTemporary(f.source,AndroidHomeStateStore.snapshot(f.service),AndroidNodeChainSession.selection(f.service,f.source),new Guard(),new Result(),prefix,catalog),"foreign catalog bound to prefix purpose");
   }
  }
+ static Fixture typedFixture(int count,String family)throws Exception{
+  AndroidNodeStore.ChainCapture.typedMode=family;
+  try{return new Fixture(count);}finally{AndroidNodeStore.ChainCapture.typedMode="";}
+ }
+ static Object suffix(Prefix p){return p.source.socks!=null?p.source.socks.plan:p.source.connect.plan;}
+ static int calls(Object suffix,String field)throws Exception{return ((Number)get(suffix,field)).intValue();}
+ static void typedPrefixSuccess()throws Exception{
+  for(String family:new String[]{"socks5","http-connect","https-connect"})for(int count:new int[]{3,4,8})try(Fixture f=typedFixture(count,family)){
+   Prefix p=new Prefix(f);Object suffix=suffix(p);
+   try{
+    int history=AndroidStartupPolicy.recorded,prepared=AndroidStartupPolicy.prepared,performance=Libbox.performanceStarts;
+    var session=p.start(f);var server=(CommandServer)get(f.service,"commandServer");
+    check(p.source.plan==null&&session.candidatePrefix==p.capture&&p.capture.plan.server==server,"typed prefix borrowed a generic source or another native owner");
+    check(calls(suffix,"factories")==0&&calls(suffix,"binds")==0&&calls(suffix,"runs")==0,"typed prefix started its unselected suffix");
+    check(!session.typedNative()&&!session.retainsServerCleanup(server)&&calls(suffix,"cleanupQueries")==0,"typed prefix borrowed suffix cleanup authority");
+    check(session.prefixHealthy()&&!session.healthy()&&LayeredVpnService.nodeChainCandidatePrefixReady(session)&&!LayeredVpnService.nodeChainReady(session),"typed prefix gained complete connection proof");
+    check(!AndroidHomeStateStore.snapshot(f.service).connected&&AndroidStartupPolicy.recorded==history&&AndroidStartupPolicy.prepared==prepared&&Libbox.performanceStarts==performance,"typed prefix published complete path state");
+    reject(session::provedExecution,"typed prefix produced a completed execution choice");reject(session::newHopMeasurement,"typed prefix borrowed suffix measurement");
+    check(p.token.drain()&&session.released()&&server.closed&&p.capture.plan.nativeClosed(),"typed prefix borrowed suffix native close receipt");f.drain();
+    check(calls(suffix,"factories")==0&&calls(suffix,"binds")==0&&calls(suffix,"runs")==0&&calls(suffix,"receipts")==0&&calls(suffix,"closes")>0,"typed prefix cleanup touched suffix native ownership");
+   }finally{
+    // Only failed counterfactual teardown may release this explicit model;
+    // it supplies no success verdict or production native-close receipt.
+    set(suffix,"cleanupOnlyReceipt",true);
+   }
+  }
+ }
+ static void typedPrefixRetirement()throws Exception{
+  for(String family:new String[]{"socks5","https-connect"})try(Fixture f=typedFixture(4,family)){
+   Prefix p=new Prefix(f);Object suffix=suffix(p);
+   try{
+    var session=p.start(f);var server=(CommandServer)get(f.service,"commandServer");
+    p.guard.join=false;check(!p.token.drain()&&calls(suffix,"closes")==0&&!server.closed,"typed prefix retired source before candidate join");p.guard.join=true;
+    // A partial host binding retains the same prefix reservation. It cannot
+    // lend that server to the untouched saved suffix during cleanup retry.
+    set(session,"nativeBound",false);
+    try{session.closePlan();check(calls(suffix,"binds")==0,"partial prefix cleanup bound unstarted suffix");}
+    finally{set(session,"nativeBound",true);}
+    p.capture.plan.missingReceipt=true;
+    try{check(!p.token.drain()&&!session.released()&&get(f.service,"commandServer")==server,"typed prefix accepted missing original native receipt");}
+    finally{p.capture.plan.missingReceipt=false;}
+    check(p.token.drain()&&session.released(),"typed prefix lost its original cleanup retry");f.drain();
+    check(calls(suffix,"receipts")==0&&calls(suffix,"cleanupQueries")==0,"typed retirement borrowed suffix receipt");
+   }finally{set(suffix,"cleanupOnlyReceipt",true);}
+  }
+  for(String family:new String[]{"socks5","https-connect"})try(Fixture f=typedFixture(3,family)){
+   Prefix p=new Prefix(f);Object suffix=suffix(p);int created=CommandServer.created;
+   p.token.cancel();check(p.token.drain()&&CommandServer.created==created,"cancelled typed prefix started an unused server");
+   check(calls(suffix,"factories")==0&&calls(suffix,"binds")==0&&calls(suffix,"receipts")==0,"unstarted typed prefix borrowed suffix teardown");
+  }
+ }
  public static void main(String[] args)throws Exception{
   String selected=args.length==0?"all":args[0];
   if(selected.equals("all")||selected.equals("success"))prefixSuccess();
   if(selected.equals("all")||selected.equals("drain"))prefixDrain();
   if(selected.equals("all")||selected.equals("receipt"))prefixReceipt();
   if(selected.equals("all")||selected.equals("source"))prefixSource();
+  if(selected.equals("all")||selected.equals("typed"))typedPrefixSuccess();
+  if(selected.equals("all")||selected.equals("typed-retirement"))typedPrefixRetirement();
   System.out.println("Android actual prefix host checks: "+checks);
  }
 }
@@ -99,7 +177,7 @@ def main():
     if not jar.is_file() or not shutil.which('javac'): raise RuntimeError('JDK17 and Android JSON required')
     with tempfile.TemporaryDirectory(prefix='routervpn-prefix-host-') as directory:
         work=Path(directory);src=work/'src'
-        for path,text in base.SOURCES.items():
+        for path,text in SOURCES.items():
             if path==base.APP+'AndroidMTUSession.java':
                 text=text.replace('candidatePrefixCurrent(AndroidNodeChainSession source){return false;}','candidatePrefixCurrent(AndroidNodeChainSession source){return true;}')
             if path==base.NATIVE+'Libbox.java':
@@ -111,7 +189,12 @@ def main():
         for name,text in originals.items():(app/(name+'.java')).write_text(text)
         marker=' public static void main(String[] args)throws Exception {'
         if base.HARNESS.count(marker)!=1:raise AssertionError('Original host harness seam changed')
-        (app/'OrderedRuntimeTest.java').write_text(base.HARNESS.split(marker)[0]+CASES)
+        harness=base.HARNESS.split(marker)[0]
+        # A failing counterfactual still retires its explicitly modeled source.
+        old='value.capture.plan.failCloses=0;'
+        assert harness.count(old)==1
+        harness=harness.replace(old,'if(value.capture.plan!=null)value.capture.plan.failCloses=0;')
+        (app/'OrderedRuntimeTest.java').write_text(harness+CASES)
         classes=work/'classes';command=['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(classes),*map(str,src.rglob('*.java'))]
         subprocess.run(command,check=True,timeout=60)
         cp=os.pathsep.join((str(classes),str(jar)))
@@ -122,6 +205,11 @@ def main():
             ('AndroidNodeChainRuntime','// Internal completion lends only candidate authority.','AndroidHomeStateStore.connectedNodeChain(context,home); // Internal completion lends only candidate authority.','success','private prefix published ordinary Connected Home'),
             ('LayeredVpnService','chain.closePlan();chain.requireNativeBindingDrain();','chain.requireNativeBindingDrain();','drain','pending prefix join destroyed native graph or MTU'),
             ('AndroidNodeChainSession','if(candidatePrefix!=null&&(server==null?owner!=null||!proofClosed:!candidatePrefix.plan.nativeClosed()))','if(false)','receipt','missing exact native receipt accepted as DOWN'),
+            ('AndroidNodeChainSession','if(candidatePrefix!=null)return new CommandServer(handler,platform);','','typed','private prefix failed host startup:'),
+            ('AndroidNodeChainSession','if(candidatePrefix==null&&execution==null&&capture.socks!=null&&(server==null?owner!=null||!proofClosed:!capture.socks.plan.nativeClosed()))','if(execution==null&&capture.socks!=null&&(server==null?owner!=null||!proofClosed:!capture.socks.plan.nativeClosed()))','typed','typed prefix borrowed suffix native close receipt'),
+            ('AndroidNodeChainSession','if(candidatePrefix==null&&execution==null&&capture.connect!=null&&(server==null?owner!=null||!proofClosed:!capture.connect.plan.nativeClosed()))','if(execution==null&&capture.connect!=null&&(server==null?owner!=null||!proofClosed:!capture.connect.plan.nativeClosed()))','typed','typed prefix borrowed suffix native close receipt'),
+            ('AndroidNodeChainSession','if(candidatePrefix==null&&execution==null&&capture.socks!=null&&!nativeBound&&server!=null)','if(execution==null&&capture.socks!=null&&!nativeBound&&server!=null)','typed-retirement','partial prefix cleanup bound unstarted suffix'),
+            ('AndroidNodeChainSession','return candidatePrefix == null && !released && !nativeClosed && server == original','return !released && !nativeClosed && server == original','typed','typed prefix borrowed suffix cleanup authority'),
         )
         for index,(name,before,after,family,witness) in enumerate(controls):
             if originals[name].count(before)!=1:raise AssertionError('Exact prefix host control seam changed: '+before)
