@@ -90,3 +90,22 @@ required workflow. Exact-source native packages, publication, Apple signing,
 physical iPhone/iPad networking, private deployment and off-LAN acceptance retain
 their own evidence requirements. Hysteria2 final AES/XOR layers and broader
 intermediate protocol compositions remain open original product requirements.
+
+## Required profile-audit correction
+
+The exact-source [map-first workflow on `51ad480d`](https://github.com/Eabusham2/router-vpn/actions/runs/43851946642)
+failed its profile-settings source audit because that audit still required the
+old Shadowsocks-only generic selector. The other 21 children of that workflow
+passed. The stale expectation was reproduced locally before correction.
+
+`deploy/profile-settings-audit.py` now compares the complete published generic
+predicate: two through eight members, paired WG/AWG prefixes, and either a
+Shadowsocks or Hysteria2 final; an imported Shadowsocks middle still requires a
+Shadowsocks final. It retains all 37 prior mutation controls, with the generic
+length-control anchor updated to the new expression. Three additional controls
+reject an unrestricted final, loss of the supported Hysteria2 choice, and removal
+of the imported branch's Shadowsocks-final restriction.
+
+The actual profile-settings audit passed all 40 source mutation controls. This
+corrects a required release gate without changing application admission or
+claiming another Swift, native-network, package or physical-device result.
