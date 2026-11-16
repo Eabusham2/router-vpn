@@ -93,6 +93,11 @@ func serverChainHysteriaKeys(t *testing.T, topology string) *serverChainHysteria
 		p.original.servers[0] = p.original.servers[2]
 	case "max-six", "mixed-layers":
 		other := serverChainEncryptedKeys(t, "mixed-three")
+		// The independent second key block starts its labels at zero. Bind each
+		// private API token to its original position in this complete request.
+		for i := range other.prefixes {
+			other.prefixes[i].APIToken = fmt.Sprintf("encrypted-server-prefix-%d-token", len(p.original.prefixes)+i)
+		}
 		p.original.prefixes = append(p.original.prefixes, other.prefixes...)
 		p.original.clients = append(p.original.clients, other.clients...)
 		p.original.servers = append(p.original.servers, other.servers...)
@@ -215,6 +220,14 @@ func (p *serverChainHysteriaPeer) control(t *testing.T, command string) serverCh
 	}
 	return p.read(t)
 }
+
+// Keep the actual constructor request independently testable before the child
+// acquires a namespace socket. This grants no provider or native receipt.
+func serverChainHysteriaRequest(p *serverChainHysteriaPeer) map[string]any {
+	paired := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": p.original.prefixes, "final_password": p.original.password, "final_node_proof_id": serverChainEncryptedProof(p.original.finalServer), "final_api_token": "encrypted-server-final-token"}
+	return map[string]any{"schema": 1, "paired": paired, "prefixes": p.prefixes, "password": serverChainHysteriaPassword, "salamander": serverChainHysteriaMask, "layers": p.layers}
+}
+
 func serverChainHysteriaStart(t *testing.T, topology, fault string) *serverChainHysteriaPeer {
 	p := serverChainHysteriaKeys(t, topology)
 	if fault == "wrong-layer-key" {
@@ -227,8 +240,7 @@ func serverChainHysteriaStart(t *testing.T, topology, fault string) *serverChain
 	command := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "-test.run=^TestRouterVPNDesktopHysteriaServerReferenceProcess$", "-test.count=1", "-test.timeout=100s")
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_HYSTERIA_SERVER_CHILD=1"}
 	p.original.process = serverChainEncryptedStart(t, command)
-	paired := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": p.original.prefixes, "final_password": p.original.password, "final_node_proof_id": serverChainEncryptedProof(p.original.finalServer), "final_api_token": "encrypted-server-final-token"}
-	if json.NewEncoder(p.original.process.input).Encode(map[string]any{"schema": 1, "paired": paired, "prefixes": p.prefixes, "password": serverChainHysteriaPassword, "salamander": serverChainHysteriaMask, "layers": p.layers}) != nil {
+	if json.NewEncoder(p.original.process.input).Encode(serverChainHysteriaRequest(p)) != nil {
 		t.Fatal("original Hysteria2 provider request failed")
 	}
 	p.read(t)

@@ -60,6 +60,126 @@ class HysteriaServerGateTests(unittest.TestCase):
     def changed(self,case,key,value):
         old=receipt(case);new=dict(old);new[key]=value
         self.refuse(transcript(case).replace(json.dumps(old),json.dumps(new)),case)
+    def test_actual_request_generator_preserves_independent_provider_identities(self):
+        # Compile the exact request generator and original provider admission.
+        # No namespace, peer socket, encrypted traffic or successful native
+        # receipt is simulated by this constructor-only regression.
+        import subprocess
+        def declaration(source, marker):
+            self.assertEqual(source.count(marker),1)
+            return marker+source.split(marker,1)[1].split('\n}',1)[0]+'\n}\n'
+        encrypted=(G.ROOT/'mobile/server_chain_acceptance/encrypted_linux_test.go.tmpl').read_text()
+        driver=(G.ROOT/G.TEMPLATE).read_text()
+        peer=(G.ROOT/'mobile/desktop/node_chain_peer_linux_test.go.tmpl').read_text()
+        hysteria=(G.ROOT/G.PEER_TEMPLATE).read_text()
+        self.assertEqual(declaration(driver,'func serverChainHysteriaStart(').count('json.NewEncoder(p.original.process.input).Encode(serverChainHysteriaRequest(p))'),1)
+        parts=[]
+        for source,names in (
+            (encrypted,('serverChainEncryptedPrefix','serverChainEncryptedPrefixStats','serverChainEncryptedFinalStats','serverChainEncryptedStats','serverChainEncryptedPeer')),
+            (driver,('serverChainHysteriaObservation','serverChainHysteriaLayer','serverChainHysteriaLayerReceipt','serverChainHysteriaReply','serverChainHysteriaPeer')),
+            (peer,('desktopNodeChainPrefixRequest','desktopNodeChainPeerRequest')),
+            (hysteria,('desktopHysteriaServerRequest','desktopHysteriaServerLayer'))):
+            for name in names:parts.append(declaration(source,'type '+name+' struct {'))
+        for source,names in (
+            (encrypted,('serverChainEncryptedKey','serverChainEncryptedRandom','serverChainEncryptedProof','serverChainEncryptedKeys')),
+            (driver,('serverChainHysteriaKeys','serverChainHysteriaRequest')),
+            (peer,('desktopNodeChainReferenceAddressPair','desktopNodeChainInner','desktopNodeChainPeerIdentityBounds')),
+            (hysteria,('desktopHysteriaServerRequestValid',))):
+            for name in names:parts.append(declaration(source,'func '+name+'('))
+        for name in ('serverChainHysteriaPassword','serverChainHysteriaMask'):
+            parts.append(next(line for line in driver.splitlines() if line.startswith('const '+name+' = ')))
+        cases=declaration(driver,'var serverChainHysteriaCases = []string{')
+        parts.append(cases)
+        originals='\n'.join(parts)
+        harness=r'''package fixture
+import("bytes";"crypto/ecdh";"crypto/rand";"crypto/sha256";"encoding/base64";"encoding/hex";"encoding/json";"errors";"fmt";"io";"net";"net/netip";"os";"runtime";"strings";"testing";"fixture/awgpolicy")
+// The source generator only stores this process pointer; no native process
+// implementation is exercised or claimed by the constructor test.
+type serverChainEncryptedProcess struct{}
+ORIGINALS
+func originalRequest(t *testing.T,topology string) desktopHysteriaServerRequest {
+ t.Helper();p:=serverChainHysteriaKeys(t,topology)
+ raw,err:=json.Marshal(serverChainHysteriaRequest(p));if err!=nil{t.Fatal(err)}
+ var request desktopHysteriaServerRequest
+ decoder:=json.NewDecoder(bytes.NewReader(raw));decoder.DisallowUnknownFields()
+ if decoder.Decode(&request)!=nil||decoder.Decode(new(any))!=io.EOF{t.Fatal("actual constructor request did not satisfy original provider schema")}
+ return request
+}
+func TestActualCapturedProviderRequest(t *testing.T){
+ seen:=map[string]bool{}
+ for _,name:=range serverChainHysteriaCases {
+  topology:=strings.Split(name,"/")[0];if seen[topology]{continue};seen[topology]=true
+  t.Run(topology,func(t *testing.T){
+   request:=originalRequest(t,topology)
+   if !desktopHysteriaServerRequestValid(request){t.Fatal("actual complete Hysteria provider rejected original independent request")}
+   count:=request.Prefixes;if count==0{count=1}
+   ipc,err:=desktopNodeChainPeerIdentityBounds(request.Paired,1,6)
+   if err!=nil||len(ipc)!=count||len(request.Layers)!=request.Prefixes{t.Fatal("actual original identity inventory changed")}
+  })
+ }
+}
+func TestProviderKeepsForeignIdentityRefusals(t *testing.T){
+ for _,fault:=range []string{"duplicate-token","final-token","duplicate-key","duplicate-node","missing-token","foreign-key","foreign-node","prefix-count","layer-count","foreign-physical","missing-password","wrong-awg"}{
+  t.Run(fault,func(t *testing.T){
+   request:=originalRequest(t,"max-six")
+   if !desktopHysteriaServerRequestValid(request){t.Fatal("original six-prefix setup failed before named mutation")}
+   switch fault {
+   case "duplicate-token":request.Paired.Prefixes[3].APIToken=request.Paired.Prefixes[0].APIToken
+   case "final-token":request.Paired.FinalAPIToken=request.Paired.Prefixes[0].APIToken
+   case "duplicate-key":request.Paired.Prefixes[3].PrivateKey=request.Paired.Prefixes[0].PrivateKey
+   case "duplicate-node":request.Paired.Prefixes[3].NodeProofID=request.Paired.Prefixes[0].NodeProofID
+   case "missing-token":request.Paired.Prefixes[3].APIToken=""
+   case "foreign-key":request.Paired.Prefixes[3].PrivateKey="foreign"
+   case "foreign-node":request.Paired.Prefixes[3].NodeProofID=strings.Repeat("f",64)
+   case "prefix-count":request.Prefixes=5
+   case "layer-count":request.Layers=request.Layers[:5]
+   case "foreign-physical":request.Paired.Address="192.168.210.1"
+   case "missing-password":request.Password=""
+   case "wrong-awg":request.Paired.Prefixes[1].Parameters["h1"]="foreign"
+   }
+   if desktopHysteriaServerRequestValid(request){t.Fatal("original provider admitted named foreign identity",fault)}
+  })
+ }
+}
+'''
+        correction='''\t\tfor i := range other.prefixes {
+\t\t\tother.prefixes[i].APIToken = fmt.Sprintf("encrypted-server-prefix-%d-token", len(p.original.prefixes)+i)
+\t\t}
+'''
+        self.assertEqual(originals.count(correction),1)
+        with tempfile.TemporaryDirectory(prefix='hysteria-provider-identity-') as directory:
+            root=Path(directory);(root/'go.mod').write_text('module fixture\n\ngo 1.26\n')
+            policy=root/'awgpolicy';policy.mkdir()
+            for path in (G.ROOT/'internal/awgpolicy').glob('*.go'):
+                if not path.name.endswith('_test.go'):(policy/path.name).write_bytes(path.read_bytes())
+            test=root/'identity_test.go'
+            def run(body,selector):
+                test.write_text(harness.replace('ORIGINALS',body))
+                return subprocess.run(['go','test','-race','-count=1','-timeout=30s','-v','-run',selector,'.'],cwd=root,text=True,capture_output=True,timeout=60)
+            positive=run(originals,'^Test(ActualCapturedProviderRequest|ProviderKeepsForeignIdentityRefusals)$')
+            self.assertEqual(positive.returncode,0,positive.stdout+positive.stderr)
+            topologies=('direct','wg','awg-fast','awg-strong','max-six','wg-aes','awg-xor','mixed-layers')
+            faults=('duplicate-token','final-token','duplicate-key','duplicate-node','missing-token','foreign-key','foreign-node','prefix-count','layer-count','foreign-physical','missing-password','wrong-awg')
+            expected=['TestActualCapturedProviderRequest',*('TestActualCapturedProviderRequest/'+v for v in topologies),'TestProviderKeepsForeignIdentityRefusals',*('TestProviderKeepsForeignIdentityRefusals/'+v for v in faults)]
+            self.assertEqual(re.findall(r'^=== RUN   (\S+)$',positive.stdout,re.M),expected)
+            self.assertEqual(re.findall(r'^\s*--- PASS: (\S+) \([0-9.]+s\)$',positive.stdout,re.M),expected)
+            for marker in ('--- FAIL:','--- SKIP:','panic:','fatal error:','WARNING: DATA RACE','[build failed]','SIGQUIT','SIGKILL'):
+                self.assertNotIn(marker,positive.stdout+positive.stderr)
+            self.assertEqual(positive.stderr,'')
+            self.assertRegex(positive.stdout,r'(?m)^PASS$')
+            self.assertRegex(positive.stdout,r'(?m)^ok\s+fixture\s+[0-9.]+s$')
+            old=run(originals.replace(correction,'',1),'^TestActualCapturedProviderRequest$/^max-six$')
+            self.assertEqual(old.returncode,1,old.stdout+old.stderr)
+            failed=['TestActualCapturedProviderRequest','TestActualCapturedProviderRequest/max-six']
+            self.assertEqual(re.findall(r'^=== RUN   (\S+)$',old.stdout,re.M),failed)
+            self.assertEqual(re.findall(r'^\s*--- FAIL: (\S+) \([0-9.]+s\)$',old.stdout,re.M),failed)
+            witness='actual complete Hysteria provider rejected original independent request'
+            self.assertEqual(old.stdout.count(witness),1)
+            for marker in ('--- PASS:','--- SKIP:','panic:','fatal error:','WARNING: DATA RACE','[build failed]','SIGQUIT','SIGKILL','timed out'):
+                self.assertNotIn(marker,old.stdout+old.stderr)
+            self.assertEqual(old.stderr,'')
+            self.assertRegex(old.stdout,r'(?m)^FAIL\s+fixture\s+[0-9.]+s$')
+
     def test_complete_native_inventory(self):
         self.assertEqual(len(G.CASES),22)
         for case in G.CASES:self.assertEqual(G.check_verdict(transcript(case),case),receipt(case))
