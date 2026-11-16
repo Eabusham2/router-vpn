@@ -132,7 +132,7 @@ final class AndroidNodeChainExecutionCapture implements AutoCloseable {
         int originalSchema = original.getInt("schema");
         int originalCount = original.getJSONArray("nodes").length();
         if (returned.length() != 4 || (originalSchema != 1 && originalSchema != 2 && !(local.socks != null && originalSchema == 3) && !(local.connect != null && originalSchema == 4))
-                || originalSchema == 3 && originalCount != 3
+                || originalSchema == 3 && (originalCount < 3 || originalCount > 8)
                 || originalSchema == 4 && (originalCount < 3 || originalCount > 8)
                 || returned.getInt("schema") != originalSchema
                 || !"local".equals(returned.getString("execution"))

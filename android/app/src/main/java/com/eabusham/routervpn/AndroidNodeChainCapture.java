@@ -100,7 +100,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         this.original=original; plan=null; selectionExecution=original.execution;
         boolean isCONNECT=sourceSchema(original.members)==4;
         int count=original.members.size();
-        if (!"local".equals(selectionExecution) && !(java.util.Arrays.asList("server","auto").contains(selectionExecution) && (isCONNECT ? count>=3&&count<=8 : count==3))) throw new IllegalStateException("CONNECT Server or Compare require three to eight original nodes; SOCKS5 requires exactly three.");
+        if (!"local".equals(selectionExecution) && !(java.util.Arrays.asList("server","auto").contains(selectionExecution) && count>=3&&count<=8)) throw new IllegalStateException("SOCKS5 and CONNECT Server or Compare require three to eight complete original nodes.");
         if(isCONNECT&&!"local".equals(selectionExecution))requireCONNECTExecutionFinalOff(original.members.get(count-1).profile());
         socks=isCONNECT?null:AndroidNodeChainSOCKSCapture.compile(source,inputs,identities);
         connect=isCONNECT?AndroidNodeChainCONNECTCapture.compile(source,inputs,identities):null;
@@ -196,8 +196,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     static void validateSOCKSExecutionSource(String input,String execution) throws Exception {
         JSONObject original=new JSONObject(input);
-        if(original.getInt("schema")!=3||original.getJSONArray("nodes").length()!=3||!java.util.Arrays.asList("server","auto").contains(execution))
-            throw new IllegalStateException("SOCKS5 execution requires the complete original three-node path.");
+        int count=original.getJSONArray("nodes").length();
+        if(original.getInt("schema")!=3||count<3||count>8||!java.util.Arrays.asList("server","auto").contains(execution))
+            throw new IllegalStateException("SOCKS5 execution requires three to eight complete original members.");
         RouterNodeChainExecution preview=Libbox.newRouterNodeChainSOCKSExecution(input,execution);
         if(preview==null)throw new IllegalStateException("The native SOCKS5 compiler returned no execution preparation.");
         try {
