@@ -9,6 +9,7 @@ The full connection-profile suite also runs this family automatically.
 from pathlib import Path
 import json
 import os
+import re
 import shutil
 import subprocess
 import android_execution_compiler_fixture as EXECUTION_COMPILER
@@ -707,12 +708,27 @@ public final class NodeChainCaptureHarness {
   check(imported.prefixModes(external.id).isEmpty(),"HY2 final offered unsupported imported middle");reject(()->imported.addPrefix(external.id,"shadowsocks"),"HY2 final admitted imported middle before Save");
   imported.setFinal(mixed.control().id,"shadowsocks");imported.addPrefix(external.id,"shadowsocks");check(imported.finalModes(mixed.control().id).equals(List.of("shadowsocks")),"imported schema2 offered unsupported HY2 final");reject(()->imported.setFinal(mixed.control().id,"hysteria2"),"imported schema2 admitted HY2 final before Save");
  }
+ static List<String> completeSourcePhases(){return List.of("paired-roundtrips","paired-capture","ordered-editor","editor-budget","editor-product","identity-modes","imported","socks");}
+ static void runSourcePhase(Path root,String phase)throws Exception{
+  switch(phase){
+   case "paired-roundtrips" -> {for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle","2/awg-fast","3/awg-strong","4/mixed-awg","8/mixed-awg"))roundtrip(root,key);}
+   case "paired-capture" -> {sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);}
+   case "ordered-editor" -> {editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);}
+   case "editor-budget" -> {editorFinalBudget(root);}
+   case "editor-product" -> {editorHandlers(root);productHandoff(root);}
+   case "identity-modes" -> {pairedIdentity(root);nativeIdentityReceipt(root);identityCompilerAdmission(root);editorMixed(root);editorMixedHandlers(root);}
+   case "imported" -> {importedMiddle(root);}
+   case "socks" -> {socksMiddle(root);}
+   default -> throw new IllegalArgumentException("unknown complete source phase");
+  }
+ }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";
+  if(family.equals("all")){for(String phase:completeSourcePhases())runSourcePhase(root,phase);System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");return;}
+  if(completeSourcePhases().contains(family)){runSourcePhase(root,family);System.out.println("Android ordered source phase "+family+": "+checks+" checks PASS");return;}
   if(family.equals("openvpn")){openVPNMiddle(root);System.out.println("Android OpenVPN middle sources: "+checks+" shipping Java/shared Go checks passed; native/device separate");return;}
   if(family.equals("hysteria-final")){hysteriaFinalBoundaries(root);hysteriaFinal(root);System.out.println("Android paired HY2 final sources: "+checks+" shipping Java/shared Go checks passed; native crypto separate");return;}
   if(family.equals("hostname")){hostnamePolicyControls(root);hostnameMiddle(root);System.out.println("Android hostname ordered sources: "+checks+" shipping Java/shared Go checks passed; no native execution");return;}
-  if(family.equals("imported")){importedMiddle(root);System.out.println("Android imported ordered methods: "+checks+" shipping Java/shared Go checks passed");return;}
   if(family.equals("source")){sourceControls(root);return;}if(family.equals("generation")){generationControls(root);return;}
   if(family.equals("atomic")){captureAtomicity(root);return;}
   if(family.equals("restore")){roundtrip(root,"3/");return;}
@@ -720,26 +736,51 @@ public final class NodeChainCaptureHarness {
   if(family.equals("ordered-permission")){orderedPermission(root);return;}
   if(family.equals("editor-native")){editorNative(root);return;}
   if(family.equals("editor-atomic")){editorAtomicity(root);return;}
-  if(family.equals("editor-budget")){editorFinalBudget(root);return;}
   if(family.equals("editor-ui")){editorHandlers(root);return;}
   if(family.equals("product-handoff")){productHandoff(root);return;}
   if(family.equals("paired-identity")){pairedIdentity(root);return;}
   if(family.equals("native-identity")){nativeIdentityReceipt(root);return;}
   if(family.equals("identity-compiler")){identityCompilerAdmission(root);return;}
-  if(family.equals("socks")){socksMiddle(root);return;}
   if(family.equals("socks-prefixes")){socksMiddle(root,true);return;}
   if(family.equals("connect")){connectMiddle(root);return;}
   if(family.equals("connect-prefixes")){connectMiddle(root,true);return;}
   if(family.equals("editor-mixed")){editorMixed(root);return;}
   if(family.equals("editor-mixed-ui")){editorMixedHandlers(root);return;}
-  for(String key:List.of("2/","3/","4/","8/","3/aes-256-gcm","4/aes-256-gcm+xor-whitening","4/fixed-middle","2/awg-fast","3/awg-strong","4/mixed-awg","8/mixed-awg"))roundtrip(root,key);
-  sourceControls(root);generationControls(root);validationControls(root);compilationRace(root);captureAtomicity(root);
-  editorChecks(root);editorGeneration(root);editorFailures(root);orderedPermission(root);editorNative(root);editorAtomicity(root);editorFinalBudget(root);editorHandlers(root);productHandoff(root);
-  pairedIdentity(root);nativeIdentityReceipt(root);identityCompilerAdmission(root);editorMixed(root);editorMixedHandlers(root);
-  importedMiddle(root);socksMiddle(root);System.out.println("Android ordered sources: "+checks+" checks; actual Go compilation, exact all-member saved capture and rollback passed");
+  throw new IllegalArgumentException("unknown ordered source family");
  }
 }
 '''
+
+
+SOURCE_PHASES = ("paired-roundtrips", "paired-capture", "ordered-editor", "editor-budget",
+                 "editor-product", "identity-modes", "imported", "socks")
+
+
+def run_source_phase(command, phase, env):
+    if phase not in SOURCE_PHASES:
+        raise ValueError("unknown complete ordered source phase")
+    try:
+        result = subprocess.run(command + [phase], env=env, check=True,
+                                capture_output=True, text=True, timeout=180)
+    except subprocess.CalledProcessError as error:
+        raise AssertionError("Ordered source phase failed: " + phase + "\n" +
+                             (error.stdout or "") + (error.stderr or "")) from error
+    pattern = (r"Android ordered source phase " + re.escape(phase) +
+               r": (?P<checks>[1-9][0-9]*) checks PASS\n")
+    if phase == "socks":
+        # The original SOCKS method already prints its own completion line.
+        # Retain it and require its exact count to agree with the phase receipt.
+        pattern = (r"Android ordered SOCKS source: (?P<checks>[1-9][0-9]*) checks; "
+                   r"actual shared compiler and saved profile ownership passed\n"
+                   r"Android ordered source phase socks: (?P=checks) checks PASS\n")
+    receipt = re.fullmatch(pattern, result.stdout)
+    if receipt is None:
+        raise AssertionError("Missing, duplicate or foreign ordered source receipt: " +
+                             phase + "\n" + result.stdout + result.stderr)
+    print(result.stdout, end="", flush=True)
+    if result.stderr:
+        print(result.stderr, end="", flush=True)
+    return int(receipt.group("checks"))
 
 
 def prepare_sources(src, app, java):
@@ -825,7 +866,12 @@ def run(root, work, app, classes, jar, env, imported_only=False, openvpn_only=Fa
     if openvpn_only:
         subprocess.run(command + ["openvpn"], env=env, check=True, timeout=180)
         return
-    subprocess.run(command + (["imported"] if imported_only else []), env=env, check=True, timeout=180)
+    # The original aggregate grew beyond one JVM budget. Every original call
+    # remains in a closed mandatory phase, each with the unchanged 180s limit.
+    phases = ("imported",) if imported_only else SOURCE_PHASES
+    phase_checks = [run_source_phase(command, phase, env) for phase in phases]
+    print("Android ordered source inventory: " + str(len(phases)) + " phases, " +
+          str(sum(phase_checks)) + " checks PASS", flush=True)
     subprocess.run(command + ["hostname"], env=env, check=True, timeout=180)
     if not imported_only:
         subprocess.run(command + ["connect"], env=env, check=True, timeout=180)

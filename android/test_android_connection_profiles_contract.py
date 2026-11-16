@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import ast
+import contextlib
+import io
+import re
+import subprocess
+from unittest.mock import patch
+import test_android_node_chain_capture as ORDERED
 
 ROOT = Path(__file__).resolve().parent
 JAVA = ROOT / "app" / "src" / "main" / "java" / "com" / "eabusham" / "routervpn"
@@ -203,6 +210,103 @@ for dependency in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNode
                    'android/test_android_node_chain_capture.py'):
     assert workflow.count("- '" + dependency + "'") == 2, f"ordered source push/PR trigger missing: {dependency}"
 assert workflow.count('          python3 android/test_android_node_chain_capture.py') == 1, "actual ordered compiler/capture gate is required"
+
+# Every original call from the complete Java aggregate belongs to one mandatory
+# bounded phase. Both the source dispatch and executed receipt remain required.
+SOURCE_PHASES = ("paired-roundtrips", "paired-capture", "ordered-editor", "editor-budget",
+                 "editor-product", "identity-modes", "imported", "socks")
+PHASE_CALLS = (
+    ("roundtrip",),
+    ("sourceControls", "generationControls", "validationControls", "compilationRace", "captureAtomicity"),
+    ("editorChecks", "editorGeneration", "editorFailures", "orderedPermission", "editorNative", "editorAtomicity"),
+    ("editorFinalBudget",), ("editorHandlers", "productHandoff"),
+    ("pairedIdentity", "nativeIdentityReceipt", "identityCompilerAdmission", "editorMixed", "editorMixedHandlers"),
+    ("importedMiddle",), ("socksMiddle",),
+)
+ROUNDTRIPS = ("2/", "3/", "4/", "8/", "3/aes-256-gcm", "4/aes-256-gcm+xor-whitening",
+              "4/fixed-middle", "2/awg-fast", "3/awg-strong", "4/mixed-awg", "8/mixed-awg")
+
+
+def validate_source_phases(source, java):
+    tree = ast.parse(source)
+    values = [ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+              and any(isinstance(t, ast.Name) and t.id == "SOURCE_PHASES" for t in n.targets)]
+    assert values == [SOURCE_PHASES], "complete ordered Python phase inventory changed"
+    declaration = re.findall(r'completeSourcePhases\(\)\{return List.of\(([^\n]+)\);\}', java)
+    assert len(declaration) == 1 and tuple(re.findall(r'"([^"\n]+)"', declaration[0])) == SOURCE_PHASES, "complete ordered Java phase inventory changed"
+    body = java.split('static void runSourcePhase(Path root,String phase)throws Exception{', 1)[1].split('\n public static void main(', 1)[0]
+    cases = re.findall(r'case "([^"\n]+)" -> \{([^\n]+)\}', body)
+    assert tuple(name for name, _ in cases) == SOURCE_PHASES, "complete ordered Java dispatch changed"
+    for (name, calls), expected in zip(cases, PHASE_CALLS):
+        assert tuple(re.findall(r'([A-Za-z][A-Za-z0-9]*)\(root(?:,key)?\);', calls)) == expected, "complete ordered original calls changed: " + name
+    assert tuple(re.findall(r'"([^"\n]+)"', cases[0][1])) == ROUNDTRIPS, "complete ordered roundtrip inventory changed"
+    for marker in ('phases = ("imported",) if imported_only else SOURCE_PHASES',
+                   'phase_checks = [run_source_phase(command, phase, env) for phase in phases]',
+                   'capture_output=True, text=True, timeout=180)',
+                   'if receipt is None:', 're.fullmatch(', 'check=True,'):
+        assert source.count(marker) >= 1, "complete ordered execution/receipt boundary omitted: " + marker
+    for marker in ('for(String phase:completeSourcePhases())runSourcePhase(root,phase);',
+                   'if(completeSourcePhases().contains(family)){runSourcePhase(root,family);',
+                   'default -> throw new IllegalArgumentException("unknown complete source phase");'):
+        assert java.count(marker) == 1, "complete ordered Java execution boundary omitted"
+
+
+ordered_source = (ROOT / 'test_android_node_chain_capture.py').read_text()
+validate_source_phases(ordered_source, ORDERED.HARNESS)
+phase_assignment = next(n for n in ast.parse(ordered_source).body if isinstance(n, ast.Assign)
+                        and any(isinstance(t, ast.Name) and t.id == "SOURCE_PHASES" for t in n.targets))
+source_lines = ordered_source.splitlines(keepends=True)
+for index, name in enumerate(SOURCE_PHASES):
+    for changed_phases in (SOURCE_PHASES[:index]+SOURCE_PHASES[index+1:],
+                           SOURCE_PHASES[:index]+(name,)+SOURCE_PHASES[index:]):
+        changed = (''.join(source_lines[:phase_assignment.lineno-1]) +
+                   'SOURCE_PHASES = '+repr(changed_phases)+'\n' +
+                   ''.join(source_lines[phase_assignment.end_lineno:]))
+        try:
+            validate_source_phases(changed, ORDERED.HARNESS)
+        except (AssertionError, SyntaxError, ValueError):
+            pass
+        else:
+            raise AssertionError('complete ordered source accepted missing/duplicate phase: '+name)
+for group in PHASE_CALLS:
+    for name in group:
+        before = name+'(root'+(',key' if name == 'roundtrip' else '')+');'
+        start = ORDERED.HARNESS.index('static void runSourcePhase(')
+        changed = ORDERED.HARNESS[:start] + ORDERED.HARNESS[start:].replace(before, '', 1)
+        try:
+            validate_source_phases(ordered_source, changed)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError('complete ordered source accepted missing original call: '+name)
+
+for phase in SOURCE_PHASES:
+    valid = 'Android ordered source phase '+phase+': 17 checks PASS\n'
+    if phase == 'socks':
+        valid = 'Android ordered SOCKS source: 17 checks; actual shared compiler and saved profile ownership passed\n' + valid
+    with patch.object(ORDERED.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, valid, '')) as called, contextlib.redirect_stdout(io.StringIO()):
+        assert ORDERED.run_source_phase(['java', 'original-fixture'], phase, {}) == 17
+        assert called.call_args.args[0] == ['java', 'original-fixture', phase]
+        assert called.call_args.kwargs['check'] is True and called.call_args.kwargs['timeout'] == 180
+    invalid = ['', valid+valid, valid.replace(phase, 'foreign'), valid.replace('17', '0')]
+    if phase == 'socks':
+        invalid += [valid.split('\n', 1)[1], valid.replace('17 checks;', '18 checks;')]
+    for output in invalid:
+        with patch.object(ORDERED.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, '')):
+            try:
+                ORDERED.run_source_phase(['java'], phase, {})
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError('complete ordered source accepted missing/duplicate/foreign/zero receipt')
+    for error in (subprocess.CalledProcessError(1, ['java'], output=valid), subprocess.TimeoutExpired(['java'], 180)):
+        with patch.object(ORDERED.subprocess, 'run', side_effect=error):
+            try:
+                ORDERED.run_source_phase(['java'], phase, {})
+            except (AssertionError, subprocess.TimeoutExpired):
+                pass
+            else:
+                raise AssertionError('complete ordered source accepted failed or timed-out phase')
 
 # The original final aggregate now runs as complete bounded JVM groups. The
 # selected Java inventory and the post-execution receipt must both be checked.

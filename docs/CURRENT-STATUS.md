@@ -57,6 +57,14 @@ workflow checks and the profile-dispatch contract passed. See
 [the complete-prefix evidence](ANDROID-IMPORTED-EXECUTION-PREFIX-EVIDENCE-2026-11-16.md).
 Native and device acceptance remain separate from these source results.
 
+The original complete Android ordered-source gate now runs its growing core
+matrix in eight mandatory groups with the existing 180-second per-process
+limit. It completed all 3,202 source/compiler/profile checks across the core,
+hostname, CONNECT, SOCKS, OpenVPN and Hysteria2 families, plus all 29 original
+compiled causal controls. Inventory and receipt checks require every original
+call and reject missing, duplicate, foreign or failed results. See
+[the bounded source-gate evidence](ANDROID-ORDERED-SOURCE-PHASES-2026-11-16.md).
+
 ## November 15: Android typed SOCKS5 execution
 
 Android's ordered editor, complete profiles and existing single VpnService now
