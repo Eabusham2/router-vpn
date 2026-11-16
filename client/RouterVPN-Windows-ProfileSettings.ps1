@@ -362,7 +362,7 @@ function global:New-RouterVPNOrderedConnectPayload {
             $connectMiddle=$node.mode-cin@('http-connect','https-connect')
             $executionKey=if($connectMiddle){'ordered_connect_execution_middle_supported'}else{'ordered_execution_middle_supported'}
             $executionMiddle=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $matchingProfiles[0] 'external') $executionKey $false
-            if($nodes.Count-ne3-or$position-ne1-or(-not$connectMiddle-and$node.mode-cne'shadowsocks')-or$nodes[-1].mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPrefixMode $nodes[0].mode)-or$executionMiddle-isnot[bool]-or-not$executionMiddle){throw 'Server or Compare requires its original literal Shadowsocks or CONNECT trio.'}
+            if($nodes.Count-lt3-or$nodes.Count-gt8-or$position-ne($nodes.Count-2)-or($connectMiddle-and$nodes.Count-ne3)-or(-not$connectMiddle-and$node.mode-cne'shadowsocks')-or$nodes[-1].mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPrefixMode $nodes[0].mode)-or$executionMiddle-isnot[bool]-or-not$executionMiddle){throw 'Server or Compare requires its original complete literal Shadowsocks prefix or exact CONNECT trio.'}
             if($connectMiddle){
                 $finals=@($profiles|Where-Object{[string](Get-RouterVPNOrderedValue $_ 'id')-ceq$nodes[-1].id})
                 if($finals.Count-ne1-or[string](Get-RouterVPNOrderedValue $finals[0] 'start_layer' '')-cnotin@('','off')){throw 'CONNECT execution retains the original unlayered Shadowsocks final.'}

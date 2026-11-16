@@ -1114,7 +1114,7 @@ prove these behaviors merely because a filename or string is present.
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
 | 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and bounded Windows/Linux/macOS single paired Router hosts with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin paired source now includes actual installed parent/child composition; its new native gate has not yet passed at this cutoff. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
-| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT, SOCKS, schema-five OpenVPN and schema-two Shadowsocks additions below extend those separate families to 3–8 members with one penultimate import. Shared Shadowsocks execution and the Apple and Android public integrations now retain complete 3–8-member literal imported-SS Server/Compare routes. The earlier desktop public trio admissions and each platform's actual native evidence remain separate; shared support alone does not prove host acceptance. Hostname Server execution, multiple imports and broader requested positions/protocols/compositions remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle follows the actual measured winner without changing that formula. |
+| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT, SOCKS, schema-five OpenVPN and schema-two Shadowsocks additions below extend those separate families to 3–8 members with one penultimate import. Shared Shadowsocks execution and the Apple, Android and Windows/Linux public integrations now retain complete 3–8-member literal imported-SS Server/Compare routes. The macOS public trio admission and each platform's actual native evidence remain separate; shared support alone does not prove host acceptance. Hostname Server execution, multiple imports and broader requested positions/protocols/compositions remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |
@@ -4085,3 +4085,51 @@ Its source was frozen on 6db6b58c and the same preimage/output was verified on
 e2ad7a89; intervening changes did not alter the compiled Swift dependency set.
 This is whole-engine Swift delivery evidence with explicit native-handle and
 OS doubles, not a generated XCFramework, signed IPA or physical-device result.
+
+
+## November 16: Windows/Linux complete imported-SS execution adoption
+
+The public ordered controller, Windows/GTK editors, saved-profile validation
+and original execution preparation now retain three-to-eight-member literal
+SS2022 Server/Compare paths. Every paired prefix keeps its independent identity
+and proof; the imported member remains penultimate and the independent paired
+SS2022 final remains last. Original credentials, selected DNS, protection and
+execution source are retained. CONNECT remains a separate exact-trio family,
+and Darwin admission is unchanged by this unit.
+
+The compiled race image passed 76 root/subtest records: 48 source/persistence,
+twelve public Server/Compare, ten Last/restoration and six missing/foreign
+native-source refusals. All six four/eight-member Server and Compare-winner
+paths passed. The original four-second Current/Result and 120-second per-root
+bounds remain. Both original-trio and complete-prefix Last restore the proved
+choice without reranking. Two actual admission omissions failed at the intended
+old-trio and duplicated-prefix-proof assertions. The separately published
+ec5e9e93 observation correction is a prerequisite, not duplicated source here.
+
+Windows passed 5,064 complete-profile callback checks and all 21 original
+profile controls. Its ordered editor passed 1,907 baseline checks and all
+fourteen controls. The old aggregate exceeded its ninety-second bound; the
+required runner now invokes the baseline and each mandatory control separately
+with that same per-process bound. Exact inventory, exit code and behavioral
+witness checks reject skipped, duplicate, foreign or incorrect control results.
+Sixteen runner tests and two actual invalid-selection refusals passed. The
+standalone default still runs the baseline and all fourteen controls.
+
+The compiled GTK model reported 4,239 checks and passed all fifteen controls,
+including three/four/eight-member choices. Its actual callback path compiled,
+but local Xvfb could not establish AF_UNIX listeners; no display-backed callback
+or rendered acceptance is claimed. The hosted display gate retains the new
+callbacks. All 66 native source-audit roots passed. Earlier rejected telemetry
+polling and aggregate timing failures remain separately recorded; accepted
+Windows runs used fresh telemetry-disabled processes with verified IPv4/IPv6
+socket denial.
+
+All seventeen preimages matched 25eb9cbf immediately before integration.
+Frozen manifest SHA256:
+`1cfb375ee9cbe9f993fa6188cf063585dd64b8b3fb0a4e4ac47d3b3fa4f4d748`.
+Final validation receipt SHA256:
+`a0f4eafe05a581d033ff5bbc47237b1cd150f86c86cfd6c8a6a5279d4cbb1789`.
+The tests execute shipping source, public transactions, profiles and restoration
+with explicit native-child/kernel/UI boundaries. They do not replace actual
+installed encrypted networking, current package publication or physical-device
+acceptance. Broader required graphs remain open in the ledger above.

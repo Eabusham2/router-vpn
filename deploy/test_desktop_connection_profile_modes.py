@@ -45,7 +45,7 @@ def behavioral_diagnostic(output):
     return " ".join(plain.split())
 
 
-def run(command, *, negative=False, witness=None, observation=None):
+def run(command, *, negative=False, witness=None, observation=None, marker="PROFILE-CHECK:"):
     started = time.monotonic()
     if observation is not None:
         print("Native profile fixture started: " + observation, flush=True)
@@ -71,12 +71,53 @@ def run(command, *, negative=False, witness=None, observation=None):
     if negative:
         diagnostic = behavioral_diagnostic(output)
         crashed = re.search(r"(?i)(?:\b(?:panic|fatal(?: error)?):|\bsegmentation fault\b|\b(?:SIGABRT|SIGSEGV|SIGILL|SIGBUS)\b|\*\*\*\s*Signal\s+\d+)", diagnostic)
-        if result.returncode != 1 or crashed or "PROFILE-CHECK:" not in diagnostic or (witness and witness not in diagnostic):
+        if result.returncode != 1 or crashed or marker not in diagnostic or (witness and witness not in diagnostic):
             raise RuntimeError("Negative did not fail on a behavioral assertion:\n" + output)
     elif result.returncode:
         raise RuntimeError("Shipping fixture failed:\n" + output)
     elif output.strip():
         print(output.strip(), flush=True)
+
+
+WINDOWS_EDITOR_CONTROLS = {'imported-execution-prefix': 'complete imported execution prefix refused',
+ 'connect-execution-global': 'CONNECT execution borrowed unrelated global '
+                             'capability',
+ 'connect-execution-final': 'CONNECT execution admitted layered final',
+ 'imported-execution-capability': 'imported execution accepted absent or '
+                                  'nonboolean native capability',
+ 'connect-protocol': 'CONNECT request borrowed a different saved protocol',
+ 'connect-mode': 'CONNECT Add substituted its exact saved transport',
+ 'socks-mode': 'SOCKS Add substituted its saved transport',
+ 'final-mode': 'Apply substituted the explicitly selected Hysteria2 final',
+ 'raw-mode': 'raw ordered mode whitelist admitted an alias or unsupported '
+             'transport',
+ 'add-mode': 'Add changed the selected node or transport',
+ 'change-mode': 'Change mode replaced its original node or ignored selected '
+                'transport',
+ 'row-label': 'editor row mislabeled its captured transport',
+ 'source-token': 'relinked middle node replaced the original editor draft',
+ 'summary-reset': 'new incomplete ordered selection displayed a previous path '
+                  'transport summary'}
+
+def windows_editor_inventory(source):
+    matches = re.findall(r"\$controls=@\{([^}]+)\}", source)
+    if len(matches) != 1:
+        raise RuntimeError("ordered editor control inventory missing or duplicated")
+    pairs = re.findall(r"'([^']+)'='([^']+)'", matches[0])
+    if len(pairs) != len(WINDOWS_EDITOR_CONTROLS) or len(dict(pairs)) != len(pairs) or dict(pairs) != WINDOWS_EDITOR_CONTROLS:
+        raise RuntimeError("ordered editor control inventory changed")
+    return WINDOWS_EDITOR_CONTROLS.copy()
+
+def windows_editor(shell):
+    path = ROOT / "client/test-windows-ordered-editor.ps1"
+    controls = windows_editor_inventory(path.read_text())
+    command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(path)]
+    if os.name == "nt":
+        command.append("-WPF")
+    run(command + ["-PositiveOnly"], observation="ordered-editor:shipping")
+    for name, witness in controls.items():
+        run(command + ["-NegativeControl", name], negative=True, marker="ORDERED-EDITOR:",
+            witness=witness, observation="ordered-editor:" + name)
 
 
 def windows(shell):
@@ -98,11 +139,7 @@ def windows(shell):
         run(command + ["-Mutation", mutation], negative=mutation != "shipping",
             witness=setup_witnesses.get(mutation), observation="profile:" + mutation)
     print("WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 21 rejected", flush=True)
-    editor = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-              str(ROOT / "client/test-windows-ordered-editor.ps1")]
-    if os.name == "nt":
-        editor.append("-WPF")
-    run(editor, observation="ordered-editor")
+    windows_editor(shell)
 
 
 SWIFT_BOUNDARIES = r'''

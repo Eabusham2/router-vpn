@@ -13,7 +13,12 @@ import (
 // No native process, proof, lease or physical readiness is fabricated here.
 func desktopImportedExecutionLaunchFixture(t *testing.T, target, method string, keyBytes int) (*app, *desktopNodeLaunch) {
 	t.Helper()
-	a, nodes := desktopNodeChainCaptureFixture(t, 3)
+	return desktopImportedPrefixExecutionLaunchFixture(t, 3, target, method, keyBytes)
+}
+
+func desktopImportedPrefixExecutionLaunchFixture(t *testing.T, count int, target, method string, keyBytes int) (*app, *desktopNodeLaunch) {
+	t.Helper()
+	a, nodes := desktopNodeChainCaptureFixture(t, count)
 	installDesktopOrderedImportedCipher(t, a, nodes, method, keyBytes)
 	for i := range a.profiles.Profiles {
 		a.profiles.Profiles[i].KillSwitch, a.profiles.Profiles[i].KillSwitchPolicy = true, "on-connect"

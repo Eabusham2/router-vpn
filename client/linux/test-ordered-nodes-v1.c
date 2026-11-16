@@ -307,39 +307,67 @@ static void connect_model_only(void) {
     printf("Shipping ordered source model including CONNECT: %u checks PASS.\n",checks);
 }
 
-static void imported_execution_model(void) {
+static void imported_execution_model(LinuxUnifiedV8 *state) {
     const char *executions[]={"server","auto"};
-    for(guint e=0;e<G_N_ELEMENTS(executions);e++){
+    const guint counts[]={3,4,8};
+    for(guint c=0;c<G_N_ELEMENTS(counts);c++){guint count=counts[c];for(guint e=0;e<G_N_ELEMENTS(executions);e++){
         JsonNode *root=parse_json("{\"selected_id\":\"exit\",\"profiles\":[{\"id\":\"entry\",\"node_kind\":\"router-vpn\"},{\"id\":\"middle\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"shadowsocks\",\"ordered_middle_supported\":true,\"ordered_execution_middle_supported\":true}},{\"id\":\"exit\",\"node_kind\":\"router-vpn\"}]}");
         JsonObject *store=json_node_get_object(root),*tokens=json_object_new();JsonArray *profiles=json_object_get_array_member(store,"profiles"),*nodes=json_array_new();
-        for(guint i=0;i<3;i++){
-            JsonObject *profile=json_array_get_object_element(profiles,i),*row=json_object_new();const char *id=obj_string(profile,"id");char *token=g_strdup_printf("%064x",i+1);
+        for(guint i=0;i<count-3;i++) {
+            JsonObject *p=json_object_new();char *id=g_strdup_printf("prefix-%u",i);
+            json_object_set_string_member(p,"id",id);g_free(id);json_object_set_string_member(p,"node_kind","router-vpn");
+            json_array_add_object_element(profiles,p);
+        }
+        // Keep catalog order independent: rows retain every prefix then middle/final.
+        JsonArray *ordered=json_array_new();json_array_add_object_element(ordered,json_object_ref(json_array_get_object_element(profiles,0)));
+        for(guint i=3;i<count;i++)json_array_add_object_element(ordered,json_object_ref(json_array_get_object_element(profiles,i)));
+        json_array_add_object_element(ordered,json_object_ref(json_array_get_object_element(profiles,1)));
+        json_array_add_object_element(ordered,json_object_ref(json_array_get_object_element(profiles,2)));
+        for(guint i=0;i<count;i++){
+            JsonObject *profile=json_array_get_object_element(ordered,i),*row=json_object_new();const char *id=obj_string(profile,"id");char *token=g_strdup_printf("%064x",i+1);
             json_object_set_string_member(profile,"profile_token",token);json_object_set_string_member(tokens,id,token);g_free(token);
-            json_object_set_string_member(row,"id",id);json_object_set_string_member(row,"mode",i==0?"wg":"shadowsocks");json_array_add_object_element(nodes,row);
+            json_object_set_string_member(row,"id",id);json_object_set_string_member(row,"mode",i<count-2?(i%2?"awg2-strong":"wg"):"shadowsocks");json_array_add_object_element(nodes,row);
         }
         LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
         check(selection&&linux_ordered_execution_v1(selection,executions[e])&&linux_ordered_current_v1(selection,store),"literal imported execution lost original trio or purpose");
+        if(state != NULL) {
+            JsonNode *original_catalog=catalog;catalog=json_node_copy(root);
+            LinuxOrderedStateV1 *owned=linux_ordered_state_v1(state);
+            LinuxOrderedSelectionV1 *captured=linux_ordered_selection_v1("exit",selection->nodes,selection->tokens);
+            check(captured&&linux_ordered_execution_v1(captured,executions[e])&&linux_ordered_store_v1(owned,captured,TRUE),"complete imported callback capture failed");
+            guint before=posts;linux_profile_connect_v11(NULL,state);
+            check(posts==before+1,"complete imported callback did not connect");
+            JsonNode *request=parse_json(last_body);JsonObject *body=json_node_get_object(request);
+            check(strcmp(obj_string(body,"execution"),executions[e])==0&&json_array_get_length(linux_ordered_array_v1(body,"nodes"))==count&&json_object_get_size(linux_ordered_object_v1(body,"expected_profile_tokens"))==count,"complete imported callback lost choice or original inventory");
+            check(strcmp(obj_string(json_array_get_object_element(linux_ordered_array_v1(body,"nodes"),count-2),"id"),"middle")==0,"complete imported callback changed penultimate");json_node_free(request);
+            JsonObject *live_middle=external_source_profile_v24(json_node_get_object(catalog),"middle");
+            json_object_set_boolean_member(linux_ordered_object_v1(live_middle,"external"),"ordered_execution_middle_supported",FALSE);
+            before=posts;linux_profile_connect_v11(NULL,state);check(posts==before,"complete imported callback ignored original capability");
+            json_node_free(catalog);catalog=original_catalog;
+            check(linux_ordered_store_v1(owned,NULL,FALSE),"complete imported callback fixture did not retire its selection");
+        }
         JsonObject *external=json_object_get_object_member(json_array_get_object_element(profiles,1),"external");
         json_object_set_boolean_member(external,"ordered_execution_middle_supported",FALSE);check(!linux_ordered_current_v1(selection,store),"imported execution accepted false native capability");
         json_object_set_int_member(external,"ordered_execution_middle_supported",1);check(!linux_ordered_current_v1(selection,store),"imported execution accepted numeric native capability");
         json_object_remove_member(external,"ordered_execution_middle_supported");check(!linux_ordered_current_v1(selection,store),"imported execution accepted absent native capability");
         json_object_set_boolean_member(external,"ordered_execution_middle_supported",TRUE);
         JsonObject *middle=json_array_get_object_element(profiles,1);json_object_set_string_member(middle,"profile_token","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(!linux_ordered_current_v1(selection,store),"imported execution borrowed changed original source token");
-        linux_ordered_selection_free_v1(selection);json_array_unref(nodes);json_object_unref(tokens);json_node_free(root);
-    }
+        linux_ordered_selection_free_v1(selection);json_array_unref(ordered);json_array_unref(nodes);json_object_unref(tokens);json_node_free(root);
+    }}
 }
 
 int main(int argc,char **argv) {
     keypath=g_build_filename(argv[1],"ordered-settings.ini",NULL);g_remove(keypath);
     model_only();
     connect_model_only();
-    imported_execution_model();
+    imported_execution_model(NULL);
     if(argc==3&&strcmp(argv[2],"--model-only")==0){puts("GTK callbacks require a display and were not executed.");return 0;}
     check(gtk_init_check(&argc,&argv),"real GTK display");
     App app={gtk_window_new(GTK_WINDOW_TOPLEVEL)};LinuxUnifiedV8 state={.app=&app,.node=gtk_combo_box_text_new(),.mode=gtk_combo_box_text_new(),.multihop=gtk_check_button_new()};unified=&state;
     JsonObject*o=json_object_new();JsonArray*rows=json_array_new();json_object_set_string_member(o,"selected_id","exit");
     for(int i=0;i<=8;i++){char*id=i?g_strdup_printf("n%d",i):g_strdup("exit");char*token=g_strdup_printf("%064x",i+1);JsonObject*p=json_object_new();json_object_set_string_member(p,"id",id);json_object_set_string_member(p,"name",id);json_object_set_string_member(p,"profile_token",token);json_object_set_string_member(p,"node_kind","router-vpn");json_array_add_object_element(rows,p);gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.node),id,id);g_free(id);g_free(token);}
     json_object_set_array_member(o,"profiles",rows);catalog=json_node_new(JSON_NODE_OBJECT);json_node_take_object(catalog,o);refresh_all(&app);choose(state.node,"exit");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.mode),"smart-auto","SMART AUTO");choose(state.mode,"smart-auto");
+    imported_execution_model(&state);
     edit(0,TRUE);LinuxOrderedStateV1*owned=linux_ordered_state_v1(&state);check(owned->selection!=NULL,"Apply lost original path");char*original=snapshot();
     check(strstr(original,"awg2-fast")&&strstr(original,"awg2-strong"),"mixed modes not retained");
     edit(1,FALSE);char*after=snapshot();check(strcmp(original,after)==0,"cancel modified retained path");g_free(after);

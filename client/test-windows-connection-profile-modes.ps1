@@ -322,6 +322,7 @@ public sealed class ProfileModeOwner {
         $orderedCases+=[pscustomobject]@{final=$finalMode;mixed=$mixed;count=$nodeCount;imported='';prefix=''}
     }}}
     foreach($executionChoice in @('server','auto')){foreach($nodeCount in @(2,3,8)){$orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$true;count=$nodeCount;imported='';prefix='';execution=$executionChoice}}}
+    foreach($executionChoice in @('server','auto')){foreach($nodeCount in @(3,4,8)){$orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$true;count=$nodeCount;imported='shadowsocks';prefix='wg';execution=$executionChoice}}}
     foreach($orderedCase in $orderedCases){
         $finalMode=$orderedCase.final;$mixed=$orderedCase.mixed;$nodeCount=$orderedCase.count
         $requestedExecution=if($orderedCase.PSObject.Properties['execution']){$orderedCase.execution}else{'local'}
@@ -329,13 +330,13 @@ public sealed class ProfileModeOwner {
         $nodes=@();$profiles=@();$tokens=@{}
         for($i=0;$i-lt$nodeCount;$i++){
             $id='ordered-'+$i;$mode=if($i-eq$nodeCount-1){$finalMode}elseif($mixed){@('awg2-fast','wg','awg2-strong')[$i%3]}else{'wg'}
-            if($orderedCase.imported){if($i-eq0){$mode=$orderedCase.prefix}elseif($i-eq1){$mode=$orderedCase.imported}}
+            if($orderedCase.imported){if($i-lt$nodeCount-2){$mode=$orderedCase.prefix}elseif($i-eq$nodeCount-2){$mode=$orderedCase.imported}}
             $nodes+=[pscustomobject]@{id=$id;mode=$mode;private_key='never-copy-member-secret'}
             $tokens[$id]=('{0:x64}' -f ($i+1))
             $profiles+=[pscustomobject]@{id=$id;name=('Node '+$i);node_kind='router-vpn';api_token='never-copy-token';profile_token=$tokens[$id]}
-            if($orderedCase.imported-and$i-eq1){
+            if($orderedCase.imported-and$i-eq$nodeCount-2){
                 $profiles[-1].node_kind='external'
-                $profiles[-1]|Add-Member -NotePropertyName external -NotePropertyValue ([pscustomobject]@{protocol=$orderedCase.imported;ordered_middle_supported=$true})
+                $profiles[-1]|Add-Member -NotePropertyName external -NotePropertyValue ([pscustomobject]@{protocol=$orderedCase.imported;ordered_middle_supported=$true;ordered_execution_middle_supported=$true})
             }
         }
         $control=$nodes[-1].id;$RouterCombo.SelectedValue=$control;$RouterCombo.Tag=[pscustomobject]@{selected_id=$control;profiles=$profiles}

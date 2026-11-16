@@ -110,5 +110,52 @@ class PowerShellDiagnosticVerdict(unittest.TestCase):
         self.assertIn("timed out: profile:shipping", output.getvalue())
         self.assertNotIn("finished:", output.getvalue())
 
+class OrderedEditorPartition(unittest.TestCase):
+    def test_exact_inventory_refuses_missing_extra_duplicate_or_changed_witness(self):
+        source = (G.ROOT / "client/test-windows-ordered-editor.ps1").read_text()
+        self.assertEqual(G.windows_editor_inventory(source), G.WINDOWS_EDITOR_CONTROLS)
+        name, witness = next(iter(G.WINDOWS_EDITOR_CONTROLS.items()))
+        literal = "'" + name + "'='" + witness + "'"
+        for replacement in ("", literal + ";" + literal, "'foreign'='foreign'", literal.replace(witness, "different")):
+            with self.subTest(replacement=replacement), self.assertRaises(RuntimeError):
+                G.windows_editor_inventory(source.replace(literal, replacement, 1))
+
+    def test_required_baseline_and_every_causal_are_called_once(self):
+        with patch.object(G, "run") as run:
+            G.windows_editor("captured-pwsh")
+        calls = run.call_args_list
+        self.assertEqual(len(calls), 1 + len(G.WINDOWS_EDITOR_CONTROLS))
+        self.assertIn("-PositiveOnly", calls[0].args[0])
+        self.assertNotIn("negative", calls[0].kwargs)
+        for call, (name, witness) in zip(calls[1:], G.WINDOWS_EDITOR_CONTROLS.items()):
+            self.assertEqual(call.args[0][-2:], ["-NegativeControl", name])
+            self.assertTrue(call.kwargs["negative"])
+            self.assertEqual(call.kwargs["marker"], "ORDERED-EDITOR:")
+            self.assertEqual(call.kwargs["witness"], witness)
+
+    def test_required_windows_entrypoint_keeps_complete_editor_partition(self):
+        with patch.object(G, "run") as run, contextlib.redirect_stdout(io.StringIO()):
+            G.windows("captured-pwsh")
+        editor = [c for c in run.call_args_list if "test-windows-ordered-editor.ps1" in " ".join(c.args[0])]
+        self.assertEqual(len(editor), 1 + len(G.WINDOWS_EDITOR_CONTROLS))
+        self.assertIn("-PositiveOnly", editor[0].args[0])
+        self.assertEqual([c.args[0][-1] for c in editor[1:]], list(G.WINDOWS_EDITOR_CONTROLS))
+        self.assertEqual(len(run.call_args_list) - len(editor), 22)
+
+    def test_ordered_marker_exit_and_intended_cause_are_required(self):
+        witness = next(iter(G.WINDOWS_EDITOR_CONTROLS.values()))
+        for code, output, accepted in ((1, "ORDERED-EDITOR: " + witness, True),
+                (0, "ORDERED-EDITOR: " + witness, False), (1, "PROFILE-CHECK: " + witness, False),
+                (1, "ORDERED-EDITOR: unrelated", False), (1, "fatal error: ORDERED-EDITOR: " + witness, False)):
+            with self.subTest(code=code, output=output):
+                result = subprocess.CompletedProcess(["pwsh"], code, output, "")
+                with patch.object(G.subprocess, "run", return_value=result) as run:
+                    if accepted:
+                        G.run(["pwsh"], negative=True, marker="ORDERED-EDITOR:", witness=witness)
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            G.run(["pwsh"], negative=True, marker="ORDERED-EDITOR:", witness=witness)
+                    self.assertEqual(run.call_args.kwargs["timeout"], 90)
+
 if __name__ == "__main__":
     unittest.main()

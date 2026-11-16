@@ -6,6 +6,26 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 16: complete Windows/Linux imported Shadowsocks execution
+
+The Windows and GTK ordered editors, public controller, complete connection
+profiles and retained execution owner now accept three-to-eight-member
+literal-address imported Shadowsocks Server/Compare routes. Every preceding
+WG/AWG member, the penultimate import and independent paired SS2022 final stay
+captured. Last and temporary restoration retain the proved Local/Server choice
+without reranking. Typed CONNECT keeps its separate exact-trio admission;
+macOS public admission remains a separate continuation unit.
+
+Validation passed 76 compiled Go source/public/persistence/Last/refusal records,
+both admission omission controls, 66 source-audit roots, 5,064 Windows profile
+checks with 21 controls, and 1,907 editor checks with all fourteen controls.
+The required editor runner now executes its baseline and every control in
+separate bounded phases, retaining the original ninety-second per-phase limit.
+GTK source/model checks and fifteen controls passed; its new display callbacks
+compiled but local Xvfb could not open its required listeners. Native process,
+kernel and UI boundaries remain explicit. Hosted rendering, encrypted native
+acceptance, exact-current packages and physical-device acceptance are separate.
+
 ## November 16: Apple typed SOCKS5 execution and selected-path latency
 
 The iPhone/iPad ordered editor, complete saved profiles and existing
@@ -227,9 +247,9 @@ integration does not claim every imported protocol or graph composition.
 ### Windows and Linux imported Shadowsocks Server/Compare
 
 The desktop public connection and complete-profile flows now accept Server
-or Compare for the original three-member schema-2 shape: one paired WG/AWG
-entry, one literal-address imported Shadowsocks 2022 middle, and an independent
-paired Shadowsocks 2022 final. The Windows and GTK editors use the backend's
+or Compare for complete three-to-eight-member schema-two routes: one to six
+paired WG/AWG prefixes, one literal-address imported Shadowsocks 2022 middle,
+and an independent paired Shadowsocks 2022 final. The Windows and GTK editors use the backend's
 specific imported-member capability as well as the current ordered selection.
 The original canonical method/key, private node references, source objects,
 selected DNS and native execution ownership remain mandatory. Saved-profile
@@ -240,10 +260,11 @@ owners. Compare preserves the existing common external endpoint and two-probe
 average, and restoration retains the already-proved Local or Server choice
 with fresh ownership and proof. It does not run a new comparison. Existing
 paired execution remains covered by its original ownership tests. The longer
-Local Shadowsocks composition below remains separate: hostname imports,
-longer imported chains and other imported protocols do not acquire Server or
-Compare from this change. The separate bounded macOS composition is described
-below; it does not widen these graph or source limits.
+Local Shadowsocks composition below remains separate. Hostname imports,
+multiple imports, other positions and broader imported protocol compositions
+remain requirements to implement. The separate bounded macOS composition is
+described below. Existing native acceptance receipts retain their recorded
+graph bounds; they do not prove every newly admitted complete-prefix route.
 
 The required native component gate checks adoption, physical-policy
 construction, restoration and altered-source refusals on supported Windows

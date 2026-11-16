@@ -27,9 +27,9 @@ func desktopNodeChainImportedExecutionMiddle(profile common.RouterProfile) bool 
 }
 
 // Paired execution retains its existing source bounds. Only the original
-// literal schema-two trio or separately typed CONNECT trio can add one imported member.
+// literal schema-two complete prefix or separately typed CONNECT trio can add one imported member.
 func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error {
-	bad := errors.New("ordered imported execution requires its original literal SS2022 or typed CONNECT trio")
+	bad := errors.New("ordered imported execution requires its original complete literal SS2022 prefix or typed CONNECT trio")
 	if !validDesktopOrderedExecution(requested) {
 		return bad
 	}
@@ -45,7 +45,11 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 	if imported == 0 {
 		return nil
 	}
-	if imported != 1 || len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[2].Mode != "shadowsocks" || !(members[1].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(members[1].Profile) || desktopNodeChainCONNECTExecutionShape(members)) {
+	if imported != 1 || len(members) < 3 || len(members) > 8 {
+		return bad
+	}
+	middle := len(members) - 2
+	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || desktopNodeChainCONNECTExecutionShape(members)) {
 		return bad
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
@@ -55,10 +59,10 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 			return bad
 		}
 		ids[p.ID] = true
-		if i == 1 {
+		if i == middle {
 			continue
 		}
-		if p.NodeKind != "" && p.NodeKind != "router-vpn" || p.External != nil || !common.ValidNodeProofID(p.NodeProofID) || proofs[p.NodeProofID] {
+		if i < middle && !mobilemultihop.NodeChainPrefixMode(member.Mode) || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.External != nil || !common.ValidNodeProofID(p.NodeProofID) || proofs[p.NodeProofID] {
 			return bad
 		}
 		proofs[p.NodeProofID] = true

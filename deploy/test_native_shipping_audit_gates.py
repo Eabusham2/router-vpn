@@ -763,7 +763,7 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
                 self.assert_multihop_chain(False)
 
-    def test_execution_imported_members_requires_exact_trio_and_independent_identity(self):
+    def test_execution_imported_members_requires_complete_prefix_and_independent_identity(self):
         path = "cmd/client/desktop_node_chain_imported_execution.go"
         declaration = "func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error"
         for before, after in (
@@ -772,13 +772,15 @@ class NativeShippingAuditTests(unittest.TestCase):
             ('member.Profile.NodeKind == "external" || member.Profile.External != nil', 'false'),
             ("imported == 0", "true"),
             ("imported != 1", "false"),
-            ("len(members) != 3", "false"),
-            ("!mobilemultihop.NodeChainPrefixMode(members[0].Mode)", "false"),
-            ('members[1].Mode == "shadowsocks"', 'true'),
-            ('members[2].Mode != "shadowsocks"', 'false'),
-            ("desktopNodeChainImportedExecutionMiddle(members[1].Profile)", "true"),
+            ("len(members) < 3", "false"),
+            ("len(members) > 8", "false"),
+            ("middle := len(members) - 2", "middle := 1"),
+            ("!mobilemultihop.NodeChainPrefixMode(member.Mode)", "false"),
+            ('members[middle].Mode == "shadowsocks"', 'true'),
+            ('members[len(members)-1].Mode != "shadowsocks"', 'false'),
+            ("desktopNodeChainImportedExecutionMiddle(members[middle].Profile)", "true"),
             ("!validProfileID(p.ID) || ids[p.ID]", "false"),
-            ("if i == 1", "if i >= 0"),
+            ("if i == middle", "if i >= 0"),
             ('p.NodeKind != "" && p.NodeKind != "router-vpn"', 'false'),
             ("p.External != nil", "false"),
             ("!common.ValidNodeProofID(p.NodeProofID) || proofs[p.NodeProofID]", "false"),

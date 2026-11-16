@@ -91,8 +91,9 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		if captured.NodeKind == "external" {
 			if record.Prefs.MultihopExecution != "local" {
 				connect := captured.Mode == "http-connect" || captured.Mode == "https-connect"
-				if len(record.NodeChain) != 3 || i != 1 || (!connect && captured.Mode != "shadowsocks") || !mobilemultihop.NodeChainPrefixMode(record.NodeChain[0].Mode) || record.NodeChain[2].Mode != "shadowsocks" {
-					return errors.New("saved imported execution requires its original literal SS2022 or typed CONNECT trio")
+				count := len(record.NodeChain)
+				if count < 3 || count > 8 || i != count-2 || (connect && count != 3) || (!connect && captured.Mode != "shadowsocks") || !mobilemultihop.NodeChainPrefixMode(record.NodeChain[0].Mode) || record.NodeChain[count-1].Mode != "shadowsocks" {
+					return errors.New("saved imported execution requires its original complete literal SS2022 prefix or typed CONNECT trio")
 				}
 				if connect {
 					final := record.NodeChain[2].Preferences

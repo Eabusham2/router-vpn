@@ -1,6 +1,9 @@
-param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='')
+param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$NegativeControl='',[switch]$PositiveOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
+$controls=@{'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted layered final';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
+if($NegativeControl-and$controls.Keys-cnotcontains$NegativeControl){throw 'Unknown ordered editor causal control.'}
+if($PositiveOnly-and$NegativeControl){throw 'Positive editor phase cannot select a causal control.'}
 $Client=Join-Path $Root 'client'
 Import-Module (Join-Path $Client 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 $Settings=[IO.File]::ReadAllText((Join-Path $Client 'RouterVPN-Windows-ProfileSettings.ps1'),[Text.Encoding]::UTF8)
@@ -10,6 +13,11 @@ if($NegativeControl-ceq'connect-protocol'){
     $before='$node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])'
     if(([regex]::Matches($Settings,[regex]::Escape($before))).Count-ne1){throw 'Shipping CONNECT protocol guard changed.'}
     $Settings=$Settings.Replace($before,'($node.mode-cne(Get-RouterVPNOrderedImportedMode $matchingProfiles[0])-and$node.mode-cnotin@(''http-connect'',''https-connect''))')
+}
+if($NegativeControl-ceq'imported-execution-prefix'){
+    $anchor='$nodes.Count-lt3-or$nodes.Count-gt8-or$position-ne($nodes.Count-2)'
+    if(([regex]::Matches($Settings,[regex]::Escape($anchor))).Count-ne1){throw 'Shipping imported prefix guard changed.'}
+    $Settings=$Settings.Replace($anchor,'$nodes.Count-ne3-or$position-ne1')
 }
 if($NegativeControl-ceq'imported-execution-capability'){
     $anchor='$executionMiddle-isnot[bool]-or-not$executionMiddle'
@@ -294,23 +302,32 @@ try{
     $rejected=$false;try{[void](Copy-RouterVPNOrderedNodes $mixed $id)}catch{$rejected=$true};Check $rejected 'imported schema two acquired Hysteria2 final authority'
     # Actual Connect builder consumes a capability hint and original token set;
     # native source/lease/proof admission remains the controller's authority.
-    foreach($executionChoice in @('server','auto')){
+    foreach($nodeCount in @(3,4,8)){foreach($executionChoice in @('server','auto')){
         $executionNodes=@([pscustomobject]@{id='entry';mode='wg'},[pscustomobject]@{id='middle';mode='shadowsocks'},[pscustomobject]@{id='exit';mode='shadowsocks'})
         $executionProfiles=@([pscustomobject]@{id='entry';node_kind='router-vpn';profile_token=('a'*64)},[pscustomobject]@{id='middle';node_kind='external';profile_token=('b'*64);external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_execution_middle_supported=$true}},[pscustomobject]@{id='exit';node_kind='router-vpn';profile_token=('c'*64)})
+        $extraNodes=@();$extraProfiles=@();$extraTokens=@{}
+        for($i=0;$i-lt$nodeCount-3;$i++){
+            $id='prefix-'+$i;$token=('{0:x64}' -f ($i+16))
+            $extraNodes+=[pscustomobject]@{id=$id;mode=@('wg','awg2-fast','awg2-strong')[$i%3]}
+            $extraProfiles+=[pscustomobject]@{id=$id;node_kind='router-vpn';profile_token=$token};$extraTokens[$id]=$token
+        }
+        $executionNodes=@($executionNodes[0])+$extraNodes+@($executionNodes[1],$executionNodes[2])
+        $executionProfiles=@($executionProfiles[0])+$extraProfiles+@($executionProfiles[1],$executionProfiles[2])
         $executionStore=@{selected_id='exit';profiles=$executionProfiles}
         $executionDraft=@{control_id='exit';nodes=$executionNodes;execution=$executionChoice;profile_tokens=@{entry=('a'*64);middle=('b'*64);exit=('c'*64)}}
-        $request=New-RouterVPNOrderedConnectPayload $executionDraft $executionStore
-        Check ($request.execution-ceq$executionChoice-and$request.nodes.Count-eq3-and$request.nodes[1].id-ceq'middle') 'literal imported execution changed original trio or purpose'
+        foreach($id in $extraTokens.Keys){$executionDraft.profile_tokens[$id]=$extraTokens[$id]}
+        try{$request=New-RouterVPNOrderedConnectPayload $executionDraft $executionStore}catch{Check $false 'complete imported execution prefix refused';throw}
+        Check ($request.execution-ceq$executionChoice-and$request.nodes.Count-eq$nodeCount-and$request.nodes[$nodeCount-2].id-ceq'middle') 'literal imported execution changed original trio or purpose'
         foreach($hint in @($false,$null,1,'true')){
-            $executionProfiles[1].external.ordered_execution_middle_supported=$hint
+            $executionProfiles[$nodeCount-2].external.ordered_execution_middle_supported=$hint
             $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
             Check $refused 'imported execution accepted absent or nonboolean native capability'
         }
-        $executionProfiles[1].external.ordered_execution_middle_supported=$true
-        $executionProfiles[1].profile_token='d'*64
+        $executionProfiles[$nodeCount-2].external.ordered_execution_middle_supported=$true
+        $executionProfiles[$nodeCount-2].profile_token='d'*64
         $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
         Check $refused 'imported execution borrowed changed original source token'
-    }
+    }}
     foreach($protocolName in @('http-connect','https-connect')){foreach($executionChoice in @('server','auto')){
         $executionNodes=@([pscustomobject]@{id='entry';mode='wg'},[pscustomobject]@{id='middle';mode=$protocolName},[pscustomobject]@{id='exit';mode='shadowsocks'})
         $executionProfiles=@([pscustomobject]@{id='entry';node_kind='router-vpn';profile_token=('a'*64)},[pscustomobject]@{id='middle';node_kind='external';profile_token=('b'*64);external=@{protocol=$protocolName;ordered_middle_supported=$true;ordered_connect_execution_middle_supported=$true}},[pscustomobject]@{id='exit';node_kind='router-vpn';profile_token=('c'*64);start_layer='off'})
@@ -330,8 +347,7 @@ try{
         $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $executionDraft $executionStore)}catch{$refused=$true}
         Check $refused 'CONNECT execution admitted layered final'
     }}
-    if(-not$NegativeControl){
-        $controls=@{'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted layered final';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary'}
+    if(-not$NegativeControl-and-not$PositiveOnly){
         foreach($key in $controls.Keys){
             $command="try { & '"+$PSCommandPath.Replace("'","''")+"' -Root '"+$Root.Replace("'","''")+"' -NegativeControl '"+$key+"' } catch { [Console]::Error.WriteLine(`$_.Exception.Message); exit 1 }"
             $child=New-Object Diagnostics.Process

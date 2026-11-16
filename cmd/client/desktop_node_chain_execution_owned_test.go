@@ -76,8 +76,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	}
 	serverInput := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode}
 	if local.Schema == 2 {
-		if len(local.Nodes) != 3 || local.IdentitySources[1] != "" || proofs[1].NodeKind != "external" || proofs[1].Mode != "shadowsocks" {
-			return nil, errors.New("modeled imported execution lost original trio")
+		middle := len(local.Nodes) - 2
+		if len(local.Nodes) < 3 || local.IdentitySources[middle] != "" || proofs[middle].NodeKind != "external" || proofs[middle].Mode != "shadowsocks" {
+			return nil, errors.New("modeled imported execution lost original complete prefix")
 		}
 		serverInput.Schema = 2
 	}
@@ -96,10 +97,10 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		serverInput.IdentitySources = append(serverInput.IdentitySources, identity)
 	}
 	if m.importedSourceOverride != nil {
-		if serverInput.Schema != 2 || len(serverInput.Nodes) != 2 {
+		if serverInput.Schema != 2 || len(serverInput.Nodes) < 2 {
 			return nil, errors.New("imported source control requires original schema two")
 		}
-		serverInput.Nodes[0] = *m.importedSourceOverride
+		serverInput.Nodes[len(serverInput.Nodes)-2] = *m.importedSourceOverride
 	}
 	encoded, _ := json.Marshal(serverInput)
 	var server *mobilemultihop.NodeChainServerPolicy
@@ -137,7 +138,7 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		request.LocalPacketPositions = []int{0}
 	}
 	for position := 1; position+1 < len(local.Nodes); position++ {
-		if descriptor.Schema == 2 || descriptor.Schema == 4 {
+		if (descriptor.Schema == 2 || descriptor.Schema == 4) && position == len(local.Nodes)-2 {
 			// Imported SS has no packet client; retain its original source and
 			// separate relay user without fabricating paired credentials.
 			request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,
@@ -153,6 +154,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 			return nil, err
 		}
 		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, public)
+		if descriptor.Schema == 2 {
+			request.LocalPacketPositions = append(request.LocalPacketPositions, position)
+		}
 		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,
 			Username: fmt.Sprintf("%048x", 256+position*2), Password: fmt.Sprintf("%048x", 257+position*2)})
 	}
