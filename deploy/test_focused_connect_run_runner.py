@@ -532,6 +532,20 @@ class EncryptedCONNECTRunValidator(unittest.TestCase):
                 original=(ROOT/sources[control["path"]]).read_text()
                 self.assertEqual(original.count(control["before"]),1)
                 self.assertNotEqual(V.BASE.mutate(control,original),original)
+    def test_cancel_join_control_preserves_current_owner_and_candidate_guards(self):
+        control=next(c for c in V.CONTROLS if c["name"]=="original-cancel-join")
+        original=(ROOT/"mobile/chain/connect_lifecycle.go.tmpl").read_text()
+        mutated=V.BASE.mutate(control,original)
+        self.assertEqual(control["before"].count("\tm.retireProof()\n"),1)
+        self.assertEqual(control["after"],control["before"].replace("\tm.retireProof()\n","\t// causal omission of immediate original proof cancellation\n",1))
+        for guard in ("if m.self != nil && m.self != m {", "(m.self != m || candidate.self != candidate || candidate.owner != m)"):
+            self.assertIn(guard,control["before"])
+            self.assertIn(guard,control["after"])
+            self.assertEqual(mutated.count(guard),original.count(guard))
+        self.assertEqual(mutated.count("\tm.retireProof()\n"),original.count("\tm.retireProof()\n")-1)
+        self.assertEqual(control["case"],"hold-prefix")
+        self.assertEqual(control["witness"],"cancelled original proof did not join before observation deadline")
+
     def test_reference_tcp_close_requires_original_half_close_and_failure_inventory(self):
         self.assertEqual(len(V.REFERENCE_TCP_CASES),9)
         self.assertTrue(V.reference_tcp_events(encoded(reference_rows(tcp=True)),0)["accepted"])

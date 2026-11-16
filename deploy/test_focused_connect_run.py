@@ -95,8 +95,8 @@ CONTROLS=(
       after="if err := ctx.Err(); err != nil {",
       witness="shared join fabricated native DOWN"),
  dict(name="original-cancel-join",case="hold-prefix",path="experimental/libbox/routervpn_node_chain_connect_lifecycle.go",
-      before="func (m *RouterNodeChainCONNECT) networkChangedContext(ctx context.Context) error {\n\tif m == nil || ctx == nil {\n\t\treturn errRouterNodeChainCONNECT()\n\t}\n\tm.retireProof()\n",
-      after="func (m *RouterNodeChainCONNECT) networkChangedContext(ctx context.Context) error {\n\tif m == nil || ctx == nil {\n\t\treturn errRouterNodeChainCONNECT()\n\t}\n\t// causal omission of immediate original proof cancellation\n",
+      before="func (m *RouterNodeChainCONNECT) networkChangedContext(ctx context.Context) error {\n\tif m == nil || ctx == nil {\n\t\treturn errRouterNodeChainCONNECT()\n\t}\n\tif m.self != nil && m.self != m {\n\t\treturn errRouterNodeChainCONNECT()\n\t}\n\tif candidate := m.candidate.Load(); candidate != nil &&\n\t\t(m.self != m || candidate.self != candidate || candidate.owner != m) {\n\t\treturn errRouterNodeChainCONNECT()\n\t}\n\tm.retireProof()\n",
+      after="func (m *RouterNodeChainCONNECT) networkChangedContext(ctx context.Context) error {\n\tif m == nil || ctx == nil {\n\t\treturn errRouterNodeChainCONNECT()\n\t}\n\tif m.self != nil && m.self != m {\n\t\treturn errRouterNodeChainCONNECT()\n\t}\n\tif candidate := m.candidate.Load(); candidate != nil &&\n\t\t(m.self != m || candidate.self != candidate || candidate.owner != m) {\n\t\treturn errRouterNodeChainCONNECT()\n\t}\n\t// causal omission of immediate original proof cancellation\n",
       witness="cancelled original proof did not join before observation deadline"),
 )
 def case_names(case):
