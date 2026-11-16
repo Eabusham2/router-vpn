@@ -1,15 +1,46 @@
 #!/usr/bin/env python3
-"""Run every shared multihop test once in bounded, disjoint CI phases."""
+"""Run every shared multihop root and prefix leaf in bounded, disjoint CI phases."""
 from pathlib import Path
 import argparse
+import importlib.util
+import json
 import re
 import subprocess
 import sys
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = './internal/mobilemultihop'
 NAME = re.compile(r'(?:Test|Example|Fuzz)\w*')
+PREFIX_ROOT = 'TestNodeChainImportedSSCompletePacketPrefixes'
+PREFIX_PHASE = 'ordered imported SS complete prefixes'
+PREFIX_MODES = ('wg', 'awg2-fast', 'awg2-strong')
+PREFIX_FORMS = ('literal', 'hostname')
+PREFIX_METHODS = ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm',
+                  '2022-blake3-chacha20-poly1305')
+
+
+def prefix_inventory():
+    return tuple((mode, form, '^' + PREFIX_ROOT + '$/^' + mode + '$/^' + form + '$',
+                  frozenset((PREFIX_ROOT, *(PREFIX_ROOT + '/' + mode + '/' + form + '/' + method + '/' + str(count)
+                            for method in PREFIX_METHODS for count in range(1, 7)))))
+                 for mode in PREFIX_MODES for form in PREFIX_FORMS)
+
+
+def load_clock_verdict():
+    # Reuse the same exact run/pass/order/negative parser as the required
+    # SS prefix source contract; only this group's original clocks differ.
+    spec = importlib.util.spec_from_file_location('shared_prefix_clock_verdict',
+        ROOT / 'deploy/test_focused_multihop_clocks.py')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 EXECUTION_FIFTY_REQUIRED = frozenset((
     'TestNodeChainExecutionLatencyClosedCaptureRequiresFreshServerProof',
     'TestNodeChainExecutionLatencyClosedCaptureRejectsRetiredMeasurement',
@@ -41,7 +72,7 @@ PHASES = (
     ('ordered execution measurements', r'^TestNodeChainExecutionMeasurement'),
     ('ordered execution capture and projection', r'^TestNodeChainExecution(?!(?:Discovery|Last|Runtime|Healthy|Stop|MTU|Measurement|Latency))'),
     ('ordered Server carrier and proof', r'^TestNodeChainServer'),
-    ('ordered imported middle', r'^TestNodeChainImported'),
+    ('ordered imported middle', r'^TestNodeChainImported(?!SSCompletePacketPrefixes$)'),
     ('ordered candidates and prefix measurements', r'^TestNodeChain(?:Candidate|Measurement)'),
     ('ordered original graphs and ownership', r'^TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement))'),
     ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
@@ -66,6 +97,7 @@ PHASES = (
     # The typed mobile restore owns a fresh native/MTU join; keep its complete
     # matrix separate from the existing generic fallback at the same budget.
     ('mobile CONNECT execution restore', r'^TestMobileNodeChainCONNECTExecutionRestore'),
+    (PREFIX_PHASE, '^' + PREFIX_ROOT + '$'),
 )
 # Explicit complete ownership keeps CI groups bounded without silently losing a
 # newly introduced phase. The default invocation still runs every group.
@@ -93,6 +125,7 @@ CI_GROUPS = {
         'Start Layers and composites', 'complete MAX chains',
         'external paths and OpenVPN',
     ),
+    'imported_prefix': (PREFIX_PHASE,),
     'runtime': (
         'desktop ordered physical graph matrix', 'desktop ordered execution authority',
         'desktop ordered policies', 'desktop ordered readiness', 'desktop node policies and ownership',
@@ -137,7 +170,7 @@ REQUIRED = frozenset((
     'TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor',
     'TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity',
     'TestMobileNodeChainCONNECTExecutionRestoreKeepsOriginalOwnerMTUAndChoice',
-)) | EXECUTION_FIFTY_REQUIRED
+)) | EXECUTION_FIFTY_REQUIRED | {PREFIX_ROOT}
 
 
 def inventory(output):
@@ -201,6 +234,31 @@ def command(names):
             PACKAGE, '-run', exact_selector(names)]
 
 
+def prefix_command(selection):
+    return ['go', 'test', '-json', '-race', '-count=1', '-timeout=180s',
+            PACKAGE, '-run', selection]
+
+
+def run_phase(label, selected, run=None):
+    if run is None:
+        run = subprocess.run
+    if label != PREFIX_PHASE:
+        run(command(selected), cwd=ROOT, check=True, timeout=240)
+        return
+    if selected != [PREFIX_ROOT]:
+        raise ValueError('Complete prefix phase must own exactly its discovered root')
+    clock = load_clock_verdict()
+    for mode, form, selection, expected in prefix_inventory():
+        print(f'Shared multihop: imported SS {mode}/{form}; 18 required leaves', flush=True)
+        result = run(prefix_command(selection), cwd=ROOT, capture_output=True, timeout=240)
+        raw = result.stdout + result.stderr
+        print(raw.decode(errors='replace'), end='', flush=True)
+        case = clock.Case(mode + '/' + form, selection, expected, 180, 240)
+        receipt = clock.verdict(raw, case, result.returncode)
+        if not receipt['accepted']:
+            raise ValueError('Complete prefix phase refused: ' + json.dumps(receipt, sort_keys=True))
+
+
 class PartitionTests(unittest.TestCase):
     def setUp(self):
         self.names = sorted(REQUIRED | {
@@ -220,6 +278,88 @@ class PartitionTests(unittest.TestCase):
             'TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode',
         })
 
+    def test_complete_prefix_matrix_is_disjoint_exhaustive_and_separate(self):
+        phases = prefix_inventory()
+        self.assertEqual(len(phases), 6)
+        self.assertEqual(len({row[2] for row in phases}), 6)
+        leaves = [name for _, _, _, expected in phases for name in expected if name != PREFIX_ROOT]
+        self.assertEqual(len(leaves), 108)
+        self.assertEqual(len(set(leaves)), 108)
+        for mode, form, selector, expected in phases:
+            self.assertEqual(len(expected), 19)
+            self.assertEqual(selector, '^' + PREFIX_ROOT + '$/^' + mode + '$/^' + form + '$')
+            self.assertEqual(prefix_command(selector), ['go', 'test', '-json', '-race', '-count=1',
+                '-timeout=180s', PACKAGE, '-run', selector])
+        groups = partition(self.names)
+        self.assertEqual(select_ci_group(groups, 'imported_prefix'), [(PREFIX_PHASE, [PREFIX_ROOT])])
+        self.assertNotIn(PREFIX_ROOT, dict(groups)['ordered imported middle'])
+        self.assertIn('TestNodeChainImportedFuture', dict(groups)['ordered imported middle'])
+        with self.assertRaises(ValueError):
+            inventory('\n'.join(name for name in self.names if name != PREFIX_ROOT))
+        for fault in ('missing-job', 'duplicate', 'omitted'):
+            assignment = {name: list(labels) for name, labels in CI_GROUPS.items()}
+            if fault == 'missing-job':
+                del assignment['imported_prefix']
+            elif fault == 'duplicate':
+                assignment['core'].append(PREFIX_PHASE)
+            else:
+                assignment['imported_prefix'].clear()
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                select_ci_group(groups, None, assignment)
+
+    def test_prefix_dispatch_requires_every_original_verdict_and_stops_on_failure(self):
+        phases = prefix_inventory()
+        def output(expected):
+            rows = [{'Action': 'start', 'Package': 'router-vpn/internal/mobilemultihop'}]
+            for name in sorted(expected):
+                rows.extend({'Action': action, 'Package': 'router-vpn/internal/mobilemultihop', 'Test': name}
+                            for action in ('run', 'pass'))
+            rows.append({'Action': 'pass', 'Package': 'router-vpn/internal/mobilemultihop'})
+            return rows
+        def encode(rows):
+            return ('\n'.join(json.dumps(row) for row in rows) + '\n').encode()
+        calls = []
+        def execute(args, **kwargs):
+            index = len(calls)
+            calls.append(args)
+            self.assertEqual(args, prefix_command(phases[index][2]))
+            self.assertEqual(kwargs, dict(cwd=ROOT, capture_output=True, timeout=240))
+            return SimpleNamespace(returncode=0, stdout=encode(output(phases[index][3])), stderr=b'')
+        with redirect_stdout(StringIO()):
+            run_phase(PREFIX_PHASE, [PREFIX_ROOT], execute)
+        self.assertEqual(len(calls), 6)
+        clock = load_clock_verdict()
+        for mode, form, selection, expected in phases:
+            case = clock.Case(mode + '/' + form, selection, expected, 180, 240)
+            rows = output(expected)
+            for name in expected:
+                for action in ('run', 'pass'):
+                    omitted = [row for row in rows if not (row.get('Test') == name and row['Action'] == action)]
+                    duplicated = rows[:-1] + [next(row for row in rows if row.get('Test') == name and row['Action'] == action)] + rows[-1:]
+                    for altered in (omitted, duplicated):
+                        self.assertFalse(clock.verdict(encode(altered), case, 0)['accepted'])
+        for fault in ('failed', 'skipped', 'foreign', 'race', 'build-fail', 'exit', 'missing-terminal', 'late-run'):
+            rows = output(phases[0][3]); code = 0
+            if fault in ('failed', 'skipped'):
+                rows[2]['Action'] = 'fail' if fault == 'failed' else 'skip'
+            elif fault == 'foreign': rows[1]['Package'] = 'foreign/package'
+            elif fault == 'race': rows.insert(1, {'Action': 'output', 'Output': 'WARNING: DATA RACE'})
+            elif fault == 'build-fail': rows.insert(1, {'Action': 'build-fail'})
+            elif fault == 'exit': code = 1
+            elif fault == 'missing-terminal': rows.pop()
+            else: rows.append(rows[1])
+            calls = []
+            def failed(args, **kwargs):
+                calls.append(args)
+                return SimpleNamespace(returncode=code, stdout=encode(rows), stderr=b'')
+            with self.subTest(fault=fault), redirect_stdout(StringIO()), self.assertRaises(ValueError):
+                run_phase(PREFIX_PHASE, [PREFIX_ROOT], failed)
+            self.assertEqual(len(calls), 1)
+        calls = []
+        run_phase('ordered imported middle', ['TestNodeChainImportedFuture'],
+                  lambda args, **kwargs: calls.append((args, kwargs)))
+        self.assertEqual(calls, [(command(['TestNodeChainImportedFuture']), dict(cwd=ROOT, check=True, timeout=240))])
+
     def test_complete_future_coverage_and_exact_commands(self):
         actual = inventory('\n'.join(self.names) + '\nok\trouter-vpn/internal/mobilemultihop\t0.1s\n')
         groups = partition(actual)
@@ -233,7 +373,7 @@ class PartitionTests(unittest.TestCase):
         groups = partition(self.names)
         self.assertEqual(select_ci_group(groups), groups)
         selected = [entry for group in CI_GROUPS for entry in select_ci_group(groups, group)]
-        self.assertEqual(selected, groups)
+        self.assertEqual(sorted(selected), sorted(groups))
         validate_partition(self.names, selected)
         for mutation in ('omitted', 'overlap', 'unknown', 'empty'):
             assignment = {key: list(value) for key, value in CI_GROUPS.items()}
@@ -280,7 +420,7 @@ class PartitionTests(unittest.TestCase):
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]
@@ -435,9 +575,9 @@ def main():
     selected_groups = select_ci_group(groups, args.group)
     for label, selected in selected_groups:
         print(f'Shared multihop: {label}; {len(selected)} discovered tests', flush=True)
-        subprocess.run(command(selected), cwd=ROOT, check=True, timeout=240)
+        run_phase(label, selected)
     count = sum(len(selected) for _, selected in selected_groups)
-    print(f'All {count} selected shared multihop tests passed exactly once in {len(selected_groups)} phases '
+    print(f'All {count} selected shared multihop roots passed with disjoint leaf coverage in {len(selected_groups)} logical phases '
           f'(complete inventory: {len(names)} tests in {len(groups)} phases)', flush=True)
     return 0
 

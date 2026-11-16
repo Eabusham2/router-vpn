@@ -81,6 +81,7 @@ on:
       - 'android/test_android_max_selection.py'
       - 'android/test_android_naive_multihop.py'
       - 'deploy/test_mobile_multihop_groups.py'
+      - 'deploy/test_focused_multihop_clocks.py'
       - 'deploy/test_android_multihop_workflow.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java'
       - 'internal/mobilepq/**'
@@ -175,6 +176,7 @@ on:
       - 'android/test_android_max_selection.py'
       - 'android/test_android_naive_multihop.py'
       - 'deploy/test_mobile_multihop_groups.py'
+      - 'deploy/test_focused_multihop_clocks.py'
       - 'deploy/test_android_multihop_workflow.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java'
       - 'internal/mobilepq/**'
@@ -270,6 +272,21 @@ jobs:
         # Complete disjoint phases retain their 180-second race deadlines.
         run: python3 deploy/test_mobile_multihop_groups.py --group core
 
+  shared_imported_prefix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Verify all 108 imported SS prefix cases
+        # 300s discovery + six 240s outer bounds + 360s setup margin = 35m.
+        # Each actual Go phase retains the original 180-second race deadline.
+        run: python3 deploy/test_mobile_multihop_groups.py --group imported_prefix
+
   shared_runtime:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -324,7 +341,7 @@ jobs:
 
   contract:
     if: ${{ always() }}
-    needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, relay]
+    needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -335,6 +352,7 @@ jobs:
           SHARED_RUNTIME_RESULT: ${{ needs.shared_runtime.result }}
           SHARED_FIFTY_RESULT: ${{ needs.shared_fifty.result }}
           SHARED_FIFTY_CLOSED_RESULT: ${{ needs.shared_fifty_closed.result }}
+          SHARED_IMPORTED_PREFIX_RESULT: ${{ needs.shared_imported_prefix.result }}
           RELAY_RESULT: ${{ needs.relay.result }}
         run: |
           test "$ANDROID_RESULT" = success
@@ -342,4 +360,5 @@ jobs:
           test "$SHARED_RUNTIME_RESULT" = success
           test "$SHARED_FIFTY_RESULT" = success
           test "$SHARED_FIFTY_CLOSED_RESULT" = success
+          test "$SHARED_IMPORTED_PREFIX_RESULT" = success
           test "$RELAY_RESULT" = success

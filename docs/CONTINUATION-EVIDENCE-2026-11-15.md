@@ -3974,3 +3974,46 @@ stores, consumers and lifecycle. Native engines, Android OS handles, widgets
 and remote exchanges retain their explicit fixture boundaries. This is not
 evidence of fifty real network probes, an APK/SDK build, encrypted physical
 networking, signing, private deployment or completion of the full requirements.
+
+
+## November 16: complete imported-prefix source phases keep their bounds
+
+Native Xray run 43769766070 at 74f6f3db, job 133000919975, timed out after
+180 seconds while the imported-Shadowsocks matrix was still progressing. Its
+108-leaf function and the relevant grouping remained unchanged at 369520a3.
+The imported aggregate had grown from 25 discovered historical roots to 33
+source-declared roots; that older failure is evidence of the unchanged grouping
+problem, not a current-SHA native failure or a proved deadlock.
+
+The complete-prefix matrix now runs in six exact mode/form phases, preserving
+all 108 distinct leaves: three WG/AWG modes, literal and hostname forms, three
+SS2022 ciphers, and one through six paired prefixes. Every phase retains the
+180-second Go race deadline and 240-second outer bound. Other imported roots
+stay together in the original 180/240-second phase. The existing strict
+source-contract parser requires every original run/pass record, complete
+package termination and no failure, skip, duplicate, foreign or racing result.
+A failed phase stops the gate before later phases.
+
+Android now has a mandatory shared_imported_prefix job with a finite 35-minute
+budget: 300 seconds for discovery, six 240-second process bounds, and 360
+seconds for setup. The old core job remains at 15 minutes. The aggregate
+requires the new job's actual success and rejects failed, canceled, skipped
+or absent results. Xray still invokes all groups. The existing authoritative
+ss-prefix-native dependency already runs these same six source selections;
+required contract tests pin selector/108-leaf equality and that dependency.
+This does not claim that every existing Xray phase can simultaneously reach
+its maximum inside the unchanged total job limit.
+
+Grouping/dispatch passed thirteen test roots, the required SS source-contract
+runner passed seven, and Android workflow validation passed all 28 roots,
+including 16,384 actual shell outcome combinations. Six retained successful
+Go JSON streams were replayed through the new dispatcher with original log
+hashes, exit/join receipts and identical source-function checks: all 108
+unique leaves were preserved. This is historical replay, not a new Go run or
+current native acceptance. No production code or actual Go test body changed.
+
+Frozen four-file manifest SHA256:
+`634611e3f78533cebcf67692e042044e18116efc366edae60bff8ba34b459c9a`.
+Final validation receipt SHA256:
+`9d5d4ce1006aaa682442acbb4c4279716e7143f9f16b1f99a473aad4e0e0daaf`.
+All four preimages matched 369520a3 immediately before integration.

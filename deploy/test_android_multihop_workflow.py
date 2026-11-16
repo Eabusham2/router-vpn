@@ -23,6 +23,7 @@ EXPECTED = {
     'shared_runtime': ('python3 deploy/test_mobile_multihop_groups.py --group runtime',),
     'shared_fifty': ('python3 deploy/test_mobile_multihop_groups.py --group fifty',),
     'shared_fifty_closed': ('python3 deploy/test_mobile_multihop_groups.py --group fifty_closed',),
+    'shared_imported_prefix': ('python3 deploy/test_mobile_multihop_groups.py --group imported_prefix',),
     'relay': ('go test -race -count=1 -timeout=5m ./internal/multihoprelay ./internal/awgpolicy',),
 }
 
@@ -72,11 +73,12 @@ def validate(source):
             for i, m in enumerate(matches)}
     assert len(matches) == len(EXPECTED) + 1 and set(jobs) == {*EXPECTED, 'contract'}, 'Missing/duplicate job'
     assert source.count("- 'deploy/test_android_multihop_workflow.py'") == 2, 'Audit trigger missing'
+    assert source.count("- 'deploy/test_focused_multihop_clocks.py'") == 2, 'Prefix verdict parser trigger missing'
     for path in ('android/test_android_socks_execution_capture.py', 'android/test_android_socks_execution_runtime.py', 'android/test_android_connect_execution_capture.py', 'android/test_android_connect_execution_runtime.py', 'android/test_android_node_chain_openvpn_runtime.py', 'android/test_android_node_chain_imported_runtime.py', 'android/test_android_ordered_history_source_transaction.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencySourceTransaction.java', 'android/test_android_execution_ordered_latency.py', 'android/test_android_execution_ordered_latency_data.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyCapture.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedExecutionLatencyStore.java', 'android/test_android_connect_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCONNECTCapture.java', 'android/test_android_node_chain_connect_runtime.py', 'android/test_android_ordered_latency.py', 'android/test_android_ordinary_ordered_latency.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyBenchmark.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyStore.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidOrderedLatencyDialog.java', 'android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java', 'android/test_android_node_chain_socks_runtime.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainExecutionCapture.java', 'android/test_android_node_chain_execution_capture.py', 'android/test_android_node_candidate_preparation.py', 'android/test_android_node_candidate_preparation_owner.py', 'android/test_android_node_candidate_preparation_ui.py', 'android/test_android_node_candidate_profile.py', 'android/test_android_node_connect_candidates.py', 'android/test_android_node_socks_candidates.py', 'android/test_android_node_candidate_prefix_capture.py', 'android/test_android_node_candidate_prefix_host.py', 'android/test_android_node_candidate_prefix_owner.py', 'android/app/src/main/java/com/eabusham/routervpn/AndroidNodeCandidatePrefixCapture.java', 'android/test_android_runtime_contract.py'):
         assert source.count("- '" + path + "'") == 2, 'Execution capture source/test trigger missing'
     for name, expected in EXPECTED.items():
         body = jobs[name]
-        assert '    timeout-minutes: 15\n' in body, 'Job deadline changed'
+        assert '    timeout-minutes: ' + ('35' if name == 'shared_imported_prefix' else '15') + '\n' in body, 'Job deadline changed'
         assert 'if:' not in body and 'continue-on-error:' not in body and 'strategy:' not in body, 'Gate can be skipped'
         assert "with: {go-version: '1.26.3', cache: false}" in body, 'Actual pinned Go toolchain missing'
         commands = []
@@ -87,7 +89,7 @@ def validate(source):
         assert Counter(commands) == Counter(expected), 'Missing/duplicate/changed command in ' + name
     contract = jobs['contract']
     assert '    if: ${{ always() }}\n' in contract, 'Aggregate skips failed dependencies'
-    assert '    needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, relay]\n' in contract, 'Aggregate dependency missing'
+    assert '    needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]\n' in contract, 'Aggregate dependency missing'
     assert 'continue-on-error:' not in contract, 'Aggregate failure ignored'
     for name in EXPECTED:
         assert f'          {name.upper()}_RESULT: ${{{{ needs.{name}.result }}}}\n' in contract, 'Result binding changed'
@@ -118,6 +120,32 @@ class WorkflowContract(unittest.TestCase):
 
     def setUp(self):
         self.source = WORKFLOW.read_text()
+
+    def test_imported_prefix_job_and_failure_propagation_are_mandatory(self):
+        begin = self.source.index('  shared_imported_prefix:\n')
+        end = self.source.index('  shared_runtime:\n', begin)
+        block = self.source[begin:end]
+        self.assertEqual(300 + 6 * 240 + 360, 35 * 60)
+        for replacement in ('', block + block,
+                block.replace('timeout-minutes: 35', 'timeout-minutes: 15'),
+                block.replace('--group imported_prefix', '--group core'),
+                block.replace('  shared_imported_prefix:\n', '  shared_imported_prefix:\n    if: false\n'),
+                block.replace('  shared_imported_prefix:\n', '  shared_imported_prefix:\n    continue-on-error: true\n')):
+            with self.subTest(replacement=replacement), self.assertRaises(AssertionError):
+                validate(self.source[:begin] + replacement + self.source[end:])
+        for before, after in (
+                (', shared_imported_prefix, relay]', ', relay]'),
+                ('SHARED_IMPORTED_PREFIX_RESULT: ${{ needs.shared_imported_prefix.result }}', 'SHARED_IMPORTED_PREFIX_RESULT: success'),
+                ("- 'deploy/test_focused_multihop_clocks.py'", "- 'deploy/omitted-parser.py'")):
+            with self.assertRaises(AssertionError): validate(self.source.replace(before, after, 1))
+        script = validate(self.source)
+        for result in ('failure', 'cancelled', 'skipped', ''):
+            env = dict(os.environ, **{name.upper() + '_RESULT': 'success' for name in EXPECTED})
+            env['SHARED_IMPORTED_PREFIX_RESULT'] = result
+            self.assertNotEqual(subprocess.run(['bash', '-e', '-c', script], env=env, timeout=5).returncode, 0)
+        bypass = script.replace('test "$SHARED_IMPORTED_PREFIX_RESULT" = success', 'true')
+        self.assertNotEqual(script, bypass)
+        self.assertEqual(subprocess.run(['bash', '-e', '-c', bypass], env=env, timeout=5).returncode, 0)
 
     def test_complete_inventory(self):
         validate(self.source)
@@ -374,7 +402,7 @@ class WorkflowContract(unittest.TestCase):
             ('--group fifty', '--group core'),
             ('  shared_fifty:\n', '  shared_fifty:\n    if: ${{ false }}\n'),
             ('SHARED_FIFTY_RESULT: ${{ needs.shared_fifty.result }}', 'SHARED_FIFTY_RESULT: success'),
-            ('needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, relay]', 'needs: [android, shared_core, relay]'),
+            ('needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]', 'needs: [android, shared_core, relay]'),
             ('if: ${{ always() }}', 'if: ${{ success() }}'),
             ('  shared_core:\n', '  shared_core:\n    if: ${{ false }}\n'),
             ('SHARED_RUNTIME_RESULT: ${{ needs.shared_runtime.result }}', 'SHARED_RUNTIME_RESULT: success'),
@@ -386,7 +414,7 @@ class WorkflowContract(unittest.TestCase):
                     validate(self.source.replace(old, new, 1))
 
     def test_execution_fifty_dependency_and_result_cannot_be_omitted(self):
-        original = 'needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, relay]'
+        original = 'needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]'
         with self.assertRaises(AssertionError):
             validate(self.source.replace(original, 'needs: [android, shared_core, shared_runtime, relay]'))
         script = validate(self.source)
@@ -409,7 +437,7 @@ class WorkflowContract(unittest.TestCase):
                 validate(self.source[:begin] + replacement + self.source[end:])
 
     def test_closed_fifty_dependency_and_terminal_result_are_mandatory(self):
-        original = 'needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, relay]'
+        original = 'needs: [android, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]'
         with self.assertRaises(AssertionError):
             validate(self.source.replace(original, original.replace(', shared_fifty_closed', '')))
         binding = 'SHARED_FIFTY_CLOSED_RESULT: ${{ needs.shared_fifty_closed.result }}'
@@ -428,7 +456,7 @@ class WorkflowContract(unittest.TestCase):
 
     def test_aggregate_bypass_control(self):
         script = validate(self.source).replace('test "$SHARED_RUNTIME_RESULT" = success', 'true')
-        env = dict(os.environ, ANDROID_RESULT='success', SHARED_CORE_RESULT='success', SHARED_RUNTIME_RESULT='failure', SHARED_FIFTY_RESULT='success', SHARED_FIFTY_CLOSED_RESULT='success', RELAY_RESULT='success')
+        env = dict(os.environ, ANDROID_RESULT='success', SHARED_CORE_RESULT='success', SHARED_RUNTIME_RESULT='failure', SHARED_FIFTY_RESULT='success', SHARED_FIFTY_CLOSED_RESULT='success', SHARED_IMPORTED_PREFIX_RESULT='success', RELAY_RESULT='success')
         # Proves the negative result matrix above would detect a silently omitted check.
         self.assertEqual(subprocess.run(['bash', '-e', '-c', script], env=env, timeout=5).returncode, 0)
 
