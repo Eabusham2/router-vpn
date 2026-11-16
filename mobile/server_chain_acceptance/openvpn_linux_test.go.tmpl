@@ -147,14 +147,11 @@ func serverChainOpenVPNDirectSource(t *testing.T, p *serverChainOpenVPNDirectPee
 	if fault == "wrong-final-key" {
 		ordinaryFault = "wrong-ss-key"
 	}
-	original, _ := serverChainEncryptedSource(t, p.original, ordinaryFault, serverChainEncryptedCarrierCapacity(t))
-	var source mobilemultihop.NodeChainServerSource
-	if json.Unmarshal([]byte(original.Source()), &source) != nil {
-		t.Fatal("original paired final source missing")
-	}
-	last := len(source.Nodes) - 1
-	final := serverChainOpenVPNFinal(t, source.Nodes[last], layer)
-	identity := source.IdentitySources[last]
+	// The provider retains a loopback-only unused WG reference. Compile only
+	// its actual paired final capture; no synthetic public WG socket is needed.
+	input, identity := serverChainEncryptedMemberSource(t, p.original, len(p.original.prefixes), ordinaryFault)
+	final := serverChainOpenVPNFinal(t, input, layer)
+	source := mobilemultihop.NodeChainServerSource{EntryID: "encrypted-server-entry", EntryNodeID: serverChainEncryptedProof(serverChainEncryptedKey(t)), EntryMode: "wg"}
 	private := p.reply.Server
 	if fault == "wrong-server-password" {
 		private.Password += "-wrong"
@@ -354,9 +351,19 @@ func TestServerChainOpenVPNDirectEncryptedSource(t *testing.T) {
 			if d.Decode(&p.reply) != nil || d.Decode(new(any)) != io.EOF {
 				t.Fatal("original provider pair source changed")
 			}
-			p.original.stats.Address = "192.168.210.2:51820"
+			p.original.stats = p.reply.Peer.serverChainEncryptedStats
 			policy, capture := serverChainOpenVPNDirectSource(t, p, parts[1], parts[2])
 			proofs := policy.ProofInventory()
+			// Neither a loopback-only nor an absent unused reference socket can
+			// become a remote prefix. Both retain the same actual final identity.
+			if parts[0] == "tcp" && parts[1] == "off" && parts[2] == "original" {
+				p.original.stats.Address = ""
+				withoutReference, _ := serverChainOpenVPNDirectSource(t, p, parts[1], parts[2])
+				other := withoutReference.ProofInventory()
+				if withoutReference.NativeCarrierRequired() || len(other) != 2 || other[1] != proofs[1] {
+					t.Fatal("unused WG reference changed paired final authority")
+				}
+			}
 			_, original, err := policy.ReadOpenVPNServerCapture(capture)
 			if err != nil || policy.NativeCarrierRequired() || len(proofs) != 2 || proofs[0].Mode != "openvpn" || proofs[0].NodeID != "" || proofs[1].NodeID != serverChainEncryptedProof(p.original.finalServer) || original.Middle.Remote.Host != "203.0.113.24" || original.Middle.Remote.Port != 1194 || original.Middle.Remote.Network != parts[0] {
 				t.Fatal("direct Server acquired unrelated carrier or identity", err)

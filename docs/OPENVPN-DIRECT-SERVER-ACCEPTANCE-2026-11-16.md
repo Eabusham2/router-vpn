@@ -94,6 +94,33 @@ Neither attempt counts as a passing build; the successful attempt followed
 removal of reproducible compiler-cache archives, without changing source or
 test bounds.
 
+## First hosted run and captured-final fixture repair
+
+The first hosted run at `c7f9de2d5a44b1c4ab2012aeaa01a535cb9b49f0`
+failed on both architectures before encrypted traffic. Jobs `133174688237`
+and `133174688794` rejected the first `tcp/off/original` source because the
+fixture compiled an unused loopback WireGuard reference while extracting the
+independent final member. The real literal-unicast validation correctly
+rejected that reference. The earlier source-only fixture had concealed this
+with a substituted WireGuard address; that substitution is removed.
+
+The original final-member builder is now shared with the ordinary fixture,
+and the direct fixture calls only that final member. It preserves the actual
+provider's credentials, source and final identity without introducing a remote
+packet prefix. Source checks also prove that an absent unused reference socket
+does not change the final authority. Production validation and encrypted
+acceptance requirements are unchanged.
+
+The repaired source passed all fourteen direct cases using the actual TCP and
+UDP provider exports, all fourteen ordinary encrypted-source cases, and
+sixteen runner tests. Both provider and complete acceptance-driver binaries
+were compiled with race instrumentation. A separately compiled causal control
+restoring the old full-WireGuard extraction failed the original first case
+with the same literal-unicast rejection observed in CI. Source bytes remained
+unchanged throughout validation. The retained validation receipt has SHA-256
+`9a5ad80c2640fa04dff9ac2c7dde528651ad91db32588c7311dc657c1d4218e1`.
+These results establish the fixture repair, not encrypted namespace acceptance.
+
 ## Acceptance still required
 
 Local compilation and source cases do not establish encrypted network

@@ -357,6 +357,80 @@ func serverChainEncryptedPeerStart(t *testing.T, name string) *serverChainEncryp
 	p.read(t)
 	return p
 }
+
+// Compile one captured original member independently. Zero-prefix typed suffixes
+// reuse only the paired final member; an unused reference WG socket is not authority.
+func serverChainEncryptedMemberSource(t *testing.T, p *serverChainEncryptedPeer, i int, fault string) (string, string) {
+	t.Helper()
+	if i < 0 || i > len(p.prefixes) {
+		t.Fatal("original member position changed")
+	}
+	mode, inner, endpoint, port, token, server, client := "shadowsocks", "10.79.0", "10.77.0.1", uint16(8388), "encrypted-server-final-token", p.finalServer, p.finalClient
+	if i < len(p.prefixes) {
+		mode = p.prefixes[i].Mode
+		inner = fmt.Sprintf("10.%d.0", 80+i)
+		if i == len(p.prefixes)-1 {
+			inner = "10.78.0"
+		}
+		endpoint = fmt.Sprintf("198.51.100.%d", 101+i)
+		port = 51820
+		if i == 0 {
+			a, err := netip.ParseAddrPort(p.stats.Address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			endpoint, port = a.Addr().String(), a.Port()
+		}
+		token, server, client = p.prefixes[i].APIToken, p.servers[i], p.clients[i]
+		if fault == "wrong-first-key" && i == 0 || fault == "wrong-middle-key" && i == 1 {
+			server = serverChainEncryptedKey(t)
+		}
+	}
+	api := "http://" + inner + ".1:8787"
+	if i == len(p.prefixes) {
+		api = "http://10.77.0.1:8787"
+	}
+	profile := map[string]any{"id": fmt.Sprintf("encrypted-server-member-%d", i), "node_kind": "router-vpn", "node_proof_id": serverChainEncryptedProof(server), "endpoint": endpoint, "router_api": api, "api_token": token, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "ipv6_mode": "off", "home_lan_access": fault != "admission-restrictions", "mtu_policy": "auto", "kill_switch_policy": "on-connect", "start_layer": "off"}
+	standard := fmt.Sprintf("[Interface]\nAddress=%s.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=%d\n[Peer]\nPublicKey=%s\nEndpoint=%s:%d\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", inner, base64.StdEncoding.EncodeToString(client.Bytes()), serverChainEncryptedReferenceMTU, base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), endpoint, port)
+	if i < len(p.prefixes) {
+		standard = strings.Replace(standard, "[Peer]\n", "[Peer]\nPresharedKey="+p.prefixes[i].PreSharedKey+"\n", 1)
+	}
+	identity := serverChainEncryptedJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(standard))})
+	files := identity
+	if mode != "wg" && mode != "shadowsocks" {
+		parameters := map[string]string{}
+		for k, v := range p.prefixes[i].Parameters {
+			parameters[k] = v
+		}
+		if fault == "wrong-awg-parameters" && i == 1 {
+			parameters["h1"] = "51000000-51999999"
+		}
+		raw, err := awgpolicy.ParametersUAPI(parameters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = serverChainEncryptedJSON(t, map[string]string{"awg.conf": base64.StdEncoding.EncodeToString([]byte(strings.Replace(standard, "[Peer]", raw+"[Peer]", 1)))})
+	}
+	if mode == "shadowsocks" {
+		password := p.password
+		if fault == "wrong-ss-key" {
+			raw, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
+			password = base64.StdEncoding.EncodeToString(raw)
+		}
+		graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": endpoint, "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "route": map[string]any{"final": "proxy"}}
+		files = serverChainEncryptedJSON(t, map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(serverChainEncryptedJSON(t, graph)))})
+	}
+	node, err := mobilemultihop.NewNodeProfile(mode, files, serverChainEncryptedJSON(t, profile), "", "")
+	if err != nil {
+		t.Fatal("real encrypted suffix source rejected", i, err)
+	}
+	launch, err := node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return launch, identity
+}
+
 func serverChainEncryptedSource(t *testing.T, p *serverChainEncryptedPeer, fault string, carrierMTU int) (*mobilemultihop.NodeChainServerPolicy, multihoprelay.NodeChainCapture) {
 	t.Helper()
 	envelope, err := awgpolicy.Envelope(p.prefixes[0].Parameters, false, 0)
@@ -370,69 +444,7 @@ func serverChainEncryptedSource(t *testing.T, p *serverChainEncryptedPeer, fault
 	}
 	source := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: "encrypted-server-entry", EntryNodeID: serverChainEncryptedProof(serverChainEncryptedKey(t)), EntryMode: "wg"}
 	for i := 0; i <= len(p.prefixes); i++ {
-		mode, inner, endpoint, port, token, server, client := "shadowsocks", "10.79.0", "10.77.0.1", uint16(8388), "encrypted-server-final-token", p.finalServer, p.finalClient
-		if i < len(p.prefixes) {
-			mode = p.prefixes[i].Mode
-			inner = fmt.Sprintf("10.%d.0", 80+i)
-			if i == len(p.prefixes)-1 {
-				inner = "10.78.0"
-			}
-			endpoint = fmt.Sprintf("198.51.100.%d", 101+i)
-			port = 51820
-			if i == 0 {
-				a, err := netip.ParseAddrPort(p.stats.Address)
-				if err != nil {
-					t.Fatal(err)
-				}
-				endpoint, port = a.Addr().String(), a.Port()
-			}
-			token, server, client = p.prefixes[i].APIToken, p.servers[i], p.clients[i]
-			if fault == "wrong-first-key" && i == 0 || fault == "wrong-middle-key" && i == 1 {
-				server = serverChainEncryptedKey(t)
-			}
-		}
-		api := "http://" + inner + ".1:8787"
-		if i == len(p.prefixes) {
-			api = "http://10.77.0.1:8787"
-		}
-		profile := map[string]any{"id": fmt.Sprintf("encrypted-server-member-%d", i), "node_kind": "router-vpn", "node_proof_id": serverChainEncryptedProof(server), "endpoint": endpoint, "router_api": api, "api_token": token, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "ipv6_mode": "off", "home_lan_access": fault != "admission-restrictions", "mtu_policy": "auto", "kill_switch_policy": "on-connect", "start_layer": "off"}
-		standard := fmt.Sprintf("[Interface]\nAddress=%s.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=%d\n[Peer]\nPublicKey=%s\nEndpoint=%s:%d\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", inner, base64.StdEncoding.EncodeToString(client.Bytes()), serverChainEncryptedReferenceMTU, base64.StdEncoding.EncodeToString(server.PublicKey().Bytes()), endpoint, port)
-		if i < len(p.prefixes) {
-			standard = strings.Replace(standard, "[Peer]\n", "[Peer]\nPresharedKey="+p.prefixes[i].PreSharedKey+"\n", 1)
-		}
-		identity := serverChainEncryptedJSON(t, map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(standard))})
-		files := identity
-		if mode != "wg" && mode != "shadowsocks" {
-			parameters := map[string]string{}
-			for k, v := range p.prefixes[i].Parameters {
-				parameters[k] = v
-			}
-			if fault == "wrong-awg-parameters" && i == 1 {
-				parameters["h1"] = "51000000-51999999"
-			}
-			raw, err := awgpolicy.ParametersUAPI(parameters)
-			if err != nil {
-				t.Fatal(err)
-			}
-			files = serverChainEncryptedJSON(t, map[string]string{"awg.conf": base64.StdEncoding.EncodeToString([]byte(strings.Replace(standard, "[Peer]", raw+"[Peer]", 1)))})
-		}
-		if mode == "shadowsocks" {
-			password := p.password
-			if fault == "wrong-ss-key" {
-				raw, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
-				password = base64.StdEncoding.EncodeToString(raw)
-			}
-			graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": endpoint, "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "route": map[string]any{"final": "proxy"}}
-			files = serverChainEncryptedJSON(t, map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(serverChainEncryptedJSON(t, graph)))})
-		}
-		node, err := mobilemultihop.NewNodeProfile(mode, files, serverChainEncryptedJSON(t, profile), "", "")
-		if err != nil {
-			t.Fatal("real encrypted suffix source rejected", i, err)
-		}
-		launch, err := node.LaunchInput()
-		if err != nil {
-			t.Fatal(err)
-		}
+		launch, identity := serverChainEncryptedMemberSource(t, p, i, fault)
 		source.Nodes = append(source.Nodes, launch)
 		source.IdentitySources = append(source.IdentitySources, identity)
 	}

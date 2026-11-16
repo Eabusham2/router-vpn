@@ -126,6 +126,20 @@ class OpenVPNDirectGateTests(unittest.TestCase):
         path=G.BASE.NODE.PREP.PEER_TEMPLATES[Path(G.PEER_TEMPLATE).name]
         self.assertEqual(path,'protocol/routervpnamnezia/routervpn_openvpn_server_direct_peer_test.go')
         self.assertTrue((G.ROOT/G.PEER_TEMPLATE).read_text().startswith('//go:build linux && !android\n\n'))
+    def test_direct_source_uses_only_original_final_member(self):
+        source=(G.ROOT/G.TEMPLATE).read_text()
+        body=source[source.index('func serverChainOpenVPNDirectSource('):source.index('func serverChainOpenVPNDirectScenario(')]
+        self.assertNotIn('serverChainEncryptedSource(',body)
+        self.assertEqual(body.count('serverChainEncryptedMemberSource(t, p.original, len(p.original.prefixes), ordinaryFault)'),1)
+        self.assertNotIn('p.original.stats.Address = "192.168.210.2:51820"',source)
+        self.assertIn('p.original.stats = p.reply.Peer.serverChainEncryptedStats',source)
+        self.assertIn('p.original.stats.Address = ""',source)
+        ordinary=(G.ROOT/G.BASE.TEMPLATE).read_text()
+        self.assertEqual(ordinary.count('func serverChainEncryptedMemberSource('),1)
+        self.assertIn('launch, identity := serverChainEncryptedMemberSource(t, p, i, fault)',ordinary)
+        self.assertIn('netip.ParseAddrPort(p.stats.Address)',ordinary)
+        self.assertIn('"unused_prefix_packets"',source)
+
     def test_go_case_inventory_is_exact(self):
         source=(G.ROOT/G.TEMPLATE).read_text();block=source[source.index('var serverChainOpenVPNDirectCases'):source.index('type serverChainOpenVPNDirectReply')]
         self.assertEqual(tuple(re.findall(r'"([^"\n]+)"',block)),G.CASES)
