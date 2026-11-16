@@ -1013,7 +1013,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             (status, "func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request)", 'desktopOrderedExecutionChoices()', 'desktopImportedTrioExecutionChoices()'),
             (status, "func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request)", 'desktopImportedTrioExecutionChoices()', 'desktopOrderedExecutionChoices()'),
             (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported()', 'OrderedExecutionMiddle: true'),
-            (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'desktopNodeChainImportedExecutionMiddle(p)', 'true'),
+            (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && desktopNodeChainImportedExecutionMiddle(p)', 'OrderedExecutionMiddle: nativeDesktopImportedTrioExecutionPlatformSupported() && true'),
             (profile, "func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCapability) publicProfile", 'desktopNodeChainImportedHostnameExecutionMiddle(p)', 'true'),
         ):
             with self.subTest(path=path, before=before):

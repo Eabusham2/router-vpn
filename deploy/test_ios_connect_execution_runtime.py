@@ -118,13 +118,19 @@ TESTS=r'''
 }
 '''
 
-def build_contract():
+def typed_abi_contract(prepare):
     import ast
-    prepare=(ROOT/'ios/RouterVPN/prepare-libbox.sh').read_text()
-    begin=prepare.index('    # Distinct typed execution ABI;')
-    end=prepare.index('    # PREFIX_PREPARATION_ABI_BEGIN',begin)
-    block=prepare[begin:end]
     import textwrap
+    markers=('    # Distinct typed execution ABI;',
+             '    # CONNECTED_TYPED_CANDIDATE_ABI_BEGIN',
+             '    # CONNECTED_TYPED_CANDIDATE_ABI_END',
+             '    # PREFIX_PREPARATION_ABI_BEGIN')
+    assert all(prepare.count(marker)==1 for marker in markers), 'typed ABI boundaries must be unique'
+    assert all(sum(line.startswith(marker) for line in prepare.splitlines())==1 for marker in markers), 'typed ABI boundaries must retain their original scope'
+    positions=[prepare.index(marker) for marker in markers]
+    assert positions==sorted(positions), 'typed ABI boundaries are out of order'
+    begin,end=positions[:2]
+    block=prepare[begin:end]
     tree=ast.parse(textwrap.dedent(block))
     assert len(tree.body)==2 and all(isinstance(node,ast.For) for node in tree.body), 'both original typed ABI families are required'
     signatures=[]
@@ -140,6 +146,26 @@ def build_contract():
         try:exec(compile(tree,'actual-apple-abi-check','exec'),{'content':content.replace(signature,'')})
         except AssertionError:pass
         else:raise AssertionError('Missing exact typed ABI signature was accepted')
+    return begin,end,block
+
+
+def build_contract():
+    prepare=(ROOT/'ios/RouterVPN/prepare-libbox.sh').read_text()
+    begin,end,block=typed_abi_contract(prepare)
+    mutations={
+        'missing-original-families':prepare[:begin]+prepare[end:],
+        'duplicate-original-families':prepare[:end]+block+prepare[end:],
+        'commented-original-families':prepare[:begin]+''.join('    # '+line+'\n' for line in block.splitlines())+prepare[end:],
+        'conditional-original-families':prepare[:begin]+'    if False:\n'+''.join('    '+line+'\n' for line in block.splitlines())+prepare[end:],
+        'sibling-original-families':prepare[:begin]+prepare[end:]+block,
+        'duplicate-connected-boundary':prepare+'\n    # CONNECTED_TYPED_CANDIDATE_ABI_BEGIN\n',
+        'missing-connected-boundary':prepare.replace('    # CONNECTED_TYPED_CANDIDATE_ABI_BEGIN','    # missing candidate boundary',1),
+    }
+    for name,mutated in mutations.items():
+        try:typed_abi_contract(mutated)
+        except AssertionError:pass
+        else:raise AssertionError('Invalid original typed ABI scope was accepted: '+name)
+    print('PASS Apple original typed ABI scope: 7 source mutation controls')
     caller='python3 "$ROOT/../../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego'
     def require_caller(value):
         assert value.count(caller)==1 and value.index('prepare-mobile-multihop.py') < value.index(caller), 'missing original native-owner shipping gate'
