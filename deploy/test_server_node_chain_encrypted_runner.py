@@ -474,4 +474,61 @@ class ImportedServerBoundaries(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'generated fixture was changed'):GATE.install_imported_fixture(core)
 
 
+class DNSFailureDiagnosticTests(unittest.TestCase):
+    def core(self, directory):
+        module=GATE.DNS_DIAGNOSTIC;core=Path(directory)/'core';core.mkdir()
+        for name,anchors in module.ANCHORS.items():
+            path=core/name;path.parent.mkdir(exist_ok=True);path.write_text('package dns\n'+''.join(anchor+'\n return nil,nil\n}\n' for anchor,_ in anchors))
+        path=core/module.DRIVER;path.parent.mkdir(parents=True);path.write_text('package main\nfunc fixture(){\n'+module.DRIVER_ANCHOR+'}\n')
+        return core
+
+    def test_diagnostic_only_for_actual_hostname_aaaa_failure(self):
+        module=GATE.DNS_DIAGNOSTIC
+        error=subprocess.CalledProcessError(1,[],output=b'ROUTERVPN_SERVER_PEER_FAILURE hostname-question-aaaa')
+        self.assertTrue(module.eligible('prefix-hostname-wg-one',error))
+        for case,failure in [('original',error),('prefix-hostname-wg-one',ValueError()),('prefix-hostname-wg-one',subprocess.CalledProcessError(1,[],output=b'hostname-question-name'))]:
+            self.assertFalse(module.eligible(case,failure))
+
+    def test_overlay_preserves_complete_original_sources(self):
+        module=GATE.DNS_DIAGNOSTIC
+        with tempfile.TemporaryDirectory() as directory:
+            core=self.core(directory);before={str(p):p.read_bytes() for p in core.rglob('*.go')}
+            mapping,receipt=module.overlay(core,Path(directory)/'shadow')
+            rows=json.loads(mapping.read_text())['Replace'];self.assertEqual(len(rows),4)
+            self.assertEqual(before,{str(p):p.read_bytes() for p in core.rglob('*.go')})
+            for name,anchors in module.ANCHORS.items():
+                actual=Path(rows[str(core/name)]).read_text()
+                for _,addition in anchors: actual=actual.replace(addition,'',1)
+                self.assertEqual(actual,before[str(core/name)].decode())
+            self.assertEqual(receipt['scope'],'non-accepting-hostname-diagnostic')
+            self.assertFalse((core/'dns/routervpn_server_dns_failure_diagnostic.go').exists())
+            (core/'dns/router.go').write_text('changed original')
+            with self.assertRaisesRegex(ValueError,'anchor differs'):module.overlay(core,Path(directory)/'changed')
+
+    def test_original_failure_survives_success_or_failed_diagnostic(self):
+        tree=ast.parse((ROOT/'deploy/test_server_node_chain_encrypted.py').read_text())
+        node=next(n for n in ast.walk(tree) if isinstance(n,ast.Try) and any(isinstance(x,ast.Attribute) and x.attr=='observe_failure' for h in n.handlers for x in ast.walk(h)))
+        original=subprocess.CalledProcessError(1,[],output='ROUTERVPN_SERVER_PEER_FAILURE hostname-question-aaaa')
+        values=dict(subprocess=subprocess,case='prefix-hostname-wg-one',command=[],workspace='unused',native_env={},sudo=None,core='unused',compiler='go',captured={},common=[],driver_flags=[],peer='unused',imported_program='unused',image_identity=lambda p:None,DNS_DIAGNOSTIC=GATE.DNS_DIAGNOSTIC,checked_sources=lambda core:(core,{}),before={})
+        values['run']=mock.Mock(side_effect=original)
+        for result in (None,ValueError('diagnostic refused'),subprocess.CalledProcessError(2,[])):
+            with mock.patch.object(GATE.DNS_DIAGNOSTIC,'execute',side_effect=result):
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    exec(compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),'original-failure','exec'),values)
+                self.assertIs(caught.exception,original)
+        self.assertIsInstance(node.handlers[0].body[-1],ast.Raise)
+        self.assertIsNone(node.handlers[0].body[-1].exc)
+
+    def test_diagnostic_compile_and_native_bounds_are_original(self):
+        module=GATE.DNS_DIAGNOSTIC
+        with tempfile.TemporaryDirectory() as directory:
+            core=self.core(directory);workspace=Path(directory)/'work';workspace.mkdir();calls=[]
+            def run(command,**options):calls.append((command,options));return ''
+            module.execute(core=core,workspace=workspace,compiler='go',captured={},common=['-race'],driver_flags=['-race','-tags=original'],peer='original-peer',case='prefix-hostname-wg-one',program='original namespace program',native_env={},sudo=None,run=run,image_identity=lambda path:(0,0,0,0,'a'*64),source_identity=lambda:{'original':'retained'},expected_source={'original':'retained'})
+            self.assertEqual([options['timeout'] for _,options in calls],[600,600,125])
+            self.assertIn('-race',calls[0][0]);self.assertIn('-tags=original',calls[1][0])
+            self.assertEqual(calls[2][0][-1],'prefix-hostname-wg-one')
+            self.assertIn('original namespace program',calls[2][0])
+
+
 if __name__=='__main__': unittest.main()

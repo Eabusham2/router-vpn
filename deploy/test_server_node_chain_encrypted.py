@@ -30,6 +30,7 @@ BUILD = load('server_encrypted_build', 'build-native-runtime.py')
 NODE = load('server_encrypted_original_peer', 'test_desktop_node_physical.py')
 UID = load('server_encrypted_owned_process', 'test_desktop_socket_uid.py')
 WORKER = load('server_encrypted_worker', 'test_server_node_chain_native.py')
+DNS_DIAGNOSTIC = load('server_dns_failure_diagnostic', 'server_dns_failure_diagnostic.py')
 CASES = ('wg', 'awg-fast', 'awg-strong', 'mixed-three', 'wrong-first-key', 'wrong-middle-key',
          'wrong-ss-key', 'wrong-awg-parameters', 'wrong-node', 'failed-selected-dns',
          'wrong-public-trust', 'cancel-prefix', 'admission-restrictions', 'joined-active-udp')
@@ -148,7 +149,7 @@ def checked_sources(core):
         raise ValueError('Encrypted Server native fixture is not the original source')
     if (core/IMPORTED_TARGET).is_symlink() or (core/IMPORTED_TARGET).read_bytes() != (ROOT/IMPORTED_TEMPLATE).read_bytes():
         raise ValueError('Imported Server native fixture is not the original source')
-    for name in (TEMPLATE, IMPORTED_TEMPLATE, 'deploy/test_server_node_chain_encrypted.py', 'deploy/test_server_node_chain_encrypted_runner.py', '.github/workflows/server-node-chain-encrypted.yml'):
+    for name in (TEMPLATE, IMPORTED_TEMPLATE, 'deploy/server_dns_failure_diagnostic.py', DNS_DIAGNOSTIC.HELPER, 'deploy/test_server_node_chain_encrypted.py', 'deploy/test_server_node_chain_encrypted_runner.py', '.github/workflows/server-node-chain-encrypted.yml'):
         path = ROOT/name
         if path.is_symlink() or not path.is_file():
             raise ValueError('Encrypted Server lost required gate input')
@@ -467,7 +468,16 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
                            images['driver'][-1], images['peer'][-1], images['worker'][-1], case]
                 if sudo:
                     command = [sudo, '-n', '--preserve-env=ROUTERVPN_SERVER_CHAIN_OUTER_NETNS,ROUTERVPN_SERVER_CHAIN_CARRIER_MTU', '--', *command]
-                output = run(command, cwd=workspace, env=native_env, timeout=125, sudo=sudo)
+                try:
+                    output = run(command, cwd=workspace, env=native_env, timeout=125, sudo=sudo)
+                except subprocess.CalledProcessError as original_failure:
+                    # Original source/image/case remains release authority. The
+                    # separate shadow replay cannot issue an acceptance receipt.
+                    DNS_DIAGNOSTIC.observe_failure(case, original_failure, core=core, workspace=workspace,
+                        compiler=compiler, captured=captured, common=common, driver_flags=driver_flags,
+                        peer=peer, program=imported_program, native_env=native_env, sudo=sudo,
+                        run=run, image_identity=image_identity, source_identity=lambda: checked_sources(core)[1], expected_source=before)
+                    raise
                 imported_verdicts.append(check_imported_verdict(output, case)); print(output, end='')
         if checked_sources(core)[1] != before or any(image_identity(path) != images[role] for role, path in (('driver', driver), ('peer', peer), ('worker', worker))):
             raise ValueError('Encrypted Server original source/image changed during acceptance')

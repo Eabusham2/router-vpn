@@ -132,6 +132,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_imported_trio_controller_runner.py',
                              ROOT/'deploy/test_server_node_chain_connect_encrypted.py',
                              ROOT/'deploy/test_server_node_chain_connect_encrypted_runner.py',
+                             ROOT/'deploy/server_dns_failure_diagnostic.py',
+                             ROOT/'deploy/fixtures/server-dns-diagnostic.go.tmpl',
                              ROOT/'mobile/server_chain_acceptance/connect_linux_test.go.tmpl',
                              ROOT/'deploy/test_desktop_imported_pq_runtime.py',
                              ROOT/'deploy/test_desktop_imported_xhttp_runtime.py',

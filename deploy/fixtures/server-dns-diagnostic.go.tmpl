@@ -1,0 +1,115 @@
+package dns
+
+import (
+	"fmt"
+	"github.com/miekg/dns"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+)
+
+// Compiled only into the separately identified failure-diagnostic overlay.
+// Never emits a name, address, tag, token, config, stack or native error.
+var routerVPNServerDNSDiagnosticState struct {
+	sync.Mutex
+	seen map[string]bool
+}
+
+func routerVPNServerDNSDiagnosticStrategy(value C.DomainStrategy) string {
+	switch value {
+	case C.DomainStrategyAsIS:
+		return "as-is"
+	case C.DomainStrategyIPv4Only:
+		return "ipv4-only"
+	case C.DomainStrategyIPv6Only:
+		return "ipv6-only"
+	case C.DomainStrategyPreferIPv4:
+		return "prefer-ipv4"
+	case C.DomainStrategyPreferIPv6:
+		return "prefer-ipv6"
+	default:
+		return "unknown"
+	}
+}
+
+func routerVPNServerDNSDiagnosticExchange(phase string, message *dns.Msg, options adapter.DNSQueryOptions, global C.DomainStrategy) {
+	domain, kind := "", "invalid"
+	if message != nil && len(message.Question) == 1 {
+		domain = message.Question[0].Name
+		switch message.Question[0].Qtype {
+		case dns.TypeA:
+			kind = "a"
+		case dns.TypeAAAA:
+			kind = "aaaa"
+		default:
+			kind = "other"
+		}
+	}
+	routerVPNServerDNSDiagnostic(phase, domain, kind, options, global)
+}
+
+func routerVPNServerDNSDiagnostic(phase, domain, question string, options adapter.DNSQueryOptions, global C.DomainStrategy) {
+	domainClass := "other"
+	if strings.EqualFold(strings.TrimSuffix(domain, "."), "middle.example.test") {
+		domainClass = "test-middle"
+	}
+	transport := "selected"
+	if options.Transport != nil {
+		transport = "explicit"
+	}
+	caller := "other"
+	var pcs [12]uintptr
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs[:])])
+	for {
+		frame, more := frames.Next()
+		if strings.Contains(frame.Function, "/common/dialer.(*resolve") {
+			caller = "resolve-dialer"
+			break
+		}
+		if strings.Contains(frame.Function, "/protocol/wireguard.") {
+			caller = "wireguard"
+			break
+		}
+		if strings.Contains(frame.Function, "/protocol/routervpnamnezia.") {
+			caller = "amnezia"
+			break
+		}
+		if strings.Contains(frame.Function, "(*routerVPNServerChain).resolve") {
+			caller = "server-front"
+			break
+		}
+		if !more {
+			break
+		}
+	}
+	switch phase {
+	case "router-lookup", "client-lookup", "router-exchange", "client-exchange", "router-async", "client-async":
+	default:
+		phase = "unknown"
+	}
+	switch question {
+	case "lookup", "a", "aaaa", "other", "invalid":
+	default:
+		question = "invalid"
+	}
+	globalName := routerVPNServerDNSDiagnosticStrategy(global)
+	if strings.HasPrefix(phase, "client-") {
+		globalName = "not-applicable"
+	}
+	key := strings.Join([]string{phase, domainClass, question, transport, routerVPNServerDNSDiagnosticStrategy(options.Strategy), routerVPNServerDNSDiagnosticStrategy(options.LookupStrategy), globalName, caller}, "|")
+	routerVPNServerDNSDiagnosticState.Lock()
+	defer routerVPNServerDNSDiagnosticState.Unlock()
+	if routerVPNServerDNSDiagnosticState.seen == nil {
+		routerVPNServerDNSDiagnosticState.seen = make(map[string]bool)
+	}
+	if len(routerVPNServerDNSDiagnosticState.seen) >= 24 || routerVPNServerDNSDiagnosticState.seen[key] {
+		return
+	}
+	routerVPNServerDNSDiagnosticState.seen[key] = true
+	_, _ = fmt.Fprintf(os.Stderr, "ROUTERVPN_SERVER_DNS_DIAGNOSTIC {\"phase\":\"%s\",\"domain\":\"%s\",\"question\":\"%s\",\"transport\":\"%s\",\"strategy\":\"%s\",\"lookup\":\"%s\",\"global\":\"%s\",\"caller\":\"%s\"}\n",
+		phase, domainClass, question, transport, routerVPNServerDNSDiagnosticStrategy(options.Strategy), routerVPNServerDNSDiagnosticStrategy(options.LookupStrategy), globalName, caller)
+}
