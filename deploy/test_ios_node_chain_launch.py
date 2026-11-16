@@ -113,18 +113,19 @@ TESTS = r'''
   do{try await action()}catch{checks+=1;return};throw NSError(domain:"ChainAppRejected",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])
  }
  static func reset(){NETunnelProviderManager.reset();IOSNodeBundleStore.shared.records=[:];IOSMAXSourceSelection.calls=0;IOSStartupLastChoice.restores=0;IOSMTUMeasurementGate.current=""}
- static func sources(_ count:Int,_ mixed:Bool=false,_ hysteriaPrefix:String="",_ socks:Bool=false)throws->[ClientBundle] {
+ static func sources(_ count:Int,_ mixed:Bool=false,_ hysteriaPrefix:String="",_ socks:Bool=false,_ finalLayer:String="off")throws->[ClientBundle] {
   let raw=try socks ? LibboxTestSOCKSFixture() : !hysteriaPrefix.isEmpty ? LibboxTestHysteriaFixture(count,hysteriaPrefix) : (mixed ? LibboxTestAWGFixture(count,"off"):LibboxTestFixture(count,"off"))
   let roots=try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [[String:Any]]
-  return try roots.map{original in
+  return try roots.enumerated().map{position,original in
    var root=original,profiles=root["routerProfiles"] as! [[String:Any]],p=profiles[0]
    p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="10.80.0.1";p["socks_port"]=1080;p["socks_username"]="";p["socks_password"]="";p["startup_mode"]="last"
+   if !hysteriaPrefix.isEmpty && position==count-1 {p["start_layer"]=finalLayer}
    profiles[0]=p;root["routerProfiles"]=profiles
    return try JSONDecoder().decode(ClientBundle.self,from:JSONSerialization.data(withJSONObject:root))
   }
  }
- static func setup(_ count:Int=3,_ mixed:Bool=false,_ hysteriaPrefix:String="")throws->(RouterVPNModel,NETunnelProviderManager,ClientBundle,IOSRuntimeSelection) {
-  reset();let nodes=try sources(count,mixed,hysteriaPrefix),final=nodes.last!,model=RouterVPNModel(),manager=NETunnelProviderManager()
+ static func setup(_ count:Int=3,_ mixed:Bool=false,_ hysteriaPrefix:String="",_ finalLayer:String="off")throws->(RouterVPNModel,NETunnelProviderManager,ClientBundle,IOSRuntimeSelection) {
+  reset();let nodes=try sources(count,mixed,hysteriaPrefix,false,finalLayer),final=nodes.last!,model=RouterVPNModel(),manager=NETunnelProviderManager()
   model.bundle=final
   for node in nodes {IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
   let capture=try model.captureIOSNodeChain(final);defer{try? capture.plan.close()}
@@ -266,15 +267,15 @@ TESTS = r'''
    try await reject("cancelled app launch"){_ = try await task.value}
    try check("cancelled task cannot start native connection",manager.connection.starts==0)
   }
-  for mode in ["wg","awg2-fast","awg2-strong"] {
-   let (model,manager,final,selection)=try setup(3,false,mode)
+  for mode in ["wg","awg2-fast","awg2-strong"] {for finalLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   let (model,manager,final,selection)=try setup(3,false,mode,finalLayer)
    try check("HY2 runtime selector preserves exact final mode",selection.rawProfileID=="hysteria2" && selection.nodeChainInput != nil)
    _ = try await model.launch(manager,final,selection)
    let configuration=(manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
    let reopened=try IOSNodeChainProviderCapture.reopen(configuration);defer{try? reopened.plan.close()}
-   try check("HY2 original source reaches one original PacketTunnel manager",NETunnelProviderManager.starts==1 && configuration[IOSNodeChainProviderCapture.key] as? String==selection.nodeChainInput && reopened.members.first?.mode==mode && reopened.members.last?.mode=="hysteria2")
+   try check("HY2 original source reaches one original PacketTunnel manager",NETunnelProviderManager.starts==1 && configuration[IOSNodeChainProviderCapture.key] as? String==selection.nodeChainInput && reopened.members.first?.mode==mode && reopened.members.last?.mode=="hysteria2" && reopened.members.last?.profile["start_layer"] as? String==finalLayer)
    try check("HY2 source capture cannot invent Connected or usage",!model.connected && model.usageWrites==0)
-  }
+  }}
  }
 }
 '''

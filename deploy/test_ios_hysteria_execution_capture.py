@@ -9,10 +9,12 @@ import test_ios_socks_execution_capture as S
 
 E = S.E
 SWIFT = E.SWIFT[:E.SWIFT.index('@main struct Tests')] + r'''
-func hysteriaFixture(_ count:Int,_ first:String,_ requested:String,_ layer:String)throws->[Data]{
+func hysteriaFixture(_ count:Int,_ first:String,_ requested:String,_ layer:String,_ finalLayer:String="off")throws->[Data]{
  let raw=try LibboxTestHysteriaFixture(count,first,layer)
  var bundles=try appFixture((JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)})
- bundles[count-1]=try editProfile(bundles[count-1]){$0["multihop_execution"]=requested}
+ bundles[count-1]=try editProfile(bundles[count-1]){$0["multihop_execution"]=requested;$0["start_layer"]=finalLayer}
+ // The original execution helper already captures a 4000-byte packet
+ // ceiling for complete independently layered paths; retain those exact assets.
  return bundles
 }
 @main struct Tests {
@@ -25,6 +27,14 @@ func hysteriaFixture(_ count:Int,_ first:String,_ requested:String,_ layer:Strin
   for mode in ["wg","awg2-fast","awg2-strong"] {for requested in ["server","auto"] {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    try original(count,mode,requested,layer)
   }}}
+  var layeredCases=0
+  for (finalIndex,finalLayer) in ["aes-256-gcm","aes-256-gcm+xor-whitening"].enumerated() {
+   for (prefixIndex,prefixLayer) in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"].enumerated() {
+    let mode=["wg","awg2-fast","awg2-strong"][(prefixIndex+finalIndex)%3],requested=["server","auto"][(prefixIndex+finalIndex)%2]
+    try original(count,mode,requested,prefixLayer,finalLayer);layeredCases+=1
+   }
+  }
+  check(layeredCases==6,"complete independent Hysteria2 final layer phase")
   let bundles=try hysteriaFixture(count,"awg2-strong","auto","off")
   for fault in ["config","requested","local-node","local-schema","local-identity","local-execution","preparation-schema","launch-schema","launch-error"] {
    LibboxTestExecutionFault(fault);reject("typed native readback "+fault){_ = try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"auto")}
@@ -39,13 +49,20 @@ func hysteriaFixture(_ count:Int,_ first:String,_ requested:String,_ layer:Strin
   reject("returned Hysteria2 replay plus error"){_ = try IOSNodeChainExecutionCapture.reopen(capture.launchInput,selectedProfile:profile(bundles[count-1]))}
   check(LibboxTestReturnedOwnerClosed(),"returned original Hysteria2 replay closed exactly once")
   try capture.close()
+  for badLayer in ["unowned",true,7,NSNull(),["off"],["layer":"off"]] as [Any] {
+   var launch=try object(Data(capture.launchInput.utf8)),source=try object(Data((launch["source"] as! String).utf8)),local=try object(Data((source["local_source"] as! String).utf8)),members=local["nodes"] as! [String]
+   var member=try object(Data(members[count-1].utf8)),profile=try object(Data((member["profile_json"] as! String).utf8))
+   profile["start_layer"]=badLayer;member["profile_json"]=String(decoding:try data(profile),as:UTF8.self);members[count-1]=String(decoding:try data(member),as:UTF8.self)
+   local["nodes"]=members;source["local_source"]=String(decoding:try data(local),as:UTF8.self);launch["source"]=String(decoding:try data(source),as:UTF8.self)
+   reject("Hysteria2 identity malformed final layer"){_ = try IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:1),engine:"multihop-libbox",rawProfile:"hysteria2",bundleData:bundles[count-1],entryBundleData:nil,nodeChainExecutionSource:try data(launch))}
+  }
   for position in bundles.indices {
    var invalid=bundles;invalid[position]=try editProfile(invalid[position]){$0["node_proof_id"]=String(repeating:"f",count:64)}
    reject("independent original identity \(position)"){_ = try IOSNodeChainExecutionCapture.compile(bundles:invalid,requested:"auto")}
   }
-  for layer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {
+  for layer in ["aes-256-gcm+unowned","xor-without-aes"] {
    var invalid=bundles;invalid[count-1]=try editProfile(invalid[count-1]){$0["start_layer"]=layer}
-   reject("Hysteria2 final layer "+layer){_ = try IOSNodeChainExecutionCapture.compile(bundles:invalid,requested:"auto")}
+   reject("malformed Hysteria2 final layer "+layer){_ = try IOSNodeChainExecutionCapture.compile(bundles:invalid,requested:"auto")}
   }
   for fault in ["missing-wg","changed-ca","insecure-tls","missing-password","missing-salamander","unknown-mask","nonobject-mask"] {
    var invalid=bundles
@@ -89,8 +106,8 @@ func hysteriaFixture(_ count:Int,_ first:String,_ requested:String,_ layer:Strin
   }
   print("PASS Apple Hysteria2 execution source nodes=\(count): \(checks) original source and consumer checks")
  }
- @MainActor static func original(_ count:Int,_ first:String,_ requested:String,_ layer:String)throws{
-  let bundles=try hysteriaFixture(count,first,requested,layer)
+ @MainActor static func original(_ count:Int,_ first:String,_ requested:String,_ layer:String,_ finalLayer:String="off")throws{
+  let bundles=try hysteriaFixture(count,first,requested,layer,finalLayer)
   let typed=try JSONDecoder().decode(ClientBundle.self,from:bundles[count-1]).routerProfiles[0],refs=typed.multihopNodes!
   check(IOSMultihopNodeSelection.supportsGenericExecution(refs) && IOSMultihopNodeSelection.supportsServerExecution(refs) && !IOSMultihopNodeSelection.supportsSOCKSExecution(refs) && !IOSMultihopNodeSelection.supportsCONNECTExecution(refs) && !IOSMultihopNodeSelection.supportsOpenVPNExecution(refs),"distinct public Hysteria2 choice")
   try IOSMultihopNodeSelection.validate(refs,execution:requested,entryID:nil,entryMode:nil,exitID:nil,exitMode:nil,controlID:typed.id)
@@ -113,7 +130,15 @@ func hysteriaFixture(_ count:Int,_ first:String,_ requested:String,_ layer:Strin
   check(tls["server_name"] as? String=="ordered-final.example.test" && tls["certificate"] as? [String]==[String(decoding:Data(base64Encoded:files["hy2-ca.pem"]!)!,as:UTF8.self)] && tls["insecure"] as? Bool != true,"original Hysteria2 TLS trust and name")
   let dns=graph["dns"] as! [String:Any],servers=dns["servers"] as! [[String:Any]],selected=servers.first{$0["tag"] as? String==dns["final"] as? String}!
   check(selected["server"] as? String==typed.adGuardIPv4 && selected["detour"] as? String==hy2["tag"] as? String,"Hysteria2 retains selected exit-routed Home DNS")
-  check(capture.members.dropLast().allSatisfy{$0.profile["start_layer"] as? String==layer} && capture.finalProfile["start_layer"] as? String=="off","original independent prefix policy and Off final")
+  check(capture.members.dropLast().allSatisfy{$0.profile["start_layer"] as? String==layer} && capture.finalProfile["start_layer"] as? String==finalLayer,"original independent prefix and final layer policies")
+  if finalLayer != "off" {
+   let finalTag=hy2["tag"] as! String,outerTag=hy2["detour"] as! String,outer=outs.first{$0["tag"] as? String==outerTag}!
+   let outerFiles=assets["shadowsocks"]!,savedOuter=(try object(Data(base64Encoded:outerFiles["sing-box.json"]!)!)["outbounds"] as! [[String:Any]])[0]
+   check(hy2["server"] as? String=="127.0.0.1" && hy2["server_port"] as? Int==saved["server_port"] as? Int && outer["type"] as? String==(finalLayer=="aes-256-gcm" ? "shadowsocks":"routervpn-aes-xor"),"original inner QUIC tuple and independent outer owner")
+   check(outer["password"] as? String==savedOuter["password"] as? String && outer["password"] as? String != hy2["password"] as? String && outer["method"] as? String==savedOuter["method"] as? String && outer["server"] as? String==typed.endpoint,"original independent outer key method and destination")
+   let endpoints=graph["endpoints"] as! [[String:Any]],preceding=endpoints.last!["tag"] as! String
+   check(outer["detour"] as? String==preceding && hy2["detour"] as? String != preceding && selected["detour"] as? String==finalTag,"only original outer traverses complete packet prefix")
+  }
   check(!capture.healthy() && !capture.nativeClosed(),"source preparation grants no native readiness or retirement")
   reject("Local capture cannot consume Server selection"){_ = try IOSNodeChainCapture.compile(bundles:bundles)}
   reject("source-only native restoration"){_ = try capture.captureRestoration()}

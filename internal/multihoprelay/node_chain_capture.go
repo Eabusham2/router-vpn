@@ -147,7 +147,7 @@ func (s NodeChainDescriptor) Validate() error {
 		}
 		nodes[member.NodeID] = true
 		if index == len(s.Members)-1 {
-			if (member.Mode != "shadowsocks" && (s.Schema != 1 || member.Mode != "hysteria2" || member.StartLayer != "off")) ||
+			if (member.Mode != "shadowsocks" && (s.Schema != 1 || member.Mode != "hysteria2")) ||
 				member.ClientPublicKey != "" || member.ServerPublicKey != "" {
 				return nodeChainCaptureError
 			}

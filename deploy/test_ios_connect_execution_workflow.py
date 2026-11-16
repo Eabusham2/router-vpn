@@ -295,12 +295,23 @@ def check_hysteria_consumers(read):
                    'Hysteria2 presentation rejects replaced final private source',
                    'for position in bundles.indices {\n   var invalid=bundles',
                    'for fault in ["missing-wg","changed-ca","insecure-tls","missing-password","missing-salamander","unknown-mask","nonobject-mask"]',
-                   'for mask in ["absent","null","salamander","gecko"]'):
+                   'for mask in ["absent","null","salamander","gecko"]',
+                   'for (finalIndex,finalLayer) in ["aes-256-gcm","aes-256-gcm+xor-whitening"].enumerated()',
+                   'for (prefixIndex,prefixLayer) in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"].enumerated()',
+                   'try original(count,mode,requested,prefixLayer,finalLayer);layeredCases+=1',
+                   'check(layeredCases==6,"complete independent Hysteria2 final layer phase")',
+                   'only original outer traverses complete packet prefix',
+                   'Hysteria2 identity malformed final layer'):
         assert source.count(marker) == 1, "required Hysteria2 source case missing: " + marker
     driver = read("deploy/test_ios_socks_execution_capture.py")
     assert driver.count('counts = (2, 3, 4, 5, 6, 7, 8) if family == "Hysteria2" else PREFIX_NODE_COUNTS') == 1
     assert driver.count('for count in counts:') == 1 and driver.count('assert count in counts') == 1
     assert driver.count('capture_output=True, text=True, timeout=180)') == 1, "original per-phase consumer deadline changed"
+    assert driver.count('Rejected Apple Hysteria2 source control: exact-final-layer-type') == 1, "strict final-layer identity control omitted"
+    for path in ("deploy/test_ios_node_chain_launch.py", "deploy/test_ios_node_chain_editor.py"):
+        local = read(path)
+        assert local.count('for mode in ["wg","awg2-fast","awg2-strong"] {for finalLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"]') == 1, "complete Hysteria2 Local/editor layer matrix omitted"
+        assert local.count('members.last?.profile["start_layer"] as? String==finalLayer') == 1, "original final layer readback omitted"
 
 
 def check(read):
@@ -384,11 +395,21 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
                 ('for requested in ["server","auto"]', 'for requested in ["server"]'),
                 ('try original(count,mode,requested,layer)', 'checks+=1'),
                 ('Hysteria2 retains selected exit-routed Home DNS', 'omitted-selected-dns'),
-                ('"missing-wg","changed-ca"', '"changed-ca"')):
+                ('"missing-wg","changed-ca"', '"changed-ca"'),
+                ('try original(count,mode,requested,prefixLayer,finalLayer);layeredCases+=1', 'layeredCases+=1'),
+                ('check(layeredCases==6,"complete independent Hysteria2 final layer phase")', 'check(true,"omitted layer count")'),
+                ('only original outer traverses complete packet prefix', 'omitted-outer-routing'),
+                ('Hysteria2 identity malformed final layer', 'omitted-invalid-layer')):
             with self.subTest(marker=before):
                 self.broken(path, before, after)
         self.broken("deploy/test_ios_socks_execution_capture.py", 'counts = (2, 3, 4, 5, 6, 7, 8)', 'counts = (3, 4, 8)')
         self.broken("deploy/test_ios_socks_execution_capture.py", 'text=True, timeout=180)', 'text=True, timeout=900)')
+        self.broken("deploy/test_ios_socks_execution_capture.py", "Rejected Apple Hysteria2 source control: exact-final-layer-type", "omitted-final-layer-control")
+
+    def test_hysteria_local_and_editor_layers_are_required(self):
+        for path in ("deploy/test_ios_node_chain_launch.py", "deploy/test_ios_node_chain_editor.py"):
+            self.broken(path, 'for finalLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"]', 'for finalLayer in ["off"]')
+            self.broken(path, 'members.last?.profile["start_layer"] as? String==finalLayer', 'members.last != nil')
 
     def test_complete_openvpn_profile_phases_cannot_be_omitted(self):
         path = "deploy/test_ios_openvpn_execution_profiles.py"

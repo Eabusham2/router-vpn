@@ -660,8 +660,8 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     }
 
     /// The shared compiler accepts paired prefixes and a Shadowsocks or
-    /// unlayered Hysteria2 final. An imported Shadowsocks middle retains its
-    /// Shadowsocks final. Private source and policy checks run at Save and Connect.
+    /// Hysteria2 final with its independently captured Start Layer. An imported
+    /// Shadowsocks middle retains its Shadowsocks final. Private source and policy checks run at Save and Connect.
     static func supportsGenericExecution(_ nodes: [Self]) -> Bool {
         guard (2...maximumNodes).contains(nodes.count), ["shadowsocks", "hysteria2"].contains(nodes.last?.mode ?? "") else { return false }
         return nodes.dropLast().allSatisfy({ supportsNativePrefix($0.mode) }) ||
@@ -683,7 +683,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard (2...maximumNodes).contains(nodes.count),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 requires Start Layer Off on the final node. One Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before a Shadowsocks final. Each paired preceding node retains its own selected Start Layer.")
+            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. One Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before a Shadowsocks final. Each paired preceding node retains its own selected Start Layer.")
         }
         var seen = Set<String>()
         for node in nodes {

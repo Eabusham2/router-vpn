@@ -78,9 +78,9 @@ TESTS = r'''
   do{try body()}catch{checks+=1;return};throw IOSMultihopNodeSelection.issue("ACCEPTED "+name)
  }
  // ORIGINAL_COMPILER_SOURCES
- static func setup(_ count:Int=3,_ mixed:Bool=false,_ hysteriaPrefix:String="")throws->RouterVPNModel {
+ static func setup(_ count:Int=3,_ mixed:Bool=false,_ hysteriaPrefix:String="",_ finalLayer:String="off")throws->RouterVPNModel {
   IOSNodeBundleStore.shared.records=[:];IOSDNSRuntimePolicy.beforePatch=nil
-  let nodes=try sources(count,mixed,hysteriaPrefix),model=RouterVPNModel();model.bundle=nodes.last!
+  let nodes=try sources(count,mixed,hysteriaPrefix,false,finalLayer),model=RouterVPNModel();model.bundle=nodes.last!
   for node in nodes{IOSNodeBundleStore.shared.records[node.selectedRouterID]=try JSONEncoder().encode(node)}
   return model
  }
@@ -115,18 +115,18 @@ TESTS = r'''
    try reject("typed SOCKS editor cannot reuse relinked private source"){try model.saveIOSNodeChain(selection,owner:stale)}
   }
   try visibleSOCKS()
-  for mode in ["wg","awg2-fast","awg2-strong"] {
-   let model=try setup(3,false,mode),owner=try model.captureIOSNodeChainEditorOwner()
+  for mode in ["wg","awg2-fast","awg2-strong"] {for finalLayer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   let model=try setup(3,false,mode,finalLayer),owner=try model.captureIOSNodeChainEditorOwner()
    var draft=IOSNodeChainDraft(saved:model.selectedNodeProfile!.multihopNodes,finalID:owner.controlID)
    try check("HY2 editor retains selected final and complete paired prefix",draft.canSave && draft.nodes.last?.mode=="hysteria2" && draft.nodes.first?.mode==mode)
    try draft.chooseFinalMode("shadowsocks");try draft.chooseFinalMode("hysteria2")
    try model.saveIOSNodeChain(draft.nodes,owner:owner)
    let captured=try model.captureIOSNodeChain(model.bundle!);defer{try? captured.plan.close()}
-   try check("HY2 editor commits exact original transport",model.writes==1 && captured.members.last?.mode=="hysteria2" && captured.members.last?.id==owner.controlID)
+   try check("HY2 editor commits exact original transport",model.writes==1 && captured.members.last?.mode=="hysteria2" && captured.members.last?.id==owner.controlID && captured.members.last?.profile["start_layer"] as? String==finalLayer)
    let stale=try model.captureIOSNodeChainEditorOwner()
    model.bundle!.profiles["hysteria2"]!["hy2-ca.pem"]=Data("changed original CA".utf8).base64EncodedString()
    try reject("HY2 editor changed original CA"){try model.saveIOSNodeChain(draft.nodes,owner:stale)}
-  }
+  }}
   var importedDraft=IOSNodeChainDraft(saved:[.init(id:"entry",mode:"wg"),.init(id:"custom",mode:"shadowsocks"),.init(id:"final",mode:"shadowsocks")],finalID:"final")
   try reject("HY2 final cannot adopt imported middle"){try importedDraft.chooseFinalMode("hysteria2")}
   for mode in ["wg","naive-h3","Hysteria2",""] {try reject("unsupported final chooser "+mode){try importedDraft.chooseFinalMode(mode)}}

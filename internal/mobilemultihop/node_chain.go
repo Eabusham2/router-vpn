@@ -163,7 +163,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		}
 		if position < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) ||
 			position == len(source.Nodes)-1 && !nodeChainFinalCapture(node) {
-			return nil, errors.New("ordered Local chains require captured WG or AWG2 Fast/Strong prefixes and an SS2022 or unlayered paired Hysteria2 final")
+			return nil, errors.New("ordered Local chains require captured WG or AWG2 Fast/Strong prefixes and an SS2022 or paired Hysteria2 final with its original Start Layer")
 		}
 		id, peer := predecessorText(node.profile, "id"), predecessorText(node.profile, "node_proof_id")
 		if ids[id] || peers[peer] {

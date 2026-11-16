@@ -100,9 +100,11 @@ func TestNodeChainHysteriaFinalKeepsExplicitScope(t *testing.T) {
 	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 		t.Run("final-layer/"+layer, func(t *testing.T) {
 			nodes := nodeChainModeFixtureNodes(t, []string{"wg", "hysteria2"}, []string{"", layer})
-			if _, err := NewNodeChain(startJSON(t, nodeChainFixtureSource(t, nodes))); err == nil {
-				t.Fatal("unimplemented Hysteria2 final layer gained ordered authority")
+			chain, err := NewNodeChain(startJSON(t, nodeChainFixtureSource(t, nodes)))
+			if err != nil || chain.proofs[1].StartLayer != layer || chain.Progress().Ready {
+				t.Fatal("original captured Hysteria2 final layer refused or gained unproved readiness", err)
 			}
+			assertNodeChainHysteriaLayerClosure(t, externalTestRead(t, chain.Config()), nodes[1], 1, chain.FinalTag(), chain.proofs[0].Tag)
 		})
 		t.Run("preserved-prefix-layer/"+layer, func(t *testing.T) {
 			_, source := nodeChainHysteriaFixture(t, 3, "awg2-strong", layer)

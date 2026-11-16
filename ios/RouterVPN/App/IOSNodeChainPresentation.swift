@@ -72,7 +72,7 @@ enum IOSNodeChainPresentation {
             guard matches.count == 1, let profile = matches.first,
                   (profile.normalizedNodeKind == "router-vpn" && profile.external == nil &&
                    (position == nodes.count - 1 ? node.mode == "shadowsocks" || node.mode == "hysteria2" &&
-                    ["", "off"].contains(profile.startLayer ?? "") &&
+                    ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer ?? "") &&
                     points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode)) ||
                    IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count) && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile)))) else { return nil }
             points.append(IOSNodePathPoint(profile, mode: node.mode))

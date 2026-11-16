@@ -1,3 +1,21 @@
+# 2026-11-16: Captured Hysteria2 final layers in shared source and Apple consumers
+
+Paired ordered routes with two through eight nodes now retain an independently
+captured Off, AES or AES+XOR layer on their Hysteria2 final in the shared compiler,
+Server/Compare/Last ownership paths and Apple Local/Server/Compare source
+consumers. Original WG/AWG prefix ownership, TLS/CA/password and independent outer
+key, final DNS and MTU checks remain required. Imported graph families still
+require a Shadowsocks final.
+
+The [shared source evidence](HYSTERIA2-FINAL-LAYER-SOURCE-2026-11-16.md) records
+302 distinct race records. The [Apple consumer evidence](APPLE-HYSTERIA2-FINAL-LAYERS-2026-11-16.md)
+records 5,523 capture assertions, 189 Local launch assertions, 350 picker
+assertions and 299 editor Save assertions with their complete compiled controls.
+These source/callback results do not establish native encrypted, installed-host
+or physical-device acceptance. Android, desktop and native acceptance are
+separate follow-on units. Older Off-only entries below describe their historical
+snapshots.
+
 # Current implementation status
 
 Updated November 16, 2026 UTC. This file distinguishes published source,

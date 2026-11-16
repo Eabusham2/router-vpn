@@ -64,10 +64,10 @@ enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -
  }
  static func run() throws {
   for prefix in IOSMultihopNodeSelection.nativePrefixModes {
-   for layer in [nil, "", "off"] as [String?] {
+   for layer in [nil, "", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] as [String?] {
     let original = profile(layer), path = nodes(prefix)
     var view = ChoiceSurface(draft: IOSNodeChainDraft(saved: path, finalID: "final"), available: [original])
-    try check("paired Off final picker", view.choices == ["shadowsocks", "hysteria2"] && view.unavailableChoice == nil)
+    try check("paired independent-layer final picker", view.choices == ["shadowsocks", "hysteria2"] && view.unavailableChoice == nil)
     try view.choose("hysteria2")
     try check("paired final callback preserves original prefix", view.draft.nodes == [path[0], .init(id: "final", mode: "hysteria2")])
     try view.choose("shadowsocks")
@@ -85,12 +85,12 @@ enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -
     try view.choose("shadowsocks")
     try check("imported final retains exact middle mode and private policies", view.draft.nodes == path && view.available == [original])
    }
-   for layer in ["aes-256-gcm", "aes-256-gcm+xor-whitening", "OFF", "unknown"] {
+   for layer in ["xor-without-aes", "aes-256-gcm+unowned", "OFF", "unknown"] {
     let original = profile(layer), path = nodes(prefix)
     var view = ChoiceSurface(draft: IOSNodeChainDraft(saved: path, finalID: "final"), available: [original])
-    try check("layered final picker", view.choices == ["shadowsocks"])
-    try reject("layered final callback") { try view.choose("hysteria2") }
-    try check("layered refusal retains original DNS MTU credentials and draft", view.available == [original] && view.draft.nodes == path)
+    try check("unsupported layer final picker", view.choices == ["shadowsocks"])
+    try reject("unsupported layer final callback") { try view.choose("hysteria2") }
+    try check("unsupported layer refusal retains original DNS MTU credentials and draft", view.available == [original] && view.draft.nodes == path)
    }
   }
   let path = nodes("wg")
@@ -112,17 +112,17 @@ enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -
   }
   var stale = ChoiceSurface(draft: IOSNodeChainDraft(saved: path, finalID: "final"), available: [profile("off")])
   try check("original callback offered Hysteria2", stale.choices.contains("hysteria2"))
-  stale.available = [profile("aes-256-gcm")]
+  stale.available = [profile("aes-256-gcm+unowned")]
   try reject("source changed before final callback") { try stale.choose("hysteria2") }
   stale.available = []
   try reject("source removed before final callback") { try stale.choose("shadowsocks") }
   try check("stale callback never substitutes final", stale.draft.nodes == path)
   var invalid = path; invalid[1].mode = "hysteria2"
-  var retained = ChoiceSurface(draft: IOSNodeChainDraft(saved: invalid, finalID: "final"), available: [profile("aes-256-gcm")])
+  var retained = ChoiceSurface(draft: IOSNodeChainDraft(saved: invalid, finalID: "final"), available: [profile("aes-256-gcm+unowned")])
   try check("unavailable saved mode remains explicit", retained.choices == ["shadowsocks"] && retained.draft.nodes == invalid)
   try check("unavailable saved row remains disabled", retained.unavailableChoice?.mode == "hysteria2" && retained.unavailableChoice?.disabled == true)
   try reject("unavailable saved mode cannot become eligible") { try retained.choose("hysteria2") }
-  try check("unavailable saved row never rewrites source", retained.draft.nodes == invalid && retained.available == [profile("aes-256-gcm")])
+  try check("unavailable saved row never rewrites source", retained.draft.nodes == invalid && retained.available == [profile("aes-256-gcm+unowned")])
  }
 }
 '''
@@ -169,10 +169,10 @@ def main(output=None):
     editor, view = paths[1].read_text(), paths[2].read_text()
     edits = [
         ('unfiltered-picker', editor, view.replace('ForEach(finalModes,', 'ForEach(IOSMultihopNodeSelection.nativeFinalModes,', 1), 'FAIL imported final picker exposes unsupported transport'),
-        ('layer-policy', editor.replace('[nil, "", "off"].contains(profile.startLayer) &&', 'true &&', 1), view, 'FAIL layered final picker'),
+        ('layer-policy', editor.replace('[nil, "", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer) &&', 'true &&', 1), view, 'FAIL unsupported layer final picker'),
         ('imported-prefix', editor.replace('nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) {', 'true {', 1), view, 'FAIL imported final picker exposes unsupported transport'),
         ('original-final', editor.replace('nodes.last?.id == profile.id else', 'true else', 1), view, 'FAIL direct final provenance changed-id'),
-        ('callback-policy', editor, view.replace('                                    try IOSNodeChainEditorVisible.requireFinalMode(mode,\n                                        profile: available.first(where: { $0.id == node.id }), nodes: draft.nodes)\n', '', 1), 'ACCEPTED layered final callback'),
+        ('callback-policy', editor, view.replace('                                    try IOSNodeChainEditorVisible.requireFinalMode(mode,\n                                        profile: available.first(where: { $0.id == node.id }), nodes: draft.nodes)\n', '', 1), 'ACCEPTED unsupported layer final callback'),
         ('unavailable-enabled', editor, view.replace('.tag(node.mode).disabled(true)', '.tag(node.mode).disabled(false)', 1), 'FAIL unavailable saved row remains disabled'),
     ]
     for name, changed_editor, changed_view, _ in edits:

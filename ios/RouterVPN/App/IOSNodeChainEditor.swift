@@ -46,7 +46,7 @@ struct IOSNodeChainDraft {
     mutating func chooseFinalMode(_ mode: String) throws {
         guard !nodes.isEmpty, IOSMultihopNodeSelection.nativeFinalModes.contains(mode),
               mode == "shadowsocks" || nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
-            throw IOSMultihopNodeSelection.issue("Hysteria2 requires paired WireGuard or AWG2 preceding nodes and Start Layer Off on the final node.")
+            throw IOSMultihopNodeSelection.issue("Hysteria2 requires paired WireGuard or AWG2 preceding nodes and an independent Off, AES or AES with XOR whitening layer on the final node.")
         }
         nodes[nodes.count - 1].mode = mode
     }
@@ -174,7 +174,7 @@ enum IOSNodeChainEditorVisible {
         guard let profile, profile.normalizedNodeKind == "router-vpn", profile.external == nil,
               nodes.last?.id == profile.id else { return [] }
         var modes = ["shadowsocks"]
-        if [nil, "", "off"].contains(profile.startLayer) &&
+        if [nil, "", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer) &&
             nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) {
             modes.append("hysteria2")
         }

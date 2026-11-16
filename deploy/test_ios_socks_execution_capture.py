@@ -200,6 +200,12 @@ def main(swift=SWIFT, family="SOCKS"):
             result = run(original, 2)
             assert result.returncode == 1 and 'ACCEPTED Hysteria2 identity mismatched final transport shadowsocks' in result.stdout + result.stderr, result.stdout + result.stderr
             print('Rejected Apple Hysteria2 source control: original-final-identity')
+            before = 'profile["start_layer"] == nil || (profile["start_layer"] as? String).map({ ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains($0) }) == true else { return false }'
+            assert identity.count(before) == 1
+            (work / 'Identity.swift').write_text(identity.replace(before, 'true else { return false }', 1))
+            result = run(original, 2)
+            assert result.returncode == 1 and 'ACCEPTED Hysteria2 identity malformed final layer' in result.stdout + result.stderr, result.stdout + result.stderr
+            print('Rejected Apple Hysteria2 source control: exact-final-layer-type')
 
 
 if __name__ == '__main__':

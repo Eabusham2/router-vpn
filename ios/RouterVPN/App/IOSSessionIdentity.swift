@@ -175,7 +175,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                     if position == nodes.count - 1 {
                         guard let raw = member["profile_json"] as? String,
                               let profile = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
-                              profile["start_layer"] == nil || profile["start_layer"] as? String == "" || profile["start_layer"] as? String == "off" else { return false }
+                              profile["start_layer"] == nil || (profile["start_layer"] as? String).map({ ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains($0) }) == true else { return false }
                     } else {
                         guard ["wg", "awg2-fast", "awg2-strong"].contains(member["mode"] as? String ?? "") else { return false }
                     }

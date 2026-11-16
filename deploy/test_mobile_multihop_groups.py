@@ -131,6 +131,31 @@ HYSTERIA_SERVER_ROOTS = (
 )
 HYSTERIA_SERVER_PHASES = tuple(('paired Hysteria2 Server '+root, '^'+root+'$') for root in HYSTERIA_SERVER_ROOTS)
 
+HYSTERIA_LAYER_ROOTS = (
+    'TestNodeChainHysteriaFinalLayers2',
+    'TestNodeChainHysteriaFinalLayers3',
+    'TestNodeChainHysteriaFinalLayers4',
+    'TestNodeChainHysteriaFinalLayers5',
+    'TestNodeChainHysteriaFinalLayers6',
+    'TestNodeChainHysteriaFinalLayers7',
+    'TestNodeChainHysteriaFinalLayers8',
+    'TestNodeChainHysteriaFinalLayersRejectChangedClosure',
+    'TestNodeChainHysteriaFinalLayersRejectBorrowedSource',
+    'TestNodeChainHysteriaFinalLayersRequireOriginalProofLifetime',
+    'TestNodeChainServerHysteriaFinalLayers2',
+    'TestNodeChainServerHysteriaFinalLayers3',
+    'TestNodeChainServerHysteriaFinalLayers4',
+    'TestNodeChainServerHysteriaFinalLayers5',
+    'TestNodeChainServerHysteriaFinalLayers6',
+    'TestNodeChainServerHysteriaFinalLayers7',
+    'TestNodeChainServerHysteriaFinalLayers8',
+    'TestNodeChainServerHysteriaFinalLayersPlan',
+    'TestNodeChainServerHysteriaFinalLayersExecution',
+    'TestNodeChainServerHysteriaFinalLayersRestore',
+    'TestNodeChainServerHysteriaFinalLayersLast',
+)
+HYSTERIA_LAYER_PHASES = tuple(('paired Hysteria2 layers '+root, '^'+root+'$') for root in HYSTERIA_LAYER_ROOTS)
+
 CANDIDATE_PREFIX_SOURCE_ROOTS = (
     'TestNodeChainCandidatePreparationImportedSavedPrefixes',
     'TestNodeChainCandidatePreparationOpenVPNKeepsOnlyPacketPrefixes',
@@ -171,7 +196,8 @@ PHASES = (
     ('ordered execution measurements', r'^TestNodeChainExecutionMeasurement'),
     ('ordered execution capture and projection', r'^TestNodeChainExecution(?!(?:Discovery|Last|Runtime|Healthy|Stop|MTU|Measurement|Latency))'),
     *HYSTERIA_SERVER_PHASES,
-    ('ordered Server carrier and proof', '^(?!(?:'+'|'.join(HYSTERIA_SERVER_ROOTS)+')$)'+r'TestNodeChainServer'),
+    *HYSTERIA_LAYER_PHASES,
+    ('ordered Server carrier and proof', '^(?!(?:'+'|'.join(HYSTERIA_SERVER_ROOTS+HYSTERIA_LAYER_ROOTS)+')$)'+r'TestNodeChainServer'),
     ('ordered imported middle', r'^TestNodeChainImported(?!SSCompletePacketPrefixes$)'),
     ('ordered hostname Server and comparison', r'^TestNodeChainHostnameExecution'),
     # Complete saved-source matrices are separate from live measurements.
@@ -186,7 +212,7 @@ PHASES = (
     *OPENVPN_EXECUTION_PHASES,
     *OPENVPN_DESKTOP_EXECUTION_PHASES,
     ('OpenVPN Server original pair and proof', '^(?:'+'|'.join(OPENVPN_SERVER_ROOTS)+')$'),
-    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS+SOCKS_PREFIX_ROOTS+OPENVPN_SERVER_ROOTS+OPENVPN_EXECUTION_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
+    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS+SOCKS_PREFIX_ROOTS+OPENVPN_SERVER_ROOTS+OPENVPN_EXECUTION_ROOTS+HYSTERIA_LAYER_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
     ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
     ('proxy transports and native Xray', r'^Test(?:Proxy|Naive|Xray|NativeXray)'),
     ('mandatory PQ', r'^TestPQ'),
@@ -232,6 +258,7 @@ CI_GROUPS = {
         'ordered execution MTU', 'ordered execution measurements',
         'ordered execution capture and projection', 'ordered Server carrier and proof',
         *(label for label, _ in HYSTERIA_SERVER_PHASES),
+        *(label for label, _ in HYSTERIA_LAYER_PHASES),
         'ordered imported middle', 'ordered hostname Server and comparison', 'captured candidate prefix sources',
         'captured imported candidate source ownership', 'ordered candidates and prefix measurements',
         'CONNECT prefix execution source authority', 'CONNECT prefix execution lifecycle',
@@ -255,7 +282,7 @@ CI_GROUPS = {
 }
 
 
-REQUIRED = frozenset((*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS, *OPENVPN_SERVER_ROOTS, *OPENVPN_EXECUTION_ROOTS, *OPENVPN_DESKTOP_EXECUTION_ROOTS, *HYSTERIA_SERVER_ROOTS, *CANDIDATE_PREFIX_REQUIRED_ROOTS, *CANDIDATE_IMPORTED_REQUIRED_ROOTS,
+REQUIRED = frozenset((*CONNECT_PREFIX_ROOTS, *SOCKS_PREFIX_ROOTS, *OPENVPN_SERVER_ROOTS, *OPENVPN_EXECUTION_ROOTS, *OPENVPN_DESKTOP_EXECUTION_ROOTS, *HYSTERIA_SERVER_ROOTS, *HYSTERIA_LAYER_ROOTS, *CANDIDATE_PREFIX_REQUIRED_ROOTS, *CANDIDATE_IMPORTED_REQUIRED_ROOTS,
     'TestNodeChainHostnameExecutionRetainsPacketPrefixDNS',
     'TestNodeChainHostnameExecutionRejectsUnownedDNS',
     'TestNodeChainHostnameExecutionComparesAndRestores',
@@ -844,6 +871,32 @@ class PartitionTests(unittest.TestCase):
         future = 'TestNodeChainServerHysteriaFuture'
         self.assertIn(future, dict(partition(sorted(set(self.names) | {future})))['ordered Server carrier and proof'])
 
+    def test_hysteria_final_layer_roots_are_complete_required_and_disjoint(self):
+        groups = dict(partition(self.names))
+        self.assertEqual(len(HYSTERIA_LAYER_ROOTS), 21)
+        actual = set()
+        for path in (ROOT/'internal/mobilemultihop').glob('node_chain*layers_test.go'):
+            actual.update(re.findall(r'^func (TestNodeChain(?:Server)?Hysteria\w+)\(', path.read_text(), re.MULTILINE))
+        self.assertEqual(set(HYSTERIA_LAYER_ROOTS), actual)
+        for root, (label, expression) in zip(HYSTERIA_LAYER_ROOTS, HYSTERIA_LAYER_PHASES):
+            self.assertEqual(groups[label], [root])
+            self.assertEqual(expression, '^'+root+'$')
+            self.assertIn(root, REQUIRED)
+            self.assertIn(label, CI_GROUPS['core'])
+            self.assertNotIn(root, groups['ordered Server carrier and proof'])
+            self.assertNotIn(root, groups[ORIGINAL_GRAPHS_PHASE])
+            self.assertIn('-timeout=180s', command(groups[label]))
+            with self.assertRaises(ValueError):
+                inventory('\n'.join(name for name in self.names if name != root))
+            for mutation in ('omitted', 'duplicated'):
+                assignment = {key: list(value) for key, value in CI_GROUPS.items()}
+                if mutation == 'omitted':
+                    assignment['core'].remove(label)
+                else:
+                    assignment['runtime'].append(label)
+                with self.subTest(root=root, mutation=mutation), self.assertRaises(ValueError):
+                    select_ci_group(list(groups.items()), 'core', assignment)
+
     def test_original_graph_batches_keep_whole_roots_order_and_existing_bounds(self):
         package = 'router-vpn/internal/mobilemultihop'
         for count in (1, 15, 16, 17, 129, 130):
@@ -984,7 +1037,7 @@ class PartitionTests(unittest.TestCase):
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and name not in HYSTERIA_SERVER_ROOTS and name not in CANDIDATE_PREFIX_REQUIRED_ROOTS and name not in CANDIDATE_IMPORTED_REQUIRED_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and name not in SOCKS_PREFIX_ROOTS and name not in OPENVPN_SERVER_ROOTS and name not in OPENVPN_EXECUTION_ROOTS and name not in HYSTERIA_SERVER_ROOTS and name not in HYSTERIA_LAYER_ROOTS and name not in CANDIDATE_PREFIX_REQUIRED_ROOTS and name not in CANDIDATE_IMPORTED_REQUIRED_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]

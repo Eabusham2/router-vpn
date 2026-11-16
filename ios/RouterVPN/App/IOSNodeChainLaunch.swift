@@ -24,7 +24,7 @@ extension RouterVPNModel {
         let control = selected.routerProfiles.first(where: { $0.id == selected.selectedRouterID })
         if let control, ["server", "auto"].contains(control.multihopExecution ?? "") {
             guard let nodes = control.multihopNodes, IOSMultihopNodeSelection.supportsServerExecution(nodes) else {
-                throw IOSMultihopNodeSelection.issue("Choose a supported ordered Server or Compare path with its original paired nodes and a Shadowsocks or unlayered Hysteria2 final. An imported middle requires a Shadowsocks final.")
+                throw IOSMultihopNodeSelection.issue("Choose a supported ordered Server or Compare path with its original paired nodes and a Shadowsocks or Hysteria2 final with its independent Off, AES or AES with XOR whitening layer. An imported middle requires a Shadowsocks final.")
             }
             return .execution(try IOSNodeChainExecutionCapture.compile(bundles: sources, requested: control.multihopExecution!))
         }
@@ -79,9 +79,10 @@ extension IOSRuntimeSelector {
               }),
               let final = capture.members.last, final.profile["node_kind"] as? String == "router-vpn",
               final.mode == "shadowsocks" || final.mode == "hysteria2" &&
-                ["", "off"].contains(final.profile["start_layer"] as? String ?? "") &&
+                (final.profile["start_layer"] == nil ||
+                 (final.profile["start_layer"] as? String).map({ ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains($0) }) == true) &&
                 capture.members.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) && $0.profile["node_kind"] as? String == "router-vpn" }) else {
-            throw IOSMultihopNodeSelection.issue("This Local ordered path needs paired WireGuard or AWG2 nodes followed by Shadowsocks 2022 or unlayered Hysteria2. An imported middle requires a Shadowsocks 2022 final node.")
+            throw IOSMultihopNodeSelection.issue("This Local ordered path needs paired WireGuard or AWG2 nodes followed by Shadowsocks 2022 or Hysteria2 with its independent Off, AES or AES with XOR whitening layer. An imported middle requires a Shadowsocks 2022 final node.")
         }
         return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: final.mode,
                                    files: [:], nodeChainInput: capture.launchInput)
