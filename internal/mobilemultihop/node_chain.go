@@ -214,7 +214,9 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		c.importedOwners.seal = c.importedOwners.captureSeal()
 	}
 	if c.openVPNMiddle != nil {
-		c.openVPNOwners = &nodeChainOpenVPNOwners{owner: c, middle: c.openVPNMiddle, nodes: append([]*NodeProfile(nil), c.nodes...)}
+		c.openVPNOwners = &nodeChainOpenVPNOwners{owner: c, sourceJSON: c.sourceJSON, middleInput: c.openVPNMiddle.input, count: len(c.nodes), middle: c.openVPNMiddle, policy: c.openVPNMiddle.policy, nodes: append([]*NodeProfile(nil), c.nodes...)}
+		c.openVPNOwners.self = c.openVPNOwners
+		c.openVPNOwners.seal = c.openVPNOwners.captureSeal()
 	}
 	if _, err := c.LaunchInput(); err != nil {
 		return nil, err
@@ -314,8 +316,7 @@ func (c *NodeChain) validateCapture() error {
 		return nodeChainError
 	}
 	if c.openVPNMiddle != nil {
-		var source NodeChainSource
-		if c.importedMiddle != nil || c.socksSource != nil || c.connectSource != nil || exactJSON([]byte(c.sourceJSON), &source, NodeChainInputLimit) != nil || source.Schema != 5 || len(source.Nodes) < 3 || len(source.Nodes) > NodeChainMaximumNodes || len(source.Nodes) != len(c.nodes) || source.Nodes[len(source.Nodes)-2] != c.openVPNMiddle.input || !c.openVPNOwners.current(c) {
+		if c.importedMiddle != nil || c.socksSource != nil || c.connectSource != nil || !c.openVPNOwners.current(c) {
 			return nodeChainError
 		}
 	}
