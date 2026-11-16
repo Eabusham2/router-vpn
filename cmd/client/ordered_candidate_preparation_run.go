@@ -161,8 +161,18 @@ func (p *orderedCandidatePreparation) startRuntime(ctx context.Context) (*ordere
 
 func orderedCandidateSameInventory(a, b *desktopNodeChainCandidateCatalog) bool {
 	if a == nil || b == nil || a.revision != b.revision || a.inventory != b.inventory ||
+		(a.prefixPreparation == nil) != (b.prefixPreparation == nil) ||
 		!reflect.DeepEqual(a.assets, b.assets) || !reflect.DeepEqual(a.profiles, b.profiles) || len(a.files) != len(b.files) {
 		return false
+	}
+	if a.prefixPreparation != nil {
+		if a.plan != nil || b.plan != nil {
+			return false
+		}
+		source := a.prefixPreparation.Source()
+		if source == "" || source != b.prefixPreparation.Source() {
+			return false
+		}
 	}
 	for i := range a.files {
 		if !sameDesktopCandidateSourceFile(a.files[i], b.files[i]) {

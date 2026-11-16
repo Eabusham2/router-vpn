@@ -117,7 +117,7 @@ func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app,
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if _, err := captureDesktopNodeChainCandidateSources(ctx, a, launch, position, []string{profile.ID}); err != nil {
+		if _, err := captureDesktopNodeChainCandidateSourcesForScope(ctx, a, launch, position, []string{profile.ID}, scope); err != nil {
 			continue
 		}
 		choice := orderedCandidateChoice{ID: profile.ID, Name: profile.Name, Kind: "router-vpn"}
@@ -137,13 +137,13 @@ func captureOrderedCandidateNativePreparedViewScope(ctx context.Context, a *app,
 	if len(ids) == 0 {
 		return nil, errors.New("no exact saved supported TCP candidate sources for this packet prefix")
 	}
-	view.catalog, err = captureDesktopNodeChainCandidateSources(ctx, a, launch, position, ids)
+	view.catalog, err = captureDesktopNodeChainCandidateSourcesForScope(ctx, a, launch, position, ids, scope)
 	if err != nil || view.catalog.revision != revision {
 		return nil, errors.Join(err, errors.New("saved candidate catalog changed during its view capture"))
 	}
 	if scope == orderedCandidateSavedPrefixScope {
-		if _, err := captureDesktopNodeCandidatePrefixSource(ctx, selection, position, view.catalog.inventory); err != nil {
-			return nil, err
+		if view.catalog.prefixPreparation == nil || view.catalog.plan != nil || view.catalog.prefixPreparation.OriginalSourceSHA256() != selection.Native.source {
+			return nil, errors.New("saved prefix view lost its original closed source")
 		}
 	}
 	if err := selection.Native.chain.validate(ctx, control, profiles); err != nil {

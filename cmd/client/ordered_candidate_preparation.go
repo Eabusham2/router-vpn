@@ -172,7 +172,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	if err != nil {
 		return nil, err
 	}
-	inventory, err := captureDesktopNodeChainCandidateSources(ctx, a, sourceLaunch, q.Position, q.CandidateIDs)
+	inventory, err := captureDesktopNodeChainCandidateSourcesForScope(ctx, a, sourceLaunch, q.Position, q.CandidateIDs, q.Scope)
 	if err != nil {
 		return nil, err
 	}
@@ -181,9 +181,9 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	}
 	var prefixPreparation *mobilemultihop.NodeChainCandidatePreparation
 	if q.Scope == orderedCandidateSavedPrefixScope {
-		prefixPreparation, err = captureDesktopNodeCandidatePrefixSource(ctx, selection, q.Position, inventory.inventory)
-		if err != nil {
-			return nil, err
+		prefixPreparation = inventory.prefixPreparation
+		if prefixPreparation == nil || inventory.plan != nil || prefixPreparation.OriginalSourceSHA256() != selection.Native.source {
+			return nil, errors.New("saved prefix inventory lost its original closed preparation")
 		}
 	}
 	if err = selection.Native.chain.validate(ctx, control, profiles); err != nil {
@@ -275,6 +275,10 @@ func (p *orderedCandidatePreparation) savedSourcesCurrent(ctx context.Context) e
 		p.selection.Native.chain == nil || p.observeNetwork == nil {
 		return errors.New("candidate saved source observation lost its original capture")
 	}
+	if p.request.Scope == orderedCandidateSavedPrefixScope && (p.prefixPreparation == nil || p.prefixPreparation != p.inventory.prefixPreparation || p.inventory.plan != nil) ||
+		p.request.Scope != orderedCandidateSavedPrefixScope && (p.prefixPreparation != nil || p.inventory.prefixPreparation != nil) {
+		return errors.New("candidate saved source changed its complete or closed-prefix owner")
+	}
 	if err := desktopnetwork.LockContext(ctx, &p.app.mu); err != nil {
 		return err
 	}
@@ -284,9 +288,12 @@ func (p *orderedCandidatePreparation) savedSourcesCurrent(ctx context.Context) e
 		return err
 	}
 	// Re-capture only source inventory. No connected identity is manufactured.
-	current, err := captureDesktopNodeChainCandidateSources(ctx, p.app, p.inventory.launch, p.request.Position, p.request.CandidateIDs)
+	current, err := captureDesktopNodeChainCandidateSourcesForScope(ctx, p.app, p.inventory.launch, p.request.Position, p.request.CandidateIDs, p.request.Scope)
 	if err != nil || current.inventory != p.inventory.inventory || !reflect.DeepEqual(current.assets, p.inventory.assets) {
 		return errors.Join(err, errors.New("temporary candidate original saved inventory changed"))
+	}
+	if p.prefixPreparation != nil && (current.prefixPreparation == nil || current.prefixPreparation.Source() != p.prefixPreparation.Source()) {
+		return errors.New("temporary candidate original prefix source changed")
 	}
 	for i, file := range current.files {
 		if i >= len(p.inventory.files) || !sameDesktopCandidateSourceFile(file, p.inventory.files[i]) {

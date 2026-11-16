@@ -164,7 +164,7 @@ func (p *orderedCandidatePreparation) startPrefixRuntime(ctx context.Context, r 
 	}
 	r.transition = false
 	// This remains the original source-only full graph, never a native graph.
-	r.catalog, err = captureDesktopNodeChainCandidateSources(ctx, p.app, p.inventory.launch, p.request.Position, p.request.CandidateIDs)
+	r.catalog, err = captureDesktopNodeChainCandidateSourcesForScope(ctx, p.app, p.inventory.launch, p.request.Position, p.request.CandidateIDs, orderedCandidateSavedPrefixScope)
 	if err != nil || !orderedCandidateSameInventory(p.inventory, r.catalog) {
 		return r, errors.Join(err, errors.New("prefix preparation changed its captured saved inventory"))
 	}

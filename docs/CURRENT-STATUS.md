@@ -6,6 +6,16 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 16: desktop saved-prefix chooser and catalog
+
+Saved four/eight-node paths with a literal or hostname imported Shadowsocks
+suffix now reach their separate closed prefix preparation from the actual desktop
+chooser. The operation preserves the complete original source and protection,
+while connected/full-path candidate authority remains separate. All 29 focused
+controller records and the compiled old-code refusal passed; native traffic,
+installed widgets and exact-SHA release evidence remain distinct. See the
+[saved-prefix catalog evidence](DESKTOP-SAVED-PREFIX-CATALOG-2026-11-16.md).
+
 ## November 16: paired Hysteria2 desktop Server/Compare
 
 Wholly paired 2–8-member WG/AWG-to-Hysteria2 paths now use their original

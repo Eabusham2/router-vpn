@@ -124,7 +124,11 @@ func TestOrderedCandidatePrefixResultCannotBorrowFullCaptureOrSaveScope(t *testi
 	a, q := orderedPreparationFixture(t, "wg")
 	q.Scope = orderedCandidateSavedPrefixScope
 	p := beginOrderedPreparationFixture(t, a, q)
-	result := desktopCandidateStatusFixture(t, p.inventory, q.CandidateIDs[0])
+	full, err := captureDesktopNodeChainCandidateSources(context.Background(), a, p.inventory.launch, q.Position, q.CandidateIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := desktopCandidateStatusFixture(t, full, q.CandidateIDs[0])
 	if validateOrderedCandidatePreparedStatus(p, q.CandidateIDs[0], result, time.Now()) == nil {
 		t.Fatal("prefix adopted complete-path candidate capture")
 	}

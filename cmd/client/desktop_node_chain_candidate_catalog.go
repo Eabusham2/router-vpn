@@ -64,6 +64,7 @@ type desktopNodeChainCandidateCatalog struct {
 	identity                          speedLabPathIdentity
 	revision, inventory, inventorySHA string
 	plan                              *mobilemultihop.NodeChainCandidatePlan
+	prefixPreparation                 *mobilemultihop.NodeChainCandidatePreparation
 	profiles                          map[string]string
 	assets                            []viaEntryAsset
 	files                             []desktopCandidateSourceFile
@@ -90,6 +91,16 @@ func captureDesktopNodeChainCandidates(ctx context.Context, a *app, identity spe
 // authority. Only captureDesktopNodeChainCandidates admits this inventory to
 // an original connected owner after the full identity check above.
 func captureDesktopNodeChainCandidateSources(ctx context.Context, a *app, launch *desktopNodeLaunch, position int, ids []string) (*desktopNodeChainCandidateCatalog, error) {
+	return captureDesktopNodeChainCandidateSourcesForScope(ctx, a, launch, position, ids, orderedCandidateSavedCompleteScope)
+}
+
+// A saved prefix captures its own closed preparation instead of borrowing the
+// connected full-path plan. The ordinary caller above keeps that separate gate.
+func captureDesktopNodeChainCandidateSourcesForScope(ctx context.Context, a *app, launch *desktopNodeLaunch, position int, ids []string, scope string) (*desktopNodeChainCandidateCatalog, error) {
+	scope, scopeErr := normalizedOrderedCandidateSavedScope(scope)
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
 	if ctx == nil || ctx.Err() != nil || a == nil || launch == nil || launch.chain == nil || launch.chain.policy == nil || len(ids) == 0 || len(ids) > hopmeasure.CandidateMaximumTargets {
 		return nil, errors.New("candidate timing requires complete captured saved sources")
 	}
@@ -166,7 +177,11 @@ func captureDesktopNodeChainCandidateSources(ctx context.Context, a *app, launch
 	clear(raw)
 	result.inventorySHA = hex.EncodeToString(sum[:])
 	result.assets = append([]viaEntryAsset(nil), capture.assets...)
-	result.plan, err = launch.chain.policy.NodeChain().NewCandidatePlan(position, result.inventory)
+	if scope == orderedCandidateSavedPrefixScope {
+		result.prefixPreparation, err = captureDesktopNodeCandidatePrefixSource(ctx, launch.chain.selection, position, result.inventory)
+	} else {
+		result.plan, err = launch.chain.policy.NodeChain().NewCandidatePlan(position, result.inventory)
+	}
 	if err != nil {
 		return nil, err
 	}
