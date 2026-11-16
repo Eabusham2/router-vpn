@@ -92,17 +92,22 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			if record.Prefs.MultihopExecution != "local" {
 				connect := captured.Mode == "http-connect" || captured.Mode == "https-connect"
 				socks := captured.Mode == "socks5"
-				typed := connect || socks
+				openvpn := captured.Mode == "openvpn"
+				typed := connect || socks || openvpn
 				count := len(record.NodeChain)
 				if count < 3 || count > 8 || i != count-2 || (!typed && captured.Mode != "shadowsocks") || !mobilemultihop.NodeChainPrefixMode(record.NodeChain[0].Mode) || record.NodeChain[count-1].Mode != "shadowsocks" {
-					return errors.New("saved imported execution requires its original complete literal SS2022, CONNECT or SOCKS path")
+					return errors.New("saved imported execution requires its original complete literal SS2022, CONNECT, SOCKS or independently paired OpenVPN path")
 				}
 				if typed {
 					final := record.NodeChain[count-1].Preferences
 					if final == nil {
 						return errors.New("saved typed proxy execution lost its original SS final")
 					}
-					if socks {
+					if openvpn {
+						if !desktopOpenVPNExecutionPairedLayer(final.StartLayer) {
+							return errors.New("saved OpenVPN execution lost its original final Start Layer")
+						}
+					} else if socks {
 						if !desktopSOCKSExecutionPairedLayer(final.StartLayer) {
 							return errors.New("saved SOCKS execution lost its original final Start Layer")
 						}

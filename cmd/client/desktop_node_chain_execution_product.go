@@ -46,7 +46,14 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 		return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
 	}
 	if requested != "local" && desktopNodeChainHasOpenVPN(nodes) {
-		return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
+		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes || nodes[len(nodes)-2].Mode != "openvpn" {
+			return errors.New("OpenVPN execution requires its original paired packet prefix and SS final")
+		}
+		for _, node := range nodes[:len(nodes)-2] {
+			if !mobilemultihop.NodeChainPrefixMode(node.Mode) {
+				return errors.New("OpenVPN execution requires only paired packet prefixes")
+			}
+		}
 	}
 	if requested != "local" && desktopNodeChainHasSOCKS(nodes) {
 		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes || nodes[len(nodes)-2].Mode != "socks5" {

@@ -213,6 +213,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_socks_execution_controller_runner.py',
                              ROOT/'deploy/test_desktop_connect_execution_layers.py',
                              ROOT/'deploy/test_desktop_connect_execution_layers_runner.py',
+                             ROOT/'deploy/test_desktop_openvpn_execution_controller.py',
+                             ROOT/'deploy/test_desktop_openvpn_execution_controller_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution.py',
                              ROOT/'deploy/test_mobile_node_chain_execution_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution_preparation.py',
@@ -1751,6 +1753,17 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_desktop_connect_execution_layers.py',
                      '--phase', connect_layer_phase, '--receipt', temp/('connect-layers-'+connect_layer_phase+'.json'),
                      *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1200)
+            run([sys.executable, ROOT/'deploy/test_desktop_openvpn_execution_controller_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # Each new root retains120s Go/135s process and240s compiler bounds.
+            # Public11 roots + one compiler fit the independent1800s phase.
+            for openvpn_parent_phase in ('source', 'public', 'controls'):
+                if openvpn_parent_phase == 'public' and not target.startswith(('linux/', 'windows/')):
+                    continue
+                run([sys.executable, ROOT/'deploy/test_desktop_openvpn_execution_controller.py',
+                     '--phase', openvpn_parent_phase, '--receipt', temp/('openvpn-controller-'+openvpn_parent_phase+'.json'),
+                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
+                    timeout=900 if openvpn_parent_phase == 'controls' else 1800)
             verify_imported_desktop_native_dns(source, target, env)
             verify_imported_desktop_native_openvpn(source, target, env)
             run([sys.executable, ROOT/'deploy/test_desktop_pt_inventory.py', source,

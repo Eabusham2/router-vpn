@@ -152,7 +152,9 @@ func (capture *desktopNodeChainExecutionRestore) newLaunchContext(ctx context.Co
 		return nil, nil, err
 	}
 	var prep *mobilemultihop.NodeChainExecutionPreparation
-	if execution.socksPhysical != nil {
+	if execution.openvpnPhysical != nil {
+		prep, err = mobilemultihop.NewDesktopNodeChainOpenVPNExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), capture.last.JSON())
+	} else if execution.socksPhysical != nil {
 		prep, err = mobilemultihop.NewDesktopNodeChainSOCKSExecutionLastPreparation(launch.chain.socksPolicy, execution.preparation.Execution(), capture.last.JSON())
 	} else if execution.connectPhysical != nil {
 		prep, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionLastPreparation(launch.chain.connectPolicy, execution.preparation.Execution(), capture.last.JSON())
@@ -162,7 +164,9 @@ func (capture *desktopNodeChainExecutionRestore) newLaunchContext(ctx context.Co
 	if err != nil {
 		return nil, nil, err
 	}
-	if execution.socksPhysical != nil {
+	if execution.openvpnPhysical != nil {
+		execution.openvpnPhysical, err = prep.OpenVPNDesktopPhysicalPolicy()
+	} else if execution.socksPhysical != nil {
 		execution.socksPhysical, err = prep.SOCKSDesktopPhysicalPolicy()
 	} else if execution.connectPhysical != nil {
 		execution.connectPhysical, err = prep.CONNECTDesktopPhysicalPolicy()
@@ -212,6 +216,9 @@ func closeDesktopNodeChainExecutionRestoreCapability(ctx context.Context, launch
 func (e *desktopNodeChainExecutionLaunch) lastCurrent(last mobilemultihop.NodeChainExecutionLast) error {
 	if e.validateSource() != nil || e.projectionPhysicalCurrent(e.projection) != nil {
 		return errors.New("execution Last lost its original typed desktop projection")
+	}
+	if e.openvpnPhysical != nil {
+		return last.ValidateOpenVPNDesktopProjection(e.projection)
 	}
 	if e.socksPhysical != nil {
 		return last.ValidateSOCKSDesktopProjection(e.projection)

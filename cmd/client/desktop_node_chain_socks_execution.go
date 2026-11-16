@@ -39,7 +39,7 @@ func desktopSOCKSTrioExecutionChoices() []string {
 }
 
 func desktopNodeChainExecutionPhysicalCount(paired *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,
-	connect *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) int {
+	connect *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy, openvpn ...*mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy) int {
 	count := 0
 	if paired != nil {
 		count++
@@ -49,6 +49,11 @@ func desktopNodeChainExecutionPhysicalCount(paired *mobilemultihop.DesktopNodeCh
 	}
 	if socks != nil {
 		count++
+	}
+	for _, policy := range openvpn {
+		if policy != nil {
+			count++
+		}
 	}
 	return count
 }

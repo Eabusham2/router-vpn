@@ -380,10 +380,12 @@ if launch != nil && launch.chain != nil {
 		return nil
 	}
 	return launch.chain.execution
+
         '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) validateSource() error', r'''
 	_, _, err := e.readSourceValidated()
 	return err
+
         '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) readSourceValidated() (mobilemultihop.DesktopPhysicalPolicy, mobilemultihop.DesktopNodeChainMetadata, error)', r'''
 	observed, err := e.readSourceObservation(false)
@@ -394,7 +396,7 @@ if launch != nil && launch.chain != nil {
 	bad := func() (desktopExecutionSourceObservation, error) {
 		return desktopExecutionSourceObservation{}, errors.New("execution launch changed its exact original source or physical preparation")
 	}
-	if e == nil || e.original == nil || e.preparation == nil || desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical) != 1 ||
+	if e == nil || e.original == nil || e.preparation == nil || desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical, e.openvpnPhysical) != 1 ||
 		!e.original.hasPolicy() || e.original.preparation != nil || e.original.selection.Native == nil ||
 		e.original.selection.Native.chain == nil || e.original.selection.Native.validate(e.original.selection) != nil {
 		return bad()
@@ -406,7 +408,20 @@ if launch != nil && launch.chain != nil {
 	var observed desktopExecutionSourceObservation
 	var policy mobilemultihop.DesktopPhysicalPolicy
 	var meta mobilemultihop.DesktopNodeChainMetadata
-	if e.socksPhysical != nil {
+	if e.openvpnPhysical != nil {
+		if e.original.policy == nil || e.original.connectPolicy != nil || e.original.socksPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil {
+			return bad()
+		}
+		original, metadata, err := e.openvpnPhysical.ReadOriginalValidated(e.preparation)
+		if err != nil || original != e.original.policy || original.OriginalChain() != selected.chain {
+			return bad()
+		}
+		source, err := e.preparation.OriginalOpenVPNSource()
+		if err != nil || source != selected.chain {
+			return bad()
+		}
+		policy, meta = e.openvpnPhysical, metadata
+	} else if e.socksPhysical != nil {
 		if e.original.socksPolicy == nil || e.original.policy != nil || e.original.connectPolicy != nil || selected.socks == nil || selected.chain != nil || selected.connect != nil {
 			return bad()
 		}
@@ -454,7 +469,7 @@ if launch != nil && launch.chain != nil {
 		return bad()
 	}
 	observed.policy, observed.metadata = policy, meta
-	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil) {
+	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil || e.openvpnPhysical != nil) {
 		var err error
 		observed.config, observed.physical, observed.capture, err = policy.PhysicalReadValidated()
 		if err != nil {
@@ -462,8 +477,9 @@ if launch != nil && launch.chain != nil {
 		}
 	}
 	return observed, nil
+
         '''),
-        ('cmd/client/desktop_node_chain_socks_execution.go', 'func desktopNodeChainExecutionPhysicalCount(paired *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,\n\tconnect *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) int', r'''
+        ('cmd/client/desktop_node_chain_socks_execution.go', 'func desktopNodeChainExecutionPhysicalCount(paired *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,\n\tconnect *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy, socks *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy, openvpn ...*mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy) int', r'''
 	count := 0
 	if paired != nil {
 		count++
@@ -474,7 +490,13 @@ if launch != nil && launch.chain != nil {
 	if socks != nil {
 		count++
 	}
+	for _, policy := range openvpn {
+		if policy != nil {
+			count++
+		}
+	}
 	return count
+
         '''),
         ('internal/mobilemultihop/node_chain_socks_execution_desktop.go', 'func (p *DesktopNodeChainSOCKSExecutionPhysicalPolicy) ReadOriginalValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainSOCKSPolicy, DesktopNodeChainMetadata, error)', r'''
 	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {
@@ -547,14 +569,17 @@ if launch != nil && launch.chain != nil {
 	}
 	_, meta, _, err := original.policy.ReadValidated()
 	return meta, err
+
         '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) physicalPolicy() (mobilemultihop.DesktopPhysicalPolicy, error)', r'''
 	policy, _, err := e.readSourceValidated()
 	return policy, err
+
         '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) readPolicy() (string, mobilemultihop.DesktopNodeChainMetadata, mobilemultihop.DesktopPhysicalCapture, error)', r'''
 	observation, err := e.readPolicyCapture()
 	return observation.config, observation.metadata, observation.capture, err
+
         '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) readPolicyCapture() (desktopExecutionSourceObservation, error)', r'''
 	observed, err := e.readSourceObservation(true)
@@ -563,7 +588,9 @@ if launch != nil && launch.chain != nil {
 	}
 	meta, physical := observed.metadata, observed.physical
 	kind := "node-chain-execution"
-	if e.socksPhysical != nil {
+	if e.openvpnPhysical != nil {
+		kind = "node-chain-openvpn-execution"
+	} else if e.socksPhysical != nil {
 		kind = "node-chain-socks-execution"
 	} else if e.connectPhysical != nil {
 		kind = "node-chain-connect-execution"
@@ -574,6 +601,7 @@ if launch != nil && launch.chain != nil {
 	}
 	observed.metadata.ConfigSHA256, observed.metadata.FinalTag = physical.ConfigSHA256, mobilemultihop.SelectorTag
 	return observed, nil
+
         '''),
         ('cmd/client/desktop_node_chain_execution_launch.go', 'func (e *desktopNodeChainExecutionLaunch) bound(launch *desktopNodeLaunch) error', r'''
 	_, meta, err := e.readSourceValidated()
@@ -582,6 +610,7 @@ if launch != nil && launch.chain != nil {
 		return errors.New("execution observation lost its exact staged parent launch")
 	}
 	return nil
+
         '''),
         ('cmd/client/desktop_node_chain_execution_graph.go', 'func captureDesktopNodeChainExecutionProofContext(ctx context.Context, launch *desktopNodeLaunch) (*desktopNodeChainExecutionProof, error)', r'''
 	if ctx == nil {
@@ -607,8 +636,9 @@ if launch != nil && launch.chain != nil {
 		!e.ready.Progress.Complete || !e.ready.Progress.Ready || !e.ready.Progress.DNSProven || !e.ready.Progress.PublicProven || e.ready.SelectionEpoch == 0 {
 		return nil, errors.New("ordered execution graph preceded its selected native proof")
 	}
-	return &desktopNodeChainExecutionProof{execution: e, physical: e.physical, connectPhysical: e.connectPhysical, socksPhysical: e.socksPhysical, projection: e.projection, identity: e.identity,
+	return &desktopNodeChainExecutionProof{execution: e, physical: e.physical, connectPhysical: e.connectPhysical, socksPhysical: e.socksPhysical, openvpnPhysical: e.openvpnPhysical, projection: e.projection, identity: e.identity,
 		winner: *e.ready.Progress.Comparison.Winner, target: e.ready.Progress.Comparison.Target, epoch: e.ready.SelectionEpoch}, nil
+
         '''),
         ('cmd/client/desktop_node_chain_execution_graph.go', 'func (proof *desktopNodeChainExecutionProof) currentContext(ctx context.Context, launch *desktopNodeLaunch, graph activeMultihopGraph) error', r'''
 	if ctx == nil {
@@ -628,6 +658,7 @@ if launch != nil && launch.chain != nil {
 	}
 	defer e.mu.Unlock()
 	return errors.Join(proof.currentState(e, graph), ctx.Err())
+
         '''),
         ('cmd/client/desktop_node_chain_execution_graph.go', 'func (proof *desktopNodeChainExecutionProof) original(launch *desktopNodeLaunch, graph activeMultihopGraph) (*desktopNodeChainExecutionLaunch, error)', r'''
 	e := desktopNodeChainLaunchExecution(launch)
@@ -637,10 +668,11 @@ if launch != nil && launch.chain != nil {
 		}
 		return nil, nil
 	}
-	if e == nil || e != proof.execution || e.bound(launch) != nil || e.physical != proof.physical || e.connectPhysical != proof.connectPhysical || e.socksPhysical != proof.socksPhysical || graph.Execution != string(proof.winner.Execution) {
+	if e == nil || e != proof.execution || e.bound(launch) != nil || e.physical != proof.physical || e.connectPhysical != proof.connectPhysical || e.socksPhysical != proof.socksPhysical || e.openvpnPhysical != proof.openvpnPhysical || graph.Execution != string(proof.winner.Execution) {
 		return nil, errors.New("ordered execution graph replaced its original preparation")
 	}
 	return e, nil
+
         '''),
         ('cmd/client/desktop_node_chain_execution_graph.go', 'func (proof *desktopNodeChainExecutionProof) currentState(e *desktopNodeChainExecutionLaunch, graph activeMultihopGraph) error', r'''
 	if e.projection != proof.projection || e.identity != proof.identity || e.ready == nil || e.ready.Identity != proof.identity ||
@@ -649,6 +681,7 @@ if launch != nil && launch.chain != nil {
 		return errors.New("ordered execution graph replaced its proved winner, target or identity")
 	}
 	return nil
+
         '''),
         ('cmd/client/desktop_node_chain_execution_graph.go', 'func (e *desktopNodeChainExecutionLaunch) publicationCurrentLocked(ctx context.Context, a *app, launch *desktopNodeLaunch, selection multihopSelection) error', r'''
 	if ctx == nil || ctx.Err() != nil || a == nil || e == nil || e.operation == nil || e.bound(launch) != nil ||
@@ -659,6 +692,7 @@ if launch != nil && launch.chain != nil {
 		return errors.New("ordered execution publication lost its captured operation, source or command")
 	}
 	return ctx.Err()
+
         '''),
     )
     sources = {path: _tokens(read(path)) for path, _, _ in expected}
@@ -1262,7 +1296,7 @@ _, err := desktopNodeChainImportedHostnameInput(profile)
 return err == nil
         """),
         (imported_path, "func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error", '''
-	bad := errors.New("ordered imported execution requires its original complete SS2022, CONNECT or SOCKS path, with a saved hostname resolver after two packet members")
+	bad := errors.New("ordered imported execution requires its original complete SS2022, CONNECT, SOCKS or independently paired OpenVPN path, with a saved hostname resolver after two packet members")
 	if !validDesktopOrderedExecution(requested) {
 		return bad
 	}
@@ -1282,7 +1316,7 @@ return err == nil
 		return bad
 	}
 	middle := len(members) - 2
-	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && (desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || len(members) >= 4 && desktopNodeChainImportedHostnameExecutionMiddle(members[middle].Profile)) || desktopNodeChainCONNECTExecutionShape(members) || desktopNodeChainSOCKSExecutionShape(members)) {
+	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && (desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || len(members) >= 4 && desktopNodeChainImportedHostnameExecutionMiddle(members[middle].Profile)) || desktopNodeChainCONNECTExecutionShape(members) || desktopNodeChainSOCKSExecutionShape(members) || desktopNodeChainOpenVPNExecutionShape(members)) {
 		return bad
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
@@ -1301,6 +1335,7 @@ return err == nil
 		proofs[p.NodeProofID] = true
 	}
 	return nil
+
         '''),
         ('cmd/client/desktop_node_chain_socks_execution.go', 'func desktopNodeChainSOCKSExecutionShape(members []desktopNodeChainMember) bool', r'''
 	if len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes {
@@ -1474,7 +1509,8 @@ return true
 		return true
 	}
 	return runtime.GOOS == "darwin" && nativeDesktopImportedTrioExecutionPlatformSupported() &&
-		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested) || desktopSOCKSTrioExecutionMembers(members, requested))
+		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested) || desktopSOCKSTrioExecutionMembers(members, requested) || desktopOpenVPNExecutionMembers(members, requested))
+
         '''),
         (product_path, "func validDesktopOrderedExecution(value string) bool", '''
 return value == "local" || value == "server" || value == "auto"
@@ -1490,7 +1526,14 @@ return value == "local" || value == "server" || value == "auto"
 		return errors.New("ordered Server and Compare currently require a Shadowsocks 2022 final node")
 	}
 	if requested != "local" && desktopNodeChainHasOpenVPN(nodes) {
-		return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
+		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes || nodes[len(nodes)-2].Mode != "openvpn" {
+			return errors.New("OpenVPN execution requires its original paired packet prefix and SS final")
+		}
+		for _, node := range nodes[:len(nodes)-2] {
+			if !mobilemultihop.NodeChainPrefixMode(node.Mode) {
+				return errors.New("OpenVPN execution requires only paired packet prefixes")
+			}
+		}
 	}
 	if requested != "local" && desktopNodeChainHasSOCKS(nodes) {
 		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes || nodes[len(nodes)-2].Mode != "socks5" {
@@ -1514,6 +1557,7 @@ return value == "local" || value == "server" || value == "auto"
 		}
 	}
 	return nil
+
         '''),
         (product_path, "func prepareDesktopOrderedExecutionSession(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeChainExecutionSession, error)", '''
 launch, image, err := prepareDesktopNodeChainExecutionHost(ctx, a, selection, requested)
@@ -1585,6 +1629,47 @@ if a.nodeProtection != slot {
 }
 if slot.provedEmptyLocked() { a.nodeProtection = nil }
 return ctx.Err()
+        '''),
+    )
+    expected += (
+        ("cmd/client/desktop_node_chain_openvpn_execution.go", "func desktopNodeChainOpenVPNExecutionMiddle(profile common.RouterProfile) bool", '''
+	if !desktopNodeChainOpenVPNMiddle(profile, "openvpn") || profile.External.OpenVPNPairing == nil {
+		return false
+	}
+	_, err := nativeopenvpn.ValidatePairing(*profile.External.OpenVPN, *profile.External.OpenVPNPairing)
+	return err == nil
+
+        '''),
+        ("cmd/client/desktop_node_chain_openvpn_execution.go", "func desktopNodeChainOpenVPNExecutionShape(members []desktopNodeChainMember) bool", '''
+	if len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes {
+		return false
+	}
+	middle, final := len(members)-2, len(members)-1
+	if members[middle].Mode != "openvpn" || !desktopNodeChainOpenVPNExecutionMiddle(members[middle].Profile) || members[final].Mode != "shadowsocks" || !desktopOpenVPNExecutionPairedLayer(members[final].Profile.StartLayer) {
+		return false
+	}
+	for _, member := range members[:middle] {
+		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || !desktopOpenVPNExecutionPairedLayer(member.Profile.StartLayer) {
+			return false
+		}
+	}
+	return true
+
+        '''),
+        ("cmd/client/desktop_node_chain_openvpn_execution.go", "func desktopOpenVPNExecutionPairedLayer(layer string) bool", '''
+	return layer == "" || layer == "off" || layer == "aes-256-gcm" || layer == "aes-256-gcm+xor-whitening"
+
+        '''),
+        ("cmd/client/desktop_node_chain_openvpn_execution.go", "func desktopOpenVPNExecutionMembers(members []desktopNodeChainMember, requested string) bool", '''
+	return (requested == "server" || requested == "auto") && desktopNodeChainOpenVPNExecutionShape(members) && desktopOrderedExecutionMembers(members, requested) == nil
+
+        '''),
+        ("cmd/client/desktop_node_chain_openvpn_execution.go", "func desktopOpenVPNExecutionChoices() []string", '''
+	if nativeDesktopImportedTrioExecutionPlatformSupported() && nativeNodeChainOpenVPNPlatformSupported() {
+		return []string{"local", "server", "auto"}
+	}
+	return []string{"local"}
+
         '''),
     )
     for path, declaration, body in expected:

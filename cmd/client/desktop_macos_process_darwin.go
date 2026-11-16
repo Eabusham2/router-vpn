@@ -39,6 +39,7 @@ type desktopMacOSProcess struct {
 	executionPhysical        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
 	executionCONNECTPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
 	executionSOCKSPhysical   *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
+	executionOpenVPNPhysical *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
 }
 
 func startDesktopMacOSProcess(ctx context.Context, parent *desktopMacOSSessionCapture, scope macosprocess.Scope) (*desktopMacOSProcess, error) {
@@ -98,6 +99,25 @@ func startDesktopMacOSProcessCapturedExecutionFamilies(ctx context.Context, pare
 	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy,
 	socksPhysical *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy,
 	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
+	return startDesktopMacOSProcessCapturedExecutionOpenVPN(ctx, parent, scope, preparation, physical, connectPhysical, socksPhysical, nil, verify)
+}
+
+func startDesktopMacOSOpenVPNExecutionProcessWithVerifier(ctx context.Context, parent *desktopMacOSSessionCapture,
+	scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation,
+	physical *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy,
+	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
+	if preparation == nil || physical == nil {
+		return nil, errors.New("macOS OpenVPN child requires its exact typed preparation")
+	}
+	return startDesktopMacOSProcessCapturedExecutionOpenVPN(ctx, parent, scope, preparation, nil, nil, nil, physical, verify)
+}
+func startDesktopMacOSProcessCapturedExecutionOpenVPN(ctx context.Context, parent *desktopMacOSSessionCapture,
+	scope macosprocess.Scope, preparation *mobilemultihop.NodeChainExecutionPreparation,
+	physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy,
+	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy,
+	socksPhysical *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy,
+	openvpnPhysical *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy,
+	verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {
 	if ctx == nil || parent == nil || verify == nil {
 		return nil, errors.New("macOS child requires its original captured application")
 	}
@@ -106,10 +126,12 @@ func startDesktopMacOSProcessCapturedExecutionFamilies(ctx context.Context, pare
 	}
 	var arguments []string
 	var err error
-	if desktopNodeChainExecutionPhysicalCount(physical, connectPhysical, socksPhysical) > 1 {
+	if desktopNodeChainExecutionPhysicalCount(physical, connectPhysical, socksPhysical, openvpnPhysical) > 1 {
 		return nil, errors.New("macOS child mixed physical execution owners")
 	}
-	if socksPhysical != nil {
+	if openvpnPhysical != nil {
+		arguments, err = desktopMacOSOpenVPNExecutionProcessArguments(scope, preparation, openvpnPhysical)
+	} else if socksPhysical != nil {
 		arguments, err = desktopMacOSSOCKSExecutionProcessArguments(scope, preparation, socksPhysical)
 	} else if connectPhysical != nil {
 		if physical != nil {
@@ -127,7 +149,7 @@ func startDesktopMacOSProcessCapturedExecutionFamilies(ctx context.Context, pare
 	if err := parent.Current(ctx); err != nil {
 		return nil, err
 	}
-	p := &desktopMacOSProcess{parent: parent, scope: scope, execution: preparation, executionPhysical: physical, executionCONNECTPhysical: connectPhysical, executionSOCKSPhysical: socksPhysical,
+	p := &desktopMacOSProcess{parent: parent, scope: scope, execution: preparation, executionPhysical: physical, executionCONNECTPhysical: connectPhysical, executionSOCKSPhysical: socksPhysical, executionOpenVPNPhysical: openvpnPhysical,
 		gate: make(chan struct{}, 1), joined: make(chan struct{})}
 	// The initially empty gate holds construction until every partial native
 	// owner is published to this retained dependent. Parent close can wait for it.
@@ -220,10 +242,14 @@ func (p *desktopMacOSProcess) currentLocked(ctx context.Context) error {
 	if p.closed || p.retiring.Load() || !p.started.Load() || p.bootstrap == nil {
 		return errors.New("macOS child has no live captured handshake")
 	}
-	if desktopNodeChainExecutionPhysicalCount(p.executionPhysical, p.executionCONNECTPhysical, p.executionSOCKSPhysical) > 1 {
+	if desktopNodeChainExecutionPhysicalCount(p.executionPhysical, p.executionCONNECTPhysical, p.executionSOCKSPhysical, p.executionOpenVPNPhysical) > 1 {
 		return errors.New("macOS process mixed physical execution owners")
 	}
-	if p.executionSOCKSPhysical != nil {
+	if p.executionOpenVPNPhysical != nil {
+		if _, err := desktopMacOSOpenVPNExecutionProcessArguments(p.scope, p.execution, p.executionOpenVPNPhysical); err != nil {
+			return err
+		}
+	} else if p.executionSOCKSPhysical != nil {
 		if _, err := desktopMacOSSOCKSExecutionProcessArguments(p.scope, p.execution, p.executionSOCKSPhysical); err != nil {
 			return err
 		}

@@ -27,8 +27,8 @@ func (platform *desktopNodeChainPlatformRuntime) captureExecutionProductStop(ctx
 	defer s.mu.Unlock()
 	h := platform.host
 	if h.runtime != platform || h.launch != s.launch || h.parent == nil || h.parent.parent == nil ||
-		h.parent.app != s.app || h.execution != s.execution || h.executionPreparation == nil || desktopNodeChainExecutionPhysicalCount(h.executionPhysical, h.executionCONNECTPhysical, h.executionSOCKSPhysical) != 1 ||
-		h.executionPreparation != s.execution.preparation || h.executionPhysical != s.execution.physical || h.executionCONNECTPhysical != s.execution.connectPhysical || h.executionSOCKSPhysical != s.execution.socksPhysical ||
+		h.parent.app != s.app || h.execution != s.execution || h.executionPreparation == nil || desktopNodeChainExecutionPhysicalCount(h.executionPhysical, h.executionCONNECTPhysical, h.executionSOCKSPhysical, h.executionOpenVPNPhysical) != 1 ||
+		h.executionPreparation != s.execution.preparation || h.executionPhysical != s.execution.physical || h.executionCONNECTPhysical != s.execution.connectPhysical || h.executionSOCKSPhysical != s.execution.socksPhysical || h.executionOpenVPNPhysical != s.execution.openvpnPhysical ||
 		h.launch.chain.selection.Native != s.selection.Native {
 		return nil, errors.New("ordered macOS Stop changed its captured preparation or parent")
 	}
@@ -96,8 +96,8 @@ func (h *desktopMacOSNodeChainHost) unpublishedExecutionProductCurrentLocked(ctx
 		h.parent == nil || h.parent.app != s.app || h.parent.parent == nil || s.launch == nil || s.launch.command != nil ||
 		s.launch.chain == nil || s.launch.chain.platform != h.runtime || s.launch.chain.execution != s.execution ||
 		s.execution == nil || h.execution != s.execution || s.execution.original != s.launch.chain ||
-		h.executionPreparation == nil || desktopNodeChainExecutionPhysicalCount(h.executionPhysical, h.executionCONNECTPhysical, h.executionSOCKSPhysical) != 1 || h.executionPreparation != s.execution.preparation ||
-		h.executionPhysical != s.execution.physical || h.executionCONNECTPhysical != s.execution.connectPhysical || h.executionSOCKSPhysical != s.execution.socksPhysical || h.launch.chain.selection.Native != s.selection.Native ||
+		h.executionPreparation == nil || desktopNodeChainExecutionPhysicalCount(h.executionPhysical, h.executionCONNECTPhysical, h.executionSOCKSPhysical, h.executionOpenVPNPhysical) != 1 || h.executionPreparation != s.execution.preparation ||
+		h.executionPhysical != s.execution.physical || h.executionCONNECTPhysical != s.execution.connectPhysical || h.executionSOCKSPhysical != s.execution.socksPhysical || h.executionOpenVPNPhysical != s.execution.openvpnPhysical || h.launch.chain.selection.Native != s.selection.Native ||
 		!registered && (h.staged || h.stageDirectory != "" || h.launch.directory != "") {
 		return nil, bad
 	}
@@ -228,8 +228,8 @@ func (h *desktopMacOSNodeChainHost) retiredExecutionProductCurrentLocked(ctx con
 		h.runtime == nil || h.runtime.host != h || h.launch != s.launch || h.parent == nil || h.parent.app != s.app || h.parent.parent == nil ||
 		s.launch == nil || s.launch.chain == nil || s.launch.chain.platform != h.runtime || s.launch.chain.execution != s.execution ||
 		s.execution == nil || h.execution != s.execution || s.execution.original != s.launch.chain ||
-		h.executionPreparation == nil || desktopNodeChainExecutionPhysicalCount(h.executionPhysical, h.executionCONNECTPhysical, h.executionSOCKSPhysical) != 1 || h.executionPreparation != s.execution.preparation ||
-		h.executionPhysical != s.execution.physical || h.executionCONNECTPhysical != s.execution.connectPhysical || h.executionSOCKSPhysical != s.execution.socksPhysical || h.launch.chain.selection.Native != s.selection.Native {
+		h.executionPreparation == nil || desktopNodeChainExecutionPhysicalCount(h.executionPhysical, h.executionCONNECTPhysical, h.executionSOCKSPhysical, h.executionOpenVPNPhysical) != 1 || h.executionPreparation != s.execution.preparation ||
+		h.executionPhysical != s.execution.physical || h.executionCONNECTPhysical != s.execution.connectPhysical || h.executionSOCKSPhysical != s.execution.socksPhysical || h.executionOpenVPNPhysical != s.execution.openvpnPhysical || h.launch.chain.selection.Native != s.selection.Native {
 		return nil, bad
 	}
 	if h.process != nil {
@@ -246,7 +246,7 @@ func (h *desktopMacOSNodeChainHost) retiredExecutionProductCurrentLocked(ctx con
 			}
 		}
 		original := p.closed && joined && p.parent == h.parent && p.command == h.launch.command &&
-			p.execution == h.executionPreparation && p.executionPhysical == h.executionPhysical && p.executionCONNECTPhysical == h.executionCONNECTPhysical && p.executionSOCKSPhysical == h.executionSOCKSPhysical
+			p.execution == h.executionPreparation && p.executionPhysical == h.executionPhysical && p.executionCONNECTPhysical == h.executionCONNECTPhysical && p.executionSOCKSPhysical == h.executionSOCKSPhysical && p.executionOpenVPNPhysical == h.executionOpenVPNPhysical
 		p.gate <- struct{}{}
 		if !original {
 			return nil, bad

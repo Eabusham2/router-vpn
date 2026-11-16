@@ -171,7 +171,7 @@ func macOSExecutionRetirementFixtureWith(t *testing.T, source func(*testing.T) (
 	meta := launch.chain.policyMetadata()
 	runtime := &desktopNodeChainPlatformRuntime{registered: true}
 	h := &desktopMacOSNodeChainHost{parent: parent, runtime: runtime, launch: launch, policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy, connectPolicy: launch.chain.connectPolicy,
-		execution: execution, executionPreparation: execution.preparation, executionPhysical: execution.physical, executionCONNECTPhysical: execution.connectPhysical, executionSOCKSPhysical: execution.socksPhysical,
+		execution: execution, executionPreparation: execution.preparation, executionPhysical: execution.physical, executionCONNECTPhysical: execution.connectPhysical, executionSOCKSPhysical: execution.socksPhysical, executionOpenVPNPhysical: execution.openvpnPhysical,
 		operation: operation, gate: make(chan struct{}, 1), entered: true, published: true, staged: true, baselineEntered: true,
 		selection: desktopMacOSNodeChainSelection{Schema: 2, Family: launch.chain.macOSFamily(), ProfileID: meta.ProfileID,
 			Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy}}
@@ -210,7 +210,7 @@ func macOSExecutionRetirementFixtureWith(t *testing.T, source func(*testing.T) (
 		return &copy, ctx.Err()
 	}
 	child := &desktopMacOSProcess{parent: parent, command: launch.command, execution: execution.preparation,
-		executionPhysical: execution.physical, executionCONNECTPhysical: execution.connectPhysical, executionSOCKSPhysical: execution.socksPhysical, gate: make(chan struct{}, 1), joined: make(chan struct{})}
+		executionPhysical: execution.physical, executionCONNECTPhysical: execution.connectPhysical, executionSOCKSPhysical: execution.socksPhysical, executionOpenVPNPhysical: execution.openvpnPhysical, gate: make(chan struct{}, 1), joined: make(chan struct{})}
 	child.gate <- struct{}{}
 	child.started.Store(true)
 	close(child.joined)

@@ -36,9 +36,9 @@ func desktopNodeChainImportedHostnameExecutionMiddle(profile common.RouterProfil
 }
 
 // Paired execution retains its existing source bounds. Only the original
-// schema-two prefix or separately typed CONNECT/SOCKS path can add one imported member.
+// schema-two prefix or separately typed CONNECT/SOCKS/OpenVPN path can add one imported member.
 func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error {
-	bad := errors.New("ordered imported execution requires its original complete SS2022, CONNECT or SOCKS path, with a saved hostname resolver after two packet members")
+	bad := errors.New("ordered imported execution requires its original complete SS2022, CONNECT, SOCKS or independently paired OpenVPN path, with a saved hostname resolver after two packet members")
 	if !validDesktopOrderedExecution(requested) {
 		return bad
 	}
@@ -58,7 +58,7 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 		return bad
 	}
 	middle := len(members) - 2
-	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && (desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || len(members) >= 4 && desktopNodeChainImportedHostnameExecutionMiddle(members[middle].Profile)) || desktopNodeChainCONNECTExecutionShape(members) || desktopNodeChainSOCKSExecutionShape(members)) {
+	if members[len(members)-1].Mode != "shadowsocks" || !(members[middle].Mode == "shadowsocks" && (desktopNodeChainImportedExecutionMiddle(members[middle].Profile) || len(members) >= 4 && desktopNodeChainImportedHostnameExecutionMiddle(members[middle].Profile)) || desktopNodeChainCONNECTExecutionShape(members) || desktopNodeChainSOCKSExecutionShape(members) || desktopNodeChainOpenVPNExecutionShape(members)) {
 		return bad
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}

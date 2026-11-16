@@ -20,6 +20,7 @@ type desktopNodeChainExecutionLaunch struct {
 	physical        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
 	connectPhysical *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
 	socksPhysical   *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
+	openvpnPhysical *mobilemultihop.DesktopNodeChainOpenVPNExecutionPhysicalPolicy
 	mu              sync.Mutex
 	adoption        string
 	projection      *mobilemultihop.NodeChainExecutionProjection
@@ -46,6 +47,21 @@ func newDesktopNodeChainExecutionSource(original *desktopNodeChainLaunch, reques
 	}
 	if meta.TargetOS != "linux" && meta.TargetOS != "windows" && meta.TargetOS != "darwin" {
 		return nil, errors.New("execution host has no supported native target")
+	}
+	if desktopNodeChainHasOpenVPN(nodeChainSelectedReferences(original.selection.Nodes)) {
+		if original.policy == nil || original.socksPolicy != nil || original.connectPolicy != nil {
+			return nil, errors.New("OpenVPN execution requires its original generic Local owner")
+		}
+		prep, err := mobilemultihop.NewDesktopNodeChainOpenVPNExecutionPreparation(original.policy, requested)
+		if err != nil {
+			return nil, err
+		}
+		physical, err := prep.OpenVPNDesktopPhysicalPolicy()
+		if err != nil {
+			return nil, err
+		}
+		result := &desktopNodeChainExecutionLaunch{original: original, preparation: prep, openvpnPhysical: physical}
+		return result, result.validateSource()
 	}
 	if original.socksPolicy != nil {
 		prep, err := mobilemultihop.NewDesktopNodeChainSOCKSExecutionPreparation(original.socksPolicy, requested)
@@ -108,7 +124,7 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 	bad := func() (desktopExecutionSourceObservation, error) {
 		return desktopExecutionSourceObservation{}, errors.New("execution launch changed its exact original source or physical preparation")
 	}
-	if e == nil || e.original == nil || e.preparation == nil || desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical) != 1 ||
+	if e == nil || e.original == nil || e.preparation == nil || desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical, e.openvpnPhysical) != 1 ||
 		!e.original.hasPolicy() || e.original.preparation != nil || e.original.selection.Native == nil ||
 		e.original.selection.Native.chain == nil || e.original.selection.Native.validate(e.original.selection) != nil {
 		return bad()
@@ -120,7 +136,20 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 	var observed desktopExecutionSourceObservation
 	var policy mobilemultihop.DesktopPhysicalPolicy
 	var meta mobilemultihop.DesktopNodeChainMetadata
-	if e.socksPhysical != nil {
+	if e.openvpnPhysical != nil {
+		if e.original.policy == nil || e.original.connectPolicy != nil || e.original.socksPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil {
+			return bad()
+		}
+		original, metadata, err := e.openvpnPhysical.ReadOriginalValidated(e.preparation)
+		if err != nil || original != e.original.policy || original.OriginalChain() != selected.chain {
+			return bad()
+		}
+		source, err := e.preparation.OriginalOpenVPNSource()
+		if err != nil || source != selected.chain {
+			return bad()
+		}
+		policy, meta = e.openvpnPhysical, metadata
+	} else if e.socksPhysical != nil {
 		if e.original.socksPolicy == nil || e.original.policy != nil || e.original.connectPolicy != nil || selected.socks == nil || selected.chain != nil || selected.connect != nil {
 			return bad()
 		}
@@ -168,7 +197,7 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 		return bad()
 	}
 	observed.policy, observed.metadata = policy, meta
-	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil) {
+	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil || e.openvpnPhysical != nil) {
 		var err error
 		observed.config, observed.physical, observed.capture, err = policy.PhysicalReadValidated()
 		if err != nil {
@@ -204,6 +233,13 @@ func (e *desktopNodeChainExecutionLaunch) physicalPolicy() (mobilemultihop.Deskt
 func (e *desktopNodeChainExecutionLaunch) projectionPhysicalCurrent(projection *mobilemultihop.NodeChainExecutionProjection) error {
 	if e.validateSource() != nil || projection == nil {
 		return errors.New("execution projection lost its original typed physical source")
+	}
+	if e.openvpnPhysical != nil {
+		physical, err := projection.OpenVPNDesktopPhysicalPolicy()
+		if err != nil || physical != e.openvpnPhysical {
+			return errors.New("OpenVPN execution replaced its original physical source")
+		}
+		return nil
 	}
 	if e.socksPhysical != nil {
 		physical, err := projection.SOCKSDesktopPhysicalPolicy()
@@ -241,7 +277,9 @@ func (e *desktopNodeChainExecutionLaunch) readPolicyCapture() (desktopExecutionS
 	}
 	meta, physical := observed.metadata, observed.physical
 	kind := "node-chain-execution"
-	if e.socksPhysical != nil {
+	if e.openvpnPhysical != nil {
+		kind = "node-chain-openvpn-execution"
+	} else if e.socksPhysical != nil {
 		kind = "node-chain-socks-execution"
 	} else if e.connectPhysical != nil {
 		kind = "node-chain-connect-execution"

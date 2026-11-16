@@ -19,6 +19,7 @@ import (
 )
 
 type desktopExecutionOwnedModel struct {
+	openvpnServer          *mobilemultihop.NodeChainServerPolicy
 	winner                 string
 	importedSourceOverride *string
 	startErr               error
@@ -41,7 +42,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, err
 	}
 	var prep *mobilemultihop.NodeChainExecutionPreparation
-	if launch.chain.execution.socksPhysical != nil {
+	if launch.chain.execution.openvpnPhysical != nil {
+		prep, err = mobilemultihop.ParseDesktopNodeChainOpenVPNExecutionPreparation(string(raw))
+	} else if launch.chain.execution.socksPhysical != nil {
 		prep, err = mobilemultihop.ParseDesktopNodeChainSOCKSExecutionPreparation(string(raw))
 	} else if launch.chain.execution.connectPhysical != nil {
 		prep, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionPreparation(string(raw))
@@ -108,13 +111,15 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		}
 		serverInput.Schema = 3
 	}
-	for position := 1; position < len(local.Nodes); position++ {
-		input, identity, err := desktopExecutionServerNode(local.Nodes[position], local.IdentitySources[position], position)
-		if err != nil {
-			return nil, err
+	if local.Schema != 5 {
+		for position := 1; position < len(local.Nodes); position++ {
+			input, identity, err := desktopExecutionServerNode(local.Nodes[position], local.IdentitySources[position], position)
+			if err != nil {
+				return nil, err
+			}
+			serverInput.Nodes = append(serverInput.Nodes, input)
+			serverInput.IdentitySources = append(serverInput.IdentitySources, identity)
 		}
-		serverInput.Nodes = append(serverInput.Nodes, input)
-		serverInput.IdentitySources = append(serverInput.IdentitySources, identity)
 	}
 	if m.importedSourceOverride != nil {
 		if serverInput.Schema != 2 || len(serverInput.Nodes) < 2 {
@@ -124,7 +129,12 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	}
 	encoded, _ := json.Marshal(serverInput)
 	var server *mobilemultihop.NodeChainServerPolicy
-	if local.Schema == 3 {
+	if local.Schema == 5 {
+		if m.openvpnServer == nil || m.openvpnServer.Descriptor().Schema != 5 {
+			return nil, errors.New("modeled OpenVPN worker lost its separately captured Server provider")
+		}
+		server = m.openvpnServer
+	} else if local.Schema == 3 {
 		server, err = mobilemultihop.NewNodeChainSOCKSServerPolicy(string(encoded))
 	} else if local.Schema == 4 {
 		server, err = mobilemultihop.NewNodeChainCONNECTServerPolicy(string(encoded))
@@ -156,11 +166,11 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		return nil, err
 	}
 	request := multihoprelay.NodeChainRequest{Schema: descriptor.Schema, SessionID: strings.Repeat("7", 32), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: strings.Repeat("8", 64), Peer: peer.Addr().String(), AcquireExpiresAt: time.Now().Add(10 * time.Second).Unix(), LocalPacketPublicKeys: []string{key}, Port: 32003, Users: []multihoprelay.NodeChainUser{{Position: 1, Username: strings.Repeat("9", 48), Password: strings.Repeat("a", 48)}}}
-	if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 {
+	if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 || descriptor.Schema == 5 {
 		request.LocalPacketPositions = []int{0}
 	}
 	for position := 1; position+1 < len(local.Nodes); position++ {
-		if (descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4) && position == len(local.Nodes)-2 {
+		if (descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 || descriptor.Schema == 5) && position == len(local.Nodes)-2 {
 			// Imported SS has no packet client; retain its original source and
 			// separate relay user without fabricating paired credentials.
 			request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,
@@ -176,7 +186,7 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 			return nil, err
 		}
 		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, public)
-		if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 {
+		if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 || descriptor.Schema == 5 {
 			request.LocalPacketPositions = append(request.LocalPacketPositions, position)
 		}
 		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,
@@ -195,12 +205,14 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		}
 	}
 	source := mobilemultihop.NodeChainExecutionSource{Schema: 1, Execution: prep.Execution(), LocalSource: prep.LocalSource(), Server: descriptor, Request: request, FirstPort: 32000, LastPort: 32007}
-	if local.Schema == 3 || local.Schema == 4 {
+	if local.Schema == 3 || local.Schema == 4 || local.Schema == 5 {
 		source.Schema = local.Schema
 	}
 	encoded, _ = json.Marshal(source)
 	var policy *mobilemultihop.NodeChainExecutionPolicy
-	if local.Schema == 3 {
+	if local.Schema == 5 {
+		policy, err = mobilemultihop.NewNodeChainOpenVPNExecutionPolicy(prep, string(encoded))
+	} else if local.Schema == 3 {
 		policy, err = mobilemultihop.NewNodeChainSOCKSExecutionPolicy(prep, string(encoded))
 	} else if local.Schema == 4 {
 		policy, err = mobilemultihop.NewNodeChainCONNECTExecutionPolicy(prep, string(encoded))
@@ -220,7 +232,9 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	}
 	identity := mobilemultihop.NodeChainIdentity{EngineID: "original-execution-engine", SessionID: meta.SessionID, NetworkID: "original-execution-network", SourceSHA256: projection.SourceSHA256(), ConfigSHA256: projection.ConfigSHA256()}
 	var adoption any
-	if local.Schema == 3 {
+	if local.Schema == 5 {
+		adoption, err = mobilemultihop.NewDesktopNodeChainOpenVPNExecutionAdoptionRecord(projection, identity, owned.attempt.digest)
+	} else if local.Schema == 3 {
 		adoption, err = mobilemultihop.NewDesktopNodeChainSOCKSExecutionAdoptionRecord(projection, identity, owned.attempt.digest)
 	} else if local.Schema == 4 {
 		adoption, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionAdoptionRecord(projection, identity, owned.attempt.digest)
@@ -253,14 +267,21 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 	}
 	progress := mobilemultihop.NodeChainExecutionProgress{NodeChainProgress: mobilemultihop.NodeChainProgress{Stage: "selected", Execution: m.winner, Complete: true, Ready: true, DNSProven: true, PublicProven: true}, Comparison: routechoice.Result{Target: mobilemultihop.Targets[1], Winner: &candidate, Final: &measured, Measurements: []routechoice.Measurement{measured}}}
 	for _, proof := range selected {
-		progress.Prefixes = append(progress.Prefixes, mobilemultihop.NodeChainPrefixProgress{Position: proof.Position, ProfileID: proof.ProfileID, Proven: true, ResponseMS: 2})
+		row := mobilemultihop.NodeChainPrefixProgress{Position: proof.Position, ProfileID: proof.ProfileID, Proven: true, ResponseMS: 2}
+		if local.Schema == 5 && proof.Position == len(selected)-2 {
+			row.Kind, row.Label = "public-path", "Cumulative path through custom middle to public HTTPS edge"
+		}
+		progress.Prefixes = append(progress.Prefixes, row)
 	}
 	mtu := capture.ConfiguredMTU
 	if meta.RestoredMTU != 0 {
 		mtu = meta.RestoredMTU
 	}
 	m.ready = mobilemultihop.DesktopNodeChainExecutionReadyRecord{Schema: 1, Kind: "routervpn-node-chain-execution-ready-v1", SourceSHA256: meta.SourceSHA256, PreparationSourceSHA256: prep.SourceSHA256(), PreparationConfigSHA256: prep.ConfigSHA256(), TransferSHA256: owned.attempt.digest, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, Identity: identity, SelectionEpoch: 1, Generation: 1, Reader: 1, InterfaceName: "router-vpn", InterfaceIndex: 91, MTU: mtu, ObservedAt: time.Now().UnixMilli(), Progress: progress}
-	if local.Schema == 3 {
+	if local.Schema == 5 {
+		m.ready.Kind = "routervpn-node-chain-openvpn-execution-ready-v1"
+		err = mobilemultihop.DesktopNodeChainOpenVPNExecutionReadyRecord(m.ready).Validate(projection, owned.attempt.digest)
+	} else if local.Schema == 3 {
 		m.ready.Kind = "routervpn-node-chain-socks-execution-ready-v1"
 		err = mobilemultihop.DesktopNodeChainSOCKSExecutionReadyRecord(m.ready).Validate(projection, owned.attempt.digest)
 	} else if local.Schema == 4 {

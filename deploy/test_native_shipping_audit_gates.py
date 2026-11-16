@@ -399,7 +399,7 @@ class NativeShippingAuditTests(unittest.TestCase):
         policy = "cmd/client/desktop_node_chain_policy_dispatch.go"
         changes = (
             (policy, "(c.policy != nil || c.connectPolicy != nil || c.socksPolicy != nil)", "true"),
-            (launch, "desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical) != 1", "false"),
+            (launch, "desktopNodeChainExecutionPhysicalCount(e.physical, e.connectPhysical, e.socksPhysical, e.openvpnPhysical) != 1", "false"),
             (launch, "e.original.connectPolicy == nil || e.original.policy != nil || selected.connect == nil || selected.chain != nil || selected.socks != nil", "false"),
             (launch, "e.original.policy == nil || e.original.connectPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil", "false"),
             (launch, "e.connectPhysical.ReadOriginalValidated(e.preparation)", "e.connectPhysical.ReadOriginalValidated(other)"),
@@ -657,6 +657,24 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.replace_execution_function(path, declaration, before, after)
                 self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
                 self.assert_multihop_chain(False)
+
+    def test_openvpn_execution_retains_independent_pair_and_typed_platform(self):
+        path = "cmd/client/desktop_node_chain_openvpn_execution.go"
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        for before, after in (
+            ('profile.External.OpenVPNPairing == nil', 'false'),
+            ('nativeopenvpn.ValidatePairing(*profile.External.OpenVPN, *profile.External.OpenVPNPairing)', '(nil, nil)'),
+            ('len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes', 'false'),
+            ('!desktopNodeChainOpenVPNExecutionMiddle(members[middle].Profile)', 'false'),
+            ('!mobilemultihop.NodeChainPrefixMode(member.Mode)', 'false'),
+            ('!desktopOpenVPNExecutionPairedLayer(members[final].Profile.StartLayer)', 'false'),
+            ('desktopOrderedExecutionMembers(members, requested) == nil', 'true'),
+            ('nativeDesktopImportedTrioExecutionPlatformSupported() && nativeNodeChainOpenVPNPlatformSupported()', 'true'),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
 
     def test_connect_execution_product_retains_complete_prefix_credentials_and_local_capture(self):
         imported = "cmd/client/desktop_node_chain_imported_execution.go"

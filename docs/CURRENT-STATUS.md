@@ -6,6 +6,24 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 16: desktop OpenVPN Server/Compare parent and restoration
+
+Eligible independently paired OpenVPN paths with 3–8 members now retain their
+original source and typed physical owner through public Server/Compare,
+typed adoption/Ready, selected DNS, protection, MTU and immutable proved Last
+restoration. The parent composes the published [native child](DESKTOP-OPENVPN-NATIVE-CHILD-2026-11-16.md),
+[three desktop editors](DESKTOP-OPENVPN-EDITOR-2026-11-16.md) and
+[earlier packet-prefix measurement](OPENVPN-CANDIDATE-PREFIXES-2026-11-16.md).
+
+The final canonical race/vet build, 53 current-source records, two actual
+compiled omission controls and impacted source audits passed. A prior frozen
+image separately passed all 114 parent records; overlapping runs are not added
+together as new cases. These tests retain explicit child/kernel/UI models.
+Current native provider traffic, installed platform protection, signing,
+packages, physical devices and deployment remain separate required evidence;
+the full graph/platform scope is unchanged. See the
+[unit evidence and preserved failures](DESKTOP-OPENVPN-PARENT-EXECUTION-2026-11-16.md).
+
 ## November 16: retained Unix REALITY native host integration
 
 Single paired Router REALITY Vision, PQ Vision and XHTTP now enter the existing
