@@ -134,12 +134,15 @@ func routerVPNNewServerChain(parent context.Context, root *os.Root, directory st
 		finish()
 		if err == nil {
 			n.carrierJoined = make(chan struct{})
+			// Typed registry contexts are installed below. Retain the original
+			// cancellation channels before publishing the carrier watcher.
+			carrierDone, ownerDone := n.carrier.Done(), owned.Done()
 			go func() {
 				defer close(n.carrierJoined)
 				select {
-				case <-n.carrier.Done():
+				case <-carrierDone:
 					n.cancel()
-				case <-n.ctx.Done():
+				case <-ownerDone:
 				}
 			}()
 		}

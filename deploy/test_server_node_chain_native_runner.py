@@ -6,6 +6,9 @@ import json
 import io
 import contextlib
 import sys
+import os
+import subprocess
+import tempfile
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -83,6 +86,65 @@ class NativeServerChainRunner(unittest.TestCase):
   self.assertIn('if n.dnsOwners.current(ctx, n) != nil {\n\t\treturn false',observation)
   self.assertIn('resolver != n.dnsOwner',observation)
   self.assertIn('service.FromContext[adapter.DNSTransportManager](n.ctx) != n.dnsManager',observation)
+ def test_compiled_original_carrier_watcher_captures_cancellation_before_publication(self):
+  source=(ROOT/'mobile/server_chain/native.go.tmpl').read_text()
+  begin='\t\t\tn.carrierJoined = make(chan struct{})'
+  end='\n\t\t\t}()'
+  self.assertEqual(source.count(begin),1)
+  start=source.index(begin);finish=source.index(end,start)+len(end)
+  block=source[start:finish]
+  capture='carrierDone, ownerDone := n.carrier.Done(), owned.Done()'
+  self.assertEqual(block.count(capture),1)
+  program=r'''package watcher
+import("context";"testing";"time")
+type carrier struct{done chan struct{}}
+func(c *carrier) Done() <-chan struct{} {return c.done}
+type native struct{ctx context.Context;carrier *carrier;carrierJoined chan struct{};cancel context.CancelFunc}
+func start(n *native,owned context.Context){WATCHER}
+type key struct{}
+func TestOriginalCarrierWatcher(t *testing.T){
+ for _,carrierStops:=range []bool{false,true}{for i:=0;i<32;i++{
+  owned,cancel:=context.WithCancel(context.Background())
+  n:=&native{ctx:owned,carrier:&carrier{done:make(chan struct{})},cancel:cancel}
+  start(n,owned)
+  // This is the real constructor's later typed registry-context publication.
+  // Context values share the same original cancellation channel.
+  n.ctx=context.WithValue(owned,key{},i)
+  if carrierStops{close(n.carrier.done)}else{cancel()}
+  select{case <-n.carrierJoined:case <-time.After(time.Second):cancel();t.Fatal("watcher did not join its original cancellation")}
+  if owned.Err()!=context.Canceled{cancel();t.Fatal("carrier stopped without cancelling original owner")}
+  cancel()
+ }}
+}
+'''
+  mutations=(
+   ('original-ctx-read',block.replace(capture,'carrierDone := n.carrier.Done()').replace('case <-ownerDone:','case <-n.ctx.Done():'),'WARNING: DATA RACE'),
+   ('missing-cancel',block.replace('n.cancel()','/* broken original cancellation */'),'carrier stopped without cancelling original owner'),
+   ('missing-join',block.replace('defer close(n.carrierJoined)','/* broken original join */'),'watcher did not join its original cancellation'),
+   ('foreign-owner',block.replace('owned.Done()','context.Background().Done()'),'watcher did not join its original cancellation'),
+  )
+  with tempfile.TemporaryDirectory(prefix='server-original-carrier-watch-') as directory:
+   work=Path(directory);(work/'go.mod').write_text('module watcher\n\ngo 1.26\n')
+   for label,body,witness in (('original',block,None),*mutations):
+    with self.subTest(variant=label):
+     (work/'watcher_test.go').write_text(program.replace('WATCHER',body))
+     result=subprocess.run(['go','test','-json','-race','-count=1','-timeout=10s','.'],cwd=work,env=dict(os.environ,GORACE='atexit_sleep_ms=0'),capture_output=True,text=True,timeout=75)
+     self.assertNotIn('build failed',result.stdout+result.stderr)
+     rows=[json.loads(line) for line in result.stdout.splitlines()]
+     self.assertFalse(any(row.get('Action') in ('build-fail','skip') for row in rows))
+     test=[row for row in rows if row.get('Test')=='TestOriginalCarrierWatcher']
+     self.assertEqual(sum(row.get('Action')=='run' for row in test),1)
+     if witness is None:
+      self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+      self.assertEqual(sum(row.get('Action')=='pass' for row in test),1)
+      self.assertEqual(rows[-1].get('Action'),'pass')
+      self.assertNotIn('WARNING: DATA RACE',result.stdout+result.stderr)
+     else:
+      self.assertNotEqual(result.returncode,0)
+      self.assertIn(witness,result.stdout+result.stderr)
+      self.assertEqual(sum(row.get('Action')=='fail' for row in test),1)
+      self.assertEqual(rows[-1].get('Action'),'fail')
+
  def test_actual_shipping_gate_and_original_families_remain(self):
   docker=(ROOT/'deploy/router-agent.Dockerfile').read_text();workflow=(ROOT/'.github/workflows/native-xray-exits.yml').read_text()
   self.assertIn("./cmd/sing-box ./routervpn/servertor -run '^TestServerTor' -count=1 -timeout 90s",docker)
