@@ -322,7 +322,7 @@ func TestCapturedAWGReceiptRefusal(t *testing.T){for _,row:=range []struct{name,
         self.assertEqual(G.ORIGINAL_CASES,original_connect)
         self.assertEqual(G.CASES,original_connect+prefix_connect)
         self.assertEqual(len(G.CASES),len(set(G.CASES)))
-        self.assertEqual(G.BASE.CASES,('wg','awg-fast','awg-strong','mixed-three','wrong-first-key','wrong-middle-key','wrong-ss-key','wrong-awg-parameters','wrong-node','failed-selected-dns','wrong-public-trust','cancel-prefix','admission-restrictions','joined-active-udp'))
+        self.assertEqual(G.BASE.CASES,('wg','awg-fast','awg-strong','mixed-three','wrong-first-key','wrong-middle-key','wrong-ss-key','wrong-awg-parameters','wrong-node','failed-selected-dns','wrong-public-trust','cancel-prefix','admission-restrictions','joined-active-udp','candidate-wg','candidate-awg'))
         original=('original','wrong-middle-key','wrong-final-key','wrong-final-identity','failed-selected-dns','wrong-public-identity','joined-active-udp','admission-restrictions')
         prefixes=('prefix-original','prefix-wrong-middle-key','prefix-wrong-final-key','prefix-wrong-final-identity','prefix-failed-selected-dns','prefix-wrong-public-identity','prefix-joined-active-udp','prefix-admission-restrictions','prefix-wg-one','prefix-awg-fast','prefix-awg-strong','prefix-max-five','prefix-wrong-first-packet-key','prefix-wrong-later-packet-key')
         hostnames=('prefix-hostname-wg-one','prefix-hostname-awg-fast','prefix-hostname-awg-strong',
@@ -331,6 +331,19 @@ func TestCapturedAWGReceiptRefusal(t *testing.T){for _,row:=range []struct{name,
                    'prefix-hostname-wrong-first-packet-key','prefix-hostname-wrong-later-packet-key')
         self.assertEqual(G.BASE.IMPORTED_CASES,original+prefixes+hostnames)
         self.assertEqual(len(G.BASE.IMPORTED_CASES),len(set(G.BASE.IMPORTED_CASES)))
+
+    def test_inherited_ordinary_inventory_rejects_omission_duplicate_and_foreign_cases(self):
+        cases=G.BASE.CASES
+        mutants=[('old-fourteen',cases[:14]),('reordered',tuple(reversed(cases)))]
+        for index,case in enumerate(cases):
+            mutants.extend((
+                ('missing-'+case,cases[:index]+cases[index+1:]),
+                ('duplicate-'+case,cases[:index]+(case,)+cases[index:]),
+                ('foreign-'+case,cases[:index]+('foreign-case',)+cases[index+1:]),
+            ))
+        for name,mutant in mutants:
+            with self.subTest(control=name),patch.object(G.BASE,'CASES',mutant),self.assertRaises(AssertionError):
+                self.test_cases_are_exact_additive_family()
 
     def test_inherited_imported_inventory_rejects_omission_duplicate_and_foreign_cases(self):
         cases=G.BASE.IMPORTED_CASES
