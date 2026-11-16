@@ -669,8 +669,9 @@ class NativeShippingAuditTests(unittest.TestCase):
             (imported, "!mobilemultihop.NodeChainPrefixMode(member.Mode)", "false"),
             (imported, 'members[final].Mode != "shadowsocks"', "false"),
             (imported, "!desktopNodeChainCONNECTMiddle(members[middle].Profile, members[middle].Mode)", "false"),
-            (imported, 'members[final].Profile.StartLayer != "" && members[final].Profile.StartLayer != "off"', "false"),
-            (imported, 'layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening"', "false"),
+            (imported, '!desktopCONNECTExecutionPairedLayer(members[final].Profile.StartLayer)', "false"),
+            (imported, '!desktopCONNECTExecutionPairedLayer(layer)', "false"),
+            (imported, 'layer == "" || layer == "off" || layer == "aes-256-gcm" || layer == "aes-256-gcm+xor-whitening"', "true"),
             (imported, '(requested == "server" || requested == "auto")', "true"),
             (imported, "desktopOrderedExecutionMembers(members, requested) == nil", "true"),
             (middle, 'profile.External.Protocol != mode', "false"),
@@ -707,6 +708,7 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.assert_multihop_chain(False)
         for path,declaration in (
             (imported,"func desktopNodeChainCONNECTExecutionShape(members []desktopNodeChainMember) bool"),
+            (imported,"func desktopCONNECTExecutionPairedLayer(layer string) bool"),
             (imported,"func desktopCONNECTTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool"),
             (platform,"func desktopCONNECTTrioExecutionChoices() []string"),
             (middle,"func desktopNodeChainCONNECTMiddle(profile common.RouterProfile, mode string) bool"),

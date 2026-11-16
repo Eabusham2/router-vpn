@@ -85,3 +85,15 @@ and physical-device acceptance require their own results.
 | Linux model-only complete log | `110359c935b138564fd79bd80e1edfe796e40b0d7c409aa8152bc1fbd2c17377` |
 | First full-package compile failure | `d6395d97fee5f67ebd05aac22e61b3105362e6dc91b318d6249bf83fc5731596` |
 | Second full-package compile failure | `c54ecf4b4d4c7d05aaaeb9c3ac0d7ea2b735f23da2c55a727abc7df4917bff9f` |
+## Shipping source-audit alignment
+
+The exact helper introduced with the desktop consumer is now required by the
+shipping source audit. The audit accepts the same bounded paired Start Layer
+choices for the final and prefix members and checks the helper's complete
+whitelist. Its original causal controls still reject omitted final and prefix
+checks; added controls reject a widened whitelist and a duplicate helper.
+The focused current-source and CONNECT causal audit roots passed against
+`8177db3c9ae2ed7228c0d4663921430c6a089e5e` and again after integration on
+`04d3d3a0d07427c86e88873439b18c55425dec72`. This aligns the source gate with the
+already-published implementation. It adds no OpenVPN consumer admission and
+does not replace native compilation or device evidence.

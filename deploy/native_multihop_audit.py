@@ -1352,16 +1352,20 @@ return err == nil
 	}
 	middle, final := len(members)-2, len(members)-1
 	if members[final].Mode != "shadowsocks" || !desktopNodeChainCONNECTMiddle(members[middle].Profile, members[middle].Mode) ||
-		members[final].Profile.StartLayer != "" && members[final].Profile.StartLayer != "off" {
+		!desktopCONNECTExecutionPairedLayer(members[final].Profile.StartLayer) {
 		return false
 	}
 	for _, member := range members[:middle] {
 		layer := member.Profile.StartLayer
-		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
+		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || !desktopCONNECTExecutionPairedLayer(layer) {
 			return false
 		}
 	}
 	return true
+
+        '''),
+        ('cmd/client/desktop_node_chain_imported_execution.go', 'func desktopCONNECTExecutionPairedLayer(layer string) bool', r'''
+	return layer == "" || layer == "off" || layer == "aes-256-gcm" || layer == "aes-256-gcm+xor-whitening"
         '''),
         ('cmd/client/desktop_node_chain_imported_execution.go', 'func desktopCONNECTTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool', r'''
 	return (requested == "server" || requested == "auto") && desktopNodeChainCONNECTExecutionShape(members) && desktopOrderedExecutionMembers(members, requested) == nil
