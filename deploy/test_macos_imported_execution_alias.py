@@ -23,6 +23,7 @@ LEAVES = (
     'partial-add-error-retains-intent', 'absent-attempted-mutation', 'mask', 'address-index',
     'loopback-index', 'failed-join-retains-original-owner', 'partial-cleanup-retry',
     'nil-join-refused', 'cancelled-cleanup-retains-owner',
+    'paired-final-three-aliases', 'paired-final-collision-before-mutation',
 )
 VERDICTS = ('TestActualAliasOwner', 'TestActualAliasCancelledWaiter') + tuple('TestActualAliasOwner/' + name for name in LEAVES)
 ADAPTER = r'''package main
@@ -57,6 +58,9 @@ func goodJoin(context.Context)error{return nil}
 func ownAlias(t *testing.T)*macOSImportedExecutionAliasOwner{t.Helper();o,e:=macOSImportedExecutionOwnAliases(context.Background());if e!=nil||o==nil{t.Fatal("original alias creation failed",e)};return o}
 func forceRelease(o *macOSImportedExecutionAliasOwner){if o!=nil{o.release()}}
 func TestActualAliasOwner(t *testing.T){
+ t.Run("paired-final-three-aliases",func(t *testing.T){resetAlias();o,e:=macOSPairedSSExecutionOwnAliases(context.Background());defer forceRelease(o);if e!=nil||o==nil||len(commands)!=3||len(inventory)!=3||inventory[netip.MustParseAddr("10.77.0.1")].index!=9{t.Fatal("paired final alias not retained")};if e=o.Close(context.Background(),goodJoin);e!=nil||len(inventory)!=0||len(commands)!=6{t.Fatal("paired final alias not joined")}})
+ t.Run("paired-final-collision-before-mutation",func(t *testing.T){resetAlias();inventory[netip.MustParseAddr("10.77.0.1")]=macOSImportedExecutionAliasState{9,32};o,e:=macOSPairedSSExecutionOwnAliases(context.Background());defer forceRelease(o);if e==nil||o!=nil||len(commands)!=0||len(inventory)!=1{t.Fatal("paired final collision borrowed alias authority")}})
+
  t.Run("owned-close-idempotent",func(t *testing.T){resetAlias();o:=ownAlias(t);defer forceRelease(o);if len(commands)!=2||len(inventory)!=2||o.index!=9{t.Fatal("both original aliases were not captured")};joined:=0
   if e:=o.Close(context.Background(),func(context.Context)error{joined++;if len(inventory)!=2{t.Fatal("aliases disappeared before original join")};return nil});e!=nil{t.Fatal(e)}
   if joined!=1||len(inventory)!=0||len(commands)!=4||!o.closed||o.unlock{t.Fatal("original alias close did not join and retire")}
@@ -117,8 +121,9 @@ def extract(source):
 
 def mutations(source):
     return {
+        'paired-final-alias': (replace_once(source, 'if pairedFinal {', 'if false && pairedFinal {'), 'TestActualAliasOwner/paired-final-three-aliases', 'paired final alias not retained'),
         'cancelled-waiter': (replace_once(source, 'if err := desktopnetwork.LockContext(ctx, &macOSImportedExecutionAliasGate); err != nil {', '_ = desktopnetwork.LockContext\n\tmacOSImportedExecutionAliasGate.Lock()\n\tif err := ctx.Err(); err != nil {\n\t\tmacOSImportedExecutionAliasGate.Unlock()'), 'TestActualAliasCancelledWaiter', 'cancelled alias waiter lost original context-aware admission'),
-        'attempted-intent': (replace_once(source, '\t\towner.added = append(owner.added, address)\n', '') .replace('\t\tactual, current, err := macOSImportedExecutionAliasInventory()', '\t\towner.added = append(owner.added, address)\n\t\tactual, current, err := macOSImportedExecutionAliasInventory()', 1), 'TestActualAliasOwner/partial-add-error-retains-intent', 'attempted alias mutation escaped owned cleanup'),
+        'attempted-intent': (replace_once(source, '\t\towner.added = append(owner.added, address)\n', '') .replace('\t\tactual, current, err := macOSExecutionAliasInventory(owner.aliases)', '\t\towner.added = append(owner.added, address)\n\t\tactual, current, err := macOSExecutionAliasInventory(owner.aliases)', 1), 'TestActualAliasOwner/partial-add-error-retains-intent', 'attempted alias mutation escaped owned cleanup'),
         'mask': (replace_once(source, 'if state != (macOSImportedExecutionAliasState{owner.index, 32}) {', 'if state.index != owner.index {'), 'TestActualAliasOwner/mask', 'foreign alias mask or index acquired deletion authority'),
         'address-index': (replace_once(source, 'if state != (macOSImportedExecutionAliasState{owner.index, 32}) {', 'if state.bits != 32 {'), 'TestActualAliasOwner/address-index', 'foreign alias mask or index acquired deletion authority'),
         'join': (replace_once(source, '\tif err := join(ctx); err != nil {\n\t\treturn err\n\t}', '\t_ = join(ctx)'), 'TestActualAliasOwner/failed-join-retains-original-owner', 'failed original join retired alias authority'),
@@ -178,7 +183,7 @@ def execute(root=ROOT, go=None):
         raise RuntimeError("Alias extraction gate changed during execution")
     if any((root/p).read_bytes()!=content for p,content in inputs.items()):
         raise RuntimeError('Original alias/lock source changed during execution')
-    receipt={'kind':'portable-darwin-imported-alias-owner','schema':1,'positive_roots':2,'positive_leaves':13,'positive_verdicts':list(VERDICTS),'gate_sha256':hashlib.sha256(script).hexdigest(),'causal_controls':len(variants)-1,'source_sha256':{p:hashlib.sha256(v).hexdigest() for p,v in inputs.items()},'native_alias_acceptance':False}
+    receipt={'kind':'portable-darwin-imported-alias-owner','schema':1,'positive_roots':2,'positive_leaves':len(LEAVES),'positive_verdicts':list(VERDICTS),'gate_sha256':hashlib.sha256(script).hexdigest(),'causal_controls':len(variants)-1,'source_sha256':{p:hashlib.sha256(v).hexdigest() for p,v in inputs.items()},'native_alias_acceptance':False}
     print(json.dumps(receipt,sort_keys=True),flush=True)
     return receipt
 

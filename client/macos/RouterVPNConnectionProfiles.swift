@@ -34,6 +34,20 @@ enum RouterVPNOrderedNodes {
         }
         return true
     }
+    static func pairedSSExecutionPath(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
+        guard (2...8).contains(rows.count), rows.last?["mode"] == "shadowsocks",
+              rows.dropLast().allSatisfy({ prefixModes.contains($0["mode"] ?? "") }),
+              Set(rows.compactMap { $0["id"] }).count == rows.count else { return false }
+        for row in rows {
+            let matches = profiles.filter { $0["id"] as? String == row["id"] }
+            guard matches.count == 1,
+                  finalProfile(matches[0], mode: "shadowsocks") else { return false }
+            if let raw = matches[0]["start_layer"] {
+                guard let pairedSSLayer = raw as? String, ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(pairedSSLayer) else { return false }
+            }
+        }
+        return true
+    }
     static func importedPosition(_ mode: String, position: Int, count: Int) -> Bool {
         if ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) {
             return (3...8).contains(count) && position == count - 2
@@ -437,7 +451,8 @@ extension ProductWindowController {
             let socksTrio = RouterVPNOrderedNodes.socksExecutionTrio(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
             let openVPNPath = RouterVPNOrderedNodes.openVPNExecutionPath(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
             let pairedHysteria = RouterVPNOrderedNodes.pairedHysteriaExecutionPath(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
-            let executionCapability = pairedHysteria && selection.execution != "local" ? "ordered_hysteria_executions" : openVPNPath && selection.execution != "local" ? "ordered_openvpn_executions" : (socksTrio && selection.execution != "local" ? "ordered_socks_trio_executions" : (connectTrio && selection.execution != "local" ? "ordered_connect_trio_executions" : (importedPrefixes && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions")))
+            let pairedSS = RouterVPNOrderedNodes.pairedSSExecutionPath(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
+            let executionCapability = pairedSS && selection.execution != "local" ? "ordered_paired_ss_executions" : pairedHysteria && selection.execution != "local" ? "ordered_hysteria_executions" : openVPNPath && selection.execution != "local" ? "ordered_openvpn_executions" : (socksTrio && selection.execution != "local" ? "ordered_socks_trio_executions" : (connectTrio && selection.execution != "local" ? "ordered_connect_trio_executions" : (importedPrefixes && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions")))
             guard let enabled = capabilities["ordered_nodes_supported"] as? NSNumber,
                   CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
                   let executions = capabilities[executionCapability] as? [String], executions.contains(selection.execution) else {

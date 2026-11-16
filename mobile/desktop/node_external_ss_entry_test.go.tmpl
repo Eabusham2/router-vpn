@@ -128,7 +128,7 @@ func desktopStartSSProviderBoundTransport(t *testing.T, server *desktopNodeLayer
 	if port == 0 {
 		listener, packet, err = desktopNodeLayerPortPair(address, net.Listen)
 	} else {
-		if port != 8389 {
+		if port != 8389 && !(port == 8388 && address == netip.MustParseAddr("10.77.0.1")) {
 			t.Fatal("unowned fixed layer port")
 		}
 		endpoint := netip.AddrPortFrom(address, port).String()

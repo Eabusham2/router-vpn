@@ -22,13 +22,17 @@ var macOSImportedExecutionAliasGate sync.Mutex
 var macOSImportedExecutionAliases = []netip.Addr{netip.MustParseAddr("10.78.0.1"), netip.MustParseAddr("10.78.0.2")}
 
 type macOSImportedExecutionAliasOwner struct {
-	index  int
-	added  []netip.Addr
-	unlock bool
-	closed bool
+	index   int
+	aliases []netip.Addr
+	added   []netip.Addr
+	unlock  bool
+	closed  bool
 }
 
 func macOSImportedExecutionAliasInventory() (int, map[netip.Addr]macOSImportedExecutionAliasState, error) {
+	return macOSExecutionAliasInventory(macOSImportedExecutionAliases)
+}
+func macOSExecutionAliasInventory(aliases []netip.Addr) (int, map[netip.Addr]macOSImportedExecutionAliasState, error) {
 	link, err := net.InterfaceByName("lo0")
 	if err != nil || link.Flags&net.FlagLoopback == 0 || link.Flags&net.FlagUp == 0 {
 		return 0, nil, errors.Join(err, errors.New("original Darwin loopback unavailable"))
@@ -49,7 +53,11 @@ func macOSImportedExecutionAliasInventory() (int, map[netip.Addr]macOSImportedEx
 				return 0, nil, err
 			}
 			address := prefix.Addr().Unmap()
-			if address != macOSImportedExecutionAliases[0] && address != macOSImportedExecutionAliases[1] {
+			matched := false
+			for _, wanted := range aliases {
+				matched = matched || wanted == address
+			}
+			if !matched {
 				continue
 			}
 			if _, duplicate := present[address]; duplicate {
@@ -61,38 +69,47 @@ func macOSImportedExecutionAliasInventory() (int, map[netip.Addr]macOSImportedEx
 	return link.Index, present, nil
 }
 func macOSImportedExecutionOwnAliases(ctx context.Context) (*macOSImportedExecutionAliasOwner, error) {
+	return macOSExecutionOwnAliases(ctx, false)
+}
+func macOSPairedSSExecutionOwnAliases(ctx context.Context) (*macOSImportedExecutionAliasOwner, error) {
+	return macOSExecutionOwnAliases(ctx, true)
+}
+func macOSExecutionOwnAliases(ctx context.Context, pairedFinal bool) (*macOSImportedExecutionAliasOwner, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("missing original alias caller")
 	}
 	if err := desktopnetwork.LockContext(ctx, &macOSImportedExecutionAliasGate); err != nil {
 		return nil, err
 	}
-	owner := &macOSImportedExecutionAliasOwner{unlock: true}
+	owner := &macOSImportedExecutionAliasOwner{unlock: true, aliases: append([]netip.Addr(nil), macOSImportedExecutionAliases...)}
+	if pairedFinal {
+		owner.aliases = append(owner.aliases, netip.MustParseAddr("10.77.0.1"))
+	}
 	if ctx.Err() != nil {
 		owner.release()
 		return nil, ctx.Err()
 	}
-	index, present, err := macOSImportedExecutionAliasInventory()
+	index, present, err := macOSExecutionAliasInventory(owner.aliases)
 	if err != nil {
 		owner.release()
 		return nil, err
 	}
 	// Check both aliases before ANY mutation. Existing addresses are never ours.
-	for _, address := range macOSImportedExecutionAliases {
+	for _, address := range owner.aliases {
 		if present[address].index != 0 {
 			owner.release()
 			return nil, errors.New("private execution fixture alias already exists")
 		}
 	}
 	owner.index = index
-	for _, address := range macOSImportedExecutionAliases {
+	for _, address := range owner.aliases {
 		// Retain the exact attempted mutation before running the command: a
 		// canceled process can have added its address before reporting failure.
 		owner.added = append(owner.added, address)
 		if err := exec.CommandContext(ctx, "/sbin/ifconfig", "lo0", "inet", address.String(), "netmask", "255.255.255.255", "alias").Run(); err != nil {
 			return owner, err
 		}
-		actual, current, err := macOSImportedExecutionAliasInventory()
+		actual, current, err := macOSExecutionAliasInventory(owner.aliases)
 		if err != nil || actual != owner.index || current[address] != (macOSImportedExecutionAliasState{owner.index, 32}) {
 			return owner, errors.Join(err, errors.New("original fixture alias readback changed"))
 		}
@@ -123,13 +140,13 @@ func (owner *macOSImportedExecutionAliasOwner) Close(ctx context.Context, join f
 	if err := join(ctx); err != nil {
 		return err
 	}
-	index, _, err := macOSImportedExecutionAliasInventory()
+	index, _, err := macOSExecutionAliasInventory(owner.aliases)
 	if err != nil || index != owner.index {
 		return errors.Join(err, errors.New("original alias interface changed"))
 	}
 	for len(owner.added) > 0 {
 		address := owner.added[len(owner.added)-1]
-		actual, present, err := macOSImportedExecutionAliasInventory()
+		actual, present, err := macOSExecutionAliasInventory(owner.aliases)
 		if err != nil || actual != owner.index {
 			return errors.Join(err, errors.New("original alias interface changed before removal"))
 		}
@@ -147,7 +164,7 @@ func (owner *macOSImportedExecutionAliasOwner) Close(ctx context.Context, join f
 		if err != nil {
 			return err
 		}
-		actual, present, err = macOSImportedExecutionAliasInventory()
+		actual, present, err = macOSExecutionAliasInventory(owner.aliases)
 		if err != nil || actual != owner.index || present[address].index != 0 {
 			return errors.Join(err, errors.New("original alias did not retire"))
 		}

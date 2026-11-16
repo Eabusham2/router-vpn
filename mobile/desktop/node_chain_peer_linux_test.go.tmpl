@@ -340,7 +340,16 @@ func desktopNodeChainPeerStart(t *testing.T, request desktopNodeChainPeerRequest
 }
 
 func desktopNodeChainPeerStartBounds(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr, minimum, maximum int) *desktopNodeChainPeer {
+	return desktopNodeChainPeerStartBoundsWithFinal(t, request, local, remote, minimum, maximum, nil, nil)
+}
+
+// The direct Server fixture retains the same single original packet device and
+// final provider. Hooks are test-only and cannot create a remote packet carrier.
+func desktopNodeChainPeerStartBoundsWithFinal(t *testing.T, request desktopNodeChainPeerRequest, local, remote netip.Addr, minimum, maximum int, finalProvider func(*desktopNodeLayerServer) desktopExternalInstalledSSPeer, decorate func(*desktopNodeWGHandler) tun.Handler) *desktopNodeChainPeer {
 	t.Helper()
+	if (finalProvider != nil || decorate != nil) && (minimum != 1 || maximum != 1 || len(request.Prefixes) != 1 || finalProvider == nil || decorate == nil) {
+		t.Fatal("direct paired execution hooks require exactly one original packet peer")
+	}
 	ipcs, err := desktopNodeChainPeerIdentityBounds(request, minimum, maximum)
 	if err != nil {
 		t.Fatal(err)
@@ -361,9 +370,13 @@ func desktopNodeChainPeerStartBounds(t *testing.T, request desktopNodeChainPeerR
 	if count == 1 {
 		finalLocal, finalRemote = local, remote
 	}
-	p.final = desktopImportedWGSSStartWithFactory(t, desktopImportedWGSSRequest{Schema: 1, Address: request.Address, ClientAddress: request.ClientAddress,
+	var decorators []func(*desktopNodeWGHandler) tun.Handler
+	if decorate != nil {
+		decorators = append(decorators, decorate)
+	}
+	p.final = desktopImportedWGSSStartWithFinal(t, desktopImportedWGSSRequest{Schema: 1, Address: request.Address, ClientAddress: request.ClientAddress,
 		PrivateKey: last.PrivateKey, ClientPublicKey: last.ClientPublicKey, PreSharedKey: last.PreSharedKey,
-		FinalPassword: request.FinalPassword, NodeProofID: request.FinalNodeProofID, Token: request.FinalAPIToken, Cover: true}, finalLocal, finalRemote, lastFactory)
+		FinalPassword: request.FinalPassword, NodeProofID: request.FinalNodeProofID, Token: request.FinalAPIToken, Cover: true}, finalLocal, finalRemote, lastFactory, finalProvider, decorators...)
 	p.prefixes[count-1].bind, p.prefixes[count-1].handler = p.final.bind, p.final.entry
 	if request.BenchmarkPort != 0 {
 		p.benchmark = desktopNodeChainBenchmarkStart(t, request.BenchmarkPort)

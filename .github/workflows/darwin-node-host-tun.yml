@@ -172,6 +172,57 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  paired-ss-execution-host:
+    name: Actual paired two-node SS Server and Compare on ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: ./.github/actions/go-windows-sockets
+      - name: Require paired SS execution inventory, cleanup controls and authoritative workflow
+        run: |
+          python3 deploy/test_macos_paired_ss_execution_host_runner.py
+          python3 deploy/test_macos_imported_execution_alias_runner.py
+          python3 deploy/test_darwin_paired_ss_execution_workflow.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/paired-ss-execution-host-bundle
+      - name: Verify exact-source paired SS execution runtime bundle
+        run: python3 deploy/native-runtime-bundle.py extract 'darwin/${{ matrix.arch }}' "$RUNNER_TEMP/paired-ss-execution-host-bundle/native-darwin-${{ matrix.arch }}.tar.gz" "$RUNNER_TEMP/paired-ss-execution-host-verified"
+      - name: Require real paired SS Server, both Compare winners and retained restoration
+        timeout-minutes: 110
+        env:
+          ROUTERVPN_DARWIN_PAIRED_SS_EXECUTION_HOST_ACCEPTANCE: '1'
+          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
+          ROUTERVPN_PAIRED_SS_EXECUTION_RECEIPT: ${{ runner.temp }}/darwin-paired-ss-execution-host-${{ matrix.arch }}.json
+          CGO_ENABLED: '1'
+        run: |
+          python3 deploy/test_macos_paired_ss_execution_host.py --bundle "$RUNNER_TEMP/paired-ss-execution-host-verified" --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_PAIRED_SS_EXECUTION_RECEIPT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Darwin-paired-ss-execution-host-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/darwin-paired-ss-execution-host-${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 14
+
   imported-execution-layers-host:
     name: Actual independent paired Start Layers with Server and Compare on ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}

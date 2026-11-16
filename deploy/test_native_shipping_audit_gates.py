@@ -933,6 +933,31 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
                 self.assert_multihop_chain(False)
 
+    def test_paired_ss_darwin_execution_keeps_bounded_private_original(self):
+        path = "cmd/client/desktop_node_chain_paired_ss_execution.go"
+        self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
+        for before, after in (
+            ('len(nodes) < 2', 'false'),
+            ('len(nodes) > mobilemultihop.NodeChainMaximumNodes', 'false'),
+            ('nodes[len(nodes)-1].Mode != "shadowsocks"', 'false'),
+            ('!mobilemultihop.NodeChainPrefixMode(node.Mode)', 'false'),
+            ('profile.External != nil', 'false'),
+            (' || proofs[profile.NodeProofID]', ''),
+            ('if profile.StartLayer != "" &&', 'if false && profile.StartLayer != "" &&'),
+            ('runtime.GOOS == "darwin"', 'true'),
+            ('retainedNativeMultihopSelected()', 'true'),
+        ):
+            with self.subTest(before=before):
+                self.changes.clear()
+                original = self.body(path)
+                self.assertEqual(original.count(before), 1)
+                self.changes[path] = original.replace(before, after, 1)
+                self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+        self.changes.clear()
+        status = "cmd/client/multihop_native_routes.go"
+        self.changes[status] = self.body(status).replace('"ordered_paired_ss_executions":', '"unrelated_paired_ss_executions":', 1)
+        self.assertFalse(_NATIVE.native_multihop_execution_product(self.body))
+
     def test_hysteria_execution_requires_wholly_paired_original_off_source(self):
         path = "cmd/client/desktop_node_chain_hysteria_execution.go"
         self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))

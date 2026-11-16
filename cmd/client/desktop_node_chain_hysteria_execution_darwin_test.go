@@ -71,8 +71,13 @@ func TestMacOSHysteriaExecutionAdmissionRemainsBounded(t *testing.T) {
 	// Selection is still checked independently of the platform capability hint.
 	changed := cloneDesktopNodeChainMembers(members)
 	changed[len(changed)-1].Mode = "shadowsocks"
-	if desktopHysteriaExecutionMembers(changed, "server") || nativeDesktopOrderedExecutionSelectionPlatformSupported(changed, "server") {
+	if desktopHysteriaExecutionMembers(changed, "server") {
 		t.Fatal("Hysteria capability admitted unrelated paired SS")
+	}
+	// The independent paired-SS capability is checked separately; it grants no
+	// Hysteria authority and the original source compiler still validates assets.
+	if !desktopPairedSSExecutionMembers(changed, "server") || !nativeDesktopOrderedExecutionSelectionPlatformSupported(changed, "server") {
+		t.Fatal("independent paired SS admission was lost")
 	}
 	changed = cloneDesktopNodeChainMembers(members)
 	changed[len(changed)-1].Profile.StartLayer = "xor-only"

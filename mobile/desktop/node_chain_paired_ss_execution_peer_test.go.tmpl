@@ -1,0 +1,229 @@
+//go:build (linux && !android) || (darwin && routervpn_darwin_node_chain)
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-tun"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// This fixture registers only a direct paired final. Any remote packet suffix
+// still requires the real Linux carrier and is not simulated on Darwin.
+type pairedSSExecutionPeerRequest struct {
+	Schema   int                         `json:"schema"`
+	Peer     desktopNodeChainPeerRequest `json:"peer"`
+	Image    string                      `json:"image"`
+	ImageSHA string                      `json:"image_sha256"`
+	Fault    string                      `json:"fault,omitempty"`
+}
+
+func pairedSSExecutionRequestValid(request desktopNodeChainPeerRequest) error {
+	original, err := desktopNodeChainPeerIdentityBounds(request, 1, 1)
+	clear(original)
+	return err
+}
+
+func TestRouterVPNDesktopPairedSSExecutionReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_PAIRED_SS_EXECUTION_REFERENCE") == "" {
+		t.Skip("explicit original imported execution peer only")
+	}
+	if os.Getenv("ROUTERVPN_PAIRED_SS_EXECUTION_REFERENCE") != "1" {
+		t.Fatal("uncaptured imported execution peer")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, mobilemultihop.NodeChainInputLimit+1)
+	var request pairedSSExecutionPeerRequest
+	if importedExecutionRead(reader, 32<<10, &request) != nil || request.Schema != 1 || pairedSSExecutionRequestValid(request.Peer) != nil || (request.Fault != "" && request.Fault != "final-key") {
+		t.Fatal("original imported execution peer request refused")
+	}
+	image, info, digest, err := captureImportedExecutionImage(request.Image)
+	if err != nil || digest != request.ImageSHA || !filepath.IsAbs(request.Image) {
+		t.Fatal("original imported execution image changed", err)
+	}
+	_ = image.Close()
+	local, remote := netip.MustParseAddr(request.Peer.Address), netip.MustParseAddr(request.Peer.ClientAddress)
+	if local != remote {
+		t.Fatal("Darwin fixture requires captured same-host physical peer")
+	}
+	var forward *importedExecutionForward
+	var provider desktopExternalInstalledSSPeer
+	peer := desktopNodeChainPeerStartBoundsWithFinal(t, request.Peer, local, remote, 1, 1,
+		func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+			password := request.Peer.FinalPassword
+			if request.Fault == "final-key" {
+				password = importedExecutionDifferentLayerKey(t, password)
+			}
+			provider = desktopStartSSProviderBoundTransport(t, owner, mobilemultihop.NativeStartLayerMethod, password, netip.MustParseAddr("10.77.0.1"), 8388, nil, nil)
+			return provider
+		}, func(original *desktopNodeWGHandler) tun.Handler {
+			forward = &importedExecutionForward{desktopNodeWGHandler: original}
+			return forward
+		})
+	endpoint := provider.address
+	if endpoint != "10.77.0.1:8388" || forward == nil {
+		t.Fatal("original paired final transport changed")
+	}
+	forward.middle.Store(&endpoint)
+	send := func(value any) {
+		if json.NewEncoder(os.Stdout).Encode(value) != nil {
+			t.Fatal("original imported execution output closed")
+		}
+	}
+	send(map[string]any{"peer": peer.snapshot(), "final_address": endpoint})
+	var configure struct {
+		LocalSource string `json:"local_source"`
+		Winner      string `json:"winner"`
+	}
+	if importedExecutionRead(reader, mobilemultihop.NodeChainInputLimit, &configure) != nil {
+		t.Fatal("missing original complete local source")
+	}
+	chain, err := mobilemultihop.NewNodeChain(configure.LocalSource)
+	var source mobilemultihop.NodeChainSource
+	if err != nil || json.Unmarshal([]byte(configure.LocalSource), &source) != nil || source.Schema != 1 || source.Execution != "local" || len(source.Nodes) != 2 || len(source.IdentitySources) != 2 {
+		t.Fatal("original paired two-node Local source refused", err)
+	}
+	proofs := chain.ProofInventory()
+	first := request.Peer.Prefixes[0]
+	if len(proofs) != 2 || proofs[0].NodeID != first.NodeProofID || proofs[0].Mode != first.Mode || proofs[1].NodeID != request.Peer.FinalNodeProofID || proofs[1].Mode != "shadowsocks" || proofs[0].StartLayer != "off" || proofs[1].StartLayer != "off" {
+		t.Fatal("original paired private identity or layer changed")
+	}
+	// Read the actual compiled final outbound, not a caller-supplied receipt.
+	var graph struct {
+		Outbounds []struct {
+			Tag      string `json:"tag"`
+			Type     string `json:"type"`
+			Server   string `json:"server"`
+			Port     int    `json:"server_port"`
+			Method   string `json:"method"`
+			Password string `json:"password"`
+		} `json:"outbounds"`
+	}
+	if json.Unmarshal([]byte(chain.Config()), &graph) != nil {
+		t.Fatal("original paired graph missing")
+	}
+	matched := 0
+	for _, outbound := range graph.Outbounds {
+		if outbound.Tag == proofs[1].Tag {
+			if outbound.Type != "shadowsocks" || outbound.Server != "10.77.0.1" || outbound.Port != 8388 || outbound.Method != mobilemultihop.NativeStartLayerMethod || outbound.Password != request.Peer.FinalPassword {
+				t.Fatal("original final credential or private endpoint changed")
+			}
+			matched++
+		}
+	}
+	if matched != 1 {
+		t.Fatal("original paired final outbound absent or duplicated")
+	}
+	suffix := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: proofs[0].ProfileID, EntryNodeID: proofs[0].NodeID, EntryMode: proofs[0].Mode, Nodes: source.Nodes[1:], IdentitySources: source.IdentitySources[1:]}
+	suffixRaw, err := json.Marshal(suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewNodeChainServerPolicy(string(suffixRaw))
+	if err != nil || policy.NativeCarrierRequired() || len(policy.ProofInventory()) != 1 {
+		t.Fatal("direct paired suffix authority refused", err)
+	}
+	runtimeDir := t.TempDir()
+	if os.Chmod(runtimeDir, 0700) != nil {
+		t.Fatal("private worker root unavailable")
+	}
+	runner := &importedExecutionRunner{policy: policy, image: request.Image, imageSHA: digest, imageInfo: info, runtime: runtimeDir}
+	manager, err := multihoprelay.New(multihoprelay.Config{ListenIP: "10.78.0.1", FirstPort: 28440, LastPort: 28447, TTLSeconds: 300, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, first.NodeProofID, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := &importedExecutionAdmin{relay: manager, token: first.APIToken}
+	admin.cfg.NodeID = first.NodeProofID
+	health := peer.prefixes[0].handler.rules["tcp/10.78.0.1:8787"].Target
+	original, _ := url.Parse("http://" + health)
+	proxy := httputil.NewSingleHostReverseProxy(original)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := admin.authorized(r); err != nil {
+			http.Error(w, "original peer refused", 403)
+			return
+		}
+		if r.URL.Path == "/api/multihop/chain/lease" {
+			admin.multihopNodeChainLease(w, r)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	})
+	listener, err := net.Listen("tcp4", "10.78.0.1:8787")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 2 * time.Second}
+	done := make(chan struct{})
+	var serveError error
+	go func() { serveError = server.Serve(listener); close(done) }()
+	closed := false
+	closeAll := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := manager.Close(ctx); err != nil {
+			return err
+		}
+		if !runner.joined() {
+			return errors.New("original relay workers did not join")
+		}
+		if err := server.Shutdown(ctx); err != nil {
+			return err
+		}
+		if err := importedExecutionJoinHTTP(ctx, done, &serveError); err != nil {
+			return err
+		}
+		provider.close()
+		closed = true
+		return nil
+	}
+	t.Cleanup(func() {
+		if !closed {
+			if err := closeAll(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	switch configure.Winner {
+	case "server":
+		forward.localDelay.Store(int64(75 * time.Millisecond))
+	case "local":
+		forward.serverDelay.Store(int64(75 * time.Millisecond))
+	case "":
+	default:
+		t.Fatal("unknown captured comparison timing arm")
+	}
+	send(map[string]any{"ready": true, "source_sha256": policy.Descriptor().SourceSHA256})
+	for {
+		var control struct {
+			Command string `json:"command"`
+		}
+		if err := importedExecutionRead(reader, 128, &control); err != nil {
+			t.Fatal(err)
+		}
+		if control.Command == "quit" {
+			if err := closeAll(); err != nil {
+				t.Fatal(err)
+			}
+			send(map[string]any{"joined": true, "launches": runner.launches.Load()})
+			return
+		}
+		if control.Command != "stats" {
+			if err := peer.control(control.Command); err != nil {
+				t.Fatal(err)
+			}
+		}
+		send(map[string]any{"peer": peer.snapshot(), "launches": runner.launches.Load(), "workers_joined": runner.joined(), "final_transport": provider.stats()})
+	}
+}

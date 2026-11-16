@@ -193,6 +193,16 @@ def check_release_aggregate_gates(source: str) -> None:
             f"native release {name} gate became conditional or nonblocking")
 
 
+def check_paired_ss_execution_host_workflow(source: str, release: str, builder: str) -> None:
+    """Require the bounded actual paired SS Darwin job before publication."""
+    path = ROOT / "deploy/test_darwin_paired_ss_execution_workflow.py"
+    spec = importlib.util.spec_from_file_location("paired_ss_execution_host_workflow", path)
+    assert spec and spec.loader, "paired SS execution workflow guard is unavailable"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.check(source, release, builder)
+
+
 def check_connect_execution_host_workflow(source: str, release: str, builder: str) -> None:
     """Require the separate CONNECT native job in the shipping artifact audit."""
     path = ROOT / "deploy/test_darwin_connect_execution_workflow.py"
@@ -782,6 +792,7 @@ for request, spec in policy.DIRECT_ARTIFACTS.items():
 check_release_aggregate_gates(rc)
 check_focused_native_release_workflow(read(".github/workflows/focused-source-validation.yml"))
 check_server_encrypted_workflow(read(".github/workflows/server-node-chain-encrypted.yml"))
+check_paired_ss_execution_host_workflow(read(".github/workflows/darwin-node-host-tun.yml"), rc, read("deploy/build-native-runtime.py"))
 check_connect_execution_host_workflow(read(".github/workflows/darwin-node-host-tun.yml"), rc, read("deploy/build-native-runtime.py"))
 check_linux_connect_execution_host_workflow(read(".github/workflows/linux-connect-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_linux_socks_execution_host_workflow(read(".github/workflows/linux-socks-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))

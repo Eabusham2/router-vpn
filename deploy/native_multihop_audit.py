@@ -1539,6 +1539,9 @@ return true
 	if nativeDesktopOrderedExecutionPlatformSupported() {
 		return true
 	}
+	if runtime.GOOS == "darwin" && nativeDesktopPairedSSExecutionPlatformSupported() && desktopPairedSSExecutionMembers(members, requested) {
+		return true
+	}
 	if runtime.GOOS == "darwin" && nativeDesktopHysteriaExecutionPlatformSupported() && desktopHysteriaExecutionMembers(members, requested) {
 		return true
 	}
@@ -1712,6 +1715,12 @@ return ctx.Err()
         ("cmd/client/desktop_node_chain_hysteria_execution.go", 'func nativeDesktopHysteriaExecutionPlatformSupported() bool', '\n\treturn nativeNodeChainPlatformSupported() && retainedNativeMultihopSelected() &&\n\t\t(runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin") &&\n\t\t(runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64")\n'),
         ("cmd/client/desktop_node_chain_hysteria_execution.go", 'func desktopHysteriaExecutionChoices() []string', '\n\tif nativeDesktopHysteriaExecutionPlatformSupported() {\n\t\treturn []string{"local", "server", "auto"}\n\t}\n\treturn []string{"local"}\n'),
     )
+    expected += (
+        ('cmd/client/desktop_node_chain_paired_ss_execution.go', 'func desktopPairedSSExecutionNodes(nodes []common.MultihopNodeSelection) bool', 'if len ( nodes ) < 2 | | len ( nodes ) > mobilemultihop . NodeChainMaximumNodes | | nodes [ len ( nodes ) - 1 ] . Mode ! = "shadowsocks" { return false } for _ , node : = range nodes [ : len ( nodes ) - 1 ] { if ! mobilemultihop . NodeChainPrefixMode ( node . Mode ) { return false } } return true'),
+        ('cmd/client/desktop_node_chain_paired_ss_execution.go', 'func desktopPairedSSExecutionMembers(members []desktopNodeChainMember, requested string) bool', 'if ( requested ! = "server" & & requested ! = "auto" ) | | ! desktopPairedSSExecutionNodes ( nodeChainSelectedReferences ( members ) ) { return false } ids , proofs : = map [ string ] bool { } , map [ string ] bool { } for _ , member : = range members { profile : = member . Profile if ! validProfileID ( profile . ID ) | | ids [ profile . ID ] | | profile . External ! = nil | | ( profile . NodeKind ! = "" & & profile . NodeKind ! = "router-vpn" ) | | ! common . ValidNodeProofID ( profile . NodeProofID ) | | proofs [ profile . NodeProofID ] { return false } if profile . StartLayer ! = "" & & profile . StartLayer ! = "off" & & profile . StartLayer ! = "aes-256-gcm" & & profile . StartLayer ! = "aes-256-gcm+xor-whitening" { return false } ids [ profile . ID ] , proofs [ profile . NodeProofID ] = true , true } return true'),
+        ('cmd/client/desktop_node_chain_paired_ss_execution.go', 'func nativeDesktopPairedSSExecutionPlatformSupported() bool', 'return nativeNodeChainPlatformSupported ( ) & & retainedNativeMultihopSelected ( ) & & runtime . GOOS = = "darwin" & & ( runtime . GOARCH = = "amd64" | | runtime . GOARCH = = "arm64" )'),
+        ('cmd/client/desktop_node_chain_paired_ss_execution.go', 'func desktopPairedSSExecutionChoices() []string', 'if nativeDesktopPairedSSExecutionPlatformSupported ( ) { return [ ] string { "local" , "server" , "auto" } } return [ ] string { "local" }'),
+    )
     for path, declaration, body in expected:
         if _function(_tokens(read(path)), declaration) != _tokens(body):
             return False
@@ -1723,6 +1732,8 @@ return ctx.Err()
         '"ordered_imported_trio_executions": desktopImportedTrioExecutionChoices(),',
         '"ordered_connect_trio_executions": desktopCONNECTTrioExecutionChoices(),',
         '"ordered_socks_trio_executions": desktopSOCKSTrioExecutionChoices(),'):
+        return False
+    if len(_positions(status, '"ordered_paired_ss_executions": desktopPairedSSExecutionChoices(),')) != 1:
         return False
     if len(_positions(status, '"ordered_hysteria_executions": desktopHysteriaExecutionChoices(),')) != 1:
         return False

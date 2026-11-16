@@ -29,11 +29,11 @@ class AliasGateTests(unittest.TestCase):
         with self.assertRaises(ValueError):gate.extract(self.source().replace('darwin && routervpn_controller_privileged','darwin'))
     def test_exact_controls(self):
         controls=gate.mutations(gate.extract(self.source()))
-        self.assertEqual(set(controls),{'cancelled-waiter','attempted-intent','mask','address-index','join'})
-        self.assertEqual(len({value[1] for value in controls.values()}),5)
+        self.assertEqual(set(controls),{'cancelled-waiter','attempted-intent','mask','address-index','join','paired-final-alias'})
+        self.assertEqual(len({value[1] for value in controls.values()}),6)
     def test_positive_inventory(self):
         gate.validate_result(self.result(self.positive()))
-        self.assertEqual(len(gate.VERDICTS),14)
+        self.assertEqual(len(gate.VERDICTS),16)
     def test_positive_omission_duplicate_unknown_refused(self):
         source=self.positive()
         for changed in (source.replace('--- PASS: TestActualAliasCancelledWaiter (0.00s)\n',''),source+'--- PASS: TestActualAliasCancelledWaiter (0.00s)\n',source+'--- PASS: Unknown (0.00s)\n',source.replace('=== RUN   TestActualAliasCancelledWaiter\n','')):

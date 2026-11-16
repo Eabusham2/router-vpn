@@ -220,6 +220,11 @@ def inputs():
                              ROOT/'deploy/test_desktop_connect_execution_layers_runner.py',
                              ROOT/'deploy/test_desktop_openvpn_execution_controller.py',
                              ROOT/'deploy/test_desktop_openvpn_execution_controller_runner.py',
+                             ROOT/'deploy/test_desktop_paired_ss_execution_controller.py',
+                             ROOT/'deploy/test_desktop_paired_ss_execution_controller_runner.py',
+                             ROOT/'deploy/test_macos_paired_ss_execution_host.py',
+                             ROOT/'deploy/test_macos_paired_ss_execution_host_runner.py',
+                             ROOT/'deploy/test_darwin_paired_ss_execution_workflow.py',
                              ROOT/'deploy/test_desktop_hysteria_execution_controller.py',
                              ROOT/'deploy/test_desktop_hysteria_execution_controller_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution.py',
@@ -1773,6 +1778,15 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                      '--phase', openvpn_parent_phase, '--receipt', temp/('openvpn-controller-'+openvpn_parent_phase+'.json'),
                      *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
                     timeout=900 if openvpn_parent_phase == 'controls' else 1800)
+            run([sys.executable, ROOT/'deploy/test_darwin_paired_ss_execution_workflow.py'],
+                cwd=ROOT, env=env, timeout=60)
+            run([sys.executable, ROOT/'deploy/test_desktop_paired_ss_execution_controller_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            for paired_ss_parent_phase in ('source', 'controls'):
+                run([sys.executable, ROOT/'deploy/test_desktop_paired_ss_execution_controller.py',
+                     '--phase', paired_ss_parent_phase, '--receipt', temp/('paired-ss-controller-'+paired_ss_parent_phase+'.json'),
+                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
+                    timeout=1200 if paired_ss_parent_phase == 'controls' else 1200)
             run([sys.executable, ROOT/'deploy/test_desktop_hysteria_execution_controller_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
             # New paired Hysteria phases retain the existing full compiler and
