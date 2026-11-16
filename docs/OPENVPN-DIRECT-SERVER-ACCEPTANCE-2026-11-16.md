@@ -151,6 +151,40 @@ These focused counter tests do not establish OpenVPN authentication or the
 fourteen full encrypted native cases. Wrong-password constructor observation
 remains a separately bounded fixture correction.
 
+## Captured wrong-password construction observation
+
+At `04d3d3a0`, both hosted architectures passed all six TCP/UDP and
+Off/AES/AES+XOR positive cases. Each required Ready, selected DNS, UDP traffic,
+zero unused-prefix counters and joined worker/provider retirement. ARM64 job
+`133200131385` and AMD64 job `133200131914` then reached the wrong-provider-password
+case. Authentication was refused, but the fixture requested an IPC snapshot
+while the original constructor still awaited its captured bootstrap deadline.
+The ordinary ten-second response limit expired before that constructor returned.
+
+That negative case now observes only the original worker's fixed-vocabulary
+construction diagnostic, at or after its captured deadline, with the existing
+ten-second response-observation allowance. It requires the exact OpenVPN-owner
+deadline failure, no cancellation, a refused snapshot with no receipt, refused
+bootstrap and private Router front, a real positive authentication-refusal
+counter and zero decrypted application/proof/DNS counters. The original partial
+owner must then pass the existing Stop and terminal-join checks. Every other
+case retains its existing Pending/bootstrap path and fifteen-second readiness
+observation. Production construction, authentication and IPC timeouts are unchanged.
+
+All eighteen runner tests passed in 8.642 seconds. Deterministic refusals cover
+early or absent captured deadlines, wrong diagnostic stage or operation,
+malformed/missing/cancelled/nondeadline diagnostics, absent or negative
+authentication counters and forbidden decrypted destinations. Three compiled
+controls separately remove the deadline, authentication or closed-destination
+requirement and must fail with their exact witnesses. The frozen source
+manifest has SHA-256
+`6d044154458cf1f3f6878f5dce292ae4db7ca1732acd5059f94bb788c68a43bb`;
+the runner receipt has SHA-256
+`1dda830b1d7640e7ab3df2878eda2e83e6384b2628b6b0baa7bdde4a88c784db`.
+These helper tests repair the observed fixture ordering; the two wrong-password
+and six remaining negative/retirement cases still require native execution on
+the published source before the fourteen-case gate can be called complete.
+
 ## Acceptance still required
 
 Local compilation and source cases do not establish encrypted network

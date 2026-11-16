@@ -145,8 +145,9 @@ class OpenVPNDirectGateTests(unittest.TestCase):
     def test_pending_front_counts_decrypted_destinations_not_transport(self):
         source=(G.ROOT/G.TEMPLATE).read_text()
         start=source.index('func serverChainOpenVPNDirectPendingClosed(')
-        helper=source[start:source.index('\nfunc serverChainOpenVPNDirectScenario(',start)]
+        helper=source[start:source.index('\n}',start)+2]
         scenario=source[source.index('func serverChainOpenVPNDirectScenario('):source.index('\nfunc TestServerChainOpenVPNDirectEncryptedNative(')]
+        scenario=scenario[scenario.index('} else {'):]
         refusal='worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))'
         check='!serverChainOpenVPNDirectPendingClosed(before)'
         self.assertLess(scenario.index(refusal),scenario.index(check))
@@ -220,6 +221,77 @@ func TestEveryDecryptedDestinationRefused(t *testing.T){
                 with self.subTest(causal=name):
                     self.assertNotEqual(body,helper)
                     failed=run(body);self.assertNotEqual(failed.returncode,0,failed.stdout+failed.stderr);self.assertIn(witness,failed.stdout+failed.stderr)
+
+
+    def test_wrong_password_requires_owned_construction_refusal(self):
+        source=(G.ROOT/G.TEMPLATE).read_text()
+        start=source.index('func serverChainOpenVPNDirectPendingClosed(')
+        helper=source[start:source.index('\nfunc serverChainOpenVPNDirectAwaitAuthRefusal(',start)]
+        waiter=source[source.index('func serverChainOpenVPNDirectAwaitAuthRefusal('):source.index('\nfunc serverChainOpenVPNDirectScenario(')]
+        self.assertIn('w.capture.BootstrapDeadline.Add(10 * time.Second)',waiter)
+        self.assertNotIn('p.control(',waiter)
+        scenario=source[source.index('func serverChainOpenVPNDirectScenario('):source.index('\nfunc TestServerChainOpenVPNDirectEncryptedNative(')]
+        branch=scenario[scenario.index('if fault == "wrong-server-password" {'):scenario.index('} else {')]
+        self.assertLess(branch.index('serverChainOpenVPNDirectAwaitAuthRefusal(t, worker)'),branch.index('worker.call(t, "snapshot")'))
+        for item in ('pending.OK || pending.Receipt != nil','worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))','worker.call(t, "bootstrap").OK','serverChainOpenVPNDirectAuthRefused(p.control(t, "stats"), worker.process.log.text(), time.Now(), worker.capture.BootstrapDeadline)'):
+            self.assertIn(item,branch)
+        self.assertIn('worker.stop(t)',scenario);self.assertIn('p.original.process.join(t)',scenario)
+        ordinary=(G.ROOT/G.BASE.TEMPLATE).read_text()
+        self.assertIn('p.output.SetReadDeadline(time.Now().Add(10*time.Second))',ordinary)
+        native=(G.ROOT/'mobile/server_chain/native.go.tmpl').read_text()
+        self.assertLess(native.index('n.openVPN.await(initialize, n)'),native.index('stage = "front-create"'))
+        command=(G.ROOT/'mobile/server_chain/command.go.tmpl').read_text()
+        self.assertLess(command.index('owner, constructionErr := factory('),command.index('for scanner.Scan()'))
+        self.assertIn('if constructionErr == nil {',command)
+        types=ordinary[ordinary.index('type serverChainEncryptedPrefixStats struct'):ordinary.index('type serverChainEncryptedLog struct')]
+        connect=(G.ROOT/'mobile/server_chain_acceptance/connect_linux_test.go.tmpl').read_text()
+        types+=connect[connect.index('type serverChainCONNECTMiddleStats struct'):connect.index('type serverChainCONNECTReply struct')]
+        types+=source[source.index('type serverChainOpenVPNDirectReply struct'):source.index('type serverChainOpenVPNDirectPeer struct')].replace('nativeopenvpn.Profile','unusedProfile')
+        diagnostic=(G.ROOT/'mobile/server_chain/diagnostic.go.tmpl').read_text()
+        diagnostic=diagnostic[diagnostic.index('type routerVPNServerChainStageError struct'):]
+        harness=r'''package main
+import("context";"encoding/json";"errors";"io";"strings";"testing";"time")
+type unusedProfile struct{}
+TYPES
+DIAGNOSTIC
+HELPER
+func TestOriginalWrongPasswordConstruction(t *testing.T){
+ original:=routerVPNServerChainDiagnostic("construction",routerVPNServerChainAtStage("openvpn-owner",context.DeadlineExceeded))
+ base:=serverChainOpenVPNDirectReply{TCP:1,AuthRefusals:1}
+ deadline:=time.Unix(100,0);now:=deadline.Add(time.Millisecond)
+ if serverChainOpenVPNDirectAuthRefused(base,original,deadline.Add(-time.Millisecond),deadline)||serverChainOpenVPNDirectAuthRefused(base,original,now,time.Time{}){t.Fatal("early or uncaptured construction refusal admitted")}
+ if !serverChainOpenVPNDirectAuthRefused(base,original,now,deadline){t.Fatal("original authenticated refusal lost")}
+ for label,change:=range map[string]func(*serverChainOpenVPNDirectReply){
+  "missing-auth":func(v *serverChainOpenVPNDirectReply){v.AuthRefusals=0},
+  "negative-auth":func(v *serverChainOpenVPNDirectReply){v.AuthRefusals=-1},
+  "inner-stream":func(v *serverChainOpenVPNDirectReply){v.Streams=1},
+  "inner-packet":func(v *serverChainOpenVPNDirectReply){v.Packets=1},
+  "private-router":func(v *serverChainOpenVPNDirectReply){v.Peer.Final.RouterQueries=1},
+  "selected-dns":func(v *serverChainOpenVPNDirectReply){v.Peer.Final.DNSQueries=1},
+  "cover":func(v *serverChainOpenVPNDirectReply){v.Peer.Final.CoverPackets=1},
+ }{t.Run(label,func(t *testing.T){v:=base;change(&v);if serverChainOpenVPNDirectAuthRefused(v,original,now,deadline){t.Fatal("foreign authentication outcome admitted:",label)}})}
+ for label,record:=range map[string]string{
+  "missing":"", "malformed":"ROUTERVPN_SERVER_FAILURE invalid-json",
+  "foreign-stage":routerVPNServerChainDiagnostic("construction",routerVPNServerChainAtStage("box-create",context.DeadlineExceeded)),
+  "foreign-operation":routerVPNServerChainDiagnostic("snapshot",routerVPNServerChainAtStage("openvpn-owner",context.DeadlineExceeded)),
+  "no-deadline":routerVPNServerChainDiagnostic("construction",routerVPNServerChainAtStage("openvpn-owner",errors.New("other"))),
+  "cancelled":routerVPNServerChainDiagnostic("construction",routerVPNServerChainAtStage("openvpn-owner",errors.Join(context.DeadlineExceeded,context.Canceled))),
+ }{t.Run(label,func(t *testing.T){if serverChainOpenVPNDirectAuthRefused(base,record,now,deadline){t.Fatal("arbitrary construction failure admitted:",label)}})}
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='server-openvpn-auth-') as d:
+            root=Path(d);(root/'go.mod').write_text('module routervpn-openvpn-auth\n\ngo 1.26\n');test=root/'auth_test.go'
+            def run(body):
+                test.write_text(harness.replace('TYPES',types).replace('DIAGNOSTIC',diagnostic).replace('HELPER',body))
+                return subprocess.run(['go','test','-race','-count=1','-timeout=30s','-v','.'],cwd=root,capture_output=True,text=True,timeout=45)
+            passed=run(helper);self.assertEqual(passed.returncode,0,passed.stdout+passed.stderr)
+            for name,body,witness in (
+                ('original-deadline',helper.replace('deadline.IsZero() || now.Before(deadline)','false',1),'early or uncaptured construction refusal admitted'),
+                ('auth-required',helper.replace('v.AuthRefusals <= 0 || ','',1),'foreign authentication outcome admitted: missing-auth'),
+                ('closed-destinations',helper.replace(' || !serverChainOpenVPNDirectPendingClosed(v)','',1),'foreign authentication outcome admitted: inner-stream'),
+            ):
+                with self.subTest(causal=name):
+                    self.assertNotEqual(body,helper);failed=run(body);self.assertNotEqual(failed.returncode,0,failed.stdout+failed.stderr);self.assertIn(witness,failed.stdout+failed.stderr)
 
     def test_go_case_inventory_is_exact(self):
         source=(G.ROOT/G.TEMPLATE).read_text();block=source[source.index('var serverChainOpenVPNDirectCases'):source.index('type serverChainOpenVPNDirectReply')]

@@ -215,6 +215,45 @@ func serverChainOpenVPNDirectPendingClosed(v serverChainOpenVPNDirectReply) bool
 		f.MTUQueries == 0 && f.MTUReplies == 0 && f.CoverPackets == 0 && f.CoverReplies == 0 && f.CoverMaximum == 0 && f.DownloadBytes == 0 && f.UploadBytes == 0
 }
 
+// A wrong captured provider password refuses construction before an IPC
+// Pending receipt exists. Observe only that original bounded construction;
+// snapshot/Stop retain their ordinary ten-second IPC response deadline.
+func serverChainOpenVPNDirectAuthRefused(v serverChainOpenVPNDirectReply, diagnostics string, now, deadline time.Time) bool {
+	if v.AuthRefusals <= 0 || !serverChainOpenVPNDirectPendingClosed(v) {
+		return false
+	}
+	return serverChainOpenVPNDirectConstructionRefused(diagnostics, now, deadline)
+}
+func serverChainOpenVPNDirectConstructionRefused(diagnostics string, now, deadline time.Time) bool {
+	if deadline.IsZero() || now.Before(deadline) {
+		return false
+	}
+	for _, record := range routerVPNSafeServerChainDiagnostics(diagnostics) {
+		if record == `ROUTERVPN_SERVER_FAILURE {"operation":"construction","stage":"openvpn-owner","deadline":true,"cancelled":false}` {
+			return true
+		}
+	}
+	return false
+}
+func serverChainOpenVPNDirectAwaitAuthRefusal(t *testing.T, w *serverChainEncryptedWorker) {
+	t.Helper()
+	// The constructor's existing captured deadline, followed only by the
+	// existing response-observation allowance; no native lifetime is extended.
+	deadline := w.capture.BootstrapDeadline.Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if serverChainOpenVPNDirectConstructionRefused(w.process.log.text(), time.Now(), w.capture.BootstrapDeadline) {
+			return
+		}
+		select {
+		case <-w.process.done:
+			t.Fatal("provider refusal lost its partial cleanup owner", routerVPNSafeServerChainDiagnostics(w.process.log.text()))
+		default:
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("original provider authentication refusal was not observed", routerVPNSafeServerChainDiagnostics(w.process.log.text()))
+}
+
 func serverChainOpenVPNDirectScenario(t *testing.T, name string) {
 	parts := strings.Split(name, "/")
 	network, layer, fault := parts[0], parts[1], parts[2]
@@ -224,38 +263,54 @@ func serverChainOpenVPNDirectScenario(t *testing.T, name string) {
 		p.control(t, "fail-dns")
 	}
 	worker := serverChainEncryptedWorkerStart(t, p.original, policy, capture, "")
-	pending := worker.call(t, "snapshot")
-	if !pending.OK || pending.Receipt == nil || pending.Receipt.TrafficAllowed || pending.Receipt.Phase != multihoprelay.NodeChainPending {
-		t.Fatal("direct OpenVPN escaped pending")
-	}
 	final := capture.Request.Users[1]
-	worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
-	if before := p.control(t, "stats"); !serverChainOpenVPNDirectPendingClosed(before) {
-		t.Fatal("pending front reached original application destination")
-	}
-	if !worker.call(t, "bootstrap").OK {
-		t.Fatal("original direct OpenVPN bootstrap refused")
-	}
 	negative := strings.HasPrefix(fault, "wrong-") || fault == "failed-selected-dns"
 	ready, failed := false, false
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		reply := worker.call(t, "snapshot")
-		if !reply.OK {
-			failed = true
-			break
+	if fault == "wrong-server-password" {
+		serverChainOpenVPNDirectAwaitAuthRefusal(t, worker)
+		pending := worker.call(t, "snapshot")
+		if pending.OK || pending.Receipt != nil {
+			t.Fatal("wrong provider credentials acquired a native receipt")
 		}
-		if reply.Receipt.Phase == multihoprelay.NodeChainReady {
-			ready = true
-			break
+		worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+		if worker.call(t, "bootstrap").OK {
+			t.Fatal("wrong provider credentials acquired bootstrap")
 		}
-		time.Sleep(20 * time.Millisecond)
+		if !serverChainOpenVPNDirectAuthRefused(p.control(t, "stats"), worker.process.log.text(), time.Now(), worker.capture.BootstrapDeadline) {
+			t.Fatal("provider refusal lost original closed application counters")
+		}
+		failed = true
+	} else {
+		pending := worker.call(t, "snapshot")
+		if !pending.OK || pending.Receipt == nil || pending.Receipt.TrafficAllowed || pending.Receipt.Phase != multihoprelay.NodeChainPending {
+			t.Fatal("direct OpenVPN escaped pending")
+		}
+		worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+		if before := p.control(t, "stats"); !serverChainOpenVPNDirectPendingClosed(before) {
+			t.Fatal("pending front reached original application destination")
+		}
+		if !worker.call(t, "bootstrap").OK {
+			t.Fatal("original direct OpenVPN bootstrap refused")
+		}
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			reply := worker.call(t, "snapshot")
+			if !reply.OK {
+				failed = true
+				break
+			}
+			if reply.Receipt.Phase == multihoprelay.NodeChainReady {
+				ready = true
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 	var active net.PacketConn
 	if negative {
-		// Provider authentication can remain initial-pending until the original
-		// 30-second bootstrap boundary. Explicit Stop still must join that owner.
-		if ready || !failed && fault != "wrong-server-password" {
+		// Every negative retains the original partial or bootstrapped owner.
+		// Explicit Stop below must join it before any successful verdict.
+		if ready || !failed {
 			t.Fatal("invalid direct OpenVPN source did not remain closed")
 		}
 		worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
