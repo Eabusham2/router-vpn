@@ -63,6 +63,13 @@ IMPORTED_SOURCE = 'TestServerChainImportedEncryptedSource'
 IMPORTED_TEMPLATE = 'mobile/server_chain_acceptance/imported_linux_test.go.tmpl'
 IMPORTED_TARGET = 'cmd/sing-box/routervpn_server_chain_imported_linux_test.go'
 IMPORTED_OWNER = 'routervpn-server-imported-encrypted-test-source.json'
+HOSTNAME_TCP_ROOT = 'TestRouterVPNServerHostnameActualTCPTransport'
+
+def check_hostname_tcp_verdict(output):
+    expected = (r'=== RUN[ \t]+'+HOSTNAME_TCP_ROOT+r'\n--- PASS: '+HOSTNAME_TCP_ROOT+r' \([0-9.]+s\)\nPASS\n?')
+    if re.fullmatch(expected, output) is None:
+        raise ValueError('Original hostname TCP transport omitted, replaced or failed its verdict')
+
 
 RECEIPT_FIELDS = {'modes', 'case', 'capture_sha256', 'source_sha256', 'prefixes', 'ready', 'retired', 'selected_dns',
                   'final_tcp', 'final_udp', 'peer_joined', 'worker_joined', 'carrier_change_refused'}
@@ -441,6 +448,9 @@ def execute(core, go='go', *, env=None, receipt=None, compile_only=False):
         images = {role: image_identity(path) for role, path in (('driver', driver), ('peer', peer), ('worker', worker))}
         if checked_sources(core)[1] != before:
             raise ValueError('Encrypted Server source changed during compilation')
+        hostname_tcp_output = run([peer, '-test.run=^'+HOSTNAME_TCP_ROOT+'$', '-test.v', '-test.count=1', '-test.timeout=30s'], cwd=core, env=captured, timeout=45)
+        check_hostname_tcp_verdict(hostname_tcp_output)
+        print(hostname_tcp_output, end='')
         source_output = run([driver, '-test.run=^'+SOURCE+'$', '-test.v', '-test.count=1', '-test.timeout=60s'], cwd=core, env=captured, timeout=75)
         source_verdict = check_verdict(source_output, None, source_only=True)
         print(source_output, end='')

@@ -83,6 +83,22 @@ def workflow_concurrency_cases(raw):
 
 
 class GateTests(unittest.TestCase):
+    def test_actual_hostname_tcp_transport_is_required_and_exact(self):
+        name = GATE.HOSTNAME_TCP_ROOT
+        output = '=== RUN   '+name+'\n--- PASS: '+name+' (0.01s)\nPASS\n'
+        GATE.check_hostname_tcp_verdict(output)
+        for changed in (output.replace('=== RUN   '+name+'\n',''),output.replace('--- PASS: '+name+' (0.01s)\n',''),
+                        output.replace('\nPASS\n','\n'),output+output,output.replace(name,'Foreign',1),
+                        output.replace('--- PASS:', 'log --- PASS:',1),output+'--- SKIP: ignored (0.01s)\n',
+                        output+'WARNING: DATA RACE\n',output+'panic: owner\n',output+'PASS\n'):
+            with self.subTest(changed=changed),self.assertRaises(ValueError): GATE.check_hostname_tcp_verdict(changed)
+        source=(ROOT/'deploy/test_server_node_chain_encrypted.py').read_text()
+        self.assertEqual(source.count('check_hostname_tcp_verdict(hostname_tcp_output)'),1)
+        self.assertIn("[peer, '-test.run=^'+HOSTNAME_TCP_ROOT+'$'",source)
+        fixture=(ROOT/'mobile/desktop/node_chain_imported_server_peer_test.go.tmpl').read_text()
+        self.assertEqual(fixture.count('func '+name+'(t *testing.T)'),1)
+        self.assertIn('DNST.NewTCPRaw(',fixture)
+
     def test_actual_logger_io_copy_obeys_snapshot_mutex(self):
         template=(ROOT/GATE.TEMPLATE).read_text()
         begin=template.index('type serverChainEncryptedLog struct {')

@@ -5,11 +5,18 @@ package routervpnamnezia
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sagernet/sing-box/common/dialer"
+	C "github.com/sagernet/sing-box/constant"
+	BDNS "github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-tun"
+	M "github.com/sagernet/sing/common/metadata"
 	"io"
 	"net"
 	"net/netip"
@@ -18,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -330,5 +338,60 @@ func TestRouterVPNDesktopNodeChainImportedServerPrefixCapture(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The listener and lower loopback dial are explicit component fixtures. The
+// handler and pinned TCP multiplexer are their original implementations; this
+// does not substitute for the encrypted namespace gate below.
+func TestRouterVPNServerHostnameActualTCPTransport(t *testing.T) {
+	peer := &desktopNodeChainImportedPeer{paired: &desktopImportedWGSSPeer{entry: &desktopNodeWGHandler{desktopReferenceHandler: &desktopReferenceHandler{rules: make(map[string]desktopReferenceRule)}}}}
+	owner := desktopNodeChainImportedServerHostname(t, peer)
+	target := peer.paired.entry.rules["tcp/"+desktopImportedHostnameDNS].Target
+	lower, err := dialer.NewDefault(context.Background(), option.DialerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := DNST.NewTCPRaw(BDNS.NewTransportAdapter(C.DNSTypeTCP, "original-hostname", nil), lower, M.ParseSocksaddr(target))
+	defer func() {
+		if err := transport.Close(); err != nil {
+			t.Error("original TCP transport did not join", err)
+		}
+	}()
+	query := func() {
+		q := new(dns.Msg).SetQuestion(desktopImportedHostname+".", dns.TypeA)
+		q.Id = 0
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		answer, err := transport.Exchange(ctx, q)
+		if err != nil || answer == nil || answer.Id != q.Id || answer.Rcode != dns.RcodeSuccess || len(answer.Answer) != 1 {
+			t.Fatal("original TCP application lookup failed", err)
+		}
+		a, ok := answer.Answer[0].(*dns.A)
+		if !ok || !a.A.Equal(net.ParseIP("10.79.0.1")) {
+			t.Fatal("original TCP application answer changed")
+		}
+	}
+	query()
+	deadline, tick := time.NewTimer(time.Second), time.NewTicker(time.Millisecond)
+	defer deadline.Stop()
+	defer tick.Stop()
+	for owner.probeA.Load() != 1 || owner.probeAAAA.Load() != 1 {
+		select {
+		case <-deadline.C:
+			t.Fatal("original TCP reuse probes did not complete")
+		case <-tick.C:
+		}
+	}
+	if owner.queries.Load() != 1 {
+		t.Fatal("TCP probes substituted the original ID0 application lookup")
+	}
+	// The real multiplexer assigns later application IDs itself. They remain A
+	// lookups, including ID1, and must not become an IPv6 application exception.
+	for i := 0; i < 4; i++ {
+		query()
+	}
+	if owner.queries.Load() < 2 || owner.probeAAAA.Load() != 1 {
+		t.Fatal("later TCP application lookup lost original ownership")
 	}
 }
