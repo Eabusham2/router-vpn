@@ -30,10 +30,14 @@ func TestDesktopSOCKSExecutionPublicCompareServer(t *testing.T) {
 // files and retained publication run here. Child and kernel observations are
 // explicit models; actual encrypted sockets belong to the separate native gate.
 func testDesktopSOCKSExecutionPublic(t *testing.T, requested, winner string) {
+	testDesktopSOCKSPrefixExecutionPublic(t, 3, requested, winner)
+}
+func testDesktopSOCKSPrefixExecutionPublic(t *testing.T, count int, requested, winner string) {
 	if (runtime.GOOS != "linux" && runtime.GOOS != "windows") || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
 		t.Skip("public controller model requires its Windows or Linux host")
 	}
-	a, selected, captured := desktopSOCKSPlatformFixture(t, "wg", "windows")
+	a, captured := desktopSOCKSPrefixProductLaunchFixture(t, count-2, "wg", "socks5")
+	selected := captured.chain.selection
 	t.Cleanup(func() { desktopOrderedExecutionOwners.Delete(a); desktopComparisons.Delete(a) })
 	f := newDesktopNodeChainOwnedFixtureWith(t, a, selected)
 	f.executionModel = &desktopExecutionOwnedModel{winner: winner}
@@ -107,16 +111,16 @@ func testDesktopSOCKSExecutionPublic(t *testing.T, requested, winner string) {
 	if status.Code != http.StatusOK || json.Unmarshal(status.Body.Bytes(), &body) != nil || body["connected"] != true || body["execution"] != winner || !reflect.DeepEqual(body["ordered_socks_trio_executions"], []any{"local", "server", "auto"}) {
 		t.Fatalf("SOCKS status lost actual selected proof: %d %s", status.Code, status.Body.String())
 	}
-	if json.Unmarshal(response.Body.Bytes(), &body) != nil || body["requested_execution"] != requested || body["execution"] != winner || len(body["nodes"].([]any)) != 3 {
+	if json.Unmarshal(response.Body.Bytes(), &body) != nil || body["requested_execution"] != requested || body["execution"] != winner || len(body["nodes"].([]any)) != count {
 		t.Fatal("SOCKS public response changed requested execution or ordered members")
 	}
 	var actual, original mobilemultihop.NodeChainSource
-	source, err := captured.chain.socksPolicy.OriginalSource()
+	source, err := captured.chain.socksPolicy.NativeSource()
 	if err != nil {
 		t.Fatal(err)
 	}
 	input, err := source.Source()
-	if err != nil || json.Unmarshal([]byte(input), &original) != nil || json.Unmarshal([]byte(owner.session.execution.preparation.LocalSource()), &actual) != nil || actual.Schema != 3 || len(actual.Nodes) != 3 || actual.IdentitySources[1] != "" || actual.Nodes[1] != original.Nodes[1] || actual.IdentitySources[2] != original.IdentitySources[2] {
+	if err != nil || json.Unmarshal([]byte(input), &original) != nil || json.Unmarshal([]byte(owner.session.execution.preparation.LocalSource()), &actual) != nil || actual.Schema != 3 || len(actual.Nodes) != count || actual.IdentitySources[count-2] != "" || !reflect.DeepEqual(actual.Nodes, original.Nodes) || !reflect.DeepEqual(actual.IdentitySources, original.IdentitySources) {
 		t.Fatal("SOCKS Connect changed imported credentials or original paired final", err)
 	}
 	proof := owner.session.native.execution

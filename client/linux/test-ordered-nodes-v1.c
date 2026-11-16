@@ -319,21 +319,30 @@ static void connect_model_only(void) {
 
 static void socks_execution_model(LinuxUnifiedV8 *state) {
     const char *prefixes[]={"wg","awg2-fast","awg2-strong"}, *choices[]={"server","auto"}, *layers[]={"off","aes-256-gcm","aes-256-gcm+xor-whitening"};
-    for(guint p=0;p<G_N_ELEMENTS(prefixes);p++)for(guint e=0;e<G_N_ELEMENTS(choices);e++)for(guint l=0;l<G_N_ELEMENTS(layers);l++) {
+    for(guint count=3;count<=8;count++)for(guint p=0;p<G_N_ELEMENTS(prefixes);p++)for(guint e=0;e<G_N_ELEMENTS(choices);e++)for(guint l=0;l<G_N_ELEMENTS(layers);l++) {
         JsonNode *root=parse_json("{\"selected_id\":\"exit\",\"profiles\":[{\"id\":\"entry\",\"node_kind\":\"router-vpn\"},{\"id\":\"middle\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"socks5\",\"ordered_middle_supported\":true,\"ordered_socks_execution_middle_supported\":true,\"password\":\"socks-private-secret\"}},{\"id\":\"exit\",\"node_kind\":\"router-vpn\"}]}");
-        JsonObject *store=json_node_get_object(root), *tokens=json_object_new();JsonArray *source_profiles=json_object_get_array_member(store,"profiles"), *nodes=json_array_new();
-        for(guint i=0;i<3;i++){
+        JsonObject *store=json_node_get_object(root), *tokens=json_object_new();JsonArray *catalog_profiles=json_object_get_array_member(store,"profiles"), *nodes=json_array_new(), *source_profiles=json_array_new();
+        guint middle=count-2;
+        json_array_add_object_element(source_profiles,json_object_ref(json_array_get_object_element(catalog_profiles,0)));
+        for(guint i=1;i<middle;i++){
+            JsonObject *profile=json_object_new();char *id=g_strdup_printf("paired-%u",i);
+            json_object_set_string_member(profile,"id",id);g_free(id);json_object_set_string_member(profile,"node_kind","router-vpn");
+            json_array_add_object_element(catalog_profiles,profile);json_array_add_object_element(source_profiles,json_object_ref(profile));
+        }
+        json_array_add_object_element(source_profiles,json_object_ref(json_array_get_object_element(catalog_profiles,1)));
+        json_array_add_object_element(source_profiles,json_object_ref(json_array_get_object_element(catalog_profiles,2)));
+        for(guint i=0;i<count;i++){
             JsonObject *profile=json_array_get_object_element(source_profiles,i), *row=json_object_new();const char *id=obj_string(profile,"id");char *token=g_strdup_printf("%064x",i+1);
             json_object_set_string_member(profile,"profile_token",token);json_object_set_string_member(tokens,id,token);g_free(token);
-            json_object_set_string_member(profile,"start_layer",i==0?layers[l]:"off");
-            json_object_set_string_member(row,"id",id);json_object_set_string_member(row,"mode",i==0?prefixes[p]:i==1?"socks5":"shadowsocks");json_array_add_object_element(nodes,row);
+            json_object_set_string_member(profile,"start_layer",i<middle?layers[l]:"off");
+            json_object_set_string_member(row,"id",id);json_object_set_string_member(row,"mode",i<middle?prefixes[p]:i==middle?"socks5":"shadowsocks");json_array_add_object_element(nodes,row);
         }
         LinuxOrderedSelectionV1 *selection=linux_ordered_selection_v1("exit",nodes,tokens);
         check(selection&&linux_ordered_execution_v1(selection,choices[e])&&linux_ordered_current_v1(selection,store),"SOCKS execution lost original typed trio");
         check(strcmp(linux_ordered_execution_capability_v1(selection),"ordered_socks_trio_executions")==0,"SOCKS execution borrowed unrelated global capability");
         char *body=linux_ordered_connect_body_v1(selection);JsonNode *request=parse_json(body);JsonObject *posted=json_node_get_object(request);
-        check(strcmp(obj_string(posted,"execution"),choices[e])==0&&json_object_get_size(linux_ordered_object_v1(posted,"expected_profile_tokens"))==3&&strstr(body,"socks-private-secret")==NULL,"SOCKS execution copied credentials or lost original sources");json_node_free(request);g_free(body);
-        JsonObject *external=linux_ordered_object_v1(json_array_get_object_element(source_profiles,1),"external");
+        check(strcmp(obj_string(posted,"execution"),choices[e])==0&&json_object_get_size(linux_ordered_object_v1(posted,"expected_profile_tokens"))==count&&strstr(body,"socks-private-secret")==NULL,"SOCKS execution copied credentials or lost original sources");json_node_free(request);g_free(body);
+        JsonObject *external=linux_ordered_object_v1(json_array_get_object_element(source_profiles,middle),"external");
         json_object_set_boolean_member(external,"ordered_socks_execution_middle_supported",FALSE);check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted false native hint");
         json_object_set_int_member(external,"ordered_socks_execution_middle_supported",1);check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted numeric native hint");
         json_object_set_string_member(external,"ordered_socks_execution_middle_supported","true");check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted string native hint");
@@ -346,22 +355,29 @@ static void socks_execution_model(LinuxUnifiedV8 *state) {
         json_object_set_string_member(entry,"start_layer","aes-256-gcm ");check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted malformed entry layer");
         json_object_set_boolean_member(entry,"start_layer",TRUE);check(!linux_ordered_current_v1(selection,store),"SOCKS execution accepted nonstring entry layer");
         json_object_set_string_member(entry,"start_layer",layers[l]);
-        for(guint i=1;i<3;i++){
+        for(guint i=1;i<middle;i++){
+            JsonObject *profile=json_array_get_object_element(source_profiles,i);
+            json_object_set_string_member(profile,"start_layer","unsupported");check(!linux_ordered_current_v1(selection,store),"SOCKS execution admitted malformed later prefix layer");
+            json_object_set_string_member(profile,"start_layer",layers[l]);
+        }
+        for(guint i=middle;i<count;i++){
             JsonObject *profile=json_array_get_object_element(source_profiles,i);
             json_object_set_string_member(profile,"start_layer","aes-256-gcm");check(!linux_ordered_current_v1(selection,store),"SOCKS execution admitted layered middle or final");
             json_object_set_boolean_member(profile,"start_layer",TRUE);check(!linux_ordered_current_v1(selection,store),"SOCKS execution admitted nonstring middle or final layer");
             json_object_set_string_member(profile,"start_layer","off");
         }
-        for(guint i=0;i<3;i++){
+        for(guint i=0;i<count;i++){
             JsonObject *profile=json_array_get_object_element(source_profiles,i);char *token=g_strdup(obj_string(profile,"profile_token"));
             json_object_set_string_member(profile,"profile_token","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");check(!linux_ordered_current_v1(selection,store),"SOCKS execution borrowed relinked source");json_object_set_string_member(profile,"profile_token",token);g_free(token);
         }
+        if(count==8){
         JsonArray *long_nodes=json_array_new();JsonObject *extra=json_object_new(), *long_tokens=json_object_new();
         json_object_set_string_member(extra,"id","extra");json_object_set_string_member(extra,"mode","wg");json_array_add_object_element(long_nodes,extra);
         json_object_set_string_member(long_tokens,"extra","dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
-        for(guint i=0;i<3;i++){JsonObject *row=json_array_get_object_element(nodes,i);const char *id=obj_string(row,"id");json_array_add_object_element(long_nodes,json_object_ref(row));json_object_set_string_member(long_tokens,id,obj_string(tokens,id));}
+        for(guint i=0;i<count;i++){JsonObject *row=json_array_get_object_element(nodes,i);const char *id=obj_string(row,"id");json_array_add_object_element(long_nodes,json_object_ref(row));json_object_set_string_member(long_tokens,id,obj_string(tokens,id));}
         LinuxOrderedSelectionV1 *long_selection=linux_ordered_selection_v1("exit",long_nodes,long_tokens);
-        check(long_selection&&!linux_ordered_execution_v1(long_selection,choices[e]),"SOCKS execution escaped exact native trio");linux_ordered_selection_free_v1(long_selection);json_array_unref(long_nodes);json_object_unref(long_tokens);
+        check(long_selection==NULL,"SOCKS execution escaped maximum path length");linux_ordered_selection_free_v1(long_selection);json_array_unref(long_nodes);json_object_unref(long_tokens);
+        }
         if(state!=NULL){
             JsonNode *original_catalog=catalog;catalog=json_node_copy(root);
             refresh_all(state->app);
@@ -369,14 +385,14 @@ static void socks_execution_model(LinuxUnifiedV8 *state) {
             check(captured&&linux_ordered_execution_v1(captured,choices[e])&&linux_ordered_store_v1(owned,captured,TRUE),"SOCKS execution callback capture failed");
             guint before=posts;linux_profile_connect_v11(NULL,state);check(posts==before+1,"SOCKS execution callback lost distinct native capability");
             JsonNode *sent=parse_json(last_body);JsonObject *value=json_node_get_object(sent);
-            check(strcmp(obj_string(value,"execution"),choices[e])==0&&json_array_get_length(linux_ordered_array_v1(value,"nodes"))==3&&json_object_get_size(linux_ordered_object_v1(value,"expected_profile_tokens"))==3,"SOCKS callback replaced execution or original source inventory");json_node_free(sent);
+            check(strcmp(obj_string(value,"execution"),choices[e])==0&&json_array_get_length(linux_ordered_array_v1(value,"nodes"))==count&&json_object_get_size(linux_ordered_object_v1(value,"expected_profile_tokens"))==count,"SOCKS callback replaced execution or original source inventory");json_node_free(sent);
             socks_capability=FALSE;before=posts;linux_profile_connect_v11(NULL,state);check(posts==before,"SOCKS execution callback borrowed unrelated global capability");socks_capability=TRUE;
             char *before_profiles=snapshot();profiles(0);check(posts==before,"SOCKS profile save or update connected implicitly");linux_ordered_store_v1(owned,NULL,FALSE);profiles(1);char *after_profiles=snapshot();
             check(strcmp(before_profiles,after_profiles)==0,"SOCKS Add Load Update replaced original selection");g_free(before_profiles);g_free(after_profiles);
             check(strcmp(obj_string(external_source_profile_v24(json_node_get_object(catalog),"entry"),"start_layer"),layers[l])==0,"SOCKS complete profiles replaced original entry layer");
             json_node_free(catalog);catalog=original_catalog;refresh_all(state->app);check(linux_ordered_store_v1(owned,NULL,FALSE),"SOCKS callback failed to retire its selection");
         }
-        linux_ordered_selection_free_v1(selection);json_array_unref(nodes);json_object_unref(tokens);json_node_free(root);
+        linux_ordered_selection_free_v1(selection);json_array_unref(source_profiles);json_array_unref(nodes);json_object_unref(tokens);json_node_free(root);
     }
 }
 

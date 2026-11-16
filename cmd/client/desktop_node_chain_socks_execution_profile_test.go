@@ -57,9 +57,12 @@ func TestDesktopSOCKSExecutionSelectionKeepsExactTrio(t *testing.T) {
 }
 
 func TestDesktopSOCKSExecutionSavedProfileKeepsCompleteSource(t *testing.T) {
+	testDesktopSOCKSExecutionSavedProfile(t, 3)
+}
+func testDesktopSOCKSExecutionSavedProfile(t *testing.T, count int) {
 	for _, requested := range []string{"server", "auto"} {
 		t.Run(requested, func(t *testing.T) {
-			a, nodes := desktopSOCKSCaptureFixture(t, "wg", "password", "off")
+			a, nodes := desktopSOCKSPrefixCaptureFixture(t, count-2, "wg", "password", "off")
 			response := postSetup(t, a, "/api/connection-profile/setup/save", map[string]any{"name": "Original SOCKS execution", "mode": "shadowsocks", "multihop_enabled": true, "multihop_execution": requested, "multihop_nodes": nodes})
 			if response.Code != http.StatusOK {
 				t.Fatalf("SOCKS Save %d: %s", response.Code, response.Body.String())
@@ -69,7 +72,7 @@ func TestDesktopSOCKSExecutionSavedProfileKeepsCompleteSource(t *testing.T) {
 				t.Fatal("SOCKS saved source absent", err)
 			}
 			saved := store.Profiles[0]
-			if saved.Prefs.MultihopExecution != requested || len(saved.NodeChain) != 3 || saved.NodeChain[1].NodeProofID != "" || saved.NodeChain[1].External == nil || saved.NodeChain[1].External.Protocol != "socks5" {
+			if saved.Prefs.MultihopExecution != requested || len(saved.NodeChain) != count || saved.NodeChain[count-2].NodeProofID != "" || saved.NodeChain[count-2].External == nil || saved.NodeChain[count-2].External.Protocol != "socks5" {
 				t.Fatal("SOCKS Save changed original source family")
 			}
 			for _, fault := range []string{"long", "final-layer", "middle-kind", "middle-protocol", "source-digest"} {
@@ -83,13 +86,13 @@ func TestDesktopSOCKSExecutionSavedProfileKeepsCompleteSource(t *testing.T) {
 					changed.NodeChain = append(changed.NodeChain[:1], append([]connectionProfileNodeChainCapture{changed.NodeChain[0]}, changed.NodeChain[1:]...)...)
 					changed.Prefs.MultihopNodes = append(changed.Prefs.MultihopNodes[:1], append([]common.MultihopNodeSelection{changed.Prefs.MultihopNodes[0]}, changed.Prefs.MultihopNodes[1:]...)...)
 				case "final-layer":
-					changed.NodeChain[2].Preferences.StartLayer = "aes-256-gcm"
+					changed.NodeChain[count-1].Preferences.StartLayer = "aes-256-gcm"
 				case "middle-kind":
-					changed.NodeChain[1].NodeKind = "router-vpn"
+					changed.NodeChain[count-2].NodeKind = "router-vpn"
 				case "middle-protocol":
-					changed.NodeChain[1].External.Protocol = "http-connect"
+					changed.NodeChain[count-2].External.Protocol = "http-connect"
 				case "source-digest":
-					changed.NodeChain[1].Sources[0].SHA256 = "foreign"
+					changed.NodeChain[count-2].Sources[0].SHA256 = "foreign"
 				}
 				if validateSavedNodeChain(changed) == nil {
 					t.Fatal("saved SOCKS execution admitted changed source", fault)
@@ -115,7 +118,7 @@ func TestDesktopSOCKSExecutionSavedProfileKeepsCompleteSource(t *testing.T) {
 			if err != nil || len(updated.Profiles) != 1 || updated.Profiles[0].Prefs.MultihopExecution != requested || !reflect.DeepEqual(updated.Profiles[0].NodeChain, saved.NodeChain) {
 				t.Fatal("SOCKS Update changed original members or choice", err)
 			}
-			a.profiles.Profiles[1].External.SOCKS5.Password += "-changed"
+			a.profiles.Profiles[count-2].External.SOCKS5.Password += "-changed"
 			before := cloneRouterProfileStore(a.profiles)
 			response = postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": saved.ID})
 			if response.Code == http.StatusOK || !reflect.DeepEqual(before, a.profiles) || a.cmd != nil {

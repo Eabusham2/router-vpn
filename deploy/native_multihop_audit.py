@@ -1262,7 +1262,7 @@ _, err := desktopNodeChainImportedHostnameInput(profile)
 return err == nil
         """),
         (imported_path, "func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error", '''
-	bad := errors.New("ordered imported execution requires its original SS2022 or CONNECT path, saved hostname resolver after two packet members, or typed SOCKS trio")
+	bad := errors.New("ordered imported execution requires its original complete SS2022, CONNECT or SOCKS path, with a saved hostname resolver after two packet members")
 	if !validDesktopOrderedExecution(requested) {
 		return bad
 	}
@@ -1303,13 +1303,21 @@ return err == nil
 	return nil
         '''),
         ('cmd/client/desktop_node_chain_socks_execution.go', 'func desktopNodeChainSOCKSExecutionShape(members []desktopNodeChainMember) bool', r'''
-	if len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[2].Mode != "shadowsocks" ||
-		!desktopNodeChainSOCKSMiddle(members[1].Profile, members[1].Mode) {
+	if len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes {
 		return false
 	}
-	entry, final := members[0].Profile.StartLayer, members[2].Profile.StartLayer
-	return (entry == "" || entry == "off" || entry == "aes-256-gcm" || entry == "aes-256-gcm+xor-whitening") &&
-		(final == "" || final == "off")
+	middle, final := len(members)-2, len(members)-1
+	if members[final].Mode != "shadowsocks" || !desktopNodeChainSOCKSMiddle(members[middle].Profile, members[middle].Mode) ||
+		members[final].Profile.StartLayer != "" && members[final].Profile.StartLayer != "off" {
+		return false
+	}
+	for _, member := range members[:middle] {
+		layer := member.Profile.StartLayer
+		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
+			return false
+		}
+	}
+	return true
         '''),
         ('cmd/client/desktop_node_chain_socks_execution.go', 'func desktopSOCKSTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool', r'''
 	return (requested == "server" || requested == "auto") && desktopNodeChainSOCKSExecutionShape(members) && desktopOrderedExecutionMembers(members, requested) == nil
@@ -1477,9 +1485,15 @@ return value == "local" || value == "server" || value == "auto"
 	if requested != "local" && desktopNodeChainHasOpenVPN(nodes) {
 		return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
 	}
-	if requested != "local" && desktopNodeChainHasSOCKS(nodes) &&
-		(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) || nodes[1].Mode != "socks5") {
-		return errors.New("SOCKS Server and Compare require their original exact trio")
+	if requested != "local" && desktopNodeChainHasSOCKS(nodes) {
+		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes || nodes[len(nodes)-2].Mode != "socks5" {
+			return errors.New("SOCKS Server and Compare require their original complete packet prefix and paired final")
+		}
+		for _, node := range nodes[:len(nodes)-2] {
+			if !mobilemultihop.NodeChainPrefixMode(node.Mode) {
+				return errors.New("SOCKS Server and Compare require only paired WireGuard or AWG2 prefix members")
+			}
+		}
 	}
 	if requested != "local" && desktopNodeChainHasCONNECT(nodes) {
 		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes ||

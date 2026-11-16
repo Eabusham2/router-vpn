@@ -94,8 +94,8 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 				socks := captured.Mode == "socks5"
 				typed := connect || socks
 				count := len(record.NodeChain)
-				if count < 3 || count > 8 || i != count-2 || (socks && count != 3) || (!typed && captured.Mode != "shadowsocks") || !mobilemultihop.NodeChainPrefixMode(record.NodeChain[0].Mode) || record.NodeChain[count-1].Mode != "shadowsocks" {
-					return errors.New("saved imported execution requires its original complete literal SS2022 or CONNECT path, or typed SOCKS trio")
+				if count < 3 || count > 8 || i != count-2 || (!typed && captured.Mode != "shadowsocks") || !mobilemultihop.NodeChainPrefixMode(record.NodeChain[0].Mode) || record.NodeChain[count-1].Mode != "shadowsocks" {
+					return errors.New("saved imported execution requires its original complete literal SS2022, CONNECT or SOCKS path")
 				}
 				if typed {
 					final := record.NodeChain[count-1].Preferences

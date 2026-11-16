@@ -102,7 +102,8 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 		serverInput.Schema = 4
 	}
 	if local.Schema == 3 {
-		if len(local.Nodes) != 3 || local.IdentitySources[1] != "" || proofs[1].NodeKind != "external" || proofs[1].Mode != "socks5" {
+		middle := len(local.Nodes) - 2
+		if len(local.Nodes) < 3 || local.IdentitySources[middle] != "" || proofs[middle].NodeKind != "external" || proofs[middle].Mode != "socks5" {
 			return nil, errors.New("modeled SOCKS execution lost its original UDP association source")
 		}
 		serverInput.Schema = 3
@@ -175,7 +176,7 @@ func (m *desktopExecutionOwnedModel) start(t *testing.T, f *desktopNodeChainOwne
 			return nil, err
 		}
 		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, public)
-		if descriptor.Schema == 2 || descriptor.Schema == 4 {
+		if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 {
 			request.LocalPacketPositions = append(request.LocalPacketPositions, position)
 		}
 		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: position + 1,

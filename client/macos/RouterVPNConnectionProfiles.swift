@@ -102,28 +102,31 @@ enum RouterVPNOrderedNodes {
         return true
     }
     static func socksExecutionTrio(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
-        guard rows.count == 3, prefixModes.contains(rows[0]["mode"] ?? ""),
-              rows[1]["mode"] == "socks5", rows[2]["mode"] == "shadowsocks" else { return false }
+        let socksCount = rows.count
+        guard (3...8).contains(socksCount), rows.dropLast(2).allSatisfy({ prefixModes.contains($0["mode"] ?? "") }),
+              rows[socksCount - 2]["mode"] == "socks5", rows.last?["mode"] == "shadowsocks" else { return false }
+        let socksMiddle = socksCount - 2, socksFinal = socksCount - 1
         var members = [[String: Any]]()
         for row in rows {
             let matches = profiles.filter { $0["id"] as? String == row["id"] }
             guard matches.count == 1 else { return false }
             members.append(matches[0])
         }
-        guard finalProfile(members[0], mode: "shadowsocks"), finalProfile(members[2], mode: "shadowsocks"),
-              importedMiddleMode(members[1]) == "socks5",
-              let external = members[1]["external"] as? [String: Any],
-              let socksHint = external["ordered_socks_execution_middle_supported"] as? NSNumber,
-              CFGetTypeID(socksHint) == CFBooleanGetTypeID(), socksHint.boolValue else { return false }
-        if let raw = members[0]["start_layer"] {
-            guard let socksEntryLayer = raw as? String,
-                  ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(socksEntryLayer) else { return false }
-        }
-        for socksPosition in [1, 2] {
-            if let raw = members[socksPosition]["start_layer"] {
-                guard let socksLayer = raw as? String, socksLayer == "" || socksLayer == "off" else { return false }
+        for (position, sourceMember) in members.enumerated() {
+            if position != socksMiddle {
+                guard finalProfile(sourceMember, mode: "shadowsocks") else { return false }
+            }
+            if let raw = sourceMember["start_layer"] {
+                guard let socksPrefixLayer = raw as? String,
+                      ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(socksPrefixLayer),
+                      position != socksMiddle || socksPrefixLayer == "" || socksPrefixLayer == "off" else { return false }
             }
         }
+        guard ["", "off"].contains(members[socksFinal]["start_layer"] as? String ?? "") else { return false }
+        guard importedMiddleMode(members[socksMiddle]) == rows[socksMiddle]["mode"],
+              let external = members[socksMiddle]["external"] as? [String: Any],
+              let socksHint = external["ordered_socks_execution_middle_supported"] as? NSNumber,
+              CFGetTypeID(socksHint) == CFBooleanGetTypeID(), socksHint.boolValue else { return false }
         return true
     }
     static func modeName(_ mode: String) -> String {

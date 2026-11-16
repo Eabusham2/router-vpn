@@ -48,9 +48,15 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 	if requested != "local" && desktopNodeChainHasOpenVPN(nodes) {
 		return errors.New("this ordered proxy path has no admitted Server or Compare native owner")
 	}
-	if requested != "local" && desktopNodeChainHasSOCKS(nodes) &&
-		(len(nodes) != 3 || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) || nodes[1].Mode != "socks5") {
-		return errors.New("SOCKS Server and Compare require their original exact trio")
+	if requested != "local" && desktopNodeChainHasSOCKS(nodes) {
+		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes || nodes[len(nodes)-2].Mode != "socks5" {
+			return errors.New("SOCKS Server and Compare require their original complete packet prefix and paired final")
+		}
+		for _, node := range nodes[:len(nodes)-2] {
+			if !mobilemultihop.NodeChainPrefixMode(node.Mode) {
+				return errors.New("SOCKS Server and Compare require only paired WireGuard or AWG2 prefix members")
+			}
+		}
 	}
 	if requested != "local" && desktopNodeChainHasCONNECT(nodes) {
 		if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes ||

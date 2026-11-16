@@ -89,6 +89,8 @@ CONTROL_NAMES = (
     "connect-execution-final-layer",
     "connect-execution-boolean",
     "connect-execution-capability",
+    "socks-execution-old-trio",
+    "socks-execution-final-layer",
     "socks-execution-capability",
     "socks-execution-boolean",
     "socks-execution-layer",

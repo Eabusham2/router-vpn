@@ -164,8 +164,7 @@ func TestDesktopOrderedExecutionChoicesKeepProxyNativeAdmissionClosed(t *testing
 				}
 				complete = append(complete, proxy[1:]...)
 				err := desktopOrderedExecutionSelection(complete, requested)
-				want := requested == "local" || mode != "socks5"
-				if (err == nil) != want {
+				if err != nil {
 					t.Fatal("typed proxy complete-prefix admission changed", mode, requested, count, err)
 				}
 			}

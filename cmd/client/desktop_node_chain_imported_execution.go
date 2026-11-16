@@ -36,9 +36,9 @@ func desktopNodeChainImportedHostnameExecutionMiddle(profile common.RouterProfil
 }
 
 // Paired execution retains its existing source bounds. Only the original
-// schema-two prefix or separately typed CONNECT path can add one imported member.
+// schema-two prefix or separately typed CONNECT/SOCKS path can add one imported member.
 func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested string) error {
-	bad := errors.New("ordered imported execution requires its original SS2022 or CONNECT path, saved hostname resolver after two packet members, or typed SOCKS trio")
+	bad := errors.New("ordered imported execution requires its original complete SS2022, CONNECT or SOCKS path, with a saved hostname resolver after two packet members")
 	if !validDesktopOrderedExecution(requested) {
 		return bad
 	}

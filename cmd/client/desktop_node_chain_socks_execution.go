@@ -6,13 +6,21 @@ import "router-vpn/internal/mobilemultihop"
 // schema-three preparation still precede physical admission or a connection
 // change. In particular the middle keeps its UDP association and credentials.
 func desktopNodeChainSOCKSExecutionShape(members []desktopNodeChainMember) bool {
-	if len(members) != 3 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[2].Mode != "shadowsocks" ||
-		!desktopNodeChainSOCKSMiddle(members[1].Profile, members[1].Mode) {
+	if len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes {
 		return false
 	}
-	entry, final := members[0].Profile.StartLayer, members[2].Profile.StartLayer
-	return (entry == "" || entry == "off" || entry == "aes-256-gcm" || entry == "aes-256-gcm+xor-whitening") &&
-		(final == "" || final == "off")
+	middle, final := len(members)-2, len(members)-1
+	if members[final].Mode != "shadowsocks" || !desktopNodeChainSOCKSMiddle(members[middle].Profile, members[middle].Mode) ||
+		members[final].Profile.StartLayer != "" && members[final].Profile.StartLayer != "off" {
+		return false
+	}
+	for _, member := range members[:middle] {
+		layer := member.Profile.StartLayer
+		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || layer != "" && layer != "off" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
+			return false
+		}
+	}
+	return true
 }
 
 func desktopSOCKSTrioExecutionMembers(members []desktopNodeChainMember, requested string) bool {
