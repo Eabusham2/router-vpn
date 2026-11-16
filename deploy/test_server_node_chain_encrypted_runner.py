@@ -323,7 +323,7 @@ func TestActualCopyAndSnapshot(t *testing.T){
 
 class ImportedServerBoundaries(unittest.TestCase):
     def sample(self, case='original'):
-        original=case.removeprefix('prefix-')
+        original=case.removeprefix('prefix-').removeprefix('hostname-')
         ready=original in ('original','joined-active-udp','admission-restrictions','wg-one','awg-fast','awg-strong','max-five')
         packet_fault=original in ('wrong-first-packet-key','wrong-later-packet-key')
         modes=None
@@ -333,8 +333,9 @@ class ImportedServerBoundaries(unittest.TestCase):
         packets=[4 if not packet_fault or original=='wrong-first-packet-key' and i==0 or original=='wrong-later-packet-key' and i<=1 else 0 for i in range(len(modes))] if modes else None
         proofs=[3 if not packet_fault or original=='wrong-later-packet-key' and i==0 else 0 for i in range(len(modes))] if modes else None
         value=dict(case=case,prefix_modes=modes,prefix_packets=packets,prefix_proofs=proofs,capture_sha256='a'*64,source_sha256='b'*64,
-                   ready=ready,selected_dns=ready,middle_tcp=0 if packet_fault else 4,middle_udp=3 if ready else 0,
+                   ready=ready,selected_dns=ready,middle_tcp=0 if packet_fault or original=='wrong-transport-dns' else 4,middle_udp=3 if ready else 0,
                    final_tcp=2 if ready else 0,final_udp=1 if ready else 0,
+                   transport_dns_queries=2 if case.startswith('prefix-hostname-') and not packet_fault else 0,
                    retired=True,worker_joined=True,peer_joined=True,private_udp_refused=original=='admission-restrictions',
                    private_sink_packets=0 if original=='admission-restrictions' else 1, private_sink_replies=0 if original=='admission-restrictions' else 1)
         root=GATE.IMPORTED_NATIVE
@@ -350,7 +351,7 @@ class ImportedServerBoundaries(unittest.TestCase):
             for before,after in (('"worker_joined": true','"worker_joined": false'),
                                  ('"peer_joined": true','"peer_joined": false'),
                                  ('"retired": true','"retired": false'),
-                                 (('"middle_tcp": 0','"middle_tcp": 1') if case in ('prefix-wrong-first-packet-key','prefix-wrong-later-packet-key') else ('"middle_tcp": 4','"middle_tcp": 0')),
+                                 (('"middle_tcp": 0','"middle_tcp": 1') if case.removeprefix('prefix-').removeprefix('hostname-') in ('wrong-first-packet-key','wrong-later-packet-key','wrong-transport-dns') else ('"middle_tcp": 4','"middle_tcp": 0')),
                                  ('--- PASS:', '--- SKIP:')):
                 self.assertIn(before,text)
                 with self.subTest(case=case, mutation=before),self.assertRaises(ValueError):
@@ -365,7 +366,7 @@ class ImportedServerBoundaries(unittest.TestCase):
                     'prefix-failed-selected-dns','prefix-wrong-public-identity','prefix-joined-active-udp','prefix-admission-restrictions',
                     'prefix-wg-one','prefix-awg-fast','prefix-awg-strong','prefix-max-five',
                     'prefix-wrong-first-packet-key','prefix-wrong-later-packet-key')
-        self.assertEqual(GATE.IMPORTED_CASES[8:], expected)
+        self.assertEqual(GATE.IMPORTED_CASES[8:22], expected)
         for case in expected:
             text = self.sample(case)
             for field in ('prefix_modes','prefix_packets','prefix_proofs'):
@@ -382,6 +383,33 @@ class ImportedServerBoundaries(unittest.TestCase):
             value[field][index]=count
             changed=re.sub(r'IMPORTED_SERVER_RECEIPT [^\n]+','IMPORTED_SERVER_RECEIPT '+json.dumps(value),text)
             with self.assertRaises(ValueError):GATE.check_imported_verdict(changed,case)
+
+    def test_hostname_packet_dns_receipts_are_required_and_causal(self):
+        expected = ('prefix-hostname-wg-one', 'prefix-hostname-awg-fast', 'prefix-hostname-awg-strong',
+                    'prefix-hostname-max-five', 'prefix-hostname-wrong-transport-dns', 'prefix-hostname-wrong-middle-key',
+                    'prefix-hostname-failed-selected-dns', 'prefix-hostname-joined-active-udp',
+                    'prefix-hostname-wrong-first-packet-key', 'prefix-hostname-wrong-later-packet-key')
+        self.assertEqual(GATE.IMPORTED_CASES[22:], expected)
+        for case in GATE.IMPORTED_CASES:
+            text = self.sample(case)
+            value = json.loads(text.split('IMPORTED_SERVER_RECEIPT ', 1)[1].splitlines()[0])
+            for mutation in ('missing', 'bool', 'opposite'):
+                changed = dict(value)
+                if mutation == 'missing':
+                    del changed['transport_dns_queries']
+                elif mutation == 'bool':
+                    changed['transport_dns_queries'] = bool(value['transport_dns_queries'])
+                else:
+                    changed['transport_dns_queries'] = 0 if value['transport_dns_queries'] else 1
+                output = re.sub(r'IMPORTED_SERVER_RECEIPT [^\n]+', 'IMPORTED_SERVER_RECEIPT '+json.dumps(changed), text)
+                with self.subTest(case=case, mutation=mutation), self.assertRaises(ValueError):
+                    GATE.check_imported_verdict(output, case)
+        text = self.sample('prefix-hostname-wrong-transport-dns')
+        for before, after in (('"final_tcp": 0', '"final_tcp": 1'),
+                              ('"middle_udp": 0', '"middle_udp": 1'),
+                              ('"ready": false', '"ready": true')):
+            with self.subTest(mutation=before), self.assertRaises(ValueError):
+                GATE.check_imported_verdict(text.replace(before, after), 'prefix-hostname-wrong-transport-dns')
 
     def test_imported_lan_policy_receipt_cannot_be_omitted_or_relabelled(self):
         text=self.sample('admission-restrictions')

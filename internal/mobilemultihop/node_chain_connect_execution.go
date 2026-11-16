@@ -183,7 +183,7 @@ func (p *NodeChainExecutionPolicy) importedPublicPosition() int {
 		}
 		return -1
 	}
-	if p.source.Schema == 1 && p.source.Server.Schema == 2 && p.local.importedMiddle != nil && p.local.importedMiddle.hostname == nil && p.local.connectSource == nil && p.local.socksSource == nil {
+	if p.source.Schema == 1 && p.source.Server.Schema == 2 && nodeChainImportedExecutionMemberSupported(p.local.importedMiddle, len(p.local.nodes)) && p.local.connectSource == nil && p.local.socksSource == nil {
 		return position
 	}
 	return -1

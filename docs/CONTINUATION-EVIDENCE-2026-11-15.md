@@ -4356,3 +4356,62 @@ Detailed validation receipt SHA256:
 `12a686c7f9012fbc6562fb273d105c65bad307a9797a05eab12afcf578cdcd69`.
 All source preimages matched when integrated over 75265645, preserving the
 newer SOCKS runtime-receipt fixture and Linux guardian selector corrections.
+
+## November 16: Hostname Server execution retains packet-owned transport DNS
+
+The shared execution and Server preparation now accept the existing sealed
+SS2022 hostname middle in complete four-to-eight-member chains. Its explicitly
+saved Custom TCP literal resolver remains behind the same preceding WG/AWG
+packet node in both Local and Server candidates. The independently paired
+final retains selected application DNS, credentials, proof positions and MTU.
+No ambient resolver or physical hostname exception is introduced. A trio has
+no packet predecessor left inside its Server suffix and still requires a
+separately owned physical DNS implementation.
+
+Public measurement capture now retains the exact original hostname object,
+source, configuration, members and preparation. Local/Server comparison keeps
+the user's two-probe average and one target, then repeats proof before retaining
+a candidate. Restoration retains the already-proved choice without repeating
+Compare. Wrong prefix proof and copied hostname ownership are rejected.
+
+Four shared roots and 27 records passed with race instrumentation, covering
+WG, AWG Fast/Strong, four/eight members, all three supported SS2022 ciphers,
+comparison and restoration. The complete native ownership gate passed all
+43 roots and 176 records under its original 120-second per-package limit.
+Both Local and Server tests reject replacement of the exact captured hostname
+resolver. A separately compiled mutation removing the original-resolver loop
+failed at the intended local substitution witness. The required gate retains
+its previous roots and controls, adding this root and causal control.
+
+All 32 imported Server source cases and all 14 original packet source cases
+passed using the compiled acceptance driver. Current registered worker, driver
+and reference-peer images compiled with race instrumentation. Thirteen native
+verdict tests, sixteen shared-partition tests and twenty-four encrypted-gate
+tests passed. The ten added encrypted hostname cases preserve all 22 original
+imported cases and the original operation bounds; they require packet-routed
+TCP DNS observations, wrong-resolver/key rejection and joined retirement.
+
+The native Box components use actual managers, selector, DNS dispatch and SOCKS
+frontend with explicit TUN, encrypted-prefix and DNS-answer doubles. They are
+not encrypted namespace, installed-host or device acceptance. This executor's
+namespace setup was already observed to fail with netlink EPERM before worker
+execution. No hostname encrypted-path pass is claimed; all 32 actual encrypted
+imported cases remain mandatory in hosted CI. Desktop public/editor adoption
+is a separate prepared change. Broader resolver choices, imported placements,
+physical-device checks and private deployment remain open requirements.
+
+The initial native compile exhausted local disk before testing; its log is
+retained. A new negative fixture initially mistook other packet-node UDP DNS
+transports for the hostname resolver. It now validates the complete original
+inventory, locates the exact captured TCP address, port and preceding packet
+tag, and changes only that manager object. Production ownership checks and
+existing negative cases were retained.
+
+Frozen 15-file manifest SHA256:
+`7a51633d5806993fae90c7f7a3a4dbb0253dba128afb65d27db4b414c38eabb5`.
+Detailed validation receipt SHA256:
+`0fc369ed9e4dbadee240562ac60aeff9d6acc6b357f52ee1e202fa4918d9f940`.
+The native/source compositions were checked on the recorded predecessor
+closures; all 15 source preimages match 8510d196. Its newer Linux imported and
+SOCKS installed gates and Android DNS fixture are preserved. Exact-current-SHA
+native CI and release publication remain separate evidence.

@@ -52,7 +52,11 @@ IMPORTED_CASES = ('original', 'wrong-middle-key', 'wrong-final-key', 'wrong-fina
                   'prefix-original', 'prefix-wrong-middle-key', 'prefix-wrong-final-key', 'prefix-wrong-final-identity',
                   'prefix-failed-selected-dns', 'prefix-wrong-public-identity', 'prefix-joined-active-udp', 'prefix-admission-restrictions',
                   'prefix-wg-one', 'prefix-awg-fast', 'prefix-awg-strong', 'prefix-max-five',
-                  'prefix-wrong-first-packet-key', 'prefix-wrong-later-packet-key')
+                  'prefix-wrong-first-packet-key', 'prefix-wrong-later-packet-key',
+                  'prefix-hostname-wg-one', 'prefix-hostname-awg-fast', 'prefix-hostname-awg-strong',
+                  'prefix-hostname-max-five', 'prefix-hostname-wrong-transport-dns', 'prefix-hostname-wrong-middle-key',
+                  'prefix-hostname-failed-selected-dns', 'prefix-hostname-joined-active-udp',
+                  'prefix-hostname-wrong-first-packet-key', 'prefix-hostname-wrong-later-packet-key')
 IMPORTED_NATIVE = 'TestServerChainImportedEncryptedNative'
 IMPORTED_SOURCE = 'TestServerChainImportedEncryptedSource'
 IMPORTED_TEMPLATE = 'mobile/server_chain_acceptance/imported_linux_test.go.tmpl'
@@ -249,14 +253,14 @@ def check_imported_verdict(output, case, *, source_only=False):
                 raise ValueError('Imported Server late or foreign receipt')
             keys = []
             value = json.loads(line.split('IMPORTED_SERVER_RECEIPT ', 1)[1], object_pairs_hook=lambda entries: keys.extend(k for k,v in entries) or dict(entries))
-            fields = {'case', 'prefix_modes', 'prefix_packets', 'prefix_proofs', 'capture_sha256', 'source_sha256', 'ready', 'selected_dns', 'middle_tcp', 'middle_udp', 'final_tcp', 'final_udp', 'retired', 'worker_joined', 'peer_joined', 'private_udp_refused', 'private_sink_packets', 'private_sink_replies'}
+            fields = {'case', 'prefix_modes', 'prefix_packets', 'prefix_proofs', 'capture_sha256', 'source_sha256', 'ready', 'selected_dns', 'middle_tcp', 'middle_udp', 'final_tcp', 'final_udp', 'transport_dns_queries', 'retired', 'worker_joined', 'peer_joined', 'private_udp_refused', 'private_sink_packets', 'private_sink_replies'}
             if set(value) != fields or len(keys) != len(set(keys)) or value['case'] != case:
                 raise ValueError('Imported Server receipt identity changed')
             if any(value[k] is not True for k in ('retired','worker_joined','peer_joined')):
                 raise ValueError('Imported Server lost original joined retirement')
             if any(not isinstance(value[k], str) or re.fullmatch('[0-9a-f]{64}', value[k]) is None for k in ('capture_sha256','source_sha256')):
                 raise ValueError('Imported Server source identity missing')
-            original = case.removeprefix('prefix-')
+            original = case.removeprefix('prefix-').removeprefix('hostname-')
             ready = original in ('original', 'joined-active-udp', 'admission-restrictions', 'wg-one', 'awg-fast', 'awg-strong', 'max-five')
             modes = []
             if case.startswith('prefix-'):
@@ -265,6 +269,11 @@ def check_imported_verdict(output, case, *, source_only=False):
             if value['prefix_modes'] != (modes or None):
                 raise ValueError('Imported Server changed actual packet inventory')
             packet_fault = original in ('wrong-first-packet-key', 'wrong-later-packet-key')
+            hostname = case.startswith('prefix-hostname-')
+            transport_fault = original == 'wrong-transport-dns'
+            queries = value['transport_dns_queries']
+            if type(queries) is not int or queries < 0 or (queries > 0) is not (hostname and not packet_fault):
+                raise ValueError('Imported hostname lost its original packet-routed transport DNS observation')
             for field in ('prefix_packets', 'prefix_proofs'):
                 counts = value[field]
                 if not modes:
@@ -283,7 +292,7 @@ def check_imported_verdict(output, case, *, source_only=False):
             if value['ready'] is not ready or value['selected_dns'] is not ready:
                 raise ValueError('Imported Server success/refusal changed')
             counters = ('middle_tcp','middle_udp','final_tcp','final_udp')
-            if any(type(value[k]) is not int or value[k] < 0 for k in counters) or not packet_fault and value['middle_tcp'] <= 0 or packet_fault and any(value[k] != 0 for k in counters) or ready and any(value[k] <= 0 for k in counters):
+            if any(type(value[k]) is not int or value[k] < 0 for k in counters) or not (packet_fault or transport_fault) and value['middle_tcp'] <= 0 or (packet_fault or transport_fault) and any(value[k] != 0 for k in counters) or ready and any(value[k] <= 0 for k in counters):
                 raise ValueError('Imported Server missing actual encrypted observations')
             restricted = original == 'admission-restrictions'
             if value['private_udp_refused'] is not restricted or any(type(value[k]) is not int or value[k] < 0 for k in ('private_sink_packets','private_sink_replies')):

@@ -17,7 +17,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'github.com/sagernet/sing-box'
 ROOTS = {
-    PACKAGE: ('NativeCONNECTCompletePrefixes', 'NativeImportedPublicPrefixes', 'NativeImportedPublicDNS', 'NativeImportedPublicServer', 'NativeRetainsOneGraphThroughDiscovery', 'NativeRejectsActualGraphSubstitution',
+    PACKAGE: ('NativeHostnamePublicPrefixes', 'NativeCONNECTCompletePrefixes', 'NativeImportedPublicPrefixes', 'NativeImportedPublicDNS', 'NativeImportedPublicServer', 'NativeRetainsOneGraphThroughDiscovery', 'NativeRejectsActualGraphSubstitution',
               'NativeDNSRejectsAwayAndBackSelection', 'NativeGateRejectsForeignProofAndRetiredSelection',
               'NativeOpenCannotFinishAfterRevoke', 'NativeDiscoveryKeepsLiteralOriginalEntry',
               'NativeRestoreRetainsOriginalFront', 'NativeRetiredSourceKeepsClosedReceipt',
@@ -39,6 +39,7 @@ ROOTS = {
 }
 CHILDREN = {
     'NativeCONNECTCompletePrefixes': ('4/server', '4/auto', '8/server', '8/auto'),
+    'NativeHostnamePublicPrefixes': ('wg/2/local', 'wg/2/server', 'wg/6/local', 'wg/6/server', 'awg2-strong/2/local', 'awg2-strong/2/server', 'awg2-strong/6/local', 'awg2-strong/6/server', 'local-transport-dns-owner', 'server-transport-dns-owner'),
     'NativeImportedPublicPrefixes': ('wg/2/local', 'wg/2/server', 'wg/6/local', 'wg/6/server', 'awg2-strong/2/local', 'awg2-strong/2/server', 'awg2-strong/6/local', 'awg2-strong/6/server', 'old-middle-position'),
     'NativeImportedPublicDNS': ('original', 'foreign-tag', 'foreign-address', 'changed-owner', 'changed-selector', 'mapped-answer', 'private-answer', 'cancelled'),
     'NativeImportedPublicServer': ('original', 'away-and-back', 'foreign-tag', 'foreign-address'),
@@ -184,6 +185,7 @@ def verify(core):
 
 
 CONTROLS = (
+    ('hostname original transport resolver', 'routervpn_node_chain_execution.go', 'for tag, original := range e.originalResolvers {', 'for tag, original := range map[string]adapter.DNSTransport{} {', '.', 'NativeHostnamePublicPrefixes/local-transport-dns-owner', 'foreign imported public DNS/selection accepted'),
     ('generic original penultimate position', 'experimental/libbox/routervpn/mobilemultihop/node_chain_execution_public_measurement.go', 'position := len(original.nodes) - 2', 'position := 1', '.', 'NativeImportedPublicPrefixes/wg/6/local', 'original selected DNS/public imported SS'),
     ('generic original public family', 'routervpn_node_chain_execution.go', 'return e.dialImportedPublicContext(ctx, state, tag)', 'return e.dialCONNECTPublicContext(ctx, state, tag)', '.', 'NativeImportedPublicDNS/original', 'original selected DNS/public imported SS'),
     ('generic public selected epoch', 'routervpn_node_chain_execution_public.go', ' || e.selector.RouterVPNNodeChainSelectionEpoch() != epoch', ' || epoch == 0', '.', 'NativeImportedPublicDNS/changed-selector', 'foreign imported public DNS/selection accepted'),

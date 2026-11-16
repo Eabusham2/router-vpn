@@ -103,7 +103,7 @@ func newNodeChainExecutionPolicyFamily(sourceJSON string, connect *nodeChainCONN
 		local = connect.local
 	}
 	if err != nil || local.validateCapture() != nil || local.openVPNMiddle != nil || len(local.nodes) != len(source.Server.Members)+1 ||
-		local.importedMiddle != nil && local.importedMiddle.hostname != nil {
+		local.importedMiddle != nil && !nodeChainImportedExecutionMemberSupported(local.importedMiddle, len(local.nodes)) {
 		return nil, nodeChainExecutionError
 	}
 	var original NodeChainSource

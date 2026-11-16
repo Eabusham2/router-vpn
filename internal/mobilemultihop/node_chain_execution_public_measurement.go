@@ -7,23 +7,26 @@ type nodeChainExecutionImportedPublicCapture struct {
 	chain          *NodeChain
 	middle         *nodeChainImportedMember
 	policy         *ExternalPolicy
+	hostname       *nodeChainImportedHostname
 	nodes          []*NodeProfile
 	source, config string
 }
 
 func captureNodeChainExecutionImportedPublic(p *NodeChainExecutionPreparation) *nodeChainExecutionImportedPublicCapture {
 	if p == nil || p.connect != nil || p.socks != nil || p.source.Schema != 1 || p.local == nil ||
-		(len(p.local.nodes) < 3 || len(p.local.nodes) > 8) || p.local.importedMiddle == nil || p.local.importedMiddle.hostname != nil ||
+		!nodeChainImportedExecutionMemberSupported(p.local.importedMiddle, len(p.local.nodes)) ||
 		p.local.openVPNMiddle != nil || p.local.socksSource != nil || p.local.connectSource != nil {
 		return nil
 	}
-	return &nodeChainExecutionImportedPublicCapture{p, p.local, p.local.importedMiddle, p.local.importedMiddle.policy,
-		append([]*NodeProfile(nil), p.local.nodes...), p.sourceSHA, p.configSHA}
+	return &nodeChainExecutionImportedPublicCapture{preparation: p, chain: p.local, middle: p.local.importedMiddle,
+		policy: p.local.importedMiddle.policy, hostname: p.local.importedMiddle.hostname,
+		nodes: append([]*NodeProfile(nil), p.local.nodes...), source: p.sourceSHA, config: p.configSHA}
 }
 
 func (c *nodeChainExecutionImportedPublicCapture) current(p *NodeChainExecutionPreparation) bool {
 	if c == nil || p == nil || c.preparation != p || c.chain == nil || p.local != c.chain ||
-		c.middle == nil || c.chain.importedMiddle != c.middle || c.policy == nil || c.middle.policy != c.policy || c.source != p.sourceSHA || c.config != p.configSHA ||
+		c.middle == nil || c.chain.importedMiddle != c.middle || c.middle.policy != c.policy || c.middle.hostname != c.hostname ||
+		!nodeChainImportedExecutionMemberSupported(c.middle, len(c.nodes)) || c.source != p.sourceSHA || c.config != p.configSHA ||
 		(len(c.nodes) < 3 || len(c.nodes) > 8) || len(c.chain.nodes) != len(c.nodes) {
 		return false
 	}
@@ -46,8 +49,7 @@ func (p *NodeChainExecutionProjection) ImportedPublicMeasurementCapture(executio
 		return "", false, nodeChainExecutionError
 	}
 	original := p.preparation.local
-	if original == nil || (len(original.nodes) < 3 || len(original.nodes) > 8) || original.importedMiddle == nil ||
-		original.importedMiddle.hostname != nil || original.openVPNMiddle != nil ||
+	if original == nil || !nodeChainImportedExecutionMemberSupported(original.importedMiddle, len(original.nodes)) || original.openVPNMiddle != nil ||
 		original.socksSource != nil || original.connectSource != nil {
 		return "", false, nodeChainExecutionError
 	}

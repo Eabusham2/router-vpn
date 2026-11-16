@@ -272,9 +272,10 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		}
 		if source.Schema == 2 && index == len(source.Nodes)-2 {
 			middle, err := parseNodeChainImportedMember(launch)
-			// A saved hostname requires a separately captured resolver owner.
-			// This literal Server family grants no ambient DNS authority.
-			if err != nil || middle == nil || middle.hostname != nil || middle.validate() != nil {
+			// The hostname resolver must retain a preceding paired packet node
+			// in this suffix. The native worker retains every configured DNS
+			// transport; this never grants ambient or direct hostname DNS.
+			if err != nil || !nodeChainImportedExecutionMemberSupported(middle, len(source.Nodes)+1) || middle.validate() != nil {
 				return nil, nodeChainServerError
 			}
 			closure, err := middle.closure()

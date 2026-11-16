@@ -29,7 +29,11 @@ import (
 // This witnesses the real schema2 Server suffix. Entry lease acquisition and
 // desktop Compare selection are separate authorities; this fixture does not
 // synthesize an authenticated Router API request or report either as exercised.
-var serverChainImportedCases = []string{"original", "wrong-middle-key", "wrong-final-key", "wrong-final-identity", "failed-selected-dns", "wrong-public-identity", "joined-active-udp", "admission-restrictions", "prefix-original", "prefix-wrong-middle-key", "prefix-wrong-final-key", "prefix-wrong-final-identity", "prefix-failed-selected-dns", "prefix-wrong-public-identity", "prefix-joined-active-udp", "prefix-admission-restrictions", "prefix-wg-one", "prefix-awg-fast", "prefix-awg-strong", "prefix-max-five", "prefix-wrong-first-packet-key", "prefix-wrong-later-packet-key"}
+var serverChainImportedCases = []string{"original", "wrong-middle-key", "wrong-final-key", "wrong-final-identity", "failed-selected-dns", "wrong-public-identity", "joined-active-udp", "admission-restrictions", "prefix-original", "prefix-wrong-middle-key", "prefix-wrong-final-key", "prefix-wrong-final-identity", "prefix-failed-selected-dns", "prefix-wrong-public-identity", "prefix-joined-active-udp", "prefix-admission-restrictions", "prefix-wg-one", "prefix-awg-fast", "prefix-awg-strong", "prefix-max-five", "prefix-wrong-first-packet-key", "prefix-wrong-later-packet-key", "prefix-hostname-wg-one", "prefix-hostname-awg-fast", "prefix-hostname-awg-strong", "prefix-hostname-max-five", "prefix-hostname-wrong-transport-dns", "prefix-hostname-wrong-middle-key", "prefix-hostname-failed-selected-dns", "prefix-hostname-joined-active-udp", "prefix-hostname-wrong-first-packet-key", "prefix-hostname-wrong-later-packet-key"}
+
+func serverChainImportedCase(name string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(name, "prefix-"), "hostname-")
+}
 
 type serverChainImportedMiddleStats struct {
 	Method        string `json:"method"`
@@ -46,12 +50,14 @@ type serverChainImportedReply struct {
 		serverChainEncryptedStats
 		Middle serverChainImportedMiddleStats `json:"middle"`
 	} `json:"peer"`
-	MiddleAddress string `json:"middle_address"`
+	MiddleAddress       string `json:"middle_address"`
+	TransportDNSQueries uint64 `json:"transport_dns_queries"`
 }
 type serverChainImportedPeer struct {
 	original *serverChainEncryptedPeer
 	password string
 	packet   bool
+	hostname bool
 	reply    serverChainImportedReply
 }
 
@@ -66,6 +72,9 @@ func (p *serverChainImportedPeer) read(t *testing.T) serverChainImportedReply {
 	endpoint, err := netip.ParseAddrPort(value.MiddleAddress)
 	if err != nil || endpoint.Addr().String() != map[bool]string{false: "192.168.210.2", true: "10.79.0.1"}[p.packet] || endpoint.Port() == 0 || value.Peer.Final.DirectQueries != 0 || value.Peer.Final.EntryPublicQueries != 0 || !p.packet && value.Peer.Prefixes[0].RawUDP != 0 {
 		t.Fatal("imported Server suffix acquired an unrelated packet carrier or bypass")
+	}
+	if !p.hostname && value.TransportDNSQueries != 0 || value.TransportDNSQueries < p.reply.TransportDNSQueries {
+		t.Fatal("imported Server acquired foreign or reset transport DNS observations")
 	}
 	if p.reply.MiddleAddress != "" && (p.reply.MiddleAddress != value.MiddleAddress || p.reply.Peer.PublicCA != value.Peer.PublicCA) {
 		t.Fatal("original imported Server endpoint or TLS identity replaced")
@@ -106,14 +115,14 @@ func (p *serverChainImportedPeer) control(t *testing.T, command string) serverCh
 }
 func serverChainImportedKeys(t *testing.T, name string) *serverChainEncryptedPeer {
 	t.Helper()
-	mode := strings.TrimPrefix(name, "prefix-")
+	mode := serverChainImportedCase(name)
 	original := serverChainEncryptedKeys(t, mode)
-	if !strings.HasPrefix(name, "prefix-") || name == "prefix-wg-one" {
+	if !strings.HasPrefix(name, "prefix-") || mode == "wg-one" {
 		original.prefixes = original.prefixes[:1]
 		original.clients = original.clients[:1]
 		original.servers = original.servers[:1]
 	}
-	if name == "prefix-max-five" {
+	if mode == "max-five" {
 		original = serverChainEncryptedKeys(t, "mixed-three")
 		tail := serverChainEncryptedKeys(t, "awg-fast")
 		original.prefixes = append(original.prefixes, tail.prefixes...)
@@ -129,7 +138,7 @@ func serverChainImportedPeerStart(t *testing.T, name string) *serverChainImporte
 	t.Helper()
 	original := serverChainImportedKeys(t, name)
 	raw, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
-	p := &serverChainImportedPeer{original: original, password: base64.StdEncoding.EncodeToString(raw), packet: strings.HasPrefix(name, "prefix-")}
+	p := &serverChainImportedPeer{original: original, password: base64.StdEncoding.EncodeToString(raw), packet: strings.HasPrefix(name, "prefix-"), hostname: strings.HasPrefix(name, "prefix-hostname-")}
 	image := serverChainEncryptedImage(t, "ROUTERVPN_SERVER_CHAIN_PEER")
 	command := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "-test.run=^TestRouterVPNDesktopNodeChainImportedServerReferenceProcess$", "-test.count=1", "-test.timeout=100s")
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_CHAIN_IMPORTED_SERVER_REFERENCE_CHILD=1"}
@@ -139,7 +148,7 @@ func serverChainImportedPeerStart(t *testing.T, name string) *serverChainImporte
 	if p.packet {
 		schema = 2
 	}
-	request := map[string]any{"schema": schema, "paired": paired, "middle_method": mobilemultihop.NativeStartLayerMethod, "middle_password": p.password}
+	request := map[string]any{"schema": schema, "paired": paired, "middle_method": mobilemultihop.NativeStartLayerMethod, "middle_password": p.password, "hostname_dns": p.hostname}
 	if json.NewEncoder(original.process.input).Encode(request) != nil {
 		t.Fatal("original imported Server request failed")
 	}
@@ -150,7 +159,7 @@ func serverChainImportedSource(t *testing.T, p *serverChainImportedPeer, fault s
 	t.Helper()
 	// Preserve every original packet source in longer suffixes. The trio
 	// retains only the independently paired final from this constructor.
-	fault = strings.TrimPrefix(fault, "prefix-")
+	fault = serverChainImportedCase(fault)
 	originalFault := ""
 	if fault == "wrong-final-key" {
 		originalFault = "wrong-ss-key"
@@ -179,6 +188,12 @@ func serverChainImportedSource(t *testing.T, p *serverChainImportedPeer, fault s
 	out := map[string]any{"type": "shadowsocks", "tag": "custom-exit", "server": endpoint.Addr().String(), "server_port": endpoint.Port(), "method": mobilemultihop.NativeStartLayerMethod, "password": password}
 	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "endpoints": []any{}, "outbounds": []any{out}, "route": map[string]any{"final": "custom-exit", "rules": []any{}, "auto_detect_interface": true}}
 	profile := map[string]any{"id": "encrypted-imported-middle", "node_kind": "external", "external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "shadowsocks": map[string]any{"server": endpoint.Addr().String(), "port": endpoint.Port(), "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "endpoint": endpoint.Addr().String(), "dns_mode": "home", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": fault != "admission-restrictions", "kill_switch_policy": "on-connect"}
+	if p.hostname {
+		const host = "Middle.EXAMPLE.test"
+		out["server"], profile["endpoint"] = host, host
+		profile["external"].(map[string]any)["shadowsocks"].(map[string]any)["server"] = host
+		profile["dns_mode"], profile["dns_protocol"], profile["dns_host"], profile["dns_port"], profile["ipv6_mode"] = "custom", "tcp", "10.78.0.53", 5353, "off"
+	}
 	capture := map[string]any{"schema": 1, "exit_id": "encrypted-imported-middle", "protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "profile": profile}
 	middle, err := mobilemultihop.NodeChainImportedMemberInput(serverChainEncryptedJSON(t, graph), serverChainEncryptedJSON(t, capture))
 	if err != nil {
@@ -217,8 +232,10 @@ func serverChainImportedScenario(t *testing.T, name string) {
 	p := serverChainImportedPeerStart(t, name)
 	policy, capture := serverChainImportedSource(t, p, name)
 	originalName := name
-	name = strings.TrimPrefix(name, "prefix-")
+	name = serverChainImportedCase(name)
 	switch name {
+	case "wrong-transport-dns":
+		p.control(t, "fail-transport-dns")
 	case "wrong-final-identity":
 		p.control(t, "wrong-node")
 	case "failed-selected-dns":
@@ -331,8 +348,15 @@ func serverChainImportedScenario(t *testing.T, name string) {
 	}
 	stats := p.control(t, "stats")
 	packetFault := name == "wrong-first-packet-key" || name == "wrong-later-packet-key"
-	if !packetFault && stats.Peer.Middle.RawTCP == 0 {
+	transportFault := name == "wrong-transport-dns"
+	if !packetFault && !transportFault && stats.Peer.Middle.RawTCP == 0 {
 		t.Fatal("no actual imported encrypted peer observation")
+	}
+	if (stats.TransportDNSQueries > 0) != (p.hostname && !packetFault) {
+		t.Fatal("hostname lookup did not belong to the original encrypted packet prefix")
+	}
+	if transportFault && (stats.Peer.Middle.RawTCP != 0 || stats.Peer.Middle.RawUDP != 0 || stats.Peer.Final.RouterQueries != 0) {
+		t.Fatal("failed captured hostname DNS reached an encrypted downstream transport")
 	}
 	var modes []string
 	var packets, proofs []int64
@@ -388,7 +412,7 @@ func serverChainImportedScenario(t *testing.T, name string) {
 	}
 	_ = p.original.process.input.Close()
 	p.original.process.join(t)
-	t.Log("IMPORTED_SERVER_RECEIPT " + serverChainEncryptedJSON(t, map[string]any{"case": originalName, "prefix_modes": modes, "prefix_packets": packets, "prefix_proofs": proofs, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "ready": ready, "selected_dns": ready, "middle_tcp": stats.Peer.Middle.RawTCP, "middle_udp": stats.Peer.Middle.RawUDP, "final_tcp": stats.Peer.Final.FinalRawTCP, "final_udp": stats.Peer.Final.FinalRawUDP, "retired": true, "worker_joined": true, "peer_joined": true, "private_udp_refused": name == "admission-restrictions", "private_sink_packets": stats.Peer.Final.CoverPackets, "private_sink_replies": stats.Peer.Final.CoverReplies}))
+	t.Log("IMPORTED_SERVER_RECEIPT " + serverChainEncryptedJSON(t, map[string]any{"case": originalName, "prefix_modes": modes, "prefix_packets": packets, "prefix_proofs": proofs, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "ready": ready, "selected_dns": ready, "middle_tcp": stats.Peer.Middle.RawTCP, "middle_udp": stats.Peer.Middle.RawUDP, "final_tcp": stats.Peer.Final.FinalRawTCP, "final_udp": stats.Peer.Final.FinalRawUDP, "transport_dns_queries": stats.TransportDNSQueries, "retired": true, "worker_joined": true, "peer_joined": true, "private_udp_refused": name == "admission-restrictions", "private_sink_packets": stats.Peer.Final.CoverPackets, "private_sink_replies": stats.Peer.Final.CoverReplies}))
 }
 func TestServerChainImportedEncryptedNative(t *testing.T) {
 	if os.Getenv("ROUTERVPN_SERVER_CHAIN_NATIVE_NS") != "1" || os.Geteuid() != 0 {
@@ -408,7 +432,7 @@ func TestServerChainImportedEncryptedSource(t *testing.T) {
 			original := serverChainImportedKeys(t, name)
 			original.stats.Address = "192.168.210.2:51820"
 			raw, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
-			p := &serverChainImportedPeer{original: original, password: base64.StdEncoding.EncodeToString(raw), packet: strings.HasPrefix(name, "prefix-")}
+			p := &serverChainImportedPeer{original: original, password: base64.StdEncoding.EncodeToString(raw), packet: strings.HasPrefix(name, "prefix-"), hostname: strings.HasPrefix(name, "prefix-hostname-")}
 			p.reply.MiddleAddress = "192.168.210.2:38388"
 			if p.packet {
 				p.reply.MiddleAddress = "10.79.0.1:8388"
@@ -430,7 +454,7 @@ func TestServerChainImportedEncryptedSource(t *testing.T) {
 			if err != nil || len(routes) != expected || routes[last-1].Final || !routes[last].Final || routes[last].UDPOverTCPVersion != 2 || routes[last-1].AllowsDestination("tcp", "10.77.0.1:8787") {
 				t.Fatal("positional source grants changed", err)
 			}
-			if routes[last].AllowsDestination("udp", "10.77.0.1:45999") != (strings.TrimPrefix(name, "prefix-") != "admission-restrictions") {
+			if routes[last].AllowsDestination("udp", "10.77.0.1:45999") != (serverChainImportedCase(name) != "admission-restrictions") {
 				t.Fatal("imported original LAN policy changed private UDP admission")
 			}
 			if !routes[last].AllowsDestination("udp", "192.168.50.133:53") {

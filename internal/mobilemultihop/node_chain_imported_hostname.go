@@ -23,6 +23,20 @@ type nodeChainImportedDevicePolicy struct {
 	HomeLANAccess    bool
 }
 
+// This is a source-shape boundary, not native or physical authority. A hostname
+// keeps its original saved resolver behind a paired packet prefix on both
+// candidates. Four complete members leave that prefix in the Server suffix;
+// the three-member hostname path would instead need a new physical DNS owner.
+func nodeChainImportedExecutionMemberSupported(m *nodeChainImportedMember, members int) bool {
+	if m == nil || members < 3 || members > NodeChainMaximumNodes {
+		return false
+	}
+	if m.hostname != nil {
+		return members >= 4 && m.policy == nil
+	}
+	return m.policy != nil
+}
+
 func (m *nodeChainImportedMember) devicePolicy() (nodeChainImportedDevicePolicy, error) {
 	if m.validate() != nil {
 		return nodeChainImportedDevicePolicy{}, nodeChainError

@@ -84,10 +84,11 @@ PHASES = (
     ('ordered execution capture and projection', r'^TestNodeChainExecution(?!(?:Discovery|Last|Runtime|Healthy|Stop|MTU|Measurement|Latency))'),
     ('ordered Server carrier and proof', r'^TestNodeChainServer'),
     ('ordered imported middle', r'^TestNodeChainImported(?!SSCompletePacketPrefixes$)'),
+    ('ordered hostname Server and comparison', r'^TestNodeChainHostnameExecution'),
     ('ordered candidates and prefix measurements', r'^TestNodeChain(?:Candidate|Measurement)'),
     ('CONNECT prefix execution source authority', '^(?:'+'|'.join(CONNECT_PREFIX_SOURCE)+')$'),
     ('CONNECT prefix execution lifecycle', '^(?:'+'|'.join(CONNECT_PREFIX_LIFECYCLE)+')$'),
-    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement))'),
+    ('ordered original graphs and ownership', '^(?!(?:'+'|'.join(CONNECT_PREFIX_ROOTS)+')$)'+r'TestNodeChain(?!(?:Execution|Server|Imported|Candidate|Measurement|HostnameExecution))'),
     ('node capture and packet identities', r'^Test(?:Node(?!Chain)|NativeNode|DesktopPredecessor|WireGuard|Amnezia|NativeAmnezia)'),
     ('proxy transports and native Xray', r'^Test(?:Proxy|Naive|Xray|NativeXray)'),
     ('mandatory PQ', r'^TestPQ'),
@@ -132,7 +133,7 @@ CI_GROUPS = {
         'ordered execution discovery and Last', 'ordered execution runtime and Stop',
         'ordered execution MTU', 'ordered execution measurements',
         'ordered execution capture and projection', 'ordered Server carrier and proof',
-        'ordered imported middle', 'ordered candidates and prefix measurements',
+        'ordered imported middle', 'ordered hostname Server and comparison', 'ordered candidates and prefix measurements',
         'CONNECT prefix execution source authority', 'CONNECT prefix execution lifecycle',
         'ordered original graphs and ownership', 'node capture and packet identities',
         'proxy transports and native Xray', 'mandatory PQ',
@@ -151,6 +152,10 @@ CI_GROUPS = {
 
 
 REQUIRED = frozenset((*CONNECT_PREFIX_ROOTS,
+    'TestNodeChainHostnameExecutionRetainsPacketPrefixDNS',
+    'TestNodeChainHostnameExecutionRejectsUnownedDNS',
+    'TestNodeChainHostnameExecutionComparesAndRestores',
+    'TestNodeChainHostnameExecutionRejectsFailedOriginalPacketProof',
     'TestImportedEntryPacketFinalCompleteGraphs', 'TestImportedEntryPacketFinalOwnershipAndMTU',
     'TestImportedEntryPacketCompleteGraphs', 'TestImportedEntryPacketSourceAndMTUOwnership', 'TestImportedEntryHysteriaFinalCompleteGraphs',
     'TestImportedEntryHysteriaFinalRejectsUnownedLayerAndTrust',
@@ -350,6 +355,7 @@ class PartitionTests(unittest.TestCase):
         leaves = [name for _, _, _, expected in phases for name in expected if name != PREFIX_ROOT]
         self.assertEqual(len(leaves), 108)
         self.assertEqual(len(set(leaves)), 108)
+
         for mode, form, selector, expected in phases:
             self.assertEqual(len(expected), 19)
             self.assertEqual(selector, '^' + PREFIX_ROOT + '$/^' + mode + '$/^' + form + '$')
@@ -371,6 +377,27 @@ class PartitionTests(unittest.TestCase):
                 assignment['imported_prefix'].clear()
             with self.subTest(fault=fault), self.assertRaises(ValueError):
                 select_ci_group(groups, None, assignment)
+
+    def test_hostname_execution_keeps_all_original_roots_in_one_bounded_phase(self):
+        names = sorted(set(self.names) | {'TestNodeChainHostnameExecutionFuture'})
+        groups = partition(names)
+        selected = dict(groups)['ordered hostname Server and comparison']
+        expected = sorted(name for name in names if name.startswith('TestNodeChainHostnameExecution'))
+        self.assertEqual(selected, expected)
+        self.assertEqual(len(expected), 5)
+        self.assertIn(('ordered hostname Server and comparison', selected), select_ci_group(groups, 'core'))
+        self.assertEqual(command(selected)[2:5], ['-race', '-count=1', '-timeout=180s'])
+        for omitted in set(expected).intersection(REQUIRED):
+            with self.subTest(omitted=omitted), self.assertRaisesRegex(ValueError, 'Required shared multihop matrix is missing'):
+                inventory('\n'.join(name for name in names if name != omitted))
+        for mutation in ('omit', 'duplicate'):
+            assignment = {key: list(value) for key, value in CI_GROUPS.items()}
+            if mutation == 'omit':
+                assignment['core'].remove('ordered hostname Server and comparison')
+            else:
+                assignment['runtime'].append('ordered hostname Server and comparison')
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                select_ci_group(groups, 'core', assignment)
 
     def test_prefix_dispatch_requires_every_original_verdict_and_stops_on_failure(self):
         phases = prefix_inventory()
@@ -535,7 +562,7 @@ class PartitionTests(unittest.TestCase):
         for prefix, count, phase in (('TestNodeChain', 10, 'ordered original graphs and ownership'),
                                      ('TestDesktopNodeChainPolicy', 4, 'desktop ordered policies'),
                                      ('TestDesktopNodeChainReady', 1, 'desktop ordered readiness')):
-            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS}
+            required = {name for name in REQUIRED if name.startswith(prefix) and name not in EXECUTION_FIFTY_REQUIRED and name != PREFIX_ROOT and name not in CONNECT_PREFIX_ROOTS and not name.startswith('TestNodeChainHostnameExecution')}
             self.assertEqual(len(required), count)
             self.assertTrue(required.issubset(groups[phase]))
             selected = [name for names in groups.values() for name in names if name in required]

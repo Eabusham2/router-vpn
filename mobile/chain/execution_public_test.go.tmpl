@@ -15,10 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/dns"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/protocol/socks/socks5"
+	"github.com/sagernet/sing/service"
 )
 
 // Real shared constructors, Box managers, selector, DNS dispatch and native
@@ -75,7 +80,7 @@ func TestRouterVPNExecutionNativeImportedPublicDNS(t *testing.T) {
 		})
 	}
 }
-func testImportedPublicDNS(t *testing.T, count int, mode, fault string) {
+func testImportedPublicDNS(t *testing.T, count int, mode, fault string, hostname ...bool) {
 	t.Helper()
 	var prep *mobilemultihop.NodeChainExecutionPreparation
 	var server *mobilemultihop.NodeChainServerPolicy
@@ -84,7 +89,12 @@ func testImportedPublicDNS(t *testing.T, count int, mode, fault string) {
 	} else {
 		prep, server = importedPublicPrefixNativeSources(t, count, mode, "auto")
 	}
-	f := newExecutionNativeFixtureWithSources(t, prep, server, nil)
+	var hooks []executionNativeConstructionHook
+	if len(hostname) != 0 && hostname[0] {
+		prep, server = importedPublicHostnameNativeSources(t, prep, server)
+		hooks = append(hooks, importedPublicHostnameNativeHook(t))
+	}
+	f := newExecutionNativeFixtureWithSources(t, prep, server, nil, hooks...)
 	projection := f.adopt(t)
 	e := f.engine
 	proofs, err := projection.ProofInventory("local")
@@ -102,6 +112,8 @@ func testImportedPublicDNS(t *testing.T, count int, mode, fault string) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	switch fault {
+	case "transport-dns-owner":
+		replaceImportedHostnameResolver(t, f)
 	case "old-middle-position":
 		tag = proofs[1].Tag
 	case "foreign-tag":
@@ -133,7 +145,7 @@ func testImportedPublicDNS(t *testing.T, count int, mode, fault string) {
 		if err == nil {
 			t.Fatal("foreign imported public DNS/selection accepted", fault)
 		}
-		if (fault == "old-middle-position" || fault == "foreign-tag" || fault == "foreign-address" || fault == "cancelled") && f.dns.calls.Load() != before {
+		if (fault == "transport-dns-owner" || fault == "old-middle-position" || fault == "foreign-tag" || fault == "foreign-address" || fault == "cancelled") && f.dns.calls.Load() != before {
 			t.Fatal("foreign imported target invoked DNS")
 		}
 		return
@@ -161,7 +173,7 @@ func TestRouterVPNExecutionNativeImportedPublicServer(t *testing.T) {
 		})
 	}
 }
-func testImportedPublicServer(t *testing.T, count int, mode, fault string) {
+func testImportedPublicServer(t *testing.T, count int, mode, fault string, hostname ...bool) {
 	t.Helper()
 	var prep *mobilemultihop.NodeChainExecutionPreparation
 	var server *mobilemultihop.NodeChainServerPolicy
@@ -170,7 +182,12 @@ func testImportedPublicServer(t *testing.T, count int, mode, fault string) {
 	} else {
 		prep, server = importedPublicPrefixNativeSources(t, count, mode, "server")
 	}
-	f := newExecutionNativeFixtureWithSources(t, prep, server, nil)
+	var hooks []executionNativeConstructionHook
+	if len(hostname) != 0 && hostname[0] {
+		prep, server = importedPublicHostnameNativeSources(t, prep, server)
+		hooks = append(hooks, importedPublicHostnameNativeHook(t))
+	}
+	f := newExecutionNativeFixtureWithSources(t, prep, server, nil, hooks...)
 	projection := f.adopt(t)
 	engine := f.engine
 	proofs, err := projection.ProofInventory("server")
@@ -188,6 +205,9 @@ func testImportedPublicServer(t *testing.T, count int, mode, fault string) {
 	}
 	if fault == "foreign-address" {
 		address = "foreign.example:443"
+	}
+	if fault == "transport-dns-owner" {
+		replaceImportedHostnameResolver(t, f)
 	}
 	observed := make(chan error, 1)
 	entry := f.prefixes[f.prep.ProofInventory()[0].Tag]
@@ -355,4 +375,114 @@ func TestRouterVPNExecutionNativeImportedPublicPrefixes(t *testing.T) {
 		}
 	}
 	t.Run("old-middle-position", func(t *testing.T) { testImportedPublicDNS(t, 6, "wg", "old-middle-position") })
+}
+
+func importedPublicHostnameNativeSources(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation, server *mobilemultihop.NodeChainServerPolicy) (*mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.NodeChainServerPolicy) {
+	t.Helper()
+	var local mobilemultihop.NodeChainSource
+	var remote mobilemultihop.NodeChainServerSource
+	if json.Unmarshal([]byte(prep.LocalSource()), &local) != nil || json.Unmarshal([]byte(server.Source()), &remote) != nil || len(local.Nodes) < 4 {
+		t.Fatal("hostname native source lost its retained Server packet prefix")
+	}
+	position := len(local.Nodes) - 2
+	var member struct {
+		Kind    string `json:"kind"`
+		Schema  int    `json:"schema"`
+		Config  string `json:"config"`
+		Capture string `json:"capture"`
+	}
+	if json.Unmarshal([]byte(local.Nodes[position]), &member) != nil || remote.Nodes[position-1] != local.Nodes[position] {
+		t.Fatal("hostname native source replaced the original shared middle")
+	}
+	var graph, capture map[string]any
+	if json.Unmarshal([]byte(member.Config), &graph) != nil || json.Unmarshal([]byte(member.Capture), &capture) != nil {
+		t.Fatal("hostname native source absent")
+	}
+	profile := capture["profile"].(map[string]any)
+	const name = "native-middle.example.test"
+	graph["outbounds"].([]any)[0].(map[string]any)["server"] = name
+	profile["endpoint"] = name
+	profile["external"].(map[string]any)["shadowsocks"].(map[string]any)["server"] = name
+	profile["dns_mode"], profile["dns_protocol"], profile["dns_host"], profile["dns_port"] = "custom", "tcp", "10.81.0.53", 5353
+	input, err := mobilemultihop.NodeChainImportedMemberInput(chainNativeJSON(t, graph), chainNativeJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	local.Nodes[position], remote.Nodes[position-1] = input, input
+	fresh, err := mobilemultihop.NewNodeChainExecutionPreparation(chainNativeJSON(t, local), prep.Execution())
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix, err := mobilemultihop.NewNodeChainServerPolicy(chainNativeJSON(t, remote))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fresh, suffix
+}
+
+func importedPublicHostnameNativeHook(t *testing.T) executionNativeConstructionHook {
+	t.Helper()
+	return executionNativeConstructionHook{context: func(ctx context.Context) (context.Context, error) {
+		registry, ok := service.FromContext[adapter.DNSTransportRegistry](ctx).(*dns.TransportRegistry)
+		if !ok {
+			return nil, errors.New("original hostname DNS registry missing")
+		}
+		// This is an explicit DNS-I/O double; the actual manager must retain
+		// this distinct transport object alongside its selected UDP resolver.
+		dns.RegisterTransport[option.RemoteDNSServerOptions](registry, "tcp", func(_ context.Context, _ log.ContextLogger, tag string, options option.RemoteDNSServerOptions) (adapter.DNSTransport, error) {
+			return &executionNativeDNS{TransportAdapter: dns.NewTransportAdapterWithRemoteOptions("tcp", tag, options)}, nil
+		})
+		return ctx, nil
+	}}
+}
+
+func replaceImportedHostnameResolver(t *testing.T, f *executionNativeFixture) {
+	t.Helper()
+	var graph struct {
+		DNS struct {
+			Servers []struct {
+				Type       string `json:"type"`
+				Tag        string `json:"tag"`
+				Server     string `json:"server"`
+				ServerPort int    `json:"server_port"`
+				Detour     string `json:"detour"`
+			} `json:"servers"`
+		} `json:"dns"`
+	}
+	proofs := f.prep.ProofInventory()
+	if json.Unmarshal([]byte(f.prep.Config()), &graph) != nil || len(proofs) < 4 || len(graph.DNS.Servers) != len(f.engine.originalResolvers) {
+		t.Fatal("hostname source lost its complete original DNS inventory")
+	}
+	retained := *chainNativeField[map[string]adapter.DNSTransport](t, f.box.dnsTransport, "transportByTag")
+	target := ""
+	for _, row := range graph.DNS.Servers {
+		original := f.engine.originalResolvers[row.Tag]
+		if original == nil || original.Type() != row.Type || retained[row.Tag] != original {
+			t.Fatal("hostname graph replaced an original native resolver")
+		}
+		if row.Type != "tcp" {
+			continue
+		}
+		if target != "" || row.Tag == f.engine.dnsCapture.DNS.ResolverTag || row.Server != "10.81.0.53" || row.ServerPort != 5353 || row.Detour != proofs[len(proofs)-3].Tag {
+			t.Fatal("hostname dependency replaced its captured TCP resolver or preceding packet owner")
+		}
+		target = row.Tag
+	}
+	if target == "" {
+		t.Fatal("hostname source did not capture exactly one independent transport resolver")
+	}
+	original := f.engine.originalResolvers[target]
+	retained[target] = &executionNativeDNS{}
+	t.Cleanup(func() { retained[target] = original })
+}
+
+func TestRouterVPNExecutionNativeHostnamePublicPrefixes(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-strong"} {
+		for _, count := range []int{2, 6} {
+			t.Run(fmt.Sprintf("%s/%d/local", mode, count), func(t *testing.T) { testImportedPublicDNS(t, count, mode, "original", true) })
+			t.Run(fmt.Sprintf("%s/%d/server", mode, count), func(t *testing.T) { testImportedPublicServer(t, count, mode, "original", true) })
+		}
+	}
+	t.Run("local-transport-dns-owner", func(t *testing.T) { testImportedPublicDNS(t, 2, "wg", "transport-dns-owner", true) })
+	t.Run("server-transport-dns-owner", func(t *testing.T) { testImportedPublicServer(t, 2, "wg", "transport-dns-owner", true) })
 }

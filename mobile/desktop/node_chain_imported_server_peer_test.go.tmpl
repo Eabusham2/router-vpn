@@ -15,8 +15,56 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/miekg/dns"
 )
+
+type desktopNodeChainImportedServerEnvelope struct {
+	desktopNodeChainImportedRequest
+	HostnameDNS bool `json:"hostname_dns,omitempty"`
+}
+
+// This resolver exists only behind the final independently encrypted packet
+// peer. It never resolves an outer/physical socket for the Server worker.
+type desktopNodeChainImportedServerDNS struct {
+	queries atomic.Uint64
+	failed  atomic.Bool
+}
+
+func desktopNodeChainImportedServerHostname(t *testing.T, peer *desktopNodeChainImportedPeer) *desktopNodeChainImportedServerDNS {
+	t.Helper()
+	owner := new(desktopNodeChainImportedServerDNS)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &dns.Server{Listener: listener, Net: "tcp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, query *dns.Msg) {
+		if len(query.Question) != 1 || !strings.EqualFold(query.Question[0].Name, desktopImportedHostname+".") || query.Question[0].Qclass != dns.ClassINET || query.Question[0].Qtype != dns.TypeA {
+			t.Error("Server hostname DNS changed its captured IPv4 question")
+			return
+		}
+		owner.queries.Add(1)
+		answer := new(dns.Msg).SetReply(query)
+		if owner.failed.Load() {
+			answer.Rcode = dns.RcodeNameError
+		} else {
+			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: query.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 0}, A: net.ParseIP("10.79.0.1")}}
+		}
+		_ = w.WriteMsg(answer)
+	})}
+	done := make(chan error, 1)
+	go func() { done <- server.ActivateAndServe() }()
+	t.Cleanup(func() {
+		_ = server.Shutdown()
+		if err := <-done; err != nil {
+			t.Error("original Server hostname resolver did not join", err)
+		}
+	})
+	peer.paired.entry.rules["tcp/"+desktopImportedHostnameDNS] = desktopReferenceRule{Network: "tcp", Address: "10.78.0.53", Port: 5353, Target: listener.Addr().String()}
+	return owner
+}
 
 func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 	if os.Getenv("ROUTERVPN_NODE_CHAIN_IMPORTED_SERVER_REFERENCE_CHILD") == "" {
@@ -30,12 +78,13 @@ func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 	if err != nil || len(line) > 32<<10 {
 		t.Fatal("bounded custom reference request required")
 	}
-	var request desktopNodeChainImportedRequest
+	var envelope desktopNodeChainImportedServerEnvelope
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || desktopNodeChainImportedServerRequestValid(request) != nil {
+	if decoder.Decode(&envelope) != nil || decoder.Decode(new(any)) != io.EOF || desktopNodeChainImportedServerRequestValid(envelope.desktopNodeChainImportedRequest) != nil || envelope.HostnameDNS && envelope.Schema != 2 {
 		t.Fatal("custom reference source changed")
 	}
+	request := envelope.desktopNodeChainImportedRequest
 	local, remote := netip.MustParseAddr(request.Paired.Address), netip.MustParseAddr(request.Paired.ClientAddress)
 	interfaces, err := net.Interfaces()
 	found := false
@@ -67,6 +116,10 @@ func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 			},
 		})
 	}
+	var transportDNS *desktopNodeChainImportedServerDNS
+	if envelope.HostnameDNS {
+		transportDNS = desktopNodeChainImportedServerHostname(t, peer)
+	}
 	respond := func() {
 		snapshot, middle := peer.snapshot(), peer.provider.address
 		if chain != nil {
@@ -74,7 +127,11 @@ func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 			snapshot.Address, snapshot.Prefixes = actual.Address, actual.Prefixes
 			middle = "10.79.0.1:8388"
 		}
-		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": snapshot, "middle_address": middle}) != nil {
+		queries := uint64(0)
+		if transportDNS != nil {
+			queries = transportDNS.queries.Load()
+		}
+		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": snapshot, "middle_address": middle, "transport_dns_queries": queries}) != nil {
 			t.Fatal("custom reply pipe failed")
 		}
 	}
@@ -91,7 +148,9 @@ func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 		if command == "quit" {
 			return
 		}
-		if peer.control(command) != nil {
+		if command == "fail-transport-dns" && transportDNS != nil {
+			transportDNS.failed.Store(true)
+		} else if peer.control(command) != nil {
 			t.Fatal("uncaptured custom control")
 		}
 		respond()

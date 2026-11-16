@@ -78,8 +78,8 @@ class Verdict(unittest.TestCase):
 
     def test_exact_complete_three_package_inventory(self):
         result = RUNNER.verdict(encoded(events()), 0)
-        self.assertEqual(result, {'roots': 42, 'test_records': 165})
-        self.assertEqual(len(RUNNER.CONTROLS), 33)
+        self.assertEqual(result, {'roots': 43, 'test_records': 176})
+        self.assertEqual(len(RUNNER.CONTROLS), 34)
 
     def test_complete_connect_prefix_native_inventory_is_additive(self):
         self.assertEqual(RUNNER.CHILDREN['NativeCONNECTCompletePrefixes'], ('4/server', '4/auto', '8/server', '8/auto'))
@@ -92,6 +92,7 @@ class Verdict(unittest.TestCase):
     def test_generic_public_family_and_selection_controls_are_mandatory(self):
         controls = {item[0]: item for item in RUNNER.CONTROLS}
         for label, selected in (
+            ('hostname original transport resolver', 'NativeHostnamePublicPrefixes/local-transport-dns-owner'),
             ('generic original penultimate position', 'NativeImportedPublicPrefixes/wg/6/local'),
             ('generic original public family', 'NativeImportedPublicDNS/original'),
             ('generic public selected epoch', 'NativeImportedPublicDNS/changed-selector'),
