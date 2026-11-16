@@ -183,18 +183,18 @@ func captureDesktopCandidatePrefix(p *NodeChainCandidatePreparation, graph map[s
 	kill, ipv6, lan := "off", "on", true
 	for position, node := range p.original.nodes {
 		var capture nodeChainImportedDevicePolicy
-		if position == 1 && p.original.importedMiddle != nil {
-			var err error
+		var err error
+		if position == p.original.importedMiddlePosition() && p.original.importedMiddle != nil {
 			capture, err = p.original.importedMiddle.devicePolicy()
-			if err != nil {
-				return bad()
-			}
+		} else if position == p.original.importedMiddlePosition() && p.original.openVPNMiddle != nil {
+			capture, err = p.original.openVPNMiddle.devicePolicy()
 		} else {
-			paired, err := node.DesktopCapture()
-			if err != nil {
-				return bad()
-			}
+			var paired NodeDesktopCapture
+			paired, err = node.DesktopCapture()
 			capture.KillSwitchPolicy, capture.IPv6Mode, capture.HomeLANAccess = paired.KillSwitchPolicy, paired.IPv6Mode, paired.HomeLANAccess
+		}
+		if err != nil {
+			return bad()
 		}
 		if capture.KillSwitchPolicy == "always" || kill == "off" && capture.KillSwitchPolicy == "on-connect" {
 			kill = capture.KillSwitchPolicy
