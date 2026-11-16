@@ -69,24 +69,42 @@ public final class NodeChainExecutionCaptureHarness {
    try{reject(()->AndroidNodeChainExecutionCapture.compile(local,"auto"),"execution survived original source replacement during compile");}finally{Libbox.afterExecution=null;}
   }
  }
- static AndroidNodeChainCapture importedLocal(Path root,String first,String method,String requested)throws Exception{
-  var fixture=new NodeChainCaptureHarness.Fixture(root,"2/"+first);
+ static AndroidNodeChainCapture importedLocal(Path root,String first,String method,String requested)throws Exception{return importedLocalCount(root,"2/"+first,method,requested);}
+ static AndroidNodeChainCapture importedLocalCount(Path root,String key,String method,String requested)throws Exception{
+  var fixture=new NodeChainCaptureHarness.Fixture(root,key);
   var exits=new AndroidStandardExitStore(fixture.context);var custom=NodeChainCaptureHarness.hostnameEntry(method);
   custom.server="198.51.100.76";custom.name="Original execution middle";
   exits.save(custom);var editor=new AndroidOrderedPathSelection(fixture.nodes,fixture.profiles);
   editor.addPrefix(custom.id,"shadowsocks");editor.setExecution(requested);return AndroidNodeChainCapture.compile(editor.save());
  }
- static void importedSource(Path root)throws Exception{
-  for(String fixture:List.of("3/","7/")) {
+ static void importedPrefixSource(Path root)throws Exception{
+  for(String fixture:List.of("3/","7/"))for(String requested:List.of("server","auto")) {
    var original=new NodeChainCaptureHarness.Fixture(root,fixture);var exits=new AndroidStandardExitStore(original.context);
    var custom=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");custom.server="198.51.100.76";exits.save(custom);
-   var editor=new AndroidOrderedPathSelection(original.nodes,original.profiles);editor.addPrefix(custom.id,"shadowsocks");
-   for(String requested:List.of("server","auto"))reject(()->editor.setExecution(requested),"long imported editor escaped Local purpose");
-   try(var local=AndroidNodeChainCapture.compile(editor.save())) {
-    for(String requested:List.of("server","auto"))reject(()->AndroidNodeChainCapture.validateExecutionPlan(local.plan,requested),"long imported source entered native execution preview");
+   var editor=new AndroidOrderedPathSelection(original.nodes,original.profiles);editor.addPrefix(custom.id,"shadowsocks");editor.setExecution(requested);
+   AndroidNodeStore.ChainCapture selected;
+   try{selected=editor.save();}catch(Exception refused){throw new AssertionError("complete imported execution Save was refused",refused);}
+   int count=selected.members.size();check(count==Integer.parseInt(fixture.split("/")[0])+1,"complete imported editor omitted a prefix");
+   try(var local=AndroidNodeChainCapture.compile(selected);var captured=AndroidNodeChainExecutionCapture.compile(local,requested)){
+    JSONObject retained=new JSONObject(new JSONObject(captured.source).getString("local_source"));JSONArray nodes=retained.getJSONArray("nodes"),ids=retained.getJSONArray("identity_sources");
+    check(retained.getInt("schema")==2&&nodes.length()==count&&ids.length()==count,"complete imported execution lost source shape");
+    for(int i=0;i<count;i++)check(nodes.getString(i).equals(local.memberInputs.get(i))&&ids.getString(i).equals(local.identityInputs.get(i))&&ids.getString(i).isEmpty()==(i==count-2),"complete imported execution moved original member/identity");
+    try(var replay=AndroidNodeChainExecutionCapture.reopen(local,captured.launchInput)){check(replay.source.equals(captured.source)&&replay.config.equals(captured.config),"complete imported execution replay changed source");}
+    reject(captured::captureRestore,"source-only complete imported execution fabricated native proof");
    }
+   var saved=original.profiles.add("Complete imported "+requested);original.changePolicies();original.profiles.load(saved.id);
+   var loaded=original.profiles.currentOrderedPath();check(loaded.members.size()==count&&loaded.execution.equals(requested),"complete imported saved Load changed original graph");
+   for(int i=0;i<count;i++)check(java.util.Arrays.equals(loaded.members.get(i).bytes(),selected.members.get(i).bytes()),"complete imported Load changed original private member or credential");
+   var changed=new AndroidOrderedPathSelection(original.nodes,original.profiles);String next=requested.equals("auto")?"server":"auto";changed.setExecution(next);var updated=changed.save();original.profiles.update(saved.id,"Changed complete imported");
+   original.changePolicies();original.profiles.load(saved.id);var reloaded=original.profiles.currentOrderedPath();check(reloaded.members.size()==count&&reloaded.execution.equals(next),"complete imported saved Update lost choice");
+   for(int i=0;i<count;i++)check(java.util.Arrays.equals(reloaded.members.get(i).bytes(),updated.members.get(i).bytes()),"complete imported Update changed original private member or credential");
+   var before=new NodeChainCaptureHarness.State(original);Libbox.afterExecution=plan->{throw new IllegalStateException("controlled complete imported preview refusal");};
+   try{reject(()->original.profiles.load(saved.id),"complete imported Load bypassed compiler refusal");before.same(original,"complete imported preview failed before publication");}finally{Libbox.afterExecution=null;}
+   original.profiles.delete(saved.id);check(original.members.stream().allMatch(n->n.file.isFile()),"complete imported Delete removed linked originals");
   }
-
+  importedReadback(root,List.of("3/","7/"));
+ }
+ static void importedSource(Path root)throws Exception{
   for(String first:List.of("","awg-fast","awg-strong"))for(String method:List.of("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","2022-blake3-chacha20-poly1305"))for(String requested:List.of("server","auto")){
    try(var local=importedLocal(root,first,method,requested)){
     AndroidNodeChainExecutionCapture captured;
@@ -107,13 +125,14 @@ public final class NodeChainExecutionCaptureHarness {
    }
   }
  }
- static void importedReadback(Path root)throws Exception{
-  for(String fault:List.of("local-schema","imported-identity","member-order","local-execution","preparation-schema","launch-schema")){
-   try(var local=importedLocal(root,"","2022-blake3-aes-256-gcm","auto")){
+ static void importedReadback(Path root)throws Exception{importedReadback(root,List.of("2/"));}
+ static void importedReadback(Path root,List<String> keys)throws Exception{
+  for(String key:keys)for(String fault:List.of("local-schema","imported-identity","member-order","local-execution","preparation-schema","launch-schema")){
+   try(var local=importedLocalCount(root,key,"2022-blake3-aes-256-gcm","auto")){
     Libbox.afterExecution=plan->{try{
      JSONObject launch=new JSONObject(plan.value.getString("launch")),prep=new JSONObject(plan.value.getString("source")),source=new JSONObject(prep.getString("local_source"));
      if(fault.equals("local-schema"))source.put("schema",1);
-     if(fault.equals("imported-identity")){JSONArray ids=source.getJSONArray("identity_sources");ids.put(1,ids.getString(0));}
+     if(fault.equals("imported-identity")){JSONArray ids=source.getJSONArray("identity_sources");ids.put(ids.length()-2,ids.getString(0));}
      if(fault.equals("member-order")){JSONArray nodes=source.getJSONArray("nodes");String first=nodes.getString(0);nodes.put(0,nodes.getString(1));nodes.put(1,first);}
      if(fault.equals("local-execution"))source.put("execution","server");
      prep.put("local_source",source.toString());if(fault.equals("preparation-schema"))prep.put("schema",2);
@@ -179,15 +198,16 @@ public final class NodeChainExecutionCaptureHarness {
 
  static void exportLastSources(Path root)throws Exception{
   JSONObject exported=new JSONObject();
-  for(String variant:List.of("server/server","auto/local","auto/server")){
-   String requested=variant.split("/")[0];var f=new NodeChainCaptureHarness.Fixture(root,"3/");f.chooseExecution(requested);
+  for(int count:new int[]{0,4,8})for(String mode:List.of("server/server","auto/local","auto/server")){
+   String variant=count==0?mode:"imported-"+count+"/"+mode,requested=mode.split("/")[0];var f=new NodeChainCaptureHarness.Fixture(root,count==0?"3/":(count-1)+"/");
+   if(count!=0){var custom=NodeChainCaptureHarness.hostnameEntry("2022-blake3-aes-256-gcm");custom.server="198.51.100.76";custom.expectedPublicIp="203.0.113.88";new AndroidStandardExitStore(f.context).save(custom);var editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);editor.addPrefix(custom.id,"shadowsocks");editor.setExecution(requested);editor.save();}else f.chooseExecution(requested);
    // Startup timing does not change the native graph identity.
    JSONObject bundle=f.bundle(f.members.size()-1);NodeChainCaptureHarness.profile(bundle).put("startup_mode","last").put("auto_connect",true);f.replace(f.members.size()-1,bundle);
    try(var local=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath())){
     JSONArray bundles=new JSONArray();for(int i=0;i<f.members.size();i++)bundles.put(f.bundle(i));
     JSONObject projected=new JSONObject(new JSONObject(local.memberInputs.get(local.memberInputs.size()-1)).getString("profile_json"));
     check(!projected.has("startup_mode")&&!projected.has("auto_connect")&&NodeChainCaptureHarness.profile(f.bundle(f.members.size()-1)).getBoolean("auto_connect"),"execution projection changed private startup choices or included timing in native identity");
-    exported.put(variant,new JSONObject().put("bundles",bundles).put("local_launch",local.launchInput).put("requested",requested).put("selected",variant.split("/")[1]));
+    exported.put(variant,new JSONObject().put("bundles",bundles).put("local_launch",local.launchInput).put("requested",requested).put("selected",mode.split("/")[1]).put("imported_store",count==0?"":Files.readString(f.context.getFilesDir().toPath().resolve("standard-exits.json"))));
    }
   }
   Files.writeString(Path.of(System.getenv("ROUTERVPN_ANDROID_EXECUTION_LAST_INPUT")),exported.toString());
@@ -195,8 +215,10 @@ public final class NodeChainExecutionCaptureHarness {
  static void lastSources(Path root)throws Exception{
   JSONObject sources=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_EXECUTION_LAST_INPUT"))));
   JSONObject records=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_EXECUTION_LAST_OUTPUT"))));
-  for(String variant:List.of("server/server","auto/local","auto/server")){
+  for(int count:new int[]{0,4,8})for(String mode:List.of("server/server","auto/local","auto/server")){
+   String variant=count==0?mode:"imported-"+count+"/"+mode;
    JSONObject original=sources.getJSONObject(variant);var f=new NodeChainCaptureHarness.Fixture(root,original.getJSONArray("bundles"));String requested=original.getString("requested"),raw=records.getString(variant);
+   if(count!=0)Files.writeString(f.context.getFilesDir().toPath().resolve("standard-exits.json"),original.getString("imported_store"));
    try(var local=AndroidNodeChainCapture.compile(f.profiles.currentOrderedPath());var last=AndroidNodeChainExecutionCapture.fromLast(local,requested,raw)){
     check(local.launchInput.equals(original.getString("local_launch")),"Last fixture changed the original Android launch before native parsing");
     JSONObject launch=new JSONObject(last.launchInput);check(launch.getInt("schema")==2&&launch.getString("last").equals(raw)&&new JSONObject(raw).getString("execution").equals(original.getString("selected")),"actual native Last parser lost saved choice or distinct envelope");
@@ -211,12 +233,49 @@ public final class NodeChainExecutionCaptureHarness {
    }
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";if(family.equals("last-export")){exportLastSources(root);return;}if(family.equals("last")){lastSources(root);System.out.println("Android exact native Last source: "+checks+" checks PASS");return;}if(family.equals("all")||family.equals("source"))source(root);if(family.equals("all")||family.equals("public"))publicRoundtrip(root);if(family.equals("all")||family.equals("readback"))nativeReadback(root);if(family.equals("all")||family.equals("changed"))changedSource(root);if(family.equals("all")||family.equals("imported"))importedSource(root);if(family.equals("all")||family.equals("imported-readback"))importedReadback(root);System.out.println("Android execution source: "+checks+" checks; actual shared preparation with original all-member captures PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);String family=args.length>1?args[1]:"all";if(family.equals("last-export")){exportLastSources(root);return;}if(family.equals("last")){lastSources(root);System.out.println("Android exact native Last source: "+checks+" checks PASS");return;}if(family.equals("all")||family.equals("source")){source(root);System.out.println("Android source phase completed: source");}if(family.equals("all")||family.equals("public")){publicRoundtrip(root);System.out.println("Android source phase completed: publicRoundtrip");}if(family.equals("all")||family.equals("readback")){nativeReadback(root);System.out.println("Android source phase completed: nativeReadback");}if(family.equals("all")||family.equals("changed")){changedSource(root);System.out.println("Android source phase completed: changedSource");}if(family.equals("all")||family.equals("imported")){importedSource(root);System.out.println("Android source phase completed: importedSource");}if(family.equals("imported-prefix")){importedPrefixSource(root);System.out.println("Android source phase completed: importedPrefixSource");}if(family.equals("all")||family.equals("imported-readback")){importedReadback(root);System.out.println("Android source phase completed: importedReadback");}System.out.println("Android execution source: "+checks+" checks; actual shared preparation with original all-member captures PASS");}
 }
 '''
 
 
-LAST_GENERATOR = 'package mobilemultihop\nimport("context";"encoding/json";"os";"testing";"time")\nfunc TestAndroidOrderedExecutionLastSourceFixture(t *testing.T){\n raw,err:=os.ReadFile(os.Getenv("ROUTERVPN_ANDROID_EXECUTION_LAST_INPUT"));if err!=nil{t.Fatal(err)}\n var rows map[string]struct{Local string `json:"local_launch"`;Requested string `json:"requested"`;Selected string `json:"selected"`};if err=json.Unmarshal(raw,&rows);err!=nil{t.Fatal(err)}\n if len(rows)!=3{t.Fatal("incomplete original Android Last source matrix")};records:=map[string]string{}\n for _,name:=range []string{"server/server","auto/local","auto/server"}{t.Run(name,func(t *testing.T){\n  row,ok:=rows[name];if !ok{t.Fatal("missing original Last source")};local,err:=ParseNodeChainLaunchInput(row.Local);if err!=nil{t.Fatal(err)}\n  var envelope NodeChainSource;if err=json.Unmarshal([]byte(row.Local),&envelope);err!=nil{t.Fatal(err)}\n  identities:=make([]*NodeProfile,len(local.nodes));for i,node:=range local.nodes{identities[i],err=NewNodeProfile("wg",envelope.IdentitySources[i],node.inputs.ProfileJSON,"",node.inputs.DNSBootstrap);if err!=nil{t.Fatal(err)}}\n  source:=nodeChainExecutionFixtureFromNodes(t,local.nodes,identities,row.Requested);f:=newNodeChainExecutionRuntimeFixtureFromSource(t,source)\n  if f.runtime.projection.preparation.LocalSourceSHA256()!=local.SourceSHA256(){t.Fatal("runtime Last generator changed original Android source")}\n  f.engine.localDelay,f.engine.serverDelay=200*time.Millisecond,time.Millisecond;if row.Selected=="local"{f.engine.localDelay,f.engine.serverDelay=time.Millisecond,200*time.Millisecond}\n  ctx,cancel:=context.WithTimeout(context.Background(),35*time.Second);defer cancel();if err=f.runtime.Run(ctx);err!=nil{t.Fatal(err)}\n  last,err:=f.runtime.CaptureLastContext(ctx);if err!=nil||last.Execution()!=row.Selected{t.Fatal("actual runtime did not capture requested original selected path",err)}\n  if _,err=ParseNodeChainExecutionLast(last.JSON(),f.runtime.projection.preparation);err!=nil{t.Fatal(err)};records[name]=last.JSON()\n })};if len(records)!=3{t.Fatal("incomplete actual Last records")};output,err:=json.Marshal(records);if err!=nil{t.Fatal(err)};if err=os.WriteFile(os.Getenv("ROUTERVPN_ANDROID_EXECUTION_LAST_OUTPUT"),output,0600);err!=nil{t.Fatal(err)}\n}\n'
+LAST_GENERATOR = r'''package mobilemultihop
+import("context";"encoding/json";"os";"testing";"time")
+func TestAndroidOrderedExecutionLastSourceFixture(t *testing.T){
+ raw,err:=os.ReadFile(os.Getenv("ROUTERVPN_ANDROID_EXECUTION_LAST_INPUT"));if err!=nil{t.Fatal(err)}
+ var rows map[string]struct{Local string `json:"local_launch"`;Requested string `json:"requested"`;Selected string `json:"selected"`};if err=json.Unmarshal(raw,&rows);err!=nil{t.Fatal(err)}
+ if len(rows)!=9{t.Fatal("incomplete original Android Last source matrix")};records:=map[string]string{}
+ for _,name:=range []string{"server/server","auto/local","auto/server","imported-4/server/server","imported-4/auto/local","imported-4/auto/server","imported-8/server/server","imported-8/auto/local","imported-8/auto/server"}{t.Run(name,func(t *testing.T){
+  row,ok:=rows[name];if !ok{t.Fatal("missing original Last source")};local,err:=ParseNodeChainLaunchInput(row.Local);if err!=nil{t.Fatal(err)}
+  var envelope NodeChainSource;if err=json.Unmarshal([]byte(row.Local),&envelope);err!=nil{t.Fatal(err)}
+  var source NodeChainExecutionSource
+  if local.importedMiddle != nil { source=androidImportedLastExecutionSource(t,local,envelope,row.Requested) } else {
+   identities:=make([]*NodeProfile,len(local.nodes));for i,node:=range local.nodes{identities[i],err=NewNodeProfile("wg",envelope.IdentitySources[i],node.inputs.ProfileJSON,"",node.inputs.DNSBootstrap);if err!=nil{t.Fatal(err)}}
+   source=nodeChainExecutionFixtureFromNodes(t,local.nodes,identities,row.Requested)
+  };f:=newNodeChainExecutionRuntimeFixtureFromSource(t,source)
+  if f.runtime.projection.preparation.LocalSourceSHA256()!=local.SourceSHA256(){t.Fatal("runtime Last generator changed original Android source")}
+  f.engine.localDelay,f.engine.serverDelay=200*time.Millisecond,time.Millisecond;if row.Selected=="local"{f.engine.localDelay,f.engine.serverDelay=time.Millisecond,200*time.Millisecond}
+  ctx,cancel:=context.WithTimeout(context.Background(),35*time.Second);defer cancel();if err=f.runtime.Run(ctx);err!=nil{t.Fatal(err)}
+  last,err:=f.runtime.CaptureLastContext(ctx);if err!=nil||last.Execution()!=row.Selected{t.Fatal("actual runtime did not capture requested original selected path",err)}
+  if _,err=ParseNodeChainExecutionLast(last.JSON(),f.runtime.projection.preparation);err!=nil{t.Fatal(err)};records[name]=last.JSON()
+ })};if len(records)!=9{t.Fatal("incomplete actual Last records")};output,err:=json.Marshal(records);if err!=nil{t.Fatal(err)};if err=os.WriteFile(os.Getenv("ROUTERVPN_ANDROID_EXECUTION_LAST_OUTPUT"),output,0600);err!=nil{t.Fatal(err)}
+}
+
+// Actual original Java source supplies every member. Only the remote/native
+// engine is the existing explicit owner double; shared Run/Last is unchanged.
+func androidImportedLastExecutionSource(t *testing.T,local *NodeChain,source NodeChainSource,execution string) NodeChainExecutionSource {
+ entry:=local.nodes[0];count:=len(local.nodes)-2
+ plan:=map[string]any{"schema":1,"entry_node_id":entry.profile["node_proof_id"],"entry":map[string]any{"bundle":nodeChainServerPlanBundle(t,entry,source.IdentitySources[0]),"profile_id":entry.profile["id"],"mode":entry.mode}}
+ var members []any
+ for i:=1;i<len(source.Nodes);i++ {
+  if i==count {var imported nodeChainImportedInput;if json.Unmarshal([]byte(source.Nodes[i]),&imported)!=nil{t.Fatal("missing original imported capture")};members=append(members,map[string]any{"imported":map[string]any{"config":imported.Config,"capture":imported.Capture}});continue}
+  node:=local.nodes[i];bundle:=nodeChainServerPlanBundle(t,node,source.IdentitySources[i]);members=append(members,map[string]any{"paired":map[string]any{"bundle":bundle,"profile_id":node.profile["id"],"mode":node.mode},"server_peer":map[string]any{"bundle":nodeChainServerPlanPeerBundle(t,bundle,i),"profile_id":"server-"+node.profile["id"].(string)}})
+ };plan["members"]=members;server,err:=NewNodeChainServerPlan(startJSON(t,plan));if err!=nil{t.Fatal(err)}
+ capture:=nodeChainServerCaptureFixture(t,server);q:=capture.Request.Clone();q.LocalPacketPublicKeys=nil;q.LocalPacketPositions=nil
+ for i,node:=range local.nodes[:count]{key,err:=node.PacketClientPublicKey();if err!=nil{t.Fatal(err)};q.LocalPacketPublicKeys=append(q.LocalPacketPublicKeys,key);q.LocalPacketPositions=append(q.LocalPacketPositions,i)}
+ q.Peer,q.Port="10.80.0.2",32003
+ return NodeChainExecutionSource{Schema:1,Execution:execution,LocalSource:startJSON(t,source),Server:server.Descriptor(),Request:q,FirstPort:32000,LastPort:32007}
+}
+'''
 
 def prepare_sources(src, app, java):
     LOCAL.prepare_sources(src, app, java)
@@ -236,7 +295,10 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     data = work / "execution-data"
     data.mkdir()
     command = ["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.NodeChainExecutionCaptureHarness", str(data)]
+    # Preserve the original aggregate six-family invocation and its120s cap.
     subprocess.run(command, env=env, check=True, timeout=120)
+    # Add complete4/8 member Save/capture/readback on the same compiled inputs.
+    subprocess.run([*command,"imported-prefix"], env=env, check=True, timeout=120)
     env["ROUTERVPN_ANDROID_EXECUTION_LAST_INPUT"]=str(work/"original-last-sources.json")
     env["ROUTERVPN_ANDROID_EXECUTION_LAST_OUTPUT"]=str(work/"proved-last-records.json")
     subprocess.run([*command,"last-export"],env=env,check=True,timeout=120)
@@ -247,6 +309,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     subprocess.run([*command,"last"],env=env,check=True,timeout=120)
     original = (app / "AndroidNodeChainExecutionCapture.java").read_text()
     controls = (
+        ("complete-prefix", '(originalSchema == 3 || originalSchema == 4) && original.getJSONArray("nodes").length() != 3', '(originalSchema == 2 || originalSchema == 3 || originalSchema == 4) && original.getJSONArray("nodes").length() != 3', 'imported-prefix', 'Server execution requires every original member'),
         ("local-digest", '!local.sourceSHA256.equals(plan.localSourceSHA256())', 'false', 'readback', 'execution accepted native readback substitution: local-digest'),
         ("member-order", '!sameStrings(original.getJSONArray("nodes"), returned.getJSONArray("nodes"))', 'false', 'readback', 'execution accepted native readback substitution: member-order'),
         ("identity-order", '!sameStrings(original.getJSONArray("identity_sources"), returned.getJSONArray("identity_sources"))', 'false', 'readback', 'execution accepted native readback substitution: identity-order'),

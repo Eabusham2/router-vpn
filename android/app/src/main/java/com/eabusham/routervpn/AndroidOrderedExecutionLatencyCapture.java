@@ -40,7 +40,7 @@ final class AndroidOrderedExecutionLatencyCapture {
             String expectedRole=i==0?"entry":i==members.length()-1?"exit":"intermediate";
             if(integer(member,"position")!=i||!id.matches("[A-Za-z0-9_-]{1,64}")||!identities.add(id)||!expectedRole.equals(role)
                     ||!Arrays.asList("private-node","public-path").contains(kind)
-                    ||"public-path".equals(kind)&&(members.length()!=3||i!=1))throw invalid();
+                    ||"public-path".equals(kind)&&(members.length()<3||i!=members.length()-2))throw invalid();
             parsed.add(new Node(id,i,role,kind));
         }
         nodes=Collections.unmodifiableList(parsed);this.raw=raw;
@@ -58,7 +58,7 @@ final class AndroidOrderedExecutionLatencyCapture {
     String label(int position)throws Exception {
         if(position<0||position>=nodes.size())throw invalid();
         return "Cumulative "+selected+" path through "+("public-path".equals(nodes.get(position).kind)
-                ?"custom node 2 of 3 → Cloudflare edge":"node "+(position+1)+" of "+nodes.size());
+                ?"custom node "+(position+1)+" of "+nodes.size()+" → Cloudflare edge":"node "+(position+1)+" of "+nodes.size());
     }
     void requireRecord(AndroidOrderedLatencyStore.Record record)throws Exception {
         if(record==null||!source.equals(record.source)||!config.equals(record.config)||!generation.equals(record.generation)

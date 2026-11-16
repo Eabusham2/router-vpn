@@ -29,7 +29,7 @@ public final class RouterNodeChainExecution {
  RouterNodeChainExecution(String input,String requested)throws Exception{this(input,requested,"");}
  RouterNodeChainExecution(String input,String requested,String last)throws Exception{
   lastRecord=last;localLaunch=input;this.requested=requested;JSONObject original=new JSONObject(input);localSHA=original.getString("source_sha256");
-  JSONObject local=new JSONObject().put("schema",1).put("execution","local").put("nodes",original.getJSONArray("nodes")).put("identity_sources",original.getJSONArray("identity_sources"));
+  JSONObject local=new JSONObject().put("schema",original.getInt("schema")).put("execution","local").put("nodes",original.getJSONArray("nodes")).put("identity_sources",original.getJSONArray("identity_sources"));
   source=new JSONObject().put("schema",1).put("execution",requested).put("local_source",local.toString()).toString();
   config=new JSONObject().put("inbounds",new JSONArray().put(new JSONObject().put("type","tun").put("tag","routervpn-chain-tun")))
    .put("route",new JSONObject().put("final","routervpn-chain-application")).put("original_source",digest(source)).toString();
@@ -72,8 +72,8 @@ final class AndroidNodeChainCapture {
  final AndroidNodeStore.ChainCapture source;final RouterNodeChain plan;final AndroidNodeChainSOCKSCapture socks=null;final AndroidNodeChainCONNECTCapture connect=null;final String config="{\"original\":\"local-pure-graph\"}",launchInput,sourceSHA256,configSHA256,selectionExecution;final boolean strict;
  private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture source)throws Exception{
   this.source=source;selectionExecution=source.execution;strict=source.strict;plan=new RouterNodeChain(source.members.size());sourceSHA256="a".repeat(64);configSHA256=RouterNodeChainExecution.digest(config);
-  JSONArray nodes=new JSONArray(),identities=new JSONArray();for(int i=0;i<source.members.size();i++){nodes.put("original-node-"+source.members.get(i).id);identities.put("original-identity-"+source.members.get(i).id);}
-  launchInput=new JSONObject().put("kind","routervpn-node-chain-launch-input").put("schema",1).put("execution","local").put("nodes",nodes).put("identity_sources",identities).put("source_sha256",sourceSHA256).put("config_sha256",configSHA256).toString();
+  JSONArray nodes=new JSONArray(),identities=new JSONArray();for(int i=0;i<source.members.size();i++){nodes.put("original-node-"+source.members.get(i).id);identities.put(source.imported&&i==source.members.size()-2?"":"original-identity-"+source.members.get(i).id);}
+  launchInput=new JSONObject().put("kind","routervpn-node-chain-launch-input").put("schema",source.imported?2:1).put("execution","local").put("nodes",nodes).put("identity_sources",identities).put("source_sha256",sourceSHA256).put("config_sha256",configSHA256).toString();
  }
  static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture source)throws Exception{source.requireCurrent();return new AndroidNodeChainCapture(source);}
  boolean ownsSource(AndroidNodeStore.ChainCapture original){return source==original;}
@@ -93,6 +93,7 @@ public final class OrderedExecutionRuntimeTest {
  static final class Fixture implements AutoCloseable {
   final LayeredVpnService service=new LayeredVpnService();final NativeSingBoxController nativeOwner;final AndroidNodeChainRuntime runtime;final AndroidNodeStore.ChainCapture source;final Path files;
   Fixture(int count,String requested)throws Exception{files=Files.createTempDirectory("ordered-execution-runtime-");service.files=files.toFile();service.onCreate();nativeOwner=new NativeSingBoxController(service);runtime=new AndroidNodeChainRuntime(service,nativeOwner);source=new AndroidNodeStore.ChainCapture(count);source.execution=requested;RouterNodeChain.configured=null;CommandServer.afterConstruction=null;android.net.VpnService.revoked=false;}
+  Fixture(int count,String requested,boolean imported)throws Exception{this(count,requested);source.imported=imported;}
   AndroidNodeChainSession owner()throws Exception{return (AndroidNodeChainSession)get(runtime,"owner");}
   Result start(){Result result=new Result();runtime.connect(source,result);return result;}
   void connected()throws Exception{Result result=start();result.finished();check(result.ok,"execution did not connect: "+result.message);check(runtime.isConnected(),"execution had no retained complete proof");drain();}
@@ -105,11 +106,12 @@ public final class OrderedExecutionRuntimeTest {
   }
  }
  static void success()throws Exception{
-  for(int count:new int[]{2,3,4,8})for(String variant:List.of("server/server","auto/server","auto/local"))try(Fixture f=new Fixture(count,variant.split("/")[0])){
+  for(boolean imported:new boolean[]{false,true})for(int count:imported?new int[]{3,4,8}:new int[]{2,3,4,8})for(String variant:List.of("server/server","auto/server","auto/local"))try(Fixture f=new Fixture(count,variant.split("/")[0],imported)){
    String chosen=variant.split("/")[1];RouterNodeChainExecution.configured=plan->plan.selected=chosen;int initial=CommandServer.created;f.connected();var original=f.owner();var plan=original.execution.plan;var server=(CommandServer)get(f.service,"commandServer");
    check(CommandServer.created==initial+1&&plan.server==server&&plan.runs==1&&original.capture.plan.runs==0,"execution used another Box, reran Local or substituted the final graph");
    check(Files.readString(original.directory.toPath().resolve("sing-box.json")).equals(original.execution.config)&&Files.readString(original.directory.toPath().resolve(AndroidNodeChainCapture.SESSION_FILE)).equals(original.execution.launchInput),"staged execution borrowed the dormant Local config or source");
    check(original.provedExecution().equals(chosen)&&f.runtime.activeSources()==f.source.members,"execution lost concrete winner or complete original members");
+   org.json.JSONObject localSource=new org.json.JSONObject(new org.json.JSONObject(original.execution.source).getString("local_source"));check(localSource.getInt("schema")== (imported?2:1)&&localSource.getJSONArray("nodes").length()==count&&(!imported||localSource.getJSONArray("identity_sources").getString(count-2).isEmpty()),"execution changed complete imported source or public position");
    check(Libbox.executionMTU==plan&&Libbox.executionMeasurement==plan&&Libbox.executionServer==server,"execution MTU or measurement dispatched through dormant Local plan");
    var capture=f.runtime.captureRestore();check(f.runtime.captureCurrent(capture),"proved execution restore capture was not current");
    reject(()->AndroidNodeChainExecutionCapture.restore(original.capture,original.execution.captureRestore()),"restore admitted before original cleanup");
@@ -126,7 +128,7 @@ public final class OrderedExecutionRuntimeTest {
  }
 
  static void coldLast()throws Exception{
-  for(String variant:List.of("server/server","auto/server","auto/local"))try(Fixture f=new Fixture(3,variant.split("/")[0])){
+  for(boolean imported:new boolean[]{false,true})for(int count:imported?new int[]{3,4,8}:new int[]{3})for(String variant:List.of("server/server","auto/server","auto/local"))try(Fixture f=new Fixture(count,variant.split("/")[0],imported)){
    String chosen=variant.split("/")[1];RouterNodeChainExecution.configured=plan->plan.selected=chosen;f.connected();var original=f.owner();String last=original.captureLastRecord();
    var active=f.runtime.captureActive();check(active.requestedExecution.equals(f.source.execution)&&active.selectedExecution.equals(chosen),"active capture lost exact requested/selected execution");
    f.stop();int ordinary=RouterNodeChainExecution.ordinaryPreparations,records=AndroidStartupPolicy.recorded;
@@ -302,7 +304,7 @@ public final class OrderedExecutionRuntimeTest {
 def sources():
     result = dict(LOCAL.SOURCES)
     result.pop(APP + 'AndroidNodeChainExecutionCapture.java')
-    result[APP + 'AndroidNodeStore.java'] = result[APP + 'AndroidNodeStore.java'].replace('final String execution="local";', 'String execution="local";')
+    result[APP + 'AndroidNodeStore.java'] = result[APP + 'AndroidNodeStore.java'].replace('final String execution="local";', 'String execution="local";boolean imported;')
     result[APP + 'AndroidNodeChainCapture.java'] = CAPTURE
     result[NATIVE + 'RouterNodeChainExecution.java'] = EXECUTION
     result[NATIVE + 'CommandServer.java'] = result[NATIVE + 'CommandServer.java'].replace('public static int created;', 'public static int created,started;public static Runnable afterConstruction;').replace('platform=p;created++;', 'platform=p;created++;if(afterConstruction!=null)afterConstruction.run();').replace('public void start(){}', 'public void start(){started++;}')

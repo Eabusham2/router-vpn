@@ -55,7 +55,7 @@ public final class OrderedExecutionRestoreTest {
  static int checks;interface Action{void run()throws Exception;}static void check(boolean value,String why){checks++;if(!value)throw new AssertionError(why);}
  static void reject(Action action,String why)throws Exception{try{action.run();}catch(Exception expected){checks++;return;}throw new AssertionError(why);}
  static void effective()throws Exception{
-  for(int count:new int[]{2,3,4,8})for(String mode:new String[]{"server/server","auto/server","auto/local"})try(var f=new OrderedExecutionRuntimeTest.Fixture(count,mode.split("/")[0])){
+  for(boolean imported:new boolean[]{false,true})for(int count:imported?new int[]{3,4,8}:new int[]{2,3,4,8})for(String mode:new String[]{"server/server","auto/server","auto/local"})try(var f=new OrderedExecutionRuntimeTest.Fixture(count,mode.split("/")[0],imported)){
    String choice=mode.split("/")[1];RouterNodeChainExecution.configured=plan->plan.selected=choice;f.connected();var original=f.owner();var plan=original.execution.plan;plan.effectiveMTU=1360;
    var restore=f.runtime.captureRestore();var another=f.runtime.captureRestore();String source=original.execution.source,config=original.execution.config,sha=original.execution.configSHA256;
    plan.effectiveMTU=1440;f.stop();RouterNodeChainExecution.configured=next->next.selected=choice.equals("server")?"local":"server";

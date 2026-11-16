@@ -89,7 +89,7 @@ def go_source():
     if fields != ['schema', 'source_sha256', 'config_sha256', 'generation_sha256', 'selected_execution', 'nodes']:
         raise AssertionError('actual execution capture field inventory changed')
     measurement = (ROOT/'internal/mobilemultihop/node_chain_execution_measurement.go').read_text()
-    for label in ('Cumulative %s path through custom node 2 of 3 → Cloudflare edge', 'Cumulative %s path through node %d of %d'):
+    for label in ('Cumulative %s path through custom node %d of %d → Cloudflare edge', 'Cumulative %s path through node %d of %d'):
         if measurement.count(label) != 1:
             raise AssertionError('actual selected-execution response label changed')
     return GO.replace('/*ACTUAL_HOP_TYPE*/', hop.group(0)).replace('/*ACTUAL_CAPTURE_TYPE*/', capture.group(1))
@@ -103,18 +103,18 @@ func digest(s string) string {h:=sha256.Sum256([]byte(s));return hex.EncodeToStr
 func encoded(v any)string{b,e:=json.Marshal(v);if e!=nil{panic("fixture encoding failed")};return string(b)}
 func fixtures(){
  rows:=[]map[string]any{}
- for _,shape:=range []struct{count int; imported bool}{{2,false},{3,false},{4,false},{5,false},{6,false},{7,false},{8,false},{3,true}}{
+ for _,shape:=range []struct{count int; imported bool}{{2,false},{3,false},{4,false},{5,false},{6,false},{7,false},{8,false},{3,true},{4,true},{8,true}}{
   for _,selection:=range []struct{requested,selected string}{{"server","server"},{"auto","local"},{"auto","server"}}{
    key:=fmt.Sprintf("%d/%t/%s/%s",shape.count,shape.imported,selection.requested,selection.selected)
    source,config,generation:=digest(key+"/actual-source"),digest(key+"/actual-config"),digest(key+"/actual-generation")
    nodes:=make([]nodeChainExecutionLatencyHop,shape.count)
-   for i:=range nodes {role,kind:="intermediate","private-node";if i==0{role="entry"}else if i==shape.count-1{role="exit"};if shape.imported&&i==1{kind="public-path"};nodes[i]=nodeChainExecutionLatencyHop{fmt.Sprintf("node_%d",i),i,role,kind}}
+   for i:=range nodes {role,kind:="intermediate","private-node";if i==0{role="entry"}else if i==shape.count-1{role="exit"};if shape.imported&&i==shape.count-2{kind="public-path"};nodes[i]=nodeChainExecutionLatencyHop{fmt.Sprintf("node_%d",i),i,role,kind}}
    capture:=encoded(/*ACTUAL_CAPTURE_TYPE*/{1,source,config,generation,selection.selected,nodes})
    receipts,statuses,ordinary:=[]string{},[]string{},[]string{}
    for i,node:=range nodes {
     label:=fmt.Sprintf("Cumulative %s path through node %d of %d",selection.selected,i+1,shape.count)
     metric,endpoint:="routed-private-response-including-connection",""
-    if node.Kind=="public-path"{label=fmt.Sprintf("Cumulative %s path through custom node 2 of 3 → Cloudflare edge",selection.selected);metric="routed-https-response-after-tls";endpoint="https://"+hopmeasure.PublicHost+"/__down?bytes=1"}
+    if node.Kind=="public-path"{label=fmt.Sprintf("Cumulative %s path through custom node %d of %d → Cloudflare edge",selection.selected,i+1,shape.count);metric="routed-https-response-after-tls";endpoint="https://"+hopmeasure.PublicHost+"/__down?bytes=1"}
     result:=hopmeasure.Result{ID:node.NodeID,Role:node.Role,Kind:node.Kind,Label:label,Ready:true,Benchmark:&hopmeasure.LatencyBenchmark{Schema:1,Measurement:metric,Endpoint:endpoint,Attempts:hopmeasure.LatencyBenchmarkSamples,Failed:0,Distribution:&hopmeasure.Latency{Samples:hopmeasure.LatencyBenchmarkSamples,Min:1,Median:2,Average:2.5,P90:4,Max:5,Jitter:1},TrimmedMean:2.4}}
     request:=digest(fmt.Sprintf("%s/%d",key,i))[:32]
     receipt:=hopmeasure.OrderedLatencyReceipt{Schema:1,SourceSHA256:source,ConfigSHA256:config,GenerationSHA256:generation,Position:i,NodeID:node.NodeID,Request:request,MeasuredAt:time.Now().UnixMilli()-10000,Result:result}
@@ -190,10 +190,10 @@ public final class ExecutionFiftyDataTest {
  static byte[] storeBytes(AndroidOrderedExecutionLatencyStore.Entry...entries)throws Exception{JSONArray list=new JSONArray();for(var entry:entries)list.put(entry.raw);return new JSONObject().put("schema",1).put("records",list).toString().getBytes(StandardCharsets.UTF_8);}
  static AndroidOrderedExecutionLatencyStore.Entry load(Context c,AndroidOrderedExecutionLatencyStore.Entry e)throws Exception{return AndroidOrderedExecutionLatencyStore.load(c,e.namespaceSource,e.namespaceConfig,e.requested,e.capture.selected,e.record.position,e.record.node,e.record.kind);}
  static void matrix()throws Exception{
-  check(fixtures.length()==24,"native ABI fixture matrix truncated");int nodes=0;Set<String> shapes=new HashSet<>();
+  check(fixtures.length()==30,"native ABI fixture matrix truncated");int nodes=0;Set<String> shapes=new HashSet<>();
   for(int n=0;n<fixtures.length();n++){
    JSONObject row=fixtures.getJSONObject(n);String selected=row.getString("selected"),requested=row.getString("requested"),raw=row.getString("capture");
-   AndroidOrderedExecutionLatencyCapture capture=new AndroidOrderedExecutionLatencyCapture(raw);capture.requireSelection(requested,selected);
+   AndroidOrderedExecutionLatencyCapture capture;try{capture=new AndroidOrderedExecutionLatencyCapture(raw);}catch(Exception error){throw new AssertionError("complete imported metadata refused",error);}capture.requireSelection(requested,selected);
    check(capture.raw.equals(raw)&&capture.nodes.size()==row.getInt("count"),"native capture bytes/count changed");
    refused(()->capture.nodes.clear(),"capture inventory is mutable");
    shapes.add(row.getInt("count")+"/"+row.getBoolean("imported")+"/"+requested+"/"+selected);
@@ -201,7 +201,7 @@ public final class ExecutionFiftyDataTest {
     var node=capture.nodes.get(i);String receipt=row.getJSONArray("receipts").getString(i),status=row.getJSONArray("statuses").getString(i);
     AndroidOrderedLatencyStore.Record record;
     try{record=new AndroidOrderedLatencyStore.Record(receipt,selected);}catch(Exception error){throw new AssertionError("selected execution label was rejected",error);}
-    capture.requireRecord(record);capture.requireNode(i,node.id,node.role,node.kind,capture.nodes.size());
+    try{capture.requireRecord(record);}catch(Exception error){throw new AssertionError("selected execution public label lost its original position",error);}capture.requireNode(i,node.id,node.role,node.kind,capture.nodes.size());
     check(record.raw.equals(receipt)&&record.selectedExecution.equals(selected)&&record.label.equals(capture.label(i)),"native receipt bytes/selected label changed");
     check(record.detail().contains("Selected execution: "+(selected.equals("server")?"Server":"Local")),"historical detail lost exact selected execution");
     var completed=AndroidOrderedLatencyStore.completed(status,receipt,record.request,capture.source,capture.config,i,node.id,node.kind,selected);
@@ -212,7 +212,7 @@ public final class ExecutionFiftyDataTest {
     check(Arrays.equals(saved.record.raw.getBytes(StandardCharsets.UTF_8),receipt.getBytes(StandardCharsets.UTF_8)),"native receipt bytes were reserialized");nodes++;
    }
   }
-  check(nodes==114&&shapes.size()==24,"all paired/imported node positions were not exercised");
+  check(nodes==150&&shapes.size()==30,"all paired/imported node positions were not exercised");
  }
  static void captureRefusals()throws Exception{
   JSONObject row=fixture(false,"server","server",3);String raw=row.getString("capture");
@@ -323,6 +323,8 @@ public final class ExecutionFiftyDataTest {
 '''
 
 CONTROLS = (
+    ('complete-public-position', 'AndroidOrderedExecutionLatencyCapture', '"public-path".equals(kind)&&(members.length()<3||i!=members.length()-2)', '"public-path".equals(kind)&&(members.length()!=3||i!=1)', 'matrix', 'complete imported metadata refused'),
+    ('complete-public-label', 'AndroidOrderedExecutionLatencyCapture', '?"custom node "+(position+1)+" of "+nodes.size()+" → Cloudflare edge"', '?"custom node 2 of 3 → Cloudflare edge"', 'matrix', 'selected execution public label lost its original position'),
     ('raw-json', 'AndroidOrderedExecutionLatencyCapture', 'io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);', '', 'capture-refusals', 'duplicate raw capture accepted'),
     ('selected', 'AndroidOrderedExecutionLatencyCapture', '||"server".equals(requested)&&!"server".equals(selected)', '||false', 'capture-refusals', 'Server request borrowed Compare Local capture'),
     ('generation', 'AndroidOrderedExecutionLatencyCapture', '||!generation.equals(record.generation)', '', 'receipt-refusals', 'receipt generation substitution accepted'),
@@ -356,7 +358,7 @@ def main():
         execute([go, 'build', '-mod=readonly', '-p', '1', '-overlay', overlay, '-o', helper, './cmd/router-agent/main.go'], 120, env=go_env)
         helper_identity = identity(helper)
         fixture_bytes = execute([helper, '--fixtures'], 10).encode(); fixtures = work/'fixtures.json'; fixtures.write_bytes(fixture_bytes); fixtures.chmod(0o600)
-        if len(json.loads(fixture_bytes)) != 24:
+        if len(json.loads(fixture_bytes)) != 30:
             raise AssertionError('the actual Go metadata fixture inventory changed')
         strict = re.findall(r'^    static String strictText\(byte\[\] bytes\) throws Exception \{.*\}$', (JAVA/'AndroidTorProfile.java').read_text(), re.M)
         if len(strict) != 1:
@@ -393,7 +395,7 @@ def main():
             check(); print('Execution fifty data causal control rejected: '+label)
         check()
     receipt = dict(schema=1, accepted=True, source=before, tools=tools, source_after=sources(), families=list(FAMILIES),
-                   native_metadata_shapes=24, original_node_positions=114, controls=[row[0] for row in CONTROLS], phases=PHASES,
+                   native_metadata_shapes=30, original_node_positions=150, controls=[row[0] for row in CONTROLS], phases=PHASES,
                    actual_private_json_validator=True, actual_native_receipt_serializer=True,
                    measured_network_samples=False, android_atomic_syscalls=False, native_owner_adoption=False, device_accepted=False,
                    rollback_scope='Shared synchronized app transaction and exact byte guard; no OS-wide same-byte inode CAS claim.')
@@ -401,7 +403,7 @@ def main():
     if destination:
         path = Path(destination)
         with path.open('x') as stream: json.dump(receipt, stream, indent=2); stream.write('\n')
-    print('Android execution fifty data: all seven families and eight compiled causal controls passed')
+    print('Android execution fifty data: all seven families and ten compiled causal controls passed')
 
 
 if __name__ == '__main__': main()

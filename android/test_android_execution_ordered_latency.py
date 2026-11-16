@@ -83,7 +83,7 @@ public final class RouterOrderedLatency {
   JSONObject distribution=new JSONObject().put("samples",fault.equals("49")?49:50).put("min_ms",1).put("median_ms",2).put("average_ms",2.1).put("p90_ms",3).put("max_ms",4).put("jitter_ms",0.2);
   JSONObject benchmark=new JSONObject().put("schema",1).put("measurement",pub?"routed-https-response-after-tls":"routed-private-response-including-connection").put("endpoint",pub?"https://speed.cloudflare.com/__down?bytes=1":"").put("attempts",50).put("failed",0).put("distribution",distribution).put("trimmed_mean_ms",2);
   String path=fault.equals("receipt-selected")?(selected.equals("server")?"local":"server"):selected;
-  JSONObject row=new JSONObject().put("node_id",node).put("role",member.getString("role")).put("kind",member.getString("kind")).put("label","Cumulative "+path+" path through "+(pub?"custom node 2 of 3 → Cloudflare edge":"node "+(position+1)+" of "+nodes.length())).put("ready",true).put("benchmark",benchmark);
+  JSONObject row=new JSONObject().put("node_id",node).put("role",member.getString("role")).put("kind",member.getString("kind")).put("label","Cumulative "+path+" path through "+(pub?"custom node "+(position+1)+" of "+nodes.length()+" → Cloudflare edge":"node "+(position+1)+" of "+nodes.length())).put("ready",true).put("benchmark",benchmark);
   if(fault.equals("count"))row.put("label","Cumulative "+path+" path through node 1 of 2");
   String source=fault.equals("receipt-preparation")?plan.sourceSHA256():fault.equals("receipt-local")?plan.localSHA:"d".repeat(64);
   JSONObject value=new JSONObject().put("schema",1).put("source_sha256",source).put("config_sha256",fault.equals("receipt-config")?plan.configSHA256():"e".repeat(64)).put("generation_sha256",fault.equals("receipt-generation")?"f".repeat(64):epoch).put("position",position).put("node_id",node).put("request_id",fault.equals("receipt-request")?"f".repeat(32):request).put("measured_at",System.currentTimeMillis()).put("result",row);
@@ -110,10 +110,11 @@ def sources():
     result[APP+'AndroidTorProfile.java'] = F.SOURCES[APP+'AndroidTorProfile.java']
     result[APP+'AndroidNodeStore.java'] = replace_once(result[APP+'AndroidNodeStore.java'], 'final boolean imported=false;', 'boolean imported=false;')
     result[APP+'AndroidNodeStore.java'] = replace_once(result[APP+'AndroidNodeStore.java'], 'modes=java.util.List.copyOf(selected);', 'modes=new java.util.ArrayList<>(selected);')
-    result[APP+'AndroidNodeChainCapture.java'] = replace_once(E.CAPTURE, 'identities.put("original-identity-"+source.members.get(i).id);', 'identities.put(source.members.get(i).imported?"":"original-identity-"+source.members.get(i).id);')
-    result[APP+'AndroidNodeChainCapture.java'] = replace_once(result[APP+'AndroidNodeChainCapture.java'], '.put("schema",1)', '.put("schema",source.members.stream().anyMatch(item->item.imported)?2:1)')
+    result[APP+'AndroidNodeChainCapture.java'] = replace_once(E.CAPTURE, 'identities.put(source.imported&&i==source.members.size()-2?"":"original-identity-"+source.members.get(i).id);', 'identities.put(source.members.get(i).imported?"":"original-identity-"+source.members.get(i).id);')
+    result[APP+'AndroidNodeChainCapture.java'] = replace_once(result[APP+'AndroidNodeChainCapture.java'], '.put("schema",source.imported?2:1)', '.put("schema",source.members.stream().anyMatch(item->item.imported)?2:1)')
     result[NATIVE+'RouterNodeChainExecution.java'] = replace_once(E.EXECUTION, 'public CommandServer server;', 'public RouterHopMeasurement measurement;public volatile String epoch="c".repeat(64);public CommandServer server;')
-    result[NATIVE+'RouterNodeChainExecution.java'] = replace_once(result[NATIVE+'RouterNodeChainExecution.java'], 'JSONObject local=new JSONObject().put("schema",1)', 'JSONObject local=new JSONObject().put("schema",original.getInt("schema"))')
+    if result[NATIVE+'RouterNodeChainExecution.java'].count('JSONObject local=new JSONObject().put("schema",original.getInt("schema"))') != 1:
+        raise AssertionError("execution fixture no longer retains the original Local schema")
     result[NATIVE+'RouterOrderedLatency.java'] = NATIVE_FIFTY
     lib = replace_once(result[NATIVE+'Libbox.java'], 'executionMeasurement=owner;executionServer=server;return new RouterHopMeasurement();', 'executionMeasurement=owner;executionServer=server;return owner.measurement=new RouterHopMeasurement();')
     result[NATIVE+'Libbox.java'] = replace_once(lib, 'throw new IllegalStateException("No execution fifty factory in type boundary");', 'return new RouterOrderedLatency(p,s,m);')
@@ -134,10 +135,10 @@ HARNESS += r'''
  static Outcome measure(LayeredVpnService.OrderedLatencyTarget target)throws Exception{Outcome result=new Outcome();new AndroidOrderedLatencyBenchmark().run(target,result);result.joined();return result;}
  static void success()throws Exception{
   int shapes=0,positions=0;
-  for(int count=2;count<=8;count++)for(boolean imported:count==3?new boolean[]{false,true}:new boolean[]{false})for(String variant:List.of("server/server","auto/server","auto/local")){
+  for(int count=2;count<=8;count++)for(boolean imported:(count==3||count==4||count==8)?new boolean[]{false,true}:new boolean[]{false})for(String variant:List.of("server/server","auto/server","auto/local")){
    RouterOrderedLatency.reset();String requested=variant.split("/")[0],selected=variant.split("/")[1];
    try(Fixture f=new Fixture(count,requested)){
-    if(imported){f.source.members.get(1).imported=true;f.source.modes.set(1,"shadowsocks");}RouterNodeChainExecution.configured=plan->plan.selected=selected;f.connected();shapes++;
+    if(imported){f.source.members.get(count-2).imported=true;f.source.modes.set(count-2,"shadowsocks");}RouterNodeChainExecution.configured=plan->plan.selected=selected;f.connected();shapes++;
     var original=f.owner();var plan=original.execution.plan;var probe=(RouterHopMeasurement)get(f.service,"hopMeasurement");int preparations=RouterNodeChainExecution.ordinaryPreparations,runs=plan.runs;
     var targets=LayeredVpnService.orderedLatencyTargets();check(targets.size()==count,"execution inventory lost an original member");
     for(var target:targets){
@@ -146,7 +147,7 @@ HARNESS += r'''
      check(entry.record.raw.equals(result.record.raw)&&entry.capture.raw.equals(facade.raw),"execution history altered the native receipt or capture bytes");
      check(result.record.source.equals("d".repeat(64))&&result.record.config.equals("e".repeat(64))&&result.record.generation.equals(plan.epoch),"execution receipt borrowed preparation or dormant Local identity");
      check(!result.record.source.equals(target.namespaceSource)&&!result.record.source.equals(target.source)&&entry.namespaceSource.equals(plan.sourceSHA256()),"execution history confused preparation lookup and measured projection");
-     check(result.record.selectedExecution.equals(selected)&&result.record.node.equals(target.node)&&target.kind.equals(imported&&target.position==1?"public-path":"private-node"),"execution result lost winner or captured node kind");
+     check(result.record.selectedExecution.equals(selected)&&result.record.node.equals(target.node)&&target.kind.equals(imported&&target.position==count-2?"public-path":"private-node"),"execution result lost winner or captured node kind");
      check(result.record.detail().contains("Selected execution: "+(selected.equals("server")?"Server":"Local"))&&facade.closed&&facade.validations==1&&!AndroidMTUMeasurementGate.held(),"execution receipt escaped selected label, joined close or fresh proof");
      check(AndroidOrderedLatencyStore.load(f.service,target.source,target.config,target.position,target.node,target.kind)==null,"execution result entered ordinary Local history");
     }
@@ -154,7 +155,7 @@ HARNESS += r'''
     ((AndroidMTUSession)get(f.service,"mtuSession")).token=1L;check(measure(targets.get(0)).error==null,"current MTU epoch prevented a fresh original execution measurement");f.stop();check(probe.closes==1,"complete session teardown did not retire original throughput");
    }
   }
-  check(shapes==24&&positions==114,"execution host matrix silently narrowed");
+  check(shapes==30&&positions==150,"execution host matrix silently narrowed");
  }
  static void captureFaults()throws Exception{
   for(String fault:List.of("capture-empty","capture-selection","capture-inventory","capture-kind","capture-generation","receipt-preparation","receipt-local","receipt-config","receipt-generation","receipt-selected","receipt-request","receipt-inventory")){

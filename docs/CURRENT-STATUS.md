@@ -6,6 +6,26 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
+## November 15: complete Android imported Shadowsocks execution
+
+Android's ordered editor, saved profiles and captured native preparation now
+retain three to eight members for literal-address imported Shadowsocks 2022
+Server/Compare paths: one to six paired WireGuard/AWG prefixes, one penultimate
+imported Shadowsocks member and an independent paired Shadowsocks final.
+Execution, Last restoration, selected-path latency and history preserve every
+original member and identity. The separately typed SOCKS5 and CONNECT execution
+paths retain their three-member bounds and existing native factories.
+
+The final composed source passed the original six-family source command,
+additional four/eight-member cases, actual shared Last restoration, shipping
+Java lifecycle/restore, typed SOCKS/CONNECT, measurement/history and source
+audit gates. The source, lifecycle, measurement and metadata fixtures retain
+their original deadlines and negative controls. Native engines, Android OS
+handles and remote network exchanges remain explicit fixture boundaries;
+exact-current APK/ABI, encrypted networking and device acceptance are separate
+requirements. The detailed receipt is recorded in
+[the continuation evidence](CONTINUATION-EVIDENCE-2026-11-15.md).
+
 ## November 15: Android typed SOCKS5 execution
 
 Android's ordered editor, complete profiles and existing single VpnService now

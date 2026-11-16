@@ -1114,7 +1114,7 @@ prove these behaviors merely because a filename or string is present.
 | 160–169; C4 | Shared DNS policy/proof, Android/Apple native hosts, DNS benchmark and selected-path reference tests | Real selected resolver/transport/IPv6 behavior on each device and path. Blank AdGuard Allowed Clients remains unrestricted. |
 | 170–199; 320–321 | Native Wintun, VpnService, PacketTunnel, AppKit/GTK and platform lifecycle/build jobs | Complete current native release, real sleep/wake/network-switch/crash behavior, signed iOS installation and qualified broader Unix/BSD targets. |
 | 200–213; 338; later Off/On-connect/Always selection | Captured native protection, Windows WFP, macOS PF and Linux journal/native socket owners; ordered, saved-prefix, supported ordinary external and bounded Windows/Linux/macOS single paired Router hosts with original-owner guards and mandatory native gates described above | All three platforms still require exact-SHA kernel/packaged acceptance. Darwin paired source now includes actual installed parent/child composition; its new native gate has not yet passed at this cutoff. No new direct-Tor acceptance or every-graph support is claimed. Physical leak checks remain distinct. |
-| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT, SOCKS, schema-five OpenVPN and schema-two Shadowsocks additions below extend those separate families to 3–8 members with one penultimate import. Shared Shadowsocks execution and the Apple public integration now retain complete 3–8-member literal imported-SS Server/Compare routes. The earlier desktop public trio admissions and each platform's actual native evidence remain separate; shared support alone does not prove host acceptance. Hostname Server execution, multiple imports and broader requested positions/protocols/compositions remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle follows the actual measured winner without changing that formula. |
+| 214–224; external hops; October Compare correction | `internal/mobilemultihop/node_chain*`, shared native bridges and actual encrypted Server/CONNECT/SOCKS witnesses; Linux ordinary entry-child repair, macOS public prefix controls and bounded Linux/Windows/macOS ordinary OpenVPN-entry to SS2022-final hosts above | Generic ordered source accepts 2–8 members. The longer Local CONNECT, SOCKS, schema-five OpenVPN and schema-two Shadowsocks additions below extend those separate families to 3–8 members with one penultimate import. Shared Shadowsocks execution and the Apple and Android public integrations now retain complete 3–8-member literal imported-SS Server/Compare routes. The earlier desktop public trio admissions and each platform's actual native evidence remain separate; shared support alone does not prove host acceptance. Hostname Server execution, multiple imports and broader requested positions/protocols/compositions remain open. These implementation bounds are not user-approved scope reductions. Compare uses the same external endpoint and `(last_node + external_server) / 2`; invalid candidates receive no score. The fixture oracle follows the actual measured winner without changing that formula. |
 | 225–241; MTU Retest/Cancel; later fifty samples | Native MTU/reader ownership, per-hop measurements and fifty-sample suites; the measured deep WireGuard startup race is repaired in `216a893a` | Real path MTU/throughput/loaded-latency behavior and exact-SHA packaged native acceptance remain required. A saved value or generic HTTP delay is not current-path MTU or ICMP RTT. |
 | 242–251; later cleanup correction | `server/scripts/download_jobs.py`, download-job/safety tests and exact-SHA broker | Current published delivery and live cancellation/retry/cleanup behavior. Cleanup-pending cannot be reported as complete. |
 | 252–262 | AI provider configuration/server and redacted-context tests | Live configured provider response, disclosure and error/recovery acceptance. No blind command execution; never transmit tunnel/admin secrets. |
@@ -3930,3 +3930,47 @@ Frozen four-file manifest SHA256:
 `ea2092e901f3c60ddc3ba653b19db6cbaafff9c85f8102afc1fa38e932a260c8`.
 All preimages match 17e5b12b. Exact-current release publication and physical
 acceptance remain separate. No private target was changed.
+
+
+## Complete Android imported Shadowsocks Server/Compare paths
+
+The Android editor/store, complete source capture, native execution readback,
+selected-path latency and history now retain three to eight members with one
+literal-address imported Shadowsocks 2022 penultimate member. Every preceding
+paired WG/AWG source, independent final, original identity and selected
+execution remains captured. Last and temporary restoration retain the original
+proved choice. The newer typed SOCKS5 and CONNECT factories, dispatch and
+restoration remain distinct and three-member bounded. Their inherited runtime
+fixtures explicitly select schema three or four without weakening admission.
+
+The final thirteen-file unit was reconciled with 6fe17057, then guarded onto
+b37df967 and ac550c57. The latter changes only unrelated Apple source fixtures;
+all thirteen current preimages and frozen outputs matched before integration.
+The original twelve-file validation package was retained separately.
+
+| Executed gate | Result |
+|---|---|
+| Original six-family source command | 451 checks, unchanged 120-second command bound |
+| Additional complete-prefix source phase | 116 checks on the same compiled Java classes and Go helper, separate 120-second bound |
+| Actual shared Run/Compare/Last plus Java readback | Nine shared cases in 16.235 seconds; 99 Java checks; ten total source controls |
+| Shipping execution runtime and restoration | 663 checks/18 controls and 132 checks/three controls |
+| Existing typed CONNECT and newer typed SOCKS | Each passed 216 runtime and 24 restore checks plus three controls |
+| Fifty-sample service ownership fixture | 2,089 checks across eleven families and thirteen controls |
+| Metadata/history | 1,073 checks, 3,358 actual Go JSON validation calls and ten controls |
+| Typed SOCKS source preservation | 216 positives, six longer-path refusals, five readback refusals and two controls |
+| Source integration audits | Profile-settings and native shipping scorer passed |
+
+Frozen manifest SHA256:
+`98f1f768581a548cf22f392f9e4dfe1cf05f41a98618e55912c2c1f0fc39e490`.
+Final receipt SHA256:
+`475299064f77b3af23700ab537a39e619ebdaab1f8ccf0e27edddb2e57c69aa9`.
+The existing aggregate source families, per-case Last limits, runtime/compiler
+bounds and causal controls remain intact. The new phase adds coverage rather
+than splitting or extending an original failing aggregate. Earlier failures
+and their fixture corrections remain in the retained validation evidence.
+
+These tests execute shared Go preparation/Run/Compare/Last and shipping Java
+stores, consumers and lifecycle. Native engines, Android OS handles, widgets
+and remote exchanges retain their explicit fixture boundaries. This is not
+evidence of fifty real network probes, an APK/SDK build, encrypted physical
+networking, signing, private deployment or completion of the full requirements.

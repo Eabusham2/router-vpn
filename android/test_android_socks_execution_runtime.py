@@ -22,7 +22,7 @@ def once(value, before, after):
 def sources():
     result=RESTORE.sources()
     app,native=HOST.APP,HOST.NATIVE
-    result[app+'AndroidNodeStore.java']=SOCKS.SOURCES[app+'AndroidNodeStore.java'].replace('final String execution="local";','String execution="local";')
+    result[app+'AndroidNodeStore.java']=SOCKS.SOURCES[app+'AndroidNodeStore.java'].replace('final String execution="local";','String execution="local";boolean imported;')
     result.pop(app+'AndroidNodeChainSOCKSCapture.java')
     capture=SOCKS.SOURCES[app+'AndroidNodeChainCapture.java']
     capture=once(capture,'final String config,launchInput;','final String config,launchInput,selectionExecution;')
@@ -48,7 +48,7 @@ def sources():
 
 
 def runtime_harness():
-    value=HOST.HARNESS.replace('new int[]{2,3,4,8}','new int[]{3}').replace('new Fixture(2,','new Fixture(3,').replace('new Fixture(4,','new Fixture(3,')
+    value=HOST.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{3,4,8}', 'new int[]{3}').replace('new int[]{2,3,4,8}','new int[]{3}').replace('new Fixture(2,','new Fixture(3,').replace('new Fixture(4,','new Fixture(3,')
     value=value.replace('value.capture.plan.failCloses=0;','value.capture.socks.plan.failClose=false;')
     value=value.replace('original.capture.plan.runs==0','original.capture.socks.plan.runs==0&&original.capture.socks.plan.factories==0&&plan.factories==1&&server.typed&&server.bound')
     value=value.replace('public static void main(String[] args)throws Exception{', r'''static void factoryControl()throws Exception{
@@ -60,6 +60,7 @@ def runtime_harness():
  }
  public static void main(String[] args)throws Exception{if(args.length>0&&args[0].equals("factory")){factoryControl();return;}
 ''')
+    value=once(value, 'localSource.getInt("schema")== (imported?2:1)', 'localSource.getInt("schema")==3')
     return value
 
 
@@ -75,7 +76,7 @@ def main():
         original={name:(HOST.JAVA/(name+'.java')).read_text() for name in names}
         for name,value in original.items():(app/(name+'.java')).write_text(value)
         (app/'OrderedExecutionRuntimeTest.java').write_text(runtime_harness())
-        (app/'OrderedExecutionRestoreTest.java').write_text(RESTORE.HARNESS.replace('new int[]{2,3,4,8}','new int[]{3}'))
+        (app/'OrderedExecutionRestoreTest.java').write_text(RESTORE.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{3,4,8}', 'new int[]{3}').replace('new int[]{2,3,4,8}','new int[]{3}'))
         classes=work/'classes';subprocess.run(['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(classes),*map(str,src.rglob('*.java'))],check=True,timeout=60)
         cp=os.pathsep.join((str(classes),str(jar)))
         for root in ('OrderedExecutionRuntimeTest','OrderedExecutionRestoreTest'):

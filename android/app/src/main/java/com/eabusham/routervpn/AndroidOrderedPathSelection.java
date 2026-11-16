@@ -240,8 +240,8 @@ final class AndroidOrderedPathSelection {
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();for(Member member:members)sources.add(member.source);
         int schema=AndroidNodeChainCapture.sourceSchema(sources);
         if(!"local".equals(execution)&&!members.isEmpty()) {
-            if(schema>4||(schema==2||schema==3||schema==4)&&members.size()!=3||!"shadowsocks".equals(members.get(members.size()-1).mode))
-                throw new IllegalStateException("Server and Compare require paired packet prefixes or a three-node path with one literal Shadowsocks, SOCKS5 or HTTP/HTTPS CONNECT middle, with a Shadowsocks 2022 final. Longer imported paths use Local.");
+            if(schema>4||(schema==3||schema==4)&&members.size()!=3||!"shadowsocks".equals(members.get(members.size()-1).mode))
+                throw new IllegalStateException("Server and Compare require paired packet prefixes, optionally one literal Shadowsocks middle before the Shadowsocks 2022 final. SOCKS5 and HTTP/HTTPS CONNECT require exactly three nodes.");
             for(Member member:members)if(member.source.imported)
                 AndroidNumericAddress.parse(member.source.external().server);
         }
