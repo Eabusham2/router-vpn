@@ -191,6 +191,8 @@ def inputs():
                              ROOT/'deploy/test_socks_server_prefix_native.py',
                              ROOT/'deploy/test_socks_server_prefix_native_runner.py',
                              ROOT/'deploy/test_server_node_chain_openvpn_encrypted.py',
+                             ROOT/'deploy/test_server_node_chain_hysteria_encrypted.py',
+                             ROOT/'deploy/test_server_node_chain_hysteria_encrypted_runner.py',
                              ROOT/'deploy/test_server_node_chain_openvpn_encrypted_runner.py',
                              ROOT/'mobile/server_chain_acceptance/openvpn_linux_test.go.tmpl',
                              ROOT/'.github/workflows/server-openvpn-direct-encrypted.yml',

@@ -174,6 +174,7 @@ BOX_TEMPLATES = {
     'tor_plain_box_test.go.tmpl': 'routervpn_desktop_tor_plain_box_test.go',
 }
 PEER_TEMPLATES = {
+    'node_chain_hysteria_server_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_hysteria_server_peer_test.go',
     'node_chain_openvpn_server_direct_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_openvpn_server_direct_peer_test.go',
     'node_chain_connect_prefix_native_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_connect_prefix_native_linux_test.go',
     'node_chain_socks_prefix_native_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_socks_prefix_native_linux_test.go',
@@ -330,6 +331,7 @@ DARWIN_NODE_CHAIN_PEERS = {
     'node_chain_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_reference_darwin_test.go',
     'node_chain_imported_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_middle_darwin_test.go',
     'node_chain_hysteria_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_hysteria_final_darwin_test.go',
+    'node_chain_hysteria_server_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_hysteria_server_peer_darwin_test.go',
     'node_chain_imported_hostname_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_hostname_darwin_test.go',
     'node_chain_imported_prefix_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_prefix_darwin_test.go',
     'node_chain_socks_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_socks_peer_darwin_test.go',
@@ -987,7 +989,7 @@ def copy_encrypted_peer_templates(vendor):
             prefix = b'//go:build linux && routervpn_linux_node_composition\n\n' + prefix
         elif name == 'node_router_peer_linux_test.go.tmpl':
             prefix = b'//go:build linux && !android && routervpn_linux_node_composition\n\n' + prefix
-        elif name in ('node_chain_openvpn_server_direct_peer_test.go.tmpl', 'node_chain_openvpn_peer_test.go.tmpl', 'node_chain_openvpn_prefix_test.go.tmpl', 'node_chain_imported_prefix_test.go.tmpl', 'node_chain_imported_execution_native_linux_test.go.tmpl', 'node_chain_connect_prefix_native_linux_test.go.tmpl', 'node_chain_socks_prefix_native_linux_test.go.tmpl'):
+        elif name in ('node_chain_hysteria_server_peer_test.go.tmpl', 'node_chain_openvpn_server_direct_peer_test.go.tmpl', 'node_chain_openvpn_peer_test.go.tmpl', 'node_chain_openvpn_prefix_test.go.tmpl', 'node_chain_imported_prefix_test.go.tmpl', 'node_chain_imported_execution_native_linux_test.go.tmpl', 'node_chain_connect_prefix_native_linux_test.go.tmpl', 'node_chain_socks_prefix_native_linux_test.go.tmpl'):
             prefix = b'//go:build linux && !android\n\n' + prefix
         elif name in ('node_openvpn_capacity_test.go.tmpl', 'node_imported_openvpn_test.go.tmpl', 'node_imported_packet_xray_test.go.tmpl', 'node_imported_packet_xray_dns_test.go.tmpl', 'node_imported_naive_h2_test.go.tmpl', 'node_imported_naive_h3_test.go.tmpl'):
             prefix = b'//go:build linux && !android && routervpn_openvpn_remote_test\n\n' + prefix

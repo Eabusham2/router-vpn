@@ -49,6 +49,7 @@ type desktopNodeChainHysteriaFixture struct {
 	dns         *D.Router
 	stop        func()
 	held        chan struct{}
+	layerPeer   *desktopHysteriaServerPeer
 }
 
 type desktopNodeChainHysteriaProvider struct {
@@ -61,11 +62,21 @@ type desktopNodeChainHysteriaProvider struct {
 // The direct encrypted test and installed namespace peer share the same pinned
 // HY2 service, original inner services and positively joined socket teardown.
 func desktopNodeChainHysteriaProviderStart(t *testing.T, ctx context.Context, peer *desktopNodeChainPeer, password, mask string, extra []desktopNodeLayerRoute) *desktopNodeChainHysteriaProvider {
+	return desktopNodeChainHysteriaProviderStartCaptured(t, ctx, peer, password, mask, extra, "127.0.0.1:0", true)
+}
+
+// A direct Server suffix has no remote packet prefix. Its actual QUIC socket
+// binds the test-owned namespace address; the original private inner services
+// and protocol implementation are identical to the packet-prefixed provider.
+func desktopNodeChainHysteriaProviderStartCaptured(t *testing.T, ctx context.Context, peer *desktopNodeChainPeer, password, mask string, extra []desktopNodeLayerRoute, address string, forward bool) *desktopNodeChainHysteriaProvider {
 	t.Helper()
+	if peer == nil || len(peer.prefixes) == 0 || (forward && address != "127.0.0.1:0") || (!forward && address != "203.0.113.25:443" && address != "127.0.0.1:0") {
+		t.Fatal("uncaptured Hysteria2 provider socket")
+	}
 	finalCtx, finalCancel := context.WithCancel(ctx)
 	provider := &desktopNodeChainHysteriaProvider{final: &desktopNodeLayerServer{ctx: finalCtx, cancel: finalCancel, connections: map[io.Closer]bool{},
 		routes: append(append([]desktopNodeLayerRoute(nil), peer.final.final.routes...), extra...)}}
-	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	packet, err := net.ListenPacket("udp4", address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +111,10 @@ func desktopNodeChainHysteriaProviderStart(t *testing.T, ctx context.Context, pe
 	provider.ca = ca
 	// No prefix receives a physical resolver, final public service or DNS rule.
 	// Only this captured UDP destination reaches the independent HY2 provider.
-	peer.prefixes[len(peer.prefixes)-1].handler.rules["udp/10.77.0.1:443"] = desktopReferenceRule{
-		Network: "udp", Address: "10.77.0.1", Port: 443, Target: packet.LocalAddr().String()}
+	if forward {
+		peer.prefixes[len(peer.prefixes)-1].handler.rules["udp/10.77.0.1:443"] = desktopReferenceRule{
+			Network: "udp", Address: "10.77.0.1", Port: 443, Target: packet.LocalAddr().String()}
+	}
 	return provider
 }
 
@@ -156,13 +169,16 @@ func TestRouterVPNDesktopNodeChainHysteriaReferenceProcess(t *testing.T) {
 }
 
 func desktopNodeChainHysteriaStart(t *testing.T, modes []string, fault string) *desktopNodeChainHysteriaFixture {
+	return desktopNodeChainHysteriaStartLayers(t, modes, fault, nil)
+}
+func desktopNodeChainHysteriaStartLayers(t *testing.T, modes []string, fault string, layers []desktopHysteriaServerLayer) *desktopNodeChainHysteriaFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(pause.WithDefaultManager(context.Background()), 20*time.Second)
 	t.Cleanup(cancel)
 	request, clients := desktopNodeChainPeerFixture(t, len(modes))
 	desktopNodeChainSetModes(t, &request, modes)
 	loopback := netip.MustParseAddr("127.0.0.1")
-	peer := desktopNodeChainPeerStart(t, request, loopback, loopback)
+	peer := desktopNodeChainPeerStartBounds(t, request, loopback, loopback, 1, 6)
 	f := &desktopNodeChainHysteriaFixture{ctx: ctx, peer: peer, request: request, held: make(chan struct{}, 1)}
 	held := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != "10.77.0.1:8790" || r.Header.Get("Authorization") != "Bearer "+request.FinalAPIToken {
@@ -179,6 +195,14 @@ func desktopNodeChainHysteriaStart(t *testing.T, modes []string, fault string) *
 	const password, mask = "original-ordered-Hysteria2-password", "original-ordered-Salamander-mask"
 	provider := desktopNodeChainHysteriaProviderStart(t, ctx, peer, password, mask, []desktopNodeLayerRoute{{Network: "tcp", Destination: "10.77.0.1:8790", Physical: held.Listener.Addr().String()}})
 	f.final, f.observation, f.stop = provider.final, provider.observation, provider.stop
+	if len(layers) > 0 {
+		r := desktopHysteriaServerRequest{Schema: 1, Paired: request, Prefixes: len(modes), Password: password, Salamander: mask, Layers: layers}
+		if !desktopHysteriaServerRequestValid(r) {
+			t.Fatal("invalid original component layer inventory")
+		}
+		f.layerPeer = &desktopHysteriaServerPeer{peer: peer, provider: provider, prefixes: len(modes)}
+		f.layerPeer.installLayers(t, ctx, layers, loopback)
+	}
 	ca := provider.ca
 	socket := netip.MustParseAddrPort(peer.prefixes[0].bind.address())
 	original := desktopNodeChainPeerSource(t, request, clients, net.JoinHostPort(request.Address, strconv.Itoa(int(socket.Port()))))
@@ -252,6 +276,13 @@ func desktopNodeChainHysteriaStart(t *testing.T, modes []string, fault string) *
 			t.Fatal(err)
 		}
 	}
+	if f.layerPeer != nil {
+		for i, layer := range layers {
+			if layer.Mode != "off" {
+				source.Nodes[i] = desktopHysteriaLayerSource(t, source.Nodes[i], layer, f.layerPeer.layers[i].outer.LocalAddr().String())
+			}
+		}
+	}
 	f.chain, err = mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, source))
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +291,11 @@ func desktopNodeChainHysteriaStart(t *testing.T, modes []string, fault string) *
 	// during Start. Capture the original counter baseline before any native
 	// client is constructed; later proof must retain and reuse that session.
 	f.before = peer.snapshot()
-	f.out, f.dns, _ = desktopImportedHostnameOwners(t, ctx, f.chain, peer.prefixes[0].bind.address())
+	physical := peer.prefixes[0].bind.address()
+	if f.layerPeer != nil && f.layerPeer.layers[0] != nil {
+		physical = f.layerPeer.layers[0].outer.LocalAddr().String()
+	}
+	f.out, f.dns, _ = desktopImportedHostnameOwners(t, ctx, f.chain, physical)
 	return f
 }
 

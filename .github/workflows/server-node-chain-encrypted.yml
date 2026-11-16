@@ -101,3 +101,7 @@ jobs:
   openvpn-direct:
     name: Require actual zero-prefix OpenVPN Server suffix
     uses: ./.github/workflows/server-openvpn-direct-encrypted.yml
+
+  hysteria-final:
+    name: Require actual Hysteria2 Server final
+    uses: ./.github/workflows/server-hysteria-encrypted.yml

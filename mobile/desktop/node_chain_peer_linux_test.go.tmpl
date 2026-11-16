@@ -38,6 +38,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	wg "github.com/sagernet/sing-box/transport/wireguard"
@@ -353,9 +354,16 @@ func desktopNodeChainPeerStartBounds(t *testing.T, request desktopNodeChainPeerR
 	last := request.Prefixes[count-1]
 	p.prefixes[count-1] = &desktopNodeChainPrefixPeer{}
 	lastFactory := desktopNodeChainPrefixFactory(t, last, p.prefixes[count-1])
+	// With a single remote packet prefix, this final reference device is
+	// also the physical first peer. Retain its captured namespace bind rather
+	// than silently inserting a loopback-only predecessor.
+	finalLocal, finalRemote := loopback, loopback
+	if count == 1 {
+		finalLocal, finalRemote = local, remote
+	}
 	p.final = desktopImportedWGSSStartWithFactory(t, desktopImportedWGSSRequest{Schema: 1, Address: request.Address, ClientAddress: request.ClientAddress,
 		PrivateKey: last.PrivateKey, ClientPublicKey: last.ClientPublicKey, PreSharedKey: last.PreSharedKey,
-		FinalPassword: request.FinalPassword, NodeProofID: request.FinalNodeProofID, Token: request.FinalAPIToken, Cover: true}, loopback, loopback, lastFactory)
+		FinalPassword: request.FinalPassword, NodeProofID: request.FinalNodeProofID, Token: request.FinalAPIToken, Cover: true}, finalLocal, finalRemote, lastFactory)
 	p.prefixes[count-1].bind, p.prefixes[count-1].handler = p.final.bind, p.final.entry
 	if request.BenchmarkPort != 0 {
 		p.benchmark = desktopNodeChainBenchmarkStart(t, request.BenchmarkPort)
@@ -785,6 +793,7 @@ func desktopNodeChainPeerOutboundsOwned(t *testing.T, ctx context.Context, chain
 	owned := service.ContextWith[adapter.OutboundManager](ctx, manager)
 	owned = service.ContextWith[adapter.NetworkManager](owned, &desktopImportedPacketNetwork{})
 	var outbounds []adapter.Outbound
+	var nativeOwners []adapter.Outbound
 	var closers []func() error
 	for position, tag := range chain.PrefixTags() {
 		var row map[string]any
@@ -799,7 +808,63 @@ func desktopNodeChainPeerOutboundsOwned(t *testing.T, ctx context.Context, chain
 		if row == nil {
 			t.Fatal("compiled prefix vanished", tag)
 		}
-		if position == 0 {
+		// Materialize the compiler's captured optional Start Layer before its
+		// original packet endpoint. This changes no source selection and does
+		// not permit an unlisted detour or an additional physical socket.
+		layerTag, _ := row["detour"].(string)
+		var layer map[string]any
+		for _, raw := range graph["outbounds"].([]any) {
+			candidate := raw.(map[string]any)
+			if candidate["tag"] == layerTag && (candidate["type"] == "shadowsocks" || candidate["type"] == "routervpn-aes-xor") {
+				layer = candidate
+			}
+		}
+		if layer != nil && (row["type"] == "wireguard" || row["type"] == mobilemultihop.AmneziaType) {
+			if position == 0 {
+				if layer["detour"] != nil {
+					t.Fatal("first captured layer already owns another detour")
+				}
+				layer["detour"] = "captured-physical"
+			} else if layer["detour"] != chain.PrefixTags()[position-1] {
+				t.Fatal("captured layer bypassed original predecessor")
+			}
+			encoded := []byte(desktopNodeChainJSON(t, layer))
+			var outer adapter.Outbound
+			if layer["type"] == "shadowsocks" {
+				var options option.ShadowsocksOutboundOptions
+				if json.Unmarshal(encoded, &options) != nil {
+					t.Fatal("captured AES options")
+				}
+				outer, err = SS.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), layerTag, options)
+			} else {
+				var options WH.Options
+				if json.Unmarshal(encoded, &options) != nil {
+					t.Fatal("captured XOR options")
+				}
+				outer, err = WH.NewOutbound(owned, nil, log.NewNOPFactory().Logger(), layerTag, options)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if manager.owners[layerTag] != nil {
+				t.Fatal("captured layer owner duplicated")
+			}
+			manager.owners[layerTag] = outer
+			nativeOwners = append(nativeOwners, outer)
+			closer, ok := outer.(io.Closer)
+			if !ok {
+				t.Fatal("captured layer has no retirement owner")
+			}
+			var once sync.Once
+			var joined error
+			closeLayer := func() error { once.Do(func() { joined = closer.Close() }); return joined }
+			closers = append(closers, closeLayer)
+			t.Cleanup(func() {
+				if err := closeLayer(); err != nil {
+					t.Error(err)
+				}
+			})
+		} else if position == 0 {
 			row["detour"] = "captured-physical"
 		}
 		if mutate != nil {
@@ -840,6 +905,7 @@ func desktopNodeChainPeerOutboundsOwned(t *testing.T, ctx context.Context, chain
 		}
 		manager.owners[tag] = out
 		outbounds = append(outbounds, out)
+		nativeOwners = append(nativeOwners, out)
 		closer, ok := out.(io.Closer)
 		if !ok {
 			t.Fatal("native prefix lost its close owner")
@@ -855,7 +921,7 @@ func desktopNodeChainPeerOutboundsOwned(t *testing.T, ctx context.Context, chain
 		})
 	}
 	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
-		for _, out := range outbounds {
+		for _, out := range nativeOwners {
 			if starter, ok := out.(adapter.Lifecycle); ok {
 				if err := starter.Start(stage); err != nil {
 					t.Fatal(err)

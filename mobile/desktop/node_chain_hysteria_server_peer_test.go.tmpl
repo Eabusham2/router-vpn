@@ -1,0 +1,393 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing/service/pause"
+)
+
+type desktopHysteriaServerRequest struct {
+	Layers     []desktopHysteriaServerLayer `json:"layers"`
+	Schema     int                          `json:"schema"`
+	Paired     desktopNodeChainPeerRequest  `json:"paired"`
+	Prefixes   int                          `json:"prefixes"`
+	Password   string                       `json:"password"`
+	Salamander string                       `json:"salamander"`
+}
+type desktopHysteriaServerLayer struct {
+	Mode     string `json:"mode"`
+	Password string `json:"password,omitempty"`
+	Fault    string `json:"fault,omitempty"`
+}
+type desktopHysteriaServerLayerReceipt struct {
+	Mode          string `json:"mode"`
+	Outer         string `json:"outer"`
+	Inner         string `json:"inner"`
+	Private       string `json:"private"`
+	Raw           int32  `json:"raw"`
+	Authenticated int32  `json:"authenticated"`
+	Forwarded     int32  `json:"forwarded"`
+	Rejected      int32  `json:"rejected"`
+}
+type desktopHysteriaServerReply struct {
+	Layers   []desktopHysteriaServerLayerReceipt          `json:"layers"`
+	Peer     desktopNodeChainPeerReply                    `json:"peer"`
+	Hysteria desktopNodeChainHysteriaReferenceObservation `json:"hysteria"`
+	Prefixes int                                          `json:"prefixes"`
+}
+type desktopHysteriaServerPeer struct {
+	peer       *desktopNodeChainPeer
+	provider   *desktopNodeChainHysteriaProvider
+	prefixes   int
+	layers     []*desktopExternalHysteriaLayerPeer
+	layerModes []string
+}
+
+func (p *desktopHysteriaServerPeer) snapshot() desktopHysteriaServerReply {
+	layers := make([]desktopHysteriaServerLayerReceipt, len(p.layers))
+	for i, owner := range p.layers {
+		layers[i].Mode = p.layerModes[i]
+		if owner != nil {
+			layers[i] = desktopHysteriaServerLayerReceipt{Mode: p.layerModes[i], Outer: owner.outer.LocalAddr().String(), Inner: owner.inner.String(), Private: owner.private.String(), Raw: owner.raw.Load(), Authenticated: owner.authenticated.Load(), Forwarded: owner.forwarded.Load(), Rejected: owner.rejected.Load()}
+		}
+	}
+	return desktopHysteriaServerReply{Peer: p.peer.snapshot(), Prefixes: p.prefixes, Layers: layers,
+		Hysteria: desktopNodeChainHysteriaReferenceObservation{CA: p.provider.ca, ServerName: "captured-final.example", RawUDP: p.provider.final.rawUDP.Load(), TCP: p.provider.final.plainTCP.Load(), UDP: p.provider.final.plainUDP.Load(), AuthFailures: p.provider.observation.authFailures.Load()}}
+}
+func desktopHysteriaServerRequestValid(r desktopHysteriaServerRequest) bool {
+	expected := r.Prefixes
+	if expected == 0 {
+		expected = 1
+	}
+	if r.Schema != 1 || r.Prefixes < 0 || r.Prefixes > 6 || len(r.Paired.Prefixes) != expected || len(r.Password) < 16 || len(r.Password) > 256 || len(r.Salamander) < 16 || len(r.Salamander) > 256 || strings.ContainsAny(r.Password+r.Salamander, "\x00\r\n") {
+		return false
+	}
+	if len(r.Layers) != 0 && len(r.Layers) != r.Prefixes {
+		return false
+	}
+	seen := map[string]bool{r.Paired.FinalPassword: true}
+	for _, prefix := range r.Paired.Prefixes {
+		for _, key := range []string{prefix.PrivateKey, prefix.ClientPublicKey, prefix.PreSharedKey} {
+			seen[key] = true
+		}
+	}
+	for _, layer := range r.Layers {
+		if layer.Mode == "off" {
+			if layer.Password != "" || layer.Fault != "" {
+				return false
+			}
+			continue
+		}
+		key, err := base64.StdEncoding.Strict().DecodeString(layer.Password)
+		valid := err == nil && len(key) == 32 && base64.StdEncoding.EncodeToString(key) == layer.Password && !seen[layer.Password] && (layer.Mode == "aes-256-gcm" || layer.Mode == "aes-256-gcm+xor-whitening") && (layer.Fault == "" || layer.Fault == "layer-key" || layer.Fault == "whitening" && layer.Mode == "aes-256-gcm+xor-whitening")
+		clear(key)
+		if !valid {
+			return false
+		}
+		seen[layer.Password] = true
+	}
+	_, err := desktopNodeChainPeerIdentityBounds(r.Paired, 1, 6)
+	return err == nil
+}
+func desktopHysteriaServerStart(t *testing.T, r desktopHysteriaServerRequest, native bool) *desktopHysteriaServerPeer {
+	t.Helper()
+	if !desktopHysteriaServerRequestValid(r) {
+		t.Fatal("uncaptured Hysteria2 Server provider request")
+	}
+	loopback := netip.MustParseAddr("127.0.0.1")
+	local, remote := loopback, loopback
+	address := "127.0.0.1:0"
+	if native {
+		local, remote = desktopNodeChainPeerPhysicalNamespace(t, r.Paired)
+		if r.Prefixes == 0 {
+			found := false
+			interfaces, err := net.Interfaces()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, iface := range interfaces {
+				values, err := iface.Addrs()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, value := range values {
+					prefix, err := netip.ParsePrefix(value.String())
+					found = found || err == nil && prefix.Addr().String() == "203.0.113.25" && prefix.Bits() == 32 && iface.Flags&net.FlagUp != 0
+				}
+			}
+			if !found {
+				t.Fatal("original Hysteria2 namespace alias missing")
+			}
+			local, remote = loopback, loopback
+			address = "203.0.113.25:443"
+		}
+	}
+	physical := local
+	if len(r.Layers) > 0 && r.Layers[0].Mode != "off" {
+		local, remote = loopback, loopback
+	}
+	peer := desktopNodeChainPeerStartBounds(t, r.Paired, local, remote, 1, 6)
+	ctx, cancel := context.WithCancel(pause.WithDefaultManager(context.Background()))
+	t.Cleanup(cancel)
+	provider := desktopNodeChainHysteriaProviderStartCaptured(t, ctx, peer, r.Password, r.Salamander, nil, address, r.Prefixes != 0)
+	p := &desktopHysteriaServerPeer{peer: peer, provider: provider, prefixes: r.Prefixes}
+	p.installLayers(t, ctx, r.Layers, physical)
+	return p
+}
+
+// Each additional layer is the existing authenticated SS2022 UDP reference,
+// including its original XOR wire schedule. Its only decrypted destination is
+// this exact original WG/AWG socket; it never answers a node proof or H2 packet.
+func (p *desktopHysteriaServerPeer) installLayers(t *testing.T, ctx context.Context, layers []desktopHysteriaServerLayer, physical netip.Addr) {
+	p.layers = make([]*desktopExternalHysteriaLayerPeer, p.prefixes)
+	p.layerModes = make([]string, p.prefixes)
+	for i := 0; i < p.prefixes; i++ {
+		p.layerModes[i] = "off"
+		if len(layers) == 0 || layers[i].Mode == "off" {
+			continue
+		}
+		layer := layers[i]
+		p.layerModes[i] = layer.Mode
+		inner := netip.MustParseAddrPort(p.peer.prefixes[i].bind.address())
+		if !inner.Addr().IsLoopback() {
+			t.Fatal("layered packet base escaped original loopback owner")
+		}
+		address, port := netip.MustParseAddr("127.0.0.1"), uint16(0)
+		if i == 0 {
+			address = physical
+			if layer.Mode == "aes-256-gcm+xor-whitening" {
+				port = 8389
+			}
+		}
+		outer, err := net.ListenPacket("udp4", netip.AddrPortFrom(address, port).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		host, _ := desktopNodeChainInner(i, p.prefixes)
+		privatePort := uint16(51820)
+		if i == 0 {
+			privatePort = inner.Port()
+		}
+		private := netip.AddrPortFrom(netip.MustParseAddr(host), privatePort)
+		owner, err := desktopNewHysteriaLayerPeer(ctx, outer, inner, private, layer.Mode, layer.Password, layer.Fault)
+		if err != nil {
+			outer.Close()
+			t.Fatal(err)
+		}
+		p.layers[i] = owner
+		t.Cleanup(func() {
+			if err := owner.Close(); err != nil {
+				t.Error("original packet layer did not join", err)
+			}
+		})
+		if i > 0 {
+			target := netip.MustParseAddrPort(desktopNodeChainNext(i))
+			old := "udp/" + target.String()
+			previous := p.peer.prefixes[i-1].handler
+			if previous.rules[old].Target != inner.String() {
+				t.Fatal("layer lost original next packet tuple")
+			}
+			delete(previous.rules, old)
+			outerPort := netip.MustParseAddrPort(outer.LocalAddr().String()).Port()
+			if layer.Mode == "aes-256-gcm+xor-whitening" {
+				outerPort = 8389
+			}
+			logical := netip.AddrPortFrom(target.Addr(), outerPort)
+			previous.rules["udp/"+logical.String()] = desktopReferenceRule{Network: "udp", Address: logical.Addr().String(), Port: int(outerPort), Target: outer.LocalAddr().String()}
+		}
+	}
+}
+func desktopHysteriaLayerSource(t *testing.T, launch string, layer desktopHysteriaServerLayer, outer string) string {
+	if layer.Mode == "off" {
+		return launch
+	}
+	var row struct {
+		Mode    string `json:"mode"`
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+	}
+	if json.Unmarshal([]byte(launch), &row) != nil {
+		t.Fatal("original layer source absent")
+	}
+	var profile map[string]any
+	if json.Unmarshal([]byte(row.Profile), &profile) != nil {
+		t.Fatal("original layer profile absent")
+	}
+	profile["start_layer"] = layer.Mode
+	port := netip.MustParseAddrPort(outer).Port()
+	graph := map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": profile["endpoint"], "server_port": port, "method": mobilemultihop.NativeStartLayerMethod, "password": layer.Password}}}
+	start := desktopNodeChainJSON(t, map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(desktopNodeChainJSON(t, graph)))})
+	node, err := mobilemultihop.NewNodeProfile(row.Mode, row.Files, desktopNodeChainJSON(t, profile), start, "")
+	if err != nil {
+		t.Fatal("original prefix Start Layer refused", err)
+	}
+	result, err := node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestRouterVPNDesktopHysteriaServerReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_HYSTERIA_SERVER_CHILD") == "" {
+		t.Skip("isolated inherited reference only")
+	}
+	if os.Getenv("ROUTERVPN_HYSTERIA_SERVER_CHILD") != "1" {
+		t.Fatal("uncaptured Hysteria2 Server child")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, 32<<10+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 32<<10 {
+		t.Fatal("bounded original Hysteria2 request required")
+	}
+	var request desktopHysteriaServerRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || request.Paired.Address != "192.168.210.2" || request.Paired.ClientAddress != "192.168.210.1" {
+		t.Fatal("original Hysteria2 namespace request changed")
+	}
+	p := desktopHysteriaServerStart(t, request, true)
+	desktopNodeChainPeerServe(t, reader, p.peer, func() any { return p.snapshot() })
+}
+func TestRouterVPNDesktopHysteriaServerSource(t *testing.T) {
+	directory := os.Getenv("ROUTERVPN_HYSTERIA_SERVER_SOURCES")
+	if directory == "" {
+		t.Skip("explicit private Hysteria2 source export only")
+	}
+	if !filepath.IsAbs(directory) {
+		t.Fatal("original Hysteria2 source export directory missing")
+	}
+	request, _ := desktopNodeChainPeerFixture(t, 1)
+	p := desktopHysteriaServerStart(t, desktopHysteriaServerRequest{Schema: 1, Paired: request, Password: "original-hysteria-server-password", Salamander: "original-hysteria-server-salamander"}, false)
+	value := p.snapshot()
+	if value.Hysteria.RawUDP != 0 || value.Hysteria.TCP != 0 || value.Hysteria.UDP != 0 || value.Hysteria.AuthFailures != 0 || value.Peer.Prefixes[0].RawUDP != 0 || value.Peer.Prefixes[0].ProofQueries != 0 {
+		t.Fatal("source export acquired native traffic authority")
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(filepath.Join(directory, "original.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.Write(raw)
+	closed := file.Close()
+	if err != nil || closed != nil {
+		t.Fatal(err, closed)
+	}
+}
+
+func TestRouterVPNDesktopHysteriaServerPrefixLayers(t *testing.T) {
+	for _, name := range []string{"aes", "xor", "mixed-six", "wrong-layer-key", "wrong-whitening"} {
+		if !t.Run(name, func(t *testing.T) {
+			modes := []string{"wg"}
+			selected := []string{"aes-256-gcm"}
+			if name == "xor" || name == "wrong-whitening" {
+				modes[0] = "awg2-strong"
+				selected[0] = "aes-256-gcm+xor-whitening"
+			}
+			if name == "mixed-six" {
+				modes = []string{"wg", "awg2-fast", "awg2-strong", "wg", "awg2-fast", "awg2-strong"}
+				selected = []string{"aes-256-gcm", "aes-256-gcm+xor-whitening", "off", "aes-256-gcm+xor-whitening", "aes-256-gcm", "off"}
+			}
+			layers := make([]desktopHysteriaServerLayer, len(modes))
+			for i, mode := range selected {
+				layers[i].Mode = mode
+				if mode != "off" {
+					var key [32]byte
+					if _, err := rand.Read(key[:]); err != nil {
+						t.Fatal(err)
+					}
+					layers[i].Password = base64.StdEncoding.EncodeToString(key[:])
+					clear(key[:])
+				}
+			}
+			if name == "wrong-layer-key" {
+				layers[0].Fault = "layer-key"
+			}
+			if name == "wrong-whitening" {
+				layers[0].Fault = "whitening"
+			}
+			f := desktopNodeChainHysteriaStartLayers(t, modes, "", layers)
+			last := len(f.out) - 1
+			if strings.HasPrefix(name, "wrong-") {
+				call, stop := context.WithTimeout(f.ctx, 2*time.Second)
+				_, err := f.get(call, last, "http://"+desktopNodeRouterHealthTarget+"/health", f.request.FinalAPIToken)
+				stop()
+				observed := f.layerPeer.snapshot()
+				if err == nil || observed.Layers[0].Raw <= 0 || observed.Layers[0].Rejected <= 0 || observed.Layers[0].Authenticated != 0 || observed.Layers[0].Forwarded != 0 || observed.Peer.Prefixes[0].RawUDP != 0 || observed.Hysteria.RawUDP != 0 || observed.Peer.Final.RouterQueries != 0 {
+					t.Fatal("invalid original prefix layer gained packet authority", err, observed)
+				}
+				return
+			}
+			for i, identity := range f.request.Prefixes {
+				inner, _ := desktopNodeChainInner(i, len(modes))
+				call, stop := context.WithTimeout(f.ctx, 2*time.Second)
+				body, err := f.get(call, i, "http://"+net.JoinHostPort(inner, "8787")+"/health", identity.APIToken)
+				stop()
+				var health desktopImportedWGSSHealthReply
+				if err != nil || json.Unmarshal(body, &health) != nil || !health.OK || health.NodeID != identity.NodeProofID {
+					t.Fatal("actual layered original packet proof missing", i, err)
+				}
+			}
+			call, stop := context.WithTimeout(f.ctx, 2*time.Second)
+			body, err := f.get(call, last, "http://"+desktopNodeRouterHealthTarget+"/health", f.request.FinalAPIToken)
+			stop()
+			var health desktopImportedWGSSHealthReply
+			if err != nil || json.Unmarshal(body, &health) != nil || !health.OK || health.NodeID != f.request.FinalNodeProofID {
+				t.Fatal("actual layered Hysteria2 private proof missing", err)
+			}
+			call, stop = context.WithTimeout(f.ctx, 2*time.Second)
+			body, err = f.get(call, last, "https://1.1.1.1/cdn-cgi/trace", "")
+			stop()
+			if err != nil || string(body) != "ip=203.0.113.89\n" {
+				t.Fatal("actual layered Hysteria2 public proof missing", err)
+			}
+			call, stop = context.WithTimeout(f.ctx, 2*time.Second)
+			question := new(dns.Msg)
+			question.SetQuestion("example.com.", dns.TypeA)
+			answer, err := f.dns.Exchange(call, question, adapter.DNSQueryOptions{})
+			stop()
+			if err != nil || answer == nil || len(answer.Answer) != 1 {
+				t.Fatal("actual layered selected DNS failed", err)
+			}
+			a, ok := answer.Answer[0].(*dns.A)
+			if !ok || !a.A.Equal(net.ParseIP("93.184.216.34")) {
+				t.Fatal("layered DNS changed captured answer")
+			}
+			observed := f.layerPeer.snapshot()
+			for i, layer := range observed.Layers {
+				if layer.Mode != selected[i] || observed.Peer.Prefixes[i].Mode != modes[i] || observed.Peer.Prefixes[i].RawUDP <= 0 || observed.Peer.Prefixes[i].ProofQueries != 1 {
+					t.Fatal("layered packet proof inventory changed", i, observed)
+				}
+				if layer.Mode != "off" && (layer.Raw <= 0 || layer.Authenticated <= 0 || layer.Forwarded <= 0 || layer.Rejected != 0) {
+					t.Fatal("actual authenticated Start Layer bypassed", i, layer)
+				}
+			}
+			if observed.Hysteria.RawUDP <= 0 || observed.Hysteria.TCP <= 0 || observed.Hysteria.UDP <= 0 || observed.Peer.Final.RouterQueries != 1 || observed.Peer.Final.DNSQueries != 1 || observed.Peer.Final.FinalPublicQueries != 1 || observed.Peer.Final.FinalRawTCP != 0 || observed.Peer.Final.FinalRawUDP != 0 {
+				t.Fatal("layered path substituted its final or resolver", observed)
+			}
+		}) {
+			return
+		}
+	}
+}

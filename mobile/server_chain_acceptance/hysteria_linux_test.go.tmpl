@@ -1,0 +1,622 @@
+//go:build linux && !android && routervpn_server_chain_acceptance
+
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/awgpolicy"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/common/uot"
+)
+
+// Only the entry API is represented by its original private capture. The
+// shipping worker owns all remote packet prefixes and the real QUIC/TLS final.
+// The zero-prefix case uses the captured physical namespace socket directly.
+var serverChainHysteriaCases = []string{
+	"direct/original", "wg/original", "awg-fast/original", "awg-strong/original", "max-six/original",
+	"direct/wrong-password", "direct/wrong-mask", "direct/wrong-sni", "direct/wrong-trust", "direct/failed-selected-dns", "direct/wrong-public-trust", "direct/wrong-node", "direct/joined-active-udp",
+	"max-six/wrong-first-key", "max-six/wrong-middle-key", "max-six/failed-selected-dns", "max-six/joined-active-udp",
+	"wg-aes/original", "awg-xor/original", "mixed-layers/original", "wg-aes/wrong-layer-key", "awg-xor/wrong-whitening",
+}
+
+const serverChainHysteriaPassword = "original-hysteria-server-password"
+const serverChainHysteriaMask = "original-hysteria-server-salamander"
+
+type serverChainHysteriaObservation struct {
+	CA           string `json:"ca"`
+	ServerName   string `json:"server_name"`
+	RawUDP       int64  `json:"raw_udp"`
+	TCP          int64  `json:"tcp"`
+	UDP          int64  `json:"udp"`
+	AuthFailures uint32 `json:"auth_failures"`
+}
+type serverChainHysteriaLayer struct {
+	Mode     string `json:"mode"`
+	Password string `json:"password,omitempty"`
+	Fault    string `json:"fault,omitempty"`
+}
+type serverChainHysteriaLayerReceipt struct {
+	Mode          string `json:"mode"`
+	Outer         string `json:"outer"`
+	Inner         string `json:"inner"`
+	Private       string `json:"private"`
+	Raw           int32  `json:"raw"`
+	Authenticated int32  `json:"authenticated"`
+	Forwarded     int32  `json:"forwarded"`
+	Rejected      int32  `json:"rejected"`
+}
+type serverChainHysteriaReply struct {
+	Layers   []serverChainHysteriaLayerReceipt `json:"layers"`
+	Peer     serverChainEncryptedStats         `json:"peer"`
+	Hysteria serverChainHysteriaObservation    `json:"hysteria"`
+	Prefixes int                               `json:"prefixes"`
+}
+type serverChainHysteriaPeer struct {
+	original *serverChainEncryptedPeer
+	prefixes int
+	reply    serverChainHysteriaReply
+	layers   []serverChainHysteriaLayer
+}
+
+func serverChainHysteriaKeys(t *testing.T, topology string) *serverChainHysteriaPeer {
+	t.Helper()
+	p := &serverChainHysteriaPeer{original: serverChainEncryptedKeys(t, "mixed-three"), prefixes: 1}
+	switch topology {
+	case "direct":
+		p.prefixes = 0
+	case "wg", "wg-aes":
+	case "awg-fast":
+		p.original.prefixes[0] = p.original.prefixes[1]
+		p.original.clients[0] = p.original.clients[1]
+		p.original.servers[0] = p.original.servers[1]
+	case "awg-strong", "awg-xor":
+		p.original.prefixes[0] = p.original.prefixes[2]
+		p.original.clients[0] = p.original.clients[2]
+		p.original.servers[0] = p.original.servers[2]
+	case "max-six", "mixed-layers":
+		other := serverChainEncryptedKeys(t, "mixed-three")
+		p.original.prefixes = append(p.original.prefixes, other.prefixes...)
+		p.original.clients = append(p.original.clients, other.clients...)
+		p.original.servers = append(p.original.servers, other.servers...)
+		p.prefixes = 6
+	default:
+		t.Fatal("uncaptured Hysteria2 topology")
+	}
+	count := p.prefixes
+	if count == 0 {
+		count = 1
+	}
+	p.original.prefixes = p.original.prefixes[:count]
+	p.original.clients = p.original.clients[:count]
+	p.original.servers = p.original.servers[:count]
+	p.layers = make([]serverChainHysteriaLayer, p.prefixes)
+	for i := range p.layers {
+		mode := "off"
+		switch topology {
+		case "wg-aes":
+			mode = "aes-256-gcm"
+		case "awg-xor":
+			mode = "aes-256-gcm+xor-whitening"
+		case "mixed-layers":
+			mode = []string{"aes-256-gcm", "aes-256-gcm+xor-whitening", "off", "aes-256-gcm+xor-whitening", "aes-256-gcm", "off"}[i]
+		}
+		p.layers[i].Mode = mode
+		if mode != "off" {
+			raw, err := hex.DecodeString(serverChainEncryptedRandom(t, 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.layers[i].Password = base64.StdEncoding.EncodeToString(raw)
+			clear(raw)
+		}
+	}
+	return p
+}
+func (p *serverChainHysteriaPeer) read(t *testing.T) serverChainHysteriaReply {
+	t.Helper()
+	var v serverChainHysteriaReply
+	d := json.NewDecoder(bytes.NewReader(p.original.process.line(t)))
+	d.DisallowUnknownFields()
+	if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF || v.Peer.Schema != 1 || len(v.Peer.Prefixes) != len(p.original.prefixes) || v.Prefixes != p.prefixes || len(v.Layers) != p.prefixes || v.Hysteria.CA == "" || v.Hysteria.ServerName != "captured-final.example" || v.Peer.PublicCA == "" {
+		t.Fatal("original Hysteria2 provider receipt missing")
+	}
+	if p.reply.Hysteria.CA != "" && (p.reply.Hysteria.CA != v.Hysteria.CA || p.reply.Peer.PublicCA != v.Peer.PublicCA) {
+		t.Fatal("original Hysteria2 TLS authority replaced")
+	}
+	if v.Peer.Final.DirectQueries != 0 || v.Peer.Final.EntryPublicQueries != 0 || v.Peer.Final.FinalRawTCP != 0 || v.Peer.Final.FinalRawUDP != 0 {
+		t.Fatal("Hysteria2 substituted an SS or direct final")
+	}
+	if p.prefixes == 0 && (v.Peer.Prefixes[0].RawUDP != 0 || v.Peer.Prefixes[0].TCP != 0 || v.Peer.Prefixes[0].UDP != 0 || v.Peer.Prefixes[0].ProofQueries != 0) {
+		t.Fatal("direct Hysteria2 manufactured a remote packet prefix")
+	}
+	endpoint, err := netip.ParseAddrPort(v.Peer.Address)
+	expectedAddress := "192.168.210.2"
+	if p.prefixes == 0 || len(p.layers) > 0 && p.layers[0].Mode != "off" {
+		expectedAddress = "127.0.0.1"
+	}
+	if err != nil || endpoint.Addr().String() != expectedAddress || endpoint.Port() == 0 || p.reply.Peer.Address != "" && p.reply.Peer.Address != v.Peer.Address {
+		t.Fatal("original Hysteria2 packet reference identity changed")
+	}
+	for i, row := range v.Peer.Prefixes {
+		expected := p.original.prefixes[i]
+		if row.Mode != expected.Mode {
+			t.Fatal("original Hysteria2 packet cipher changed")
+		}
+		if row.Mode == "wg" {
+			if row.ParametersSHA256 != "" {
+				t.Fatal("WG acquired AWG receipt")
+			}
+		} else {
+			parameters, err := awgpolicy.ParametersUAPI(expected.Parameters)
+			digest := sha256.Sum256([]byte(parameters))
+			if err != nil || row.ParametersSHA256 != hex.EncodeToString(digest[:]) {
+				t.Fatal("original Hysteria2 AWG parameter readback changed")
+			}
+		}
+	}
+	for i, layer := range v.Layers {
+		if layer.Mode != p.layers[i].Mode || layer.Raw < 0 || layer.Authenticated < 0 || layer.Forwarded < 0 || layer.Rejected < 0 {
+			t.Fatal("original packet layer receipt changed")
+		}
+		if layer.Mode == "off" {
+			if layer.Outer != "" || layer.Inner != "" || layer.Private != "" || layer.Raw != 0 || layer.Authenticated != 0 || layer.Forwarded != 0 || layer.Rejected != 0 {
+				t.Fatal("Off prefix invented another owner")
+			}
+			continue
+		}
+		outer, e1 := netip.ParseAddrPort(layer.Outer)
+		inner, e2 := netip.ParseAddrPort(layer.Inner)
+		private, e3 := netip.ParseAddrPort(layer.Private)
+		physical := "127.0.0.1"
+		port := uint16(51820)
+		if i == 0 {
+			physical = "192.168.210.2"
+			port = endpoint.Port()
+		}
+		host := fmt.Sprintf("10.%d.0.1", 80+i)
+		if i == p.prefixes-1 {
+			host = "10.78.0.1"
+		}
+		if e1 != nil || e2 != nil || e3 != nil || outer.Addr().String() != physical || outer.Port() == 0 || inner.Addr().String() != "127.0.0.1" || inner.Port() == 0 || private.Addr().String() != host || private.Port() != port || i == 0 && layer.Mode == "aes-256-gcm+xor-whitening" && outer.Port() != 8389 {
+			t.Fatal("packet layer substituted original outer/private/base tuple", i)
+		}
+		if len(p.reply.Layers) == p.prefixes {
+			old := p.reply.Layers[i]
+			if old.Mode != layer.Mode || old.Outer != layer.Outer || old.Inner != layer.Inner || old.Private != layer.Private {
+				t.Fatal("packet layer original owner replaced")
+			}
+		}
+	}
+	p.reply = v
+	p.original.stats = v.Peer
+	return v
+}
+func (p *serverChainHysteriaPeer) control(t *testing.T, command string) serverChainHysteriaReply {
+	if _, err := io.WriteString(p.original.process.input, command+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	return p.read(t)
+}
+func serverChainHysteriaStart(t *testing.T, topology, fault string) *serverChainHysteriaPeer {
+	p := serverChainHysteriaKeys(t, topology)
+	if fault == "wrong-layer-key" {
+		p.layers[0].Fault = "layer-key"
+	}
+	if fault == "wrong-whitening" {
+		p.layers[0].Fault = "whitening"
+	}
+	image := serverChainEncryptedImage(t, "ROUTERVPN_SERVER_CHAIN_PEER")
+	command := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "-test.run=^TestRouterVPNDesktopHysteriaServerReferenceProcess$", "-test.count=1", "-test.timeout=100s")
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_HYSTERIA_SERVER_CHILD=1"}
+	p.original.process = serverChainEncryptedStart(t, command)
+	paired := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": p.original.prefixes, "final_password": p.original.password, "final_node_proof_id": serverChainEncryptedProof(p.original.finalServer), "final_api_token": "encrypted-server-final-token"}
+	if json.NewEncoder(p.original.process.input).Encode(map[string]any{"schema": 1, "paired": paired, "prefixes": p.prefixes, "password": serverChainHysteriaPassword, "salamander": serverChainHysteriaMask, "layers": p.layers}) != nil {
+		t.Fatal("original Hysteria2 provider request failed")
+	}
+	p.read(t)
+	return p
+}
+func serverChainHysteriaFinal(t *testing.T, p *serverChainHysteriaPeer, fault string) (string, string) {
+	input, identity := serverChainEncryptedMemberSource(t, p.original, len(p.original.prefixes), "")
+	var row struct {
+		Profile string `json:"profile_json"`
+	}
+	if json.Unmarshal([]byte(input), &row) != nil {
+		t.Fatal("original final source absent")
+	}
+	var profile map[string]any
+	if json.Unmarshal([]byte(row.Profile), &profile) != nil {
+		t.Fatal("original final profile absent")
+	}
+	endpoint := "10.77.0.1"
+	if p.prefixes == 0 {
+		endpoint = "203.0.113.25"
+		// This direct fixture provisions the same final Router identity at its
+		// captured physical provider address. Preserve both original keys and
+		// all other WG bytes; a suffix-only 10.77.0.1 identity cannot authorize it.
+		var files map[string]string
+		if json.Unmarshal([]byte(identity), &files) != nil || len(files) != 1 {
+			t.Fatal("original direct Hysteria2 identity assets changed")
+		}
+		raw, err := base64.StdEncoding.Strict().DecodeString(files["wg.conf"])
+		const previous = "\nEndpoint=10.77.0.1:8388\n"
+		if err != nil || strings.Count(string(raw), previous) != 1 {
+			t.Fatal("original direct Hysteria2 identity endpoint changed")
+		}
+		files["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(strings.Replace(string(raw), previous, "\nEndpoint="+endpoint+":8388\n", 1)))
+		clear(raw)
+		identity = serverChainEncryptedJSON(t, files)
+	}
+	profile["endpoint"] = endpoint
+	password, mask, sni, ca := serverChainHysteriaPassword, serverChainHysteriaMask, p.reply.Hysteria.ServerName, p.reply.Hysteria.CA
+	switch fault {
+	case "wrong-password":
+		password += "-wrong"
+	case "wrong-mask":
+		mask += "-wrong"
+	case "wrong-sni":
+		sni = "wrong-final.example"
+	case "wrong-trust":
+		ca = p.reply.Peer.PublicCA
+	}
+	final := map[string]any{"type": "hysteria2", "tag": "proxy", "server": endpoint, "server_port": 443, "password": password, "obfs": map[string]any{"type": "salamander", "password": mask}, "tls": map[string]any{"enabled": true, "server_name": sni, "certificate_path": "cert.pem"}}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}}, "outbounds": []any{final}, "route": map[string]any{"final": "proxy", "rules": []any{}}}
+	assets := map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(serverChainEncryptedJSON(t, graph))), "cert.pem": base64.StdEncoding.EncodeToString([]byte(ca))}
+	node, err := mobilemultihop.NewNodeProfile("hysteria2", serverChainEncryptedJSON(t, assets), serverChainEncryptedJSON(t, profile), "", "")
+	if err != nil {
+		t.Fatal("original Hysteria2 final source rejected", err)
+	}
+	source, err := node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return source, identity
+}
+func serverChainHysteriaMemberSource(t *testing.T, p *serverChainHysteriaPeer, i int, fault string) (string, string) {
+	original := *p.original
+	if len(p.layers) > 0 && p.layers[0].Mode != "off" {
+		base := netip.MustParseAddrPort(original.stats.Address)
+		outer := netip.MustParseAddrPort(p.reply.Layers[0].Outer)
+		// The captured WG source names its original provider's public address and
+		// actual base port. Its native Start Layer compiler replaces only that host
+		// with the same node's private service; the separate outer owns physical IO.
+		original.stats.Address = netip.AddrPortFrom(outer.Addr(), base.Port()).String()
+	}
+	launch, identity := serverChainEncryptedMemberSource(t, &original, i, fault)
+	if p.layers[i].Mode == "off" {
+		return launch, identity
+	}
+	var row struct {
+		Mode    string `json:"mode"`
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+	}
+	if json.Unmarshal([]byte(launch), &row) != nil {
+		t.Fatal("captured layer source absent")
+	}
+	var profile map[string]any
+	if json.Unmarshal([]byte(row.Profile), &profile) != nil {
+		t.Fatal("captured layer profile absent")
+	}
+	profile["start_layer"] = p.layers[i].Mode
+	outer := netip.MustParseAddrPort(p.reply.Layers[i].Outer)
+	graph := map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": profile["endpoint"], "server_port": outer.Port(), "method": mobilemultihop.NativeStartLayerMethod, "password": p.layers[i].Password}}}
+	start := serverChainEncryptedJSON(t, map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(serverChainEncryptedJSON(t, graph)))})
+	node, err := mobilemultihop.NewNodeProfile(row.Mode, row.Files, serverChainEncryptedJSON(t, profile), start, "")
+	if err != nil {
+		t.Fatal("captured prefix layer rejected", err)
+	}
+	launch, err = node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return launch, identity
+}
+func serverChainHysteriaSource(t *testing.T, p *serverChainHysteriaPeer, fault string) (*mobilemultihop.NodeChainServerPolicy, multihoprelay.NodeChainCapture) {
+	source := mobilemultihop.NodeChainServerSource{Schema: 1, EntryID: "encrypted-hysteria-entry", EntryNodeID: serverChainEncryptedProof(serverChainEncryptedKey(t)), EntryMode: "wg"}
+	for i := 0; i < p.prefixes; i++ {
+		launch, identity := serverChainHysteriaMemberSource(t, p, i, fault)
+		source.Nodes = append(source.Nodes, launch)
+		source.IdentitySources = append(source.IdentitySources, identity)
+	}
+	final, identity := serverChainHysteriaFinal(t, p, fault)
+	source.Nodes = append(source.Nodes, final)
+	source.IdentitySources = append(source.IdentitySources, identity)
+	policy, err := mobilemultihop.NewNodeChainServerPolicy(serverChainEncryptedJSON(t, source))
+	if err != nil {
+		t.Fatal("original Hysteria2 Server source rejected", err)
+	}
+	if p.prefixes == 0 {
+		// Keep the formerly mismatched fixture as an actual rejection control.
+		// A valid Hysteria2 transport never replaces its independent Router key
+		// asset or makes a private suffix endpoint a physical identity receipt.
+		_, staleIdentity := serverChainEncryptedMemberSource(t, p.original, len(p.original.prefixes), "")
+		foreign := source
+		foreign.IdentitySources = []string{staleIdentity}
+		if _, err := mobilemultihop.NewNodeChainServerPolicy(serverChainEncryptedJSON(t, foreign)); err == nil {
+			t.Fatal("direct Hysteria2 accepted a different identity endpoint")
+		}
+	}
+	descriptor := policy.Descriptor()
+	digest, err := descriptor.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := multihoprelay.NodeChainRequest{Schema: 1, SessionID: serverChainEncryptedRandom(t, 16), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: serverChainEncryptedRandom(t, 32), Peer: "192.168.210.1", AcquireExpiresAt: time.Now().Add(30 * time.Second).Unix(), Port: 28440}
+	for i := range descriptor.Members {
+		key := serverChainEncryptedKey(t)
+		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()))
+		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: serverChainEncryptedRandom(t, 24), Password: serverChainEncryptedRandom(t, 24)})
+	}
+	capture := multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: descriptor, RegistrySHA256: digest, OwnerID: serverChainEncryptedRandom(t, 32), Peer: request.Peer, Host: request.Peer, BootstrapDeadline: time.Now().Add(30 * time.Second).UTC()}
+	if err = capture.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return policy, capture
+}
+func serverChainHysteriaPendingClosed(v serverChainHysteriaReply) bool {
+	if v.Hysteria.TCP != 0 || v.Hysteria.UDP != 0 || v.Peer.Final.RouterQueries != 0 || v.Peer.Final.DNSQueries != 0 || v.Peer.Final.FinalPublicQueries != 0 || v.Peer.Final.CoverPackets != 0 || v.Peer.Final.DownloadBytes != 0 || v.Peer.Final.UploadBytes != 0 {
+		return false
+	}
+	for _, p := range v.Peer.Prefixes {
+		if p.ProofQueries != 0 {
+			return false
+		}
+	}
+	return true
+}
+func serverChainHysteriaScenario(t *testing.T, name string) {
+	parts := strings.Split(name, "/")
+	topology, fault := parts[0], parts[1]
+	carrier, err := net.InterfaceByName("rvpn-test")
+	if err != nil || carrier.MTU != serverChainEncryptedCarrierCapacity(t) || carrier.Flags&net.FlagUp == 0 {
+		t.Fatal("original Hysteria2 carrier capacity missing", err)
+	}
+	p := serverChainHysteriaStart(t, topology, fault)
+	policy, capture := serverChainHysteriaSource(t, p, fault)
+	if fault == "failed-selected-dns" {
+		p.control(t, "fail-dns")
+	}
+	if fault == "wrong-node" {
+		p.control(t, "wrong-node")
+	}
+	w := serverChainEncryptedWorkerStart(t, p.original, policy, capture, fault)
+	final := capture.Request.Users[len(capture.Request.Users)-1]
+	pending := w.call(t, "snapshot")
+	if !pending.OK || pending.Receipt == nil || pending.Receipt.Phase != multihoprelay.NodeChainPending || pending.Receipt.TrafficAllowed {
+		t.Fatal("Hysteria2 worker escaped original pending phase")
+	}
+	w.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+	if !serverChainHysteriaPendingClosed(p.control(t, "stats")) {
+		t.Fatal("pending Hysteria2 front reached application or proof authority")
+	}
+	if !w.call(t, "bootstrap").OK {
+		t.Fatal("original Hysteria2 bootstrap refused")
+	}
+	ready, failed := false, false
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		result := w.call(t, "snapshot")
+		if !result.OK {
+			failed = true
+			break
+		}
+		if result.Receipt.Phase == multihoprelay.NodeChainReady {
+			ready = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	negative := fault != "original" && fault != "joined-active-udp"
+	var active net.PacketConn
+	if negative {
+		if ready || !failed {
+			t.Fatal("invalid Hysteria2 authority did not remain closed", routerVPNSafeServerChainDiagnostics(w.process.log.text()))
+		}
+		w.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+	} else {
+		if !ready {
+			t.Fatal("original Hysteria2 suffix never proved ready", routerVPNSafeServerChainDiagnostics(w.process.log.text()))
+		}
+		targets, err := policy.ProofTargets(capture)
+		if err != nil || len(targets) != p.prefixes+1 {
+			t.Fatal("original Hysteria2 proof inventory changed", err)
+		}
+		for i, target := range targets {
+			w.health(t, capture.Request.Users[i], target.API, target.Token, target.Proof.NodeID)
+		}
+		w.selectedDNS(t)
+		before := p.control(t, "stats")
+		foreign := final
+		foreign.Password = serverChainEncryptedRandom(t, 24)
+		w.refuse(t, foreign, M.ParseSocksaddr("10.77.0.1:8787"))
+		for _, user := range capture.Request.Users[:len(capture.Request.Users)-1] {
+			w.refuse(t, user, uot.RequestDestination(2))
+		}
+		after := p.control(t, "stats")
+		if before.Peer.Final.RouterQueries != after.Peer.Final.RouterQueries || before.Peer.Final.DNSQueries != after.Peer.Final.DNSQueries {
+			t.Fatal("foreign positional credentials reached Hysteria2 final")
+		}
+		target := M.ParseSocksaddr("10.77.0.1:45999")
+		active = w.packets(t, target)
+		payload := []byte("original-hysteria-server-" + serverChainEncryptedRandom(t, 16))
+		if n, err := active.WriteTo(payload, target); err != nil || n != len(payload) {
+			t.Fatal("original Hysteria2 datagram write", err)
+		}
+		buffer := make([]byte, 2048)
+		n, from, err := active.ReadFrom(buffer)
+		if err != nil || from.String() != target.String() || !bytes.Equal(buffer[:n], payload) {
+			t.Fatal("actual Hysteria2 datagram echo", err)
+		}
+		if fault == "joined-active-udp" {
+			p.control(t, "drop-cover")
+			if _, err = active.WriteTo(payload, target); err != nil {
+				t.Fatal(err)
+			}
+			until := time.Now().Add(2 * time.Second)
+			for time.Now().Before(until) {
+				v := p.control(t, "stats")
+				if v.Peer.Final.CoverPackets > v.Peer.Final.CoverReplies {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			v := p.control(t, "stats")
+			if v.Peer.Final.CoverPackets <= v.Peer.Final.CoverReplies {
+				t.Fatal("no original held Hysteria2 datagram at Stop")
+			}
+		}
+	}
+	stats := p.control(t, "stats")
+	layerFailure := fault == "wrong-layer-key" || fault == "wrong-whitening"
+	packetFailure := fault == "wrong-first-key" || fault == "wrong-middle-key" || layerFailure
+	if !packetFailure && stats.Hysteria.RawUDP <= 0 {
+		t.Fatal("actual encrypted QUIC transport absent")
+	}
+	if fault == "wrong-password" && (stats.Hysteria.AuthFailures == 0 || stats.Hysteria.TCP != 0 || stats.Hysteria.UDP != 0) {
+		t.Fatal("wrong Hysteria2 credentials reached inner traffic")
+	}
+	if fault == "wrong-mask" || fault == "wrong-sni" || fault == "wrong-trust" || packetFailure {
+		if stats.Hysteria.TCP != 0 || stats.Hysteria.UDP != 0 || stats.Peer.Final.RouterQueries != 0 {
+			t.Fatal("failed original encrypted transport reached private authority")
+		}
+	}
+	packets, proofs := []int64{}, []uint64{}
+	for i, row := range stats.Peer.Prefixes {
+		packets = append(packets, row.RawUDP)
+		proofs = append(proofs, row.ProofQueries)
+		if p.prefixes != 0 && !packetFailure && (row.RawUDP <= 0 || row.ProofQueries == 0) {
+			t.Fatal("captured encrypted prefix missing", i)
+		}
+	}
+	for i, layer := range stats.Layers {
+		if layer.Mode == "off" {
+			continue
+		}
+		if layerFailure {
+			if i != 0 || layer.Raw <= 0 || layer.Rejected <= 0 || layer.Authenticated != 0 || layer.Forwarded != 0 {
+				t.Fatal("wrong layer authenticated or absent", i)
+			}
+		} else if layer.Raw <= 0 || layer.Authenticated <= 0 || layer.Forwarded <= 0 || layer.Rejected != 0 {
+			t.Fatal("original prefix layer bypassed", i)
+		}
+	}
+	if layerFailure {
+		for _, row := range stats.Peer.Prefixes {
+			if row.RawUDP != 0 || row.ProofQueries != 0 {
+				t.Fatal("rejected layer reached original packet device")
+			}
+		}
+	}
+	if ready && (stats.Hysteria.TCP <= 0 || stats.Hysteria.UDP <= 0 || stats.Hysteria.AuthFailures != 0 || stats.Peer.Final.RouterQueries == 0 || stats.Peer.Final.DNSQueries == 0 || stats.Peer.Final.FinalPublicQueries == 0 || stats.Peer.Final.CoverReplies == 0) {
+		t.Fatal("original Hysteria2 final/DNS/UDP proof incomplete")
+	}
+	w.stop(t)
+	if active != nil {
+		_ = active.SetReadDeadline(time.Now().Add(time.Second))
+		if _, _, err := active.ReadFrom(make([]byte, 2048)); err == nil {
+			t.Fatal("Hysteria2 packet survived original joined Stop")
+		}
+		_ = active.Close()
+	}
+	_ = p.original.process.input.Close()
+	p.original.process.join(t)
+	t.Log("HYSTERIA_SERVER_RECEIPT " + serverChainEncryptedJSON(t, map[string]any{"case": name, "capture_sha256": w.digest, "source_sha256": capture.Source.SourceSHA256, "prefixes": p.prefixes, "prefix_packets": packets, "prefix_proofs": proofs, "prefix_layers": stats.Layers, "ready": ready, "selected_dns": ready, "provider_udp": stats.Hysteria.RawUDP, "streams": stats.Hysteria.TCP, "packets": stats.Hysteria.UDP, "auth_refusals": stats.Hysteria.AuthFailures, "private_proofs": stats.Peer.Final.RouterQueries, "dns_queries": stats.Peer.Final.DNSQueries, "public_queries": stats.Peer.Final.FinalPublicQueries, "cover_replies": stats.Peer.Final.CoverReplies, "ss_tcp": stats.Peer.Final.FinalRawTCP, "ss_udp": stats.Peer.Final.FinalRawUDP, "retired": true, "worker_joined": true, "peer_joined": true}))
+}
+func TestServerChainHysteriaEncryptedNative(t *testing.T) {
+	if os.Getenv("ROUTERVPN_SERVER_CHAIN_NATIVE_NS") != "1" || os.Geteuid() != 0 {
+		t.Fatal("Hysteria2 requires original Linux namespace")
+	}
+	info, err := os.Stat("/proc/self/ns/net")
+	if err != nil || os.Getenv("ROUTERVPN_SERVER_CHAIN_OUTER_NETNS") == "" || fmt.Sprintf("%d:%d", info.Sys().(*syscall.Stat_t).Dev, info.Sys().(*syscall.Stat_t).Ino) == os.Getenv("ROUTERVPN_SERVER_CHAIN_OUTER_NETNS") {
+		t.Fatal("Hysteria2 retained outer namespace")
+	}
+	for _, name := range serverChainHysteriaCases {
+		if !t.Run(name, func(t *testing.T) { serverChainHysteriaScenario(t, name) }) {
+			return
+		}
+	}
+}
+func TestServerChainHysteriaEncryptedSource(t *testing.T) {
+	directory := os.Getenv("ROUTERVPN_HYSTERIA_SERVER_SOURCES")
+	if !filepath.IsAbs(directory) {
+		t.Fatal("original Hysteria2 source directory missing")
+	}
+	path := filepath.Join(directory, "original.json")
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() > 1<<20 {
+		t.Fatal("sealed Hysteria2 source missing", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range serverChainHysteriaCases {
+		t.Run(name, func(t *testing.T) {
+			parts := strings.Split(name, "/")
+			p := serverChainHysteriaKeys(t, parts[0])
+			d := json.NewDecoder(bytes.NewReader(raw))
+			d.DisallowUnknownFields()
+			if d.Decode(&p.reply) != nil || d.Decode(new(any)) != io.EOF {
+				t.Fatal("original source export changed")
+			}
+			// This source-only declaration never starts a native endpoint or grants a
+			// receipt. Native cases obtain this tuple from their actual namespace peer.
+			p.original.stats = p.reply.Peer
+			p.original.stats.Address = "192.168.210.2:51820"
+			p.reply.Layers = make([]serverChainHysteriaLayerReceipt, p.prefixes)
+			for i, layer := range p.layers {
+				p.reply.Layers[i].Mode = layer.Mode
+				if layer.Mode != "off" {
+					p.reply.Layers[i].Outer = "192.168.210.2:8388"
+				}
+			}
+
+			policy, capture := serverChainHysteriaSource(t, p, parts[1])
+			if policy.NativeCarrierRequired() != (p.prefixes != 0) || len(policy.ProofInventory()) != p.prefixes+1 {
+				t.Fatal("original Hysteria2 carrier/proof shape changed")
+			}
+			for i, proof := range policy.ProofInventory() {
+				if i < p.prefixes && proof.StartLayer != p.layers[i].Mode {
+					t.Fatal("captured prefix layer lost in native source", i)
+				}
+			}
+			config, err := policy.NativeConfig(capture)
+			if err != nil || !strings.Contains(config, `"type":"hysteria2"`) {
+				t.Fatal("real Hysteria2 native source missing", err)
+			}
+			routes, err := policy.FrontRoutes(capture)
+			if err != nil || len(routes) != p.prefixes+1 || !routes[len(routes)-1].Final || routes[len(routes)-1].UDPOverTCPVersion != 2 {
+				t.Fatal("Hysteria2 final positional front changed", err)
+			}
+			dns, err := policy.DNSCapture(capture)
+			if err != nil || dns.PolicySHA256 != capture.Source.DNSPolicySHA256 || dns.FinalTag != routes[len(routes)-1].Tag {
+				t.Fatal("Hysteria2 selected DNS detached", err)
+			}
+			foreign := capture
+			foreign.Source.Members = append([]multihoprelay.NodeChainMember(nil), capture.Source.Members...)
+			foreign.Source.Members[len(foreign.Source.Members)-1].SourceSHA256 = strings.Repeat("f", 64)
+			if _, err = policy.NativeConfig(foreign); err == nil {
+				t.Fatal("foreign Hysteria2 source acquired native ownership")
+			}
+		})
+	}
+}
