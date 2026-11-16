@@ -1,0 +1,232 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
+	ownedSOCKS "github.com/sagernet/sing-box/protocol/routervpnnodesocks"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+func desktopSOCKSExecutionPhysicalPreparation(t *testing.T, target, execution string) (*mobilemultihop.NodeChainExecutionPreparation, *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) {
+	t.Helper()
+	original := desktopSOCKSPhysicalPolicy(t, target)
+	prep, err := mobilemultihop.NewDesktopNodeChainSOCKSExecutionPreparation(original, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := prep.SOCKSDesktopPhysicalPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prep, physical
+}
+
+// The actual SOCKS control/association, paired final, gate, physical service and
+// Box constructors run. The unstarted TUN fixture grants no kernel authority.
+func desktopSOCKSExecutionPhysicalBox(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation, change func(map[string]any)) (*Box, *desktopTorBoxTUN, error) {
+	t.Helper()
+	source, err := prep.OriginalSOCKSSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture, err := ownedSOCKS.NewCapture(t.Context(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := capture.CloseContext(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	var tun *desktopTorBoxTUN
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		tun = &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: options.InterfaceName, index: 772, mtu: int(options.MTU)}
+		return tun, nil
+	})
+	outs := outbound.NewRegistry()
+	group.RegisterSelector(outs)
+	G.RegisterOutbound(outs)
+	shadowsocks.RegisterOutbound(outs)
+	if err := capture.Register(outs); err != nil {
+		t.Fatal(err)
+	}
+	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
+	ends := endpoint.NewRegistry()
+	wireguard.RegisterEndpoint(ends)
+	AWG.RegisterEndpoint(ends)
+	ds := dns.NewTransportRegistry()
+	DNST.RegisterUDP(ds)
+	services := boxService.NewRegistry()
+	routervpndesktoppt.RegisterNodeNetworkOwner(services)
+	ctx := Context(capture.Context(), ins, outs, ends, ds, services, certificate.NewRegistry())
+	ctx, err = RouterVPNNodeSOCKSExecutionContext(ctx, prep, capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var graph map[string]any
+	if err := json.Unmarshal([]byte(prep.Config()), &graph); err != nil {
+		t.Fatal(err)
+	}
+	if change != nil {
+		change(graph)
+	}
+	raw, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, raw)
+	if err != nil {
+		return nil, tun, err
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	instance, err := New(Options{Context: ctx, Options: options})
+	if instance != nil {
+		t.Cleanup(func() {
+			if err := instance.Close(); err != nil {
+				t.Error("original typed Box failed close", err)
+			}
+		})
+	}
+	return instance, tun, err
+}
+
+func TestRouterVPNDesktopSOCKSExecutionPhysicalActualBox(t *testing.T) {
+	for _, setting := range []string{"server", "auto"} {
+		t.Run(setting, func(t *testing.T) {
+			prep, physical := desktopSOCKSExecutionPhysicalPreparation(t, runtime.GOOS, setting)
+			instance, tun, err := desktopSOCKSExecutionPhysicalBox(t, prep, nil)
+			if err != nil || instance == nil || tun == nil {
+				t.Fatal("typed execution Box lost original construction", err)
+			}
+			if !routerVPNDesktopNodeChainSOCKSExecutionPhysicalTarget(physical, runtime.GOOS) || instance.routerVPNNodeOptions == "" || instance.routerVPNNodeChainExecutionOptions == "" {
+				t.Fatal("typed execution Box lost original physical receipt")
+			}
+			_, network, err := instance.routerVPNDesktopNodePhysical(physical)
+			if err != nil || network == nil || network.Current() || network.SocketCurrent() || tun.ready || tun.claimed {
+				t.Fatal("closed SOCKS execution fabricated physical readiness", err)
+			}
+			original, err := physical.OriginalDesktopSOCKSPolicy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = instance.routerVPNDesktopNodePhysical(original); err == nil {
+				t.Fatal("ordinary Local policy borrowed execution physical authority")
+			}
+			captured, err := routerVPNNodeChainExecutionPhysicalPolicy(prep)
+			if err != nil || captured != physical {
+				t.Fatal("MTU dispatch changed the exact SOCKS physical owner", err)
+			}
+			if owner, err := instance.routerVPNDesktopNodeActivatePhysical(physical); err == nil || owner != nil {
+				t.Fatal("unprepared SOCKS execution acquired a TUN grant")
+			}
+			if err := instance.RouterVPNStrategyStart(); err == nil {
+				t.Fatal("SOCKS execution bypassed original physical preparation")
+			}
+			if network.SocketCurrent() || tun.ready || tun.claimed {
+				t.Fatal("unprepared SOCKS execution opened physical traffic")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopSOCKSExecutionPhysicalRefusesChangedGraph(t *testing.T) {
+	for _, fault := range []string{"middle-user", "middle-password", "middle-detour", "final-detour", "dns", "physical-source", "mtu", "open-gate"} {
+		t.Run(fault, func(t *testing.T) {
+			prep, physical := desktopSOCKSExecutionPhysicalPreparation(t, runtime.GOOS, "auto")
+			original, _ := physical.OriginalDesktopSOCKSPolicy()
+			_, meta, capture, err := original.ReadValidated()
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, tun, err := desktopSOCKSExecutionPhysicalBox(t, prep, func(graph map[string]any) {
+				find := func(tag string) map[string]any {
+					for _, value := range graph["outbounds"].([]any) {
+						row := value.(map[string]any)
+						if row["tag"] == tag {
+							return row
+						}
+					}
+					t.Fatal("captured member missing")
+					return nil
+				}
+				switch fault {
+				case "middle-user":
+					find(meta.Prefixes[1].Tag)["username"] = "foreign-user"
+				case "middle-password":
+					find(meta.Prefixes[1].Tag)["password"] = "foreign-password"
+				case "middle-detour":
+					delete(find(meta.Prefixes[1].Tag), "detour")
+				case "final-detour":
+					find(meta.Prefixes[2].Tag)["detour"] = meta.Prefixes[0].Tag
+				case "dns":
+					found := false
+					for _, value := range graph["dns"].(map[string]any)["servers"].([]any) {
+						row := value.(map[string]any)
+						if row["tag"] == capture.SelectedDNS.Tag {
+							row["server"] = "192.168.50.134"
+							found = true
+						}
+					}
+					if !found {
+						t.Fatal("original DNS missing")
+					}
+				case "physical-source":
+					graph["services"].([]any)[0].(map[string]any)["source_sha256"] = strings.Repeat("e", 64)
+				case "mtu":
+					row := graph["inbounds"].([]any)[0].(map[string]any)
+					row["mtu"] = row["mtu"].(float64) + 16
+				case "open-gate":
+					graph["route"].(map[string]any)["final"] = mobilemultihop.SelectorTag
+				}
+			})
+			if err == nil || instance != nil || tun != nil {
+				t.Fatal("changed SOCKS execution reached original native construction", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopSOCKSExecutionPhysicalKeepsTarget(t *testing.T) {
+	for _, target := range []string{"linux", "windows", "darwin"} {
+		t.Run(target, func(t *testing.T) {
+			_, policy := desktopSOCKSExecutionPhysicalPreparation(t, target, "auto")
+			if !routerVPNDesktopNodeChainSOCKSExecutionPhysicalTarget(policy, target) {
+				t.Fatal("original SOCKS execution target refused")
+			}
+			for _, foreign := range []string{"linux", "windows", "darwin", "android", ""} {
+				if foreign != target && routerVPNDesktopNodeChainSOCKSExecutionPhysicalTarget(policy, foreign) {
+					t.Fatal("SOCKS execution borrowed foreign target")
+				}
+			}
+		})
+	}
+	if routerVPNDesktopNodeChainSOCKSExecutionPhysicalTarget(nil, "linux") {
+		t.Fatal("missing SOCKS execution policy admitted")
+	}
+}

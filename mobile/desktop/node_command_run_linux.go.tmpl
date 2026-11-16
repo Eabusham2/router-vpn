@@ -316,6 +316,14 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		}
 		graph = connectExecutionConstruction.ctx
 	}
+	var socksExecutionConstruction *routerVPNDesktopSOCKSExecutionConstruction
+	if _, ok := policy.(*mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy); ok {
+		socksExecutionConstruction, err = routerVPNNewDesktopSOCKSExecutionConstruction(graph, executionPreparation)
+		if err != nil {
+			return err
+		}
+		graph = socksExecutionConstruction.ctx
+	}
 	parsed, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(policy.Config()))
 	if err != nil {
 		return err
@@ -397,6 +405,12 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 			control.preparation = prepared
 		}
 		err = prepareErr
+	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
+		prepared, prepareErr := instance.RouterVPNDesktopLinuxNodeChainSOCKSExecutionPreparePhysicalOwned(original)
+		if prepared != nil {
+			control.preparation = prepared
+		}
+		err = prepareErr
 	default:
 		return routerVPNExternalFailure
 	}
@@ -430,6 +444,8 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		physical, err = instance.RouterVPNDesktopLinuxNodeChainExecutionActivatePhysical(proof, original)
 	case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
 		physical, err = instance.RouterVPNDesktopLinuxNodeChainCONNECTExecutionActivatePhysical(proof, original)
+	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
+		physical, err = instance.RouterVPNDesktopLinuxNodeChainSOCKSExecutionActivatePhysical(proof, original)
 	case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
 		physical, err = instance.RouterVPNDesktopLinuxCandidatePrefixActivatePhysical(proof, original)
 	}
@@ -454,6 +470,8 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		cover, err = instance.RouterVPNDesktopLinuxNodeChainExecutionActivateCover(activation, original, physical)
 	case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
 		cover, err = instance.RouterVPNDesktopLinuxNodeChainCONNECTExecutionActivateCover(activation, original, physical)
+	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
+		cover, err = instance.RouterVPNDesktopLinuxNodeChainSOCKSExecutionActivateCover(activation, original, physical)
 	case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
 		cover, err = instance.RouterVPNDesktopLinuxCandidatePrefixActivateCover(activation, original, physical)
 	}
@@ -512,6 +530,11 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 			}
 			if connectExecutionConstruction != nil {
 				if err := connectExecutionConstruction.current(call); err != nil {
+					return err
+				}
+			}
+			if socksExecutionConstruction != nil {
+				if err := socksExecutionConstruction.current(call); err != nil {
 					return err
 				}
 			}

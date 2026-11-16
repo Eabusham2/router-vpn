@@ -791,6 +791,14 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 		}
 		ctx = connectExecutionConstruction.ctx
 	}
+	var socksExecutionConstruction *routerVPNDesktopSOCKSExecutionConstruction
+	if _, ok := physicalPolicy.(*mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy); ok {
+		socksExecutionConstruction, err = routerVPNNewDesktopSOCKSExecutionConstruction(ctx, executionPreparation)
+		if err != nil {
+			return err
+		}
+		ctx = socksExecutionConstruction.ctx
+	}
 	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, raw)
 	if err != nil {
 		return routerVPNExternalFailure
@@ -940,6 +948,8 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 			captured, prepareErr = instance.RouterVPNDesktopNodeChainExecutionPreparePhysicalOwned(policy)
 		case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
 			captured, prepareErr = instance.RouterVPNDesktopNodeChainCONNECTExecutionPreparePhysicalOwned(policy)
+		case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
+			captured, prepareErr = instance.RouterVPNDesktopNodeChainSOCKSExecutionPreparePhysicalOwned(policy)
 		case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
 			captured, prepareErr = instance.RouterVPNDesktopCandidatePrefixPreparePhysicalOwned(policy)
 		default:
@@ -978,6 +988,8 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 			physical, err = instance.RouterVPNDesktopNodeChainExecutionActivatePhysical(policy)
 		case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
 			physical, err = instance.RouterVPNDesktopNodeChainCONNECTExecutionActivatePhysical(policy)
+		case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
+			physical, err = instance.RouterVPNDesktopNodeChainSOCKSExecutionActivatePhysical(policy)
 		case *mobilemultihop.DesktopNodeCandidatePreparationPolicy:
 			physical, err = instance.RouterVPNDesktopCandidatePrefixActivatePhysical(policy)
 		default:
@@ -1035,6 +1047,11 @@ func routerVPNRunNodeMTUTypedFamiliesCaptured(parent context.Context, directory,
 		execution, err = routerVPNNewNodeChainExecutionRuntime(ctx, files, executionPreparation, transfer, instance, func(call context.Context) error {
 			if connectExecutionConstruction != nil {
 				if err := connectExecutionConstruction.current(call); err != nil {
+					return err
+				}
+			}
+			if socksExecutionConstruction != nil {
+				if err := socksExecutionConstruction.current(call); err != nil {
 					return err
 				}
 			}

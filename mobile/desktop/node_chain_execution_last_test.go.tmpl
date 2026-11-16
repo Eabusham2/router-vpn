@@ -24,11 +24,17 @@ func desktopExecutionSavedChoice(t *testing.T, prep *mobilemultihop.NodeChainExe
 	if json.Unmarshal([]byte(projection.Source()), &source) != nil {
 		t.Fatal("source fixture")
 	}
-	policy, err := mobilemultihop.NewNodeChainExecutionPolicy(projection.Source())
+	var policy *mobilemultihop.NodeChainExecutionPolicy
+	var err error
+	if prep.RequiresSOCKSExecutionObserver() {
+		policy, err = mobilemultihop.NewNodeChainSOCKSExecutionPolicy(prep, projection.Source())
+	} else {
+		policy, err = mobilemultihop.NewNodeChainExecutionPolicy(projection.Source())
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	physical, _ := prep.DesktopPhysicalPolicy()
+	physical, _ := routerVPNDesktopExecutionPhysicalPolicy(prep)
 	_, meta, _, _ := physical.PhysicalReadValidated()
 	descriptor, _ := source.Server.Digest()
 	input := sha256.Sum256([]byte(prep.LocalSource()))

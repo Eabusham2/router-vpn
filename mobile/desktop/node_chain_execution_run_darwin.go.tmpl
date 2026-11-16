@@ -151,6 +151,14 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		}
 		graph = connectConstruction.ctx
 	}
+	var socksConstruction *routerVPNDesktopSOCKSExecutionConstruction
+	if control.socksPolicy != nil {
+		socksConstruction, err = routerVPNNewDesktopSOCKSExecutionConstruction(graph, control.prep)
+		if err != nil {
+			return err
+		}
+		graph = socksConstruction.ctx
+	}
 	parsed, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(control.prep.Config()))
 	if err != nil {
 		return err
@@ -212,6 +220,12 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		if owned != nil {
 			prepared = owned
 		}
+	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
+		owned, e := instance.RouterVPNDesktopDarwinNodeChainSOCKSExecutionPreparePhysicalOwned(captured)
+		err = e
+		if owned != nil {
+			prepared = owned
+		}
 	default:
 		return routerVPNExternalFailure
 	}
@@ -252,6 +266,8 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		physical, err = instance.RouterVPNDesktopDarwinNodeChainExecutionActivatePhysical(captured)
 	case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
 		physical, err = instance.RouterVPNDesktopDarwinNodeChainCONNECTExecutionActivatePhysical(captured)
+	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
+		physical, err = instance.RouterVPNDesktopDarwinNodeChainSOCKSExecutionActivatePhysical(captured)
 	default:
 		return routerVPNExternalFailure
 	}
@@ -267,6 +283,11 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 				return err
 			}
 		}
+		if socksConstruction != nil {
+			if err := socksConstruction.current(call); err != nil {
+				return err
+			}
+		}
 		if err := physical.CurrentContext(call); err != nil {
 			return err
 		}
@@ -278,6 +299,11 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		}
 		if connectConstruction != nil {
 			if err := connectConstruction.current(call); err != nil {
+				return err
+			}
+		}
+		if socksConstruction != nil {
+			if err := socksConstruction.current(call); err != nil {
 				return err
 			}
 		}

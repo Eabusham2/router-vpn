@@ -188,6 +188,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_native_root_phases_runner.py',
                              ROOT/'deploy/test_desktop_socks_execution_construction.py',
                              ROOT/'deploy/test_desktop_socks_execution_construction_runner.py',
+                             ROOT/'deploy/test_desktop_socks_execution_child.py',
+                             ROOT/'deploy/test_desktop_socks_execution_child_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray.py',
                              ROOT/'deploy/test_mobile_imported_socks_xray_runner.py',
@@ -1649,6 +1651,14 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_construction.py',
                  '--core', source, '--tags='+','.join(tags(target)),
                  *(['--without-race'] if not race else [])], cwd=source, env=env, timeout=1200)
+            run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_child_runner.py'],
+                cwd=ROOT, env=env, timeout=60)
+            # Preserve each existing 120s test / 600s compiler bound. Separate
+            # source-bound phases each join two serial original processes.
+            for socks_phase in ('baselines', 'controls'):
+                run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_child.py',
+                     '--core', source, '--tags='+','.join(tags(target)), '--phase', socks_phase,
+                     *(['--without-race'] if not race else [])], cwd=source, env=env, timeout=1200)
             verify_imported_desktop_native_dns(source, target, env)
             verify_imported_desktop_native_openvpn(source, target, env)
             run([sys.executable, ROOT/'deploy/test_desktop_pt_inventory.py', source,

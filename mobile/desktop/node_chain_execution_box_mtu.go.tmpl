@@ -113,11 +113,14 @@ func (owner *RouterVPNDesktopNodePhysical) ConfirmExecutionDarwinMTUReader(ctx c
 	})
 }
 
-// Both factories return sealed concrete policies. A schema discriminator alone
+// Every factory returns a sealed concrete policy. A schema discriminator alone
 // grants no authority, and typed validation failure never falls back families.
 func routerVPNNodeChainExecutionPhysicalPolicy(preparation *mobilemultihop.NodeChainExecutionPreparation) (mobilemultihop.DesktopPhysicalPolicy, error) {
 	if preparation == nil {
 		return nil, errRouterVPNExecutionOwner
+	}
+	if preparation.RequiresSOCKSExecutionObserver() {
+		return preparation.SOCKSDesktopPhysicalPolicy()
 	}
 	if preparation.RequiresCONNECTExecutionObserver() {
 		return preparation.CONNECTDesktopPhysicalPolicy()

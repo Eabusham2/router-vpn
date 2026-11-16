@@ -25,6 +25,7 @@ type routerVPNDarwinNodeChainExecutionControl struct {
 	prep          *mobilemultihop.NodeChainExecutionPreparation
 	policy        *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
 	connectPolicy *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy
+	socksPolicy   *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
 	retiring      atomic.Bool
 	retired       atomic.Bool
 	native        *routerVPNDarwinNodeChainNative // assigned by the one joined command loop
@@ -47,7 +48,7 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) original(ctx context.Cont
 }
 
 func (owner *routerVPNDarwinNodeChainExecutionControl) compile(ctx context.Context, files *routerVPNExternalFiles) (mobilemultihop.DesktopPhysicalPolicy, error) {
-	if owner == nil || owner.prep != nil || owner.policy != nil || owner.connectPolicy != nil || owner.retiring.Load() || files == nil || files.root == nil ||
+	if owner == nil || owner.prep != nil || owner.policy != nil || owner.connectPolicy != nil || owner.socksPolicy != nil || owner.retiring.Load() || files == nil || files.root == nil ||
 		owner.original(ctx) != nil || owner.workspace(files) != nil {
 		return nil, routerVPNExternalFailure
 	}
@@ -66,6 +67,8 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) compile(ctx context.Conte
 		owner.policy = captured
 	case *mobilemultihop.DesktopNodeChainCONNECTExecutionPhysicalPolicy:
 		owner.connectPolicy = captured
+	case *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy:
+		owner.socksPolicy = captured
 	default:
 		return nil, routerVPNExternalFailure
 	}
@@ -77,7 +80,7 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) prepare(ctx context.Conte
 	if owner == nil || owner.current(ctx) != nil {
 		return nil, routerVPNExternalFailure
 	}
-	if owner.policy != nil && owner.policy != policy || owner.connectPolicy != nil && owner.connectPolicy != policy {
+	if owner.policy != nil && owner.policy != policy || owner.connectPolicy != nil && owner.connectPolicy != policy || owner.socksPolicy != nil && owner.socksPolicy != policy {
 		return nil, routerVPNExternalFailure
 	}
 	files := owner.capture.Files()
@@ -90,7 +93,7 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) prepare(ctx context.Conte
 }
 
 func (owner *routerVPNDarwinNodeChainExecutionControl) current(ctx context.Context) error {
-	if owner == nil || owner.prep == nil || (owner.policy == nil) == (owner.connectPolicy == nil) || owner.retiring.Load() || owner.original(ctx) != nil ||
+	if owner == nil || owner.prep == nil || !owner.exclusivePolicy() || owner.retiring.Load() || owner.original(ctx) != nil ||
 		owner.prep.SourceSHA256() != owner.execution {
 		return routerVPNExternalFailure
 	}
@@ -135,8 +138,15 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) retirementReceipt() error
 // Retain an exclusive concrete owner. The interface is only a dispatch view;
 // neither a foreign policy nor a failed typed constructor can fall back.
 func (owner *routerVPNDarwinNodeChainExecutionControl) physicalPolicy() (mobilemultihop.DesktopPhysicalPolicy, error) {
-	if owner == nil || owner.prep == nil || (owner.policy == nil) == (owner.connectPolicy == nil) {
+	if owner == nil || owner.prep == nil || !owner.exclusivePolicy() {
 		return nil, routerVPNExternalFailure
+	}
+	if owner.socksPolicy != nil {
+		p, err := owner.prep.SOCKSDesktopPhysicalPolicy()
+		if err != nil || p != owner.socksPolicy {
+			return nil, routerVPNExternalFailure
+		}
+		return p, nil
 	}
 	if owner.connectPolicy != nil {
 		p, err := owner.prep.CONNECTDesktopPhysicalPolicy()
@@ -150,4 +160,21 @@ func (owner *routerVPNDarwinNodeChainExecutionControl) physicalPolicy() (mobilem
 		return nil, routerVPNExternalFailure
 	}
 	return policy, nil
+}
+
+func (owner *routerVPNDarwinNodeChainExecutionControl) exclusivePolicy() bool {
+	if owner == nil {
+		return false
+	}
+	count := 0
+	if owner.policy != nil {
+		count++
+	}
+	if owner.connectPolicy != nil {
+		count++
+	}
+	if owner.socksPolicy != nil {
+		count++
+	}
+	return count == 1
 }

@@ -19,3 +19,12 @@ func (n *NodeNetworkOwner) PrepareNodeChainSOCKSPhysicalPolicy(policy *mobilemul
 	})
 }
 
+func (n *NodeNetworkOwner) PrepareNodeChainSOCKSExecutionPhysicalPolicy(policy *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) error {
+	return n.prepareNodePhysicalLinuxLifecycle(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		owned, err := mobiletor.NewDesktopLinuxNodeSocketPolicy(ctx, capture, options)
+		if owned == nil {
+			return nil, err
+		}
+		return owned, err
+	})
+}

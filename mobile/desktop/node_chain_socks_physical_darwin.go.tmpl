@@ -23,3 +23,16 @@ func (n *NodeNetworkOwner) CloseNodeChainSOCKSPhysicalSource(ctx context.Context
 	return n.closeOrderedPhysicalSource(ctx, policy, "node-chain-socks")
 }
 
+func (n *NodeNetworkOwner) PrepareNodeChainSOCKSExecutionPhysicalPolicy(policy *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) error {
+	return n.prepareNodePhysicalDarwin(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopDarwinSocketOptions) (desktopDarwinPhysicalPolicy, error) {
+		owned, err := mobiletor.NewDesktopDarwinSocketPolicy(ctx, capture, options)
+		if owned == nil {
+			return nil, err
+		}
+		return owned, err
+	})
+}
+
+func (n *NodeNetworkOwner) CloseNodeChainSOCKSExecutionPhysicalSource(ctx context.Context, policy *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) error {
+	return n.closeOrderedPhysicalSource(ctx, policy, "node-chain-socks-execution")
+}

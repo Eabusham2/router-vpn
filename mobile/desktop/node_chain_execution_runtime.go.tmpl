@@ -257,7 +257,9 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 		return err
 	}
 	var adoption any
-	if owner.prep.RequiresCONNECTExecutionObserver() {
+	if owner.prep.RequiresSOCKSExecutionObserver() {
+		adoption, err = mobilemultihop.NewDesktopNodeChainSOCKSExecutionAdoptionRecord(projection, identity, owner.transfer)
+	} else if owner.prep.RequiresCONNECTExecutionObserver() {
 		adoption, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionAdoptionRecord(projection, identity, owner.transfer)
 	} else {
 		adoption, err = mobilemultihop.NewDesktopNodeChainExecutionAdoptionRecord(projection, identity, owner.transfer)
@@ -269,7 +271,15 @@ func (owner *routerVPNNodeChainExecutionRuntime) run(ctx context.Context) (failu
 		return err
 	}
 	var saved mobilemultihop.NodeChainExecutionLast
-	if owner.prep.RequiresCONNECTExecutionObserver() {
+	if owner.prep.RequiresSOCKSExecutionObserver() {
+		typed, ok := controller.(interface {
+			CaptureSOCKSDesktopLastContext(context.Context) (mobilemultihop.NodeChainExecutionLast, error)
+		})
+		if !ok {
+			return routerVPNExternalFailure
+		}
+		saved, err = typed.CaptureSOCKSDesktopLastContext(startup)
+	} else if owner.prep.RequiresCONNECTExecutionObserver() {
 		typed, ok := controller.(interface {
 			CaptureCONNECTDesktopLastContext(context.Context) (mobilemultihop.NodeChainExecutionLast, error)
 		})
@@ -408,7 +418,12 @@ func (owner *routerVPNNodeChainExecutionRuntime) heartbeat(ctx context.Context, 
 		InterfaceIndex: uint32(record.Index), MTU: record.MTU, ObservedAt: time.Now().UnixMilli(), Progress: state.controller.Load().value.Progress()}
 	var heartbeat any = ready
 	var readyErr error
-	if owner.prep.RequiresCONNECTExecutionObserver() {
+	if owner.prep.RequiresSOCKSExecutionObserver() {
+		typed := mobilemultihop.DesktopNodeChainSOCKSExecutionReadyRecord(ready)
+		typed.Kind = "routervpn-node-chain-socks-execution-ready-v1"
+		readyErr = typed.Validate(projection, owner.transfer)
+		heartbeat = typed
+	} else if owner.prep.RequiresCONNECTExecutionObserver() {
 		typed := mobilemultihop.DesktopNodeChainCONNECTExecutionReadyRecord(ready)
 		typed.Kind = "routervpn-node-chain-connect-execution-ready-v1"
 		readyErr = typed.Validate(projection, owner.transfer)
@@ -433,6 +448,9 @@ func routerVPNDesktopExecutionProjectionPhysical(projection *mobilemultihop.Node
 	if prep == nil || projection == nil {
 		return nil, routerVPNExternalFailure
 	}
+	if prep.RequiresSOCKSExecutionObserver() {
+		return projection.SOCKSDesktopPhysicalPolicy()
+	}
 	if prep.RequiresCONNECTExecutionObserver() {
 		return projection.CONNECTDesktopPhysicalPolicy()
 	}
@@ -443,6 +461,9 @@ func routerVPNDesktopExecutionLastCapture(prep *mobilemultihop.NodeChainExecutio
 	if prep == nil {
 		return mobilemultihop.NodeChainExecutionLast{}, false, routerVPNExternalFailure
 	}
+	if prep.RequiresSOCKSExecutionObserver() {
+		return prep.SOCKSDesktopLast()
+	}
 	if prep.RequiresCONNECTExecutionObserver() {
 		return prep.CONNECTDesktopLast()
 	}
@@ -452,6 +473,9 @@ func routerVPNDesktopExecutionLastCapture(prep *mobilemultihop.NodeChainExecutio
 func routerVPNDesktopExecutionLastCurrent(last mobilemultihop.NodeChainExecutionLast, projection *mobilemultihop.NodeChainExecutionProjection, prep *mobilemultihop.NodeChainExecutionPreparation) error {
 	if prep == nil || projection == nil {
 		return routerVPNExternalFailure
+	}
+	if prep.RequiresSOCKSExecutionObserver() {
+		return last.ValidateSOCKSDesktopProjection(projection)
 	}
 	if prep.RequiresCONNECTExecutionObserver() {
 		return last.ValidateCONNECTDesktopProjection(projection)

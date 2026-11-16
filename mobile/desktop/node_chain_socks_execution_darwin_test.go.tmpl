@@ -1,0 +1,105 @@
+//go:build darwin
+
+package main
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"strings"
+	"testing"
+)
+
+func TestRouterVPNNodeChainSOCKSExecutionDarwinControl(t *testing.T) {
+	for _, choice := range []string{"server", "auto"} {
+		t.Run(choice, func(t *testing.T) {
+			prep := desktopSOCKSExecutionCommandPreparation(t, "darwin", choice)
+			control, files, _, _ := routerVPNDarwinExecutionControlFixtureFromPreparation(t, prep)
+			ctx := routerVPNDarwinExecutionControlContext(t)
+			policy, err := control.compile(ctx, files)
+			if err != nil || policy == nil || control.policy != nil || control.connectPolicy != nil || control.socksPolicy == nil || policy != control.socksPolicy || control.current(ctx) != nil {
+				t.Fatal("typed source lost exact SOCKS physical owner", err)
+			}
+			if prepared, err := control.prepare(ctx, policy); err != nil || prepared == nil {
+				t.Fatal(err)
+			}
+			if _, err := control.prep.DesktopPhysicalPolicy(); err == nil {
+				t.Fatal("SOCKS capture borrowed paired physical policy")
+			}
+			if _, err := control.compile(ctx, files); err == nil {
+				t.Fatal("source replay replaced original")
+			}
+		})
+	}
+	for _, fault := range []string{"policy", "preparation", "mixed", "mixed-connect", "missing", "source", "session", "cancelled", "retiring", "foreign-prepare"} {
+		t.Run(fault, func(t *testing.T) {
+			prep := desktopSOCKSExecutionCommandPreparation(t, "darwin", "auto")
+			control, files, _, _ := routerVPNDarwinExecutionControlFixtureFromPreparation(t, prep)
+			ctx, cancel := context.WithCancel(routerVPNDarwinExecutionControlContext(t))
+			defer cancel()
+			original, err := control.compile(ctx, files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign, err := mobilemultihop.ParseDesktopNodeChainSOCKSExecutionPreparation(control.prep.Source())
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreignPhysical, err := foreign.SOCKSDesktopPhysicalPolicy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "policy":
+				control.socksPolicy = foreignPhysical
+			case "preparation":
+				control.prep = foreign
+			case "mixed":
+				paired := desktopNodeChainCommandPolicyWithIdentity(t, 3, "darwin", 1400, true)
+				other, e := mobilemultihop.NewDesktopNodeChainExecutionPreparation(paired, "auto")
+				if e != nil {
+					t.Fatal(e)
+				}
+				control.policy, e = other.DesktopPhysicalPolicy()
+				if e != nil {
+					t.Fatal(e)
+				}
+			case "mixed-connect":
+				other := desktopCONNECTExecutionCommandPreparation(t, "darwin", "auto")
+				control.connectPolicy, err = other.CONNECTDesktopPhysicalPolicy()
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "missing":
+				control.socksPolicy = nil
+			case "source":
+				control.execution = strings.Repeat("f", 64)
+			case "session":
+				control.scope.Session = strings.Repeat("f", 32)
+			case "cancelled":
+				cancel()
+			case "retiring":
+				control.retiring.Store(true)
+			case "foreign-prepare":
+				original = foreignPhysical
+			}
+			if _, err := control.prepare(ctx, original); err == nil {
+				t.Fatal("foreign typed preparation admitted", fault)
+			}
+			if fault != "foreign-prepare" && control.current(ctx) == nil {
+				t.Fatal("changed original owner current", fault)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeChainSOCKSExecutionDarwinEarlyStop(t *testing.T) {
+	testRouterVPNNodeChainExecutionDarwinEarlyStop(t, func(t *testing.T, choice string) (*routerVPNDarwinNodeChainExecutionControl, *routerVPNExternalFiles, *routerVPNDarwinChainCaptureRead, *routerVPNDarwinChainBootstrapRead) {
+		return routerVPNDarwinExecutionControlFixtureFromPreparation(t, desktopSOCKSExecutionCommandPreparation(t, "darwin", choice))
+	})
+}
+
+func TestRouterVPNNodeChainSOCKSExecutionDarwinMailboxStartup(t *testing.T) {
+	testRouterVPNNodeChainExecutionDarwinMailboxStartup(t, func(t *testing.T, choice string) (*routerVPNDarwinNodeChainExecutionControl, *routerVPNExternalFiles, *routerVPNDarwinChainCaptureRead, *routerVPNDarwinChainBootstrapRead) {
+		return routerVPNDarwinExecutionControlFixtureFromPreparation(t, desktopSOCKSExecutionCommandPreparation(t, "darwin", choice))
+	})
+}

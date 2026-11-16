@@ -1,0 +1,42 @@
+package box
+
+import (
+	"errors"
+	"runtime"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The execution policy retains the original SOCKS association source and the
+// exact physical entry scope. Neither an imported proxy address nor the
+// negotiated relay may acquire a direct host permission.
+func routerVPNDesktopNodeChainSOCKSExecutionPhysicalTarget(policy *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy, target string) bool {
+	if policy == nil {
+		return false
+	}
+	original, err := policy.OriginalDesktopSOCKSPolicy()
+	if err != nil || !routerVPNDesktopNodeChainSOCKSPhysicalTarget(original, target) {
+		return false
+	}
+	_, meta, _, err := policy.PhysicalReadValidated()
+	return err == nil && meta.Kind == "node-chain-socks-execution" && meta.TargetOS == target
+}
+
+func (s *Box) RouterVPNDesktopNodeChainSOCKSExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) (*RouterVPNDesktopNodePreparation, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainSOCKSExecutionPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered SOCKS execution lost its original Windows physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainSOCKSExecutionPhysicalPolicy(policy)
+}
+
+func (s *Box) RouterVPNDesktopNodeChainSOCKSExecutionActivatePhysical(policy *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if runtime.GOOS != "windows" || !routerVPNDesktopNodeChainSOCKSExecutionPhysicalTarget(policy, "windows") {
+		return nil, errors.New("ordered SOCKS execution lost its original Windows physical activation")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

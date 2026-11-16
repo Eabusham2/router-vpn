@@ -1,0 +1,42 @@
+//go:build darwin
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+)
+
+type RouterVPNDesktopDarwinNodeChainSOCKSExecutionPreparation struct {
+	network *routervpndesktoppt.NodeNetworkOwner
+	policy  *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodeChainSOCKSExecutionPreparePhysicalOwned(policy *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) (*RouterVPNDesktopDarwinNodeChainSOCKSExecutionPreparation, error) {
+	if !routerVPNDesktopNodeChainSOCKSExecutionPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("ordered SOCKS execution lost its original Darwin physical preparation")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopDarwinNodeChainSOCKSExecutionPreparation{network: network, policy: policy}
+	return owner, network.PrepareNodeChainSOCKSExecutionPhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopDarwinNodeChainSOCKSExecutionPreparation) CloseSource(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("ordered SOCKS execution cleanup lost its original Darwin preparation")
+	}
+	return p.network.CloseNodeChainSOCKSExecutionPhysicalSource(ctx, p.policy)
+}
+
+func (s *Box) RouterVPNDesktopDarwinNodeChainSOCKSExecutionActivatePhysical(policy *mobilemultihop.DesktopNodeChainSOCKSExecutionPhysicalPolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if !routerVPNDesktopNodeChainSOCKSExecutionPhysicalTarget(policy, "darwin") {
+		return nil, errors.New("ordered SOCKS execution lost its original Darwin physical activation")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}

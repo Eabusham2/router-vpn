@@ -35,7 +35,9 @@ func routerVPNNodeChainExecutionCommandCapture(files *routerVPNExternalFiles, se
 		return nil, routerVPNExternalFailure
 	}
 	var prep *mobilemultihop.NodeChainExecutionPreparation
-	if string(header.Schema) == "4" {
+	if string(header.Schema) == "3" {
+		prep, err = mobilemultihop.ParseDesktopNodeChainSOCKSExecutionPreparation(string(raw))
+	} else if string(header.Schema) == "4" {
 		prep, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionPreparation(string(raw))
 	} else {
 		prep, err = mobilemultihop.ParseDesktopNodeChainExecutionPreparation(string(raw))
@@ -66,6 +68,9 @@ func routerVPNDesktopExecutionPhysicalPolicy(prep *mobilemultihop.NodeChainExecu
 	if prep == nil {
 		return nil, routerVPNExternalFailure
 	}
+	if prep.RequiresSOCKSExecutionObserver() {
+		return prep.SOCKSDesktopPhysicalPolicy()
+	}
 	if prep.RequiresCONNECTExecutionObserver() {
 		return prep.CONNECTDesktopPhysicalPolicy()
 	}
@@ -75,6 +80,9 @@ func routerVPNDesktopExecutionPhysicalPolicy(prep *mobilemultihop.NodeChainExecu
 func routerVPNDesktopExecutionPhysicalKind(prep *mobilemultihop.NodeChainExecutionPreparation) string {
 	if prep == nil {
 		return ""
+	}
+	if prep.RequiresSOCKSExecutionObserver() {
+		return "node-chain-socks-execution"
 	}
 	if prep.RequiresCONNECTExecutionObserver() {
 		return "node-chain-connect-execution"

@@ -269,7 +269,15 @@ type desktopExecutionRuntimeFixture struct {
 func newDesktopExecutionRuntimeFixture(t *testing.T) *desktopExecutionRuntimeFixture {
 	t.Helper()
 	prep, projection := desktopExecutionCommandSource(t, "linux", "auto")
-	physical, _ := prep.DesktopPhysicalPolicy()
+	return newDesktopExecutionRuntimeFixtureFromProjection(t, prep, projection)
+}
+
+func newDesktopExecutionRuntimeFixtureFromProjection(t *testing.T, prep *mobilemultihop.NodeChainExecutionPreparation, projection *mobilemultihop.NodeChainExecutionProjection) *desktopExecutionRuntimeFixture {
+	t.Helper()
+	physical, err := routerVPNDesktopExecutionPhysicalPolicy(prep)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, meta, _, _ := physical.PhysicalReadValidated()
 	files := desktopImportedCommandFiles(t, map[string]string{"node-chain-execution-source.json": prep.Source(), "sing-box.json": prep.Config()})
 	f := &desktopExecutionRuntimeFixture{}
