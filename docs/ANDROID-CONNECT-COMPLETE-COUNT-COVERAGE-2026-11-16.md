@@ -35,8 +35,8 @@ Validation of the frozen source snapshot
   `AndroidNodeStore`, `AndroidOrderedPathSelection`, and `ProductActivity` were
   independently compared byte-for-byte with published `9ac3f3a6` and matched.
 
-The tests retain the existing 180-second Go helper/generator, 60-second javac, and
-120-second Java process limits. The helper compiler used one CPU; the immutable
+The tests retain the existing 120-second Go helper build, 180-second Go fixture
+generator, 60-second javac, and 120-second Java process limits. The helper compiler used one CPU; the immutable
 helper runtime used two CPUs. Validation used Go 1.26.3 and JDK 17.
 
 This is source/profile and shipping Java ownership evidence. The host fixture
