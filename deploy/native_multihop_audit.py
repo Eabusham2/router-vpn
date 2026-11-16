@@ -412,12 +412,16 @@ if launch != nil && launch.chain != nil {
 		if e.original.policy == nil || e.original.connectPolicy != nil || e.original.socksPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil {
 			return bad()
 		}
-		original, metadata, err := e.openvpnPhysical.ReadOriginalValidated(e.preparation)
-		if err != nil || original != e.original.policy || original.OriginalChain() != selected.chain {
-			return bad()
+		var original *mobilemultihop.DesktopNodeChainPolicy
+		var source *mobilemultihop.NodeChain
+		var metadata mobilemultihop.DesktopNodeChainMetadata
+		var err error
+		if physicalRead {
+			original, source, metadata, observed.config, observed.physical, observed.capture, err = e.openvpnPhysical.ReadExecutionValidated(e.preparation)
+		} else {
+			original, source, metadata, err = e.openvpnPhysical.ReadOriginalSourceValidated(e.preparation)
 		}
-		source, err := e.preparation.OriginalOpenVPNSource()
-		if err != nil || source != selected.chain {
+		if err != nil || original != e.original.policy || source != selected.chain {
 			return bad()
 		}
 		policy, meta = e.openvpnPhysical, metadata
@@ -469,7 +473,7 @@ if launch != nil && launch.chain != nil {
 		return bad()
 	}
 	observed.policy, observed.metadata = policy, meta
-	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil || e.openvpnPhysical != nil) {
+	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil) {
 		var err error
 		observed.config, observed.physical, observed.capture, err = policy.PhysicalReadValidated()
 		if err != nil {
@@ -498,6 +502,30 @@ if launch != nil && launch.chain != nil {
 	return count
 
         '''),
+        ('internal/mobilemultihop/node_chain_openvpn_execution_desktop.go', 'func (p *DesktopNodeChainOpenVPNExecutionPhysicalPolicy) ReadOriginalValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, DesktopNodeChainMetadata, error)', r'''
+	original, _, metadata, err := p.ReadOriginalSourceValidated(preparation)
+	return original, metadata, err
+'''),
+        ('internal/mobilemultihop/node_chain_openvpn_execution_desktop.go', 'func (p *DesktopNodeChainOpenVPNExecutionPhysicalPolicy) ReadOriginalSourceValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, *NodeChain, DesktopNodeChainMetadata, error)', r'''
+	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, nodeChainExecutionError
+	}
+	metadata := p.owner.metadata
+	metadata.Prefixes = append([]NodeChainProof(nil), metadata.Prefixes...)
+	metadata.Roots = append([]DesktopNodeRootMetadata(nil), metadata.Roots...)
+	return p.original, p.owner.source, metadata, nil
+'''),
+        ('internal/mobilemultihop/node_chain_openvpn_execution_desktop.go', 'func (p *DesktopNodeChainOpenVPNExecutionPhysicalPolicy) ReadExecutionValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, *NodeChain, DesktopNodeChainMetadata, string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error)', r'''
+	original, source, metadata, err := p.ReadOriginalSourceValidated(preparation)
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, err
+	}
+	config, physical, capture, err := p.physicalReadValidated()
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, err
+	}
+	return original, source, metadata, config, physical, capture, nil
+'''),
         ('internal/mobilemultihop/node_chain_socks_execution_desktop.go', 'func (p *DesktopNodeChainSOCKSExecutionPhysicalPolicy) ReadOriginalValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainSOCKSPolicy, DesktopNodeChainMetadata, error)', r'''
 	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {
 		return nil, DesktopNodeChainMetadata{}, nodeChainExecutionError

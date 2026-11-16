@@ -163,13 +163,32 @@ func (p *DesktopNodeChainOpenVPNExecutionPhysicalPolicy) OriginalDesktopOpenVPNP
 	return p.original, nil
 }
 func (p *DesktopNodeChainOpenVPNExecutionPhysicalPolicy) ReadOriginalValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, DesktopNodeChainMetadata, error) {
+	original, _, metadata, err := p.ReadOriginalSourceValidated(preparation)
+	return original, metadata, err
+}
+
+// Each result is an immediate observation of the same original preparation and
+// physical owner. It stores no validation result or live native authority.
+func (p *DesktopNodeChainOpenVPNExecutionPhysicalPolicy) ReadOriginalSourceValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, *NodeChain, DesktopNodeChainMetadata, error) {
 	if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {
-		return nil, DesktopNodeChainMetadata{}, nodeChainExecutionError
+		return nil, nil, DesktopNodeChainMetadata{}, nodeChainExecutionError
 	}
 	metadata := p.owner.metadata
 	metadata.Prefixes = append([]NodeChainProof(nil), metadata.Prefixes...)
 	metadata.Roots = append([]DesktopNodeRootMetadata(nil), metadata.Roots...)
-	return p.original, metadata, nil
+	return p.original, p.owner.source, metadata, nil
+}
+
+func (p *DesktopNodeChainOpenVPNExecutionPhysicalPolicy) ReadExecutionValidated(preparation *NodeChainExecutionPreparation) (*DesktopNodeChainPolicy, *NodeChain, DesktopNodeChainMetadata, string, DesktopPhysicalMetadata, DesktopPhysicalCapture, error) {
+	original, source, metadata, err := p.ReadOriginalSourceValidated(preparation)
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, err
+	}
+	config, physical, capture, err := p.physicalReadValidated()
+	if err != nil {
+		return nil, nil, DesktopNodeChainMetadata{}, "", DesktopPhysicalMetadata{}, DesktopPhysicalCapture{}, err
+	}
+	return original, source, metadata, config, physical, capture, nil
 }
 func (p *NodeChainExecutionPreparation) RequiresDesktopOpenVPNExecutionObserver() bool {
 	return p != nil && (p.source.DesktopOpenVPN != nil || p.openvpn != nil && p.openvpn.desktop != nil)

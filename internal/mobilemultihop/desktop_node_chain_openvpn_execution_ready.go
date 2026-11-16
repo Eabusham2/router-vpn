@@ -34,28 +34,20 @@ type DesktopNodeChainOpenVPNExecutionReadyRecord struct {
 
 func (r DesktopNodeChainOpenVPNExecutionReadyRecord) Validate(p *NodeChainExecutionProjection, transfer string) error {
 	bad := errors.New("ordered execution heartbeat differs from its original selected native owner")
-	if p == nil || p.validateCapture() != nil || p.preparation.openvpn == nil || p.preparation.openvpn.desktop == nil || !proofID.MatchString(transfer) {
+	if !proofID.MatchString(transfer) {
 		return bad
 	}
-	physical, err := p.OpenVPNDesktopPhysicalPolicy()
+	observation, err := p.readOpenVPNDesktopReadyCapture(r.Progress.Execution)
 	if err != nil {
 		return bad
 	}
-	_, meta, capture, err := physical.PhysicalReadValidated()
-	if err != nil {
-		return bad
-	}
-	plan, err := p.MTUPlan()
-	if err != nil {
-		return bad
-	}
+	meta, capture, plan := observation.metadata, observation.physical, observation.plan
+	proofs, dns := observation.proofs, observation.dns
 	progress := r.Progress
 	if progress.Execution != "server" && (progress.Execution != "local" || p.Execution() != "auto") {
 		return bad
 	}
-	proofs, err := p.ProofInventory(progress.Execution)
-	dns, dnsErr := p.DNSCapture(progress.Execution)
-	if err != nil || dnsErr != nil || len(proofs) < 2 || len(progress.Prefixes) != len(proofs) {
+	if len(proofs) < 2 || len(progress.Prefixes) != len(proofs) {
 		return bad
 	}
 	if r.Schema != 1 || r.Kind != "routervpn-node-chain-openvpn-execution-ready-v1" ||
@@ -137,4 +129,37 @@ func ParseDesktopNodeChainOpenVPNExecutionReadyRecord(raw []byte, p *NodeChainEx
 		return DesktopNodeChainOpenVPNExecutionReadyRecord{}, errors.New("ordered execution heartbeat is not canonical and complete")
 	}
 	return r, nil
+}
+
+// Read one fresh typed projection for this heartbeat only. The original source,
+// paired Server policy, physical owner and MTU derivation are still validated;
+// this stack-local value neither caches validity nor grants native authority.
+func (p *NodeChainExecutionProjection) readOpenVPNDesktopReadyCapture(execution string) (desktopNodeChainExecutionReadyCapture, error) {
+	bad := func() (desktopNodeChainExecutionReadyCapture, error) {
+		return desktopNodeChainExecutionReadyCapture{}, nodeChainExecutionError
+	}
+	if p == nil || p.validateCapture() != nil || p.preparation.openvpn == nil || p.preparation.openvpn.desktop == nil {
+		return bad()
+	}
+	owner := p.preparation.openvpn.desktop
+	physical := owner.physical
+	if physical == nil || physical.self != physical || physical.owner != owner || physical.preparation != p.preparation || physical.original != owner.original {
+		return bad()
+	}
+	_, metadata, capture, err := physical.physicalReadValidated()
+	if err != nil {
+		return bad()
+	}
+	// Preserve the original complete native Local graph/TUN MTU calculation.
+	plan, err := p.MTUPlan()
+	if err != nil {
+		return bad()
+	}
+	proofs, err := p.policy.proofInventoryValidated(execution)
+	if err != nil || len(proofs) < 2 {
+		return bad()
+	}
+	dns := NodeChainExecutionDNSCapture{execution, SelectorTag, proofs[len(proofs)-1].Tag, p.policy.source.Server.DNSPolicySHA256, p.policy.dns}
+	dns.DNS.ConfigSHA256 = p.hash
+	return desktopNodeChainExecutionReadyCapture{metadata, capture, plan, proofs, dns}, nil
 }

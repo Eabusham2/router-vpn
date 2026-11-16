@@ -157,6 +157,72 @@ func TestDesktopOpenVPNExecutionMaximumRecords(t *testing.T) {
 					t.Fatal("foreign family accepted OpenVPN adoption")
 				}
 			}
+			// The fresh read keeps the original owner checks even though each
+			// public getter no longer repeats the same complete validation.
+			for _, fault := range []string{"source", "native", "physical", "original", "projection", "dns"} {
+				t.Run("owner-"+fault, func(t *testing.T) {
+					owner := p.preparation.openvpn.desktop
+					var restore func()
+					switch fault {
+					case "source":
+						original := owner.source.sourceJSON
+						owner.source.sourceJSON += " "
+						restore = func() { owner.source.sourceJSON = original }
+					case "native":
+						original := owner.native.config
+						owner.native.config += " "
+						restore = func() { owner.native.config = original }
+					case "physical":
+						original := owner.physical
+						copy := *original
+						owner.physical = &copy
+						restore = func() { owner.physical = original }
+					case "original":
+						original := owner.original
+						copy := *original
+						owner.original = &copy
+						restore = func() { owner.original = original }
+					case "projection":
+						original := p.config
+						p.config += " "
+						restore = func() { p.config = original }
+					case "dns":
+						original := owner.capture.SelectedDNS.Detour
+						owner.capture.SelectedDNS.Detour = "foreign"
+						restore = func() { owner.capture.SelectedDNS.Detour = original }
+					}
+					defer restore()
+					if _, err := p.readOpenVPNDesktopReadyCapture(selected); err == nil || r.Validate(p, transfer) == nil {
+						t.Fatal("fresh OpenVPN heartbeat accepted changed original owner", fault)
+					}
+					if _, _, _, _, _, _, err := owner.physical.ReadExecutionValidated(p.preparation); fault != "projection" && err == nil {
+						t.Fatal("fresh OpenVPN physical read accepted changed original owner", fault)
+					}
+					restore()
+					if r.Validate(p, transfer) != nil {
+						t.Fatal("original OpenVPN heartbeat could not retry")
+					}
+				})
+			}
+			t.Run("copied-output", func(t *testing.T) {
+				owner := p.preparation.openvpn.desktop
+				original, source, metadata, config, physical, capture, err := owner.physical.ReadExecutionValidated(p.preparation)
+				if err != nil || original != owner.original || source != owner.source || config != p.preparation.Config() || physical.ConfigSHA256 != p.preparation.ConfigSHA256() {
+					t.Fatal("combined OpenVPN read replaced original construction", err)
+				}
+				metadata.Prefixes[0].ProfileID = "foreign"
+				metadata.Roots[0].Tag = "foreign"
+				capture.SelectedDNS.Detour = "foreign"
+				read, err := p.readOpenVPNDesktopReadyCapture(selected)
+				if err != nil {
+					t.Fatal(err)
+				}
+				read.proofs[0].ProfileID = "foreign"
+				read.physical.SelectedDNS.Detour = "foreign"
+				if r.Validate(p, transfer) != nil {
+					t.Fatal("OpenVPN read leaked mutable proof or physical capture")
+				}
+			})
 			for _, fault := range []string{"server-source", "server-key", "transfer", "kind", "noncanonical"} {
 				t.Run(fault, func(t *testing.T) {
 					var x DesktopNodeChainOpenVPNExecutionAdoptionRecord

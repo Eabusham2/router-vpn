@@ -393,6 +393,31 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.assert_backend_proof_admission(True)
         self.assert_multihop_scores(True)
 
+    def test_openvpn_combined_observation_keeps_original_source_and_fresh_validation(self):
+        shared = "internal/mobilemultihop/node_chain_openvpn_execution_desktop.go"
+        launch = "cmd/client/desktop_node_chain_execution_launch.go"
+        for path, before, after in (
+                (shared, "original, _, metadata, err := p.ReadOriginalSourceValidated(preparation)", "original, _, metadata, err := other.ReadOriginalSourceValidated(preparation)"),
+                (shared, "preparation == nil || p.preparation != preparation", "false"),
+                (shared, "p.preparation != preparation || p.Validate() != nil", "p.preparation != preparation"),
+                (shared, "return p.original, p.owner.source, metadata, nil", "return p.original, other.source, metadata, nil"),
+                (shared, "metadata.Prefixes = append([]NodeChainProof(nil), metadata.Prefixes...)", "metadata.Prefixes = metadata.Prefixes"),
+                (shared, "metadata.Roots = append([]DesktopNodeRootMetadata(nil), metadata.Roots...)", "metadata.Roots = metadata.Roots"),
+                (shared, "original, source, metadata, err := p.ReadOriginalSourceValidated(preparation)", "original, source, metadata, err := other.ReadOriginalSourceValidated(preparation)"),
+                (shared, "config, physical, capture, err := p.physicalReadValidated()", "config, physical, capture, err := other.physicalReadValidated()"),
+                (launch, "e.openvpnPhysical.ReadOriginalSourceValidated(e.preparation)", "e.openvpnPhysical.ReadOriginalSourceValidated(other)"),
+                (launch, "e.openvpnPhysical.ReadExecutionValidated(e.preparation)", "other.ReadExecutionValidated(e.preparation)"),
+                (launch, "source != selected.chain", "false")):
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assert_backend_proof_admission(False)
+                self.assert_multihop_scores(False)
+        self.changes.clear()
+        self.assert_backend_proof_admission(True)
+        self.assert_multihop_scores(True)
+
     def test_connect_execution_keeps_distinct_sealed_owner_and_original_graph(self):
         launch = "cmd/client/desktop_node_chain_execution_launch.go"
         graph = "cmd/client/desktop_node_chain_execution_graph.go"

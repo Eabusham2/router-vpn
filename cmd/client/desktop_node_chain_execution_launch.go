@@ -140,12 +140,16 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 		if e.original.policy == nil || e.original.connectPolicy != nil || e.original.socksPolicy != nil || selected.chain == nil || selected.connect != nil || selected.socks != nil {
 			return bad()
 		}
-		original, metadata, err := e.openvpnPhysical.ReadOriginalValidated(e.preparation)
-		if err != nil || original != e.original.policy || original.OriginalChain() != selected.chain {
-			return bad()
+		var original *mobilemultihop.DesktopNodeChainPolicy
+		var source *mobilemultihop.NodeChain
+		var metadata mobilemultihop.DesktopNodeChainMetadata
+		var err error
+		if physicalRead {
+			original, source, metadata, observed.config, observed.physical, observed.capture, err = e.openvpnPhysical.ReadExecutionValidated(e.preparation)
+		} else {
+			original, source, metadata, err = e.openvpnPhysical.ReadOriginalSourceValidated(e.preparation)
 		}
-		source, err := e.preparation.OriginalOpenVPNSource()
-		if err != nil || source != selected.chain {
+		if err != nil || original != e.original.policy || source != selected.chain {
 			return bad()
 		}
 		policy, meta = e.openvpnPhysical, metadata
@@ -197,7 +201,7 @@ func (e *desktopNodeChainExecutionLaunch) readSourceObservation(physicalRead boo
 		return bad()
 	}
 	observed.policy, observed.metadata = policy, meta
-	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil || e.openvpnPhysical != nil) {
+	if physicalRead && (e.connectPhysical != nil || e.socksPhysical != nil) {
 		var err error
 		observed.config, observed.physical, observed.capture, err = policy.PhysicalReadValidated()
 		if err != nil {

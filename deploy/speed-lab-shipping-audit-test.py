@@ -167,6 +167,7 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
                         "cmd/client/desktop_node_chain_execution_graph.go",
                         "cmd/client/desktop_node_chain_socks_execution.go",
                         "internal/mobilemultihop/node_chain_execution_desktop.go",
+                        "internal/mobilemultihop/node_chain_openvpn_execution_desktop.go",
                         "internal/mobilemultihop/node_chain_connect_execution_desktop.go",
                         "internal/mobilemultihop/node_chain_socks_execution_desktop.go")
     sources = {path: (Path(__file__).resolve().parents[1]/path).read_text() for path in (
