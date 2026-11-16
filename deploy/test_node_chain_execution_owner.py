@@ -65,6 +65,7 @@ CHILDREN = {
     'AppendRejectsForeignOwnerAndLifecycle': ('entry', 'gate', 'detour', 'lifecycle', 'cancelled', 'closed-manager'),
 }
 PREFIX = 'TestRouterVPNExecution'
+MAX_BUILD_OUTPUT_BYTES = 64 * 1024
 
 
 def selection():
@@ -95,14 +96,35 @@ def verdict(raw, code):
     runs = {p: set() for p in ROOTS}
     passes = {p: set() for p in ROOTS}
     packages = set()
+    observed = set()
+    build_packages = {p+'.test': p for p in ROOTS}
+    build_output_bytes = {}
     for line in raw.splitlines():
         try:
             row = json.loads(line)
         except (ValueError, TypeError) as error:
             raise ValueError('non-JSON native execution owner verdict') from error
-        if not isinstance(row, dict) or row.get('Package') not in ROOTS:
+        if not isinstance(row, dict):
+            raise ValueError('foreign native execution package')
+        if row.get('Action') == 'build-output':
+            # Go 1.26 emits linker diagnostics as BuildEvents, without Package.
+            # They can precede only their exact test binary's runtime events
+            # and never supply any required run, pass or terminal receipt.
+            package = build_packages.get(row.get('ImportPath'))
+            output = row.get('Output')
+            if (set(row) != {'ImportPath', 'Action', 'Output'} or
+                    package is None or package in observed or
+                    not isinstance(output, str) or not output or 'DATA RACE' in output):
+                raise ValueError('foreign, late or malformed native execution build output')
+            size = build_output_bytes.get(package, 0) + len(output.encode('utf-8'))
+            if size > MAX_BUILD_OUTPUT_BYTES:
+                raise ValueError('native execution build output exceeded its diagnostic bound')
+            build_output_bytes[package] = size
+            continue
+        if row.get('Package') not in ROOTS:
             raise ValueError('foreign native execution package')
         package, action, name = row['Package'], row.get('Action'), row.get('Test')
+        observed.add(package)
         if package in packages or action in ('fail', 'skip') or 'DATA RACE' in row.get('Output', ''):
             raise ValueError('failed, skipped, late or racing native owner verdict')
         if name:
