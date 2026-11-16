@@ -57,6 +57,47 @@ func NewCommandServer(handler CommandServerHandler, platformInterface PlatformIn
 '''
 
 
+MULTIPLE_IMPORTED_ROOTS = ('TestRouterVPNMultipleImportedPublicRouteOriginalOwners',
+                           'TestRouterVPNMultipleImportedPublicRouteRefusals')
+MULTIPLE_IMPORTED_SELECTION = '^TestRouterVPNMultipleImportedPublicRoute(OriginalOwners|Refusals)$'
+
+
+def multiple_imported_shipping_selection(source, executable):
+    """Require the actual unconditional command in the owned vendor build."""
+    start = '\n(\n  cd "$VENDOR"\n'
+    if source.count(start) != 1 or not source.startswith('#!/usr/bin/env bash\nset -euo pipefail\n'):
+        raise ValueError('original vendor build or fail-closed shell missing')
+    block = source.split(start, 1)[1].split('\n)\n', 1)[0]
+    command = [executable, 'test', '-race', '-ldflags=-checklinkname=0', '-tags',
+               'with_quic,with_wireguard,with_gvisor', '.', '-run',
+               MULTIPLE_IMPORTED_SELECTION, '-count=1', '-timeout=90s']
+    lines = [line for line in source.splitlines() if MULTIPLE_IMPORTED_SELECTION in line]
+    if len(lines) != 1 or shlex.split(lines[0]) != command or lines[0] not in block.splitlines():
+        raise ValueError('original multiple-import Box selection missing, changed or duplicated')
+    # The shipping prefix is a straight-line sequence with explicit failing
+    # assertion blocks. Refuse a newly enclosing shell control flow, function,
+    # subshell or heredoc before accepting this command as unconditional.
+    prefix = block.split(lines[0], 1)[0]
+    depth = []
+    for line in prefix.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        words = shlex.split(stripped)
+        first = words[0] if words else ''
+        if first in ('if', 'for', 'while', 'until', 'case', 'select'):
+            depth.append(first)
+        elif first in ('fi', 'done', 'esac'):
+            if not depth:
+                raise ValueError('unbalanced vendor control flow')
+            depth.pop()
+        elif first in ('(', ')') or '<<' in stripped or re.match(r'[^ ]+\s*\(\)\s*\{', stripped) or first == 'function':
+            raise ValueError('multiple-import command moved into another shell owner')
+    if depth:
+        raise ValueError('multiple-import Box selection became conditional')
+    return command
+
+
 class NodeChainPreparation(unittest.TestCase):
     def vendor(self, base):
         vendor = Path(base)/'core'
@@ -338,6 +379,41 @@ class NodeChainPreparation(unittest.TestCase):
             'TestRouterNodeChainSOCKSMTUCleanupTokenEndsWithExactAttempt',
         })
 
+    def test_multiple_imported_public_route_shipping_commands_are_required(self):
+        native = (ROOT/'mobile/chain/multiple_imported_box_test.go.tmpl').read_text()
+        self.assertEqual(tuple(re.findall(r'^func (Test\w+)\(', native, re.M)), MULTIPLE_IMPORTED_ROOTS)
+        for relative, executable in (('android/build-sing-box-libbox.sh', 'go_retry'),
+                                     ('ios/RouterVPN/prepare-libbox.sh', 'go')):
+            source = (ROOT/relative).read_text()
+            command = multiple_imported_shipping_selection(source, executable)
+            for name in MULTIPLE_IMPORTED_ROOTS:
+                self.assertIsNotNone(re.fullmatch(command[command.index('-run')+1], name))
+            self.assertIsNone(re.fullmatch(command[command.index('-run')+1], MULTIPLE_IMPORTED_ROOTS[0]+'Foreign'))
+
+    def test_multiple_imported_shipping_omissions_and_substitutions_fail(self):
+        for relative, executable in (('android/build-sing-box-libbox.sh', 'go_retry'),
+                                     ('ios/RouterVPN/prepare-libbox.sh', 'go')):
+            source = (ROOT/relative).read_text()
+            multiple_imported_shipping_selection(source, executable)
+            line = next(line for line in source.splitlines() if MULTIPLE_IMPORTED_SELECTION in line)
+            faults = {
+                'omitted': '', 'comment': '  # '+line.strip(), 'duplicate': line+'\n'+line,
+                'conditional': '  if false; then\n'+line+'\n  fi',
+                'optional': line+' || true', 'wrong-package': line.replace(' . -run ', ' ./route -run '),
+                'no-race': line.replace(' -race ', ' '), 'missing-wireguard': line.replace(',with_wireguard', ''),
+                'missing-positive': line.replace('(OriginalOwners|Refusals)', 'Refusals'),
+                'missing-refusals': line.replace('(OriginalOwners|Refusals)', 'OriginalOwners'),
+                'changed-bound': line.replace('-timeout=90s', '-timeout=180s'),
+                'wrong-owner': line.replace(executable+' test', 'echo '+executable+' test', 1),
+                'sibling-function': '  unrelated() {\n'+line+'\n  }',
+            }
+            for name, replacement in faults.items():
+                with self.subTest(relative=relative, fault=name), self.assertRaises(ValueError):
+                    multiple_imported_shipping_selection(source.replace(line, replacement, 1), executable)
+            outside = source.replace(line, '', 1)+'\n'+line+'\n'
+            with self.subTest(relative=relative, fault='outside-original-vendor'), self.assertRaises(ValueError):
+                multiple_imported_shipping_selection(outside, executable)
+
     def test_actual_native_roots_are_selected_in_each_shipping_build(self):
         roots = {}
         for template, relative in PREP.TEMPLATES.items():
@@ -388,9 +464,17 @@ class NodeChainPreparation(unittest.TestCase):
         self.assertIn("'--tagged-only', *(['--race'] if race else [])", desktop_source)
         stub_source = (ROOT/'mobile/chain/openvpn_execution_stub_test.go.tmpl').read_text()
         self.assertTrue(stub_source.startswith('//go:build !with_openvpn\n'))
+        # Schema6's actual Linux driver owns the seventeen public-route Box
+        # records separately from the generic native phases. Verify its existing
+        # required builder invocation before accounting for those exact roots.
+        imported_spec = importlib.util.spec_from_file_location('selected_multiple_imported_runner', ROOT/'deploy/test_node_chain_multiple_imported_native_runner.py')
+        imported = importlib.util.module_from_spec(imported_spec)
+        imported_spec.loader.exec_module(imported)
+        imported.required_wiring(desktop_source)
+        imported_patterns = ['^'+re.escape(name)+'$' for name in imported.RUN.BOX_CASES]
         def selected_patterns(package):
             direct = [command[command.index('-run')+1] for command in commands if package in command and '-run' in command]
-            return direct + ([phases.SELECTION, owner.POSITIVE.selection()] if package == '.' else [])
+            return direct + ([phases.SELECTION, owner.POSITIVE.selection(), *imported_patterns] if package == '.' else [])
         for package, names in roots.items():
             if package == './experimental/libbox':
                 continue  # Desktop owns its original command-process lifecycle.
