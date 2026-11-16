@@ -262,12 +262,15 @@ func TestDesktopSOCKSRegisteredPublicRouteRefusesStaleAndUnsupportedGraphs(t *te
 }
 
 func TestDesktopSOCKSRegisteredPublicExecutionRequiresOriginalNativeReceipt(t *testing.T) {
-	if !desktopNodeChainSOCKSAdmissionSupported(runtime.GOOS, runtime.GOARCH, true) || !nativeDesktopImportedTrioExecutionPlatformSupported() {
+	if !desktopNodeChainSOCKSAdmissionSupported(runtime.GOOS, runtime.GOARCH, true) {
 		t.Skip("installed SOCKS execution public target is not enabled on this platform")
 	}
 	for _, execution := range []string{"server", "auto"} {
 		t.Run(execution, func(t *testing.T) {
 			a, nodes := desktopSOCKSPublicHandlerFixture(t, "wg", "password")
+			if !nativeDesktopImportedTrioExecutionPlatformSupported() {
+				t.Fatal("original SOCKS fixture did not select its native dispatcher")
+			}
 			q := orderedPublicRequest(t, a, nodes)
 			q.Execution = execution
 			before := cloneRouterProfileStore(a.profiles)
