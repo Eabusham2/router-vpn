@@ -142,7 +142,7 @@ for selection in ["","AUTO","server\n"," server","remote"] {
  do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("malformed chain execution accepted")}catch{checks+=1}
 }
 for selection in ["server","auto"] {
- for count in 3...8 {for kind in ["socks5","http-connect","https-connect"] {
+ for count in 3...8 {for kind in ["socks5","http-connect","https-connect","openvpn"] {
   var raw=chainObject;raw["multihopExecution"]=selection
   var references=[[String:String]]()
   for position in 0..<count {
@@ -163,7 +163,7 @@ for selection in ["server","auto"] {
   let restored=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:data)
   try check("complete typed profile preserves all settings and node references",restored.profiles[0]==saved)
  }}
- for modes in [["wg","hysteria2"],["wg","openvpn","shadowsocks"],["wg","hysteria2","socks5","shadowsocks"],["wg","hysteria2","http-connect","shadowsocks"],["wg","hysteria2","https-connect","shadowsocks"]] {
+ for modes in [["wg","hysteria2"],["wg","hysteria2","openvpn","shadowsocks"],["wg","hysteria2","socks5","shadowsocks"],["wg","hysteria2","http-connect","shadowsocks"],["wg","hysteria2","https-connect","shadowsocks"]] {
   var bad=chainObject;bad["multihopExecution"]=selection
   bad["multihopNodes"]=modes.enumerated().map{["id":"node-\($0.offset)","mode":$0.element]}
   do {_ = try preferences(String(decoding:JSONSerialization.data(withJSONObject:bad),as:UTF8.self));fatalError("unsupported Server or Compare chain accepted")}catch{checks+=1}
@@ -210,6 +210,7 @@ def main() -> None:
             assert failed.returncode != 0 and witness in failed.stdout+failed.stderr, (name,failed.stdout+failed.stderr)
             print('Apple profile execution causal refusal:',name)
         for family, next_function, kind in (
+                ('OpenVPN', 'supportsCONNECTExecution', 'openvpn'),
                 ('CONNECT', 'supportsGenericExecution', 'http-connect'),
                 ('SOCKS', 'supportsServerExecution', 'socks5')):
             start = chain.index('    static func supports' + family + 'Execution(')

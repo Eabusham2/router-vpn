@@ -94,6 +94,8 @@ enum IOSNodeChainPresentation {
                 path = capturedCONNECT(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested)
             } else if kind == "routervpn-node-chain-socks-execution-preparation-input", preparation["schema"] as? Int == 3 {
                 path = capturedSOCKS(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested)
+            } else if kind == "routervpn-node-chain-openvpn-execution-preparation-input", preparation["schema"] as? Int == 5 {
+                path = capturedOpenVPNExecution(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested)
             } else if kind == "routervpn-node-chain-execution-preparation-input", preparation["schema"] as? Int == 1 {
                 path = capturedGenericExecution(source: Data(source.utf8), bundleData: identity.bundleData, selectionExecution: requested)
             } else { return nil }
@@ -146,6 +148,43 @@ enum IOSNodeChainPresentation {
             profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
         }
         guard profiles.last == control, control.multihopNodes == nodes else { return nil }
+        return planned(selected: control, catalog: profiles)
+    }
+
+    private static func capturedOpenVPNExecution(source: Data, bundleData: Data, selectionExecution: String) -> [IOSNodePathPoint]? {
+        guard !source.isEmpty, source.count <= 40 * 1024 * 1024, !bundleData.isEmpty, bundleData.count <= 32 * 1024 * 1024,
+              let root = try? JSONSerialization.jsonObject(with: source) as? [String: Any],
+              Set(root.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
+              let schema = root["schema"] as? Int, schema == 5,
+              root["execution"] as? String == "local", let inputs = root["nodes"] as? [String],
+              (3...8).contains(inputs.count),
+              let identities = root["identity_sources"] as? [String], identities.count == inputs.count,
+              identities.enumerated().allSatisfy({ schema == 5 && $0.offset == inputs.count - 2 ? $0.element.isEmpty : !$0.element.isEmpty }),
+              let bundle = try? JSONDecoder().decode(ClientBundle.self, from: bundleData),
+              bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
+              let control = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) else { return nil }
+        var profiles: [RouterProfile] = [], nodes: [IOSMultihopNodeSelection] = []
+        for (position, input) in inputs.enumerated() {
+            guard let member = try? JSONDecoder().decode(Member.self, from: Data(input.utf8)), member.schema == 1 else { return nil }
+            let profile: RouterProfile, mode: String
+            if schema == 5 && position == inputs.count - 2 {
+                guard member.kind == "routervpn-node-chain-openvpn-member", let raw = member.capture,
+                      let capture = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                      let saved = capture["profile"], let data = try? JSONSerialization.data(withJSONObject: saved),
+                      let value = try? JSONDecoder().decode(RouterProfile.self, from: data), IOSImportedOpenVPNSource.eligible(value), value.external?.openVPNPairing != nil else { return nil }
+                profile = value; mode = "openvpn"
+            } else {
+                guard member.kind == "routervpn-node-launch-input", let raw = member.profile_json, let selected = member.mode,
+                      let value = try? JSONDecoder().decode(RouterProfile.self, from: Data(raw.utf8)),
+                      value.normalizedNodeKind == "router-vpn", value.external == nil else { return nil }
+                profile = value; mode = selected
+            }
+            profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
+        }
+        guard let last = profiles.last, IOSMultihopNodeSelection.supportsOpenVPNExecution(nodes),
+              control.multihopNodes == nodes, control.multihopExecution == selectionExecution else { return nil }
+        var expected = control; expected.startupMode = nil; expected.autoConnect = nil
+        guard last == expected else { return nil }
         return planned(selected: control, catalog: profiles)
     }
 

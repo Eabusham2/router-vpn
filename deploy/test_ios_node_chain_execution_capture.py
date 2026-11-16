@@ -29,11 +29,13 @@ GO=GO.replace(anchor,r'''
  case "connect-execution-open":value,err=connectExecutionOpen(r.Source)
  case "socks-execution-new":value,err=socksExecutionNew(r.Source,r.Mode)
  case "socks-execution-open":value,err=socksExecutionOpen(r.Source)
+ case "openvpn-execution-new":value,err=openVPNExecutionNew(r.Source,r.Mode)
+ case "openvpn-execution-open":value,err=openVPNExecutionOpen(r.Source)
  case "execution-digest":sum:=sha256.Sum256([]byte(r.Source));value=hex.EncodeToString(sum[:])
 '''+anchor,1)+r'''
 type executionEnvelope struct{Kind string `json:"kind"`;Schema int `json:"schema"`;Source string `json:"source"`;SourceSHA string `json:"source_sha256"`;ConfigSHA string `json:"config_sha256"`}
 func executionPrepared(p *mobilemultihop.NodeChainExecutionPreparation)(string,error){
- kind:="routervpn-node-chain-execution-preparation-input";if p.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"};if p.RequiresSOCKSExecutionObserver(){kind="routervpn-node-chain-socks-execution-preparation-input"}
+ kind:="routervpn-node-chain-execution-preparation-input";if p.RequiresCONNECTExecutionObserver(){kind="routervpn-node-chain-connect-execution-preparation-input"};if p.RequiresSOCKSExecutionObserver(){kind="routervpn-node-chain-socks-execution-preparation-input"};if p.RequiresOpenVPNExecutionObserver(){kind="routervpn-node-chain-openvpn-execution-preparation-input"}
  launch,err:=json.Marshal(executionEnvelope{kind,1,p.Source(),p.SourceSHA256(),p.ConfigSHA256()});if err!=nil{return "",err}
  raw,err:=json.Marshal(map[string]string{"source":p.Source(),"source_sha256":p.SourceSHA256(),"config":p.Config(),"config_sha256":p.ConfigSHA256(),"local_source_sha256":p.LocalSourceSHA256(),"requested":p.Execution(),"launch":string(launch)});return string(raw),err
 }
@@ -59,6 +61,17 @@ func socksExecutionOpen(input string)(string,error){
  p,err:=mobilemultihop.ParseNodeChainSOCKSExecutionPreparation(e.Source);if err!=nil{return "",err}
  if p.Source()!=e.Source||p.SourceSHA256()!=e.SourceSHA||p.ConfigSHA256()!=e.ConfigSHA{return "",fmt.Errorf("changed original SOCKS execution source")};return executionPrepared(p)
 }
+func openVPNExecutionNew(input,requested string)(string,error){
+ original,err:=mobilemultihop.ParseNodeChainLaunchInput(input);if err!=nil{return "",err}
+ p,err:=mobilemultihop.NewNodeChainOpenVPNExecutionPreparation(original,requested);if err!=nil{return "",err};return executionPrepared(p)
+}
+func openVPNExecutionOpen(input string)(string,error){
+ if err:=libbox.RouterValidatePrivateNodeJSON(input);err!=nil{return "",err}
+ var e executionEnvelope;if err:=json.Unmarshal([]byte(input),&e);err!=nil{return "",err}
+ canonical,err:=json.Marshal(e);if err!=nil||string(canonical)!=input||e.Kind!="routervpn-node-chain-openvpn-execution-preparation-input"||e.Schema!=1{return "",fmt.Errorf("noncanonical original OpenVPN private launch")}
+ p,err:=mobilemultihop.ParseNodeChainOpenVPNExecutionPreparation(e.Source);if err!=nil{return "",err}
+ if p.Source()!=e.Source||p.SourceSHA256()!=e.SourceSHA||p.ConfigSHA256()!=e.ConfigSHA{return "",fmt.Errorf("changed original OpenVPN execution source")};return executionPrepared(p)
+}
 func executionNew(input,requested string)(string,error){
  if _,err:=mobilemultihop.ParseNodeChainLaunchInput(input);err!=nil{return "",err}
  var local mobilemultihop.NodeChainSource;if err:=json.Unmarshal([]byte(input),&local);err!=nil{return "",err};raw,err:=json.Marshal(local);if err!=nil{return "",err}
@@ -75,7 +88,32 @@ func executionOpen(input string)(string,error){
  return executionPrepared(p)
 }
 '''
-LIBBOX=LOCAL.LIBBOX.replace('PQTest','OrdinarySourceTest')+r'''
+LOCAL_LIBBOX=LOCAL.LIBBOX.replace('PQTest','OrdinarySourceTest')
+# A generated bridge can return an owned object together with NSError. Retain
+# that exact object in the double and count only its own acknowledged close.
+local_close=' public func close()throws{}'
+local_begin=LOCAL_LIBBOX.index('public final class LibboxRouterNodeChain {')
+local_end=LOCAL_LIBBOX.index('private final class NativeLaunchFault',local_begin)
+local_body=LOCAL_LIBBOX[local_begin:local_end]
+assert local_body.count(local_close)==1
+LOCAL_LIBBOX=LOCAL_LIBBOX[:local_begin]+local_body.replace(local_close,' public func close()throws{ReturnedOwnerFault.shared.close(self)}',1)+LOCAL_LIBBOX[local_end:]
+local_factory='public func LibboxNewRouterNodeChain(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChain?{api(error){try make("chain-new",source)}}'
+assert LOCAL_LIBBOX.count(local_factory)==1
+LOCAL_LIBBOX=LOCAL_LIBBOX.replace(local_factory,'public func LibboxNewRouterNodeChain(_ source:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChain?{returnedOwner("local-new",error){api(error){try make("chain-new",source)}}}',1)
+LIBBOX=LOCAL_LIBBOX+r'''
+private final class ReturnedOwnerFault: @unchecked Sendable {
+ static let shared=ReturnedOwnerFault();private let lock=NSLock();private var operation="";private var returned:AnyObject?;private var closes=0
+ func arm(_ value:String){lock.lock();operation=value;returned=nil;closes=0;lock.unlock()}
+ func capture(_ name:String,_ value:AnyObject)->Bool{lock.lock();defer{lock.unlock()};guard operation==name else{return false};operation="";returned=value;return true}
+ func close(_ value:AnyObject){lock.lock();if let returned,returned===value{closes+=1};lock.unlock()}
+ func closed()->Bool{lock.lock();defer{lock.unlock()};return returned != nil && closes==1}
+}
+public func LibboxTestReturnedOwnerError(_ operation:String){ReturnedOwnerFault.shared.arm(operation)}
+public func LibboxTestReturnedOwnerClosed()->Bool{ReturnedOwnerFault.shared.closed()}
+private func returnedOwner<T:AnyObject>(_ operation:String,_ error:UnsafeMutablePointer<NSError?>?,_ make:()->T?)->T?{
+ let value=make();if let value,ReturnedOwnerFault.shared.capture(operation,value){error?.pointee=NSError(domain:"ReturnedOriginalOwner",code:1)};return value
+}
+
 public final class LibboxCommandServer { public var bindAttempts=0; public init(){} }
 private final class ExecutionFault: @unchecked Sendable {
  static let shared=ExecutionFault();let lock=NSLock();var value=""
@@ -97,7 +135,7 @@ public final class LibboxRouterNodeChainExecution {
   case "config":self.receipt["config"]=receipt["config"]!+" "
   case "requested":self.receipt["requested"]="local"
   case "launch-error":launchError=true
-  case "local-node","local-schema","local-identity","local-execution","preparation-schema","launch-schema":
+  case "local-node","local-schema","local-identity","local-execution","preparation-schema","launch-schema","openvpn-local-launch":
    var source=try JSONSerialization.jsonObject(with:Data(receipt["source"]!.utf8)) as! [String:Any]
    var local=try JSONSerialization.jsonObject(with:Data((source["local_source"] as! String).utf8)) as! [String:Any]
    if fault=="local-node"{var nodes=local["nodes"] as! [String];nodes.swapAt(0,1);local["nodes"]=nodes}
@@ -106,6 +144,7 @@ public final class LibboxRouterNodeChainExecution {
    if fault=="local-execution"{local["execution"]="server"}
    source["local_source"]=String(decoding:try JSONSerialization.data(withJSONObject:local,options:[.sortedKeys]),as:UTF8.self)
    if fault=="preparation-schema"{source["schema"]=2}
+   if fault=="openvpn-local-launch"{source["openvpn_local_launch"]=(source["openvpn_local_launch"] as! String)+" "}
    self.receipt["source"]=String(decoding:try JSONSerialization.data(withJSONObject:source,options:[.sortedKeys]),as:UTF8.self)
    var launch=try JSONSerialization.jsonObject(with:Data(receipt["launch"]!.utf8)) as! [String:Any];launch["source"]=self.receipt["source"]!
    if fault=="launch-schema"{launch["schema"]=2}
@@ -130,19 +169,22 @@ public final class LibboxRouterNodeChainExecution {
  public func requireRestore(_ value:LibboxRouterNodeChainExecutionRestoreCapture)throws{throw NSError(domain:"SourceOnly",code:1)}
  public func captureLastJSON(_ error:UnsafeMutablePointer<NSError?>?)->String{error?.pointee=NSError(domain:"SourceOnly",code:1);return ""}
  public func retainsServerCleanup(_ server:LibboxCommandServer)->Bool{false}
- public func close()throws{closed=true}
+ public func close()throws{closed=true;ReturnedOwnerFault.shared.close(self)}
 }
 func executionMake(_ operation:String,_ source:String,_ requested:String)throws->LibboxRouterNodeChainExecution{
  let raw=try bridge(["Op":operation,"Source":source,"Mode":requested]);return try LibboxRouterNodeChainExecution(JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:String])
 }
-public func LibboxRouterNodeChainExecutionFromLaunch(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("execution-new",input,execution)}}
-public func LibboxNewRouterNodeChainExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("execution-open",input,"")}}
-public func LibboxNewRouterNodeChainCONNECTExecution(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("connect-execution-new",input,execution)}}
-public func LibboxNewRouterNodeChainCONNECTExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("connect-execution-open",input,"")}}
+public func LibboxRouterNodeChainExecutionFromLaunch(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-new",error){api(error){try executionMake("execution-new",input,execution)}}}
+public func LibboxNewRouterNodeChainExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-open",error){api(error){try executionMake("execution-open",input,"")}}}
+public func LibboxNewRouterNodeChainCONNECTExecution(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-new",error){api(error){try executionMake("connect-execution-new",input,execution)}}}
+public func LibboxNewRouterNodeChainCONNECTExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-open",error){api(error){try executionMake("connect-execution-open",input,"")}}}
 public func LibboxRouterNodeChainCONNECTExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
-public func LibboxNewRouterNodeChainSOCKSExecution(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("socks-execution-new",input,execution)}}
-public func LibboxNewRouterNodeChainSOCKSExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{api(error){try executionMake("socks-execution-open",input,"")}}
+public func LibboxNewRouterNodeChainSOCKSExecution(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-new",error){api(error){try executionMake("socks-execution-new",input,execution)}}}
+public func LibboxNewRouterNodeChainSOCKSExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-open",error){api(error){try executionMake("socks-execution-open",input,"")}}}
 public func LibboxRouterNodeChainSOCKSExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
+public func LibboxRouterNodeChainOpenVPNExecutionFromLaunch(_ input:String,_ execution:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-new",error){api(error){try executionMake("openvpn-execution-new",input,execution)}}}
+public func LibboxNewRouterNodeChainOpenVPNExecutionLaunch(_ input:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{returnedOwner("execution-open",error){api(error){try executionMake("openvpn-execution-open",input,"")}}}
+public func LibboxRouterNodeChainOpenVPNExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
 public func LibboxNewRouterNodeChainExecutionRestore(_ value:LibboxRouterNodeChainExecutionRestoreCapture,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
 public func LibboxRouterNodeChainExecutionFromLast(_ input:String,_ requested:String,_ record:String,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterNodeChainExecution?{error?.pointee=NSError(domain:"SourceOnly",code:1);return nil}
 '''
@@ -249,12 +291,20 @@ func importedFixture(_ requested:String,_ first:String,_ method:String,_ count:I
   }
   reject("undersized layered packet source"){_ = try IOSNodeChainExecutionCapture.compile(bundles:tooSmall,requested:"server")}
   let bundles=try fixture(3,"off","server",false)
+  for operation in ["local-new","execution-new"]{
+   LibboxTestReturnedOwnerError(operation)
+   reject("returned native object plus error "+operation){_ = try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"server")}
+   check(LibboxTestReturnedOwnerClosed(),"returned original owner was not closed exactly once: "+operation)
+  }
   for fault in ["config","requested","launch-error","local-node"]{
    LibboxTestExecutionFault(fault)
    reject("native execution "+fault){_ = try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"server")}
   }
   let capture=try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"server")
   var replaced=try profile(bundles.last!);replaced["api_token"]="another-private-node-token"
+  LibboxTestReturnedOwnerError("execution-open")
+  reject("returned replay object plus error"){_ = try IOSNodeChainExecutionCapture.reopen(capture.launchInput,selectedProfile:profile(bundles.last!))}
+  check(LibboxTestReturnedOwnerClosed(),"returned original owner was not closed exactly once: execution-open")
   reject("changed final control"){_ = try IOSNodeChainExecutionCapture.reopen(capture.launchInput,selectedProfile:replaced)}
   reject("noncanonical launch"){_ = try IOSNodeChainExecutionCapture.reopen(capture.launchInput+" ",selectedProfile:profile(bundles.last!))}
   reject("requested execution normalized"){_ = try IOSNodeChainExecutionCapture.compile(bundles:bundles,requested:"auto")}
@@ -302,5 +352,26 @@ def main():
                      else 'ACCEPTED native execution '+name)
             assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,(result.stdout+result.stderr)[-1500:])
             print('Rejected Apple execution source control:',name)
+
+        # Each cleanup is independently causal: the native call still returns
+        # its original object and NSError; only the required close is removed.
+        local_source=APP/'IOSNodeChainCapture.swift'
+        for name,owner,reason in (
+            ('local-new',local_source,'The selected ordered native graph is unavailable.'),
+            ('execution-new',source,'The complete ordered execution could not be prepared.'),
+            ('execution-open',source,'The private execution source could not be reproduced.'),
+        ):
+            original=owner.read_text()
+            marker='try? returned?.close()\n'+('            ' if name=='local-new' else '                ')+'throw failure ?? issue("'+reason+'")'
+            assert original.count(marker)==1,name
+            mutant=work/('returned-'+name+'.swift');mutant.write_text(original.replace(marker,marker.replace('try? returned?.close()','/* controlled original owner close omitted */'),1))
+            active_command=[str(mutant) if value==str(local_source) and name=='local-new' else value for value in command]
+            execution_source=source if name=='local-new' else mutant
+            binary=work/('returned-'+name)
+            subprocess.run(active_command+[str(execution_source),str(tests),'-o',str(binary)],check=True,timeout=90)
+            result=subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
+            witness='returned original owner was not closed exactly once: '+name
+            assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,(result.stdout+result.stderr)[-1500:])
+            print('Rejected Apple returned-owner cleanup control:',name)
 
 if __name__=='__main__':main()

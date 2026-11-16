@@ -647,6 +647,12 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     }
 
     /// Public choice only; full private source compilation owns admission.
+    static func supportsOpenVPNExecution(_ nodes: [Self]) -> Bool {
+        guard (3...maximumNodes).contains(nodes.count), nodes.last?.mode == "shadowsocks",
+              nodes[nodes.count - 2].mode == "openvpn" else { return false }
+        return nodes.dropLast(2).allSatisfy({ supportsNativePrefix($0.mode) })
+    }
+
     static func supportsCONNECTExecution(_ nodes: [Self]) -> Bool {
         guard (3...maximumNodes).contains(nodes.count), nodes.last?.mode == "shadowsocks" else { return false }
         return nodes.dropLast(2).allSatisfy({ supportsNativePrefix($0.mode) }) &&
@@ -668,7 +674,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     }
 
     static func supportsServerExecution(_ nodes: [Self]) -> Bool {
-        supportsGenericExecution(nodes) || supportsCONNECTExecution(nodes) || supportsSOCKSExecution(nodes)
+        supportsGenericExecution(nodes) || supportsCONNECTExecution(nodes) || supportsSOCKSExecution(nodes) || supportsOpenVPNExecution(nodes)
     }
 
     static func validate(_ nodes: [Self], execution: String?, entryID: String?, entryMode: String?,
@@ -676,7 +682,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         guard (2...maximumNodes).contains(nodes.count),
               execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
-            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires a Shadowsocks final after paired WireGuard/AWG2 nodes, optionally with one Shadowsocks 2022, SOCKS5 or HTTP/HTTPS CONNECT node immediately before the final. CONNECT supports three to eight nodes with the final Start Layer Off. SOCKS5 supports three to eight nodes.")
+            throw issue("An ordered chain needs two to eight nodes and no separate entry/exit selection. Server or Compare requires a Shadowsocks final after paired WireGuard/AWG2 nodes, optionally with one Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node immediately before the final. CONNECT requires the final Start Layer Off.")
         }
         var seen = Set<String>()
         for node in nodes {

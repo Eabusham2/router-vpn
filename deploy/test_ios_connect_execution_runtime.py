@@ -39,6 +39,9 @@ func LibboxRouterNodeChainCONNECTExecutionNewCommandServer(_ plan:LibboxRouterNo
 func LibboxRouterNodeChainSOCKSExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:RouterVPNLibboxPlatform,_ platform:RouterVPNLibboxPlatform,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{
  error?.pointee=failure("ordinary CONNECT fixture cannot own a SOCKS execution");return nil
 }
+func LibboxRouterNodeChainOpenVPNExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:RouterVPNLibboxPlatform,_ platform:RouterVPNLibboxPlatform,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{
+ error?.pointee=failure("ordinary CONNECT fixture cannot own an OpenVPN execution");return nil
+}
 func LibboxNewCommandServer(_ handler:RouterVPNLibboxPlatform,_ platform:RouterVPNLibboxPlatform,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{CommandFactory.shared.ordinary+=1;return LibboxCommandServer()}
 func error(_ text:String)->NSError{failure(text)}
 final class RouterVPNLibboxEngine {

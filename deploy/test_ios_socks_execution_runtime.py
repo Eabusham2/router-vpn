@@ -57,7 +57,7 @@ TESTS = TESTS.replace(marker, r'''
   print("PASS Apple SOCKS and generic execution runtime: original factory, fifty-sample facade, role labels and joined cleanup")''', 1)
 
 
-def main():
+def main(native=NATIVE, tests=TESTS, family="SOCKS"):
     C.build_contract()
     host = (TUN / 'RouterVPNNodeChainExecutionHost.swift').read_text().replace('import Libbox\n', '')
     engine = (TUN / 'RouterVPNLibboxEngine.swift').read_text()
@@ -73,14 +73,14 @@ def main():
         work = Path(folder)
         source, binary = work / 'Runtime.swift', work / 'runtime'
         def run(h, f, dispatch=None):
-            source.write_text(C.H.BOUNDARY + C.H.RESTORE_BOUNDARY + NATIVE.replace('// ACTUAL_FACTORY', f).replace('// ACTUAL_IPC', ipc if dispatch is None else dispatch) + registry + h + TESTS)
+            source.write_text(C.H.BOUNDARY + C.H.RESTORE_BOUNDARY + native.replace('// ACTUAL_FACTORY', f).replace('// ACTUAL_IPC', ipc if dispatch is None else dispatch) + registry + h + tests)
             subprocess.run(['swiftc', '-j', '1', '-swift-version', '6', '-parse-as-library', '-module-cache-path', str(work / 'modules'), str(source), '-o', str(binary)], check=True, timeout=90)
             return subprocess.run([str(binary)], capture_output=True, text=True, timeout=35)
         result = run(host, factory)
         assert result.returncode == 0, result.stdout + result.stderr
         print(result.stdout.strip())
         for name, target, before, after, witness in (
-            ('typed-factory', 'factory', 'let created = capture.isSOCKS', 'let created = false', 'execution-owned factory required'),
+            ('typed-factory', 'factory', 'let created = capture.isOpenVPN' if family == 'OpenVPN' else ': capture.isSOCKS', 'let created = false' if family == 'OpenVPN' else ': false', 'execution-owned factory required'),
             ('factory-retention', 'factory', 'if let created { try host.bindNative(created) }', 'if let created, createError == nil { try host.bindNative(created) }', 'factory owner bound before error'),
             ('facade-join', 'host', 'try latency?.close() // join the original borrowed facade before its measurement service', '_ = latency // omitted original facade join', 'ACCEPTED pending facade join'),
             ('facade-late-owner', 'host', 'if let returned { retain(returned) }', 'if let returned, !cancelled { retain(returned) }', 'late original facade retained for close'),
@@ -90,12 +90,12 @@ def main():
             assert value.count(before) == 1, name
             result = run(host if target == 'factory' else value.replace(before, after, 1), factory if target == 'host' else value.replace(before, after, 1))
             assert result.returncode == 1 and ('FAIL ' + witness + '\n') in result.stdout + result.stderr, (name, result.returncode, result.stdout, result.stderr)
-            print('Rejected Apple SOCKS runtime control:', name)
+            print('Rejected Apple ' + family + ' runtime control:', name)
         before = 'if let execution { result = try execution.latencyInfo(request, session: engine.settingsEpoch) }'
         assert ipc.count(before) == 1
         result = run(host, factory, ipc.replace(before, 'if false {}', 1))
         assert result.returncode == 1 and 'FAIL typed execution IPC reaches original latency host\n' in result.stdout + result.stderr, result.stdout + result.stderr
-        print('Rejected Apple SOCKS runtime control: original-IPC-dispatch')
+        print('Rejected Apple ' + family + ' runtime control: original-IPC-dispatch')
 
 
 if __name__ == '__main__':

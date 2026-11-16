@@ -105,7 +105,7 @@ func socksFixture(_ mode:String,_ requested:String,_ authenticated:Bool,_ count:
 '''
 
 
-def main():
+def main(swift=SWIFT, family="SOCKS"):
     launch = (APP / 'IOSNodeChainLaunch.swift').read_text()
     route = launch.split('@MainActor\nextension RouterVPNModel')[0]
     model = F.BOUNDARY.replace('// ORIGINAL_CAPTURE', F.member(launch, '    func captureIOSOrderedRoute('))
@@ -117,7 +117,7 @@ def main():
         subprocess.run(['go', 'build', '-p', '1', '-o', str(compiler), str(gd / 'main.go')], cwd=ROOT, check=True, timeout=180)
         (work / 'Libbox.swift').write_text(LIBBOX)
         (work / 'CryptoKit.swift').write_text(E.CRYPTO)
-        (work / 'Tests.swift').write_text(SWIFT)
+        (work / 'Tests.swift').write_text(swift)
         (work / 'Latency.swift').write_text(route + model + latency)
         options = ['swiftc', '-j', '1', '-swift-version', '6', '-module-cache-path', str(work / 'modules')]
         suffix = '.dylib' if platform.system() == 'Darwin' else '.so'
@@ -144,7 +144,7 @@ def main():
         for count in PREFIX_NODE_COUNTS:
             result = execute(count)
             assert result.returncode == 0, (count, result.stdout, result.stderr)
-            assert result.stdout.count('PASS Apple SOCKS execution source nodes='+str(count)+': ')==1, result.stdout
+            assert result.stdout.count('PASS Apple '+family+' execution source nodes='+str(count)+': ')==1, result.stdout
             print(result.stdout.strip(), flush=True)
         for name, before, after, witness in (
             ('original-members', 'nodes == original["nodes"] as? [String],', 'true,', 'ACCEPTED typed native readback local-node'),
@@ -154,26 +154,32 @@ def main():
             assert original.count(before) == 1, name
             result = run(original.replace(before, after, 1))
             assert result.returncode == 1 and witness in result.stdout + result.stderr, (name, result.stdout, result.stderr)
-            print('Rejected Apple SOCKS source control:', name)
-        start = presentation.index('    private static func capturedSOCKS(')
-        end = presentation.index('    private static func capturedCONNECT(', start)
+            print('Rejected Apple '+family+' source control:', name)
+        if family == 'OpenVPN':
+            before = '!local.isOpenVPN || preparation["openvpn_local_launch"] as? String == local.launchInput,'
+            assert original.count(before) == 1
+            result = run(original.replace(before, 'true,', 1))
+            assert result.returncode == 1 and 'ACCEPTED typed native readback openvpn-local-launch' in result.stdout + result.stderr, result.stdout + result.stderr
+            print('Rejected Apple OpenVPN source control: sealed-local-launch')
+        start = presentation.index('    private static func capturedOpenVPNExecution(' if family == 'OpenVPN' else '    private static func capturedSOCKS(')
+        end = presentation.index('    private static func capturedGenericExecution(' if family == 'OpenVPN' else '    private static func capturedCONNECT(', start)
         section = presentation[start:end]
         before = 'guard last == expected else { return nil }'
         assert section.count(before) == 1
         (work / 'Presentation.swift').write_text(presentation[:start] + section.replace(before, 'guard true else { return nil }', 1) + presentation[end:])
         result = run(original)
-        assert result.returncode == 1 and 'SOCKS presentation rejects replaced final private source' in result.stdout + result.stderr, result.stdout + result.stderr
-        print('Rejected Apple SOCKS source control: original-presentation')
+        assert result.returncode == 1 and family+' presentation rejects replaced final private source' in result.stdout + result.stderr, result.stdout + result.stderr
+        print('Rejected Apple '+family+' source control: original-presentation')
         (work / 'Presentation.swift').write_text(presentation)
-        begin = models.index('    static func supportsSOCKSExecution(')
-        end = models.index('    static func supportsServerExecution(', begin)
+        begin = models.index('    static func supports'+family+'Execution(')
+        end = models.index('    static func supportsCONNECTExecution(' if family == 'OpenVPN' else '    static func supportsServerExecution(', begin)
         section = models[begin:end]
         before = '(3...maximumNodes).contains(nodes.count)'
         assert section.count(before) == 1
         (work / 'Models.swift').write_text(models[:begin] + section.replace(before, 'nodes.count == 3', 1) + models[end:])
         result = run(original, 4)
-        assert result.returncode == 1 and 'FAIL distinct public SOCKS choice' in result.stdout + result.stderr, result.stdout + result.stderr
-        print('Rejected Apple SOCKS source control: old-trio-admission')
+        assert result.returncode == 1 and 'FAIL distinct public '+family+' choice' in result.stdout + result.stderr, result.stdout + result.stderr
+        print('Rejected Apple '+family+' source control: old-trio-admission')
 
 
 if __name__ == '__main__':

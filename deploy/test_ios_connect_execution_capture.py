@@ -190,7 +190,9 @@ func connectFixture(_ kind:String,_ mode:String,_ requested:String,_ count:Int=3
   let valid=profile.multihopNodes!
   let typedSOCKS=["wg","wg","socks5","shadowsocks"].enumerated().map{IOSMultihopNodeSelection(id:"typed-\($0.offset)",mode:$0.element)}
   check(!IOSMultihopNodeSelection.supportsGenericExecution(typedSOCKS),"generic selector cannot borrow complete typed SOCKS")
-  for modes in [["wg"],["wg","hysteria2"],["wg","hysteria2","socks5","shadowsocks"],["wg","openvpn","shadowsocks"],["wg","shadowsocks","wg","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
+  let typedOpenVPN=["wg","openvpn","shadowsocks"].enumerated().map{IOSMultihopNodeSelection(id:"typed-openvpn-\($0.offset)",mode:$0.element)}
+  check(!IOSMultihopNodeSelection.supportsGenericExecution(typedOpenVPN),"generic selector cannot borrow typed OpenVPN")
+  for modes in [["wg"],["wg","hysteria2"],["wg","hysteria2","socks5","shadowsocks"],["wg","hysteria2","openvpn","shadowsocks"],["wg","shadowsocks","wg","shadowsocks"],Array(repeating:"wg",count:8)+["shadowsocks"]] {
    let nodes=modes.enumerated().map{IOSMultihopNodeSelection(id:"original-\($0.offset)",mode:$0.element)}
    check(!IOSMultihopNodeSelection.supportsGenericExecution(nodes),"generic selector refuses unsupported graph shape")
    reject("unsupported generic execution choice"){try IOSMultihopNodeSelection.validate(nodes,execution:"server",entryID:nil,entryMode:nil,exitID:nil,exitMode:nil)}

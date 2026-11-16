@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = "ios/RouterVPN/test_runtime_selection_contract.py"
 GUARD = "deploy/test_ios_connect_execution_workflow.py"
 GATES = tuple("test_ios_connect_execution_" + name + ".py"
-              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "layered_control", "layered_launch", "layered_profiles")) + ("test_ios_node_chain_connect_profiles.py",)
+              for name in ("capture", "prefix_controls", "runtime", "control", "launch", "speed_lab")) + tuple("test_ios_socks_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "layered_control", "layered_launch", "layered_profiles")) + tuple("test_ios_openvpn_execution_" + name + ".py" for name in ("capture", "runtime", "restore_last", "profiles")) + ("test_ios_node_chain_connect_profiles.py",)
 CAPTURE = "deploy/test_ios_connect_execution_capture.py"
 PREFIX = "deploy/test_ios_connect_execution_prefix_controls.py"
 ORIGINAL_CONTROLS = (
@@ -74,6 +74,7 @@ RELEASE = ".github/workflows/release-candidate.yml"
 INPUTS = tuple("deploy/" + name for name in GATES) + (
     "deploy/test_ios_node_chain_execution_capture.py", "deploy/test_ios_node_chain_profiles.py",
     "deploy/test_ios_node_chain_openvpn_profiles.py",
+    "internal/mobilemultihop/node_chain_openvpn_apple_fixture_test.go",
     "deploy/ios_ordered_execution_control_boundary.py", GUARD, CONTRACT, SMOKE, LIBBOX)
 STEP = "      - name: Require complete typed CONNECT execution contracts\n"
 BASE_COMMANDS = "        run: |\n          xcrun --find swiftc\n          python3 " + GUARD + "\n"
@@ -222,9 +223,27 @@ def check_capture_phases(read):
     ], "required prefix companion must execute its exact phase"
 
 
+def check_openvpn_profile_phases(read):
+    source = read("deploy/test_ios_openvpn_execution_profiles.py")
+    tree = ast.parse(source)
+    counts = [node for node in tree.body if isinstance(node, ast.Assign)
+              and [ast.unparse(target) for target in node.targets] == ["PROFILE_NODE_COUNTS"]]
+    assert len(counts) == 1 and ast.literal_eval(counts[0].value) == (3, 4, 5, 6, 7, 8), "all six original OpenVPN profile lengths are mandatory"
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and ast.unparse(node.func) == "C.main"]
+    assert len(calls) == 1 and ast.unparse(calls[0]) == "C.main(label='OpenVPN execution', roundtrip='openVPNRoundtrip', binary_cases=[(count,) for count in PROFILE_NODE_COUNTS])", "the original profile driver must execute all bounded OpenVPN phases"
+    for marker in ('CommandLine.arguments.count==3', '(3...8).contains(count)',
+                   'for network in ["tcp","udp"] {for requested in ["server","auto"] {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"]',
+                   'completedCases==12'):
+        assert source.count(marker) == 1, "complete OpenVPN profile phase lost its original matrix: " + marker
+    driver = ast.parse(read("deploy/test_ios_node_chain_connect_profiles.py"))
+    calls = [node for node in ast.walk(driver) if isinstance(node, ast.Call) and ast.unparse(node.func) == "P.main"]
+    assert len(calls) == 1 and [(item.arg, ast.unparse(item.value)) for item in calls[0].keywords if item.arg == "binary_cases"] == [("binary_cases", "binary_cases")], "typed profile driver must forward the complete phase inventory"
+
+
 def check(read):
     check_capture_phases(read)
     check_layered_socks_consumers(read)
+    check_openvpn_profile_phases(read)
     tree = ast.parse(read(CONTRACT))
     darwin = [node for node in tree.body if isinstance(node, ast.If)
               and ast.unparse(node.test) == "platform.system() == 'Darwin'"]
@@ -267,7 +286,7 @@ def check(read):
 
     libbox = read(LIBBOX)
     for path in ("ios/RouterVPN/App/IOS*.swift", "ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",
-                 CONTRACT, "deploy/test_ios_connect_execution_*.py", "deploy/test_ios_socks_execution_*.py", "deploy/test_ios_node_chain_connect_profiles.py", "deploy/ios_ordered_execution_control_boundary.py"):
+                 CONTRACT, "deploy/test_ios_connect_execution_*.py", "deploy/test_ios_socks_execution_*.py", "deploy/test_ios_openvpn_execution_*.py", "deploy/test_ios_node_chain_connect_profiles.py", "deploy/ios_ordered_execution_control_boundary.py"):
         assert libbox.count("      - '" + path + "'\n") == 2, "Apple gate lost push or pull-request path coverage"
     aggregate = job(read(RELEASE), "aggregate")
     values = re.findall(r"(?m)^    needs: \[([^\n]+)\]$", aggregate)
@@ -291,6 +310,19 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
 
     def test_complete_native_closure(self):
         check(self.read)
+
+    def test_complete_openvpn_profile_phases_cannot_be_omitted(self):
+        path = "deploy/test_ios_openvpn_execution_profiles.py"
+        for before, after in (
+                ("PROFILE_NODE_COUNTS = (3, 4, 5, 6, 7, 8)", "PROFILE_NODE_COUNTS = (3, 4, 8)"),
+                ("binary_cases=[(count,) for count in PROFILE_NODE_COUNTS]", "binary_cases=[(3,)]"),
+                ("(3...8).contains(count)", "(3...7).contains(count)"),
+                ('for network in ["tcp","udp"]', 'for network in ["tcp"]'),
+                ('for requested in ["server","auto"]', 'for requested in ["server"]'),
+                ("completedCases==12", "completedCases==6")):
+            with self.subTest(marker=before):
+                self.broken(path, before, after)
+        self.broken("deploy/test_ios_node_chain_connect_profiles.py", "binary_cases=binary_cases", "binary_cases=None")
 
     def test_complete_connect_prefix_cases_and_controls_cannot_be_omitted(self):
         for path, inventory in COMPLETE_PREFIX_CASES.items():
