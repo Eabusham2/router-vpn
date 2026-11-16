@@ -30,6 +30,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -90,6 +91,8 @@ func startDesktopInstalledOpenVPNProviderCapacity(t *testing.T, parent *desktopN
 // through this original native provider. Ordinary provider fixtures retain all
 // previous services, capacities, authentication and cleanup behavior.
 type desktopOpenVPNProviderCapture struct {
+	// Only isolated Server acceptance binds its owned public namespace tuple.
+	Direct bool
 	// Only a paired-role fixture requests a second independently issued identity.
 	Local        *nativeopenvpn.Profile
 	Remote       netip.AddrPort
@@ -108,11 +111,28 @@ func startDesktopInstalledOpenVPNProviderCaptured(t *testing.T, parent *desktopN
 		mtu = 1280
 	}
 	if captured != nil {
-		if !final || !physical.IsLoopback() || physical != clientAddress || !captured.Remote.IsValid() || !captured.Remote.Addr().IsGlobalUnicast() || captured.Remote.Addr().IsLoopback() || captured.Remote.Port() == 0 || captured.MTU < 1280 || captured.MTU > 1500 || len(captured.Routes) < 1 || len(captured.Routes) > 4 {
+		if !final || (!captured.Direct && (!physical.IsLoopback() || physical != clientAddress)) || (captured.Direct && (captured.Local == nil || maxClients != 2 || physical != captured.Remote.Addr() || physical.IsLoopback() || physical == clientAddress || request.OpenVPNFallback)) || !captured.Remote.IsValid() || !captured.Remote.Addr().IsGlobalUnicast() || captured.Remote.Addr().IsLoopback() || captured.Remote.Port() == 0 || captured.MTU < 1280 || captured.MTU > 1500 || len(captured.Routes) < 1 || len(captured.Routes) > 4 {
 			t.Fatal("imported OpenVPN provider lost its bounded private source")
 		}
 		if request.OpenVPNFallback != (captured.FallbackPort != 0) || captured.FallbackPort == captured.Remote.Port() || request.OpenVPNFallback && request.OpenVPNNetwork != "tcp" {
 			t.Fatal("imported OpenVPN fallback lacks its original bounded TCP tuple")
+		}
+		if captured.Direct {
+			interfaces, e := net.Interfaces()
+			found := false
+			for _, iface := range interfaces {
+				addresses, err := iface.Addrs()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, raw := range addresses {
+					prefix, err := netip.ParsePrefix(raw.String())
+					found = found || err == nil && prefix.Addr() == physical && prefix.Bits() == 32 && iface.Flags&net.FlagUp != 0
+				}
+			}
+			if e != nil || !found {
+				t.Fatal("direct provider lacks its exact owned namespace alias")
+			}
 		}
 		mtu = captured.MTU
 	}
@@ -272,15 +292,19 @@ func startDesktopInstalledOpenVPNProviderCaptured(t *testing.T, parent *desktopN
 	transport := ovpn.ServerTransportOptions{Protocol: request.OpenVPNNetwork}
 	received := func() { finalSequence.CompareAndSwap(0, order.Add(1)) }
 	address := ""
+	listenPort := "0"
+	if captured != nil && captured.Direct {
+		listenPort = strconv.Itoa(int(captured.Remote.Port()))
+	}
 	if request.OpenVPNNetwork == "tcp" {
-		listener, err = net.Listen("tcp4", net.JoinHostPort(physical.String(), "0"))
+		listener, err = net.Listen("tcp4", net.JoinHostPort(physical.String(), listenPort))
 		if err != nil {
 			t.Fatal(err)
 		}
 		address = listener.Addr().String()
 		transport.Listener = &desktopDarwinOpenVPNListener{Listener: listener, physical: physical, client: clientAddress, count: &rawTCP, received: received}
 	} else {
-		packet, err = net.ListenPacket("udp4", net.JoinHostPort(physical.String(), "0"))
+		packet, err = net.ListenPacket("udp4", net.JoinHostPort(physical.String(), listenPort))
 		if err != nil {
 			t.Fatal(err)
 		}

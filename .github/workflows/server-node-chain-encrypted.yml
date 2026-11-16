@@ -97,3 +97,7 @@ jobs:
             ${{ runner.temp }}/server-connect-node-chain-${{ matrix.arch }}.json
           if-no-files-found: error
           retention-days: 14
+
+  openvpn-direct:
+    name: Require actual zero-prefix OpenVPN Server suffix
+    uses: ./.github/workflows/server-openvpn-direct-encrypted.yml

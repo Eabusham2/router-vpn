@@ -1,0 +1,384 @@
+//go:build linux && !android && routervpn_server_chain_acceptance
+
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/common/uot"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// The original client entry is represented by its private capture, not a
+// synthetic native WG endpoint. The remote worker owns exactly OpenVPN + SS.
+// Entry API lease acquisition and public client adoption are separate gates.
+var serverChainOpenVPNDirectCases = []string{
+	"tcp/off/original", "tcp/aes-256-gcm/original", "tcp/aes-256-gcm+xor-whitening/original",
+	"udp/off/original", "udp/aes-256-gcm/original", "udp/aes-256-gcm+xor-whitening/original",
+	"tcp/off/wrong-server-password", "udp/off/wrong-server-password",
+	"tcp/off/wrong-final-key", "udp/off/wrong-final-key",
+	"tcp/off/failed-selected-dns", "udp/off/failed-selected-dns",
+	"tcp/off/joined-active-udp", "udp/off/joined-active-udp",
+}
+
+type serverChainOpenVPNDirectReply struct {
+	Peer struct {
+		serverChainEncryptedStats
+		Middle serverChainCONNECTMiddleStats `json:"middle"`
+	} `json:"peer"`
+	Local        nativeopenvpn.Profile `json:"local"`
+	Server       nativeopenvpn.Profile `json:"server"`
+	TCP          int64                 `json:"tcp"`
+	UDP          int64                 `json:"udp"`
+	AuthRefusals int64                 `json:"auth_refusals"`
+	Streams      int64                 `json:"streams"`
+	Packets      int64                 `json:"packets"`
+}
+type serverChainOpenVPNDirectPeer struct {
+	original *serverChainEncryptedPeer
+	reply    serverChainOpenVPNDirectReply
+}
+
+func (p *serverChainOpenVPNDirectPeer) read(t *testing.T) serverChainOpenVPNDirectReply {
+	t.Helper()
+	var v serverChainOpenVPNDirectReply
+	d := json.NewDecoder(bytes.NewReader(p.original.process.line(t)))
+	d.DisallowUnknownFields()
+	if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF || v.Peer.Schema != 1 || len(v.Peer.Prefixes) != 1 || v.Peer.PublicCA == "" || v.Local.Config == "" || v.Server.Config == "" {
+		t.Fatal("direct OpenVPN original receipt missing")
+	}
+	if v.Peer.Prefixes[0].RawUDP != 0 || v.Peer.Prefixes[0].ProofQueries != 0 || v.Peer.Final.DirectQueries != 0 || v.Peer.Final.EntryPublicQueries != 0 {
+		t.Fatal("direct OpenVPN manufactured a packet prefix or bypass")
+	}
+	if p.reply.Server.Config != "" && (p.reply.Server != v.Server || p.reply.Local != v.Local || p.reply.Peer.PublicCA != v.Peer.PublicCA) {
+		t.Fatal("original provider identities replaced")
+	}
+	p.reply = v
+	p.original.stats = v.Peer.serverChainEncryptedStats
+	return v
+}
+func (p *serverChainOpenVPNDirectPeer) control(t *testing.T, command string) serverChainOpenVPNDirectReply {
+	t.Helper()
+	if _, err := io.WriteString(p.original.process.input, command+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	return p.read(t)
+}
+func serverChainOpenVPNDirectKeys(t *testing.T) *serverChainEncryptedPeer {
+	p := serverChainEncryptedKeys(t, "wg")
+	p.prefixes = p.prefixes[:1]
+	p.clients = p.clients[:1]
+	p.servers = p.servers[:1]
+	return p
+}
+func serverChainOpenVPNDirectStart(t *testing.T, network, layer string) *serverChainOpenVPNDirectPeer {
+	t.Helper()
+	p := &serverChainOpenVPNDirectPeer{original: serverChainOpenVPNDirectKeys(t)}
+	image := serverChainEncryptedImage(t, "ROUTERVPN_SERVER_CHAIN_PEER")
+	command := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "-test.run=^TestRouterVPNDesktopOpenVPNDirectServerReferenceProcess$", "-test.count=1", "-test.timeout=100s")
+	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_OPENVPN_DIRECT_SERVER_CHILD=1"}
+	p.original.process = serverChainEncryptedStart(t, command)
+	paired := map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1", "prefixes": p.original.prefixes, "final_password": p.original.password, "final_node_proof_id": serverChainEncryptedProof(p.original.finalServer), "final_api_token": "encrypted-server-final-token"}
+	if json.NewEncoder(p.original.process.input).Encode(map[string]any{"schema": 1, "paired": paired, "network": network, "layer": layer}) != nil {
+		t.Fatal("direct OpenVPN request failed")
+	}
+	p.read(t)
+	return p
+}
+func serverChainOpenVPNFinal(t *testing.T, input, layer string) string {
+	t.Helper()
+	var row struct {
+		Mode      string `json:"mode"`
+		Files     string `json:"files"`
+		Profile   string `json:"profile_json"`
+		Start     string `json:"start"`
+		Bootstrap string `json:"dns_bootstrap"`
+	}
+	if json.Unmarshal([]byte(input), &row) != nil {
+		t.Fatal("final input")
+	}
+	var assets map[string]string
+	var profile, graph map[string]any
+	if json.Unmarshal([]byte(row.Files), &assets) != nil || json.Unmarshal([]byte(row.Profile), &profile) != nil {
+		t.Fatal("final captured assets")
+	}
+	raw, err := base64.StdEncoding.DecodeString(assets["sing-box.json"])
+	if err != nil || json.Unmarshal(raw, &graph) != nil {
+		t.Fatal("final config", err)
+	}
+	final := graph["outbounds"].([]any)[0].(map[string]any)
+	configHash, keyHash := sha256.Sum256(raw), sha256.Sum256([]byte(final["password"].(string)))
+	declaration := []byte(serverChainEncryptedJSON(t, map[string]any{"schema": 1, "node_id": profile["node_proof_id"], "configured_image": nativecomposite.SSServiceImage, "uot_version": 2, "endpoint": final["server"], "port": final["server_port"], "method": final["method"], "source_sha256": hex.EncodeToString(configHash[:]), "key_sha256": hex.EncodeToString(keyHash[:])}))
+	if err = nativecomposite.ValidateSSServiceCompanion(raw, declaration, profile["node_proof_id"].(string)); err != nil {
+		t.Fatal("actual final companion", err)
+	}
+	assets[nativecomposite.SSServiceAsset] = base64.StdEncoding.EncodeToString(declaration)
+	profile["start_layer"] = layer
+	node, err := mobilemultihop.NewNodeProfile(row.Mode, serverChainEncryptedJSON(t, assets), serverChainEncryptedJSON(t, profile), row.Start, row.Bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+func serverChainOpenVPNDirectSource(t *testing.T, p *serverChainOpenVPNDirectPeer, layer, fault string) (*mobilemultihop.NodeChainServerPolicy, multihoprelay.NodeChainCapture) {
+	t.Helper()
+	ordinaryFault := ""
+	if fault == "wrong-final-key" {
+		ordinaryFault = "wrong-ss-key"
+	}
+	original, _ := serverChainEncryptedSource(t, p.original, ordinaryFault, serverChainEncryptedCarrierCapacity(t))
+	var source mobilemultihop.NodeChainServerSource
+	if json.Unmarshal([]byte(original.Source()), &source) != nil {
+		t.Fatal("original paired final source missing")
+	}
+	last := len(source.Nodes) - 1
+	final := serverChainOpenVPNFinal(t, source.Nodes[last], layer)
+	identity := source.IdentitySources[last]
+	private := p.reply.Server
+	if fault == "wrong-server-password" {
+		private.Password += "-wrong"
+	}
+	endpoint, err := nativeopenvpn.CompileProfile(private, mobilemultihop.ExternalFinalTag, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := map[string]any{"id": "captured-openvpn-middle", "node_kind": "external", "endpoint": "203.0.113.24", "external": map[string]any{"protocol": "openvpn", "expected_public_ip": "203.0.113.88", "openvpn": private}, "dns_mode": "home", "start_layer": "off", "mtu_policy": "auto", "ipv6_mode": "on", "home_lan_access": true, "kill_switch_policy": "on-connect"}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "endpoints": []any{endpoint}, "outbounds": []any{}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "rules": []any{}, "auto_detect_interface": true}}
+	capture := map[string]any{"schema": 1, "exit_id": "captured-openvpn-middle", "protocol": "openvpn", "expected_public_ip": "203.0.113.88", "profile": profile}
+	middle, err := mobilemultihop.NodeChainImportedOpenVPNMemberInput(serverChainEncryptedJSON(t, graph), serverChainEncryptedJSON(t, capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	localKey := base64.StdEncoding.EncodeToString(serverChainEncryptedKey(t).Bytes())
+	serverKey := base64.StdEncoding.EncodeToString(serverChainEncryptedKey(t).Bytes())
+	local, err := nativeopenvpn.DescribePeer(p.reply.Local, localKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := nativeopenvpn.DescribePeer(private, serverKey)
+	if err != nil || nativeopenvpn.ValidatePublicPair(local, remote) != nil {
+		t.Fatal("independent original provider pair missing", err)
+	}
+	source.Schema = 5
+	source.Nodes = []string{middle, final}
+	source.IdentitySources = []string{"", identity}
+	source.OpenVPNPairing = &mobilemultihop.NodeChainOpenVPNServerPairing{PrivateKey: serverKey, Local: local, Server: remote}
+	policy, err := mobilemultihop.NewNodeChainOpenVPNServerPolicy(serverChainEncryptedJSON(t, source))
+	if err != nil {
+		t.Fatal("original direct OpenVPN source refused", err)
+	}
+	descriptor := policy.Descriptor()
+	digest, err := descriptor.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entryKey := serverChainEncryptedKey(t)
+	request := multihoprelay.NodeChainRequest{Schema: 5, SessionID: serverChainEncryptedRandom(t, 16), EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, DNSPolicySHA256: descriptor.DNSPolicySHA256, Epoch: serverChainEncryptedRandom(t, 32), Peer: "192.168.210.1", AcquireExpiresAt: time.Now().Add(30 * time.Second).Unix(), Port: 28440, LocalPacketPositions: []int{0}, LocalPacketPublicKeys: []string{base64.StdEncoding.EncodeToString(entryKey.PublicKey().Bytes())}}
+	for i := range descriptor.Members {
+		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: i + 1, Username: serverChainEncryptedRandom(t, 24), Password: serverChainEncryptedRandom(t, 24)})
+	}
+	owned := multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: descriptor, RegistrySHA256: digest, OwnerID: serverChainEncryptedRandom(t, 32), Peer: request.Peer, Host: request.Peer, BootstrapDeadline: time.Now().Add(30 * time.Second).UTC()}
+	if err = owned.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return policy, owned
+}
+func serverChainOpenVPNDirectScenario(t *testing.T, name string) {
+	parts := strings.Split(name, "/")
+	network, layer, fault := parts[0], parts[1], parts[2]
+	p := serverChainOpenVPNDirectStart(t, network, layer)
+	policy, capture := serverChainOpenVPNDirectSource(t, p, layer, fault)
+	if fault == "failed-selected-dns" {
+		p.control(t, "fail-dns")
+	}
+	worker := serverChainEncryptedWorkerStart(t, p.original, policy, capture, "")
+	pending := worker.call(t, "snapshot")
+	if !pending.OK || pending.Receipt == nil || pending.Receipt.TrafficAllowed || pending.Receipt.Phase != multihoprelay.NodeChainPending {
+		t.Fatal("direct OpenVPN escaped pending")
+	}
+	final := capture.Request.Users[1]
+	worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+	if before := p.control(t, "stats"); before.TCP != 0 || before.UDP != 0 {
+		t.Fatal("pending front reached original provider")
+	}
+	if !worker.call(t, "bootstrap").OK {
+		t.Fatal("original direct OpenVPN bootstrap refused")
+	}
+	negative := strings.HasPrefix(fault, "wrong-") || fault == "failed-selected-dns"
+	ready, failed := false, false
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		reply := worker.call(t, "snapshot")
+		if !reply.OK {
+			failed = true
+			break
+		}
+		if reply.Receipt.Phase == multihoprelay.NodeChainReady {
+			ready = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	var active net.PacketConn
+	if negative {
+		// Provider authentication can remain initial-pending until the original
+		// 30-second bootstrap boundary. Explicit Stop still must join that owner.
+		if ready || !failed && fault != "wrong-server-password" {
+			t.Fatal("invalid direct OpenVPN source did not remain closed")
+		}
+		worker.refuse(t, final, M.ParseSocksaddr("10.77.0.1:8787"))
+	} else {
+		if !ready {
+			t.Fatal("actual direct OpenVPN suffix never proved ready")
+		}
+		targets, err := policy.ProofTargets(capture)
+		if err != nil || len(targets) != 2 || targets[0].Proof.NodeID != "" || targets[1].Proof.NodeID == "" {
+			t.Fatal("OpenVPN and paired proof authorities merged", err)
+		}
+		worker.health(t, final, targets[1].API, targets[1].Token, targets[1].Proof.NodeID)
+		worker.selectedDNS(t)
+		before := p.control(t, "stats")
+		foreign := final
+		foreign.Password = serverChainEncryptedRandom(t, 24)
+		worker.refuse(t, foreign, M.ParseSocksaddr("10.77.0.1:8787"))
+		worker.refuse(t, capture.Request.Users[0], uot.RequestDestination(2))
+		after := p.control(t, "stats")
+		if after.Peer.Final.RouterQueries != before.Peer.Final.RouterQueries || after.Peer.Final.DNSQueries != before.Peer.Final.DNSQueries {
+			t.Fatal("foreign or middle credentials reached final")
+		}
+		target := M.ParseSocksaddr("10.77.0.1:45999")
+		active = worker.packets(t, target)
+		payload := []byte("original-openvpn-direct-" + serverChainEncryptedRandom(t, 16))
+		if n, err := active.WriteTo(payload, target); err != nil || n != len(payload) {
+			t.Fatal("original direct packet write", err)
+		}
+		buffer := make([]byte, 2048)
+		n, from, err := active.ReadFrom(buffer)
+		if err != nil || from.String() != target.String() || !bytes.Equal(buffer[:n], payload) {
+			t.Fatal("actual OpenVPN SS UDP echo", err)
+		}
+		if fault == "joined-active-udp" {
+			p.control(t, "drop-cover")
+			if _, err = active.WriteTo(payload, target); err != nil {
+				t.Fatal(err)
+			}
+			until := time.Now().Add(2 * time.Second)
+			for time.Now().Before(until) {
+				v := p.control(t, "stats")
+				if v.Peer.Final.CoverPackets > v.Peer.Final.CoverReplies {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			v := p.control(t, "stats")
+			if v.Peer.Final.CoverPackets <= v.Peer.Final.CoverReplies {
+				t.Fatal("no actual pending packet before Stop")
+			}
+		}
+	}
+	stats := p.control(t, "stats")
+	if network == "tcp" && (stats.TCP <= 0 || stats.UDP != 0) || network == "udp" && (stats.UDP <= 0 || stats.TCP != 0) {
+		t.Fatal("original provider transport observation changed")
+	}
+	if fault == "wrong-server-password" && (stats.AuthRefusals <= 0 || stats.Streams != 0 || stats.Packets != 0) {
+		t.Fatal("wrong Server credentials borrowed Local authority")
+	}
+	if !negative && (stats.AuthRefusals != 0 || stats.Streams <= 0 || stats.Packets <= 0 || stats.Peer.Middle.PublicQueries == 0 || stats.Peer.Final.RouterQueries == 0 || stats.Peer.Final.DNSQueries == 0 || stats.Peer.Final.FinalPublicQueries == 0 || stats.Peer.Final.CoverReplies == 0) {
+		t.Fatal("actual direct OpenVPN final/DNS proof incomplete")
+	}
+	worker.stop(t)
+	if active != nil {
+		_ = active.SetReadDeadline(time.Now().Add(time.Second))
+		if _, _, err := active.ReadFrom(make([]byte, 2048)); err == nil {
+			t.Fatal("original packet survived joined Stop")
+		}
+		_ = active.Close()
+	}
+	_ = p.original.process.input.Close()
+	p.original.process.join(t)
+	t.Log("OPENVPN_DIRECT_SERVER_RECEIPT " + serverChainEncryptedJSON(t, map[string]any{"case": name, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "ready": ready, "selected_dns": ready, "provider_tcp": stats.TCP, "provider_udp": stats.UDP, "auth_refusals": stats.AuthRefusals, "streams": stats.Streams, "packets": stats.Packets, "unused_prefix_packets": stats.Peer.Prefixes[0].RawUDP, "unused_prefix_proofs": stats.Peer.Prefixes[0].ProofQueries, "retired": true, "worker_joined": true, "peer_joined": true}))
+}
+func TestServerChainOpenVPNDirectEncryptedNative(t *testing.T) {
+	if os.Getenv("ROUTERVPN_SERVER_CHAIN_NATIVE_NS") != "1" || os.Geteuid() != 0 {
+		t.Fatal("direct OpenVPN requires owned Linux namespace")
+	}
+	info, err := os.Stat("/proc/self/ns/net")
+	if err != nil || os.Getenv("ROUTERVPN_SERVER_CHAIN_OUTER_NETNS") == "" || fmt.Sprintf("%d:%d", info.Sys().(*syscall.Stat_t).Dev, info.Sys().(*syscall.Stat_t).Ino) == os.Getenv("ROUTERVPN_SERVER_CHAIN_OUTER_NETNS") {
+		t.Fatal("direct OpenVPN retained outer namespace")
+	}
+	for _, name := range serverChainOpenVPNDirectCases {
+		t.Run(name, func(t *testing.T) { serverChainOpenVPNDirectScenario(t, name) })
+	}
+}
+func TestServerChainOpenVPNDirectEncryptedSource(t *testing.T) {
+	for _, name := range serverChainOpenVPNDirectCases {
+		t.Run(name, func(t *testing.T) {
+			parts := strings.Split(name, "/")
+			directory := os.Getenv("ROUTERVPN_OPENVPN_DIRECT_PROFILES")
+			if directory == "" || !filepath.IsAbs(directory) {
+				t.Fatal("owned provider profile directory missing")
+			}
+			path := filepath.Join(directory, parts[0]+".json")
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() > 1<<20 {
+				t.Fatal("original private provider export required", err)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := &serverChainOpenVPNDirectPeer{original: serverChainOpenVPNDirectKeys(t)}
+			d := json.NewDecoder(bytes.NewReader(raw))
+			d.DisallowUnknownFields()
+			if d.Decode(&p.reply) != nil || d.Decode(new(any)) != io.EOF {
+				t.Fatal("original provider pair source changed")
+			}
+			p.original.stats.Address = "192.168.210.2:51820"
+			policy, capture := serverChainOpenVPNDirectSource(t, p, parts[1], parts[2])
+			proofs := policy.ProofInventory()
+			_, original, err := policy.ReadOpenVPNServerCapture(capture)
+			if err != nil || policy.NativeCarrierRequired() || len(proofs) != 2 || proofs[0].Mode != "openvpn" || proofs[0].NodeID != "" || proofs[1].NodeID != serverChainEncryptedProof(p.original.finalServer) || original.Middle.Remote.Host != "203.0.113.24" || original.Middle.Remote.Port != 1194 || original.Middle.Remote.Network != parts[0] {
+				t.Fatal("direct Server acquired unrelated carrier or identity", err)
+			}
+			routes, err := policy.FrontRoutes(capture)
+			if err != nil || len(routes) != 2 || routes[0].Final || !routes[1].Final || routes[1].UDPOverTCPVersion != 2 {
+				t.Fatal("original direct front scope changed", err)
+			}
+			var source mobilemultihop.NodeChainServerSource
+			if json.Unmarshal([]byte(policy.Source()), &source) != nil {
+				t.Fatal("original source unavailable")
+			}
+			source.OpenVPNPairing.Local = source.OpenVPNPairing.Server
+			if _, err = mobilemultihop.NewNodeChainOpenVPNServerPolicy(serverChainEncryptedJSON(t, source)); err == nil {
+				t.Fatal("same provider identity acquired both roles")
+			}
+			foreign := capture
+			foreign.Source.Members = append([]multihoprelay.NodeChainMember(nil), capture.Source.Members...)
+			foreign.Source.Members[0].SourceSHA256 = strings.Repeat("f", 64)
+			if _, _, err = policy.ReadOpenVPNServerCapture(foreign); err == nil {
+				t.Fatal("foreign OpenVPN capture accepted")
+			}
+		})
+	}
+}

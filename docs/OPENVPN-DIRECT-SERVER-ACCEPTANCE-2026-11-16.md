@@ -1,0 +1,105 @@
+# OpenVPN Server suffix acceptance — November 16, 2026
+
+This gate covers the existing schema-five Server graph whose remote worker
+contains an imported OpenVPN member and an independent paired SS2022 final
+member, without an additional remote WG/AWG prefix. The client's entry remains
+outside that remote worker. It continues recovered requirements 214–224 and
+addendum 336; it does not establish every requested graph or device scenario.
+
+The source baseline for the completed local validation is
+`9dfc56c6c0c61b22f84e686400d3edfb5d8e50e7` plus this unit.
+
+## Required release path
+
+`server-openvpn-direct-encrypted.yml` runs the actual prepared Server worker,
+independent provider peer, and driver in owned Linux network namespaces on
+AMD64 and ARM64. It is an unconditional reusable job of the existing
+`server-node-chain-encrypted.yml`. The release candidate's
+`server-ordered-encrypted` job calls that workflow, and the aggregate native
+release requires that job. Standalone push and pull-request runs retain their
+source path filters; an exact commit is required for standalone acceptance.
+
+The gate requires all fourteen cases:
+
+| Transport | Original final layers | Additional refusal or retirement cases |
+| --- | --- | --- |
+| TCP | Off, AES-256-GCM, AES-256-GCM + XOR whitening | Wrong Server provider password, wrong final key, failed selected DNS, Stop with an active pending UDP exchange |
+| UDP | Off, AES-256-GCM, AES-256-GCM + XOR whitening | The same four cases |
+
+Each accepted case requires actual provider stream and packet counters,
+separate public-middle and private-final proofs, selected DNS, and joined
+worker/provider retirement. Wrong Server credentials must produce an
+authentication refusal without transferring application data. Foreign final
+credentials and middle-only credentials cannot reach the final service.
+
+## Original provider and namespace ownership
+
+The reference uses a test-owned `203.0.113.24/32` alias inside its isolated peer
+namespace. A narrow opt-in in the existing provider fixture permits only the
+captured original literal remote, matching physical address, and two separate
+provider credential identities. The ordinary provider fixture retains its
+existing loopback boundary.
+
+The reused reference prefix supplies the existing final services. It is not a
+member of the product's remote graph and is never its packet carrier. Its
+packet and proof counters must remain zero. The source controls additionally
+require `NativeCarrierRequired()` to be false and reject both a shared provider
+identity and a foreign captured source.
+
+The new namespace program changes only the exact case inventory, selected
+test root, and owned alias command. The original process, namespace,
+bootstrap, proof, and cleanup bounds remain in force. The native receipt
+parser requires exact case selection, complete counters and joins, strict
+types, and a complete successful test inventory. Missing, duplicate, skipped,
+foreign, or late output cannot produce an acceptance receipt.
+
+## Completed local validation
+
+The actual shipping preparers ran against pristine pinned checkouts:
+
+* Native core: `1ac1a339cb1223e9c70eae14c44411c75033c02d`.
+* Xray source: `50231eaff98ccc31b5cbd247a721c16e97fe5ec1`.
+
+The complete source verifier checked **2,809 records** before and after the
+build. Their combined identity was
+`4dfe3754da27d0de1b10f00053942757797dc966b56fcd6cfbe837726f07af71`.
+Compilation used pinned Go 1.26.3, race instrumentation, read-only modules,
+the actual native build tags, and the original 600-second compile bounds.
+
+| Actual output | Compile time | SHA-256 |
+| --- | ---: | --- |
+| Shipping worker | 97.024 s | `984ea348886f0d0fb16bef9d1fe8a04d9aaffef26a0177120abaf44c93addee9` |
+| Independent provider peer | 75.150 s | `db09a1177fd67888ae2a73f50e41f2c15153f6d5e127fd0c227d52334f0a3843` |
+| Acceptance driver | 48.277 s | `8fe9f7895fa400c1580c1a5be4e7c1832b39bfded9cfc22ad1f0947d93522353` |
+
+Both actual provider source-export cases passed. All fourteen actual source
+cases passed, including independent credentials, captured transport, source
+refusals and the absence of a remote packet carrier. The existing source/MTU
+inventory also passed. Total execution of this compile-and-source mode took
+235.090 seconds, with all checked source bytes unchanged. Temporary private
+exports and generated executables were removed by the original gate after
+their identities were recorded.
+
+The gate's fifteen runner controls passed at this baseline. They cover exact
+case selection, receipt types, missing and duplicated output, source ownership,
+namespace deltas, workflow inclusion and prevention of compile-only bypasses.
+
+The retained compile/source receipt has SHA-256
+`d659aaa41a6b4345085dc58678f64d519b0898e82dbaefeda69b80b2c1ee1ced`;
+its log has SHA-256
+`69430e5d2c19c9c0665417a2fc53b6e56f844a4ab5e26735778ed5d4af85dca7`.
+An earlier copied-core preparation was refused by the existing generated-source
+ownership guard. The first pristine compile then exhausted scratch disk space.
+Neither attempt counts as a passing build; the successful attempt followed
+removal of reproducible compiler-cache archives, without changing source or
+test bounds.
+
+## Acceptance still required
+
+Local compilation and source cases do not establish encrypted network
+acceptance. This environment's network namespace setup is denied, so the
+local result explicitly has scope `compile-and-source-only` and an empty
+native-case receipt list. The required hosted AMD64 and ARM64 jobs must execute
+all fourteen encrypted cases on the published source. Actual entry API lease
+acquisition, public client adoption, installed-device behavior, private
+deployment and physical off-LAN acceptance remain separate requirements.
