@@ -285,18 +285,33 @@ class OrdinaryHysteria2Scope(unittest.TestCase):
                     for case in GATE.EXTERNAL_HY2_CASES]
         invalid += [(0, complete + marker + "\n") for marker in (
             "--- SKIP: hidden", "WARNING: DATA RACE", "--- FAIL: hidden", "FAIL", "panic: bad")]
-        for status, output in [(0, complete), *invalid]:
-            with self.subTest(status=status, output=output):
-                raw = io.BytesIO()
-                stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
-                try:
-                    with contextlib.redirect_stdout(stream):
-                        if (status, output) == (0, complete):
-                            GATE.report_external_hysteria2(status, output)
-                        else:
-                            with self.assertRaisesRegex(ValueError, "required native result"):
+        # Model both console newline policies explicitly on every host. The
+        # reporter preserves the selected policy while changing only encoding;
+        # native verdict input is never normalized to make a refusal pass.
+        for newline in ("\n", "\r\n"):
+            for status, output in [(0, complete), *invalid]:
+                with self.subTest(newline=newline, status=status, output=output):
+                    raw = io.BytesIO()
+                    stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", newline=newline)
+                    try:
+                        with contextlib.redirect_stdout(stream):
+                            if (status, output) == (0, complete):
                                 GATE.report_external_hysteria2(status, output)
-                    self.assertEqual(raw.getvalue().decode("utf-8"), output)
+                            else:
+                                with self.assertRaisesRegex(ValueError, "required native result"):
+                                    GATE.report_external_hysteria2(status, output)
+                        self.assertEqual(raw.getvalue(), output.replace("\n", newline).encode("utf-8"))
+                        self.assertEqual(stream.encoding, "utf-8")
+                        self.assertEqual(stream.errors, "strict")
+                    finally:
+                        stream.close()
+            with self.subTest(newline=newline, unencodable=True):
+                raw = io.BytesIO()
+                stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", newline=newline)
+                try:
+                    with contextlib.redirect_stdout(stream), self.assertRaises(UnicodeEncodeError):
+                        GATE.print_native_output("invalid captured character: \ud800\n")
+                    self.assertEqual(raw.getvalue(), b"")
                     self.assertEqual(stream.errors, "strict")
                 finally:
                     stream.close()
