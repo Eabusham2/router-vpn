@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/imported-packet-reality-native.yml'
+      - '.github/workflows/typed-connected-candidates.yml'
       - 'internal/**'
       - 'mobile/**'
       - 'android/**'
