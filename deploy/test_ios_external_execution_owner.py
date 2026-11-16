@@ -88,8 +88,29 @@ final class LibboxRouterOrderedLatency {
 }
 func LibboxRouterValidatePrivateNodeJSON(_ raw:String,_ error:inout NSError?)->Bool{error=FixtureFailure.error;return false}
 func LibboxRouterNodeChainNewLatencyBenchmark(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ probe:LibboxRouterHopMeasurement,_ error:inout NSError?)->LibboxRouterOrderedLatency?{error=FixtureFailure.error;return nil}
+// Ordered candidate owners are unavailable here. The extracted shipping Stop
+// methods retain their complete typed cleanup checks; these declarations must
+// not turn an ordinary external proof into an ordered candidate authority.
+final class LibboxRouterNodeChainSOCKS {private init(){}}
+final class LibboxRouterNodeChainCONNECT {private init(){}}
+struct IOSNodeChainSOCKSCapture {let plan:LibboxRouterNodeChainSOCKS}
+struct IOSNodeChainCONNECTCapture {let plan:LibboxRouterNodeChainCONNECT}
+enum RouterVPNNodeCandidateOwner {
+ case ordinary(LibboxRouterNodeChain)
+ case socks(LibboxRouterNodeChainSOCKS)
+ case connect(LibboxRouterNodeChainCONNECT)
+}
+final class RouterVPNNodeCandidateSession {
+ private init(){}
+ func invalidate(){}
+ func matches(owner:RouterVPNNodeCandidateOwner,server:LibboxCommandServer)->Bool{false}
+ func close()throws{throw FixtureFailure.error}
+}
+final class RouterVPNNodeCandidateRegistry: @unchecked Sendable {
+ static let shared=RouterVPNNodeCandidateRegistry();private init(){}
+ func close(original:RouterVPNNodeCandidateSession)->Bool{false}
+}
 // This ordinary external fixture cannot construct an ordered execution host.
-final class RouterVPNNodeCandidateSession {func invalidate(){};func close()throws{throw FixtureFailure.error}}
 func LibboxRouterNodeChainNewHopMeasurement(_ plan:LibboxRouterNodeChain,_ server:LibboxCommandServer,_ failure:inout NSError?)->LibboxRouterHopMeasurement?{failure=FixtureFailure.error;return nil}
 final class RouterVPNNodeChainExecutionHost {
  func close()throws{throw FixtureFailure.error}
@@ -101,6 +122,7 @@ final class RouterVPNNodeChainExecutionHost {
 // test_ios_node_chain_socks_host.py and the whole-engine delivery gate.
 final class RouterVPNNodeChainSOCKSHost {
  private init(){}
+ var capture:IOSNodeChainSOCKSCapture{fatalError("unexpected SOCKS capture in external fixture")}
  func close()throws{throw FixtureFailure.error}
  func retainForRetirement(){fatalError("unexpected SOCKS retirement in external fixture")}
  func releaseRetirement(){fatalError("unexpected SOCKS release in external fixture")}
@@ -110,6 +132,7 @@ final class RouterVPNNodeChainSOCKSHost {
 // Its actual lifecycle runs in test_ios_node_chain_connect_host.py.
 final class RouterVPNNodeChainCONNECTHost {
  private init(){}
+ var capture:IOSNodeChainCONNECTCapture{fatalError("unexpected CONNECT capture in external fixture")}
  func close()throws{throw FixtureFailure.error}
  func retainForRetirement(){fatalError("unexpected CONNECT retirement in external fixture")}
  func releaseRetirement(){fatalError("unexpected CONNECT release in external fixture")}
