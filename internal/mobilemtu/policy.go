@@ -258,28 +258,15 @@ func NewPlan(config string, actual int) (*Plan, error) {
 			}
 		}
 	}
-	// Validate through a Start Layer too; its datagrams still have to fit the
-	// original predecessor interface. Never let a wrapper hide control overhead.
+	// A packet may cross several independently captured SS carriers and its
+	// own Start Layer before reaching an actual preceding packet interface.
+	// Validate the whole datagram envelope; a proxy TUN is not its capacity.
 	if packet["type"] == "wireguard" || packet["type"] == awgpolicy.Type {
-		next, _ := packet["detour"].(string)
-		entry := all[next]
-		var layer map[string]any
-		if entry != nil && (entry["type"] == "shadowsocks" || entry["type"] == "routervpn-aes-xor") {
-			layer = entry
-			next, _ = layer["detour"].(string)
-			entry = all[next]
-			if next != "" && (entry == nil || entry["tag"] == layer["tag"] || entry["tag"] == packet["tag"]) {
-				return nil, errors.New("missing or cyclic Start Layer predecessor")
-			}
+		e, entry, failure := awgpolicy.NestedPacketEnvelope(packet, all)
+		if failure != nil {
+			return nil, failure
 		}
-		if entry != nil && (entry["type"] == "wireguard" || entry["type"] == awgpolicy.Type) {
-			if entry["tag"] == packet["tag"] {
-				return nil, errors.New("cyclic nested packet envelope")
-			}
-			e, failure := awgpolicy.EndpointEnvelope(packet, layer)
-			if failure != nil {
-				return nil, failure
-			}
+		if entry != nil {
 			outer, failure := intField(entry, "mtu", 0)
 			if failure != nil {
 				return nil, failure
