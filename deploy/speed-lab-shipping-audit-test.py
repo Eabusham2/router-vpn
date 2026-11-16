@@ -165,8 +165,10 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
                         "cmd/client/desktop_node_chain_linux.go",
                         "cmd/client/desktop_node_chain_execution_launch.go",
                         "cmd/client/desktop_node_chain_execution_graph.go",
+                        "cmd/client/desktop_node_chain_socks_execution.go",
                         "internal/mobilemultihop/node_chain_execution_desktop.go",
-                        "internal/mobilemultihop/node_chain_connect_execution_desktop.go")
+                        "internal/mobilemultihop/node_chain_connect_execution_desktop.go",
+                        "internal/mobilemultihop/node_chain_socks_execution_desktop.go")
     sources = {path: (Path(__file__).resolve().parents[1]/path).read_text() for path in (
         "cmd/client/speed_lab_paths.go", "cmd/client/desktop_external_path.go",
         "cmd/client/speed_lab.go", "cmd/client/multihop_native_launch.go", *platform_sources)}
@@ -190,6 +192,8 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
 
     def test_owner_context_and_dns_cannot_be_removed_or_borrowed(self):
         changes = (
+            ("cmd/client/desktop_node_chain_socks_execution.go", 'if socks != nil {\n\t\tcount++\n\t}', 'if false {\n\t\tcount++\n\t}'),
+            ("internal/mobilemultihop/node_chain_socks_execution_desktop.go", 'if p == nil || preparation == nil || p.preparation != preparation || p.Validate() != nil {', 'if p == nil || preparation == nil {'),
             ("cmd/client/speed_lab_paths.go", 'Imported: imported', 'Imported: nil'),
             ("cmd/client/speed_lab_paths.go", 'owner != identity.Imported', 'owner == nil'),
             ("cmd/client/speed_lab_paths.go", 'network, err = identity.Imported.physicalNetworkContext(ctx)', 'network, err = "cached-network", nil'),
