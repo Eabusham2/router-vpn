@@ -16,10 +16,14 @@ type nodeChainExecutionMobileProjection struct {
 	connect         *nodeChainCONNECTExecutionMobileRestore
 	socks           *nodeChainSOCKSExecutionMobileRestore
 	openvpn         *nodeChainOpenVPNExecutionMobileRestore
+	multiple        *nodeChainMultipleImportedExecutionMobileRestore
 }
 
 func (p *NodeChainExecutionPreparation) validateMobileCapture() error {
 	m := p.mobile
+	if m != nil && m.multiple != nil {
+		return m.multiple.validate(p)
+	}
 	if m != nil && m.openvpn != nil {
 		return m.openvpn.validate(p)
 	}
@@ -138,6 +142,9 @@ func (c NodeChainExecutionMobileRestoreCapture) NewPreparationContext(ctx contex
 		return nil, err
 	}
 	p := c.restore.projection
+	if p.preparation.multiple != nil {
+		return c.newMultipleImportedPreparationContext(ctx)
+	}
 	if p.preparation.openvpn != nil {
 		return c.newOpenVPNPreparationContext(ctx)
 	}

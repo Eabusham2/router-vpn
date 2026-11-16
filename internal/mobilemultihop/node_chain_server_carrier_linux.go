@@ -752,3 +752,8 @@ func nodeChainServerCarrierEvent(message syscall.NetlinkMessage, target Physical
 		return false, nodeChainServerCarrierError
 	}
 }
+
+// The multiple-import family retains its separately captured packet-first root.
+func NewNodeChainMultipleImportedServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
+	return newNodeChainServerCarrierContext(ctx, lifetime, source, 6)
+}

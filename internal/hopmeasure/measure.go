@@ -256,6 +256,17 @@ func NewOrderedImportedSSPrefixContext(ctx context.Context, engine Engine, hops 
 // The source adapter must bind each public position to its original import;
 // this constructor grants no Server tags, arbitrary host or private API scope.
 func NewOrderedImportedNodesContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	return newOrderedImportedNodesContext(ctx, engine, hops, false)
+}
+
+// NewOrderedImportedNodesServerContext requires a complete original inventory
+// with one captured Server digest across every authenticated suffix route.
+// It does not widen the Local or older penultimate-only constructors.
+func NewOrderedImportedNodesServerContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	return newOrderedImportedNodesContext(ctx, engine, hops, true)
+}
+
+func newOrderedImportedNodesContext(ctx context.Context, engine Engine, hops []Hop, server bool) (*Service, error) {
 	if len(hops) < 3 || len(hops) > 8 {
 		return nil, errors.New("ordered imported nodes require a complete bounded path")
 	}
@@ -271,7 +282,7 @@ func NewOrderedImportedNodesContext(ctx context.Context, engine Engine, hops []H
 	if len(publicPositions) == 0 {
 		return nil, errors.New("ordered imported nodes require an original public interior")
 	}
-	return newContextWithPublicPositions(ctx, engine, hops, true, publicPositions, false)
+	return newContextWithPublicPositions(ctx, engine, hops, true, publicPositions, server)
 }
 
 func newContext(ctx context.Context, engine Engine, hops []Hop, ordered bool, importedMiddle bool, serverOrdered bool) (*Service, error) {

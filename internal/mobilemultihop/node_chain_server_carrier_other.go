@@ -20,3 +20,8 @@ func NewNodeChainSOCKSServerCarrierContext(ctx, lifetime context.Context, source
 func NewNodeChainOpenVPNServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
 	return nil, nodeChainServerCarrierError
 }
+
+// The multiple-import family retains its separately captured packet-first root.
+func NewNodeChainMultipleImportedServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
+	return nil, nodeChainServerCarrierError
+}

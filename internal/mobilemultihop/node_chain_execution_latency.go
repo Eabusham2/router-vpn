@@ -37,6 +37,20 @@ type nodeChainExecutionLatencyHop struct {
 	Kind     string `json:"kind"`
 }
 
+// This typed extension is issued only by the original schema-six projection.
+// Public tags belong to the selected Local/Server proof inventory; its source
+// digest retains the complete original Local capture and selected generation.
+type nodeChainExecutionLatencyMultipleImported struct {
+	Schema               int                               `json:"schema"`
+	OriginalSourceSHA256 string                            `json:"original_source_sha256"`
+	Public               []nodeChainExecutionLatencyPublic `json:"public"`
+}
+type nodeChainExecutionLatencyPublic struct {
+	Position     int    `json:"position"`
+	Tag          string `json:"tag"`
+	SourceSHA256 string `json:"source_sha256"`
+}
+
 // NewLatencyBenchmarkContext attaches a facade only after the actual selected
 // execution and the host's original measurement association both validate.
 // Source/config belong to that projection, never caller-supplied physical or
@@ -65,20 +79,39 @@ func (s *NodeChainExecutionMeasurement) NewLatencyBenchmarkContext(ctx context.C
 		} else if position == len(proofs)-1 {
 			role = "exit"
 		}
-		if position == p.policy.importedPublicPosition() {
+		if p.policy.importedPublicAt(position) {
 			kind = "public-path"
 		}
 		hops[position] = nodeChainExecutionLatencyHop{proof.ProfileID, position, role, kind}
 	}
+	var multiple *nodeChainExecutionLatencyMultipleImported
+	if p.policy.multiple != nil {
+		captured, _, captureErr := p.ImportedPublicMeasurementCaptures(s.engine.trial.execution)
+		if captureErr != nil || len(captured) == 0 {
+			return nil, nodeChainExecutionError
+		}
+		original, originalErr := p.preparation.OriginalMultipleImportedSource()
+		if originalErr != nil {
+			return nil, originalErr
+		}
+		multiple = &nodeChainExecutionLatencyMultipleImported{Schema: 6, OriginalSourceSHA256: original.SourceSHA256()}
+		for _, value := range captured {
+			if value.Position <= 0 || value.Position >= len(hops)-1 || hops[value.Position].Kind != "public-path" {
+				return nil, nodeChainExecutionError
+			}
+			multiple.Public = append(multiple.Public, nodeChainExecutionLatencyPublic{value.Position, value.Tag, value.SourceSHA256})
+		}
+	}
 	digest := sha256.Sum256([]byte(identity))
 	capture, err := json.Marshal(struct {
-		Schema           int                            `json:"schema"`
-		SourceSHA256     string                         `json:"source_sha256"`
-		ConfigSHA256     string                         `json:"config_sha256"`
-		GenerationSHA256 string                         `json:"generation_sha256"`
-		Execution        string                         `json:"selected_execution"`
-		Nodes            []nodeChainExecutionLatencyHop `json:"nodes"`
-	}{1, p.SourceSHA256(), p.ConfigSHA256(), hex.EncodeToString(digest[:]), s.engine.trial.execution, hops})
+		Schema           int                                        `json:"schema"`
+		SourceSHA256     string                                     `json:"source_sha256"`
+		ConfigSHA256     string                                     `json:"config_sha256"`
+		GenerationSHA256 string                                     `json:"generation_sha256"`
+		Execution        string                                     `json:"selected_execution"`
+		Nodes            []nodeChainExecutionLatencyHop             `json:"nodes"`
+		MultipleImported *nodeChainExecutionLatencyMultipleImported `json:"multiple_imported,omitempty"`
+	}{1, p.SourceSHA256(), p.ConfigSHA256(), hex.EncodeToString(digest[:]), s.engine.trial.execution, hops, multiple})
 	if err != nil {
 		return nil, err
 	}

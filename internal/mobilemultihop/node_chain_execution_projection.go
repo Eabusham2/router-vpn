@@ -12,15 +12,17 @@ const NodeChainExecutionGateTag = "routervpn-chain-application"
 // source before entry-authenticated discovery is available. It grants no
 // application forwarding and contains no guessed server source or port.
 type NodeChainExecutionPreparationSource struct {
-	DesktopOpenVPN     *DesktopNodeChainMetadata        `json:"desktop_openvpn,omitempty"`
-	OpenVPNLocalLaunch string                           `json:"openvpn_local_launch,omitempty"`
-	Schema             int                              `json:"schema"`
-	Execution          string                           `json:"execution"`
-	LocalSource        string                           `json:"local_source"`
-	Desktop            *DesktopNodeChainMetadata        `json:"desktop,omitempty"`
-	DesktopLast        string                           `json:"desktop_last,omitempty"`
-	DesktopCONNECT     *DesktopNodeChainCONNECTMetadata `json:"desktop_connect,omitempty"`
-	DesktopSOCKS       *DesktopNodeChainSOCKSMetadata   `json:"desktop_socks,omitempty"`
+	DesktopMultipleImported     *DesktopNodeChainMetadata        `json:"desktop_multiple_imported,omitempty"`
+	MultipleImportedLocalLaunch string                           `json:"multiple_imported_local_launch,omitempty"`
+	DesktopOpenVPN              *DesktopNodeChainMetadata        `json:"desktop_openvpn,omitempty"`
+	OpenVPNLocalLaunch          string                           `json:"openvpn_local_launch,omitempty"`
+	Schema                      int                              `json:"schema"`
+	Execution                   string                           `json:"execution"`
+	LocalSource                 string                           `json:"local_source"`
+	Desktop                     *DesktopNodeChainMetadata        `json:"desktop,omitempty"`
+	DesktopLast                 string                           `json:"desktop_last,omitempty"`
+	DesktopCONNECT              *DesktopNodeChainCONNECTMetadata `json:"desktop_connect,omitempty"`
+	DesktopSOCKS                *DesktopNodeChainSOCKSMetadata   `json:"desktop_socks,omitempty"`
 }
 
 // NodeChainExecutionDiscoveryCapture is private original-route authority. The
@@ -67,6 +69,7 @@ type NodeChainExecutionPreparation struct {
 	connect                                        *nodeChainCONNECTExecutionBinding
 	socks                                          *nodeChainSOCKSExecutionBinding
 	openvpn                                        *nodeChainOpenVPNExecutionBinding
+	multiple                                       *nodeChainMultipleImportedExecutionBinding
 	importedPublic                                 *nodeChainExecutionImportedPublicCapture
 }
 
@@ -122,6 +125,10 @@ func newNodeChainExecutionPreparationOwned(localSource, execution string, deskto
 }
 
 func newNodeChainExecutionPreparationOwnedOpenVPN(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, connectDesktop *nodeChainCONNECTExecutionDesktop, socksDesktop *nodeChainSOCKSExecutionDesktop, openvpn *NodeChain, typedOpenVPNDesktop ...*nodeChainOpenVPNExecutionDesktop) (*NodeChainExecutionPreparation, error) {
+	return newNodeChainExecutionPreparationOwnedMultiple(localSource, execution, desktop, mobile, local, connect, socks, connectDesktop, socksDesktop, openvpn, nil, typedOpenVPNDesktop...)
+}
+
+func newNodeChainExecutionPreparationOwnedMultiple(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, connectDesktop *nodeChainCONNECTExecutionDesktop, socksDesktop *nodeChainSOCKSExecutionDesktop, openvpn, multiple *NodeChain, typedOpenVPNDesktop ...*nodeChainOpenVPNExecutionDesktop) (*NodeChainExecutionPreparation, error) {
 	if len(typedOpenVPNDesktop) > 1 || len(typedOpenVPNDesktop) == 1 && (typedOpenVPNDesktop[0] == nil || openvpn == nil || desktop != nil || mobile != nil) {
 		return nil, nodeChainExecutionError
 	}
@@ -129,12 +136,24 @@ func newNodeChainExecutionPreparationOwnedOpenVPN(localSource, execution string,
 	if len(typedOpenVPNDesktop) == 1 {
 		openvpnDesktop = typedOpenVPNDesktop[0]
 	}
+	return newNodeChainExecutionPreparationOwnedFamilies(localSource, execution, desktop, mobile, local, connect, socks, connectDesktop, socksDesktop, openvpn, multiple, openvpnDesktop, nil)
+}
+
+// Closed family constructors retain their exact original physical owner. A
+// generic metadata field cannot supply either typed desktop adjunct.
+func newNodeChainExecutionPreparationOwnedFamilies(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, connectDesktop *nodeChainCONNECTExecutionDesktop, socksDesktop *nodeChainSOCKSExecutionDesktop, openvpn, multiple *NodeChain, openvpnDesktop *nodeChainOpenVPNExecutionDesktop, multipleDesktop *nodeChainMultipleImportedExecutionDesktop) (*NodeChainExecutionPreparation, error) {
+	if multipleDesktop != nil && (multiple == nil || mobile != nil || desktop != nil || connectDesktop != nil || socksDesktop != nil || openvpnDesktop != nil) {
+		return nil, nodeChainExecutionError
+	}
 	if openvpn != nil && (local != openvpn || connect != nil || socks != nil || desktop != nil || connectDesktop != nil || socksDesktop != nil || mobile != nil && (mobile.openvpn == nil || mobile.socks != nil || mobile.connect != nil)) {
 		return nil, nodeChainExecutionError
 	}
 	if socks != nil && (connect != nil || desktop != nil || connectDesktop != nil || mobile != nil && (mobile.socks == nil || mobile.connect != nil || mobile.openvpn != nil)) ||
 		connectDesktop != nil && (connect == nil || desktop != nil || mobile != nil || socksDesktop != nil) ||
 		socksDesktop != nil && (socks == nil || connect != nil || desktop != nil || mobile != nil || connectDesktop != nil) {
+		return nil, nodeChainExecutionError
+	}
+	if multiple != nil && (local != multiple || openvpn != nil || connect != nil || socks != nil || desktop != nil || connectDesktop != nil || socksDesktop != nil || openvpnDesktop != nil || mobile != nil && (mobile.multiple == nil || mobile.connect != nil || mobile.socks != nil || mobile.openvpn != nil)) {
 		return nil, nodeChainExecutionError
 	}
 	var err error
@@ -186,7 +205,25 @@ func newNodeChainExecutionPreparationOwnedOpenVPN(localSource, execution string,
 			}
 		}
 	}
+	if multiple != nil {
+		launch, err := multiple.LaunchInput()
+		if err != nil {
+			return nil, err
+		}
+		p.source.Schema, p.source.MultipleImportedLocalLaunch = 6, launch
+		p.multiple = &nodeChainMultipleImportedExecutionBinding{preparation: p, source: multiple, local: local, owners: multiple.importedNodes, sourceSeal: multiple.seal, launch: launch}
+		p.multiple.self = p.multiple
+		if multipleDesktop != nil {
+			p.multiple.desktop = multipleDesktop
+			if err := multipleDesktop.bind(p, p.multiple); err != nil {
+				return nil, err
+			}
+		}
+	}
 	config := local.Config()
+	if multipleDesktop != nil {
+		config = multipleDesktop.native.config
+	}
 	if openvpnDesktop != nil {
 		config = openvpnDesktop.native.config
 	}
@@ -309,6 +346,9 @@ func (p *NodeChainExecutionPreparation) captureSeal() string {
 	if p == nil {
 		return ""
 	}
+	if p.multiple != nil && p.multiple.desktop != nil {
+		return p.captureMultipleImportedDesktopSeal()
+	}
 	if p.openvpn != nil && p.openvpn.desktop != nil {
 		return p.captureOpenVPNDesktopSeal()
 	}
@@ -330,11 +370,17 @@ func (p *NodeChainExecutionPreparation) captureSeal() string {
 }
 
 func (p *NodeChainExecutionPreparation) validateCapture() error {
-	if p == nil || p.seal == "" || p.captureSeal() != p.seal || p.local == nil || p.openvpn == nil && p.local.validateCapture() != nil || p.local.openVPNMiddle != nil && p.openvpn == nil ||
+	if p == nil || p.seal == "" || p.captureSeal() != p.seal || p.local == nil || p.openvpn == nil && p.multiple == nil && p.local.validateCapture() != nil || p.local.openVPNMiddle != nil && p.openvpn == nil ||
 		p.discovery.Entry != p.local.proofs[0] || p.dns.DNS.SourceSHA256 != p.sourceSHA || p.dns.DNS.ConfigSHA256 != p.configSHA {
 		return nodeChainExecutionError
 	}
-	if p.openvpn != nil {
+	if p.multiple != nil {
+		if p.multiple.validate(p, p.local) != nil {
+			return nodeChainExecutionError
+		}
+	} else if p.local.importedNodes != nil || p.source.MultipleImportedLocalLaunch != "" || p.source.DesktopMultipleImported != nil || p.source.Schema == 6 {
+		return nodeChainExecutionError
+	} else if p.openvpn != nil {
 		if p.openvpn.validate(p, p.local) != nil {
 			return nodeChainExecutionError
 		}
@@ -407,13 +453,13 @@ func (p *NodeChainExecutionPreparation) BindExecution(policy *NodeChainExecution
 		!reflect.DeepEqual(p.physical, policy.physical) || p.dns.DNSPolicySHA256 != policy.source.Server.DNSPolicySHA256 {
 		return nil, nodeChainExecutionError
 	}
-	if p.connect != policy.connect || p.socks != policy.socks || p.openvpn != policy.openvpn {
+	if p.connect != policy.connect || p.socks != policy.socks || p.openvpn != policy.openvpn || p.multiple != policy.multiple {
 		return nil, nodeChainExecutionError
 	}
 	if p.mobile != nil && p.mobile.executionSource != policy.Source() {
 		return nil, nodeChainExecutionError
 	}
-	if p.desktop != nil || p.mobile != nil || p.openvpn != nil && p.openvpn.desktop != nil {
+	if p.desktop != nil || p.mobile != nil || p.openvpn != nil && p.openvpn.desktop != nil || p.multiple != nil && p.multiple.desktop != nil {
 		return p.bindProjectedExecution(policy)
 	}
 	var before, after map[string]any
@@ -506,10 +552,11 @@ func (p *NodeChainExecutionProjection) captureSeal() string {
 }
 func (p *NodeChainExecutionProjection) validateCapture() error {
 	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.policy == nil || p.policy.validateCapture() != nil ||
-		(p.policy.connect == nil && p.policy.socks == nil && p.policy.openvpn == nil && p.preparation.validateCapture() != nil) ||
+		(p.policy.connect == nil && p.policy.socks == nil && p.policy.openvpn == nil && p.policy.multiple == nil && p.preparation.validateCapture() != nil) ||
 		(p.policy.connect != nil && p.preparation != p.policy.connect.preparation) ||
 		(p.policy.socks != nil && p.preparation != p.policy.socks.preparation) ||
 		(p.policy.openvpn != nil && p.preparation != p.policy.openvpn.preparation) ||
+		(p.policy.multiple != nil && p.preparation != p.policy.multiple.preparation) ||
 		p.transition.PreparationSourceSHA256 != p.preparation.sourceSHA || p.transition.PreparationConfigSHA256 != p.preparation.configSHA ||
 		p.transition.SourceSHA256 != p.policy.sourceSHA || p.transition.ConfigSHA256 != p.hash || externalDigest([]byte(p.config)) != p.hash {
 		return nodeChainExecutionError

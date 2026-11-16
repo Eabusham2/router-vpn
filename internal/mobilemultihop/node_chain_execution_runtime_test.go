@@ -440,7 +440,15 @@ func newNodeChainExecutionRuntimeFixtureFromPreparation(t *testing.T, source Nod
 
 	var policy *NodeChainExecutionPolicy
 	var err error
-	if source.Schema == 5 {
+	if source.Schema == 6 {
+		if prep == nil {
+			t.Fatal("multiple-import fixture requires original sealed preparation")
+		}
+		policy, err = NewNodeChainMultipleImportedExecutionPolicy(prep, startJSON(t, source))
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if source.Schema == 5 {
 		if prep == nil {
 			t.Fatal("OpenVPN fixture requires its original sealed preparation")
 		}
@@ -498,7 +506,7 @@ func newNodeChainExecutionRuntimeFixtureFromPreparation(t *testing.T, source Nod
 		t.Fatal(err)
 	}
 	for position, node := range policy.local.nodes {
-		if node == nil && position == policy.importedPublicPosition() {
+		if node == nil && policy.importedPublicAt(position) {
 			continue
 		}
 		api, _ := privateAPI(predecessorText(node.profile, "router_api"))
@@ -567,6 +575,9 @@ func newNodeChainExecutionRuntimeFixtureFromPreparation(t *testing.T, source Nod
 	if position := policy.importedPublicPosition(); position >= 0 {
 		e.peers[local[position].Tag+"/1.1.1.1:443"] = e.publicPeer
 		e.peers[serverProofs[position].Tag+"/1.1.1.1:443"] = e.publicPeer
+	}
+	if policy.multiple != nil {
+		multipleImportedExecutionPublicFixtures(t, f, local, serverProofs, trust)
 	}
 	f.trust = trust
 	f.runtime, err = NewNodeChainExecutionRuntime(projection, e)

@@ -227,15 +227,28 @@ func (e *importedNodesMeasurementFixture) BeginMeasurementContext(ctx context.Co
 }
 
 func importedNodesLatencyFixture(t *testing.T) (*OrderedLatencyService, *importedNodesMeasurementFixture) {
+	return importedNodesLatencyFixtureOwned(t, false)
+}
+
+func importedNodesLatencyFixtureOwned(t *testing.T, server bool) (*OrderedLatencyService, *importedNodesMeasurementFixture) {
 	t.Helper()
 	legacy, private := fixture(t)
 	hops := importedNodesHops(4, 1, 2)
+	if server {
+		for i := 1; i < len(hops); i++ {
+			hops[i].Tag = fmt.Sprintf("routervpn-chain-server-%d-%s", i, strings.Repeat("a", 16))
+		}
+	}
 	for i, position := range []int{0, 3} {
 		original := legacy.hops[i]
 		hops[position].API, hops[position].Token, hops[position].Proof = original.API, original.Token, original.Proof
 	}
 	engine := &importedNodesMeasurementFixture{private: private, public: [2]*publicFixture{newPublicFixture(t), newPublicFixture(t)}, hops: append([]Hop(nil), hops...)}
-	base, err := NewOrderedImportedNodesContext(t.Context(), engine, hops)
+	constructor := NewOrderedImportedNodesContext
+	if server {
+		constructor = NewOrderedImportedNodesServerContext
+	}
+	base, err := constructor(t.Context(), engine, hops)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,6 +276,11 @@ func importedNodesLatencyFixture(t *testing.T) (*OrderedLatencyService, *importe
 
 func TestOrderedImportedNodesMeasuresFiftyResponsesThroughEachOriginalTag(t *testing.T) {
 	service, engine := importedNodesLatencyFixture(t)
+	assertImportedNodesFiftyOriginalTags(t, service, engine)
+}
+
+func assertImportedNodesFiftyOriginalTags(t *testing.T, service *OrderedLatencyService, engine *importedNodesMeasurementFixture) {
+	t.Helper()
 	for position, hop := range engine.hops {
 		request := fmt.Sprintf("%032x", position+1)
 		if err := service.Start(request, hop.ID); err != nil {

@@ -315,6 +315,12 @@ func (p *NodeChainExecutionProjection) readDesktopReadyCapture(execution string)
 }
 
 func (p *NodeChainExecutionPreparation) bindProjectedExecution(policy *NodeChainExecutionPolicy) (*NodeChainExecutionProjection, error) {
+	if p.multiple != nil && p.multiple.desktop != nil {
+		return p.bindMultipleImportedDesktopProjected(policy)
+	}
+	if p.mobile != nil && p.mobile.multiple != nil {
+		return p.bindMultipleImportedMobileProjected(policy)
+	}
 	if p.openvpn != nil && p.openvpn.desktop != nil {
 		return p.bindOpenVPNDesktopProjected(policy)
 	}

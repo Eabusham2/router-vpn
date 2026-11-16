@@ -17,7 +17,9 @@ func (p *NodeChainExecutionProjection) MTUPlan() (NodeChainMTUPlan, error) {
 		return NodeChainMTUPlan{}, nodeChainExecutionError
 	}
 	local := p.policy.local
-	if p.preparation.openvpn != nil && p.preparation.openvpn.desktop != nil {
+	if p.preparation.multiple != nil && p.preparation.multiple.desktop != nil {
+		local = p.preparation.multiple.desktop.native
+	} else if p.preparation.openvpn != nil && p.preparation.openvpn.desktop != nil {
 		local = p.preparation.openvpn.desktop.native
 	} else if p.preparation.desktop != nil {
 		local = p.preparation.desktop.chain
@@ -26,7 +28,7 @@ func (p *NodeChainExecutionProjection) MTUPlan() (NodeChainMTUPlan, error) {
 	}
 	bound, err := local.MTUPlan()
 	localConfig := local.config
-	if m := p.preparation.mobile; m != nil && (m.connect != nil || m.socks != nil || m.openvpn != nil) {
+	if m := p.preparation.mobile; m != nil && (m.connect != nil || m.socks != nil || m.openvpn != nil || m.multiple != nil) {
 		localConfig = m.config()
 		bound, err = nodeChainProjectedMTUPlan(localConfig, local.proofs, nodeChainProjection{TargetOS: m.readback.TargetOS, RestoredMTU: m.readback.MTU})
 	}

@@ -14,6 +14,8 @@ import (
 // original Local source; this label conveys no private Router proof authority.
 const nodeChainOpenVPNExecutionPublicLabel = "Cumulative path through custom middle to public HTTPS edge"
 
+const nodeChainMultipleImportedExecutionPublicLabel = "Cumulative path through imported hop to public HTTPS edge"
+
 func nodeChainExecutionTarget(target string) bool {
 	for _, allowed := range Targets {
 		if target == allowed {
@@ -33,7 +35,7 @@ func (s *nodeChainExecutionTrial) retainDial(operation *leaseStopIO, ctx context
 	}
 	allowed := false
 	for i, proof := range proofs {
-		if i == s.runtime.projection.policy.importedPublicPosition() {
+		if s.runtime.projection.policy.importedPublicAt(i) {
 			allowed = allowed || tag == proof.Tag && address == "1.1.1.1:443"
 			continue
 		}
@@ -89,8 +91,8 @@ func (s *nodeChainExecutionTrial) provePrefix(parent context.Context, position i
 		dial := func(dialCtx context.Context, tag, address string) (net.Conn, error) {
 			return s.retainDial(operation, dialCtx, tag, address)
 		}
-		if position == s.runtime.projection.policy.importedPublicPosition() {
-			return nil, proveExternalPublicIP(call, dial, proof.Tag, s.runtime.projection.policy.importedExpectedPublicIP(), s.runtime.testTLS)
+		if s.runtime.projection.policy.importedPublicAt(position) {
+			return nil, proveExternalPublicIP(call, dial, proof.Tag, s.runtime.projection.policy.importedExpectedPublicIPAt(position), s.runtime.testTLS)
 		}
 		data, err := externalProofHTTP(call, dial, proof.Tag,
 			healthURL(predecessorText(node.profile, "router_api")), predecessorText(node.profile, "api_token"), s.runtime.testTLS)
@@ -180,7 +182,10 @@ func (s *nodeChainExecutionTrial) proveComplete(ctx context.Context) error {
 			return err
 		}
 		row := NodeChainPrefixProgress{Position: proof.Position, ProfileID: proof.ProfileID, ResponseMS: float64(elapsed) / float64(time.Millisecond), Proven: true}
-		if s.runtime.projection.policy.openvpn != nil && i == s.runtime.projection.policy.importedPublicPosition() {
+		if s.runtime.projection.policy.multiple != nil && s.runtime.projection.policy.importedPublicAt(i) && proof.Kind == "public-path" {
+			row.Kind, row.Label = "public-path", nodeChainMultipleImportedExecutionPublicLabel
+		}
+		if s.runtime.projection.policy.openvpn != nil && s.runtime.projection.policy.importedPublicAt(i) {
 			row.Kind, row.Label = "public-path", nodeChainOpenVPNExecutionPublicLabel
 		}
 		rows = append(rows, row)

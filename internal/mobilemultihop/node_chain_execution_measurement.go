@@ -43,7 +43,7 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 	if trial == nil {
 		return nil, hopmeasure.ErrStale
 	}
-	e := &nodeChainExecutionMeasurementEngine{runtime: r, owner: owner, identity: identity, trial: trial}
+	e := &nodeChainExecutionMeasurementEngine{runtime: r, projection: r.projection, owner: owner, identity: identity, trial: trial}
 	if err := e.current(ctx); err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 			role = "exit"
 		}
 		node := r.projection.policy.local.nodes[position]
-		if position == r.projection.policy.importedPublicPosition() {
+		if r.projection.policy.importedPublicAt(position) {
 			hops[position] = hopmeasure.Hop{ID: proof.ProfileID, Role: role, Tag: proof.Tag, Kind: "public-path",
 				Label: fmt.Sprintf("Cumulative %s path through custom node %d of %d → Cloudflare edge", trial.execution, position+1, len(proofs))}
 			continue
@@ -70,7 +70,11 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 			Kind: "private-node", Label: fmt.Sprintf("Cumulative %s path through node %d of %d", trial.execution, position+1, len(proofs))}
 	}
 	var service *hopmeasure.Service
-	if trial.execution == "server" && r.projection.policy.openvpn != nil && r.projection.policy.importedPublicMiddle() {
+	if r.projection.policy.multiple != nil && trial.execution == "server" {
+		service, err = hopmeasure.NewOrderedImportedNodesServerContext(ctx, e, hops)
+	} else if r.projection.policy.multiple != nil && trial.execution == "local" {
+		service, err = hopmeasure.NewOrderedImportedNodesContext(ctx, e, hops)
+	} else if trial.execution == "server" && r.projection.policy.openvpn != nil && r.projection.policy.importedPublicMiddle() {
 		service, err = hopmeasure.NewOrderedOpenVPNServerPrefixContext(ctx, e, hops)
 	} else if trial.execution == "local" && r.projection.policy.openvpn != nil && r.projection.policy.importedPublicMiddle() {
 		service, err = hopmeasure.NewOrderedOpenVPNPrefixContext(ctx, e, hops)
@@ -106,15 +110,16 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 }
 
 type nodeChainExecutionMeasurementEngine struct {
-	runtime  *NodeChainExecutionRuntime
-	owner    NodeChainExecutionMeasurementOwner
-	identity NodeChainIdentity
-	trial    *nodeChainExecutionTrial
-	closed   atomic.Bool
-	mu       sync.Mutex
-	starting bool
-	nextID   string
-	scope    *nodeChainExecutionMeasurementScope
+	runtime    *NodeChainExecutionRuntime
+	projection *NodeChainExecutionProjection
+	owner      NodeChainExecutionMeasurementOwner
+	identity   NodeChainIdentity
+	trial      *nodeChainExecutionTrial
+	closed     atomic.Bool
+	mu         sync.Mutex
+	starting   bool
+	nextID     string
+	scope      *nodeChainExecutionMeasurementScope
 }
 
 func (e *nodeChainExecutionMeasurementEngine) current(ctx context.Context) error {
@@ -122,7 +127,7 @@ func (e *nodeChainExecutionMeasurementEngine) current(ctx context.Context) error
 		return hopmeasure.ErrStale
 	}
 	active, err := e.owner.MeasurementExecutionContext(ctx)
-	if err != nil || active != e.runtime {
+	if err != nil || active != e.runtime || active.projection != e.projection {
 		return errors.Join(err, hopmeasure.ErrStale)
 	}
 	if err := active.HealthyContext(ctx); err != nil {
@@ -171,7 +176,7 @@ func (e *nodeChainExecutionMeasurementEngine) Dial(ctx context.Context, tag, add
 	}
 	allowed := false
 	for position, proof := range proofs {
-		if position == e.runtime.projection.policy.importedPublicPosition() {
+		if e.runtime.projection.policy.importedPublicAt(position) {
 			allowed = allowed || proof.Tag == tag && address == hopmeasure.PublicAddress
 			continue
 		}

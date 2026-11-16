@@ -121,6 +121,8 @@ func captureNodeChainServerCarrier(ctx context.Context, policy *NodeChainServerP
 		family = 3
 	} else if policy.openvpn != nil {
 		family = 5
+	} else if policy.multiple != nil {
+		family = 6
 	}
 	c := &NodeChainServerCarrier{family: family, source: policy.sourceJSON, sourceSHA: policy.sourceSHA, target: target, snapshot: observed, read: read}
 	c.seal = c.digest()

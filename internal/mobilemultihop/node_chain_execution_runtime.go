@@ -46,6 +46,7 @@ type NodeChainExecutionRuntime struct {
 	checkedAt            time.Time
 	restore              *NodeChainExecutionRestoreCapture
 	openvpnRestore       *nodeChainOpenVPNExecutionConnectedReceipt
+	multipleRestore      *nodeChainMultipleImportedExecutionRestoreReceipt
 	mtuPause             *nodeChainExecutionMTUResumeState
 	mtuResume            *nodeChainExecutionMTUResumeState
 	lastPlan             *nodeChainExecutionLastPlanState
@@ -71,6 +72,11 @@ type nodeChainExecutionTrial struct {
 func NewNodeChainExecutionRuntime(projection *NodeChainExecutionProjection, engine NodeChainExecutionEngine) (*NodeChainExecutionRuntime, error) {
 	if projection.validateCapture() != nil || engine == nil {
 		return nil, nodeChainExecutionError
+	}
+	if projection.preparation.RequiresMultipleImportedExecutionObserver() {
+		if _, ok := engine.(NodeChainMultipleImportedExecutionObserver); !ok {
+			return nil, nodeChainExecutionError
+		}
 	}
 	if projection.preparation.RequiresOpenVPNExecutionObserver() {
 		if _, ok := engine.(NodeChainOpenVPNExecutionObserver); !ok {
@@ -109,6 +115,9 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 	r.mu.Unlock()
 	if !r.identityMatches(identity) || trial != nil && (active != trial || trial.lifetime.Err() != nil) {
 		return nodeChainExecutionError
+	}
+	if err := r.observeMultipleImportedExecutionCurrentContext(ctx); err != nil {
+		return err
 	}
 	if r.projection.preparation.RequiresOpenVPNExecutionObserver() {
 		if err := r.observeOpenVPNExecutionCurrentContext(ctx, trial != nil && trial.execution == "local"); err != nil {
@@ -301,6 +310,10 @@ func (r *NodeChainExecutionRuntime) Run(parent context.Context) (failure error) 
 	r.mu.Lock()
 	r.identity = identity
 	r.mu.Unlock()
+	if err := r.admitMultipleImportedExecutionRestoreContext(ctx); err != nil {
+		finish()
+		return err
+	}
 	if err := r.admitOpenVPNExecutionRestoreContext(ctx); err != nil {
 		finish()
 		return err
