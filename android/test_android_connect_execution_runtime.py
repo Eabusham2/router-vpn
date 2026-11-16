@@ -23,10 +23,12 @@ def sources():
     result=RESTORE.sources()
     app,native=HOST.APP,HOST.NATIVE
     result[app+'AndroidNodeStore.java']=CONNECT.SOURCES[app+'AndroidNodeStore.java'].replace('final String execution="local";','String execution="local";boolean imported;')
+    result[app+'AndroidNodeStore.java']=once(result[app+'AndroidNodeStore.java'],'volatile boolean valid=true;','String finalLayer="off";volatile boolean valid=true;')
     result.pop(app+'AndroidNodeChainCONNECTCapture.java')
     capture=CONNECT.SOURCES[app+'AndroidNodeChainCapture.java']
     capture=once(capture,'final String config,launchInput;','final String config,launchInput,selectionExecution;')
     capture=once(capture,'this.source=source;strict=source.strict;','this.source=source;selectionExecution=source.execution;strict=source.strict;')
+    capture=once(capture,'"original-paired-"+i','i==source.members.size()-1?new org.json.JSONObject().put("mode","shadowsocks").put("profile_json",new org.json.JSONObject().put("start_layer",source.finalLayer).toString()).put("original_private_final","original-paired-"+i).toString():"original-paired-"+i')
     result[app+'AndroidNodeChainCapture.java']=capture
     result[native+'RouterNodeChainCONNECT.java']=CONNECT.SOURCES[native+'RouterNodeChainCONNECT.java']
     server=result[native+'CommandServer.java']
@@ -63,6 +65,37 @@ def runtime_harness():
     return value
 
 
+LAYER_HARNESS=r'''package com.eabusham.routervpn;
+import io.nekohasekai.libbox.*;import org.json.*;import java.nio.file.*;
+public final class CONNECTExecutionLayersRuntimeTest {
+ static int checks;static void check(boolean value,String why){checks++;if(!value)throw new AssertionError(why);}
+ static void retained(String source,int count,String layer)throws Exception{
+  JSONObject original=new JSONObject(new JSONObject(source).getString("local_source"));JSONArray nodes=original.getJSONArray("nodes"),ids=original.getJSONArray("identity_sources");
+  check(original.getInt("schema")==4&&nodes.length()==count&&ids.length()==count,"layered host lost original complete source");
+  JSONObject last=new JSONObject(nodes.getString(count-1));check(last.getString("original_private_final").equals("original-paired-"+(count-1))&&new JSONObject(last.getString("profile_json")).getString("start_layer").equals(layer),"layered host replaced original final source");
+  for(int i=0;i<count;i++)check(ids.getString(i).equals(i==count-2?"":"paired-identity-"+i),"layered host replaced original paired inventory");
+ }
+ public static void main(String[]args)throws Exception{
+  RouterNodeChainCONNECT.transport=System.getProperty("routervpn.connect.protocol","http-connect");
+  for(int count:new int[]{3,8})for(String layer:new String[]{"aes-256-gcm","aes-256-gcm+xor-whitening"})for(String variant:new String[]{"server/server","auto/server","auto/local"})try(var f=new OrderedExecutionRuntimeTest.Fixture(count,variant.split("/")[0])){
+   String chosen=variant.split("/")[1];f.source.finalLayer=layer;RouterNodeChainExecution.configured=plan->plan.selected=chosen;f.connected();var original=f.owner();String source=original.execution.source;retained(source,count,layer);
+   original.execution.plan.effectiveMTU=1360;var restore=f.runtime.captureRestore();String last=original.captureLastRecord();int ordinary=RouterNodeChainExecution.ordinaryPreparations;f.stop();
+   RouterNodeChainExecution.configured=plan->plan.selected=chosen.equals("server")?"local":"server";
+   var done=new OrderedExecutionRuntimeTest.Result();f.runtime.restore(restore,AndroidHomeStateStore.snapshot(f.service),done);done.finished();f.drain();var current=f.owner();
+   check(done.ok&&current!=original&&current.source==f.source&&f.runtime.restoredMatches(restore),"layered host did not retain original restore owner");
+   check(current.execution.source.equals(source)&&current.execution.execution().equals(chosen)&&current.execution.plan.runs==1,"layered restore changed final source or reran Compare");retained(current.execution.source,count,layer);
+   check(new JSONObject(current.execution.config).getJSONArray("inbounds").getJSONObject(0).getInt("mtu")==1360&&Files.readString(current.directory.toPath().resolve("sing-box.json")).equals(current.execution.config),"layered restore staged a foreign final projection");f.stop();
+   var cold=new OrderedExecutionRuntimeTest.Result();f.runtime.connectLast(f.source,AndroidHomeStateStore.snapshot(f.service),AndroidNodeChainSession.selection(f.service,f.source),chosen,last,cold);cold.finished();f.drain();
+   check(cold.ok&&f.owner().execution.source.equals(source)&&f.owner().provedExecution().equals(chosen),"layered cold Last replaced original source or selected execution");
+   check(RouterNodeChainExecution.ordinaryPreparations==ordinary&&f.owner().execution.plan.runs==1,"layered cold Last reran Compare");retained(f.owner().execution.source,count,layer);f.stop();
+   f.source.finalLayer="off";var changed=new OrderedExecutionRuntimeTest.Result();f.runtime.connectLast(f.source,AndroidHomeStateStore.snapshot(f.service),AndroidNodeChainSession.selection(f.service,f.source),chosen,last,changed);changed.finished();f.drain();
+   check(!changed.ok&&!f.runtime.isConnected(),"changed final layer borrowed original Last authority");
+  }
+  System.out.println("Android CONNECT independent final-layer lifecycle: "+checks+" shipping Java checks PASS; source/native/OS boundaries doubled");
+ }
+}
+'''
+
 def main():
     jar=Path(os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar'))
     if not jar.is_file() or not shutil.which('javac'):raise RuntimeError('Actual JDK and JSON required')
@@ -75,11 +108,12 @@ def main():
         original={name:(HOST.JAVA/(name+'.java')).read_text() for name in names}
         for name,value in original.items():(app/(name+'.java')).write_text(value)
         (app/'OrderedExecutionRuntimeTest.java').write_text(runtime_harness())
+        (app/'CONNECTExecutionLayersRuntimeTest.java').write_text(LAYER_HARNESS)
         (app/'OrderedExecutionRestoreTest.java').write_text(RESTORE.HARNESS.replace('new boolean[]{false,true}', 'new boolean[]{false}').replace('new int[]{2,3,4,8}','new int[]{3,4,8}').replace('new int[]{3,4,8}','new int[]{3,4,5,6,7,8}').replace('public static void main(String[] args)throws Exception{','public static void main(String[] args)throws Exception{RouterNodeChainCONNECT.transport=System.getProperty("routervpn.connect.protocol","http-connect");'))
         classes=work/'classes';subprocess.run(['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(classes),*map(str,src.rglob('*.java'))],check=True,timeout=60)
         cp=os.pathsep.join((str(classes),str(jar)))
         for transport in ('http-connect','https-connect'):
-            for root in ('OrderedExecutionRuntimeTest','OrderedExecutionRestoreTest'):
+            for root in ('OrderedExecutionRuntimeTest','OrderedExecutionRestoreTest','CONNECTExecutionLayersRuntimeTest'):
                 subprocess.run(['java','-Droutervpn.connect.protocol='+transport,'-cp',cp,'com.eabusham.routervpn.'+root],check=True,timeout=120)
         controls=(
           ('AndroidNodeChainSession','if(execution!=null&&capture.connect!=null)return execution.plan.newCommandServer(handler,platform);','if(execution!=null&&capture.connect!=null)return capture.connect.plan.newCommandServer(handler,platform);','OrderedExecutionRuntimeTest','factory','typed execution factory borrowed dormant Local owner'),

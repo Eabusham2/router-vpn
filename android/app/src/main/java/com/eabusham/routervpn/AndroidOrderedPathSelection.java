@@ -243,7 +243,6 @@ final class AndroidOrderedPathSelection {
         if(!"local".equals(execution)&&!members.isEmpty()) {
             if(schema>5||schema==3&&(members.size()<3||members.size()>8)||schema==4&&(members.size()<3||members.size()>8)||schema==5&&(members.size()<3||members.size()>8)||!"shadowsocks".equals(members.get(members.size()-1).mode))
                 throw new IllegalStateException("Server and Compare require paired packet prefixes before the Shadowsocks 2022 final. A supported Shadowsocks, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN middle may retain three to eight nodes; a Shadowsocks hostname requires at least four.");
-            if(schema==4)AndroidNodeChainCapture.requireCONNECTExecutionFinalOff(members.get(members.size()-1).source.profile());
             for(Member member:members)if(member.source.imported) {
                 AndroidStandardExitStore.Entry imported=member.source.external();
                 if(AndroidStandardExitStore.importedHostname(imported)) {
